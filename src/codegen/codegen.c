@@ -735,6 +735,14 @@ static bool cg_user_type_is_value(const struct UserType *t) {
            t->decl->as.type_decl.is_value;
 }
 
+/* Tuples and explicitly annotated @value types share the aggregate
+ * representation and descriptor ABI. */
+static bool cg_type_decl_is_value_semantics(const FengDecl *decl) {
+    return decl != NULL &&
+           decl->kind == FENG_DECL_TYPE &&
+           (decl->as.type_decl.is_tuple || decl->as.type_decl.is_value);
+}
+
 static bool cg_type_is_value_user(const CGType *t) {
     return t != NULL && t->kind == CG_TYPE_OBJECT && cg_user_type_is_value(t->user);
 }
@@ -2358,6 +2366,10 @@ static const UserMethod *cg_user_type_constructor_by_member(const UserType *t,
                                                             const FengTypeMember *m);
 static size_t cg_field_managed_descriptor_count(CG *cg, const CGType *t,
                                                 FengToken blame);
+static size_t cg_aggregate_pointer_slot_count(const CGType *t);
+static void cg_emit_aggregate_pointer_slot_rows(Buf *out,
+                                                const char *field_base_offsetof_expr,
+                                                const CGType *t);
 static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
                                               const char *struct_name,
                                               const char *field_name,
@@ -6260,6 +6272,221 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
     return true;
 }
 
+/* Emit the callable adapter, one-allocation closure layout, and binder for a
+ * fixed-layout value receiver. The receiver is copied into the closure's
+ * inline payload; `_self` remains NULL solely to preserve the callable-form
+ * common prefix used by ordinary callable invocation. */
+static bool cg_emit_fixed_value_callable_method_support(
+    CG *cg,
+    const UserSpec *spec,
+    const UserType *owner,
+    const UserMethod *method,
+    FengToken blame,
+    const char *adapter_name,
+    const char *bind_name) {
+    Buf closure_struct;
+    Buf closure_desc;
+    CGType receiver_type;
+    size_t receiver_pointer_slot_count;
+
+    if (cg == NULL || spec == NULL || owner == NULL || method == NULL ||
+        adapter_name == NULL || bind_name == NULL ||
+        owner->c_struct_name == NULL || owner->c_aggregate_desc_name == NULL) {
+        return cg_fail(cg, blame,
+            "CE0028", "codegen: invalid fixed value callable method-value request");
+    }
+
+    memset(&receiver_type, 0, sizeof receiver_type);
+    receiver_type.kind = CG_TYPE_OBJECT;
+    receiver_type.user = owner;
+    receiver_pointer_slot_count =
+        cg_aggregate_pointer_slot_count(&receiver_type);
+
+    buf_init(&closure_struct);
+    buf_init(&closure_desc);
+    buf_append_fmt(&closure_struct, "%s__ValueClosure", bind_name);
+    buf_append_fmt(&closure_desc, "%s__ValueClosureDesc", bind_name);
+    if (closure_struct.data == NULL || closure_desc.data == NULL) {
+        buf_free(&closure_struct);
+        buf_free(&closure_desc);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    buf_append_fmt(&cg->type_defs,
+                   "struct %s {\n"
+                   "    FengManagedHeader _hdr;\n"
+                   "    void *_self;\n    ",
+                   closure_struct.data);
+    cg_emit_callable_abi_return_type(&cg->type_defs,
+                                     spec->callable_return_type,
+                                     spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->type_defs, " (*invoke)(void *_closure");
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->type_defs, ", ");
+        cg_emit_callable_abi_param_type(&cg->type_defs,
+                                        spec->callable_param_types[i],
+                                        spec->callable_param_abi_kinds[i]);
+    }
+    cg_append_callable_abi_out_parameter(&cg->type_defs,
+                                         spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->type_defs,
+                   ");\n    struct %s _receiver;\n};\n\n",
+                   owner->c_struct_name);
+
+    if (receiver_pointer_slot_count > 0U) {
+        Buf receiver_base;
+
+        buf_init(&receiver_base);
+        buf_append_fmt(&receiver_base,
+                       "offsetof(struct %s, _receiver)",
+                       closure_struct.data);
+        if (receiver_base.data == NULL) {
+            buf_free(&closure_struct);
+            buf_free(&closure_desc);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(&cg->type_defs,
+                       "static void %s__release_children(void *_self) {\n"
+                       "    struct %s *_o = (struct %s *)_self;\n"
+                       "    feng_aggregate_release(&_o->_receiver, &%s);\n"
+                       "}\n\n"
+                       "static const FengManagedFieldDescriptor %s__managed_fields[] = {\n",
+                       closure_desc.data,
+                       closure_struct.data,
+                       closure_struct.data,
+                       owner->c_aggregate_desc_name,
+                       closure_desc.data);
+        cg_emit_aggregate_pointer_slot_rows(&cg->type_defs,
+                                            receiver_base.data,
+                                            &receiver_type);
+        buf_append_cstr(&cg->type_defs, "};\n\n");
+        buf_free(&receiver_base);
+    }
+
+    buf_append_fmt(&cg->type_defs,
+                   "static const FengTypeDescriptor %s = {\n"
+                   "    .name = \"%s\",\n"
+                   "    .size = sizeof(struct %s),\n"
+                   "    .default_zero_init = NULL,\n"
+                   "    .finalizer = NULL,\n",
+                   closure_desc.data,
+                   closure_struct.data,
+                   closure_struct.data);
+    if (receiver_pointer_slot_count > 0U) {
+        buf_append_fmt(&cg->type_defs,
+                       "    .release_children = %s__release_children,\n"
+                       "    .is_potentially_cyclic = true,\n"
+                       "    .managed_field_count = %zu,\n"
+                       "    .managed_fields = %s__managed_fields,\n",
+                       closure_desc.data,
+                       receiver_pointer_slot_count,
+                       closure_desc.data);
+    } else {
+        buf_append_cstr(&cg->type_defs,
+                        "    .release_children = NULL,\n"
+                        "    .is_potentially_cyclic = false,\n"
+                        "    .managed_field_count = 0,\n"
+                        "    .managed_fields = NULL,\n");
+    }
+    buf_append_cstr(&cg->type_defs,
+                    "    .equal_fn = NULL,\n"
+                    "    .reified_generic_params_count = 0,\n"
+                    "};\n\n");
+
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_callable_abi_return_type(&cg->headers,
+                                     spec->callable_return_type,
+                                     spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_callable_abi_param_type(&cg->headers,
+                                        spec->callable_param_types[i],
+                                        spec->callable_param_abi_kinds[i]);
+        buf_append_fmt(&cg->headers, " _arg%zu", i);
+    }
+    cg_append_callable_abi_out_parameter(&cg->headers,
+                                         spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->headers, ");\n");
+    buf_append_fmt(&cg->headers,
+                   "static struct %s *%s(struct %s *_self);\n",
+                   spec->c_closure_struct_name,
+                   bind_name,
+                   owner->c_struct_name);
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_callable_abi_return_type(&cg->witness_defs,
+                                     spec->callable_return_type,
+                                     spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs, " %s(void *_closure", adapter_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_callable_abi_param_type(&cg->witness_defs,
+                                        spec->callable_param_types[i],
+                                        spec->callable_param_abi_kinds[i]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", i);
+    }
+    cg_append_callable_abi_out_parameter(&cg->witness_defs,
+                                         spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs,
+                   ") {\n    struct %s *_bound = (struct %s *)_closure;\n"
+                   "    struct %s *_self = &_bound->_receiver;\n    ",
+                   closure_struct.data,
+                   closure_struct.data,
+                   owner->c_struct_name);
+    if (spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "*(");
+        cg_emit_c_type(&cg->witness_defs, spec->callable_return_type);
+        buf_append_cstr(&cg->witness_defs, " *)_out = ");
+    } else if (spec->callable_return_type != NULL &&
+               spec->callable_return_type->kind != CG_TYPE_VOID) {
+        buf_append_cstr(&cg->witness_defs, "return ");
+    }
+    buf_append_fmt(&cg->witness_defs, "%s(_self", method->c_name);
+    for (size_t i = 0; i < spec->callable_param_count; ++i) {
+        char arg_name[32];
+        (void)snprintf(arg_name, sizeof arg_name, "_arg%zu", i);
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_append_callable_abi_argument_value(&cg->witness_defs,
+                                              spec->callable_param_types[i],
+                                              spec->callable_param_abi_kinds[i],
+                                              arg_name);
+    }
+    buf_append_cstr(&cg->witness_defs, ");\n}\n\n");
+
+    buf_append_fmt(&cg->witness_defs,
+                   "static struct %s *%s(struct %s *_self) {\n"
+                   "    struct %s *_o = (struct %s *)feng_object_new(&%s);\n"
+                   "    _o->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+                   "    _o->_self = NULL;\n"
+                   "    _o->invoke = %s;\n",
+                   spec->c_closure_struct_name,
+                   bind_name,
+                   owner->c_struct_name,
+                   closure_struct.data,
+                   closure_struct.data,
+                   closure_desc.data,
+                   adapter_name);
+    if (receiver_pointer_slot_count > 0U) {
+        buf_append_fmt(&cg->witness_defs,
+                       "    feng_aggregate_default_init(&_o->_receiver, &%s);\n"
+                       "    feng_aggregate_assign(&_o->_receiver, _self, &%s);\n",
+                       owner->c_aggregate_desc_name,
+                       owner->c_aggregate_desc_name);
+    } else {
+        buf_append_cstr(&cg->witness_defs,
+                        "    _o->_receiver = *_self;\n");
+    }
+    buf_append_fmt(&cg->witness_defs,
+                   "    return (struct %s *)_o;\n"
+                   "}\n\n",
+                   spec->c_closure_struct_name);
+
+    buf_free(&closure_struct);
+    buf_free(&closure_desc);
+    return true;
+}
+
 static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
                                             const UserType *owner,
                                             const UserMethod *method,
@@ -6312,6 +6539,21 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
         free(adapter_name);
         free(bind_name);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    if (cg_user_type_is_value_semantics(owner)) {
+        if (!cg_emit_fixed_value_callable_method_support(cg,
+                                                         spec,
+                                                         owner,
+                                                         method,
+                                                         blame,
+                                                         adapter_name,
+                                                         bind_name)) {
+            free(adapter_name);
+            free(bind_name);
+            return false;
+        }
+        goto record_callable_method_value;
     }
 
     buf_append_cstr(&cg->headers, "static ");
@@ -6392,6 +6634,7 @@ static bool cg_ensure_callable_method_value(CG *cg, const UserSpec *spec,
                    spec->c_closure_desc_name,
                    adapter_name);
 
+record_callable_method_value:
     cg->callable_method_values[cg->callable_method_value_count].spec = spec;
     cg->callable_method_values[cg->callable_method_value_count].owner = owner;
     cg->callable_method_values[cg->callable_method_value_count].method = method;
@@ -7839,7 +8082,7 @@ static const char *cg_open_generic_managed_descriptor_name(
     }
     type_decl = cg_find_generic_type_decl(cg, ref);
     if (type_decl == NULL || type_decl->decl == NULL ||
-        type_decl->decl->as.type_decl.is_value) {
+        cg_type_decl_is_value_semantics(type_decl->decl)) {
         return NULL;
     }
     type_instance = cg_find_generic_instance_user_type_with_active_context(
@@ -17558,7 +17801,7 @@ static const char *cg_lambda_owner_descriptor_c_type(
         context->owner_type_decl->kind != FENG_DECL_TYPE) {
         return NULL;
     }
-    return context->owner_type_decl->as.type_decl.is_value
+    return cg_type_decl_is_value_semantics(context->owner_type_decl)
                ? "FengAggregateDescriptor"
                : "FengTypeDescriptor";
 }
@@ -18532,7 +18775,10 @@ static bool cg_emit_callable_method_coercion(CG *cg,
                                              ExprResult *out) {
     const UserSpec *target_spec = NULL;
     const UserMethod *method = NULL;
+    const UserFit *selected_fit = NULL;
+    const FengDecl *receiver_owner_decl = NULL;
     const char *bind_fn = NULL;
+    char *receiver_argument = NULL;
     ExprResult recv;
 
     er_init(out);
@@ -18559,38 +18805,69 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         return cg_fail(cg, e->token,
             "CE0112", "codegen: callable method coercion source must be an object value");
     }
-    if (recv.type->user->decl != cs->callable_owner_type_decl) {
+    receiver_owner_decl = recv.type->user->is_generic_instance
+                              ? recv.type->user->generic_origin_decl
+                              : recv.type->user->decl;
+    if (receiver_owner_decl != cs->callable_owner_type_decl) {
         er_free(&recv);
         return cg_fail(cg, e->token,
             "CE0113", "codegen: callable method coercion receiver type does not match resolved owner type");
     }
-    method = cg_user_type_method_by_member(recv.type->user, cs->callable_member);
+    if (cs->callable_fit_decl != NULL) {
+        selected_fit = cg_find_user_fit_by_decl_and_target(cg,
+                                                           cs->callable_fit_decl,
+                                                           recv.type->user);
+        method = cg_user_fit_method_by_member(selected_fit,
+                                              cs->callable_member);
+    } else {
+        method = cg_user_type_method_by_member(recv.type->user,
+                                               cs->callable_member);
+    }
     if (method == NULL) {
         er_free(&recv);
         return cg_fail(cg, e->token,
             "CE0114", "codegen: callable method coercion source method was not registered");
     }
-    if (cgtype_is_managed(recv.type) && recv.owns_ref) {
+    if (cg_type_is_value_semantics(recv.type)) {
+        if ((!recv.is_addressable || recv.owns_ref) &&
+            cg_materialize_to_local(cg, &recv, "_value_method_receiver") == NULL) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                           "IE0001", "codegen: failed to materialize value method receiver");
+        }
+        receiver_argument = cg_aggregate_result_address_dup(&recv);
+        if (receiver_argument == NULL) {
+            er_free(&recv);
+            return cg_fail(cg, e->token,
+                           "IE0001", "codegen: value method receiver has no stable storage");
+        }
+    } else if (cgtype_is_managed(recv.type) && recv.owns_ref) {
         cg_materialize_to_local(cg, &recv, "_t");
     }
     if (!cg_ensure_callable_method_value(cg, target_spec, recv.type->user,
                                          method, e->token, &bind_fn)) {
+        free(receiver_argument);
         er_free(&recv);
         return false;
     }
     {
         Buf b; buf_init(&b);
-        buf_append_fmt(&b, "%s(%s)", bind_fn, recv.c_expr);
+        buf_append_fmt(&b, "%s(%s)", bind_fn,
+                       receiver_argument != NULL
+                           ? receiver_argument
+                           : recv.c_expr);
         out->c_expr = b.data;
     }
     out->type = cgtype_new(CG_TYPE_CALLABLE);
     if (!out->c_expr || !out->type) {
         er_free(&recv);
         er_free(out);
+        free(receiver_argument);
         return false;
     }
     out->type->user_spec = target_spec;
     out->owns_ref = true;
+    free(receiver_argument);
     er_free(&recv);
     return true;
 }
@@ -44935,7 +45212,7 @@ static bool cg_emit_generic_default_zero_entry(CG *cg,
 
     if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE ||
         decl->as.type_decl.type_param_count == 0U ||
-        decl->as.type_decl.is_value) {
+        cg_type_decl_is_value_semantics(decl)) {
         return true;
     }
     memset(&member, 0, sizeof(member));
@@ -45228,7 +45505,9 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                             Buf fdesc; buf_init(&fdesc);
                             if (has_fit_fdesc) {
                                 buf_append_fmt(&fdesc, "&%s__fit%zu__fdesc",
-                                               uf->target->c_desc_name,
+                                               cg_user_type_is_value_semantics(uf->target)
+                                                   ? uf->target->c_aggregate_desc_name
+                                                   : uf->target->c_desc_name,
                                                uf->index);
                             } else {
                                 buf_append_fmt(&fdesc,
@@ -46045,7 +46324,10 @@ static bool cg_emit_all_programs(CG *cg,
             Buf fdesc; buf_init(&fdesc);
             if (has_fit_fdesc) {
                 buf_append_fmt(&fdesc, "&%s__fit%zu__fdesc",
-                               uf->target->c_desc_name, uf->index);
+                               cg_user_type_is_value_semantics(uf->target)
+                                   ? uf->target->c_aggregate_desc_name
+                                   : uf->target->c_desc_name,
+                               uf->index);
             } else {
                 buf_append_fmt(&fdesc,
                     "&(const FengFunctionDescriptor){.name = \"%s\"}",
@@ -47721,7 +48003,9 @@ static bool cg_emit_closed_generic_fit_descriptors(CG *cg,
         if (ok) {
             buf_append_fmt(&symbol,
                            "%s__fit%zu",
-                           type->c_desc_name,
+                           cg_user_type_is_value_semantics(type)
+                               ? type->c_aggregate_desc_name
+                               : type->c_desc_name,
                            fit->index);
             ok = symbol.data != NULL;
         }
@@ -49528,7 +49812,7 @@ static bool cg_emit_generic_type_static_binding_ensure_shared(
                 "IE0001", "codegen: out of memory");
         goto cleanup;
     }
-    descriptor_type = decl->as.type_decl.is_value
+    descriptor_type = cg_type_decl_is_value_semantics(decl)
                           ? "FengAggregateDescriptor"
                           : "FengTypeDescriptor";
     exports_public_surface =
@@ -49836,7 +50120,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
      *
      * @value type: _type_desc is FengAggregateDescriptor (值类型没有
      * FengTypeDescriptor，reified_generic_params 在聚合描述符上)。 */
-    const char *type_desc_c_type = decl->as.type_decl.is_value
+    const char *type_desc_c_type = cg_type_decl_is_value_semantics(decl)
         ? "FengAggregateDescriptor" : "FengTypeDescriptor";
 
     /* Helper: emit the parameter list for proto or body. */
@@ -50110,7 +50394,7 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
 
     /* @value type: wrapper 的 _type_desc 参数和传给共享体的描述符
      * 使用 FengAggregateDescriptor（值类型没有 FengTypeDescriptor）。 */
-    bool is_value_type = cg_user_type_is_value(t);
+    bool is_value_type = cg_user_type_is_value_semantics(t);
     const char *type_desc_c_type = is_value_type
         ? "FengAggregateDescriptor" : "FengTypeDescriptor";
     const char *desc_name = is_value_type

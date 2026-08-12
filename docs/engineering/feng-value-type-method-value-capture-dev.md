@@ -1,6 +1,6 @@
 # Feng 值类型方法值接收者捕获与泛型 FCTS 加固开发文档
 
-> 状态：待人工 Review，未实施
+> 状态：已通过人工 Review，实施中
 >
 > 方法值与 `self` 的权威语义以
 > [Feng 函数规范](../specifications/feng-function.md) 和
@@ -293,11 +293,11 @@ Semantic/compiler regression 覆盖：
 
 ## 7 完成标准
 
-- [ ] 人工 Review 并确认本文范围、分组和性能门槛
-- [ ] 第一组：通用值接收者捕获与基础语义
-- [ ] 第一组完成后的完整 `make test`
-- [ ] 第二组：闭合泛型值接收者与方法值 ABI
-- [ ] 第二组完成后的完整 `make test`
+- [x] 人工 Review 并确认本文范围、分组和性能门槛
+- [x] 第一组：通用值接收者捕获与基础语义
+- [x] 第一组完成后的完整 `make test`
+- [x] 第二组：闭合泛型值接收者与方法值 ABI
+- [x] 第二组完成后的完整 `make test`
 - [ ] 第三组：共享泛型体内形成值接收者方法值
 - [ ] 第三组完成后的完整 `make test`
 - [ ] 第四组：生命周期、异常与负向诊断
@@ -310,4 +310,35 @@ Semantic/compiler regression 覆盖：
 
 ## 8 实施中发现的问题
 
-待实施时按组记录。每项必须包括：复现代码、根因、通用修复、测试归属、ABI/性能影响和完成状态。
+### 8.1 第一组：fit 方法无法形成目标类型明确的方法值
+
+- 最小复现：`let read: Producer = value.fitRead;` 在 `fitRead` 仅由可见 `fit` 提供时报告 `AE0522`；
+- 根因：方法调用的重载解析已经同时枚举 type 自身方法和可见 fit 方法，但目标类型驱动的方法值解析只枚举
+  type 自身方法；
+- 通用修复：方法值解析通过统一的可见 fit 遍历器收集候选，并在匹配前按 owner 实例与 fit 目标替换参数、
+  返回类型；候选唯一性仍使用既有 callable 目标类型规则；
+- 测试归属：第一组 FCTS 覆盖 `@value type` 与 tuple 的直接 fit 方法值；
+- ABI/性能影响：仅增加编译期候选解析；运行时无新增路径或开销；
+- 状态：已修复，第一组专项 FCTS（719/719）与完整 `make test` 均通过。
+
+### 8.2 第二组：对象字面量推导丢失闭合 owner 实参
+
+- 最小复现：`let value = Cell<int> { payload: 1 }; let read: Producer<int> = value.read;` 中，对象字面量
+  被推导为泛型声明 `Cell<T>`，字段校验与方法值签名匹配均无法把 `T` 替换为 `int`；
+- 根因：对象字面量类型推导只返回 target 的类型声明，没有保留 generic target 表达式提供的完整
+  `FengTypeRef`；
+- 通用修复：对象字面量推导和字段校验均优先使用 target 表达式的完整实例类型，只有非泛型 target 才回退到
+  类型声明视角；
+- ABI/性能影响：仅修正编译期类型事实；运行时无新增路径或开销；
+- 状态：已修复。
+
+### 8.3 第二组：泛型 tuple 的共享 fit 路径错误使用 managed descriptor
+
+- 最小复现：闭合泛型 tuple 形成其泛型 `fit` 方法值时，生成 C 引用了不存在的
+  `FengTypeDescriptor`，而该 tuple 实际只拥有 `FengAggregateDescriptor`；
+- 根因：部分泛型共享方法、wrapper、fit descriptor 与 lambda reification 路径只检查 `@value` 标记，未复用
+  “tuple 或 `@value type` 均为值语义 aggregate”的既有统一判断；
+- 通用修复：新增声明级值语义谓词，并让上述泛型 descriptor 路径和 `UserType` 级谓词保持一致；fit function
+  descriptor 的符号前缀同样取实际 owner descriptor；
+- ABI/性能影响：只修正生成 C 的静态 descriptor 类型与符号；运行时无新增间接层、分配或查找；
+- 状态：已修复，第二组专项 FCTS（727/727）与完整 `make test` 均通过。

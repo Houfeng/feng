@@ -1,0 +1,326 @@
+module fcts_bin;
+
+import std;
+import std.numeric;
+import std.test;
+
+/** Produces one integer from a captured value receiver. */
+spec ValueMethodIntProducer(): int;
+
+/** Produces one string from a captured aggregate value receiver. */
+spec ValueMethodStringProducer(): string;
+
+/** Mutates a captured value receiver and returns its new integer state. */
+spec ValueMethodIntUpdater(delta: int): int;
+
+/** Produces one closed generic value from a captured generic receiver. */
+spec ValueMethodProducer<T>(): T;
+
+/** Replaces one closed generic payload in a captured generic receiver. */
+spec ValueMethodReplacer<T>(next: T): T;
+
+/** Exchanges a composite value whose layout depends on T. */
+spec ValueMethodEnvelopeSwapper<T>(next: ValueMethodEnvelope<T>): ValueMethodEnvelope<T>;
+
+/** Object-form view stored as an already-boxed generic payload. */
+spec ValueMethodNamedView {
+  func label(): string;
+}
+
+/** Trivial value receiver used by the base method-value capture matrix. */
+@value
+type ValueMethodCounter {
+  var value: int;
+
+  func read(): int {
+    return self.value;
+  }
+
+  func add(delta: int): int {
+    self.value += delta;
+    return self.value;
+  }
+}
+
+/** Aggregate value receiver whose copied payload owns a managed string. */
+@value
+type ValueMethodLabel {
+  var text: string;
+  var number: int;
+
+  func describe(): string {
+    return self.text + ":" + self.number.toString();
+  }
+}
+
+/** Wide aggregate generic argument used by the closed method-value ABI. */
+@value
+type ValueMethodWideValue {
+  var first: string;
+  var second: string;
+  var number: int;
+}
+
+/** Composite generic payload used in method parameters and returns. */
+@value
+type ValueMethodEnvelope<T> {
+  var value: T;
+  var marker: string;
+}
+
+/** Closed generic value receiver whose methods still use shared bodies. */
+@value
+type ValueMethodCell<T> {
+  var value: T;
+
+  func read(): T {
+    return self.value;
+  }
+
+  func replace(next: T): T {
+    let previous = self.value;
+    self.value = next;
+    return previous;
+  }
+}
+
+/** Generic receiver with a descriptor-sized composite field. */
+@value
+type ValueMethodEnvelopeCell<T> {
+  var value: ValueMethodEnvelope<T>;
+
+  func swap(next: ValueMethodEnvelope<T>): ValueMethodEnvelope<T> {
+    let previous = self.value;
+    self.value = next;
+    return previous;
+  }
+}
+
+/** Concrete object entering a generic value only through a spec view. */
+type ValueMethodNamedObject: ValueMethodNamedView {
+  let text: string;
+
+  func ValueMethodNamedObject(text: string) {
+    self.text = text;
+  }
+
+  func label(): string {
+    return self.text;
+  }
+}
+
+/** Generic tuple receiver used by the closed fit-method path. */
+type ValueMethodGenericPair<T>(T, T);
+
+/** Supplies a generic tuple fit method that returns its closed T. */
+fit ValueMethodGenericPair<T> {
+  func first(): T {
+    return self.item1;
+  }
+}
+
+/** Stores a generic callable to verify field assignment and overwrite. */
+type ValueMethodProducerHolder<T> {
+  var producer: ValueMethodProducer<T>;
+}
+
+/** Supplies a fit-body method-value path for a value receiver. */
+fit ValueMethodCounter {
+  func fitRead(): int {
+    return self.value + 100;
+  }
+}
+
+/** Tuple receiver used to verify fit method values share value semantics. */
+type ValueMethodPair(int, int);
+
+/** Supplies a fit-body method for the tuple receiver. */
+fit ValueMethodPair {
+  func total(): int {
+    return self.item1 + self.item2;
+  }
+}
+
+/** Invokes a method value received through a callable parameter. */
+func invokeValueMethodProducer(producer: ValueMethodIntProducer): int {
+  return producer();
+}
+
+/** Forms a method value in a completed function scope and returns it. */
+func makeValueMethodReader(value: int): ValueMethodIntProducer {
+  let local = ValueMethodCounter { value: value };
+  return local.read;
+}
+
+/** First value-receiver method-value conformance group. */
+open func test_value_method_capture() {
+  describe("value method capture", () {
+    test("trivial receiver is copied when the method value forms", () {
+      var source = ValueMethodCounter { value: 10 };
+      let read: ValueMethodIntProducer = source.read;
+      source.value = 20;
+      assert(read() == 10,
+             "later source mutation does not change the captured receiver");
+    });
+
+    test("aggregate receiver retains an independent managed payload", () {
+      var source = ValueMethodLabel { text: "before", number: 7 };
+      let describe: ValueMethodStringProducer = source.describe;
+      source.text = "after";
+      source.number = 9;
+      assert(describe() == "before:7",
+             "managed fields belong to the captured aggregate copy");
+    });
+
+    test("mutating method keeps state in the captured receiver", () {
+      let source = ValueMethodCounter { value: 30 };
+      let add: ValueMethodIntUpdater = source.add;
+      assert(add(2) == 32 && add(3) == 35,
+             "successive calls observe the same captured receiver storage");
+      assert(source.value == 30,
+             "mutating the captured receiver does not mutate the source value");
+    });
+
+    test("separately formed method values own separate receiver copies", () {
+      let source = ValueMethodCounter { value: 40 };
+      let first: ValueMethodIntUpdater = source.add;
+      let second: ValueMethodIntUpdater = source.add;
+      assert(first(1) == 41 && first(1) == 42,
+             "the first method value keeps its own state");
+      assert(second(5) == 45,
+             "the second method value starts from an independent copy");
+    });
+
+    test("copying a callable shares the existing method closure", () {
+      let source = ValueMethodCounter { value: 50 };
+      let update: ValueMethodIntUpdater = source.add;
+      let alias = update;
+      assert(update(1) == 51 && alias(1) == 52,
+             "callable copies keep the existing callable reference semantics");
+    });
+
+    test("value fit method forms a callable method value", () {
+      let source = ValueMethodCounter { value: 60 };
+      let read: ValueMethodIntProducer = source.fitRead;
+      assert(read() == 160,
+             "a value fit method reads from its captured value receiver");
+    });
+
+    test("tuple fit method forms a callable method value", () {
+      let source: ValueMethodPair = (70, 8);
+      let total: ValueMethodIntProducer = source.total;
+      assert(total() == 78,
+             "a tuple fit method reads from its captured tuple receiver");
+    });
+
+    test("method value passes directly as a callable argument", () {
+      let source = ValueMethodCounter { value: 80 };
+      assert(invokeValueMethodProducer(source.read) == 80,
+             "callable parameter binding preserves the receiver copy");
+    });
+
+    test("returned method value outlives its creation scope", () {
+      let read = makeValueMethodReader(90);
+      assert(read() == 90,
+             "the returned closure owns the receiver after the local scope ends");
+    });
+
+    test("closed generic scalar receiver forms a method value", () {
+      var source = ValueMethodCell<int> { value: 101 };
+      let read: ValueMethodProducer<int> = source.read;
+      source.value = 102;
+      assert(read() == 101,
+             "a closed scalar generic instance is copied into the closure");
+    });
+
+    test("closed generic managed receiver mutates only captured storage", () {
+      let source = ValueMethodCell<string> { value: "first" };
+      let replace: ValueMethodReplacer<string> = source.replace;
+      assert(replace("second") == "first" &&
+             replace("third") == "second" &&
+             source.value == "first",
+             "managed T replacement preserves value capture and ownership");
+    });
+
+    test("closed generic wide value uses aggregate callable ABI", () {
+      let initial = ValueMethodWideValue {
+        first: "wide-a",
+        second: "wide-b",
+        number: 103
+      };
+      let next = ValueMethodWideValue {
+        first: "next-a",
+        second: "next-b",
+        number: 104
+      };
+      let source = ValueMethodCell<ValueMethodWideValue> { value: initial };
+      let replace: ValueMethodReplacer<ValueMethodWideValue> = source.replace;
+      let previous = replace(next);
+      let current = replace(initial);
+      assert(previous.first == "wide-a" && previous.second == "wide-b" &&
+             previous.number == 103 && current.first == "next-a" &&
+             current.second == "next-b" && current.number == 104,
+             "descriptor-sized T parameters and returns remain complete");
+    });
+
+    test("closed generic tuple fit method uses substituted T", () {
+      let source: ValueMethodGenericPair<string> = ("tuple-first", "tuple-second");
+      let first: ValueMethodProducer<string> = source.first;
+      assert(first() == "tuple-first",
+             "generic tuple fit method returns the closed tuple payload");
+    });
+
+    test("object-form spec remains the existing boxed generic payload", () {
+      let view: ValueMethodNamedView = ValueMethodNamedObject("spec-value");
+      let source = ValueMethodCell<ValueMethodNamedView> { value: view };
+      let read: ValueMethodProducer<ValueMethodNamedView> = source.read;
+      let result = read();
+      assert(result.label() == "spec-value",
+             "capturing the outer value copies the existing subject and witness");
+    });
+
+    test("callable-form spec remains a managed generic payload", () {
+      let nested: ValueMethodStringProducer = () -> "nested-callable";
+      let source = ValueMethodCell<ValueMethodStringProducer> { value: nested };
+      let read: ValueMethodProducer<ValueMethodStringProducer> = source.read;
+      let result = read();
+      assert(result() == "nested-callable",
+             "the nested callable survives the outer receiver copy");
+    });
+
+    test("composite generic parameter and return keep their closed layout", () {
+      let initial = ValueMethodEnvelope<string> {
+        value: "initial-envelope",
+        marker: "initial-marker"
+      };
+      let next = ValueMethodEnvelope<string> {
+        value: "next-envelope",
+        marker: "next-marker"
+      };
+      let source = ValueMethodEnvelopeCell<string> { value: initial };
+      let swap: ValueMethodEnvelopeSwapper<string> = source.swap;
+      let previous = swap(next);
+      let current = swap(initial);
+      assert(previous.value == "initial-envelope" &&
+             previous.marker == "initial-marker" &&
+             current.value == "next-envelope" &&
+             current.marker == "next-marker",
+             "Composite<T> uses the closed descriptor in both ABI directions");
+    });
+
+    test("generic method value survives field copy and overwrite", () {
+      let firstSource = ValueMethodCell<int> { value: 105 };
+      let secondSource = ValueMethodCell<int> { value: 106 };
+      let first: ValueMethodProducer<int> = firstSource.read;
+      let alias = first;
+      let holder = ValueMethodProducerHolder<int>();
+      holder.producer = first;
+      assert(holder.producer() == 105 && alias() == 105,
+             "field storage and callable binding copies share one closure");
+      holder.producer = secondSource.read;
+      assert(holder.producer() == 106 && alias() == 105,
+             "overwriting the field releases only its old callable reference");
+    });
+
+  });
+}

@@ -36,6 +36,7 @@ func main(args: string[]) {
       test_defer();
       test_value_type();
       test_value_type_array();
+      test_value_method_capture();
       test_inferred_generic_field();
       test_imported_generic_callable_mixin();
       test_nested_generic_callback();
