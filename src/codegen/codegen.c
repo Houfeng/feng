@@ -8096,11 +8096,62 @@ static bool cg_collect_generic_instances_from_type_params_from_program(
     size_t type_param_count,
     CGTypeParamScope scope,
     const FengProgram *reference_program);
+static const FengReifiableDepSet *cg_callable_dep_set(
+    const CG *cg,
+    const FengReifiableCallableDep *dep);
+static bool cg_close_callable_dep_type_args(
+    CG *cg,
+    const FengReifiableCallableDep *dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    FengToken blame,
+    FengTypeParam **out_params,
+    FengTypeRef ***out_args,
+    size_t *out_count);
 
-/* Close one callable's direct reifiable type dependencies at a concrete call
- * site and register every generic type/spec instance before the emission
- * passes resolve descriptor symbols. */
-static bool cg_collect_closed_reifiable_dep_instances(
+/* One active node in recursive generic-instance pre-registration.  The
+ * dependency-set identity and closed arguments together identify a concrete
+ * callable invocation; retaining only the active path handles direct and
+ * mutual recursion without suppressing independent branches. */
+typedef struct CGReifiablePreRegistrationFrame {
+    const FengReifiableDepSet *dep_set;
+    FengTypeRef *const *type_args;
+    size_t type_arg_count;
+    const struct CGReifiablePreRegistrationFrame *parent;
+} CGReifiablePreRegistrationFrame;
+
+/* Return whether one closed dependency invocation is already active. */
+static bool cg_reifiable_pre_registration_is_active(
+    const CGReifiablePreRegistrationFrame *frame,
+    const FengReifiableDepSet *dep_set,
+    FengTypeRef *const *type_args,
+    size_t type_arg_count) {
+    for (const CGReifiablePreRegistrationFrame *current = frame;
+         current != NULL;
+         current = current->parent) {
+        size_t index;
+
+        if (current->dep_set != dep_set ||
+            current->type_arg_count != type_arg_count) {
+            continue;
+        }
+        for (index = 0U; index < type_arg_count; ++index) {
+            if (!cg_type_ref_equal(current->type_args[index],
+                                   type_args[index])) {
+                break;
+            }
+        }
+        if (index == type_arg_count) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Register direct and transitive type/spec instances required by one closed
+ * callable dependency graph. */
+static bool cg_collect_closed_reifiable_dep_instances_inner(
     CG *cg,
     const FengReifiableDepSet *dep_set,
     const FengTypeParam *type_params,
@@ -8108,13 +8159,27 @@ static bool cg_collect_closed_reifiable_dep_instances(
     FengTypeRef *const *type_args,
     CGTypeParamScope caller_scope,
     const FengProgram *reference_program,
-    FengToken blame) {
-    if (dep_set == NULL || dep_set->dep_count == 0U) {
+    FengToken blame,
+    const CGReifiablePreRegistrationFrame *parent) {
+    CGReifiablePreRegistrationFrame frame;
+
+    if (dep_set == NULL) {
         return true;
     }
     if (type_param_count > 0U && type_args == NULL) {
         return true;
     }
+    if (cg_reifiable_pre_registration_is_active(parent,
+                                                 dep_set,
+                                                 type_args,
+                                                 type_param_count)) {
+        return true;
+    }
+    frame.dep_set = dep_set;
+    frame.type_args = type_args;
+    frame.type_arg_count = type_param_count;
+    frame.parent = parent;
+
     for (size_t index = 0U; index < dep_set->dep_count; ++index) {
         FengTypeRef *closed_ref = cg_type_ref_substitute(
             dep_set->deps[index].type_ref,
@@ -8133,7 +8198,82 @@ static bool cg_collect_closed_reifiable_dep_instances(
             return false;
         }
     }
+
+    for (size_t index = 0U;
+         index < dep_set->callable_dep_count;
+         ++index) {
+        const FengReifiableCallableDep *callable_dep =
+            &dep_set->callable_deps[index];
+        const FengReifiableDepSet *callee_dep_set =
+            cg_callable_dep_set(cg, callable_dep);
+        const FengDecl *reference_decl =
+            callable_dep->function_decl != NULL
+                ? callable_dep->function_decl
+                : (callable_dep->fit_decl != NULL
+                       ? callable_dep->fit_decl
+                       : callable_dep->owner_type_decl);
+        FengTypeParam *callee_params = NULL;
+        FengTypeRef **callee_args = NULL;
+        size_t callee_count = 0U;
+        bool ok;
+
+        if (!cg_close_callable_dep_type_args(cg,
+                                             callable_dep,
+                                             type_params,
+                                             type_param_count,
+                                             type_args,
+                                             blame,
+                                             &callee_params,
+                                             &callee_args,
+                                             &callee_count)) {
+            return false;
+        }
+        ok = cg_collect_closed_reifiable_dep_instances_inner(
+            cg,
+            callee_dep_set,
+            callee_params,
+            callee_count,
+            callee_args,
+            caller_scope,
+            cg_find_decl_owner_program(cg, reference_decl),
+            blame,
+            &frame);
+        for (size_t arg_index = 0U;
+             arg_index < callee_count;
+             ++arg_index) {
+            cg_type_ref_free(callee_args[arg_index]);
+        }
+        free(callee_args);
+        free(callee_params);
+        if (!ok) {
+            return false;
+        }
+    }
     return true;
+}
+
+/* Close one callable's direct reifiable type dependencies at a concrete call
+ * site and register every direct or transitive generic type/spec instance
+ * before the emission passes resolve descriptor symbols. */
+static bool cg_collect_closed_reifiable_dep_instances(
+    CG *cg,
+    const FengReifiableDepSet *dep_set,
+    const FengTypeParam *type_params,
+    size_t type_param_count,
+    FengTypeRef *const *type_args,
+    CGTypeParamScope caller_scope,
+    const FengProgram *reference_program,
+    FengToken blame) {
+    return cg_collect_closed_reifiable_dep_instances_inner(
+        cg,
+        dep_set,
+        type_params,
+        type_param_count,
+        type_args,
+        caller_scope,
+        reference_program,
+        blame,
+        NULL);
 }
 
 /* Close direct dependencies for a resolved top-level or type method call.
@@ -36977,7 +37117,7 @@ static bool cg_emit_owner_callable_dep_array(
                 (void)cg_fail(
                     cg,
                     blame,
-                    "CE0376",
+                    "IE0002",
                     "codegen: cannot build owner callable dependency key "
                     "for '%s' in '%s'",
                     identity != NULL ? identity : "<unknown>",
@@ -37028,7 +37168,7 @@ static bool cg_emit_owner_callable_dep_array(
 cleanup:
     if (!ok && !cg->failed) {
         (void)cg_fail(cg, blame,
-                      "CE0376",
+                      "IE0002",
                       "codegen: failed to close owner callable dependency "
                       "'%s' for '%s'",
                       failed_dep_index < count &&

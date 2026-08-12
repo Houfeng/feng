@@ -1,6 +1,6 @@
 # Feng 泛型跨特性场景 FCTS 补强开发文档
 
-> 状态：进行中（第一至第三组已完成，待第四组）
+> 状态：进行中（第一至第三组及 `@mixable` 泛型补充组已完成，待第四组）
 >
 > 泛型语言规则以
 > [feng-generics-draft.md](../specifications/feng-generics-draft.md) 为准；前两轮组合覆盖及修复记录见
@@ -10,7 +10,8 @@
 >
 > 第三组曾暴露出泛型类型 owner 缺少 callable dependency slots，以及泛型终结器实现与权威规范不一致。
 > [feng-generic-type-owner-reification-bugfix-dev.md](./feng-generic-type-owner-reification-bugfix-dev.md)
-> 已完成并通过全量回归；第三组现已完成，本计划从第四组继续。
+> 已完成并通过全量回归；第三组现已完成。在第四组前先补齐
+> `@mixable` 生成 wrapper 的泛型 reified dependency 闭环。
 
 ## 1 目标
 
@@ -21,10 +22,11 @@
 1. 泛型共享体持有泛型值时经过异常传播和 `defer` 清理；
 2. 捕获泛型值的闭包逃逸出创建它的共享体；
 3. 泛型构造器主体创建派生泛型局部值并调用泛型 callable；
-4. 从上下文目标类型推导函数或方法类型参数，并通过静态工厂契约产生结果；
-5. 泛型约束中的静态字段访问；
-6. 跨包泛型 `fit` 及不同 subject 表示；
-7. enum、tuple、数组和泛型引用实例直接作为 `T`，以及 `Span`、变参、`Map` 等复合路径。
+4. `@mixable` 泛型静态 wrapper 和实例 wrapper 跨包、多层转发 reified dependencies；
+5. 从上下文目标类型推导函数或方法类型参数，并通过静态工厂契约产生结果；
+6. 泛型约束中的静态字段访问；
+7. 跨包泛型 `fit` 及不同 subject 表示；
+8. enum、tuple、数组和泛型引用实例直接作为 `T`，以及 `Span`、变参、`Map` 等复合路径。
 
 新增成功行为用例优先写入 FCTS，并验证完整值或确定的生命周期结果，不能只验证源码可编译。
 
@@ -125,6 +127,22 @@ type 与 callable 三类依赖，并保持既有构造器 ABI；不得为构造�
 
 验收：专项 FCTS 通过后，在沙箱外执行一次 `make test`。
 
+### 4.3.1 第三组补充：`@mixable` 泛型 reified dependencies
+
+新增独立的 imported 来源类型和 consumer 展开目标，不修改既有 mixin 用例。覆盖：
+
+- 来源 owner 类型参数 `T` 在 `@mixable` 方法体中闭合 `List<T>`、聚合类型和泛型 callable；
+- 方法类型参数 `U` 在生成静态 wrapper 和实例 wrapper 中保持独立描述符映射；
+- owner `T` 与方法 `U` 同时出现在参数、返回值及派生 callable dependencies 中；
+- provider 导出的生成 wrapper 经 `.ft` 恢复后再被 consumer 多层展开；
+- 来源实例入口、导入生成入口、consumer 静态入口和 consumer 实例入口；
+- 标量、托管引用和 descriptor-sized 闭合实参。
+
+这些路径必须复用普通手写方法的函数描述符、callable dependency slots 和泛型共享体。
+禁止为 `@mixable` 生成 wrapper 增加专用运行时描述符查找或特判。
+
+验收：专项 FCTS 通过后，在沙箱外执行一次 `make test`；通过后再进入第四组。
+
 ### 4.4 第四组：目标类型推导与静态工厂/静态字段约束
 
 定义跨包 object-form spec：
@@ -205,6 +223,8 @@ fit 提供的方法。至少覆盖：
 - [x] 第二组完成后的 `make test`
 - [x] 第三组：泛型构造器主体具化
 - [x] 第三组完成后的 `make test`
+- [x] 第三组补充：`@mixable` 泛型 reified dependencies
+- [x] `@mixable` 泛型补充组完成后的 `make test`
 - [ ] 第四组：目标类型推导与静态工厂/静态字段约束
 - [ ] 第四组完成后的 `make test`
 - [ ] 第五组：跨包泛型 `fit` 与多种 subject 表示
@@ -285,3 +305,30 @@ aggregate 实参必须先取得 cleanup 所有权，再根据声明选择传值�
 唯一稳定 C 局部槽的 fixed-layout owned aggregate，直接把该槽登记到当前作用域，不为登记 cleanup 再做
 一次结构体复制。修复不修改 runtime API/ABI，不增加堆分配或描述符读取；新增的 release 只回收原本
 泄漏的所有权。
+
+### 7.8 泛型 owner 的泛型方法返回类型代入（Semantic 缺陷）
+
+`@mixable` 泛型补充组首次专项运行确认：当泛型 owner 的泛型方法返回只依赖方法参数 `U`
+的泛型聚合时，调用返回类型的待具化依赖收集只检查并代入了 owner 参数 `T`。返回类型不含
+`T` 时收集器提前退出，因而遗漏 `Composite<U>` 的 aggregate descriptor slot，共享体发码报
+`IE0002`（原 `CE0066`）。该缺口属于普通泛型方法调用，不属于 `@mixable` 展开规则。
+
+通用修复规则是：依赖收集以 Semantic 已记录的 caller-view owner 实例和 callable 类型实参为权威
+映射，按“owner 类型参数、callable 类型参数”两层依次代入返回类型，再以完整的 caller-view
+类型收集待具化依赖。该规则同时覆盖只依赖 `T`、只依赖 `U` 及同时依赖 `T/U` 的返回类型，
+并统一使用显式或推导得到的 callable 类型实参。修复只完善编译期函数描述符内容，不修改 runtime
+API/ABI，不增加 Feng 程序运行时分支、分配或描述符读取。
+
+### 7.9 多层 callable dependency graph 的泛型实例预注册（Codegen 缺陷）
+
+`@mixable` 泛型跨包、多层展开路径继续确认：consumer 的实例 wrapper 依赖 imported 中间层静态
+wrapper，中间层再依赖原始来源方法。函数描述符生成已会递归闭合整个 callable dependency graph，
+但发码前的泛型 type/spec 实例预注册只扫描直接依赖。第二层描述符生成时因此无法解析
+只在转发链上间接出现的 `Source<T>` 具化实例，报 `CE0031`。该缺口同样属于普通泛型
+callable dependency graph，不属于 `@mixable` 专用规则。
+
+通用修复规则是：泛型实例预注册与函数描述符生成共用同一个 callable dependency graph 语义；
+每层先用 caller 的闭合实参生成 callee 参数映射，注册该层的 managed/aggregate 依赖，再递归处理
+其 callable 依赖。遍历以“依赖集身份 + 闭合类型实参”为循环判定单元，使直接递归和互递归不会
+无限扫描。该修复只改变编译期预注册顺序，不修改 runtime API/ABI，不增加生成程序的描述符、
+分支、分配或间接读取。

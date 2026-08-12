@@ -599,7 +599,6 @@
 | **CE0371** | 泛型实例化 | codegen: internal: failed to emit generic method wrapper '%s.%s' |
 | **CE0372** | 模块/程序 | codegen: no programs to compile |
 | **CE0373** | 模块/程序 | codegen: bin target requires `main` function |
-| **CE0376** | 泛型实例化 | codegen: cannot build owner callable dependency key for '%s' in '%s'、codegen: failed to close owner callable dependency '%s' for '%s' |
 | **CE0377** | 成员展开 | codegen: member mix source field is not lowerable、codegen: member mix source construction is not an object value |
 | **CE0378** | 成员展开 | codegen: member mix source requires missing reified layout |
 | **CE0379** | 成员展开 | codegen: member mix source field index is missing、codegen: member mix source field is missing |

@@ -1,0 +1,73 @@
+open module fcts_lib.test;
+
+import std.collections;
+
+/** Nominal target accepted by the generic mixable source and its wrappers. */
+open spec LibGenericMixableWidget {}
+
+/** Build one descriptor-sized value through an imported generic callable. */
+open func libGenericMixableBuild<T>(
+  value: T,
+  label: string,
+  revision: i64
+): LibAdvancedComposite<T> {
+  let values = List<T>();
+  values.add(value);
+  return LibAdvancedComposite<T>(values.get(0), label, revision);
+}
+
+/** Source whose mixable methods require owner and method reification data. */
+open type LibGenericMixableSource<T>: LibGenericMixableWidget {
+  /** Project an owner-generic value through direct and callable dependencies. */
+  @mixable
+  open static func ownerProject(
+    target: LibGenericMixableWidget,
+    value: T
+  ): LibAdvancedComposite<T> {
+    let values = List<T>();
+    values.add(value);
+    return libGenericMixableBuild<T>(
+      values.get(0),
+      "mixable-owner",
+      201
+    );
+  }
+
+  /** Project an independent method-generic value through the same machinery. */
+  @mixable
+  open static func methodProject<U>(
+    target: LibGenericMixableWidget,
+    value: U
+  ): LibAdvancedComposite<U> {
+    let values = List<U>();
+    values.add(value);
+    return libGenericMixableBuild<U>(
+      values.get(0),
+      "mixable-method",
+      202
+    );
+  }
+
+  /** Combine owner T and method U after forwarding through two generic callees. */
+  @mixable
+  open static func combine<U>(
+    target: LibGenericMixableWidget,
+    ownerValue: T,
+    methodValue: U
+  ): LibAdvancedPair<T, U> {
+    let owner = LibGenericMixableSource<T>.ownerProject(
+      target,
+      ownerValue
+    );
+    let method = LibGenericMixableSource<T>.methodProject<U>(
+      target,
+      methodValue
+    );
+    return (owner, method, owner.value, method.value);
+  }
+}
+
+/** Export generated generic wrappers so a consumer can mix them again. */
+open type LibGenericMixableMiddle<T>: LibGenericMixableWidget {
+  ...: LibGenericMixableSource<T>;
+}

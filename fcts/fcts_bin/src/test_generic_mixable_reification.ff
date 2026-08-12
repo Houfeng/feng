@@ -1,0 +1,99 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Wide value proving method-generic wrapper results retain full layout. */
+@value
+type GenericMixableWideValue {
+  /** First managed field. */
+  let first: string;
+
+  /** Second managed field. */
+  let second: string;
+
+  /** Scalar tail. */
+  let number: i64;
+
+  /** Construct a populated wide value. */
+  func GenericMixableWideValue(
+    first: string,
+    second: string,
+    number: i64
+  ) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Consumer target that mixes an imported generated wrapper for a second time. */
+type GenericMixableLeaf<T>: LibGenericMixableWidget {
+  ...: LibGenericMixableMiddle<T>;
+}
+
+/** Verify generic mixable wrappers reuse ordinary reification behavior. */
+open func test_generic_mixable_reification(): void {
+  describe("generic mixable reification", () {
+    test("source and imported owner wrappers close generic dependencies", () {
+      let source = LibGenericMixableSource<string>();
+      let sourceResult = source.ownerProject("source-value");
+      assert(sourceResult.value == "source-value" &&
+             sourceResult.label == "mixable-owner" &&
+             sourceResult.revision == 201,
+             "source instance wrapper closes owner T dependencies");
+
+      let middle = LibGenericMixableMiddle<i64>();
+      let middleResult = middle.ownerProject(41);
+      assert(middleResult.value == 41 &&
+             middleResult.label == "mixable-owner" &&
+             middleResult.revision == 201,
+             "imported generated wrapper restores owner T dependencies");
+    });
+
+    test("consumer static and instance wrappers close method dependencies", () {
+      let leaf = GenericMixableLeaf<string>();
+      let wide = GenericMixableWideValue("wide-first", "wide-second", 42);
+      let staticResult = GenericMixableLeaf<string>.methodProject<
+        GenericMixableWideValue
+      >(leaf, wide);
+      let instanceResult = leaf.methodProject<i64>(43);
+
+      assert(staticResult.value.first == "wide-first" &&
+             staticResult.value.second == "wide-second" &&
+             staticResult.value.number == 42 &&
+             staticResult.label == "mixable-method" &&
+             staticResult.revision == 202,
+             "static wrapper preserves descriptor-sized method U");
+      assert(instanceResult.value == 43 &&
+             instanceResult.label == "mixable-method" &&
+             instanceResult.revision == 202,
+             "instance wrapper preserves another method U closure");
+    });
+
+    test("multi-level wrapper keeps owner and method scopes independent", () {
+      let leaf = GenericMixableLeaf<string>();
+      let wide = GenericMixableWideValue("pair-first", "pair-second", 44);
+      let result = leaf.combine<GenericMixableWideValue>(
+        "owner-value",
+        wide
+      );
+
+      assert(result.item1.value == "owner-value" &&
+             result.item1.label == "mixable-owner" &&
+             result.item1.revision == 201,
+             "combined wrapper closes owner T through its callable slot");
+      assert(result.item2.value.first == "pair-first" &&
+             result.item2.value.second == "pair-second" &&
+             result.item2.value.number == 44 &&
+             result.item2.label == "mixable-method" &&
+             result.item2.revision == 202,
+             "combined wrapper closes descriptor-sized method U");
+      assert(result.item3 == "owner-value" &&
+             result.item4.first == "pair-first" &&
+             result.item4.second == "pair-second" &&
+             result.item4.number == 44,
+             "combined wrapper returns complete direct T and U slots");
+    });
+  });
+}

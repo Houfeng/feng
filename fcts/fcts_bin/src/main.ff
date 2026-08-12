@@ -45,6 +45,7 @@ func main(args: string[]) {
       test_generic_cross_feature_coverage();
       test_generic_shared_body_reification();
       test_generic_type_owner_reification();
+      test_generic_mixable_reification();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

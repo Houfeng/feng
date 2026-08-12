@@ -943,7 +943,7 @@ static FengTypeRef *rd_clone_type_ref_substituting(
     const FengTypeRef *type_ref,
     const FengTypeParam *type_params,
     size_t type_param_count,
-    FengTypeRef *const *type_args) {
+    const FengTypeRef *const *type_args) {
     FengTypeRef *clone;
     size_t i;
 
@@ -1033,15 +1033,14 @@ static FengTypeRef *rd_clone_type_ref_substituting(
 /* ---- 收集 CALL 表达式返回类型中的间接泛型依赖 --------------------------- */
 
 /* 对被调方法/函数的返回类型做参数代入，得到 caller 视角的类型引用并收集。
- * 仅当返回类型含有 owner 的泛型参数时才产生合成 type_ref。 */
+ * owner 和 callable 参数属于两个独立层次，必须依次完成代入。 */
 static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
                                                 const FengExpr *expr) {
     const FengResolvedCallable *rc;
     const FengTypeRef *return_type_ref = NULL;
-    const FengTypeParam *callee_type_params = NULL;
-    size_t callee_type_param_count = 0U;
-    FengTypeRef *const *call_site_type_args = NULL;
-    FengTypeRef *substituted;
+    const FengCallableSignature *callable = NULL;
+    const FengTypeRef *current;
+    FengTypeRef *owned_current = NULL;
 
     if (ctx == NULL || expr == NULL ||
         expr->kind != FENG_EXPR_CALL) {
@@ -1057,11 +1056,13 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
         case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:
             if (rc->member != NULL) {
+                callable = &rc->member->as.callable;
                 return_type_ref = rc->member->as.callable.return_type;
             }
             break;
         case FENG_RESOLVED_CALLABLE_FUNCTION:
             if (rc->function_decl != NULL) {
+                callable = &rc->function_decl->as.function_decl;
                 return_type_ref =
                     rc->function_decl->as.function_decl.return_type;
             }
@@ -1072,70 +1073,83 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
     if (return_type_ref == NULL) {
         return;
     }
+    current = return_type_ref;
 
-    /* 2. 建立形参→实参映射。 */
+    /* 2. 先代入 owner 类型参数。 */
     if (rc->owner_type_decl != NULL &&
         rc->owner_type_decl->kind == FENG_DECL_TYPE &&
         rc->owner_instance_type_ref != NULL &&
         rc->owner_instance_type_ref->kind == FENG_TYPE_REF_NAMED) {
-        callee_type_params =
+        const FengTypeParam *owner_type_params =
             rc->owner_type_decl->as.type_decl.type_params;
-        callee_type_param_count =
+        size_t owner_type_param_count =
             rc->owner_type_decl->as.type_decl.type_param_count;
-        call_site_type_args =
-            rc->owner_instance_type_ref->as.named.type_args;
+        const FengTypeRef *const *owner_type_args =
+            (const FengTypeRef *const *)
+                rc->owner_instance_type_ref->as.named.type_args;
+
         if (rc->owner_instance_type_ref->as.named.type_arg_count !=
-            callee_type_param_count) {
+            owner_type_param_count) {
             return;
         }
-    } else if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
-               rc->function_decl != NULL &&
-               rc->function_decl->as.function_decl.type_param_count > 0U &&
-               expr->as.call.has_explicit_type_args) {
-        callee_type_params =
-            rc->function_decl->as.function_decl.type_params;
-        callee_type_param_count =
-            rc->function_decl->as.function_decl.type_param_count;
-        call_site_type_args = expr->as.call.explicit_type_args;
-        if (expr->as.call.explicit_type_arg_count !=
-            callee_type_param_count) {
+        if (owner_type_param_count > 0U &&
+            type_ref_contains_type_param(current,
+                                         owner_type_params,
+                                         owner_type_param_count)) {
+            owned_current = rd_clone_type_ref_substituting(
+                current,
+                owner_type_params,
+                owner_type_param_count,
+                owner_type_args);
+            if (owned_current == NULL) {
+                return;
+            }
+            current = owned_current;
+        }
+    }
+
+    /* 3. 再代入方法/函数级类型参数。Semantic 记录的
+     * callable_type_args 已经同时覆盖显式及推导实参。 */
+    if (callable != NULL && callable->type_param_count > 0U &&
+        rc->callable_type_args != NULL) {
+        FengTypeRef *next;
+
+        if (rc->callable_type_arg_count != callable->type_param_count) {
+            rd_free_synthesized_type_ref(owned_current);
             return;
         }
-    } else {
-        /* 无映射可建——直接对返回类型尝试收集（不做代入）。 */
-        try_collect_type_ref(ctx, return_type_ref);
-        return;
+        if (type_ref_contains_type_param(current,
+                                         callable->type_params,
+                                         callable->type_param_count)) {
+            next = rd_clone_type_ref_substituting(
+                current,
+                callable->type_params,
+                callable->type_param_count,
+                rc->callable_type_args);
+            if (next == NULL) {
+                rd_free_synthesized_type_ref(owned_current);
+                return;
+            }
+            rd_free_synthesized_type_ref(owned_current);
+            owned_current = next;
+            current = owned_current;
+        }
     }
 
-    if (callee_type_param_count == 0U || call_site_type_args == NULL) {
-        return;
-    }
-
-    /* 3. 返回类型不含被调者的泛型参数则跳过。 */
-    if (!type_ref_contains_type_param(return_type_ref,
-                                      callee_type_params,
-                                      callee_type_param_count)) {
-        return;
-    }
-
-    /* 4. 参数代入：将返回类型中被调形参替换为调用点实参。 */
-    substituted = rd_clone_type_ref_substituting(
-        return_type_ref,
-        callee_type_params,
-        callee_type_param_count,
-        call_site_type_args);
-    if (substituted == NULL) {
+    /* 4. 无需代入时直接收集原始返回类型。 */
+    if (owned_current == NULL) {
+        try_collect_type_ref(ctx, current);
         return;
     }
 
     /* 5. 存入 analysis 管理生命周期。 */
-    if (!rd_store_synthesized_ref(ctx->analysis, substituted)) {
-        rd_free_synthesized_type_ref(substituted);
+    if (!rd_store_synthesized_ref(ctx->analysis, owned_current)) {
+        rd_free_synthesized_type_ref(owned_current);
         return;
     }
 
     /* 6. 对代入后的类型调用 try_collect_type_ref。 */
-    try_collect_type_ref(ctx, substituted);
+    try_collect_type_ref(ctx, owned_current);
 }
 
 /* Collect the caller-view signature required to lower a lambda into its
@@ -1147,7 +1161,7 @@ static void rd_collect_lambda_target_signature_deps(CollectContext *ctx,
     const FengSpecCoercionSite *site;
     const FengDecl *spec_decl;
     const FengTypeRef *target_ref;
-    FengTypeRef *const *type_args = NULL;
+    const FengTypeRef *const *type_args = NULL;
     size_t type_arg_count = 0U;
     size_t index;
 
@@ -1173,7 +1187,8 @@ static void rd_collect_lambda_target_signature_deps(CollectContext *ctx,
      * in addition to the signature's transitive layout dependencies. */
     try_collect_type_ref(ctx, target_ref);
     if (target_ref->kind == FENG_TYPE_REF_NAMED) {
-        type_args = target_ref->as.named.type_args;
+        type_args = (const FengTypeRef *const *)
+            target_ref->as.named.type_args;
         type_arg_count = target_ref->as.named.type_arg_count;
     }
 
