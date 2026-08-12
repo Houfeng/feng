@@ -4,6 +4,9 @@
 > 语言规则权威来源见 [docs/specifications/feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md)、[docs/specifications/feng-fit.md](../specifications/feng-fit.md)、[docs/specifications/feng-builtin-type.md](../specifications/feng-builtin-type.md)。
 > 符号表导出规范见 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)。
 > 本文只写实现方案与任务拆解，不重复规范定义。
+>
+> 隐式 `self` 在语言层统一引用当前接收者；标量没有可变子结构或可观察的存储身份，原生值 `self` ABI
+> 是该语义的等价 lowering，不构成 Feng 语言中的赋值或显式参数复制边界。
 
 ## 1. 目标
 
@@ -65,17 +68,17 @@
 
 | 适配点 | 改动内容 | 量级 |
 | --- | --- | --- |
-| **thunk 内部** | `void*` → 目标类型适配：用户 type → `(struct T*)`，标量 → 从借用地址或 `FengScalarBox` 取原生值，`string`/数组 → 受管引用指针 | 每种目标一个专门化解包 |
+| **thunk 内部** | `void*` → 目标类型适配：用户 type → `(struct T*)`，标量 → 从借用地址或 `FengScalarBox` 读取一次原生值，`string`/数组 → 受管引用所指实例 | 每种目标一个专门化解包 |
 | **witness sidecar key** | 从 `(type_decl, spec_decl)` 扩到统一 subject key（用户 type / builtin canonical name / 数组结构化签名） | 扩字段，不拆表，纯编译期 |
 | **fit target 归一化** | 语义层新增归一化 helper，使 target 识别、self 绑定、孤儿判定都基于同一份归一化结果 | 新增一个内部结构 |
 | **标量 spec subject 物化** | 非逃逸临时 spec 调用可借用局部物化地址；可逃逸 object-form spec 值统一进入 runtime-internal `FengScalarBox` | 一套内部承载机制 |
 
 ### 2.3 当前推荐的标量 subject 策略
 
-- 对 `1.xx()` 这类 direct-call，仍然直接传原生值；不得经过 `FengScalarBox`。
+- 对标量 direct-call，接收者表达式只求值一次，并以原生标量值传给 fit 实现；这只是隐式 `self` 的等价底层表示，不是 Feng 语言的显式参数复制边界。direct-call 不得经过 `FengScalarBox`。
 - 对标量的临时 spec 调用，编译器可先物化局部变量，再把其地址作为 `_subject` 传给 witness thunk。
 - 只有当标量真正形成**可逃逸的一等 object-form spec 值**时，才创建 runtime-internal `FengScalarBox`。
-- `FengScalarBox` 只负责提供稳定 subject 存储；fit 方法实现与 `self` 语义永远只看原始标量值，不看箱对象。
+- `FengScalarBox` 只负责为可逃逸 object-form spec subject 提供稳定标量存储；witness thunk 从其中读取原生标量值交给 fit 实现，不把箱对象本身暴露为接收者。
 
 ### 2.4 不做的方向
 
@@ -258,7 +261,7 @@ struct FengScalarBox {
 - 一套统一的 direct-call emitter
 - 一套统一的 witness emitter
 - 仅在两个局部位置分支：
-  - `self` 的底层表示（对象指针 / 托管引用 / 标量值）
+  - `self` 的底层表示（对象实例引用 / 托管引用所指实例 / 语义等价的原生标量值）
   - spec subject 的物化策略（现有对象 / 借用临时标量地址 / `FengScalarBox`）
 
 目标是：编译器只有一条 fit 主路径，不做两套互相平行的 fit 子系统。
@@ -375,11 +378,11 @@ struct FengScalarBox {
 
 - [x] D1：抽开 `UserFit.target` 的“只能是 `UserType *`”假设。
 - [x] D2：新增统一 fit method 发码入口：对象走现有 `cg_emit_user_method`，builtin / array 走新分支。
-- [x] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用原生 C 类型表示。
+- [x] D3：`string` / 数组的 `self` 沿用现有受管引用表示；builtin 标量的 `self` 沿用语义等价的原生 C 值表示。接收者表达式只求值一次，方法调用不引入 Feng 语言层的复制边界。
 - [x] D4：direct-call 与 spec-call 共享同一个 fit 实现符号，不允许为标量再分裂出一套“箱版方法实现”。
 - [x] D5：将 `cg_ensure_witness_instance` 从“只接受 `UserType`”推广到接受统一 subject target。
 - [x] D6：对对象 target：继续 `(struct T *)_subject`。
-- [x] D7：对 builtin 标量：从借用地址或 `FengScalarBox` 中只做一次原生类型取值。
+- [x] D7：对 builtin 标量，从借用地址或 `FengScalarBox` 中只读取一次原生标量值，作为隐式 `self` 的等价底层表示。
 - [x] D8：对 `string` / 数组：只做一次现有引用表示取指针。
 - [x] D9：thunk 直接调用 fit 方法实现，不经额外运行时查表或第二层 wrapper。
 - [x] D10：builtin 标量 / `string` 目标复用 BUILTIN type node；`T[]` / `T[]!` 目标复用 ARRAY type node，保留元素类型引用与可写位图。

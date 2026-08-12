@@ -199,7 +199,7 @@ struct MyTuple__spec_box {
 };
 ```
 
-tuple box 是普通运行时管理对象，`release_children` 对 `value` 调用 `feng_aggregate_release()`；witness thunk 从 box 的 `value` 字段恢复 by-value `self`，因此元组值作为 spec 参数、spec 局部或返回值逃逸时不会悬垂。
+tuple box 是普通运行时管理对象，`release_children` 对 `value` 调用 `feng_aggregate_release()`；元组值在进入 spec 参数、spec 局部或返回边界时复制进 box 的 `value` 字段，witness thunk 随后把该字段的存储地址作为隐式 `self`，方法调用本身不再复制元组，也不会让 `self` 悬垂。
 
 ---
 
