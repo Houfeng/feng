@@ -13564,38 +13564,50 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
 
 static bool cg_resolve_type_for_user_fit_member(CG *cg,
                                                 const UserFit *uf,
+                                                const FengCallableSignature *sig,
                                                 const FengTypeRef *ref,
                                                 const FengToken *fallback,
                                                 CGType **out_type) {
-    const FengDecl *target_decl;
-
-    if (uf == NULL || uf->target == NULL || uf->decl == NULL ||
-        !uf->target->is_generic_instance) {
-        return cg_resolve_type(cg, ref, fallback, out_type);
-    }
-    target_decl = uf->target->generic_origin_decl;
-    if (target_decl == NULL || target_decl->kind != FENG_DECL_TYPE ||
-        target_decl->as.type_decl.type_param_count == 0U) {
-        return cg_resolve_type(cg, ref, fallback, out_type);
-    }
-
-    FengTypeRef *sub = cg_type_ref_substitute(ref,
-                                             target_decl->as.type_decl.type_params,
-                                             target_decl->as.type_decl.type_param_count,
-                                             uf->target->generic_type_args);
+    const FengDecl *target_decl = NULL;
+    const FengTypeRef *effective_ref = ref;
+    FengTypeRef *substituted = NULL;
+    CGTypeParamScope open_scope = {0};
     bool ok;
 
-    if (sub == NULL) return false;
-    if (uf->target->generic_context_type_param_count > 0U) {
-        CGTypeParamScope open_scope = {
-            .first = target_decl->as.type_decl.type_params,
-            .first_count = target_decl->as.type_decl.type_param_count,
-        };
-        ok = cg_resolve_type_with_open_scope(cg, sub, fallback, &open_scope, out_type);
-    } else {
-        ok = cg_resolve_type(cg, sub, fallback, out_type);
+    if (uf == NULL || uf->target == NULL || uf->decl == NULL || sig == NULL) {
+        return false;
     }
-    cg_type_ref_free(sub);
+    if (uf->target->is_generic_instance) {
+        target_decl = uf->target->generic_origin_decl;
+        if (target_decl != NULL && target_decl->kind == FENG_DECL_TYPE &&
+            target_decl->as.type_decl.type_param_count > 0U) {
+            substituted = cg_type_ref_substitute(
+                ref,
+                target_decl->as.type_decl.type_params,
+                target_decl->as.type_decl.type_param_count,
+                uf->target->generic_type_args);
+            if (substituted == NULL) {
+                return false;
+            }
+            effective_ref = substituted;
+            /* Keep the declared owner domain before the method domain even
+             * for a closed instance. Shared fit-method ABIs use the same
+             * owner-T / method-U descriptor indices as ordinary methods. */
+            open_scope.first = target_decl->as.type_decl.type_params;
+            open_scope.first_count =
+                target_decl->as.type_decl.type_param_count;
+        }
+    }
+    open_scope.second = sig->type_params;
+    open_scope.second_count = sig->type_param_count;
+
+    if (open_scope.first_count > 0U || open_scope.second_count > 0U) {
+        ok = cg_resolve_type_with_open_scope(
+            cg, effective_ref, fallback, &open_scope, out_type);
+    } else {
+        ok = cg_resolve_type(cg, effective_ref, fallback, out_type);
+    }
+    cg_type_ref_free(substituted);
     return ok;
 }
 
@@ -13638,13 +13650,14 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         for (size_t pi = 0; pi < sig->param_count; pi++) {
             if (!cg_resolve_type_for_user_fit_member(cg,
                                                      uf,
+                                                     sig,
                                                      sig->params[pi].type,
                                                      &sig->params[pi].token,
                                                      &um->param_types[pi])) return false;
             um->param_names[pi] = strndup(sig->params[pi].name.data,
                                           sig->params[pi].name.length);
         }
-        if (!cg_resolve_type_for_user_fit_member(cg, uf, sig->return_type, &sig->token,
+        if (!cg_resolve_type_for_user_fit_member(cg, uf, sig, sig->return_type, &sig->token,
                                                  &um->return_type)) return false;
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types, um->param_count,
@@ -22389,7 +22402,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         !ut->is_generic_instance;
     bool calls_shared = calls_open_shared || calls_imported_shared;
     if (calls_shared) {
-        dispatch_name = user_fit != NULL && calls_open_shared
+        dispatch_name = user_fit != NULL
             ? cg_fit_method_shared_cname(cg, user_fit, um->member)
             : cg_generic_type_method_shared_cname(
                   cg,
@@ -22421,7 +22434,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     if (calls_shared) {
         const char *type_descriptor = calls_open_shared
             ? shared_type_desc_expr
-            : (cg_user_type_is_value(ut)
+            : (cg_user_type_is_value_semantics(ut)
                    ? ut->c_aggregate_desc_name
                    : ut->c_desc_name);
         if (type_descriptor == NULL) {
@@ -37370,15 +37383,16 @@ static void cg_emit_user_method_proto(Buf *out,
     cg_emit_user_method_proto_ex(out, t, m, needs_static, false);
 }
 
-/* Emit one exported shared-body ABI prototype for an imported generic owner
- * member. Instance/static methods use the provider's owner descriptor,
- * optional callable descriptor, method descriptors, ordinary parameters and
- * output slot ordering. Constructors share the same path without a callable
- * descriptor. Final C symbols are deduplicated across open instances. */
+/* Emit one exported shared-body ABI prototype for an imported generic-owner
+ * or method-generic member. Instance/static methods use the provider's owner
+ * descriptor, optional callable descriptor, method descriptors, ordinary
+ * parameters and output slot ordering. A fit supplies its stable shared-name
+ * override. Final C symbols are deduplicated across imported instances. */
 static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
                                                          const UserType *type,
                                                          const UserMethod *method,
-                                                         bool has_func_desc) {
+                                                         bool has_func_desc,
+                                                         const char *shared_name_override) {
     const FengCallableSignature *signature;
     char *shared_name;
     const char *type_descriptor_name;
@@ -37388,8 +37402,10 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
         return false;
     }
     signature = &method->member->as.callable;
-    shared_name = cg_generic_type_method_shared_cname(
-        cg, type->decl, method->member);
+    shared_name = shared_name_override != NULL
+        ? strdup(shared_name_override)
+        : cg_generic_type_method_shared_cname(
+              cg, type->decl, method->member);
     if (shared_name == NULL) {
         return cg_fail(cg, method->member->token,
                        "IE0001", "codegen: out of memory");
@@ -37429,7 +37445,7 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
                        "IE0001", "codegen: out of memory");
     }
     cg->imported_generic_shared_proto_count++;
-    type_descriptor_name = cg_user_type_is_value(type)
+    type_descriptor_name = cg_user_type_is_value_semantics(type)
                                ? "FengAggregateDescriptor"
                                : "FengTypeDescriptor";
 
@@ -47252,8 +47268,14 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         }
                         cg->cur_program = saved_prog;
                     } else {
-                        /* Non-generic target: monomorphised path. */
+                        /* A fit method with its own generic parameters uses
+                         * the same shared-body + thin-wrapper pipeline as a
+                         * generic method declared directly on a non-generic
+                         * type. Only a fully non-generic fit method remains
+                         * on the monomorphised path. */
                         for (size_t mi = 0; mi < uf->method_count; mi++) {
+                            const FengCallableSignature *signature =
+                                &uf->methods[mi].member->as.callable;
                             bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                                   d->visibility == FENG_VISIBILITY_PUBLIC &&
                                                   uf->methods[mi].member->visibility ==
@@ -47261,10 +47283,35 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                             const UserFit *saved_user_fit = cg->current_user_fit;
 
                             cg->current_user_fit = uf;
-                            if (!cg_emit_user_method(cg,
-                                                     uf->target,
-                                                     &uf->methods[mi],
-                                                     needs_static)) {
+                            if (signature->type_param_count > 0U) {
+                                char *shared_name = cg_fit_method_shared_cname(
+                                    cg, uf, uf->methods[mi].member);
+
+                                if (shared_name == NULL ||
+                                    !cg_emit_generic_type_method_shared(
+                                        cg,
+                                        uf->target->decl,
+                                        uf->methods[mi].member,
+                                        target,
+                                        true,
+                                        shared_name,
+                                        d,
+                                        CG_GENERIC_CONSTRUCTOR_INIT_DECLARED) ||
+                                    !cg_emit_generic_type_method_wrapper(
+                                        cg,
+                                        uf->target,
+                                        &uf->methods[mi],
+                                        NULL,
+                                        shared_name)) {
+                                    free(shared_name);
+                                    cg->current_user_fit = saved_user_fit;
+                                    return false;
+                                }
+                                free(shared_name);
+                            } else if (!cg_emit_user_method(cg,
+                                                            uf->target,
+                                                            &uf->methods[mi],
+                                                            needs_static)) {
                                 cg->current_user_fit = saved_user_fit;
                                 return false;
                             }
@@ -47887,19 +47934,19 @@ static bool cg_emit_all_programs(CG *cg,
             if (t->generic_context_type_param_count > 0U) {
                 for (size_t ci = 0U; ci < t->constructor_count; ++ci) {
                     if (!cg_emit_imported_generic_method_shared_proto(
-                            cg, t, &t->constructors[ci], false)) {
+                            cg, t, &t->constructors[ci], false, NULL)) {
                         return false;
                     }
                 }
                 for (size_t mi = 0U; mi < t->method_count; ++mi) {
                     if (!cg_emit_imported_generic_method_shared_proto(
-                            cg, t, &t->methods[mi], true)) {
+                            cg, t, &t->methods[mi], true, NULL)) {
                         return false;
                     }
                 }
                 for (size_t mi = 0U; mi < t->static_method_count; ++mi) {
                     if (!cg_emit_imported_generic_method_shared_proto(
-                            cg, t, &t->static_methods[mi], true)) {
+                            cg, t, &t->static_methods[mi], true, NULL)) {
                         return false;
                     }
                 }
@@ -47913,7 +47960,7 @@ static bool cg_emit_all_programs(CG *cg,
 
             if (signature != NULL && signature->type_param_count > 0U) {
                 if (!cg_emit_imported_generic_method_shared_proto(
-                        cg, t, method, true)) {
+                        cg, t, method, true, NULL)) {
                     return false;
                 }
             } else {
@@ -47929,7 +47976,7 @@ static bool cg_emit_all_programs(CG *cg,
 
             if (sm_tp_count > 0U && t->decl != NULL) {
                 if (!cg_emit_imported_generic_method_shared_proto(
-                        cg, t, sm, true)) {
+                        cg, t, sm, true, NULL)) {
                     return false;
                 }
             } else {
@@ -47954,7 +48001,31 @@ static bool cg_emit_all_programs(CG *cg,
             continue;
         }
         for (size_t mi = 0; mi < uf->method_count; mi++) {
-            cg_emit_user_method_proto(&cg->fn_protos, uf->target, &uf->methods[mi], false);
+            const FengCallableSignature *signature =
+                &uf->methods[mi].member->as.callable;
+
+            if (signature->type_param_count > 0U) {
+                char *shared_name = cg_fit_method_shared_cname(
+                    cg, uf, uf->methods[mi].member);
+
+                if (shared_name == NULL ||
+                    !cg_emit_imported_generic_method_shared_proto(
+                        cg,
+                        uf->target,
+                        &uf->methods[mi],
+                        true,
+                        shared_name)) {
+                    free(shared_name);
+                    return false;
+                }
+                free(shared_name);
+            } else {
+                cg_emit_user_method_proto(
+                    &cg->fn_protos,
+                    uf->target,
+                    &uf->methods[mi],
+                    false);
+            }
         }
     }
     for (size_t i = 0; i < cg->builtin_fit_count; i++) {
@@ -51281,16 +51352,16 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
     return b.data;
 }
 
-/* Build a stable C symbol name for a fit method's shared body.  All concrete
- * instances of the same generic fit decl share a single compiled body; the
- * name is derived from the fit's owner program, the generic origin type name,
- * and the method's ordinal within the fit declaration.  This mirrors
- * cg_generic_type_method_shared_cname but uses the fit decl's member list
- * for ordinal computation. */
+/* Build a stable C symbol name for a fit method's shared body. Generic target
+ * instances use their common origin declaration; a non-generic target uses
+ * its declaration directly when the fit method itself is generic. The method
+ * ordinal is taken from the fit declaration rather than the target type. */
 static char *cg_fit_method_shared_cname(CG *cg,
                                         const UserFit *uf,
                                         const FengTypeMember *member) {
-    const FengDecl *origin_decl = uf->target->generic_origin_decl;
+    const FengDecl *origin_decl = uf->target->generic_origin_decl != NULL
+        ? uf->target->generic_origin_decl
+        : uf->target->decl;
     if (origin_decl == NULL || origin_decl->kind != FENG_DECL_TYPE) return NULL;
 
     char *owner_mangle = NULL;
@@ -51501,6 +51572,36 @@ static void cg_free_generic_owner_view(UserType *view) {
     }
     free(view->generic_type_args);
     memset(view, 0, sizeof(*view));
+}
+
+/* Build the Feng-level self expression used inside a shared method body.
+ * Open generic owners retain their erased storage address because field
+ * layout is descriptor-selected. Fixed-layout owners recover the concrete C
+ * receiver view once at emission time; no runtime conversion is introduced. */
+static char *cg_shared_method_self_expr(const UserType *owner,
+                                        bool uses_reified_owner_layout) {
+    Buf expression;
+
+    if (owner == NULL) {
+        return NULL;
+    }
+    if (uses_reified_owner_layout) {
+        return strdup("_self");
+    }
+    if (owner->c_struct_name == NULL) {
+        return NULL;
+    }
+    buf_init(&expression);
+    if (cg_user_type_is_value_semantics(owner)) {
+        buf_append_fmt(&expression,
+                       "(*(struct %s *)_self)",
+                       owner->c_struct_name);
+    } else {
+        buf_append_fmt(&expression,
+                       "((struct %s *)_self)",
+                       owner->c_struct_name);
+    }
+    return expression.data;
 }
 
 /** Emit the directly called shared ensure-init body for one generic static field. */
@@ -51736,6 +51837,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         cg->generic_function_descriptor_c_name;
     UserType owner_view;
     bool owner_view_initialized = false;
+    char *self_expr = NULL;
     Scope *fn_scope = NULL;
     int saved_tmp_counter = cg->tmp_counter;
     int saved_local_counter = cg->local_counter;
@@ -52023,6 +52125,15 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         if (!cg_init_generic_owner_view(cg, decl, &owner_view)) {
             goto cleanup;
         }
+        self_expr = cg_shared_method_self_expr(
+            &owner_view,
+            outer_tp_count > 0U);
+        if (self_expr == NULL) {
+            cg_fail(cg,
+                    member->token,
+                    "IE0001", "codegen: failed to form shared method receiver");
+            goto cleanup;
+        }
     }
 
     if (!is_static_method && cg->current_callable_captures_self) {
@@ -52038,7 +52149,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                 self_name,
                 self_type,
                 member->token,
-                "_self",
+                self_expr,
                 true,
                 false,
                 true,
@@ -52052,16 +52163,16 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         if (self_type != NULL) {
             self_type->user = &owner_view;
         }
-        if (!self_type || !scope_add(fn_scope, "self", "_self", self_type, true)) {
+        if (!self_type || !scope_add(fn_scope, "self", self_expr, self_type, true)) {
             cgtype_free(self_type);
             cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
-        /* The shared ABI always passes a value-type receiver as its storage
-         * address. Keep that representation in the local binding so every
-         * consumer of `self` (including nested method calls) reuses `_self`
-         * directly instead of forming `&_self`. */
-        if (cg_type_decl_is_value_semantics(decl) &&
+        /* An open generic value owner keeps its descriptor-sized storage
+         * address marker. A fixed-layout owner was already dereferenced by
+         * self_expr and therefore follows ordinary value-member lowering. */
+        if (outer_tp_count > 0U &&
+            cg_type_decl_is_value_semantics(decl) &&
             !scope_mark_last_storage_address(fn_scope)) {
             cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -52134,6 +52245,7 @@ cleanup:
     if (owner_view_initialized) {
         cg_free_generic_owner_view(&owner_view);
     }
+    free(self_expr);
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
     cg->cur_function_has_frame_marker = false;

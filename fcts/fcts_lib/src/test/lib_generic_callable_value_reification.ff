@@ -1,5 +1,8 @@
 open module fcts_lib.test;
 
+import std;
+import std.collections;
+
 /** Produces one closed generic value. */
 open spec LibCallableProducer<T>(): T;
 
@@ -161,4 +164,148 @@ open type LibCallableStaticFactory<T> {
   open static func mapper(): LibCallableMapper<T> {
     return libCallableIdentity<T>;
   }
+}
+
+/** Alternate callable surface with the same closed ABI as LibCallableMapper. */
+open spec LibCallableMapperAlt<T>(value: T): T;
+
+/** Stores two callable surfaces formed from one source declaration. */
+@value
+open type LibCallableSurfacePair<T> {
+  /** Primary callable surface. */
+  open let primary: LibCallableMapper<T>;
+
+  /** Alternate callable surface. */
+  open let alternate: LibCallableMapperAlt<T>;
+
+  /** Construct one pair of independently typed callable surfaces. */
+  func LibCallableSurfacePair(
+    primary: LibCallableMapper<T>,
+    alternate: LibCallableMapperAlt<T>
+  ) {
+    self.primary = primary;
+    self.alternate = alternate;
+  }
+}
+
+/** Aggregate used by a callable target's own reified dependency graph. */
+@value
+open type LibCallableNestedBox<T> {
+  /** Closed generic payload. */
+  open let value: T;
+
+  /** Construct one nested payload. */
+  func LibCallableNestedBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Use both managed-type and aggregate dependencies inside a target callable. */
+open func libCallableNestedLeaf<T>(value: T): T {
+  let values = List<T>();
+  values.add(value);
+  let box = LibCallableNestedBox<T>(values.get(0));
+  return box.value;
+}
+
+/** Form another generic callable value inside the target callable body. */
+open func libCallableNested<T>(value: T): T {
+  let mapper: LibCallableMapper<T> = libCallableNestedLeaf<T>;
+  return mapper(value);
+}
+
+/** Return a target whose descriptor has recursive callable dependencies. */
+open func libCallableNestedMapper<T>(): LibCallableMapper<T> {
+  return libCallableNested<T>;
+}
+
+/** Form the same target declaration through two callable-form surfaces. */
+open func libCallableSurfaces<T>(): LibCallableSurfacePair<T> {
+  let primary: LibCallableMapper<T> = libCallableNested<T>;
+  let alternate: LibCallableMapperAlt<T> = libCallableNested<T>;
+  return LibCallableSurfacePair<T>(primary, alternate);
+}
+
+/** Pair whose layout depends independently on owner T and method U. */
+@value
+open type LibCallablePair<T, U> {
+  /** Owner-generic value. */
+  open let owner: T;
+
+  /** Method-generic value. */
+  open let method: U;
+
+  /** Construct one two-domain result. */
+  func LibCallablePair(owner: T, method: U) {
+    self.owner = owner;
+    self.method = method;
+  }
+}
+
+/** Maps method U into a result that also contains owner T. */
+open spec LibCallablePairMapper<T, U>(value: U): LibCallablePair<T, U>;
+
+/** Descriptor-sized receiver combining owner and method generic domains. */
+@value
+open type LibCallablePairOwner<T> {
+  /** Owner-generic captured value. */
+  open let owner: T;
+
+  /** Construct one pair owner. */
+  func LibCallablePairOwner(owner: T) {
+    self.owner = owner;
+  }
+
+  /** Build a result whose ABI depends on both T and U. */
+  open func pair<U>(value: U): LibCallablePair<T, U> {
+    return LibCallablePair<T, U>(self.owner, value);
+  }
+
+  /** Form an explicitly closed generic method from a value receiver. */
+  open func mapper<U>(): LibCallablePairMapper<T, U> {
+    return self.pair<U>;
+  }
+}
+
+/** Tuple receiver used by the explicitly generic fit-method path. */
+open type LibCallableGenericFitOwner<T>(T, string);
+
+/** Supply a generic fit method whose U is selected when its value forms. */
+open fit LibCallableGenericFitOwner<T> {
+  /** Return the method-generic argument after observing the captured receiver. */
+  open func echo<U>(value: U): U {
+    self.item2;
+    return value;
+  }
+}
+
+/** Form an explicitly generic fit method in an imported shared body. */
+open func libCallableBindGenericFit<T, U>(
+  owner: LibCallableGenericFitOwner<T>
+): LibCallableMapper<U> {
+  return owner.echo<U>;
+}
+
+/** Concrete tuple receiver used to isolate a fit method's own U domain. */
+open type LibCallableConcreteFitOwner(i64, string);
+
+/** Supply a generic fit method without an owner-generic domain. */
+open fit LibCallableConcreteFitOwner {
+  /** Return the method-generic argument after observing the receiver. */
+  open func echo<U>(value: U): U {
+    self.item1;
+    return value;
+  }
+}
+
+/** Form a generic fit method whose receiver type itself is not generic. */
+open func libCallableBindConcreteFit<U>(
+  owner: LibCallableConcreteFitOwner
+): LibCallableMapper<U> {
+  return owner.echo<U>;
+}
+
+/** Explicitly convert an unbound lambda through an open callable target. */
+open func libCallableLambdaCast<T>(value: T): LibCallableProducer<T> {
+  return (LibCallableProducer<T>)(() -> value);
 }

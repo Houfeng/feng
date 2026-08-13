@@ -1,5 +1,6 @@
 module fcts_bin;
 
+import std;
 import std.test;
 import fcts_lib.test;
 
@@ -41,6 +42,136 @@ type CallableValueNamedPayload: LibCallableNamed {
   func label(): string {
     return self.text;
   }
+}
+
+/** Local generic identity used by an unbound top-level explicit conversion. */
+func callableValueLocalIdentity<T>(value: T): T {
+  return value;
+}
+
+/** Non-generic function used by the direct unbound conversion matrix. */
+func callableValueLocalIncrement(value: int): int {
+  return value + 1;
+}
+
+/** Non-generic receiver used by the direct unbound method conversion. */
+type CallableValueLocalPlainReader {
+  /** Apply a receiver-specific increment. */
+  func increment(value: int): int {
+    return value + 2;
+  }
+}
+
+/** Local value receiver used by the exact `(Func<T>)self.read` form. */
+@value
+type CallableValueLocalReader<T> {
+  /** Value copied into the bound method closure. */
+  let value: T;
+
+  /** Return the receiver payload. */
+  func read(): T {
+    return self.value;
+  }
+
+  /** Convert an unbound method through an open standard callable spec. */
+  func castReader(): Func<T> {
+    let test = (Func<T>)self.read;
+    return test;
+  }
+}
+
+/** Convert an explicitly closed top-level function through an open target. */
+func callableValueLocalTopCast<T>(): Func<T, T> {
+  return (Func<T, T>)callableValueLocalIdentity<T>;
+}
+
+/** Convert an unbound lambda through an open target. */
+func callableValueLocalLambdaCast<T>(value: T): Func<T> {
+  return (Func<T>)(() -> value);
+}
+
+/** Form a two-domain descriptor-sized method closure for lifetime checks. */
+func makeCallableValuePairMapper(
+  value: string
+): LibCallablePairMapper<LibAdvancedLifetimeLeaf, i64> {
+  let owner = LibCallablePairOwner<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf(value)
+  );
+  return owner.mapper<i64>();
+}
+
+/** Verify normal cleanup of the new T + U bound-method descriptor path. */
+func verifyCallableValuePairNormalLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var valid = false;
+  {
+    let mapper = makeCallableValuePairMapper("pair-normal");
+    let result = mapper(55);
+    valid = result.owner.value == "pair-normal" && result.method == 55;
+  }
+  return valid && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify overwrite releases only the replaced T + U method closure. */
+func verifyCallableValuePairOverwriteLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var releasedOld = false;
+  {
+    var mapper = makeCallableValuePairMapper("pair-overwrite-first");
+    mapper = makeCallableValuePairMapper("pair-overwrite-second");
+    let result = mapper(56);
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  result.owner.value == "pair-overwrite-second" &&
+                  result.method == 56;
+  }
+  return releasedOld && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify copied callables share one T + U method closure until last release. */
+func verifyCallableValuePairSharedLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var retainedOld = false;
+  var releasedOld = false;
+  {
+    var current = makeCallableValuePairMapper("pair-shared-first");
+    {
+      let retained = current;
+      current = makeCallableValuePairMapper("pair-shared-second");
+      let result = retained(57);
+      retainedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 0 &&
+                    result.owner.value == "pair-shared-first" &&
+                    result.method == 57;
+    }
+    let currentResult = current(58);
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  currentResult.owner.value == "pair-shared-second" &&
+                  currentResult.method == 58;
+  }
+  return retainedOld && releasedOld &&
+         LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Throw while a two-domain descriptor-sized method closure remains live. */
+func throwWithCallableValuePairLifetime(): void {
+  let mapper = makeCallableValuePairMapper("pair-exception");
+  let result = mapper(59);
+  assert(result.owner.value == "pair-exception" && result.method == 59,
+         "the two-domain method closure is callable before unwinding");
+  throw "pair-callable-lifetime";
+}
+
+/** Verify exceptional cleanup releases the two-domain closure exactly once. */
+func verifyCallableValuePairExceptionLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var caught = false;
+  try throwWithCallableValuePairLifetime() catch error: string {
+    caught = error == "pair-callable-lifetime";
+  };
+  return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }
 
 /** Verify generic shared bodies form fully closed callable values. */
@@ -193,6 +324,146 @@ open func test_generic_callable_value_reification(): void {
       assert(escaped() == "escaped" && wide.first == "static-first" &&
              wide.second == "static-second" && wide.number == 54,
              "escaping lambda and generic static owner remain fully closed");
+    });
+
+    test("local unbound function method and lambda casts stay generic", () {
+      let source = CallableValueWidePayload {
+        first: "local-first",
+        second: "local-second",
+        number: 60
+      };
+      let top = callableValueLocalTopCast<CallableValueWidePayload>();
+      let localReader = CallableValueLocalReader<CallableValueWidePayload> {
+        value: source
+      };
+      let method = localReader.castReader();
+      let lambda = callableValueLocalLambdaCast<CallableValueWidePayload>(
+        source
+      );
+      let topValue = top(source);
+      let methodValue = method();
+      let lambdaValue = lambda();
+
+      assert(topValue.number == 60 && methodValue.first == "local-first" &&
+             methodValue.second == "local-second" &&
+             lambdaValue.number == 60,
+             "all three unbound callable sources use their explicit targets");
+    });
+
+    test("non-generic unbound function method and lambda casts are direct", () {
+      let top = (Func<int, int>)callableValueLocalIncrement;
+      let owner = CallableValueLocalPlainReader();
+      let method = (Func<int, int>)owner.increment;
+      let lambda = (Func<int, int>)((value: int) -> value + 3);
+
+      assert(top(10) == 11 && method(10) == 12 && lambda(10) == 13,
+             "all fixed-signature unbound callable sources convert directly");
+    });
+
+    test("target callable descriptors preserve recursive dependencies", () {
+      let mapper = libCallableNestedMapper<CallableValueWidePayload>();
+      let result = mapper(CallableValueWidePayload {
+        first: "nested-first",
+        second: "nested-second",
+        number: 61
+      });
+
+      assert(result.first == "nested-first" &&
+             result.second == "nested-second" && result.number == 61,
+             "the target descriptor supplies callable type and aggregate deps");
+    });
+
+    test("one source keeps two callable surfaces distinct", () {
+      let surfaces = libCallableSurfaces<CallableValueWidePayload>();
+      let first = surfaces.primary(CallableValueWidePayload {
+        first: "surface-a-first",
+        second: "surface-a-second",
+        number: 62
+      });
+      let second = surfaces.alternate(CallableValueWidePayload {
+        first: "surface-b-first",
+        second: "surface-b-second",
+        number: 63
+      });
+
+      assert(first.first == "surface-a-first" && first.number == 62 &&
+             second.second == "surface-b-second" && second.number == 63,
+             "target surface participates in descriptor identity and adapters");
+    });
+
+    test("owner T and method U jointly close a value method", () {
+      let owner = LibCallablePairOwner<string>("pair-owner");
+      let mapper = owner.mapper<CallableValueWidePayload>();
+      let result = mapper(CallableValueWidePayload {
+        first: "pair-method-first",
+        second: "pair-method-second",
+        number: 64
+      });
+
+      assert(result.owner == "pair-owner" &&
+             result.method.first == "pair-method-first" &&
+             result.method.second == "pair-method-second" &&
+             result.method.number == 64,
+             "receiver capture and callable ABI use both descriptor domains");
+    });
+
+    test("explicit generic fit method forms a callable value", () {
+      let owner: LibCallableGenericFitOwner<string> = (
+        "fit-owner",
+        "fit-marker"
+      );
+      let mapper = libCallableBindGenericFit<string, CallableValueWidePayload>(
+        owner
+      );
+      let result = mapper(CallableValueWidePayload {
+        first: "fit-first",
+        second: "fit-second",
+        number: 65
+      });
+
+      assert(result.first == "fit-first" && result.second == "fit-second" &&
+             result.number == 65,
+             "fit identity owner T and method U survive import and closure");
+    });
+
+    test("generic fit method works on a non-generic receiver", () {
+      let owner: LibCallableConcreteFitOwner = (66, "concrete-fit");
+      let mapper = libCallableBindConcreteFit<CallableValueWidePayload>(owner);
+      let result = mapper(CallableValueWidePayload {
+        first: "concrete-fit-first",
+        second: "concrete-fit-second",
+        number: 66
+      });
+      let direct = owner.echo<CallableValueWidePayload>(
+        CallableValueWidePayload {
+          first: "concrete-direct-first",
+          second: "concrete-direct-second",
+          number: 67
+        }
+      );
+
+      assert(result.first == "concrete-fit-first" &&
+             result.second == "concrete-fit-second" && result.number == 66 &&
+             direct.first == "concrete-direct-first" &&
+             direct.second == "concrete-direct-second" && direct.number == 67,
+             "method U works as a value and direct imported fit call");
+    });
+
+    test("imported unbound lambda supports explicit conversion", () {
+      let reader = libCallableLambdaCast<string>("lambda-cast");
+      assert(reader() == "lambda-cast",
+             "an imported open lambda cast closes at the consumer");
+    });
+
+    test("two-domain value method closures retain and release exactly once", () {
+      assert(verifyCallableValuePairNormalLifetime(),
+             "normal exit releases the captured receiver exactly once");
+      assert(verifyCallableValuePairOverwriteLifetime(),
+             "overwrite releases only the old captured receiver");
+      assert(verifyCallableValuePairSharedLifetime(),
+             "copied callable references retain one shared closure");
+      assert(verifyCallableValuePairExceptionLifetime(),
+             "exception unwinding releases the captured receiver exactly once");
     });
   });
 }

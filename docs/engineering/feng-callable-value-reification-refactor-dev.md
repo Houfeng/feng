@@ -691,3 +691,24 @@ codegen tests 还必须锁定：
 - [x] 执行完整 `make test` 并确认全部通过。
 - [x] 按实际实现更新本文状态和 TODO。
 - [x] 同步相关函数、泛型与 spec 规范中的语义描述；未重复定义其他开发文档的状态。
+
+### 11.6 完整性补测
+
+在首次实现与全量回归通过后，按实现分支重新审计发现还需要补齐以下直接证据。该阶段
+不新增语言语义，不改变 runtime ABI，也不允许为了测试引入非通用实现分支。
+
+- [x] 分别验证尚未绑定到 callable-form `spec` 的顶层函数、实例方法和 lambda 可通过
+  显式转换形成目标 callable value；同时覆盖开放 `T` 目标，例如
+  `let test = (Func<T>)self.read;`。
+- [x] 为上述三类显式转换补齐签名不匹配等语义负向用例；泛型实例方法另行覆盖类型实参
+  数量、约束和闭合后签名检查。
+- [x] 验证同一个来源 callable 在同一共享体内进入多个 callable-form `spec` surface 时，
+  descriptor key、slot 与 typed adapter 分别对应各自目标 surface，且不会错误去重。
+- [x] 验证作为值返回的目标共享 callable 自身继续使用 aggregate、managed type 与
+  callable dependency 时，其完整递归具化依赖由同一个 `FengFunctionDescriptor` 提供。
+- [x] 验证泛型 owner `T` 与泛型方法 `U` 同时参与绑定方法的 receiver、参数和返回布局，
+  并补齐泛型 `fit` 方法显式形成 callable value 的行为。
+- [x] 在 FCTS 中同时覆盖本地与跨包执行路径，并复用既有生命周期计数设施验证新增的
+  descriptor-sized receiver 在正常退出、复制/覆盖和异常展开时没有泄漏或重复释放。
+- [x] 补齐 semantic、FT、codegen 和 FCTS 后执行完整 `make test`，全部通过后重新将本文
+  标记为“已完成”。

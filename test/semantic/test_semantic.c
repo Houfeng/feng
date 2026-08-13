@@ -21746,6 +21746,41 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
             "callable_cast_without_source_args.ff",
             "func use(): void { let value = (IntMapper)identity; }\n",
             "AE0051"
+        },
+        {
+            "callable_method_cast_without_source_args.ff",
+            "func use(reader: Reader): void { let value = (IntMapper)reader.identity; }\n",
+            "AE0051"
+        },
+        {
+            "callable_method_value_wrong_arg_count.ff",
+            "func use(reader: Reader): void { let value: IntMapper = reader.identity<int, string>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_method_value_wrong_signature.ff",
+            "func use(reader: Reader): void { let value: IntMapper = reader.identity<string>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_method_value_wrong_constraint.ff",
+            "func use(reader: Reader): void { let value: IntMapper = reader.constrained<int>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_method_cast_wrong_signature.ff",
+            "func use(reader: Reader): void { let value = (IntMapper)reader.stringIdentity; }\n",
+            "AE0051"
+        },
+        {
+            "callable_top_cast_wrong_signature.ff",
+            "func use(): void { let value = (IntMapper)stringIdentity; }\n",
+            "AE0051"
+        },
+        {
+            "callable_lambda_cast_wrong_signature.ff",
+            "func use(): void { let value = (IntMapper)((item: string) -> item); }\n",
+            "AE0051"
         }
     };
     const char *prefix =
@@ -21753,7 +21788,13 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         "spec Named {}\n"
         "spec IntMapper(value: int): int;\n"
         "func identity<T>(value: T): T { return value; }\n"
-        "func constrained<T: Named>(value: T): T { return value; }\n";
+        "func constrained<T: Named>(value: T): T { return value; }\n"
+        "func stringIdentity(value: string): string { return value; }\n"
+        "type Reader {\n"
+        "    func identity<T>(value: T): T { return value; }\n"
+        "    func constrained<T: Named>(value: T): T { return value; }\n"
+        "    func stringIdentity(value: string): string { return value; }\n"
+        "}\n";
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
         size_t source_length = strlen(prefix) + strlen(cases[index].body) + 1U;
@@ -21780,6 +21821,78 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         feng_program_free(program);
         free(source);
     }
+}
+
+/* A callable-form cast is an explicit target context for every unbound
+ * callable source. Open owner/function T remains open in the sidecar until
+ * the surrounding shared body is closed by its consumer. */
+static void test_unbound_callable_explicit_casts_with_open_targets(void) {
+    const char *source =
+        "module demo.callable.unbound_casts;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "spec Producer<T>(): T;\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "type Reader<T> {\n"
+        "    let value: T;\n"
+        "    func read(): T { return self.value; }\n"
+        "    func castReader(): Producer<T> {\n"
+        "        let test = (Producer<T>)self.read;\n"
+        "        return test;\n"
+        "    }\n"
+        "}\n"
+        "func castAll<T>(reader: Reader<T>, value: T): T {\n"
+        "    let top = (Mapper<T>)identity<T>;\n"
+        "    let method = (Producer<T>)reader.read;\n"
+        "    let lambda = (Mapper<T>)((item: T) -> item);\n"
+        "    return lambda(top(method()));\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "unbound_callable_open_casts_ok.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *cast_all;
+    const FengExpr *initializer;
+    const FengSpecCoercionSite *site;
+    static const FengSpecCoercionCallableSource expected_sources[] = {
+        FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN,
+        FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE,
+        FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA
+    };
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cast_all = find_function_decl_in_program(program, "castAll");
+    ASSERT(cast_all != NULL);
+    for (size_t index = 0U;
+         index < sizeof(expected_sources) / sizeof(expected_sources[0]);
+         ++index) {
+        initializer = nth_let_initializer(&cast_all->as.function_decl, index);
+        ASSERT(initializer != NULL && initializer->kind == FENG_EXPR_CAST);
+        site = feng_semantic_lookup_spec_coercion_site(
+            analysis, initializer->as.cast.value);
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source == expected_sources[index]);
+        ASSERT(site->target_spec_type_ref != NULL);
+    }
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis,
+        nth_let_initializer(&cast_all->as.function_decl, 0U)->as.cast.value);
+    ASSERT(site->callable_type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_type_args[0], "T"));
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis,
+        nth_let_initializer(&cast_all->as.function_decl, 1U)->as.cast.value);
+    ASSERT(site->callable_type_arg_count == 0U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_receiver_type_ref,
+                                        "Reader"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 /* Assert the common identity and path invariants of one recorded upcast. */
@@ -22130,6 +22243,7 @@ int main(void) {
     test_generic_callable_spec_instance_rejects_lambda_return_mismatch();
     test_explicit_generic_callable_values_and_unbound_casts();
     test_explicit_generic_callable_values_reject_invalid_sources();
+    test_unbound_callable_explicit_casts_with_open_targets();
     test_callable_spec_value_rejects_different_spec_implicit_match();
     test_callable_spec_value_explicit_cast_accepts_equal_signature();
     test_callable_spec_top_level_fn_still_matches_multiple_specs();

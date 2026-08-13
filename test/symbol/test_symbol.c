@@ -1645,9 +1645,16 @@ static void test_callable_value_dependency_ft_roundtrip(void) {
     static const char *kSource =
         "open module feng.test.symbol.callable_value_dep;\n"
         "open spec Mapper<T>(value: T): T;\n"
+        "open spec MapperAlt<T>(value: T): T;\n"
         "open spec Producer<T>(): T;\n"
         "open func identity<T>(value: T): T { return value; }\n"
         "open func make<T>(): Mapper<T> { return identity<T>; }\n"
+        "open func surfaces<T>(): Mapper<T> {\n"
+        "    let first: Mapper<T> = identity<T>;\n"
+        "    let second: MapperAlt<T> = identity<T>;\n"
+        "    second;\n"
+        "    return first;\n"
+        "}\n"
         "open type Reader<T> {\n"
         "    open let value: T;\n"
         "    open func read(): T { return self.value; }\n"
@@ -1656,6 +1663,13 @@ static void test_callable_value_dependency_ft_roundtrip(void) {
         "open type MethodOwner {\n"
         "    open func identity<U>(value: U): U { return value; }\n"
         "    open func mapper<T>(): Mapper<T> { return self.identity<T>; }\n"
+        "}\n"
+        "open type FitOwner<T>(T, string);\n"
+        "open fit FitOwner<T> {\n"
+        "    open func identity<U>(value: U): U { return value; }\n"
+        "}\n"
+        "open func fitMapper<T, U>(owner: FitOwner<T>): Mapper<U> {\n"
+        "    return owner.identity<U>;\n"
         "}\n";
     FengProgram *program = parse_or_die("callable_value_dep.ff", kSource);
     FengSemanticAnalysis *analysis = analyze_or_die(program);
@@ -1670,6 +1684,8 @@ static void test_callable_value_dependency_ft_roundtrip(void) {
     const FengSymbolDeclView *reader_method;
     const FengSymbolDeclView *method_owner_type;
     const FengSymbolDeclView *mapper_method;
+    const FengSymbolDeclView *surfaces_decl;
+    const FengSymbolDeclView *fit_mapper_decl;
     const FengSymbolCallableDepView *dependency;
     const FengSymbolTypeView *type;
 
@@ -1768,6 +1784,57 @@ static void test_callable_value_dependency_ft_roundtrip(void) {
     ASSERT(dependency->owner_instance_type != NULL);
     ASSERT(feng_symbol_type_kind(dependency->owner_instance_type) ==
            FENG_SYMBOL_TYPE_KIND_NAMED);
+
+    /* The same source function entering two target surfaces must remain two
+     * dependencies after export/import. The source identity is shared, while
+     * each target spec and its adapter surface stays distinct. */
+    surfaces_decl = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("surfaces"));
+    ASSERT(surfaces_decl != NULL);
+    ASSERT(surfaces_decl->reifiable_callable_dep_count == 2U);
+    ASSERT(surfaces_decl->reifiable_callable_deps[0].target_symbol_id ==
+           surfaces_decl->reifiable_callable_deps[1].target_symbol_id);
+    ASSERT(surfaces_decl->reifiable_callable_deps[0].target_callable_type != NULL);
+    ASSERT(surfaces_decl->reifiable_callable_deps[1].target_callable_type != NULL);
+    {
+        const FengSymbolTypeView *first_target =
+            surfaces_decl->reifiable_callable_deps[0].target_callable_type;
+        const FengSymbolTypeView *second_target =
+            surfaces_decl->reifiable_callable_deps[1].target_callable_type;
+        size_t first_segment_count = feng_symbol_type_segment_count(first_target);
+        size_t second_segment_count = feng_symbol_type_segment_count(second_target);
+
+        ASSERT(first_segment_count > 0U && second_segment_count > 0U);
+        ASSERT(slice_equals_cstr(
+            feng_symbol_type_segment_at(first_target, first_segment_count - 1U),
+            "Mapper"));
+        ASSERT(slice_equals_cstr(
+            feng_symbol_type_segment_at(second_target, second_segment_count - 1U),
+            "MapperAlt"));
+    }
+
+    /* A generic fit method retains both its generic owner T and method-local
+     * U, rather than being restored as an ordinary type method dependency. */
+    fit_mapper_decl = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("fitMapper"));
+    ASSERT(fit_mapper_decl != NULL);
+    ASSERT(fit_mapper_decl->reifiable_callable_dep_count == 1U);
+    dependency = &fit_mapper_decl->reifiable_callable_deps[0];
+    ASSERT(dependency->purpose == FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+    ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD);
+    ASSERT(dependency->callable_type_arg_count == 1U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            dependency->callable_type_args[0]), "U"));
+    ASSERT(dependency->owner_instance_type != NULL);
+    ASSERT(feng_symbol_type_kind(dependency->owner_instance_type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(
+               dependency->owner_instance_type) == 1U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            feng_symbol_type_generic_arg_at(
+                dependency->owner_instance_type, 0U)), "T"));
 
     feng_symbol_provider_free(provider);
     feng_symbol_error_free(&error);

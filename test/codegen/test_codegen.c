@@ -6624,6 +6624,177 @@ static void test_generic_callable_value_reification_codegen(void) {
     feng_program_free(program);
 }
 
+/* Unbound function, method and lambda casts share the typed callable-value
+ * descriptor path. The same fixture also pins recursive target dependencies,
+ * distinct target surfaces, and fixed-layout generic/fit method receivers. */
+static void test_unbound_callable_explicit_cast_codegen(void) {
+    const char *source =
+        "module feng.codegen.unbound_callable_cast;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "spec MapperAlt<T>(value: T): T;\n"
+        "spec Producer<T>(): T;\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "func topCast<T>(): Mapper<T> {\n"
+        "    return (Mapper<T>)identity<T>;\n"
+        "}\n"
+        "@value type NestedBox<T> { let value: T; }\n"
+        "type NestedOwner<T> {\n"
+        "    let value: T;\n"
+        "    func NestedOwner(value: T) { self.value = value; }\n"
+        "}\n"
+        "func nestedLeaf<T>(value: T): T {\n"
+        "    let owner = NestedOwner<T>(value);\n"
+        "    let box = NestedBox<T> { value: owner.value };\n"
+        "    return box.value;\n"
+        "}\n"
+        "func nested<T>(value: T): T {\n"
+        "    let mapper: Mapper<T> = nestedLeaf<T>;\n"
+        "    return mapper(value);\n"
+        "}\n"
+        "func nestedMapper<T>(): Mapper<T> { return nested<T>; }\n"
+        "@value type SurfacePair<T> {\n"
+        "    let primary: Mapper<T>;\n"
+        "    let alternate: MapperAlt<T>;\n"
+        "}\n"
+        "func surfaces<T>(): SurfacePair<T> {\n"
+        "    let primary: Mapper<T> = nested<T>;\n"
+        "    let alternate: MapperAlt<T> = nested<T>;\n"
+        "    return SurfacePair<T> {\n"
+        "        primary: primary, alternate: alternate\n"
+        "    };\n"
+        "}\n"
+        "@value type Reader<T> {\n"
+        "    let value: T;\n"
+        "    func read(): T { return self.value; }\n"
+        "    func castReader(): Producer<T> {\n"
+        "        let test = (Producer<T>)self.read;\n"
+        "        return test;\n"
+        "    }\n"
+        "}\n"
+        "func lambdaCast<T>(value: T): Producer<T> {\n"
+        "    return (Producer<T>)(() -> value);\n"
+        "}\n"
+        "type DirectOwner {\n"
+        "    let marker: i64;\n"
+        "    func DirectOwner(marker: i64) { self.marker = marker; }\n"
+        "    func echo<U>(value: U): U { self.marker; return value; }\n"
+        "    func mapper<U>(): Mapper<U> { return self.echo<U>; }\n"
+        "}\n"
+        "type FitOwner(i64, string);\n"
+        "fit FitOwner {\n"
+        "    func echo<U>(value: U): U { self.item1; return value; }\n"
+        "}\n"
+        "func fitMapper<U>(owner: FitOwner): Mapper<U> {\n"
+        "    return owner.echo<U>;\n"
+        "}\n"
+        "func use(): i64 {\n"
+        "    let top = topCast<i64>();\n"
+        "    let reader = Reader<i64> { value: 2 };\n"
+        "    let method = reader.castReader();\n"
+        "    let lambda = lambdaCast<i64>(3);\n"
+        "    let nestedValue = nestedMapper<i64>();\n"
+        "    let pair = surfaces<i64>();\n"
+        "    let direct = DirectOwner(4).mapper<i64>();\n"
+        "    let fitted: FitOwner = (5, \"fit\");\n"
+        "    let fittedMapper = fitMapper<i64>(fitted);\n"
+        "    return top(1) + method() + lambda() + nestedValue(4) +\n"
+        "           pair.primary(5) + pair.alternate(6) + direct(7) +\n"
+        "           fittedMapper(8);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "unbound_callable_explicit_cast_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(strstr(output.c_source, "FengMethodValueDescriptor") == NULL);
+    ASSERT(strstr(output.c_source, "descriptor_factory") == NULL);
+
+    /* An explicit top-level cast reads one closed descriptor slot and keeps
+     * the immortal static callable path allocation-free. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__unbound_callable_cast__topCast_G__from__void",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "callable_value.static_value") == 1U);
+    ASSERT(!span_contains(body_start, body_end, "feng_object_new("));
+
+    /* The exact `(Producer<T>)self.read` form reads one method descriptor and
+     * performs exactly one language-level bound-method closure allocation. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void FengGenericMethod__feng__codegen__unbound_callable_cast__Reader__i1__castReader",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 1U);
+
+    /* The explicit lambda cast lowers directly to the target-shaped closure.
+     * It retains the creating function descriptor for T and does not need a
+     * second callable-dependency slot or adapter object. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__unbound_callable_cast__lambdaCast_G__from__X",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_reified_function_desc = _desc") == 1U);
+    ASSERT(!span_contains(body_start, body_end,
+                          "_desc->reified_callable_deps["));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 1U);
+
+    /* One source entering two callable surfaces must retain two distinct
+     * descriptor slots rather than being deduplicated by source symbol. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__unbound_callable_cast__surfaces_G__from__void",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[1]") == 1U);
+
+    /* A fixed-layout ordinary owner and a fixed-layout fit owner recover the
+     * concrete receiver view in their generic shared bodies. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void FengGenericMethod__feng__codegen__unbound_callable_cast__DirectOwner__i1__echo",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "(((struct Feng__feng__codegen__unbound_callable_cast__DirectOwner *)_self))->marker"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void FengFitMethod__feng__codegen__unbound_callable_cast__FitOwner__fm0__echo",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "((*(struct Feng__feng__codegen__unbound_callable_cast__FitOwner *)_self)).item1"));
+    ASSERT(!span_contains(body_start, body_end, "(_self).item1"));
+
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecLambdaLocalCaptureSrc =
     "module feng.codegen.gs6;\n"
     "spec Mapper(x: int): int;\n"
@@ -10332,6 +10503,7 @@ int main(void) {
     test_callable_spec_method_coercion_codegen();
     test_value_method_capture_codegen_has_direct_closure_lowering();
     test_generic_callable_value_reification_codegen();
+    test_unbound_callable_explicit_cast_codegen();
     test_callable_spec_lambda_local_capture_codegen();
     test_generic_lambda_dynamic_capture_codegen();
     test_lambda_tuple_body_uses_callable_return_target_codegen();
