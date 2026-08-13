@@ -425,6 +425,23 @@ typedef struct FengAggregateDescriptor {
     FengStaticBindingState *static_bindings;
 } FengAggregateDescriptor;
 
+/* Describes how one closed callable implementation forms a callable value.
+ * Generated shared bodies read this metadata from their statically assigned
+ * FengFunctionDescriptor dependency slot; no runtime lookup or dispatch is
+ * performed. */
+typedef struct FengCallableValueDescriptor {
+    /* Preformed immortal callable value for a source without captures. */
+    const void *static_value;
+    /* Closed closure layout used when the value must be formed dynamically. */
+    const FengTypeDescriptor *closure_desc;
+    /* Typed invoke adapter matching the selected callable-form spec ABI. */
+    void (*invoke)(void);
+    /* Descriptor for an aggregate capture copied into the closure, if any. */
+    const FengAggregateDescriptor *aggregate_capture_desc;
+    /* Byte offset of the aggregate capture within the closed closure. */
+    size_t aggregate_capture_offset;
+} FengCallableValueDescriptor;
+
 /* Static description of a concrete invocation of a standalone generic function.
  * Wrapper generates one per call-site specialization as `static const` in
  * .rodata; the shared body receives it as the `_desc` hidden argument.
@@ -445,10 +462,14 @@ typedef struct FengFunctionDescriptor {
      * sorted by key. */
     size_t reified_type_deps_count;
     const FengTypeDescriptor *const *reified_type_deps;
-    /* Concrete direct generic callable dependencies used by this invocation.
-     * Slots are assigned statically; shared bodies perform only indexed reads. */
+    /* Concrete generic callable dependencies directly called or formed as
+     * values by this invocation. Slots are assigned statically; shared bodies
+     * perform only indexed reads. */
     size_t reified_callable_deps_count;
     const struct FengFunctionDescriptor *const *reified_callable_deps;
+    /* Static formation information when this closed callable is used as a
+     * callable value. Direct-call-only descriptors leave it zeroed. */
+    FengCallableValueDescriptor callable_value;
 } FengFunctionDescriptor;
 
 static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(

@@ -41,7 +41,7 @@ typedef struct FengSymbolParamView {
  * purpose. Values intentionally match FengReifiableCallableDepPurpose. */
 typedef enum FengSymbolCallableDepPurpose {
     FENG_SYMBOL_CALLABLE_DEP_DIRECT_CALL = 0,
-    FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE
+    FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE
 } FengSymbolCallableDepPurpose;
 
 /* One direct callable dependency carried by a function/method symbol. The

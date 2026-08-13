@@ -21584,6 +21584,204 @@ static bool spec_upcast_type_ref_leaf_is(const FengTypeRef *type_ref,
            memcmp(leaf->data, name, name_length) == 0;
 }
 
+/* Explicit generic function and method targets use the surrounding callable
+ * spec as a target context, including when that context is an explicit cast. */
+static void test_explicit_generic_callable_values_and_unbound_casts(void) {
+    const char *source =
+        "module demo.callable.explicit_target;\n"
+        "spec IntMapper(value: int): int;\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "func plusOne(value: int): int { return value + 1; }\n"
+        "type Reader {\n"
+        "    func identity<T>(value: T): T { return value; }\n"
+        "    func plusOne(value: int): int { return value + 1; }\n"
+        "}\n"
+        "func accept(mapper: IntMapper): int { return mapper(10); }\n"
+        "func makeTop(): IntMapper { return identity<int>; }\n"
+        "func exercise(reader: Reader): int {\n"
+        "    let top: IntMapper = identity<int>;\n"
+        "    let method: IntMapper = reader.identity<int>;\n"
+        "    let topCast = (IntMapper)identity<int>;\n"
+        "    let methodCast = (IntMapper)reader.identity<int>;\n"
+        "    let plainTop = (IntMapper)plusOne;\n"
+        "    let plainMethod = (IntMapper)reader.plusOne;\n"
+        "    return top(1) + method(2) + topCast(3) + methodCast(4) +\n"
+        "           plainTop(5) + plainMethod(6) + accept(identity<int>);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "explicit_generic_callable_value_ok.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *exercise;
+    const FengDecl *make_top;
+    const FengExpr *expressions[6];
+    const FengSpecCoercionSite *site;
+    const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    exercise = find_function_decl_in_program(program, "exercise");
+    make_top = find_function_decl_in_program(program, "makeTop");
+    ASSERT(exercise != NULL && make_top != NULL);
+    for (size_t index = 0U; index < 6U; ++index) {
+        expressions[index] = nth_let_initializer(
+            &exercise->as.function_decl, index);
+        ASSERT(expressions[index] != NULL);
+    }
+
+    /* Direct top-level and bound instance generic targets retain their
+     * explicit callable-local argument in the semantic sidecar. */
+    site = feng_semantic_lookup_spec_coercion_site(analysis, expressions[0]);
+    ASSERT(site != NULL);
+    ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN);
+    ASSERT(site->callable_decl != NULL);
+    ASSERT(site->callable_member == NULL);
+    ASSERT(site->callable_type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_type_args[0],
+                                        int_canonical));
+    ASSERT(spec_upcast_type_ref_leaf_is(site->target_spec_type_ref,
+                                        "IntMapper"));
+
+    site = feng_semantic_lookup_spec_coercion_site(analysis, expressions[1]);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+    ASSERT(site->callable_decl == NULL);
+    ASSERT(site->callable_member != NULL);
+    ASSERT(site->callable_type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_type_args[0],
+                                        int_canonical));
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_receiver_type_ref,
+                                        "Reader"));
+
+    /* A cast records the same source expression and does not create an
+     * already-bound intermediary callable value. */
+    ASSERT(expressions[2]->kind == FENG_EXPR_CAST);
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis, expressions[2]->as.cast.value);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN);
+    ASSERT(site->callable_type_arg_count == 1U);
+    ASSERT(expressions[3]->kind == FENG_EXPR_CAST);
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis, expressions[3]->as.cast.value);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+    ASSERT(site->callable_type_arg_count == 1U);
+
+    /* The same explicit target context also accepts ordinary unbound,
+     * non-generic top-level and instance method references. */
+    ASSERT(expressions[4]->kind == FENG_EXPR_CAST);
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis, expressions[4]->as.cast.value);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN);
+    ASSERT(site->callable_type_arg_count == 0U);
+    ASSERT(expressions[5]->kind == FENG_EXPR_CAST);
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis, expressions[5]->as.cast.value);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+    ASSERT(site->callable_type_arg_count == 0U);
+
+    /* Return and argument target contexts consume the same explicit target
+     * without leaving a polymorphic callable value behind. */
+    ASSERT(make_top->as.function_decl.body->statement_count == 1U);
+    ASSERT(make_top->as.function_decl.body->statements[0]->kind ==
+           FENG_STMT_RETURN);
+    site = feng_semantic_lookup_spec_coercion_site(
+        analysis,
+        make_top->as.function_decl.body->statements[0]->as.return_value);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_type_arg_count == 1U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Explicit generic callable targets reject every unresolved or incompatible
+ * source at the semantic boundary; casts do not infer source type arguments. */
+static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *body;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "callable_value_without_target.ff",
+            "func use(): void { let value = identity<int>; }\n",
+            "AE1016"
+        },
+        {
+            "callable_value_without_source_args.ff",
+            "func use(): void { let value: IntMapper = identity; }\n",
+            "AE0522"
+        },
+        {
+            "callable_value_wrong_arg_count.ff",
+            "func use(): void { let value: IntMapper = identity<int, string>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_value_wrong_signature.ff",
+            "func use(): void { let value: IntMapper = identity<string>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_value_wrong_constraint.ff",
+            "func use(): void { let value: IntMapper = constrained<int>; }\n",
+            "AE0522"
+        },
+        {
+            "callable_cast_without_source_args.ff",
+            "func use(): void { let value = (IntMapper)identity; }\n",
+            "AE0051"
+        }
+    };
+    const char *prefix =
+        "module demo.callable.explicit_target_error;\n"
+        "spec Named {}\n"
+        "spec IntMapper(value: int): int;\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "func constrained<T: Named>(value: T): T { return value; }\n";
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        size_t source_length = strlen(prefix) + strlen(cases[index].body) + 1U;
+        char *source = (char *)malloc(source_length);
+        FengProgram *program;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(source != NULL);
+        ASSERT(snprintf(source, source_length, "%s%s",
+                        prefix, cases[index].body) > 0);
+        program = parse_program_or_die(cases[index].path, source);
+        programs[0] = program;
+        ASSERT(!feng_semantic_analyze(programs, 1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].expected_code) == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        free(source);
+    }
+}
+
 /* Assert the common identity and path invariants of one recorded upcast. */
 static const FengSpecCoercionSite *assert_object_spec_upcast_site(
     const FengSemanticAnalysis *analysis,
@@ -21930,6 +22128,8 @@ int main(void) {
     test_generic_callable_spec_instance_adapts_untyped_callable_values();
     test_generic_callable_spec_instance_rejects_lambda_parameter_mismatch();
     test_generic_callable_spec_instance_rejects_lambda_return_mismatch();
+    test_explicit_generic_callable_values_and_unbound_casts();
+    test_explicit_generic_callable_values_reject_invalid_sources();
     test_callable_spec_value_rejects_different_spec_implicit_match();
     test_callable_spec_value_explicit_cast_accepts_equal_signature();
     test_callable_spec_top_level_fn_still_matches_multiple_specs();

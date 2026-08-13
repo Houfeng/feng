@@ -2238,8 +2238,8 @@ static void restore_imported_reifiable_deps(
                 dependency->callable_type_arg_count;
         }
         if (dependency->purpose ==
-            FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE) {
-            (void)feng_semantic_reifiable_dep_set_append_method_value(
+            FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE) {
+            (void)feng_semantic_reifiable_dep_set_append_callable_value(
                 dep_set, &resolved, target_callable_ref);
         } else {
             (void)feng_semantic_reifiable_dep_set_append_callable(

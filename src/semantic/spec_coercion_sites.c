@@ -177,6 +177,18 @@ static FengSpecCoercionSite *reserve_site_slot(FengSemanticAnalysis *analysis,
     return slot;
 }
 
+/* Release arrays owned directly by one sidecar slot before replacing its
+ * classification. Type-ref trees themselves remain owned by the analysis-wide
+ * coercion type-ref arena and are released with the analysis. */
+static void reset_site_payload(FengSpecCoercionSite *slot) {
+    if (slot == NULL) {
+        return;
+    }
+    free(slot->object_upcast_parent_indices);
+    free((void *)slot->callable_type_args);
+    memset(slot, 0, sizeof(*slot));
+}
+
 bool feng_semantic_record_object_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
@@ -199,6 +211,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     if (slot == NULL) {
         return false;
     }
+    reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_OBJECT;
     slot->src_subject_key = *src_subject_key;
@@ -244,8 +257,7 @@ bool feng_semantic_record_object_spec_upcast_site(
         free(owned_indices);
         return false;
     }
-    free(slot->object_upcast_parent_indices);
-    memset(slot, 0, sizeof(*slot));
+    reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_OBJECT_UPCAST;
     slot->target_spec_decl = target_spec_decl;
@@ -268,6 +280,8 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengDecl *callable_owner_type_decl,
     const FengDecl *callable_fit_decl,
     const FengTypeRef *callable_receiver_type_ref,
+    const FengTypeRef *const *callable_type_args,
+    size_t callable_type_arg_count,
     const FengExpr *callable_lambda_expr) {
     if (analysis_const == NULL || expr == NULL || target_spec_decl == NULL ||
         target_spec_type_ref == NULL) {
@@ -279,6 +293,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
         callable_receiver_type_ref != NULL
             ? analysis_clone_type_ref(analysis, callable_receiver_type_ref)
             : NULL;
+    const FengTypeRef **owned_callable_type_args = NULL;
     if (owned_type_ref == NULL) {
         return false;
     }
@@ -286,10 +301,32 @@ bool feng_semantic_record_callable_spec_coercion_site(
         owned_receiver_type_ref == NULL) {
         return false;
     }
+    if (callable_type_arg_count > 0U) {
+        if (callable_type_args == NULL) {
+            return false;
+        }
+        owned_callable_type_args = (const FengTypeRef **)calloc(
+            callable_type_arg_count, sizeof(*owned_callable_type_args));
+        if (owned_callable_type_args == NULL) {
+            return false;
+        }
+        for (size_t index = 0U;
+             index < callable_type_arg_count;
+             ++index) {
+            owned_callable_type_args[index] =
+                analysis_clone_type_ref(analysis, callable_type_args[index]);
+            if (owned_callable_type_args[index] == NULL) {
+                free(owned_callable_type_args);
+                return false;
+            }
+        }
+    }
     FengSpecCoercionSite *slot = reserve_site_slot(analysis, expr);
     if (slot == NULL) {
+        free(owned_callable_type_args);
         return false;
     }
+    reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_CALLABLE;
     memset(&slot->src_subject_key, 0, sizeof(slot->src_subject_key)); /* INVALID — unused for CALLABLE */
@@ -303,6 +340,8 @@ bool feng_semantic_record_callable_spec_coercion_site(
     slot->callable_owner_type_decl = callable_owner_type_decl;
     slot->callable_fit_decl = callable_fit_decl;
     slot->callable_receiver_type_ref = owned_receiver_type_ref;
+    slot->callable_type_args = owned_callable_type_args;
+    slot->callable_type_arg_count = callable_type_arg_count;
     slot->callable_lambda_expr = callable_lambda_expr;
     return true;
 }
@@ -328,6 +367,7 @@ bool feng_semantic_record_intersection_spec_coercion_site(
     if (slot == NULL) {
         return false;
     }
+    reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_INTERSECTION;
     slot->src_subject_key = *src_subject_key;
@@ -358,6 +398,7 @@ bool feng_semantic_record_abi_function_pointer_site(
     if (slot == NULL) {
         return false;
     }
+    reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER;
     memset(&slot->src_subject_key, 0, sizeof(slot->src_subject_key));

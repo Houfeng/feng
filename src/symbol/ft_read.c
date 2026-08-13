@@ -1416,7 +1416,7 @@ static bool parse_callable_dependencies(ReadContext *ctx,
             target_module_name == NULL || target_symbol_id == 0U ||
             kind < FENG_RESOLVED_CALLABLE_FUNCTION ||
             kind > FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
-            purpose > FENG_SYMBOL_CALLABLE_DEP_METHOD_VALUE ||
+            purpose > FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE ||
             callable_arg_start > tseq_total ||
             callable_arg_count > tseq_total - callable_arg_start) {
             return feng_symbol_internal_set_error(

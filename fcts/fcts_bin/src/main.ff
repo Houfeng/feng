@@ -50,6 +50,7 @@ func main(args: string[]) {
       test_generic_factory_target_inference();
       test_generic_fit_subject();
       test_generic_remaining_representation();
+      test_generic_callable_value_reification();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

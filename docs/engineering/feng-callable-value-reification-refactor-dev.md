@@ -1,9 +1,10 @@
 # Feng 泛型共享体 Callable Value 具化重构开发文档
 
-> 状态：待 Review，尚未开始实施
+> 状态：已完成
 >
-> 本文只定义泛型共享体形成 callable value 的实现重构方案，不新增或修改 Feng
-> 语言语义。方法值与 `self` 的语义仍以
+> 本文定义泛型共享体形成 callable value 的实现重构方案，并增加显式泛型 target
+> `function<TypeArgs...>` / `object.method<TypeArgs...>` 形成闭合 callable value 的
+> 语义。方法值与 `self` 的其他语义仍以
 > [Feng 函数规范](../specifications/feng-function.md) 和
 > [Feng 类型规范](../specifications/feng-type.md) 为准；泛型二进制分发规则仍以
 > [Feng 泛型规范](../specifications/feng-generics-draft.md) 为准。
@@ -58,13 +59,14 @@ consumer 实际生成 `FengMethodValueDescriptor`，但只把 `&descriptor.base`
 3. `FengCallableValueDescriptor` 作为正式 runtime 私有 ABI，并以内嵌字段形式进入
    `FengFunctionDescriptor`；
 4. 顶层函数共享体和类型成员共享体均可形成并返回顶层函数引用、绑定成员方法或
-   lambda；
+   lambda；其中具名函数/方法引用使用统一 callable dependency，lambda 继续使用既有
+   helper 与捕获上下文路径；
 5. 引用 receiver 与值 receiver 复用相同的描述符读取、closure 分配和 invoke 初始化
    流程，只在捕获 receiver 的值表示操作上不同；
 6. provider 编译时允许相关类型仍然开放，consumer 在最终具化点静态生成闭合函数
    描述符、closure 描述符和 typed invoke adapter；
-7. 共享体只按固定 slot 读取静态描述符，不执行运行时搜索、动态具化、tag 分派或
-   描述符工厂间接调用；
+7. 具名 callable dependency 只按固定 slot 读取静态描述符；lambda 继续直接读取既有
+   捕获上下文；两条路径均不执行运行时搜索、动态具化、tag 分派或描述符工厂间接调用；
 8. 不改变 callable value 的现有值表示、调用 ABI、生命周期和装箱规则；
 9. 不给现有非泛型路径、已闭合路径或直接泛型调用路径增加执行时开销。
 
@@ -76,6 +78,7 @@ consumer 实际生成 `FengMethodValueDescriptor`，但只把 `&descriptor.base`
 - 泛型 owner 的实例方法、静态方法以及带方法级泛参的方法共享体形成并返回
   callable value；
 - 顶层函数引用，包括闭合普通函数和需要 consumer 闭合的泛型顶层函数；
+- 显式闭合的泛型顶层函数值和实例方法值；
 - 引用类型 receiver 的方法值；
 - `@value type` 与 tuple 等值语义 receiver 的方法值；
 - 自身方法和 `fit` 方法形成的方法值；
@@ -92,9 +95,41 @@ consumer 实际生成 `FengMethodValueDescriptor`，但只把 `&descriptor.base`
 - 修改方法值 receiver 复制语义或 lambda 捕获语义；
 - 以单态化泛型共享体替代现有二进制分发方案；
 - 与本缺口无关的 callable ABI 重设计。
+- 无 callable-form `spec` 目标的匿名或多态 callable 类型推导；`let r = read;` 与
+  `let r = object.read;` 继续非法；
+- callable 值形成后仍保留方法级泛参、并在后续以 `r<int>()` 重新选择类型实参的
+  first-class polymorphic callable；
+- 已绑定到一个具体 callable-form `spec` 的值，仅凭结构一致隐式贴合另一个
+  callable-form `spec`。
 
 本专项只补齐已经通过语义检查的 callable value 表达式在共享泛型体中的通用具化和
 发码能力。
+
+### 3.3 显式泛型 callable target
+
+泛型顶层函数或实例方法作为值时，必须显式提供完整类型实参：
+
+```feng
+open spec ReadInt(): int;
+
+let top: ReadInt = topRead<int>;
+let method: ReadInt = object.read<int>;
+let converted = (ReadInt)object.read<int>;
+```
+
+显式 target 仍然需要绑定、参数或返回位置提供 callable-form `spec` 目标。Semantic
+先按现有泛型规则检查实参数量和约束，使用这些实参闭合来源参数与返回类型，再复用普通
+callable 结构匹配和重载唯一性检查。目标 callable-form `spec` 不反向推导来源泛参；
+`let value = topRead<int>;` 仍然非法。
+
+类型实参可以引用当前共享体的活动泛参，例如 `topRead<T>` 或 `self.read<U>`。Provider
+把该开放实参写入 callable dependency，consumer 在具化点生成对应的闭合函数描述符、
+adapter 和 callable value。形成后的值不保留泛参，调用时只写 `value()`。
+
+callable-form `spec` 的显式转换也是目标上下文。除已绑定 callable spec 之间的现有
+转换外，本专项补齐 `(ReadInt)object.read` 这类未绑定非泛型方法/函数引用的通用转换，
+以及 `(ReadInt)object.read<int>` 这类显式闭合泛型来源。转换目标不用于反向推导来源
+泛参，因此 `(ReadInt)object.read` 不能选择仍声明方法级泛参的 `read<T>`。
 
 ## 4. 扩展后的描述符结构
 
@@ -230,19 +265,22 @@ dependency 由上述已解析结果是否仍引用当前活动泛参决定，而
 
 ### 5.2 依赖收集与 slot
 
-共享体需要 consumer 补充闭合 callable 信息时，收集一条通用 callable dependency。
+共享体中的具名函数或方法值需要 consumer 补充闭合 callable 信息时，收集一条通用
+callable dependency。lambda 继续由既有 helper、目标签名依赖和捕获上下文完成闭合，
+不额外占用具名 callable dependency slot。
 依赖记录至少包含：
 
 - 使用方式：直接调用、形成 callable value，或者两者都需要；
 - 来源类别；
-- 顶层函数、类型成员、`fit` 或 lambda helper 的稳定符号身份；
+- 顶层函数、类型成员或 `fit` 的稳定符号身份；
 - owner 实例类型；
 - 来源 callable 的显式或推断泛型实参；
 - 形成值时的目标 callable-form spec 实例类型；
 - 依赖归属的 owner/function domain。
 
-`METHOD_VALUE` 不再是特殊描述符用途。方法值、顶层函数值和 lambda 值都属于
-“形成 callable value”，最终 slot 元素统一为 `FengFunctionDescriptor *`。
+`METHOD_VALUE` 不再是特殊描述符用途。方法值和顶层函数值都属于“形成 callable
+value”，最终 slot 元素统一为 `FengFunctionDescriptor *`。lambda 不进入该 slot
+数组，继续使用既有闭包 helper 和捕获布局。
 
 slot 使用规范化 key 排序和去重。用于形成 callable value 时，key 至少区分：
 
@@ -251,17 +289,16 @@ slot 使用规范化 key 排序和去重。用于形成 callable value 时，key
 - callable 泛型实参；
 - `fit` 实现身份；
 - 目标 callable-form spec 实例类型；
-- lambda helper 的稳定生成身份。
 
 provider 写入 `.ft` 的开放 key 与 consumer 替换泛参后的闭合 key 必须遵守同一规则。
 不得使用 AST 地址、遍历偶然顺序或生成 C 符号文本作为跨包身份。
 
 ### 5.3 Consumer 闭合
 
-consumer 在具体 wrapper 或闭合 owner descriptor 生成阶段：
+consumer 在具体 wrapper 或闭合 owner descriptor 生成具名 callable dependency 时：
 
 1. 替换 owner 与方法活动泛参；
-2. 注册目标 callable-form spec、receiver、捕获环境和共享体依赖需要的闭合类型；
+2. 注册目标 callable-form spec、receiver 和共享体依赖需要的闭合类型；
 3. 递归生成目标 callable 的真实 `reified_agg_deps`、`reified_type_deps` 和
    `reified_callable_deps`；
 4. 生成或复用与目标 callable surface 匹配的 typed invoke adapter；
@@ -335,22 +372,24 @@ typed adapter 从 closure 的内联捕获区取得 `self`，再把同一个 `cal
 
 #### Lambda
 
-lambda 使用编译器生成的 invoke helper 作为 callable 实现。其函数描述符同样可携带
-真实共享体依赖和 `callable_value`：
+lambda 使用编译器生成的 invoke helper 作为 callable 实现，并继续沿用既有 closure
+形成路径：
 
 ```c
-closure = feng_object_new(value_desc->closure_desc);
-closure->invoke = value_desc->invoke;
+closure = feng_object_new(lambda_closure_desc);
+closure->invoke = lambda_invoke;
 /* 按现有 lambda 捕获计划写入普通捕获、owner/function descriptor 和泛参描述符。 */
 ```
 
-lambda 的多个捕获字段继续由现有捕获分析逐项处理；不能把
-`aggregate_capture_desc/offset` 特判为“描述全部 lambda 捕获”。只有 provider 无法独立
-确定的闭合 closure 级事实从 `callable_value` 读取。
+lambda 的多个捕获字段继续由现有捕获分析逐项处理；它不生成具名 callable dependency，
+也不读取 `FengCallableValueDescriptor`。目标 callable 签名中引用的活动泛参仍按既有
+reifiable type dependency 收集，owner/function descriptor 与方法泛参描述符仍按既有
+捕获协议写入 closure。该路径已经能在 provider 开放、consumer 闭合的跨包场景下工作，
+无需为 lambda 增加第二套描述符或专用 slot。
 
 ### 5.5 Typed adapter 的统一职责
 
-无论 callable value 来源是顶层函数、引用方法、值方法还是 lambda，typed adapter 均
+对于进入通用 callable dependency 的顶层函数、引用方法和值方法，typed adapter 均
 负责：
 
 1. 按目标 callable-form spec ABI 接收参数和返回值；
@@ -360,8 +399,10 @@ lambda 的多个捕获字段继续由现有捕获分析逐项处理；不能把
    `FengFunctionDescriptor`；
 5. 转发 owner descriptor、方法级泛参描述符和参数/返回值，不执行运行时具化。
 
-因此，形成 callable value 和调用该 value 使用同一份闭合函数事实，不会出现
-`FengMethodValueDescriptor.base` 与真实函数描述符内容不一致的问题。
+lambda 的 invoke helper 继续履行相同的目标 callable ABI，但从自身 closure 读取既有
+捕获上下文，不经过具名 callable descriptor slot。因此，具名 callable value 的形成和
+调用使用同一份闭合函数事实，不会出现 `FengMethodValueDescriptor.base` 与真实函数
+描述符内容不一致的问题；lambda 路径也不受该旧结构影响。
 
 ## 6. 必须支持的组合
 
@@ -455,13 +496,16 @@ runtime 地址或 consumer 生成的 C 符号。
 
 导出和恢复必须保证：
 
-1. 顶层函数、成员、`fit` 和 lambda helper 的身份稳定；
+1. 顶层函数、成员和 `fit` 的身份稳定；lambda helper 继续使用既有 closure/helper
+   生成规则，不进入 callable dependency 记录；
 2. owner 实例、目标 callable spec 和 callable 泛参保留完整开放类型表达式；
 3. provider 与 consumer 使用相同的 slot key、排序和去重规则；
 4. consumer 可使用 provider 从未预先出现的具体类型实参完成闭合；
 5. imported 与本地声明进入同一 semantic、reification 和 codegen 管线，不建立 imported
    专用分支；
-6. FT 版本或记录结构变化必须显式升级，不能让旧 reader 静默误读新记录。
+6. 本次复用的 FT callable dependency 记录已经包含使用方式、来源身份、owner、泛参和
+   目标 callable spec；仅将既有枚举值的语义从 method value 扩展为 callable value，
+   数值和记录布局均未变化，因此无需升级 FT 版本；reader 继续执行既有范围校验。
 
 ## 8. ABI 与性能约束
 
@@ -574,64 +618,76 @@ codegen tests 还必须锁定：
 
 ## 11. 实施步骤
 
-### 11.1 Runtime 描述符与编译期数据模型
+### 11.1 语义元数据与 Runtime 描述符
 
-- [ ] 在 runtime 中定义 `FengCallableValueDescriptor`。
-- [ ] 为 `FengCallableValueDescriptor` 及其所有字段补充准确的 runtime ABI 注释。
-- [ ] 在 `FengFunctionDescriptor` 中内嵌 `FengCallableValueDescriptor callable_value`。
-- [ ] 更新 `FengFunctionDescriptor` 的职责注释，明确其描述一个闭合 callable 实例。
-- [ ] 保持 `reified_callable_deps` 的数组元素类型为
+- [x] 复用 Parser 现有显式泛型 target AST，允许顶层函数和实例方法 target 在明确
+  callable-form `spec` 目标下形成值。
+- [x] 让 callable-form `spec` 显式转换目标复用同一 callable-value 解析链路，支持未绑定
+  非泛型函数/方法引用，以及已经显式闭合的泛型函数/方法引用。
+- [x] 复用现有泛型实参数量、约束、重载唯一性和闭合签名检查，不增加按目标返回类型
+  隐式推导来源泛参的分支。
+- [x] 在 callable coercion sidecar 中保存完整显式类型实参，并保持到 reification、FT
+  和 codegen 阶段。
+- [x] 保持无 callable-form `spec` 目标的显式泛型 target 非法。
+- [x] 在 runtime 中定义 `FengCallableValueDescriptor`。
+- [x] 为 `FengCallableValueDescriptor` 及其所有字段补充准确的 runtime ABI 注释。
+- [x] 在 `FengFunctionDescriptor` 中内嵌 `FengCallableValueDescriptor callable_value`。
+- [x] 更新 `FengFunctionDescriptor` 的职责注释，明确其描述一个闭合 callable 实例。
+- [x] 保持 `reified_callable_deps` 的数组元素类型为
   `FengFunctionDescriptor *`，不增加第二套 callable-value slot 域。
-- [ ] 将 method-value 专用依赖抽象为可表达直接调用、形成 callable value 或二者兼有的
+- [x] 将 method-value 专用依赖抽象为可表达直接调用、形成 callable value 或二者兼有的
   通用 callable dependency。
-- [ ] 确认没有引入类型名、包名、声明方向或测试模型特判。
+- [x] 确认没有引入类型名、包名、声明方向或测试模型特判。
 
 ### 11.2 `.ft` 闭合协议
 
-- [ ] 扩展 callable dependency 的 FT 记录，使其保存使用方式、来源身份、owner 实例、
-  callable 泛参和目标 callable-form spec。
-- [ ] 覆盖顶层函数、类型成员、`fit` 和需要稳定身份的 lambda helper。
-- [ ] 实现本地、导出和导入一致的规范化 key、排序、去重及类型替换。
-- [ ] 显式升级受影响的 FT 版本或记录结构，禁止旧 reader 静默误读。
-- [ ] 增加 FT round-trip 和 consumer-only 闭合实例的 compiler tests。
-- [ ] 完成本阶段专项测试并执行完整 `make test`；若发现问题，先修复通用根因再进入下一阶段。
+- [x] 复用既有 callable dependency FT 记录所保存的使用方式、来源身份、owner 实例、
+  callable 泛参和目标 callable-form spec，并将其用途扩展到顶层函数值和方法值。
+- [x] 覆盖顶层函数、类型成员和 `fit`；lambda helper 继续使用既有稳定的
+  closure/helper 与捕获上下文路径，不新增具名 callable dependency。
+- [x] 实现本地、导出和导入一致的规范化 key、排序、去重及类型替换。
+- [x] 确认本次只扩展既有枚举值语义，数值和 FT 记录布局未变化，无需升级 FT 版本；
+  reader 继续按既有范围校验，不能静默接受非法记录。
+- [x] 增加 FT round-trip 和 consumer-only 闭合实例的 compiler tests。
+- [x] 完成本阶段专项测试并执行完整 `make test`；发现的问题均按通用根因修复后再继续。
 
 ### 11.3 Consumer 描述符生成
 
-- [ ] 递归生成每个依赖 callable 的真实 `reified_agg_deps`、
+- [x] 递归生成每个依赖 callable 的真实 `reified_agg_deps`、
   `reified_type_deps` 和 `reified_callable_deps`。
-- [ ] 为顶层函数、引用 receiver 方法、值 receiver 方法和 lambda 生成或复用闭合
-  closure descriptor 与 typed invoke adapter。
-- [ ] 为无动态捕获的顶层函数生成或复用静态 callable value。
-- [ ] 为引用 receiver 填写 `closure_desc` 和 `invoke`。
-- [ ] 为值 receiver 填写 `closure_desc`、`invoke`、
+- [x] 为顶层函数、引用 receiver 方法和值 receiver 方法生成或复用闭合 closure
+  descriptor 与 typed invoke adapter；lambda 继续复用既有 helper/closure 形成路径。
+- [x] 为无动态捕获的顶层函数生成或复用静态 callable value。
+- [x] 为引用 receiver 填写 `closure_desc` 和 `invoke`。
+- [x] 为值 receiver 填写 `closure_desc`、`invoke`、
   `aggregate_capture_desc` 和 `aggregate_capture_offset`。
-- [ ] 为同一声明的不同 callable surface 生成正确且可复用的闭合函数描述符实例。
-- [ ] 输出元素类型严格一致的 `FengFunctionDescriptor *` 依赖数组。
-- [ ] 删除 codegen-private `FengMethodValueDescriptor`、`&descriptor.base` 和向下强制转换。
-- [ ] 完成本阶段专项测试并执行完整 `make test`；若发现问题，先修复通用根因再进入下一阶段。
+- [x] 为同一声明的不同 callable surface 生成正确且可复用的闭合函数描述符实例。
+- [x] 输出元素类型严格一致的 `FengFunctionDescriptor *` 依赖数组。
+- [x] 删除 codegen-private `FengMethodValueDescriptor`、`&descriptor.base` 和向下强制转换。
+- [x] 完成本阶段专项测试并执行完整 `make test`；发现的问题均按通用根因修复后再继续。
 
 ### 11.4 通用共享体形成发码
 
-- [ ] 让顶层函数共享体和成员共享体复用统一的 callable descriptor slot 查找入口。
-- [ ] 实现无动态捕获顶层函数的静态 callable value 形成路径。
-- [ ] 实现引用 receiver 方法值的一次 closure 分配与 `feng_assign` 捕获路径。
-- [ ] 实现值 receiver 方法值的一次 closure 分配与 aggregate 内联复制路径。
-- [ ] 让 lambda 复用统一的闭合 callable 描述信息，同时保持现有逐项捕获语义。
-- [ ] 让 typed adapter 使用所属的同一个 `FengFunctionDescriptor` 调用目标共享体。
-- [ ] 支持 §6 中顶层函数共享体与成员共享体返回顶层函数、成员方法、lambda，以及转发
+- [x] 让顶层函数共享体和成员共享体复用统一的 callable descriptor slot 查找入口。
+- [x] 实现无动态捕获顶层函数的静态 callable value 形成路径。
+- [x] 实现引用 receiver 方法值的一次 closure 分配与 `feng_assign` 捕获路径。
+- [x] 实现值 receiver 方法值的一次 closure 分配与 aggregate 内联复制路径。
+- [x] 保持 lambda 既有的闭合 helper、descriptor 上下文和逐项捕获路径，并验证其与
+  新 callable dependency 管线共同工作。
+- [x] 让 typed adapter 使用所属的同一个 `FengFunctionDescriptor` 调用目标共享体。
+- [x] 支持 §6 中顶层函数共享体与成员共享体返回顶层函数、成员方法、lambda，以及转发
   已形成 callable value 的全部组合。
-- [ ] 保持既有非泛型、已闭合和直接调用路径的发码及执行时开销不变。
-- [ ] 完成本阶段专项测试并执行完整 `make test`；若发现问题，先修复通用根因再进入下一阶段。
+- [x] 保持既有非泛型、已闭合和直接调用路径的发码及执行时开销不变。
+- [x] 完成本阶段专项测试并执行完整 `make test`；发现的问题均按通用根因修复后再继续。
 
 ### 11.5 完整用例与最终验收
 
-- [ ] 补齐 §9.1 的 semantic、FT 和 codegen compiler tests。
-- [ ] 在 FCTS 中补齐 §9.2 的本地及跨包行为矩阵，并使用 `std.test` 完成可观察断言。
-- [ ] 补齐 §9.3 的分配次数、装箱、slot 读取和直接调用路径性能结构断言。
-- [ ] 验证引用和值 receiver 的捕获、调用、复制、释放及异常展开符合既有语义。
-- [ ] 验证类型级泛参、方法级泛参以及二者组合的 descriptor domain 和 slot 均正确。
-- [ ] 验证 consumer 使用 provider 未预先出现的闭合类型实参时仍可正确二进制分发。
-- [ ] 执行完整 `make test` 并确认全部通过。
-- [ ] 按实际实现更新本文状态和 TODO。
-- [ ] 在实施完成后另行同步相关既有开发文档的状态与实现描述。
+- [x] 补齐 §9.1 的 semantic、FT 和 codegen compiler tests。
+- [x] 在 FCTS 中补齐 §9.2 的本地及跨包行为矩阵，并使用 `std.test` 完成可观察断言。
+- [x] 补齐 §9.3 的分配次数、装箱、slot 读取和直接调用路径性能结构断言。
+- [x] 验证引用和值 receiver 的捕获、调用、复制、释放及异常展开符合既有语义。
+- [x] 验证类型级泛参、方法级泛参以及二者组合的 descriptor domain 和 slot 均正确。
+- [x] 验证 consumer 使用 provider 未预先出现的闭合类型实参时仍可正确二进制分发。
+- [x] 执行完整 `make test` 并确认全部通过。
+- [x] 按实际实现更新本文状态和 TODO。
+- [x] 同步相关函数、泛型与 spec 规范中的语义描述；未重复定义其他开发文档的状态。

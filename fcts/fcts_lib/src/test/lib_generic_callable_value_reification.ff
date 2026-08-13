@@ -1,0 +1,164 @@
+open module fcts_lib.test;
+
+/** Produces one closed generic value. */
+open spec LibCallableProducer<T>(): T;
+
+/** Maps one closed generic value to another value of the same type. */
+open spec LibCallableMapper<T>(value: T): T;
+
+/** Object-form payload used as a consumer-only generic argument. */
+open spec LibCallableNamed {
+  /** Return the payload's observable label. */
+  func label(): string;
+}
+
+/** Identity implementation used by closed top-level callable values. */
+open func libCallableIdentity<T>(value: T): T {
+  return value;
+}
+
+/** Form an explicitly closed top-level generic function value. */
+open func libCallableTopMapper<T>(): LibCallableMapper<T> {
+  return libCallableIdentity<T>;
+}
+
+/** Form the same top-level value through an explicit callable conversion. */
+open func libCallableTopMapperCast<T>(): LibCallableMapper<T> {
+  return (LibCallableMapper<T>)libCallableIdentity<T>;
+}
+
+/** Form an escaping lambda in an imported top-level generic shared body. */
+open func libCallableLambda<T>(value: T): LibCallableProducer<T> {
+  return () -> value;
+}
+
+/** Forward an already formed callable through the generic callable ABI. */
+open func libCallableForward<T>(
+  producer: LibCallableProducer<T>
+): LibCallableProducer<T> {
+  return producer;
+}
+
+/** Reference receiver whose final T is selected by the consumer. */
+open type LibCallableReader<T> {
+  /** Mutable payload observed through bound reference-method values. */
+  open var value: T;
+
+  /** Construct one reference receiver. */
+  func LibCallableReader(value: T) {
+    self.value = value;
+  }
+
+  /** Read the current receiver payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Form a bound self method in a generic-owner shared body. */
+  open func reader(): LibCallableProducer<T> {
+    return self.read;
+  }
+
+  /** Form a bound self method through an explicit callable conversion. */
+  open func readerCast(): LibCallableProducer<T> {
+    return (LibCallableProducer<T>)self.read;
+  }
+
+  /** Form a closed top-level function in a generic-owner shared body. */
+  open func mapper(): LibCallableMapper<T> {
+    return libCallableIdentity<T>;
+  }
+
+  /** Form an escaping lambda in a generic-owner shared body. */
+  open func lambdaReader(): LibCallableProducer<T> {
+    return () -> self.value;
+  }
+
+  /** Keep owner T and method U in distinct descriptor domains. */
+  open func methodMapper<U>(): LibCallableMapper<U> {
+    return libCallableIdentity<U>;
+  }
+
+  /** Capture method U in a lambda while owner T remains active. */
+  open func methodLambda<U>(value: U): LibCallableProducer<U> {
+    return () -> value;
+  }
+}
+
+/** Form a reference-receiver method in a top-level generic shared body. */
+open func libCallableBindReference<T>(
+  reader: LibCallableReader<T>
+): LibCallableProducer<T> {
+  return reader.read;
+}
+
+/** Value receiver whose final layout is selected by the consumer. */
+@value
+open type LibCallableValueReader<T> {
+  /** Payload copied into bound value-method closures. */
+  open var value: T;
+
+  /** Read the copied receiver payload. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Form a bound self method in a generic value-owner shared body. */
+  open func reader(): LibCallableProducer<T> {
+    return self.read;
+  }
+}
+
+/** Form a value-receiver method in a top-level generic shared body. */
+open func libCallableBindValue<T>(
+  reader: LibCallableValueReader<T>
+): LibCallableProducer<T> {
+  return reader.read;
+}
+
+/** Generic tuple used to verify fit method values with descriptor-sized T. */
+open type LibCallableTuple<T>(T, string);
+
+/** Supply a fit-body method for the generic tuple receiver. */
+open fit LibCallableTuple<T> {
+  /** Return the tuple's generic field. */
+  open func first(): T {
+    return self.item1;
+  }
+}
+
+/** Form a tuple fit method in an imported top-level generic shared body. */
+open func libCallableBindTuple<T>(
+  value: LibCallableTuple<T>
+): LibCallableProducer<T> {
+  return value.first;
+}
+
+/** Non-generic owner used to close an explicitly generic instance method. */
+open type LibCallableMethodSource {
+  /** Construct one method source. */
+  func LibCallableMethodSource() {}
+
+  /** Generic instance identity method. */
+  open func identity<T>(value: T): T {
+    return value;
+  }
+
+  /** Form an explicitly closed generic instance method value. */
+  open func mapper<T>(): LibCallableMapper<T> {
+    return self.identity<T>;
+  }
+
+  /** Form the same method value through an explicit callable conversion. */
+  open func mapperCast<T>(): LibCallableMapper<T> {
+    return (LibCallableMapper<T>)self.identity<T>;
+  }
+}
+
+/** Generic static owner returning a closed top-level callable value. */
+open type LibCallableStaticFactory<T> {
+  /** Form the owner-T top-level callable without allocating a closure. */
+  open static func mapper(): LibCallableMapper<T> {
+    return libCallableIdentity<T>;
+  }
+}

@@ -1,0 +1,198 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Consumer-only reference payload used to close imported callable values. */
+type CallableValueReferencePayload {
+  /** Observable payload. */
+  open let text: string;
+
+  /** Construct one reference payload. */
+  func CallableValueReferencePayload(text: string) {
+    self.text = text;
+  }
+}
+
+/** Consumer-only descriptor-sized value payload. */
+@value
+type CallableValueWidePayload {
+  /** First managed field. */
+  open let first: string;
+
+  /** Second managed field. */
+  open let second: string;
+
+  /** Scalar tail. */
+  open let number: i64;
+}
+
+/** Consumer-only object satisfying the provider's object-form spec. */
+type CallableValueNamedPayload: LibCallableNamed {
+  /** Observable label. */
+  open let text: string;
+
+  /** Construct one named payload. */
+  func CallableValueNamedPayload(text: string) {
+    self.text = text;
+  }
+
+  /** Implement the provider contract. */
+  func label(): string {
+    return self.text;
+  }
+}
+
+/** Verify generic shared bodies form fully closed callable values. */
+open func test_generic_callable_value_reification(): void {
+  describe("generic callable-value reification", () {
+    test("top-level callable values close scalar and explicit casts", () {
+      let mapper = libCallableTopMapper<i64>();
+      let castMapper = libCallableTopMapperCast<i64>();
+      let direct: LibCallableMapper<i64> = libCallableIdentity<i64>;
+      let directCast =
+        (LibCallableMapper<i64>)libCallableIdentity<i64>;
+
+      assert(mapper(40) == 40 && castMapper(41) == 41 &&
+             direct(42) == 42 && directCast(43) == 43,
+             "closed top-level references and casts share the same result");
+    });
+
+    test("consumer-only reference and wide values close provider slots", () {
+      let referenceMapper =
+        libCallableTopMapper<CallableValueReferencePayload>();
+      let reference = referenceMapper(
+        CallableValueReferencePayload("reference")
+      );
+      let wideMapper = libCallableTopMapper<CallableValueWidePayload>();
+      let wide = wideMapper(CallableValueWidePayload {
+        first: "wide-first",
+        second: "wide-second",
+        number: 44
+      });
+
+      assert(reference.text == "reference" &&
+             wide.first == "wide-first" &&
+             wide.second == "wide-second" && wide.number == 44,
+             "consumer-only reference and descriptor-sized values survive");
+    });
+
+    test("object and callable specs remain valid generic arguments", () {
+      let named: LibCallableNamed = CallableValueNamedPayload("named");
+      let namedMapper = libCallableTopMapper<LibCallableNamed>();
+      let mappedNamed = namedMapper(named);
+      let producer: LibCallableProducer<string> = () -> "inner-callable";
+      let callableMapper =
+        libCallableTopMapper<LibCallableProducer<string>>();
+      let mappedProducer = callableMapper(producer);
+
+      assert(mappedNamed.label() == "named" &&
+             mappedProducer() == "inner-callable",
+             "object-form and callable-form spec values remain callable");
+    });
+
+    test("reference method closures retain identity and observe mutation", () {
+      let reader = LibCallableReader<string>("before");
+      let topBound = libCallableBindReference<string>(reader);
+      let ownerBound = reader.reader();
+      let castBound = reader.readerCast();
+      reader.value = "after";
+
+      assert(topBound() == "after" && ownerBound() == "after" &&
+             castBound() == "after",
+             "bound reference methods retain and observe the same receiver");
+    });
+
+    test("value method closures capture independent descriptor-sized copies", () {
+      let original = CallableValueWidePayload {
+        first: "captured-first",
+        second: "captured-second",
+        number: 45
+      };
+      var reader = LibCallableValueReader<CallableValueWidePayload> {
+        value: original
+      };
+      let topBound = libCallableBindValue<CallableValueWidePayload>(reader);
+      let ownerBound = reader.reader();
+      reader.value = CallableValueWidePayload {
+        first: "changed-first",
+        second: "changed-second",
+        number: 46
+      };
+      let topValue = topBound();
+      let ownerValue = ownerBound();
+
+      assert(topValue.first == "captured-first" &&
+             topValue.second == "captured-second" && topValue.number == 45 &&
+             ownerValue.first == "captured-first" &&
+             ownerValue.second == "captured-second" &&
+             ownerValue.number == 45,
+             "value method closures keep their formation-time copies");
+    });
+
+    test("generic tuple fit methods preserve wide captured values", () {
+      let tuple: LibCallableTuple<CallableValueWidePayload> = (
+        CallableValueWidePayload {
+          first: "tuple-first",
+          second: "tuple-second",
+          number: 47
+        },
+        "marker"
+      );
+      let first = libCallableBindTuple<CallableValueWidePayload>(tuple);
+      let value = first();
+
+      assert(value.first == "tuple-first" &&
+             value.second == "tuple-second" && value.number == 47,
+             "tuple fit method captures use the closed aggregate descriptor");
+    });
+
+    test("owner and method generic domains form independent callables", () {
+      let owner = LibCallableReader<string>("owner-T");
+      let ownerMapper = owner.mapper();
+      let methodMapper = owner.methodMapper<CallableValueWidePayload>();
+      let methodLambda = owner.methodLambda<i64>(48);
+      let wide = methodMapper(CallableValueWidePayload {
+        first: "method-U-first",
+        second: "method-U-second",
+        number: 49
+      });
+
+      assert(ownerMapper("owner-value") == "owner-value" &&
+             wide.first == "method-U-first" &&
+             wide.second == "method-U-second" && wide.number == 49 &&
+             methodLambda() == 48,
+             "owner T and method U use separate callable dependency slots");
+    });
+
+    test("explicit generic instance method values close through targets", () {
+      let source = LibCallableMethodSource();
+      let mapper = source.mapper<i64>();
+      let castMapper = source.mapperCast<i64>();
+      let direct: LibCallableMapper<i64> = source.identity<i64>;
+      let directCast =
+        (LibCallableMapper<i64>)source.identity<i64>;
+
+      assert(mapper(50) == 50 && castMapper(51) == 51 &&
+             direct(52) == 52 && directCast(53) == 53,
+             "explicitly closed instance methods support binding and casts");
+    });
+
+    test("lambda forwarding and generic static owners remain callable", () {
+      let escaped = libCallableForward<string>(
+        libCallableLambda<string>("escaped")
+      );
+      let staticMapper =
+        LibCallableStaticFactory<CallableValueWidePayload>.mapper();
+      let wide = staticMapper(CallableValueWidePayload {
+        first: "static-first",
+        second: "static-second",
+        number: 54
+      });
+
+      assert(escaped() == "escaped" && wide.first == "static-first" &&
+             wide.second == "static-second" && wide.number == 54,
+             "escaping lambda and generic static owner remain fully closed");
+    });
+  });
+}

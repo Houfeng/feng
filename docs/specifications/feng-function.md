@@ -148,6 +148,27 @@ let u = User {};
 let s = u.say; // 错误: say 的重载本身合法,但 let s 无法推导唯一目标可调用形状; 应显式标注绑定类型
 ```
 
+正确语法四-b，显式闭合泛型函数值和方法值:
+
+```feng
+spec ReadInt(): int;
+
+func read<T>(): T {
+    // 示例主体省略
+}
+
+type Reader {
+    func read<T>(): T {
+        // 示例主体省略
+    }
+}
+
+let topReader: ReadInt = read<int>;
+let owner = Reader();
+let methodReader: ReadInt = owner.read<int>;
+let convertedMethodReader = (ReadInt)owner.read<int>;
+```
+
 正确语法五，`@mixable` 静态方法:
 
 ```feng
@@ -201,6 +222,10 @@ type Bad: Widget {
 - `type` 字段的初始化器表达式本身不得直接引用 `self`; 但当字段类型解析为 `spec` 定义的可调用形状,且初始化器是 Lambda 时,该 Lambda 体可捕获外层 `type` 的 `self`(捕获在对象构造完成后才生效)。
 - 方法值在形成时绑定当前接收者：值类型接收者按值捕获，后续调用中的 `self` 引用方法值保存的值存储；引用类型接收者复制引用，后续调用中的 `self` 引用该引用所指向的同一实例。调用方法值本身不再复制或重新选择接收者。若方法存在重载，仍需由上下文唯一确定目标可调用形状。
 - 对重载函数值或重载方法值,可用于消歧的上下文包括参数位置的目标可调用形状、显式绑定类型与已声明返回类型。
+- 声明了函数级或方法级泛参的顶层函数或实例方法作为值时，必须使用 `function<TypeArgs...>` 或 `object.method<TypeArgs...>` 显式提供完整类型实参；目标 callable-form `spec` 不隐式推导来源泛参。显式类型实参数量和约束检查通过后，编译器先闭合来源签名，再按普通未绑定 callable 的规则与目标 callable-form `spec` 做结构匹配。
+- 显式闭合的泛型函数值或方法值仍必须出现在具有明确 callable-form `spec` 目标的绑定、实参或返回位置；`let reader = read<int>;` 不推导匿名 callable 类型。形成后的值是普通闭合 callable，调用形式为 `reader()`，不能再写 `reader<int>()`。
+- `read<T>` 或 `self.read<T>` 中的类型实参可以引用当前活动的类型级或函数/方法级泛参；泛型共享体在最终具化点为每组具体实参生成对应的闭合 callable 描述信息。
+- callable-form `spec` 的显式转换目标也构成明确的 callable 目标上下文，因此未绑定的非泛型函数或方法引用可以直接写为 `(TargetSpec)function` / `(TargetSpec)object.method`；泛型来源必须先显式闭合，写为 `(TargetSpec)function<TypeArgs...>` / `(TargetSpec)object.method<TypeArgs...>`。转换目标不反向推导来源泛参。
 
 ### 4.2 main 函数
 
@@ -386,6 +411,10 @@ wrapper 只增加源码语义明确的普通静态调用层，不引入运行时
 - [必须] Lambda 作为绑定值、实参或返回值时,必须存在显式 callable-form `spec` 目标类型; 绑定位置来自显式绑定类型,参数位置来自形参类型,返回位置来自当前函数的显式返回类型; 泛型目标必须按目标实例的类型实参完成签名替换后再进行贴合检查。
 - [必须] Lambda 可以捕获其外层作用域中的普通绑定,也可以在存在外层 `self` 绑定时捕获该 `self`。
 - [必须] 当重载函数或重载方法以函数值形式出现时,必须存在足以唯一确定目标可调用形状的上下文,例如参数位置的目标类型、显式绑定类型或已声明返回类型。
+- [必须] 声明函数级或方法级泛参的顶层函数或实例方法作为值时，必须通过显式泛型 target 提供完整类型实参；编译器必须验证实参数量、泛型约束和闭合后的 callable 签名。
+- [必须] 显式泛型 target 形成函数值时仍必须具有 callable-form `spec` 目标；形成后的值必须是普通闭合 callable，不得保留可在后续调用重新指定的泛参。
+- [必须] callable-form `spec` 的显式转换可以直接以尚未绑定到 spec 的顶层函数或实例方法引用作为操作数；编译器必须以转换目标完成来源选择、结构匹配和 callable value 形成。泛型来源必须先通过显式泛型 target 提供完整类型实参。
+- [禁止] 通过 callable-form `spec` 目标的参数或返回类型隐式推导并消除来源函数或方法自身声明的泛参。
 - [禁止] 通过 `import` 导入的同名函数与当前文件内声明的顶层函数或同一文件内其他导入来源共同组成新的重载集合。
 - [禁止] 多行 Lambda 使用 `->`。
 - [禁止] 通过未标注类型的绑定、函数返回类型推导或其他无 callable-form `spec` 目标类型的表达式上下文为 Lambda 推导匿名函数类型。

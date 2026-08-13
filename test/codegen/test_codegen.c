@@ -313,6 +313,69 @@ static bool span_contains(const char *start, const char *end, const char *needle
     return false;
 }
 
+/* Count complete substring occurrences inside one half-open source span. */
+static size_t count_substr_in_span(const char *start,
+                                   const char *end,
+                                   const char *needle) {
+    size_t count = 0U;
+    size_t needle_length;
+    const char *cursor;
+
+    if (start == NULL || end == NULL || end < start || needle == NULL ||
+        needle[0] == '\0') {
+        return 0U;
+    }
+    needle_length = strlen(needle);
+    cursor = start;
+    while (cursor + needle_length <= end) {
+        const char *match = strstr(cursor, needle);
+
+        if (match == NULL || match + needle_length > end) {
+            break;
+        }
+        count++;
+        cursor = match + needle_length;
+    }
+    return count;
+}
+
+/* Locate the generated definition matching a complete declaration prefix.
+ * Prototypes are skipped; generated function-closing braces begin at column
+ * zero, which gives a stable half-open body span for structural assertions. */
+static bool find_generated_function_body(const char *source,
+                                         const char *declaration_prefix,
+                                         const char **out_start,
+                                         const char **out_end) {
+    const char *cursor;
+    size_t prefix_length;
+
+    if (source == NULL || declaration_prefix == NULL || out_start == NULL ||
+        out_end == NULL) {
+        return false;
+    }
+    prefix_length = strlen(declaration_prefix);
+    cursor = source;
+    while ((cursor = strstr(cursor, declaration_prefix)) != NULL) {
+        const char *delimiter = strpbrk(cursor + prefix_length, ";{");
+
+        if (delimiter == NULL) {
+            return false;
+        }
+        if (*delimiter == '{') {
+            const char *end = strstr(delimiter, "\n}\n");
+
+            if (end == NULL) {
+                return false;
+            }
+            *out_start = delimiter + 1;
+            *out_end = end;
+            return true;
+        }
+        cursor += prefix_length;
+    }
+    return false;
+}
+
 static void assert_builtin_subject_thunks_direct_fit_call(const char *c_source) {
     const char *cursor = c_source;
     size_t checked = 0U;
@@ -6307,25 +6370,243 @@ static void test_value_method_capture_codegen_has_direct_closure_lowering(void) 
                                      NULL, &output, &codegen_error));
     ASSERT(output.c_source != NULL);
 
-    /* The shared body performs one fixed-slot read and one existing closure
-     * allocation. No binder call, search, or second allocation is emitted. */
+    /* The shared body reads one complete function descriptor and its embedded
+     * callable-value metadata from one fixed slot. The retired prefix-cast
+     * descriptor representation must not survive in generated C. */
+    ASSERT(strstr(output.c_source, "FengMethodValueDescriptor") == NULL);
     ASSERT(count_substr(output.c_source,
-                        "const FengMethodValueDescriptor *_method_value_desc") ==
+                        "const FengFunctionDescriptor *_method_value_desc") ==
            1U);
     ASSERT(count_substr(output.c_source,
-                        "(FengMethodValueClosurePrefix *)feng_object_new(") ==
+                        "const FengCallableValueDescriptor *_callable_value_desc") ==
            1U);
     ASSERT(count_substr(output.c_source,
                         "_desc->reified_callable_deps[") == 1U);
-
-    /* The fixed-layout path retains its single ValueClosure allocation. */
     ASSERT(count_substr(output.c_source,
-                        "feng_object_new(&FengCallableBind__") == 1U);
+                        "feng_object_new(_callable_value_desc") == 1U);
+    ASSERT(strstr(output.c_source,
+                  "_callable_value_desc3->aggregate_capture_desc") != NULL);
+
+    /* The fixed-layout direct binder and the consumer-generated shared-body
+     * adapter each contain exactly one closure allocation. At execution only
+     * the selected formation path runs, so neither path performs a second
+     * receiver box or closure allocation. */
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(&FengCallableBind__") == 2U);
 
     /* Spec-box descriptors may be declared for object-spec coercion support,
      * but method-value formation must never allocate one. */
     for (const char *line = output.c_source;
          (line = strstr(line, "feng_object_new(&")) != NULL;
+         ++line) {
+        const char *line_end = strchr(line, '\n');
+
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        ASSERT(!span_contains(line, line_end, "__spec_box"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Generic shared bodies form top-level, reference-method and value-method
+ * callable values from one typed function-descriptor representation. Static
+ * function values allocate nothing, while each bound method path allocates
+ * exactly its one language-level closure. */
+static void test_generic_callable_value_reification_codegen(void) {
+    const char *source =
+        "module feng.codegen.callable_value_reification;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "spec Producer<T>(): T;\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "func makeTop<T>(): Mapper<T> { return identity<T>; }\n"
+        "func makeTopCast<T>(): Mapper<T> {\n"
+        "    return (Mapper<T>)identity<T>;\n"
+        "}\n"
+        "func direct<T>(value: T): T { return identity<T>(value); }\n"
+        "type Reader<T> {\n"
+        "    let value: T;\n"
+        "    func Reader(value: T) { self.value = value; }\n"
+        "    func read(): T { return self.value; }\n"
+        "    func reader(): Producer<T> { return self.read; }\n"
+        "    func mapper(): Mapper<T> { return identity<T>; }\n"
+        "    func lambdaReader(): Producer<T> {\n"
+        "        return () -> self.value;\n"
+        "    }\n"
+        "    func methodMapper<U>(): Mapper<U> { return identity<U>; }\n"
+        "    func forward(reader: Reader<T>): Reader<T> { return reader; }\n"
+        "}\n"
+        "type Forwarder {\n"
+        "    func forward<U>(reader: Reader<U>): Reader<U> { return reader; }\n"
+        "    static func forwardStatic<U>(reader: Reader<U>): Reader<U> {\n"
+        "        return reader;\n"
+        "    }\n"
+        "}\n"
+        "@value type ValueReader<T> {\n"
+        "    var value: T;\n"
+        "    func read(): T { return self.value; }\n"
+        "    func reader(): Producer<T> { return self.read; }\n"
+        "    func current(): T { return self.read(); }\n"
+        "}\n"
+        "type StaticFactory<T> {\n"
+        "    static func mapper(): Mapper<T> { return identity<T>; }\n"
+        "}\n"
+        "func bindReference<T>(reader: Reader<T>): Producer<T> {\n"
+        "    return reader.read;\n"
+        "}\n"
+        "func bindValue<T>(reader: ValueReader<T>): Producer<T> {\n"
+        "    return reader.read;\n"
+        "}\n"
+        "func makeLambda<T>(value: T): Producer<T> {\n"
+        "    return () -> value;\n"
+        "}\n"
+        "func use(): int {\n"
+        "    let top = makeTop<int>();\n"
+        "    let topCast = makeTopCast<int>();\n"
+        "    let reader = Reader<int>(3);\n"
+        "    let reference = bindReference<int>(reader);\n"
+        "    let ownerReference = reader.reader();\n"
+        "    let ownerTop = reader.mapper();\n"
+        "    let ownerLambda = reader.lambdaReader();\n"
+        "    let methodTop = reader.methodMapper<int>();\n"
+        "    let ownerForward = reader.forward(reader);\n"
+        "    let methodForward = Forwarder().forward<int>(reader);\n"
+        "    let staticForward = Forwarder.forwardStatic<int>(reader);\n"
+        "    let value = ValueReader<int> { value: 4 };\n"
+        "    let valueReference = bindValue<int>(value);\n"
+        "    let valueOwnerReference = value.reader();\n"
+        "    let valueCurrent = value.current();\n"
+        "    let lambda = makeLambda<int>(5);\n"
+        "    let staticTop = StaticFactory<int>.mapper();\n"
+        "    return top(1) + topCast(2) + reference() + ownerReference() +\n"
+        "           ownerTop(5) + ownerLambda() + methodTop(6) +\n"
+        "           ownerForward.read() + methodForward.read() +\n"
+        "           staticForward.read() +\n"
+        "           valueReference() + valueOwnerReference() + valueCurrent +\n"
+        "           lambda() +\n"
+        "           staticTop(7) + direct<int>(8);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "generic_callable_value_reification_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(strstr(output.c_source, "FengMethodValueDescriptor") == NULL);
+    ASSERT(strstr(output.c_source, "FengCallableValueDescriptor") != NULL);
+    ASSERT(strstr(output.c_source, "descriptor_factory") == NULL);
+    ASSERT(strstr(output.c_source, "FENG_REFCOUNT_IMMORTAL") != NULL);
+
+    /* A generic top-level function value is loaded from one fixed descriptor
+     * slot and never allocates a closure. An explicit cast uses the identical
+     * path and therefore adds no wrapper or forwarding layer. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__callable_value_reification__makeTop_G__from__void",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "callable_value.static_value") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 0U);
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__callable_value_reification__makeTopCast_G__from__void",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "callable_value.static_value") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 0U);
+
+    /* A direct generic call keeps its prior shared-call path and never reads
+     * callable-value formation metadata. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__callable_value_reification__direct_G__from__X",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end, "->callable_value"));
+    ASSERT(!span_contains(body_start, body_end, "static_value"));
+
+    /* Reference receivers use one closure allocation and one retained pointer
+     * assignment, with no aggregate copy or receiver box. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__callable_value_reification__bindReference_G__from__O_Feng__feng__codegen__callable_value_reification__Reader__G__T__CTX__T",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_assign(") == 1U);
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_assign("));
+
+    /* Value receivers share the same slot and closure path, changing only the
+     * required single descriptor-sized aggregate copy. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__callable_value_reification__bindValue_G__from__O_Feng__feng__codegen__callable_value_reification__ValueReader__G__T__CTX__T",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[0]") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_aggregate_assign(") == 1U);
+    ASSERT(span_contains(body_start, body_end,
+                         "aggregate_capture_offset"));
+    ASSERT(span_contains(body_start, body_end,
+                         "aggregate_capture_desc"));
+
+    /* A shared generic @value receiver is already an address. Nested self
+     * calls must pass that address through directly instead of taking the
+     * address of the `_self` pointer itself. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void FengGenericMethod__feng__codegen__callable_value_reification__ValueReader__i2__current",
+        &body_start, &body_end));
+    ASSERT(span_contains(
+        body_start,
+        body_end,
+        "FengGenericMethod__feng__codegen__callable_value_reification__ValueReader__i0__read(_self, _td"));
+    ASSERT(!span_contains(body_start, body_end, "__i0__read(&_self"));
+
+    /* A generic static shared method also returns the same immortal top-level
+     * callable value without allocating or dispatching on a source tag. */
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void FengGenericMethod__feng__codegen__callable_value_reification__StaticFactory__i0__mapper",
+        &body_start, &body_end));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "callable_value.static_value") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 0U);
+
+    /* Value-receiver formation must never allocate an object-spec box even
+     * though reusable box descriptors can exist in the translation unit. */
+    for (const char *line = output.c_source;
+         (line = strstr(line, "feng_object_new(")) != NULL;
          ++line) {
         const char *line_end = strchr(line, '\n');
 
@@ -9809,6 +10090,46 @@ static void test_member_mix_fields_and_mixable_wrappers_codegen(void) {
     feng_program_free(program);
 }
 
+/* A generic-owner shared wrapper may use its local layout view as `self`, but
+ * object-spec coercion must build and cache the witness against the persistent
+ * registered nominal instance rather than that stack-owned compiler view. */
+static void test_generic_owner_mixable_coercion_uses_nominal_instance(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_mixin_coercion;\n"
+        "spec Widget {}\n"
+        "type View<T>: Widget {\n"
+        "    var value: T;\n"
+        "    @mixable static func echo(target: Widget, value: T): T {\n"
+        "        return value;\n"
+        "    }\n"
+        "}\n"
+        "func use(view: View<i64>): i64 { return view.echo(41); }\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_mixin_coercion_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengWitness__feng__codegen__generic_mixin_coercion") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Object-spec upcasts use direct-parent witness fields, preserve the subject,
  * converge diamond ancestors, instantiate generic parents, and evaluate the
  * projected source expression exactly once. */
@@ -9916,6 +10237,7 @@ int main(void) {
 
     test_multi_file_bin();
     test_member_mix_fields_and_mixable_wrappers_codegen();
+    test_generic_owner_mixable_coercion_uses_nominal_instance();
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();
     test_private_representation_cross_package_ft_codegen();
@@ -10009,6 +10331,7 @@ int main(void) {
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
     test_value_method_capture_codegen_has_direct_closure_lowering();
+    test_generic_callable_value_reification_codegen();
     test_callable_spec_lambda_local_capture_codegen();
     test_generic_lambda_dynamic_capture_codegen();
     test_lambda_tuple_body_uses_callable_return_target_codegen();

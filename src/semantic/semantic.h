@@ -274,6 +274,12 @@ typedef struct FengSpecCoercionSite {
     /* METHOD_VALUE only: caller-view receiver instance, preserving open
      * generic arguments such as Cell<T> or Owner<T>. */
     const FengTypeRef *callable_receiver_type_ref;
+    /* TOP_LEVEL_FN / METHOD_VALUE only: explicit callable-local type
+     * arguments supplied by `function<T...>` / `object.method<T...>`.
+     * The pointer array and every referenced type tree are owned by the
+     * semantic analysis. Empty for ordinary non-generic callable values. */
+    const FengTypeRef *const *callable_type_args;
+    size_t callable_type_arg_count;
     const FengExpr *callable_lambda_expr;
 } FengSpecCoercionSite;
 
@@ -340,8 +346,8 @@ typedef struct FengReifiableDep {
 typedef enum FengReifiableCallableDepPurpose {
     /* The shared body directly invokes another generic shared callable. */
     FENG_REIFIABLE_CALLABLE_DEP_DIRECT_CALL = 0,
-    /* The shared body forms a bound method value from a value receiver. */
-    FENG_REIFIABLE_CALLABLE_DEP_METHOD_VALUE
+    /* The shared body forms a callable value. */
+    FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE
 } FengReifiableCallableDepPurpose;
 
 /* 当前共享 callable 使用的另一个 callable 相关依赖。所有类型引用均已
@@ -356,7 +362,7 @@ typedef struct FengReifiableCallableDep {
     const FengTypeRef *owner_instance_type_ref;
     const FengTypeRef *const *callable_type_args;
     size_t callable_type_arg_count;
-    /* METHOD_VALUE only: callable-form spec selected by the target-typed
+    /* CALLABLE_VALUE only: callable-form spec selected by the target-typed
      * coercion site, for example Producer<T> in `return self.read`. */
     const FengTypeRef *target_callable_type_ref;
 } FengReifiableCallableDep;
@@ -658,6 +664,8 @@ bool feng_semantic_record_callable_spec_coercion_site(
     const FengDecl *callable_owner_type_decl,
     const FengDecl *callable_fit_decl,
     const FengTypeRef *callable_receiver_type_ref,
+    const FengTypeRef *const *callable_type_args,
+    size_t callable_type_arg_count,
     const FengExpr *callable_lambda_expr);
 
 /* Record an ABI function-pointer address site. This is the `&top_level_fn`
@@ -1038,8 +1046,8 @@ bool feng_semantic_reifiable_dep_set_append_callable(
     FengReifiableDepSet *dep_set,
     const FengResolvedCallable *resolved);
 
-/* Append one target-typed value-receiver method-value dependency. */
-bool feng_semantic_reifiable_dep_set_append_method_value(
+/* Append one target-typed callable-value formation dependency. */
+bool feng_semantic_reifiable_dep_set_append_callable_value(
     FengReifiableDepSet *dep_set,
     const FengResolvedCallable *resolved,
     const FengTypeRef *target_callable_type_ref);

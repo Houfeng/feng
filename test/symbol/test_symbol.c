@@ -11,6 +11,7 @@
 #include "symbol/export.h"
 #include "symbol/ft.h"
 #include "symbol/imported_module.h"
+#include "symbol/internal.h"
 #include "symbol/provider.h"
 #include "symbol/symbol.h"
 
@@ -1638,6 +1639,142 @@ static void test_generic_function_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Callable-value dependencies retain their source identity, explicit
+ * callable-local arguments, owner instance and target surface through FT. */
+static void test_callable_value_dependency_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.callable_value_dep;\n"
+        "open spec Mapper<T>(value: T): T;\n"
+        "open spec Producer<T>(): T;\n"
+        "open func identity<T>(value: T): T { return value; }\n"
+        "open func make<T>(): Mapper<T> { return identity<T>; }\n"
+        "open type Reader<T> {\n"
+        "    open let value: T;\n"
+        "    open func read(): T { return self.value; }\n"
+        "    open func reader(): Producer<T> { return self.read; }\n"
+        "}\n"
+        "open type MethodOwner {\n"
+        "    open func identity<U>(value: U): U { return value; }\n"
+        "    open func mapper<T>(): Mapper<T> { return self.identity<T>; }\n"
+        "}\n";
+    FengProgram *program = parse_or_die("callable_value_dep.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolDeclView *make_decl;
+    const FengSymbolDeclView *reader_type;
+    const FengSymbolDeclView *reader_method;
+    const FengSymbolDeclView *method_owner_type;
+    const FengSymbolDeclView *mapper_method;
+    const FengSymbolCallableDepView *dependency;
+    const FengSymbolTypeView *type;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("callable_value_dep");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    /* The top-level dependency has no owner and retains the open T in both
+     * its source callable arguments and Mapper<T> target surface. */
+    make_decl = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("make"));
+    ASSERT(make_decl != NULL);
+    ASSERT(make_decl->reifiable_callable_dep_count == 1U);
+    dependency = &make_decl->reifiable_callable_deps[0];
+    ASSERT(dependency->purpose == FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+    ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_FUNCTION);
+    ASSERT(dependency->target_module_name != NULL);
+    ASSERT(strcmp(dependency->target_module_name,
+                  "feng.test.symbol.callable_value_dep") == 0);
+    ASSERT(dependency->target_symbol_id != 0U);
+    ASSERT(dependency->owner_instance_type == NULL);
+    ASSERT(dependency->callable_type_arg_count == 1U);
+    type = dependency->callable_type_args[0];
+    ASSERT(feng_symbol_type_kind(type) ==
+           FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(feng_symbol_type_type_param_ref_name(type), "T"));
+    type = dependency->target_callable_type;
+    ASSERT(feng_symbol_type_kind(type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(type) == 1U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            feng_symbol_type_generic_arg_at(type, 0U)), "T"));
+
+    /* A bound method preserves Reader<T> as its owner instance and carries
+     * no method-local arguments when the selected read method is non-generic. */
+    reader_type = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("Reader"));
+    ASSERT(reader_type != NULL);
+    reader_method = feng_symbol_decl_find_public_member(
+        reader_type, slice_from_cstr("reader"));
+    ASSERT(reader_method != NULL);
+    ASSERT(reader_method->reifiable_callable_dep_count == 1U);
+    dependency = &reader_method->reifiable_callable_deps[0];
+    ASSERT(dependency->purpose == FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+    ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD);
+    ASSERT(dependency->target_symbol_id != 0U);
+    ASSERT(dependency->callable_type_arg_count == 0U);
+    type = dependency->owner_instance_type;
+    ASSERT(feng_symbol_type_kind(type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(type) == 1U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            feng_symbol_type_generic_arg_at(type, 0U)), "T"));
+    type = dependency->target_callable_type;
+    ASSERT(feng_symbol_type_kind(type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(type) == 1U);
+
+    /* A method-level explicit target retains its own open T independently
+     * from the non-generic owner instance. */
+    method_owner_type = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("MethodOwner"));
+    ASSERT(method_owner_type != NULL);
+    mapper_method = feng_symbol_decl_find_public_member(
+        method_owner_type, slice_from_cstr("mapper"));
+    ASSERT(mapper_method != NULL);
+    ASSERT(mapper_method->reifiable_callable_dep_count == 1U);
+    dependency = &mapper_method->reifiable_callable_deps[0];
+    ASSERT(dependency->purpose == FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+    ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD);
+    ASSERT(dependency->callable_type_arg_count == 1U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            dependency->callable_type_args[0]), "T"));
+    ASSERT(dependency->owner_instance_type != NULL);
+    ASSERT(feng_symbol_type_kind(dependency->owner_instance_type) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_generic_type_ft_roundtrip(void) {
     /* open type Box<T> { open let value: T; }
      * After roundtrip: type decl should have type_param_count == 1,
@@ -2425,6 +2562,7 @@ int main(void) {
     test_imported_module_cache_keeps_bundle_fit_modules_alive();
     test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive();
     test_generic_function_ft_roundtrip();
+    test_callable_value_dependency_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_inferred_generic_field_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
