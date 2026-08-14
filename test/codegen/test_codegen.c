@@ -4092,6 +4092,171 @@ static void test_imported_generic_enum_argument_uses_canonical_identity(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* Ensure imported field debug types are resolved in the field declaration's
+ * program, not in the consumer program that happens to emit the field record. */
+static void test_imported_field_debug_type_uses_declaring_program_context(void) {
+    static const char *kCollectionsSource =
+        "open module vendor.collections;\n"
+        "open type Box<T> {\n"
+        "    open var value: T;\n"
+        "}\n";
+    static const char *kEventSource =
+        "open module vendor.event;\n"
+        "import vendor.collections;\n"
+        "open type Event {\n"
+        "    open let box: Box<i32>;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.eventconsumer;\n"
+        "import vendor.event;\n"
+        "func consume(event: Event): void {\n"
+        "}\n";
+    static const char *kParentDisplayType = "vendor.event.Event";
+    static const char *kFieldDisplayType = "vendor.collections.Box<i32>";
+    FengCodegenMapingSourceMapping provider_mappings[2] = {
+        {
+            .source_path = "tests/imported_field_context_collections.ff",
+            .package_name = "vendor",
+            .package_root = "tests",
+        },
+        {
+            .source_path = "tests/imported_field_context_event.ff",
+            .package_name = "vendor",
+            .package_root = "tests",
+        },
+    };
+    FengCodegenMapingSourceMapping consumer_mapping = {
+        .source_path = "tests/imported_field_context_consumer.ff",
+        .package_name = "demo",
+        .package_root = "tests",
+    };
+    FengCodegenOptions provider_codegen_options = {
+        .debug_source_mappings = provider_mappings,
+        .debug_source_mapping_count = 2U,
+    };
+    FengCodegenOptions consumer_codegen_options = {
+        .debug_source_mappings = &consumer_mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    FengProgram *provider_programs[2] = {
+        parse_or_die(kCollectionsSource,
+                     "tests/imported_field_context_collections.ff"),
+        parse_or_die(kEventSource,
+                     "tests/imported_field_context_event.ff"),
+    };
+    const FengProgram *provider_program_views[2] = {
+        provider_programs[0],
+        provider_programs[1],
+    };
+    FengProgram *consumer_program = NULL;
+    const FengProgram *consumer_programs[1];
+    FengSemanticAnalysis *provider_analysis = NULL;
+    FengSemanticAnalysis *consumer_analysis = NULL;
+    FengSemanticError *provider_errors = NULL;
+    FengSemanticError *consumer_errors = NULL;
+    size_t provider_error_count = 0U;
+    size_t consumer_error_count = 0U;
+    FengSymbolGraph *graph = NULL;
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSymbolError symbol_error = {0};
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions analyze_options = {0};
+    FengCodegenOutput provider_out = {0};
+    FengCodegenOutput consumer_out = {0};
+    FengCodegenError provider_cgerr = {0};
+    FengCodegenError consumer_cgerr = {0};
+    bool provider_field_found = false;
+    bool consumer_field_found = false;
+
+    ASSERT(feng_semantic_analyze(provider_program_views,
+                                 2U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &provider_analysis,
+                                 &provider_errors,
+                                 &provider_error_count));
+    ASSERT(provider_errors == NULL);
+    ASSERT(provider_error_count == 0U);
+    ASSERT(feng_codegen_emit_program(provider_analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &provider_codegen_options,
+                                     &provider_out,
+                                     &provider_cgerr));
+    ASSERT(provider_out.c_source != NULL);
+    ASSERT(feng_symbol_build_graph(provider_analysis, &graph, &symbol_error));
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_graph(provider, graph, &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    analyze_options.target = FENG_COMPILE_TARGET_LIB;
+    analyze_options.imported_modules = &query;
+    analyze_options.pointer_size = sizeof(void *);
+    consumer_program = parse_or_die(kConsumerSource,
+                                    "tests/imported_field_context_consumer.ff");
+    consumer_programs[0] = consumer_program;
+    ASSERT(feng_semantic_analyze_with_options(consumer_programs,
+                                              1U,
+                                              &analyze_options,
+                                              &consumer_analysis,
+                                              &consumer_errors,
+                                              &consumer_error_count));
+    ASSERT(consumer_errors == NULL);
+    ASSERT(consumer_error_count == 0U);
+    ASSERT(feng_codegen_emit_program(consumer_analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &consumer_codegen_options,
+                                     &consumer_out,
+                                     &consumer_cgerr));
+    ASSERT(consumer_out.c_source != NULL);
+
+    for (size_t index = 0U; index < provider_out.debug_info.variable_count; ++index) {
+        const FengCodegenMapingVariableRecord *variable =
+            &provider_out.debug_info.variables[index];
+        if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+            variable->display_name != NULL &&
+            strcmp(variable->display_name, "box") == 0 &&
+            variable->parent_display_type != NULL &&
+            strcmp(variable->parent_display_type, kParentDisplayType) == 0 &&
+            variable->display_type != NULL &&
+            strcmp(variable->display_type, kFieldDisplayType) == 0) {
+            provider_field_found = true;
+        }
+    }
+    for (size_t index = 0U; index < consumer_out.debug_info.variable_count; ++index) {
+        const FengCodegenMapingVariableRecord *variable =
+            &consumer_out.debug_info.variables[index];
+        if (variable->kind == FENG_CODEGEN_MAPING_VARIABLE_FIELD &&
+            variable->display_name != NULL &&
+            strcmp(variable->display_name, "box") == 0 &&
+            variable->parent_display_type != NULL &&
+            strcmp(variable->parent_display_type, kParentDisplayType) == 0 &&
+            variable->display_type != NULL &&
+            strcmp(variable->display_type, kFieldDisplayType) == 0) {
+            consumer_field_found = true;
+        }
+    }
+    ASSERT(provider_field_found);
+    ASSERT(consumer_field_found);
+    compile_generated_c_or_die(provider_out.c_source);
+    compile_generated_c_or_die(consumer_out.c_source);
+
+    feng_codegen_output_free(&provider_out);
+    feng_codegen_output_free(&consumer_out);
+    feng_codegen_error_free(&provider_cgerr);
+    feng_codegen_error_free(&consumer_cgerr);
+    feng_semantic_analysis_free(consumer_analysis);
+    feng_program_free(consumer_program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_graph_free(graph);
+    feng_semantic_analysis_free(provider_analysis);
+    feng_program_free(provider_programs[0]);
+    feng_program_free(provider_programs[1]);
+    feng_symbol_error_free(&symbol_error);
+}
+
 static void test_bin_public_functions_remain_static(void) {
     static const char *kSource =
         "module feng.codegen.exportbin;\n"
@@ -10912,6 +11077,7 @@ int main(void) {
     test_imported_enum_codegen_emits_visible_symbols();
     test_imported_enum_union_default_codegen_stays_file_scoped();
     test_imported_generic_enum_argument_uses_canonical_identity();
+    test_imported_field_debug_type_uses_declaring_program_context();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
     test_fit_builtin_direct_call_codegen_shape();

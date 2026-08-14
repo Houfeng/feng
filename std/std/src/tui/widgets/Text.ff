@@ -7,5 +7,5 @@ import std.tui.view;
 import std.tui.input;
 
 open type Text: Widget {
-  ...: View;
+  ...: View = View();
 }

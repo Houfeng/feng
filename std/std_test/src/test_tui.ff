@@ -1058,27 +1058,27 @@ func view_manager_mouse_target_lock_and_bubble() {
   var parentMove = 0;
   var otherMove = 0;
   var targetStable = true;
-  child.onMouseDown = (event: MouseEvent<Widget>) {
+  child.mouseDown.on((event: MouseEvent<Widget>) {
     childDown += 1;
     targetStable = targetStable && event.hasTarget() &&
       event.target == (Widget)child;
     check(event.lock(), "tui/view/lock-hit-target");
-  };
-  parent.onMouseDown = (event: MouseEvent<Widget>) {
+  });
+  parent.mouseDown.on((event: MouseEvent<Widget>) {
     parentDown += 1;
     targetStable = targetStable && event.target == (Widget)child;
-  };
-  child.onMouseMove = (event: MouseEvent<Widget>) {
+  });
+  child.mouseMove.on((event: MouseEvent<Widget>) {
     childMove += 1;
     targetStable = targetStable && event.target == (Widget)child;
-  };
-  parent.onMouseMove = (event: MouseEvent<Widget>) {
+  });
+  parent.mouseMove.on((event: MouseEvent<Widget>) {
     parentMove += 1;
     targetStable = targetStable && event.target == (Widget)child;
-  };
-  other.onMouseMove = (event: MouseEvent<Widget>) {
+  });
+  other.mouseMove.on((event: MouseEvent<Widget>) {
     otherMove += 1;
-  };
+  });
 
   let press = MouseEvent<Widget>(MouseAction.press, MouseButton.left, 3, 3, 0);
   manager.dispatchMouse(press);
@@ -1101,9 +1101,9 @@ func view_manager_mouse_target_lock_and_bubble() {
   check(outsideMove.target == (Widget)child, "tui/view/locked-move-target-child");
   check(targetStable, "tui/view/target-stable-during-bubble");
 
-  child.onMouseUp = (event: MouseEvent<Widget>) {
+  child.mouseUp.on((event: MouseEvent<Widget>) {
     event.unlock();
-  };
+  });
   let release = MouseEvent<Widget>(MouseAction.release, MouseButton.left, 21, 3, 0);
   manager.dispatchMouse(release);
   check(release.isLocked() == false, "tui/view/release-explicit-unlock");
@@ -1114,12 +1114,19 @@ func view_manager_mouse_target_lock_and_bubble() {
   check(unlockedMove.target == (Widget)other, "tui/view/unlocked-move-target-other");
 
   parentDown = 0;
-  child.onMouseDown = (event: MouseEvent<Widget>) {
+  var childAfterStop = 0;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
     event.stop();
-  };
+  });
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    if event.isStopped() {
+      childAfterStop += 1;
+    }
+  });
   let stopped = MouseEvent<Widget>(MouseAction.press, MouseButton.left, 3, 3, 0);
   manager.dispatchMouse(stopped);
   check(stopped.isStopped(), "tui/view/stop-state-shared");
+  check(childAfterStop == 1, "tui/view/stop-keeps-current-widget-listeners");
   check(parentDown == 0, "tui/view/stop-prevents-parent-bubble");
 }
 

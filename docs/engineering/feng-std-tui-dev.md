@@ -203,7 +203,8 @@
 - [x] 4.36 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达事件路由目标类型；增加 MouseEvent target 与 lock/unlock/isLocked 能力，并让 ViewManager 优先向锁定目标路由
 - [x] 4.37 将 tui_demo 拖动改为由矩形自身 lock 后处理越界 move/release，不再在根容器绑定拖动事件
 - [x] 4.38 补充 std_test 用例：覆盖 target、锁定取得/重复/抢占/释放、锁定后越界路由、目标在冒泡中保持不变及停止传播
-- [ ] 4.39 全量回归测试：执行 `make test`，确认全部通过
+- [x] 4.38a 将 Widget/View 的键盘和鼠标事件改为 `Event<T>` 多播，由 ViewManager 触发；InputManager 回调保持单播
+- [x] 4.39 全量回归测试：执行 `make test`，确认全部通过
 - [ ] 4.40 等待人工 Review：开发者审查鼠标 target 与 lock 设计和实现，通过后再处理焦点和键盘路由
 - [ ] 4.41 后续实现焦点管理与键盘焦点路由
 

@@ -160,10 +160,19 @@ static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref);
 static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
                                                     const FengTypeRef *ref,
                                                     FengSlice *out_name);
+static const FengProgram *cg_type_ref_decl_identity_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program,
+    FengSlice *out_name);
 /* Qualifies single-segment user type names to fully-qualified form for debug
  * display_type strings. Only used in the debug path. */
 static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
                                               const FengTypeRef *ref);
+static FengTypeRef *cg_debug_qualify_type_ref_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program);
 
 typedef enum CGValueKind {
     CG_VK_TRIVIAL = 0,
@@ -2603,9 +2612,11 @@ static char *cg_debug_dup_display_type_from_type_ref(const FengTypeRef *type_ref
     return out.data;
 }
 
-static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
-                                                   const CGType *type,
-                                                   FengToken blame) {
+static char *cg_debug_dup_display_type_from_cgtype_from_program(
+    CG *cg,
+    const CGType *type,
+    const FengProgram *reference_program,
+    FengToken blame) {
     FengTypeRef *type_ref;
     FengTypeRef *qualified_ref;
     char *display_type;
@@ -2617,7 +2628,9 @@ static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
     if (type_ref == NULL) {
         return NULL;
     }
-    qualified_ref = cg_debug_qualify_type_ref(cg, type_ref);
+    qualified_ref = cg_debug_qualify_type_ref_from_program(cg,
+                                                            type_ref,
+                                                            reference_program);
     cg_type_ref_free(type_ref);
     if (qualified_ref == NULL) {
         return NULL;
@@ -2625,6 +2638,17 @@ static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
     display_type = cg_debug_dup_display_type_from_type_ref(qualified_ref);
     cg_type_ref_free(qualified_ref);
     return display_type;
+}
+
+/* Formats one codegen type in the currently emitted program's source context. */
+static char *cg_debug_dup_display_type_from_cgtype(CG *cg,
+                                                   const CGType *type,
+                                                   FengToken blame) {
+    return cg_debug_dup_display_type_from_cgtype_from_program(
+        cg,
+        type,
+        cg != NULL ? cg->cur_program : NULL,
+        blame);
 }
 
 /* Adds one variable mapping that already has a C-string display name. */
@@ -2796,7 +2820,11 @@ static bool cg_debug_add_user_type_field_records(CG *cg,
     memset(&parent_type, 0, sizeof(parent_type));
     parent_type.kind = CG_TYPE_OBJECT;
     parent_type.user = type;
-    parent_display_type = cg_debug_dup_display_type_from_cgtype(cg, &parent_type, blame);
+    parent_display_type = cg_debug_dup_display_type_from_cgtype_from_program(
+        cg,
+        &parent_type,
+        type->owner_program,
+        blame);
     if (parent_display_type == NULL) {
         return true;
     }
@@ -2808,7 +2836,11 @@ static bool cg_debug_add_user_type_field_records(CG *cg,
         if (field->feng_name == NULL || field->c_name == NULL || field->type == NULL) {
             continue;
         }
-        field_display_type = cg_debug_dup_display_type_from_cgtype(cg, field->type, blame);
+        field_display_type = cg_debug_dup_display_type_from_cgtype_from_program(
+            cg,
+            field->type,
+            type->owner_program,
+            blame);
         if (field_display_type == NULL) {
             continue;
         }
@@ -5669,8 +5701,11 @@ static bool cg_user_spec_constraints_from_indices(CG *cg,
     return true;
 }
 
-static const UserType *cg_find_user_type_by_ref(const CG *cg,
-                                                const FengTypeRef *ref) {
+/* Finds a non-generic user type from the program that owns the reference. */
+static const UserType *cg_find_user_type_by_ref_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program) {
     const UserType *visible = NULL;
 
     if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
@@ -5682,14 +5717,16 @@ static const UserType *cg_find_user_type_by_ref(const CG *cg,
 
         if (ut->is_generic_instance || ut->decl == NULL ||
             ut->decl->kind != FENG_DECL_TYPE || ut->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program(cg,
-                                                     ref,
-                                                     ut->owner_program,
-                                                     ut->decl->visibility,
-                                                     ut->decl->as.type_decl.name)) {
+            !cg_named_type_ref_targets_owner_program_from(
+                cg,
+                reference_program,
+                ref,
+                ut->owner_program,
+                ut->decl->visibility,
+                ut->decl->as.type_decl.name)) {
             continue;
         }
-        if (cg->cur_program != NULL && ut->owner_program == cg->cur_program) {
+        if (reference_program != NULL && ut->owner_program == reference_program) {
             return ut;
         }
         if (visible == NULL) {
@@ -5700,8 +5737,20 @@ static const UserType *cg_find_user_type_by_ref(const CG *cg,
     return visible;
 }
 
-static const UserSpec *cg_find_user_spec_by_ref(const CG *cg,
+/* Finds a non-generic user type from the program currently being emitted. */
+static const UserType *cg_find_user_type_by_ref(const CG *cg,
                                                 const FengTypeRef *ref) {
+    return cg_find_user_type_by_ref_from_program(
+        cg,
+        ref,
+        cg != NULL ? cg->cur_program : NULL);
+}
+
+/* Finds a non-generic user spec from the program that owns the reference. */
+static const UserSpec *cg_find_user_spec_by_ref_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program) {
     const UserSpec *visible = NULL;
 
     if (cg == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) {
@@ -5713,14 +5762,16 @@ static const UserSpec *cg_find_user_spec_by_ref(const CG *cg,
 
         if (us->is_generic_instance || us->decl == NULL ||
             us->decl->kind != FENG_DECL_SPEC || us->owner_program == NULL ||
-            !cg_named_type_ref_targets_owner_program(cg,
-                                                     ref,
-                                                     us->owner_program,
-                                                     us->decl->visibility,
-                                                     us->decl->as.spec_decl.name)) {
+            !cg_named_type_ref_targets_owner_program_from(
+                cg,
+                reference_program,
+                ref,
+                us->owner_program,
+                us->decl->visibility,
+                us->decl->as.spec_decl.name)) {
             continue;
         }
-        if (cg->cur_program != NULL && us->owner_program == cg->cur_program) {
+        if (reference_program != NULL && us->owner_program == reference_program) {
             return us;
         }
         if (visible == NULL) {
@@ -5729,6 +5780,15 @@ static const UserSpec *cg_find_user_spec_by_ref(const CG *cg,
     }
 
     return visible;
+}
+
+/* Finds a non-generic user spec from the program currently being emitted. */
+static const UserSpec *cg_find_user_spec_by_ref(const CG *cg,
+                                                const FengTypeRef *ref) {
+    return cg_find_user_spec_by_ref_from_program(
+        cg,
+        ref,
+        cg != NULL ? cg->cur_program : NULL);
 }
 
 static const FengDecl *cg_find_enum_decl_by_ref(const CG *cg,
@@ -7929,10 +7989,13 @@ static bool cg_type_ref_equal(const FengTypeRef *left, const FengTypeRef *right)
     return false;
 }
 
-/* Recursively qualifies declaration-backed type names to fully-qualified form
- * (e.g. "JsonValue" → "std.text.JsonValue") for debug display_type strings. */
-static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
-                                              const FengTypeRef *ref) {
+/* Recursively qualifies declaration-backed type names from the program that
+ * owns the source reference. Field templates use their declaring program so
+ * imported closed generics keep the same display type in every artifact. */
+static FengTypeRef *cg_debug_qualify_type_ref_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program) {
     FengTypeRef *result;
 
     if (ref == NULL) return NULL;
@@ -7941,7 +8004,10 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
         case FENG_TYPE_REF_NAMED: {
             FengSlice decl_name = {0};
             const FengProgram *owner =
-                cg_type_ref_decl_identity(cg, ref, &decl_name);
+                cg_type_ref_decl_identity_from_program(cg,
+                                                       ref,
+                                                       reference_program,
+                                                       &decl_name);
 
             result = calloc(1U, sizeof *result);
             if (result == NULL) return NULL;
@@ -7988,8 +8054,10 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
                 }
                 for (size_t i = 0; i < ref->as.named.type_arg_count; ++i) {
                     result->as.named.type_args[i] =
-                        cg_debug_qualify_type_ref(cg,
-                                                  ref->as.named.type_args[i]);
+                        cg_debug_qualify_type_ref_from_program(
+                            cg,
+                            ref->as.named.type_args[i],
+                            reference_program);
                     if (result->as.named.type_args[i] == NULL) {
                         cg_type_ref_free(result);
                         return NULL;
@@ -8003,7 +8071,10 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
             if (result == NULL) return NULL;
             result->token = ref->token;
             result->kind = FENG_TYPE_REF_POINTER;
-            result->as.inner = cg_debug_qualify_type_ref(cg, ref->as.inner);
+            result->as.inner = cg_debug_qualify_type_ref_from_program(
+                cg,
+                ref->as.inner,
+                reference_program);
             if (result->as.inner == NULL) { free(result); return NULL; }
             return result;
         case FENG_TYPE_REF_ARRAY:
@@ -8012,11 +8083,23 @@ static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
             result->token = ref->token;
             result->kind = FENG_TYPE_REF_ARRAY;
             result->array_element_writable = ref->array_element_writable;
-            result->as.inner = cg_debug_qualify_type_ref(cg, ref->as.inner);
+            result->as.inner = cg_debug_qualify_type_ref_from_program(
+                cg,
+                ref->as.inner,
+                reference_program);
             if (result->as.inner == NULL) { free(result); return NULL; }
             return result;
     }
     return cg_type_ref_clone(ref);
+}
+
+/* Qualifies a type reference from the program currently being emitted. */
+static FengTypeRef *cg_debug_qualify_type_ref(const CG *cg,
+                                              const FengTypeRef *ref) {
+    return cg_debug_qualify_type_ref_from_program(
+        cg,
+        ref,
+        cg != NULL ? cg->cur_program : NULL);
 }
 
 static void cg_append_type_ref_display(Buf *out, const FengTypeRef *ref) {
@@ -8198,12 +8281,13 @@ static CGNamedGenericTarget cg_resolve_named_generic_target_from_program(
     return target;
 }
 
-/* Resolve a named type reference to the declaration identity used for stable
- * cross-package generic-instance symbols. Type parameters and builtins have
- * no declaration owner and intentionally remain encoded by their own name. */
-static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
-                                                    const FengTypeRef *ref,
-                                                    FengSlice *out_name) {
+/* Resolves a named type reference from its source program to the declaration
+ * identity used by stable symbols and fully-qualified debug display types. */
+static const FengProgram *cg_type_ref_decl_identity_from_program(
+    const CG *cg,
+    const FengTypeRef *ref,
+    const FengProgram *reference_program,
+    FengSlice *out_name) {
     const UserType *user_type;
     const UserSpec *user_spec;
     const GenericTypeDecl *generic_type;
@@ -8216,22 +8300,28 @@ static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
         return NULL;
     }
 
-    user_type = cg_find_user_type_by_ref(cg, ref);
+    user_type =
+        cg_find_user_type_by_ref_from_program(cg, ref, reference_program);
     if (user_type != NULL && user_type->decl != NULL) {
         *out_name = user_type->decl->as.type_decl.name;
         return user_type->owner_program;
     }
-    user_spec = cg_find_user_spec_by_ref(cg, ref);
+
+    user_spec =
+        cg_find_user_spec_by_ref_from_program(cg, ref, reference_program);
     if (user_spec != NULL && user_spec->decl != NULL) {
         *out_name = user_spec->decl->as.spec_decl.name;
         return user_spec->owner_program;
     }
-    generic_type = cg_find_generic_type_decl(cg, ref);
+
+    generic_type =
+        cg_find_generic_type_decl_from_program(cg, ref, reference_program);
     if (generic_type != NULL && generic_type->decl != NULL) {
         *out_name = generic_type->decl->as.type_decl.name;
         return generic_type->owner_program;
     }
-    generic_spec = cg_find_generic_spec_decl(cg, ref);
+    generic_spec =
+        cg_find_generic_spec_decl_from_program(cg, ref, reference_program);
     if (generic_spec != NULL && generic_spec->decl != NULL) {
         *out_name = generic_spec->decl->as.spec_decl.name;
         return generic_spec->owner_program;
@@ -8254,14 +8344,16 @@ static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
                 const FengDecl *decl = program->declarations[decl_index];
 
                 if (decl->kind != FENG_DECL_ENUM ||
-                    !cg_named_type_ref_targets_owner_program(cg,
-                                                             ref,
-                                                             program,
-                                                             decl->visibility,
-                                                             decl->as.enum_decl.name)) {
+                    !cg_named_type_ref_targets_owner_program_from(
+                        cg,
+                        reference_program,
+                        ref,
+                        program,
+                        decl->visibility,
+                        decl->as.enum_decl.name)) {
                     continue;
                 }
-                if (cg->cur_program != NULL && program == cg->cur_program) {
+                if (reference_program != NULL && program == reference_program) {
                     *out_name = decl->as.enum_decl.name;
                     return program;
                 }
@@ -8276,6 +8368,18 @@ static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
         *out_name = visible_enum_name;
     }
     return visible_enum_owner;
+}
+
+/* Resolves a named reference from the program currently being emitted. Type
+ * parameters and builtins have no declaration owner and remain short names. */
+static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
+                                                    const FengTypeRef *ref,
+                                                    FengSlice *out_name) {
+    return cg_type_ref_decl_identity_from_program(
+        cg,
+        ref,
+        cg != NULL ? cg->cur_program : NULL,
+        out_name);
 }
 
 /* Append a canonical type-reference symbol fragment. Named declaration types

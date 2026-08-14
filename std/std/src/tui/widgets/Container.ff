@@ -14,7 +14,7 @@ open type Container: ContainerWidget {
   /**
    * 展开 View 提供的公共状态与 Widget 默认行为
    */
-  ...: View;
+  ...: View = View();
 
   /**
    * 直接子组件集合

@@ -35,29 +35,29 @@ open spec Widget {
   var parent: Option<ContainerWidget>;
 
   /**
-   * 键盘事件回调
+   * 键盘多播事件
    */
-  var onKey: Action<KeyEvent<Widget>>;
+  let key: Event<KeyEvent<Widget>>;
 
   /**
-   * 鼠标按下事件回调
+   * 鼠标按下多播事件
    */
-  var onMouseDown: Action<MouseEvent<Widget>>;
+  let mouseDown: Event<MouseEvent<Widget>>;
 
   /**
-   * 鼠标移动事件回调
+   * 鼠标移动多播事件
    */
-  var onMouseMove: Action<MouseEvent<Widget>>;
+  let mouseMove: Event<MouseEvent<Widget>>;
 
   /**
-   * 鼠标释放事件回调
+   * 鼠标释放多播事件
    */
-  var onMouseUp: Action<MouseEvent<Widget>>;
+  let mouseUp: Event<MouseEvent<Widget>>;
 
   /**
-   * 鼠标滚轮事件回调
+   * 鼠标滚轮多播事件
    */
-  var onWheel: Action<MouseEvent<Widget>>;
+  let wheel: Event<MouseEvent<Widget>>;
 
   /**
    * 对齐并计算当前组件的 frame

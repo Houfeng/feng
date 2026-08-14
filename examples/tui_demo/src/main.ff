@@ -75,16 +75,16 @@ func main(args: string[]) {
   var dragOffsetY: u32 = 0;
 
   // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
-  rectangle.onMouseDown = (event: MouseEvent<Widget>) {
+  rectangle.mouseDown.on((event: MouseEvent<Widget>) {
     if event.button == MouseButton.left && event.lock() {
       dragging = true;
       dragOffsetX = event.x - rectangle.frame.x;
       dragOffsetY = event.y - rectangle.frame.y;
     }
-  };
+  });
 
   // lock 后即使鼠标移出矩形，move 事件仍直接路由到矩形。
-  rectangle.onMouseMove = (event: MouseEvent<Widget>) {
+  rectangle.mouseMove.on((event: MouseEvent<Widget>) {
     if event.action == MouseAction.move && dragging {
       var x: u32 = 0;
       var y: u32 = 0;
@@ -110,13 +110,13 @@ func main(args: string[]) {
       rectangle.style.x = x;
       rectangle.style.y = y;
     }
-  };
+  });
 
   // release 仍路由到锁定的矩形，由锁定目标显式结束拖动并释放锁定。
-  rectangle.onMouseUp = (event: MouseEvent<Widget>) {
+  rectangle.mouseUp.on((event: MouseEvent<Widget>) {
     dragging = false;
     event.unlock();
-  };
+  });
 
   app.run();
 }

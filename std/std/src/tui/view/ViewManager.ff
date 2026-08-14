@@ -107,29 +107,29 @@ open type ViewManager {
   }
 
   /**
-   * 根据鼠标动作调用组件对应的单播回调。
-   * 滚轮按钮优先映射为 onWheel，其余事件按 action 分发。
+   * 根据鼠标动作触发组件对应的多播事件。
+   * 滚轮按钮优先映射为 wheel，其余事件按 action 分发。
    * @param widget 当前接收事件的组件
    * @param event 需要分发的鼠标事件
    */
   seal func invokeMouse(widget: Widget, event: MouseEvent<Widget>): void {
     if event.button == MouseButton.wheelUp || event.button == MouseButton.wheelDown {
-      let handler = widget.onWheel;
-      handler(event);
+      let targetEvent = widget.wheel;
+      targetEvent.emit(event);
       return;
     }
     match event.action {
       MouseAction.press {
-        let handler = widget.onMouseDown;
-        handler(event);
+        let targetEvent = widget.mouseDown;
+        targetEvent.emit(event);
       }
       MouseAction.move {
-        let handler = widget.onMouseMove;
-        handler(event);
+        let targetEvent = widget.mouseMove;
+        targetEvent.emit(event);
       }
       MouseAction.release {
-        let handler = widget.onMouseUp;
-        handler(event);
+        let targetEvent = widget.mouseUp;
+        targetEvent.emit(event);
       }
     }
   }
@@ -137,7 +137,7 @@ open type ViewManager {
   /**
    * 从锁定目标或本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
    * 锁定目标优先于坐标命中；选定目标会写入 event.target，并在本次冒泡期间保持不变。
-   * 每个回调返回后检查 event.isStopped()；停止后不再调用父组件回调。
+   * 当前组件的全部监听器返回后检查 event.isStopped()；停止后不再触发父组件事件。
    * 未命中任何组件时静默返回。
    * @param event InputManager 解析得到的鼠标事件
    */

@@ -28,12 +28,12 @@ TuiApp
 - `ViewManager` 的组件树、绘制顺序、命中及事件路由；
 - `ViewManager` 与 `TuiApp`、`Screen`、`InputManager` 的集成。
 
-第七阶段不完整实现 Text/Button/Input/List/Table/Dialog 等高级组件，也不实现 VStack/HStack/Dock/ScrollView/Grid 等布局容器。`Text` 和 `Button` 可保留最小类型骨架，仅用于验证 `Widget` 契约、`...: View` 成员展开和 `@mixable` wrapper，不在本阶段实现文本绘制或按钮交互。CSS、选择器、级联样式、复杂捕获阶段、透明穿透和复杂 z-index 同样不在本阶段范围内。
+第七阶段不完整实现 Text/Button/Input/List/Table/Dialog 等高级组件，也不实现 VStack/HStack/Dock/ScrollView/Grid 等布局容器。`Text` 和 `Button` 可保留最小类型骨架，仅用于验证 `Widget` 契约、`...: View = View()` 成员展开和 `@mixable` wrapper，不在本阶段实现文本绘制或按钮交互。CSS、选择器、级联样式、复杂捕获阶段、透明穿透和复杂 z-index 同样不在本阶段范围内。
 
 叶子组件直接满足 `Widget` spec，容器组件满足 `ContainerWidget` spec；两者分别可通过成员展开复用 `View` 或 `Container` 的状态与行为。上层组装组件树时不需要 `asWidget()` 之类的转换 API。
 
-当前事件分发切片实现鼠标命中、目标绑定、锁定、鼠标回调选择和自下向上的冒泡。
-焦点管理、键盘焦点路由及多播事件均留到后续步骤，不与本次鼠标分发一起实现。
+当前事件分发切片实现鼠标命中、目标绑定、锁定、Widget 多播事件触发和自下向上的冒泡。
+焦点管理与键盘焦点路由留到后续步骤，不与本次鼠标分发一起实现。
 
 ## 3 已定义的核心类型
 
@@ -142,11 +142,11 @@ open spec Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
-  var onKey: Action<KeyEvent<Widget>>;
-  var onMouseDown: Action<MouseEvent<Widget>>;
-  var onMouseMove: Action<MouseEvent<Widget>>;
-  var onMouseUp: Action<MouseEvent<Widget>>;
-  var onWheel: Action<MouseEvent<Widget>>;
+  let key: Event<KeyEvent<Widget>>;
+  let mouseDown: Event<MouseEvent<Widget>>;
+  let mouseMove: Event<MouseEvent<Widget>>;
+  let mouseUp: Event<MouseEvent<Widget>>;
+  let wheel: Event<MouseEvent<Widget>>;
 }
 ```
 
@@ -158,7 +158,7 @@ open spec Widget {
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
-- 键盘和鼠标处理使用可配置的事件回调字段；
+- 键盘和鼠标处理使用不可重新绑定的多播事件字段，监听器通过 `on()`/`off()` 管理；
 - 第七阶段不引入独立 `ViewNode`，`Widget` 自身就是组件树节点。
 
 ## 5 View 基础组件
@@ -176,17 +176,17 @@ open type View: Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
-  var onKey: Action<KeyEvent<Widget>>;
-  var onMouseDown: Action<MouseEvent<Widget>>;
-  var onMouseMove: Action<MouseEvent<Widget>>;
-  var onMouseUp: Action<MouseEvent<Widget>>;
-  var onWheel: Action<MouseEvent<Widget>>;
+  let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
+  let mouseDown: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let mouseMove: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let mouseUp: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
 }
 ```
 
 `View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并通过 `ViewManager.trace(widget, drawFrame)` 同时缓存有效绘制区域和登记绘制顺序。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
-`View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。
+`View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
 ## 6 ContainerWidget 与 Container
 
@@ -206,13 +206,13 @@ open spec ContainerWidget: Widget {
 
 ```feng
 open type Container: ContainerWidget {
-  ...: View;
+  ...: View = View();
 
   let children: List<Widget>;
 }
 ```
 
-`Container` 展开 `View` 的公共状态与 Widget 默认行为，并通过以 `ContainerWidget` 为首参数的 `@mixable` 静态方法实现 `addChild`、`removeChild` 和 `clearChildren`。`Container` 只提供树存储与修改行为，不默认布局或绘制 children。
+`Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并通过以 `ContainerWidget` 为首参数的 `@mixable` 静态方法实现 `addChild`、`removeChild` 和 `clearChildren`。`Container` 只提供树存储与修改行为，不默认布局或绘制 children。
 
 ## 7 arrange 与 draw
 
@@ -318,15 +318,21 @@ open type ViewManager {
 
 ## 10 事件接口
 
-`Widget` 使用以自身契约为目标类型的泛型事件：
+`Widget` 使用以自身契约为目标类型的 `Event<T>` 多播事件：
 
-- `onKey: Action<KeyEvent<Widget>>`；
-- `onMouseDown`、`onMouseMove`、`onMouseUp`、`onWheel: Action<MouseEvent<Widget>>`。
+- `key: Event<KeyEvent<Widget>>`；
+- `mouseDown`、`mouseMove`、`mouseUp`、`wheel: Event<MouseEvent<Widget>>`。
+
+各事件字段不可重新绑定。调用方通过 `on(listener)` 和 `off(listener)` 订阅或退订；
+`ViewManager` 通过 `emit(event)` 按注册顺序触发当前 Widget 的全部监听器。
+`Event<T>` 是共享监听器列表的值类型，因此通过 `Widget` spec 读取事件字段后进行订阅，
+仍会修改该 Widget 所持有的同一监听器列表。
 
 `KeyEvent<T>`、`MouseEvent<T>` 的事件载荷和基础接口由
 `docs/engineering/feng-std-tui-input-dev.md` 定义。`MouseEvent<T>` 是引用类型，
-传播状态由 `stop()` 和 `isStopped()` 管理。`stop()` 在当前 Widget 回调返回后生效，
-只阻止后续父组件回调；不会中断当前回调。重复调用 `stop()` 保持停止状态。
+传播状态由 `stop()` 和 `isStopped()` 管理。当前 Widget 的 `emit()` 会先完成其全部
+监听器调用，随后 `ViewManager` 检查 `isStopped()`；停止状态只阻止后续父组件事件，
+不会中断当前 Widget 尚未执行的其他监听器。重复调用 `stop()` 保持停止状态。
 
 鼠标事件按以下规则分发：
 
@@ -336,16 +342,16 @@ open type ViewManager {
    写入同一事件实例的 `target`，并由后者记录当前事件属于锁定目标。Widget 回调中
    `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
    表示最初命中或锁定的事件来源，不随当前接收回调的 Widget 改变；
-3. `wheelUp`/`wheelDown` 调用 `onWheel`，其余事件按 `press`、`move`、`release`
-   分别调用 `onMouseDown`、`onMouseMove`、`onMouseUp`；
-4. 当前 Widget 回调返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
+3. `wheelUp`/`wheelDown` 触发 `wheel.emit(event)`，其余事件按 `press`、`move`、
+   `release` 分别触发 `mouseDown`、`mouseMove`、`mouseUp`；
+4. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
    `parent` 继续向上传递；
 5. 没有锁定目标且未命中 Widget 时静默返回；不执行 root 兜底回调；
 6. 当前不定义捕获阶段、`currentTarget`、默认行为、透明穿透、事件克隆或事件池化。
 
-每个 Widget 的每类事件仍只有一个 `Action<MouseEvent<Widget>>` 回调字段，
-`InputManager<Widget>` 的
-`onMouse` 也保持单播；本阶段不引入处理器列表或隐式多播。
+Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保持
+`Action<MouseEvent<Widget>>` 单播，只负责把解析后的输入直接交给 ViewManager。
+两层职责不合并：InputManager 不维护订阅集合，ViewManager 不改变输入解析回调模型。
 
 `MouseEvent<Widget>.lock()` 由当前 `target` 请求锁定。首个目标取得锁定后，后续鼠标
 事件即使移出该 Widget 的 `drawFrame`，仍从锁定目标开始分发并沿其当前 parent 链冒泡。
@@ -411,14 +417,14 @@ std/std/src/tui/widgets/
 8. 为 MouseEvent 增加 target、lock()/unlock()/isLocked()，并让 ViewManager 优先向
    锁定目标路由；
 9. 补充 MouseEvent、target、lock、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；
-10. 执行全量回归测试 `make test`；
-11. 等待人工 Review，通过后再开始焦点与键盘路由。
+10. 已将 Widget/View 的键盘和鼠标回调字段改为 `Event<T>`，由 ViewManager 触发鼠标事件；
+11. 已执行全量回归测试 `make test`；
+12. 等待人工 Review，通过后再开始焦点与键盘路由。
 
 ## 14 Review 关注点
 
 现有定义尚未确定以下实现契约：
 
 - `WidgetStyle` 的默认值；
-- `View` 与 `Container` 的构造和字段初始化方式；
 - `spec` 的 `seal` 成员落地后，如何在保持公开树操作 API 不变的前提下收紧 children/parent 存储访问；
 - 后续焦点、键盘路由与 root 的具体关系。
