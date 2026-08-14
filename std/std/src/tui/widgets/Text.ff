@@ -24,6 +24,16 @@ extern func feng_pointer_move(ptr: string*, offset: int): string*;
 @runtime
 extern func feng_pointer_diff(a: string*, b: string*): int;
 
+/** Text 中每一行内容的水平对齐方式。 */
+open enum TextAlign {
+  /** 从 Text frame 左侧开始绘制。 */
+  Left,
+  /** 在 Text frame 内水平居中。 */
+  Center,
+  /** 与 Text frame 右侧对齐。 */
+  Right
+}
+
 /**
  * TextLine 记录 Text.content 中一条最终显示行的原始字节区间。
  * 区间不包含硬换行码点，绘制时直接从原字符串解码，不创建 substring。
@@ -50,8 +60,11 @@ open spec TextWidget: Widget {
   /** 需要显示的文本内容。 */
   var content: string;
 
+  /** 每一行内容在 Text frame 内的水平对齐方式。 */
+  var textAlign: TextAlign;
+
   /** arrange 生成、draw 复用的最终显示行。 */
-  let _lines: List<TextLine>;
+  let lines: List<TextLine>;
 }
 
 /**
@@ -65,8 +78,11 @@ open type Text: TextWidget {
   /** 需要显示的文本内容。 */
   open var content: string;
 
+  /** 每一行内容在 Text frame 内的水平对齐方式。 */
+  open var textAlign: TextAlign = TextAlign.Left;
+
   /** arrange 生成、draw 复用的最终显示行。 */
-  seal let _lines: List<TextLine> = List<TextLine>();
+  seal let lines: List<TextLine> = List<TextLine>();
 
   /** 判断当前宽度声明是否需要扫描内在内容宽度。 */
   seal static func needsIntrinsicWidth(text: TextWidget): bool {
@@ -81,45 +97,35 @@ open type Text: TextWidget {
     return false;
   }
 
+  /** 返回一个 grapheme 按当前 Cell 契约占用的 Cell 数。 */
+  seal static func graphemeCells(value: string): int {
+    return value.runes().length();
+  }
+
+  /** 判断一个 grapheme 是否为 Text 支持的硬换行。 */
+  seal static func isHardBreak(value: string): bool {
+    return value == "\n" || value == "\r\n";
+  }
+
   /**
    * 计算 content 中最长逻辑行的 Cell 数。
-   * LF 和 CRLF 结束当前逻辑行，其他码点各占一个 Cell。
+   * LF 和 CRLF 结束当前逻辑行，其他内容按 std.text grapheme 边界扫描。
    */
   seal static func measureIntrinsicWidth(text: TextWidget): int {
     if text.content.length() == 0 {
       return 0;
     }
-    let data: string* = &text.content;
-    var cursor: string* = data;
     var current = 0;
     var longest = 0;
-    while true {
-      var value: u32 = 0;
-      let next = text_u8_next(&value, cursor);
-      if feng_pointer_is_null(next) {
-        break;
-      }
-      if value == (u32)13 {
-        var afterValue: u32 = 0;
-        let after = text_u8_next(&afterValue, next);
-        if !feng_pointer_is_null(after) && afterValue == (u32)10 {
-          if current > longest {
-            longest = current;
-          }
-          current = 0;
-          cursor = after;
-          continue;
-        }
-      }
-      if value == (u32)10 {
+    for let grapheme in text.content.graphemes() {
+      if Text.isHardBreak(grapheme) {
         if current > longest {
           longest = current;
         }
         current = 0;
       } else {
-        current += 1;
+        current += Text.graphemeCells(grapheme);
       }
-      cursor = next;
     }
     if current > longest {
       longest = current;
@@ -130,59 +136,58 @@ open type Text: TextWidget {
   /** 向复用行缓冲追加一条 content 字节区间。 */
   seal static func addLine(text: TextWidget, start: int,
     end: int, cells: int): void {
-    text._lines.add(TextLine(start, end, cells));
+    text.lines.add(TextLine(start, end, cells));
   }
 
   /**
-   * 按最终内容宽度生成硬换行和软换行后的显示行。
+   * 按最终内容宽度和 std.text grapheme 边界生成显示行。
+   * 能放入整行的 grapheme 不在中间软换行；自身超过整行宽度时按码点拆分。
    * 空 content 或零宽度不生成行；末尾硬换行生成空的最终行。
    */
   seal static func layoutLines(text: TextWidget, width: int): void {
-    text._lines.clear();
+    text.lines.clear();
     let length = text.content.length();
     if length == 0 || width <= 0 {
       return;
     }
 
-    let data: string* = &text.content;
-    var cursor: string* = data;
     var lineStart = 0;
     var lineCells = 0;
-    while true {
-      let valueStart = feng_pointer_diff(cursor, data);
-      var value: u32 = 0;
-      let next = text_u8_next(&value, cursor);
-      if feng_pointer_is_null(next) {
-        break;
-      }
+    var offset = 0;
+    for let grapheme in text.content.graphemes() {
+      let graphemeStart = offset;
+      let graphemeEnd = graphemeStart + grapheme.length();
+      offset = graphemeEnd;
 
-      if value == (u32)13 {
-        var afterValue: u32 = 0;
-        let after = text_u8_next(&afterValue, next);
-        if !feng_pointer_is_null(after) && afterValue == (u32)10 {
-          Text.addLine(text, lineStart, valueStart, lineCells);
-          lineStart = feng_pointer_diff(after, data);
-          lineCells = 0;
-          cursor = after;
-          continue;
-        }
-      }
-
-      if value == (u32)10 {
-        Text.addLine(text, lineStart, valueStart, lineCells);
-        lineStart = feng_pointer_diff(next, data);
+      if Text.isHardBreak(grapheme) {
+        Text.addLine(text, lineStart, graphemeStart, lineCells);
+        lineStart = graphemeEnd;
         lineCells = 0;
-        cursor = next;
         continue;
       }
 
-      if lineCells >= width {
-        Text.addLine(text, lineStart, valueStart, lineCells);
-        lineStart = valueStart;
-        lineCells = 0;
+      let cells = Text.graphemeCells(grapheme);
+      if cells <= width {
+        if lineCells > 0 && lineCells + cells > width {
+          Text.addLine(text, lineStart, graphemeStart, lineCells);
+          lineStart = graphemeStart;
+          lineCells = 0;
+        }
+        lineCells += cells;
+        continue;
       }
-      lineCells += 1;
-      cursor = next;
+
+      var graphemeOffset = 0;
+      for let rune in grapheme.runes() {
+        if lineCells >= width {
+          let splitOffset = graphemeStart + graphemeOffset;
+          Text.addLine(text, lineStart, splitOffset, lineCells);
+          lineStart = splitOffset;
+          lineCells = 0;
+        }
+        lineCells += 1;
+        graphemeOffset += rune.length();
+      }
     }
     Text.addLine(text, lineStart, length, lineCells);
   }
@@ -205,6 +210,24 @@ open type Text: TextWidget {
     buffer.cells[index].value = (u64)value;
     buffer.cells[index].style =
       (buffer.cells[index].style & Cell.MASK_BG) | foreBits;
+  }
+
+  /**
+   * 按当前行的 Cell 数计算其在 Text frame 内的起始横坐标。
+   */
+  seal static func resolveLineX(text: TextWidget, line: TextLine): int {
+    let remaining = text.frame.width - line.cells;
+    match text.textAlign {
+      TextAlign.Center {
+        return text.frame.x + remaining / 2;
+      }
+      TextAlign.Right {
+        return text.frame.x + remaining;
+      }
+      else {
+        return text.frame.x;
+      }
+    }
   }
 
   /**
@@ -271,7 +294,7 @@ open type Text: TextWidget {
       left, right, intrinsicWidth);
     Text.layoutLines(text, width);
     let height = View.resolveHeight(widget, reference.height,
-      top, bottom, text._lines.size());
+      top, bottom, text.lines.size());
 
     let frame = Rect();
     frame.x = View.resolveX(widget, reference, left, right, width);
@@ -300,17 +323,30 @@ open type Text: TextWidget {
     }
 
     let firstLine = drawFrame.y - text.frame.y;
-    let firstColumn = drawFrame.x - text.frame.x;
     let foreBits = Text.resolveForeBits(text);
     var visibleRow = 0;
     while visibleRow < drawFrame.height {
       let lineIndex = firstLine + visibleRow;
-      if lineIndex >= text._lines.size() || lineIndex >= text.frame.height {
+      if lineIndex >= text.lines.size() || lineIndex >= text.frame.height {
         return;
       }
-      Text.drawLine(text, buffer, text._lines.get(lineIndex),
-        drawFrame.x, drawFrame.y + visibleRow, firstColumn,
-        drawFrame.width, foreBits);
+      let line = text.lines.get(lineIndex);
+      let lineX = Text.resolveLineX(text, line);
+      var visibleX = lineX;
+      if visibleX < drawFrame.x {
+        visibleX = drawFrame.x;
+      }
+      var visibleRight = lineX + line.cells;
+      let drawRight = drawFrame.x + drawFrame.width;
+      if visibleRight > drawRight {
+        visibleRight = drawRight;
+      }
+      let visibleWidth = visibleRight - visibleX;
+      if visibleWidth > 0 {
+        Text.drawLine(text, buffer, line,
+          visibleX, drawFrame.y + visibleRow, visibleX - lineX,
+          visibleWidth, foreBits);
+      }
       visibleRow += 1;
     }
   }

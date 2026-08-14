@@ -1280,6 +1280,122 @@ func text_wrap_and_reflow_dimensions() {
     "tui/text/fixed-height-does-not-expand");
 }
 
+/** 验证 Text 复用 std.text grapheme 边界处理组合字符与 Emoji 换行。 */
+func text_grapheme_wrap_and_emoji() {
+  let screen = Screen(7, 4);
+  let manager = ViewManager(screen);
+  let text = Text();
+  text.style.position = Position.Absolute;
+  text.style.width = auto;
+  text.style.height = auto;
+  text.content = "😀";
+  text.arrange(manager);
+  check(text.frame.width == 1 && text.frame.height == 1,
+    "tui/text/single-codepoint-emoji-size");
+
+  text.content = "👨‍👩‍👧‍👦";
+  text.arrange(manager);
+  check(text.frame.width == 7 && text.frame.height == 1,
+    "tui/text/multi-codepoint-grapheme-auto-size");
+
+  text.style.width = 2;
+  text.content = "AéB";
+  text.arrange(manager);
+  text.draw(manager);
+  check(text.frame.height == 3,
+    "tui/text/grapheme-wraps-as-unit");
+  let combinedBuffer = screen.buffer();
+  check(combinedBuffer.cells[0].value == (u64)65 &&
+    combinedBuffer.cells[7].value == (u64)101 &&
+    combinedBuffer.cells[8].value == (u64)0x0301 &&
+    combinedBuffer.cells[14].value == (u64)66,
+    "tui/text/grapheme-draws-all-codepoints");
+
+  let familyScreen = Screen(3, 3);
+  let familyManager = ViewManager(familyScreen);
+  let family = Text();
+  family.style.position = Position.Absolute;
+  family.style.width = 3;
+  family.style.height = auto;
+  family.content = "👨‍👩‍👧‍👦";
+  family.arrange(familyManager);
+  family.draw(familyManager);
+  check(family.frame.height == 3,
+    "tui/text/overwide-grapheme-splits-by-codepoint");
+  let familyBuffer = familyScreen.buffer();
+  check(familyBuffer.cells[0].value == (u64)0x1F468 &&
+    familyBuffer.cells[1].value == (u64)0x200D &&
+    familyBuffer.cells[2].value == (u64)0x1F469 &&
+    familyBuffer.cells[3].value == (u64)0x200D &&
+    familyBuffer.cells[4].value == (u64)0x1F467 &&
+    familyBuffer.cells[5].value == (u64)0x200D &&
+    familyBuffer.cells[6].value == (u64)0x1F466,
+    "tui/text/overwide-grapheme-preserves-codepoints");
+
+  let atomicManager = ViewManager(Screen(7, 3));
+  let atomic = Text();
+  atomic.style.position = Position.Absolute;
+  atomic.style.width = 7;
+  atomic.style.height = auto;
+  atomic.content = "A👨‍👩‍👧‍👦B";
+  atomic.arrange(atomicManager);
+  check(atomic.frame.height == 3,
+    "tui/text/fitting-grapheme-is-not-split");
+}
+
+/** 验证 Text 每行独立水平对齐，并在裁剪后保持原始对齐位置。 */
+func text_horizontal_alignment_and_clipping() {
+  let centerScreen = Screen(7, 3);
+  let centerManager = ViewManager(centerScreen);
+  let centerText = Text();
+  check(centerText.textAlign == TextAlign.Left,
+    "tui/text/default-left-align");
+  centerText.style.position = Position.Absolute;
+  centerText.style.width = 7;
+  centerText.style.height = 3;
+  centerText.content = "A\nBCD\nEFGHI";
+  let centerWidget: TextWidget = centerText;
+  centerWidget.textAlign = TextAlign.Center;
+  centerText.arrange(centerManager);
+  centerText.draw(centerManager);
+
+  let centerBuffer = centerScreen.buffer();
+  check(centerBuffer.cells[3].value == (u64)65,
+    "tui/text/center-one-cell-line");
+  check(centerBuffer.cells[9].value == (u64)66 &&
+    centerBuffer.cells[10].value == (u64)67 &&
+    centerBuffer.cells[11].value == (u64)68,
+    "tui/text/center-three-cell-line");
+  check(centerBuffer.cells[15].value == (u64)69 &&
+    centerBuffer.cells[19].value == (u64)73,
+    "tui/text/center-five-cell-line");
+
+  let rightScreen = Screen(4, 3);
+  let rightManager = ViewManager(rightScreen);
+  let rightText = Text();
+  rightText.style.position = Position.Absolute;
+  rightText.style.x = -2;
+  rightText.style.width = 6;
+  rightText.style.height = 3;
+  rightText.textAlign = TextAlign.Right;
+  rightText.content = "AB\nCDEF\nGHIJKL";
+  rightText.arrange(rightManager);
+  rightText.draw(rightManager);
+
+  let rightBuffer = rightScreen.buffer();
+  check(rightBuffer.cells[0].value == (u64)0 &&
+    rightBuffer.cells[1].value == (u64)0 &&
+    rightBuffer.cells[2].value == (u64)65 &&
+    rightBuffer.cells[3].value == (u64)66,
+    "tui/text/right-align-short-line");
+  check(rightBuffer.cells[4].value == (u64)67 &&
+    rightBuffer.cells[7].value == (u64)70,
+    "tui/text/right-align-medium-line");
+  check(rightBuffer.cells[8].value == (u64)73 &&
+    rightBuffer.cells[11].value == (u64)76,
+    "tui/text/right-align-clipped-long-line");
+}
+
 /** 验证 Text 通过 Widget 调度绘制自动换行、硬换行和 Unicode 码点。 */
 func text_draw_wrap_unicode_and_hit_target() {
   let screen = Screen(6, 4);
@@ -2512,6 +2628,8 @@ open func run_tui_tests() {
     test("view_auto_size_semantics()", () { view_auto_size_semantics(); });
     test("text_auto_measure_and_alignment()", () { text_auto_measure_and_alignment(); });
     test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
+    test("text_grapheme_wrap_and_emoji()", () { text_grapheme_wrap_and_emoji(); });
+    test("text_horizontal_alignment_and_clipping()", () { text_horizontal_alignment_and_clipping(); });
     test("text_draw_wrap_unicode_and_hit_target()", () { text_draw_wrap_unicode_and_hit_target(); });
     test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
