@@ -90,7 +90,7 @@
 - **双缓冲 + Diff 引擎**（非图形系统页翻转，是 diff 模型）：
   - `buildPatchBytes()` 时逐 cell 比较 front 与 back 的 `value` 和 `style` 字段，只对变化的 cell 发射 ANSI 序列。
   - 渲染完成后将 back 的内容覆盖到 front（memcpy，**不交换指针**——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
-  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
+  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。Cell style 表示完整目标状态；当前状态中存在目标已移除的前景色、背景色或样式标志时，先发射 `\x1b[0m`，再发射完整目标样式，避免终端沿用已删除的状态。纯新增样式或非零颜色替换不增加重置。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
   - 光标定位：`\x1b[y;xH`（1-based 坐标）。
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
@@ -207,6 +207,7 @@
 - [x] 4.39 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.40 等待人工 Review：开发者审查鼠标 target 与 lock 设计和实现，通过后再处理焦点和键盘路由
 - [x] 4.41 实现焦点管理、不可停止的 `FocusEvent` 路径事件、鼠标自动聚焦、ViewManager 多播事件、键盘焦点路由及不可被视图停止的 `TuiApp.key`；详见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`
+- [x] 4.41a 修复 SGR 完整状态转换：移除背景色、前景色或样式标志时重置并重放目标样式，覆盖透明上层组件跨多背景绘制场景
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。

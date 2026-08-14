@@ -129,10 +129,7 @@ open type Screen {
     }
     // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
     if self.currentSgr != (u64)0 {
-      output.add((byte)0x1b); // ESC
-      output.add((byte)0x5b); // '['
-      output.add((byte)0x30); // '0'
-      output.add((byte)0x6d); // 'm'
+      self.writeSgrReset();
       self.currentSgr = (u64)0;
     }
     // back → front 覆盖（memcpy，不交换指针）
@@ -251,6 +248,35 @@ open type Screen {
     }
   }
 
+  /** 向输出缓冲追加完整 SGR 重置序列。 */
+  seal func writeSgrReset(): void {
+    let output = self.output;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x30); // '0'
+    output.add((byte)0x6d); // 'm'
+  }
+
+  /**
+   * 判断从当前完整样式切换到目标完整样式前是否必须重置。
+   * 非零颜色可直接覆盖；颜色恢复默认值或任一样式标志被移除时必须重置。
+   */
+  seal func needsSgrReset(current: u64, target: u64): bool {
+    let currentFg = (u32)(current & Cell.MASK_FG);
+    let targetFg = (u32)(target & Cell.MASK_FG);
+    if currentFg != (u32)0 && targetFg == (u32)0 {
+      return true;
+    }
+    let currentBg = (u32)((current >> (u64)24) & Cell.MASK_FG);
+    let targetBg = (u32)((target >> (u64)24) & Cell.MASK_FG);
+    if currentBg != (u32)0 && targetBg == (u32)0 {
+      return true;
+    }
+    let currentFlags = current & Cell.MASK_FLAGS;
+    let targetFlags = target & Cell.MASK_FLAGS;
+    return (currentFlags & targetFlags) != currentFlags;
+  }
+
   /**
    * 根据 Cell 的 style 编码，将 SGR（Select Graphic Rendition）序列
    * 直接追加到 output 缓冲区。
@@ -265,11 +291,12 @@ open type Screen {
     let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
     // 若前景、背景、样式标志全为零，发射 SGR 重置 \x1b[0m
     if fg == (u32)0 && bg == (u32)0 && style == (u64)0 {
-      output.add((byte)0x1b); // ESC
-      output.add((byte)0x5b); // '['
-      output.add((byte)0x30); // '0'
-      output.add((byte)0x6d); // 'm'
+      self.writeSgrReset();
       return;
+    }
+    // Cell style 是完整目标状态；先清除目标不再包含的终端状态。
+    if self.needsSgrReset(self.currentSgr, style) {
+      self.writeSgrReset();
     }
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['

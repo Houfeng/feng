@@ -688,6 +688,50 @@ func screen_render_sgr_fg_bg_color() {
   check(out.contains("48;2;0;0;255"), "tui/screen/render-sgr-bg");
 }
 
+/** 验证 SGR 将 Cell style 作为完整状态，正确清除已移除的颜色和样式。 */
+func screen_render_sgr_complete_state_transitions() {
+  let green = RgbColor((u8)0, (u8)180, (u8)120);
+  let blue = RgbColor((u8)0, (u8)0, (u8)255);
+
+  let backgroundScreen = Screen((u32)2, (u32)1);
+  backgroundScreen.buffer().draw((u32)0, (u32)0, (u64)65,
+    green, blue);
+  backgroundScreen.buffer().draw((u32)1, (u32)0, (u64)66,
+    green);
+  let backgroundOut = backgroundScreen.buildPatchString();
+  check(backgroundOut.contains(
+    "\x1b[1;2H\x1b[0m\x1b[38;2;0;180;120mB"),
+    "tui/screen/sgr-removes-background-before-foreground");
+
+  let foregroundScreen = Screen((u32)2, (u32)1);
+  foregroundScreen.buffer().draw((u32)0, (u32)0, (u64)65,
+    green);
+  foregroundScreen.buffer().draw((u32)1, (u32)0, (u64)66,
+    CellStyle.Italic);
+  let foregroundOut = foregroundScreen.buildPatchString();
+  check(foregroundOut.contains(
+    "\x1b[1;2H\x1b[0m\x1b[3mB"),
+    "tui/screen/sgr-removes-foreground-before-style");
+
+  let flagScreen = Screen((u32)2, (u32)1);
+  flagScreen.buffer().draw((u32)0, (u32)0, (u64)65,
+    CellStyle.Bold, CellStyle.Italic);
+  flagScreen.buffer().draw((u32)1, (u32)0, (u64)66,
+    CellStyle.Italic);
+  let flagOut = flagScreen.buildPatchString();
+  check(flagOut.contains("\x1b[1;2H\x1b[0m\x1b[3mB"),
+    "tui/screen/sgr-removes-absent-style-flag");
+
+  let additiveScreen = Screen((u32)2, (u32)1);
+  additiveScreen.buffer().draw((u32)0, (u32)0, (u64)65,
+    CellStyle.Italic);
+  additiveScreen.buffer().draw((u32)1, (u32)0, (u64)66,
+    CellStyle.Bold, CellStyle.Italic);
+  let additiveOut = additiveScreen.buildPatchString();
+  check(!additiveOut.contains("\x1b[1;2H\x1b[0m"),
+    "tui/screen/sgr-additive-transition-does-not-reset");
+}
+
 func screen_render_sgr_multi_style() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, "X", CellStyle.Bold, CellStyle.Italic, CellStyle.Underline);
@@ -2674,6 +2718,7 @@ open func run_tui_tests() {
     test("screen_render_sgr_bold()", () { screen_render_sgr_bold(); });
     test("screen_render_sgr_fg_color()", () { screen_render_sgr_fg_color(); });
     test("screen_render_sgr_fg_bg_color()", () { screen_render_sgr_fg_bg_color(); });
+    test("screen_render_sgr_complete_state_transitions()", () { screen_render_sgr_complete_state_transitions(); });
     test("screen_render_sgr_multi_style()", () { screen_render_sgr_multi_style(); });
     test("screen_render_partial_diff()", () { screen_render_partial_diff(); });
     test("screen_render_no_sgr_for_unchanged_style()", () { screen_render_no_sgr_for_unchanged_style(); });

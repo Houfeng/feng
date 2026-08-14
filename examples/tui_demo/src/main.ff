@@ -40,56 +40,14 @@ type DragSurface: ContainerWidget {
 }
 
 /**
- * TUI demo: 使用 ViewManager 绘制 Text，并拖动一个蓝色矩形。
- *
- * 运行方式：./build/bin/feng run ./examples/tui_demo
- * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
+ * 为矩形绑定独立的鼠标锁定和拖动状态。
+ * 锁定后鼠标移出矩形仍继续拖动，并将最终位置限制在 Screen 内。
  */
-func main(args: string[]) {
-  // 构造 TuiApp（无外部 fd），init 进入 Raw Mode 并按终端尺寸初始化 Screen
-  let app = TuiApp();
-  app.init();
-  defer { app.exit(); }
-  app.key.on((event: KeyEvent<Widget>) {
-    // 按下 Ctrl+C 时退出应用
-    if event.isControl() && event.content match let c: u32 && c == 0x03 {
-      app.exit();
-    }
-  });
-
-  // 根容器占满 Screen，负责自治布局和绘制子组件。
-  let surface = DragSurface();
-  app.view.root = surface;
-
-  // 初始居中的 20×20 蓝色矩形。
-  let rectangle = View();
-  rectangle.style.width = 20;
-  rectangle.style.height = 10;
-  rectangle.style.horizontalAlign = Align.Center;
-  rectangle.style.verticalAlign = Align.Center;
-  rectangle.style.backColor = RgbColor(0, 0, 255);
-  surface.addChild(rectangle);
-
-  // 顶部文本演示自动高度、有限宽度换行、Emoji 和逐行居中。
-  let text = Text();
-  text.content = "Feng TUI Text 😀\nGrapheme: é · auto wrap\nDrag the blue rectangle";
-  text.textAlign = TextAlign.Center;
-  text.style.width = 28;
-  text.style.height = auto;
-  text.style.horizontalAlign = Align.Center;
-  text.style.verticalAlign = Align.Start;
-  let textMarginTop: int = 2;
-  let textMarginSide: int = 0;
-  text.style.margin = Thickness(textMarginTop, textMarginSide,
-    textMarginSide, textMarginSide);
-  text.style.foreColor = RgbColor(0, 180, 120);
-  surface.addChild(text);
-
+func bindDrag(rectangle: View, app: TuiApp): void {
   var dragging = false;
   var dragOffsetX: int = 0;
   var dragOffsetY: int = 0;
 
-  // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
   rectangle.mouseDown.on((event: MouseEvent<Widget>) {
     if event.button == MouseButton.Left && event.lock() {
       dragging = true;
@@ -98,7 +56,6 @@ func main(args: string[]) {
     }
   });
 
-  // lock 后即使鼠标移出矩形，move 事件仍直接路由到矩形。
   rectangle.mouseMove.on((event: MouseEvent<Widget>) {
     if event.action == MouseAction.Move && dragging {
       var x: int = 0;
@@ -127,11 +84,69 @@ func main(args: string[]) {
     }
   });
 
-  // release 仍路由到锁定的矩形，由锁定目标显式结束拖动并释放锁定。
   rectangle.mouseUp.on((event: MouseEvent<Widget>) {
     dragging = false;
     event.unlock();
   });
+}
+
+/**
+ * TUI demo: 使用 ViewManager 绘制 Text，并独立拖动蓝色和红色矩形。
+ *
+ * 运行方式：./build/bin/feng run ./examples/tui_demo
+ * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
+ */
+func main(args: string[]) {
+  // 构造 TuiApp（无外部 fd），init 进入 Raw Mode 并按终端尺寸初始化 Screen
+  let app = TuiApp();
+  app.init();
+  defer { app.exit(); }
+  app.key.on((event: KeyEvent<Widget>) {
+    // 按下 Ctrl+C 时退出应用
+    if event.isControl() && event.content match let c: u32 && c == 0x03 {
+      app.exit();
+    }
+  });
+
+  // 根容器占满 Screen，负责自治布局和绘制子组件。
+  let surface = DragSurface();
+  app.view.root = surface;
+
+  // 初始居中的蓝色矩形。
+  let blueRectangle = View();
+  blueRectangle.style.width = 20;
+  blueRectangle.style.height = 10;
+  blueRectangle.style.horizontalAlign = Align.Center;
+  blueRectangle.style.verticalAlign = Align.Center;
+  blueRectangle.style.backColor = RgbColor(0, 0, 255);
+  surface.addChild(blueRectangle);
+
+  // 初始靠右居中的红色矩形，用于交叉验证透明文本下的背景切换。
+  let redRectangle = View();
+  redRectangle.style.width = 14;
+  redRectangle.style.height = 6;
+  redRectangle.style.horizontalAlign = Align.End;
+  redRectangle.style.verticalAlign = Align.Center;
+  redRectangle.style.backColor = RgbColor(255, 0, 0);
+  surface.addChild(redRectangle);
+
+  // 顶部文本演示自动高度、有限宽度换行、Emoji 和逐行居中。
+  let text = Text();
+  text.content = "Feng TUI Text 😀\nGrapheme: é · auto wrap\nDrag the blue rectangle";
+  text.textAlign = TextAlign.Center;
+  text.style.width = 28;
+  text.style.height = auto;
+  text.style.horizontalAlign = Align.Center;
+  text.style.verticalAlign = Align.Start;
+  let textMarginTop: int = 2;
+  let textMarginSide: int = 0;
+  text.style.margin = Thickness(textMarginTop, textMarginSide,
+    textMarginSide, textMarginSide);
+  text.style.foreColor = RgbColor(0, 180, 120);
+  surface.addChild(text);
+
+  bindDrag(blueRectangle, app);
+  bindDrag(redRectangle, app);
 
   app.run();
 }
