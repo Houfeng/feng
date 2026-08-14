@@ -5,12 +5,12 @@ open module std.tui.common;
  */
 @value
 open type Rect {
-  /** 左上角列坐标（0-based） */
-  var x: u32;
-  /** 左上角行坐标（0-based） */
-  var y: u32;
-  /** 宽度 */
-  var width: u32;
-  /** 高度 */
-  var height: u32;
+  /** 左上角列坐标；允许位于参照区域左侧 */
+  var x: int;
+  /** 左上角行坐标；允许位于参照区域上方 */
+  var y: int;
+  /** 宽度；布局与绘制产生的 Rect 保持非负 */
+  var width: int;
+  /** 高度；布局与绘制产生的 Rect 保持非负 */
+  var height: int;
 }

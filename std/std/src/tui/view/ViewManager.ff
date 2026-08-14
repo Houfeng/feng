@@ -37,18 +37,18 @@ open type ViewManager {
    * 获取当前 Screen 宽度。
    * @return Screen 列数
    */
-  open func getScreenWidth(): u32 {
+  open func getScreenWidth(): int {
     let size = self.screen.size();
-    return size.item1;
+    return (int)size.item1;
   }
 
   /**
    * 获取当前 Screen 高度。
    * @return Screen 行数
    */
-  open func getScreenHeight(): u32 {
+  open func getScreenHeight(): int {
     let size = self.screen.size();
-    return size.item2;
+    return (int)size.item2;
   }
 
   /**
@@ -72,19 +72,18 @@ open type ViewManager {
 
   /**
    * 判断屏幕坐标是否位于指定矩形内。
-   * 使用 u64 计算右、下边界，避免 u32 坐标与尺寸相加时溢出。
    * @param frame 需要检查的矩形
    * @param x 屏幕列坐标
    * @param y 屏幕行坐标
    * @return 坐标是否位于矩形内
    */
-  seal func containsPoint(frame: Rect, x: u32, y: u32): bool {
-    if frame.width == 0 || frame.height == 0 || x < frame.x || y < frame.y {
+  seal func containsPoint(frame: Rect, x: int, y: int): bool {
+    if frame.width <= 0 || frame.height <= 0 || x < frame.x || y < frame.y {
       return false;
     }
-    let right = (u64)frame.x + (u64)frame.width;
-    let bottom = (u64)frame.y + (u64)frame.height;
-    return (u64)x < right && (u64)y < bottom;
+    let right = frame.x + frame.width;
+    let bottom = frame.y + frame.height;
+    return x < right && y < bottom;
   }
 
   /**
@@ -94,7 +93,7 @@ open type ViewManager {
    * @param y 屏幕行坐标
    * @return 首个命中的组件；未命中时返回 none
    */
-  seal func hitTest(x: u32, y: u32): Option<Widget> {
+  seal func hitTest(x: int, y: int): Option<Widget> {
     var index = self.sequence.size();
     while index > 0 {
       index -= 1;

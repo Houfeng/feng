@@ -43,7 +43,7 @@ open enum MouseButton {
  * 修饰键来自 SGR 鼠标序列（mode 1006）的 button 高位编码，
  * 由终端主动报告，100% 可靠——isControl/isAlt/isShift 均准确。
  *
- * 坐标为 0-based，与 Screen/Buffer 的坐标体系统一。
+ * 终端输入产生的坐标为 0-based；坐标使用 int，允许其他输入后端表达窗口外位置。
  * InputManager 解析时将终端 SGR 序列的 1-based 坐标减 1。
  */
 open type MouseEvent<T> {
@@ -63,11 +63,11 @@ open type MouseEvent<T> {
   /** 按下的按钮（move 动作时为 none） */
   let button: MouseButton;
 
-  /** 列坐标（0-based，与 Screen/Buffer 一致） */
-  let x: u32;
+  /** 列坐标；终端输入为 0-based，其他输入后端可提供窗口外坐标 */
+  let x: int;
 
-  /** 行坐标（0-based） */
-  let y: u32;
+  /** 行坐标；终端输入为 0-based，其他输入后端可提供窗口外坐标 */
+  let y: int;
 
   /** 修饰键位标志（MOD_CONTROL / MOD_ALT / MOD_SHIFT 的按位或，100% 可靠） */
   let mods: u8;
@@ -106,7 +106,7 @@ open type MouseEvent<T> {
    * @param y - 行坐标（0-based）
    * @param mods - 修饰键位标志的按位或
    */
-  func MouseEvent(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8) {
+  func MouseEvent(action: MouseAction, button: MouseButton, x: int, y: int, mods: u8) {
     self._hasTarget = false;
     self._targetOwnsLock = false;
     self.action = action;

@@ -522,8 +522,8 @@ open type InputManager<T> {
       }
     }
     // 坐标转换：终端 1-based → 0-based
-    let mx = (u32)(x - 1);
-    let my = (u32)(y - 1);
+    let mx = (int)(x - 1);
+    let my = (int)(y - 1);
     self.emitMouse(action, button, mx, my, mods);
   }
 
@@ -563,7 +563,7 @@ open type InputManager<T> {
    * @param y - 行坐标（0-based）
    * @param mods - 修饰键位标志
    */
-  seal func emitMouse(action: MouseAction, button: MouseButton, x: u32, y: u32, mods: u8): void {
+  seal func emitMouse(action: MouseAction, button: MouseButton, x: int, y: int, mods: u8): void {
     let event = MouseEvent<T>(action, button, x, y, mods);
     self.onMouse(event);
   }

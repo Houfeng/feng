@@ -7,25 +7,32 @@ import std;
  * 可用于 Padding、Margin、Border 等
  */
 open type Thickness {
-  let top: Union<u32, float>;
-  let right: Union<u32, float>;
-  let bottom: Union<u32, float>;
-  let left: Union<u32, float>;
+  /** 上侧厚度；int 为固定终端单元数，float 为相对比例 */
+  let top: Union<int, float>;
+  /** 右侧厚度；int 为固定终端单元数，float 为相对比例 */
+  let right: Union<int, float>;
+  /** 下侧厚度；int 为固定终端单元数，float 为相对比例 */
+  let bottom: Union<int, float>;
+  /** 左侧厚度；int 为固定终端单元数，float 为相对比例 */
+  let left: Union<int, float>;
 
-  func Thickness(t: u32, r: u32, b: u32, l: u32): void {
+  /** 使用固定终端单元数分别构造四侧厚度。 */
+  func Thickness(t: int, r: int, b: int, l: int): void {
     self.top = t;
     self.right = r;
     self.bottom = b;
     self.left = l;
   }
 
-  func Thickness(v: u32, h: u32): void {
+  /** 使用固定终端单元数按垂直、水平两轴构造厚度。 */
+  func Thickness(v: int, h: int): void {
     self.top = v;
     self.right = h;
     self.bottom = v;
     self.left = h;
   }
 
+  /** 使用相对比例分别构造四侧厚度。 */
   func Thickness(t: float, r: float, b: float, l: float): void {
     self.top = t;
     self.right = r;
@@ -33,6 +40,7 @@ open type Thickness {
     self.left = l;
   }
 
+  /** 使用相对比例按垂直、水平两轴构造厚度。 */
   func Thickness(v: float, h: float): void {
     self.top = v;
     self.right = h;
@@ -40,13 +48,15 @@ open type Thickness {
     self.left = h;
   }
 
-  func Thickness(all: u32): void {
+  /** 使用同一固定终端单元数构造四侧厚度。 */
+  func Thickness(all: int): void {
     self.top = all;
     self.right = all;
     self.bottom = all;
     self.left = all;
   }
 
+  /** 使用同一相对比例构造四侧厚度。 */
   func Thickness(all: float): void {
     self.top = all;
     self.right = all;

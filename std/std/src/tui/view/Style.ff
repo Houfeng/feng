@@ -57,35 +57,37 @@ open type Style {
 
   /**
    * X 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
-   * u32 表示固定终端单元数，float 表示相对参照区域宽度的百分比；
+   * int 表示固定终端单元数，float 表示相对参照区域宽度的百分比；
+   * 两种形式均允许负值，使组件可位于参照区域左侧。
    * 百分比基数不扣除自身 margin。最终 frame.x 还会叠加 margin.left，
    * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
    */
-  var x: Union<u32, float>;
+  var x: Union<int, float>;
 
   /**
    * Y 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
-   * u32 表示固定终端单元数，float 表示相对参照区域高度的百分比；
+   * int 表示固定终端单元数，float 表示相对参照区域高度的百分比；
+   * 两种形式均允许负值，使组件可位于参照区域上方。
    * 百分比基数不扣除自身 margin。最终 frame.y 还会叠加 margin.top，
    * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
    */
-  var y: Union<u32, float>;
+  var y: Union<int, float>;
 
   /**
-   * 宽度，u32 表示固定终端单元数，float 表示百分比。
+   * 宽度，int 表示固定终端单元数，float 表示百分比；解析结果保持非负。
    * 固定宽度保持原值，不扣除 margin；百分比宽度以参照区域扣除
    * margin.left/right 后的剩余宽度为基数。Normal/Relative + horizontalAlign=Full
    * 时忽略 width，直接占满扣除左右 margin 后的可用宽度。
    */
-  var width: Union<u32, float>;
+  var width: Union<int, float>;
 
   /**
-   * 高度，u32 表示固定终端单元数，float 表示百分比。
+   * 高度，int 表示固定终端单元数，float 表示百分比；解析结果保持非负。
    * 固定高度保持原值，不扣除 margin；百分比高度以参照区域扣除
    * margin.top/bottom 后的剩余高度为基数。Normal/Relative + verticalAlign=Full
    * 时忽略 height，直接占满扣除上下 margin 后的可用高度。
    */
-  var height: Union<u32, float>;
+  var height: Union<int, float>;
 
   /**
    * 前景色；不参与布局，在绘制阶段使用。

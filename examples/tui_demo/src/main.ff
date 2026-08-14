@@ -63,16 +63,16 @@ func main(args: string[]) {
 
   // 初始居中的 20×20 蓝色矩形。
   let rectangle = View();
-  rectangle.style.width = (u32)20;
-  rectangle.style.height = (u32)10;
+  rectangle.style.width = 20;
+  rectangle.style.height = 10;
   rectangle.style.horizontalAlign = Align.Center;
   rectangle.style.verticalAlign = Align.Center;
   rectangle.style.backColor = RgbColor(0, 0, 255);
   surface.addChild(rectangle);
 
   var dragging = false;
-  var dragOffsetX: u32 = 0;
-  var dragOffsetY: u32 = 0;
+  var dragOffsetX: int = 0;
+  var dragOffsetY: int = 0;
 
   // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
   rectangle.mouseDown.on((event: MouseEvent<Widget>) {
@@ -86,8 +86,8 @@ func main(args: string[]) {
   // lock 后即使鼠标移出矩形，move 事件仍直接路由到矩形。
   rectangle.mouseMove.on((event: MouseEvent<Widget>) {
     if event.action == MouseAction.Move && dragging {
-      var x: u32 = 0;
-      var y: u32 = 0;
+      var x: int = 0;
+      var y: int = 0;
       if event.x > dragOffsetX {
         x = event.x - dragOffsetX;
       }
@@ -97,10 +97,10 @@ func main(args: string[]) {
 
       let screenWidth = app.view.getScreenWidth();
       let screenHeight = app.view.getScreenHeight();
-      let maxX: u32 = if screenWidth > rectangle.frame.width {
+      let maxX: int = if screenWidth > rectangle.frame.width {
         screenWidth - rectangle.frame.width;
       } else { 0; };
-      let maxY: u32 = if screenHeight > rectangle.frame.height {
+      let maxY: int = if screenHeight > rectangle.frame.height {
         screenHeight - rectangle.frame.height;
       } else { 0; };
       if x > maxX { x = maxX; }

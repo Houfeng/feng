@@ -971,8 +971,8 @@ func mouse_event_default_ctor() {
   let e = MouseEvent<i32>();
   check(e.action == MouseAction.Press, "tui/mouse/ctor-default-action");
   check(e.button == MouseButton.None, "tui/mouse/ctor-default-button");
-  check(e.x == (u32)0, "tui/mouse/ctor-default-x");
-  check(e.y == (u32)0, "tui/mouse/ctor-default-y");
+  check(e.x == 0, "tui/mouse/ctor-default-x");
+  check(e.y == 0, "tui/mouse/ctor-default-y");
   check(e.mods == (u8)0, "tui/mouse/ctor-default-mods");
   check(e.isControl() == false, "tui/mouse/ctor-default-is-control");
   check(e.isAlt() == false, "tui/mouse/ctor-default-is-alt");
@@ -980,25 +980,25 @@ func mouse_event_default_ctor() {
 }
 
 func mouse_event_left_click() {
-  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, (u32)9, (u32)4, 0);
+  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 9, 4, 0);
   check(e.action == MouseAction.Press, "tui/mouse/left-click-action");
   check(e.button == MouseButton.Left, "tui/mouse/left-click-button");
-  check(e.x == (u32)9, "tui/mouse/left-click-x");
-  check(e.y == (u32)4, "tui/mouse/left-click-y");
+  check(e.x == 9, "tui/mouse/left-click-x");
+  check(e.y == 4, "tui/mouse/left-click-y");
   check(e.mods == (u8)0, "tui/mouse/left-click-mods");
 }
 
 func mouse_event_with_modifiers() {
   // SGR 鼠标：+4=Shift, +8=Alt, +16=Ctrl
   let mods: u8 = MOD_SHIFT | MOD_ALT | MOD_CONTROL;
-  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, (u32)0, (u32)0, mods);
+  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 0, 0, mods);
   check(e.isShift() == true, "tui/mouse/mod-shift");
   check(e.isAlt() == true, "tui/mouse/mod-alt");
   check(e.isControl() == true, "tui/mouse/mod-control");
 }
 
 func mouse_event_move_action() {
-  let e = MouseEvent<i32>(MouseAction.Move, MouseButton.None, (u32)5, (u32)3, 0);
+  let e = MouseEvent<i32>(MouseAction.Move, MouseButton.None, 5, 3, 0);
   check(e.action == MouseAction.Move, "tui/mouse/move-action");
   check(e.button == MouseButton.None, "tui/mouse/move-button-none");
 }
@@ -1032,7 +1032,71 @@ func mouse_event_target_stop_and_lock() {
   check(routed.isLocked() == false, "tui/mouse/unlock-owner");
 }
 
-func makeWidgetFrame(x: u32, y: u32, width: u32, height: u32): Rect {
+func mouse_event_allows_window_outside_coordinates() {
+  let event = MouseEvent<i32>(MouseAction.Move, MouseButton.None, -4, -2, 0);
+  check(event.x == -4, "tui/mouse/window-outside-x");
+  check(event.y == -2, "tui/mouse/window-outside-y");
+}
+
+func view_arrange_preserves_signed_geometry() {
+  let screen = Screen(20, 10);
+  let manager = ViewManager(screen);
+  let view = View();
+  view.style.position = Position.Absolute;
+  view.style.x = -3;
+  view.style.y = -2;
+  view.style.width = 8;
+  view.style.height = 5;
+
+  view.arrange(manager);
+  check(view.frame.x == -3, "tui/view/arrange-negative-x");
+  check(view.frame.y == -2, "tui/view/arrange-negative-y");
+  check(view.frame.width == 8, "tui/view/arrange-signed-width");
+  check(view.frame.height == 5, "tui/view/arrange-signed-height");
+
+  view.draw(manager);
+  check(view.drawFrame.x == 0, "tui/view/draw-clip-negative-x");
+  check(view.drawFrame.y == 0, "tui/view/draw-clip-negative-y");
+  check(view.drawFrame.width == 5, "tui/view/draw-clip-negative-width");
+  check(view.drawFrame.height == 3, "tui/view/draw-clip-negative-height");
+}
+
+func view_arrange_preserves_negative_percentage_offsets() {
+  let screen = Screen(20, 10);
+  let manager = ViewManager(screen);
+  let view = View();
+  let negativeQuarter: float = -0.25;
+  let negativeHalf: float = -0.5;
+  view.style.position = Position.Fixed;
+  view.style.x = negativeQuarter;
+  view.style.y = negativeHalf;
+  view.style.width = -8;
+  view.style.height = negativeHalf;
+
+  view.arrange(manager);
+  check(view.frame.x == -5, "tui/view/arrange-negative-percent-x");
+  check(view.frame.y == -5, "tui/view/arrange-negative-percent-y");
+  check(view.frame.width == 0, "tui/view/arrange-negative-width-zero");
+  check(view.frame.height == 0, "tui/view/arrange-negative-height-zero");
+}
+
+func view_arrange_oversized_alignment_keeps_negative_origin() {
+  let screen = Screen(20, 10);
+  let manager = ViewManager(screen);
+  let view = View();
+  view.style.width = 30;
+  view.style.height = 20;
+  view.style.horizontalAlign = Align.Center;
+  view.style.verticalAlign = Align.Center;
+
+  view.arrange(manager);
+  check(view.frame.x == -5, "tui/view/arrange-oversized-center-x");
+  check(view.frame.y == -5, "tui/view/arrange-oversized-center-y");
+  check(view.frame.width == 30, "tui/view/arrange-oversized-width");
+  check(view.frame.height == 20, "tui/view/arrange-oversized-height");
+}
+
+func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
   let frame = Rect();
   frame.x = x;
   frame.y = y;
@@ -1639,6 +1703,10 @@ open func run_tui_tests() {
     test("mouse_event_with_modifiers()", () { mouse_event_with_modifiers(); });
     test("mouse_event_move_action()", () { mouse_event_move_action(); });
     test("mouse_event_target_stop_and_lock()", () { mouse_event_target_stop_and_lock(); });
+    test("mouse_event_allows_window_outside_coordinates()", () { mouse_event_allows_window_outside_coordinates(); });
+    test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
+    test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
+    test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
     test("view_manager_mouse_target_lock_and_bubble()", () { view_manager_mouse_target_lock_and_bubble(); });
     // ─── Phase 5: InputManager ───
     test("input_printable_ascii()", () { input_printable_ascii(); });

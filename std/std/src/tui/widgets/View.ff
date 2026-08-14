@@ -62,58 +62,66 @@ open type View: Widget {
   let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
 
   /**
-   * 按指定参照尺寸解析固定值或百分比值。
-   * 百分比转换为 u32 时向零截断；非正数及 NaN 解析为 0，超出 u32 范围时取最大值。
+   * 将百分比解析为有符号坐标偏移。
    */
-  seal static func resolveLength(value: Union<u32, float>, reference: u32): u32 {
+  seal static func resolveScaledOffset(ratio: float, reference: int): int {
+    if ratio != ratio {
+      return 0;
+    }
+    return (int)((double)reference * (double)ratio);
+  }
+
+  /**
+   * 将正百分比解析为非负尺寸。
+   */
+  seal static func resolveScaledSize(ratio: float, reference: int): int {
+    if ratio != ratio || ratio <= 0.0 {
+      return 0;
+    }
+    return (int)((double)reference * (double)ratio);
+  }
+
+  /**
+   * 按指定参照尺寸解析坐标偏移。
+   * 固定值和百分比均保留正负方向；NaN 解析为 0。
+   */
+  seal static func resolveOffset(value: Union<int, float>, reference: int): int {
     return match value {
-      fixed: u32 { fixed }
-      ratio: float {
-        var value: u32 = 0;
-        if ratio == ratio && ratio > 0.0 {
-          let resolved = (double)reference * (double)ratio;
-          if resolved >= 4294967295.0 {
-            value = (u32)4294967295;
-          } else {
-            value = (u32)resolved;
-          }
-        }
-        value;
-      }
+      fixed: int { fixed }
+      ratio: float { View.resolveScaledOffset(ratio, reference) }
       else { 0 }
     };
   }
 
   /**
-   * 从参照尺寸中扣除两侧间距，扣除量过大时返回 0。
+   * 按指定参照尺寸解析非负尺寸或间距。
+   * 非正固定值、非正百分比及 NaN 解析为 0。
    */
-  seal static func resolveAvailableSize(reference: u32, leading: u32, trailing: u32): u32 {
-    let occupied = (u64)leading + (u64)trailing;
-    if occupied >= (u64)reference {
-      return 0;
-    }
-    return reference - (u32)occupied;
+  seal static func resolveSize(value: Union<int, float>, reference: int): int {
+    return match value {
+      fixed: int {
+        if fixed > 0 { fixed } else { 0 }
+      }
+      ratio: float { View.resolveScaledSize(ratio, reference) }
+      else { 0 }
+    };
   }
 
   /**
-   * 对 u32 坐标执行饱和加法。
+   * 从参照尺寸中扣除两侧非负间距，扣除量过大时返回 0。
    */
-  seal static func addCoordinate(value: u32, offset: u32): u32 {
-    let result = (u64)value + (u64)offset;
-    if result >= (u64)4294967295 {
-      return (u32)4294967295;
+  seal static func resolveAvailableSize(reference: int, leading: int, trailing: int): int {
+    if reference <= 0 || leading >= reference || trailing >= reference - leading {
+      return 0;
     }
-    return (u32)result;
+    return reference - leading - trailing;
   }
 
   /**
-   * 对 u32 坐标执行饱和减法。
+   * 向坐标叠加有符号偏移。
    */
-  seal static func subtractCoordinate(value: u32, offset: u32): u32 {
-    if offset >= value {
-      return 0;
-    }
-    return value - offset;
+  seal static func addCoordinate(value: int, offset: int): int {
+    return value + offset;
   }
 
   /**
@@ -125,22 +133,16 @@ open type View: Widget {
 
   /**
    * 根据对齐方式在一个轴的可用区域中定位组件。
-   * 组件尺寸超过可用区域时仍保持 Center/End 语义，并在坐标小于 0 时截断到 0。
+   * 组件尺寸超过可用区域时仍保持 Center/End 语义，允许结果位于参照区域之前。
    */
-  seal static func resolveAlignedPosition(origin: u32, available: u32,
-    size: u32, align: Align): u32 {
+  seal static func resolveAlignedPosition(origin: int, available: int,
+    size: int, align: Align): int {
     match align {
       Align.Center {
-        if size <= available {
-          return View.addCoordinate(origin, (available - size) / (u32)2);
-        }
-        return View.subtractCoordinate(origin, (size - available) / (u32)2);
+        return View.addCoordinate(origin, (available - size) / 2);
       }
       Align.End {
-        if size <= available {
-          return View.addCoordinate(origin, available - size);
-        }
-        return View.subtractCoordinate(origin, size - available);
+        return View.addCoordinate(origin, available - size);
       }
       else {
         return origin;
@@ -186,10 +188,10 @@ open type View: Widget {
 
       if View.isNormalFlow(widget.style.position) {
         let padding = parentWidget.style.padding;
-        let top = View.resolveLength(padding.top, reference.height);
-        let right = View.resolveLength(padding.right, reference.width);
-        let bottom = View.resolveLength(padding.bottom, reference.height);
-        let left = View.resolveLength(padding.left, reference.width);
+        let top = View.resolveSize(padding.top, reference.height);
+        let right = View.resolveSize(padding.right, reference.width);
+        let bottom = View.resolveSize(padding.bottom, reference.height);
+        let left = View.resolveSize(padding.left, reference.width);
         reference.x = View.addCoordinate(reference.x, left);
         reference.y = View.addCoordinate(reference.y, top);
         reference.width = View.resolveAvailableSize(reference.width, left, right);
@@ -203,41 +205,41 @@ open type View: Widget {
   /**
    * 解析组件最终宽度。
    */
-  seal static func resolveWidth(widget: Widget, referenceWidth: u32,
-    left: u32, right: u32): u32 {
+  seal static func resolveWidth(widget: Widget, referenceWidth: int,
+    left: int, right: int): int {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
     if View.isNormalFlow(widget.style.position) &&
     widget.style.horizontalAlign == Align.Full {
       return available;
     }
-    return View.resolveLength(widget.style.width, available);
+    return View.resolveSize(widget.style.width, available);
   }
 
   /**
    * 解析组件最终高度。
    */
-  seal static func resolveHeight(widget: Widget, referenceHeight: u32,
-    top: u32, bottom: u32): u32 {
+  seal static func resolveHeight(widget: Widget, referenceHeight: int,
+    top: int, bottom: int): int {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
     if View.isNormalFlow(widget.style.position) &&
     widget.style.verticalAlign == Align.Full {
       return available;
     }
-    return View.resolveLength(widget.style.height, available);
+    return View.resolveSize(widget.style.height, available);
   }
 
   /**
    * 解析组件最终横坐标。
    */
   seal static func resolveX(widget: Widget, reference: Rect,
-    left: u32, right: u32, width: u32): u32 {
+    left: int, right: int, width: int): int {
     let marginOrigin = View.addCoordinate(reference.x, left);
     if View.isNormalFlow(widget.style.position) {
       let available = View.resolveAvailableSize(reference.width, left, right);
       return View.resolveAlignedPosition(marginOrigin, available, width,
       widget.style.horizontalAlign);
     }
-    let offset = View.resolveLength(widget.style.x, reference.width);
+    let offset = View.resolveOffset(widget.style.x, reference.width);
     return View.addCoordinate(View.addCoordinate(reference.x, offset), left);
   }
 
@@ -245,14 +247,14 @@ open type View: Widget {
    * 解析组件最终纵坐标。
    */
   seal static func resolveY(widget: Widget, reference: Rect,
-    top: u32, bottom: u32, height: u32): u32 {
+    top: int, bottom: int, height: int): int {
     let marginOrigin = View.addCoordinate(reference.y, top);
     if View.isNormalFlow(widget.style.position) {
       let available = View.resolveAvailableSize(reference.height, top, bottom);
       return View.resolveAlignedPosition(marginOrigin, available, height,
       widget.style.verticalAlign);
     }
-    let offset = View.resolveLength(widget.style.y, reference.height);
+    let offset = View.resolveOffset(widget.style.y, reference.height);
     return View.addCoordinate(View.addCoordinate(reference.y, offset), top);
   }
 
@@ -264,10 +266,10 @@ open type View: Widget {
   static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.style.margin;
-    let top = View.resolveLength(margin.top, reference.height);
-    let right = View.resolveLength(margin.right, reference.width);
-    let bottom = View.resolveLength(margin.bottom, reference.height);
-    let left = View.resolveLength(margin.left, reference.width);
+    let top = View.resolveSize(margin.top, reference.height);
+    let right = View.resolveSize(margin.right, reference.width);
+    let bottom = View.resolveSize(margin.bottom, reference.height);
+    let left = View.resolveSize(margin.left, reference.width);
     let width = View.resolveWidth(widget, reference.width, left, right);
     let height = View.resolveHeight(widget, reference.height, top, bottom);
 
@@ -281,7 +283,6 @@ open type View: Widget {
 
   /**
    * 计算两个矩形的交集；无交集时返回宽高为 0 的矩形。
-   * 使用 u64 计算边界，避免 u32 坐标与尺寸相加时溢出。
    */
   seal static func intersectFrame(first: Rect, second: Rect): Rect {
     var left = first.x;
@@ -293,13 +294,13 @@ open type View: Widget {
       top = second.y;
     }
 
-    var right = (u64)first.x + (u64)first.width;
-    let secondRight = (u64)second.x + (u64)second.width;
+    var right = View.addCoordinate(first.x, first.width);
+    let secondRight = View.addCoordinate(second.x, second.width);
     if secondRight < right {
       right = secondRight;
     }
-    var bottom = (u64)first.y + (u64)first.height;
-    let secondBottom = (u64)second.y + (u64)second.height;
+    var bottom = View.addCoordinate(first.y, first.height);
+    let secondBottom = View.addCoordinate(second.y, second.height);
     if secondBottom < bottom {
       bottom = secondBottom;
     }
@@ -307,13 +308,14 @@ open type View: Widget {
     let result = Rect();
     result.x = left;
     result.y = top;
-    if right <= (u64)left || bottom <= (u64)top {
+    if first.width <= 0 || first.height <= 0 || second.width <= 0 ||
+    second.height <= 0 || right <= left || bottom <= top {
       result.width = 0;
       result.height = 0;
       return result;
     }
-    result.width = (u32)(right - (u64)left);
-    result.height = (u32)(bottom - (u64)top);
+    result.width = right - left;
+    result.height = bottom - top;
     return result;
   }
 
@@ -352,7 +354,8 @@ open type View: Widget {
       return;
     }
     manager.trace(widget, frame);
-    manager.getScreenBuffer().draw(frame.x, frame.y, frame.width, frame.height, (u64)0,
+    manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,
+      (u32)frame.width, (u32)frame.height, (u64)0,
       none, widget.style.backColor);
   }
 
