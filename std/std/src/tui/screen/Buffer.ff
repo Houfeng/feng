@@ -1,6 +1,7 @@
 open module std.tui.screen;
 
 import std;
+import std.tui.common;
 
 // ─── extern 函数声明（用于 draw 码点解码） ──────────────────────────────
 
@@ -54,15 +55,15 @@ open type Buffer {
    */
   seal func styleToBits(s: Style): u64 {
     return match s {
-      Style.none { (u64)0; }
-      Style.bold { Cell.STYLE_BOLD; }
-      Style.dim { Cell.STYLE_DIM; }
-      Style.italic { Cell.STYLE_ITALIC; }
-      Style.underline { Cell.STYLE_UNDERLINE; }
-      Style.blink { Cell.STYLE_BLINK; }
-      Style.reverse { Cell.STYLE_REVERSE; }
-      Style.hidden { Cell.STYLE_HIDDEN; }
-      Style.strikethrough { Cell.STYLE_STRIKETHROUGH; }
+      Style.None { (u64)0; }
+      Style.Bold { Cell.STYLE_BOLD; }
+      Style.Dim { Cell.STYLE_DIM; }
+      Style.Italic { Cell.STYLE_ITALIC; }
+      Style.Underline { Cell.STYLE_UNDERLINE; }
+      Style.Blink { Cell.STYLE_BLINK; }
+      Style.Reverse { Cell.STYLE_REVERSE; }
+      Style.Hidden { Cell.STYLE_HIDDEN; }
+      Style.Strikethrough { Cell.STYLE_STRIKETHROUGH; }
       else { (u64)0; }
     };
   }

@@ -1,4 +1,4 @@
-open module std.tui.screen;
+open module std.tui.common;
 
 /**
  * RgbColor 表示一个 RGB 颜色值，用于终端前景色和背景色。

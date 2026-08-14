@@ -4,6 +4,7 @@ import std;
 import std.text;
 import std.numeric;
 import std.tui;
+import std.tui.common;
 import std.tui.input;
 import std.tui.screen;
 import std.tui.widgets;

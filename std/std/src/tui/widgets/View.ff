@@ -5,6 +5,7 @@ import std.collections;
 import std.tui.view;
 import std.tui.input;
 import std.tui.screen;
+import std.tui.common;
 
 /**
  * 基础视图组件

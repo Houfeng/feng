@@ -11,21 +11,21 @@ open module std.tui.screen;
  */
 open enum Style {
   /** 无样式 */
-  none = 0,
+  None = 0,
   /** 粗体 */
-  bold = 1,
+  Bold = 1,
   /** 暗淡 */
-  dim = 2,
+  Dim = 2,
   /** 斜体 */
-  italic = 3,
+  Italic = 3,
   /** 下划线 */
-  underline = 4,
+  Underline = 4,
   /** 闪烁 */
-  blink = 5,
+  Blink = 5,
   /** 反转前景/背景色 */
-  reverse = 6,
+  Reverse = 6,
   /** 隐藏（不可见） */
-  hidden = 7,
+  Hidden = 7,
   /** 删除线 */
-  strikethrough = 8
+  Strikethrough = 8
 }

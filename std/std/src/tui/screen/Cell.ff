@@ -1,5 +1,7 @@
 open module std.tui.screen;
 
+import std.tui.common;
+
 /**
  * Cell represents a single character cell in a terminal user interface (TUI).
  * Each cell contains a Unicode code point and style information.

@@ -2,6 +2,7 @@ open module std.tui.view;
 
 import std;
 import std.collections;
+import std.tui.common;
 import std.tui.screen;
 import std.tui.input;
 

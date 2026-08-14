@@ -1,4 +1,4 @@
-open module std.tui.view;
+open module std.tui.common;
 
 import std;
 
