@@ -1,0 +1,329 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Consumer-only managed parameter used to close imported callable slots. */
+type MultiCallableReferenceValue {
+  /** Observable reference payload. */
+  open let text: string;
+
+  /** Construct one managed parameter. */
+  func MultiCallableReferenceValue(text: string) {
+    self.text = text;
+  }
+}
+
+/** Consumer-only descriptor-sized parameter. */
+@value
+type MultiCallableWideValue {
+  /** First managed field. */
+  open let first: string;
+
+  /** Second managed field. */
+  open let second: string;
+
+  /** Scalar tail. */
+  open let number: i64;
+
+  /** Construct one complete descriptor-sized parameter. */
+  func MultiCallableWideValue(first: string, second: string, number: i64) {
+    self.first = first;
+    self.second = second;
+    self.number = number;
+  }
+}
+
+/** Consumer-only object-form argument implementation. */
+type MultiCallableNamedValue: LibMultiCallableNamed {
+  /** Observable name. */
+  let value: string;
+
+  /** Construct one named argument. */
+  func MultiCallableNamedValue(value: string) {
+    self.value = value;
+  }
+
+  /** Implement the imported object-form parameter contract. */
+  func name(): string {
+    return self.value;
+  }
+}
+
+/** Form a lifecycle-observable multi-parameter bound value method. */
+func makeMultiCallableLifetimeValue(
+  value: string
+): LibMultiCallable<i64, string, i64> {
+  let owner = LibMultiCallableValueOwner<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf(value),
+    value
+  );
+  return owner.callable<i64, string, i64>();
+}
+
+/** Verify normal cleanup of a multi-parameter value-method closure. */
+func multiCallableNormalLifetimeIsComplete(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var valid = false;
+  {
+    let callable = makeMultiCallableLifetimeValue("multi-normal");
+    let result = callable("managed", 81, 82, "repeated");
+    valid = result.direct == 81 && result.managed == "managed" &&
+            result.wide == 82 && result.repeated == "repeated" &&
+            result.marker == "multi-normal";
+  }
+  return valid && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify overwrite releases exactly the replaced receiver closure. */
+func multiCallableOverwriteLifetimeIsComplete(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var releasedOld = false;
+  {
+    var callable = makeMultiCallableLifetimeValue("multi-overwrite-first");
+    callable = makeMultiCallableLifetimeValue("multi-overwrite-second");
+    let result = callable("managed", 83, 84, "repeated");
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  result.marker == "multi-overwrite-second";
+  }
+  return releasedOld && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify callable copies retain one shared captured receiver. */
+func multiCallableCopyLifetimeIsComplete(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var retainedOld = false;
+  var releasedOld = false;
+  {
+    var current = makeMultiCallableLifetimeValue("multi-copy-first");
+    {
+      let retained = current;
+      current = makeMultiCallableLifetimeValue("multi-copy-second");
+      let result = retained("managed", 85, 86, "repeated");
+      retainedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 0 &&
+                    result.marker == "multi-copy-first";
+    }
+    let result = current("managed", 87, 88, "repeated");
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  result.marker == "multi-copy-second";
+  }
+  return retainedOld && releasedOld &&
+         LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Throw while a multi-parameter callable and result remain live. */
+func throwWithMultiCallableLifetime(): void {
+  let callable = makeMultiCallableLifetimeValue("multi-exception");
+  let result = callable("managed", 89, 90, "repeated");
+  assert(result.marker == "multi-exception" && result.direct == 89,
+         "the multi-parameter callable is valid before unwinding");
+  throw "multi-callable-lifetime";
+}
+
+/** Verify exceptional cleanup releases the captured receiver exactly once. */
+func multiCallableExceptionLifetimeIsComplete(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var caught = false;
+  try throwWithMultiCallableLifetime() catch error: string {
+    caught = error == "multi-callable-lifetime";
+  };
+  return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify all multi-parameter generic callable paths. */
+open func test_generic_multi_parameter_callable_coverage(): void {
+  describe("generic multi-parameter callable coverage", () {
+    test("top-level adaptation forwarding argument return and field paths", () {
+      let managed = MultiCallableReferenceValue("managed-first");
+      let repeated = MultiCallableReferenceValue("managed-last");
+      let wide = MultiCallableWideValue("wide-first", "wide-second", 91);
+      let direct: LibMultiCallable<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      > = libMultiCallableTop<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >;
+      let cast = (LibMultiCallable<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >)libMultiCallableTop<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >;
+      let returned = libMultiCallableTopValue<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >();
+      let forwarded = libMultiCallableForward<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >(returned);
+      let holder = LibMultiCallableHolder<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >(forwarded);
+      let first = libMultiCallableApply<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >(holder.callable, managed, 92, wide, repeated);
+      let second = cast(managed, 93, wide, repeated);
+      let third = direct(managed, 94, wide, repeated);
+
+      assert(first.direct == 92 && first.managed.text == "managed-first" &&
+             first.wide.first == "wide-first" &&
+             first.wide.second == "wide-second" &&
+             first.wide.number == 91 &&
+             first.repeated.text == "managed-last" &&
+             first.marker == "top" && second.direct == 93 &&
+             third.direct == 94,
+             "all target contexts preserve parameter order and full values");
+    });
+
+    test("escaping lambda closes every mixed representation", () {
+      let callable = libMultiCallableLambda<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >("lambda");
+      let result = callable(
+        MultiCallableReferenceValue("lambda-first"),
+        95,
+        MultiCallableWideValue("lambda-wide-a", "lambda-wide-b", 96),
+        MultiCallableReferenceValue("lambda-last")
+      );
+
+      assert(result.direct == 95 && result.managed.text == "lambda-first" &&
+             result.wide.first == "lambda-wide-a" &&
+             result.wide.second == "lambda-wide-b" &&
+             result.wide.number == 96 &&
+             result.repeated.text == "lambda-last" &&
+             result.marker == "lambda",
+             "lambda invocation preserves all mixed ABI classes");
+    });
+
+    test("reference and value receivers keep their distinct self semantics", () {
+      let captured = MultiCallableWideValue("capture-a", "capture-b", 97);
+      let referenceOwner =
+        LibMultiCallableReferenceOwner<MultiCallableWideValue>(
+          captured,
+          "reference-before"
+        );
+      let referenceCallable = referenceOwner.callable<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >();
+      referenceOwner.marker = "reference-after";
+      var valueOwner = LibMultiCallableValueOwner<MultiCallableWideValue>(
+        captured,
+        "value-before"
+      );
+      let valueCallable = valueOwner.callable<
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >();
+      valueOwner.marker = "value-after";
+      let referenceResult = referenceCallable(
+        MultiCallableReferenceValue("reference-first"),
+        98,
+        captured,
+        MultiCallableReferenceValue("reference-last")
+      );
+      let valueResult = valueCallable(
+        MultiCallableReferenceValue("value-first"),
+        99,
+        captured,
+        MultiCallableReferenceValue("value-last")
+      );
+
+      assert(referenceResult.marker == "reference-after" &&
+             referenceResult.direct == 98 &&
+             valueResult.marker == "value-before" &&
+             valueResult.direct == 99 &&
+             valueResult.wide.second == "capture-b",
+             "reference methods observe mutation and value methods keep copies");
+    });
+
+    test("generic fit method closes owner and three method domains", () {
+      let owner: LibMultiCallableFitOwner<MultiCallableWideValue> = (
+        MultiCallableWideValue("fit-capture-a", "fit-capture-b", 100),
+        "fit"
+      );
+      let callable = libMultiCallableBindFit<
+        MultiCallableWideValue,
+        i64,
+        MultiCallableReferenceValue,
+        MultiCallableWideValue
+      >(owner);
+      let result = callable(
+        MultiCallableReferenceValue("fit-first"),
+        101,
+        MultiCallableWideValue("fit-wide-a", "fit-wide-b", 102),
+        MultiCallableReferenceValue("fit-last")
+      );
+
+      assert(result.marker == "fit" && result.direct == 101 &&
+             result.managed.text == "fit-first" &&
+             result.wide.number == 102 &&
+             result.repeated.text == "fit-last",
+             "fit receiver and all method descriptors remain independent");
+    });
+
+    test("object callable and union parameters compose recursively", () {
+      let named: LibMultiCallableNamed =
+        MultiCallableNamedValue("recursive-name");
+      let producer: LibMultiCallableProducer<MultiCallableWideValue> =
+        () -> MultiCallableWideValue(
+          "produced-first",
+          "produced-second",
+          103
+        );
+      let choice: LibMultiCallableChoice<MultiCallableWideValue> =
+        LibMultiCallableChoiceValue<MultiCallableWideValue>(
+          MultiCallableWideValue("choice-first", "choice-second", 104),
+          "choice"
+        );
+      let callable =
+        libMultiCallableRecursiveValue<MultiCallableWideValue>();
+      let result = callable(named, producer, choice);
+      var choiceValid = false;
+      if result.choice match value:
+        LibMultiCallableChoiceValue<MultiCallableWideValue> {
+        choiceValid = value.value.first == "choice-first" &&
+                      value.value.second == "choice-second" &&
+                      value.value.number == 104 && value.label == "choice";
+      }
+
+      assert(result.name == "recursive-name" &&
+             result.produced.first == "produced-first" &&
+             result.produced.second == "produced-second" &&
+             result.produced.number == 103 && choiceValid,
+             "all three spec forms preserve their nested generic values");
+    });
+
+    test("multi-parameter callable lifecycle is balanced on every exit", () {
+      assert(multiCallableNormalLifetimeIsComplete(),
+             "normal exit releases one captured value receiver");
+      assert(multiCallableOverwriteLifetimeIsComplete(),
+             "overwrite releases exactly the replaced closure");
+      assert(multiCallableCopyLifetimeIsComplete(),
+             "copied callables share their captured receiver until release");
+      assert(multiCallableExceptionLifetimeIsComplete(),
+             "exception unwinding releases the closure exactly once");
+    });
+  });
+}

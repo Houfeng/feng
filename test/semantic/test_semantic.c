@@ -15111,6 +15111,94 @@ static void test_generic_callable_spec_instance_rejects_lambda_return_mismatch(v
     feng_program_free(program);
 }
 
+/* A closed multi-parameter callable target validates every parameter position,
+ * return type, explicit generic arity, and source constraint independently. */
+static void test_multi_parameter_generic_callable_rejects_each_mismatch(void) {
+    static const struct {
+        const char *path;
+        const char *body;
+    } cases[] = {
+        {
+            "multi_callable_parameter_count_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string) -> first;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_first_parameter_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = (first: string, middle: string, last: bool) -> 1;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_middle_parameter_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: i64, last: bool) -> first;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_last_parameter_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string, last: string) -> first;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_return_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string, last: bool) -> middle;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_generic_arity_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = source<i64, string>;\n"
+            "}\n"
+        },
+        {
+            "multi_callable_constraint_error.ff",
+            "func use(): void {\n"
+            "    let value: Multi<i64, string, bool, i64> = constrained<i64, string, bool>;\n"
+            "}\n"
+        }
+    };
+    const char *prefix =
+        "module demo.callable.multi_parameter_errors;\n"
+        "spec Marker {}\n"
+        "spec Multi<A, B, C, R>(first: A, middle: B, last: C): R;\n"
+        "func source<A, B, C>(first: A, middle: B, last: C): A {\n"
+        "    middle; last; return first;\n"
+        "}\n"
+        "func constrained<A: Marker, B, C>(first: A, middle: B, last: C): A {\n"
+        "    middle; last; return first;\n"
+        "}\n";
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        size_t source_length = strlen(prefix) + strlen(cases[index].body) + 1U;
+        char *source = (char *)malloc(source_length);
+        FengProgram *program;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(source != NULL);
+        ASSERT(snprintf(source, source_length, "%s%s",
+                        prefix, cases[index].body) > 0);
+        program = parse_program_or_die(cases[index].path, source);
+        programs[0] = program;
+        ASSERT(!feng_semantic_analyze(programs, 1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, "AE0522") == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        free(source);
+    }
+}
+
 static void test_callable_spec_value_rejects_different_spec_implicit_match(void) {
     const char *src =
         "open module demo.callable.nominal;\n"
@@ -22241,6 +22329,7 @@ int main(void) {
     test_generic_callable_spec_instance_adapts_untyped_callable_values();
     test_generic_callable_spec_instance_rejects_lambda_parameter_mismatch();
     test_generic_callable_spec_instance_rejects_lambda_return_mismatch();
+    test_multi_parameter_generic_callable_rejects_each_mismatch();
     test_explicit_generic_callable_values_and_unbound_casts();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();

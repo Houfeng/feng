@@ -1,0 +1,194 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Consumer-only descriptor-sized generic iterator element. */
+@value
+type GenericForInWide<T> {
+  /** Generic payload whose representation is selected by T. */
+  let value: T;
+
+  /** Managed field following the generic payload. */
+  let label: string;
+
+  /** Scalar tail used to verify the complete layout. */
+  let revision: i64;
+
+  /** Construct one complete wide element. */
+  func GenericForInWide(value: T, label: string, revision: i64) {
+    self.value = value;
+    self.label = label;
+    self.revision = revision;
+  }
+}
+
+/** Consumer-only implementation of the provider object-form surface. */
+type GenericForInNamedValue: LibGenericForInNamed {
+  /** Observable label. */
+  let value: string;
+
+  /** Construct one named value. */
+  func GenericForInNamedValue(value: string) {
+    self.value = value;
+  }
+
+  /** Implement the provider's object-form contract. */
+  func label(): string {
+    return self.value;
+  }
+}
+
+/** Produce the first callable element result. */
+func genericForInFirstText(): string {
+  return "callable-first";
+}
+
+/** Produce the second callable element result. */
+func genericForInSecondText(): string {
+  return "callable-second";
+}
+
+/** Throw through an imported generic iterator shared body. */
+func genericForInThrowWithManagedElements(): void {
+  let first = GenericForInWide<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("for-in-first"),
+    "first",
+    71
+  );
+  let second = GenericForInWide<LibAdvancedLifetimeLeaf>(
+    LibAdvancedLifetimeLeaf("for-in-second"),
+    "second",
+    72
+  );
+  let source = LibGenericForInSequence<
+    GenericForInWide<LibAdvancedLifetimeLeaf>
+  >([first, second], first);
+  libGenericForInThrowFirst<
+    GenericForInWide<LibAdvancedLifetimeLeaf>
+  >(source);
+}
+
+/** Verify exceptional loop exit releases every managed element exactly once. */
+func genericForInExceptionalCleanupIsComplete(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var caught = false;
+  try genericForInThrowWithManagedElements() catch error: string {
+    caught = error == "generic-for-in";
+  };
+  return caught && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify all remaining generic for-in lowering and representation paths. */
+open func test_generic_for_in_coverage(): void {
+  describe("generic for-in coverage", () {
+    test("readonly and writable generic arrays preserve full values", () {
+      let readonly: i64[] = [1, 2, 3];
+      let readonlyLast = libGenericForInReadonlyLast<i64>(readonly, 0);
+      let first = GenericForInWide<string>("first", "readonly", 73);
+      let second = GenericForInWide<string>("second", "writable", 74);
+      let writable: GenericForInWide<string>[!] = [first, second];
+      let writableLast = libGenericForInWritableLast<
+        GenericForInWide<string>
+      >(writable, first);
+
+      assert(readonlyLast == 3 &&
+             writableLast.value == "second" &&
+             writableLast.label == "writable" &&
+             writableLast.revision == 74,
+             "both built-in array paths preserve generic elements");
+    });
+
+    test("generic iterable handles continue break and early return", () {
+      let first = GenericForInWide<string>("first", "one", 75);
+      let second = GenericForInWide<string>("second", "two", 76);
+      let third = GenericForInWide<string>("third", "three", 77);
+      let source = LibGenericForInSequence<GenericForInWide<string>>(
+        [first, second, third],
+        first
+      );
+      let selected = libGenericForInSelectSecond<
+        GenericForInWide<string>
+      >(source);
+      let returned = libGenericForInEarlyReturn<
+        GenericForInWide<string>
+      >(source);
+
+      assert(selected.value == "second" && selected.label == "two" &&
+             selected.revision == 76 && returned.value == "first" &&
+             source.iteratorCalls == 2,
+             "each traversal has one cursor and all exits preserve values");
+    });
+
+    test("nested generic traversal creates independent cursors", () {
+      let source = LibGenericForInSequence<i64>([4, 5], 0);
+      let count = libGenericForInNestedCount<i64>(source);
+
+      assert(count == 4 && source.iteratorCalls == 3,
+             "outer traversal and two inner traversals use three cursors");
+    });
+
+    test("generic source expression is evaluated exactly once", () {
+      let probe = LibGenericForInProbe();
+      let result = libGenericForInSourceOnce<string>(
+        probe,
+        ["first", "second"],
+        "missing"
+      );
+
+      assert(result == "second" && probe.evaluations == 1,
+             "for-in evaluates its generic source expression once");
+    });
+
+    test("generic self cursor carries callable-form elements", () {
+      let first: LibGenericForInProducer<string> = genericForInFirstText;
+      let second: LibGenericForInProducer<string> = genericForInSecondText;
+      let cursor = LibGenericForInSelfCursor<
+        LibGenericForInProducer<string>
+      >([first, second], first);
+      let result = libGenericForInSelfLast<
+        LibGenericForInProducer<string>
+      >(cursor, first);
+
+      assert(result() == "callable-second",
+             "generic self cursor preserves callable-form values");
+    });
+
+    test("generic iterable supplied by fit carries object-form elements", () {
+      let first: LibGenericForInNamed = GenericForInNamedValue("first");
+      let second: LibGenericForInNamed = GenericForInNamedValue("second");
+      let source = LibGenericForInFitSequence<LibGenericForInNamed>(
+        [first, second],
+        first
+      );
+      let result = libGenericForInFitLast<LibGenericForInNamed>(source);
+
+      assert(result.label() == "second" && source.iteratorCalls == 1,
+             "generic fit lookup and object-form element transport work");
+    });
+
+    test("generic readonly array carries union-form elements", () {
+      let first: LibGenericForInChoice<string> =
+        LibGenericForInUnionReference("reference");
+      let second: LibGenericForInChoice<string> =
+        LibGenericForInUnionValue<string>("aggregate", "union");
+      let third: LibGenericForInChoice<string> = 79;
+      let result = libGenericForInReadonlyLast<
+        LibGenericForInChoice<string>
+      >([first, second, third], first);
+      var matched = false;
+      if result match value: i64 {
+        matched = value == 79;
+      }
+
+      assert(matched,
+             "generic array iteration preserves the union member tag");
+    });
+
+    test("exceptional generic iteration cleans descriptor-sized elements", () {
+      assert(genericForInExceptionalCleanupIsComplete(),
+             "exceptional for-in exit releases every managed leaf once");
+    });
+  });
+}

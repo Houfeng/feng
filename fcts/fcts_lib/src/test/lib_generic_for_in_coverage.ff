@@ -1,0 +1,290 @@
+open module fcts_lib.test;
+
+import std.collections;
+
+/** Named tuple returned by every generic iterator step. */
+open type LibGenericForInResult<T>(bool, T);
+
+/** Tracks evaluation of a generic for-in source expression. */
+open type LibGenericForInProbe {
+  /** Number of source-expression evaluations. */
+  open var evaluations: i64;
+
+  /** Construct a reset probe. */
+  func LibGenericForInProbe() {
+    self.evaluations = 0;
+  }
+}
+
+/** Descriptor-sized cursor returned by a generic iterable source. */
+@value
+open type LibGenericForInCursor<T> {
+  /** Values yielded by this cursor. */
+  seal let values: T[];
+
+  /** Value returned in the terminal tuple slot. */
+  seal let missing: T;
+
+  /** Index of the next value. */
+  seal var index: int;
+
+  /** Construct a cursor over all supplied values. */
+  func LibGenericForInCursor(values: T[], missing: T) {
+    self.values = values;
+    self.missing = missing;
+    self.index = 0;
+  }
+
+  /** Advance the cursor by one element. */
+  @iterator
+  open func next(): LibGenericForInResult<T> {
+    if self.index >= self.values.length() {
+      return (false, self.missing);
+    }
+    let value = self.values[self.index];
+    self.index += 1;
+    return (true, value);
+  }
+}
+
+/** Generic source whose iterable entry records every invocation. */
+open type LibGenericForInSequence<T> {
+  /** Values exposed by the sequence. */
+  open let values: T[];
+
+  /** Terminal value forwarded to each cursor. */
+  open let missing: T;
+
+  /** Number of cursors requested from this sequence. */
+  open var iteratorCalls: i64;
+
+  /** Construct a sequence over all supplied values. */
+  func LibGenericForInSequence(values: T[], missing: T) {
+    self.values = values;
+    self.missing = missing;
+    self.iteratorCalls = 0;
+  }
+
+  /** Create one independent generic cursor. */
+  @iterable
+  open func iter(): LibGenericForInCursor<T> {
+    self.iteratorCalls += 1;
+    return LibGenericForInCursor<T>(self.values, self.missing);
+  }
+}
+
+/** Generic value cursor that acts as its own iterator. */
+@value
+open type LibGenericForInSelfCursor<T> {
+  /** Values yielded by this cursor. */
+  seal let values: T[];
+
+  /** Value returned after exhaustion. */
+  seal let missing: T;
+
+  /** Index of the next value. */
+  seal var index: int;
+
+  /** Construct a self cursor over all supplied values. */
+  func LibGenericForInSelfCursor(values: T[], missing: T) {
+    self.values = values;
+    self.missing = missing;
+    self.index = 0;
+  }
+
+  /** Advance this self cursor by one element. */
+  @iterator
+  open func next(): LibGenericForInResult<T> {
+    if self.index >= self.values.length() {
+      return (false, self.missing);
+    }
+    let value = self.values[self.index];
+    self.index += 1;
+    return (true, value);
+  }
+}
+
+/** Generic source whose iterable entry is supplied by a fit. */
+open type LibGenericForInFitSequence<T> {
+  /** Values exposed through the fitted iterator protocol. */
+  open let values: T[];
+
+  /** Terminal value forwarded to the fitted cursor. */
+  open let missing: T;
+
+  /** Number of fitted cursor requests. */
+  open var iteratorCalls: i64;
+
+  /** Construct a fitted sequence. */
+  func LibGenericForInFitSequence(values: T[], missing: T) {
+    self.values = values;
+    self.missing = missing;
+    self.iteratorCalls = 0;
+  }
+}
+
+/** Supply the generic iterable protocol through a fit declaration. */
+open fit LibGenericForInFitSequence<T> {
+  /** Create one cursor and record this fitted protocol invocation. */
+  @iterable
+  open func iter(): LibGenericForInCursor<T> {
+    self.iteratorCalls += 1;
+    return LibGenericForInCursor<T>(self.values, self.missing);
+  }
+}
+
+/** Object-form element surface used by generic for-in tests. */
+open spec LibGenericForInNamed {
+  /** Return the observable element label. */
+  func label(): string;
+}
+
+/** Callable-form element surface used by generic self cursors. */
+open spec LibGenericForInProducer<T>(): T;
+
+/** Descriptor-sized branch of the generic union element surface. */
+@value
+open type LibGenericForInUnionValue<T> {
+  /** Generic union payload. */
+  open let value: T;
+
+  /** Managed field following the generic payload. */
+  open let label: string;
+
+  /** Construct a populated union value branch. */
+  func LibGenericForInUnionValue(value: T, label: string) {
+    self.value = value;
+    self.label = label;
+  }
+}
+
+/** Reference branch of the generic union element surface. */
+open type LibGenericForInUnionReference {
+  /** Observable reference label. */
+  open let label: string;
+
+  /** Construct a populated reference branch. */
+  func LibGenericForInUnionReference(label: string) {
+    self.label = label;
+  }
+}
+
+/** Union-form element combining reference, aggregate, and scalar layouts. */
+open spec LibGenericForInChoice<T>:
+  LibGenericForInUnionReference | LibGenericForInUnionValue<T> | i64;
+
+/** Return the final element of a generic readonly array. */
+open func libGenericForInReadonlyLast<T>(values: T[], missing: T): T {
+  var result = missing;
+  for let value in values {
+    result = value;
+  }
+  return result;
+}
+
+/** Return the final element of a generic writable array. */
+open func libGenericForInWritableLast<T>(values: T[!], missing: T): T {
+  var result = missing;
+  for let value in values {
+    result = value;
+  }
+  return result;
+}
+
+/** Select the second sequence element through continue and break exits. */
+open func libGenericForInSelectSecond<T>(
+  source: LibGenericForInSequence<T>
+): T {
+  var index = 0;
+  var selected = source.missing;
+  for let value in source {
+    index += 1;
+    if index == 1 {
+      continue;
+    }
+    selected = value;
+    break;
+  }
+  return selected;
+}
+
+/** Return directly from inside a generic iterable loop. */
+open func libGenericForInEarlyReturn<T>(
+  source: LibGenericForInSequence<T>
+): T {
+  for let value in source {
+    return value;
+  }
+  return source.missing;
+}
+
+/** Count a nested traversal and request an independent inner cursor each time. */
+open func libGenericForInNestedCount<T>(
+  source: LibGenericForInSequence<T>
+): i64 {
+  var count: i64 = 0;
+  for let outer in source {
+    for let inner in source {
+      outer;
+      inner;
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/** Return the final value produced by a generic self cursor. */
+open func libGenericForInSelfLast<T>(
+  source: LibGenericForInSelfCursor<T>,
+  missing: T
+): T {
+  var result = missing;
+  for let value in source {
+    result = value;
+  }
+  return result;
+}
+
+/** Return the final value produced through a generic fitted iterable. */
+open func libGenericForInFitLast<T>(
+  source: LibGenericForInFitSequence<T>
+): T {
+  var result = source.missing;
+  for let value in source {
+    result = value;
+  }
+  return result;
+}
+
+/** Construct a sequence while recording evaluation of the source expression. */
+open func libGenericForInMakeSequence<T>(
+  probe: LibGenericForInProbe,
+  values: T[],
+  missing: T
+): LibGenericForInSequence<T> {
+  probe.evaluations += 1;
+  return LibGenericForInSequence<T>(values, missing);
+}
+
+/** Iterate an expression-produced source and return its final element. */
+open func libGenericForInSourceOnce<T>(
+  probe: LibGenericForInProbe,
+  values: T[],
+  missing: T
+): T {
+  var result = missing;
+  for let value in libGenericForInMakeSequence<T>(probe, values, missing) {
+    result = value;
+  }
+  return result;
+}
+
+/** Throw while the first generic iterator element remains live. */
+open func libGenericForInThrowFirst<T>(
+  source: LibGenericForInSequence<T>
+): void {
+  for let value in source {
+    value;
+    throw "generic-for-in";
+  }
+}

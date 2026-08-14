@@ -15096,6 +15096,401 @@ static void test_project_run_collects_cross_package_generic_cycle(void) {
     free(repo_root);
 }
 
+/* Build and execute one four-package generic diamond twice with opposite root
+ * dependency order. Both providers recover the same common generic
+ * declarations, while each consumer supplies the only concrete closing type. */
+static void test_project_build_closes_multi_provider_generic_diamond(void) {
+    static const char *kCommonSource =
+        "open module test.cli.genericdiamond.common;\n"
+        "\n"
+        "/** Descriptor-sized aggregate shared by both providers. */\n"
+        "@value\n"
+        "open type DiamondBox<T> {\n"
+        "  /** Generic payload closed only by the final consumer. */\n"
+        "  open let value: T;\n"
+        "\n"
+        "  /** Provider traversal marker. */\n"
+        "  open let marker: string;\n"
+        "\n"
+        "  /** Construct one complete aggregate. */\n"
+        "  func DiamondBox(value: T, marker: string) {\n"
+        "    self.value = value;\n"
+        "    self.marker = marker;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Object-form contract whose witness returns the generic payload. */\n"
+        "open spec DiamondNamed<T> {\n"
+        "  /** Return the closed payload. */\n"
+        "  func value(): T;\n"
+        "}\n"
+        "\n"
+        "/** Callable-form contract transported through both providers. */\n"
+        "open spec DiamondMapper<T>(value: T): T;\n"
+        "\n"
+        "/** Managed generic node combining every common representation. */\n"
+        "open type DiamondNode<T> {\n"
+        "  /** Aggregate payload. */\n"
+        "  open let box: DiamondBox<T>;\n"
+        "\n"
+        "  /** Object-spec payload and witness. */\n"
+        "  open let named: DiamondNamed<T>;\n"
+        "\n"
+        "  /** Callable payload. */\n"
+        "  open let mapper: DiamondMapper<T>;\n"
+        "\n"
+        "  /** Construct the complete common representation graph. */\n"
+        "  func DiamondNode(\n"
+        "    box: DiamondBox<T>,\n"
+        "    named: DiamondNamed<T>,\n"
+        "    mapper: DiamondMapper<T>\n"
+        "  ) {\n"
+        "    self.box = box;\n"
+        "    self.named = named;\n"
+        "    self.mapper = mapper;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Descriptor-sized value receiver used by imported shared bodies. */\n"
+        "@value\n"
+        "open type DiamondValueNode<T> {\n"
+        "  /** Aggregate payload makes the closed receiver layout dynamic. */\n"
+        "  open let box: DiamondBox<T>;\n"
+        "\n"
+        "  /** Fixed-size callable field follows the dynamic aggregate field. */\n"
+        "  open let mapper: DiamondMapper<T>;\n"
+        "\n"
+        "  /** Construct one complete value receiver. */\n"
+        "  func DiamondValueNode(\n"
+        "    box: DiamondBox<T>,\n"
+        "    mapper: DiamondMapper<T>\n"
+        "  ) {\n"
+        "    self.box = box;\n"
+        "    self.mapper = mapper;\n"
+        "  }\n"
+        "}\n";
+    static const char *kProviderASource =
+        "open module test.cli.genericdiamond.provider_a;\n"
+        "\n"
+        "import test.cli.genericdiamond.common;\n"
+        "\n"
+        "/** Identity body used as a generic callable value. */\n"
+        "open func providerAIdentity<T>(value: T): T { return value; }\n"
+        "\n"
+        "/** Construct the common representation graph in provider A. */\n"
+        "open func providerANode<T>(\n"
+        "  value: T,\n"
+        "  named: DiamondNamed<T>\n"
+        "): DiamondNode<T> {\n"
+        "  let mapper: DiamondMapper<T> = providerAIdentity<T>;\n"
+        "  return DiamondNode<T>(DiamondBox<T>(value, \"A\"), named, mapper);\n"
+        "}\n"
+        "\n"
+        "/** Forward a node returned by the other provider. */\n"
+        "open func providerAForward<T>(node: DiamondNode<T>): DiamondNode<T> {\n"
+        "  return node;\n"
+        "}\n"
+        "\n"
+        "/** Forward an object-spec value without changing its witness. */\n"
+        "open func providerANamed<T>(named: DiamondNamed<T>): DiamondNamed<T> {\n"
+        "  return named;\n"
+        "}\n"
+        "\n"
+        "/** Construct a descriptor-sized value receiver in provider A. */\n"
+        "open func providerAValueNode<T>(value: T): DiamondValueNode<T> {\n"
+        "  let mapper: DiamondMapper<T> = providerAIdentity<T>;\n"
+        "  return DiamondValueNode<T>(DiamondBox<T>(value, \"V\"), mapper);\n"
+        "}\n";
+    static const char *kProviderBSource =
+        "open module test.cli.genericdiamond.provider_b;\n"
+        "\n"
+        "import test.cli.genericdiamond.common;\n"
+        "\n"
+        "/** Rebuild a provider-A node after invoking its common callable. */\n"
+        "open func providerBTransform<T>(node: DiamondNode<T>): DiamondNode<T> {\n"
+        "  let mapped = node.mapper(node.box.value);\n"
+        "  return DiamondNode<T>(\n"
+        "    DiamondBox<T>(mapped, node.box.marker + \"B\"),\n"
+        "    node.named,\n"
+        "    node.mapper\n"
+        "  );\n"
+        "}\n"
+        "\n"
+        "/** Invoke a callable formed by the other provider. */\n"
+        "open func providerBApply<T>(mapper: DiamondMapper<T>, value: T): T {\n"
+        "  return mapper(value);\n"
+        "}\n"
+        "\n"
+        "/** Dispatch through an object-spec witness formed by the consumer. */\n"
+        "open func providerBRead<T>(named: DiamondNamed<T>): T {\n"
+        "  return named.value();\n"
+        "}\n"
+        "\n"
+        "/** Invoke a callable field through a descriptor-sized value receiver. */\n"
+        "open func providerBValueApply<T>(node: DiamondValueNode<T>): T {\n"
+        "  return node.mapper(node.box.value);\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module test.cli.genericdiamond.consumer;\n"
+        "\n"
+        "import test.cli.genericdiamond.common;\n"
+        "import test.cli.genericdiamond.provider_a;\n"
+        "import test.cli.genericdiamond.provider_b;\n"
+        "\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(message: string*): i32;\n"
+        "\n"
+        "/** Consumer-only descriptor-sized closing type. */\n"
+        "@value\n"
+        "type DiamondConsumerValue {\n"
+        "  /** First managed payload. */\n"
+        "  let first: string;\n"
+        "\n"
+        "  /** Second managed payload. */\n"
+        "  let second: string;\n"
+        "\n"
+        "  /** Scalar tail distinguishing values. */\n"
+        "  let number: i64;\n"
+        "\n"
+        "  /** Construct one complete consumer payload. */\n"
+        "  func DiamondConsumerValue(first: string, second: string, number: i64) {\n"
+        "    self.first = first;\n"
+        "    self.second = second;\n"
+        "    self.number = number;\n"
+        "  }\n"
+        "}\n"
+        "\n"
+        "/** Consumer-owned implementation of the common generic contract. */\n"
+        "type DiamondConsumerNamed: DiamondNamed<DiamondConsumerValue> {\n"
+        "  /** Value returned through the imported witness. */\n"
+        "  let stored: DiamondConsumerValue;\n"
+        "\n"
+        "  /** Construct one consumer witness subject. */\n"
+        "  func DiamondConsumerNamed(stored: DiamondConsumerValue) {\n"
+        "    self.stored = stored;\n"
+        "  }\n"
+        "\n"
+        "  /** Implement the common generic contract. */\n"
+        "  func value(): DiamondConsumerValue { return self.stored; }\n"
+        "}\n"
+        "\n"
+        "/** Execute values through both branches of the package diamond. */\n"
+        "func main(args: string[]) {\n"
+        "  let named: DiamondNamed<DiamondConsumerValue> =\n"
+        "    DiamondConsumerNamed(\n"
+        "      DiamondConsumerValue(\"named-first\", \"named-second\", 41)\n"
+        "    );\n"
+        "  let fromA = providerANode<DiamondConsumerValue>(\n"
+        "    DiamondConsumerValue(\"node-first\", \"node-second\", 42),\n"
+        "    named\n"
+        "  );\n"
+        "  let fromB = providerBTransform<DiamondConsumerValue>(fromA);\n"
+        "  let returned = providerAForward<DiamondConsumerValue>(fromB);\n"
+        "  let mapped = providerBApply<DiamondConsumerValue>(\n"
+        "    returned.mapper,\n"
+        "    DiamondConsumerValue(\"map-first\", \"map-second\", 43)\n"
+        "  );\n"
+        "  let namedValue = providerBRead<DiamondConsumerValue>(\n"
+        "    providerANamed<DiamondConsumerValue>(returned.named)\n"
+        "  );\n"
+        "  let valueNode = providerAValueNode<DiamondConsumerValue>(\n"
+        "    DiamondConsumerValue(\"value-first\", \"value-second\", 44)\n"
+        "  );\n"
+        "  let valueMapped =\n"
+        "    providerBValueApply<DiamondConsumerValue>(valueNode);\n"
+        "  if returned.box.marker == \"AB\" &&\n"
+        "     returned.box.value.first == \"node-first\" &&\n"
+        "     returned.box.value.second == \"node-second\" &&\n"
+        "     returned.box.value.number == 42 &&\n"
+        "     mapped.first == \"map-first\" &&\n"
+        "     mapped.second == \"map-second\" && mapped.number == 43 &&\n"
+        "     namedValue.first == \"named-first\" &&\n"
+        "     namedValue.second == \"named-second\" &&\n"
+        "     namedValue.number == 41 && valueNode.box.marker == \"V\" &&\n"
+        "     valueMapped.first == \"value-first\" &&\n"
+        "     valueMapped.second == \"value-second\" &&\n"
+        "     valueMapped.number == 44 {\n"
+        "    puts(&\"diamond-ok\");\n"
+        "  } else {\n"
+        "    puts(&\"diamond-bad\");\n"
+        "  }\n"
+        "}\n";
+    char template_path[] = "temp/feng_cli_generic_diamond_XXXXXX";
+    char *workspace_dir;
+    char *common_dir;
+    char *common_src_dir;
+    char *common_manifest_path;
+    char *common_source_path;
+    char *common_bundle_path;
+    char *provider_a_dir;
+    char *provider_a_src_dir;
+    char *provider_a_manifest_path;
+    char *provider_a_source_path;
+    char *provider_a_bundle_path;
+    char *provider_b_dir;
+    char *provider_b_src_dir;
+    char *provider_b_manifest_path;
+    char *provider_b_source_path;
+    char *provider_b_bundle_path;
+    char *consumer_ab_dir;
+    char *consumer_ab_src_dir;
+    char *consumer_ab_manifest_path;
+    char *consumer_ab_source_path;
+    char *consumer_ab_binary_path;
+    char *consumer_ba_dir;
+    char *consumer_ba_src_dir;
+    char *consumer_ba_manifest_path;
+    char *consumer_ba_source_path;
+    char *consumer_ba_binary_path;
+    char *consumer_ab_output;
+    char *consumer_ba_output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    common_dir = path_join(workspace_dir, "common");
+    common_src_dir = path_join(common_dir, "src");
+    common_manifest_path = path_join(common_dir, "feng.fm");
+    common_source_path = path_join(common_src_dir, "common.ff");
+    common_bundle_path = path_join(
+        common_dir, "build/pkg/diamond_common-0.1.0.fb");
+    provider_a_dir = path_join(workspace_dir, "provider_a");
+    provider_a_src_dir = path_join(provider_a_dir, "src");
+    provider_a_manifest_path = path_join(provider_a_dir, "feng.fm");
+    provider_a_source_path = path_join(provider_a_src_dir, "provider_a.ff");
+    provider_a_bundle_path = path_join(
+        provider_a_dir, "build/pkg/diamond_provider_a-0.1.0.fb");
+    provider_b_dir = path_join(workspace_dir, "provider_b");
+    provider_b_src_dir = path_join(provider_b_dir, "src");
+    provider_b_manifest_path = path_join(provider_b_dir, "feng.fm");
+    provider_b_source_path = path_join(provider_b_src_dir, "provider_b.ff");
+    provider_b_bundle_path = path_join(
+        provider_b_dir, "build/pkg/diamond_provider_b-0.1.0.fb");
+    consumer_ab_dir = path_join(workspace_dir, "consumer_ab");
+    consumer_ab_src_dir = path_join(consumer_ab_dir, "src");
+    consumer_ab_manifest_path = path_join(consumer_ab_dir, "feng.fm");
+    consumer_ab_source_path = path_join(consumer_ab_src_dir, "main.ff");
+    consumer_ab_binary_path = project_host_build_path(
+        consumer_ab_dir, "bin/diamond_consumer_ab");
+    consumer_ba_dir = path_join(workspace_dir, "consumer_ba");
+    consumer_ba_src_dir = path_join(consumer_ba_dir, "src");
+    consumer_ba_manifest_path = path_join(consumer_ba_dir, "feng.fm");
+    consumer_ba_source_path = path_join(consumer_ba_src_dir, "main.ff");
+    consumer_ba_binary_path = project_host_build_path(
+        consumer_ba_dir, "bin/diamond_consumer_ba");
+
+    mkdir_p(common_src_dir);
+    mkdir_p(provider_a_src_dir);
+    mkdir_p(provider_b_src_dir);
+    mkdir_p(consumer_ab_src_dir);
+    mkdir_p(consumer_ba_src_dir);
+    write_text_file(common_manifest_path,
+                    "[package]\n"
+                    "name: \"diamond_common\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(common_source_path, kCommonSource);
+    write_text_file(provider_a_manifest_path,
+                    "[package]\n"
+                    "name: \"diamond_provider_a\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "diamond_common: \"../common\"\n");
+    write_text_file(provider_a_source_path, kProviderASource);
+    write_text_file(provider_b_manifest_path,
+                    "[package]\n"
+                    "name: \"diamond_provider_b\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "diamond_common: \"../common\"\n");
+    write_text_file(provider_b_source_path, kProviderBSource);
+    write_text_file(consumer_ab_manifest_path,
+                    "[package]\n"
+                    "name: \"diamond_consumer_ab\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "diamond_provider_a: \"../provider_a\"\n"
+                    "diamond_provider_b: \"../provider_b\"\n");
+    write_text_file(consumer_ab_source_path, kConsumerSource);
+    write_text_file(consumer_ba_manifest_path,
+                    "[package]\n"
+                    "name: \"diamond_consumer_ba\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "diamond_provider_b: \"../provider_b\"\n"
+                    "diamond_provider_a: \"../provider_a\"\n");
+    write_text_file(consumer_ba_source_path, kConsumerSource);
+
+    {
+        char *argv[] = {consumer_ab_dir};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(common_bundle_path));
+    ASSERT(path_exists(provider_a_bundle_path));
+    ASSERT(path_exists(provider_b_bundle_path));
+    ASSERT(path_exists(consumer_ab_binary_path));
+    consumer_ab_output =
+        run_binary_capture_stdout_or_die(consumer_ab_binary_path);
+    ASSERT(strcmp(consumer_ab_output, "diamond-ok\n") == 0);
+
+    {
+        char *argv[] = {consumer_ba_dir};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(consumer_ba_binary_path));
+    consumer_ba_output =
+        run_binary_capture_stdout_or_die(consumer_ba_binary_path);
+    ASSERT(strcmp(consumer_ba_output, "diamond-ok\n") == 0);
+
+    free(consumer_ba_output);
+    free(consumer_ab_output);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_ba_binary_path);
+    free(consumer_ba_source_path);
+    free(consumer_ba_manifest_path);
+    free(consumer_ba_src_dir);
+    free(consumer_ba_dir);
+    free(consumer_ab_binary_path);
+    free(consumer_ab_source_path);
+    free(consumer_ab_manifest_path);
+    free(consumer_ab_src_dir);
+    free(consumer_ab_dir);
+    free(provider_b_bundle_path);
+    free(provider_b_source_path);
+    free(provider_b_manifest_path);
+    free(provider_b_src_dir);
+    free(provider_b_dir);
+    free(provider_a_bundle_path);
+    free(provider_a_source_path);
+    free(provider_a_manifest_path);
+    free(provider_a_src_dir);
+    free(provider_a_dir);
+    free(common_bundle_path);
+    free(common_source_path);
+    free(common_manifest_path);
+    free(common_src_dir);
+    free(common_dir);
+}
+
 /* Verify a closed generic finalizer receives its owner descriptor when the
  * cycle collector, rather than ordinary ARC, discovers the object. */
 static void test_project_run_collects_generic_finalizer_cycle(void) {
@@ -18034,6 +18429,7 @@ int main(void) {
     test_project_build_lib_stages_extlib_assets_without_assets_layer();
     test_project_run_release_reuses_build_pipeline();
     test_project_run_collects_cross_package_generic_cycle();
+    test_project_build_closes_multi_provider_generic_diamond();
     test_project_run_collects_generic_finalizer_cycle();
     test_project_pack_uses_release_build_and_public_ft_excludes_spans();
     test_project_pack_includes_staged_assets_in_bundle();

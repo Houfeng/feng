@@ -1,0 +1,312 @@
+open module fcts_lib.test;
+
+/** Result whose layout depends independently on every callable parameter. */
+@value
+open type LibMultiCallableResult<T, U, V> {
+  /** Direct parameter value. */
+  open let direct: T;
+
+  /** First value from the repeated U domain. */
+  open let managed: U;
+
+  /** Descriptor-sized or otherwise independent V value. */
+  open let wide: V;
+
+  /** Second value from the repeated U domain. */
+  open let repeated: U;
+
+  /** Identifies the callable source that produced this result. */
+  open let marker: string;
+
+  /** Construct one complete multi-domain result. */
+  func LibMultiCallableResult(
+    direct: T,
+    managed: U,
+    wide: V,
+    repeated: U,
+    marker: string
+  ) {
+    self.direct = direct;
+    self.managed = managed;
+    self.wide = wide;
+    self.repeated = repeated;
+    self.marker = marker;
+  }
+}
+
+/**
+ * Callable surface with mixed parameter representations and a repeated domain.
+ *
+ * U deliberately occupies the first and last positions so descriptor mapping
+ * cannot be inferred from parameter order alone.
+ */
+open spec LibMultiCallable<T, U, V>(
+  managed: U,
+  direct: T,
+  wide: V,
+  repeated: U
+): LibMultiCallableResult<T, U, V>;
+
+/** Build a result in an imported top-level generic shared body. */
+open func libMultiCallableTop<T, U, V>(
+  managed: U,
+  direct: T,
+  wide: V,
+  repeated: U
+): LibMultiCallableResult<T, U, V> {
+  return LibMultiCallableResult<T, U, V>(
+    direct,
+    managed,
+    wide,
+    repeated,
+    "top"
+  );
+}
+
+/** Form the top-level function through target callable adaptation. */
+open func libMultiCallableTopValue<T, U, V>(): LibMultiCallable<T, U, V> {
+  return libMultiCallableTop<T, U, V>;
+}
+
+/** Form the top-level function through an explicit callable conversion. */
+open func libMultiCallableTopCast<T, U, V>(): LibMultiCallable<T, U, V> {
+  return (LibMultiCallable<T, U, V>)libMultiCallableTop<T, U, V>;
+}
+
+/** Forward an already formed multi-parameter callable unchanged. */
+open func libMultiCallableForward<T, U, V>(
+  callable: LibMultiCallable<T, U, V>
+): LibMultiCallable<T, U, V> {
+  return callable;
+}
+
+/** Invoke a multi-parameter callable received as an ordinary argument. */
+open func libMultiCallableApply<T, U, V>(
+  callable: LibMultiCallable<T, U, V>,
+  managed: U,
+  direct: T,
+  wide: V,
+  repeated: U
+): LibMultiCallableResult<T, U, V> {
+  return callable(managed, direct, wide, repeated);
+}
+
+/** Store one closed multi-parameter callable in an aggregate field. */
+@value
+open type LibMultiCallableHolder<T, U, V> {
+  /** Stored callable value. */
+  open let callable: LibMultiCallable<T, U, V>;
+
+  /** Construct one callable holder. */
+  func LibMultiCallableHolder(callable: LibMultiCallable<T, U, V>) {
+    self.callable = callable;
+  }
+}
+
+/** Form an escaping lambda whose callable signature contains all domains. */
+open func libMultiCallableLambda<T, U, V>(
+  marker: string
+): LibMultiCallable<T, U, V> {
+  return (managed: U, direct: T, wide: V, repeated: U) ->
+    LibMultiCallableResult<T, U, V>(
+      direct,
+      managed,
+      wide,
+      repeated,
+      marker
+    );
+}
+
+/** Reference receiver used to verify bound-method identity and mutation. */
+open type LibMultiCallableReferenceOwner<C> {
+  /** Generic state retained by the bound method closure. */
+  open var captured: C;
+
+  /** Mutable marker observed after the callable is formed. */
+  open var marker: string;
+
+  /** Construct one reference receiver. */
+  func LibMultiCallableReferenceOwner(captured: C, marker: string) {
+    self.captured = captured;
+    self.marker = marker;
+  }
+
+  /** Build one result while observing the generic receiver state. */
+  open func combine<T, U, V>(
+    managed: U,
+    direct: T,
+    wide: V,
+    repeated: U
+  ): LibMultiCallableResult<T, U, V> {
+    self.captured;
+    return LibMultiCallableResult<T, U, V>(
+      direct,
+      managed,
+      wide,
+      repeated,
+      self.marker
+    );
+  }
+
+  /** Form an explicitly closed bound reference-method value. */
+  open func callable<T, U, V>(): LibMultiCallable<T, U, V> {
+    return self.combine<T, U, V>;
+  }
+}
+
+/** Value receiver used to verify copied receiver state and lifecycle. */
+@value
+open type LibMultiCallableValueOwner<C> {
+  /** Generic state copied into the bound method closure. */
+  open let captured: C;
+
+  /** Marker copied with the value receiver. */
+  open var marker: string;
+
+  /** Construct one value receiver. */
+  func LibMultiCallableValueOwner(captured: C, marker: string) {
+    self.captured = captured;
+    self.marker = marker;
+  }
+
+  /** Build one result from the copied receiver. */
+  open func combine<T, U, V>(
+    managed: U,
+    direct: T,
+    wide: V,
+    repeated: U
+  ): LibMultiCallableResult<T, U, V> {
+    self.captured;
+    return LibMultiCallableResult<T, U, V>(
+      direct,
+      managed,
+      wide,
+      repeated,
+      self.marker
+    );
+  }
+
+  /** Form an explicitly closed bound value-method value. */
+  open func callable<T, U, V>(): LibMultiCallable<T, U, V> {
+    return self.combine<T, U, V>;
+  }
+}
+
+/** Tuple receiver whose generic fit supplies a multi-parameter method. */
+open type LibMultiCallableFitOwner<C>(C, string);
+
+/** Supply the multi-parameter callable source through a generic fit. */
+open fit LibMultiCallableFitOwner<C> {
+  /** Build one result after observing the fitted receiver. */
+  open func combine<T, U, V>(
+    managed: U,
+    direct: T,
+    wide: V,
+    repeated: U
+  ): LibMultiCallableResult<T, U, V> {
+    self.item1;
+    return LibMultiCallableResult<T, U, V>(
+      direct,
+      managed,
+      wide,
+      repeated,
+      self.item2
+    );
+  }
+}
+
+/** Form an explicitly closed generic fit-method value. */
+open func libMultiCallableBindFit<C, T, U, V>(
+  owner: LibMultiCallableFitOwner<C>
+): LibMultiCallable<T, U, V> {
+  return owner.combine<T, U, V>;
+}
+
+/** Object-form parameter surface used by the recursive representation case. */
+open spec LibMultiCallableNamed {
+  /** Return the observable name. */
+  func name(): string;
+}
+
+/** Callable-form parameter nested inside another callable signature. */
+open spec LibMultiCallableProducer<T>(): T;
+
+/** Reference branch of the recursive union parameter. */
+open type LibMultiCallableChoiceReference {
+  /** Observable reference label. */
+  open let label: string;
+
+  /** Construct one reference branch. */
+  func LibMultiCallableChoiceReference(label: string) {
+    self.label = label;
+  }
+}
+
+/** Descriptor-sized branch of the recursive union parameter. */
+@value
+open type LibMultiCallableChoiceValue<T> {
+  /** Generic union payload. */
+  open let value: T;
+
+  /** Observable aggregate label. */
+  open let label: string;
+
+  /** Construct one aggregate branch. */
+  func LibMultiCallableChoiceValue(value: T, label: string) {
+    self.value = value;
+    self.label = label;
+  }
+}
+
+/** Union-form parameter combining reference, aggregate, and scalar branches. */
+open spec LibMultiCallableChoice<T>:
+  LibMultiCallableChoiceReference | LibMultiCallableChoiceValue<T> | i64;
+
+/** Result combining object, callable, and union-form parameter paths. */
+@value
+open type LibMultiCallableRecursiveResult<T> {
+  /** Name read through the object-form witness. */
+  open let name: string;
+
+  /** Value produced through the nested callable-form argument. */
+  open let produced: T;
+
+  /** Union value forwarded unchanged. */
+  open let choice: LibMultiCallableChoice<T>;
+
+  /** Construct one recursive representation result. */
+  func LibMultiCallableRecursiveResult(
+    name: string,
+    produced: T,
+    choice: LibMultiCallableChoice<T>
+  ) {
+    self.name = name;
+    self.produced = produced;
+    self.choice = choice;
+  }
+}
+
+/** Callable surface whose parameters recursively contain three spec forms. */
+open spec LibMultiCallableRecursive<T>(
+  named: LibMultiCallableNamed,
+  producer: LibMultiCallableProducer<T>,
+  choice: LibMultiCallableChoice<T>
+): LibMultiCallableRecursiveResult<T>;
+
+/** Invoke every recursive parameter representation in one shared body. */
+open func libMultiCallableRecursive<T>(
+  named: LibMultiCallableNamed,
+  producer: LibMultiCallableProducer<T>,
+  choice: LibMultiCallableChoice<T>
+): LibMultiCallableRecursiveResult<T> {
+  return LibMultiCallableRecursiveResult<T>(
+    named.name(),
+    producer(),
+    choice
+  );
+}
+
+/** Form the recursive top-level function as a callable value. */
+open func libMultiCallableRecursiveValue<T>(): LibMultiCallableRecursive<T> {
+  return libMultiCallableRecursive<T>;
+}

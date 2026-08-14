@@ -51,6 +51,8 @@ func main(args: string[]) {
       test_generic_fit_subject();
       test_generic_remaining_representation();
       test_generic_callable_value_reification();
+      test_generic_for_in_coverage();
+      test_generic_multi_parameter_callable_coverage();
       test_mixin();
       test_private_generic_representation();
       test_cross_package_private_representation();

@@ -2985,6 +2985,51 @@ static void test_unsupported_pointer_pointee_reports_explicit_error(void) {
     feng_program_free(program);
 }
 
+/* A failure while emitting a generic function body must propagate through the
+ * shared cleanup path instead of returning a partial C translation as success. */
+static void test_generic_function_codegen_failure_propagates(void) {
+    static const char *kSource =
+        "module feng.codegen.genericfailure;\n"
+        "type User {\n"
+        "    var name: string;\n"
+        "}\n"
+        "func unsupported<T>() {\n"
+        "    let pointer: User*;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "genericfailure.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    ASSERT(!cg_ok);
+    ASSERT(cgerr.message != NULL);
+    ASSERT(strstr(cgerr.message,
+                  "does not support ABI pointer lowering") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_abi_value_function_pointer_codegen(void) {
     static const char *kSource =
         "module feng.codegen.abivaluefn;\n"
@@ -6138,6 +6183,70 @@ static void test_generic_callable_spec_instance_codegen(void) {
     feng_program_free(program);
 }
 
+/* Object-form spec fields whose value is callable must first dispatch through
+ * the field getter and then through the callable ABI. Cover both an explicit
+ * spec value and a direct generic parameter constrained by the same spec. */
+static void test_generic_object_spec_callable_field_call_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_spec_callable_field;\n"
+        "@value type Payload<T> { let value: T; }\n"
+        "spec Mapper<T>(value: Payload<T>): Payload<T>;\n"
+        "spec HasMapper<T> {\n"
+        "    let mapper: Mapper<T>;\n"
+        "}\n"
+        "func applySpec<T>(holder: HasMapper<T>, value: Payload<T>): Payload<T> {\n"
+        "    return holder.mapper(value);\n"
+        "}\n"
+        "func applyConstrained<T, H: HasMapper<T>>(\n"
+        "    holder: H, value: Payload<T>\n"
+        "): Payload<T> {\n"
+        "    return holder.mapper(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource,
+        "generic_object_spec_callable_field_call.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *first_getter;
+    const char *first_invoke;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &out,
+                                   &cgerr)) {
+        fprintf(stderr,
+                "codegen error (generic object spec callable field): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    first_getter = strstr(out.c_source, "->get_mapper(");
+    first_invoke = strstr(out.c_source, "->invoke(");
+    ASSERT(first_getter != NULL);
+    ASSERT(first_invoke != NULL);
+    ASSERT(strstr(first_getter + 1, "->get_mapper(") != NULL);
+    ASSERT(strstr(first_invoke + 1, "->invoke(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static void test_open_generic_callable_field_default_codegen(void) {
     static const char *kSource =
         "module feng.codegen.open_callable_default;\n"
@@ -8617,6 +8726,235 @@ static void test_generic_try_body_reified_storage_codegen(void) {
     feng_program_free(program);
 }
 
+/* Generic loops keep goto-based continue labels outside descriptor-sized VLA
+ * scopes. A T[] traversal also derives a borrowed element address from the
+ * cached descriptor size instead of interpreting arbitrary element bytes as
+ * a pointer. */
+static void test_generic_loop_reified_storage_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_loop_continue;\n"
+        "type Step<T>(bool, T);\n"
+        "@value\n"
+        "type Cursor<T> {\n"
+        "    var index: i64;\n"
+        "    let value: T;\n"
+        "    @iterator\n"
+        "    func next(): Step<T> {\n"
+        "        if self.index > 0 { return (false, self.value); }\n"
+        "        self.index += 1;\n"
+        "        return (true, self.value);\n"
+        "    }\n"
+        "}\n"
+        "type Sequence<T> {\n"
+        "    let value: T;\n"
+        "    @iterable\n"
+        "    func iter(): Cursor<T> {\n"
+        "        return Cursor<T> { index: 0, value: self.value };\n"
+        "    }\n"
+        "}\n"
+        "func choose<T>(source: Sequence<T>, values: T[], missing: T): T {\n"
+        "    var result = missing;\n"
+        "    var seen: i64 = 0;\n"
+        "    for let value in source {\n"
+        "        seen += 1;\n"
+        "        if seen == 1 { continue; }\n"
+        "        result = value;\n"
+        "    }\n"
+        "    for let value in values {\n"
+        "        if seen == 1 { continue; }\n"
+        "        result = value;\n"
+        "    }\n"
+        "    for var index = 0; index < 2; index += 1 {\n"
+        "        if index == 0 { continue; }\n"
+        "        result = missing;\n"
+        "    }\n"
+        "    return result;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/generic_loop_continue.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    {
+        bool semantic_ok = feng_semantic_analyze(programs,
+                                                 1U,
+                                                 FENG_COMPILE_TARGET_LIB,
+                                                 &analysis,
+                                                 &errors,
+                                                 &error_count);
+        if (!semantic_ok) {
+            for (size_t index = 0U; index < error_count; ++index) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[index].path,
+                        errors[index].token.line,
+                        errors[index].token.column,
+                        errors[index].message);
+            }
+        }
+        ASSERT(semantic_ok);
+    }
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "goto _cont_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "        }\n        _cont_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const size_t _felem_size_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "(void *)((char *)feng_array_data(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "* _felem_size_") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _cursor") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_Alignas(max_align_t) char _ir") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "->reified_field_offsets[0]") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "->reified_field_offsets[1]") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A multi-parameter generic callable shared body keeps source parameter order
+ * independent from generic descriptor order. Every open value uses the
+ * existing generic-value ABI, the descriptor-sized result uses its one
+ * reified aggregate slot, and direct values never acquire a spec box. */
+static void test_multi_parameter_generic_callable_abi_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_multi_callable_abi;\n"
+        "@value\n"
+        "type Wide<T> {\n"
+        "    let value: T;\n"
+        "    let marker: string;\n"
+        "    func Wide(value: T, marker: string) {\n"
+        "        self.value = value;\n"
+        "        self.marker = marker;\n"
+        "    }\n"
+        "}\n"
+        "@value\n"
+        "type Result<T, U, V> {\n"
+        "    let direct: T;\n"
+        "    let managed: U;\n"
+        "    let wide: V;\n"
+        "    let repeated: U;\n"
+        "    func Result(direct: T, managed: U, wide: V, repeated: U) {\n"
+        "        self.direct = direct;\n"
+        "        self.managed = managed;\n"
+        "        self.wide = wide;\n"
+        "        self.repeated = repeated;\n"
+        "    }\n"
+        "}\n"
+        "spec Multi<T, U, V>(managed: U, direct: T, wide: V, repeated: U): Result<T, U, V>;\n"
+        "func top<T, U, V>(managed: U, direct: T, wide: V, repeated: U): Result<T, U, V> {\n"
+        "    return Result<T, U, V>(direct, managed, wide, repeated);\n"
+        "}\n"
+        "func apply<T, U, V>(callable: Multi<T, U, V>, managed: U, direct: T, wide: V, repeated: U): Result<T, U, V> {\n"
+        "    return callable(managed, direct, wide, repeated);\n"
+        "}\n"
+        "func use(): i64 {\n"
+        "    let callable: Multi<i64, string, Wide<string>> = top<i64, string, Wide<string>>;\n"
+        "    let result = apply<i64, string, Wide<string>>(\n"
+        "        callable, \"first\", 41, Wide<string>(\"wide\", \"marker\"), \"last\"\n"
+        "    );\n"
+        "    return result.direct;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_multi_parameter_callable_abi.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *body_start;
+    const char *body_end;
+    const char *first_u;
+    const char *direct_t;
+    const char *wide_v;
+    const char *repeated_u;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(find_generated_function_body(
+        out.c_source,
+        "void feng__feng__codegen__generic_multi_callable_abi__apply_G__from__",
+        &body_start,
+        &body_end));
+
+    /* The shared signature receives each generic domain once and preserves
+     * the declared managed/direct/wide/repeated argument order. */
+    ASSERT(strstr(out.c_source,
+                  "const FengFunctionDescriptor *_desc, "
+                  "const FengGenericParamDescriptor *_T, "
+                  "const FengGenericParamDescriptor *_U, "
+                  "const FengGenericParamDescriptor *_V") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const void *_p_managed, const void *_p_direct, "
+                  "const void *_p_wide, const void *_p_repeated, "
+                  "void *_out") != NULL);
+
+    first_u = strstr(body_start, "= _U;");
+    direct_t = first_u != NULL ? strstr(first_u + 1, "= _T;") : NULL;
+    wide_v = direct_t != NULL ? strstr(direct_t + 1, "= _V;") : NULL;
+    repeated_u = wide_v != NULL ? strstr(wide_v + 1, "= _U;") : NULL;
+    ASSERT(first_u != NULL && first_u < body_end);
+    ASSERT(direct_t != NULL && direct_t < body_end);
+    ASSERT(wide_v != NULL && wide_v < body_end);
+    ASSERT(repeated_u != NULL && repeated_u < body_end);
+    ASSERT(first_u < direct_t && direct_t < wide_v && wide_v < repeated_u);
+
+    /* The one required callable dispatch receives four address-form generic
+     * values and writes directly into descriptor-sized result storage. */
+    ASSERT(count_substr_in_span(body_start, body_end, ")->invoke(") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_Alignas(max_align_t) char _call_arg") == 4U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_Alignas(max_align_t) char _call_result") ==
+           1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_agg_deps[") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_type_deps[") == 0U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "_desc->reified_callable_deps[") == 0U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_object_new(") == 0U);
+    ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* T2: variadic function called with zero variadic arguments — the compiler
  * must emit feng_array_new(..., 0) for the implicit empty array. */
 static void test_variadic_zero_args_codegen(void) {
@@ -10451,6 +10789,7 @@ int main(void) {
     test_generic_runtime_extern_direct_type_param_return_codegen();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_unsupported_pointer_pointee_reports_explicit_error();
+    test_generic_function_codegen_failure_propagates();
     test_abi_value_function_pointer_codegen();
     test_lib_public_functions_are_exported();
     test_bin_public_functions_remain_static();
@@ -10497,6 +10836,7 @@ int main(void) {
     test_generic_callable_constraint_codegen();
     test_generic_object_spec_instance_codegen();
     test_generic_callable_spec_instance_codegen();
+    test_generic_object_spec_callable_field_call_codegen();
     test_open_generic_callable_field_default_codegen();
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
@@ -10537,6 +10877,8 @@ int main(void) {
     test_void_try_expression_codegen();
     test_try_catch_return_codegen();
     test_generic_try_body_reified_storage_codegen();
+    test_generic_loop_reified_storage_codegen();
+    test_multi_parameter_generic_callable_abi_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
     test_variadic_zero_args_codegen();
