@@ -65,8 +65,8 @@ func main(args: string[]) {
   let rectangle = View();
   rectangle.style.width = (u32)20;
   rectangle.style.height = (u32)10;
-  rectangle.style.horizontalAlign = WidgetAlign.Center;
-  rectangle.style.verticalAlign = WidgetAlign.Center;
+  rectangle.style.horizontalAlign = Align.Center;
+  rectangle.style.verticalAlign = Align.Center;
   rectangle.style.backColor = RgbColor(0, 0, 255);
   surface.addChild(rectangle);
 
@@ -106,7 +106,7 @@ func main(args: string[]) {
       if x > maxX { x = maxX; }
       if y > maxY { y = maxY; }
 
-      rectangle.style.position = WidgetPosition.Fixed;
+      rectangle.style.position = Position.Fixed;
       rectangle.style.x = x;
       rectangle.style.y = y;
     }
