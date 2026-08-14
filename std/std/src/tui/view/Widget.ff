@@ -35,6 +35,12 @@ open spec Widget {
   var parent: Option<ContainerWidget>;
 
   /**
+   * 焦点资格与后续 Tab 顺序。
+   * 负值表示不可获得焦点，非负值表示可获得焦点。
+   */
+  var tabIndex: int;
+
+  /**
    * 键盘多播事件
    */
   let key: Event<KeyEvent<Widget>>;

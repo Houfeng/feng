@@ -23,6 +23,24 @@ open type ViewManager {
    */
   seal let sequence: List<Widget>;
 
+  /** 当前获得键盘焦点的 Widget。 */
+  seal var _focused: Option<Widget>;
+
+  /** root 之后的键盘多播事件。 */
+  let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
+
+  /** root 之后的鼠标按下多播事件。 */
+  let mouseDown: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+
+  /** root 之后的鼠标移动多播事件。 */
+  let mouseMove: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+
+  /** root 之后的鼠标释放多播事件。 */
+  let mouseUp: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+
+  /** root 之后的鼠标滚轮多播事件。 */
+  let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+
   /**
    * 使用已有 Screen 创建 ViewManager。
    * @param screen 视图布局和绘制使用的 Screen
@@ -30,7 +48,62 @@ open type ViewManager {
   func ViewManager(screen: Screen) {
     self.screen = screen;
     self.sequence = List<Widget>();
+    self._focused = none;
     self.root = none;
+  }
+
+  /**
+   * 判断 Widget 是否属于当前 root 组件树。
+   * @param widget 需要检查的 Widget
+   * @return Widget 是 root 本身或其后代时返回 true
+   */
+  seal func isInRoot(widget: Widget): bool {
+    if self.root match root: Widget {
+      return root == widget || root.isAncestor(widget);
+    }
+    return false;
+  }
+
+  /**
+   * 返回有效焦点；焦点已不可聚焦或脱离 root 时清除并返回 none。
+   * @return 当前仍有效的焦点
+   */
+  seal func validFocus(): Option<Widget> {
+    if self._focused match focused: Widget {
+      if focused.tabIndex >= 0 && self.isInRoot(focused) {
+        return focused;
+      }
+      self._focused = none;
+    }
+    return none;
+  }
+
+  /**
+   * 尝试让当前 root 组件树中的可聚焦 Widget 获得焦点。
+   * @param widget 需要获得焦点的 Widget
+   * @return 设置成功或已经获得焦点时返回 true
+   */
+  open func focus(widget: Widget): bool {
+    if widget.tabIndex < 0 || !self.isInRoot(widget) {
+      return false;
+    }
+    self._focused = widget;
+    return true;
+  }
+
+  /**
+   * 清除当前焦点；没有焦点时静默返回。
+   */
+  open func clearFocus(): void {
+    self._focused = none;
+  }
+
+  /**
+   * 获取当前有效焦点。
+   * @return 当前焦点；焦点无效或不存在时返回 none
+   */
+  open func focused(): Option<Widget> {
+    return self.validFocus();
   }
 
   /**
@@ -134,10 +207,75 @@ open type ViewManager {
   }
 
   /**
+   * 根据鼠标动作触发 ViewManager 对应的多播事件。
+   * @param event 需要分发的鼠标事件
+   */
+  seal func invokeManagerMouse(event: MouseEvent<Widget>): void {
+    if event.button == MouseButton.WheelUp || event.button == MouseButton.WheelDown {
+      let targetEvent = self.wheel;
+      targetEvent.emit(event);
+      return;
+    }
+    match event.action {
+      MouseAction.Press {
+        let targetEvent = self.mouseDown;
+        targetEvent.emit(event);
+      }
+      MouseAction.Move {
+        let targetEvent = self.mouseMove;
+        targetEvent.emit(event);
+      }
+      MouseAction.Release {
+        let targetEvent = self.mouseUp;
+        targetEvent.emit(event);
+      }
+    }
+  }
+
+  /**
+   * 判断当前 Widget 是否为 ViewManager 的 root。
+   * @param widget 传播链中的当前 Widget
+   * @return 当前 Widget 是否为 root
+   */
+  seal func isCurrentRoot(widget: Widget): bool {
+    if self.root match root: Widget {
+      return root == widget;
+    }
+    return false;
+  }
+
+  /**
+   * 执行鼠标按下后的默认聚焦行为。
+   * 从原始 target 向上选择最近的可聚焦 Widget；滚轮及已阻止事件不处理。
+   * @param target 鼠标最初命中或锁定的 target
+   * @param event 已完成视图路由的鼠标事件
+   */
+  seal func applyMouseDefault(target: Widget, event: MouseEvent<Widget>): void {
+    if event.action != MouseAction.Press ||
+    event.button == MouseButton.WheelUp || event.button == MouseButton.WheelDown ||
+    event.isPrevented() {
+      return;
+    }
+    var current = target;
+    while true {
+      if current.tabIndex >= 0 {
+        self.focus(current);
+        return;
+      }
+      if current.parent match let parent: ContainerWidget {
+        current = (Widget)parent;
+      } else {
+        return;
+      }
+    }
+  }
+
+  /**
    * 从锁定目标或本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
    * 锁定目标优先于坐标命中；选定目标会写入 event.target，并在本次冒泡期间保持不变。
-   * 当前组件的全部监听器返回后检查 event.isStopped()；停止后不再触发父组件事件。
-   * 未命中任何组件时静默返回。
+   * 当前组件的全部监听器返回后检查 event.isStopped()；停止后不再触发父组件或
+   * ViewManager 事件。正常到达 root 后触发 ViewManager 对应事件，随后执行默认聚焦。
+   * 未命中任何组件时直接触发 ViewManager 对应事件。
    * @param event InputManager 解析得到的鼠标事件
    */
   open func dispatchMouse(event: MouseEvent<Widget>): void {
@@ -154,17 +292,54 @@ open type ViewManager {
         event.bindTarget(target);
       }
       var current = target;
-      while true {
+      var routing = true;
+      while routing {
         self.invokeMouse(current, event);
         if event.isStopped() {
-          return;
-        }
-        if current.parent match let parent: ContainerWidget {
+          routing = false;
+        } else if self.isCurrentRoot(current) {
+          self.invokeManagerMouse(event);
+          routing = false;
+        } else if current.parent match let parent: ContainerWidget {
           current = (Widget)parent;
         } else {
-          return;
+          routing = false;
         }
       }
+      self.applyMouseDefault(target, event);
+    } else {
+      self.invokeManagerMouse(event);
+    }
+  }
+
+  /**
+   * 向当前焦点 Widget 分发键盘事件，并沿 parent 向 root 冒泡。
+   * 正常到达 root 后触发 ViewManager.key；没有焦点时直接触发 ViewManager.key。
+   * @param event InputManager 解析得到的键盘事件
+   */
+  open func dispatchKey(event: KeyEvent<Widget>): void {
+    if self.validFocus() match let target: Widget {
+      event.bindTarget(target);
+      var current = target;
+      var routing = true;
+      while routing {
+        let targetEvent = current.key;
+        targetEvent.emit(event);
+        if event.isStopped() {
+          routing = false;
+        } else if self.isCurrentRoot(current) {
+          let managerEvent = self.key;
+          managerEvent.emit(event);
+          routing = false;
+        } else if current.parent match let parent: ContainerWidget {
+          current = (Widget)parent;
+        } else {
+          routing = false;
+        }
+      }
+    } else {
+      let managerEvent = self.key;
+      managerEvent.emit(event);
     }
   }
 

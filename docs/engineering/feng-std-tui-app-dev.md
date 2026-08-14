@@ -663,7 +663,7 @@ TuiApp.exit()
 阶段四完成后，阶段五（输入支持）的衔接点。实现方案详见 `docs/engineering/feng-std-tui-input-dev.md`：
 
 1. **stdin 已在 poll 监听集合中**：阶段四 `run()` 的 pollfd 数组已包含 stdin，阶段五将 stdin drain 替换为 `input.feed()` 逐字节喂入 InputManager 解析分发
-2. **InputManager 作为 TuiApp 公开成员**：当前为 `let input: InputManager<Widget>`，用户通过 `app.input.onKey = ...` 注册键盘回调；鼠标单播槽默认接入 ViewManager，直接重赋 `app.input.onMouse` 会替换该路由
+2. **InputManager 作为 TuiApp 公开成员**：当前为 `let input: InputManager<Widget>`；键盘与鼠标单播槽均由 TuiApp 接入 ViewManager，应用通过 `app.key.on(...)` 订阅不可被视图停止的应用级键盘事件。完整规则见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`
 3. **SIGWINCH 已通过 self-pipe 处理**：阶段四已将 SIGWINCH 转为 fd 纳入 poll，无需迁移
 
 ## 10 平台注意

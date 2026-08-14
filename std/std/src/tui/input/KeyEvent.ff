@@ -99,8 +99,9 @@ open let MOD_SHIFT: u8 = 4;
 /**
  * KeyEvent 表示一个带路由目标类型的键盘事件。
  *
- * @value 类型，content/mods 构造后不可变。target 在 InputManager 完成解析时尚未绑定，
- * 后续焦点路由实现后由路由器在进入 Widget 回调前绑定。
+ * 普通引用类型，content/mods 构造后不可变。target 在 InputManager 完成解析时尚未绑定，
+ * 由 ViewManager 在进入 Widget 回调前绑定。同一事件实例在 Widget 树中逐级传播，
+ * target 保持不变，stop()/isStopped() 维护共享的停止状态。
  *
  * 按键内容通过 `Union<SpecialKey, u32>` 互斥表达：
  * - `SpecialKey` 分支：特殊键（方向键、功能键、Enter 等）
@@ -108,7 +109,6 @@ open let MOD_SHIFT: u8 = 4;
  *
  * 修饰键用 `u8` 位标志表示，快捷方法仅在 100% 能确定时返回 true。
  */
-@value
 open type KeyEvent<T> {
 
   /** 路由目标；仅在 hasTarget() 返回 true 时有效。 */
@@ -116,6 +116,9 @@ open type KeyEvent<T> {
 
   /** target 是否已经由路由器绑定。 */
   seal var _hasTarget: bool;
+
+  /** 是否已停止后续视图传播；仅由 stop() 修改。 */
+  seal var stopped: bool;
 
   /**
    * 按键内容：SpecialKey=特殊键，u32=可打印字符码点。
@@ -134,6 +137,7 @@ open type KeyEvent<T> {
    */
   func KeyEvent() {
     self._hasTarget = false;
+    self.stopped = false;
     self.content = (u32)0;
     self.mods = 0;
   }
@@ -145,6 +149,7 @@ open type KeyEvent<T> {
    */
   func KeyEvent(content: Union<u32, SpecialKey>, mods: u8) {
     self._hasTarget = false;
+    self.stopped = false;
     self.content = content;
     self.mods = mods;
   }
@@ -203,5 +208,21 @@ open type KeyEvent<T> {
    */
   func hasTarget(): bool {
     return self._hasTarget;
+  }
+
+  /**
+   * 停止当前 Widget 回调完成后的后续视图传播。
+   * 重复调用保持停止状态，不中断当前 Event 中的其他监听器。
+   */
+  func stop(): void {
+    self.stopped = true;
+  }
+
+  /**
+   * 查询事件是否已停止后续视图传播。
+   * @return stop() 是否已经被调用
+   */
+  func isStopped(): bool {
+    return self.stopped;
   }
 }

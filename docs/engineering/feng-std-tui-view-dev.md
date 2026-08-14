@@ -32,8 +32,9 @@ TuiApp
 
 叶子组件直接满足 `Widget` spec，容器组件满足 `ContainerWidget` spec；两者分别可通过成员展开复用 `View` 或 `Container` 的状态与行为。上层组装组件树时不需要 `asWidget()` 之类的转换 API。
 
-当前事件分发切片实现鼠标命中、目标绑定、锁定、Widget 多播事件触发和自下向上的冒泡。
-焦点管理与键盘焦点路由留到后续步骤，不与本次鼠标分发一起实现。
+本阶段事件分发切片实现鼠标命中、目标绑定、锁定、Widget 多播事件触发和自下向上的
+冒泡。后续焦点管理、ViewManager 事件与键盘焦点路由已经实施，其新增和调整的契约统一
+由 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 定义。
 
 ## 3 已定义的核心类型
 
@@ -294,8 +295,8 @@ open type ViewManager {
 `drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
 当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问、sequence
-登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由
-不在本次实现范围内。
+登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由是在
+本阶段基础上的后续扩展，以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
 
 ## 9 组件树与 parent
 
@@ -344,10 +345,11 @@ open type ViewManager {
    表示最初命中或锁定的事件来源，不随当前接收回调的 Widget 改变；
 3. `wheelUp`/`wheelDown` 触发 `wheel.emit(event)`，其余事件按 `press`、`move`、
    `release` 分别触发 `mouseDown`、`mouseMove`、`mouseUp`；
-4. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则结束分发，否则沿
-   `parent` 继续向上传递；
-5. 没有锁定目标且未命中 Widget 时静默返回；不执行 root 兜底回调；
-6. 当前不定义捕获阶段、`currentTarget`、默认行为、透明穿透、事件克隆或事件池化。
+4. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则结束 Widget
+   传播，否则沿 `parent` 继续向上传递；
+5. ViewManager 事件、未命中路径、`preventDefault()` 与自动聚焦属于后续焦点路由扩展，
+   统一以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准；
+6. 当前不定义捕获阶段、`currentTarget`、透明穿透、事件克隆或事件池化。
 
 Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保持
 `Action<MouseEvent<Widget>>` 单播，只负责把解析后的输入直接交给 ViewManager。
@@ -381,9 +383,10 @@ open type TuiApp {
 `Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，
 现有直接绘制 Screen 的代码保持有效。
 
-本次集成只将 `InputManager.onMouse` 单播回调绑定到 ViewManager 的鼠标分发入口，
-不接管 `onKey`。由于 `onMouse` 是单播 `open var`，应用之后直接重新赋值会替换
-ViewManager 路由；本阶段不自动组合两个回调。焦点和键盘事件在后续步骤接入。
+本阶段集成最初只将 `InputManager.onMouse` 单播回调绑定到 ViewManager。焦点与键盘路由
+实施后，`TuiApp` 同时接管 `InputManager.onKey`，先调用 `ViewManager.dispatchKey()`，再
+触发应用级 `TuiApp.key`。当前完整规则以
+`docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
 
 ## 12 文件规划
 
@@ -412,14 +415,15 @@ std/std/src/tui/widgets/
 3. 已将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
 4. 在 draw 阶段缓存 `drawFrame`，实现基于该快照的 sequence 逆序命中；
 5. 实现鼠标回调选择、自下向上冒泡及停止传播；
-6. 将 `InputManager.onMouse` 单播回调接入 ViewManager，不接管 `onKey`；
+6. 本阶段先将 `InputManager.onMouse` 单播回调接入 ViewManager，当时未接管 `onKey`；
 7. 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达路由目标类型；
 8. 为 MouseEvent 增加 target、lock()/unlock()/isLocked()，并让 ViewManager 优先向
    锁定目标路由；
 9. 补充 MouseEvent、target、lock、命中、裁剪、层级、冒泡和停止传播的 std_test 用例；
 10. 已将 Widget/View 的键盘和鼠标回调字段改为 `Event<T>`，由 ViewManager 触发鼠标事件；
 11. 已执行全量回归测试 `make test`；
-12. 等待人工 Review，通过后再开始焦点与键盘路由。
+12. 已完成人工 Review；
+13. 已按 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 实现焦点与键盘路由。
 
 ## 14 Review 关注点
 
@@ -427,4 +431,4 @@ std/std/src/tui/widgets/
 
 - `WidgetStyle` 的默认值；
 - `spec` 的 `seal` 成员落地后，如何在保持公开树操作 API 不变的前提下收紧 children/parent 存储访问；
-- 后续焦点、键盘路由与 root 的具体关系。
+- Tab 正向/反向焦点切换规则（由后续专项步骤单独设计）。

@@ -939,6 +939,17 @@ func key_event_target_binding() {
   check(e.target == 42, "tui/key/target-value");
 }
 
+/** 验证 KeyEvent 的停止状态由引用别名共享且重复停止保持幂等。 */
+func key_event_stop_state_is_shared() {
+  let event = KeyEvent<i32>(SpecialKey.Enter, 0);
+  let alias = event;
+  check(event.isStopped() == false, "tui/key/stop-default");
+  alias.stop();
+  check(event.isStopped(), "tui/key/stop-reference-shared");
+  event.stop();
+  check(alias.isStopped(), "tui/key/stop-idempotent");
+}
+
 // ─── Phase 5: MouseEvent 测试 ────────────────────────────────────────────
 
 func mouse_action_enum() {
@@ -1038,6 +1049,20 @@ func mouse_event_allows_window_outside_coordinates() {
   check(event.y == -2, "tui/mouse/window-outside-y");
 }
 
+/** 验证阻止鼠标默认行为与停止传播是两个相互独立的状态。 */
+func mouse_event_prevent_default_is_independent() {
+  let event = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 0, 0, 0);
+  check(event.isPrevented() == false, "tui/mouse/prevent-default");
+  check(event.isStopped() == false, "tui/mouse/prevent-stop-default");
+  event.preventDefault();
+  event.preventDefault();
+  check(event.isPrevented(), "tui/mouse/prevent-idempotent");
+  check(event.isStopped() == false, "tui/mouse/prevent-does-not-stop");
+  event.stop();
+  check(event.isStopped(), "tui/mouse/stop-after-prevent");
+  check(event.isPrevented(), "tui/mouse/stop-keeps-prevented");
+}
+
 func view_arrange_preserves_signed_geometry() {
   let screen = Screen(20, 10);
   let manager = ViewManager(screen);
@@ -1103,6 +1128,278 @@ func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
   frame.width = width;
   frame.height = height;
   return frame;
+}
+
+/**
+ * 判断 ViewManager 当前是否聚焦指定 Widget。
+ */
+func managerHasFocus(manager: ViewManager, expected: Widget): bool {
+  if manager.focused() match focused: Widget {
+    return focused == expected;
+  }
+  return false;
+}
+
+/**
+ * 判断 ViewManager 当前是否没有有效焦点。
+ */
+func managerHasNoFocus(manager: ViewManager): bool {
+  if manager.focused() match focused: Widget {
+    return false;
+  }
+  return true;
+}
+
+/** 验证 ViewManager 焦点资格、组件树归属、失效清理与显式清除。 */
+func view_manager_focus_lifecycle() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let child = View();
+
+  check(root.tabIndex == -1, "tui/focus/root-default-tab-index");
+  check(child.tabIndex == -1, "tui/focus/child-default-tab-index");
+  check(manager.focus(child) == false, "tui/focus/reject-without-root");
+
+  manager.root = root;
+  check(manager.focus(child) == false, "tui/focus/reject-detached-widget");
+  root.addChild(child);
+  check(manager.focus(child) == false, "tui/focus/reject-negative-tab-index");
+
+  child.tabIndex = 0;
+  check(manager.focus(child), "tui/focus/accept-attached-widget");
+  check(managerHasFocus(manager, child), "tui/focus/current-child");
+  check(manager.focus(child), "tui/focus/repeat-idempotent");
+
+  child.tabIndex = -1;
+  check(managerHasNoFocus(manager), "tui/focus/tab-index-invalidates-focus");
+
+  child.tabIndex = 2;
+  check(manager.focus(child), "tui/focus/refocus-child");
+  root.removeChild(child);
+  check(managerHasNoFocus(manager), "tui/focus/detach-invalidates-focus");
+
+  root.tabIndex = 1;
+  check(manager.focus(root), "tui/focus/root-can-focus");
+  manager.clearFocus();
+  manager.clearFocus();
+  check(managerHasNoFocus(manager), "tui/focus/clear-idempotent");
+}
+
+/** 验证鼠标传播、ViewManager 事件及自动聚焦默认行为的组合规则。 */
+func view_manager_mouse_default_focus_and_propagation() {
+  let manager = ViewManager(Screen(30, 15));
+  let root = Container();
+  let child = View();
+  root.addChild(child);
+  root.tabIndex = 5;
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 20, 10));
+  manager.trace(child, makeWidgetFrame(2, 2, 6, 4));
+
+  var mode = 0;
+  var preventAtManager = false;
+  var childDown = 0;
+  var rootDown = 0;
+  var managerDown = 0;
+  var managerSawUnbound = false;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    childDown += 1;
+    if mode == 1 {
+      event.preventDefault();
+    } else if mode == 2 {
+      event.stop();
+    }
+  });
+  root.mouseDown.on((event: MouseEvent<Widget>) {
+    rootDown += 1;
+  });
+  manager.mouseDown.on((event: MouseEvent<Widget>) {
+    managerDown += 1;
+    if !event.hasTarget() {
+      managerSawUnbound = true;
+    }
+    if preventAtManager {
+      event.preventDefault();
+    }
+  });
+
+  let nearestAncestor = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 3, 3, 0);
+  manager.dispatchMouse(nearestAncestor);
+  check(childDown == 1 && rootDown == 1 && managerDown == 1,
+    "tui/mouse/propagates-through-manager");
+  check(managerHasFocus(manager, root), "tui/mouse/focus-nearest-ancestor");
+
+  child.tabIndex = 0;
+  manager.clearFocus();
+  mode = 1;
+  let preventedByWidget = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 3, 3, 0);
+  manager.dispatchMouse(preventedByWidget);
+  check(preventedByWidget.isPrevented(), "tui/mouse/widget-prevent-state");
+  check(preventedByWidget.isStopped() == false, "tui/mouse/widget-prevent-keeps-routing");
+  check(childDown == 2 && rootDown == 2 && managerDown == 2,
+    "tui/mouse/prevent-still-propagates");
+  check(managerHasNoFocus(manager), "tui/mouse/widget-prevents-focus");
+
+  manager.clearFocus();
+  mode = 2;
+  let stopped = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 3, 3, 0);
+  manager.dispatchMouse(stopped);
+  check(stopped.isStopped(), "tui/mouse/stop-state-after-route");
+  check(stopped.isPrevented() == false, "tui/mouse/stop-does-not-prevent");
+  check(childDown == 3 && rootDown == 2 && managerDown == 2,
+    "tui/mouse/stop-skips-root-and-manager");
+  check(managerHasFocus(manager, child), "tui/mouse/stop-keeps-default-focus");
+
+  manager.clearFocus();
+  mode = 0;
+  preventAtManager = true;
+  let preventedByManager = MouseEvent<Widget>(MouseAction.Press, MouseButton.Right, 3, 3, 0);
+  manager.dispatchMouse(preventedByManager);
+  check(childDown == 4 && rootDown == 3 && managerDown == 3,
+    "tui/mouse/right-press-routes-through-manager");
+  check(preventedByManager.isPrevented(), "tui/mouse/manager-prevent-state");
+  check(managerHasNoFocus(manager), "tui/mouse/manager-prevents-focus");
+
+  preventAtManager = false;
+  let rightPress = MouseEvent<Widget>(MouseAction.Press, MouseButton.Right, 3, 3, 0);
+  manager.dispatchMouse(rightPress);
+  check(childDown == 5 && rootDown == 4 && managerDown == 4,
+    "tui/mouse/right-press-routes-without-prevent");
+  check(managerHasFocus(manager, child), "tui/mouse/all-non-wheel-press-focuses");
+
+  let noHit = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 25, 12, 0);
+  manager.dispatchMouse(noHit);
+  check(managerDown == 5, "tui/mouse/no-hit-reaches-manager");
+  check(managerSawUnbound, "tui/mouse/no-hit-target-unbound");
+  check(noHit.hasTarget() == false, "tui/mouse/no-hit-event-unbound");
+  check(managerHasFocus(manager, child), "tui/mouse/no-hit-keeps-focus");
+}
+
+/** 验证 ViewManager 将全部鼠标输入映射到对应的多播事件。 */
+func view_manager_mouse_event_mapping() {
+  let manager = ViewManager(Screen(10, 5));
+  var down = 0;
+  var move = 0;
+  var up = 0;
+  var wheel = 0;
+  manager.mouseDown.on((event: MouseEvent<Widget>) { down += 1; });
+  manager.mouseMove.on((event: MouseEvent<Widget>) { move += 1; });
+  manager.mouseUp.on((event: MouseEvent<Widget>) { up += 1; });
+  manager.wheel.on((event: MouseEvent<Widget>) { wheel += 1; });
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 20, 20, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move, MouseButton.None, 20, 20, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release, MouseButton.Left, 20, 20, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press, MouseButton.WheelUp, 20, 20, 0));
+
+  check(down == 1, "tui/mouse/manager-maps-down");
+  check(move == 1, "tui/mouse/manager-maps-move");
+  check(up == 1, "tui/mouse/manager-maps-up");
+  check(wheel == 1, "tui/mouse/manager-maps-wheel");
+  check(managerHasNoFocus(manager), "tui/mouse/wheel-does-not-focus");
+}
+
+/** 验证键盘事件从焦点 Widget 到 root、ViewManager 的路由和停止规则。 */
+func view_manager_key_focus_route() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let child = View();
+  root.addChild(child);
+  child.tabIndex = 0;
+  manager.root = root;
+  check(manager.focus(child), "tui/key-route/focus-child");
+
+  var order = 0;
+  var targetStable = true;
+  var stopAtChild = false;
+  var managerSawUnbound = false;
+  child.key.on((event: KeyEvent<Widget>) {
+    order = order * 10 + 1;
+    targetStable = targetStable && event.hasTarget() && event.target == (Widget)child;
+    if stopAtChild {
+      event.stop();
+    }
+  });
+  root.key.on((event: KeyEvent<Widget>) {
+    order = order * 10 + 2;
+    targetStable = targetStable && event.target == (Widget)child;
+  });
+  manager.key.on((event: KeyEvent<Widget>) {
+    order = order * 10 + 3;
+    if !event.hasTarget() {
+      managerSawUnbound = true;
+    } else {
+      targetStable = targetStable && event.target == (Widget)child;
+    }
+  });
+
+  let routed = KeyEvent<Widget>(SpecialKey.Enter, 0);
+  manager.dispatchKey(routed);
+  check(order == 123, "tui/key-route/child-root-manager-order");
+  check(targetStable, "tui/key-route/target-stable");
+
+  order = 0;
+  stopAtChild = true;
+  let stopped = KeyEvent<Widget>(SpecialKey.Enter, 0);
+  manager.dispatchKey(stopped);
+  check(order == 1, "tui/key-route/stop-skips-root-manager");
+  check(stopped.isStopped(), "tui/key-route/stop-state-shared");
+
+  stopAtChild = false;
+  check(manager.focus(child), "tui/key-route/refocus-before-remove");
+  root.removeChild(child);
+  order = 0;
+  let invalidFocus = KeyEvent<Widget>(SpecialKey.Enter, 0);
+  manager.dispatchKey(invalidFocus);
+  check(order == 3, "tui/key-route/invalid-focus-manager-only");
+  check(managerSawUnbound, "tui/key-route/no-focus-manager-unbound");
+  check(invalidFocus.hasTarget() == false, "tui/key-route/invalid-focus-no-target");
+  check(managerHasNoFocus(manager), "tui/key-route/invalid-focus-cleared");
+}
+
+/** 验证 TuiApp.key 始终位于可停止的 Widget/ViewManager 路由之后。 */
+func tuiapp_key_remains_application_level() {
+  let app = TuiApp();
+  let root = Container();
+  let child = View();
+  root.addChild(child);
+  child.tabIndex = 0;
+  app.view.root = root;
+  check(app.view.focus(child), "tui/app-key/focus-child");
+
+  var childKeys = 0;
+  var managerKeys = 0;
+  var appKeys = 0;
+  var removableKeys = 0;
+  var appSawStoppedTarget = true;
+  child.key.on((event: KeyEvent<Widget>) {
+    childKeys += 1;
+    event.stop();
+  });
+  app.view.key.on((event: KeyEvent<Widget>) {
+    managerKeys += 1;
+  });
+  app.key.on((event: KeyEvent<Widget>) {
+    appKeys += 1;
+    appSawStoppedTarget = appSawStoppedTarget && event.isStopped() &&
+      event.hasTarget() && event.target == (Widget)child && event.isControl();
+  });
+  let removable: Action<KeyEvent<Widget>> = (event: KeyEvent<Widget>) {
+    removableKeys += 1;
+  };
+  app.key.on(removable);
+
+  app.input.feed((u8)0x03);
+  check(childKeys == 1, "tui/app-key/widget-receives-input");
+  check(managerKeys == 0, "tui/app-key/stop-skips-view-manager");
+  check(appKeys == 1 && removableKeys == 1, "tui/app-key/all-listeners-run");
+  check(appSawStoppedTarget, "tui/app-key/receives-stopped-target");
+
+  app.key.off(removable);
+  app.input.feed((u8)0x03);
+  check(childKeys == 2, "tui/app-key/widget-receives-second-input");
+  check(appKeys == 2, "tui/app-key/primary-listener-kept");
+  check(removableKeys == 1, "tui/app-key/off-removes-listener");
 }
 
 func view_manager_mouse_target_lock_and_bubble() {
@@ -1686,6 +1983,7 @@ open func run_tui_tests() {
     test("tuiapp_render_with_content()", () { tuiapp_render_with_content(); });
     test("tuiapp_run_startup_clears_screen_keeps_buffer()", () { tuiapp_run_startup_clears_screen_keeps_buffer(); });
     test("tuiapp_run_drains_stdin_and_exit_stops()", () { tuiapp_run_drains_stdin_and_exit_stops(); });
+    test("tuiapp_key_remains_application_level()", () { tuiapp_key_remains_application_level(); });
     // ─── Phase 5: KeyEvent ───
     test("key_mod_constants()", () { key_mod_constants(); });
     test("key_special_key_enum()", () { key_special_key_enum(); });
@@ -1695,6 +1993,7 @@ open func run_tui_tests() {
     test("key_event_ctrl_combo()", () { key_event_ctrl_combo(); });
     test("key_event_shift_arrow()", () { key_event_shift_arrow(); });
     test("key_event_target_binding()", () { key_event_target_binding(); });
+    test("key_event_stop_state_is_shared()", () { key_event_stop_state_is_shared(); });
     // ─── Phase 5: MouseEvent ───
     test("mouse_action_enum()", () { mouse_action_enum(); });
     test("mouse_button_enum()", () { mouse_button_enum(); });
@@ -1704,9 +2003,14 @@ open func run_tui_tests() {
     test("mouse_event_move_action()", () { mouse_event_move_action(); });
     test("mouse_event_target_stop_and_lock()", () { mouse_event_target_stop_and_lock(); });
     test("mouse_event_allows_window_outside_coordinates()", () { mouse_event_allows_window_outside_coordinates(); });
+    test("mouse_event_prevent_default_is_independent()", () { mouse_event_prevent_default_is_independent(); });
     test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
+    test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
+    test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
+    test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
+    test("view_manager_key_focus_route()", () { view_manager_key_focus_route(); });
     test("view_manager_mouse_target_lock_and_bubble()", () { view_manager_mouse_target_lock_and_bubble(); });
     // ─── Phase 5: InputManager ───
     test("input_printable_ascii()", () { input_printable_ascii(); });

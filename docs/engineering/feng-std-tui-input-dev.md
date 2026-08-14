@@ -11,6 +11,7 @@
 **InputManager 独立 + spec 回调注入**：InputManager 作为独立泛型 `open type`
 负责将 stdin 字节流通过状态机解析为 `KeyEvent<T>`/`MouseEvent<T>`，并在内部直接
 分发到 `onKey`/`onMouse` 回调。TuiApp 持有 `input: InputManager<Widget>` 公开成员，
+并将两个单播回调接入视图路由；应用级键盘监听通过 `TuiApp.key` 注册。
 在 `run()` 中将 stdin 字节逐个喂入 `feed()`。应用层在回调中修改状态，
 回调返回后 `run()` 自动调用 `render()`。
 
@@ -27,7 +28,7 @@ stdin 可读
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
-| Ctrl+C 退出 | 交给应用回调 | InputManager 只产出 KeyEvent，退出语义由应用 onKey 决定 |
+| Ctrl+C 退出 | 交给应用回调 | InputManager 只产出 KeyEvent，退出语义由应用级 `TuiApp.key` 决定 |
 | 鼠标支持 | 完整支持 | 第五阶段含鼠标（init 时发送启用序列，exit 时发送禁用序列） |
 | 事件路由 | InputManager 内部分发（onKey/onMouse） | feed 解析完成后直接调 onKey/onMouse，无需中间 TuiEvent 包装 |
 | 回调类型 | 普通 open spec（非 @abi） | feed 内部分发是 Feng→Feng 调用，不经 C ABI。@abi 仅用于 C 回调 Feng 的场景 |
@@ -112,15 +113,17 @@ seal let MOD_SHIFT: u8 = 4;
 `target` 在 InputManager 刚完成解析时尚未绑定；焦点与键盘路由实现后，由路由器在
 进入 Widget 回调前绑定。由于 Feng 当前不支持 `Option<T>` 作为开放泛型成员布局，
 事件使用默认 `T` 存储配合布尔状态表达是否已绑定，不把默认值误判为有效目标。
-其余字段为 `let`，结构体初始化后不可变：
+输入载荷字段为 `let`，构造后不可变；KeyEvent 使用引用语义，使 target 与停止状态可由
+同一传播链共享：
 
 ```feng
-@value
 open type KeyEvent<T> {
   /** 路由目标；仅在 hasTarget() 为 true 时有效 */
   var target: T;
   /** target 是否已经由路由器绑定 */
   seal var _hasTarget: bool;
+  /** 是否已停止后续视图传播 */
+  seal var stopped: bool;
   /** 按键内容：SpecialKey=特殊键，u32=可打印字符码点 */
   let content: Union<SpecialKey, u32>;
   /** 修饰键位标志（KeyEvent 仅含可靠推断的 MOD_CONTROL/MOD_SHIFT，不设 MOD_ALT） */
@@ -128,12 +131,14 @@ open type KeyEvent<T> {
 
   func KeyEvent() {
     self._hasTarget = false;
+    self.stopped = false;
     self.content = (u32)0;
     self.mods = 0;
   }
 
   func KeyEvent(content: Union<SpecialKey, u32>, mods: u8) {
     self._hasTarget = false;
+    self.stopped = false;
     self.content = content;
     self.mods = mods;
   }
@@ -166,15 +171,18 @@ open type KeyEvent<T> {
   }
   func bindTarget(target: T): void { ... }
   func hasTarget(): bool { ... }
+  func stop(): void { ... }
+  func isStopped(): bool { ... }
 }
 ```
 
 > **KeyEvent 不提供 isAlt()**：ESC 前缀无法 100% 消歧，KeyEvent 不设置 MOD_ALT。
 > MouseEvent 提供 isAlt()——SGR 鼠标序列的 button 高位显式报告 Alt 状态，100% 可靠。
 >
-> `content` 和 `mods` 为不可变输入快照；`target` 只供后续路由阶段绑定。
-> 当前尚未实现焦点和键盘路由，因此直接通过 `InputManager.onKey` 收到的
-> `KeyEvent<T>.hasTarget()` 返回 false，此时不得读取 `target` 作为有效事件来源。
+> `content` 和 `mods` 为不可变输入快照；`target` 只供后续路由阶段绑定。直接使用
+> `InputManager` 时，`onKey` 收到的 `KeyEvent<T>.hasTarget()` 仍为 false；通过
+> `TuiApp` 时由 ViewManager 按当前焦点绑定 target。焦点、停止传播以及应用级键盘事件
+> 的完整契约见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
 >
 > **各场景 KeyEvent 值**：
 >
@@ -547,21 +555,23 @@ CSI 参数以 `;` 分隔。例如 `ESC[1;2A` → params = [1, 2]。
 
 ### 4.1 TuiApp 新增公开成员
 
-InputManager 作为 TuiApp 的公开成员，用户通过 `app.input.onKey = ...` 注册回调：
+InputManager 作为 TuiApp 的公开成员，但其单播回调由 TuiApp 内部用于视图路由。应用
+通过 `app.key.on(...)` 注册应用级键盘监听：
 
 ```feng
 open type TuiApp {
   // ... 阶段四已有字段 ...
 
-  /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
+  /** 输入管理器（公开只读成员，构造时创建，单播回调由 TuiApp 接入视图路由） */
   let input: InputManager<Widget>;
+  /** 视图键盘路由完成后触发的应用级多播事件 */
+  let key: Event<KeyEvent<Widget>>;
 }
 ```
 
 > **`input` 为 `let`**：引用不可变——构造时创建 InputManager 实例，之后不替换
-> 整个实例。用户通过 `app.input.onKey = ...` 和 `app.input.onMouse = ...`
-> 修改的是 InputManager **内部**的 `open var` 字段，不是 `input` 字段本身。
-> 这与 Buffer 的 `let width: u32` 同理——引用不可变，但内部可变字段仍可修改。
+> 整个实例。`InputManager.onKey`/`onMouse` 仍是公开单播字段，独立使用 InputManager 时
+> 可直接绑定；在 TuiApp 中由框架占用，应用不应重新赋值绕过视图路由。
 
 ### 4.2 run() 修改
 
@@ -644,7 +654,7 @@ std/std/src/tui/
   TuiApp.ff             # 组装 input: InputManager<Widget>，并在主循环喂入字节
 
   input/
-    KeyEvent.ff         # KeyEvent<T> @value 类型、target 与按键快捷方法
+    KeyEvent.ff         # KeyEvent<T> 引用类型、target、传播停止与按键快捷方法
     MouseEvent.ff       # MouseEvent<T> 引用类型、target、lock 与传播状态
     InputManager.ff     # 泛型 VT100/xterm 状态机、单播回调与 feed(byte)
 

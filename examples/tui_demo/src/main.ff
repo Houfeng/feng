@@ -50,12 +50,12 @@ func main(args: string[]) {
   let app = TuiApp();
   app.init();
   defer { app.exit(); }
-  app.input.onKey = (event: KeyEvent<Widget>) {
+  app.key.on((event: KeyEvent<Widget>) {
     // 按下 Ctrl+C 时退出应用
     if event.isControl() && event.content match let c: u32 && c == 0x03 {
       app.exit();
     }
-  };
+  });
 
   // 根容器占满 Screen，负责自治布局和绘制子组件。
   let surface = DragSurface();

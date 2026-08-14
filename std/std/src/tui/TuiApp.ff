@@ -270,10 +270,12 @@ open type TuiApp {
   seal var loop: int;
   /** Screen 渲染底座；声明处绑定零尺寸实例，init() 时原地调整为终端真实尺寸 */
   let screen: Screen = Screen(0, 0);
-  /** 输入管理器（公开只读成员，构造时创建，用户通过此注册回调） */
+  /** 输入管理器（公开只读成员，构造时创建；输入回调由 TuiApp 接入视图路由） */
   let input: InputManager<Widget>;
   /** 视图管理器；复用当前 TuiApp 的 Screen，render() 中调度 View 布局与绘制 */
   let view: ViewManager;
+  /** 应用级键盘多播事件；不属于 Widget 传播链，不能被 Widget.stop() 阻止 */
+  let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
   /** 窗口尺寸已变化标志：sigpipe 可读时置位，render() 中检查并清零 */
   seal var resizeRequested: bool;
   /** 是否已初始化（防止重复 init / 重复 exit） */
@@ -297,6 +299,17 @@ open type TuiApp {
   /** 主循环是否运行中（run() 置 true，exit() 置 false） */
   open func isRunning(): bool {
     return self.running;
+  }
+
+  /**
+   * 组合视图键盘路由与应用级键盘事件。
+   * ViewManager 返回后始终触发 TuiApp.key，即使 Widget 已停止视图传播。
+   * @param event InputManager 解析得到的键盘事件
+   */
+  seal func dispatchKey(event: KeyEvent<Widget>): void {
+    self.view.dispatchKey(event);
+    let appEvent = self.key;
+    appEvent.emit(event);
   }
 
   /**
@@ -342,12 +355,13 @@ open type TuiApp {
 
   /**
    * 构造函数（无外部 fd）：创建 InputManager 和 ViewManager，将单播鼠标输入
-   * 绑定到 ViewManager，不做 TTY 初始化。
+   * 绑定到 ViewManager，并由 TuiApp 组合键盘视图路由与应用事件，不做 TTY 初始化。
    * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
    */
   func TuiApp() {
     self.input = InputManager<Widget>();
     self.view = ViewManager(self.screen);
+    self.input.onKey = self.dispatchKey;
     self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;
     self.loop = 0;
@@ -361,7 +375,8 @@ open type TuiApp {
 
   /**
    * 构造函数（有外部 fd）：创建 InputManager 和 ViewManager，将单播鼠标输入
-   * 绑定到 ViewManager，并保存外部通知 fd 数组，不做 TTY 初始化。
+   * 绑定到 ViewManager，由 TuiApp 组合键盘视图路由与应用事件，并保存外部通知 fd
+   * 数组，不做 TTY 初始化。
    * screen 已在字段声明处显式初始绑定为零尺寸 Screen，不在构造函数中重复绑定。
    * 异步 I/O 库场景使用：fds 为异步 I/O 库的通知 fd（如 epoll/kqueue/self-pipe 管道读端）。
    * TuiApp 只监听 fd 可读事件唤醒渲染，不向 fd 写入、不处理关闭——fd 的生命周期由调用方管理。
@@ -370,6 +385,7 @@ open type TuiApp {
   func TuiApp(fds: i32[]) {
     self.input = InputManager<Widget>();
     self.view = ViewManager(self.screen);
+    self.input.onKey = self.dispatchKey;
     self.input.onMouse = self.view.dispatchMouse;
     self.tty = 0;
     self.loop = 0;

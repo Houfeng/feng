@@ -1,6 +1,6 @@
 # Feng TUI 焦点与键盘路由开发方案
 
-> 状态：设计中，等待人工 Review。
+> 状态：已实施，等待人工 Review。
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 中焦点管理与键盘焦点路由阶段的
 > 专项开发文档。既有鼠标命中、target、lock 和 Widget 冒泡规则仍以
@@ -22,7 +22,7 @@
 本阶段不完善 Text、Button 等具体组件，也不引入捕获阶段、焦点作用域、焦点陷阱或
 复杂快捷键系统。
 
-## 2 当前基线
+## 2 实施前基线
 
 当前实现具有以下基础能力：
 
@@ -179,8 +179,8 @@ open type KeyEvent<T> {
    `event.hasTarget()` 为 `false`。
 
 改为引用类型会改变 KeyEvent 的运行时表示，并使输入解析时创建键盘事件对象。该变化是
-共享传播状态所需的通用语义调整，不通过 sidecar、装箱或事件克隆规避；实施前需在
-Review 中确认该运行时分配变化。
+共享传播状态所需的通用语义调整，不通过 sidecar、装箱或事件克隆规避；该运行时分配
+变化已在实施前 Review 中确认。
 
 ## 8 TuiApp 应用级键盘事件
 
@@ -258,27 +258,27 @@ InputManager.onKey
 
 ## 12 实施 TODO
 
-- [ ] 12.1 人工 Review 并确认本文档，特别确认 KeyEvent 改为引用类型的分配变化；
-- [ ] 12.2 为 Widget/View 增加 `tabIndex: int` 及默认值，并补充基础用例；
-- [ ] 12.3 为 MouseEvent 增加 `preventDefault()`/`isPrevented()` 及状态用例；
-- [ ] 12.4 将 KeyEvent 改为引用类型，增加 `stop()`/`isStopped()`，更新对应输入用例；
-- [ ] 12.5 为 ViewManager 增加焦点状态和 `focus()`/`clearFocus()`/`focused()`；
-- [ ] 12.6 为 ViewManager 增加与 Widget 完全相同的五类多播事件；
-- [ ] 12.7 重构鼠标分发顺序，接入 ViewManager 事件和自动聚焦默认行为；
-- [ ] 12.8 实现 `ViewManager.dispatchKey()`、target 绑定、冒泡及停止传播；
-- [ ] 12.9 为 TuiApp 增加 `key` 多播事件，接管 `InputManager.onKey` 并组合视图与应用分发；
-- [ ] 12.10 更新 `examples/tui_demo`，将 Ctrl+C 改为订阅 `TuiApp.key`；
-- [ ] 12.11 补齐焦点、鼠标默认行为、键盘路由和三层事件集成的 std_test 用例；
-- [ ] 12.12 运行 std、std_test 和 tui_demo 定向构建与验证；
-- [ ] 12.13 在非 Codex 沙箱环境执行 `make test` 全量回归；
-- [ ] 12.14 根据实现结果更新 TODO 状态，等待人工 Review；
+- [x] 12.1 人工 Review 并确认本文档，特别确认 KeyEvent 改为引用类型的分配变化；
+- [x] 12.2 为 Widget/View 增加 `tabIndex: int` 及默认值，并补充基础用例；
+- [x] 12.3 为 MouseEvent 增加 `preventDefault()`/`isPrevented()` 及状态用例；
+- [x] 12.4 将 KeyEvent 改为引用类型，增加 `stop()`/`isStopped()`，更新对应输入用例；
+- [x] 12.5 为 ViewManager 增加焦点状态和 `focus()`/`clearFocus()`/`focused()`；
+- [x] 12.6 为 ViewManager 增加与 Widget 完全相同的五类多播事件；
+- [x] 12.7 重构鼠标分发顺序，接入 ViewManager 事件和自动聚焦默认行为；
+- [x] 12.8 实现 `ViewManager.dispatchKey()`、target 绑定、冒泡及停止传播；
+- [x] 12.9 为 TuiApp 增加 `key` 多播事件，接管 `InputManager.onKey` 并组合视图与应用分发；
+- [x] 12.10 更新 `examples/tui_demo`，将 Ctrl+C 改为订阅 `TuiApp.key`；
+- [x] 12.11 补齐焦点、鼠标默认行为、键盘路由和三层事件集成的 std_test 用例；
+- [x] 12.12 运行 std、std_test 和 tui_demo 定向构建与验证；
+- [x] 12.13 在非 Codex 沙箱环境执行 `make test` 全量回归；
+- [x] 12.14 根据实现结果更新 TODO 状态，等待人工 Review；
 - [ ] 12.15 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
 
-## 13 Review 关注点
+## 13 实施结论与后续 Review
 
-- `focus(widget)` 返回 `bool` 是否符合预期；
-- 不可聚焦或不属于 root 时，保持原焦点是否符合预期；
-- 点击不可聚焦区域时保持原焦点是否符合预期；
-- 鼠标自动聚焦应覆盖全部 Press，还是只覆盖左键 Press；
-- KeyEvent 从 `@value` 改为引用类型带来的每次键盘输入对象分配是否可接受；
-- Tab 同值顺序、循环和阻止规则留到 12.15 决策是否合适。
+- `focus(widget)` 使用 `bool` 返回是否成功；不可聚焦或不属于 root 时保持原焦点；
+- 点击未命中或不存在可聚焦祖先的区域时保持原焦点；
+- 自动聚焦覆盖除滚轮外的全部 `MouseAction.Press`；
+- KeyEvent 使用引用类型，共享 target 与停止状态；该分配变化已经人工确认；
+- `make test` 已完整通过，其中 std_test 521/521、fcts 768/768；
+- Tab 同值顺序、循环和阻止规则仍留到 12.15 单独决策与实施。

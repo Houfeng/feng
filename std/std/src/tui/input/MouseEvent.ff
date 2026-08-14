@@ -38,7 +38,8 @@ open enum MouseButton {
  * 普通引用类型，输入载荷字段均为 `let`，构造后不可变。
  * target 在 InputManager 完成解析时尚未绑定，由 ViewManager 在进入 Widget 回调前
  * 绑定为命中或锁定目标。同一事件实例在 Widget 树中逐级传播，target 保持不变，
- * stop()/isStopped() 维护共享的停止状态。
+ * stop()/isStopped() 维护共享的停止状态，preventDefault()/isPrevented()
+ * 维护独立的默认行为阻止状态。
  *
  * 修饰键来自 SGR 鼠标序列（mode 1006）的 button 高位编码，
  * 由终端主动报告，100% 可靠——isControl/isAlt/isShift 均准确。
@@ -75,6 +76,9 @@ open type MouseEvent<T> {
   /** 是否已停止后续传播；仅由 stop() 修改 */
   seal var stopped: bool;
 
+  /** 是否已阻止 ViewManager 的默认行为；仅由 preventDefault() 修改。 */
+  seal var prevented: bool;
+
   /** 当前闭合 MouseEvent<T> 是否存在锁定目标。 */
   seal static var _locked: bool;
 
@@ -96,6 +100,7 @@ open type MouseEvent<T> {
     self.y = 0;
     self.mods = 0;
     self.stopped = false;
+    self.prevented = false;
   }
 
   /**
@@ -115,6 +120,7 @@ open type MouseEvent<T> {
     self.y = y;
     self.mods = mods;
     self.stopped = false;
+    self.prevented = false;
   }
 
   // ─── 快捷判定方法（均 100% 可靠，来自 SGR button 高位） ───────────────
@@ -186,6 +192,22 @@ open type MouseEvent<T> {
    */
   func isStopped(): bool {
     return self.stopped;
+  }
+
+  /**
+   * 阻止 ViewManager 在事件路由后的默认行为。
+   * 不停止传播，也不中断当前 Event 中的其他监听器。
+   */
+  func preventDefault(): void {
+    self.prevented = true;
+  }
+
+  /**
+   * 查询是否已阻止 ViewManager 的默认行为。
+   * @return preventDefault() 是否已经被调用
+   */
+  func isPrevented(): bool {
+    return self.prevented;
   }
 
   /**
