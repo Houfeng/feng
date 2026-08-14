@@ -1396,6 +1396,94 @@ func text_horizontal_alignment_and_clipping() {
     "tui/text/right-align-clipped-long-line");
 }
 
+/** 验证 TextOverflow 只处理 Text 自身高度溢出，并保留外部裁剪语义。 */
+func text_overflow_ellipsis() {
+  let clipScreen = Screen(7, 1);
+  let clipManager = ViewManager(clipScreen);
+  let clip = Text();
+  check(clip.textOverflow == TextOverflow.Clip,
+    "tui/text/overflow-default-clip");
+  clip.style.position = Position.Absolute;
+  clip.style.width = 7;
+  clip.style.height = 1;
+  clip.content = "abcdefgh";
+  clip.arrange(clipManager);
+  clip.draw(clipManager);
+  let clipBuffer = clipScreen.buffer();
+  check(clipBuffer.cells[0].value == (u64)97 &&
+    clipBuffer.cells[6].value == (u64)103,
+    "tui/text/overflow-clip-keeps-visible-content");
+
+  let ellipsisScreen = Screen(7, 1);
+  let ellipsisManager = ViewManager(ellipsisScreen);
+  let ellipsis = Text();
+  ellipsis.style.position = Position.Absolute;
+  ellipsis.style.width = 7;
+  ellipsis.style.height = 1;
+  ellipsis.textOverflow = TextOverflow.Ellipsis;
+  ellipsis.content = "abcdefgh";
+  ellipsis.arrange(ellipsisManager);
+  ellipsis.draw(ellipsisManager);
+  let ellipsisBuffer = ellipsisScreen.buffer();
+  check(ellipsisBuffer.cells[0].value == (u64)97 &&
+    ellipsisBuffer.cells[3].value == (u64)100 &&
+    ellipsisBuffer.cells[4].value == (u64)46 &&
+    ellipsisBuffer.cells[5].value == (u64)46 &&
+    ellipsisBuffer.cells[6].value == (u64)46,
+    "tui/text/overflow-ellipsis-replaces-last-three-cells");
+
+  let multiScreen = Screen(4, 2);
+  let multiManager = ViewManager(multiScreen);
+  let multi = Text();
+  multi.style.position = Position.Absolute;
+  multi.style.width = 4;
+  multi.style.height = 2;
+  multi.textOverflow = TextOverflow.Ellipsis;
+  multi.content = "abcdefghij";
+  multi.arrange(multiManager);
+  multi.draw(multiManager);
+  let multiBuffer = multiScreen.buffer();
+  check(multiBuffer.cells[0].value == (u64)97 &&
+    multiBuffer.cells[3].value == (u64)100 &&
+    multiBuffer.cells[4].value == (u64)101 &&
+    multiBuffer.cells[5].value == (u64)46 &&
+    multiBuffer.cells[6].value == (u64)46 &&
+    multiBuffer.cells[7].value == (u64)46,
+    "tui/text/overflow-ellipsis-only-on-last-visible-line");
+
+  let narrowScreen = Screen(2, 1);
+  let narrowManager = ViewManager(narrowScreen);
+  let narrow = Text();
+  narrow.style.position = Position.Absolute;
+  narrow.style.width = 2;
+  narrow.style.height = 1;
+  narrow.textOverflow = TextOverflow.Ellipsis;
+  narrow.content = "abc";
+  narrow.arrange(narrowManager);
+  narrow.draw(narrowManager);
+  let narrowBuffer = narrowScreen.buffer();
+  check(narrowBuffer.cells[0].value == (u64)46 &&
+    narrowBuffer.cells[1].value == (u64)46,
+    "tui/text/overflow-ellipsis-fits-narrow-frame");
+
+  let externalScreen = Screen(4, 1);
+  let externalManager = ViewManager(externalScreen);
+  let external = Text();
+  external.style.position = Position.Absolute;
+  external.style.width = 7;
+  external.style.height = 1;
+  external.textOverflow = TextOverflow.Ellipsis;
+  external.content = "abcdefg";
+  external.arrange(externalManager);
+  external.draw(externalManager);
+  let externalBuffer = externalScreen.buffer();
+  check(externalBuffer.cells[0].value == (u64)97 &&
+    externalBuffer.cells[1].value == (u64)98 &&
+    externalBuffer.cells[2].value == (u64)99 &&
+    externalBuffer.cells[3].value == (u64)100,
+    "tui/text/external-clip-does-not-trigger-ellipsis");
+}
+
 /** 验证 Text 通过 Widget 调度绘制自动换行、硬换行和 Unicode 码点。 */
 func text_draw_wrap_unicode_and_hit_target() {
   let screen = Screen(6, 4);
@@ -2630,6 +2718,7 @@ open func run_tui_tests() {
     test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
     test("text_grapheme_wrap_and_emoji()", () { text_grapheme_wrap_and_emoji(); });
     test("text_horizontal_alignment_and_clipping()", () { text_horizontal_alignment_and_clipping(); });
+    test("text_overflow_ellipsis()", () { text_overflow_ellipsis(); });
     test("text_draw_wrap_unicode_and_hit_target()", () { text_draw_wrap_unicode_and_hit_target(); });
     test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });

@@ -30,6 +30,14 @@ open enum TextAlign {
   Right
 }
 
+/** Text 内容超出自身 frame 高度时的显示方式。 */
+open enum TextOverflow {
+  /** 直接裁剪超出自身 frame 的内容。 */
+  Clip,
+  /** 在最后可显示行的最右侧绘制最多三个 ASCII 点。 */
+  Ellipsis
+}
+
 /**
  * TextLine 记录 Text.content 中一条最终显示行的原始字节区间。
  * 区间不包含硬换行码点，绘制时直接从原字符串解码，不创建 substring。
@@ -59,6 +67,9 @@ open spec TextWidget: Widget {
   /** 每一行内容在 Text frame 内的水平对齐方式。 */
   var textAlign: TextAlign;
 
+  /** 内容超出 Text 自身高度时的显示方式。 */
+  var textOverflow: TextOverflow;
+
   /** arrange 生成、draw 复用的最终显示行。 */
   let lines: List<TextLine>;
 }
@@ -76,6 +87,9 @@ open type Text: TextWidget {
 
   /** 每一行内容在 Text frame 内的水平对齐方式。 */
   open var textAlign: TextAlign = TextAlign.Left;
+
+  /** 内容超出 Text 自身高度时的显示方式。 */
+  open var textOverflow: TextOverflow = TextOverflow.Clip;
 
   /** arrange 生成、draw 复用的最终显示行。 */
   seal let lines: List<TextLine> = List<TextLine>();
@@ -267,6 +281,48 @@ open type Text: TextWidget {
     }
   }
 
+  /** 返回需要显示省略号的行索引；不需要时返回 -1。 */
+  seal static func resolveEllipsisLine(text: TextWidget): int {
+    if text.textOverflow == TextOverflow.Ellipsis &&
+    text.frame.width > 0 && text.frame.height > 0 &&
+    text.lines.size() > text.frame.height {
+      return text.frame.height - 1;
+    }
+    return -1;
+  }
+
+  /** 返回当前 Text frame 能够容纳的省略号 Cell 数。 */
+  seal static func ellipsisCells(text: TextWidget): int {
+    if text.frame.width < 3 {
+      return text.frame.width;
+    }
+    return 3;
+  }
+
+  /**
+   * 在 Text frame 最右侧绘制落入 drawFrame 的省略号 Cell。
+   * frame 宽度小于 3 时只绘制能够容纳的点。
+   */
+  seal static func drawEllipsis(text: TextWidget, buffer: Buffer,
+    drawFrame: Rect, y: int, foreBits: u64): void {
+    let cells = Text.ellipsisCells(text);
+    var start = text.frame.x + text.frame.width - cells;
+    if start < drawFrame.x {
+      start = drawFrame.x;
+    }
+    var end = text.frame.x + text.frame.width;
+    let drawRight = drawFrame.x + drawFrame.width;
+    if end > drawRight {
+      end = drawRight;
+    }
+    var x = start;
+    while x < end {
+      let cellIndex = y * (int)buffer.width + x;
+      Text.writeCell(buffer, cellIndex, (u32)46, foreBits);
+      x += 1;
+    }
+  }
+
   /**
    * 测量 content 并写回最终 frame。
    * 宽度先解析，Auto 高度再使用最终分行数。
@@ -322,6 +378,7 @@ open type Text: TextWidget {
 
     let firstLine = drawFrame.y - text.frame.y;
     let foreBits = Text.resolveForeBits(text);
+    let ellipsisLine = Text.resolveEllipsisLine(text);
     var visibleRow = 0;
     while visibleRow < drawFrame.height {
       let lineIndex = firstLine + visibleRow;
@@ -329,6 +386,7 @@ open type Text: TextWidget {
         return;
       }
       let line = text.lines.get(lineIndex);
+      let ellipsis = lineIndex == ellipsisLine;
       let lineX = Text.resolveLineX(text, line);
       var visibleX = lineX;
       if visibleX < drawFrame.x {
@@ -339,11 +397,22 @@ open type Text: TextWidget {
       if visibleRight > drawRight {
         visibleRight = drawRight;
       }
+      if ellipsis {
+        let ellipsisStart = text.frame.x + text.frame.width -
+          Text.ellipsisCells(text);
+        if visibleRight > ellipsisStart {
+          visibleRight = ellipsisStart;
+        }
+      }
       let visibleWidth = visibleRight - visibleX;
       if visibleWidth > 0 {
         Text.drawLine(text, buffer, line,
           visibleX, drawFrame.y + visibleRow, visibleX - lineX,
           visibleWidth, foreBits);
+      }
+      if ellipsis {
+        Text.drawEllipsis(text, buffer, drawFrame,
+          drawFrame.y + visibleRow, foreBits);
       }
       visibleRow += 1;
     }

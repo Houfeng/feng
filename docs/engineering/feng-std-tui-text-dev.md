@@ -15,13 +15,14 @@
 - 将当前 Text 验证骨架实现为具有公开 `content` 字段的实际 Widget；
 - 根据 Text 的最终内容宽度完成硬换行、自动换行、自动高度和裁剪绘制；
 - 支持每一行文本在 Text frame 内左对齐、居中和右对齐；
+- 支持内容超出 Text 自身固定高度时裁剪或在最后可显示行绘制 `...`；
 - 复用 `std.text` 的 grapheme 能力确定用户可见字符边界，支持 Emoji 与组合字符；
 - 测量和绘制使用一致的分行结果，不创建逐行字符串副本；
 - 保持现有 View、Buffer、Cell 的颜色、裁剪和字符存储契约。
 
-本阶段不实现 VStack/HStack、Input、文本选择、光标、富文本、单词级断行、垂直文本对齐、
-Text Overflow 或滚动。这些能力在 Text 基础行为稳定后分别设计；富文本由未来的 RichText
-负责，滚动由未来的 ScrollView 负责。
+本阶段不实现 VStack/HStack、Input、文本选择、光标、富文本、单词级断行、垂直文本对齐
+或滚动。这些能力在 Text 基础行为稳定后分别设计；富文本由未来的 RichText 负责，滚动
+由未来的 ScrollView 负责。文本选择后续由组件自身实现，不依赖终端原生选择兜底。
 
 ## 2 当前基线
 
@@ -94,12 +95,20 @@ open enum TextAlign {
   Right
 }
 
+open enum TextOverflow {
+  Clip,
+  Ellipsis
+}
+
 open spec TextWidget: Widget {
   /** 需要显示的文本内容。 */
   var content: string;
 
   /** 每一行文本在 frame 内的水平对齐方式。 */
   var textAlign: TextAlign;
+
+  /** 内容超出 Text 自身高度时的显示方式。 */
+  var textOverflow: TextOverflow;
 
   /** arrange 生成、draw 复用的内部分行信息。 */
   let lines: List<TextLine>;
@@ -113,6 +122,9 @@ open type Text: TextWidget {
 
   /** 每一行文本在 frame 内的水平对齐方式，默认左对齐。 */
   open var textAlign: TextAlign = TextAlign.Left;
+
+  /** 内容超出 Text 自身高度时的显示方式，默认直接裁剪。 */
+  open var textOverflow: TextOverflow = TextOverflow.Clip;
 
   /** arrange 生成、draw 复用的内部分行信息。 */
   let lines: List<TextLine> = List<TextLine>();
@@ -206,6 +218,11 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - 水平裁剪以对齐后的行起点为基准，只绘制该行与 drawFrame 的交集；裁剪不能改变
   对齐结果，也不能把可见字符重新贴到 frame 或 drawFrame 左侧；
 - 裁剪宽度不重新触发自动换行，换行宽度始终来自布局阶段的完整内容宽度；
+- `TextOverflow.Clip` 保持直接裁剪；`TextOverflow.Ellipsis` 仅在最终分行数大于 Text
+  自身 frame 高度时生效，不因 Screen 或祖先造成的外部裁剪而单独触发；
+- Ellipsis 在最后可显示行的 frame 最右侧预留最多三个 Cell 并绘制 ASCII `...`；
+  frame 宽度小于 3 时绘制能够容纳的点，宽或高为 0 时不绘制；
+- 省略号的位置由完整 frame 决定，drawFrame 只裁剪，不把省略号移动到外部可见区域内；
 - Text 仍通过 `ViewManager.trace(widget, drawFrame)` 登记绘制区域和命中顺序；
 - frame 或 drawFrame 任一轴为 0 时不写入 Buffer。
 
@@ -244,6 +261,7 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - 固定高度裁剪、Screen 裁剪和最近 Hidden 祖先裁剪；
 - 左侧、顶部被裁剪后仍保持原始文本行列偏移；
 - Left/Center/Right 对齐按每行实际 Cell 数计算，并在 Screen/祖先裁剪后保持原始位置；
+- Clip、Ellipsis、多行固定高度、窄于三个 Cell 以及仅发生外部裁剪的行为；
 - 前景色、指定背景色和 none 背景不覆盖已有 Cell 背景；
 - content 或可用宽度改变后重新 arrange 得到新的 frame 和分行；
 - Text 的 drawFrame、trace 和鼠标命中区域与实际可见区域一致。
@@ -265,4 +283,5 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.9 根据实现结果更新 TODO，等待人工 Review；
 - [x] 11.10 为 TextWidget/Text 增加 TextAlign 与 textAlign，并实现逐行水平对齐及裁剪测试；
 - [x] 11.11 复用 `std.text` grapheme API，实现组合字符与 Emoji 的测量、换行和绘制；
-- [ ] 11.12 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。
+- [x] 11.12 增加 TextOverflow.Clip/Ellipsis，并覆盖自身高度溢出与外部裁剪边界；
+- [ ] 11.13 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。
