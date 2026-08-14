@@ -64,31 +64,31 @@ open type View: Widget {
   /**
    * 将百分比解析为有符号坐标偏移。
    */
-  seal static func resolveScaledOffset(ratio: float, reference: int): int {
+  seal static func resolveScaledOffset(ratio: double, reference: int): int {
     if ratio != ratio {
       return 0;
     }
-    return (int)((double)reference * (double)ratio);
+    return (int)((double)reference * ratio);
   }
 
   /**
    * 将正百分比解析为非负尺寸。
    */
-  seal static func resolveScaledSize(ratio: float, reference: int): int {
+  seal static func resolveScaledSize(ratio: double, reference: int): int {
     if ratio != ratio || ratio <= 0.0 {
       return 0;
     }
-    return (int)((double)reference * (double)ratio);
+    return (int)((double)reference * ratio);
   }
 
   /**
    * 按指定参照尺寸解析坐标偏移。
    * 固定值和百分比均保留正负方向；NaN 解析为 0。
    */
-  seal static func resolveOffset(value: Union<int, float>, reference: int): int {
+  seal static func resolveOffset(value: Union<int, double>, reference: int): int {
     return match value {
       fixed: int { fixed }
-      ratio: float { View.resolveScaledOffset(ratio, reference) }
+      ratio: double { View.resolveScaledOffset(ratio, reference) }
       else { 0 }
     };
   }
@@ -97,12 +97,12 @@ open type View: Widget {
    * 按指定参照尺寸解析非负尺寸或间距。
    * 非正固定值、非正百分比及 NaN 解析为 0。
    */
-  seal static func resolveSize(value: Union<int, float>, reference: int): int {
+  seal static func resolveSize(value: Union<int, double>, reference: int): int {
     return match value {
       fixed: int {
         if fixed > 0 { fixed } else { 0 }
       }
-      ratio: float { View.resolveScaledSize(ratio, reference) }
+      ratio: double { View.resolveScaledSize(ratio, reference) }
       else { 0 }
     };
   }

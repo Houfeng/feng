@@ -76,10 +76,10 @@ open enum WidgetOverflow {
 ```feng
 open type WidgetStyle {
   var position: WidgetPosition;
-  var x: Union<u32, float>;
-  var y: Union<u32, float>;
-  var width: Union<u32, float>;
-  var height: Union<u32, float>;
+  var x: Union<int, double>;
+  var y: Union<int, double>;
+  var width: Union<int, double>;
+  var height: Union<int, double>;
   var foreColor: Option<RgbColor>;
   var backColor: Option<RgbColor>;
   var padding: Thickness;
@@ -90,7 +90,7 @@ open type WidgetStyle {
 }
 ```
 
-尺寸和坐标使用 `Union<u32, float>`：`u32` 表示固定终端单元数，`float` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal`、`Relative` 忽略二者。`Absolute` 的相对坐标以最近的非 `Normal` 祖先组件为参照，且不受该祖先组件 `padding` 影响；不存在非 `Normal` 祖先时以屏幕为参照。`Fixed` 始终以屏幕为参照。`Absolute` 和 `Fixed` 忽略 `horizontalAlign` 和 `verticalAlign`。
+尺寸和坐标使用 `Union<int, double>`：`int` 表示固定终端单元数，`double` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal`、`Relative` 忽略二者。`Absolute` 的相对坐标以最近的非 `Normal` 祖先组件为参照，且不受该祖先组件 `padding` 影响；不存在非 `Normal` 祖先时以屏幕为参照。`Fixed` 始终以屏幕为参照。`Absolute` 和 `Fixed` 忽略 `horizontalAlign` 和 `verticalAlign`。
 
 `foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
 
@@ -100,14 +100,14 @@ open type WidgetStyle {
 
 ```feng
 open type Thickness {
-  let top: Union<u32, float>;
-  let right: Union<u32, float>;
-  let bottom: Union<u32, float>;
-  let left: Union<u32, float>;
+  let top: Union<int, double>;
+  let right: Union<int, double>;
+  let bottom: Union<int, double>;
+  let left: Union<int, double>;
 }
 ```
 
-当前提供六种构造形式：四边值、垂直/水平值和统一值，每种形式分别支持全部使用 `u32` 或全部使用 `float`。
+当前提供六种构造形式：四边值、垂直/水平值和统一值，每种形式分别支持全部使用 `int` 或全部使用 `double`。
 
 ### 3.4 WidgetFrame
 
@@ -116,10 +116,10 @@ open type Thickness {
 ```feng
 @value
 open type WidgetFrame {
-  var x: u32;
-  var y: u32;
-  var width: u32;
-  var height: u32;
+  var x: int;
+  var y: int;
+  var width: int;
+  var height: int;
 }
 ```
 
@@ -243,7 +243,7 @@ draw 阶段
 2. 从参照区域扣除两侧 margin，得到该轴的可用区域；
 3. `Full` 忽略该轴的 `width`/`height` 并占满可用区域；
 4. `Start`、`Center`、`End` 根据 `width`/`height` 计算尺寸，并在可用区域的起始、中间或末端定位；
-5. 百分比 `width`/`height` 以扣除自身 margin 后的可用区域为基数，转换为 `u32` 时向零截断。
+5. 百分比 `width`/`height` 以扣除自身 margin 后的可用区域为基数，转换为 `int` 时向零截断。
 
 `padding` 不改变组件自身的 `frame`，由具体容器在计算其 children 的参照区域时使用。组件自行决定是否及如何触发 children 的布局，`ViewManager` 不参与子组件布局。
 

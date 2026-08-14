@@ -1065,8 +1065,8 @@ func view_arrange_preserves_negative_percentage_offsets() {
   let screen = Screen(20, 10);
   let manager = ViewManager(screen);
   let view = View();
-  let negativeQuarter: float = -0.25;
-  let negativeHalf: float = -0.5;
+  let negativeQuarter: double = -0.25;
+  let negativeHalf: double = -0.5;
   view.style.position = Position.Fixed;
   view.style.x = negativeQuarter;
   view.style.y = negativeHalf;
