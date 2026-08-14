@@ -113,21 +113,21 @@ open type ViewManager {
    * @param event 需要分发的鼠标事件
    */
   seal func invokeMouse(widget: Widget, event: MouseEvent<Widget>): void {
-    if event.button == MouseButton.wheelUp || event.button == MouseButton.wheelDown {
+    if event.button == MouseButton.WheelUp || event.button == MouseButton.WheelDown {
       let targetEvent = widget.wheel;
       targetEvent.emit(event);
       return;
     }
     match event.action {
-      MouseAction.press {
+      MouseAction.Press {
         let targetEvent = widget.mouseDown;
         targetEvent.emit(event);
       }
-      MouseAction.move {
+      MouseAction.Move {
         let targetEvent = widget.mouseMove;
         targetEvent.emit(event);
       }
-      MouseAction.release {
+      MouseAction.Release {
         let targetEvent = widget.mouseUp;
         targetEvent.emit(event);
       }

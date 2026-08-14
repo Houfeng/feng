@@ -11,15 +11,15 @@ import std;
  */
 open enum ParserState {
   /** 地面态：等待新字节，处理单字节字符和 UTF-8 首字节 */
-  ground = 0,
+  Ground = 0,
   /** ESC 态：已收到 ESC（0x1B），等待下一个字节决定序列类型 */
-  esc = 1,
+  Esc = 1,
   /** CSI 态：已收到 ESC [，收集参数字节，等待终态字节 */
-  csi = 2,
+  Csi = 2,
   /** SS3 态：已收到 ESC O，等待功能键字节 */
-  ss3 = 3,
+  Ss3 = 3,
   /** UTF-8 多字节续传态：正在收集 UTF-8 续传字节 */
-  utf8 = 4
+  Utf8 = 4
 }
 
 /**
@@ -67,7 +67,7 @@ open type InputManager<T> {
    * 默认构造函数：初始化为 ground 态，回调未注册（默认零值，事件静默丢弃）。
    */
   func InputManager() {
-    self.state = ParserState.ground;
+    self.state = ParserState.Ground;
     self.params = i32[:8];
     self.paramCount = 0;
     self.currentParam = 0;
@@ -89,11 +89,11 @@ open type InputManager<T> {
    */
   open func feed(b: u8): void {
     match self.state {
-      ParserState.ground { self.handleGround(b); }
-      ParserState.esc { self.handleEsc(b); }
-      ParserState.csi { self.handleCsi(b); }
-      ParserState.ss3 { self.handleSs3(b); }
-      ParserState.utf8 { self.handleUtf8(b); }
+      ParserState.Ground { self.handleGround(b); }
+      ParserState.Esc { self.handleEsc(b); }
+      ParserState.Csi { self.handleCsi(b); }
+      ParserState.Ss3 { self.handleSs3(b); }
+      ParserState.Utf8 { self.handleUtf8(b); }
       else { self.reset(); }
     }
   }
@@ -186,22 +186,22 @@ open type InputManager<T> {
   seal func handleGround(b: u8): void {
     if b == (u8)0x1B {
       // ESC：进入 esc 态
-      self.state = ParserState.esc;
+      self.state = ParserState.Esc;
       return;
     }
     if b == (u8)0x08 || b == (u8)0x7F {
       // Backspace（BS 或 DEL）
-      self.emitKey(SpecialKey.backspace, 0);
+      self.emitKey(SpecialKey.Backspace, 0);
       return;
     }
     if b == (u8)0x09 {
       // Tab
-      self.emitKey(SpecialKey.tab, 0);
+      self.emitKey(SpecialKey.Tab, 0);
       return;
     }
     if b == (u8)0x0D {
       // Enter (CR)
-      self.emitKey(SpecialKey.enter, 0);
+      self.emitKey(SpecialKey.Enter, 0);
       return;
     }
     // Ctrl+字母：纯控制字符 0x01-0x07, 0x0B-0x0C, 0x0E-0x1A, 0x1C-0x1F
@@ -228,21 +228,21 @@ open type InputManager<T> {
       // 2 字节序列
       self.utf8Codepoint = ((u32)b & (u32)0x1F);
       self.utf8Remaining = 1;
-      self.state = ParserState.utf8;
+      self.state = ParserState.Utf8;
       return;
     }
     if b >= (u8)0xE0 && b <= (u8)0xEF {
       // 3 字节序列
       self.utf8Codepoint = ((u32)b & (u32)0x0F);
       self.utf8Remaining = 2;
-      self.state = ParserState.utf8;
+      self.state = ParserState.Utf8;
       return;
     }
     if b >= (u8)0xF0 && b <= (u8)0xF7 {
       // 4 字节序列
       self.utf8Codepoint = ((u32)b & (u32)0x07);
       self.utf8Remaining = 3;
-      self.state = ParserState.utf8;
+      self.state = ParserState.Utf8;
       return;
     }
     // 0x80-0xBF：非法续传字节（ground 态不应出现），丢弃
@@ -261,18 +261,18 @@ open type InputManager<T> {
     if b == (u8)0x5B {
       // '[' — 进入 CSI 态
       self.resetCsiState();
-      self.state = ParserState.csi;
+      self.state = ParserState.Csi;
       return;
     }
     if b == (u8)0x4F {
       // 'O' — 进入 SS3 态
-      self.state = ParserState.ss3;
+      self.state = ParserState.Ss3;
       return;
     }
     // 其他字节：产出普通字符（不加 MOD_ALT），回到 ground 态
     // 不在 ground 态处理 ESC 单独按键——终端无法区分单独 Esc 和 Alt+X
     self.emitKeyPrintable((u32)b, 0);
-    self.state = ParserState.ground;
+    self.state = ParserState.Ground;
   }
 
   /**
@@ -331,23 +331,23 @@ open type InputManager<T> {
   seal func handleSs3(b: u8): void {
     // F1-F4
     if b == (u8)0x50 { // 'P'
-      self.emitKey(SpecialKey.f1, 0);
+      self.emitKey(SpecialKey.F1, 0);
     } else if b == (u8)0x51 { // 'Q'
-      self.emitKey(SpecialKey.f2, 0);
+      self.emitKey(SpecialKey.F2, 0);
     } else if b == (u8)0x52 { // 'R'
-      self.emitKey(SpecialKey.f3, 0);
+      self.emitKey(SpecialKey.F3, 0);
     } else if b == (u8)0x53 { // 'S'
-      self.emitKey(SpecialKey.f4, 0);
+      self.emitKey(SpecialKey.F4, 0);
     } else if b == (u8)0x41 { // 'A' 方向键（某些终端用 SS3）
-      self.emitKey(SpecialKey.arrowUp, 0);
+      self.emitKey(SpecialKey.ArrowUp, 0);
     } else if b == (u8)0x42 { // 'B'
-      self.emitKey(SpecialKey.arrowDown, 0);
+      self.emitKey(SpecialKey.ArrowDown, 0);
     } else if b == (u8)0x43 { // 'C'
-      self.emitKey(SpecialKey.arrowRight, 0);
+      self.emitKey(SpecialKey.ArrowRight, 0);
     } else if b == (u8)0x44 { // 'D'
-      self.emitKey(SpecialKey.arrowLeft, 0);
+      self.emitKey(SpecialKey.ArrowLeft, 0);
     } else if b == (u8)0x48 { // 'H' Home（某些终端）
-      self.emitKey(SpecialKey.home, 0);
+      self.emitKey(SpecialKey.Home, 0);
     }
     // 其他字节：无效，丢弃
     self.reset();
@@ -398,25 +398,25 @@ open type InputManager<T> {
       }
     }
     if final == (u8)0x41 { // 'A'
-      self.emitKey(SpecialKey.arrowUp, mods);
+      self.emitKey(SpecialKey.ArrowUp, mods);
     } else if final == (u8)0x42 { // 'B'
-      self.emitKey(SpecialKey.arrowDown, mods);
+      self.emitKey(SpecialKey.ArrowDown, mods);
     } else if final == (u8)0x43 { // 'C'
-      self.emitKey(SpecialKey.arrowRight, mods);
+      self.emitKey(SpecialKey.ArrowRight, mods);
     } else if final == (u8)0x44 { // 'D'
-      self.emitKey(SpecialKey.arrowLeft, mods);
+      self.emitKey(SpecialKey.ArrowLeft, mods);
     } else if final == (u8)0x48 { // 'H'
-      self.emitKey(SpecialKey.home, mods);
+      self.emitKey(SpecialKey.Home, mods);
     } else if final == (u8)0x46 { // 'F'
-      self.emitKey(SpecialKey.end, mods);
+      self.emitKey(SpecialKey.End, mods);
     } else if final == (u8)0x50 { // 'P' (xterm CSI)
-      self.emitKey(SpecialKey.f1, mods);
+      self.emitKey(SpecialKey.F1, mods);
     } else if final == (u8)0x51 { // 'Q'
-      self.emitKey(SpecialKey.f2, mods);
+      self.emitKey(SpecialKey.F2, mods);
     } else if final == (u8)0x52 { // 'R'
-      self.emitKey(SpecialKey.f3, mods);
+      self.emitKey(SpecialKey.F3, mods);
     } else if final == (u8)0x53 { // 'S'
-      self.emitKey(SpecialKey.f4, mods);
+      self.emitKey(SpecialKey.F4, mods);
     } else if final == (u8)0x7E { // '~'
       self.handleCsiTilde(mods);
     }
@@ -435,20 +435,20 @@ open type InputManager<T> {
     }
     let code = self.params[0];
     match code {
-      1 { self.emitKey(SpecialKey.home, mods); }
-      4 { self.emitKey(SpecialKey.end, mods); }
-      5 { self.emitKey(SpecialKey.pageUp, mods); }
-      6 { self.emitKey(SpecialKey.pageDown, mods); }
-      2 { self.emitKey(SpecialKey.insert, mods); }
-      3 { self.emitKey(SpecialKey.delete, mods); }
-      15 { self.emitKey(SpecialKey.f5, mods); }
-      17 { self.emitKey(SpecialKey.f6, mods); }
-      18 { self.emitKey(SpecialKey.f7, mods); }
-      19 { self.emitKey(SpecialKey.f8, mods); }
-      20 { self.emitKey(SpecialKey.f9, mods); }
-      21 { self.emitKey(SpecialKey.f10, mods); }
-      23 { self.emitKey(SpecialKey.f11, mods); }
-      24 { self.emitKey(SpecialKey.f12, mods); }
+      1 { self.emitKey(SpecialKey.Home, mods); }
+      4 { self.emitKey(SpecialKey.End, mods); }
+      5 { self.emitKey(SpecialKey.PageUp, mods); }
+      6 { self.emitKey(SpecialKey.PageDown, mods); }
+      2 { self.emitKey(SpecialKey.Insert, mods); }
+      3 { self.emitKey(SpecialKey.Delete, mods); }
+      15 { self.emitKey(SpecialKey.F5, mods); }
+      17 { self.emitKey(SpecialKey.F6, mods); }
+      18 { self.emitKey(SpecialKey.F7, mods); }
+      19 { self.emitKey(SpecialKey.F8, mods); }
+      20 { self.emitKey(SpecialKey.F9, mods); }
+      21 { self.emitKey(SpecialKey.F10, mods); }
+      23 { self.emitKey(SpecialKey.F11, mods); }
+      24 { self.emitKey(SpecialKey.F12, mods); }
       else { /* 未知 ~ 序列，丢弃 */ }
     }
   }
@@ -479,46 +479,46 @@ open type InputManager<T> {
     if (btnVal & 8) != 0 { mods |= MOD_ALT; }
     if (btnVal & 16) != 0 { mods |= MOD_CONTROL; }
     // 判断按钮和动作
-    var action: MouseAction = MouseAction.press;
-    var button: MouseButton = MouseButton.none;
+    var action: MouseAction = MouseAction.Press;
+    var button: MouseButton = MouseButton.None;
     // 滚轮
     if btnVal == 64 {
-      button = MouseButton.wheelUp;
-      action = MouseAction.press;
+      button = MouseButton.WheelUp;
+      action = MouseAction.Press;
     } else if btnVal == 65 {
-      button = MouseButton.wheelDown;
-      action = MouseAction.press;
+      button = MouseButton.WheelDown;
+      action = MouseAction.Press;
     } else if (btnVal & 32) != 0 {
       // motion 标志（32）：拖动或悬停移动
-      action = MouseAction.move;
+      action = MouseAction.Move;
       let lowBits = btnVal & 3;
       if lowBits == 0 {
-        button = MouseButton.left;
+        button = MouseButton.Left;
       } else if lowBits == 1 {
-        button = MouseButton.middle;
+        button = MouseButton.Middle;
       } else if lowBits == 2 {
-        button = MouseButton.right;
+        button = MouseButton.Right;
       } else {
-        button = MouseButton.none; // 悬停移动（无按钮）
+        button = MouseButton.None; // 悬停移动（无按钮）
       }
     } else {
       // 普通 press/release
       if final == (u8)0x6D {
         // 'm' = release
-        action = MouseAction.release;
+        action = MouseAction.Release;
       } else {
         // 'M' = press
-        action = MouseAction.press;
+        action = MouseAction.Press;
       }
       let lowBits = btnVal & 3;
       if lowBits == 0 {
-        button = MouseButton.left;
+        button = MouseButton.Left;
       } else if lowBits == 1 {
-        button = MouseButton.middle;
+        button = MouseButton.Middle;
       } else if lowBits == 2 {
-        button = MouseButton.right;
+        button = MouseButton.Right;
       } else {
-        button = MouseButton.none;
+        button = MouseButton.None;
       }
     }
     // 坐标转换：终端 1-based → 0-based
@@ -574,7 +574,7 @@ open type InputManager<T> {
    * 重置状态机到 ground 态，清空所有累积状态。
    */
   seal func reset(): void {
-    self.state = ParserState.ground;
+    self.state = ParserState.Ground;
     self.paramCount = 0;
     self.currentParam = 0;
     self.hasDigits = false;

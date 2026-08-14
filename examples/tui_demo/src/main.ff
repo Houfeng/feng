@@ -76,7 +76,7 @@ func main(args: string[]) {
 
   // 只有经过 ViewManager 命中矩形的左键按下才开始拖动。
   rectangle.mouseDown.on((event: MouseEvent<Widget>) {
-    if event.button == MouseButton.left && event.lock() {
+    if event.button == MouseButton.Left && event.lock() {
       dragging = true;
       dragOffsetX = event.x - rectangle.frame.x;
       dragOffsetY = event.y - rectangle.frame.y;
@@ -85,7 +85,7 @@ func main(args: string[]) {
 
   // lock 后即使鼠标移出矩形，move 事件仍直接路由到矩形。
   rectangle.mouseMove.on((event: MouseEvent<Widget>) {
-    if event.action == MouseAction.move && dragging {
+    if event.action == MouseAction.Move && dragging {
       var x: u32 = 0;
       var y: u32 = 0;
       if event.x > dragOffsetX {

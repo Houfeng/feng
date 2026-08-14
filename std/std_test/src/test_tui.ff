@@ -868,16 +868,16 @@ func key_mod_constants() {
 
 func key_special_key_enum() {
   // SpecialKey 枚举值通过 KeyEvent 构造间接验证可访问性
-  let e1 = KeyEvent<i32>(SpecialKey.escape, 0);
-  let e2 = KeyEvent<i32>(SpecialKey.tab, 0);
-  let e3 = KeyEvent<i32>(SpecialKey.enter, 0);
-  let e4 = KeyEvent<i32>(SpecialKey.backspace, 0);
-  let e5 = KeyEvent<i32>(SpecialKey.arrowUp, 0);
-  let e6 = KeyEvent<i32>(SpecialKey.arrowDown, 0);
-  let e7 = KeyEvent<i32>(SpecialKey.arrowLeft, 0);
-  let e8 = KeyEvent<i32>(SpecialKey.arrowRight, 0);
-  let e9 = KeyEvent<i32>(SpecialKey.f1, 0);
-  let e10 = KeyEvent<i32>(SpecialKey.f12, 0);
+  let e1 = KeyEvent<i32>(SpecialKey.Escape, 0);
+  let e2 = KeyEvent<i32>(SpecialKey.Tab, 0);
+  let e3 = KeyEvent<i32>(SpecialKey.Enter, 0);
+  let e4 = KeyEvent<i32>(SpecialKey.Backspace, 0);
+  let e5 = KeyEvent<i32>(SpecialKey.ArrowUp, 0);
+  let e6 = KeyEvent<i32>(SpecialKey.ArrowDown, 0);
+  let e7 = KeyEvent<i32>(SpecialKey.ArrowLeft, 0);
+  let e8 = KeyEvent<i32>(SpecialKey.ArrowRight, 0);
+  let e9 = KeyEvent<i32>(SpecialKey.F1, 0);
+  let e10 = KeyEvent<i32>(SpecialKey.F12, 0);
   check(e1.isPrintable() == false, "tui/key/special-escape");
   check(e2.isPrintable() == false, "tui/key/special-tab");
   check(e3.isPrintable() == false, "tui/key/special-enter");
@@ -901,7 +901,7 @@ func key_event_default_ctor() {
 
 func key_event_special_key() {
   // 构造特殊键事件
-  let e = KeyEvent<i32>(SpecialKey.enter, 0);
+  let e = KeyEvent<i32>(SpecialKey.Enter, 0);
   check(e.isPrintable() == false, "tui/key/special-enter-is-printable");
   check(e.isControl() == false, "tui/key/special-enter-is-control");
   check(e.isShift() == false, "tui/key/special-enter-is-shift");
@@ -925,14 +925,14 @@ func key_event_ctrl_combo() {
 
 func key_event_shift_arrow() {
   // Shift+ArrowUp：mods=MOD_SHIFT
-  let e = KeyEvent<i32>(SpecialKey.arrowUp, MOD_SHIFT);
+  let e = KeyEvent<i32>(SpecialKey.ArrowUp, MOD_SHIFT);
   check(e.isShift() == true, "tui/key/shift-arrow-is-shift");
   check(e.isControl() == false, "tui/key/shift-arrow-is-control");
   check(e.isPrintable() == false, "tui/key/shift-arrow-is-printable");
 }
 
 func key_event_target_binding() {
-  let e = KeyEvent<i32>(SpecialKey.enter, 0);
+  let e = KeyEvent<i32>(SpecialKey.Enter, 0);
   check(e.hasTarget() == false, "tui/key/target-unbound");
   e.bindTarget(42);
   check(e.hasTarget() == true, "tui/key/target-bound");
@@ -943,34 +943,34 @@ func key_event_target_binding() {
 
 func mouse_action_enum() {
   // 通过 MouseEvent 构造间接验证枚举值可访问
-  let e1 = MouseEvent<i32>(MouseAction.press, MouseButton.none, 0, 0, 0);
-  let e2 = MouseEvent<i32>(MouseAction.release, MouseButton.none, 0, 0, 0);
-  let e3 = MouseEvent<i32>(MouseAction.move, MouseButton.none, 0, 0, 0);
-  check(e1.action == MouseAction.press, "tui/mouse/action-press");
-  check(e2.action == MouseAction.release, "tui/mouse/action-release");
-  check(e3.action == MouseAction.move, "tui/mouse/action-move");
+  let e1 = MouseEvent<i32>(MouseAction.Press, MouseButton.None, 0, 0, 0);
+  let e2 = MouseEvent<i32>(MouseAction.Release, MouseButton.None, 0, 0, 0);
+  let e3 = MouseEvent<i32>(MouseAction.Move, MouseButton.None, 0, 0, 0);
+  check(e1.action == MouseAction.Press, "tui/mouse/action-press");
+  check(e2.action == MouseAction.Release, "tui/mouse/action-release");
+  check(e3.action == MouseAction.Move, "tui/mouse/action-move");
 }
 
 func mouse_button_enum() {
   // 通过 MouseEvent 构造间接验证枚举值可访问
-  let e1 = MouseEvent<i32>(MouseAction.press, MouseButton.none, 0, 0, 0);
-  let e2 = MouseEvent<i32>(MouseAction.press, MouseButton.left, 0, 0, 0);
-  let e3 = MouseEvent<i32>(MouseAction.press, MouseButton.middle, 0, 0, 0);
-  let e4 = MouseEvent<i32>(MouseAction.press, MouseButton.right, 0, 0, 0);
-  let e5 = MouseEvent<i32>(MouseAction.press, MouseButton.wheelUp, 0, 0, 0);
-  let e6 = MouseEvent<i32>(MouseAction.press, MouseButton.wheelDown, 0, 0, 0);
-  check(e1.button == MouseButton.none, "tui/mouse/button-none");
-  check(e2.button == MouseButton.left, "tui/mouse/button-left");
-  check(e3.button == MouseButton.middle, "tui/mouse/button-middle");
-  check(e4.button == MouseButton.right, "tui/mouse/button-right");
-  check(e5.button == MouseButton.wheelUp, "tui/mouse/button-wheel-up");
-  check(e6.button == MouseButton.wheelDown, "tui/mouse/button-wheel-down");
+  let e1 = MouseEvent<i32>(MouseAction.Press, MouseButton.None, 0, 0, 0);
+  let e2 = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 0, 0, 0);
+  let e3 = MouseEvent<i32>(MouseAction.Press, MouseButton.Middle, 0, 0, 0);
+  let e4 = MouseEvent<i32>(MouseAction.Press, MouseButton.Right, 0, 0, 0);
+  let e5 = MouseEvent<i32>(MouseAction.Press, MouseButton.WheelUp, 0, 0, 0);
+  let e6 = MouseEvent<i32>(MouseAction.Press, MouseButton.WheelDown, 0, 0, 0);
+  check(e1.button == MouseButton.None, "tui/mouse/button-none");
+  check(e2.button == MouseButton.Left, "tui/mouse/button-left");
+  check(e3.button == MouseButton.Middle, "tui/mouse/button-middle");
+  check(e4.button == MouseButton.Right, "tui/mouse/button-right");
+  check(e5.button == MouseButton.WheelUp, "tui/mouse/button-wheel-up");
+  check(e6.button == MouseButton.WheelDown, "tui/mouse/button-wheel-down");
 }
 
 func mouse_event_default_ctor() {
   let e = MouseEvent<i32>();
-  check(e.action == MouseAction.press, "tui/mouse/ctor-default-action");
-  check(e.button == MouseButton.none, "tui/mouse/ctor-default-button");
+  check(e.action == MouseAction.Press, "tui/mouse/ctor-default-action");
+  check(e.button == MouseButton.None, "tui/mouse/ctor-default-button");
   check(e.x == (u32)0, "tui/mouse/ctor-default-x");
   check(e.y == (u32)0, "tui/mouse/ctor-default-y");
   check(e.mods == (u8)0, "tui/mouse/ctor-default-mods");
@@ -980,9 +980,9 @@ func mouse_event_default_ctor() {
 }
 
 func mouse_event_left_click() {
-  let e = MouseEvent<i32>(MouseAction.press, MouseButton.left, (u32)9, (u32)4, 0);
-  check(e.action == MouseAction.press, "tui/mouse/left-click-action");
-  check(e.button == MouseButton.left, "tui/mouse/left-click-button");
+  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, (u32)9, (u32)4, 0);
+  check(e.action == MouseAction.Press, "tui/mouse/left-click-action");
+  check(e.button == MouseButton.Left, "tui/mouse/left-click-button");
   check(e.x == (u32)9, "tui/mouse/left-click-x");
   check(e.y == (u32)4, "tui/mouse/left-click-y");
   check(e.mods == (u8)0, "tui/mouse/left-click-mods");
@@ -991,20 +991,20 @@ func mouse_event_left_click() {
 func mouse_event_with_modifiers() {
   // SGR 鼠标：+4=Shift, +8=Alt, +16=Ctrl
   let mods: u8 = MOD_SHIFT | MOD_ALT | MOD_CONTROL;
-  let e = MouseEvent<i32>(MouseAction.press, MouseButton.left, (u32)0, (u32)0, mods);
+  let e = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, (u32)0, (u32)0, mods);
   check(e.isShift() == true, "tui/mouse/mod-shift");
   check(e.isAlt() == true, "tui/mouse/mod-alt");
   check(e.isControl() == true, "tui/mouse/mod-control");
 }
 
 func mouse_event_move_action() {
-  let e = MouseEvent<i32>(MouseAction.move, MouseButton.none, (u32)5, (u32)3, 0);
-  check(e.action == MouseAction.move, "tui/mouse/move-action");
-  check(e.button == MouseButton.none, "tui/mouse/move-button-none");
+  let e = MouseEvent<i32>(MouseAction.Move, MouseButton.None, (u32)5, (u32)3, 0);
+  check(e.action == MouseAction.Move, "tui/mouse/move-action");
+  check(e.button == MouseButton.None, "tui/mouse/move-button-none");
 }
 
 func mouse_event_target_stop_and_lock() {
-  let owner = MouseEvent<i32>(MouseAction.press, MouseButton.left, 0, 0, 0);
+  let owner = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 0, 0, 0);
   check(owner.hasTarget() == false, "tui/mouse/target-unbound");
   check(owner.lock() == false, "tui/mouse/lock-rejects-unbound");
   check(owner.isStopped() == false, "tui/mouse/stop-default");
@@ -1019,13 +1019,13 @@ func mouse_event_target_stop_and_lock() {
   check(owner.isLocked() == true, "tui/mouse/lock-state-set");
   check(MouseEvent<i32>.lockedTarget() == 7, "tui/mouse/locked-target-value");
 
-  let competitor = MouseEvent<i32>(MouseAction.press, MouseButton.left, 0, 0, 0);
+  let competitor = MouseEvent<i32>(MouseAction.Press, MouseButton.Left, 0, 0, 0);
   competitor.bindTarget(9);
   check(competitor.lock() == false, "tui/mouse/lock-rejects-competitor");
   competitor.unlock();
   check(owner.isLocked() == true, "tui/mouse/unlock-rejects-competitor");
 
-  let routed = MouseEvent<i32>(MouseAction.move, MouseButton.none, 0, 0, 0);
+  let routed = MouseEvent<i32>(MouseAction.Move, MouseButton.None, 0, 0, 0);
   routed.bindLockedTarget(MouseEvent<i32>.lockedTarget());
   check(routed.lock() == true, "tui/mouse/lock-routed-owner");
   routed.unlock();
@@ -1080,20 +1080,20 @@ func view_manager_mouse_target_lock_and_bubble() {
     otherMove += 1;
   });
 
-  let press = MouseEvent<Widget>(MouseAction.press, MouseButton.left, 3, 3, 0);
+  let press = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 3, 3, 0);
   manager.dispatchMouse(press);
   check(childDown == 1, "tui/view/hit-child-down");
   check(parentDown == 1, "tui/view/bubble-parent-down");
   check(press.target == (Widget)child, "tui/view/press-target-child");
   check(press.isLocked(), "tui/view/press-lock-established");
 
-  let competing = MouseEvent<Widget>(MouseAction.press, MouseButton.left, 21, 3, 0);
+  let competing = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 21, 3, 0);
   competing.bindTarget((Widget)other);
   check(competing.lock() == false, "tui/view/lock-cannot-be-stolen");
   competing.unlock();
   check(press.isLocked(), "tui/view/lock-cannot-be-foreign-unlocked");
 
-  let outsideMove = MouseEvent<Widget>(MouseAction.move, MouseButton.none, 21, 3, 0);
+  let outsideMove = MouseEvent<Widget>(MouseAction.Move, MouseButton.None, 21, 3, 0);
   manager.dispatchMouse(outsideMove);
   check(childMove == 1, "tui/view/locked-move-child");
   check(parentMove == 1, "tui/view/locked-move-bubbles");
@@ -1104,11 +1104,11 @@ func view_manager_mouse_target_lock_and_bubble() {
   child.mouseUp.on((event: MouseEvent<Widget>) {
     event.unlock();
   });
-  let release = MouseEvent<Widget>(MouseAction.release, MouseButton.left, 21, 3, 0);
+  let release = MouseEvent<Widget>(MouseAction.Release, MouseButton.Left, 21, 3, 0);
   manager.dispatchMouse(release);
   check(release.isLocked() == false, "tui/view/release-explicit-unlock");
 
-  let unlockedMove = MouseEvent<Widget>(MouseAction.move, MouseButton.none, 21, 3, 0);
+  let unlockedMove = MouseEvent<Widget>(MouseAction.Move, MouseButton.None, 21, 3, 0);
   manager.dispatchMouse(unlockedMove);
   check(otherMove == 1, "tui/view/unlocked-move-hit-other");
   check(unlockedMove.target == (Widget)other, "tui/view/unlocked-move-target-other");
@@ -1123,7 +1123,7 @@ func view_manager_mouse_target_lock_and_bubble() {
       childAfterStop += 1;
     }
   });
-  let stopped = MouseEvent<Widget>(MouseAction.press, MouseButton.left, 3, 3, 0);
+  let stopped = MouseEvent<Widget>(MouseAction.Press, MouseButton.Left, 3, 3, 0);
   manager.dispatchMouse(stopped);
   check(stopped.isStopped(), "tui/view/stop-state-shared");
   check(childAfterStop == 1, "tui/view/stop-keeps-current-widget-listeners");
@@ -1223,7 +1223,7 @@ func input_ctrl_a() {
 }
 
 func input_ctrl_h_is_backspace_not_control() {
-  // Ctrl+H = 0x08 = BS，优先映射为 SpecialKey.backspace，不设 MOD_CONTROL
+  // Ctrl+H = 0x08 = BS，优先映射为 SpecialKey.Backspace，不设 MOD_CONTROL
   let mgr = makeInputManager();
   mgr.feed((u8)0x08);
   check(keyCaptured == true, "tui/input/ctrl-h-captured");
@@ -1232,7 +1232,7 @@ func input_ctrl_h_is_backspace_not_control() {
 }
 
 func input_ctrl_m_is_enter_not_control() {
-  // Ctrl+M = 0x0D = CR，优先映射为 SpecialKey.enter，不设 MOD_CONTROL
+  // Ctrl+M = 0x0D = CR，优先映射为 SpecialKey.Enter，不设 MOD_CONTROL
   let mgr = makeInputManager();
   mgr.feed((u8)0x0D);
   check(keyCaptured == true, "tui/input/ctrl-m-captured");
@@ -1393,8 +1393,8 @@ func input_mouse_left_click() {
   seq[5] = (byte)0x31; seq[6] = (byte)0x30; seq[7] = (byte)0x3B; seq[8] = (byte)0x35; seq[9] = (byte)0x4D;
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-left-click-captured");
-  check(capturedMouse.action == MouseAction.press, "tui/input/mouse-left-click-action");
-  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-left-click-button");
+  check(capturedMouse.action == MouseAction.Press, "tui/input/mouse-left-click-action");
+  check(capturedMouse.button == MouseButton.Left, "tui/input/mouse-left-click-button");
   check(capturedMouse.x == (u32)9, "tui/input/mouse-left-click-x");
   check(capturedMouse.y == (u32)4, "tui/input/mouse-left-click-y");
   check(capturedMouse.mods == (u8)0, "tui/input/mouse-left-click-mods");
@@ -1409,8 +1409,8 @@ func input_mouse_right_release() {
   seq[5] = (byte)0x31; seq[6] = (byte)0x30; seq[7] = (byte)0x3B; seq[8] = (byte)0x35; seq[9] = (byte)0x6D;
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-right-release-captured");
-  check(capturedMouse.action == MouseAction.release, "tui/input/mouse-right-release-action");
-  check(capturedMouse.button == MouseButton.right, "tui/input/mouse-right-release-button");
+  check(capturedMouse.action == MouseAction.Release, "tui/input/mouse-right-release-action");
+  check(capturedMouse.button == MouseButton.Right, "tui/input/mouse-right-release-button");
   check(capturedMouse.x == (u32)9, "tui/input/mouse-right-release-x");
   check(capturedMouse.y == (u32)4, "tui/input/mouse-right-release-y");
 }
@@ -1423,8 +1423,8 @@ func input_mouse_wheel_up() {
   seq[6] = (byte)0x31; seq[7] = (byte)0x3B; seq[8] = (byte)0x31; seq[9] = (byte)0x4D;
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-wheel-up-captured");
-  check(capturedMouse.action == MouseAction.press, "tui/input/mouse-wheel-up-action");
-  check(capturedMouse.button == MouseButton.wheelUp, "tui/input/mouse-wheel-up-button");
+  check(capturedMouse.action == MouseAction.Press, "tui/input/mouse-wheel-up-action");
+  check(capturedMouse.button == MouseButton.WheelUp, "tui/input/mouse-wheel-up-button");
   check(capturedMouse.x == (u32)0, "tui/input/mouse-wheel-up-x");
   check(capturedMouse.y == (u32)0, "tui/input/mouse-wheel-up-y");
 }
@@ -1447,8 +1447,8 @@ func input_mouse_drag_left() {
   seq[10] = (byte)0x4D; // 'M'
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-drag-left-captured");
-  check(capturedMouse.action == MouseAction.move, "tui/input/mouse-drag-left-action");
-  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-drag-left-button");
+  check(capturedMouse.action == MouseAction.Move, "tui/input/mouse-drag-left-action");
+  check(capturedMouse.button == MouseButton.Left, "tui/input/mouse-drag-left-button");
   check(capturedMouse.x == (u32)9, "tui/input/mouse-drag-left-x");
   check(capturedMouse.y == (u32)4, "tui/input/mouse-drag-left-y");
 }
@@ -1471,8 +1471,8 @@ func input_mouse_hover_move() {
   seq[10] = (byte)0x4D; // 'M'
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-hover-captured");
-  check(capturedMouse.action == MouseAction.move, "tui/input/mouse-hover-action");
-  check(capturedMouse.button == MouseButton.none, "tui/input/mouse-hover-button-none");
+  check(capturedMouse.action == MouseAction.Move, "tui/input/mouse-hover-action");
+  check(capturedMouse.button == MouseButton.None, "tui/input/mouse-hover-button-none");
   check(capturedMouse.x == (u32)9, "tui/input/mouse-hover-x");
   check(capturedMouse.y == (u32)4, "tui/input/mouse-hover-y");
 }
@@ -1486,7 +1486,7 @@ func input_mouse_with_modifiers() {
   feedBytes(mgr, (byte[])seq);
   check(mouseCaptured == true, "tui/input/mouse-shift-captured");
   check(capturedMouse.isShift() == true, "tui/input/mouse-shift-is-shift");
-  check(capturedMouse.button == MouseButton.left, "tui/input/mouse-shift-button");
+  check(capturedMouse.button == MouseButton.Left, "tui/input/mouse-shift-button");
 }
 
 func input_unregistered_callback_drops_events() {
