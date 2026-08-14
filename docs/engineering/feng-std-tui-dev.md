@@ -208,6 +208,9 @@
 - [x] 4.40 等待人工 Review：开发者审查鼠标 target 与 lock 设计和实现，通过后再处理焦点和键盘路由
 - [x] 4.41 实现焦点管理、不可停止的 `FocusEvent` 路径事件、鼠标自动聚焦、ViewManager 多播事件、键盘焦点路由及不可被视图停止的 `TuiApp.key`；详见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`
 
+> Text 与自动尺寸作为后续独立阶段设计，详见
+> `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。
+
 ### 第八阶段：测试与验证
 
 - [ ] 4.42 补充 std_test 用例：审查前七阶段测试覆盖度，补充遗漏的边界用例与集成场景测试

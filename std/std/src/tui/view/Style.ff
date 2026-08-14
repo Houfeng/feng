@@ -44,6 +44,15 @@ open enum Overflow {
 }
 
 /**
+ * Auto 表示由组件的内在内容决定最终尺寸。
+ * 零元素具名 tuple 不携带运行时数据。
+ */
+open type Auto();
+
+/** 自动尺寸值。 */
+open let auto: Auto = ();
+
+/**
  * WidgetStyle 组件布局与样式约束
  */
 open type Style {
@@ -74,20 +83,22 @@ open type Style {
   var y: Union<int, double>;
 
   /**
-   * 宽度，int 表示固定终端单元数，double 表示百分比；解析结果保持非负。
+   * 宽度，Auto 表示内在内容宽度，int 表示固定终端单元数，double 表示百分比；
+   * 解析结果保持非负。
    * 固定宽度保持原值，不扣除 margin；百分比宽度以参照区域扣除
    * margin.left/right 后的剩余宽度为基数。Normal/Relative + horizontalAlign=Full
    * 时忽略 width，直接占满扣除左右 margin 后的可用宽度。
    */
-  var width: Union<int, double>;
+  var width: Union<Auto, int, double>;
 
   /**
-   * 高度，int 表示固定终端单元数，double 表示百分比；解析结果保持非负。
+   * 高度，Auto 表示内在内容高度，int 表示固定终端单元数，double 表示百分比；
+   * 解析结果保持非负。
    * 固定高度保持原值，不扣除 margin；百分比高度以参照区域扣除
    * margin.top/bottom 后的剩余高度为基数。Normal/Relative + verticalAlign=Full
    * 时忽略 height，直接占满扣除上下 margin 后的可用高度。
    */
-  var height: Union<int, double>;
+  var height: Union<Auto, int, double>;
 
   /**
    * 前景色；不参与布局，在绘制阶段使用。
@@ -119,14 +130,14 @@ open type Style {
 
   /**
    * Normal/Relative 布局的水平对齐方式；Absolute/Fixed 时忽略。
-   * Start/Center/End 在扣除左右 margin 后的可用区域内定位固定或百分比宽度；
+   * Start/Center/End 在扣除左右 margin 后的可用区域内按最终解析宽度定位；
    * Full 忽略 width 并占满该可用区域。
    */
   var horizontalAlign: Align;
 
   /**
    * Normal/Relative 布局的垂直对齐方式；Absolute/Fixed 时忽略。
-   * Start/Center/End 在扣除上下 margin 后的可用区域内定位固定或百分比高度；
+   * Start/Center/End 在扣除上下 margin 后的可用区域内按最终解析高度定位；
    * Full 忽略 height 并占满该可用区域。
    */
   var verticalAlign: Align;

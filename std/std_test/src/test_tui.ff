@@ -1136,6 +1136,287 @@ func view_arrange_oversized_alignment_keeps_negative_origin() {
   check(view.frame.height == 20, "tui/view/arrange-oversized-height");
 }
 
+/** 验证 Auto 默认值、Full 优先级及基础 View 的零内在尺寸。 */
+func view_auto_size_semantics() {
+  let manager = ViewManager(Screen(20, 10));
+  let view = View();
+  var widthIsAuto = false;
+  var heightIsAuto = false;
+  if view.style.width match value: Auto {
+    widthIsAuto = true;
+  }
+  if view.style.height match value: Auto {
+    heightIsAuto = true;
+  }
+  check(widthIsAuto && heightIsAuto, "tui/view/auto-default-branches");
+
+  view.arrange(manager);
+  check(view.frame.width == 20 && view.frame.height == 10,
+    "tui/view/auto-full-precedence");
+
+  view.style.horizontalAlign = Align.Start;
+  view.style.verticalAlign = Align.Start;
+  view.arrange(manager);
+  check(view.frame.width == 0 && view.frame.height == 0,
+    "tui/view/auto-zero-intrinsic-size");
+
+  let half: double = 0.5;
+  view.style.width = 6;
+  view.style.height = half;
+  view.arrange(manager);
+  check(view.frame.width == 6 && view.frame.height == 5,
+    "tui/view/auto-keeps-fixed-percent");
+
+  view.style.position = Position.Absolute;
+  view.style.x = 2;
+  view.style.y = 3;
+  view.style.width = auto;
+  view.style.height = auto;
+  view.arrange(manager);
+  check(view.frame.x == 2 && view.frame.y == 3 &&
+    view.frame.width == 0 && view.frame.height == 0,
+    "tui/view/auto-absolute-zero-intrinsic");
+}
+
+/** 验证 Text 的 Auto 宽高、硬换行、末尾换行和最终尺寸对齐。 */
+func text_auto_measure_and_alignment() {
+  let manager = ViewManager(Screen(20, 10));
+  let text = Text();
+  text.style.horizontalAlign = Align.Start;
+  text.style.verticalAlign = Align.Start;
+  let paddingSize: int = 4;
+  text.style.padding = Thickness(paddingSize);
+
+  check(text.content == "", "tui/text/default-empty-content");
+  text.arrange(manager);
+  check(text.frame.width == 0 && text.frame.height == 0,
+    "tui/text/empty-auto-size");
+
+  text.content = "ab\ncde";
+  text.arrange(manager);
+  check(text.frame.width == 3 && text.frame.height == 2,
+    "tui/text/auto-hard-lines");
+
+  text.content = "ab\r\nc";
+  text.arrange(manager);
+  check(text.frame.width == 2 && text.frame.height == 2,
+    "tui/text/auto-crlf-lines");
+
+  text.content = "ab\n";
+  text.arrange(manager);
+  check(text.frame.width == 2 && text.frame.height == 2,
+    "tui/text/auto-trailing-empty-line");
+
+  text.content = "abc";
+  text.style.horizontalAlign = Align.Center;
+  text.style.verticalAlign = Align.Center;
+  text.arrange(manager);
+  check(text.frame.x == 8 && text.frame.y == 4,
+    "tui/text/auto-center-final-size");
+  check(text.frame.width == 3 && text.frame.height == 1,
+    "tui/text/auto-center-dimensions");
+
+  text.style.horizontalAlign = Align.End;
+  text.style.verticalAlign = Align.End;
+  text.arrange(manager);
+  check(text.frame.x == 17 && text.frame.y == 9,
+    "tui/text/auto-end-final-size");
+
+  text.style.horizontalAlign = Align.Start;
+  text.style.verticalAlign = Align.Start;
+  text.content = "\n";
+  text.arrange(manager);
+  check(text.frame.width == 0 && text.frame.height == 0,
+    "tui/text/zero-intrinsic-width-has-zero-height");
+
+  text.style.width = 2;
+  text.arrange(manager);
+  check(text.frame.width == 2 && text.frame.height == 2,
+    "tui/text/finite-width-preserves-empty-lines");
+  check(!text.isAncestor(text),
+    "tui/text/inherits-view-is-ancestor");
+}
+
+/** 验证有限宽度换行、百分比/Full 宽度以及内容和宽度变化后的重排。 */
+func text_wrap_and_reflow_dimensions() {
+  let manager = ViewManager(Screen(10, 8));
+  let text = Text();
+  text.style.horizontalAlign = Align.Start;
+  text.style.verticalAlign = Align.Start;
+  text.style.width = 3;
+  text.style.height = auto;
+  text.content = "abcdefg";
+
+  text.arrange(manager);
+  check(text.frame.width == 3 && text.frame.height == 3,
+    "tui/text/fixed-width-auto-height");
+
+  text.style.width = 4;
+  text.arrange(manager);
+  check(text.frame.width == 4 && text.frame.height == 2,
+    "tui/text/width-change-reflow");
+
+  text.content = "xy";
+  text.arrange(manager);
+  check(text.frame.width == 4 && text.frame.height == 1,
+    "tui/text/content-change-reflow");
+
+  let half: double = 0.5;
+  text.style.width = half;
+  text.content = "abcdefghijk";
+  text.arrange(manager);
+  check(text.frame.width == 5 && text.frame.height == 3,
+    "tui/text/percent-width-auto-height");
+
+  text.style.width = auto;
+  text.style.horizontalAlign = Align.Full;
+  text.arrange(manager);
+  check(text.frame.width == 10 && text.frame.height == 2,
+    "tui/text/full-width-auto-height");
+
+  text.style.height = 1;
+  text.arrange(manager);
+  check(text.frame.width == 10 && text.frame.height == 1,
+    "tui/text/fixed-height-does-not-expand");
+}
+
+/** 验证 Text 通过 Widget 调度绘制自动换行、硬换行和 Unicode 码点。 */
+func text_draw_wrap_unicode_and_hit_target() {
+  let screen = Screen(6, 4);
+  let manager = ViewManager(screen);
+  let text = Text();
+  text.style.position = Position.Absolute;
+  text.style.x = 1;
+  text.style.y = 0;
+  text.style.width = 3;
+  text.style.height = 3;
+  text.style.foreColor = RgbColor(0x12, 0x34, 0x56);
+  text.content = "A中😀B\nZ";
+  manager.root = text;
+
+  manager.arrange();
+  manager.draw();
+  let buffer = screen.buffer();
+  check(buffer.cells[1].value == (u64)65,
+    "tui/text/draw-first-ascii");
+  check(buffer.cells[2].value == (u64)0x4E2D,
+    "tui/text/draw-chinese-codepoint");
+  check(buffer.cells[3].value == (u64)0x1F600,
+    "tui/text/draw-emoji-codepoint");
+  check(buffer.cells[7].value == (u64)66,
+    "tui/text/draw-soft-wrapped-row");
+  check(buffer.cells[13].value == (u64)90,
+    "tui/text/draw-hard-wrapped-row");
+  check(buffer.cells[1].foreColor() == (u32)0x123456,
+    "tui/text/draw-foreground");
+  check(text.drawFrame.x == 1 && text.drawFrame.y == 0 &&
+    text.drawFrame.width == 3 && text.drawFrame.height == 3,
+    "tui/text/draw-frame-traced");
+
+  var mouseHits = 0;
+  var targetStable = true;
+  text.mouseDown.on((event: MouseEvent<Widget>) {
+    mouseHits += 1;
+    targetStable = targetStable && event.target == (Widget)text;
+  });
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 2, 0, 0));
+  check(mouseHits == 1 && targetStable,
+    "tui/text/draw-frame-hit-target");
+}
+
+/** 验证 Text 的 none 背景保留底层 Cell，指定背景填充完整可见 frame。 */
+func text_draw_background_semantics() {
+  let screen = Screen(4, 2);
+  let manager = ViewManager(screen);
+  let buffer = screen.buffer();
+  let under = RgbColor(0x01, 0x02, 0x03);
+  buffer.draw((u32)0, (u32)0, (u32)4, (u32)1, (u64)88,
+    none, under, CellStyle.Bold);
+
+  let text = Text();
+  text.style.position = Position.Absolute;
+  text.style.width = 2;
+  text.style.height = 1;
+  text.style.foreColor = RgbColor(0xAA, 0xBB, 0xCC);
+  text.content = "A";
+  text.arrange(manager);
+  text.draw(manager);
+
+  check(buffer.cells[0].value == (u64)65,
+    "tui/text/none-bg-writes-glyph");
+  check(buffer.cells[0].backColor() == (u32)0x010203,
+    "tui/text/none-bg-preserves-underlay");
+  check(buffer.cells[0].foreColor() == (u32)0xAABBCC,
+    "tui/text/none-bg-writes-foreground");
+  check((buffer.cells[0].style & Cell.MASK_FLAGS) == (u64)0,
+    "tui/text/glyph-clears-underlay-flags");
+  check(buffer.cells[1].value == (u64)88 && buffer.cells[1].bold(),
+    "tui/text/none-bg-keeps-unwritten-cell");
+
+  text.style.backColor = RgbColor(0x04, 0x05, 0x06);
+  text.content = "B";
+  text.arrange(manager);
+  text.draw(manager);
+  check(buffer.cells[0].value == (u64)66 &&
+    buffer.cells[0].backColor() == (u32)0x040506,
+    "tui/text/explicit-bg-glyph-cell");
+  check(buffer.cells[1].value == (u64)0 &&
+    buffer.cells[1].backColor() == (u32)0x040506,
+    "tui/text/explicit-bg-fills-frame");
+}
+
+/** 验证 Screen 与 Hidden 祖先裁剪只跳过原始行列，不重新排版文本。 */
+func text_draw_clipping_preserves_content_origin() {
+  let screen = Screen(4, 3);
+  let manager = ViewManager(screen);
+  let text = Text();
+  text.style.position = Position.Absolute;
+  text.style.x = -1;
+  text.style.y = -1;
+  text.style.width = 3;
+  text.style.height = 3;
+  text.content = "abcdefghi";
+  text.arrange(manager);
+  text.draw(manager);
+
+  let buffer = screen.buffer();
+  check(text.drawFrame.x == 0 && text.drawFrame.y == 0 &&
+    text.drawFrame.width == 2 && text.drawFrame.height == 2,
+    "tui/text/screen-clipped-frame");
+  check(buffer.cells[0].value == (u64)101 &&
+    buffer.cells[1].value == (u64)102 &&
+    buffer.cells[4].value == (u64)104 &&
+    buffer.cells[5].value == (u64)105,
+    "tui/text/screen-clip-keeps-origin");
+
+  let hiddenScreen = Screen(6, 3);
+  let hiddenManager = ViewManager(hiddenScreen);
+  let parent = Container();
+  parent.style.position = Position.Relative;
+  parent.style.overflow = Overflow.Hidden;
+  parent.frame = makeWidgetFrame(1, 0, 2, 2);
+  let child = Text();
+  child.style.position = Position.Absolute;
+  child.style.x = -1;
+  child.style.width = 4;
+  child.style.height = 2;
+  child.content = "abcdefgh";
+  parent.addChild(child);
+  child.arrange(hiddenManager);
+  child.draw(hiddenManager);
+
+  let hiddenBuffer = hiddenScreen.buffer();
+  check(child.drawFrame.x == 1 && child.drawFrame.y == 0 &&
+    child.drawFrame.width == 2 && child.drawFrame.height == 2,
+    "tui/text/hidden-ancestor-frame");
+  check(hiddenBuffer.cells[1].value == (u64)98 &&
+    hiddenBuffer.cells[2].value == (u64)99 &&
+    hiddenBuffer.cells[7].value == (u64)102 &&
+    hiddenBuffer.cells[8].value == (u64)103,
+    "tui/text/hidden-clip-keeps-origin");
+}
+
 func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
   let frame = Rect();
   frame.x = x;
@@ -2228,6 +2509,12 @@ open func run_tui_tests() {
     test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
+    test("view_auto_size_semantics()", () { view_auto_size_semantics(); });
+    test("text_auto_measure_and_alignment()", () { text_auto_measure_and_alignment(); });
+    test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
+    test("text_draw_wrap_unicode_and_hit_target()", () { text_draw_wrap_unicode_and_hit_target(); });
+    test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
+    test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
     test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
     test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });

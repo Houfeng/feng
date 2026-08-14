@@ -77,47 +77,17 @@ open type View: Widget {
   let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
 
   /**
-   * 将百分比解析为有符号坐标偏移。
+   * 按指定参照尺寸解析固定值或百分比。
+   * 结果保留正负方向；NaN 解析为 0。
    */
-  seal static func resolveScaledOffset(ratio: double, reference: int): int {
-    if ratio != ratio {
-      return 0;
-    }
-    return (int)((double)reference * ratio);
-  }
-
-  /**
-   * 将正百分比解析为非负尺寸。
-   */
-  seal static func resolveScaledSize(ratio: double, reference: int): int {
-    if ratio != ratio || ratio <= 0.0 {
-      return 0;
-    }
-    return (int)((double)reference * ratio);
-  }
-
-  /**
-   * 按指定参照尺寸解析坐标偏移。
-   * 固定值和百分比均保留正负方向；NaN 解析为 0。
-   */
-  seal static func resolveOffset(value: Union<int, double>, reference: int): int {
+  open static func resolveLength(value: Union<int, double>,
+    reference: int): int {
     return match value {
       fixed: int { fixed }
-      ratio: double { View.resolveScaledOffset(ratio, reference) }
-      else { 0 }
-    };
-  }
-
-  /**
-   * 按指定参照尺寸解析非负尺寸或间距。
-   * 非正固定值、非正百分比及 NaN 解析为 0。
-   */
-  seal static func resolveSize(value: Union<int, double>, reference: int): int {
-    return match value {
-      fixed: int {
-        if fixed > 0 { fixed } else { 0 }
+      ratio: double {
+        if ratio != ratio { 0 }
+        else { (int)((double)reference * ratio) }
       }
-      ratio: double { View.resolveScaledSize(ratio, reference) }
       else { 0 }
     };
   }
@@ -171,7 +141,7 @@ open type View: Widget {
    * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
    * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
-  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
+  open static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
     let reference = Rect();
     reference.x = 0;
     reference.y = 0;
@@ -203,10 +173,14 @@ open type View: Widget {
 
       if View.isNormalFlow(widget.style.position) {
         let padding = parentWidget.style.padding;
-        let top = View.resolveSize(padding.top, reference.height);
-        let right = View.resolveSize(padding.right, reference.width);
-        let bottom = View.resolveSize(padding.bottom, reference.height);
-        let left = View.resolveSize(padding.left, reference.width);
+        var top = View.resolveLength(padding.top, reference.height);
+        var right = View.resolveLength(padding.right, reference.width);
+        var bottom = View.resolveLength(padding.bottom, reference.height);
+        var left = View.resolveLength(padding.left, reference.width);
+        if top < 0 { top = 0; }
+        if right < 0 { right = 0; }
+        if bottom < 0 { bottom = 0; }
+        if left < 0 { left = 0; }
         reference.x = View.addCoordinate(reference.x, left);
         reference.y = View.addCoordinate(reference.y, top);
         reference.width = View.resolveAvailableSize(reference.width, left, right);
@@ -220,33 +194,49 @@ open type View: Widget {
   /**
    * 解析组件最终宽度。
    */
-  seal static func resolveWidth(widget: Widget, referenceWidth: int,
-    left: int, right: int): int {
+  open static func resolveWidth(widget: Widget, referenceWidth: int,
+    left: int, right: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
     if View.isNormalFlow(widget.style.position) &&
     widget.style.horizontalAlign == Align.Full {
       return available;
     }
-    return View.resolveSize(widget.style.width, available);
+    return match widget.style.width {
+      autoValue: Auto { if intrinsic > 0 { intrinsic } else { 0 } }
+      fixed: int { if fixed > 0 { fixed } else { 0 } }
+      ratio: double {
+        let length = View.resolveLength(ratio, available);
+        if length > 0 { length } else { 0 }
+      }
+      else { 0 }
+    };
   }
 
   /**
    * 解析组件最终高度。
    */
-  seal static func resolveHeight(widget: Widget, referenceHeight: int,
-    top: int, bottom: int): int {
+  open static func resolveHeight(widget: Widget, referenceHeight: int,
+    top: int, bottom: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
     if View.isNormalFlow(widget.style.position) &&
     widget.style.verticalAlign == Align.Full {
       return available;
     }
-    return View.resolveSize(widget.style.height, available);
+    return match widget.style.height {
+      autoValue: Auto { if intrinsic > 0 { intrinsic } else { 0 } }
+      fixed: int { if fixed > 0 { fixed } else { 0 } }
+      ratio: double {
+        let length = View.resolveLength(ratio, available);
+        if length > 0 { length } else { 0 }
+      }
+      else { 0 }
+    };
   }
 
   /**
    * 解析组件最终横坐标。
    */
-  seal static func resolveX(widget: Widget, reference: Rect,
+  open static func resolveX(widget: Widget, reference: Rect,
     left: int, right: int, width: int): int {
     let marginOrigin = View.addCoordinate(reference.x, left);
     if View.isNormalFlow(widget.style.position) {
@@ -254,14 +244,14 @@ open type View: Widget {
       return View.resolveAlignedPosition(marginOrigin, available, width,
       widget.style.horizontalAlign);
     }
-    let offset = View.resolveOffset(widget.style.x, reference.width);
+    let offset = View.resolveLength(widget.style.x, reference.width);
     return View.addCoordinate(View.addCoordinate(reference.x, offset), left);
   }
 
   /**
    * 解析组件最终纵坐标。
    */
-  seal static func resolveY(widget: Widget, reference: Rect,
+  open static func resolveY(widget: Widget, reference: Rect,
     top: int, bottom: int, height: int): int {
     let marginOrigin = View.addCoordinate(reference.y, top);
     if View.isNormalFlow(widget.style.position) {
@@ -269,7 +259,7 @@ open type View: Widget {
       return View.resolveAlignedPosition(marginOrigin, available, height,
       widget.style.verticalAlign);
     }
-    let offset = View.resolveOffset(widget.style.y, reference.height);
+    let offset = View.resolveLength(widget.style.y, reference.height);
     return View.addCoordinate(View.addCoordinate(reference.y, offset), top);
   }
 
@@ -281,12 +271,16 @@ open type View: Widget {
   static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.style.margin;
-    let top = View.resolveSize(margin.top, reference.height);
-    let right = View.resolveSize(margin.right, reference.width);
-    let bottom = View.resolveSize(margin.bottom, reference.height);
-    let left = View.resolveSize(margin.left, reference.width);
-    let width = View.resolveWidth(widget, reference.width, left, right);
-    let height = View.resolveHeight(widget, reference.height, top, bottom);
+    var top = View.resolveLength(margin.top, reference.height);
+    var right = View.resolveLength(margin.right, reference.width);
+    var bottom = View.resolveLength(margin.bottom, reference.height);
+    var left = View.resolveLength(margin.left, reference.width);
+    if top < 0 { top = 0; }
+    if right < 0 { right = 0; }
+    if bottom < 0 { bottom = 0; }
+    if left < 0 { left = 0; }
+    let width = View.resolveWidth(widget, reference.width, left, right, 0);
+    let height = View.resolveHeight(widget, reference.height, top, bottom, 0);
 
     let frame = Rect();
     frame.x = View.resolveX(widget, reference, left, right, width);
@@ -338,7 +332,7 @@ open type View: Widget {
    * 解析当前组件的有效绘制区域。
    * 先使用最近的 overflow=Hidden 祖先 frame 裁剪，再裁剪到 Screen。
    */
-  seal static func resolveDrawFrame(widget: Widget, manager: ViewManager): Rect {
+  open static func resolveDrawFrame(widget: Widget, manager: ViewManager): Rect {
     var result = widget.frame;
     var current: Option<ContainerWidget> = widget.parent;
     while current match let parent: ContainerWidget {

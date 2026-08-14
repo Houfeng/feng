@@ -2,10 +2,316 @@ open module std.tui.widgets;
 
 import std;
 import std.collections;
+import std.text;
 import std.tui.common;
 import std.tui.view;
 import std.tui.input;
+import std.tui.screen;
 
-open type Text: Widget {
+/** libunistring：解码下一个 UTF-8 码点。 */
+@cdecl("feng_std_unistring", "u8_next")
+extern func text_u8_next(puc: u32*, s: string*): string*;
+
+/** runtime：判断指针是否为空。 */
+@runtime
+extern func feng_pointer_is_null(ptr: string*): bool;
+
+/** runtime：按字节偏移移动指针。 */
+@runtime
+extern func feng_pointer_move(ptr: string*, offset: int): string*;
+
+/** runtime：计算两个指针的字节偏移。 */
+@runtime
+extern func feng_pointer_diff(a: string*, b: string*): int;
+
+/**
+ * TextLine 记录 Text.content 中一条最终显示行的原始字节区间。
+ * 区间不包含硬换行码点，绘制时直接从原字符串解码，不创建 substring。
+ */
+@value
+open type TextLine {
+  /** 行首相对 content 数据起点的字节偏移。 */
+  let start: int;
+  /** 行尾相对 content 数据起点的字节偏移，采用左闭右开区间。 */
+  let end: int;
+  /** 本行包含的 Cell 数。 */
+  let cells: int;
+
+  /** 创建一条最终显示行。 */
+  func TextLine(start: int, end: int, cells: int) {
+    self.start = start;
+    self.end = end;
+    self.cells = cells;
+  }
+}
+
+/** Text 组件的内容与内部排版状态契约。 */
+open spec TextWidget: Widget {
+  /** 需要显示的文本内容。 */
+  var content: string;
+
+  /** arrange 生成、draw 复用的最终显示行。 */
+  let _lines: List<TextLine>;
+}
+
+/**
+ * Text 文本组件。
+ * 根据最终内容宽度自动换行，并在 Auto 高度下使用最终行数确定 frame。
+ */
+open type Text: TextWidget {
+  /** 展开 View 的 Widget 基础状态和未被 Text 覆盖的默认行为。 */
   ...: View = View();
+
+  /** 需要显示的文本内容。 */
+  open var content: string;
+
+  /** arrange 生成、draw 复用的最终显示行。 */
+  seal let _lines: List<TextLine> = List<TextLine>();
+
+  /** 判断当前宽度声明是否需要扫描内在内容宽度。 */
+  seal static func needsIntrinsicWidth(text: TextWidget): bool {
+    if (text.style.position == Position.Normal ||
+    text.style.position == Position.Relative) &&
+    text.style.horizontalAlign == Align.Full {
+      return false;
+    }
+    if text.style.width match value: Auto {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 计算 content 中最长逻辑行的 Cell 数。
+   * LF 和 CRLF 结束当前逻辑行，其他码点各占一个 Cell。
+   */
+  seal static func measureIntrinsicWidth(text: TextWidget): int {
+    if text.content.length() == 0 {
+      return 0;
+    }
+    let data: string* = &text.content;
+    var cursor: string* = data;
+    var current = 0;
+    var longest = 0;
+    while true {
+      var value: u32 = 0;
+      let next = text_u8_next(&value, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+      if value == (u32)13 {
+        var afterValue: u32 = 0;
+        let after = text_u8_next(&afterValue, next);
+        if !feng_pointer_is_null(after) && afterValue == (u32)10 {
+          if current > longest {
+            longest = current;
+          }
+          current = 0;
+          cursor = after;
+          continue;
+        }
+      }
+      if value == (u32)10 {
+        if current > longest {
+          longest = current;
+        }
+        current = 0;
+      } else {
+        current += 1;
+      }
+      cursor = next;
+    }
+    if current > longest {
+      longest = current;
+    }
+    return longest;
+  }
+
+  /** 向复用行缓冲追加一条 content 字节区间。 */
+  seal static func addLine(text: TextWidget, start: int,
+    end: int, cells: int): void {
+    text._lines.add(TextLine(start, end, cells));
+  }
+
+  /**
+   * 按最终内容宽度生成硬换行和软换行后的显示行。
+   * 空 content 或零宽度不生成行；末尾硬换行生成空的最终行。
+   */
+  seal static func layoutLines(text: TextWidget, width: int): void {
+    text._lines.clear();
+    let length = text.content.length();
+    if length == 0 || width <= 0 {
+      return;
+    }
+
+    let data: string* = &text.content;
+    var cursor: string* = data;
+    var lineStart = 0;
+    var lineCells = 0;
+    while true {
+      let valueStart = feng_pointer_diff(cursor, data);
+      var value: u32 = 0;
+      let next = text_u8_next(&value, cursor);
+      if feng_pointer_is_null(next) {
+        break;
+      }
+
+      if value == (u32)13 {
+        var afterValue: u32 = 0;
+        let after = text_u8_next(&afterValue, next);
+        if !feng_pointer_is_null(after) && afterValue == (u32)10 {
+          Text.addLine(text, lineStart, valueStart, lineCells);
+          lineStart = feng_pointer_diff(after, data);
+          lineCells = 0;
+          cursor = after;
+          continue;
+        }
+      }
+
+      if value == (u32)10 {
+        Text.addLine(text, lineStart, valueStart, lineCells);
+        lineStart = feng_pointer_diff(next, data);
+        lineCells = 0;
+        cursor = next;
+        continue;
+      }
+
+      if lineCells >= width {
+        Text.addLine(text, lineStart, valueStart, lineCells);
+        lineStart = valueStart;
+        lineCells = 0;
+      }
+      lineCells += 1;
+      cursor = next;
+    }
+    Text.addLine(text, lineStart, length, lineCells);
+  }
+
+  /** 将可选前景色转换为 Cell 的低 24 位颜色编码。 */
+  seal static func resolveForeBits(text: TextWidget): u64 {
+    if text.style.foreColor match color: RgbColor {
+      return ((u64)color.r << (u64)16) |
+        ((u64)color.g << (u64)8) | (u64)color.b;
+    }
+    return (u64)0;
+  }
+
+  /**
+   * 在指定 Cell 写入一个文本码点。
+   * 清除旧前景色和字符样式，仅保留已经存在或明确绘制的背景色。
+   */
+  seal static func writeCell(buffer: Buffer, index: int,
+    value: u32, foreBits: u64): void {
+    buffer.cells[index].value = (u64)value;
+    buffer.cells[index].style =
+      (buffer.cells[index].style & Cell.MASK_BG) | foreBits;
+  }
+
+  /**
+   * 将一条显示行中落入水平可见范围的码点写入 back buffer。
+   */
+  seal static func drawLine(text: TextWidget, buffer: Buffer,
+    line: TextLine, x: int, y: int, skip: int,
+    width: int, foreBits: u64): void {
+    if skip >= line.cells || width <= 0 {
+      return;
+    }
+    let data: string* = &text.content;
+    var cursor = feng_pointer_move(data, line.start);
+    var offset = line.start;
+    var column = 0;
+    while column < skip && offset < line.end {
+      var ignored: u32 = 0;
+      let next = text_u8_next(&ignored, cursor);
+      if feng_pointer_is_null(next) {
+        return;
+      }
+      cursor = next;
+      offset = feng_pointer_diff(next, data);
+      column += 1;
+    }
+
+    var visibleColumn = 0;
+    while visibleColumn < width && offset < line.end {
+      var value: u32 = 0;
+      let next = text_u8_next(&value, cursor);
+      if feng_pointer_is_null(next) {
+        return;
+      }
+      let cellIndex = y * (int)buffer.width + x + visibleColumn;
+      Text.writeCell(buffer, cellIndex, value, foreBits);
+      cursor = next;
+      offset = feng_pointer_diff(next, data);
+      visibleColumn += 1;
+    }
+  }
+
+  /**
+   * 测量 content 并写回最终 frame。
+   * 宽度先解析，Auto 高度再使用最终分行数。
+   */
+  @mixable
+  static func arrange(text: TextWidget, manager: ViewManager): void {
+    let widget = (Widget)text;
+    let reference = View.resolveReferenceFrame(widget, manager);
+    let margin = widget.style.margin;
+    var top = View.resolveLength(margin.top, reference.height);
+    var right = View.resolveLength(margin.right, reference.width);
+    var bottom = View.resolveLength(margin.bottom, reference.height);
+    var left = View.resolveLength(margin.left, reference.width);
+    if top < 0 { top = 0; }
+    if right < 0 { right = 0; }
+    if bottom < 0 { bottom = 0; }
+    if left < 0 { left = 0; }
+    var intrinsicWidth = 0;
+    if Text.needsIntrinsicWidth(text) {
+      intrinsicWidth = Text.measureIntrinsicWidth(text);
+    }
+    let width = View.resolveWidth(widget, reference.width,
+      left, right, intrinsicWidth);
+    Text.layoutLines(text, width);
+    let height = View.resolveHeight(widget, reference.height,
+      top, bottom, text._lines.size());
+
+    let frame = Rect();
+    frame.x = View.resolveX(widget, reference, left, right, width);
+    frame.y = View.resolveY(widget, reference, top, bottom, height);
+    frame.width = width;
+    frame.height = height;
+    widget.frame = frame;
+  }
+
+  /**
+   * 绘制可见背景和文本；drawFrame 只裁剪，不改变布局阶段的分行。
+   */
+  @mixable
+  static func draw(text: TextWidget, manager: ViewManager): void {
+    let widget = (Widget)text;
+    let drawFrame = View.resolveDrawFrame(widget, manager);
+    if drawFrame.width == 0 || drawFrame.height == 0 {
+      return;
+    }
+    manager.trace(widget, drawFrame);
+    let buffer = manager.getScreenBuffer();
+    if text.style.backColor match color: RgbColor {
+      buffer.draw((u32)drawFrame.x, (u32)drawFrame.y,
+        (u32)drawFrame.width, (u32)drawFrame.height, (u64)0,
+        none, color);
+    }
+
+    let firstLine = drawFrame.y - text.frame.y;
+    let firstColumn = drawFrame.x - text.frame.x;
+    let foreBits = Text.resolveForeBits(text);
+    var visibleRow = 0;
+    while visibleRow < drawFrame.height {
+      let lineIndex = firstLine + visibleRow;
+      if lineIndex >= text._lines.size() || lineIndex >= text.frame.height {
+        return;
+      }
+      Text.drawLine(text, buffer, text._lines.get(lineIndex),
+        drawFrame.x, drawFrame.y + visibleRow, firstColumn,
+        drawFrame.width, foreBits);
+      visibleRow += 1;
+    }
+  }
 }
