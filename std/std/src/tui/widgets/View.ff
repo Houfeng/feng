@@ -42,6 +42,16 @@ open type View: Widget {
   var tabIndex: int = -1;
 
   /**
+   * 焦点首次进入当前组件子树时触发的多播事件。
+   */
+  let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+
+  /**
+   * 焦点最终离开当前组件子树时触发的多播事件。
+   */
+  let onBlur: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+
+  /**
    * 键盘多播事件
    */
   let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();

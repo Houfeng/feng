@@ -26,6 +26,27 @@ open type ViewManager {
   /** 当前获得键盘焦点的 Widget。 */
   seal var _focused: Option<Widget>;
 
+  /** 当前焦点从 target 到 root 的有序路径；组件脱离树后仍用于完整 blur。 */
+  seal var _focusPath: List<Widget>;
+
+  /** 下一焦点路径的复用缓冲；与 _focusPath 在切换完成时交换。 */
+  seal var _nextFocusPath: List<Widget>;
+
+  /** 当前是否正在触发不可停止的焦点路径事件。 */
+  seal var _focusChanging: bool;
+
+  /** 焦点事件监听器是否提交了待串行处理的焦点请求。 */
+  seal var _hasPendingFocus: bool;
+
+  /** 焦点事件监听器最后一次提交的焦点请求。 */
+  seal var _pendingFocus: Option<Widget>;
+
+  /** 焦点首次进入 ViewManager 组件树时触发的多播事件。 */
+  let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+
+  /** 焦点最终离开 ViewManager 组件树时触发的多播事件。 */
+  let onBlur: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+
   /** root 之后的键盘多播事件。 */
   let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
 
@@ -49,6 +70,11 @@ open type ViewManager {
     self.screen = screen;
     self.sequence = List<Widget>();
     self._focused = none;
+    self._focusPath = List<Widget>();
+    self._nextFocusPath = List<Widget>();
+    self._focusChanging = false;
+    self._hasPendingFocus = false;
+    self._pendingFocus = none;
     self.root = none;
   }
 
@@ -65,6 +91,164 @@ open type ViewManager {
   }
 
   /**
+   * 判断下一焦点是否与当前焦点相同。
+   * @param next 待设置的焦点
+   * @return 两个 Option 是否表示同一个 Widget 或都为 none
+   */
+  seal func isSameFocus(next: Option<Widget>): bool {
+    if self._focused match current: Widget {
+      if next match candidate: Widget {
+        return current == candidate;
+      }
+      return false;
+    }
+    if next match candidate: Widget {
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * 将 target 到当前 root 的路径写入复用缓冲。
+   * @param target 路径起点
+   * @param path 需要清空并写入的路径缓冲
+   */
+  seal func fillFocusPath(target: Widget, path: List<Widget>): void {
+    path.clear();
+    var current = target;
+    while true {
+      path.add(current);
+      if self.isCurrentRoot(current) {
+        return;
+      }
+      if current.parent match let parent: ContainerWidget {
+        current = (Widget)parent;
+      } else {
+        path.clear();
+        return;
+      }
+    }
+  }
+
+  /**
+   * 按 target 到共同祖先之前的顺序触发不可停止的 blur 事件。
+   * @param path 旧焦点路径
+   * @param count 发生焦点离开状态变化的路径长度
+   * @param target 真正失去焦点的 Widget
+   */
+  seal func emitBlurPath(path: List<Widget>, count: int, target: Widget): void {
+    let event = FocusEvent<Widget>(target);
+    for var index: int = 0; index < count; index += 1 {
+      let targetEvent = path.get(index).onBlur;
+      targetEvent.emit(event);
+    }
+  }
+
+  /**
+   * 按 target 到共同祖先之前的顺序触发不可停止的 focus 事件。
+   * @param path 新焦点路径
+   * @param count 发生焦点进入状态变化的路径长度
+   * @param target 真正获得焦点的 Widget
+   */
+  seal func emitFocusPath(path: List<Widget>, count: int, target: Widget): void {
+    let event = FocusEvent<Widget>(target);
+    for var index: int = 0; index < count; index += 1 {
+      let targetEvent = path.get(index).onFocus;
+      targetEvent.emit(event);
+    }
+  }
+
+  /**
+   * 执行一次焦点路径差分并同步焦点状态。
+   * 状态和路径在事件触发前更新，使监听器读取 focused() 时看到本次新状态。
+   * @param next 本次请求的下一焦点
+   */
+  seal func performFocusChange(next: Option<Widget>): void {
+    if self.isSameFocus(next) {
+      return;
+    }
+    if next match candidate: Widget {
+      if candidate.tabIndex < 0 || !self.isInRoot(candidate) {
+        return;
+      }
+      self.fillFocusPath(candidate, self._nextFocusPath);
+    } else {
+      self._nextFocusPath.clear();
+    }
+
+    let previous = self._focused;
+    let oldPath = self._focusPath;
+    let newPath = self._nextFocusPath;
+    var oldChangedCount = oldPath.size();
+    var newChangedCount = newPath.size();
+    while oldChangedCount > 0 && newChangedCount > 0 {
+      if oldPath.get(oldChangedCount - 1) != newPath.get(newChangedCount - 1) {
+        break;
+      }
+      oldChangedCount -= 1;
+      newChangedCount -= 1;
+    }
+
+    self._focused = next;
+    self._focusPath = newPath;
+    self._nextFocusPath = oldPath;
+    defer { oldPath.clear(); }
+
+    var hadPrevious = false;
+    var hasNext = false;
+    if previous match oldTarget: Widget {
+      hadPrevious = true;
+      self.emitBlurPath(oldPath, oldChangedCount, oldTarget);
+    }
+    if next match newTarget: Widget {
+      hasNext = true;
+      self.emitFocusPath(newPath, newChangedCount, newTarget);
+    }
+    if hadPrevious && !hasNext {
+      if previous match oldTarget: Widget {
+        let event = FocusEvent<Widget>(oldTarget);
+        let managerEvent = self.onBlur;
+        managerEvent.emit(event);
+      }
+    } else if !hadPrevious && hasNext {
+      if next match newTarget: Widget {
+        let event = FocusEvent<Widget>(newTarget);
+        let managerEvent = self.onFocus;
+        managerEvent.emit(event);
+      }
+    }
+  }
+
+  /**
+   * 提交焦点变更；焦点事件内的重入请求在本轮事件完成后串行处理，最后一次请求生效。
+   * @param next 请求的下一焦点
+   */
+  seal func requestFocus(next: Option<Widget>): void {
+    if self._focusChanging {
+      self._pendingFocus = next;
+      self._hasPendingFocus = true;
+      return;
+    }
+    self._focusChanging = true;
+    defer {
+      self._focusChanging = false;
+      self._hasPendingFocus = false;
+      self._pendingFocus = none;
+    }
+    var requested = next;
+    while true {
+      self._hasPendingFocus = false;
+      self.performFocusChange(requested);
+      if self._hasPendingFocus {
+        requested = self._pendingFocus;
+        self._pendingFocus = none;
+      } else {
+        return;
+      }
+    }
+  }
+
+  /**
    * 返回有效焦点；焦点已不可聚焦或脱离 root 时清除并返回 none。
    * @return 当前仍有效的焦点
    */
@@ -73,7 +257,7 @@ open type ViewManager {
       if focused.tabIndex >= 0 && self.isInRoot(focused) {
         return focused;
       }
-      self._focused = none;
+      self.requestFocus(none);
     }
     return none;
   }
@@ -87,7 +271,7 @@ open type ViewManager {
     if widget.tabIndex < 0 || !self.isInRoot(widget) {
       return false;
     }
-    self._focused = widget;
+    self.requestFocus(widget);
     return true;
   }
 
@@ -95,7 +279,7 @@ open type ViewManager {
    * 清除当前焦点；没有焦点时静默返回。
    */
   open func clearFocus(): void {
-    self._focused = none;
+    self.requestFocus(none);
   }
 
   /**

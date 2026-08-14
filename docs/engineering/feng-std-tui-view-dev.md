@@ -143,6 +143,8 @@ open spec Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
+  let onFocus: Event<FocusEvent<Widget>>;
+  let onBlur: Event<FocusEvent<Widget>>;
   let key: Event<KeyEvent<Widget>>;
   let mouseDown: Event<MouseEvent<Widget>>;
   let mouseMove: Event<MouseEvent<Widget>>;
@@ -177,6 +179,8 @@ open type View: Widget {
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
+  let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+  let onBlur: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
   let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
   let mouseDown: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
   let mouseMove: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
@@ -322,6 +326,7 @@ open type ViewManager {
 `Widget` 使用以自身契约为目标类型的 `Event<T>` 多播事件：
 
 - `key: Event<KeyEvent<Widget>>`；
+- `onFocus`、`onBlur: Event<FocusEvent<Widget>>`；
 - `mouseDown`、`mouseMove`、`mouseUp`、`wheel: Event<MouseEvent<Widget>>`。
 
 各事件字段不可重新绑定。调用方通过 `on(listener)` 和 `off(listener)` 订阅或退订；
@@ -334,6 +339,9 @@ open type ViewManager {
 传播状态由 `stop()` 和 `isStopped()` 管理。当前 Widget 的 `emit()` 会先完成其全部
 监听器调用，随后 `ViewManager` 检查 `isStopped()`；停止状态只阻止后续父组件事件，
 不会中断当前 Widget 尚未执行的其他监听器。重复调用 `stop()` 保持停止状态。
+
+`FocusEvent<T>` 与 `onFocus`/`onBlur` 的路径差分、共同祖先和不可停止规则由
+`docs/engineering/feng-std-tui-focus-key-routing-dev.md` 统一定义。
 
 鼠标事件按以下规则分发：
 

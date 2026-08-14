@@ -101,7 +101,8 @@ open let MOD_SHIFT: u8 = 4;
  *
  * 普通引用类型，content/mods 构造后不可变。target 在 InputManager 完成解析时尚未绑定，
  * 由 ViewManager 在进入 Widget 回调前绑定。同一事件实例在 Widget 树中逐级传播，
- * target 保持不变，stop()/isStopped() 维护共享的停止状态。
+ * target 保持不变，stop()/isStopped() 维护共享的停止状态，
+ * preventDefault()/isPrevented() 维护独立的默认行为阻止状态。
  *
  * 按键内容通过 `Union<SpecialKey, u32>` 互斥表达：
  * - `SpecialKey` 分支：特殊键（方向键、功能键、Enter 等）
@@ -119,6 +120,9 @@ open type KeyEvent<T> {
 
   /** 是否已停止后续视图传播；仅由 stop() 修改。 */
   seal var stopped: bool;
+
+  /** 是否已阻止 ViewManager 的键盘默认行为；仅由 preventDefault() 修改。 */
+  seal var prevented: bool;
 
   /**
    * 按键内容：SpecialKey=特殊键，u32=可打印字符码点。
@@ -138,6 +142,7 @@ open type KeyEvent<T> {
   func KeyEvent() {
     self._hasTarget = false;
     self.stopped = false;
+    self.prevented = false;
     self.content = (u32)0;
     self.mods = 0;
   }
@@ -150,6 +155,7 @@ open type KeyEvent<T> {
   func KeyEvent(content: Union<u32, SpecialKey>, mods: u8) {
     self._hasTarget = false;
     self.stopped = false;
+    self.prevented = false;
     self.content = content;
     self.mods = mods;
   }
@@ -224,5 +230,21 @@ open type KeyEvent<T> {
    */
   func isStopped(): bool {
     return self.stopped;
+  }
+
+  /**
+   * 阻止 ViewManager 在键盘事件路由后的默认行为。
+   * 不停止传播，也不中断当前 Event 中的其他监听器。
+   */
+  func preventDefault(): void {
+    self.prevented = true;
+  }
+
+  /**
+   * 查询是否已阻止 ViewManager 的键盘默认行为。
+   * @return preventDefault() 是否已经被调用
+   */
+  func isPrevented(): bool {
+    return self.prevented;
   }
 }

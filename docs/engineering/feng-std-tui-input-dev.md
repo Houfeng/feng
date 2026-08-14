@@ -113,8 +113,8 @@ seal let MOD_SHIFT: u8 = 4;
 `target` 在 InputManager 刚完成解析时尚未绑定；焦点与键盘路由实现后，由路由器在
 进入 Widget 回调前绑定。由于 Feng 当前不支持 `Option<T>` 作为开放泛型成员布局，
 事件使用默认 `T` 存储配合布尔状态表达是否已绑定，不把默认值误判为有效目标。
-输入载荷字段为 `let`，构造后不可变；KeyEvent 使用引用语义，使 target 与停止状态可由
-同一传播链共享：
+输入载荷字段为 `let`，构造后不可变；KeyEvent 使用引用语义，使 target、停止状态与
+默认行为阻止状态可由同一传播链共享：
 
 ```feng
 open type KeyEvent<T> {
@@ -124,6 +124,8 @@ open type KeyEvent<T> {
   seal var _hasTarget: bool;
   /** 是否已停止后续视图传播 */
   seal var stopped: bool;
+  /** 是否已阻止 ViewManager 的键盘默认行为 */
+  seal var prevented: bool;
   /** 按键内容：SpecialKey=特殊键，u32=可打印字符码点 */
   let content: Union<SpecialKey, u32>;
   /** 修饰键位标志（KeyEvent 仅含可靠推断的 MOD_CONTROL/MOD_SHIFT，不设 MOD_ALT） */
@@ -132,6 +134,7 @@ open type KeyEvent<T> {
   func KeyEvent() {
     self._hasTarget = false;
     self.stopped = false;
+    self.prevented = false;
     self.content = (u32)0;
     self.mods = 0;
   }
@@ -139,6 +142,7 @@ open type KeyEvent<T> {
   func KeyEvent(content: Union<SpecialKey, u32>, mods: u8) {
     self._hasTarget = false;
     self.stopped = false;
+    self.prevented = false;
     self.content = content;
     self.mods = mods;
   }
@@ -173,6 +177,8 @@ open type KeyEvent<T> {
   func hasTarget(): bool { ... }
   func stop(): void { ... }
   func isStopped(): bool { ... }
+  func preventDefault(): void { ... }
+  func isPrevented(): bool { ... }
 }
 ```
 
@@ -182,6 +188,7 @@ open type KeyEvent<T> {
 > `content` 和 `mods` 为不可变输入快照；`target` 只供后续路由阶段绑定。直接使用
 > `InputManager` 时，`onKey` 收到的 `KeyEvent<T>.hasTarget()` 仍为 false；通过
 > `TuiApp` 时由 ViewManager 按当前焦点绑定 target。焦点、停止传播以及应用级键盘事件
+> `preventDefault()` 与 `stop()` 相互独立。焦点、停止传播、默认行为以及应用级键盘事件
 > 的完整契约见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
 >
 > **各场景 KeyEvent 值**：
@@ -654,7 +661,7 @@ std/std/src/tui/
   TuiApp.ff             # 组装 input: InputManager<Widget>，并在主循环喂入字节
 
   input/
-    KeyEvent.ff         # KeyEvent<T> 引用类型、target、传播停止与按键快捷方法
+    KeyEvent.ff         # KeyEvent<T> 引用类型、target、传播停止、默认行为与按键快捷方法
     MouseEvent.ff       # MouseEvent<T> 引用类型、target、lock 与传播状态
     InputManager.ff     # 泛型 VT100/xterm 状态机、单播回调与 feed(byte)
 

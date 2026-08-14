@@ -1,0 +1,22 @@
+open module std.tui.view;
+
+/**
+ * FocusEvent 表示一次焦点进入或离开组件子树的不可变事件。
+ *
+ * 事件不提供停止传播或阻止默认行为的状态。ViewManager 将同一个 target 的值事件
+ * 依次发送给本次焦点路径中发生状态变化的 Widget。
+ */
+@value
+open type FocusEvent<T> {
+
+  /** 本次真正获得或失去焦点的目标。 */
+  let target: T;
+
+  /**
+   * 创建指定目标的焦点事件。
+   * @param target 真正获得或失去焦点的目标
+   */
+  func FocusEvent(target: T) {
+    self.target = target;
+  }
+}

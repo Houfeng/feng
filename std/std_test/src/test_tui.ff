@@ -950,6 +950,21 @@ func key_event_stop_state_is_shared() {
   check(alias.isStopped(), "tui/key/stop-idempotent");
 }
 
+/** 验证阻止键盘默认行为与停止传播是两个相互独立的共享状态。 */
+func key_event_prevent_default_is_independent() {
+  let event = KeyEvent<i32>(SpecialKey.Tab, 0);
+  let alias = event;
+  check(event.isPrevented() == false, "tui/key/prevent-default");
+  check(event.isStopped() == false, "tui/key/prevent-stop-default");
+  alias.preventDefault();
+  alias.preventDefault();
+  check(event.isPrevented(), "tui/key/prevent-reference-shared");
+  check(event.isStopped() == false, "tui/key/prevent-does-not-stop");
+  event.stop();
+  check(alias.isStopped(), "tui/key/stop-reference-shared-after-prevent");
+  check(alias.isPrevented(), "tui/key/stop-keeps-prevented");
+}
+
 // ─── Phase 5: MouseEvent 测试 ────────────────────────────────────────────
 
 func mouse_action_enum() {
@@ -1185,6 +1200,209 @@ func view_manager_focus_lifecycle() {
   check(managerHasNoFocus(manager), "tui/focus/clear-idempotent");
 }
 
+/** 验证焦点路径差分、事件顺序、共同祖先去重和 ViewManager 边界。 */
+func view_manager_focus_path_events() {
+  let manager = ViewManager(Screen(30, 15));
+  let root = Container();
+  let left = Container();
+  let right = Container();
+  let childA = View();
+  let childB = View();
+  let childC = View();
+  root.addChild(left);
+  root.addChild(right);
+  left.addChild(childA);
+  left.addChild(childB);
+  right.addChild(childC);
+  childA.tabIndex = 0;
+  childB.tabIndex = 0;
+  childC.tabIndex = 0;
+  manager.root = root;
+
+  var order = 0;
+  var targetsStable = true;
+  var leftFocus = 0;
+  var leftBlur = 0;
+  var rightFocus = 0;
+  var rightBlur = 0;
+  var rootFocus = 0;
+  var rootBlur = 0;
+  var managerFocus = 0;
+  var managerBlur = 0;
+
+  childA.onFocus.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 1;
+    targetsStable = targetsStable && event.target == (Widget)childA;
+  });
+  childA.onBlur.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 1;
+    targetsStable = targetsStable && event.target == (Widget)childA;
+  });
+  childB.onFocus.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 2;
+    targetsStable = targetsStable && event.target == (Widget)childB;
+  });
+  childB.onBlur.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 1;
+    targetsStable = targetsStable && event.target == (Widget)childB;
+  });
+  childC.onFocus.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 3;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+  childC.onBlur.on((event: FocusEvent<Widget>) {
+    order = order * 10 + 1;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+  left.onFocus.on((event: FocusEvent<Widget>) {
+    leftFocus += 1;
+    order = order * 10 + 2;
+    targetsStable = targetsStable && event.target == (Widget)childA;
+  });
+  left.onBlur.on((event: FocusEvent<Widget>) {
+    leftBlur += 1;
+    order = order * 10 + 2;
+    targetsStable = targetsStable && event.target == (Widget)childB;
+  });
+  right.onFocus.on((event: FocusEvent<Widget>) {
+    rightFocus += 1;
+    order = order * 10 + 4;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+  right.onBlur.on((event: FocusEvent<Widget>) {
+    rightBlur += 1;
+    order = order * 10 + 2;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+  root.onFocus.on((event: FocusEvent<Widget>) {
+    rootFocus += 1;
+    order = order * 10 + 3;
+    targetsStable = targetsStable && event.target == (Widget)childA;
+  });
+  root.onBlur.on((event: FocusEvent<Widget>) {
+    rootBlur += 1;
+    order = order * 10 + 3;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+  manager.onFocus.on((event: FocusEvent<Widget>) {
+    managerFocus += 1;
+    order = order * 10 + 4;
+    targetsStable = targetsStable && event.target == (Widget)childA;
+  });
+  manager.onBlur.on((event: FocusEvent<Widget>) {
+    managerBlur += 1;
+    order = order * 10 + 4;
+    targetsStable = targetsStable && event.target == (Widget)childC;
+  });
+
+  check(manager.focus(left) == false, "tui/focus-event/reject-negative-tab-index");
+  check(leftFocus == 0, "tui/focus-event/rejected-target-emits-no-focus");
+  check(manager.focus(childA), "tui/focus-event/focus-first-child");
+  check(order == 1234, "tui/focus-event/none-to-child-order");
+  check(leftFocus == 1 && rootFocus == 1 && managerFocus == 1,
+    "tui/focus-event/none-to-child-path");
+
+  order = 0;
+  check(manager.focus(childB), "tui/focus-event/focus-sibling");
+  check(order == 12, "tui/focus-event/sibling-only-targets");
+  check(leftFocus == 1 && leftBlur == 0 && rootFocus == 1 && rootBlur == 0 &&
+    managerFocus == 1 && managerBlur == 0,
+    "tui/focus-event/sibling-common-ancestors-stable");
+
+  order = 0;
+  check(manager.focus(childC), "tui/focus-event/focus-other-branch");
+  check(order == 1234, "tui/focus-event/blur-before-focus-branch-order");
+  check(leftBlur == 1 && rightFocus == 1 && rootFocus == 1 && rootBlur == 0 &&
+    managerFocus == 1 && managerBlur == 0,
+    "tui/focus-event/root-common-ancestor-stable");
+
+  order = 0;
+  check(manager.focus(childC), "tui/focus-event/repeat-focus-success");
+  check(order == 0, "tui/focus-event/repeat-focus-no-events");
+
+  manager.clearFocus();
+  check(order == 1234, "tui/focus-event/clear-blur-order");
+  check(rightBlur == 1 && rootBlur == 1 && managerBlur == 1,
+    "tui/focus-event/clear-full-path");
+  check(targetsStable, "tui/focus-event/target-stable");
+}
+
+/** 验证失效焦点使用缓存旧路径 blur，并串行处理监听器中的重入请求。 */
+func view_manager_focus_invalid_path_and_reentrant_request() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let parent = Container();
+  let child = View();
+  root.addChild(parent);
+  parent.addChild(child);
+  child.tabIndex = 0;
+  manager.root = root;
+  check(manager.focus(child), "tui/focus-event/cache-focus-child");
+
+  var blurOrder = 0;
+  var blurTargetStable = true;
+  child.onBlur.on((event: FocusEvent<Widget>) {
+    blurOrder = blurOrder * 10 + 1;
+    blurTargetStable = blurTargetStable && event.target == (Widget)child;
+  });
+  parent.onBlur.on((event: FocusEvent<Widget>) {
+    blurOrder = blurOrder * 10 + 2;
+    blurTargetStable = blurTargetStable && event.target == (Widget)child;
+  });
+  root.onBlur.on((event: FocusEvent<Widget>) {
+    blurOrder = blurOrder * 10 + 3;
+    blurTargetStable = blurTargetStable && event.target == (Widget)child;
+  });
+  manager.onBlur.on((event: FocusEvent<Widget>) {
+    blurOrder = blurOrder * 10 + 4;
+    blurTargetStable = blurTargetStable && event.target == (Widget)child;
+  });
+
+  parent.removeChild(child);
+  check(managerHasNoFocus(manager), "tui/focus-event/detached-focus-invalid");
+  check(blurOrder == 1234, "tui/focus-event/detached-uses-cached-path");
+  check(blurTargetStable, "tui/focus-event/detached-blur-target");
+  check(managerHasNoFocus(manager), "tui/focus-event/detached-remains-clear");
+  check(blurOrder == 1234, "tui/focus-event/detached-blur-once");
+
+  let reentrantManager = ViewManager(Screen(20, 10));
+  let reentrantRoot = Container();
+  let first = View();
+  let skipped = View();
+  let last = View();
+  first.tabIndex = 0;
+  skipped.tabIndex = 0;
+  last.tabIndex = 0;
+  reentrantRoot.addChild(first);
+  reentrantRoot.addChild(skipped);
+  reentrantRoot.addChild(last);
+  reentrantManager.root = reentrantRoot;
+
+  var firstFocus = 0;
+  var firstBlur = 0;
+  var skippedFocus = 0;
+  var lastFocus = 0;
+  var rootFocus = 0;
+  var managerFocus = 0;
+  first.onFocus.on((event: FocusEvent<Widget>) {
+    firstFocus += 1;
+    reentrantManager.focus(skipped);
+    reentrantManager.focus(last);
+  });
+  first.onBlur.on((event: FocusEvent<Widget>) { firstBlur += 1; });
+  skipped.onFocus.on((event: FocusEvent<Widget>) { skippedFocus += 1; });
+  last.onFocus.on((event: FocusEvent<Widget>) { lastFocus += 1; });
+  reentrantRoot.onFocus.on((event: FocusEvent<Widget>) { rootFocus += 1; });
+  reentrantManager.onFocus.on((event: FocusEvent<Widget>) { managerFocus += 1; });
+
+  check(reentrantManager.focus(first), "tui/focus-event/reentrant-first-request");
+  check(firstFocus == 1 && firstBlur == 1, "tui/focus-event/reentrant-first-lifecycle");
+  check(skippedFocus == 0 && lastFocus == 1, "tui/focus-event/reentrant-last-request-wins");
+  check(rootFocus == 1 && managerFocus == 1,
+    "tui/focus-event/reentrant-common-ancestors-stable");
+  check(managerHasFocus(reentrantManager, last), "tui/focus-event/reentrant-final-focus");
+}
+
 /** 验证鼠标传播、ViewManager 事件及自动聚焦默认行为的组合规则。 */
 func view_manager_mouse_default_focus_and_propagation() {
   let manager = ViewManager(Screen(30, 15));
@@ -1375,6 +1593,7 @@ func tuiapp_key_remains_application_level() {
   child.key.on((event: KeyEvent<Widget>) {
     childKeys += 1;
     event.stop();
+    event.preventDefault();
   });
   app.view.key.on((event: KeyEvent<Widget>) {
     managerKeys += 1;
@@ -1382,7 +1601,8 @@ func tuiapp_key_remains_application_level() {
   app.key.on((event: KeyEvent<Widget>) {
     appKeys += 1;
     appSawStoppedTarget = appSawStoppedTarget && event.isStopped() &&
-      event.hasTarget() && event.target == (Widget)child && event.isControl();
+      event.isPrevented() && event.hasTarget() &&
+      event.target == (Widget)child && event.isControl();
   });
   let removable: Action<KeyEvent<Widget>> = (event: KeyEvent<Widget>) {
     removableKeys += 1;
@@ -1393,7 +1613,7 @@ func tuiapp_key_remains_application_level() {
   check(childKeys == 1, "tui/app-key/widget-receives-input");
   check(managerKeys == 0, "tui/app-key/stop-skips-view-manager");
   check(appKeys == 1 && removableKeys == 1, "tui/app-key/all-listeners-run");
-  check(appSawStoppedTarget, "tui/app-key/receives-stopped-target");
+  check(appSawStoppedTarget, "tui/app-key/receives-stopped-prevented-target");
 
   app.key.off(removable);
   app.input.feed((u8)0x03);
@@ -1994,6 +2214,7 @@ open func run_tui_tests() {
     test("key_event_shift_arrow()", () { key_event_shift_arrow(); });
     test("key_event_target_binding()", () { key_event_target_binding(); });
     test("key_event_stop_state_is_shared()", () { key_event_stop_state_is_shared(); });
+    test("key_event_prevent_default_is_independent()", () { key_event_prevent_default_is_independent(); });
     // ─── Phase 5: MouseEvent ───
     test("mouse_action_enum()", () { mouse_action_enum(); });
     test("mouse_button_enum()", () { mouse_button_enum(); });
@@ -2008,6 +2229,8 @@ open func run_tui_tests() {
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
+    test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
+    test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });
     test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
     test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
     test("view_manager_key_focus_route()", () { view_manager_key_focus_route(); });

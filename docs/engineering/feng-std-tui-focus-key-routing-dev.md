@@ -24,7 +24,7 @@
 
 ## 2 实施前基线
 
-当前实现具有以下基础能力：
+本专项开始实施前具有以下基础能力：
 
 - `InputManager<Widget>` 通过单播 `onKey`、`onMouse` 输出解析后的输入事件；
 - `TuiApp` 已将 `input.onMouse` 绑定到 `ViewManager.dispatchMouse`，但尚未接管
@@ -32,7 +32,7 @@
 - `Widget` 已提供 `key`、`mouseDown`、`mouseMove`、`mouseUp`、`wheel` 多播事件；
 - `ViewManager` 已根据 lock 或本帧 `drawFrame` 确定鼠标 target，并沿 parent 冒泡；
 - `MouseEvent<Widget>` 已是引用类型，具有稳定 target 以及 `stop()`/`isStopped()`；
-- `KeyEvent<Widget>` 目前仍是 `@value` 类型，尚无传播停止状态；
+- `KeyEvent<Widget>` 当时仍是 `@value` 类型，尚无传播停止状态；
 - `examples/tui_demo` 当前直接给 `app.input.onKey` 赋值处理 Ctrl+C。
 
 焦点路由接入后，应用不应继续直接替换 `app.input.onKey`，否则会绕过 ViewManager 的
@@ -85,8 +85,8 @@ open type ViewManager {
 - 键盘分发前需要确认保存的 Widget 仍属于当前 root 组件树；已经被移除或 root 已变更时
   清除失效焦点，再按无焦点规则处理本次按键。
 
-本阶段不增加 focus/blur 事件。焦点变化通知与具体组件的焦点视觉效果在基础路由稳定后
-另行设计。
+焦点变化通知在基础路由稳定后按 7.1 节追加实现；具体组件的焦点视觉效果仍由组件自行
+处理。
 
 ## 5 ViewManager 多播事件
 
@@ -94,6 +94,8 @@ open type ViewManager {
 
 ```feng
 open type ViewManager {
+  let onFocus: Event<FocusEvent<Widget>>;
+  let onBlur: Event<FocusEvent<Widget>>;
   let key: Event<KeyEvent<Widget>>;
   let mouseDown: Event<MouseEvent<Widget>>;
   let mouseMove: Event<MouseEvent<Widget>>;
@@ -102,7 +104,7 @@ open type ViewManager {
 }
 ```
 
-这些事件位于 Widget 传播链的 root 之后：
+键盘和鼠标事件位于 Widget 传播链的 root 之后；焦点事件遵循 7.1 节的路径差分规则：
 
 - Widget 传播正常到达 root 后，再触发 ViewManager 对应事件；
 - Widget 调用 `stop()` 后，不再触发后续父 Widget、root 或 ViewManager 对应事件；
@@ -162,11 +164,18 @@ open type MouseEvent<T> {
 open type KeyEvent<T> {
   // 现有 target/content/mods 等成员保持语义不变
   seal var stopped: bool;
+  seal var prevented: bool;
 
   func stop(): void;
   func isStopped(): bool;
+  func preventDefault(): void;
+  func isPrevented(): bool;
 }
 ```
+
+`preventDefault()`/`isPrevented()` 与 `stop()`/`isStopped()` 相互独立：停止传播不自动
+阻止默认行为，阻止默认行为也不停止传播。后续 Tab 切换作为键盘默认行为实现时，输入框
+等组件可以在 key 监听器中调用 `preventDefault()`，保留 Tab 输入而不切换焦点。
 
 `ViewManager.dispatchKey(event)` 按以下规则处理：
 
@@ -181,6 +190,43 @@ open type KeyEvent<T> {
 改为引用类型会改变 KeyEvent 的运行时表示，并使输入解析时创建键盘事件对象。该变化是
 共享传播状态所需的通用语义调整，不通过 sidecar、装箱或事件克隆规避；该运行时分配
 变化已在实施前 Review 中确认。
+
+### 7.1 FocusEvent 与焦点路径事件
+
+焦点事件不携带可变传播状态，使用无额外对象分配的值类型：
+
+```feng
+@value
+open type FocusEvent<T> {
+  let target: T;
+}
+```
+
+`FocusEvent` 不提供 `stop()`/`isStopped()` 或
+`preventDefault()`/`isPrevented()`。Widget 与 ViewManager 增加：
+
+```feng
+let onFocus: Event<FocusEvent<Widget>>;
+let onBlur: Event<FocusEvent<Widget>>;
+```
+
+焦点事件表达“焦点进入或离开当前 Widget 子树”，按新旧焦点的共同祖先路径差分触发：
+
+1. ViewManager 分别维护旧焦点和新焦点从 target 到 root 的有序路径；
+2. 从 root 端比较两条路径，找到最近公共祖先；
+3. 先从旧 target 向上触发 `onBlur`，到最近公共祖先之前结束；
+4. 再从新 target 向上触发 `onFocus`，到最近公共祖先之前结束；
+5. 公共祖先及其上层不重复触发事件，焦点事件不可停止；
+6. `FocusEvent.target` 在 blur 路径中始终是旧焦点，在 focus 路径中始终是新焦点；
+7. 从无焦点进入组件树时，focus 路径最终触发 `ViewManager.onFocus`；清除或失效焦点时，
+   blur 路径最终触发 `ViewManager.onBlur`；两个有效焦点之间切换时 ViewManager 不重复触发；
+8. 重复聚焦同一 Widget 不触发事件；焦点切换过程中监听器再次请求焦点时，ViewManager
+   完成本轮不可停止事件后串行处理最后一次请求，避免递归破坏焦点状态。
+
+`tabIndex < 0` 的 Widget 不能作为焦点 target：显式 `focus(widget)` 返回 false；鼠标
+默认行为继续向上查找最近的可聚焦祖先。不可聚焦 Widget 仍可作为焦点路径中的祖先，
+在焦点首次进入或最终离开其子树时收到 `onFocus`/`onBlur`。焦点 Widget 脱离组件树或
+变为不可聚焦时，ViewManager 使用已缓存的旧路径完整触发 blur，不依赖已经变化的 parent。
 
 ## 8 TuiApp 应用级键盘事件
 
@@ -206,7 +252,7 @@ InputManager.onKey
 - `TuiApp.key` 不属于 Widget 视图树，不是 Widget 传播链的一部分；
 - 无论 Widget 是否调用 `stop()`，`TuiApp.key` 都会触发；
 - TuiApp 监听器收到 ViewManager 已经处理过的同一事件，可以读取
-  `hasTarget()`、`target` 和 `isStopped()`；
+  `hasTarget()`、`target`、`isStopped()` 和 `isPrevented()`；
 - Ctrl+C、退出应用等不能被局部 Widget 阻止的快捷键订阅 `TuiApp.key`；
 - `examples/tui_demo` 从直接覆盖 `app.input.onKey` 改为订阅 `app.key`；
 - `InputManager.onKey` 继续保持单播，不改造成 Event，也不维护监听器集合。
@@ -231,11 +277,13 @@ InputManager.onKey
 ## 10 性能约束
 
 - 每次鼠标或键盘分发复用 InputManager 创建的同一事件，不克隆载荷；
-- 基础焦点切换只沿 parent 链查找，不为单次事件创建 List 或临时组件集合；
+- ViewManager 构造时创建并复用两条有序焦点路径；焦点切换不创建 List、HashSet 或临时
+  组件集合，并可在组件脱离树后使用旧路径完成 blur；
 - ViewManager 的多播 Event 在 ViewManager 构造时创建，不在每次分发时创建；
 - 本阶段不为 Tab 顺序引入每次按键排序；其数据结构和更新策略在 Tab 步骤实现前单独
   Review；
-- 除已经明确列出的 KeyEvent 引用类型分配外，不增加新的每事件运行时分配。
+- `FocusEvent` 使用值类型；除已经明确列出的 KeyEvent 引用类型分配外，不增加新的
+  每事件运行时分配。
 
 ## 11 测试范围
 
@@ -248,13 +296,17 @@ InputManager.onKey
 - Widget 鼠标事件到 root、ViewManager 的顺序和停止规则；
 - 未命中 Widget 时直接触发 ViewManager 鼠标事件；
 - KeyEvent target、逐级冒泡、停止传播、ViewManager.key 和无焦点路径；
+- KeyEvent 阻止默认行为的幂等性，以及它与停止传播的独立语义；
+- FocusEvent target、blur-before-focus 顺序、共同祖先不重复触发和 ViewManager 边界；
+- 不可聚焦 target、可聚焦祖先、重复 focus、clearFocus 和失效焦点的事件行为；
+- 焦点 Widget 脱离组件树后仍按缓存旧路径完整 blur，以及监听器内重入切换的串行行为；
 - Widget 停止键盘传播后，`TuiApp.key` 仍被触发；
 - TuiApp 多个 key 监听器、退订及 Ctrl+C 所需的应用级路径；
 - InputManager 单播出口、ViewManager 路由和 TuiApp.key 的集成；
 - `examples/tui_demo` 改用 `app.key` 后可以构建并正常退出。
 
-测试只新增或按人工批准调整相关 TUI 用例。完成每个实现小组后运行相关定向测试；全部
-完成后在非 Codex 沙箱环境执行 `make test` 全量回归。
+测试只新增或按人工批准调整相关 TUI 用例。此前基础阶段已经执行 `make test` 全量回归；
+本轮仅变更 std 及 std_test，按人工确认构建 std 并完整回归 std_test。
 
 ## 12 实施 TODO
 
@@ -272,13 +324,22 @@ InputManager.onKey
 - [x] 12.12 运行 std、std_test 和 tui_demo 定向构建与验证；
 - [x] 12.13 在非 Codex 沙箱环境执行 `make test` 全量回归；
 - [x] 12.14 根据实现结果更新 TODO 状态，等待人工 Review；
-- [ ] 12.15 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
+- [x] 12.15 为 KeyEvent 增加 `preventDefault()`/`isPrevented()` 及独立状态用例；
+- [x] 12.16 增加不可停止、不可阻止默认行为的值类型 `FocusEvent<T>`；
+- [x] 12.17 为 Widget、ViewManager 增加 `onFocus`/`onBlur` 多播事件；
+- [x] 12.18 使用 ViewManager 构造期创建的两条有序路径实现共同祖先差分和失效 blur；
+- [x] 12.19 串行处理焦点事件监听器中的重入焦点请求；
+- [x] 12.20 补齐 KeyEvent 默认行为和 FocusEvent 路径切换 std_test 用例；
+- [x] 12.21 构建 std 并回归 std_test，更新实施状态；
+- [ ] 12.22 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
 
 ## 13 实施结论与后续 Review
 
 - `focus(widget)` 使用 `bool` 返回是否成功；不可聚焦或不属于 root 时保持原焦点；
 - 点击未命中或不存在可聚焦祖先的区域时保持原焦点；
 - 自动聚焦覆盖除滚轮外的全部 `MouseAction.Press`；
-- KeyEvent 使用引用类型，共享 target 与停止状态；该分配变化已经人工确认；
-- `make test` 已完整通过，其中 std_test 521/521、fcts 768/768；
-- Tab 同值顺序、循环和阻止规则仍留到 12.15 单独决策与实施。
+- KeyEvent 使用引用类型，共享 target、停止状态和默认行为状态；该分配变化已经人工确认；
+- Widget 与 ViewManager 已提供不可停止的 `onFocus`/`onBlur`，共同祖先不重复触发；
+- 此前 `make test` 已完整通过，其中 std_test 521/521、fcts 768/768；本轮按人工确认仅
+  构建 std 并回归 std_test，结果为 524/524；
+- Tab 同值顺序、循环和阻止规则仍留到 12.22 单独决策与实施。
