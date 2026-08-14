@@ -2,6 +2,7 @@ open module std.tui.view;
 
 import std;
 import std.collections;
+import std.tui.common;
 import std.tui.input;
 import std.tui.screen;
 
@@ -64,7 +65,7 @@ open type ViewManager {
    * @param widget 需要跟踪的 widget
    * @param drawFrame 经过祖先和 Screen 裁剪后的实际绘制区域
    */
-  open func trace(widget: Widget, drawFrame: WidgetFrame): void {
+  open func trace(widget: Widget, drawFrame: Rect): void {
     widget.drawFrame = drawFrame;
     self.sequence.add(widget);
   }
@@ -77,7 +78,7 @@ open type ViewManager {
    * @param y 屏幕行坐标
    * @return 坐标是否位于矩形内
    */
-  seal func containsPoint(frame: WidgetFrame, x: u32, y: u32): bool {
+  seal func containsPoint(frame: Rect, x: u32, y: u32): bool {
     if frame.width == 0 || frame.height == 0 || x < frame.x || y < frame.y {
       return false;
     }

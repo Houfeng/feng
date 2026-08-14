@@ -9,7 +9,7 @@ open module std.tui.screen;
  *
  * 使用 enum 而非裸整数，确保调用方只能传入合法样式，类型安全。
  */
-open enum Style {
+open enum CellStyle {
   /** 无样式 */
   None = 0,
   /** 粗体 */

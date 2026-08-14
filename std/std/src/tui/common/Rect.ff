@@ -1,0 +1,16 @@
+open module std.tui.common;
+
+/**
+ * 矩形区域
+ */
+@value
+open type Rect {
+  /** 左上角列坐标（0-based） */
+  var x: u32;
+  /** 左上角行坐标（0-based） */
+  var y: u32;
+  /** 宽度 */
+  var width: u32;
+  /** 高度 */
+  var height: u32;
+}

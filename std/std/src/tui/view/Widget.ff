@@ -7,165 +7,26 @@ import std.tui.screen;
 import std.tui.input;
 
 /**
- * WidgetPosition 组件定位方式
- */
-open enum WidgetPosition {
-  /** 普通布局，由父组件控制 */
-  Normal,
-  /** 与 Normal 使用相同布局，但可作为 Absolute 后代的定位参照 */
-  Relative,
-  /** 绝对布局，相对于最近的非 Normal 祖先定位 */
-  Absolute,
-  /** 固定布局，相对于屏幕定位 */
-  Fixed
-}
-
-/**
- * WidgetAlign 组件对齐方式
- */
-open enum WidgetAlign {
-  /** 填充整个可用空间 */
-  Full,
-  /** 靠开始位置对齐 */
-  Start,
-  /** 居中对齐 */
-  Center,
-  /** 靠结束位置对齐 */
-  End
-}
-
-/**
- * WidgetOverflow 组件溢出处理方式
- * 无 Scroll 定义，因为 ScrollView 组件实现（ScrollView 自身是 Hidden）
- */
-open enum WidgetOverflow {
-  Visible,
-  Hidden
-}
-
-/**
- * WidgetStyle 组件布局与样式约束
- */
-open type WidgetStyle {
-  /**
-   * 组件布局类型。
-   * Normal/Relative 使用直接父组件扣除 padding 后的 content 区域；
-   * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
-   * Relative 的自身布局与 Normal 相同，但可作为 Absolute 后代的定位参照。
-   */
-  var position: WidgetPosition;
-
-  /**
-   * X 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
-   * u32 表示固定终端单元数，float 表示相对参照区域宽度的百分比；
-   * 百分比基数不扣除自身 margin。最终 frame.x 还会叠加 margin.left，
-   * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
-   */
-  var x: Union<u32, float>;
-
-  /**
-   * Y 坐标，仅用于 Absolute/Fixed，Normal/Relative 布局时忽略。
-   * u32 表示固定终端单元数，float 表示相对参照区域高度的百分比；
-   * 百分比基数不扣除自身 margin。最终 frame.y 还会叠加 margin.top，
-   * Absolute 的相对坐标不受定位参照祖先的 padding 影响。
-   */
-  var y: Union<u32, float>;
-
-  /**
-   * 宽度，u32 表示固定终端单元数，float 表示百分比。
-   * 固定宽度保持原值，不扣除 margin；百分比宽度以参照区域扣除
-   * margin.left/right 后的剩余宽度为基数。Normal/Relative + horizontalAlign=Full
-   * 时忽略 width，直接占满扣除左右 margin 后的可用宽度。
-   */
-  var width: Union<u32, float>;
-
-  /**
-   * 高度，u32 表示固定终端单元数，float 表示百分比。
-   * 固定高度保持原值，不扣除 margin；百分比高度以参照区域扣除
-   * margin.top/bottom 后的剩余高度为基数。Normal/Relative + verticalAlign=Full
-   * 时忽略 height，直接占满扣除上下 margin 后的可用高度。
-   */
-  var height: Union<u32, float>;
-
-  /**
-   * 前景色；不参与布局，在绘制阶段使用。
-   */
-  var foreColor: Option<RgbColor>;
-
-  /**
-   * 背景色；不参与布局，在绘制阶段使用。
-   */
-  var backColor: Option<RgbColor>;
-
-  /**
-   * 填充间距，不改变组件自身 frame。
-   * Normal/Relative 子组件以直接父组件 frame 扣除 padding 后的 content 区域为布局参照；
-   * Absolute 子组件的相对坐标不受定位参照祖先的 padding 影响。
-   */
-  var padding: Thickness;
-
-  /**
-   * 外边距。起始侧 margin 叠加到最终 frame.x/frame.y；两侧 margin
-   * 共同缩小 Full 和百分比尺寸的计算基数，但不改变固定 width/height。
-   */
-  var margin: Thickness;
-
-  /**
-   * 溢出处理方式；不参与 frame 计算，在绘制阶段决定是否裁剪。
-   */
-  var overflow: WidgetOverflow;
-
-  /**
-   * Normal/Relative 布局的水平对齐方式；Absolute/Fixed 时忽略。
-   * Start/Center/End 在扣除左右 margin 后的可用区域内定位固定或百分比宽度；
-   * Full 忽略 width 并占满该可用区域。
-   */
-  var horizontalAlign: WidgetAlign;
-
-  /**
-   * Normal/Relative 布局的垂直对齐方式；Absolute/Fixed 时忽略。
-   * Start/Center/End 在扣除上下 margin 后的可用区域内定位固定或百分比高度；
-   * Full 忽略 height 并占满该可用区域。
-   */
-  var verticalAlign: WidgetAlign;
-}
-
-/**
- * 组件的最终布局区域
- */
-@value
-open type WidgetFrame {
-  /** 左上角列坐标（0-based） */
-  var x: u32;
-  /** 左上角行坐标（0-based） */
-  var y: u32;
-  /** 宽度 */
-  var width: u32;
-  /** 高度 */
-  var height: u32;
-}
-
-/**
  * Widget 组件契约
  */
 open spec Widget {
   /**
    * 用户声明的布局与样式约束
    */
-  let style: WidgetStyle;
+  let style: Style;
 
   /**
    * 布局阶段计算后的最终区域信息
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  var frame: WidgetFrame;
+  var frame: Rect;
 
   /**
    * 绘制阶段经过祖先和 Screen 裁剪后的本帧实际区域
    * 鼠标命中直接使用该绘制快照
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  var drawFrame: WidgetFrame;
+  var drawFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护

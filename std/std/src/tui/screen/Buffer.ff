@@ -53,17 +53,17 @@ open type Buffer {
    * @param s - Style 枚举值
    * @return 对应的 u64 位值
    */
-  seal func styleToBits(s: Style): u64 {
+  seal func styleToBits(s: CellStyle): u64 {
     return match s {
-      Style.None { (u64)0; }
-      Style.Bold { Cell.STYLE_BOLD; }
-      Style.Dim { Cell.STYLE_DIM; }
-      Style.Italic { Cell.STYLE_ITALIC; }
-      Style.Underline { Cell.STYLE_UNDERLINE; }
-      Style.Blink { Cell.STYLE_BLINK; }
-      Style.Reverse { Cell.STYLE_REVERSE; }
-      Style.Hidden { Cell.STYLE_HIDDEN; }
-      Style.Strikethrough { Cell.STYLE_STRIKETHROUGH; }
+      CellStyle.None { (u64)0; }
+      CellStyle.Bold { Cell.STYLE_BOLD; }
+      CellStyle.Dim { Cell.STYLE_DIM; }
+      CellStyle.Italic { Cell.STYLE_ITALIC; }
+      CellStyle.Underline { Cell.STYLE_UNDERLINE; }
+      CellStyle.Blink { Cell.STYLE_BLINK; }
+      CellStyle.Reverse { Cell.STYLE_REVERSE; }
+      CellStyle.Hidden { Cell.STYLE_HIDDEN; }
+      CellStyle.Strikethrough { Cell.STYLE_STRIKETHROUGH; }
       else { (u64)0; }
     };
   }
@@ -73,7 +73,7 @@ open type Buffer {
    * @param styles - Style 数组
    * @return 组合后的 u64 样式编码
    */
-  seal func combineStyles(styles: Style[]): u64 {
+  seal func combineStyles(styles: CellStyle[]): u64 {
     var result: u64 = 0;
     for let s in styles {
       result |= self.styleToBits(s);
@@ -89,7 +89,7 @@ open type Buffer {
    * @param styles - 样式数组
    * @return 完整的 u64 样式编码
    */
-  seal func packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64 {
+  seal func packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): u64 {
     var s = self.combineStyles(styles);
     if fg match let c: RgbColor {
       s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b;
@@ -113,7 +113,7 @@ open type Buffer {
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+  seal func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     if y >= self.height {
       return;
@@ -150,7 +150,7 @@ open type Buffer {
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+  seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     let data: string* = &text;
     var cursor: string* = data;
@@ -190,7 +190,7 @@ open type Buffer {
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+  seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     if x >= self.width || y >= self.height {
       return;
@@ -211,7 +211,7 @@ open type Buffer {
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
    */
-  seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): void {
+  seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     var row: u32 = 0;
     while row < h {
@@ -243,7 +243,7 @@ open type Buffer {
    * @param text - 要绘制的文本
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, text: string, styles: Style...): void {
+  func draw(x: u32, y: u32, text: string, styles: CellStyle...): void {
     self.draw(x, y, text, none, none, styles);
   }
 
@@ -256,7 +256,7 @@ open type Buffer {
    * @param text - 要绘制的文本
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, styles: CellStyle...): void {
     self.draw(x, y, w, h, text, none, none, styles);
   }
 
@@ -267,7 +267,7 @@ open type Buffer {
    * @param value - Unicode 码点
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, value: u64, styles: Style...): void {
+  func draw(x: u32, y: u32, value: u64, styles: CellStyle...): void {
     self.draw(x, y, value, none, none, styles);
   }
 
@@ -280,7 +280,7 @@ open type Buffer {
    * @param value - Unicode 码点
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: CellStyle...): void {
     self.draw(x, y, w, h, value, none, none, styles);
   }
 
@@ -294,7 +294,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, styles: Style...): void {
+  func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, text, fg, none, styles);
   }
 
@@ -308,7 +308,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, w, h, text, fg, none, styles);
   }
 
@@ -320,7 +320,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, styles: Style...): void {
+  func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, value, fg, none, styles);
   }
 
@@ -334,7 +334,7 @@ open type Buffer {
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
-  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, styles: Style...): void {
+  func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, w, h, value, fg, none, styles);
   }
 
@@ -349,7 +349,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  open func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
+  open func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, text, fg, bg, styles);
   }
 
@@ -364,7 +364,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  open func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
+  open func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, w, h, text, fg, bg, styles);
   }
 
@@ -377,7 +377,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  open func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
+  open func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, value, fg, bg, styles);
   }
 
@@ -392,7 +392,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  open func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style...): void {
+  open func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle...): void {
     self.draw(x, y, w, h, value, fg, bg, styles);
   }
 
@@ -406,7 +406,7 @@ open type Buffer {
    * @param bg - 背景色
    * @param styles - 样式变长参数
    */
-  func fill(value: u64, fg: RgbColor, bg: RgbColor, styles: Style...): void {
+  func fill(value: u64, fg: RgbColor, bg: RgbColor, styles: CellStyle...): void {
     self.draw((u32)0, (u32)0, self.width, self.height, value, fg, bg, styles);
   }
 
@@ -415,7 +415,7 @@ open type Buffer {
    * @param value - Unicode 码点
    * @param styles - 样式变长参数
    */
-  func fill(value: u64, styles: Style...): void {
+  func fill(value: u64, styles: CellStyle...): void {
     self.draw((u32)0, (u32)0, self.width, self.height, value, none, none, styles);
   }
 

@@ -2,6 +2,7 @@ open module std.tui.widgets;
 
 import std;
 import std.collections;
+import std.tui.common;
 import std.tui.view;
 import std.tui.input;
 

@@ -15,20 +15,20 @@ open type View: Widget {
   /**
    * 用户声明的布局与样式约束
    */
-  let style: WidgetStyle;
+  let style: Style;
 
   /**
    * 布局阶段计算后的最终区域信息
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  var frame: WidgetFrame;
+  var frame: Rect;
 
   /**
    * 绘制阶段经过祖先和 Screen 裁剪后的本帧实际区域
    * 鼠标命中直接使用该绘制快照
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  var drawFrame: WidgetFrame;
+  var drawFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
@@ -119,8 +119,8 @@ open type View: Widget {
   /**
    * 判断定位方式是否参与普通流布局。
    */
-  seal static func isNormalFlow(position: WidgetPosition): bool {
-    return position == WidgetPosition.Normal || position == WidgetPosition.Relative;
+  seal static func isNormalFlow(position: Position): bool {
+    return position == Position.Normal || position == Position.Relative;
   }
 
   /**
@@ -128,15 +128,15 @@ open type View: Widget {
    * 组件尺寸超过可用区域时仍保持 Center/End 语义，并在坐标小于 0 时截断到 0。
    */
   seal static func resolveAlignedPosition(origin: u32, available: u32,
-    size: u32, align: WidgetAlign): u32 {
+    size: u32, align: Align): u32 {
     match align {
-      WidgetAlign.Center {
+      Align.Center {
         if size <= available {
           return View.addCoordinate(origin, (available - size) / (u32)2);
         }
         return View.subtractCoordinate(origin, (size - available) / (u32)2);
       }
-      WidgetAlign.End {
+      Align.End {
         if size <= available {
           return View.addCoordinate(origin, available - size);
         }
@@ -154,22 +154,22 @@ open type View: Widget {
    * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
    * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
-  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): WidgetFrame {
-    let reference = WidgetFrame();
+  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
+    let reference = Rect();
     reference.x = 0;
     reference.y = 0;
     reference.width = manager.getScreenWidth();
     reference.height = manager.getScreenHeight();
 
-    if widget.style.position == WidgetPosition.Fixed {
+    if widget.style.position == Position.Fixed {
       return reference;
     }
 
-    if widget.style.position == WidgetPosition.Absolute {
+    if widget.style.position == Position.Absolute {
       var current: Option<ContainerWidget> = widget.parent;
       while current match let parent: ContainerWidget {
         let parentWidget = (Widget)parent;
-        if parentWidget.style.position != WidgetPosition.Normal {
+        if parentWidget.style.position != Position.Normal {
           return parentWidget.frame;
         }
         current = parentWidget.parent;
@@ -207,7 +207,7 @@ open type View: Widget {
     left: u32, right: u32): u32 {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
     if View.isNormalFlow(widget.style.position) &&
-    widget.style.horizontalAlign == WidgetAlign.Full {
+    widget.style.horizontalAlign == Align.Full {
       return available;
     }
     return View.resolveLength(widget.style.width, available);
@@ -220,7 +220,7 @@ open type View: Widget {
     top: u32, bottom: u32): u32 {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
     if View.isNormalFlow(widget.style.position) &&
-    widget.style.verticalAlign == WidgetAlign.Full {
+    widget.style.verticalAlign == Align.Full {
       return available;
     }
     return View.resolveLength(widget.style.height, available);
@@ -229,7 +229,7 @@ open type View: Widget {
   /**
    * 解析组件最终横坐标。
    */
-  seal static func resolveX(widget: Widget, reference: WidgetFrame,
+  seal static func resolveX(widget: Widget, reference: Rect,
     left: u32, right: u32, width: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.x, left);
     if View.isNormalFlow(widget.style.position) {
@@ -244,7 +244,7 @@ open type View: Widget {
   /**
    * 解析组件最终纵坐标。
    */
-  seal static func resolveY(widget: Widget, reference: WidgetFrame,
+  seal static func resolveY(widget: Widget, reference: Rect,
     top: u32, bottom: u32, height: u32): u32 {
     let marginOrigin = View.addCoordinate(reference.y, top);
     if View.isNormalFlow(widget.style.position) {
@@ -271,7 +271,7 @@ open type View: Widget {
     let width = View.resolveWidth(widget, reference.width, left, right);
     let height = View.resolveHeight(widget, reference.height, top, bottom);
 
-    let frame = WidgetFrame();
+    let frame = Rect();
     frame.x = View.resolveX(widget, reference, left, right, width);
     frame.y = View.resolveY(widget, reference, top, bottom, height);
     frame.width = width;
@@ -283,7 +283,7 @@ open type View: Widget {
    * 计算两个矩形的交集；无交集时返回宽高为 0 的矩形。
    * 使用 u64 计算边界，避免 u32 坐标与尺寸相加时溢出。
    */
-  seal static func intersectFrame(first: WidgetFrame, second: WidgetFrame): WidgetFrame {
+  seal static func intersectFrame(first: Rect, second: Rect): Rect {
     var left = first.x;
     if second.x > left {
       left = second.x;
@@ -304,7 +304,7 @@ open type View: Widget {
       bottom = secondBottom;
     }
 
-    let result = WidgetFrame();
+    let result = Rect();
     result.x = left;
     result.y = top;
     if right <= (u64)left || bottom <= (u64)top {
@@ -321,19 +321,19 @@ open type View: Widget {
    * 解析当前组件的有效绘制区域。
    * 先使用最近的 overflow=Hidden 祖先 frame 裁剪，再裁剪到 Screen。
    */
-  seal static func resolveDrawFrame(widget: Widget, manager: ViewManager): WidgetFrame {
+  seal static func resolveDrawFrame(widget: Widget, manager: ViewManager): Rect {
     var result = widget.frame;
     var current: Option<ContainerWidget> = widget.parent;
     while current match let parent: ContainerWidget {
       let parentWidget = (Widget)parent;
-      if parentWidget.style.overflow == WidgetOverflow.Hidden {
+      if parentWidget.style.overflow == Overflow.Hidden {
         result = View.intersectFrame(result, parentWidget.frame);
         break;
       }
       current = parentWidget.parent;
     }
 
-    let screen = WidgetFrame();
+    let screen = Rect();
     screen.x = 0;
     screen.y = 0;
     screen.width = manager.getScreenWidth();
