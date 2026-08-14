@@ -40,7 +40,7 @@ type DragSurface: ContainerWidget {
 }
 
 /**
- * TUI demo: 使用 ViewManager 绘制并拖动一个 20×20 的矩形。
+ * TUI demo: 使用 ViewManager 绘制 Text，并拖动一个蓝色矩形。
  *
  * 运行方式：./build/bin/feng run ./examples/tui_demo
  * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
@@ -69,6 +69,21 @@ func main(args: string[]) {
   rectangle.style.verticalAlign = Align.Center;
   rectangle.style.backColor = RgbColor(0, 0, 255);
   surface.addChild(rectangle);
+
+  // 顶部文本演示自动高度、有限宽度换行、Emoji 和逐行居中。
+  let text = Text();
+  text.content = "Feng TUI Text 😀\nGrapheme: é · auto wrap\nDrag the blue rectangle";
+  text.textAlign = TextAlign.Center;
+  text.style.width = 28;
+  text.style.height = auto;
+  text.style.horizontalAlign = Align.Center;
+  text.style.verticalAlign = Align.Start;
+  let textMarginTop: int = 2;
+  let textMarginSide: int = 0;
+  text.style.margin = Thickness(textMarginTop, textMarginSide,
+    textMarginSide, textMarginSide);
+  text.style.foreColor = RgbColor(0, 180, 120);
+  surface.addChild(text);
 
   var dragging = false;
   var dragOffsetX: int = 0;

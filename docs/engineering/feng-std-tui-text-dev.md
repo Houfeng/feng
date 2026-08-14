@@ -225,6 +225,8 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - grapheme 边界直接复用 `std.text` 当前公开 API；该 API 当前返回 grapheme 字符串，
   是否进一步提供零分配游标属于 `std.text` 自身的后续优化，不在本次 Text 实现中扩大范围；
 - 内部行缓冲可清空后复用已有容量，不在每帧为每行创建对象；
+- 绘制按行起始字节位置一次定位，再按 `skip`、可见宽度和行 Cell 数控制解码次数；
+  热路径不为每个码点重复计算相对原字符串的字节偏移；
 - 绘制直接写入 Screen back buffer，不创建中间字符矩阵；
 - Auto 不增加装箱、字符串判定或 runtime ABI；
 - 不为了 Text 修改 Cell 的既有存储取舍，也不增加 C runtime 特判。

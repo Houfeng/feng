@@ -20,10 +20,6 @@ extern func feng_pointer_is_null(ptr: string*): bool;
 @runtime
 extern func feng_pointer_move(ptr: string*, offset: int): string*;
 
-/** runtime：计算两个指针的字节偏移。 */
-@runtime
-extern func feng_pointer_diff(a: string*, b: string*): int;
-
 /** Text 中每一行内容的水平对齐方式。 */
 open enum TextAlign {
   /** 从 Text frame 左侧开始绘制。 */
@@ -241,21 +237,24 @@ open type Text: TextWidget {
     }
     let data: string* = &text.content;
     var cursor = feng_pointer_move(data, line.start);
-    var offset = line.start;
     var column = 0;
-    while column < skip && offset < line.end {
+    while column < skip {
       var ignored: u32 = 0;
       let next = text_u8_next(&ignored, cursor);
       if feng_pointer_is_null(next) {
         return;
       }
       cursor = next;
-      offset = feng_pointer_diff(next, data);
       column += 1;
     }
 
+    var visibleCells = width;
+    let remainingCells = line.cells - skip;
+    if visibleCells > remainingCells {
+      visibleCells = remainingCells;
+    }
     var visibleColumn = 0;
-    while visibleColumn < width && offset < line.end {
+    while visibleColumn < visibleCells {
       var value: u32 = 0;
       let next = text_u8_next(&value, cursor);
       if feng_pointer_is_null(next) {
@@ -264,7 +263,6 @@ open type Text: TextWidget {
       let cellIndex = y * (int)buffer.width + x + visibleColumn;
       Text.writeCell(buffer, cellIndex, value, foreBits);
       cursor = next;
-      offset = feng_pointer_diff(next, data);
       visibleColumn += 1;
     }
   }
