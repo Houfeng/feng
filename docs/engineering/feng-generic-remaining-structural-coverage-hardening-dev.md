@@ -370,10 +370,12 @@ common-generic
   descriptor；
 - runtime ABI 与 Feng 程序运行时性能影响：不改变 runtime ABI；恢复固定大小路径原有的闭合
   descriptor cleanup，不增加 Feng 程序运行时操作、查表、分配或间接层；
-- 新增回归用例：现有 `std.Event<T>.emit()` 提供固定大小 `IteratorResult<Action<T>>` 的直接回归，
-  新增 codegen 用例同时断言真正动态的 cursor/result 仍使用 descriptor-sized 槽；
-- 专项测试与全量 `make test` 结果：`./build/bin/test_codegen`、包含 `std.Event<T>` 链接的完整 FCTS
-  及全量 `make test` 均已通过。
+- 新增回归用例：`test_generic_iterator_fixed_storage_reified_cleanup_codegen` 以最小化的
+  `Result<T>(bool, Action<T>)` 直接断言 result 保持固定 C 存储，同时从当前闭合描述符的
+  `reified_agg_deps` 槽取得 aggregate cleanup descriptor，并且不引用开放泛型实例的静态
+  descriptor；现有 `std.Event<T>.emit()` 继续提供完整标准库路径的行为与链接回归；
+- 专项测试与全量 `make test` 结果：`./build/bin/test_codegen`、包含 `std.Event<T>` 的
+  `std-tests` 及全量 `make test` 均已通过。
 
 ### 11.6 泛型 callable 闭合实例缺少共享体名义指针桥接
 

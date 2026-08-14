@@ -8830,6 +8830,111 @@ static void test_generic_loop_reified_storage_codegen(void) {
     feng_program_free(program);
 }
 
+/* A generic iterator result may have a fixed C representation while its
+ * managed-slot cleanup still depends on the closed aggregate descriptor.
+ * Keep storage direct and obtain cleanup authority from the ordinary
+ * reified aggregate dependency slot, never from an open static descriptor. */
+static void test_generic_iterator_fixed_storage_reified_cleanup_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_iterator_fixed_cleanup;\n"
+        "spec Action<T>(value: T): void;\n"
+        "type Result<T>(bool, Action<T>);\n"
+        "@value\n"
+        "type Cursor<T> {\n"
+        "    var index: i64;\n"
+        "    let callback: Action<T>;\n"
+        "    @iterator\n"
+        "    func next(): Result<T> {\n"
+        "        if self.index > 0 { return (false, self.callback); }\n"
+        "        self.index += 1;\n"
+        "        return (true, self.callback);\n"
+        "    }\n"
+        "}\n"
+        "type Sequence<T> {\n"
+        "    let callback: Action<T>;\n"
+        "    @iterable\n"
+        "    func iter(): Cursor<T> {\n"
+        "        return Cursor<T> { index: 0, callback: self.callback };\n"
+        "    }\n"
+        "}\n"
+        "func invokeAll<T>(source: Sequence<T>, value: T): void {\n"
+        "    for let callback in source { callback(value); }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_iterator_fixed_cleanup.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *body_start;
+    const char *body_end;
+    const char *result_decl;
+    const char *result_cleanup;
+    const char *result_release;
+    const char *line_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(find_generated_function_body(
+        out.c_source,
+        "static void feng__feng__codegen__generic_iterator_fixed_cleanup__invokeAll_G__from__",
+        &body_start,
+        &body_end));
+
+    result_decl = strstr(
+        body_start,
+        "struct Feng__feng__codegen__generic_iterator_fixed_cleanup__Result__G__T__CTX__T _ir");
+    ASSERT(result_decl != NULL && result_decl < body_end);
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "_Alignas(max_align_t) char _ir") == 0U);
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "->reified_field_offsets[") == 0U);
+    ASSERT(span_contains(result_decl, body_end, ".item1"));
+    ASSERT(span_contains(result_decl, body_end, ".item2"));
+
+    result_cleanup = strstr(result_decl, "feng_cleanup_push_aggregate(");
+    ASSERT(result_cleanup != NULL && result_cleanup < body_end);
+    line_end = strchr(result_cleanup, '\n');
+    ASSERT(line_end != NULL && line_end < body_end);
+    ASSERT(span_contains(result_cleanup,
+                         line_end,
+                         "_desc->reified_agg_deps["));
+
+    result_release = strstr(result_cleanup, "feng_aggregate_release(&_ir");
+    ASSERT(result_release != NULL && result_release < body_end);
+    line_end = strchr(result_release, '\n');
+    ASSERT(line_end != NULL && line_end < body_end);
+    ASSERT(span_contains(result_release,
+                         line_end,
+                         "_desc->reified_agg_deps["));
+    ASSERT(!span_contains(
+        body_start,
+        body_end,
+        "Result__G__T__CTX__T__aggregate_desc"));
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A multi-parameter generic callable shared body keeps source parameter order
  * independent from generic descriptor order. Every open value uses the
  * existing generic-value ABI, the descriptor-sized result uses its one
@@ -10878,6 +10983,7 @@ int main(void) {
     test_try_catch_return_codegen();
     test_generic_try_body_reified_storage_codegen();
     test_generic_loop_reified_storage_codegen();
+    test_generic_iterator_fixed_storage_reified_cleanup_codegen();
     test_multi_parameter_generic_callable_abi_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
