@@ -1,6 +1,6 @@
 # Feng TUI Text 与自动尺寸开发方案
 
-> 状态：已实施并通过 std_test 回归，待人工 Review。
+> 状态：已实施并通过 std_test、全量回归及人工显示验证。
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 中 Text 组件阶段的专项开发文档。
 > Widget、Style、frame、drawFrame 和祖先裁剪的既有契约仍以
@@ -323,7 +323,8 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.15 实现 Buffer 宽度感知绘制、覆盖修正与 Screen 续占 diff；
 - [x] 11.16 Text 复用 TextUtil 的列宽测量和 Buffer 的通用 Cell 绘制；
 - [x] 11.17 更新并新增宽字符 std_test，保留 tui_demo 的宽字符与色块覆盖验证场景；
-- [ ] 11.18 通过 tui_demo 人工验证宽字符被色块反复覆盖后的显示；
+- [x] 11.18 通过 tui_demo 人工验证宽字符被色块反复覆盖后的显示；
 - [x] 11.19 执行 `make test` 全量回归；
 - [x] 11.20 为 RgbColor 增加 alpha，令 Buffer 负责透明颜色通道合成，以 Cell 颜色存在位区分显式黑色与终端默认色，并移除 Text 对 Cell 的直接操作；
-- [ ] 11.21 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。
+- [ ] 11.21 Text 已通过 Review；VStack/HStack 已进入
+  `docs/engineering/feng-std-tui-stack-layout-dev.md` 独立设计，Input 仍待后续设计。

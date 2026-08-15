@@ -233,6 +233,8 @@
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。
+> Text 通过人工验证后，VStack/HStack 的后续布局契约与实现计划详见
+> `docs/engineering/feng-std-tui-stack-layout-dev.md`；Input 仍在更后阶段单独设计。
 
 ### 第八阶段：测试与验证
 
