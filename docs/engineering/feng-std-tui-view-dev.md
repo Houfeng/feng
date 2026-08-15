@@ -386,7 +386,12 @@ draw 阶段
 
 `View.doDraw()` 在自身或任一祖先不是 `Visibility.Visible` 时，将 `clippedFrame` 置为空且不调用
 `draw()`，从而统一截断该组件子树的绘制。可见组件再查找离自身最近的
-`overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `clippedFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
+`overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件本帧已经缓存的
+`clippedFrame` 求交，得到本次有效绘制区域；该祖先的快照已经包含更高层 Hidden 祖先和
+Screen 的剪裁。不存在 Hidden 祖先时，自身 `frame` 直接与 Screen 求交。该规则依赖既有的
+祖先 `doDraw()` 先缓存自身快照、再调度 descendants 的绘制顺序。裁剪结果不写回布局
+`frame`，而是在登记 sequence 时写入 `clippedFrame`，作为本帧绘制与后续鼠标命中的共同
+快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
 
 裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `clippedFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
 

@@ -2472,6 +2472,7 @@ func text_draw_clipping_preserves_content_origin() {
   child.content = "abcdefgh";
   parent.addChild(child);
   parent.doStyling(hiddenManager);
+  parent.doDraw(hiddenManager);
   arrangeStyledWidget(child, hiddenManager);
   drawStyledWidget(child, hiddenManager);
 
@@ -2484,6 +2485,36 @@ func text_draw_clipping_preserves_content_origin() {
     hiddenBuffer.cells[7].value == (u64)102 &&
     hiddenBuffer.cells[8].value == (u64)103,
     "tui/text/hidden-clip-keeps-origin");
+}
+
+/** 验证最近 Hidden 祖先的 clippedFrame 传递全部上层剪裁。 */
+func view_multilevel_hidden_clipping() {
+  let manager = ViewManager(Screen(8, 4));
+  let outer = Container();
+  outer.style.overflow = Overflow.Hidden;
+  outer.frame = makeWidgetFrame(2, 0, 3, 2);
+  let middle = Container();
+  middle.style.overflow = Overflow.Hidden;
+  middle.frame = makeWidgetFrame(1, 0, 5, 3);
+  let child = View();
+  child.frame = makeWidgetFrame(0, 0, 6, 3);
+  outer.addChild(middle);
+  middle.addChild(child);
+
+  outer.doStyling(manager);
+  outer.doDraw(manager);
+  middle.doDraw(manager);
+  child.doDraw(manager);
+
+  check(outer.clippedFrame.x == 2 && outer.clippedFrame.y == 0 &&
+    outer.clippedFrame.width == 3 && outer.clippedFrame.height == 2,
+    "tui/view/multilevel-outer-clipped-frame");
+  check(middle.clippedFrame.x == 2 && middle.clippedFrame.y == 0 &&
+    middle.clippedFrame.width == 3 && middle.clippedFrame.height == 2,
+    "tui/view/multilevel-middle-clipped-frame");
+  check(child.clippedFrame.x == 2 && child.clippedFrame.y == 0 &&
+    child.clippedFrame.width == 3 && child.clippedFrame.height == 2,
+    "tui/view/multilevel-child-clipped-frame");
 }
 
 func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
@@ -3617,6 +3648,7 @@ open func run_tui_tests() {
     test("text_draw_wrap_unicode_and_hit_target()", () { text_draw_wrap_unicode_and_hit_target(); });
     test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
+    test("view_multilevel_hidden_clipping()", () { view_multilevel_hidden_clipping(); });
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
     test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
     test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });

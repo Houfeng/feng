@@ -414,9 +414,10 @@ open type View: Widget {
 
   /**
    * 解析当前组件的有效绘制区域。
-   * 先使用最近的 overflow=Hidden 祖先 frame 裁剪，再裁剪到 Screen。
+   * 存在 overflow=Hidden 祖先时与最近祖先的 clippedFrame 求交；
+   * 该快照已经包含更高祖先与 Screen 的剪裁。否则直接裁剪到 Screen。
    */
-  open static func resolveDrawFrame(widget: Widget, manager: ViewManager): Rect {
+  open static func resolveClippedFrame(widget: Widget, manager: ViewManager): Rect {
     if widget.rtStyle.visibility != Visibility.Visible {
       return Rect();
     }
@@ -428,8 +429,7 @@ open type View: Widget {
         return Rect();
       }
       if parentWidget.rtStyle.overflow == Overflow.Hidden {
-        result = View.intersectFrame(result, parentWidget.frame);
-        break;
+        return View.intersectFrame(result, parentWidget.clippedFrame);
       }
       current = parentWidget.parent;
     }
@@ -448,7 +448,7 @@ open type View: Widget {
    */
   @mixable
   static func doDraw(widget: Widget, manager: ViewManager): void {
-    let frame = View.resolveDrawFrame(widget, manager);
+    let frame = View.resolveClippedFrame(widget, manager);
     widget.clippedFrame = frame;
     if frame.width == 0 || frame.height == 0 {
       return;
