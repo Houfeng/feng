@@ -104,6 +104,11 @@ open type WidgetStyle {
 `StylePatch` 与 `Style` 保持同一组字段，每个字段均使用
 `Option<T>` 表示是否参与本层覆盖；`none` 表示不覆盖该字段。
 
+`Style` 提供 `clear()` 和两个 `apply()` 重载。`clear()` 将实例恢复为默认样式；
+`apply(Style)` 应用完整样式，`apply(StylePatch)` 只应用 Patch 中存在的字段。
+两个 `apply()` 在比较和赋值的同时返回 `StyleApplyResult`，分别记录本次调用是否改变了
+布局字段、绘制字段、两类字段或没有产生变化。
+
 ### 3.3 Thickness
 
 `Thickness` 表示矩形四边的间距，供 `padding`、`margin` 及后续边框使用：

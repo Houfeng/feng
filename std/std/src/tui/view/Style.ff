@@ -53,6 +53,23 @@ open type Auto();
 open let auto: Auto = ();
 
 /**
+ * StyleApplyResult 表示一次样式应用实际改变的字段类别。
+ */
+open enum StyleApplyResult {
+  /** 没有字段发生变化。 */
+  None,
+  /** 只有布局字段发生变化。 */
+  Layout,
+  /** 只有绘制字段发生变化。 */
+  Draw,
+  /** 布局字段和绘制字段均发生变化。 */
+  LayoutAndDraw
+}
+
+/** Style.clear() 复用的零间距，避免清理草稿样式时产生临时对象。 */
+let zeroThickness = Thickness(0);
+
+/**
  * WidgetStyle 组件布局与样式约束
  */
 open type Style {
@@ -141,4 +158,247 @@ open type Style {
    * Full 忽略 height 并占满该可用区域。
    */
   var verticalAlign: Align;
+
+  /**
+   * 将当前实例恢复为 Style 的默认状态。
+   */
+  open func clear(): void {
+    self.position = Position.Normal;
+    self.x = 0;
+    self.y = 0;
+    self.width = auto;
+    self.height = auto;
+    self.foreColor = none;
+    self.backColor = none;
+    self.padding = zeroThickness;
+    self.margin = zeroThickness;
+    self.overflow = Overflow.Visible;
+    self.horizontalAlign = Align.Full;
+    self.verticalAlign = Align.Full;
+  }
+
+  /**
+   * 应用完整样式，只写入实际变化的字段。
+   * @param source - 要应用的完整样式
+   * @return 本次应用实际改变的字段类别
+   */
+  open func apply(source: Style): StyleApplyResult {
+    var result = StyleApplyResult.None;
+    if self.position != source.position {
+      self.position = source.position;
+      result = Style.markLayout(result);
+    }
+    if !Style.lengthEquals(self.x, source.x) {
+      self.x = source.x;
+      result = Style.markLayout(result);
+    }
+    if !Style.lengthEquals(self.y, source.y) {
+      self.y = source.y;
+      result = Style.markLayout(result);
+    }
+    if !Style.sizeEquals(self.width, source.width) {
+      self.width = source.width;
+      result = Style.markLayout(result);
+    }
+    if !Style.sizeEquals(self.height, source.height) {
+      self.height = source.height;
+      result = Style.markLayout(result);
+    }
+    if !Style.colorEquals(self.foreColor, source.foreColor) {
+      self.foreColor = source.foreColor;
+      result = Style.markDraw(result);
+    }
+    if !Style.colorEquals(self.backColor, source.backColor) {
+      self.backColor = source.backColor;
+      result = Style.markDraw(result);
+    }
+    if !Style.thicknessEquals(self.padding, source.padding) {
+      self.padding = source.padding;
+      result = Style.markLayout(result);
+    }
+    if !Style.thicknessEquals(self.margin, source.margin) {
+      self.margin = source.margin;
+      result = Style.markLayout(result);
+    }
+    if self.overflow != source.overflow {
+      self.overflow = source.overflow;
+      result = Style.markDraw(result);
+    }
+    if self.horizontalAlign != source.horizontalAlign {
+      self.horizontalAlign = source.horizontalAlign;
+      result = Style.markLayout(result);
+    }
+    if self.verticalAlign != source.verticalAlign {
+      self.verticalAlign = source.verticalAlign;
+      result = Style.markLayout(result);
+    }
+    return result;
+  }
+
+  /**
+   * 应用稀疏样式，只处理 Patch 中存在且实际变化的字段。
+   * @param patch - 要应用的稀疏样式
+   * @return 本次应用实际改变的字段类别
+   */
+  open func apply(patch: StylePatch): StyleApplyResult {
+    var result = StyleApplyResult.None;
+    if patch.position match value: Position {
+      if self.position != value {
+        self.position = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.x match value: Union<int, double> {
+      if !Style.lengthEquals(self.x, value) {
+        self.x = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.y match value: Union<int, double> {
+      if !Style.lengthEquals(self.y, value) {
+        self.y = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.width match value: Union<Auto, int, double> {
+      if !Style.sizeEquals(self.width, value) {
+        self.width = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.height match value: Union<Auto, int, double> {
+      if !Style.sizeEquals(self.height, value) {
+        self.height = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.foreColor match value: RgbColor {
+      let color: Option<RgbColor> = value;
+      if !Style.colorEquals(self.foreColor, color) {
+        self.foreColor = value;
+        result = Style.markDraw(result);
+      }
+    }
+    if patch.backColor match value: RgbColor {
+      let color: Option<RgbColor> = value;
+      if !Style.colorEquals(self.backColor, color) {
+        self.backColor = value;
+        result = Style.markDraw(result);
+      }
+    }
+    if patch.padding match value: Thickness {
+      if !Style.thicknessEquals(self.padding, value) {
+        self.padding = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.margin match value: Thickness {
+      if !Style.thicknessEquals(self.margin, value) {
+        self.margin = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.overflow match value: Overflow {
+      if self.overflow != value {
+        self.overflow = value;
+        result = Style.markDraw(result);
+      }
+    }
+    if patch.horizontalAlign match value: Align {
+      if self.horizontalAlign != value {
+        self.horizontalAlign = value;
+        result = Style.markLayout(result);
+      }
+    }
+    if patch.verticalAlign match value: Align {
+      if self.verticalAlign != value {
+        self.verticalAlign = value;
+        result = Style.markLayout(result);
+      }
+    }
+    return result;
+  }
+
+  /** 将本次结果标记为包含布局变化。 */
+  seal static func markLayout(result: StyleApplyResult): StyleApplyResult {
+    return match result {
+      StyleApplyResult.Draw { StyleApplyResult.LayoutAndDraw }
+      StyleApplyResult.LayoutAndDraw { StyleApplyResult.LayoutAndDraw }
+      else { StyleApplyResult.Layout }
+    };
+  }
+
+  /** 将本次结果标记为包含绘制变化。 */
+  seal static func markDraw(result: StyleApplyResult): StyleApplyResult {
+    return match result {
+      StyleApplyResult.Layout { StyleApplyResult.LayoutAndDraw }
+      StyleApplyResult.LayoutAndDraw { StyleApplyResult.LayoutAndDraw }
+      else { StyleApplyResult.Draw }
+    };
+  }
+
+  /** 比较 double 样式值，并将两个 NaN 视为相同的无效值。 */
+  seal static func doubleEquals(left: double, right: double): bool {
+    return left == right || (left != left && right != right);
+  }
+
+  /** 比较固定值或百分比长度。 */
+  seal static func lengthEquals(left: Union<int, double>,
+    right: Union<int, double>): bool {
+    return match left {
+      leftValue: int {
+        if right match rightValue: int { leftValue == rightValue }
+        else { false }
+      }
+      leftValue: double {
+        if right match rightValue: double {
+          Style.doubleEquals(leftValue, rightValue)
+        } else { false }
+      }
+      else { false }
+    };
+  }
+
+  /** 比较自动值、固定值或百分比尺寸。 */
+  seal static func sizeEquals(left: Union<Auto, int, double>,
+    right: Union<Auto, int, double>): bool {
+    return match left {
+      Auto { right match Auto }
+      leftValue: int {
+        if right match rightValue: int { leftValue == rightValue }
+        else { false }
+      }
+      leftValue: double {
+        if right match rightValue: double {
+          Style.doubleEquals(leftValue, rightValue)
+        } else { false }
+      }
+      else { false }
+    };
+  }
+
+  /** 比较两个可选颜色的 RGBA 分量。 */
+  seal static func colorEquals(left: Option<RgbColor>,
+    right: Option<RgbColor>): bool {
+    return match left {
+      None { right match None }
+      leftValue: RgbColor {
+        if right match rightValue: RgbColor {
+          leftValue.r == rightValue.r &&
+          leftValue.g == rightValue.g &&
+          leftValue.b == rightValue.b &&
+          leftValue.a == rightValue.a
+        } else { false }
+      }
+      else { false }
+    };
+  }
+
+  /** 比较两个间距对象的四边值。 */
+  seal static func thicknessEquals(left: Thickness, right: Thickness): bool {
+    return Style.lengthEquals(left.top, right.top) &&
+      Style.lengthEquals(left.right, right.right) &&
+      Style.lengthEquals(left.bottom, right.bottom) &&
+      Style.lengthEquals(left.left, right.left);
+  }
 }
