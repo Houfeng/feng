@@ -38,6 +38,12 @@ open type StylePatch {
   /** 溢出处理方式覆盖。 */
   var overflow: Option<Overflow>;
 
+  /** 组件可见性覆盖。 */
+  var visibility: Option<Visibility>;
+
+  /** 鼠标事件响应方式覆盖。 */
+  var pointerEvents: Option<PointerEvents>;
+
   /** 水平对齐方式覆盖。 */
   var horizontalAlign: Option<Align>;
 
@@ -56,6 +62,8 @@ open type StylePatch {
     self.padding = none;
     self.margin = none;
     self.overflow = none;
+    self.visibility = none;
+    self.pointerEvents = none;
     self.horizontalAlign = none;
     self.verticalAlign = none;
   }

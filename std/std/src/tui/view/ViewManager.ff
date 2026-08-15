@@ -355,7 +355,9 @@ open type ViewManager {
     while index > 0 {
       index -= 1;
       let widget = self.sequence.get(index);
-      if self.containsPoint(widget.drawFrame, x, y) {
+      if widget.rtStyle.visibility == Visibility.Visible &&
+      widget.rtStyle.pointerEvents == PointerEvents.All &&
+      self.containsPoint(widget.drawFrame, x, y) {
         return widget;
       }
     }
@@ -442,7 +444,9 @@ open type ViewManager {
     }
     var current = target;
     while true {
-      if current.tabIndex >= 0 {
+      if current.rtStyle.visibility == Visibility.Visible &&
+      current.rtStyle.pointerEvents == PointerEvents.All &&
+      current.tabIndex >= 0 {
         self.focus(current);
         return;
       }
@@ -450,6 +454,30 @@ open type ViewManager {
         current = (Widget)parent;
       } else {
         return;
+      }
+    }
+  }
+
+  /**
+   * 查找锁定目标到 root 路径中最外层的不可见 Widget。
+   * 路由将跳过该边界及其内部子树，再从边界的可见父级继续冒泡。
+   * @param target 当前锁定的鼠标目标
+   * @return 最外层不可见边界；整条路径可见时返回 none
+   */
+  seal func resolveLockedHiddenBoundary(target: Widget): Option<Widget> {
+    var result: Option<Widget> = none;
+    var current = target;
+    while true {
+      if current.rtStyle.visibility != Visibility.Visible {
+        result = current;
+      }
+      if self.isCurrentRoot(current) {
+        return result;
+      }
+      if current.parent match let parent: ContainerWidget {
+        current = (Widget)parent;
+      } else {
+        return result;
       }
     }
   }
@@ -470,15 +498,32 @@ open type ViewManager {
       selected = self.hitTest(event.x, event.y);
     }
     if selected match let target: Widget {
+      var hiddenBoundary: Option<Widget> = none;
+      var insideHiddenBoundary = false;
       if MouseEvent<Widget>.hasLockedTarget() {
         event.bindLockedTarget(target);
+        hiddenBoundary = self.resolveLockedHiddenBoundary(target);
+        if hiddenBoundary match boundary: Widget {
+          insideHiddenBoundary = true;
+        }
       } else {
         event.bindTarget(target);
       }
       var current = target;
       var routing = true;
       while routing {
-        self.invokeMouse(current, event);
+        if !insideHiddenBoundary &&
+        current.rtStyle.visibility == Visibility.Visible &&
+        current.rtStyle.pointerEvents == PointerEvents.All {
+          self.invokeMouse(current, event);
+        }
+        if insideHiddenBoundary {
+          if hiddenBoundary match boundary: Widget {
+            if current == boundary {
+              insideHiddenBoundary = false;
+            }
+          }
+        }
         if event.isStopped() {
           routing = false;
         } else if self.isCurrentRoot(current) {
@@ -507,8 +552,10 @@ open type ViewManager {
       var current = target;
       var routing = true;
       while routing {
-        let targetEvent = current.key;
-        targetEvent.emit(event);
+        if current.rtStyle.visibility == Visibility.Visible {
+          let targetEvent = current.key;
+          targetEvent.emit(event);
+        }
         if event.isStopped() {
           routing = false;
         } else if self.isCurrentRoot(current) {

@@ -1405,6 +1405,203 @@ func view_dirty_initial_state() {
     "tui/view/dirty-initial-subtree-layout");
 }
 
+/** 验证 Visibility/PointerEvents 的默认值、合并分类和 Patch 清理。 */
+func style_visibility_and_pointer_events_apply() {
+  let style = Style();
+  style.visibility = Visibility.Collapse;
+  style.pointerEvents = PointerEvents.None;
+  style.clear();
+  check(style.visibility == Visibility.Visible &&
+    style.pointerEvents == PointerEvents.All,
+    "tui/style/interaction-defaults");
+
+  let pointerPatch = StylePatch();
+  pointerPatch.pointerEvents = PointerEvents.None;
+  let pointerResult = style.apply(pointerPatch);
+  check(style.pointerEvents == PointerEvents.None,
+    "tui/style/pointer-events-applied");
+  check(!pointerResult.has(StyleChangeType.Layout) &&
+    !pointerResult.has(StyleChangeType.Draw),
+    "tui/style/pointer-events-no-visual-change");
+
+  let hiddenPatch = StylePatch();
+  hiddenPatch.visibility = Visibility.Hidden;
+  let hiddenResult = style.apply(hiddenPatch);
+  check(style.visibility == Visibility.Hidden &&
+    !hiddenResult.has(StyleChangeType.Layout) &&
+    hiddenResult.has(StyleChangeType.Draw),
+    "tui/style/hidden-is-draw-change");
+
+  hiddenPatch.visibility = Visibility.Collapse;
+  let collapseResult = style.apply(hiddenPatch);
+  check(style.visibility == Visibility.Collapse &&
+    collapseResult.has(StyleChangeType.Layout) &&
+    collapseResult.has(StyleChangeType.Draw),
+    "tui/style/collapse-is-layout-and-draw-change");
+
+  hiddenPatch.pointerEvents = PointerEvents.None;
+  hiddenPatch.clear();
+  style.pointerEvents = PointerEvents.All;
+  let clearedResult = style.apply(hiddenPatch);
+  check(style.visibility == Visibility.Collapse &&
+    style.pointerEvents == PointerEvents.All &&
+    !clearedResult.has(StyleChangeType.Layout) &&
+    !clearedResult.has(StyleChangeType.Draw),
+    "tui/style/patch-clear-removes-interaction-overrides");
+}
+
+/** 验证 Collapse child 的 frame 为零，且 margin 不占用 VStack 空间。 */
+func vstack_collapse_child_has_no_space() {
+  let manager = ViewManager(Screen(10, 5));
+  let stack = VStack();
+  stack.style.position = Position.Fixed;
+  stack.style.width = auto;
+  stack.style.height = auto;
+
+  let collapsed = View();
+  collapsed.style.width = 4;
+  collapsed.style.height = 3;
+  collapsed.style.horizontalAlign = Align.Start;
+  collapsed.style.verticalAlign = Align.Start;
+  let margin: int = 2;
+  collapsed.style.margin = Thickness(margin);
+  collapsed.style.visibility = Visibility.Collapse;
+
+  let visible = View();
+  visible.style.width = 2;
+  visible.style.height = 1;
+  visible.style.horizontalAlign = Align.Start;
+  visible.style.verticalAlign = Align.Start;
+  stack.addChild(collapsed);
+  stack.addChild(visible);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(collapsed.frame.width == 0 && collapsed.frame.height == 0,
+    "tui/visibility/collapse-zero-frame");
+  check(visible.frame.x == 0 && visible.frame.y == 0,
+    "tui/visibility/collapse-skips-margin-and-flow");
+  check(stack.frame.width == 2 && stack.frame.height == 1,
+    "tui/visibility/collapse-not-in-auto-size");
+}
+
+/** 验证 Hidden 与 PointerEvents 在绘制、命中和冒泡中的统一行为。 */
+func visibility_and_pointer_events_render_and_route() {
+  let screen = Screen(3, 1);
+  let manager = ViewManager(screen);
+  let root = VStack();
+  let bottom = View();
+  bottom.style.position = Position.Absolute;
+  bottom.style.width = 3;
+  bottom.style.height = 1;
+  bottom.style.backColor = RgbColor(0, 0, 0xFF);
+  let top = View();
+  top.style.position = Position.Absolute;
+  top.style.width = 3;
+  top.style.height = 1;
+  top.style.backColor = RgbColor(0xFF, 0, 0);
+  top.style.visibility = Visibility.Hidden;
+  root.addChild(bottom);
+  root.addChild(top);
+  manager.root = root;
+
+  var bottomHits = 0;
+  var topHits = 0;
+  var rootHits = 0;
+  var managerHits = 0;
+  bottom.mouseDown.on((event: MouseEvent<Widget>) { bottomHits += 1; });
+  top.mouseDown.on((event: MouseEvent<Widget>) { topHits += 1; });
+  root.mouseDown.on((event: MouseEvent<Widget>) { rootHits += 1; });
+  manager.mouseDown.on((event: MouseEvent<Widget>) { managerHits += 1; });
+
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(top.frame.width == 3 && top.frame.height == 1,
+    "tui/visibility/hidden-keeps-layout");
+  check(screen.buffer().cells[0].backColor() == (u32)0x0000FF,
+    "tui/visibility/hidden-skips-draw");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(bottomHits == 1 && topHits == 0 && rootHits == 1 && managerHits == 1,
+    "tui/visibility/hidden-skips-hit");
+
+  top.style.visibility = Visibility.Visible;
+  top.style.pointerEvents = PointerEvents.None;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(screen.buffer().cells[0].backColor() == (u32)0xFF0000,
+    "tui/pointer-events/none-keeps-draw");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(bottomHits == 2 && topHits == 0 && rootHits == 2 && managerHits == 2,
+    "tui/pointer-events/none-hits-underlying-widget");
+
+  root.style.pointerEvents = PointerEvents.None;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 3,
+    "tui/pointer-events/none-skips-bubble-node");
+
+  root.style.visibility = Visibility.Hidden;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(screen.buffer().cells[0].value == (u64)0 &&
+    screen.buffer().cells[0].backColor() == (u32)0,
+    "tui/visibility/hidden-stops-draw-subtree");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 4,
+    "tui/visibility/hidden-subtree-reaches-manager-only");
+
+  let lockOwner = MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0);
+  lockOwner.bindTarget(bottom);
+  check(lockOwner.lock(), "tui/visibility/lock-hidden-subtree-target");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 5,
+    "tui/visibility/locked-hidden-subtree-skips-widgets");
+  lockOwner.unlock();
+}
+
+/** 验证键盘冒泡跳过不可见 Widget，且不受 PointerEvents 影响。 */
+func visibility_skips_key_bubble_node() {
+  let manager = ViewManager(Screen(3, 1));
+  let root = Container();
+  let child = View();
+  child.tabIndex = 0;
+  root.addChild(child);
+  manager.root = root;
+  check(manager.focus(child), "tui/visibility/key-focus-child");
+
+  var childKeys = 0;
+  var rootKeys = 0;
+  var managerKeys = 0;
+  child.key.on((event: KeyEvent<Widget>) { childKeys += 1; });
+  root.key.on((event: KeyEvent<Widget>) { rootKeys += 1; });
+  manager.key.on((event: KeyEvent<Widget>) { managerKeys += 1; });
+
+  child.style.visibility = Visibility.Hidden;
+  manager.doStyling();
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Enter, 0));
+  check(childKeys == 0 && rootKeys == 1 && managerKeys == 1,
+    "tui/visibility/hidden-skips-key-bubble-node");
+
+  child.style.visibility = Visibility.Visible;
+  child.style.pointerEvents = PointerEvents.None;
+  manager.doStyling();
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Enter, 0));
+  check(childKeys == 1 && rootKeys == 2 && managerKeys == 2,
+    "tui/pointer-events/none-keeps-key-routing");
+}
+
 /** 验证正式样式阶段强制 Root 铺满 Screen，且不修改用户 Style。 */
 func view_manager_styling_forces_root_frame() {
   let manager = ViewManager(Screen(7, 4));
@@ -3396,6 +3593,10 @@ open func run_tui_tests() {
     test("dirty_mark_construction_and_query()", () { dirty_mark_construction_and_query(); });
     test("dirty_mark_mutation_and_value_copy()", () { dirty_mark_mutation_and_value_copy(); });
     test("view_dirty_initial_state()", () { view_dirty_initial_state(); });
+    test("style_visibility_and_pointer_events_apply()", () { style_visibility_and_pointer_events_apply(); });
+    test("vstack_collapse_child_has_no_space()", () { vstack_collapse_child_has_no_space(); });
+    test("visibility_and_pointer_events_render_and_route()", () { visibility_and_pointer_events_render_and_route(); });
+    test("visibility_skips_key_bubble_node()", () { visibility_skips_key_bubble_node(); });
     test("view_manager_styling_forces_root_frame()", () { view_manager_styling_forces_root_frame(); });
     test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });

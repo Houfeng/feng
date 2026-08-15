@@ -101,7 +101,8 @@ open type VStack: VStackWidget {
     var width = 0;
     var height = 0;
     for let child in stack.children {
-      if View.isNormalFlow(child.rtStyle.position) {
+      if child.rtStyle.visibility != Visibility.Collapse &&
+      View.isNormalFlow(child.rtStyle.position) {
         let margin = VStack.resolveMargin(child, content);
         let outerWidth = margin.item4 + child.frame.width + margin.item2;
         let outerHeight = margin.item1 + child.frame.height + margin.item3;
@@ -174,6 +175,10 @@ open type VStack: VStackWidget {
     var intrinsicWidth = 0;
     for let child in stack.children {
       child.dirty.add(DirtyType.Layout);
+      if child.rtStyle.visibility == Visibility.Collapse {
+        child.doArrange(manager);
+        continue;
+      }
       if !View.isNormalFlow(child.rtStyle.position) {
         child.doArrange(manager);
         continue;

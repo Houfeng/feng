@@ -180,6 +180,13 @@ open type View: Widget {
     !widget.dirty.has(DirtyType.SubtreeLayout) {
       return;
     }
+    if widget.rtStyle.visibility == Visibility.Collapse {
+      widget.dirty.remove(DirtyType.Layout);
+      widget.dirty.remove(DirtyType.SubtreeLayout);
+      widget.frame.width = 0;
+      widget.frame.height = 0;
+      return;
+    }
     while true {
       widget.dirty.remove(DirtyType.Layout);
       widget.dirty.remove(DirtyType.SubtreeLayout);
@@ -409,10 +416,16 @@ open type View: Widget {
    * 先使用最近的 overflow=Hidden 祖先 frame 裁剪，再裁剪到 Screen。
    */
   open static func resolveDrawFrame(widget: Widget, manager: ViewManager): Rect {
+    if widget.rtStyle.visibility != Visibility.Visible {
+      return Rect();
+    }
     var result = widget.frame;
     var current: Option<ContainerWidget> = widget.parent;
     while current match let parent: ContainerWidget {
       let parentWidget = (Widget)parent;
+      if parentWidget.rtStyle.visibility != Visibility.Visible {
+        return Rect();
+      }
       if parentWidget.rtStyle.overflow == Overflow.Hidden {
         result = View.intersectFrame(result, parentWidget.frame);
         break;

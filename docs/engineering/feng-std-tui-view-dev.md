@@ -86,6 +86,8 @@ open type WidgetStyle {
   var padding: Thickness;
   var margin: Thickness;
   var overflow: WidgetOverflow;
+  var visibility: Visibility;
+  var pointerEvents: PointerEvents;
   var horizontalAlign: WidgetAlign;
   var verticalAlign: WidgetAlign;
 }
@@ -94,6 +96,17 @@ open type WidgetStyle {
 尺寸和坐标使用 `Union<int, double>`：`int` 表示固定终端单元数，`double` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal`、`Relative` 忽略二者。`Absolute` 的相对坐标以最近的非 `Normal` 祖先组件为参照，且不受该祖先组件 `padding` 影响；不存在非 `Normal` 祖先时以屏幕为参照。`Fixed` 始终以屏幕为参照。`Absolute` 和 `Fixed` 忽略 `horizontalAlign` 和 `verticalAlign`。
 
 `foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
+
+`visibility` 和 `pointerEvents` 的定义如下：
+
+- `Visibility.Visible`：正常参与布局、绘制和事件路由；
+- `Visibility.Hidden`：继续参与布局并保留占位，但不绘制自身及其子树，不参与事件命中；事件沿既有目标向上路由时跳过该 Widget；
+- `Visibility.Collapse`：不占位，公共布局调度将最终 `frame.width` 和 `frame.height` 置为 0；绘制与事件行为同 `Hidden`；
+- `PointerEvents.All`：正常参与鼠标命中和鼠标事件路由；
+- `PointerEvents.None`：仍参与布局和绘制，但自身不作为鼠标命中目标，鼠标事件冒泡时跳过该 Widget。该字段不影响键盘和焦点事件。
+
+`Visibility` 默认值为 `Visible`，`PointerEvents` 默认值为 `All`。`Collapse` 组件的
+`margin` 也不占用父布局空间；父布局组件在排列直接 children 时必须排除该 child。
 
 #### 3.2.1 StylePatch
 
@@ -108,6 +121,9 @@ open type WidgetStyle {
 `apply(Style)` 应用完整样式，`apply(StylePatch)` 只应用 Patch 中存在的字段。
 两个 `apply()` 在比较和赋值的同时返回 `StyleApplyResult`。该 `@value` 类型通过一个
 内部整数按位记录 `StyleChangeType.Layout` 和 `StyleChangeType.Draw`，可同时表达两类变化。
+`Visibility` 在进入或离开 `Collapse` 时同时产生 Layout 和 Draw 变化，在 `Visible` 与
+`Hidden` 之间切换时只产生 Draw 变化；`PointerEvents` 不改变布局或绘制结果，因此不产生
+这两类变化，但仍同步写入最终 `rtStyle`。
 
 ### 3.3 Thickness
 
@@ -331,6 +347,10 @@ draw 阶段
 `arrange()`，直到当前组件不再请求重排。只重新出现 `SubtreeLayout` 时不重复当前组件，
 本轮自治的 children 布局完成后由 `doArrange()` 一并消费该路径标记。
 
+当最终 `rtStyle.visibility == Visibility.Collapse` 时，公共 `doArrange()` 不调用组件自己的
+`arrange()`，直接将 `frame.width` 和 `frame.height` 置为 0 并消费当前布局标记。父布局在
+排列 children 时还必须跳过该 child 的 margin，保证 Collapse 完全不占位。
+
 组件在布局阶段之外修改自身布局输入时，先直接添加 `Layout`，再调用
 `requestReflow()` 通知父级路径。布局阶段内，子组件的最终占位改变时直接调用
 `requestReflow()`；父级重新布局后，只有父级自身占位也改变时才继续向上请求。
@@ -364,7 +384,9 @@ draw 阶段
 
 ### 7.3 绘制裁剪
 
-`View.doDraw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
+`View.doDraw()` 在自身或任一祖先不是 `Visibility.Visible` 时，将 `drawFrame` 置为空且不调用
+`draw()`，从而统一截断该组件子树的绘制。可见组件再查找离自身最近的
+`overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
 
 裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `drawFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
 
@@ -400,7 +422,13 @@ back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只�
 
 `sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；`Widget.doDraw()` 完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。组件自己的 `draw()` 不感知 sequence。越靠后的组件实际绘制层级越高，容器对 children 的 `doDraw()` 调用顺序同时决定子组件在 sequence 中的顺序。
 
-鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `drawFrame` 判断事件坐标；第一个命中的组件即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
+鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `drawFrame` 判断事件坐标；
+不可见或 `pointerEvents == PointerEvents.None` 的组件不能成为目标，查找继续向下层组件进行。
+找到的第一个可响应组件即为目标。鼠标事件沿 parent 冒泡时，逐节点跳过不可见或
+`PointerEvents.None` 的 Widget，但继续向其父级路由；正常到达 root 后仍触发
+ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 `PointerEvents` 影响。
+锁定目标同样遵循该规则；若其祖先在锁定期间变为不可见，隐藏子树内的目标和祖先均被
+跳过，事件从隐藏边界之外的首个可见祖先继续冒泡。
 
 `drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
@@ -543,6 +571,8 @@ std/std/src/tui/widgets/
     clean 子树跳过及 ViewManager root 调度。
 16. 增加 `doDraw()`，统一处理绘制裁剪、`drawFrame` 缓存及 sequence 登记；保持完整帧
     绘制，不增加 Draw dirty。
+17. 为 Style/StylePatch 增加 `Visibility` 和 `PointerEvents`，接入 Collapse 零占位、
+    Hidden 绘制截断、鼠标命中过滤及鼠标/键盘冒泡跳过规则。
 
 ## 14 Review 关注点
 

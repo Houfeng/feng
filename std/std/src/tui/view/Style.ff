@@ -43,6 +43,24 @@ open enum Overflow {
   Hidden
 }
 
+/** 组件在布局、绘制和事件阶段的可见性。 */
+open enum Visibility {
+  /** 正常参与布局、绘制和事件路由。 */
+  Visible,
+  /** 保留布局占位，但不绘制且不响应事件。 */
+  Hidden,
+  /** 不占布局空间、不绘制且不响应事件。 */
+  Collapse
+}
+
+/** 组件是否参与鼠标命中和鼠标事件路由。 */
+open enum PointerEvents {
+  /** 正常响应鼠标事件。 */
+  All,
+  /** 不响应鼠标事件。 */
+  None
+}
+
 /**
  * Auto 表示由组件的内在内容决定最终尺寸。
  * 零元素具名 tuple 不携带运行时数据。
@@ -166,6 +184,16 @@ open type Style {
   var overflow: Overflow;
 
   /**
+   * 组件可见性；Hidden 保留占位，Collapse 不占位。
+   */
+  var visibility: Visibility;
+
+  /**
+   * 是否参与鼠标命中和鼠标事件路由。
+   */
+  var pointerEvents: PointerEvents;
+
+  /**
    * Normal/Relative 布局的水平对齐方式；Absolute/Fixed 时忽略。
    * Start/Center/End 在扣除左右 margin 后的可用区域内按最终解析宽度定位；
    * Full 忽略 width 并占满该可用区域。
@@ -193,6 +221,8 @@ open type Style {
     self.padding = zeroThickness;
     self.margin = zeroThickness;
     self.overflow = Overflow.Visible;
+    self.visibility = Visibility.Visible;
+    self.pointerEvents = PointerEvents.All;
     self.horizontalAlign = Align.Full;
     self.verticalAlign = Align.Full;
   }
@@ -243,6 +273,17 @@ open type Style {
     if self.overflow != source.overflow {
       self.overflow = source.overflow;
       result.add(StyleChangeType.Draw);
+    }
+    if self.visibility != source.visibility {
+      if self.visibility == Visibility.Collapse ||
+      source.visibility == Visibility.Collapse {
+        result.add(StyleChangeType.Layout);
+      }
+      self.visibility = source.visibility;
+      result.add(StyleChangeType.Draw);
+    }
+    if self.pointerEvents != source.pointerEvents {
+      self.pointerEvents = source.pointerEvents;
     }
     if self.horizontalAlign != source.horizontalAlign {
       self.horizontalAlign = source.horizontalAlign;
@@ -322,6 +363,21 @@ open type Style {
       if self.overflow != value {
         self.overflow = value;
         result.add(StyleChangeType.Draw);
+      }
+    }
+    if patch.visibility match value: Visibility {
+      if self.visibility != value {
+        if self.visibility == Visibility.Collapse ||
+        value == Visibility.Collapse {
+          result.add(StyleChangeType.Layout);
+        }
+        self.visibility = value;
+        result.add(StyleChangeType.Draw);
+      }
+    }
+    if patch.pointerEvents match value: PointerEvents {
+      if self.pointerEvents != value {
+        self.pointerEvents = value;
       }
     }
     if patch.horizontalAlign match value: Align {
