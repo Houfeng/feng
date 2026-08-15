@@ -58,6 +58,12 @@ func cell_style_strikethrough_const() {
   check(Cell.STYLE_STRIKETHROUGH == ((u64)1 << (u64)55), "tui/cell/style-strikethrough-const");
 }
 
+/** 验证续占标记位于 Unicode 有效范围之外。 */
+func cell_continuation_const() {
+  check(Cell.CONTINUATION == (u64)0x110000,
+    "tui/cell/continuation-const");
+}
+
 // ─── 构造函数 ──────────────────────────────────────────────────────────────
 
 func cell_ctor_default() {
@@ -274,7 +280,11 @@ func buffer_draw_text_chinese() {
   // "中" U+4E2D, "文" U+6587
   buf.draw((u32)0, (u32)0, "中文");
   check(buf.cells[(int)0].value == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
-  check(buf.cells[(int)1].value == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
+  check(buf.cells[(int)1].value == Cell.CONTINUATION,
+    "tui/buffer/draw-text-chinese-0-continuation");
+  check(buf.cells[(int)2].value == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
+  check(buf.cells[(int)3].value == Cell.CONTINUATION,
+    "tui/buffer/draw-text-chinese-1-continuation");
 }
 
 func buffer_draw_text_emoji() {
@@ -282,6 +292,46 @@ func buffer_draw_text_emoji() {
   // 😀 U+1F600
   buf.draw((u32)0, (u32)0, "😀");
   check(buf.cells[(int)0].value == (u64)0x1F600, "tui/buffer/draw-text-emoji");
+  check(buf.cells[(int)1].value == Cell.CONTINUATION,
+    "tui/buffer/draw-text-emoji-continuation");
+}
+
+/** 验证 TextUtil 在 Unicode locale 下返回终端显示列宽。 */
+func text_util_measure_cell_width() {
+  check(TextUtil.measureCellWidth((u32)65) == 1,
+    "tui/text-util/ascii-width");
+  check(TextUtil.measureCellWidth((u32)0x4E2D) == 2,
+    "tui/text-util/chinese-width");
+  check(TextUtil.measureCellWidth((u32)0x1F600) == 2,
+    "tui/text-util/emoji-width");
+  check(TextUtil.measureCellWidth("中文") == 4,
+    "tui/text-util/string-width");
+}
+
+/** 验证 Buffer 覆盖宽字符任一列时会整体清理旧占用关系。 */
+func buffer_wide_glyph_occupancy_overwrite() {
+  let buf = Buffer((u32)5, (u32)1);
+  buf.draw((u32)0, (u32)0, "中文");
+  buf.draw((u32)1, (u32)0, (u64)88);
+  check(buf.cells[0].value == (u64)0 &&
+    buf.cells[1].value == (u64)88,
+    "tui/buffer/overwrite-wide-continuation-clears-lead");
+  check(buf.cells[2].value == (u64)0x6587 &&
+    buf.cells[3].value == Cell.CONTINUATION,
+    "tui/buffer/overwrite-wide-continuation-keeps-next-glyph");
+
+  buf.draw((u32)2, (u32)0, (u64)89);
+  check(buf.cells[2].value == (u64)89 &&
+    buf.cells[3].value == (u64)0,
+    "tui/buffer/overwrite-wide-lead-clears-continuation");
+
+  buf.draw((u32)0, (u32)0, "ABCD");
+  buf.draw((u32)1, (u32)0, "中");
+  check(buf.cells[0].value == (u64)65 &&
+    buf.cells[1].value == (u64)0x4E2D &&
+    buf.cells[2].value == Cell.CONTINUATION &&
+    buf.cells[3].value == (u64)68,
+    "tui/buffer/wide-overwrites-complete-target-columns");
 }
 
 func buffer_draw_text_clip() {
@@ -803,6 +853,26 @@ func screen_render_unicode_emoji() {
   scr.buffer().draw((u32)0, (u32)0, "😀");
   let out = scr.buildPatchString();
   check(out.contains("😀"), "tui/screen/render-unicode-emoji");
+}
+
+/** 验证 Screen diff 只输出宽字符主 Cell，并正确处理宽窄字符转换。 */
+func screen_render_wide_glyph_transitions() {
+  let scr = Screen((u32)4, (u32)1);
+  scr.buffer().draw((u32)0, (u32)0, "😀");
+  let wide = scr.buildPatchString();
+  check(wide.contains("😀") && !wide.contains("\x1b[1;2H"),
+    "tui/screen/wide-continuation-not-emitted");
+
+  scr.buffer().draw((u32)1, (u32)0, (u64)88);
+  let narrow = scr.buildPatchString();
+  check(narrow.contains("X") && !narrow.contains("😀"),
+    "tui/screen/overwrite-continuation-clears-wide-glyph");
+
+  scr.buffer().draw((u32)0, (u32)0, "😀");
+  let restored = scr.buildPatchString();
+  check(restored.contains("😀") &&
+    scr.buffer().cells[1].value == Cell.CONTINUATION,
+    "tui/screen/wide-glyph-restored-after-overwrite");
 }
 
 // ─── TuiApp 构造与字段初始化 ─────────────────────────────────────────────
@@ -1334,12 +1404,12 @@ func text_grapheme_wrap_and_emoji() {
   text.style.height = auto;
   text.content = "😀";
   text.arrange(manager);
-  check(text.frame.width == 1 && text.frame.height == 1,
+  check(text.frame.width == 2 && text.frame.height == 1,
     "tui/text/single-codepoint-emoji-size");
 
   text.content = "👨‍👩‍👧‍👦";
   text.arrange(manager);
-  check(text.frame.width == 7 && text.frame.height == 1,
+  check(text.frame.width == 11 && text.frame.height == 1,
     "tui/text/multi-codepoint-grapheme-auto-size");
 
   text.style.width = 2;
@@ -1364,22 +1434,24 @@ func text_grapheme_wrap_and_emoji() {
   family.content = "👨‍👩‍👧‍👦";
   family.arrange(familyManager);
   family.draw(familyManager);
-  check(family.frame.height == 3,
+  check(family.frame.height == 4,
     "tui/text/overwide-grapheme-splits-by-codepoint");
   let familyBuffer = familyScreen.buffer();
   check(familyBuffer.cells[0].value == (u64)0x1F468 &&
-    familyBuffer.cells[1].value == (u64)0x200D &&
-    familyBuffer.cells[2].value == (u64)0x1F469 &&
-    familyBuffer.cells[3].value == (u64)0x200D &&
-    familyBuffer.cells[4].value == (u64)0x1F467 &&
+    familyBuffer.cells[1].value == Cell.CONTINUATION &&
+    familyBuffer.cells[2].value == (u64)0x200D &&
+    familyBuffer.cells[3].value == (u64)0x1F469 &&
+    familyBuffer.cells[4].value == Cell.CONTINUATION &&
     familyBuffer.cells[5].value == (u64)0x200D &&
-    familyBuffer.cells[6].value == (u64)0x1F466,
+    familyBuffer.cells[6].value == (u64)0x1F467 &&
+    familyBuffer.cells[7].value == Cell.CONTINUATION &&
+    familyBuffer.cells[8].value == (u64)0x200D,
     "tui/text/overwide-grapheme-preserves-codepoints");
 
-  let atomicManager = ViewManager(Screen(7, 3));
+  let atomicManager = ViewManager(Screen(11, 3));
   let atomic = Text();
   atomic.style.position = Position.Absolute;
-  atomic.style.width = 7;
+  atomic.style.width = 11;
   atomic.style.height = auto;
   atomic.content = "A👨‍👩‍👧‍👦B";
   atomic.arrange(atomicManager);
@@ -1549,9 +1621,13 @@ func text_draw_wrap_unicode_and_hit_target() {
     "tui/text/draw-first-ascii");
   check(buffer.cells[2].value == (u64)0x4E2D,
     "tui/text/draw-chinese-codepoint");
-  check(buffer.cells[3].value == (u64)0x1F600,
+  check(buffer.cells[3].value == Cell.CONTINUATION,
+    "tui/text/draw-chinese-continuation");
+  check(buffer.cells[7].value == (u64)0x1F600,
     "tui/text/draw-emoji-codepoint");
-  check(buffer.cells[7].value == (u64)66,
+  check(buffer.cells[8].value == Cell.CONTINUATION,
+    "tui/text/draw-emoji-continuation");
+  check(buffer.cells[9].value == (u64)66,
     "tui/text/draw-soft-wrapped-row");
   check(buffer.cells[13].value == (u64)90,
     "tui/text/draw-hard-wrapped-row");
@@ -2643,6 +2719,7 @@ func input_build_disable_mouse_sgr_bytes() {
 }
 
 open func run_tui_tests() {
+  TextUtil.init();
   describe("tui tests", () {
     test("cell_mask_fg()", () { cell_mask_fg(); });
     test("cell_mask_bg()", () { cell_mask_bg(); });
@@ -2655,6 +2732,7 @@ open func run_tui_tests() {
     test("cell_style_reverse_const()", () { cell_style_reverse_const(); });
     test("cell_style_hidden_const()", () { cell_style_hidden_const(); });
     test("cell_style_strikethrough_const()", () { cell_style_strikethrough_const(); });
+    test("cell_continuation_const()", () { cell_continuation_const(); });
     test("cell_ctor_default()", () { cell_ctor_default(); });
     test("cell_ctor_value()", () { cell_ctor_value(); });
     test("cell_ctor_value_style()", () { cell_ctor_value_style(); });
@@ -2681,6 +2759,8 @@ open func run_tui_tests() {
     test("buffer_draw_text_ascii()", () { buffer_draw_text_ascii(); });
     test("buffer_draw_text_chinese()", () { buffer_draw_text_chinese(); });
     test("buffer_draw_text_emoji()", () { buffer_draw_text_emoji(); });
+    test("text_util_measure_cell_width()", () { text_util_measure_cell_width(); });
+    test("buffer_wide_glyph_occupancy_overwrite()", () { buffer_wide_glyph_occupancy_overwrite(); });
     test("buffer_draw_text_clip()", () { buffer_draw_text_clip(); });
     test("buffer_draw_text_offset_and_clip()", () { buffer_draw_text_offset_and_clip(); });
     test("buffer_draw_text_empty()", () { buffer_draw_text_empty(); });
@@ -2725,6 +2805,7 @@ open func run_tui_tests() {
     test("screen_resize()", () { screen_resize(); });
     test("screen_render_unicode_chinese()", () { screen_render_unicode_chinese(); });
     test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
+    test("screen_render_wide_glyph_transitions()", () { screen_render_wide_glyph_transitions(); });
     // ─── TuiApp ───
     test("tuiapp_ctor_no_fds()", () { tuiapp_ctor_no_fds(); });
     test("tuiapp_ctor_with_fds()", () { tuiapp_ctor_with_fds(); });

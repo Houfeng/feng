@@ -109,7 +109,7 @@ open type Text: TextWidget {
 
   /** 返回一个 grapheme 按当前 Cell 契约占用的 Cell 数。 */
   seal static func graphemeCells(value: string): int {
-    return value.runes().length();
+    return TextUtil.measureCellWidth(value);
   }
 
   /** 判断一个 grapheme 是否为 Text 支持的硬换行。 */
@@ -189,13 +189,14 @@ open type Text: TextWidget {
 
       var graphemeOffset = 0;
       for let rune in grapheme.runes() {
-        if lineCells >= width {
+        let runeCells = TextUtil.measureCellWidth(rune);
+        if lineCells > 0 && lineCells + runeCells > width {
           let splitOffset = graphemeStart + graphemeOffset;
           Text.addLine(text, lineStart, splitOffset, lineCells);
           lineStart = splitOffset;
           lineCells = 0;
         }
-        lineCells += 1;
+        lineCells += runeCells;
         graphemeOffset += rune.length();
       }
     }
@@ -212,14 +213,15 @@ open type Text: TextWidget {
   }
 
   /**
-   * 在指定 Cell 写入一个文本码点。
+   * 在指定位置写入一个已测量列宽的文本码点。
    * 清除旧前景色和字符样式，仅保留已经存在或明确绘制的背景色。
    */
-  seal static func writeCell(buffer: Buffer, index: int,
-    value: u32, foreBits: u64): void {
-    buffer.cells[index].value = (u64)value;
-    buffer.cells[index].style =
-      (buffer.cells[index].style & Cell.MASK_BG) | foreBits;
+  seal static func writeCell(buffer: Buffer, x: int, y: int,
+    value: u32, width: int, foreBits: u64): void {
+    let index = y * (int)buffer.width + x;
+    let style = (buffer.cells[index].style & Cell.MASK_BG) | foreBits;
+    buffer.drawCell((u32)x, (u32)y,
+      Cell((u64)value, style), (u32)width);
   }
 
   /**
@@ -241,43 +243,34 @@ open type Text: TextWidget {
   }
 
   /**
-   * 将一条显示行中落入水平可见范围的码点写入 back buffer。
+   * 将一条显示行中完整落入水平可见范围的码点写入 back buffer。
+   * 裁剪边界穿过多列码点时不输出不完整的字形。
    */
   seal static func drawLine(text: TextWidget, buffer: Buffer,
-    line: TextLine, x: int, y: int, skip: int,
-    width: int, foreBits: u64): void {
-    if skip >= line.cells || width <= 0 {
+    line: TextLine, lineX: int, y: int,
+    clipLeft: int, clipRight: int, foreBits: u64): void {
+    if clipLeft >= clipRight || line.cells <= 0 {
       return;
     }
     let data: string* = &text.content;
     var cursor = feng_pointer_move(data, line.start);
     var column = 0;
-    while column < skip {
-      var ignored: u32 = 0;
-      let next = text_u8_next(&ignored, cursor);
-      if feng_pointer_is_null(next) {
-        return;
-      }
-      cursor = next;
-      column += 1;
-    }
-
-    var visibleCells = width;
-    let remainingCells = line.cells - skip;
-    if visibleCells > remainingCells {
-      visibleCells = remainingCells;
-    }
-    var visibleColumn = 0;
-    while visibleColumn < visibleCells {
+    while column < line.cells {
       var value: u32 = 0;
       let next = text_u8_next(&value, cursor);
       if feng_pointer_is_null(next) {
         return;
       }
-      let cellIndex = y * (int)buffer.width + x + visibleColumn;
-      Text.writeCell(buffer, cellIndex, value, foreBits);
+      let width = TextUtil.measureCellWidth(value);
+      let x = lineX + column;
+      if x >= clipRight {
+        return;
+      }
+      if x >= clipLeft && x + width <= clipRight {
+        Text.writeCell(buffer, x, y, value, width, foreBits);
+      }
       cursor = next;
-      visibleColumn += 1;
+      column += width;
     }
   }
 
@@ -317,8 +310,7 @@ open type Text: TextWidget {
     }
     var x = start;
     while x < end {
-      let cellIndex = y * (int)buffer.width + x;
-      Text.writeCell(buffer, cellIndex, (u32)46, foreBits);
+      Text.writeCell(buffer, x, y, (u32)46, 1, foreBits);
       x += 1;
     }
   }
@@ -407,8 +399,8 @@ open type Text: TextWidget {
       let visibleWidth = visibleRight - visibleX;
       if visibleWidth > 0 {
         Text.drawLine(text, buffer, line,
-          visibleX, drawFrame.y + visibleRow, visibleX - lineX,
-          visibleWidth, foreBits);
+          lineX, drawFrame.y + visibleRow,
+          visibleX, visibleRight, foreBits);
       }
       if ellipsis {
         Text.drawEllipsis(text, buffer, drawFrame,

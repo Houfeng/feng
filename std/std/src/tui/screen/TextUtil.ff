@@ -1,0 +1,69 @@
+open module std.tui.screen;
+
+/** libc：根据进程环境选择字符分类 locale。 */
+@cdecl("libc", "setlocale")
+extern func text_util_setlocale(category: i32, locale: string*): string*;
+
+/** libc：返回 Unicode 码点在当前 locale 中占用的终端列数。 */
+@cdecl("libc", "wcwidth")
+extern func text_util_wcwidth(value: i32): i32;
+
+/** libunistring：解码下一个 UTF-8 码点。 */
+@cdecl("feng_std_unistring", "u8_next")
+extern func text_util_u8_next(puc: u32*, s: string*): string*;
+
+/**
+ * TextUtil 集中提供终端文本所需的初始化和显示列宽测量。
+ *
+ * `init()` 应在应用启动阶段调用一次。TuiApp 会自动调用；
+ * 直接使用 Buffer/Screen 的调用方需自行调用。
+ */
+open type TextUtil {
+
+  /** POSIX LC_CTYPE 分类常量。 */
+  seal static let LC_CTYPE: i32 = 0;
+
+  /**
+   * 按当前进程环境初始化 Unicode 字符分类 locale。
+   * 该方法不由测量热路径隐式调用。
+   * @throws "tui/text/locale-init-failed" - 当前环境的 locale 无法启用
+   */
+  open static func init(): void {
+    let environment = "";
+    let selected = text_util_setlocale(TextUtil.LC_CTYPE, &environment);
+    if feng_pointer_is_null(selected) {
+      throw "tui/text/locale-init-failed";
+    }
+  }
+
+  /**
+   * 返回一个 Unicode 码点按当前 Cell 契约占用的显示列数。
+   * `wcwidth` 返回 0 或负数时保持每个存储码点至少占一个 Cell。
+   */
+  open static func measureCellWidth(value: u32): int {
+    let width = text_util_wcwidth((i32)value);
+    if width > 1 {
+      return (int)width;
+    }
+    return 1;
+  }
+
+  /**
+   * 返回 UTF-8 文本中所有码点按当前 Cell 契约占用的显示列数。
+   */
+  open static func measureCellWidth(value: string): int {
+    let data: string* = &value;
+    var cursor = data;
+    var result = 0;
+    while true {
+      var codepoint: u32 = 0;
+      let next = text_util_u8_next(&codepoint, cursor);
+      if feng_pointer_is_null(next) {
+        return result;
+      }
+      result += TextUtil.measureCellWidth(codepoint);
+      cursor = next;
+    }
+    return result;
+  }
+}

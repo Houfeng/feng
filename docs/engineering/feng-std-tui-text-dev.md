@@ -17,6 +17,8 @@
 - 支持每一行文本在 Text frame 内左对齐、居中和右对齐；
 - 支持内容超出 Text 自身固定高度时裁剪或在最后可显示行绘制 `...`；
 - 复用 `std.text` 的 grapheme 能力确定用户可见字符边界，支持 Emoji 与组合字符；
+- 通过终端显示列宽度处理双列码点，使 Text 布局、Buffer 绘制与 Screen diff
+  对同一列占用关系保持一致；
 - 测量和绘制使用一致的分行结果，不创建逐行字符串副本；
 - 保持现有 View、Buffer、Cell 的颜色、裁剪和字符存储契约。
 
@@ -175,11 +177,23 @@ Text 按“先确定宽度，再确定分行和高度”的顺序布局：
 - 内容宽度为 0 时不绘制字符，自动高度为 0；
 - Text 通过现有 `std.text` `GraphemeView`/`GraphemeIterator` 识别 grapheme 边界，不在
   `std.tui` 内重复声明或直接调用 libunistring grapheme API；
-- Cell/Buffer 的既有契约保持不变：每个 Unicode 码点占一个 Cell，因此单码点 Emoji
-  占一个 Cell，包含多个码点的 grapheme 使用多个连续 Cell；
+- `TextUtil.init()` 在进程启动阶段通过 `setlocale(LC_CTYPE, "")` 启用当前环境的
+  Unicode locale；`TuiApp.init()` 自动调用一次，直接使用 TextUtil/Buffer/Screen
+  的调用方应在自身启动阶段显式调用；
+- `TextUtil.measureCellWidth()` 通过 POSIX `wcwidth` 计算单码点显示列数；
+  测量热路径不执行 locale 初始化，也不增加每次调用的初始化状态判断；
+- Cell 仍然只在主 Cell 中保存一个 Unicode 码点和样式，不增加字段或改变
+  存储大小；占多列的码点在后续 Cell 的 `value` 中写入
+  `Cell.CONTINUATION` 续占标记，该值使用 Unicode 有效范围外的 `0x110000`；
+- `Cell.CONTINUATION` 不是空白字符，也不得编码输出；它只表示当前终端列
+  属于前面的多列码点；
+- 当 `wcwidth` 返回 0 或负数时，本阶段保持 Cell 已有的“每个存储码点
+  至少使用一个 Cell”契约；组合码点仍使用独立 Cell，不在本次双列字符
+  修复中扩大为 Cell 字形存储重构；
 - 一个多码点 grapheme 能完整放入一行时不在中间软换行；若其 Cell 数本身超过一行宽度，
   才按码点边界拆分到多行，保证有限宽度下布局始终能够推进；
-- 本阶段不引入 wcwidth 或终端相关的双列字符宽度模型。
+- `TuiApp.exit()` 不恢复 locale；locale 是进程级状态，恢复可能覆盖应用后续主动
+  设置的 locale，而退出 TUI 也不代表进程不再处理 Unicode 文本。
 
 `Style.padding` 的现有含义是为子组件定义 content 区域。Text 不包含子组件，因此本阶段
 不重新解释 Text 自身的 padding，也不把 padding 计入 Text 的内在尺寸；Button 等容器
@@ -226,6 +240,16 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - Text 仍通过 `ViewManager.trace(widget, drawFrame)` 登记绘制区域和命中顺序；
 - frame 或 drawFrame 任一轴为 0 时不写入 Buffer。
 
+Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方正确：
+
+- Buffer 的文本和单码点 draw API 自行测量列宽；例如在 4 列区域绘制
+  `中文` 时，主 Cell 分别位于第 0、2 列，第 1、3 列为续占 Cell；
+- Buffer 覆盖多列码点的主 Cell 或任一续占 Cell 时，按完整码点清理旧的
+  占用关系，不允许遗留孤立续占或只覆盖宽字符的一半；
+- Screen diff 仅对主 Cell 编码输出，跳过 back buffer 中的续占 Cell；
+- 宽码点与窄码点互相覆盖时，Buffer 先修正占用关系，Screen 再根据修正后的
+  front/back 差异清除或重画完整字形；不在 SGR 或 Text 中增加 Emoji 特判。
+
 颜色规则保持此前确定的组件层语义，不改变 Buffer 现有 draw API：
 
 - `style.backColor` 有值时，Text 的完整可见 frame 使用该背景色；
@@ -245,6 +269,8 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - 绘制按行起始字节位置一次定位，再按 `skip`、可见宽度和行 Cell 数控制解码次数；
   热路径不为每个码点重复计算相对原字符串的字节偏移；
 - 绘制直接写入 Screen back buffer，不创建中间字符矩阵；
+- locale 初始化仅发生在 `TextUtil.init()`，不进入逐码点测量热路径；
+- 续占复用 Cell 既有 `value` 编码，不增大 Cell 和 front/back buffer；
 - Auto 不增加装箱、字符串判定或 runtime ABI；
 - 不为了 Text 修改 Cell 的既有存储取舍，也不增加 C runtime 特判。
 
@@ -257,6 +283,9 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - 基础 View 的 Auto 内在尺寸为 0，固定值和百分比现有行为不变；
 - Text 空内容、单行、硬换行、末尾换行和有限宽度自动换行；
 - 单码点 Emoji、组合字符与 ZWJ Emoji 的 grapheme 边界，以及超出单行宽度后的码点拆分；
+- TextUtil 初始化后 ASCII、中文和 Emoji 的列宽测量；
+- Buffer 绘制中文/Emoji 时的主 Cell 与续占 Cell 布局；
+- 宽码点被窄码点覆盖、从续占列开始覆盖，以及 Screen diff 不独立输出续占 Cell；
 - 固定/百分比/Full 宽度配合 Auto 高度，以及 Auto 宽度；
 - 固定高度裁剪、Screen 裁剪和最近 Hidden 祖先裁剪；
 - 左侧、顶部被裁剪后仍保持原始文本行列偏移；
@@ -284,4 +313,11 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.10 为 TextWidget/Text 增加 TextAlign 与 textAlign，并实现逐行水平对齐及裁剪测试；
 - [x] 11.11 复用 `std.text` grapheme API，实现组合字符与 Emoji 的测量、换行和绘制；
 - [x] 11.12 增加 TextOverflow.Clip/Ellipsis，并覆盖自身高度溢出与外部裁剪边界；
-- [ ] 11.13 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。
+- [x] 11.13 实现 TextUtil 显式 locale 初始化和 POSIX 码点列宽测量；
+- [x] 11.14 在不改变 Cell 存储大小的前提下实现多列码点续占表示；
+- [x] 11.15 实现 Buffer 宽度感知绘制、覆盖修正与 Screen 续占 diff；
+- [x] 11.16 Text 复用 TextUtil 的列宽测量和 Buffer 的通用 Cell 绘制；
+- [x] 11.17 更新并新增宽字符 std_test，保留 tui_demo 的宽字符与色块覆盖验证场景；
+- [ ] 11.18 通过 tui_demo 人工验证宽字符被色块反复覆盖后的显示；
+- [x] 11.19 执行 `make test` 全量回归；
+- [ ] 11.20 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。

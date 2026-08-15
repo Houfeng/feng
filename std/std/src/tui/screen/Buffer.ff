@@ -100,10 +100,67 @@ open type Buffer {
     return s;
   }
 
+  /**
+   * 清除覆盖 index 的完整码点占用关系。
+   * 字符值、前景色和字符样式被清除，已有背景色保留。
+   */
+  seal func clearGlyphAt(index: int, rowStart: int, rowEnd: int): void {
+    var start = index;
+    while start > rowStart && self.cells[start].value == Cell.CONTINUATION {
+      start -= 1;
+    }
+    var end = start + 1;
+    while end < rowEnd {
+      if self.cells[end].value != Cell.CONTINUATION {
+        break;
+      }
+      end += 1;
+    }
+    var current = start;
+    while current < end {
+      self.cells[current].value = (u64)0;
+      self.cells[current].style &= Cell.MASK_BG;
+      current += 1;
+    }
+  }
+
+  /**
+   * 写入一个已确定显示列宽的 Cell，并为后续列写入续占标记。
+   * 写入前会完整清除与目标列重叠的旧码点占用关系。
+   * @param x - 起始列坐标
+   * @param y - 行坐标
+   * @param cell - 主 Cell 的字符和样式
+   * @param width - 字符占用的显示列数
+   */
+  open func drawCell(x: u32, y: u32, cell: Cell, width: u32): void {
+    if width == 0 || x >= self.width || y >= self.height ||
+    (u64)x + (u64)width > (u64)self.width ||
+    cell.value == Cell.CONTINUATION {
+      return;
+    }
+    let rowStart = (int)((u64)y * (u64)self.width);
+    let rowEnd = rowStart + (int)self.width;
+    let start = rowStart + (int)x;
+    let end = start + (int)width;
+    var current = start;
+    while current < end {
+      self.clearGlyphAt(current, rowStart, rowEnd);
+      current += 1;
+    }
+    self.cells[start].value = cell.value;
+    self.cells[start].style = cell.style;
+    current = start + 1;
+    while current < end {
+      self.cells[current].value = Cell.CONTINUATION;
+      self.cells[current].style = cell.style;
+      current += 1;
+    }
+  }
+
   // ─── draw 数组版本（seal，内部实现 + fill 转发用） ─────────────────────────
 
   /**
-   * 在 (x, y) 处绘制文本，逐码点写入连续 Cell。
+   * 在 (x, y) 处绘制文本，按每个码点的显示列宽写入 Cell。
    * 使用 u8_next 直接解码 UTF-8 码点，零字符串分配。
    * 超出右边界的内容被裁剪。
    * @param x - 起始列坐标（0-based）
@@ -127,20 +184,19 @@ open type Buffer {
       if feng_pointer_is_null(next) {
         break;
       }
-      if col >= self.width {
+      let cellWidth = (u32)TextUtil.measureCellWidth(uc);
+      if (u64)col + (u64)cellWidth > (u64)self.width {
         break;
       }
-      let idx = (int)((u64)y * (u64)self.width + (u64)col);
-      self.cells[idx].value = (u64)uc;
-      self.cells[idx].style = s;
-      col += (u32)1;
+      self.drawCell(col, y, Cell((u64)uc, s), cellWidth);
+      col += cellWidth;
       cursor = next;
     }
   }
 
   /**
    * 在 (x, y, w, h) 矩形区域内绘制文本，自动换行。
-   * 文本逐码点填充，每行 w 列，超过 h 行后裁剪。
+   * 文本按码点显示列宽填充，每行 w 列，超过 h 行后裁剪。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
@@ -152,32 +208,36 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    if x >= self.width || y >= self.height || w == 0 || h == 0 {
+      return;
+    }
+    var rowWidth = w;
+    if (u64)x + (u64)rowWidth > (u64)self.width {
+      rowWidth = self.width - x;
+    }
     let data: string* = &text;
     var cursor: string* = data;
-    var uc: u32 = 0;
     var row: u32 = 0;
-    while row < h {
-      let cy = y + row;
-      if cy >= self.height {
-        break;
+    var col: u32 = 0;
+    while row < h && y + row < self.height {
+      var uc: u32 = 0;
+      let next: string* = u8_next(&uc, cursor);
+      if feng_pointer_is_null(next) {
+        return;
       }
-      var col: u32 = 0;
-      while col < w {
-        let cx = x + col;
-        if cx >= self.width {
-          break;
-        }
-        let next: string* = u8_next(&uc, cursor);
-        if feng_pointer_is_null(next) {
-          return;
-        }
-        let idx = (int)((u64)cy * (u64)self.width + (u64)cx);
-        self.cells[idx].value = (u64)uc;
-        self.cells[idx].style = s;
-        col += (u32)1;
+      let cellWidth = (u32)TextUtil.measureCellWidth(uc);
+      if cellWidth > rowWidth {
         cursor = next;
+        continue;
       }
-      row += (u32)1;
+      if (u64)col + (u64)cellWidth > (u64)rowWidth {
+        row += (u32)1;
+        col = 0;
+        continue;
+      }
+      self.drawCell(x + col, y + row, Cell((u64)uc, s), cellWidth);
+      col += cellWidth;
+      cursor = next;
     }
   }
 
@@ -192,12 +252,8 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
-    if x >= self.width || y >= self.height {
-      return;
-    }
-    let idx = (int)((u64)y * (u64)self.width + (u64)x);
-    self.cells[idx].value = value;
-    self.cells[idx].style = s;
+    let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
+    self.drawCell(x, y, Cell(value, s), cellWidth);
   }
 
   /**
@@ -213,6 +269,7 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
     var row: u32 = 0;
     while row < h {
       let cy = y + row;
@@ -220,15 +277,13 @@ open type Buffer {
         break;
       }
       var col: u32 = 0;
-      while col < w {
+      while (u64)col + (u64)cellWidth <= (u64)w {
         let cx = x + col;
-        if cx >= self.width {
+        if (u64)cx + (u64)cellWidth > (u64)self.width {
           break;
         }
-        let idx = (int)((u64)cy * (u64)self.width + (u64)cx);
-        self.cells[idx].value = value;
-        self.cells[idx].style = s;
-        col += (u32)1;
+        self.drawCell(cx, cy, Cell(value, s), cellWidth);
+        col += cellWidth;
       }
       row += (u32)1;
     }

@@ -400,8 +400,8 @@ open type TuiApp {
   // ─── 生命周期 ─────────────────────────────────────────────────────────────
 
   /**
-   * 初始化：分配 TTY 句柄、进入 Raw Mode、按终端尺寸调整 Screen、创建信号管道、
-   * 注册 SIGWINCH 和 atexit 回调。
+   * 初始化：启用当前环境的 Unicode locale、分配 TTY 句柄、进入 Raw Mode、
+   * 按终端尺寸调整 Screen、创建信号管道、注册 SIGWINCH 和 atexit 回调。
    * 幂等：重复调用安全。
    * @throws "tui/app/alloc-failed" — feng_alloc 失败
    * @throws "tui/app/tty-init-failed" — uv_tty_init 失败
@@ -409,9 +409,12 @@ open type TuiApp {
    * @throws "tui/app/raw-mode-failed" — uv_tty_set_mode 失败
    * @throws "tui/app/size-failed" — 无法取得有效终端尺寸
    * @throws "tui/app/pipe-failed" — pipe() 失败
+   * @throws "tui/text/locale-init-failed" — 无法启用当前环境的 Unicode locale
    */
   open func init(): void {
     if self.initialized { return; }
+    // 在任何布局或绘制前一次性启用当前环境的 Unicode locale。
+    TextUtil.init();
     // 分配 uv_tty_t 内存
     self.tty = feng_alloc(UV_TTY_T_SIZE);
     if self.tty == 0 { throw "tui/app/alloc-failed"; }

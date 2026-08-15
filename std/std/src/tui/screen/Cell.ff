@@ -38,10 +38,16 @@ open type Cell {
   /** 删除线标志位（第 55 位） */
   open static let STYLE_STRIKETHROUGH: u64 = (u64)1 << (u64)55;
 
+  /**
+   * 多列码点的续占标记。
+   * 使用 Unicode 有效范围 U+0000..U+10FFFF 之外的值，不作为字符输出。
+   */
+  open static let CONTINUATION: u64 = 0x110000;
+
   // ─── 实例字段 ──────────────────────────────────────────────────────────────
 
   /**
-   * 字符的 Unicode 码点
+   * 字符的 Unicode 码点，或 Cell.CONTINUATION 续占标记
    * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
    * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji
    */

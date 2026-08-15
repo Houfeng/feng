@@ -105,8 +105,10 @@ open type Screen {
     while i < total {
       let f = frontCells[i];
       let b = backCells[i];
-      // 值或样式有变化才发射
-      if f.value != b.value || f.style != b.style {
+      // 续占 Cell 由前面的多列码点一次性输出，不独立发射。
+      // 其他 Cell 仅在值或样式变化时发射。
+      if b.value != Cell.CONTINUATION &&
+      (f.value != b.value || f.style != b.style) {
         // 计算此 cell 的 (x, y) 坐标
         let y = (u32)((u64)i / (u64)w);
         let x = (u32)((u64)i % (u64)w);
