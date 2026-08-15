@@ -35,8 +35,9 @@
 - **`std.tui.screen.Style`**：`open enum`，9 个枚举项（none/bold/dim/italic/underline/blink/reverse/hidden/strikethrough），使用小整数序号。类型安全，调用方只能传入合法样式。
 - **`std.tui.common.RgbColor`**：`@value` 类型，4 个 `u8` 字段（r/g/b/a）。配合
   `Option<RgbColor>` 使用：`none` 表示终端默认色；`a == 0` 表示不绘制对应颜色通道，
-  保留 Buffer 中已有颜色；本阶段任何非零 alpha 均按完全不透明处理。三参数构造默认
-  `a = 1`，四参数构造用于显式指定 alpha。真正的半透明合成留待后续阶段实现。
+  保留 Buffer 中已有颜色；`a == 255` 表示完全不透明；`1..254` 为半透明范围，本阶段
+  暂按 255 处理。默认构造和三参数构造均设置 `a = 255`，四参数构造保存调用方指定的
+  完整 `0..255` alpha。真正的半透明合成留待后续阶段实现。
 - **`std.tui.screen.Buffer`**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
 - **`std.tui.screen.Screen`**：封装双缓冲内存同步与差异比对（Diff）引擎。ANSI 转义序列生成也内聚在 Screen 中；Screen 只构建输出字节，不执行 stdout I/O，不关心业务逻辑。
 
@@ -78,7 +79,7 @@
 - **内部样式打包方法（seal）**：
   - `styleToBits(s: Style): u64` — 将 Style 枚举值映射为 Cell 的 `STYLE_*` 位值。
   - `combineStyles(styles: Style[]): u64` — 将多个 Style 按位或组合为单个 u64 样式编码。
-  - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 不写入 RGB 及颜色存在标记，表示终端默认色；alpha 为 0 的颜色通道由 Buffer 在写入时完整保留目标 Cell 的 RGB 与存在标记；非零 alpha 写入 RGB 并设置对应存在标记，本阶段均按完全不透明处理。Cell 不存储 alpha。
+  - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 不写入 RGB 及颜色存在标记，表示终端默认色；alpha 为 0 的颜色通道由 Buffer 在写入时完整保留目标 Cell 的 RGB 与存在标记；alpha 为 255 时完全覆盖；`1..254` 本阶段暂按 255 处理。Cell 不存储 alpha。
 - **绘制原语**：
   - `draw`（4 个 seal 数组版本 + 12 个变长版本）。
     - seal 数组版本（内部实现，参数为 `fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]`）：
@@ -100,7 +101,7 @@
 - **双缓冲 + Diff 引擎**（非图形系统页翻转，是 diff 模型）：
   - `buildPatchBytes()` 时逐 cell 比较 front 与 back 的 `value` 和 `style` 字段，只对变化的 cell 发射 ANSI 序列。
   - 渲染完成后将 back 的内容覆盖到 front（memcpy，**不交换指针**——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
-  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。Cell style 表示完整目标状态；当前状态中存在目标已移除的前景色、背景色或样式标志时，先发射 `\x1b[0m`，再发射完整目标样式，避免终端沿用已删除的状态。纯新增样式或非零颜色替换不增加重置。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
+  - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。Cell style 表示完整目标状态；当前状态中存在目标已移除的前景色、背景色或样式标志时，先发射 `\x1b[0m`，再发射完整目标样式，避免终端沿用已删除的状态。纯新增样式或显式颜色替换不增加重置。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
   - 光标定位：`\x1b[y;xH`（1-based 坐标）。
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。

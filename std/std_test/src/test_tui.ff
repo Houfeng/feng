@@ -544,8 +544,8 @@ func rgb_color_alpha_constructors() {
   let rgb = RgbColor((u8)1, (u8)2, (u8)3);
   let transparent = RgbColor((u8)4, (u8)5, (u8)6, (u8)0);
   let nonzero = RgbColor((u8)7, (u8)8, (u8)9, (u8)200);
-  check(defaults.a == (u8)1, "tui/rgb/default-alpha-opaque");
-  check(rgb.a == (u8)1, "tui/rgb/rgb-alpha-opaque");
+  check(defaults.a == (u8)255, "tui/rgb/default-alpha-opaque");
+  check(rgb.a == (u8)255, "tui/rgb/rgb-alpha-opaque");
   check(transparent.r == (u8)4 && transparent.g == (u8)5 &&
     transparent.b == (u8)6 && transparent.a == (u8)0,
     "tui/rgb/rgba-transparent-constructor");

@@ -7,7 +7,8 @@ open module std.tui.common;
  * 在 Buffer 的 draw 方法中配合 Option<RgbColor> 使用：
  *   - none 表示终端默认色（不写入 style 的颜色位段）
  *   - a == 0 表示透明，保留 Buffer 中已有的对应颜色通道
- *   - 本阶段任何非零 a 均按完全不透明处理
+ *   - a == 255 表示完全不透明
+ *   - a == 1..254 为半透明范围，本阶段暂按 255 处理
  */
 @value
 open type RgbColor {
@@ -17,14 +18,14 @@ open type RgbColor {
   open var g: u8;
   /** 蓝色分量（0-255） */
   open var b: u8;
-  /** Alpha 分量；本阶段 0 表示透明，非零表示完全不透明 */
+  /** Alpha 分量（0-255）；本阶段 1-254 暂按 255 处理 */
   open var a: u8;
 
   /**
-   * 默认构造函数：创建完全不透明的黑色 (0, 0, 0, 1)。
+   * 默认构造函数：创建完全不透明的黑色 (0, 0, 0, 255)。
    */
   func RgbColor() {
-    self.a = 1;
+    self.a = 255;
   }
 
   /**
@@ -37,16 +38,16 @@ open type RgbColor {
     self.r = r;
     self.g = g;
     self.b = b;
-    self.a = 1;
+    self.a = 255;
   }
 
   /**
    * 构造函数：创建指定 RGBA 分量的绘制颜色。
-   * 本阶段 a == 0 表示透明，任何非零值均按完全不透明处理。
+   * a == 0 表示透明，a == 255 表示完全不透明；本阶段 1-254 暂按 255 处理。
    * @param r - 红色分量（0-255）
    * @param g - 绿色分量（0-255）
    * @param b - 蓝色分量（0-255）
-   * @param a - Alpha 分量
+   * @param a - Alpha 分量（0-255）
    */
   func RgbColor(r: u8, g: u8, b: u8, a: u8) {
     self.r = r;
