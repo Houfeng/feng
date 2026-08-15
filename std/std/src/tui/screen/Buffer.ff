@@ -83,7 +83,8 @@ open type Buffer {
 
   /**
    * 将前景色、背景色和样式数组打包为完整的 u64 样式编码。
-   * none 的颜色不写入对应位段，表示终端默认色。
+   * none 的颜色不写入对应位段，表示终端默认色；alpha 为 0 的颜色位段
+   * 由 drawCell 从目标 Cell 保留，本方法只打包非透明颜色。
    * @param fg - 前景色（none 表示终端默认前景色）
    * @param bg - 背景色（none 表示终端默认背景色）
    * @param styles - 样式数组
@@ -92,12 +93,37 @@ open type Buffer {
   seal func packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): u64 {
     var s = self.combineStyles(styles);
     if fg match let c: RgbColor {
-      s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b;
+      if c.a != 0 {
+        s |= ((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) |
+          (u64)c.b | Cell.HAS_FG;
+      }
     }
     if bg match let c: RgbColor {
-      s |= (((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) | (u64)c.b) << (u64)24;
+      if c.a != 0 {
+        s |= (((u64)c.r << (u64)16) | ((u64)c.g << (u64)8) |
+          (u64)c.b) << (u64)24 | Cell.HAS_BG;
+      }
     }
     return s;
+  }
+
+  /**
+   * 返回绘制时需要从目标 Cell 保留的颜色位段。
+   * none 表示终端默认色，不保留目标颜色；只有 alpha 为 0 的显式颜色表示透明。
+   */
+  seal func resolvePreserveMask(fg: Option<RgbColor>, bg: Option<RgbColor>): u64 {
+    var mask: u64 = 0;
+    if fg match let color: RgbColor {
+      if color.a == 0 {
+        mask |= Cell.MASK_FG | Cell.HAS_FG;
+      }
+    }
+    if bg match let color: RgbColor {
+      if color.a == 0 {
+        mask |= Cell.MASK_BG | Cell.HAS_BG;
+      }
+    }
+    return mask;
   }
 
   /**
@@ -119,7 +145,7 @@ open type Buffer {
     var current = start;
     while current < end {
       self.cells[current].value = (u64)0;
-      self.cells[current].style &= Cell.MASK_BG;
+      self.cells[current].style &= Cell.MASK_BG | Cell.HAS_BG;
       current += 1;
     }
   }
@@ -131,8 +157,10 @@ open type Buffer {
    * @param y - 行坐标
    * @param cell - 主 Cell 的字符和样式
    * @param width - 字符占用的显示列数
+   * @param preserveMask - 从目标 Cell 保留的颜色位段
    */
-  open func drawCell(x: u32, y: u32, cell: Cell, width: u32): void {
+  seal func drawCell(x: u32, y: u32, cell: Cell,
+    width: u32, preserveMask: u64): void {
     if width == 0 || x >= self.width || y >= self.height ||
     (u64)x + (u64)width > (u64)self.width ||
     cell.value == Cell.CONTINUATION {
@@ -142,17 +170,21 @@ open type Buffer {
     let rowEnd = rowStart + (int)self.width;
     let start = rowStart + (int)x;
     let end = start + (int)width;
+    var resolvedStyle = cell.style;
+    if preserveMask != 0 {
+      resolvedStyle |= self.cells[start].style & preserveMask;
+    }
     var current = start;
     while current < end {
       self.clearGlyphAt(current, rowStart, rowEnd);
       current += 1;
     }
     self.cells[start].value = cell.value;
-    self.cells[start].style = cell.style;
+    self.cells[start].style = resolvedStyle;
     current = start + 1;
     while current < end {
       self.cells[current].value = Cell.CONTINUATION;
-      self.cells[current].style = cell.style;
+      self.cells[current].style = resolvedStyle;
       current += 1;
     }
   }
@@ -172,6 +204,7 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    let preserveMask = self.resolvePreserveMask(fg, bg);
     if y >= self.height {
       return;
     }
@@ -188,7 +221,7 @@ open type Buffer {
       if (u64)col + (u64)cellWidth > (u64)self.width {
         break;
       }
-      self.drawCell(col, y, Cell((u64)uc, s), cellWidth);
+      self.drawCell(col, y, Cell((u64)uc, s), cellWidth, preserveMask);
       col += cellWidth;
       cursor = next;
     }
@@ -208,6 +241,7 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    let preserveMask = self.resolvePreserveMask(fg, bg);
     if x >= self.width || y >= self.height || w == 0 || h == 0 {
       return;
     }
@@ -235,7 +269,7 @@ open type Buffer {
         col = 0;
         continue;
       }
-      self.drawCell(x + col, y + row, Cell((u64)uc, s), cellWidth);
+      self.drawCell(x + col, y + row, Cell((u64)uc, s), cellWidth, preserveMask);
       col += cellWidth;
       cursor = next;
     }
@@ -252,8 +286,9 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    let preserveMask = self.resolvePreserveMask(fg, bg);
     let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
-    self.drawCell(x, y, Cell(value, s), cellWidth);
+    self.drawCell(x, y, Cell(value, s), cellWidth, preserveMask);
   }
 
   /**
@@ -269,6 +304,7 @@ open type Buffer {
    */
   seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
+    let preserveMask = self.resolvePreserveMask(fg, bg);
     let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
     var row: u32 = 0;
     while row < h {
@@ -282,7 +318,7 @@ open type Buffer {
         if (u64)cx + (u64)cellWidth > (u64)self.width {
           break;
         }
-        self.drawCell(cx, cy, Cell(value, s), cellWidth);
+        self.drawCell(cx, cy, Cell(value, s), cellWidth, preserveMask);
         col += cellWidth;
       }
       row += (u32)1;

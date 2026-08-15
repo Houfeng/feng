@@ -13,10 +13,10 @@ open type Cell {
 
   /** 前景色掩码（低 24 bits） */
   open static let MASK_FG: u64 = 0xFFFFFF;
-  /** 背景色掩码（中 24 bits） */
+  /** 背景色掩码（bits 24-47） */
   open static let MASK_BG: u64 = (u64)0xFFFFFF << (u64)24;
   /**
-   * 样式标志位掩码（高 16 bits，48-63 位）
+   * 终端样式标志位掩码（bits 48-55）
    * 等价于 STYLE_BOLD | STYLE_DIM | ... | STYLE_STRIKETHROUGH
    */
   open static let MASK_FLAGS: u64 = (u64)0xFF << (u64)48;
@@ -37,6 +37,10 @@ open type Cell {
   open static let STYLE_HIDDEN: u64 = (u64)1 << (u64)54;
   /** 删除线标志位（第 55 位） */
   open static let STYLE_STRIKETHROUGH: u64 = (u64)1 << (u64)55;
+  /** 存在显式前景色（第 56 位）；未设置表示终端默认前景色 */
+  open static let HAS_FG: u64 = (u64)1 << (u64)56;
+  /** 存在显式背景色（第 57 位）；未设置表示终端默认背景色 */
+  open static let HAS_BG: u64 = (u64)1 << (u64)57;
 
   /**
    * 多列码点的续占标记。
@@ -57,8 +61,12 @@ open type Cell {
    * 字符的样式信息
    * 通过或与运算，支持多种样式的组合，例如粗体、斜体、下划线、前景色、背景色等
    * 
-   * 直接用 16 进制表式，比如： 0x0001ADD8E6FF0000  
-   *   - [ 16 bits 样式与标志位 ] [ 24 bits 背景 RGB ] [ 24 bits 前景 RGB ]
+   * 位布局：
+   *   - bits 0-23：前景 RGB
+   *   - bits 24-47：背景 RGB
+   *   - bits 48-55：终端样式标志
+   *   - bit 56/57：HAS_FG/HAS_BG 显式颜色存在标记
+   *   - bits 58-63：保留
    *
    * 提取前景色 (最低 24 bits)  
    *   - 直接使用 Cell.MASK_FG 掩码截取，指令开销最小
@@ -68,7 +76,7 @@ open type Cell {
    *   - 先右移 24 位，再使用 0xFFFFFF 掩码截取
    *   - ((self.style >> 24) & 0xFFFFFF)
    *
-   * 样式标志位常量见类型开头的 `open static let STYLE_*` 声明
+   * RGB 为 0 且存在标记已设置时表示显式黑色；未设置存在标记时表示终端默认色。
    */
   open var style: u64;
 
@@ -85,7 +93,8 @@ open type Cell {
    * @param value - 前景 RGB 值（仅低 24 bits 有效）
    */
   func foreColor(value: u32): void {
-    self.style = (self.style & (u64)(~Cell.MASK_FG)) | ((u64)(value & 0xFFFFFF));
+    self.style = (self.style & (u64)(~Cell.MASK_FG)) |
+      ((u64)(value & 0xFFFFFF)) | Cell.HAS_FG;
   }
 
   /**
@@ -101,7 +110,8 @@ open type Cell {
    * @param value - 背景 RGB 值（仅低 24 bits 有效）
    */
   func backColor(value: u32): void {
-    self.style = (self.style & (u64)(~Cell.MASK_BG)) | ((u64)(value & 0xFFFFFF) << (u64)24);
+    self.style = (self.style & (u64)(~Cell.MASK_BG)) |
+      ((u64)(value & 0xFFFFFF) << (u64)24) | Cell.HAS_BG;
   }
 
   /**

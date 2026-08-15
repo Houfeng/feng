@@ -203,27 +203,6 @@ open type Text: TextWidget {
     Text.addLine(text, lineStart, length, lineCells);
   }
 
-  /** 将可选前景色转换为 Cell 的低 24 位颜色编码。 */
-  seal static func resolveForeBits(text: TextWidget): u64 {
-    if text.style.foreColor match color: RgbColor {
-      return ((u64)color.r << (u64)16) |
-        ((u64)color.g << (u64)8) | (u64)color.b;
-    }
-    return (u64)0;
-  }
-
-  /**
-   * 在指定位置写入一个已测量列宽的文本码点。
-   * 清除旧前景色和字符样式，仅保留已经存在或明确绘制的背景色。
-   */
-  seal static func writeCell(buffer: Buffer, x: int, y: int,
-    value: u32, width: int, foreBits: u64): void {
-    let index = y * (int)buffer.width + x;
-    let style = (buffer.cells[index].style & Cell.MASK_BG) | foreBits;
-    buffer.drawCell((u32)x, (u32)y,
-      Cell((u64)value, style), (u32)width);
-  }
-
   /**
    * 按当前行的 Cell 数计算其在 Text frame 内的起始横坐标。
    */
@@ -248,7 +227,7 @@ open type Text: TextWidget {
    */
   seal static func drawLine(text: TextWidget, buffer: Buffer,
     line: TextLine, lineX: int, y: int,
-    clipLeft: int, clipRight: int, foreBits: u64): void {
+    clipLeft: int, clipRight: int, transparent: RgbColor): void {
     if clipLeft >= clipRight || line.cells <= 0 {
       return;
     }
@@ -267,7 +246,8 @@ open type Text: TextWidget {
         return;
       }
       if x >= clipLeft && x + width <= clipRight {
-        Text.writeCell(buffer, x, y, value, width, foreBits);
+        buffer.draw((u32)x, (u32)y, (u64)value,
+          text.style.foreColor, transparent);
       }
       cursor = next;
       column += width;
@@ -297,7 +277,7 @@ open type Text: TextWidget {
    * frame 宽度小于 3 时只绘制能够容纳的点。
    */
   seal static func drawEllipsis(text: TextWidget, buffer: Buffer,
-    drawFrame: Rect, y: int, foreBits: u64): void {
+    drawFrame: Rect, y: int, transparent: RgbColor): void {
     let cells = Text.ellipsisCells(text);
     var start = text.frame.x + text.frame.width - cells;
     if start < drawFrame.x {
@@ -310,7 +290,8 @@ open type Text: TextWidget {
     }
     var x = start;
     while x < end {
-      Text.writeCell(buffer, x, y, (u32)46, 1, foreBits);
+      buffer.draw((u32)x, (u32)y, (u64)46,
+        text.style.foreColor, transparent);
       x += 1;
     }
   }
@@ -363,13 +344,15 @@ open type Text: TextWidget {
     manager.trace(widget, drawFrame);
     let buffer = manager.getScreenBuffer();
     if text.style.backColor match color: RgbColor {
-      buffer.draw((u32)drawFrame.x, (u32)drawFrame.y,
-        (u32)drawFrame.width, (u32)drawFrame.height, (u64)0,
-        none, color);
+      if color.a != 0 {
+        buffer.draw((u32)drawFrame.x, (u32)drawFrame.y,
+          (u32)drawFrame.width, (u32)drawFrame.height, (u64)0,
+          none, color);
+      }
     }
 
     let firstLine = drawFrame.y - text.frame.y;
-    let foreBits = Text.resolveForeBits(text);
+    let transparent = RgbColor(0, 0, 0, 0);
     let ellipsisLine = Text.resolveEllipsisLine(text);
     var visibleRow = 0;
     while visibleRow < drawFrame.height {
@@ -400,11 +383,11 @@ open type Text: TextWidget {
       if visibleWidth > 0 {
         Text.drawLine(text, buffer, line,
           lineX, drawFrame.y + visibleRow,
-          visibleX, visibleRight, foreBits);
+          visibleX, visibleRight, transparent);
       }
       if ellipsis {
         Text.drawEllipsis(text, buffer, drawFrame,
-          drawFrame.y + visibleRow, foreBits);
+          drawFrame.y + visibleRow, transparent);
       }
       visibleRow += 1;
     }

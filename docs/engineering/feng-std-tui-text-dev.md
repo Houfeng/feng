@@ -187,6 +187,9 @@ Text 按“先确定宽度，再确定分行和高度”的顺序布局：
   `Cell.CONTINUATION` 续占标记，该值使用 Unicode 有效范围外的 `0x110000`；
 - `Cell.CONTINUATION` 不是空白字符，也不得编码输出；它只表示当前终端列
   属于前面的多列码点；
+- Text 不读取或拼装 Buffer 的 Cell；没有背景色时向 Buffer 传入 `a == 0` 的
+  `RgbColor`，由 Buffer 的通用颜色合成保留画布原背景。`drawCell` 仅作为 Buffer
+  内部维护主 Cell 与续占 Cell 关系的 `seal` 原语；
 - 当 `wcwidth` 返回 0 或负数时，本阶段保持 Cell 已有的“每个存储码点
   至少使用一个 Cell”契约；组合码点仍使用独立 Cell，不在本次双列字符
   修复中扩大为 Cell 字形存储重构；
@@ -320,4 +323,5 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.17 更新并新增宽字符 std_test，保留 tui_demo 的宽字符与色块覆盖验证场景；
 - [ ] 11.18 通过 tui_demo 人工验证宽字符被色块反复覆盖后的显示；
 - [x] 11.19 执行 `make test` 全量回归；
-- [ ] 11.20 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。
+- [x] 11.20 为 RgbColor 增加 alpha，令 Buffer 负责透明颜色通道合成，以 Cell 颜色存在位区分显式黑色与终端默认色，并移除 Text 对 Cell 的直接操作；
+- [ ] 11.21 Text 通过 Review 后，再分别设计 VStack/HStack 和 Input。

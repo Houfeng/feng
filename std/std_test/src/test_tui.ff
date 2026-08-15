@@ -26,6 +26,15 @@ func cell_mask_flags() {
   check(Cell.MASK_FLAGS == ((u64)0xFF << (u64)48), "tui/cell/mask-flags");
 }
 
+func cell_color_presence_constants() {
+  check(Cell.HAS_FG == ((u64)1 << (u64)56),
+    "tui/cell/has-fg-const");
+  check(Cell.HAS_BG == ((u64)1 << (u64)57),
+    "tui/cell/has-bg-const");
+  check((Cell.MASK_FLAGS & (Cell.HAS_FG | Cell.HAS_BG)) == (u64)0,
+    "tui/cell/color-presence-outside-style-flags");
+}
+
 func cell_style_bold_const() {
   check(Cell.STYLE_BOLD == ((u64)1 << (u64)48), "tui/cell/style-bold-const");
 }
@@ -106,6 +115,17 @@ func cell_fore_back_color_independent() {
   c.backColor((u32)0xFF00);
   check(c.foreColor() == (u32)0xFF, "tui/cell/fore-back-independent-fg");
   check(c.backColor() == (u32)0xFF00, "tui/cell/fore-back-independent-bg");
+}
+
+func cell_explicit_black_presence() {
+  let c = Cell((u64)65);
+  c.foreColor((u32)0);
+  c.backColor((u32)0);
+  check(c.foreColor() == (u32)0 && c.backColor() == (u32)0,
+    "tui/cell/black-rgb-zero");
+  check((c.style & Cell.HAS_FG) != (u64)0 &&
+    (c.style & Cell.HAS_BG) != (u64)0,
+    "tui/cell/black-presence-bits");
 }
 
 // ─── 样式标志位读写 ──────────────────────────────────────────────────────────
@@ -519,6 +539,83 @@ func rgb_color_field_rw() {
   check(c.b == (u8)30, "tui/rgb/field-rw-b");
 }
 
+func rgb_color_alpha_constructors() {
+  let defaults = RgbColor();
+  let rgb = RgbColor((u8)1, (u8)2, (u8)3);
+  let transparent = RgbColor((u8)4, (u8)5, (u8)6, (u8)0);
+  let nonzero = RgbColor((u8)7, (u8)8, (u8)9, (u8)200);
+  check(defaults.a == (u8)1, "tui/rgb/default-alpha-opaque");
+  check(rgb.a == (u8)1, "tui/rgb/rgb-alpha-opaque");
+  check(transparent.r == (u8)4 && transparent.g == (u8)5 &&
+    transparent.b == (u8)6 && transparent.a == (u8)0,
+    "tui/rgb/rgba-transparent-constructor");
+  check(nonzero.a == (u8)200, "tui/rgb/rgba-nonzero-alpha");
+}
+
+func buffer_draw_alpha_color_channels() {
+  let buf = Buffer((u32)3, (u32)1);
+  buf.draw((u32)0, (u32)0, (u64)65,
+    RgbColor((u8)0x11, (u8)0x22, (u8)0x33),
+    RgbColor((u8)0x44, (u8)0x55, (u8)0x66), CellStyle.Bold);
+
+  let transparent = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
+  buf.draw((u32)0, (u32)0, (u64)66,
+    transparent, transparent, CellStyle.Italic);
+  check(buf.cells[0].value == (u64)66,
+    "tui/buffer/transparent-colors-write-value");
+  check(buf.cells[0].foreColor() == (u32)0x112233 &&
+    buf.cells[0].backColor() == (u32)0x445566,
+    "tui/buffer/transparent-colors-preserve-channels");
+  check(!buf.cells[0].bold() && buf.cells[0].italic(),
+    "tui/buffer/transparent-colors-replace-flags");
+
+  buf.draw((u32)0, (u32)0, (u64)67,
+    RgbColor((u8)0xAA, (u8)0xBB, (u8)0xCC, (u8)2),
+    RgbColor((u8)0x01, (u8)0x02, (u8)0x03, (u8)200));
+  check(buf.cells[0].foreColor() == (u32)0xAABBCC &&
+    buf.cells[0].backColor() == (u32)0x010203,
+    "tui/buffer/nonzero-alpha-is-opaque");
+
+  buf.draw((u32)0, (u32)0, (u64)68, none, none);
+  check(buf.cells[0].foreColor() == (u32)0 &&
+    buf.cells[0].backColor() == (u32)0,
+    "tui/buffer/none-remains-terminal-default");
+}
+
+func buffer_draw_wide_transparent_background() {
+  let buf = Buffer((u32)3, (u32)1);
+  buf.draw((u32)0, (u32)0, (u64)88, none,
+    RgbColor((u8)0x12, (u8)0x34, (u8)0x56));
+  buf.draw((u32)0, (u32)0, (u64)0x4E2D,
+    RgbColor((u8)0xAB, (u8)0xCD, (u8)0xEF),
+    RgbColor((u8)0, (u8)0, (u8)0, (u8)0));
+  check(buf.cells[0].value == (u64)0x4E2D &&
+    buf.cells[1].value == Cell.CONTINUATION,
+    "tui/buffer/wide-transparent-occupancy");
+  check(buf.cells[0].backColor() == (u32)0x123456 &&
+    buf.cells[1].backColor() == (u32)0x123456,
+    "tui/buffer/wide-transparent-background");
+}
+
+func buffer_draw_explicit_black_and_transparency() {
+  let buf = Buffer((u32)2, (u32)1);
+  let black = RgbColor((u8)0, (u8)0, (u8)0);
+  let transparent = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
+  buf.draw((u32)0, (u32)0, (u64)65, black, black);
+  check((buf.cells[0].style & Cell.HAS_FG) != (u64)0 &&
+    (buf.cells[0].style & Cell.HAS_BG) != (u64)0,
+    "tui/buffer/explicit-black-presence");
+
+  buf.draw((u32)0, (u32)0, (u64)66, transparent, transparent);
+  check((buf.cells[0].style & Cell.HAS_FG) != (u64)0 &&
+    (buf.cells[0].style & Cell.HAS_BG) != (u64)0,
+    "tui/buffer/transparent-preserves-black-presence");
+
+  buf.draw((u32)0, (u32)0, (u64)67, none, none);
+  check((buf.cells[0].style & (Cell.HAS_FG | Cell.HAS_BG)) == (u64)0,
+    "tui/buffer/default-clears-color-presence");
+}
+
 // ─── Buffer draw 带前景色 ──────────────────────────────────────────────────
 
 func buffer_draw_text_with_fg() {
@@ -736,6 +833,20 @@ func screen_render_sgr_fg_bg_color() {
   // 前景色 38;2;255;0;0 和背景色 48;2;0;0;255
   check(out.contains("38;2;255;0;0"), "tui/screen/render-sgr-fg");
   check(out.contains("48;2;0;0;255"), "tui/screen/render-sgr-bg");
+}
+
+func screen_render_sgr_explicit_black() {
+  let scr = Screen((u32)2, (u32)1);
+  let black = RgbColor((u8)0, (u8)0, (u8)0);
+  scr.buffer().draw((u32)0, (u32)0, (u64)65, black, black);
+  scr.buffer().draw((u32)1, (u32)0, (u64)66, none, none);
+  let out = scr.buildPatchString();
+  check(out.contains("38;2;0;0;0"),
+    "tui/screen/render-explicit-black-foreground");
+  check(out.contains("48;2;0;0;0"),
+    "tui/screen/render-explicit-black-background");
+  check(out.contains("\x1b[1;2H\x1b[0mB"),
+    "tui/screen/render-black-to-default-reset");
 }
 
 /** 验证 SGR 将 Cell style 作为完整状态，正确清除已移除的颜色和样式。 */
@@ -1290,6 +1401,38 @@ func view_auto_size_semantics() {
   check(view.frame.x == 2 && view.frame.y == 3 &&
     view.frame.width == 0 && view.frame.height == 0,
     "tui/view/auto-absolute-zero-intrinsic");
+}
+
+/** 验证无背景和透明背景的 View 不改动画布，非透明背景正常覆盖。 */
+func view_draw_alpha_background_semantics() {
+  let screen = Screen(3, 1);
+  let manager = ViewManager(screen);
+  let buffer = screen.buffer();
+  buffer.draw((u32)0, (u32)0, (u64)88,
+    RgbColor((u8)0x11, (u8)0x22, (u8)0x33),
+    RgbColor((u8)0x44, (u8)0x55, (u8)0x66));
+
+  let view = View();
+  view.style.position = Position.Absolute;
+  view.style.width = 1;
+  view.style.height = 1;
+  view.arrange(manager);
+  view.draw(manager);
+  check(buffer.cells[0].value == (u64)88 &&
+    buffer.cells[0].backColor() == (u32)0x445566,
+    "tui/view/no-background-keeps-canvas");
+
+  view.style.backColor = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
+  view.draw(manager);
+  check(buffer.cells[0].value == (u64)88 &&
+    buffer.cells[0].backColor() == (u32)0x445566,
+    "tui/view/transparent-background-keeps-canvas");
+
+  view.style.backColor = RgbColor((u8)0x01, (u8)0x02, (u8)0x03);
+  view.draw(manager);
+  check(buffer.cells[0].value == (u64)0 &&
+    buffer.cells[0].backColor() == (u32)0x010203,
+    "tui/view/opaque-background-paints-canvas");
 }
 
 /** 验证 Text 的 Auto 宽高、硬换行、末尾换行和最终尺寸对齐。 */
@@ -2724,6 +2867,7 @@ open func run_tui_tests() {
     test("cell_mask_fg()", () { cell_mask_fg(); });
     test("cell_mask_bg()", () { cell_mask_bg(); });
     test("cell_mask_flags()", () { cell_mask_flags(); });
+    test("cell_color_presence_constants()", () { cell_color_presence_constants(); });
     test("cell_style_bold_const()", () { cell_style_bold_const(); });
     test("cell_style_dim_const()", () { cell_style_dim_const(); });
     test("cell_style_italic_const()", () { cell_style_italic_const(); });
@@ -2739,6 +2883,7 @@ open func run_tui_tests() {
     test("cell_fore_color_rw()", () { cell_fore_color_rw(); });
     test("cell_back_color_rw()", () { cell_back_color_rw(); });
     test("cell_fore_back_color_independent()", () { cell_fore_back_color_independent(); });
+    test("cell_explicit_black_presence()", () { cell_explicit_black_presence(); });
     test("cell_bold_rw()", () { cell_bold_rw(); });
     test("cell_dim_rw()", () { cell_dim_rw(); });
     test("cell_italic_rw()", () { cell_italic_rw(); });
@@ -2753,6 +2898,10 @@ open func run_tui_tests() {
     test("rgb_color_default()", () { rgb_color_default(); });
     test("rgb_color_ctor()", () { rgb_color_ctor(); });
     test("rgb_color_field_rw()", () { rgb_color_field_rw(); });
+    test("rgb_color_alpha_constructors()", () { rgb_color_alpha_constructors(); });
+    test("buffer_draw_alpha_color_channels()", () { buffer_draw_alpha_color_channels(); });
+    test("buffer_draw_wide_transparent_background()", () { buffer_draw_wide_transparent_background(); });
+    test("buffer_draw_explicit_black_and_transparency()", () { buffer_draw_explicit_black_and_transparency(); });
     test("buffer_ctor()", () { buffer_ctor(); });
     test("buffer_default_cells()", () { buffer_default_cells(); });
     test("buffer_cells_in_place_modify()", () { buffer_cells_in_place_modify(); });
@@ -2798,6 +2947,7 @@ open func run_tui_tests() {
     test("screen_render_sgr_bold()", () { screen_render_sgr_bold(); });
     test("screen_render_sgr_fg_color()", () { screen_render_sgr_fg_color(); });
     test("screen_render_sgr_fg_bg_color()", () { screen_render_sgr_fg_bg_color(); });
+    test("screen_render_sgr_explicit_black()", () { screen_render_sgr_explicit_black(); });
     test("screen_render_sgr_complete_state_transitions()", () { screen_render_sgr_complete_state_transitions(); });
     test("screen_render_sgr_multi_style()", () { screen_render_sgr_multi_style(); });
     test("screen_render_partial_diff()", () { screen_render_partial_diff(); });
@@ -2840,6 +2990,7 @@ open func run_tui_tests() {
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
     test("view_auto_size_semantics()", () { view_auto_size_semantics(); });
+    test("view_draw_alpha_background_semantics()", () { view_draw_alpha_background_semantics(); });
     test("text_auto_measure_and_alignment()", () { text_auto_measure_and_alignment(); });
     test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
     test("text_grapheme_wrap_and_emoji()", () { text_grapheme_wrap_and_emoji(); });

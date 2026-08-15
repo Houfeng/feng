@@ -363,9 +363,13 @@ open type View: Widget {
       return;
     }
     manager.trace(widget, frame);
-    manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,
-      (u32)frame.width, (u32)frame.height, (u64)0,
-      none, widget.style.backColor);
+    if widget.style.backColor match color: RgbColor {
+      if color.a != 0 {
+        manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,
+          (u32)frame.width, (u32)frame.height, (u64)0,
+          none, color);
+      }
+    }
   }
 
   /**

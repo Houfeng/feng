@@ -33,7 +33,10 @@
 
 - **`std.tui.screen.Cell`**：纯粹的数据容器。`@value` 类型，16 字节布局（`u64 value` + `u64 style`），值语义保证内存绝对连续排列。成员为 `open var`，可直接字段赋值修改；同时提供 foreColor/backColor/bold/dim 等便利 getter/setter 方法对。
 - **`std.tui.screen.Style`**：`open enum`，9 个枚举项（none/bold/dim/italic/underline/blink/reverse/hidden/strikethrough），使用小整数序号。类型安全，调用方只能传入合法样式。
-- **`std.tui.screen.RgbColor`**：`@value` 类型，3 个 `u8` 字段（r/g/b），表示 RGB 颜色。配合 `Option<RgbColor>` 使用，`none` 表示终端默认色。
+- **`std.tui.common.RgbColor`**：`@value` 类型，4 个 `u8` 字段（r/g/b/a）。配合
+  `Option<RgbColor>` 使用：`none` 表示终端默认色；`a == 0` 表示不绘制对应颜色通道，
+  保留 Buffer 中已有颜色；本阶段任何非零 alpha 均按完全不透明处理。三参数构造默认
+  `a = 1`，四参数构造用于显式指定 alpha。真正的半透明合成留待后续阶段实现。
 - **`std.tui.screen.Buffer`**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
 - **`std.tui.screen.Screen`**：封装双缓冲内存同步与差异比对（Diff）引擎。ANSI 转义序列生成也内聚在 Screen 中；Screen 只构建输出字节，不执行 stdout I/O，不关心业务逻辑。
 
@@ -52,9 +55,16 @@
 ### 3.1 Cell 设计
 
 - `@value open type Cell`，两个成员：`open var value: u64`（码点）、`open var style: u64`（样式编码）。成员为 `open var`，允许直接字段赋值修改。
-- 样式布局：`[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]`，RGB 编码为 `0xRRGGBB`（R 在高位，B 在低位）。
-- 静态常量：`MASK_FG`（低 24 bits 前景色掩码）、`MASK_BG`（中 24 bits 背景色掩码）、`MASK_FLAGS`（高 16 bits 样式标志掩码）、`STYLE_BOLD` 至 `STYLE_STRIKETHROUGH`（各样式位值）。
-- 样式标志位（48-63 位）：`BOLD=48, DIM=49, ITALIC=50, UNDERLINE=51, BLINK=52, REVERSE=53, HIDDEN=54, STRIKETHROUGH=55`。
+- 样式布局：bits 0–23 保存前景 RGB，bits 24–47 保存背景 RGB，bits 48–55
+  保存 8 个终端样式标志，bit 56/57 分别保存 `HAS_FG`/`HAS_BG` 显式颜色
+  存在标记，bits 58–63 保留。RGB 编码为 `0xRRGGBB`（R 在高位，B 在低位）。
+- 静态常量：`MASK_FG`、`MASK_BG`、`MASK_FLAGS`、`HAS_FG`、`HAS_BG`，以及
+  `STYLE_BOLD` 至 `STYLE_STRIKETHROUGH`。`MASK_FLAGS` 只包含 bits 48–55 的
+  终端样式，不包含颜色存在标记。
+- `HAS_FG`/`HAS_BG` 区分显式黑色与终端默认色：不存在标记表示终端默认色；
+  存在标记时即使 RGB 位段为 0 也表示显式 `RGB(0,0,0)`。
+- 样式标志位：`BOLD=48, DIM=49, ITALIC=50, UNDERLINE=51, BLINK=52,
+  REVERSE=53, HIDDEN=54, STRIKETHROUGH=55`；`HAS_FG=56, HAS_BG=57`。
 - 便利方法：`foreColor()`/`foreColor(value)`、`backColor()`/`backColor(value)` 色读写方法对，`bold()`/`bold(value)` 至 `strikeThrough()`/`strikeThrough(value)` 样式读写方法对，均通过 `self` 就地修改 `var` 成员。
 - 构造函数：`Cell()`（空白）、`Cell(value)`（指定码点）、`Cell(value, style)`（指定码点和样式）。
 - **不加 width 字段**。复杂字符（如 ZWJ 组合 emoji `👨‍👨‍👦‍👦`）在输入层拆分为多个 Cell，每个 Cell 持有单个 Unicode 码点。
@@ -68,7 +78,7 @@
 - **内部样式打包方法（seal）**：
   - `styleToBits(s: Style): u64` — 将 Style 枚举值映射为 Cell 的 `STYLE_*` 位值。
   - `combineStyles(styles: Style[]): u64` — 将多个 Style 按位或组合为单个 u64 样式编码。
-  - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 的颜色不写入对应位段，表示终端默认色。RGB 编码为 `0xRRGGBB`。
+  - `packStyle(fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]): u64` — 将前景色、背景色和样式数组打包为完整的 u64 样式编码。`none` 不写入 RGB 及颜色存在标记，表示终端默认色；alpha 为 0 的颜色通道由 Buffer 在写入时完整保留目标 Cell 的 RGB 与存在标记；非零 alpha 写入 RGB 并设置对应存在标记，本阶段均按完全不透明处理。Cell 不存储 alpha。
 - **绘制原语**：
   - `draw`（4 个 seal 数组版本 + 12 个变长版本）。
     - seal 数组版本（内部实现，参数为 `fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]`）：
@@ -231,12 +241,14 @@ std/std/src/tui/
     KeyEvent.ff            # 键盘事件
     MouseEvent.ff          # 鼠标事件
 
+  common/                  # std.tui.common：跨层基础值类型
+    RgbColor.ff            # RGBA 绘制颜色值（保留既有类型名）
+
   screen/                  # std.tui.screen：渲染底座
     Cell.ff                # 最小渲染单元
     Buffer.ff              # Cell 矩阵与绘制原语
     Screen.ff              # 双缓冲、Diff 与 ANSI 序列生成
     Style.ff               # 样式枚举
-    RgbColor.ff            # RGB 颜色值
 
   view/                    # std.tui.view：视图契约与管理机制
     Thickness.ff           # 四边间距类型

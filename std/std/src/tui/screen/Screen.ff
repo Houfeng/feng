@@ -261,17 +261,17 @@ open type Screen {
 
   /**
    * 判断从当前完整样式切换到目标完整样式前是否必须重置。
-   * 非零颜色可直接覆盖；颜色恢复默认值或任一样式标志被移除时必须重置。
+   * 显式颜色可直接覆盖；颜色恢复默认值或任一样式标志被移除时必须重置。
    */
   seal func needsSgrReset(current: u64, target: u64): bool {
-    let currentFg = (u32)(current & Cell.MASK_FG);
-    let targetFg = (u32)(target & Cell.MASK_FG);
-    if currentFg != (u32)0 && targetFg == (u32)0 {
+    let currentHasFg = (current & Cell.HAS_FG) != (u64)0;
+    let targetHasFg = (target & Cell.HAS_FG) != (u64)0;
+    if currentHasFg && !targetHasFg {
       return true;
     }
-    let currentBg = (u32)((current >> (u64)24) & Cell.MASK_FG);
-    let targetBg = (u32)((target >> (u64)24) & Cell.MASK_FG);
-    if currentBg != (u32)0 && targetBg == (u32)0 {
+    let currentHasBg = (current & Cell.HAS_BG) != (u64)0;
+    let targetHasBg = (target & Cell.HAS_BG) != (u64)0;
+    if currentHasBg && !targetHasBg {
       return true;
     }
     let currentFlags = current & Cell.MASK_FLAGS;
@@ -282,7 +282,7 @@ open type Screen {
   /**
    * 根据 Cell 的 style 编码，将 SGR（Select Graphic Rendition）序列
    * 直接追加到 output 缓冲区。
-   * 样式布局：[ 16 bits 样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
+   * 样式布局：[ 保留/存在标记/样式标志 ] [ 24 bits 背景RGB ] [ 24 bits 前景RGB ]
    * @param style - Cell 的样式编码
    */
   seal func writeSgr(style: u64) {
@@ -291,8 +291,10 @@ open type Screen {
     let fg = (u32)(style & Cell.MASK_FG);
     // 背景色（中 24 bits）
     let bg = (u32)((style >> (u64)24) & Cell.MASK_FG);
+    let hasFg = (style & Cell.HAS_FG) != (u64)0;
+    let hasBg = (style & Cell.HAS_BG) != (u64)0;
     // 若前景、背景、样式标志全为零，发射 SGR 重置 \x1b[0m
-    if fg == (u32)0 && bg == (u32)0 && style == (u64)0 {
+    if !hasFg && !hasBg && (style & Cell.MASK_FLAGS) == (u64)0 {
       self.writeSgrReset();
       return;
     }
@@ -304,7 +306,7 @@ open type Screen {
     output.add((byte)0x5b); // '['
     var first: bool = true;
     // 前景色：38;2;r;g;b
-    if fg != (u32)0 {
+    if hasFg {
       if !first { output.add((byte)0x3b); } // ';'
       first = false;
       output.add((byte)0x33); // '3'
@@ -319,7 +321,7 @@ open type Screen {
       self.writeDecimal(fg & (u32)0xFF);
     }
     // 背景色：48;2;r;g;b
-    if bg != (u32)0 {
+    if hasBg {
       if !first { output.add((byte)0x3b); } // ';'
       first = false;
       output.add((byte)0x34); // '4'
@@ -333,7 +335,7 @@ open type Screen {
       output.add((byte)0x3b); // ';'
       self.writeDecimal(bg & (u32)0xFF);
     }
-    // 样式标志位（高 16 bits）
+    // 终端样式标志位（bits 48-55；颜色存在标记不属于终端样式）
     if (style & Cell.STYLE_BOLD) != (u64)0 {
       if !first { output.add((byte)0x3b); }
       first = false;

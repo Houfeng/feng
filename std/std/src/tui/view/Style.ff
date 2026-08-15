@@ -101,12 +101,12 @@ open type Style {
   var height: Union<Auto, int, double>;
 
   /**
-   * 前景色；不参与布局，在绘制阶段使用。
+   * 前景色；不参与布局，在绘制阶段使用。alpha 为 0 时保留画布已有前景色。
    */
   var foreColor: Option<RgbColor>;
 
   /**
-   * 背景色；不参与布局，在绘制阶段使用。
+   * 背景色；不参与布局，在绘制阶段使用。alpha 为 0 时表示透明背景。
    */
   var backColor: Option<RgbColor>;
 
