@@ -82,6 +82,18 @@ open spec Widget {
   let wheel: Event<MouseEvent<Widget>>;
 
   /**
+   * 请求直接父组件重新布局。
+   * 更高祖先只标记子树布局路径；没有父组件时静默返回。
+   */
+  func requestReflow(): void;
+
+  /**
+   * 根据布局脏标记调度 arrange。
+   * 仅供 ViewManager 和负责子组件布局的组件调用。
+   */
+  func doArrange(manager: ViewManager): void;
+
+  /**
    * 对齐并计算当前组件的 frame
    * 容器组件自行决定是否及如何布局子组件
    */

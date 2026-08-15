@@ -846,7 +846,7 @@ typedef struct UserSpecMember {
     char   *feng_name;          /* e.g., "greet" */
     char   *c_field_name;       /* sanitised — slot name in the witness struct */
     enum {
-        USM_KIND_FIELD = 0,     /* spec field — getter/setter slots */
+        USM_KIND_FIELD = 0,     /* spec field — read-or-borrow/setter slots */
         USM_KIND_METHOD         /* spec method — single function-pointer slot */
     } kind;
     /* For FIELD: the field's declared type. For METHOD: the method return type. */
@@ -891,6 +891,20 @@ typedef struct UserSpecMember {
      * a heap pointer, not a UserSpec* index. */
     FengTypeRef *source_member_type_ref;
 } UserSpecMember;
+
+/* Return whether one instance-field witness slot must preserve the identity
+ * of the implementing field's storage. Fixed value-semantics aggregates need
+ * this for mutating method receivers; ADDRESS is the stable declaration-side
+ * ABI for open generic fields that may close to such a value. Static fields
+ * have independent storage semantics and retain their existing getter ABI. */
+static bool cg_spec_field_uses_storage_borrow(
+    const UserSpecMember *member) {
+    return member != NULL &&
+           member->kind == USM_KIND_FIELD &&
+           !member->is_static &&
+           (cg_type_is_value_semantics(member->type) ||
+            member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS);
+}
 
 typedef struct UserSpec {
     char   *feng_name;                /* e.g., "Named" */
@@ -14289,11 +14303,11 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
 }
 
 /* Emit the witness struct body to `out`. Method members get a single
- * function-pointer slot; field members get a getter slot and (for `var`)
- * a setter slot. The declaration order of slots matches the spec source
- * so codegen iteration and debugger inspection stay aligned. If a spec
- * has no slots at all an empty struct would be invalid C — emit a
- * `_padding` byte.
+ * function-pointer slot. Field members get either a value getter or a stable
+ * storage borrow plus, for `var`, a setter. The declaration order of slots
+ * matches the spec source so codegen iteration and debugger inspection stay
+ * aligned. If a spec has no slots at all an empty struct would be invalid C —
+ * emit a `_padding` byte.
  *
  * Called from cg_emit_user_spec_forward so the complete struct appears
  * in the headers buffer before any witness-instance tentative definitions
@@ -14339,26 +14353,34 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
             buf_append_cstr(out, ");\n");
             emitted++;
         } else if (sm->kind == USM_KIND_FIELD) {
-            buf_append_cstr(out, "    ");
-            cg_emit_callable_abi_return_type(out,
-                                             sm->type,
-                                             sm->value_abi_kind);
-            if (sm->is_static) {
-                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-                    buf_append_fmt(out, " (*get_%s)(void *_out);\n",
-                                   sm->c_field_name);
-                } else {
-                    buf_append_fmt(out, " (*get_%s)(void);\n", sm->c_field_name);
-                }
-            } else {
-                buf_append_fmt(out, " (*get_%s)(void *_subject",
+            if (cg_spec_field_uses_storage_borrow(sm)) {
+                buf_append_fmt(out,
+                               "    void *(*borrow_%s)(void *_subject);\n",
                                sm->c_field_name);
-                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-                    buf_append_cstr(out, ", void *_out");
+                emitted++;
+            } else {
+                buf_append_cstr(out, "    ");
+                cg_emit_callable_abi_return_type(out,
+                                                 sm->type,
+                                                 sm->value_abi_kind);
+                if (sm->is_static) {
+                    if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                        buf_append_fmt(out, " (*get_%s)(void *_out);\n",
+                                       sm->c_field_name);
+                    } else {
+                        buf_append_fmt(out, " (*get_%s)(void);\n",
+                                       sm->c_field_name);
+                    }
+                } else {
+                    buf_append_fmt(out, " (*get_%s)(void *_subject",
+                                   sm->c_field_name);
+                    if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                        buf_append_cstr(out, ", void *_out");
+                    }
+                    buf_append_cstr(out, ");\n");
                 }
-                buf_append_cstr(out, ");\n");
+                emitted++;
             }
-            emitted++;
             if (sm->is_var) {
                 buf_append_cstr(out, "    void (*set_");
                 buf_append_cstr(out, sm->c_field_name);
@@ -14457,55 +14479,66 @@ static bool cg_emit_spec_default_abi_result(CG *cg,
     return true;
 }
 
-/* Emit one default-witness field getter/setter pair through the field's
- * stable generic-spec ABI. */
+/* Emit one default-witness field read-or-borrow/setter pair through the
+ * field's stable generic-spec ABI. */
 static bool cg_emit_default_spec_field_thunks(CG *cg,
                                                Buf *out,
                                                const UserSpec *spec,
                                                const UserSpecMember *member) {
-    buf_append_cstr(out, "static ");
-    cg_emit_callable_abi_return_type(out,
-                                     member->type,
-                                     member->value_abi_kind);
-    buf_append_fmt(out, " %s__get_%s(",
-                   spec->c_default_witness_name,
-                   member->c_field_name);
-    if (!member->is_static) {
-        buf_append_cstr(out, "void *_subject");
-    }
-    if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-        if (!member->is_static) buf_append_cstr(out, ", ");
-        buf_append_cstr(out, "void *_out");
-    } else if (member->is_static) {
-        buf_append_cstr(out, "void");
-    }
-    buf_append_cstr(out, ") {\n");
-    if (member->is_static) {
-        if (!cg_emit_spec_default_abi_result(cg,
-                                             out,
-                                             member->type,
-                                             member->value_abi_kind,
-                                             spec->decl->token)) {
-            return false;
-        }
-    } else if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+    if (cg_spec_field_uses_storage_borrow(member)) {
         buf_append_fmt(out,
-            "    memcpy(_out, &((struct %s *)_subject)->%s, "
-            "sizeof ((struct %s *)_subject)->%s);\n}\n",
-            spec->c_default_subject_struct_name,
+            "static void *%s__borrow_%s(void *_subject) {\n"
+            "    return &((struct %s *)_subject)->%s;\n"
+            "}\n",
+            spec->c_default_witness_name,
             member->c_field_name,
             spec->c_default_subject_struct_name,
             member->c_field_name);
     } else {
-        if (member->value_abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
-            buf_append_cstr(out, "    return (void *)");
-        } else {
-            buf_append_cstr(out, "    return ");
+        buf_append_cstr(out, "static ");
+        cg_emit_callable_abi_return_type(out,
+                                         member->type,
+                                         member->value_abi_kind);
+        buf_append_fmt(out, " %s__get_%s(",
+                       spec->c_default_witness_name,
+                       member->c_field_name);
+        if (!member->is_static) {
+            buf_append_cstr(out, "void *_subject");
         }
-        buf_append_fmt(out,
-            "((struct %s *)_subject)->%s;\n}\n",
-            spec->c_default_subject_struct_name,
-            member->c_field_name);
+        if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            if (!member->is_static) buf_append_cstr(out, ", ");
+            buf_append_cstr(out, "void *_out");
+        } else if (member->is_static) {
+            buf_append_cstr(out, "void");
+        }
+        buf_append_cstr(out, ") {\n");
+        if (member->is_static) {
+            if (!cg_emit_spec_default_abi_result(cg,
+                                                 out,
+                                                 member->type,
+                                                 member->value_abi_kind,
+                                                 spec->decl->token)) {
+                return false;
+            }
+        } else if (member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_fmt(out,
+                "    memcpy(_out, &((struct %s *)_subject)->%s, "
+                "sizeof ((struct %s *)_subject)->%s);\n}\n",
+                spec->c_default_subject_struct_name,
+                member->c_field_name,
+                spec->c_default_subject_struct_name,
+                member->c_field_name);
+        } else {
+            if (member->value_abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
+                buf_append_cstr(out, "    return (void *)");
+            } else {
+                buf_append_cstr(out, "    return ");
+            }
+            buf_append_fmt(out,
+                "((struct %s *)_subject)->%s;\n}\n",
+                spec->c_default_subject_struct_name,
+                member->c_field_name);
+        }
     }
     if (!member->is_var) return true;
 
@@ -14687,11 +14720,19 @@ static bool cg_ensure_default_parent_witness(CG *cg,
                            "CE0048", "codegen: default subject parent witness member mismatch");
         }
         if (target_member->kind == USM_KIND_FIELD) {
-            buf_append_fmt(&cg->type_defs,
-                           "    .get_%s = &%s__get_%s,\n",
-                           target_member->c_field_name,
-                           root->c_default_witness_name,
-                           root_member->c_field_name);
+            if (cg_spec_field_uses_storage_borrow(target_member)) {
+                buf_append_fmt(&cg->type_defs,
+                               "    .borrow_%s = &%s__borrow_%s,\n",
+                               target_member->c_field_name,
+                               root->c_default_witness_name,
+                               root_member->c_field_name);
+            } else {
+                buf_append_fmt(&cg->type_defs,
+                               "    .get_%s = &%s__get_%s,\n",
+                               target_member->c_field_name,
+                               root->c_default_witness_name,
+                               root_member->c_field_name);
+            }
             if (target_member->is_var) {
                 buf_append_fmt(&cg->type_defs,
                                "    .set_%s = &%s__set_%s,\n",
@@ -15287,9 +15328,15 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_FIELD) {
-            buf_append_fmt(td, "    .get_%s = &%s__get_%s,\n",
-                           sm->c_field_name, s->c_default_witness_name,
-                           sm->c_field_name);
+            if (cg_spec_field_uses_storage_borrow(sm)) {
+                buf_append_fmt(td, "    .borrow_%s = &%s__borrow_%s,\n",
+                               sm->c_field_name, s->c_default_witness_name,
+                               sm->c_field_name);
+            } else {
+                buf_append_fmt(td, "    .get_%s = &%s__get_%s,\n",
+                               sm->c_field_name, s->c_default_witness_name,
+                               sm->c_field_name);
+            }
             if (sm->is_var) {
                 buf_append_fmt(td, "    .set_%s = &%s__set_%s,\n",
                                sm->c_field_name, s->c_default_witness_name,
@@ -26099,6 +26146,7 @@ static bool cg_emit_spec_field_borrow(CG *cg,
                                       FengToken blame,
                                       ExprResult *out) {
     Buf value;
+    bool uses_storage_borrow;
 
     er_init(out);
     if (cg == NULL || receiver == NULL || receiver->type == NULL ||
@@ -26107,6 +26155,7 @@ static bool cg_emit_spec_field_borrow(CG *cg,
                        blame,
                        "IE0001", "codegen: invalid spec field receiver");
     }
+    uses_storage_borrow = cg_spec_field_uses_storage_borrow(field);
 
     buf_init(&value);
     if (receiver->type->kind == CG_TYPE_GENERIC_PARAM) {
@@ -26134,13 +26183,23 @@ static bool cg_emit_spec_field_borrow(CG *cg,
                 er_free(receiver);
                 return false;
             }
-            buf_append_fmt(
-                &value,
-                "((const struct %s *)%s->witness)->get_%s(%s)",
-                spec->c_witness_struct_name,
-                generic_descriptor,
-                field->c_field_name,
-                subject);
+            if (uses_storage_borrow) {
+                buf_append_fmt(
+                    &value,
+                    "((const struct %s *)%s->witness)->borrow_%s(%s)",
+                    spec->c_witness_struct_name,
+                    generic_descriptor,
+                    field->c_field_name,
+                    subject);
+            } else {
+                buf_append_fmt(
+                    &value,
+                    "((const struct %s *)%s->witness)->get_%s(%s)",
+                    spec->c_witness_struct_name,
+                    generic_descriptor,
+                    field->c_field_name,
+                    subject);
+            }
             free(subject);
         }
     } else if (receiver->type->kind == CG_TYPE_SPEC &&
@@ -26155,11 +26214,19 @@ static bool cg_emit_spec_field_borrow(CG *cg,
             }
             return false;
         }
-        buf_append_fmt(&value,
-                       "%s.witness->get_%s(%s.subject)",
-                       receiver->c_expr,
-                       field->c_field_name,
-                       receiver->c_expr);
+        if (uses_storage_borrow) {
+            buf_append_fmt(&value,
+                           "%s.witness->borrow_%s(%s.subject)",
+                           receiver->c_expr,
+                           field->c_field_name,
+                           receiver->c_expr);
+        } else {
+            buf_append_fmt(&value,
+                           "%s.witness->get_%s(%s.subject)",
+                           receiver->c_expr,
+                           field->c_field_name,
+                           receiver->c_expr);
+        }
     } else {
         buf_free(&value);
         er_free(receiver);
@@ -26168,11 +26235,48 @@ static bool cg_emit_spec_field_borrow(CG *cg,
                        "IE0001", "codegen: invalid spec field receiver");
     }
 
-    out->c_expr = value.data;
+    if (uses_storage_borrow &&
+        field->type->kind != CG_TYPE_GENERIC_PARAM &&
+        !cg_type_uses_reified_storage(cg, field->type)) {
+        char *ctype = cg_ctype_dup(field->type);
+        Buf dereference;
+
+        if (ctype == NULL) {
+            buf_free(&value);
+            er_free(receiver);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_init(&dereference);
+        buf_append_fmt(&dereference,
+                       "(*(%s *)(%s))",
+                       ctype,
+                       value.data);
+        free(ctype);
+        buf_free(&value);
+        out->c_expr = dereference.data;
+    } else {
+        out->c_expr = value.data;
+    }
     out->type = cgtype_clone(field->type);
     out->owns_ref = false;
+    out->is_addressable = uses_storage_borrow;
+    out->is_storage_address =
+        uses_storage_borrow &&
+        (field->type->kind == CG_TYPE_GENERIC_PARAM ||
+         cg_type_uses_reified_storage(cg, field->type));
+    out->uses_reified_storage =
+        uses_storage_borrow &&
+        cg_type_uses_reified_storage(cg, field->type);
+    if (out->uses_reified_storage) {
+        out->reified_descriptor_c_name =
+            cg_reified_aggregate_descriptor_expr_dup(cg,
+                                                      field->type,
+                                                      blame);
+    }
     er_free(receiver);
-    return out->c_expr != NULL && out->type != NULL;
+    return out->c_expr != NULL && out->type != NULL &&
+           (!out->uses_reified_storage ||
+            out->reified_descriptor_c_name != NULL);
 }
 
 /* Borrow one already-evaluated user field while preserving the receiver's
@@ -44540,6 +44644,8 @@ static bool cg_user_spec_member_compatible(const UserSpecMember *src,
     }
     if (src->kind == USM_KIND_FIELD) {
         return cg_types_equal(src->type, dst->type) &&
+               cg_spec_field_uses_storage_borrow(src) ==
+                   cg_spec_field_uses_storage_borrow(dst) &&
                (!dst->is_var || src->is_var);
     }
     if (src->param_count != dst->param_count ||
@@ -44696,17 +44802,34 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
             }
 
             if (dst_member->kind == USM_KIND_FIELD) {
-                buf_append_cstr(wd, "static ");
-                cg_emit_c_type(wd, dst_member->type);
-                buf_append_fmt(wd, " %s__get_%s(void *_subject) {\n",
-                               var.data, dst_member->c_field_name);
-                buf_append_fmt(wd,
-                    "    const struct %s *_value = (const struct %s *)_subject;\n"
-                    "    return _value->witness->get_%s(_value->subject);\n"
-                    "}\n",
-                    src->c_value_struct_name,
-                    src->c_value_struct_name,
-                    src_member->c_field_name);
+                if (cg_spec_field_uses_storage_borrow(dst_member)) {
+                    buf_append_fmt(wd,
+                        "static void *%s__borrow_%s(void *_subject) {\n"
+                        "    const struct %s *_value = "
+                        "(const struct %s *)_subject;\n"
+                        "    return _value->witness->borrow_%s"
+                        "(_value->subject);\n"
+                        "}\n",
+                        var.data,
+                        dst_member->c_field_name,
+                        src->c_value_struct_name,
+                        src->c_value_struct_name,
+                        src_member->c_field_name);
+                } else {
+                    buf_append_cstr(wd, "static ");
+                    cg_emit_c_type(wd, dst_member->type);
+                    buf_append_fmt(wd, " %s__get_%s(void *_subject) {\n",
+                                   var.data, dst_member->c_field_name);
+                    buf_append_fmt(wd,
+                        "    const struct %s *_value = "
+                        "(const struct %s *)_subject;\n"
+                        "    return _value->witness->get_%s"
+                        "(_value->subject);\n"
+                        "}\n",
+                        src->c_value_struct_name,
+                        src->c_value_struct_name,
+                        src_member->c_field_name);
+                }
                 if (dst_member->is_var) {
                     buf_append_fmt(wd, "static void %s__set_%s(void *_subject, ",
                                    var.data, dst_member->c_field_name);
@@ -44782,9 +44905,16 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
             const UserSpecMember *dst_member = &dst->members[i];
 
             if (dst_member->kind == USM_KIND_FIELD) {
-                buf_append_fmt(wd, "    .get_%s = &%s__get_%s,\n",
-                               dst_member->c_field_name, var.data,
-                               dst_member->c_field_name);
+                if (cg_spec_field_uses_storage_borrow(dst_member)) {
+                    buf_append_fmt(wd,
+                                   "    .borrow_%s = &%s__borrow_%s,\n",
+                                   dst_member->c_field_name, var.data,
+                                   dst_member->c_field_name);
+                } else {
+                    buf_append_fmt(wd, "    .get_%s = &%s__get_%s,\n",
+                                   dst_member->c_field_name, var.data,
+                                   dst_member->c_field_name);
+                }
                 if (dst_member->is_var) {
                     buf_append_fmt(wd, "    .set_%s = &%s__set_%s,\n",
                                    dst_member->c_field_name, var.data,
@@ -46200,21 +46330,36 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
 
         const UserField *field = binding.field;
         Buf *fd = &cg->witness_defs;
-        buf_append_cstr(fd, "static ");
-        cg_emit_c_type(fd, sm->type);
-        buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
-                       prefix.data, sm->c_field_name);
-        buf_append_fmt(fd,
-                       "    return ((struct %s *)_subject)->value.%s;\n",
-                       t->c_value_box_struct_name,
-                       field->c_name);
-        buf_append_cstr(fd, "}\n\n");
-
         Buf *fp = &cg->fn_protos;
-        buf_append_cstr(fp, "static ");
-        cg_emit_c_type(fp, sm->type);
-        buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
-                       prefix.data, sm->c_field_name);
+        if (cg_spec_field_uses_storage_borrow(sm)) {
+            buf_append_fmt(fd,
+                           "static void *%s__borrow_%s(void *_subject) {\n"
+                           "    return &((struct %s *)_subject)->value.%s;\n"
+                           "}\n\n",
+                           prefix.data,
+                           sm->c_field_name,
+                           t->c_value_box_struct_name,
+                           field->c_name);
+            buf_append_fmt(fp,
+                           "static void *%s__borrow_%s(void *_subject);\n",
+                           prefix.data,
+                           sm->c_field_name);
+        } else {
+            buf_append_cstr(fd, "static ");
+            cg_emit_c_type(fd, sm->type);
+            buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
+                           prefix.data, sm->c_field_name);
+            buf_append_fmt(fd,
+                           "    return ((struct %s *)_subject)->value.%s;\n",
+                           t->c_value_box_struct_name,
+                           field->c_name);
+            buf_append_cstr(fd, "}\n\n");
+
+            buf_append_cstr(fp, "static ");
+            cg_emit_c_type(fp, sm->type);
+            buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
+                           prefix.data, sm->c_field_name);
+        }
 
         if (sm->is_var) {
             buf_free(&prefix); free(t_san); free(s_san);
@@ -46275,8 +46420,15 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             buf_append_fmt(fd, "    .%s = &%s__%s,\n",
                            sm->c_field_name, prefix.data, sm->c_field_name);
         } else if (sm->kind == USM_KIND_FIELD) {
-            buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
-                           sm->c_field_name, prefix.data, sm->c_field_name);
+            if (cg_spec_field_uses_storage_borrow(sm)) {
+                buf_append_fmt(fd, "    .borrow_%s = &%s__borrow_%s,\n",
+                               sm->c_field_name, prefix.data,
+                               sm->c_field_name);
+            } else {
+                buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
+                               sm->c_field_name, prefix.data,
+                               sm->c_field_name);
+            }
         }
     }
     for (size_t parent_index = 0U;
@@ -46494,8 +46646,16 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             const UserSpecMember *sm = &s->members[i];
             const char *member_witness_var = member_witness_vars[i];
             if (sm->kind == USM_KIND_FIELD) {
-                buf_append_fmt(wd, "    .get_%s = %s.get_%s,\n",
-                               sm->c_field_name, member_witness_var, sm->c_field_name);
+                if (cg_spec_field_uses_storage_borrow(sm)) {
+                    buf_append_fmt(wd,
+                                   "    .borrow_%s = %s.borrow_%s,\n",
+                                   sm->c_field_name, member_witness_var,
+                                   sm->c_field_name);
+                } else {
+                    buf_append_fmt(wd, "    .get_%s = %s.get_%s,\n",
+                                   sm->c_field_name, member_witness_var,
+                                   sm->c_field_name);
+                }
                 if (sm->is_var) {
                     buf_append_fmt(wd, "    .set_%s = %s.set_%s,\n",
                                    sm->c_field_name, member_witness_var, sm->c_field_name);
@@ -47057,22 +47217,40 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     t->feng_name, sm->feng_name, s->feng_name);
             }
 
-            /* Getter: return ((struct T*)_subject)->c_field. The thunk
-             * emits a borrow — caller is responsible for any retain. */
+            /* Storage-borrow fields return their implementing field address;
+             * ordinary reference fields retain the existing getter ABI. */
             Buf *fd = &cg->witness_defs;
-            buf_append_cstr(fd, "static ");
-            cg_emit_c_type(fd, sm->type);
-            buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
-                           prefix.data, sm->c_field_name);
-            buf_append_fmt(fd, "    return ((struct %s *)_subject)->%s;\n",
-                           t->c_struct_name, uf->c_name);
-            buf_append_cstr(fd, "}\n\n");
-
             Buf *fp = &cg->fn_protos;
-            buf_append_cstr(fp, "static ");
-            cg_emit_c_type(fp, sm->type);
-            buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
-                           prefix.data, sm->c_field_name);
+            if (cg_spec_field_uses_storage_borrow(sm)) {
+                buf_append_fmt(fd,
+                               "static void *%s__borrow_%s"
+                               "(void *_subject) {\n"
+                               "    return &((struct %s *)_subject)->%s;\n"
+                               "}\n\n",
+                               prefix.data,
+                               sm->c_field_name,
+                               t->c_struct_name,
+                               uf->c_name);
+                buf_append_fmt(fp,
+                               "static void *%s__borrow_%s"
+                               "(void *_subject);\n",
+                               prefix.data,
+                               sm->c_field_name);
+            } else {
+                buf_append_cstr(fd, "static ");
+                cg_emit_c_type(fd, sm->type);
+                buf_append_fmt(fd, " %s__get_%s(void *_subject) {\n",
+                               prefix.data, sm->c_field_name);
+                buf_append_fmt(fd,
+                               "    return ((struct %s *)_subject)->%s;\n",
+                               t->c_struct_name, uf->c_name);
+                buf_append_cstr(fd, "}\n\n");
+
+                buf_append_cstr(fp, "static ");
+                cg_emit_c_type(fp, sm->type);
+                buf_append_fmt(fp, " %s__get_%s(void *_subject);\n",
+                               prefix.data, sm->c_field_name);
+            }
 
             if (sm->is_var) {
                 /* Setter: managed slots route through feng_assign so the
@@ -47161,8 +47339,15 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             buf_append_fmt(fd, "    .%s = &%s__%s,\n",
                            sm->c_field_name, prefix.data, sm->c_field_name);
         } else if (sm->kind == USM_KIND_FIELD) {
-            buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
-                           sm->c_field_name, prefix.data, sm->c_field_name);
+            if (cg_spec_field_uses_storage_borrow(sm)) {
+                buf_append_fmt(fd, "    .borrow_%s = &%s__borrow_%s,\n",
+                               sm->c_field_name, prefix.data,
+                               sm->c_field_name);
+            } else {
+                buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
+                               sm->c_field_name, prefix.data,
+                               sm->c_field_name);
+            }
             if (sm->is_var) {
                 buf_append_fmt(fd, "    .set_%s = &%s__set_%s,\n",
                                sm->c_field_name, prefix.data, sm->c_field_name);

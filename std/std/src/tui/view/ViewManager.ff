@@ -540,7 +540,7 @@ open type ViewManager {
    */
   open func arrange() {
     if self.root match root: Widget {
-      root.arrange(self);
+      root.doArrange(self);
     }
   }
 

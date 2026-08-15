@@ -43,7 +43,8 @@ Widget 实现统一测量接口。组件需要的内在尺寸仍由组件自己�
 - VStack/HStack 在 arrange 内排列 children，并根据结果处理自身 Auto 尺寸；
 - 未来其他布局组件可以根据自身需求实现自己的局部布局过程。
 
-ViewManager.arrange 仍只调用 `root.arrange(manager)`，不遍历组件树，也不理解具体组件类型。
+ViewManager.arrange 仍只调用 `root.doArrange(manager)`，不遍历组件树，也不理解具体组件
+类型。Stack 通过 `child.doArrange(manager)` 自治调度需要参与布局的 children。
 
 ### 2.2 不修改用户 Style
 
@@ -62,12 +63,12 @@ Comlet 具有独立的 `RtStyle`，VStack/HStack 可以在 Flow 阶段向 child 
 ### 2.3 Reflow 由需要它的组件负责
 
 VStack/HStack 的 Auto 尺寸依赖 children；Stack 尺寸变化又可能改变百分比 child、Full
-child 或 Text 自动换行结果。因此 Stack.arrange 必须在自身内部完成局部 Reflow，不能
-假定单次从父到子的 arrange 总能得到最终结果。
+child 或 Text 自动换行结果。因此 Stack 复用 Widget 已有的 `doArrange()` 和
+`requestReflow()` 完成局部 Reflow，不能假定单次从父到子的 arrange 总能得到最终结果。
 
-Reflow 是 Stack 的内部实现，不新增公共 `requestReflow()` 或全局 measure/arrange 阶段。
-嵌套 Stack 在 child.arrange 返回前完成自身 Reflow，外层 Stack 因而能直接读取 child 的
-最终 frame，并继续完成上层 Reflow。
+child 的最终占位变化时只请求直接父级 Stack 重新布局；Stack 自身占位变化后才继续请求
+其直接父级。更高祖先的 `SubtreeLayout` 仅用于调度进入对应子树，不表示这些祖先自身需要
+重新布局。该机制不增加全局 measure/arrange 阶段。
 
 ## 3 通用排列槽位
 
@@ -293,10 +294,10 @@ Auto 与百分比可以形成循环依赖，例如 Auto parent 的尺寸由百�
 
 最大次数是通用安全边界，不针对具体 Widget；其具体常量在实现前由人工 Review 确认。
 
-本阶段不增加跨帧 dirty tree。ViewManager 当前每轮都会从 root 调用 arrange，Stack 可以
-从自身和 children 已有 frame 取得下一轮的初始内在尺寸估计，以减少稳定界面的额外
-Reflow；这些旧 frame 只用于初值，本轮仍会调用 child.arrange，不能跳过用户可能已修改的
-Style/content。
+跨帧 dirty tree、`requestReflow()` 和 `doArrange()` 的共同语义以
+`docs/engineering/feng-std-tui-view-dev.md` 为准。Stack 可以从自身和 children 已有 frame
+取得下一轮的初始内在尺寸估计，以减少稳定界面的额外 Reflow；组件修改 Style/content
+后必须按共同机制标记 `Layout` 并通知父级路径。
 
 ## 8 绘制、裁剪与命中
 

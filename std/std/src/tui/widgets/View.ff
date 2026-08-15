@@ -126,6 +126,49 @@ open type View: Widget {
   }
 
   /**
+   * 请求直接父组件重新布局，并为更高祖先标记子树布局路径。
+   * 直接父组件获得 Layout；更高祖先只获得 SubtreeLayout。
+   */
+  @mixable
+  static func requestReflow(widget: Widget): void {
+    if widget.parent match parent: ContainerWidget {
+      let parentWidget = (Widget)parent;
+      parentWidget.dirty.add(DirtyType.Layout);
+      var current = parentWidget.parent;
+      while current match let ancestor: ContainerWidget {
+        let ancestorWidget = (Widget)ancestor;
+        if ancestorWidget.dirty.has(DirtyType.SubtreeLayout) {
+          return;
+        }
+        ancestorWidget.dirty.add(DirtyType.SubtreeLayout);
+        current = ancestorWidget.parent;
+      }
+    }
+  }
+
+  /**
+   * 消费布局脏标记并调度组件自己的 arrange 实现。
+   * arrange 期间直接父级收到的 Layout 请求会在本次调用内继续处理。
+   */
+  @mixable
+  static func doArrange(widget: Widget, manager: ViewManager): void {
+    if !widget.dirty.has(DirtyType.Layout) &&
+    !widget.dirty.has(DirtyType.SubtreeLayout) {
+      return;
+    }
+    while true {
+      widget.dirty.remove(DirtyType.Layout);
+      widget.dirty.remove(DirtyType.SubtreeLayout);
+      widget.arrange(manager);
+      if !widget.dirty.has(DirtyType.Layout) {
+        // 本轮自治布局已经同步处理子树；消费期间重新登记的路径标记。
+        widget.dirty.remove(DirtyType.SubtreeLayout);
+        return;
+      }
+    }
+  }
+
+  /**
    * 根据对齐方式在一个轴的可用区域中定位组件。
    * 组件尺寸超过可用区域时仍保持 Center/End 语义，允许结果位于参照区域之前。
    */

@@ -21,9 +21,16 @@ type DragSurface: ContainerWidget {
    */
   @mixable
   static func arrange(surface: ContainerWidget, manager: ViewManager): void {
+    let previousWidth = surface.frame.width;
+    let previousHeight = surface.frame.height;
     View.arrange(surface, manager);
+    let referenceChanged = previousWidth != surface.frame.width ||
+      previousHeight != surface.frame.height;
     for let child in surface.children {
-      child.arrange(manager);
+      if referenceChanged {
+        child.dirty.add(DirtyType.Layout);
+      }
+      child.doArrange(manager);
     }
   }
 
@@ -81,6 +88,8 @@ func bindDrag(rectangle: View, app: TuiApp): void {
       rectangle.style.position = Position.Fixed;
       rectangle.style.x = x;
       rectangle.style.y = y;
+      rectangle.dirty.add(DirtyType.Layout);
+      rectangle.requestReflow();
     }
   });
 

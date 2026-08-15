@@ -158,7 +158,13 @@ open type DirtyMark {
 - `has`、`add` 和 `remove` 始终接受 `DirtyType`，不向外暴露内部整数编码；
 - `DirtyMark` 是 `@value` 类型，复制后各副本独立修改；
 - `View.dirty` 初始包含 `Layout` 和 `SubtreeLayout`，保证新组件及其初始子树进入后续布局；
-- 本步只定义、存储和操作脏标记，不接入父级传播、布局跳过、绘制脏标记或 Stack。
+- 组件直接通过 `widget.dirty.add(DirtyType.Layout)` 标记自身需要重新布局，不增加语义
+  重复的 `requestArrange()` 或 `markLayoutDirty()`；
+- `requestReflow()` 将直接父级标记为 `Layout`，并将更高祖先标记为
+  `SubtreeLayout`。只有直接父级需要重新布局，更高祖先的标记仅用于让调度进入对应子树；
+- `doArrange()` 消费这两个布局标记并统一调度 `arrange()`，不增加独立的
+  `reflowRequested` 状态字段；
+- 绘制脏标记及具体布局容器仍由后续阶段实现。
 
 ## 4 Widget 契约
 
@@ -172,6 +178,8 @@ open spec Widget {
   var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
+  func requestReflow(): void;
+  func doArrange(manager: ViewManager): void;
   func arrange(manager: ViewManager): void;
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
@@ -193,6 +201,9 @@ open spec Widget {
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `drawFrame` 是 `@value` 绘制快照，由 `draw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
+- `requestReflow()` 只让直接父级进入 `Layout`，更高祖先只进入
+  `SubtreeLayout`；根组件调用时静默返回；
+- `doArrange()` 是框架布局调度入口，ViewManager 和容器通过它进入组件布局；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
 - 键盘和鼠标处理使用不可重新绑定的多播事件字段，监听器通过 `on()`/`off()` 管理；
@@ -260,7 +271,8 @@ open type Container: ContainerWidget {
 
 ```text
 arrange 阶段
-  Widget.arrange(manager)
+  Widget.doArrange(manager)
+    -> Widget.arrange(manager)
   将 WidgetStyle 解析为 WidgetFrame
 
 draw 阶段
@@ -269,7 +281,19 @@ draw 阶段
   缓存 drawFrame 并登记到 ViewManager.sequence
 ```
 
-`ViewManager.arrange()` 和 `ViewManager.draw()` 只调用 root。每个组件自行决定是否、何时以及按什么顺序调用 children 的 `arrange()` 和 `draw()`；例如虚拟滚动容器可以只绘制当前可见的子组件。
+`ViewManager.arrange()` 只调用 `root.doArrange()`，`ViewManager.draw()` 只调用 root 的
+`draw()`。每个组件自行决定是否、何时以及按什么顺序调用 children 的
+`doArrange()` 和 `draw()`；例如虚拟滚动容器可以只布局和绘制当前可见的子组件。
+
+`doArrange()` 在 `Layout` 和 `SubtreeLayout` 都不存在时跳过当前子树；否则先移除本轮
+消费的两个标记，再调用一次组件自己的 `arrange()`。如果布局过程中子组件通过
+`requestReflow()` 重新为当前组件添加了 `Layout`，`doArrange()` 继续调用
+`arrange()`，直到当前组件不再请求重排。只重新出现 `SubtreeLayout` 时不重复当前组件，
+本轮自治的 children 布局完成后由 `doArrange()` 一并消费该路径标记。
+
+组件在布局阶段之外修改自身布局输入时，先直接添加 `Layout`，再调用
+`requestReflow()` 通知父级路径。布局阶段内，子组件的最终占位改变时直接调用
+`requestReflow()`；父级重新布局后，只有父级自身占位也改变时才继续向上请求。
 
 `arrange` 和 `draw` 都接收同一个 `ViewManager`。组件通过 manager 获取本轮调度所需的视图上下文。只有实际调用 `draw()` 并执行 sequence 登记的组件才参与本帧鼠标命中。
 
@@ -325,7 +349,12 @@ open type ViewManager {
 
 `ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照；`getScreenBuffer()` 返回当前 Screen 的 back buffer。组件不缓存该 Buffer，避免 Screen resize 后继续使用旧引用。
 
-`root` 默认为 `none`。`arrange()` 在无 root 时不做处理。`draw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空 back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空 `screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff 基准。
+`root` 默认为 `none`。`arrange()` 在无 root 时不做处理，存在 root 时调用
+`root.doArrange()`。`draw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back
+buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空
+back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空
+`screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff
+基准。
 
 `sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。越靠后的组件实际绘制层级越高，容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
 
@@ -467,7 +496,9 @@ std/std/src/tui/widgets/
 11. 已执行全量回归测试 `make test`；
 12. 已完成人工 Review；
 13. 已按 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 实现焦点与键盘路由。
-14. 为 Widget 增加组合式 `DirtyMark` 状态；本步尚未接入脏状态传播和布局调度。
+14. 为 Widget 增加组合式 `DirtyMark` 状态；
+15. 增加 `requestReflow()` 和 `doArrange()`，接入直接父级 Reflow、祖先子树标记、
+    clean 子树跳过及 ViewManager root 调度。
 
 ## 14 Review 关注点
 

@@ -7590,6 +7590,60 @@ static void test_spec_aggregate_field_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kSpecValueFieldReceiverSrc =
+    "module feng.codegen.sfvalue1;\n"
+    "@value\n"
+    "type Counter {\n"
+    "    var value: int;\n"
+    "    func add(amount: int) {\n"
+    "        self.value += amount;\n"
+    "    }\n"
+    "}\n"
+    "spec HasCounter {\n"
+    "    var counter: Counter;\n"
+    "}\n"
+    "type Holder: HasCounter {\n"
+    "    var counter: Counter;\n"
+    "}\n"
+    "func update(box: HasCounter) {\n"
+    "    box.counter.add(1);\n"
+    "    let copied = box.counter;\n"
+    "    box.counter.add(copied.value);\n"
+    "}\n";
+
+/* A composite value field exposed by an object-form spec keeps one witness
+ * slot, but that slot returns the implementing field address so method self
+ * can mutate it in place and ordinary reads can still copy from it. */
+static void test_spec_value_field_receiver_codegen(void) {
+    FengProgram *program = parse_or_die(kSpecValueFieldReceiverSrc,
+                                        "sfvalue1.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "void *(*borrow_counter)(void *_subject)") != NULL);
+    ASSERT(strstr(out.c_source, "__borrow_counter(void *_subject)") != NULL);
+    ASSERT(strstr(out.c_source, ".borrow_counter = &") != NULL);
+    ASSERT(strstr(out.c_source, "witness->borrow_counter(") != NULL);
+    ASSERT(strstr(out.c_source, "get_counter") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericConstrainedAggregateSpecValueSrc =
     "module feng.codegen.gf9;\n"
     "spec Named {\n"
@@ -11303,6 +11357,7 @@ int main(void) {
     test_generic_user_fit_object_spec_coercion_codegen();
     test_generic_constrained_spec_value_codegen();
     test_spec_aggregate_field_codegen();
+    test_spec_value_field_receiver_codegen();
     test_generic_constrained_aggregate_spec_value_codegen();
     test_if_expr_aggregate_result_codegen();
     test_match_expr_aggregate_result_codegen();

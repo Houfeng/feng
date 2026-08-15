@@ -33,6 +33,102 @@ type BorrowedGetterContainerItem: BorrowedGetterContainer {
 }
 
 /**
+ * 验证通过 object-form spec 访问复合值字段时的存储与复制语义。
+ */
+@value
+type SpecValueFieldCounter {
+  var value: int;
+
+  /** 原地增加当前值。 */
+  func add(amount: int) {
+    self.value += amount;
+  }
+}
+
+/**
+ * 声明一个可变复合值实例字段。
+ */
+spec SpecValueFieldHolder {
+  var counter: SpecValueFieldCounter;
+}
+
+/**
+ * 以普通引用 type 实现复合值字段契约。
+ */
+type SpecValueFieldHolderItem: SpecValueFieldHolder {
+  var counter: SpecValueFieldCounter;
+}
+
+/**
+ * 继承复合值字段契约，用于验证父 spec 投影视角。
+ */
+spec ChildSpecValueFieldHolder: SpecValueFieldHolder {}
+
+/**
+ * 实现继承后的复合值字段契约。
+ */
+type ChildSpecValueFieldHolderItem: ChildSpecValueFieldHolder {
+  var counter: SpecValueFieldCounter;
+}
+
+/**
+ * 只读字段仍允许其值类型接收者修改自身状态。
+ */
+spec BoxedSpecValueFieldHolder {
+  let counter: SpecValueFieldCounter;
+}
+
+/**
+ * 值类型进入 object-form spec 视角时由 box 持有独立副本。
+ */
+@value
+type BoxedSpecValueFieldHolderItem: BoxedSpecValueFieldHolder {
+  let counter: SpecValueFieldCounter;
+}
+
+/**
+ * 通过 spec 视角把复合值字段直接作为方法接收者。
+ */
+func addThroughSpec(holder: SpecValueFieldHolder, amount: int) {
+  holder.counter.add(amount);
+}
+
+/**
+ * 由类型参数决定布局的复合值字段。
+ */
+@value
+type GenericSpecValueField<T> {
+  var value: T;
+
+  /** 原地替换当前值。 */
+  func replace(next: T) {
+    self.value = next;
+  }
+}
+
+/**
+ * 验证开放泛型 spec 字段沿用稳定的存储借用 ABI。
+ */
+spec GenericSpecValueFieldHolder<T> {
+  var item: GenericSpecValueField<T>;
+}
+
+/**
+ * 闭合为 string 的泛型 spec 字段普通引用实现。
+ */
+type GenericStringValueFieldHolderItem: GenericSpecValueFieldHolder<string> {
+  var item: GenericSpecValueField<string>;
+}
+
+/**
+ * 在共享泛型函数体中通过 spec 字段调用值类型方法。
+ */
+func replaceThroughGenericSpec<T>(holder: GenericSpecValueFieldHolder<T>,
+                                  next: T) {
+  holder.item.replace(next);
+}
+
+/**
  * 沿父链迭代检查祖先，保持与 TUI View.isAncestor 相同的赋值形态。
  */
 func borrowedGetterIsAncestor(widget: BorrowedGetterWidget,
@@ -100,6 +196,92 @@ open func test_spec_borrowed_getter_assign() {
       }
       assert(!borrowedGetterIsAncestor((BorrowedGetterWidget)parent, leaf),
              "cleared source field no longer exposes the parent");
+    });
+
+    test("mutates a value field in its subject storage through a spec", () {
+      let concrete = SpecValueFieldHolderItem {
+        counter: SpecValueFieldCounter { value: 10 }
+      };
+      let holder: SpecValueFieldHolder = concrete;
+
+      addThroughSpec(holder, 5);
+
+      assert(concrete.counter.value == 15,
+             "spec field method receiver uses the implementing field storage");
+      assert(holder.counter.value == 15,
+             "spec field read observes the same updated storage");
+    });
+
+    test("borrows the value field of a default spec subject", () {
+      let holder: SpecValueFieldHolder;
+
+      holder.counter.add(3);
+
+      assert(holder.counter.value == 3,
+             "default witness exposes its own initialized field storage");
+    });
+
+    test("borrows value field storage through a parent spec projection", () {
+      let concrete = ChildSpecValueFieldHolderItem {
+        counter: SpecValueFieldCounter { value: 30 }
+      };
+      let child: ChildSpecValueFieldHolder = concrete;
+      let parent: SpecValueFieldHolder = child;
+
+      parent.counter.add(4);
+
+      assert(concrete.counter.value == 34,
+             "parent projection keeps the implementing field storage");
+    });
+
+    test("mutates the boxed copy without changing the pre-boxed value", () {
+      let original = BoxedSpecValueFieldHolderItem {
+        counter: SpecValueFieldCounter { value: 40 }
+      };
+      let holder: BoxedSpecValueFieldHolder = original;
+
+      holder.counter.add(6);
+
+      assert(holder.counter.value == 46,
+             "spec field receiver mutates the value stored in its box");
+      assert(original.counter.value == 40,
+             "boxing keeps the original value independent");
+    });
+
+    test("copies a spec value field when assigning it to other bindings", () {
+      let concrete = SpecValueFieldHolderItem {
+        counter: SpecValueFieldCounter { value: 20 }
+      };
+      let holder: SpecValueFieldHolder = concrete;
+      let firstCopy = holder.counter;
+      var mutableCopy = holder.counter;
+
+      addThroughSpec(holder, 2);
+      mutableCopy.add(7);
+
+      assert(holder.counter.value == 22,
+             "mutating the subject after assignment does not change copies");
+      assert(firstCopy.value == 20,
+             "a let binding receives an independent value copy");
+      assert(mutableCopy.value == 27,
+             "mutating a copied var binding does not change the subject field");
+    });
+
+    test("preserves storage and copy semantics for an open generic field", () {
+      let concrete = GenericStringValueFieldHolderItem {
+        item: GenericSpecValueField<string> { value: "before" }
+      };
+      let holder: GenericSpecValueFieldHolder<string> = concrete;
+      let copied = holder.item;
+
+      replaceThroughGenericSpec<string>(holder, "after");
+
+      assert(holder.item.value == "after",
+             "generic spec field method receiver mutates implementing storage");
+      assert(concrete.item.value == "after",
+             "generic implementing type observes the same field storage");
+      assert(copied.value == "before",
+             "generic spec field assignment keeps value-copy semantics");
     });
   });
 }

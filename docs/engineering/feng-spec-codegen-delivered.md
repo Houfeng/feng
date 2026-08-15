@@ -338,6 +338,20 @@ callable-form `spec` 不是对象布局契约，而是函数形状。Phase 2 起
 - 字段读：`recv.witness->get_field(recv.subject)`。
 - 字段写：`recv.witness->set_field(recv.subject, value)`。
 
+当实例字段的稳定 ABI 需要保留复合值存储身份（tuple、`@value type`，以及开放泛型中
+可能闭合为该类值的字段）时，witness 的读取槽位改为
+`borrow_field(recv.subject): void *`。同一个字段不同时保留 `get_field` 和
+`borrow_field`，因此 witness 大小不增加：
+
+- 字段作为方法接收者时，codegen 将 `borrow_field` 返回的地址直接作为值类型方法的
+  隐式 self，方法原地作用于 subject 的实际字段；
+- 字段进入绑定、参数、返回或赋值源等值边界时，从该地址按字段类型执行既有复制规则；
+  trivial 值直接复制，aggregate 值继续走描述符驱动的 retain/assign；
+- 普通非泛型引用类型字段继续使用 `get_field`，不增加运行时分支、witness 槽位或调用
+  开销；开放泛型字段沿用声明侧稳定 ABI，保证跨包二进制分发时 witness 布局一致；
+- `borrow_field` 是生成 C 内部的短期借用，不进入 Feng runtime API，也不允许逃逸为 Feng
+  可见地址。
+
 接收方在调用前必须先 materialize 到一个借用本地（避免对临时值多次取址），与 4b-α 已落地的 `cg_materialize_to_local` 路径一致。
 
 ### 9.3 spec 默认零值 \[4b-β]
