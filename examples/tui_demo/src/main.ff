@@ -14,7 +14,7 @@ import std.tui.view;
  * 拖动示例的根容器：占满 Screen，并按子组件顺序自治布局和绘制。
  */
 type DragSurface: ContainerWidget {
-  ...: Container;
+  ...: Container = Container();
 
   /**
    * 先布局根容器，再布局所有直接子组件。
