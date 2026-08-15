@@ -41,7 +41,7 @@ type DragSurface: ContainerWidget {
   static func draw(surface: ContainerWidget, manager: ViewManager): void {
     View.draw(surface, manager);
     for let child in surface.children {
-      child.draw(manager);
+      child.doDraw(manager);
     }
   }
 }

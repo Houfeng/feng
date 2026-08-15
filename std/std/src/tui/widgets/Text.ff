@@ -432,11 +432,10 @@ open type Text: TextWidget {
   @mixable
   static func draw(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
-    let drawFrame = View.resolveDrawFrame(widget, manager);
+    let drawFrame = widget.drawFrame;
     if drawFrame.width == 0 || drawFrame.height == 0 {
       return;
     }
-    manager.trace(widget, drawFrame);
     let buffer = manager.getScreenBuffer();
     if text.style.backColor match color: RgbColor {
       if color.a != 0 {

@@ -43,7 +43,7 @@ Widget 实现统一测量接口。组件需要的内在尺寸仍由组件自己�
 - VStack/HStack 在 arrange 内排列 children，并根据结果处理自身 Auto 尺寸；
 - 未来其他布局组件可以根据自身需求实现自己的局部布局过程。
 
-ViewManager.arrange 仍只调用 `root.doArrange(manager)`，不遍历组件树，也不理解具体组件
+ViewManager.doArrange 仍只调用 `root.doArrange(manager)`，不遍历组件树，也不理解具体组件
 类型。Stack 通过 `child.doArrange(manager)` 自治调度需要参与布局的 children。
 
 ### 2.2 不修改用户 Style

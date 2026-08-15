@@ -100,8 +100,14 @@ open spec Widget {
   func arrange(manager: ViewManager): void;
 
   /**
-   * 根据 frame 和非尺寸样式绘制当前组件
-   * 需要组件将自身添加到 ViewManager 的 sequence 中，保证绘制顺序正确
+   * 计算并缓存有效绘制区域、登记绘制顺序，再调度 draw。
+   * 仅供 ViewManager 和负责绘制子组件的组件调用。
+   */
+  func doDraw(manager: ViewManager): void;
+
+  /**
+   * 根据已缓存的 drawFrame 和非尺寸样式绘制当前组件。
+   * 容器组件自行决定是否及如何绘制子组件。
    */
   func draw(manager: ViewManager): void;
 

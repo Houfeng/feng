@@ -405,16 +405,30 @@ open type View: Widget {
   }
 
   /**
-   * 使用 frame 和非尺寸样式绘制当前组件的矩形。
-   * 超出 Screen 的部分被裁剪；不绘制文本、边框或子组件。
+   * 计算并缓存当前组件的有效绘制区域，登记绘制顺序后调度 draw。
+   * 空区域不会进入 sequence，也不会调用组件的 draw 实现。
    */
   @mixable
-  static func draw(widget: Widget, manager: ViewManager): void {
+  static func doDraw(widget: Widget, manager: ViewManager): void {
     let frame = View.resolveDrawFrame(widget, manager);
+    widget.drawFrame = frame;
     if frame.width == 0 || frame.height == 0 {
       return;
     }
     manager.trace(widget, frame);
+    widget.draw(manager);
+  }
+
+  /**
+   * 使用已缓存的 drawFrame 和非尺寸样式绘制当前组件的矩形。
+   * 不绘制文本、边框或子组件。
+   */
+  @mixable
+  static func draw(widget: Widget, manager: ViewManager): void {
+    let frame = widget.drawFrame;
+    if frame.width == 0 || frame.height == 0 {
+      return;
+    }
     if widget.style.backColor match color: RgbColor {
       if color.a != 0 {
         manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,

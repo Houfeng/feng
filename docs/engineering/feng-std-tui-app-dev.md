@@ -422,8 +422,8 @@ open func render(): void {
     }
     self.resizeRequested = false;
   }
-  self.view.arrange();
-  self.view.draw();
+  self.view.doArrange();
+  self.view.doDraw();
   // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
   let ansi = self.screen.buildPatchBytes();
   // 直接完整写入 stdout，无需 string → byte[] 转换
@@ -618,7 +618,7 @@ TuiApp.run()
               │     uv_tty_get_winsize → screen.resize(w, h)
               │     screen.clearScreen()
               │     resizeRequested = false
-              ├── view.arrange() → view.draw()
+              ├── view.doArrange() → view.doDraw()
               ├── screen.buildPatchBytes() → byte[]     ← 零转换
               └── writeOutput(ansi) → 循环 c_write 直至完整写出
 

@@ -13,7 +13,7 @@
 TuiApp
   ├─ screen: Screen          # 渲染底座，负责双缓冲与 diff 输出
   ├─ input: InputManager<Widget> # 输入底座，负责终端字节流解析
-  └─ view: ViewManager       # 视图机制层，负责组件树、arrange/draw 调度与事件路由
+  └─ view: ViewManager       # 视图机制层，负责组件树、doArrange/doDraw 调度与事件路由
 ```
 
 `Screen`、`InputManager`、`ViewManager` 不互相替代，也不重复创建。三者均为 `TuiApp` 的成员，分别管理画布、基础输入和视图机制。
@@ -181,6 +181,7 @@ open spec Widget {
   func requestReflow(): void;
   func doArrange(manager: ViewManager): void;
   func arrange(manager: ViewManager): void;
+  func doDraw(manager: ViewManager): void;
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
 
@@ -199,11 +200,12 @@ open spec Widget {
 - `style` 引用不可重新绑定；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
-- `drawFrame` 是 `@value` 绘制快照，由 `draw()` 计算并在登记 sequence 时整体写回；
+- `drawFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `requestReflow()` 只让直接父级进入 `Layout`，更高祖先只进入
   `SubtreeLayout`；根组件调用时静默返回；
 - `doArrange()` 是框架布局调度入口，ViewManager 和容器通过它进入组件布局；
+- `doDraw()` 是框架绘制调度入口，统一处理裁剪、`drawFrame` 缓存和 sequence 登记；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
 - 键盘和鼠标处理使用不可重新绑定的多播事件字段，监听器通过 `on()`/`off()` 管理；
@@ -221,6 +223,7 @@ open type View: Widget {
   var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
 
+  func doDraw(manager: ViewManager): void;
   func arrange(manager: ViewManager): void;
   func draw(manager: ViewManager): void;
   func isAncestor(w: Widget): bool;
@@ -235,7 +238,7 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`；`View.draw()` 使用 `frame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色，并通过 `ViewManager.trace(widget, drawFrame)` 同时缓存有效绘制区域和登记绘制顺序。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`。`View.doDraw()` 计算有效绘制区域，缓存 `drawFrame`，排除空区域并通过 `ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `drawFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
@@ -276,14 +279,16 @@ arrange 阶段
   将 WidgetStyle 解析为 WidgetFrame
 
 draw 阶段
-  Widget.draw(manager)
-  根据 WidgetFrame 和非尺寸样式绘制
-  缓存 drawFrame 并登记到 ViewManager.sequence
+  Widget.doDraw(manager)
+    -> 计算并缓存 drawFrame
+    -> 登记到 ViewManager.sequence
+    -> Widget.draw(manager)
+  根据 drawFrame 和非尺寸样式绘制
 ```
 
-`ViewManager.arrange()` 只调用 `root.doArrange()`，`ViewManager.draw()` 只调用 root 的
-`draw()`。每个组件自行决定是否、何时以及按什么顺序调用 children 的
-`doArrange()` 和 `draw()`；例如虚拟滚动容器可以只布局和绘制当前可见的子组件。
+`ViewManager.doArrange()` 只调用 `root.doArrange()`，`ViewManager.doDraw()` 只调用 root 的
+`doDraw()`。每个组件自行决定是否、何时以及按什么顺序调用 children 的
+`doArrange()` 和 `doDraw()`；例如虚拟滚动容器可以只布局和绘制当前可见的子组件。
 
 `doArrange()` 在 `Layout` 和 `SubtreeLayout` 都不存在时跳过当前子树；否则先移除本轮
 消费的两个标记，再调用一次组件自己的 `arrange()`。如果布局过程中子组件通过
@@ -295,7 +300,7 @@ draw 阶段
 `requestReflow()` 通知父级路径。布局阶段内，子组件的最终占位改变时直接调用
 `requestReflow()`；父级重新布局后，只有父级自身占位也改变时才继续向上请求。
 
-`arrange` 和 `draw` 都接收同一个 `ViewManager`。组件通过 manager 获取本轮调度所需的视图上下文。只有实际调用 `draw()` 并执行 sequence 登记的组件才参与本帧鼠标命中。
+`arrange` 和 `draw` 都接收同一个 `ViewManager`。组件通过 manager 获取本轮调度所需的视图上下文。只有实际进入 `doDraw()`、具有非空有效绘制区域并完成 sequence 登记的组件才参与本帧鼠标命中。
 
 ### 7.1 Normal 与 Relative 排列
 
@@ -324,7 +329,7 @@ draw 阶段
 
 ### 7.3 绘制裁剪
 
-`View.draw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。
+`View.doDraw()` 先查找离自身最近的 `overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
 
 裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `drawFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
 
@@ -342,27 +347,27 @@ open type ViewManager {
   open func getScreenHeight(): u32;
   open func getScreenBuffer(): Buffer;
   open func trace(widget: Widget, drawFrame: WidgetFrame): void;
-  open func arrange(): void;
-  open func draw(): void;
+  open func doArrange(): void;
+  open func doDraw(): void;
 }
 ```
 
 `ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照；`getScreenBuffer()` 返回当前 Screen 的 back buffer。组件不缓存该 Buffer，避免 Screen resize 后继续使用旧引用。
 
-`root` 默认为 `none`。`arrange()` 在无 root 时不做处理，存在 root 时调用
-`root.doArrange()`。`draw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back
+`root` 默认为 `none`。`doArrange()` 在无 root 时不做处理，存在 root 时调用
+`root.doArrange()`。`doDraw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back
 buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空
 back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空
 `screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff
 基准。
 
-`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；组件完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。越靠后的组件实际绘制层级越高，容器对 children 的调用顺序同时决定子组件在 sequence 中的顺序。
+`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；`Widget.doDraw()` 完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。组件自己的 `draw()` 不感知 sequence。越靠后的组件实际绘制层级越高，容器对 children 的 `doDraw()` 调用顺序同时决定子组件在 sequence 中的顺序。
 
 鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `drawFrame` 判断事件坐标；第一个命中的组件即为目标组件。第七阶段不支持透明穿透，因此命中顶层组件后不继续向下查找。
 
 `drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
-当前 `ViewManager` 已提供可选 root 的 arrange/draw 入口、back buffer 访问、sequence
+当前 `ViewManager` 已提供可选 root 的 doArrange/doDraw 入口、back buffer 访问、sequence
 登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由是在
 本阶段基础上的后续扩展，以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
 
@@ -451,7 +456,7 @@ open type TuiApp {
 路由，并通过
 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
-`TuiApp.render()` 处理 resize 后依次调用 `view.arrange()` 和 `view.draw()`，再通过
+`TuiApp.render()` 处理 resize 后依次调用 `view.doArrange()` 和 `view.doDraw()`，再通过
 `Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，
 现有直接绘制 Screen 的代码保持有效。
 
@@ -499,6 +504,8 @@ std/std/src/tui/widgets/
 14. 为 Widget 增加组合式 `DirtyMark` 状态；
 15. 增加 `requestReflow()` 和 `doArrange()`，接入直接父级 Reflow、祖先子树标记、
     clean 子树跳过及 ViewManager root 调度。
+16. 增加 `doDraw()`，统一处理绘制裁剪、`drawFrame` 缓存及 sequence 登记；保持完整帧
+    绘制，不增加 Draw dirty。
 
 ## 14 Review 关注点
 

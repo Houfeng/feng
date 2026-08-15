@@ -538,7 +538,7 @@ open type ViewManager {
    * 从 Root 开始，递归调用每个 Widget 的 arrange 方法，计算每个 Widget 的位置和大小
    * 布局结阶段结束后，所有 widgets 的 frame 都已经计算完成
    */
-  open func arrange() {
+  open func doArrange() {
     if self.root match root: Widget {
       root.doArrange(self);
     }
@@ -549,11 +549,11 @@ open type ViewManager {
    * 从 Root 开始，递归调用每个 Widget 的 draw 方法，绘制每个 Widget
    * 绘制阶段结束后，所有 widgets 都已经绘制完成
    */
-  open func draw() {
+  open func doDraw() {
     self.sequence.clear();
     if self.root match root: Widget {
       self.screen.buffer().clear();
-      root.draw(self);
+      root.doDraw(self);
     }
   }
 

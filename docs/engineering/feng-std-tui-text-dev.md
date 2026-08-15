@@ -151,8 +151,8 @@ Text 对外新增 `content` 和 `textAlign`。`lines` 是 arrange/draw 共享的
 
 Text 不增加面向使用方的自定义 `draw` API。`arrange` 和 `draw` 均为
 `@mixable static` 方法，以 `TextWidget` 为首参契约，并按目标显式优先规则
-替换 View 的对应实现。ViewManager 仍通过 Widget 的 `arrange(manager)`、
-`draw(manager)` 调度 Text；`isAncestor` 等 Text 未覆盖的 Widget 行为继续由
+替换 View 的对应实现。ViewManager 仍通过 Widget 的 `doArrange(manager)`、
+`doDraw(manager)` 调度 Text；`isAncestor` 等 Text 未覆盖的 Widget 行为继续由
 View 自然 mix，Text 不单独重复实现。
 
 Text 不是 ContainerWidget，也不持有子组件。Button 等上层组件需要文本时，将 Text
@@ -239,7 +239,7 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 - Ellipsis 在最后可显示行的 frame 最右侧预留最多三个 Cell 并绘制 ASCII `...`；
   frame 宽度小于 3 时绘制能够容纳的点，宽或高为 0 时不绘制；
 - 省略号的位置由完整 frame 决定，drawFrame 只裁剪，不把省略号移动到外部可见区域内；
-- Text 仍通过 `ViewManager.trace(widget, drawFrame)` 登记绘制区域和命中顺序；
+- Text 由 `Widget.doDraw()` 统一缓存 `drawFrame` 并登记绘制区域和命中顺序；
 - frame 或 drawFrame 任一轴为 0 时不写入 Buffer。
 
 Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方正确：

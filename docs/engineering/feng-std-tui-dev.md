@@ -43,7 +43,7 @@
 
 ### 2.2 视图逻辑层（第 4 层）
 
-- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 arrange/draw 调度接入 `TuiApp.render()`；鼠标逆序命中与冒泡、焦点管理及键盘焦点路由已经实现，分别详见 `docs/engineering/feng-std-tui-view-dev.md` 和 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
+- **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 `doArrange()`/`doDraw()` 调度接入 `TuiApp.render()`；鼠标逆序命中与冒泡、焦点管理及键盘焦点路由已经实现，分别详见 `docs/engineering/feng-std-tui-view-dev.md` 和 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
 - **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
 
 ### 2.3 应用控制层（第 5 层）
@@ -218,7 +218,7 @@
 
 - [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
 - [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制、drawFrame 缓存及 sequence 登记
-- [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、arrange/draw 入口，复用现有 Screen 并接入 `TuiApp.render()`
+- [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、`doArrange()`/`doDraw()` 入口，复用现有 Screen 并接入 `TuiApp.render()`
 - [x] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
 - [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
 - [x] 4.35 全量回归测试：执行 `make test`，确认全部通过
@@ -267,7 +267,7 @@ std/std/src/tui/
   view/                    # std.tui.view：视图契约与管理机制
     Thickness.ff           # 四边间距类型
     Widget.ff              # 布局类型、Widget 与 ContainerWidget
-    ViewManager.ff         # arrange/draw 调度、sequence、鼠标命中与冒泡
+    ViewManager.ff         # doArrange/doDraw 调度、sequence、鼠标命中与冒泡
 
   widgets/                 # std.tui.widgets：组件实现
     View.ff                # Widget 基础实现

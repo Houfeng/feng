@@ -499,8 +499,8 @@ open type TuiApp {
       self.resizeRequested = false;
     }
     // ViewManager 在存在 root 时重新布局并绘制本帧；无 root 时保留现有 Screen 内容
-    self.view.arrange();
-    self.view.draw();
+    self.view.doArrange();
+    self.view.doDraw();
     // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
     let ansi = self.screen.buildPatchBytes();
     // 直接完整写入 stdout，无需 string → byte[] 转换

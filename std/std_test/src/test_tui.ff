@@ -1421,7 +1421,7 @@ func view_arrange_preserves_signed_geometry() {
   check(view.frame.width == 8, "tui/view/arrange-signed-width");
   check(view.frame.height == 5, "tui/view/arrange-signed-height");
 
-  view.draw(manager);
+  view.doDraw(manager);
   check(view.drawFrame.x == 0, "tui/view/draw-clip-negative-x");
   check(view.drawFrame.y == 0, "tui/view/draw-clip-negative-y");
   check(view.drawFrame.width == 5, "tui/view/draw-clip-negative-width");
@@ -1519,22 +1519,55 @@ func view_draw_alpha_background_semantics() {
   view.style.width = 1;
   view.style.height = 1;
   view.arrange(manager);
-  view.draw(manager);
+  view.doDraw(manager);
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/no-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
-  view.draw(manager);
+  view.doDraw(manager);
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/transparent-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0x01, (u8)0x02, (u8)0x03);
-  view.draw(manager);
+  view.doDraw(manager);
   check(buffer.cells[0].value == (u64)0 &&
     buffer.cells[0].backColor() == (u32)0x010203,
     "tui/view/opaque-background-paints-canvas");
+}
+
+/** 验证 doDraw 统一缓存裁剪区域、登记 sequence，并排除不可见组件。 */
+func view_do_draw_tracks_only_visible_frame() {
+  let manager = ViewManager(Screen(3, 1));
+  let view = View();
+  view.style.position = Position.Fixed;
+  view.style.x = -1;
+  view.style.width = 2;
+  view.style.height = 1;
+  var hits = 0;
+  view.mouseDown.on((event: MouseEvent<Widget>) {
+    hits += 1;
+  });
+  manager.root = view;
+
+  manager.doArrange();
+  manager.doDraw();
+  check(view.drawFrame.x == 0 && view.drawFrame.width == 1,
+    "tui/view/do-draw-caches-clipped-frame");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(hits == 1, "tui/view/do-draw-tracks-visible-widget");
+
+  view.style.x = 3;
+  view.dirty.add(DirtyType.Layout);
+  manager.doArrange();
+  manager.doDraw();
+  check(view.drawFrame.width == 0 && view.drawFrame.height == 0,
+    "tui/view/do-draw-caches-empty-frame");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  check(hits == 1, "tui/view/do-draw-skips-empty-widget");
 }
 
 /** 验证 Text 的 Auto 宽高、硬换行、末尾换行和最终尺寸对齐。 */
@@ -1660,7 +1693,7 @@ func text_grapheme_wrap_and_emoji() {
   text.style.width = 2;
   text.content = "AéB";
   text.arrange(manager);
-  text.draw(manager);
+  text.doDraw(manager);
   check(text.frame.height == 2,
     "tui/text/grapheme-wraps-as-unit");
   let combinedBuffer = screen.buffer();
@@ -1677,7 +1710,7 @@ func text_grapheme_wrap_and_emoji() {
   family.style.height = auto;
   family.content = "👨‍👩‍👧‍👦";
   family.arrange(familyManager);
-  family.draw(familyManager);
+  family.doDraw(familyManager);
   check(family.frame.height == 4,
     "tui/text/overwide-grapheme-splits-by-codepoint");
   let familyBuffer = familyScreen.buffer();
@@ -1719,7 +1752,7 @@ func text_horizontal_alignment_and_clipping() {
   let centerWidget: TextWidget = centerText;
   centerWidget.textAlign = TextAlign.Center;
   centerText.arrange(centerManager);
-  centerText.draw(centerManager);
+  centerText.doDraw(centerManager);
 
   let centerBuffer = centerScreen.buffer();
   check(centerBuffer.cells[3].value == (u64)65,
@@ -1742,7 +1775,7 @@ func text_horizontal_alignment_and_clipping() {
   rightText.textAlign = TextAlign.Right;
   rightText.content = "AB\nCDEF\nGHIJKL";
   rightText.arrange(rightManager);
-  rightText.draw(rightManager);
+  rightText.doDraw(rightManager);
 
   let rightBuffer = rightScreen.buffer();
   check(rightBuffer.cells[0].value == (u64)0 &&
@@ -1770,7 +1803,7 @@ func text_overflow_ellipsis() {
   clip.style.height = 1;
   clip.content = "abcdefgh";
   clip.arrange(clipManager);
-  clip.draw(clipManager);
+  clip.doDraw(clipManager);
   let clipBuffer = clipScreen.buffer();
   check(clipBuffer.cells[0].value == (u64)97 &&
     clipBuffer.cells[6].value == (u64)103,
@@ -1785,7 +1818,7 @@ func text_overflow_ellipsis() {
   ellipsis.textOverflow = TextOverflow.Ellipsis;
   ellipsis.content = "abcdefgh";
   ellipsis.arrange(ellipsisManager);
-  ellipsis.draw(ellipsisManager);
+  ellipsis.doDraw(ellipsisManager);
   let ellipsisBuffer = ellipsisScreen.buffer();
   check(ellipsisBuffer.cells[0].value == (u64)97 &&
     ellipsisBuffer.cells[3].value == (u64)100 &&
@@ -1803,7 +1836,7 @@ func text_overflow_ellipsis() {
   multi.textOverflow = TextOverflow.Ellipsis;
   multi.content = "abcdefghij";
   multi.arrange(multiManager);
-  multi.draw(multiManager);
+  multi.doDraw(multiManager);
   let multiBuffer = multiScreen.buffer();
   check(multiBuffer.cells[0].value == (u64)97 &&
     multiBuffer.cells[3].value == (u64)100 &&
@@ -1822,7 +1855,7 @@ func text_overflow_ellipsis() {
   narrow.textOverflow = TextOverflow.Ellipsis;
   narrow.content = "abc";
   narrow.arrange(narrowManager);
-  narrow.draw(narrowManager);
+  narrow.doDraw(narrowManager);
   let narrowBuffer = narrowScreen.buffer();
   check(narrowBuffer.cells[0].value == (u64)46 &&
     narrowBuffer.cells[1].value == (u64)46,
@@ -1837,7 +1870,7 @@ func text_overflow_ellipsis() {
   external.textOverflow = TextOverflow.Ellipsis;
   external.content = "abcdefg";
   external.arrange(externalManager);
-  external.draw(externalManager);
+  external.doDraw(externalManager);
   let externalBuffer = externalScreen.buffer();
   check(externalBuffer.cells[0].value == (u64)97 &&
     externalBuffer.cells[1].value == (u64)98 &&
@@ -1860,8 +1893,8 @@ func text_draw_wrap_unicode_and_hit_target() {
   text.content = "A中😀B\nZ";
   manager.root = text;
 
-  manager.arrange();
-  manager.draw();
+  manager.doArrange();
+  manager.doDraw();
   let buffer = screen.buffer();
   check(buffer.cells[1].value == (u64)65,
     "tui/text/draw-first-ascii");
@@ -1911,7 +1944,7 @@ func text_draw_background_semantics() {
   text.style.foreColor = RgbColor(0xAA, 0xBB, 0xCC);
   text.content = "A";
   text.arrange(manager);
-  text.draw(manager);
+  text.doDraw(manager);
 
   check(buffer.cells[0].value == (u64)65,
     "tui/text/none-bg-writes-glyph");
@@ -1927,7 +1960,7 @@ func text_draw_background_semantics() {
   text.style.backColor = RgbColor(0x04, 0x05, 0x06);
   text.content = "B";
   text.arrange(manager);
-  text.draw(manager);
+  text.doDraw(manager);
   check(buffer.cells[0].value == (u64)66 &&
     buffer.cells[0].backColor() == (u32)0x040506,
     "tui/text/explicit-bg-glyph-cell");
@@ -1948,7 +1981,7 @@ func text_draw_clipping_preserves_content_origin() {
   text.style.height = 3;
   text.content = "abcdefghi";
   text.arrange(manager);
-  text.draw(manager);
+  text.doDraw(manager);
 
   let buffer = screen.buffer();
   check(text.drawFrame.x == 0 && text.drawFrame.y == 0 &&
@@ -1974,7 +2007,7 @@ func text_draw_clipping_preserves_content_origin() {
   child.content = "abcdefgh";
   parent.addChild(child);
   child.arrange(hiddenManager);
-  child.draw(hiddenManager);
+  child.doDraw(hiddenManager);
 
   let hiddenBuffer = hiddenScreen.buffer();
   check(child.drawFrame.x == 1 && child.drawFrame.y == 0 &&
@@ -3099,6 +3132,7 @@ open func run_tui_tests() {
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });
     test("view_auto_size_semantics()", () { view_auto_size_semantics(); });
     test("view_draw_alpha_background_semantics()", () { view_draw_alpha_background_semantics(); });
+    test("view_do_draw_tracks_only_visible_frame()", () { view_do_draw_tracks_only_visible_frame(); });
     test("text_auto_measure_and_alignment()", () { text_auto_measure_and_alignment(); });
     test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
     test("text_grapheme_wrap_and_emoji()", () { text_grapheme_wrap_and_emoji(); });
