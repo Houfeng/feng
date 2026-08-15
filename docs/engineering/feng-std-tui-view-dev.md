@@ -95,6 +95,15 @@ open type WidgetStyle {
 
 `foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
 
+#### 3.2.1 StylePatch
+
+`StylePatch` 是稀疏样式覆盖，只记录明确设置的字段，不改变用户声明的
+`Style`。后续 Pseudo 样式和布局强制样式共用该表示；本步只定义数据结构，
+不接入样式合成或布局逻辑。
+
+`StylePatch` 与 `Style` 保持同一组字段，每个字段均使用
+`Option<T>` 表示是否参与本层覆盖；`none` 表示不覆盖该字段。
+
 ### 3.3 Thickness
 
 `Thickness` 表示矩形四边的间距，供 `padding`、`margin` 及后续边框使用：

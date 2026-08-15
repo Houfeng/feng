@@ -1,0 +1,46 @@
+open module std.tui.view;
+
+import std;
+import std.tui.common;
+
+/**
+ * StylePatch 保存一层稀疏样式覆盖。
+ * 字段为 None 时不覆盖；后续由 Pseudo 和框架布局覆盖共用。
+ */
+open type StylePatch {
+  /** 组件定位方式覆盖。 */
+  var position: Option<Position>;
+
+  /** X 坐标覆盖。 */
+  var x: Option<Union<int, double>>;
+
+  /** Y 坐标覆盖。 */
+  var y: Option<Union<int, double>>;
+
+  /** 宽度覆盖。 */
+  var width: Option<Union<Auto, int, double>>;
+
+  /** 高度覆盖。 */
+  var height: Option<Union<Auto, int, double>>;
+
+  /** 前景色覆盖。 */
+  var foreColor: Option<RgbColor>;
+
+  /** 背景色覆盖。 */
+  var backColor: Option<RgbColor>;
+
+  /** 填充间距覆盖。 */
+  var padding: Option<Thickness>;
+
+  /** 外边距覆盖。 */
+  var margin: Option<Thickness>;
+
+  /** 溢出处理方式覆盖。 */
+  var overflow: Option<Overflow>;
+
+  /** 水平对齐方式覆盖。 */
+  var horizontalAlign: Option<Align>;
+
+  /** 垂直对齐方式覆盖。 */
+  var verticalAlign: Option<Align>;
+}
