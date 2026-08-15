@@ -1355,6 +1355,56 @@ func mouse_event_prevent_default_is_independent() {
   check(event.isPrevented(), "tui/mouse/stop-keeps-prevented");
 }
 
+/** 验证 DirtyMark 的空构造、组合构造和查询。 */
+func dirty_mark_construction_and_query() {
+  let empty = DirtyMark();
+  check(empty.isEmpty(), "tui/dirty/empty-constructor");
+  check(empty.has(DirtyType.Layout) == false &&
+    empty.has(DirtyType.SubtreeLayout) == false,
+    "tui/dirty/empty-has-no-marks");
+
+  let combined = DirtyMark(
+    DirtyType.Layout,
+    DirtyType.SubtreeLayout,
+    DirtyType.Layout
+  );
+  check(combined.isEmpty() == false, "tui/dirty/combined-not-empty");
+  check(combined.has(DirtyType.Layout), "tui/dirty/combined-layout");
+  check(combined.has(DirtyType.SubtreeLayout),
+    "tui/dirty/combined-subtree-layout");
+}
+
+/** 验证 DirtyMark 的添加、移除、清空和独立值语义。 */
+func dirty_mark_mutation_and_value_copy() {
+  let original = DirtyMark(DirtyType.Layout);
+  let copied = original;
+  copied.add(DirtyType.SubtreeLayout);
+  copied.add(DirtyType.SubtreeLayout);
+  check(original.has(DirtyType.Layout) &&
+    original.has(DirtyType.SubtreeLayout) == false,
+    "tui/dirty/value-copy-independent");
+  check(copied.has(DirtyType.Layout) &&
+    copied.has(DirtyType.SubtreeLayout),
+    "tui/dirty/add-idempotent");
+
+  copied.remove(DirtyType.Layout);
+  copied.remove(DirtyType.Layout);
+  check(copied.has(DirtyType.Layout) == false &&
+    copied.has(DirtyType.SubtreeLayout),
+    "tui/dirty/remove-idempotent");
+  copied.clear();
+  check(copied.isEmpty(), "tui/dirty/clear");
+}
+
+/** 验证基础 View 初始需要布局自身及其子树。 */
+func view_dirty_initial_state() {
+  let view = View();
+  check(view.dirty.has(DirtyType.Layout),
+    "tui/view/dirty-initial-layout");
+  check(view.dirty.has(DirtyType.SubtreeLayout),
+    "tui/view/dirty-initial-subtree-layout");
+}
+
 func view_arrange_preserves_signed_geometry() {
   let screen = Screen(20, 10);
   let manager = ViewManager(screen);
@@ -3041,6 +3091,9 @@ open func run_tui_tests() {
     test("mouse_event_target_stop_and_lock()", () { mouse_event_target_stop_and_lock(); });
     test("mouse_event_allows_window_outside_coordinates()", () { mouse_event_allows_window_outside_coordinates(); });
     test("mouse_event_prevent_default_is_independent()", () { mouse_event_prevent_default_is_independent(); });
+    test("dirty_mark_construction_and_query()", () { dirty_mark_construction_and_query(); });
+    test("dirty_mark_mutation_and_value_copy()", () { dirty_mark_mutation_and_value_copy(); });
+    test("view_dirty_initial_state()", () { view_dirty_initial_state(); });
     test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });

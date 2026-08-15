@@ -1,0 +1,59 @@
+open module std.tui.view;
+
+/** Widget 可组合的失效状态类型。 */
+open enum DirtyType {
+  /** 当前 Widget 需要重新布局。 */
+  Layout = 1,
+
+  /** 当前 Widget 的子树中存在需要重新布局的组件。 */
+  SubtreeLayout = 2
+}
+
+/**
+ * 使用一个整数按位保存多个 DirtyType。
+ * 公开操作始终接受 DirtyType，不暴露内部整数编码。
+ */
+@value
+open type DirtyMark {
+  /** 当前组合状态的内部位值。 */
+  seal var value: int = 0;
+
+  /** 创建一个不包含任何状态的标记。 */
+  open func DirtyMark() {
+    self.value = 0;
+  }
+
+  /** 创建一个包含一个或多个状态的标记。 */
+  open func DirtyMark(first: DirtyType, rest: DirtyType...) {
+    self.value = (int)first;
+    for let dirtyType in rest {
+      self.add(dirtyType);
+    }
+  }
+
+  /** 判断是否包含指定状态。 */
+  open func has(dirtyType: DirtyType): bool {
+    let mask = (int)dirtyType;
+    return (self.value & mask) == mask;
+  }
+
+  /** 添加指定状态；已经存在时保持不变。 */
+  open func add(dirtyType: DirtyType): void {
+    self.value |= (int)dirtyType;
+  }
+
+  /** 移除指定状态；不存在时保持不变。 */
+  open func remove(dirtyType: DirtyType): void {
+    self.value &= ~(int)dirtyType;
+  }
+
+  /** 移除全部状态。 */
+  open func clear(): void {
+    self.value = 0;
+  }
+
+  /** 判断当前是否不包含任何状态。 */
+  open func isEmpty(): bool {
+    return self.value == 0;
+  }
+}

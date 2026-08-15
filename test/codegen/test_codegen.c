@@ -9382,6 +9382,96 @@ static void test_variadic_fixed_prefix_codegen(void) {
     feng_program_free(program);
 }
 
+/* Variadic constructor calls use the same normalized array ABI as functions
+ * and methods. Cover reference/value/generic construction, fixed-prefix and
+ * variadic-only forms, prepacked forwarding, and a field initializer. */
+static void test_variadic_constructor_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.variadic_constructor;\n"
+        "type RefValues {\n"
+        "    let values: int[];\n"
+        "    func RefValues(first: int, rest: int...) {\n"
+        "        self.values = rest;\n"
+        "    }\n"
+        "}\n"
+        "@value\n"
+        "type ValueValues {\n"
+        "    let values: int[];\n"
+        "    func ValueValues(first: int, rest: int...) {\n"
+        "        self.values = rest;\n"
+        "    }\n"
+        "}\n"
+        "type OnlyValues {\n"
+        "    let values: int[];\n"
+        "    func OnlyValues(values: int...) {\n"
+        "        self.values = values;\n"
+        "    }\n"
+        "}\n"
+        "type GenericValues<T> {\n"
+        "    let values: T[];\n"
+        "    func GenericValues(first: T, rest: T...) {\n"
+        "        self.values = rest;\n"
+        "    }\n"
+        "}\n"
+        "type Holder {\n"
+        "    let values = ValueValues(1, 2, 3);\n"
+        "}\n"
+        "func run(existing: int[]): int {\n"
+        "    let empty = RefValues(1);\n"
+        "    let multiple = RefValues(1, 2, 3);\n"
+        "    let forwarded = RefValues(1, ...existing);\n"
+        "    let value = ValueValues(1, 2, 3);\n"
+        "    let onlyEmpty = OnlyValues();\n"
+        "    let onlyMultiple = OnlyValues(1, 2, 3);\n"
+        "    let genericEmpty = GenericValues<int>(1);\n"
+        "    let genericForwarded = GenericValues<int>(1, ...existing);\n"
+        "    let holder = Holder();\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program =
+        parse_or_die(kSource, "tests/variadic_constructor.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (variadic constructor): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "__ctor__RefValues") != NULL);
+    ASSERT(strstr(out.c_source, "__ctor__ValueValues") != NULL);
+    ASSERT(strstr(out.c_source, "__ctor__OnlyValues") != NULL);
+    ASSERT(strstr(out.c_source, "GenericValues") != NULL);
+    ASSERT(strstr(out.c_source, "(size_t)0") != NULL);
+    ASSERT(strstr(out.c_source, "(size_t)2") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Explicitly forwarded variadic arrays are passed through without emitting a
  * second feng_array_new call in free, method, static-method, or generic paths. */
 static void test_prepacked_variadic_forwarding_codegen(void) {
@@ -11156,6 +11246,7 @@ int main(void) {
     test_variadic_zero_args_codegen();
     test_variadic_multi_args_codegen();
     test_variadic_fixed_prefix_codegen();
+    test_variadic_constructor_codegen();
     test_prepacked_variadic_forwarding_codegen();
     test_variadic_callable_spec_lambda_codegen();
     test_tuple_value_codegen_core();

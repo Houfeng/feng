@@ -128,6 +128,38 @@ open type WidgetFrame {
 经过祖先和 Screen 裁剪的本帧实际绘制区域写入 `drawFrame`。事件命中只读取
 `drawFrame`，不在事件阶段重新遍历祖先或解析当前样式。
 
+### 3.5 布局脏标记
+
+`DirtyType` 使用独立枚举定义合法的脏状态类型，`DirtyMark` 使用一个内部整数按位保存多个
+状态。Widget 只持有一个 `dirty` 字段；未来增加绘制等其他脏状态时扩展 `DirtyType`，不再
+增加 Widget 字段。
+
+```feng
+open enum DirtyType {
+  Layout = 1,
+  SubtreeLayout = 2
+}
+
+@value
+open type DirtyMark {
+  seal var value: int;
+
+  open func DirtyMark(): void;
+  open func DirtyMark(first: DirtyType, rest: DirtyType...): void;
+  open func has(dirtyType: DirtyType): bool;
+  open func add(dirtyType: DirtyType): void;
+  open func remove(dirtyType: DirtyType): void;
+  open func clear(): void;
+  open func isEmpty(): bool;
+}
+```
+
+- 无参构造创建空标记；变参构造至少接受一个 `DirtyType`，重复项不影响结果；
+- `has`、`add` 和 `remove` 始终接受 `DirtyType`，不向外暴露内部整数编码；
+- `DirtyMark` 是 `@value` 类型，复制后各副本独立修改；
+- `View.dirty` 初始包含 `Layout` 和 `SubtreeLayout`，保证新组件及其初始子树进入后续布局；
+- 本步只定义、存储和操作脏标记，不接入父级传播、布局跳过、绘制脏标记或 Stack。
+
 ## 4 Widget 契约
 
 `Widget` 不是继承基类，而是组件参与视图树的能力契约。组件多态通过 spec 实现，代码复用通过组合实现。
@@ -135,6 +167,7 @@ open type WidgetFrame {
 ```feng
 open spec Widget {
   let style: WidgetStyle;
+  var dirty: DirtyMark;
   var frame: WidgetFrame;
   var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
@@ -156,6 +189,7 @@ open spec Widget {
 其中：
 
 - `style` 引用不可重新绑定；
+- `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `drawFrame` 是 `@value` 绘制快照，由 `draw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
@@ -171,6 +205,7 @@ open spec Widget {
 ```feng
 open type View: Widget {
   let style: WidgetStyle;
+  var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
   var frame: WidgetFrame;
   var drawFrame: WidgetFrame;
   var parent: Option<ContainerWidget>;
@@ -432,6 +467,7 @@ std/std/src/tui/widgets/
 11. 已执行全量回归测试 `make test`；
 12. 已完成人工 Review；
 13. 已按 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 实现焦点与键盘路由。
+14. 为 Widget 增加组合式 `DirtyMark` 状态；本步尚未接入脏状态传播和布局调度。
 
 ## 14 Review 关注点
 

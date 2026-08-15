@@ -16,6 +16,12 @@ open spec Widget {
   let style: Style;
 
   /**
+   * 当前组件的组合脏状态，仅供 TUI 框架维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  var dirty: DirtyMark;
+
+  /**
    * 布局阶段计算后的最终区域信息
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */

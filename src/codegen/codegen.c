@@ -2487,6 +2487,14 @@ static bool cg_emit_constructor_invoke(CG *cg,
                                        const char *self_expr,
                                        const char *owner_descriptor_expr,
                                        FengToken blame);
+static bool cg_emit_variadic_array_arg_from_args(
+    CG *cg,
+    const FengToken *token,
+    FengExpr *const *args,
+    size_t arg_count,
+    size_t fixed_count,
+    const CGType *array_type,
+    ExprResult *out);
 
 /* Emit @value type construction: stack allocation + member initialisers +
  * user constructor invoke.  The result is an owned stack value (not a heap
@@ -17797,6 +17805,8 @@ static bool cg_emit_constructor_invoke(CG *cg,
                                        const char *owner_descriptor_expr,
                                        FengToken blame) {
     Buf args_buf;
+    bool is_variadic;
+    size_t fixed_count;
     bool ok = true;
 
     buf_init(&args_buf);
@@ -17808,16 +17818,20 @@ static bool cg_emit_constructor_invoke(CG *cg,
         }
         return true;
     }
-    if (arg_count != ctor->param_count) {
+    is_variadic = ctor->is_variadic;
+    fixed_count = is_variadic ? ctor->param_count - 1U : ctor->param_count;
+    if ((!is_variadic && arg_count != ctor->param_count) ||
+        (is_variadic && arg_count < fixed_count)) {
         buf_free(&args_buf);
         return cg_fail(cg, blame,
-                       "CE0077", "codegen: wrong argument count for constructor '%s' (expected %zu, got %zu)",
+                       "CE0077", "codegen: wrong argument count for constructor '%s' (expected%s %zu, got %zu)",
                        ctor->feng_name,
-                       ctor->param_count,
+                       is_variadic ? " at least" : "",
+                       fixed_count,
                        arg_count);
     }
 
-    for (size_t i = 0; i < arg_count; ++i) {
+    for (size_t i = 0; i < fixed_count; ++i) {
         ExprResult ar;
         if (!cg_emit_expr_for_expected_type(cg, args[i], ctor->param_types[i], &ar)) {
             ok = false;
@@ -17829,6 +17843,29 @@ static bool cg_emit_constructor_invoke(CG *cg,
         buf_append_cstr(&args_buf, ", ");
         buf_append_cstr(&args_buf, ar.c_expr);
         er_free(&ar);
+    }
+    if (ok && is_variadic) {
+        const CGType *array_type = ctor->param_types[ctor->param_count - 1U];
+        ExprResult variadic_array;
+
+        if (!cg_emit_variadic_array_arg_from_args(
+                cg,
+                &blame,
+                args,
+                arg_count,
+                fixed_count,
+                array_type,
+                &variadic_array)) {
+            ok = false;
+        } else {
+            if (cgtype_is_managed(variadic_array.type) &&
+                variadic_array.owns_ref) {
+                cg_materialize_to_local(cg, &variadic_array, "_t");
+            }
+            buf_append_cstr(&args_buf, ", ");
+            buf_append_cstr(&args_buf, variadic_array.c_expr);
+            er_free(&variadic_array);
+        }
     }
     if (!ok) {
         buf_free(&args_buf);
@@ -21325,20 +21362,44 @@ static bool cg_emit_variadic_array_arg(CG *cg,
                                        size_t fixed_count,
                                        const CGType *array_type,
                                        ExprResult *out) {
-    const FengExpr *last_arg;
-
-    if (call == NULL || call->kind != FENG_EXPR_CALL || array_type == NULL ||
-        array_type->kind != CG_TYPE_ARRAY) {
+    if (call == NULL || call->kind != FENG_EXPR_CALL) {
         return false;
     }
-    last_arg = call->as.call.arg_count > 0U
-                   ? call->as.call.args[call->as.call.arg_count - 1U]
+    return cg_emit_variadic_array_arg_from_args(
+        cg,
+        &call->token,
+        call->as.call.args,
+        call->as.call.arg_count,
+        fixed_count,
+        array_type,
+        out);
+}
+
+/* Produce the normalized array argument from any resolved variadic call
+ * shape, including ordinary functions, methods, callable values and
+ * constructors. */
+static bool cg_emit_variadic_array_arg_from_args(
+    CG *cg,
+    const FengToken *token,
+    FengExpr *const *args,
+    size_t arg_count,
+    size_t fixed_count,
+    const CGType *array_type,
+    ExprResult *out) {
+    const FengExpr *last_arg;
+
+    if (token == NULL || array_type == NULL ||
+        array_type->kind != CG_TYPE_ARRAY || arg_count < fixed_count) {
+        return false;
+    }
+    last_arg = arg_count > 0U
+                   ? args[arg_count - 1U]
                    : NULL;
     if (last_arg != NULL && last_arg->is_prepacked_variadic_arg) {
-        if (call->as.call.arg_count != fixed_count + 1U) {
+        if (arg_count != fixed_count + 1U) {
             return cg_fail(
                 cg,
-                call->token,
+                *token,
                 "CE0123", "codegen: prepacked variadic argument is not at the first variadic position");
         }
         return cg_emit_expr_for_expected_type(cg, last_arg, array_type, out);
@@ -21346,9 +21407,9 @@ static bool cg_emit_variadic_array_arg(CG *cg,
 
     return cg_pack_variadic_args(
         cg,
-        &call->token,
-        call->as.call.args != NULL ? call->as.call.args + fixed_count : NULL,
-        call->as.call.arg_count - fixed_count,
+        token,
+        args != NULL ? args + fixed_count : NULL,
+        arg_count - fixed_count,
         array_type->element,
         out);
 }
