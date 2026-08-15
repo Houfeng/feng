@@ -11988,16 +11988,16 @@ static bool callable_parameters_match_args_for_owner_instance(
             param_type = callable->params[fixed_count].type->as.inner;
         }
 
-        if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
-            param_type = substitute_type_ref_for_owner_instance(context,
-                                                                owner_type_decl,
-                                                                owner_type,
-                                                                param_type);
-            param_type = substitute_type_ref_for_fit_instance(context,
-                                                              fit_decl,
-                                                              owner_type,
-                                                              param_type);
-        }
+        /* Owner and fit substitutions apply equally to fixed parameters, a
+         * prepacked T[] group, and each ordinary variadic element T. */
+        param_type = substitute_type_ref_for_owner_instance(context,
+                                                            owner_type_decl,
+                                                            owner_type,
+                                                            param_type);
+        param_type = substitute_type_ref_for_fit_instance(context,
+                                                          fit_decl,
+                                                          owner_type,
+                                                          param_type);
         param_type = substitute_type_ref_for_explicit_callable_args(
             context,
             callable,

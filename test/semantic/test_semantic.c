@@ -17779,6 +17779,66 @@ static void test_prepacked_variadic_calls_are_semantically_valid(void) {
     feng_program_free(program);
 }
 
+/* Generic owner parameters and method parameters are substituted before
+ * matching each ordinary variadic element in methods and constructors. */
+static void test_generic_owner_variadic_calls_are_semantically_valid(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Values<T> {\n"
+        "    let rest: T[];\n"
+        "    func Values(first: T, rest: T...) { self.rest = rest; }\n"
+        "}\n"
+        "type Relay<T> {\n"
+        "    func ownerValues(values: T...): T[] { return values; }\n"
+        "    func methodValues<U>(values: U...): U[] { return values; }\n"
+        "    func ownerPair(first: T, second: T): T[] {\n"
+        "        return self.ownerValues(first, second);\n"
+        "    }\n"
+        "    func methodPair<U>(first: U, second: U): U[] {\n"
+        "        return self.methodValues<U>(first, second);\n"
+        "    }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let constructed = Values<string>(\"head\", \"a\", \"b\");\n"
+        "    let relay = Relay<int>();\n"
+        "    let owner = relay.ownerValues(1, 2, 3);\n"
+        "    let method = relay.methodValues<string>(\"c\", \"d\");\n"
+        "    let ownerPair = relay.ownerPair(4, 5);\n"
+        "    let methodPair = relay.methodPair<string>(\"e\", \"f\");\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program =
+        parse_program_or_die("generic_owner_variadic_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    bool analyzed = feng_semantic_analyze(programs,
+                                          1U,
+                                          FENG_COMPILE_TARGET_LIB,
+                                          &analysis,
+                                          &errors,
+                                          &error_count);
+    if (!analyzed) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "%s:%u:%u: semantic error: %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].message);
+        }
+    }
+    ASSERT(analyzed);
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* `...expr` cannot target a non-variadic callable. */
 static void test_prepacked_variadic_rejects_non_variadic_target(void) {
     const char *source =
@@ -22935,6 +22995,7 @@ int main(void) {
     test_variadic_rejects_mismatched_element_type();
     test_variadic_rejects_existing_array_argument();
     test_prepacked_variadic_calls_are_semantically_valid();
+    test_generic_owner_variadic_calls_are_semantically_valid();
     test_prepacked_variadic_rejects_non_variadic_target();
     test_prepacked_variadic_rejects_prior_variadic_elements();
     test_prepacked_variadic_rejects_non_array_expression();

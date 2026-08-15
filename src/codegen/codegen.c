@@ -22578,6 +22578,16 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     const FengCallableSignature *sig = um ? &um->member->as.callable : NULL;
     size_t method_tp_count = sig ? sig->type_param_count : 0U;
     size_t arg_count = e->as.call.arg_count;
+    bool method_is_variadic = um != NULL && um->is_variadic;
+    size_t fixed_param_count = method_is_variadic
+                                   ? um->param_count - 1U
+                                   : um->param_count;
+    size_t emitted_arg_count = method_is_variadic
+                                   ? um->param_count
+                                   : arg_count;
+    bool has_prepacked_variadic_arg =
+        method_is_variadic && arg_count > 0U &&
+        e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
     ExprResult *args = NULL;
     CGType **type_args = NULL;
     const UserSpec **constraint_specs = NULL;
@@ -22586,6 +22596,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     char *func_desc_expr = NULL;
     char *dispatch_name = NULL;
     char *shared_type_desc_expr = NULL;
+    CGType *variadic_array_type = NULL;
     CGType *concrete_return = NULL;
     char *ret_cname = NULL;
     char *ret_erased_descriptor_name = NULL;
@@ -22610,12 +22621,15 @@ static bool cg_emit_generic_type_method_call(CG *cg,
             method_tp_count,
             e->as.call.explicit_type_arg_count);
     }
-    if (arg_count != um->param_count) {
+    if ((method_is_variadic && arg_count < fixed_param_count) ||
+        (!method_is_variadic && arg_count != um->param_count)) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "CE0136", "codegen: wrong argument count for generic method '%s' (expected %zu, got %zu)",
+            "CE0136", "codegen: semantic argument-count invariant failed for generic method '%s' "
+            "(expected %s%zu, got %zu)",
             um->feng_name,
-            um->param_count,
+            method_is_variadic ? "at least " : "",
+            fixed_param_count,
             arg_count);
     }
     if (cgtype_is_managed(recv->type) && recv->owns_ref) {
@@ -22643,18 +22657,55 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     args = arg_count ? calloc(arg_count, sizeof *args) : NULL;
     type_args = method_tp_count ? calloc(method_tp_count, sizeof *type_args) : NULL;
     desc_exprs = method_tp_count ? calloc(method_tp_count, sizeof *desc_exprs) : NULL;
-    arg_exprs = arg_count ? calloc(arg_count, sizeof *arg_exprs) : NULL;
-    if ((arg_count && (args == NULL || arg_exprs == NULL)) ||
+    arg_exprs = emitted_arg_count
+                    ? calloc(emitted_arg_count, sizeof *arg_exprs)
+                    : NULL;
+    if ((arg_count > 0U && args == NULL) ||
+        (emitted_arg_count > 0U && arg_exprs == NULL) ||
         (method_tp_count && (type_args == NULL || desc_exprs == NULL))) {
         cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
 
+    if (method_is_variadic) {
+        if (!cg_resolve_selected_callable_type_ref(
+                cg,
+                e,
+                sig,
+                sig->params[sig->param_count - 1U].type,
+                sig->params[sig->param_count - 1U].token,
+                &variadic_array_type)) {
+            ok = false;
+            goto cleanup;
+        }
+        if (variadic_array_type == NULL ||
+            variadic_array_type->kind != CG_TYPE_ARRAY ||
+            variadic_array_type->element == NULL) {
+            cg_fail(cg,
+                    e->token,
+                    "CE0136", "codegen: cannot determine concrete variadic parameter type for generic method '%s'",
+                    um->feng_name);
+            ok = false;
+            goto cleanup;
+        }
+    }
+
     for (size_t i = 0; i < arg_count; ++i) {
+        const CGType *expected_type = NULL;
+
+        if (i < fixed_param_count) {
+            expected_type = um->param_types[i];
+        } else if (method_is_variadic) {
+            expected_type = has_prepacked_variadic_arg
+                                ? variadic_array_type
+                                : variadic_array_type->element;
+        } else {
+            expected_type = um->param_types[i];
+        }
         if (!cg_emit_expr_for_expected_type(cg,
                                             e->as.call.args[i],
-                                            um->param_types[i],
+                                            expected_type,
                                             &args[i])) {
             ok = false;
             goto cleanup;
@@ -22789,7 +22840,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         }
     }
 
-    for (size_t i = 0; i < arg_count; ++i) {
+    for (size_t i = 0; i < fixed_param_count; ++i) {
         bool uses_address_abi =
             cg_shared_generic_param_uses_address(um->param_types[i]);
 
@@ -22803,6 +22854,66 @@ static bool cg_emit_generic_type_method_call(CG *cg,
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
             goto cleanup;
+        }
+    }
+    if (method_is_variadic) {
+        ExprResult variadic_array;
+        bool uses_address_abi = cg_shared_generic_param_uses_address(
+            um->param_types[fixed_param_count]);
+
+        er_init(&variadic_array);
+        if (has_prepacked_variadic_arg) {
+            if (arg_count != fixed_param_count + 1U) {
+                cg_fail(cg,
+                        e->token,
+                        "CE0123", "codegen: prepacked variadic argument is not at the first variadic position");
+                ok = false;
+            } else {
+                variadic_array = args[fixed_param_count];
+                er_init(&args[fixed_param_count]);
+            }
+        } else if (!cg_pack_variadic_expr_results(
+                       cg,
+                       &e->token,
+                       args != NULL ? args + fixed_param_count : NULL,
+                       arg_count - fixed_param_count,
+                       variadic_array_type->element,
+                       &variadic_array)) {
+            ok = false;
+        }
+        if (ok) {
+            arg_exprs[fixed_param_count] =
+                cg_shared_callable_argument_for_type_expr_dup(
+                    cg,
+                    &variadic_array,
+                    um->param_types[fixed_param_count],
+                    uses_address_abi,
+                    "_gma");
+            if (arg_exprs[fixed_param_count] == NULL) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+            }
+        }
+        er_free(&variadic_array);
+        if (!ok) {
+            goto cleanup;
+        }
+    } else {
+        for (size_t i = fixed_param_count; i < arg_count; ++i) {
+            bool uses_address_abi =
+                cg_shared_generic_param_uses_address(um->param_types[i]);
+
+            arg_exprs[i] = cg_shared_callable_argument_for_type_expr_dup(
+                cg,
+                &args[i],
+                um->param_types[i],
+                uses_address_abi,
+                "_gma");
+            if (arg_exprs[i] == NULL) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+                goto cleanup;
+            }
         }
     }
 
@@ -22917,7 +23028,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
     }
-    for (size_t i = 0; i < arg_count; ++i) {
+    for (size_t i = 0; i < emitted_arg_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", arg_exprs[i]);
     }
     if (ret_cname != NULL) {
@@ -23010,13 +23121,14 @@ cleanup:
     }
     free(desc_exprs);
     if (arg_exprs != NULL) {
-        for (size_t i = 0; i < arg_count; ++i) free(arg_exprs[i]);
+        for (size_t i = 0; i < emitted_arg_count; ++i) free(arg_exprs[i]);
     }
     free(arg_exprs);
     free(func_desc_expr);
     free(dispatch_name);
     free(shared_type_desc_expr);
     free((void *)constraint_specs);
+    cgtype_free(variadic_array_type);
     cgtype_free(concrete_return);
     free(ret_erased_descriptor_name);
     free(ret_erased_size_name);
@@ -23077,6 +23189,11 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     const FengTypeMember *member = NULL;
     const FengCallableSignature *sig;
     size_t method_tp_count;
+    size_t arg_count;
+    bool method_is_variadic;
+    size_t fixed_param_count;
+    size_t emitted_arg_count;
+    bool has_prepacked_variadic_arg;
     char *shared_name = NULL;
     CGType **param_types = NULL;
     ExprResult *args = NULL;
@@ -23084,6 +23201,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     const UserSpec **constraint_specs = NULL;
     char **desc_exprs = NULL;
     char **arg_exprs = NULL;
+    CGType *variadic_array_type = NULL;
     CGType *return_type = NULL;
     char *ret_cname = NULL;
     char *ret_erased_descriptor_name = NULL;
@@ -23115,6 +23233,18 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
 
     sig = &member->as.callable;
     method_tp_count = sig->type_param_count;
+    arg_count = e->as.call.arg_count;
+    method_is_variadic = sig->param_count > 0U &&
+                         sig->params[sig->param_count - 1U].is_variadic;
+    fixed_param_count = method_is_variadic
+                            ? sig->param_count - 1U
+                            : sig->param_count;
+    emitted_arg_count = method_is_variadic
+                            ? sig->param_count
+                            : arg_count;
+    has_prepacked_variadic_arg =
+        method_is_variadic && arg_count > 0U &&
+        e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
     if (e->as.call.has_explicit_type_args &&
         e->as.call.explicit_type_arg_count != method_tp_count) {
         er_free(recv);
@@ -23123,31 +23253,62 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             method_tp_count,
             e->as.call.explicit_type_arg_count);
     }
-    if (e->as.call.arg_count != sig->param_count) {
+    if ((method_is_variadic && arg_count < fixed_param_count) ||
+        (!method_is_variadic && arg_count != sig->param_count)) {
         er_free(recv);
         return cg_fail(cg, e->token,
-            "CE0140", "codegen: wrong argument count for method '%.*s' (expected %zu, got %zu)",
+            "CE0140", "codegen: semantic argument-count invariant failed for method '%.*s' "
+            "(expected %s%zu, got %zu)",
             (int)sig->name.length,
             sig->name.data,
-            sig->param_count,
-            e->as.call.arg_count);
+            method_is_variadic ? "at least " : "",
+            fixed_param_count,
+            arg_count);
     }
 
     shared_name = cg_generic_type_method_shared_cname(cg, owner, member);
     param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
-    args = sig->param_count ? calloc(sig->param_count, sizeof *args) : NULL;
+    args = arg_count ? calloc(arg_count, sizeof *args) : NULL;
     type_args = method_tp_count ? calloc(method_tp_count, sizeof *type_args) : NULL;
     desc_exprs = method_tp_count ? calloc(method_tp_count, sizeof *desc_exprs) : NULL;
-    arg_exprs = sig->param_count ? calloc(sig->param_count, sizeof *arg_exprs) : NULL;
+    arg_exprs = emitted_arg_count
+                    ? calloc(emitted_arg_count, sizeof *arg_exprs)
+                    : NULL;
     if (shared_name == NULL ||
-        (sig->param_count > 0U && (param_types == NULL || args == NULL || arg_exprs == NULL)) ||
+        (sig->param_count > 0U && param_types == NULL) ||
+        (arg_count > 0U && args == NULL) ||
+        (emitted_arg_count > 0U && arg_exprs == NULL) ||
         (method_tp_count > 0U && (type_args == NULL || desc_exprs == NULL))) {
         cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         ok = false;
         goto cleanup;
     }
 
-    for (size_t i = 0; i < sig->param_count; ++i) {
+    if (method_is_variadic) {
+        if (!cg_resolve_selected_callable_type_ref(
+                cg,
+                e,
+                sig,
+                sig->params[sig->param_count - 1U].type,
+                sig->params[sig->param_count - 1U].token,
+                &variadic_array_type)) {
+            ok = false;
+            goto cleanup;
+        }
+        if (variadic_array_type == NULL ||
+            variadic_array_type->kind != CG_TYPE_ARRAY ||
+            variadic_array_type->element == NULL) {
+            cg_fail(cg,
+                    e->token,
+                    "CE0140", "codegen: cannot determine concrete variadic parameter type for method '%.*s'",
+                    (int)sig->name.length,
+                    sig->name.data);
+            ok = false;
+            goto cleanup;
+        }
+    }
+
+    for (size_t i = 0; i < arg_count; ++i) {
         if (!cg_emit_expr(cg, e->as.call.args[i], &args[i])) {
             ok = false;
             goto cleanup;
@@ -23172,7 +23333,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
         }
     } else {
         for (size_t i = 0; i < method_tp_count; ++i) {
-            type_args[i] = cg_infer_method_type_arg(sig, i, args, sig->param_count);
+            type_args[i] = cg_infer_method_type_arg(sig, i, args, arg_count);
             if (type_args[i] == NULL) {
                 cg_fail(cg, e->token,
                     "CE0141", "codegen: cannot infer type argument %zu for generic method '%.*s'",
@@ -23218,7 +23379,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
             ok = false;
             goto cleanup;
         }
-        {
+        if (i < fixed_param_count || !method_is_variadic) {
             bool uses_address_abi = false;
 
             if (!cg_shared_method_param_uses_address_abi(
@@ -23232,10 +23393,61 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                 param_types[i],
                 uses_address_abi,
                 "_gsm");
+            if (arg_exprs[i] == NULL) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+                goto cleanup;
+            }
         }
-        if (arg_exprs[i] == NULL) {
-            cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+    }
+
+    if (method_is_variadic) {
+        ExprResult variadic_array;
+        bool uses_address_abi = false;
+
+        er_init(&variadic_array);
+        if (has_prepacked_variadic_arg) {
+            if (arg_count != fixed_param_count + 1U) {
+                cg_fail(cg,
+                        e->token,
+                        "CE0123", "codegen: prepacked variadic argument is not at the first variadic position");
+                ok = false;
+            } else {
+                variadic_array = args[fixed_param_count];
+                er_init(&args[fixed_param_count]);
+            }
+        } else if (!cg_pack_variadic_expr_results(
+                       cg,
+                       &e->token,
+                       args != NULL ? args + fixed_param_count : NULL,
+                       arg_count - fixed_param_count,
+                       variadic_array_type->element,
+                       &variadic_array)) {
             ok = false;
+        }
+        if (ok && !cg_shared_method_param_uses_address_abi(
+                      cg,
+                      owner,
+                      member,
+                      fixed_param_count,
+                      &uses_address_abi)) {
+            ok = false;
+        }
+        if (ok) {
+            arg_exprs[fixed_param_count] =
+                cg_shared_callable_argument_for_type_expr_dup(
+                    cg,
+                    &variadic_array,
+                    param_types[fixed_param_count],
+                    uses_address_abi,
+                    "_gsm");
+            if (arg_exprs[fixed_param_count] == NULL) {
+                cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+                ok = false;
+            }
+        }
+        er_free(&variadic_array);
+        if (!ok) {
             goto cleanup;
         }
     }
@@ -23309,7 +23521,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     for (size_t i = 0; i < method_tp_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", desc_exprs[i]);
     }
-    for (size_t i = 0; i < sig->param_count; ++i) {
+    for (size_t i = 0; i < emitted_arg_count; ++i) {
         buf_append_fmt(cg->cur_body, ", %s", arg_exprs[i]);
     }
     if (ret_cname != NULL) {
@@ -23393,7 +23605,7 @@ cleanup:
         er_free(out);
     }
     if (args != NULL) {
-        for (size_t i = 0; i < sig->param_count; ++i) {
+        for (size_t i = 0; i < arg_count; ++i) {
             er_free(&args[i]);
         }
     }
@@ -23413,7 +23625,7 @@ cleanup:
         }
     }
     if (arg_exprs != NULL) {
-        for (size_t i = 0; i < sig->param_count; ++i) {
+        for (size_t i = 0; i < emitted_arg_count; ++i) {
             free(arg_exprs[i]);
         }
     }
@@ -23423,6 +23635,7 @@ cleanup:
     free((void *)constraint_specs);
     free(desc_exprs);
     free(arg_exprs);
+    cgtype_free(variadic_array_type);
     cgtype_free(return_type);
     free(ret_erased_descriptor_name);
     free(ret_erased_size_name);

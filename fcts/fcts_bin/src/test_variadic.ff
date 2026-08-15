@@ -93,6 +93,29 @@ type GenericVariadicConstructor<T> {
   }
 }
 
+/** 验证宿主级和方法级泛参在普通实例方法的变参位中正确归一化。 */
+type GenericVariadicMethods<T> {
+  /** 返回使用宿主泛参 T 打包的变参数组。 */
+  func ownerValues(values: T...): T[] {
+    return values;
+  }
+
+  /** 返回使用方法泛参 U 打包的变参数组。 */
+  func methodValues<U>(values: U...): U[] {
+    return values;
+  }
+
+  /** 从泛型共享体内以普通实参调用宿主泛参变参方法。 */
+  func ownerPair(first: T, second: T): T[] {
+    return self.ownerValues(first, second);
+  }
+
+  /** 从泛型共享体内以普通实参调用方法泛参变参方法。 */
+  func methodPair<U>(first: U, second: U): U[] {
+    return self.methodValues<U>(first, second);
+  }
+}
+
 /** 值类型变参构造函数，验证与引用类型使用同一调用规则。 */
 @value
 type VariadicValueConstructor {
@@ -168,10 +191,42 @@ open func test_variadic() {
       let empty = GenericVariadicConstructor<int>(1);
       let values: int[] = [3, 4];
       let forwarded = GenericVariadicConstructor<int>(2, ...values);
+      let managed = GenericVariadicConstructor<string>("head", "a", "b");
       assert(empty.first == 1 && empty.rest.length() == 0,
              "generic variadic constructor zero suffix");
       assert(forwarded.first == 2 && forwarded.rest == values,
              "generic variadic constructor prepacked forwarding");
+      assert(managed.first == "head" && managed.rest.length() == 2 &&
+             managed.rest[0] == "a" && managed.rest[1] == "b",
+             "generic variadic constructor managed arguments");
+    });
+
+    test("generic variadic instance method packing and forwarding", () {
+      let methods = GenericVariadicMethods<int>();
+      let ownerEmpty = methods.ownerValues();
+      let ownerPacked = methods.ownerValues(1, 2, 3);
+      let ownerExisting: int[] = [4, 5];
+      let ownerForwarded = methods.ownerValues(...ownerExisting);
+      let methodPacked = methods.methodValues<string>("a", "b");
+      let methodExisting: string[] = ["c", "d"];
+      let methodForwarded = methods.methodValues<string>(...methodExisting);
+      let ownerPair = methods.ownerPair(6, 7);
+      let methodPair = methods.methodPair<string>("e", "f");
+      assert(ownerEmpty.length() == 0 && ownerPacked.length() == 3 &&
+             ownerPacked[0] == 1 && ownerPacked[2] == 3,
+             "generic owner variadic method ordinary packing");
+      assert(ownerForwarded == ownerExisting,
+             "generic owner variadic method prepacked forwarding");
+      assert(methodPacked.length() == 2 && methodPacked[0] == "a" &&
+             methodPacked[1] == "b",
+             "generic method variadic ordinary packing");
+      assert(methodForwarded == methodExisting,
+             "generic method variadic prepacked forwarding");
+      assert(ownerPair.length() == 2 && ownerPair[0] == 6 && ownerPair[1] == 7,
+             "generic owner variadic self call packing");
+      assert(methodPair.length() == 2 && methodPair[0] == "e" &&
+             methodPair[1] == "f",
+             "generic method variadic self call packing");
     });
 
     test("variadic constructor prepacked forwarding", () {

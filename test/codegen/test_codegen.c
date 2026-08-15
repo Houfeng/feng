@@ -9472,6 +9472,89 @@ static void test_variadic_constructor_codegen(void) {
     feng_program_free(program);
 }
 
+/* Generic instance methods normalize variadic arrays in both generic domains:
+ * the owner type parameter T and the method type parameter U. */
+static void test_generic_variadic_instance_method_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_variadic_method;\n"
+        "type Relay<T> {\n"
+        "    func ownerValues(values: T...): T[] {\n"
+        "        return values;\n"
+        "    }\n"
+        "    func methodValues<U>(values: U...): U[] {\n"
+        "        return values;\n"
+        "    }\n"
+        "    func ownerPair(first: T, second: T): T[] {\n"
+        "        return self.ownerValues(first, second);\n"
+        "    }\n"
+        "    func methodPair<U>(first: U, second: U): U[] {\n"
+        "        return self.methodValues<U>(first, second);\n"
+        "    }\n"
+        "}\n"
+        "func run(existing: int[]): int {\n"
+        "    let relay = Relay<int>();\n"
+        "    let ownerEmpty = relay.ownerValues();\n"
+        "    let ownerPacked = relay.ownerValues(1, 2, 3);\n"
+        "    let ownerForwarded = relay.ownerValues(...existing);\n"
+        "    let methodPacked = relay.methodValues<string>(\"a\", \"b\");\n"
+        "    let strings: string[] = [\"c\", \"d\"];\n"
+        "    let methodForwarded = relay.methodValues<string>(...strings);\n"
+        "    let ownerPair = relay.ownerPair(4, 5);\n"
+        "    let methodPair = relay.methodPair<string>(\"e\", \"f\");\n"
+        "    return 0;\n"
+        "}\n";
+    FengProgram *program =
+        parse_or_die(kSource, "tests/generic_variadic_method.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    bool analyzed = feng_semantic_analyze(programs,
+                                          1U,
+                                          FENG_COMPILE_TARGET_LIB,
+                                          &analysis,
+                                          &errors,
+                                          &error_count);
+    if (!analyzed) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "%s:%u:%u: semantic error: %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].message);
+        }
+    }
+    ASSERT(analyzed);
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic variadic method): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "ownerValues") != NULL);
+    ASSERT(strstr(out.c_source, "methodValues") != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_new") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Explicitly forwarded variadic arrays are passed through without emitting a
  * second feng_array_new call in free, method, static-method, or generic paths. */
 static void test_prepacked_variadic_forwarding_codegen(void) {
@@ -11247,6 +11330,7 @@ int main(void) {
     test_variadic_multi_args_codegen();
     test_variadic_fixed_prefix_codegen();
     test_variadic_constructor_codegen();
+    test_generic_variadic_instance_method_codegen();
     test_prepacked_variadic_forwarding_codegen();
     test_variadic_callable_spec_lambda_codegen();
     test_tuple_value_codegen_core();
