@@ -17,16 +17,10 @@ open type VStack: VStackWidget {
   /** 复用 Container 的组件树与 View 基础能力。 */
   ...: Container = Container();
 
-  /** 判断指定 Widget 是否参与普通流。 */
-  seal static func isNormalFlow(widget: Widget): bool {
-    return widget.style.position == Position.Normal ||
-      widget.style.position == Position.Relative;
-  }
-
   /** 判断 VStack 当前是否需要 children 提供 Auto 内在宽度。 */
   seal static func needsIntrinsicWidth(stack: VStackWidget): bool {
     let widget = (Widget)stack;
-    if VStack.isNormalFlow(widget) &&
+    if View.isNormalFlow(widget.style.position) &&
     widget.style.horizontalAlign == Align.Full {
       return false;
     }
@@ -36,7 +30,7 @@ open type VStack: VStackWidget {
   /** 判断 VStack 当前是否需要 children 提供 Auto 内在高度。 */
   seal static func needsIntrinsicHeight(stack: VStackWidget): bool {
     let widget = (Widget)stack;
-    if VStack.isNormalFlow(widget) &&
+    if View.isNormalFlow(widget.style.position) &&
     widget.style.verticalAlign == Align.Full {
       return false;
     }
@@ -107,7 +101,7 @@ open type VStack: VStackWidget {
     var width = 0;
     var height = 0;
     for let child in stack.children {
-      if VStack.isNormalFlow(child) {
+      if View.isNormalFlow(child.style.position) {
         let margin = VStack.resolveMargin(child, content);
         let outerWidth = margin.item4 + child.frame.width + margin.item2;
         let outerHeight = margin.item1 + child.frame.height + margin.item3;
@@ -141,7 +135,8 @@ open type VStack: VStackWidget {
       margin.item4, margin.item2, width);
     frame.y = View.resolveY(widget, reference,
       margin.item1, margin.item3, height);
-    if VStack.isNormalFlow(widget) && widget.parent match parent: ContainerWidget {
+    if View.isNormalFlow(widget.style.position) &&
+    widget.parent match parent: ContainerWidget {
       frame.x = assignedX;
       frame.y = assignedY;
     }
@@ -179,7 +174,7 @@ open type VStack: VStackWidget {
     var intrinsicWidth = 0;
     for let child in stack.children {
       child.dirty.add(DirtyType.Layout);
-      if !VStack.isNormalFlow(child) {
+      if !View.isNormalFlow(child.style.position) {
         child.doArrange(manager);
         continue;
       }

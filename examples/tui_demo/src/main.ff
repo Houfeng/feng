@@ -121,6 +121,38 @@ func main(args: string[]) {
   let surface = DragSurface();
   app.view.root = surface;
 
+  // VStack 使用 Auto 高度，并按加入顺序垂直排列两个直接 Text child。
+  let stack = VStack();
+  stack.style.position = Position.Fixed;
+  stack.style.x = 2;
+  stack.style.y = 2;
+  stack.style.width = 24;
+  stack.style.height = auto;
+  stack.style.horizontalAlign = Align.Start;
+  stack.style.verticalAlign = Align.Start;
+  let stackPadding: int = 1;
+  stack.style.padding = Thickness(stackPadding);
+  stack.style.backColor = RgbColor(40, 40, 40);
+  surface.addChild(stack);
+
+  let stackTitle = Text();
+  stackTitle.content = "VStack";
+  stackTitle.style.width = auto;
+  stackTitle.style.height = auto;
+  stackTitle.style.horizontalAlign = Align.Start;
+  stackTitle.style.verticalAlign = Align.Start;
+  stackTitle.style.foreColor = RgbColor(255, 220, 80);
+  stack.addChild(stackTitle);
+
+  let stackDescription = Text();
+  stackDescription.content = "Direct children layout";
+  stackDescription.style.width = auto;
+  stackDescription.style.height = auto;
+  stackDescription.style.horizontalAlign = Align.Start;
+  stackDescription.style.verticalAlign = Align.Start;
+  stackDescription.style.foreColor = RgbColor(180, 220, 255);
+  stack.addChild(stackDescription);
+
   // 初始居中的蓝色矩形。
   let blueRectangle = View();
   blueRectangle.style.width = 20;

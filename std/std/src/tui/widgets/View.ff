@@ -121,7 +121,7 @@ open type View: Widget {
   /**
    * 判断定位方式是否参与普通流布局。
    */
-  seal static func isNormalFlow(position: Position): bool {
+  open static func isNormalFlow(position: Position): bool {
     return position == Position.Normal || position == Position.Relative;
   }
 
