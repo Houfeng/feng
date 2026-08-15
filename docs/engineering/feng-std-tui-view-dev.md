@@ -106,8 +106,8 @@ open type WidgetStyle {
 
 `Style` 提供 `clear()` 和两个 `apply()` 重载。`clear()` 将实例恢复为默认样式；
 `apply(Style)` 应用完整样式，`apply(StylePatch)` 只应用 Patch 中存在的字段。
-两个 `apply()` 在比较和赋值的同时返回 `StyleApplyResult`，分别记录本次调用是否改变了
-布局字段、绘制字段、两类字段或没有产生变化。
+两个 `apply()` 在比较和赋值的同时返回 `StyleApplyResult`。该 `@value` 类型通过一个
+内部整数按位记录 `StyleChangeType.Layout` 和 `StyleChangeType.Draw`，可同时表达两类变化。
 
 ### 3.3 Thickness
 

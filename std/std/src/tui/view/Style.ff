@@ -52,18 +52,37 @@ open type Auto();
 /** 自动尺寸值。 */
 open let auto: Auto = ();
 
+/** 一次样式应用可能改变的字段类别。 */
+open enum StyleChangeType {
+  /** 布局字段发生变化。 */
+  Layout = 1,
+  /** 绘制字段发生变化。 */
+  Draw = 2
+}
+
 /**
- * StyleApplyResult 表示一次样式应用实际改变的字段类别。
+ * 使用一个整数按位保存一次样式应用实际改变的字段类别。
  */
-open enum StyleApplyResult {
-  /** 没有字段发生变化。 */
-  None,
-  /** 只有布局字段发生变化。 */
-  Layout,
-  /** 只有绘制字段发生变化。 */
-  Draw,
-  /** 布局字段和绘制字段均发生变化。 */
-  LayoutAndDraw
+@value
+open type StyleApplyResult {
+  /** 当前组合结果的内部位值。 */
+  seal var value: int = 0;
+
+  /** 判断是否包含指定变化类别。 */
+  open func has(changeType: StyleChangeType): bool {
+    let mask = (int)changeType;
+    return (self.value & mask) == mask;
+  }
+
+  /** 添加指定变化类别；已经存在时保持不变。 */
+  open func add(changeType: StyleChangeType): void {
+    self.value |= (int)changeType;
+  }
+
+  /** 移除指定变化类别；不存在时保持不变。 */
+  open func remove(changeType: StyleChangeType): void {
+    self.value &= ~(int)changeType;
+  }
 }
 
 /** Style.clear() 复用的零间距，避免清理草稿样式时产生临时对象。 */
@@ -183,54 +202,54 @@ open type Style {
    * @return 本次应用实际改变的字段类别
    */
   open func apply(source: Style): StyleApplyResult {
-    var result = StyleApplyResult.None;
+    var result = StyleApplyResult();
     if self.position != source.position {
       self.position = source.position;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.lengthEquals(self.x, source.x) {
       self.x = source.x;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.lengthEquals(self.y, source.y) {
       self.y = source.y;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.sizeEquals(self.width, source.width) {
       self.width = source.width;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.sizeEquals(self.height, source.height) {
       self.height = source.height;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.colorEquals(self.foreColor, source.foreColor) {
       self.foreColor = source.foreColor;
-      result = Style.markDraw(result);
+      result.add(StyleChangeType.Draw);
     }
     if !Style.colorEquals(self.backColor, source.backColor) {
       self.backColor = source.backColor;
-      result = Style.markDraw(result);
+      result.add(StyleChangeType.Draw);
     }
     if !Style.thicknessEquals(self.padding, source.padding) {
       self.padding = source.padding;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if !Style.thicknessEquals(self.margin, source.margin) {
       self.margin = source.margin;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if self.overflow != source.overflow {
       self.overflow = source.overflow;
-      result = Style.markDraw(result);
+      result.add(StyleChangeType.Draw);
     }
     if self.horizontalAlign != source.horizontalAlign {
       self.horizontalAlign = source.horizontalAlign;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     if self.verticalAlign != source.verticalAlign {
       self.verticalAlign = source.verticalAlign;
-      result = Style.markLayout(result);
+      result.add(StyleChangeType.Layout);
     }
     return result;
   }
@@ -241,100 +260,82 @@ open type Style {
    * @return 本次应用实际改变的字段类别
    */
   open func apply(patch: StylePatch): StyleApplyResult {
-    var result = StyleApplyResult.None;
+    var result = StyleApplyResult();
     if patch.position match value: Position {
       if self.position != value {
         self.position = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.x match value: Union<int, double> {
       if !Style.lengthEquals(self.x, value) {
         self.x = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.y match value: Union<int, double> {
       if !Style.lengthEquals(self.y, value) {
         self.y = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.width match value: Union<Auto, int, double> {
       if !Style.sizeEquals(self.width, value) {
         self.width = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.height match value: Union<Auto, int, double> {
       if !Style.sizeEquals(self.height, value) {
         self.height = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.foreColor match value: RgbColor {
       let color: Option<RgbColor> = value;
       if !Style.colorEquals(self.foreColor, color) {
         self.foreColor = value;
-        result = Style.markDraw(result);
+        result.add(StyleChangeType.Draw);
       }
     }
     if patch.backColor match value: RgbColor {
       let color: Option<RgbColor> = value;
       if !Style.colorEquals(self.backColor, color) {
         self.backColor = value;
-        result = Style.markDraw(result);
+        result.add(StyleChangeType.Draw);
       }
     }
     if patch.padding match value: Thickness {
       if !Style.thicknessEquals(self.padding, value) {
         self.padding = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.margin match value: Thickness {
       if !Style.thicknessEquals(self.margin, value) {
         self.margin = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.overflow match value: Overflow {
       if self.overflow != value {
         self.overflow = value;
-        result = Style.markDraw(result);
+        result.add(StyleChangeType.Draw);
       }
     }
     if patch.horizontalAlign match value: Align {
       if self.horizontalAlign != value {
         self.horizontalAlign = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     if patch.verticalAlign match value: Align {
       if self.verticalAlign != value {
         self.verticalAlign = value;
-        result = Style.markLayout(result);
+        result.add(StyleChangeType.Layout);
       }
     }
     return result;
-  }
-
-  /** 将本次结果标记为包含布局变化。 */
-  seal static func markLayout(result: StyleApplyResult): StyleApplyResult {
-    return match result {
-      StyleApplyResult.Draw { StyleApplyResult.LayoutAndDraw }
-      StyleApplyResult.LayoutAndDraw { StyleApplyResult.LayoutAndDraw }
-      else { StyleApplyResult.Layout }
-    };
-  }
-
-  /** 将本次结果标记为包含绘制变化。 */
-  seal static func markDraw(result: StyleApplyResult): StyleApplyResult {
-    return match result {
-      StyleApplyResult.Layout { StyleApplyResult.LayoutAndDraw }
-      StyleApplyResult.LayoutAndDraw { StyleApplyResult.LayoutAndDraw }
-      else { StyleApplyResult.Draw }
-    };
   }
 
   /** 比较 double 样式值，并将两个 NaN 视为相同的无效值。 */
