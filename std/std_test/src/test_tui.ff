@@ -1405,6 +1405,40 @@ func view_dirty_initial_state() {
     "tui/view/dirty-initial-subtree-layout");
 }
 
+/** 验证正式样式阶段强制 Root 铺满 Screen，且不修改用户 Style。 */
+func view_manager_styling_forces_root_frame() {
+  let manager = ViewManager(Screen(7, 4));
+  let root = View();
+  root.style.position = Position.Absolute;
+  root.style.x = 2;
+  root.style.y = 1;
+  root.style.width = 3;
+  root.style.height = 2;
+  let margin: int = 1;
+  root.style.margin = Thickness(margin);
+  manager.root = root;
+
+  manager.doStyling();
+  manager.doArrange();
+  check(root.frame.x == 0 && root.frame.y == 0 &&
+    root.frame.width == 7 && root.frame.height == 4,
+    "tui/view-manager/root-fills-screen");
+  check(root.style.position == Position.Absolute,
+    "tui/view-manager/root-user-style-unchanged");
+}
+
+/** 按生产阶段顺序合并样式后直接调用组件布局实现。 */
+func arrangeStyledWidget(widget: Widget, manager: ViewManager): void {
+  widget.doStyling(manager);
+  widget.arrange(manager);
+}
+
+/** 合并样式后直接调用组件绘制调度。 */
+func drawStyledWidget(widget: Widget, manager: ViewManager): void {
+  widget.doStyling(manager);
+  widget.doDraw(manager);
+}
+
 func view_arrange_preserves_signed_geometry() {
   let screen = Screen(20, 10);
   let manager = ViewManager(screen);
@@ -1415,13 +1449,13 @@ func view_arrange_preserves_signed_geometry() {
   view.style.width = 8;
   view.style.height = 5;
 
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.x == -3, "tui/view/arrange-negative-x");
   check(view.frame.y == -2, "tui/view/arrange-negative-y");
   check(view.frame.width == 8, "tui/view/arrange-signed-width");
   check(view.frame.height == 5, "tui/view/arrange-signed-height");
 
-  view.doDraw(manager);
+  drawStyledWidget(view, manager);
   check(view.drawFrame.x == 0, "tui/view/draw-clip-negative-x");
   check(view.drawFrame.y == 0, "tui/view/draw-clip-negative-y");
   check(view.drawFrame.width == 5, "tui/view/draw-clip-negative-width");
@@ -1440,7 +1474,7 @@ func view_arrange_preserves_negative_percentage_offsets() {
   view.style.width = -8;
   view.style.height = negativeHalf;
 
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.x == -5, "tui/view/arrange-negative-percent-x");
   check(view.frame.y == -5, "tui/view/arrange-negative-percent-y");
   check(view.frame.width == 0, "tui/view/arrange-negative-width-zero");
@@ -1456,7 +1490,7 @@ func view_arrange_oversized_alignment_keeps_negative_origin() {
   view.style.horizontalAlign = Align.Center;
   view.style.verticalAlign = Align.Center;
 
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.x == -5, "tui/view/arrange-oversized-center-x");
   check(view.frame.y == -5, "tui/view/arrange-oversized-center-y");
   check(view.frame.width == 30, "tui/view/arrange-oversized-width");
@@ -1477,20 +1511,20 @@ func view_auto_size_semantics() {
   }
   check(widthIsAuto && heightIsAuto, "tui/view/auto-default-branches");
 
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.width == 20 && view.frame.height == 10,
     "tui/view/auto-full-precedence");
 
   view.style.horizontalAlign = Align.Start;
   view.style.verticalAlign = Align.Start;
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.width == 0 && view.frame.height == 0,
     "tui/view/auto-zero-intrinsic-size");
 
   let half: double = 0.5;
   view.style.width = 6;
   view.style.height = half;
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.width == 6 && view.frame.height == 5,
     "tui/view/auto-keeps-fixed-percent");
 
@@ -1499,7 +1533,7 @@ func view_auto_size_semantics() {
   view.style.y = 3;
   view.style.width = auto;
   view.style.height = auto;
-  view.arrange(manager);
+  arrangeStyledWidget(view, manager);
   check(view.frame.x == 2 && view.frame.y == 3 &&
     view.frame.width == 0 && view.frame.height == 0,
     "tui/view/auto-absolute-zero-intrinsic");
@@ -1518,20 +1552,20 @@ func view_draw_alpha_background_semantics() {
   view.style.position = Position.Absolute;
   view.style.width = 1;
   view.style.height = 1;
-  view.arrange(manager);
-  view.doDraw(manager);
+  arrangeStyledWidget(view, manager);
+  drawStyledWidget(view, manager);
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/no-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
-  view.doDraw(manager);
+  drawStyledWidget(view, manager);
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/transparent-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0x01, (u8)0x02, (u8)0x03);
-  view.doDraw(manager);
+  drawStyledWidget(view, manager);
   check(buffer.cells[0].value == (u64)0 &&
     buffer.cells[0].backColor() == (u32)0x010203,
     "tui/view/opaque-background-paints-canvas");
@@ -1551,6 +1585,7 @@ func view_do_draw_tracks_only_visible_frame() {
   });
   manager.root = view;
 
+  view.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
   check(view.drawFrame.x == 0 && view.drawFrame.width == 1,
@@ -1561,6 +1596,7 @@ func view_do_draw_tracks_only_visible_frame() {
 
   view.style.x = 3;
   view.dirty.add(DirtyType.Layout);
+  view.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
   check(view.drawFrame.width == 0 && view.drawFrame.height == 0,
@@ -1603,6 +1639,7 @@ func vstack_arranges_direct_children() {
   stack.addChild(first);
   stack.addChild(second);
   manager.root = stack;
+  stack.doStyling(manager);
   manager.doArrange();
 
   check(stack.frame.x == 2 && stack.frame.y == 1 &&
@@ -1656,6 +1693,7 @@ func vstack_auto_size_from_children() {
   stack.addChild(second);
   manager.root = stack;
 
+  stack.doStyling(manager);
   manager.doArrange();
   check(stack.frame.x == 3 && stack.frame.y == 2 &&
     stack.frame.width == 8 && stack.frame.height == 7,
@@ -1669,6 +1707,7 @@ func vstack_auto_size_from_children() {
   first.style.height = 4;
   first.dirty.add(DirtyType.Layout);
   first.requestReflow();
+  stack.doStyling(manager);
   manager.doArrange();
   check(stack.frame.width == 8 && stack.frame.height == 9,
     "tui/vstack/auto-reflow-frame");
@@ -1713,6 +1752,7 @@ func vstack_percentage_and_cross_axis_alignment() {
   stack.addChild(full);
   stack.addChild(end);
   manager.root = stack;
+  stack.doStyling(manager);
   manager.doArrange();
 
   check(percent.frame.x == 2 && percent.frame.y == 2 &&
@@ -1757,6 +1797,7 @@ func vstack_floating_children_do_not_advance_flow() {
   stack.addChild(second);
   manager.root = stack;
 
+  stack.doStyling(manager);
   manager.doArrange();
   check(first.frame.y == 1 && second.frame.y == 3,
     "tui/vstack/floating-does-not-advance");
@@ -1785,6 +1826,7 @@ func vstack_draws_and_hits_direct_children() {
   stack.addChild(child);
   manager.root = stack;
 
+  stack.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
   check(child.drawFrame.x == 0 && child.drawFrame.y == 0 &&
@@ -1805,29 +1847,29 @@ func text_auto_measure_and_alignment() {
   text.style.padding = Thickness(paddingSize);
 
   check(text.content == "", "tui/text/default-empty-content");
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 0 && text.frame.height == 0,
     "tui/text/empty-auto-size");
 
   text.content = "ab\ncde";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 3 && text.frame.height == 2,
     "tui/text/auto-hard-lines");
 
   text.content = "ab\r\nc";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 2 && text.frame.height == 2,
     "tui/text/auto-crlf-lines");
 
   text.content = "ab\n";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 2 && text.frame.height == 2,
     "tui/text/auto-trailing-empty-line");
 
   text.content = "abc";
   text.style.horizontalAlign = Align.Center;
   text.style.verticalAlign = Align.Center;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.x == 8 && text.frame.y == 4,
     "tui/text/auto-center-final-size");
   check(text.frame.width == 3 && text.frame.height == 1,
@@ -1835,19 +1877,19 @@ func text_auto_measure_and_alignment() {
 
   text.style.horizontalAlign = Align.End;
   text.style.verticalAlign = Align.End;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.x == 17 && text.frame.y == 9,
     "tui/text/auto-end-final-size");
 
   text.style.horizontalAlign = Align.Start;
   text.style.verticalAlign = Align.Start;
   text.content = "\n";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 0 && text.frame.height == 0,
     "tui/text/zero-intrinsic-width-has-zero-height");
 
   text.style.width = 2;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 2 && text.frame.height == 2,
     "tui/text/finite-width-preserves-empty-lines");
   check(!text.isAncestor(text),
@@ -1864,35 +1906,35 @@ func text_wrap_and_reflow_dimensions() {
   text.style.height = auto;
   text.content = "abcdefg";
 
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 3 && text.frame.height == 3,
     "tui/text/fixed-width-auto-height");
 
   text.style.width = 4;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 4 && text.frame.height == 2,
     "tui/text/width-change-reflow");
 
   text.content = "xy";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 4 && text.frame.height == 1,
     "tui/text/content-change-reflow");
 
   let half: double = 0.5;
   text.style.width = half;
   text.content = "abcdefghijk";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 5 && text.frame.height == 3,
     "tui/text/percent-width-auto-height");
 
   text.style.width = auto;
   text.style.horizontalAlign = Align.Full;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 10 && text.frame.height == 2,
     "tui/text/full-width-auto-height");
 
   text.style.height = 1;
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 10 && text.frame.height == 1,
     "tui/text/fixed-height-does-not-expand");
 }
@@ -1906,19 +1948,19 @@ func text_grapheme_wrap_and_emoji() {
   text.style.width = auto;
   text.style.height = auto;
   text.content = "😀";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 2 && text.frame.height == 1,
     "tui/text/single-codepoint-emoji-size");
 
   text.content = "👨‍👩‍👧‍👦";
-  text.arrange(manager);
+  arrangeStyledWidget(text, manager);
   check(text.frame.width == 8 && text.frame.height == 1,
     "tui/text/multi-codepoint-grapheme-auto-size");
 
   text.style.width = 2;
   text.content = "AéB";
-  text.arrange(manager);
-  text.doDraw(manager);
+  arrangeStyledWidget(text, manager);
+  drawStyledWidget(text, manager);
   check(text.frame.height == 2,
     "tui/text/grapheme-wraps-as-unit");
   let combinedBuffer = screen.buffer();
@@ -1934,8 +1976,8 @@ func text_grapheme_wrap_and_emoji() {
   family.style.width = 3;
   family.style.height = auto;
   family.content = "👨‍👩‍👧‍👦";
-  family.arrange(familyManager);
-  family.doDraw(familyManager);
+  arrangeStyledWidget(family, familyManager);
+  drawStyledWidget(family, familyManager);
   check(family.frame.height == 4,
     "tui/text/overwide-grapheme-splits-by-codepoint");
   let familyBuffer = familyScreen.buffer();
@@ -1958,7 +2000,7 @@ func text_grapheme_wrap_and_emoji() {
   atomic.style.width = 11;
   atomic.style.height = auto;
   atomic.content = "A👨‍👩‍👧‍👦B";
-  atomic.arrange(atomicManager);
+  arrangeStyledWidget(atomic, atomicManager);
   check(atomic.frame.height == 1,
     "tui/text/fitting-grapheme-is-not-split");
 }
@@ -1976,8 +2018,8 @@ func text_horizontal_alignment_and_clipping() {
   centerText.content = "A\nBCD\nEFGHI";
   let centerWidget: TextWidget = centerText;
   centerWidget.textAlign = TextAlign.Center;
-  centerText.arrange(centerManager);
-  centerText.doDraw(centerManager);
+  arrangeStyledWidget(centerText, centerManager);
+  drawStyledWidget(centerText, centerManager);
 
   let centerBuffer = centerScreen.buffer();
   check(centerBuffer.cells[3].value == (u64)65,
@@ -1999,8 +2041,8 @@ func text_horizontal_alignment_and_clipping() {
   rightText.style.height = 3;
   rightText.textAlign = TextAlign.Right;
   rightText.content = "AB\nCDEF\nGHIJKL";
-  rightText.arrange(rightManager);
-  rightText.doDraw(rightManager);
+  arrangeStyledWidget(rightText, rightManager);
+  drawStyledWidget(rightText, rightManager);
 
   let rightBuffer = rightScreen.buffer();
   check(rightBuffer.cells[0].value == (u64)0 &&
@@ -2027,8 +2069,8 @@ func text_overflow_ellipsis() {
   clip.style.width = 7;
   clip.style.height = 1;
   clip.content = "abcdefgh";
-  clip.arrange(clipManager);
-  clip.doDraw(clipManager);
+  arrangeStyledWidget(clip, clipManager);
+  drawStyledWidget(clip, clipManager);
   let clipBuffer = clipScreen.buffer();
   check(clipBuffer.cells[0].value == (u64)97 &&
     clipBuffer.cells[6].value == (u64)103,
@@ -2042,8 +2084,8 @@ func text_overflow_ellipsis() {
   ellipsis.style.height = 1;
   ellipsis.textOverflow = TextOverflow.Ellipsis;
   ellipsis.content = "abcdefgh";
-  ellipsis.arrange(ellipsisManager);
-  ellipsis.doDraw(ellipsisManager);
+  arrangeStyledWidget(ellipsis, ellipsisManager);
+  drawStyledWidget(ellipsis, ellipsisManager);
   let ellipsisBuffer = ellipsisScreen.buffer();
   check(ellipsisBuffer.cells[0].value == (u64)97 &&
     ellipsisBuffer.cells[3].value == (u64)100 &&
@@ -2060,8 +2102,8 @@ func text_overflow_ellipsis() {
   multi.style.height = 2;
   multi.textOverflow = TextOverflow.Ellipsis;
   multi.content = "abcdefghij";
-  multi.arrange(multiManager);
-  multi.doDraw(multiManager);
+  arrangeStyledWidget(multi, multiManager);
+  drawStyledWidget(multi, multiManager);
   let multiBuffer = multiScreen.buffer();
   check(multiBuffer.cells[0].value == (u64)97 &&
     multiBuffer.cells[3].value == (u64)100 &&
@@ -2079,8 +2121,8 @@ func text_overflow_ellipsis() {
   narrow.style.height = 1;
   narrow.textOverflow = TextOverflow.Ellipsis;
   narrow.content = "abc";
-  narrow.arrange(narrowManager);
-  narrow.doDraw(narrowManager);
+  arrangeStyledWidget(narrow, narrowManager);
+  drawStyledWidget(narrow, narrowManager);
   let narrowBuffer = narrowScreen.buffer();
   check(narrowBuffer.cells[0].value == (u64)46 &&
     narrowBuffer.cells[1].value == (u64)46,
@@ -2094,8 +2136,8 @@ func text_overflow_ellipsis() {
   external.style.height = 1;
   external.textOverflow = TextOverflow.Ellipsis;
   external.content = "abcdefg";
-  external.arrange(externalManager);
-  external.doDraw(externalManager);
+  arrangeStyledWidget(external, externalManager);
+  drawStyledWidget(external, externalManager);
   let externalBuffer = externalScreen.buffer();
   check(externalBuffer.cells[0].value == (u64)97 &&
     externalBuffer.cells[1].value == (u64)98 &&
@@ -2118,6 +2160,7 @@ func text_draw_wrap_unicode_and_hit_target() {
   text.content = "A中😀B\nZ";
   manager.root = text;
 
+  text.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
   let buffer = screen.buffer();
@@ -2168,8 +2211,8 @@ func text_draw_background_semantics() {
   text.style.height = 1;
   text.style.foreColor = RgbColor(0xAA, 0xBB, 0xCC);
   text.content = "A";
-  text.arrange(manager);
-  text.doDraw(manager);
+  arrangeStyledWidget(text, manager);
+  drawStyledWidget(text, manager);
 
   check(buffer.cells[0].value == (u64)65,
     "tui/text/none-bg-writes-glyph");
@@ -2184,8 +2227,8 @@ func text_draw_background_semantics() {
 
   text.style.backColor = RgbColor(0x04, 0x05, 0x06);
   text.content = "B";
-  text.arrange(manager);
-  text.doDraw(manager);
+  arrangeStyledWidget(text, manager);
+  drawStyledWidget(text, manager);
   check(buffer.cells[0].value == (u64)66 &&
     buffer.cells[0].backColor() == (u32)0x040506,
     "tui/text/explicit-bg-glyph-cell");
@@ -2205,8 +2248,8 @@ func text_draw_clipping_preserves_content_origin() {
   text.style.width = 3;
   text.style.height = 3;
   text.content = "abcdefghi";
-  text.arrange(manager);
-  text.doDraw(manager);
+  arrangeStyledWidget(text, manager);
+  drawStyledWidget(text, manager);
 
   let buffer = screen.buffer();
   check(text.drawFrame.x == 0 && text.drawFrame.y == 0 &&
@@ -2231,8 +2274,9 @@ func text_draw_clipping_preserves_content_origin() {
   child.style.height = 2;
   child.content = "abcdefgh";
   parent.addChild(child);
-  child.arrange(hiddenManager);
-  child.doDraw(hiddenManager);
+  parent.doStyling(hiddenManager);
+  arrangeStyledWidget(child, hiddenManager);
+  drawStyledWidget(child, hiddenManager);
 
   let hiddenBuffer = hiddenScreen.buffer();
   check(child.drawFrame.x == 1 && child.drawFrame.y == 0 &&
@@ -3352,6 +3396,7 @@ open func run_tui_tests() {
     test("dirty_mark_construction_and_query()", () { dirty_mark_construction_and_query(); });
     test("dirty_mark_mutation_and_value_copy()", () { dirty_mark_mutation_and_value_copy(); });
     test("view_dirty_initial_state()", () { view_dirty_initial_state(); });
+    test("view_manager_styling_forces_root_frame()", () { view_manager_styling_forces_root_frame(); });
     test("view_arrange_preserves_signed_geometry()", () { view_arrange_preserves_signed_geometry(); });
     test("view_arrange_preserves_negative_percentage_offsets()", () { view_arrange_preserves_negative_percentage_offsets(); });
     test("view_arrange_oversized_alignment_keeps_negative_origin()", () { view_arrange_oversized_alignment_keeps_negative_origin(); });

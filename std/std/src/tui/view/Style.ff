@@ -86,7 +86,8 @@ open type StyleApplyResult {
 }
 
 /** Style.clear() 复用的零间距，避免清理草稿样式时产生临时对象。 */
-let zeroThickness = Thickness(0);
+let zeroThicknessValue: int = 0;
+let zeroThickness = Thickness(zeroThicknessValue);
 
 /**
  * WidgetStyle 组件布局与样式约束
@@ -348,13 +349,16 @@ open type Style {
     right: Union<int, double>): bool {
     return match left {
       leftValue: int {
-        if right match rightValue: int { leftValue == rightValue }
-        else { false }
+        match right {
+          rightValue: int { leftValue == rightValue }
+          else { false }
+        }
       }
       leftValue: double {
-        if right match rightValue: double {
-          Style.doubleEquals(leftValue, rightValue)
-        } else { false }
+        match right {
+          rightValue: double { Style.doubleEquals(leftValue, rightValue) }
+          else { false }
+        }
       }
       else { false }
     };
@@ -366,13 +370,16 @@ open type Style {
     return match left {
       Auto { right match Auto }
       leftValue: int {
-        if right match rightValue: int { leftValue == rightValue }
-        else { false }
+        match right {
+          rightValue: int { leftValue == rightValue }
+          else { false }
+        }
       }
       leftValue: double {
-        if right match rightValue: double {
-          Style.doubleEquals(leftValue, rightValue)
-        } else { false }
+        match right {
+          rightValue: double { Style.doubleEquals(leftValue, rightValue) }
+          else { false }
+        }
       }
       else { false }
     };
@@ -384,12 +391,15 @@ open type Style {
     return match left {
       None { right match None }
       leftValue: RgbColor {
-        if right match rightValue: RgbColor {
-          leftValue.r == rightValue.r &&
-          leftValue.g == rightValue.g &&
-          leftValue.b == rightValue.b &&
-          leftValue.a == rightValue.a
-        } else { false }
+        match right {
+          rightValue: RgbColor {
+            leftValue.r == rightValue.r &&
+            leftValue.g == rightValue.g &&
+            leftValue.b == rightValue.b &&
+            leftValue.a == rightValue.a
+          }
+          else { false }
+        }
       }
       else { false }
     };

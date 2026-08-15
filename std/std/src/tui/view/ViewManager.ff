@@ -541,10 +541,14 @@ open type ViewManager {
     if self.root match root: Widget {
       root.overrideStyle.clear();
       root.overrideStyle.position = Position.Fixed;
-      root.overrideStyle.x = 0;
-      root.overrideStyle.y = 0;
-      root.overrideStyle.width = self.getScreenWidth();
-      root.overrideStyle.height = self.getScreenHeight();
+      let rootX: Union<int, double> = 0;
+      let rootY: Union<int, double> = 0;
+      let rootWidth: Union<Auto, int, double> = self.getScreenWidth();
+      let rootHeight: Union<Auto, int, double> = self.getScreenHeight();
+      root.overrideStyle.x = rootX;
+      root.overrideStyle.y = rootY;
+      root.overrideStyle.width = rootWidth;
+      root.overrideStyle.height = rootHeight;
       root.overrideStyle.margin = zeroThickness;
       root.doStyling(self);
     }
