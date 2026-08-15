@@ -133,6 +133,9 @@ jobs:
         run: scripts/release_ci_environment.sh --platform="${{ matrix.platform }}"
 
       - name: Run full regression
+        env:
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: make test
 
       - name: Create native release component
