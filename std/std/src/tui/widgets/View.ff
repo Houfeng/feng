@@ -17,6 +17,15 @@ open type View: Widget {
    */
   let style: Style;
 
+  /** 当前样式阶段复用的草稿样式，仅供 TUI 框架维护。 */
+  let draftStyle: Style;
+
+  /** 当前已经生效的运行时样式，仅供 TUI 框架维护。 */
+  let rtStyle: Style;
+
+  /** 框架和父布局提供的最高优先级样式覆盖，仅供 TUI 框架维护。 */
+  let overrideStyle: StylePatch;
+
   /**
    * 当前组件的组合脏状态；新组件及其初始子树需要布局
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
@@ -147,6 +156,21 @@ open type View: Widget {
   }
 
   /**
+   * 合并用户样式和框架覆盖，只按最终运行时布局样式变化请求重新布局。
+   */
+  @mixable
+  static func doStyling(widget: Widget, manager: ViewManager): void {
+    widget.draftStyle.clear();
+    widget.draftStyle.apply(widget.style);
+    widget.draftStyle.apply(widget.overrideStyle);
+    let result = widget.rtStyle.apply(widget.draftStyle);
+    if result.has(StyleChangeType.Layout) {
+      widget.dirty.add(DirtyType.Layout);
+      widget.requestReflow();
+    }
+  }
+
+  /**
    * 消费布局脏标记并调度组件自己的 arrange 实现。
    * arrange 期间直接父级收到的 Layout 请求会在本次调用内继续处理。
    */
@@ -200,15 +224,15 @@ open type View: Widget {
     reference.width = manager.getScreenWidth();
     reference.height = manager.getScreenHeight();
 
-    if widget.style.position == Position.Fixed {
+    if widget.rtStyle.position == Position.Fixed {
       return reference;
     }
 
-    if widget.style.position == Position.Absolute {
+    if widget.rtStyle.position == Position.Absolute {
       var current: Option<ContainerWidget> = widget.parent;
       while current match let parent: ContainerWidget {
         let parentWidget = (Widget)parent;
-        if parentWidget.style.position != Position.Normal {
+        if parentWidget.rtStyle.position != Position.Normal {
           return parentWidget.frame;
         }
         current = parentWidget.parent;
@@ -223,8 +247,8 @@ open type View: Widget {
       reference.width = parentWidget.frame.width;
       reference.height = parentWidget.frame.height;
 
-      if View.isNormalFlow(widget.style.position) {
-        let padding = parentWidget.style.padding;
+      if View.isNormalFlow(widget.rtStyle.position) {
+        let padding = parentWidget.rtStyle.padding;
         var top = View.resolveLength(padding.top, reference.height);
         var right = View.resolveLength(padding.right, reference.width);
         var bottom = View.resolveLength(padding.bottom, reference.height);
@@ -249,11 +273,11 @@ open type View: Widget {
   open static func resolveWidth(widget: Widget, referenceWidth: int,
     left: int, right: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
-    if View.isNormalFlow(widget.style.position) &&
-    widget.style.horizontalAlign == Align.Full {
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.horizontalAlign == Align.Full {
       return available;
     }
-    return match widget.style.width {
+    return match widget.rtStyle.width {
       autoValue: Auto { if intrinsic > 0 { intrinsic } else { 0 } }
       fixed: int { if fixed > 0 { fixed } else { 0 } }
       ratio: double {
@@ -270,11 +294,11 @@ open type View: Widget {
   open static func resolveHeight(widget: Widget, referenceHeight: int,
     top: int, bottom: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
-    if View.isNormalFlow(widget.style.position) &&
-    widget.style.verticalAlign == Align.Full {
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.verticalAlign == Align.Full {
       return available;
     }
-    return match widget.style.height {
+    return match widget.rtStyle.height {
       autoValue: Auto { if intrinsic > 0 { intrinsic } else { 0 } }
       fixed: int { if fixed > 0 { fixed } else { 0 } }
       ratio: double {
@@ -291,12 +315,12 @@ open type View: Widget {
   open static func resolveX(widget: Widget, reference: Rect,
     left: int, right: int, width: int): int {
     let marginOrigin = View.addCoordinate(reference.x, left);
-    if View.isNormalFlow(widget.style.position) {
+    if View.isNormalFlow(widget.rtStyle.position) {
       let available = View.resolveAvailableSize(reference.width, left, right);
       return View.resolveAlignedPosition(marginOrigin, available, width,
-      widget.style.horizontalAlign);
+      widget.rtStyle.horizontalAlign);
     }
-    let offset = View.resolveLength(widget.style.x, reference.width);
+    let offset = View.resolveLength(widget.rtStyle.x, reference.width);
     return View.addCoordinate(View.addCoordinate(reference.x, offset), left);
   }
 
@@ -306,12 +330,12 @@ open type View: Widget {
   open static func resolveY(widget: Widget, reference: Rect,
     top: int, bottom: int, height: int): int {
     let marginOrigin = View.addCoordinate(reference.y, top);
-    if View.isNormalFlow(widget.style.position) {
+    if View.isNormalFlow(widget.rtStyle.position) {
       let available = View.resolveAvailableSize(reference.height, top, bottom);
       return View.resolveAlignedPosition(marginOrigin, available, height,
-      widget.style.verticalAlign);
+      widget.rtStyle.verticalAlign);
     }
-    let offset = View.resolveLength(widget.style.y, reference.height);
+    let offset = View.resolveLength(widget.rtStyle.y, reference.height);
     return View.addCoordinate(View.addCoordinate(reference.y, offset), top);
   }
 
@@ -322,7 +346,7 @@ open type View: Widget {
   @mixable
   static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
-    let margin = widget.style.margin;
+    let margin = widget.rtStyle.margin;
     var top = View.resolveLength(margin.top, reference.height);
     var right = View.resolveLength(margin.right, reference.width);
     var bottom = View.resolveLength(margin.bottom, reference.height);
@@ -389,7 +413,7 @@ open type View: Widget {
     var current: Option<ContainerWidget> = widget.parent;
     while current match let parent: ContainerWidget {
       let parentWidget = (Widget)parent;
-      if parentWidget.style.overflow == Overflow.Hidden {
+      if parentWidget.rtStyle.overflow == Overflow.Hidden {
         result = View.intersectFrame(result, parentWidget.frame);
         break;
       }
@@ -429,7 +453,7 @@ open type View: Widget {
     if frame.width == 0 || frame.height == 0 {
       return;
     }
-    if widget.style.backColor match color: RgbColor {
+    if widget.rtStyle.backColor match color: RgbColor {
       if color.a != 0 {
         manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,
           (u32)frame.width, (u32)frame.height, (u64)0,

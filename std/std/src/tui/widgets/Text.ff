@@ -104,12 +104,12 @@ open type Text: TextWidget {
 
   /** 判断当前宽度声明是否需要扫描内在内容宽度。 */
   seal static func needsIntrinsicWidth(text: TextWidget): bool {
-    if (text.style.position == Position.Normal ||
-    text.style.position == Position.Relative) &&
-    text.style.horizontalAlign == Align.Full {
+    if (text.rtStyle.position == Position.Normal ||
+    text.rtStyle.position == Position.Relative) &&
+    text.rtStyle.horizontalAlign == Align.Full {
       return false;
     }
-    if text.style.width match value: Auto {
+    if text.rtStyle.width match value: Auto {
       return true;
     }
     return false;
@@ -321,7 +321,7 @@ open type Text: TextWidget {
           }
           if x >= clipLeft && x + width <= clipRight {
             buffer.draw((u32)x, (u32)y, cellValue,
-              text.style.foreColor, transparent);
+              text.rtStyle.foreColor, transparent);
           }
           column += width;
           cellValue = 0;
@@ -341,7 +341,7 @@ open type Text: TextWidget {
         }
         if x >= clipLeft && x + width <= clipRight {
           buffer.draw((u32)x, (u32)y, cellValue,
-            text.style.foreColor, transparent);
+            text.rtStyle.foreColor, transparent);
         }
         column += width;
       }
@@ -386,7 +386,7 @@ open type Text: TextWidget {
     var x = start;
     while x < end {
       buffer.draw((u32)x, (u32)y, (u64)46,
-        text.style.foreColor, transparent);
+        text.rtStyle.foreColor, transparent);
       x += 1;
     }
   }
@@ -399,7 +399,7 @@ open type Text: TextWidget {
   static func arrange(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
     let reference = View.resolveReferenceFrame(widget, manager);
-    let margin = widget.style.margin;
+    let margin = widget.rtStyle.margin;
     var top = View.resolveLength(margin.top, reference.height);
     var right = View.resolveLength(margin.right, reference.width);
     var bottom = View.resolveLength(margin.bottom, reference.height);
@@ -437,7 +437,7 @@ open type Text: TextWidget {
       return;
     }
     let buffer = manager.getScreenBuffer();
-    if text.style.backColor match color: RgbColor {
+    if text.rtStyle.backColor match color: RgbColor {
       if color.a != 0 {
         buffer.draw((u32)drawFrame.x, (u32)drawFrame.y,
           (u32)drawFrame.width, (u32)drawFrame.height, (u64)0,

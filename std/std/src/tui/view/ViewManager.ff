@@ -534,7 +534,24 @@ open type ViewManager {
   open var root: Option<Widget>;
 
   /**
-   * 第一阶段：布局
+   * 第一阶段：样式合并
+   * Root 由框架强制铺满 Screen，再从 Root 开始合并组件树的运行时样式。
+   */
+  open func doStyling() {
+    if self.root match root: Widget {
+      root.overrideStyle.clear();
+      root.overrideStyle.position = Position.Fixed;
+      root.overrideStyle.x = 0;
+      root.overrideStyle.y = 0;
+      root.overrideStyle.width = self.getScreenWidth();
+      root.overrideStyle.height = self.getScreenHeight();
+      root.overrideStyle.margin = zeroThickness;
+      root.doStyling(self);
+    }
+  }
+
+  /**
+   * 第二阶段：布局
    * 从 Root 开始，递归调用每个 Widget 的 arrange 方法，计算每个 Widget 的位置和大小
    * 布局结阶段结束后，所有 widgets 的 frame 都已经计算完成
    */
@@ -545,7 +562,7 @@ open type ViewManager {
   }
 
   /**
-   * 第二阶段：绘制
+   * 第三阶段：绘制
    * 从 Root 开始，递归调用每个 Widget 的 draw 方法，绘制每个 Widget
    * 绘制阶段结束后，所有 widgets 都已经绘制完成
    */

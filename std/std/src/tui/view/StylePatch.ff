@@ -43,4 +43,20 @@ open type StylePatch {
 
   /** 垂直对齐方式覆盖。 */
   var verticalAlign: Option<Align>;
+
+  /** 清除全部覆盖字段。 */
+  open func clear(): void {
+    self.position = none;
+    self.x = none;
+    self.y = none;
+    self.width = none;
+    self.height = none;
+    self.foreColor = none;
+    self.backColor = none;
+    self.padding = none;
+    self.margin = none;
+    self.overflow = none;
+    self.horizontalAlign = none;
+    self.verticalAlign = none;
+  }
 }

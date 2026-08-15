@@ -20,21 +20,21 @@ open type VStack: VStackWidget {
   /** 判断 VStack 当前是否需要 children 提供 Auto 内在宽度。 */
   seal static func needsIntrinsicWidth(stack: VStackWidget): bool {
     let widget = (Widget)stack;
-    if View.isNormalFlow(widget.style.position) &&
-    widget.style.horizontalAlign == Align.Full {
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.horizontalAlign == Align.Full {
       return false;
     }
-    return widget.style.width match value: Auto;
+    return widget.rtStyle.width match value: Auto;
   }
 
   /** 判断 VStack 当前是否需要 children 提供 Auto 内在高度。 */
   seal static func needsIntrinsicHeight(stack: VStackWidget): bool {
     let widget = (Widget)stack;
-    if View.isNormalFlow(widget.style.position) &&
-    widget.style.verticalAlign == Align.Full {
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.verticalAlign == Align.Full {
       return false;
     }
-    return widget.style.height match value: Auto;
+    return widget.rtStyle.height match value: Auto;
   }
 
   /** 按参照尺寸解析非负间距。 */
@@ -56,7 +56,7 @@ open type VStack: VStackWidget {
   /** 解析 Widget 在指定参照区域中的四侧非负 margin。 */
   seal static func resolveMargin(widget: Widget,
     reference: Rect): Tuple<int, int, int, int> {
-    let margin = widget.style.margin;
+    let margin = widget.rtStyle.margin;
     return (
       VStack.resolveSpacing(margin.top, reference.height),
       VStack.resolveSpacing(margin.right, reference.width),
@@ -67,7 +67,7 @@ open type VStack: VStackWidget {
 
   /** 解析 Widget 在自身 frame 中的四侧非负 padding。 */
   seal static func resolvePadding(widget: Widget): Tuple<int, int, int, int> {
-    let padding = widget.style.padding;
+    let padding = widget.rtStyle.padding;
     return (
       VStack.resolveSpacing(padding.top, widget.frame.height),
       VStack.resolveSpacing(padding.right, widget.frame.width),
@@ -101,7 +101,7 @@ open type VStack: VStackWidget {
     var width = 0;
     var height = 0;
     for let child in stack.children {
-      if View.isNormalFlow(child.style.position) {
+      if View.isNormalFlow(child.rtStyle.position) {
         let margin = VStack.resolveMargin(child, content);
         let outerWidth = margin.item4 + child.frame.width + margin.item2;
         let outerHeight = margin.item1 + child.frame.height + margin.item3;
@@ -135,7 +135,7 @@ open type VStack: VStackWidget {
       margin.item4, margin.item2, width);
     frame.y = View.resolveY(widget, reference,
       margin.item1, margin.item3, height);
-    if View.isNormalFlow(widget.style.position) &&
+    if View.isNormalFlow(widget.rtStyle.position) &&
     widget.parent match parent: ContainerWidget {
       frame.x = assignedX;
       frame.y = assignedY;
@@ -150,7 +150,7 @@ open type VStack: VStackWidget {
     left: int, right: int): int {
     let origin = content.x + left;
     let available = VStack.resolveAvailableSize(content.width, left, right);
-    match child.style.horizontalAlign {
+    match child.rtStyle.horizontalAlign {
       Align.Center {
         return origin + (available - child.frame.width) / 2;
       }
@@ -174,7 +174,7 @@ open type VStack: VStackWidget {
     var intrinsicWidth = 0;
     for let child in stack.children {
       child.dirty.add(DirtyType.Layout);
-      if !View.isNormalFlow(child.style.position) {
+      if !View.isNormalFlow(child.rtStyle.position) {
         child.doArrange(manager);
         continue;
       }

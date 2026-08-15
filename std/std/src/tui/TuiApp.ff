@@ -498,7 +498,8 @@ open type TuiApp {
       }
       self.resizeRequested = false;
     }
-    // ViewManager 在存在 root 时重新布局并绘制本帧；无 root 时保留现有 Screen 内容
+    // ViewManager 在存在 root 时合并样式、重新布局并绘制本帧；无 root 时保留现有 Screen 内容
+    self.view.doStyling();
     self.view.doArrange();
     self.view.doDraw();
     // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节

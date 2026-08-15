@@ -16,6 +16,24 @@ open spec Widget {
   let style: Style;
 
   /**
+   * 当前样式阶段复用的草稿样式，仅供 TUI 框架维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  let draftStyle: Style;
+
+  /**
+   * 当前已经生效的运行时样式，仅供 TUI 框架维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  let rtStyle: Style;
+
+  /**
+   * 框架和父布局提供的最高优先级样式覆盖，仅供 TUI 框架维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  let overrideStyle: StylePatch;
+
+  /**
    * 当前组件的组合脏状态，仅供 TUI 框架维护
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
@@ -86,6 +104,12 @@ open spec Widget {
    * 更高祖先只标记子树布局路径；没有父组件时静默返回。
    */
   func requestReflow(): void;
+
+  /**
+   * 合并本轮有效样式，并根据最终布局样式变化标记布局。
+   * 容器组件自行决定是否及如何处理子组件。
+   */
+  func doStyling(manager: ViewManager): void;
 
   /**
    * 根据布局脏标记调度 arrange。

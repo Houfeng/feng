@@ -22,6 +22,20 @@ open type Container: ContainerWidget {
   let children: List<Widget>;
 
   /**
+   * 合并自身样式，再清理并合并所有直接 children 的样式。
+   * 具体容器可定义自己的同签名 @mixable 方法改变 children 的处理范围和顺序。
+   */
+  @mixable
+  static func doStyling(container: ContainerWidget,
+    manager: ViewManager): void {
+    View.doStyling(container, manager);
+    for let child in container.children {
+      child.overrideStyle.clear();
+      child.doStyling(manager);
+    }
+  }
+
+  /**
    * 添加子组件；已有父容器时先从旧父容器移除
    * 循环关系会在修改组件树前抛出 tui/widget/cycle
    */

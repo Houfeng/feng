@@ -13,7 +13,7 @@
 TuiApp
   ├─ screen: Screen          # 渲染底座，负责双缓冲与 diff 输出
   ├─ input: InputManager<Widget> # 输入底座，负责终端字节流解析
-  └─ view: ViewManager       # 视图机制层，负责组件树、doArrange/doDraw 调度与事件路由
+  └─ view: ViewManager       # 视图机制层，负责组件树、样式/布局/绘制调度与事件路由
 ```
 
 `Screen`、`InputManager`、`ViewManager` 不互相替代，也不重复创建。三者均为 `TuiApp` 的成员，分别管理画布、基础输入和视图机制。
@@ -98,11 +98,11 @@ open type WidgetStyle {
 #### 3.2.1 StylePatch
 
 `StylePatch` 是稀疏样式覆盖，只记录明确设置的字段，不改变用户声明的
-`Style`。后续 Pseudo 样式和布局强制样式共用该表示；本步只定义数据结构，
-不接入样式合成或布局逻辑。
+`Style`。Pseudo 样式和布局强制样式共用该表示，并在 styling 阶段按优先级合并。
 
 `StylePatch` 与 `Style` 保持同一组字段，每个字段均使用
-`Option<T>` 表示是否参与本层覆盖；`none` 表示不覆盖该字段。
+`Option<T>` 表示是否参与本层覆盖；`none` 表示不覆盖该字段。`clear()` 将全部字段恢复为
+`none`，供框架逐轮复用同一个 Patch 对象。
 
 `Style` 提供 `clear()` 和两个 `apply()` 重载。`clear()` 将实例恢复为默认样式；
 `apply(Style)` 应用完整样式，`apply(StylePatch)` 只应用 Patch 中存在的字段。
@@ -186,13 +186,17 @@ open type DirtyMark {
 
 ```feng
 open spec Widget {
-  let style: WidgetStyle;
+  let style: Style;
+  let draftStyle: Style;
+  let rtStyle: Style;
+  let overrideStyle: StylePatch;
   var dirty: DirtyMark;
-  var frame: WidgetFrame;
-  var drawFrame: WidgetFrame;
+  var frame: Rect;
+  var drawFrame: Rect;
   var parent: Option<ContainerWidget>;
 
   func requestReflow(): void;
+  func doStyling(manager: ViewManager): void;
   func doArrange(manager: ViewManager): void;
   func arrange(manager: ViewManager): void;
   func doDraw(manager: ViewManager): void;
@@ -211,13 +215,17 @@ open spec Widget {
 
 其中：
 
-- `style` 引用不可重新绑定；
+- `style` 是引用不可重新绑定的用户样式；
+- `draftStyle` 是每轮完整合并样式时复用的草稿，`rtStyle` 是布局与绘制读取的最终结果；
+- `overrideStyle` 是框架和父布局提供的最高优先级稀疏覆盖；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `drawFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `requestReflow()` 只让直接父级进入 `Layout`，更高祖先只进入
   `SubtreeLayout`；根组件调用时静默返回；
+- `doStyling()` 清理并合并 `draftStyle`，最后通过 `rtStyle.apply(draftStyle)` 的结果决定
+  是否增加 `Layout` 并请求父级 Reflow；
 - `doArrange()` 是框架布局调度入口，ViewManager 和容器通过它进入组件布局；
 - `doDraw()` 是框架绘制调度入口，统一处理裁剪、`drawFrame` 缓存和 sequence 登记；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
@@ -231,12 +239,16 @@ open spec Widget {
 
 ```feng
 open type View: Widget {
-  let style: WidgetStyle;
+  let style: Style;
+  let draftStyle: Style;
+  let rtStyle: Style;
+  let overrideStyle: StylePatch;
   var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
-  var frame: WidgetFrame;
-  var drawFrame: WidgetFrame;
+  var frame: Rect;
+  var drawFrame: Rect;
   var parent: Option<ContainerWidget>;
 
+  func doStyling(manager: ViewManager): void;
   func doDraw(manager: ViewManager): void;
   func arrange(manager: ViewManager): void;
   func draw(manager: ViewManager): void;
@@ -252,7 +264,11 @@ open type View: Widget {
 }
 ```
 
-`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.arrange()` 只根据当前组件的 `style`、祖先组件区域和屏幕尺寸计算自身 `frame`。`View.doDraw()` 计算有效绘制区域，缓存 `drawFrame`，排除空区域并通过 `ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `drawFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
+`View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.doStyling()` 按
+`style`、后续状态 Patch、`overrideStyle` 的顺序生成 `draftStyle`，最后只根据
+`draftStyle -> rtStyle` 的最终变化标记布局。`View.arrange()` 和 `View.draw()` 只读取
+`rtStyle`。`View.doDraw()` 计算有效绘制区域，缓存 `drawFrame`，排除空区域并通过
+`ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `drawFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
@@ -280,13 +296,17 @@ open type Container: ContainerWidget {
 }
 ```
 
-`Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并通过以 `ContainerWidget` 为首参数的 `@mixable` 静态方法实现 `addChild`、`removeChild` 和 `clearChildren`。`Container` 只提供树存储与修改行为，不默认布局或绘制 children。
+`Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并通过以 `ContainerWidget` 为首参数的 `@mixable` 静态方法实现 `addChild`、`removeChild` 和 `clearChildren`。`Container.doStyling()` 默认合并自身，再逐个清理直接 child 的 `overrideStyle` 并调用其 `doStyling()`；具体容器仍可定义同签名 `@mixable` 方法改变处理范围和顺序。`Container` 不默认布局或绘制 children。
 
-## 7 arrange 与 draw
+## 7 styling、arrange 与 draw
 
-每轮渲染分为固定的两个阶段：
+每轮渲染分为固定的三个阶段：
 
 ```text
+styling 阶段
+  Widget.doStyling(manager)
+  style + StylePatch -> draftStyle -> rtStyle
+
 arrange 阶段
   Widget.doArrange(manager)
     -> Widget.arrange(manager)
@@ -300,7 +320,8 @@ draw 阶段
   根据 drawFrame 和非尺寸样式绘制
 ```
 
-`ViewManager.doArrange()` 只调用 `root.doArrange()`，`ViewManager.doDraw()` 只调用 root 的
+`ViewManager.doStyling()` 为 root 写入强制铺满 Screen 的 `overrideStyle`，再调用
+`root.doStyling()`。`ViewManager.doArrange()` 只调用 `root.doArrange()`，`ViewManager.doDraw()` 只调用 root 的
 `doDraw()`。每个组件自行决定是否、何时以及按什么顺序调用 children 的
 `doArrange()` 和 `doDraw()`；例如虚拟滚动容器可以只布局和绘制当前可见的子组件。
 
@@ -361,6 +382,7 @@ open type ViewManager {
   open func getScreenHeight(): u32;
   open func getScreenBuffer(): Buffer;
   open func trace(widget: Widget, drawFrame: WidgetFrame): void;
+  open func doStyling(): void;
   open func doArrange(): void;
   open func doDraw(): void;
 }
@@ -368,7 +390,8 @@ open type ViewManager {
 
 `ViewManager` 通过构造函数接收已有 `Screen`，不创建新的 Screen。`getScreenWidth()` 和 `getScreenHeight()` 为 `View.arrange()` 提供无 parent 组件及 `Fixed` 组件的布局参照；`getScreenBuffer()` 返回当前 Screen 的 back buffer。组件不缓存该 Buffer，避免 Screen resize 后继续使用旧引用。
 
-`root` 默认为 `none`。`doArrange()` 在无 root 时不做处理，存在 root 时调用
+`root` 默认为 `none`。`doStyling()` 在存在 root 时先清理其 `overrideStyle`，强制写入
+Screen 原点、宽高和零 margin，再从 root 开始合并组件树样式。`doArrange()` 在无 root 时不做处理，存在 root 时调用
 `root.doArrange()`。`doDraw()` 每轮先清空 `sequence`；存在 root 时再清空 Screen back
 buffer 并从 root 开始绘制，使组件移动或缩小后不会留下旧帧内容。无 root 时不清空
 back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只清空
@@ -381,7 +404,7 @@ back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只�
 
 `drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
-当前 `ViewManager` 已提供可选 root 的 doArrange/doDraw 入口、back buffer 访问、sequence
+当前 `ViewManager` 已提供可选 root 的 doStyling/doArrange/doDraw 入口、back buffer 访问、sequence
 登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由是在
 本阶段基础上的后续扩展，以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
 
@@ -470,8 +493,8 @@ open type TuiApp {
 路由，并通过
 `Screen` 完成组件绘制。`Screen` 和 `InputManager` 不在视图层重建。
 
-`TuiApp.render()` 处理 resize 后依次调用 `view.doArrange()` 和 `view.doDraw()`，再通过
-`Screen.buildPatchBytes()` 生成终端输出。无 root 时前两步不改变 Screen back buffer，
+`TuiApp.render()` 处理 resize 后依次调用 `view.doStyling()`、`view.doArrange()` 和
+`view.doDraw()`，再通过 `Screen.buildPatchBytes()` 生成终端输出。无 root 时三个步骤不改变 Screen back buffer，
 现有直接绘制 Screen 的代码保持有效。
 
 本阶段集成最初只将 `InputManager.onMouse` 单播回调绑定到 ViewManager。焦点与键盘路由
