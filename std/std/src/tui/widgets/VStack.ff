@@ -1,0 +1,254 @@
+open module std.tui.widgets;
+
+import std;
+import std.collections;
+import std.tui.common;
+import std.tui.view;
+import std.tui.input;
+
+/** VStack 的组件契约。 */
+open spec VStackWidget: ContainerWidget {}
+
+/**
+ * 按 children 顺序垂直排列直接子组件的容器。
+ * Normal/Relative child 参与普通流，Absolute/Fixed child 脱离普通流。
+ */
+open type VStack: VStackWidget {
+  /** 复用 Container 的组件树与 View 基础能力。 */
+  ...: Container = Container();
+
+  /** 判断指定 Widget 是否参与普通流。 */
+  seal static func isNormalFlow(widget: Widget): bool {
+    return widget.style.position == Position.Normal ||
+      widget.style.position == Position.Relative;
+  }
+
+  /** 判断 VStack 当前是否需要 children 提供 Auto 内在宽度。 */
+  seal static func needsIntrinsicWidth(stack: VStackWidget): bool {
+    let widget = (Widget)stack;
+    if VStack.isNormalFlow(widget) &&
+    widget.style.horizontalAlign == Align.Full {
+      return false;
+    }
+    return widget.style.width match value: Auto;
+  }
+
+  /** 判断 VStack 当前是否需要 children 提供 Auto 内在高度。 */
+  seal static func needsIntrinsicHeight(stack: VStackWidget): bool {
+    let widget = (Widget)stack;
+    if VStack.isNormalFlow(widget) &&
+    widget.style.verticalAlign == Align.Full {
+      return false;
+    }
+    return widget.style.height match value: Auto;
+  }
+
+  /** 按参照尺寸解析非负间距。 */
+  seal static func resolveSpacing(value: Union<int, double>,
+    reference: int): int {
+    let result = View.resolveLength(value, reference);
+    return if result > 0 { result } else { 0 };
+  }
+
+  /** 从总尺寸扣除两侧间距，结果保持非负。 */
+  seal static func resolveAvailableSize(size: int,
+    leading: int, trailing: int): int {
+    if size <= 0 || leading >= size || trailing >= size - leading {
+      return 0;
+    }
+    return size - leading - trailing;
+  }
+
+  /** 解析 Widget 在指定参照区域中的四侧非负 margin。 */
+  seal static func resolveMargin(widget: Widget,
+    reference: Rect): Tuple<int, int, int, int> {
+    let margin = widget.style.margin;
+    return (
+      VStack.resolveSpacing(margin.top, reference.height),
+      VStack.resolveSpacing(margin.right, reference.width),
+      VStack.resolveSpacing(margin.bottom, reference.height),
+      VStack.resolveSpacing(margin.left, reference.width)
+    );
+  }
+
+  /** 解析 Widget 在自身 frame 中的四侧非负 padding。 */
+  seal static func resolvePadding(widget: Widget): Tuple<int, int, int, int> {
+    let padding = widget.style.padding;
+    return (
+      VStack.resolveSpacing(padding.top, widget.frame.height),
+      VStack.resolveSpacing(padding.right, widget.frame.width),
+      VStack.resolveSpacing(padding.bottom, widget.frame.height),
+      VStack.resolveSpacing(padding.left, widget.frame.width)
+    );
+  }
+
+  /** 解析 VStack frame 内扣除非负 padding 后的 content 区域。 */
+  seal static func resolveContentFrame(stack: VStackWidget): Rect {
+    let widget = (Widget)stack;
+    let padding = VStack.resolvePadding(widget);
+    let content = Rect();
+    content.x = widget.frame.x + padding.item4;
+    content.y = widget.frame.y + padding.item1;
+    content.width = VStack.resolveAvailableSize(widget.frame.width,
+      padding.item4, padding.item2);
+    content.height = VStack.resolveAvailableSize(widget.frame.height,
+      padding.item1, padding.item3);
+    return content;
+  }
+
+  /**
+   * 根据已布局的普通流直接 children 计算 VStack 的 Auto 内在尺寸。
+   * 返回值已经包含自身 padding。
+   */
+  seal static func resolveIntrinsicSize(stack: VStackWidget): Tuple<int, int> {
+    let widget = (Widget)stack;
+    let content = VStack.resolveContentFrame(stack);
+    let padding = VStack.resolvePadding(widget);
+    var width = 0;
+    var height = 0;
+    for let child in stack.children {
+      if VStack.isNormalFlow(child) {
+        let margin = VStack.resolveMargin(child, content);
+        let outerWidth = margin.item4 + child.frame.width + margin.item2;
+        let outerHeight = margin.item1 + child.frame.height + margin.item3;
+        if outerWidth > width {
+          width = outerWidth;
+        }
+        height += outerHeight;
+      }
+    }
+    return (width + padding.item4 + padding.item2,
+      height + padding.item1 + padding.item3);
+  }
+
+  /**
+   * 使用内在尺寸解析 VStack 自身 frame。
+   * VStack 作为普通流 child 时保留直接父容器已经写入的坐标。
+   */
+  seal static func resolveFrame(stack: VStackWidget,
+    manager: ViewManager, intrinsic: Tuple<int, int>): Rect {
+    let widget = (Widget)stack;
+    let assignedX = widget.frame.x;
+    let assignedY = widget.frame.y;
+    let reference = View.resolveReferenceFrame(widget, manager);
+    let margin = VStack.resolveMargin(widget, reference);
+    let width = View.resolveWidth(widget, reference.width,
+      margin.item4, margin.item2, intrinsic.item1);
+    let height = View.resolveHeight(widget, reference.height,
+      margin.item1, margin.item3, intrinsic.item2);
+    let frame = Rect();
+    frame.x = View.resolveX(widget, reference,
+      margin.item4, margin.item2, width);
+    frame.y = View.resolveY(widget, reference,
+      margin.item1, margin.item3, height);
+    if VStack.isNormalFlow(widget) && widget.parent match parent: ContainerWidget {
+      frame.x = assignedX;
+      frame.y = assignedY;
+    }
+    frame.width = width;
+    frame.height = height;
+    return frame;
+  }
+
+  /** 根据交叉轴 Align 解析普通流 child 的最终横坐标。 */
+  seal static func resolveChildX(child: Widget, content: Rect,
+    left: int, right: int): int {
+    let origin = content.x + left;
+    let available = VStack.resolveAvailableSize(content.width, left, right);
+    match child.style.horizontalAlign {
+      Align.Center {
+        return origin + (available - child.frame.width) / 2;
+      }
+      Align.End {
+        return origin + available - child.frame.width;
+      }
+      else {
+        return origin;
+      }
+    }
+  }
+
+  /**
+   * 在最终 content 区域内布局直接 children，并返回普通流内在尺寸。
+   * 只调用直接 child 的公开调度方法，不访问下一层 children。
+   */
+  seal static func arrangeChildren(stack: VStackWidget,
+    manager: ViewManager): Tuple<int, int> {
+    let content = VStack.resolveContentFrame(stack);
+    var cursor = content.y;
+    var intrinsicWidth = 0;
+    for let child in stack.children {
+      child.dirty.add(DirtyType.Layout);
+      if !VStack.isNormalFlow(child) {
+        child.doArrange(manager);
+        continue;
+      }
+
+      let margin = VStack.resolveMargin(child, content);
+      let provisionalX = VStack.resolveChildX(child, content,
+        margin.item4, margin.item2);
+      let childY = cursor + margin.item1;
+      if child.frame.x != provisionalX || child.frame.y != childY {
+        child.frame.x = provisionalX;
+        child.frame.y = childY;
+        child.dirty.add(DirtyType.SubtreeLayout);
+      }
+      child.doArrange(manager);
+
+      let childX = VStack.resolveChildX(child, content,
+        margin.item4, margin.item2);
+      child.frame.x = childX;
+      child.frame.y = childY;
+      let outerWidth = margin.item4 + child.frame.width + margin.item2;
+      if outerWidth > intrinsicWidth {
+        intrinsicWidth = outerWidth;
+      }
+      cursor = childY + child.frame.height + margin.item3;
+    }
+    return (intrinsicWidth, cursor - content.y);
+  }
+
+  /**
+   * 解析自身尺寸并按顺序布局直接 children。
+   * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
+   */
+  @mixable
+  static func arrange(stack: VStackWidget, manager: ViewManager): void {
+    let widget = (Widget)stack;
+    let previous = widget.frame;
+    let needsWidth = VStack.needsIntrinsicWidth(stack);
+    let needsHeight = VStack.needsIntrinsicHeight(stack);
+    var intrinsic: Tuple<int, int> = (0, 0);
+    if needsWidth || needsHeight {
+      intrinsic = VStack.resolveIntrinsicSize(stack);
+    }
+    widget.frame = VStack.resolveFrame(stack, manager, intrinsic);
+    let childrenIntrinsic = VStack.arrangeChildren(stack, manager);
+    if needsWidth || needsHeight {
+      let padding = VStack.resolvePadding(widget);
+      let finalIntrinsic: Tuple<int, int> = (
+        childrenIntrinsic.item1 + padding.item4 + padding.item2,
+        childrenIntrinsic.item2 + padding.item1 + padding.item3
+      );
+      let resolved = VStack.resolveFrame(stack, manager, finalIntrinsic);
+      if resolved.x != widget.frame.x || resolved.y != widget.frame.y ||
+      resolved.width != widget.frame.width || resolved.height != widget.frame.height {
+        widget.frame = resolved;
+        widget.dirty.add(DirtyType.Layout);
+      }
+    }
+    if previous.x != widget.frame.x || previous.y != widget.frame.y ||
+    previous.width != widget.frame.width || previous.height != widget.frame.height {
+      widget.requestReflow();
+    }
+  }
+
+  /** 绘制自身背景，再按 List 顺序绘制直接 children。 */
+  @mixable
+  static func draw(stack: VStackWidget, manager: ViewManager): void {
+    View.draw(stack, manager);
+    for let child in stack.children {
+      child.doDraw(manager);
+    }
+  }
+}
