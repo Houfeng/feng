@@ -25,7 +25,7 @@
 │     Cell 矩阵 / 值语义 / 连续内存              │
 ├──────────────────────────────────────────────┤
 │  1. Cell (渲染底座 - 最小单元)                 │
-│     码点 + 样式 / 16 字节 / @value             │
+│     内联 UTF-8 grapheme + 样式 / 16 字节 / @value│
 └──────────────────────────────────────────────┘
 ```
 
@@ -38,7 +38,7 @@
   保留 Buffer 中已有颜色；`a == 255` 表示完全不透明；`1..254` 为半透明范围，本阶段
   暂按 255 处理。默认构造和三参数构造均设置 `a = 255`，四参数构造保存调用方指定的
   完整 `0..255` alpha。真正的半透明合成留待后续阶段实现。
-- **`std.tui.screen.Buffer`**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/码点 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
+- **`std.tui.screen.Buffer`**：管理 `Cell[]` 矩阵。通过直接字段赋值（`cells[idx].value = ...`）就地修改元素，利用 `@value` 类型的语义，不需要可写数组。提供统一的 `draw` 重载体系（文本/Cell 值 × 单点/矩形 × 无色/前景/前景+背景）、`fill`、`clear` 绘制原语，内部通过 `styleToBits`/`combineStyles`/`packStyle` 将 Style 枚举与 RgbColor 打包为 Cell 的样式编码。
 - **`std.tui.screen.Screen`**：封装双缓冲内存同步与差异比对（Diff）引擎。ANSI 转义序列生成也内聚在 Screen 中；Screen 只构建输出字节，不执行 stdout I/O，不关心业务逻辑。
 
 ### 2.2 视图逻辑层（第 4 层）
@@ -55,7 +55,9 @@
 
 ### 3.1 Cell 设计
 
-- `@value open type Cell`，两个成员：`open var value: u64`（码点）、`open var style: u64`（样式编码）。成员为 `open var`，允许直接字段赋值修改。
+- `@value open type Cell`，两个成员：`open var value: u64`（内联 UTF-8
+  grapheme）、`open var style: u64`（样式编码）。成员为 `open var`，允许直接
+  字段赋值修改。
 - 样式布局：bits 0–23 保存前景 RGB，bits 24–47 保存背景 RGB，bits 48–55
   保存 8 个终端样式标志，bit 56/57 分别保存 `HAS_FG`/`HAS_BG` 显式颜色
   存在标记，bits 58–63 保留。RGB 编码为 `0xRRGGBB`（R 在高位，B 在低位）。
@@ -67,8 +69,15 @@
 - 样式标志位：`BOLD=48, DIM=49, ITALIC=50, UNDERLINE=51, BLINK=52,
   REVERSE=53, HIDDEN=54, STRIKETHROUGH=55`；`HAS_FG=56, HAS_BG=57`。
 - 便利方法：`foreColor()`/`foreColor(value)`、`backColor()`/`backColor(value)` 色读写方法对，`bold()`/`bold(value)` 至 `strikeThrough()`/`strikeThrough(value)` 样式读写方法对，均通过 `self` 就地修改 `var` 成员。
-- 构造函数：`Cell()`（空白）、`Cell(value)`（指定码点）、`Cell(value, style)`（指定码点和样式）。
-- **不加 width 字段**。复杂字符（如 ZWJ 组合 emoji `👨‍👨‍👦‍👦`）在输入层拆分为多个 Cell，每个 Cell 持有单个 Unicode 码点。
+- `value` 的低位字节保存 grapheme 的首个 UTF-8 字节，后续字节依次向高位
+  排列；未使用的高位字节为 0。`value == 0` 表示空白 Cell。
+- 构造函数：`Cell()`（空白）、`Cell(value)`（指定已编码 Cell 值）、
+  `Cell(value, style)`（指定已编码 Cell 值和样式）。
+- **不加 width 字段，也不增加间接字符串存储**。一个 grapheme 的 UTF-8 表示
+  不超过 8 字节时完整保存在一个主 Cell 中；超过 8 字节时，由 Text、Input 等
+  上层组件在合法码点边界拆成多个 Cell。Buffer 和 Screen 不负责该拆分。
+- 多列 Cell 的主 Cell 保存完整的已编码值，后续终端列使用
+  `Cell.CONTINUATION` 标记；续占 Cell 只描述列占用，不保存 grapheme 片段。
 - `@value` 类型的 `self` 方法可就地修改 `var` 成员，值语义保证内存连续排列。
 
 ### 3.2 Buffer 设计
@@ -83,15 +92,16 @@
 - **绘制原语**：
   - `draw`（4 个 seal 数组版本 + 12 个变长版本）。
     - seal 数组版本（内部实现，参数为 `fg: Option<RgbColor>, bg: Option<RgbColor>, styles: Style[]`）：
-      1. `draw(x, y, text, fg, bg, styles)` — 单行文本，使用 `u8_next` 零分配解码 UTF-8 码点。
+      1. `draw(x, y, text, fg, bg, styles)` — 单行文本，按不超过 8 字节的
+         grapheme 写入 Cell；超长 grapheme 必须由上层预先拆分。
       2. `draw(x, y, w, h, text, fg, bg, styles)` — 矩形区域文本，自动换行。
-      3. `draw(x, y, value: u64, fg, bg, styles)` — 单个码点。
-      4. `draw(x, y, w, h, value: u64, fg, bg, styles)` — 矩形区域码点填充。
+      3. `draw(x, y, value: u64, fg, bg, styles)` — 单个已编码 Cell 值。
+      4. `draw(x, y, w, h, value: u64, fg, bg, styles)` — 矩形区域 Cell 值填充。
     - open 变长版本（公开 API，3 种颜色组合 × 4 种形状 = 12 个重载，参数为 `styles: Style...`）：
       - 无颜色：`draw(x, y, text, styles...)` 等 4 个，使用终端默认色。
       - 带前景色：`draw(x, y, text, fg: Option<RgbColor>, styles...)` 等 4 个。
       - 带前景及背景色：`draw(x, y, text, fg: Option<RgbColor>, bg: Option<RgbColor>, styles...)` 等 4 个。
-  - `fill(value, fg, bg, styles...)` / `fill(value, styles...)` — 用指定码点和样式填充整个矩阵，委托 `draw(0, 0, width, height, ...)`。
+  - `fill(value, fg, bg, styles...)` / `fill(value, styles...)` — 用指定 Cell 值和样式填充整个矩阵，委托 `draw(0, 0, width, height, ...)`。
   - `clear()` — 清空矩阵，委托 `fill(0)`。
 - 所有绘制方法均做边界裁剪，超出 Buffer 范围的内容被跳过。
 
@@ -116,7 +126,8 @@
   - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
   - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。
-  - 码点 0（空白 cell）render 时输出空格 `' '`。
+  - Cell 值 0（空白 Cell）render 时输出空格 `' '`；其他值按低位到高位直接
+    输出其中的 UTF-8 字节，Screen 不重新编码码点，也不拆分 grapheme。
 
 ### 3.4 组件树设计（后续专门设计）
 

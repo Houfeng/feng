@@ -4,7 +4,7 @@ import std.tui.common;
 
 /**
  * Cell represents a single character cell in a terminal user interface (TUI).
- * Each cell contains a Unicode code point and style information.
+ * Each cell contains up to eight inline UTF-8 bytes and style information.
  */
 @value
 open type Cell {
@@ -43,17 +43,16 @@ open type Cell {
   open static let HAS_BG: u64 = (u64)1 << (u64)57;
 
   /**
-   * 多列码点的续占标记。
-   * 使用 Unicode 有效范围 U+0000..U+10FFFF 之外的值，不作为字符输出。
+   * 多列 grapheme 的续占标记。
+   * 该保留值不是有效的低位优先 UTF-8 Cell 值，不作为字符输出。
    */
   open static let CONTINUATION: u64 = 0x110000;
 
   // ─── 实例字段 ──────────────────────────────────────────────────────────────
 
   /**
-   * 字符的 Unicode 码点，或 Cell.CONTINUATION 续占标记
-   * 支持所有 Unicode 字符，包括 Emoji、汉字、拉丁字母等
-   * 部分超过 8 字节的组合 emoji 通过 ZWJ 拆分为多个 emoji
+   * 低位优先保存最多 8 个 UTF-8 字节，或保存 Cell.CONTINUATION 续占标记。
+   * 超过 8 字节的 grapheme 由 Text、Input 等上层在码点边界拆分。
    */
   open var value: u64;
 
@@ -282,8 +281,8 @@ open type Cell {
   func Cell() {}
 
   /**
-   * 构造函数：创建一个持有指定码点的 cell，不带任何样式
-   * @param value - Unicode 码点
+   * 构造函数：创建一个持有指定已编码值的 Cell，不带任何样式。
+   * @param value - 低位优先的 UTF-8 Cell 值
    */
   func Cell(value: u64) {
     self.value = value;
@@ -291,8 +290,8 @@ open type Cell {
   }
 
   /**
-   * 构造函数：创建一个持有指定码点和样式编码的 cell
-   * @param value - Unicode 码点
+   * 构造函数：创建一个持有指定已编码值和样式编码的 Cell。
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param style - 样式编码（通过 Cell.STYLE_* 常量组合）
    */
   func Cell(value: u64, style: u64) {

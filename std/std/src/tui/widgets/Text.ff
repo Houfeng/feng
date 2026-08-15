@@ -12,6 +12,10 @@ import std.tui.screen;
 @cdecl("feng_std_unistring", "u8_next")
 extern func text_u8_next(puc: u32*, s: string*): string*;
 
+/** libunistring：返回当前 extended grapheme cluster 之后的位置。 */
+@cdecl("feng_std_unistring", "u8_grapheme_next")
+extern func text_u8_grapheme_next(s: string*, end: string*): string*;
+
 /** runtime：判断指针是否为空。 */
 @runtime
 extern func feng_pointer_is_null(ptr: string*): bool;
@@ -19,6 +23,10 @@ extern func feng_pointer_is_null(ptr: string*): bool;
 /** runtime：按字节偏移移动指针。 */
 @runtime
 extern func feng_pointer_move(ptr: string*, offset: int): string*;
+
+/** runtime：判断两个字符串数据指针是否相等。 */
+@runtime
+extern func feng_pointer_equal(left: string*, right: string*): bool;
 
 /** Text 中每一行内容的水平对齐方式。 */
 open enum TextAlign {
@@ -107,9 +115,31 @@ open type Text: TextWidget {
     return false;
   }
 
-  /** 返回一个 grapheme 按当前 Cell 契约占用的 Cell 数。 */
+  /**
+   * 返回一个 grapheme 按 8 字节 Cell 内联规则拆分后的总显示列数。
+   */
   seal static func graphemeCells(value: string): int {
-    return TextUtil.measureCellWidth(value);
+    if value.length() <= TextUtil.MAX_CELL_BYTES {
+      return TextUtil.measureCellWidth(value);
+    }
+    var result = 0;
+    var chunkBytes = 0;
+    var chunkWidth = 0;
+    for let rune in value.runes() {
+      let runeBytes = rune.length();
+      if chunkBytes > 0 &&
+      chunkBytes + runeBytes > TextUtil.MAX_CELL_BYTES {
+        result += TextUtil.resolveCellWidth(chunkWidth);
+        chunkBytes = 0;
+        chunkWidth = 0;
+      }
+      chunkBytes += runeBytes;
+      chunkWidth += TextUtil.measureRuneWidth(rune);
+    }
+    if chunkBytes > 0 {
+      result += TextUtil.resolveCellWidth(chunkWidth);
+    }
+    return result;
   }
 
   /** 判断一个 grapheme 是否为 Text 支持的硬换行。 */
@@ -147,6 +177,20 @@ open type Text: TextWidget {
   seal static func addLine(text: TextWidget, start: int,
     end: int, cells: int): void {
     text.lines.add(TextLine(start, end, cells));
+  }
+
+  /**
+   * 将一个已拆分 Cell 计入当前行，必要时先结束上一行。
+   * 返回更新后的 lineStart/lineCells，不产生中间集合。
+   */
+  seal static func layoutCell(text: TextWidget, width: int,
+    cellStart: int, cellWidth: int,
+    lineStart: int, lineCells: int): Tuple<int, int> {
+    if lineCells > 0 && lineCells + cellWidth > width {
+      Text.addLine(text, lineStart, cellStart, lineCells);
+      return (cellStart, cellWidth);
+    }
+    return (lineStart, lineCells + cellWidth);
   }
 
   /**
@@ -188,16 +232,32 @@ open type Text: TextWidget {
       }
 
       var graphemeOffset = 0;
+      var chunkStart = 0;
+      var chunkBytes = 0;
+      var chunkWidth = 0;
       for let rune in grapheme.runes() {
-        let runeCells = TextUtil.measureCellWidth(rune);
-        if lineCells > 0 && lineCells + runeCells > width {
-          let splitOffset = graphemeStart + graphemeOffset;
-          Text.addLine(text, lineStart, splitOffset, lineCells);
-          lineStart = splitOffset;
-          lineCells = 0;
+        let runeBytes = rune.length();
+        if chunkBytes > 0 &&
+        chunkBytes + runeBytes > TextUtil.MAX_CELL_BYTES {
+          let state = Text.layoutCell(text, width,
+            graphemeStart + chunkStart,
+            TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
+          lineStart = state.item1;
+          lineCells = state.item2;
+          chunkStart = graphemeOffset;
+          chunkBytes = 0;
+          chunkWidth = 0;
         }
-        lineCells += runeCells;
-        graphemeOffset += rune.length();
+        chunkBytes += runeBytes;
+        chunkWidth += TextUtil.measureRuneWidth(rune);
+        graphemeOffset += runeBytes;
+      }
+      if chunkBytes > 0 {
+        let state = Text.layoutCell(text, width,
+          graphemeStart + chunkStart,
+          TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
+        lineStart = state.item1;
+        lineCells = state.item2;
       }
     }
     Text.addLine(text, lineStart, length, lineCells);
@@ -222,8 +282,8 @@ open type Text: TextWidget {
   }
 
   /**
-   * 将一条显示行中完整落入水平可见范围的码点写入 back buffer。
-   * 裁剪边界穿过多列码点时不输出不完整的字形。
+   * 将一条显示行中完整落入水平可见范围的 Cell 值写入 back buffer。
+   * grapheme 超过 8 字节时在码点边界拆分，Screen 不参与拆分。
    */
   seal static func drawLine(text: TextWidget, buffer: Buffer,
     line: TextLine, lineX: int, y: int,
@@ -233,24 +293,59 @@ open type Text: TextWidget {
     }
     let data: string* = &text.content;
     var cursor = feng_pointer_move(data, line.start);
+    let lineEnd = feng_pointer_move(data, line.end);
     var column = 0;
-    while column < line.cells {
-      var value: u32 = 0;
-      let next = text_u8_next(&value, cursor);
-      if feng_pointer_is_null(next) {
+    while column < line.cells && !feng_pointer_equal(cursor, lineEnd) {
+      let graphemeEnd = text_u8_grapheme_next(cursor, lineEnd);
+      if feng_pointer_is_null(graphemeEnd) {
         return;
       }
-      let width = TextUtil.measureCellWidth(value);
-      let x = lineX + column;
-      if x >= clipRight {
-        return;
+      var runeCursor = cursor;
+      var cellValue: u64 = 0;
+      var cellBytes = 0;
+      var cellWidth = 0;
+      while !feng_pointer_equal(runeCursor, graphemeEnd) {
+        var value: u32 = 0;
+        let next = text_u8_next(&value, runeCursor);
+        if feng_pointer_is_null(next) {
+          return;
+        }
+        let encoded = TextUtil.encodeCellValue(value);
+        let encodedBytes = TextUtil.cellValueByteLength(encoded);
+        if cellBytes > 0 &&
+        cellBytes + encodedBytes > TextUtil.MAX_CELL_BYTES {
+          let width = TextUtil.resolveCellWidth(cellWidth);
+          let x = lineX + column;
+          if x >= clipRight {
+            return;
+          }
+          if x >= clipLeft && x + width <= clipRight {
+            buffer.draw((u32)x, (u32)y, cellValue,
+              text.style.foreColor, transparent);
+          }
+          column += width;
+          cellValue = 0;
+          cellBytes = 0;
+          cellWidth = 0;
+        }
+        cellValue |= encoded << (u64)(cellBytes * 8);
+        cellBytes += encodedBytes;
+        cellWidth += TextUtil.measureCellWidth(value);
+        runeCursor = next;
       }
-      if x >= clipLeft && x + width <= clipRight {
-        buffer.draw((u32)x, (u32)y, (u64)value,
-          text.style.foreColor, transparent);
+      if cellBytes > 0 {
+        let width = TextUtil.resolveCellWidth(cellWidth);
+        let x = lineX + column;
+        if x >= clipRight {
+          return;
+        }
+        if x >= clipLeft && x + width <= clipRight {
+          buffer.draw((u32)x, (u32)y, cellValue,
+            text.style.foreColor, transparent);
+        }
+        column += width;
       }
-      cursor = next;
-      column += width;
+      cursor = graphemeEnd;
     }
   }
 

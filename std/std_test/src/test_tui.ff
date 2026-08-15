@@ -237,9 +237,10 @@ func cell_field_rw() {
   let c = Cell();
   check(c.value == (u64)0, "tui/cell/field-rw-value-init");
   check(c.style == (u64)0, "tui/cell/field-rw-style-init");
-  c.value = (u64)0x4E2D;
+  c.value = TextUtil.encodeCellValue("中");
   c.style = Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE;
-  check(c.value == (u64)0x4E2D, "tui/cell/field-rw-value-write");
+  check(c.value == TextUtil.encodeCellValue("中"),
+    "tui/cell/field-rw-value-write");
   check(c.style == (Cell.STYLE_BOLD | Cell.STYLE_UNDERLINE), "tui/cell/field-rw-style-write");
   check(c.bold() == true, "tui/cell/field-rw-bold");
   check(c.underline() == true, "tui/cell/field-rw-underline");
@@ -297,21 +298,22 @@ func buffer_draw_text_ascii() {
 
 func buffer_draw_text_chinese() {
   let buf = Buffer((u32)10, (u32)2);
-  // "中" U+4E2D, "文" U+6587
   buf.draw((u32)0, (u32)0, "中文");
-  check(buf.cells[(int)0].value == (u64)0x4E2D, "tui/buffer/draw-text-chinese-0");
+  check(buf.cells[(int)0].value == TextUtil.encodeCellValue("中"),
+    "tui/buffer/draw-text-chinese-0");
   check(buf.cells[(int)1].value == Cell.CONTINUATION,
     "tui/buffer/draw-text-chinese-0-continuation");
-  check(buf.cells[(int)2].value == (u64)0x6587, "tui/buffer/draw-text-chinese-1");
+  check(buf.cells[(int)2].value == TextUtil.encodeCellValue("文"),
+    "tui/buffer/draw-text-chinese-1");
   check(buf.cells[(int)3].value == Cell.CONTINUATION,
     "tui/buffer/draw-text-chinese-1-continuation");
 }
 
 func buffer_draw_text_emoji() {
   let buf = Buffer((u32)10, (u32)2);
-  // 😀 U+1F600
   buf.draw((u32)0, (u32)0, "😀");
-  check(buf.cells[(int)0].value == (u64)0x1F600, "tui/buffer/draw-text-emoji");
+  check(buf.cells[(int)0].value == TextUtil.encodeCellValue("😀"),
+    "tui/buffer/draw-text-emoji");
   check(buf.cells[(int)1].value == Cell.CONTINUATION,
     "tui/buffer/draw-text-emoji-continuation");
 }
@@ -326,6 +328,31 @@ func text_util_measure_cell_width() {
     "tui/text-util/emoji-width");
   check(TextUtil.measureCellWidth("中文") == 4,
     "tui/text-util/string-width");
+  check(TextUtil.measureCellWidth("é") == 1,
+    "tui/text-util/combining-grapheme-width");
+  check(TextUtil.encodeCellValue("é") == (u64)0x81CC65,
+    "tui/text-util/combining-grapheme-encoding");
+  check(TextUtil.cellValueByteLength(TextUtil.encodeCellValue("é")) == 3,
+    "tui/text-util/combining-grapheme-byte-length");
+  check(TextUtil.cellValueByteLength(TextUtil.encodeCellValue("👍🏻")) == 8 &&
+    TextUtil.measureCellValueWidth(TextUtil.encodeCellValue("👍🏻")) == 2,
+    "tui/text-util/full-inline-cell-capacity");
+}
+
+/** 验证 Buffer 将 8 字节内的组合 grapheme 完整保存到一个主 Cell。 */
+func buffer_draw_combining_grapheme_inline() {
+  let buf = Buffer((u32)3, (u32)1);
+  buf.draw((u32)0, (u32)0, "éX");
+  check(buf.cells[0].value == TextUtil.encodeCellValue("é") &&
+    buf.cells[1].value == (u64)88 && buf.cells[2].value == (u64)0,
+    "tui/buffer/combining-grapheme-inline-cell");
+
+  let full = Buffer((u32)3, (u32)1);
+  full.draw((u32)0, (u32)0, "👍🏻");
+  check(full.cells[0].value == TextUtil.encodeCellValue("👍🏻") &&
+    full.cells[1].value == Cell.CONTINUATION &&
+    full.cells[2].value == (u64)0,
+    "tui/buffer/full-capacity-grapheme-inline-cell");
 }
 
 /** 验证 Buffer 覆盖宽字符任一列时会整体清理旧占用关系。 */
@@ -336,7 +363,7 @@ func buffer_wide_glyph_occupancy_overwrite() {
   check(buf.cells[0].value == (u64)0 &&
     buf.cells[1].value == (u64)88,
     "tui/buffer/overwrite-wide-continuation-clears-lead");
-  check(buf.cells[2].value == (u64)0x6587 &&
+  check(buf.cells[2].value == TextUtil.encodeCellValue("文") &&
     buf.cells[3].value == Cell.CONTINUATION,
     "tui/buffer/overwrite-wide-continuation-keeps-next-glyph");
 
@@ -348,7 +375,7 @@ func buffer_wide_glyph_occupancy_overwrite() {
   buf.draw((u32)0, (u32)0, "ABCD");
   buf.draw((u32)1, (u32)0, "中");
   check(buf.cells[0].value == (u64)65 &&
-    buf.cells[1].value == (u64)0x4E2D &&
+    buf.cells[1].value == TextUtil.encodeCellValue("中") &&
     buf.cells[2].value == Cell.CONTINUATION &&
     buf.cells[3].value == (u64)68,
     "tui/buffer/wide-overwrites-complete-target-columns");
@@ -430,7 +457,7 @@ func buffer_draw_rect_text_clip_height() {
 
 // ─── Buffer draw 单码点 ────────────────────────────────────────────────────
 
-func buffer_draw_codepoint() {
+func buffer_draw_cell_value() {
   let buf = Buffer((u32)5, (u32)3);
   buf.draw((u32)2, (u32)1, (u64)65, CellStyle.Bold);
   let idx = (int)((u64)1 * (u64)5 + (u64)2);
@@ -438,7 +465,7 @@ func buffer_draw_codepoint() {
   check(buf.cells[idx].bold() == true, "tui/buffer/draw-codepoint-bold");
 }
 
-func buffer_draw_codepoint_out_of_bounds() {
+func buffer_draw_cell_value_out_of_bounds() {
   let buf = Buffer((u32)3, (u32)3);
   buf.draw((u32)5, (u32)0, (u64)65);
   buf.draw((u32)0, (u32)5, (u64)65);
@@ -447,7 +474,7 @@ func buffer_draw_codepoint_out_of_bounds() {
 
 // ─── Buffer draw 矩形码点填充 ──────────────────────────────────────────────
 
-func buffer_draw_rect_codepoint() {
+func buffer_draw_rect_cell_value() {
   let buf = Buffer((u32)5, (u32)4);
   buf.draw((u32)1, (u32)1, (u32)3, (u32)2, (u64)65, CellStyle.Italic);
   // 矩形内 (1,1) 到 (3,2) 应被填充
@@ -586,10 +613,10 @@ func buffer_draw_wide_transparent_background() {
   let buf = Buffer((u32)3, (u32)1);
   buf.draw((u32)0, (u32)0, (u64)88, none,
     RgbColor((u8)0x12, (u8)0x34, (u8)0x56));
-  buf.draw((u32)0, (u32)0, (u64)0x4E2D,
+  buf.draw((u32)0, (u32)0, TextUtil.encodeCellValue("中"),
     RgbColor((u8)0xAB, (u8)0xCD, (u8)0xEF),
     RgbColor((u8)0, (u8)0, (u8)0, (u8)0));
-  check(buf.cells[0].value == (u64)0x4E2D &&
+  check(buf.cells[0].value == TextUtil.encodeCellValue("中") &&
     buf.cells[1].value == Cell.CONTINUATION,
     "tui/buffer/wide-transparent-occupancy");
   check(buf.cells[0].backColor() == (u32)0x123456 &&
@@ -655,7 +682,7 @@ func buffer_draw_text_with_fg_bg_and_style() {
 
 // ─── Buffer draw 码点带颜色 ────────────────────────────────────────────────
 
-func buffer_draw_codepoint_with_fg() {
+func buffer_draw_cell_value_with_fg() {
   let buf = Buffer((u32)5, (u32)3);
   buf.draw((u32)1, (u32)1, (u64)65, RgbColor((u8)0xFF, (u8)0xFF, (u8)0x00));
   let idx = (int)((u64)1 * (u64)5 + (u64)1);
@@ -663,7 +690,7 @@ func buffer_draw_codepoint_with_fg() {
   check(buf.cells[idx].foreColor() == (u32)0xFFFF00, "tui/buffer/draw-codepoint-fg-color");
 }
 
-func buffer_draw_codepoint_with_fg_bg() {
+func buffer_draw_cell_value_with_fg_bg() {
   let buf = Buffer((u32)5, (u32)3);
   buf.draw((u32)1, (u32)1, (u64)65, RgbColor((u8)0xFF, (u8)0xFF, (u8)0x00), RgbColor((u8)0x00, (u8)0xFF, (u8)0xFF), CellStyle.Bold);
   let idx = (int)((u64)1 * (u64)5 + (u64)1);
@@ -782,14 +809,14 @@ func screen_render_cursor_position() {
   check(out.contains("\x1b[2;3H"), "tui/screen/render-cursor-position");
 }
 
-func screen_render_codepoint_output() {
+func screen_render_cell_value_output() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, (u64)65);  // 'A'
   let out = scr.buildPatchString();
   check(out.contains("A"), "tui/screen/render-codepoint-ascii");
 }
 
-func screen_render_codepoint_zero_to_space() {
+func screen_render_cell_value_zero_to_space() {
   let scr = Screen((u32)5, (u32)2);
   // 先绘制非零内容并 buildPatchString 同步到 front
   scr.buffer().draw((u32)0, (u32)0, "AB");
@@ -964,6 +991,31 @@ func screen_render_unicode_emoji() {
   scr.buffer().draw((u32)0, (u32)0, "😀");
   let out = scr.buildPatchString();
   check(out.contains("😀"), "tui/screen/render-unicode-emoji");
+}
+
+/** 验证组合 grapheme 覆盖旧背景时作为一个 Cell 完整输出。 */
+func screen_render_combining_grapheme_clears_old_background() {
+  let scr = Screen((u32)3, (u32)1);
+  scr.buffer().draw((u32)0, (u32)0, (u64)0, none,
+    RgbColor((u8)0xFF, (u8)0, (u8)0));
+  scr.buildPatchString();
+
+  scr.buffer().clear();
+  scr.buffer().draw((u32)0, (u32)0, "é",
+    RgbColor((u8)0, (u8)0xFF, (u8)0),
+    RgbColor((u8)0, (u8)0, (u8)0, (u8)0));
+  let patch = scr.buildPatchString();
+  check(patch.contains("é") && !patch.contains("\x1b[1;2H"),
+    "tui/screen/combining-grapheme-single-cell-patch");
+  check(scr.buffer().cells[0].value == TextUtil.encodeCellValue("é") &&
+    scr.buffer().cells[1].value == (u64)0,
+    "tui/screen/combining-grapheme-no-residual-cell");
+
+  scr.buffer().clear();
+  scr.buffer().draw((u32)0, (u32)0, "👍🏻");
+  let full = scr.buildPatchString();
+  check(full.contains("👍🏻"),
+    "tui/screen/full-capacity-grapheme-output");
 }
 
 /** 验证 Screen diff 只输出宽字符主 Cell，并正确处理宽窄字符转换。 */
@@ -1552,23 +1604,22 @@ func text_grapheme_wrap_and_emoji() {
 
   text.content = "👨‍👩‍👧‍👦";
   text.arrange(manager);
-  check(text.frame.width == 11 && text.frame.height == 1,
+  check(text.frame.width == 8 && text.frame.height == 1,
     "tui/text/multi-codepoint-grapheme-auto-size");
 
   text.style.width = 2;
   text.content = "AéB";
   text.arrange(manager);
   text.draw(manager);
-  check(text.frame.height == 3,
+  check(text.frame.height == 2,
     "tui/text/grapheme-wraps-as-unit");
   let combinedBuffer = screen.buffer();
   check(combinedBuffer.cells[0].value == (u64)65 &&
-    combinedBuffer.cells[7].value == (u64)101 &&
-    combinedBuffer.cells[8].value == (u64)0x0301 &&
-    combinedBuffer.cells[14].value == (u64)66,
-    "tui/text/grapheme-draws-all-codepoints");
+    combinedBuffer.cells[1].value == TextUtil.encodeCellValue("é") &&
+    combinedBuffer.cells[7].value == (u64)66,
+    "tui/text/grapheme-draws-inline-cell");
 
-  let familyScreen = Screen(3, 3);
+  let familyScreen = Screen(3, 4);
   let familyManager = ViewManager(familyScreen);
   let family = Text();
   family.style.position = Position.Absolute;
@@ -1580,16 +1631,18 @@ func text_grapheme_wrap_and_emoji() {
   check(family.frame.height == 4,
     "tui/text/overwide-grapheme-splits-by-codepoint");
   let familyBuffer = familyScreen.buffer();
-  check(familyBuffer.cells[0].value == (u64)0x1F468 &&
+  check(familyBuffer.cells[0].value == TextUtil.encodeCellValue("👨‍") &&
     familyBuffer.cells[1].value == Cell.CONTINUATION &&
-    familyBuffer.cells[2].value == (u64)0x200D &&
-    familyBuffer.cells[3].value == (u64)0x1F469 &&
+    familyBuffer.cells[2].value == (u64)0 &&
+    familyBuffer.cells[3].value == TextUtil.encodeCellValue("👩‍") &&
     familyBuffer.cells[4].value == Cell.CONTINUATION &&
-    familyBuffer.cells[5].value == (u64)0x200D &&
-    familyBuffer.cells[6].value == (u64)0x1F467 &&
+    familyBuffer.cells[5].value == (u64)0 &&
+    familyBuffer.cells[6].value == TextUtil.encodeCellValue("👧‍") &&
     familyBuffer.cells[7].value == Cell.CONTINUATION &&
-    familyBuffer.cells[8].value == (u64)0x200D,
-    "tui/text/overwide-grapheme-preserves-codepoints");
+    familyBuffer.cells[8].value == (u64)0 &&
+    familyBuffer.cells[9].value == TextUtil.encodeCellValue("👦") &&
+    familyBuffer.cells[10].value == Cell.CONTINUATION,
+    "tui/text/overwide-grapheme-splits-at-codepoint-boundaries");
 
   let atomicManager = ViewManager(Screen(11, 3));
   let atomic = Text();
@@ -1598,7 +1651,7 @@ func text_grapheme_wrap_and_emoji() {
   atomic.style.height = auto;
   atomic.content = "A👨‍👩‍👧‍👦B";
   atomic.arrange(atomicManager);
-  check(atomic.frame.height == 3,
+  check(atomic.frame.height == 1,
     "tui/text/fitting-grapheme-is-not-split");
 }
 
@@ -1762,12 +1815,12 @@ func text_draw_wrap_unicode_and_hit_target() {
   let buffer = screen.buffer();
   check(buffer.cells[1].value == (u64)65,
     "tui/text/draw-first-ascii");
-  check(buffer.cells[2].value == (u64)0x4E2D,
-    "tui/text/draw-chinese-codepoint");
+  check(buffer.cells[2].value == TextUtil.encodeCellValue("中"),
+    "tui/text/draw-chinese-cell-value");
   check(buffer.cells[3].value == Cell.CONTINUATION,
     "tui/text/draw-chinese-continuation");
-  check(buffer.cells[7].value == (u64)0x1F600,
-    "tui/text/draw-emoji-codepoint");
+  check(buffer.cells[7].value == TextUtil.encodeCellValue("😀"),
+    "tui/text/draw-emoji-cell-value");
   check(buffer.cells[8].value == Cell.CONTINUATION,
     "tui/text/draw-emoji-continuation");
   check(buffer.cells[9].value == (u64)66,
@@ -2909,6 +2962,7 @@ open func run_tui_tests() {
     test("buffer_draw_text_chinese()", () { buffer_draw_text_chinese(); });
     test("buffer_draw_text_emoji()", () { buffer_draw_text_emoji(); });
     test("text_util_measure_cell_width()", () { text_util_measure_cell_width(); });
+    test("buffer_draw_combining_grapheme_inline()", () { buffer_draw_combining_grapheme_inline(); });
     test("buffer_wide_glyph_occupancy_overwrite()", () { buffer_wide_glyph_occupancy_overwrite(); });
     test("buffer_draw_text_clip()", () { buffer_draw_text_clip(); });
     test("buffer_draw_text_offset_and_clip()", () { buffer_draw_text_offset_and_clip(); });
@@ -2921,11 +2975,11 @@ open func run_tui_tests() {
     test("buffer_draw_text_with_fg_bg_and_style()", () { buffer_draw_text_with_fg_bg_and_style(); });
     test("buffer_draw_rect_text_wrap()", () { buffer_draw_rect_text_wrap(); });
     test("buffer_draw_rect_text_clip_height()", () { buffer_draw_rect_text_clip_height(); });
-    test("buffer_draw_codepoint()", () { buffer_draw_codepoint(); });
-    test("buffer_draw_codepoint_out_of_bounds()", () { buffer_draw_codepoint_out_of_bounds(); });
-    test("buffer_draw_rect_codepoint()", () { buffer_draw_rect_codepoint(); });
-    test("buffer_draw_codepoint_with_fg()", () { buffer_draw_codepoint_with_fg(); });
-    test("buffer_draw_codepoint_with_fg_bg()", () { buffer_draw_codepoint_with_fg_bg(); });
+    test("buffer_draw_cell_value()", () { buffer_draw_cell_value(); });
+    test("buffer_draw_cell_value_out_of_bounds()", () { buffer_draw_cell_value_out_of_bounds(); });
+    test("buffer_draw_rect_cell_value()", () { buffer_draw_rect_cell_value(); });
+    test("buffer_draw_cell_value_with_fg()", () { buffer_draw_cell_value_with_fg(); });
+    test("buffer_draw_cell_value_with_fg_bg()", () { buffer_draw_cell_value_with_fg_bg(); });
     test("buffer_fill()", () { buffer_fill(); });
     test("buffer_fill_no_style()", () { buffer_fill_no_style(); });
     test("buffer_fill_multi_style()", () { buffer_fill_multi_style(); });
@@ -2941,8 +2995,8 @@ open func run_tui_tests() {
     test("screen_render_empty_no_diff()", () { screen_render_empty_no_diff(); });
     test("screen_render_full_diff()", () { screen_render_full_diff(); });
     test("screen_render_cursor_position()", () { screen_render_cursor_position(); });
-    test("screen_render_codepoint_output()", () { screen_render_codepoint_output(); });
-    test("screen_render_codepoint_zero_to_space()", () { screen_render_codepoint_zero_to_space(); });
+    test("screen_render_cell_value_output()", () { screen_render_cell_value_output(); });
+    test("screen_render_cell_value_zero_to_space()", () { screen_render_cell_value_zero_to_space(); });
     test("screen_render_sgr_reset()", () { screen_render_sgr_reset(); });
     test("screen_render_sgr_bold()", () { screen_render_sgr_bold(); });
     test("screen_render_sgr_fg_color()", () { screen_render_sgr_fg_color(); });
@@ -2955,6 +3009,7 @@ open func run_tui_tests() {
     test("screen_resize()", () { screen_resize(); });
     test("screen_render_unicode_chinese()", () { screen_render_unicode_chinese(); });
     test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
+    test("screen_render_combining_grapheme_clears_old_background()", () { screen_render_combining_grapheme_clears_old_background(); });
     test("screen_render_wide_glyph_transitions()", () { screen_render_wide_glyph_transitions(); });
     // ─── TuiApp ───
     test("tuiapp_ctor_no_fds()", () { tuiapp_ctor_no_fds(); });

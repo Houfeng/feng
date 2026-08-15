@@ -121,18 +121,17 @@ func main(args: string[]) {
   blueRectangle.style.backColor = RgbColor(0, 0, 255);
   surface.addChild(blueRectangle);
 
-  // 初始靠右居中的红色矩形，用于交叉验证透明文本下的背景切换。
+  // 初始靠右居中的红色矩形；最后加入，作为覆盖 Text 的最上层组件。
   let redRectangle = View();
   redRectangle.style.width = 14;
   redRectangle.style.height = 6;
   redRectangle.style.horizontalAlign = Align.End;
   redRectangle.style.verticalAlign = Align.Center;
   redRectangle.style.backColor = RgbColor(255, 0, 0);
-  surface.addChild(redRectangle);
 
-  // 顶部文本演示自动高度、有限宽度换行、Emoji 和逐行居中。
+  // Text 位于蓝色矩形之上、红色矩形之下。
   let text = Text();
-  text.content = "Feng TUI Text 😀\nGrapheme: é · auto wrap\nDrag the blue rectangle";
+  text.content = "Feng TUI Text 😀\n中文宽字符：拖动色块穿过文字\nGrapheme: é · auto wrap\nDrag the blue rectangle";
   text.textAlign = TextAlign.Center;
   text.style.width = 28;
   text.style.height = auto;
@@ -144,6 +143,7 @@ func main(args: string[]) {
     textMarginSide, textMarginSide);
   text.style.foreColor = RgbColor(0, 180, 120);
   surface.addChild(text);
+  surface.addChild(redRectangle);
 
   bindDrag(blueRectangle, app);
   bindDrag(redRectangle, app);

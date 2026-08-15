@@ -1,13 +1,18 @@
 open module std.tui.screen;
 
 import std;
+import std.text;
 import std.tui.common;
 
-// ─── extern 函数声明（用于 draw 码点解码） ──────────────────────────────
+// ─── extern 函数声明（用于 draw grapheme 解码） ─────────────────────────
 
 /** libunistring: 解码下一个 UTF-8 码点，返回指向下一个码点起点的指针 */
 @cdecl("feng_std_unistring", "u8_next")
 extern func u8_next(puc: u32*, s: string*): string*;
+
+/** libunistring: 返回当前 extended grapheme cluster 之后的位置 */
+@cdecl("feng_std_unistring", "u8_grapheme_next")
+extern func buffer_u8_grapheme_next(s: string*, end: string*): string*;
 
 /** runtime: 判断指针是否为空 */
 extern func feng_pointer_is_null(ptr: string*): bool;
@@ -127,7 +132,7 @@ open type Buffer {
   }
 
   /**
-   * 清除覆盖 index 的完整码点占用关系。
+   * 清除覆盖 index 的完整 grapheme 占用关系。
    * 字符值、前景色和字符样式被清除，已有背景色保留。
    */
   seal func clearGlyphAt(index: int, rowStart: int, rowEnd: int): void {
@@ -152,7 +157,7 @@ open type Buffer {
 
   /**
    * 写入一个已确定显示列宽的 Cell，并为后续列写入续占标记。
-   * 写入前会完整清除与目标列重叠的旧码点占用关系。
+   * 写入前会完整清除与目标列重叠的旧 grapheme 占用关系。
    * @param x - 起始列坐标
    * @param y - 行坐标
    * @param cell - 主 Cell 的字符和样式
@@ -192,8 +197,8 @@ open type Buffer {
   // ─── draw 数组版本（seal，内部实现 + fill 转发用） ─────────────────────────
 
   /**
-   * 在 (x, y) 处绘制文本，按每个码点的显示列宽写入 Cell。
-   * 使用 u8_next 直接解码 UTF-8 码点，零字符串分配。
+   * 在 (x, y) 处绘制文本，按 grapheme 显示列宽写入 Cell。
+   * 每个 grapheme 必须能完整内联到一个 Cell；超长 grapheme 由上层预先拆分。
    * 超出右边界的内容被裁剪。
    * @param x - 起始列坐标（0-based）
    * @param y - 行坐标（0-based）
@@ -201,6 +206,7 @@ open type Buffer {
    * @param fg - 前景色（none 表示终端默认）
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
+   * @throws "tui/screen/grapheme-overflow" - 输入包含尚未由上层拆分的超长 grapheme
    */
   seal func draw(x: u32, y: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
@@ -209,27 +215,47 @@ open type Buffer {
       return;
     }
     let data: string* = &text;
+    let end = feng_pointer_move(data, text.length());
     var cursor: string* = data;
-    var uc: u32 = 0;
     var col: u32 = x;
-    while true {
-      let next: string* = u8_next(&uc, cursor);
-      if feng_pointer_is_null(next) {
+    while !feng_pointer_equal(cursor, end) {
+      let graphemeEnd = buffer_u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(graphemeEnd) {
         break;
       }
-      let cellWidth = (u32)TextUtil.measureCellWidth(uc);
+      var runeCursor = cursor;
+      var value: u64 = 0;
+      var byteLength = 0;
+      var width = 0;
+      while !feng_pointer_equal(runeCursor, graphemeEnd) {
+        var codepoint: u32 = 0;
+        let next = u8_next(&codepoint, runeCursor);
+        if feng_pointer_is_null(next) {
+          return;
+        }
+        let encoded = TextUtil.encodeCellValue(codepoint);
+        let encodedLength = TextUtil.cellValueByteLength(encoded);
+        if byteLength + encodedLength > TextUtil.MAX_CELL_BYTES {
+          throw "tui/screen/grapheme-overflow";
+        }
+        value |= encoded << (u64)(byteLength * 8);
+        byteLength += encodedLength;
+        width += TextUtil.measureCellWidth(codepoint);
+        runeCursor = next;
+      }
+      let cellWidth = (u32)TextUtil.resolveCellWidth(width);
       if (u64)col + (u64)cellWidth > (u64)self.width {
         break;
       }
-      self.drawCell(col, y, Cell((u64)uc, s), cellWidth, preserveMask);
+      self.drawCell(col, y, Cell(value, s), cellWidth, preserveMask);
       col += cellWidth;
-      cursor = next;
+      cursor = graphemeEnd;
     }
   }
 
   /**
    * 在 (x, y, w, h) 矩形区域内绘制文本，自动换行。
-   * 文本按码点显示列宽填充，每行 w 列，超过 h 行后裁剪。
+   * 文本按 grapheme 显示列宽填充，每行 w 列，超过 h 行后裁剪。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
@@ -238,6 +264,7 @@ open type Buffer {
    * @param fg - 前景色（none 表示终端默认）
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
+   * @throws "tui/screen/grapheme-overflow" - 输入包含尚未由上层拆分的超长 grapheme
    */
   seal func draw(x: u32, y: u32, w: u32, h: u32, text: string, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
@@ -250,18 +277,39 @@ open type Buffer {
       rowWidth = self.width - x;
     }
     let data: string* = &text;
+    let end = feng_pointer_move(data, text.length());
     var cursor: string* = data;
     var row: u32 = 0;
     var col: u32 = 0;
-    while row < h && y + row < self.height {
-      var uc: u32 = 0;
-      let next: string* = u8_next(&uc, cursor);
-      if feng_pointer_is_null(next) {
+    while row < h && y + row < self.height &&
+    !feng_pointer_equal(cursor, end) {
+      let graphemeEnd = buffer_u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(graphemeEnd) {
         return;
       }
-      let cellWidth = (u32)TextUtil.measureCellWidth(uc);
+      var runeCursor = cursor;
+      var value: u64 = 0;
+      var byteLength = 0;
+      var width = 0;
+      while !feng_pointer_equal(runeCursor, graphemeEnd) {
+        var codepoint: u32 = 0;
+        let next = u8_next(&codepoint, runeCursor);
+        if feng_pointer_is_null(next) {
+          return;
+        }
+        let encoded = TextUtil.encodeCellValue(codepoint);
+        let encodedLength = TextUtil.cellValueByteLength(encoded);
+        if byteLength + encodedLength > TextUtil.MAX_CELL_BYTES {
+          throw "tui/screen/grapheme-overflow";
+        }
+        value |= encoded << (u64)(byteLength * 8);
+        byteLength += encodedLength;
+        width += TextUtil.measureCellWidth(codepoint);
+        runeCursor = next;
+      }
+      let cellWidth = (u32)TextUtil.resolveCellWidth(width);
       if cellWidth > rowWidth {
-        cursor = next;
+        cursor = graphemeEnd;
         continue;
       }
       if (u64)col + (u64)cellWidth > (u64)rowWidth {
@@ -269,17 +317,17 @@ open type Buffer {
         col = 0;
         continue;
       }
-      self.drawCell(x + col, y + row, Cell((u64)uc, s), cellWidth, preserveMask);
+      self.drawCell(x + col, y + row, Cell(value, s), cellWidth, preserveMask);
       col += cellWidth;
-      cursor = next;
+      cursor = graphemeEnd;
     }
   }
 
   /**
-   * 在 (x, y) 处绘制单个码点。
+   * 在 (x, y) 处绘制单个已编码 Cell 值。
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色（none 表示终端默认）
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
@@ -287,17 +335,17 @@ open type Buffer {
   seal func draw(x: u32, y: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     let preserveMask = self.resolvePreserveMask(fg, bg);
-    let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
+    let cellWidth = (u32)TextUtil.measureCellValueWidth(value);
     self.drawCell(x, y, Cell(value, s), cellWidth, preserveMask);
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内填充码点。
+   * 在 (x, y, w, h) 矩形区域内填充已编码 Cell 值。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
    * @param h - 矩形高度
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色（none 表示终端默认）
    * @param bg - 背景色（none 表示终端默认）
    * @param styles - 样式数组
@@ -305,7 +353,7 @@ open type Buffer {
   seal func draw(x: u32, y: u32, w: u32, h: u32, value: u64, fg: Option<RgbColor>, bg: Option<RgbColor>, styles: CellStyle[]): void {
     let s = self.packStyle(fg, bg, styles);
     let preserveMask = self.resolvePreserveMask(fg, bg);
-    let cellWidth = (u32)TextUtil.measureCellWidth((u32)value);
+    let cellWidth = (u32)TextUtil.measureCellValueWidth(value);
     var row: u32 = 0;
     while row < h {
       let cy = y + row;
@@ -352,10 +400,10 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y) 处绘制单个码点，使用终端默认颜色。
+   * 在 (x, y) 处绘制单个 Cell 值，使用终端默认颜色。
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, value: u64, styles: CellStyle...): void {
@@ -363,12 +411,12 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内填充码点，使用终端默认颜色。
+   * 在 (x, y, w, h) 矩形区域内填充 Cell 值，使用终端默认颜色。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
    * @param h - 矩形高度
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param styles - 样式变长参数
    */
   func draw(x: u32, y: u32, w: u32, h: u32, value: u64, styles: CellStyle...): void {
@@ -404,10 +452,10 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y) 处绘制单个码点，指定前景色。
+   * 在 (x, y) 处绘制单个 Cell 值，指定前景色。
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
@@ -416,12 +464,12 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内填充码点，指定前景色。
+   * 在 (x, y, w, h) 矩形区域内填充 Cell 值，指定前景色。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
    * @param h - 矩形高度
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色
    * @param styles - 样式变长参数
    */
@@ -460,10 +508,10 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y) 处绘制单个码点，指定前景色和背景色。
+   * 在 (x, y) 处绘制单个 Cell 值，指定前景色和背景色。
    * @param x - 列坐标（0-based）
    * @param y - 行坐标（0-based）
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色
    * @param bg - 背景色
    * @param styles - 样式变长参数
@@ -473,12 +521,12 @@ open type Buffer {
   }
 
   /**
-   * 在 (x, y, w, h) 矩形区域内填充码点，指定前景色和背景色。
+   * 在 (x, y, w, h) 矩形区域内填充 Cell 值，指定前景色和背景色。
    * @param x - 起始列坐标（0-based）
    * @param y - 起始行坐标（0-based）
    * @param w - 矩形宽度
    * @param h - 矩形高度
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色
    * @param bg - 背景色
    * @param styles - 样式变长参数
@@ -490,9 +538,9 @@ open type Buffer {
   // ─── 便利方法 ─────────────────────────────────────────────────────────────
 
   /**
-   * 用指定的码点、前景色、背景色和样式填充整个矩阵。
+   * 用指定的 Cell 值、前景色、背景色和样式填充整个矩阵。
    * 等价于 draw(0, 0, width, height, value, fg, bg, styles)。
-   * @param value - Unicode 码点
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param fg - 前景色
    * @param bg - 背景色
    * @param styles - 样式变长参数
@@ -502,8 +550,8 @@ open type Buffer {
   }
 
   /**
-   * 用指定的码点填充整个矩阵，使用终端默认颜色。
-   * @param value - Unicode 码点
+   * 用指定的 Cell 值填充整个矩阵，使用终端默认颜色。
+   * @param value - 低位优先的 UTF-8 Cell 值
    * @param styles - 样式变长参数
    */
   func fill(value: u64, styles: CellStyle...): void {

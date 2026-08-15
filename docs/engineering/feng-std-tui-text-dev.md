@@ -175,26 +175,25 @@ Text 按“先确定宽度，再确定分行和高度”的顺序布局：
 - 有限宽度内每写满一行即软换行，不增加单词边界或语言相关断行规则；
 - 空 content 的内在宽高均为 0；末尾硬换行产生一个空的最终逻辑行；
 - 内容宽度为 0 时不绘制字符，自动高度为 0；
-- Text 通过现有 `std.text` `GraphemeView`/`GraphemeIterator` 识别 grapheme 边界，不在
-  `std.tui` 内重复声明或直接调用 libunistring grapheme API；
+- Text 的布局通过现有 `std.text` `GraphemeView`/`GraphemeIterator` 识别 grapheme
+  边界；绘制阶段按布局记录的原字符串字节区间零分配重放，并复用与 `std.text`
+  相同的 libunistring grapheme 边界能力，不在 `std.tui` 中重写分段算法；
 - `TextUtil.init()` 在进程启动阶段通过 `setlocale(LC_CTYPE, "")` 启用当前环境的
   Unicode locale；`TuiApp.init()` 自动调用一次，直接使用 TextUtil/Buffer/Screen
   的调用方应在自身启动阶段显式调用；
-- `TextUtil.measureCellWidth()` 通过 POSIX `wcwidth` 计算单码点显示列数；
-  测量热路径不执行 locale 初始化，也不增加每次调用的初始化状态判断；
-- Cell 仍然只在主 Cell 中保存一个 Unicode 码点和样式，不增加字段或改变
-  存储大小；占多列的码点在后续 Cell 的 `value` 中写入
-  `Cell.CONTINUATION` 续占标记，该值使用 Unicode 有效范围外的 `0x110000`；
+- `TextUtil.measureCellWidth()` 通过 POSIX `wcwidth` 获取码点列宽，并按 grapheme
+  汇总最终显示列数；组合码点的 0 列宽不再被提升为独立 Cell。测量热路径不执行
+  locale 初始化，也不增加每次调用的初始化状态判断；
+- Cell 的字符存储遵循 `feng-std-tui-dev.md` 3.1 节：不超过 8 字节的完整 UTF-8
+  grapheme 内联保存在主 Cell 的 `u64 value` 中，不增加字段或改变 Cell 大小；
+  占多列的 grapheme 在后续 Cell 的 `value` 中写入 `Cell.CONTINUATION`；
 - `Cell.CONTINUATION` 不是空白字符，也不得编码输出；它只表示当前终端列
   属于前面的多列码点；
-- Text 不读取或拼装 Buffer 的 Cell；没有背景色时向 Buffer 传入 `a == 0` 的
-  `RgbColor`，由 Buffer 的通用颜色合成保留画布原背景。`drawCell` 仅作为 Buffer
-  内部维护主 Cell 与续占 Cell 关系的 `seal` 原语；
-- 当 `wcwidth` 返回 0 或负数时，本阶段保持 Cell 已有的“每个存储码点
-  至少使用一个 Cell”契约；组合码点仍使用独立 Cell，不在本次双列字符
-  修复中扩大为 Cell 字形存储重构；
-- 一个多码点 grapheme 能完整放入一行时不在中间软换行；若其 Cell 数本身超过一行宽度，
-  才按码点边界拆分到多行，保证有限宽度下布局始终能够推进；
+- Text 在上层按 grapheme 生成 Cell 值；超过 8 字节时在合法码点边界拆分，Buffer
+  和 Screen 不参与拆分。没有背景色时向 Buffer 传入 `a == 0` 的 `RgbColor`，由
+  Buffer 的通用颜色合成保留画布原背景；
+- 一个已拆分 Cell 值能完整放入一行时不在中间软换行；其显示列数超过剩余宽度时
+  才换行，保证有限宽度下布局始终能够推进；
 - `TuiApp.exit()` 不恢复 locale；locale 是进程级状态，恢复可能覆盖应用后续主动
   设置的 locale，而退出 TUI 也不代表进程不再处理 Unicode 文本。
 
@@ -245,12 +244,12 @@ Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪
 
 Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方正确：
 
-- Buffer 的文本和单码点 draw API 自行测量列宽；例如在 4 列区域绘制
+- Buffer 的文本和 Cell 值 draw API 自行测量列宽；例如在 4 列区域绘制
   `中文` 时，主 Cell 分别位于第 0、2 列，第 1、3 列为续占 Cell；
-- Buffer 覆盖多列码点的主 Cell 或任一续占 Cell 时，按完整码点清理旧的
+- Buffer 覆盖多列 grapheme 的主 Cell 或任一续占 Cell 时，按完整 grapheme 清理旧的
   占用关系，不允许遗留孤立续占或只覆盖宽字符的一半；
 - Screen diff 仅对主 Cell 编码输出，跳过 back buffer 中的续占 Cell；
-- 宽码点与窄码点互相覆盖时，Buffer 先修正占用关系，Screen 再根据修正后的
+- 宽 Cell 与窄 Cell 互相覆盖时，Buffer 先修正占用关系，Screen 再根据修正后的
   front/back 差异清除或重画完整字形；不在 SGR 或 Text 中增加 Emoji 特判。
 
 颜色规则保持此前确定的组件层语义，不改变 Buffer 现有 draw API：
@@ -264,16 +263,18 @@ Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方�
 ## 9 内部数据与性能约束
 
 - arrange 扫描 content 时生成行起点、长度等内部元数据，draw 直接复用，不重复执行
-  完整分行；
+  完整分行；Text 在 arrange/draw 中使用同一套 grapheme 拆分规则；
 - 行信息只记录原 content 中的位置，不为每行创建 substring；
-- grapheme 边界直接复用 `std.text` 当前公开 API；该 API 当前返回 grapheme 字符串，
-  是否进一步提供零分配游标属于 `std.text` 自身的后续优化，不在本次 Text 实现中扩大范围；
+- 布局阶段复用 `std.text` 当前公开 grapheme API；绘制阶段不再次创建 grapheme
+  substring，而是以行的原始字节区间和同一底层边界规则零分配重放；本次不为此
+  扩大 `std.text` 的公开 API；
 - 内部行缓冲可清空后复用已有容量，不在每帧为每行创建对象；
 - 绘制按行起始字节位置一次定位，再按 `skip`、可见宽度和行 Cell 数控制解码次数；
   热路径不为每个码点重复计算相对原字符串的字节偏移；
 - 绘制直接写入 Screen back buffer，不创建中间字符矩阵；
 - locale 初始化仅发生在 `TextUtil.init()`，不进入逐码点测量热路径；
-- 续占复用 Cell 既有 `value` 编码，不增大 Cell 和 front/back buffer；
+- 完整 grapheme 直接复用 Cell 的 `u64 value`，续占继续复用既有保留值；不增大
+  Cell 和 front/back buffer，也不为普通或组合字符增加间接存储；
 - Auto 不增加装箱、字符串判定或 runtime ABI；
 - 不为了 Text 修改 Cell 的既有存储取舍，也不增加 C runtime 特判。
 
@@ -285,7 +286,8 @@ Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方�
 - Full 优先于 Auto，Start/Center/End 使用 Auto 最终尺寸定位；
 - 基础 View 的 Auto 内在尺寸为 0，固定值和百分比现有行为不变；
 - Text 空内容、单行、硬换行、末尾换行和有限宽度自动换行；
-- 单码点 Emoji、组合字符与 ZWJ Emoji 的 grapheme 边界，以及超出单行宽度后的码点拆分；
+- 单码点 Emoji、组合字符与 ZWJ Emoji 的 grapheme 边界，8 字节内联编码，以及
+  超出内联容量后由 Text 在码点边界拆分；
 - TextUtil 初始化后 ASCII、中文和 Emoji 的列宽测量；
 - Buffer 绘制中文/Emoji 时的主 Cell 与续占 Cell 布局；
 - 宽码点被窄码点覆盖、从续占列开始覆盖，以及 Screen diff 不独立输出续占 Cell；

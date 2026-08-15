@@ -124,8 +124,8 @@ open type Screen {
           self.writeSgr(b.style);
           self.currentSgr = b.style;
         }
-        // 发射字符（码点 → UTF-8）
-        self.writeCodepoint(b.value);
+        // 发射 Cell 中已编码的 UTF-8 字节
+        self.writeCellValue(b.value);
       }
       i = i + (int)1;
     }
@@ -380,36 +380,20 @@ open type Screen {
   }
 
   /**
-   * 将 Unicode 码点编码为 UTF-8 字节序列，直接追加到 output 缓冲区。
-   * 码点 0 渲染为空格 ' '（0x20）。
-   * @param cp - Unicode 码点
+   * 将 Cell.value 中低位优先的 UTF-8 字节直接追加到 output 缓冲区。
+   * 值 0 渲染为空格；grapheme 拆分已经由 Text、Input 等上层完成。
+   * @param value - 已编码 Cell 值
    */
-  seal func writeCodepoint(cp: u64) {
+  seal func writeCellValue(value: u64) {
     let output = self.output;
-    // 码点 0 渲染为空格（终端不显示 NUL）
-    if cp == (u64)0 {
-      output.add((byte)0x20); // 空格
+    if value == (u64)0 {
+      output.add((byte)0x20);
       return;
     }
-    let c = (u32)cp;
-    // 1 字节序列：0xxxxxxx（U+0000..U+007F，已排除 NUL）
-    if c < (u32)0x80 {
-      output.add((byte)c);
-    } else if c < (u32)0x800 {
-      // 2 字节序列：110xxxxx 10xxxxxx（U+0080..U+07FF）
-      output.add((byte)((u32)0xC0 | (c >> (u32)6)));
-      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
-    } else if c < (u32)0x10000 {
-      // 3 字节序列：1110xxxx 10xxxxxx 10xxxxxx（U+0800..U+FFFF）
-      output.add((byte)((u32)0xE0 | (c >> (u32)12)));
-      output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
-      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
-    } else {
-      // 4 字节序列：11110xxx 10xxxxxx 10xxxxxx 10xxxxxx（U+10000..U+10FFFF）
-      output.add((byte)((u32)0xF0 | (c >> (u32)18)));
-      output.add((byte)((u32)0x80 | ((c >> (u32)12) & (u32)0x3F)));
-      output.add((byte)((u32)0x80 | ((c >> (u32)6) & (u32)0x3F)));
-      output.add((byte)((u32)0x80 | (c & (u32)0x3F)));
+    var remaining = value;
+    while remaining != (u64)0 {
+      output.add((byte)(remaining & (u64)0xFF));
+      remaining >>= (u64)8;
     }
   }
 }
