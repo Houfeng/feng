@@ -115,7 +115,7 @@ VStack.draw：
 1. 调用 View.draw 绘制自身背景；
 2. 按 children 的 List 顺序调用每个直接 child.doDraw(manager)。
 
-由 `doDraw()` 统一计算和缓存各 Widget 的 drawFrame、登记 sequence。VStack 不跨级处理
+由 `doDraw()` 统一计算和缓存各 Widget 的 clippedFrame、登记 sequence。VStack 不跨级处理
 descendants，不改变祖先 overflow 裁剪、逆序命中或事件冒泡行为。
 
 ## 6 性能与约束

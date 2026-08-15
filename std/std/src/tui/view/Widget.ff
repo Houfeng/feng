@@ -40,17 +40,18 @@ open spec Widget {
   var dirty: DirtyMark;
 
   /**
-   * 布局阶段计算后的最终区域信息
+   * 布局阶段计算后的最终区域；x/y 是相对于 Screen 原点的绝对坐标。
+   * 父布局负责将直接 child 的相对布局结果转换为该绝对坐标。
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   var frame: Rect;
 
   /**
-   * 绘制阶段经过祖先和 Screen 裁剪后的本帧实际区域
-   * 鼠标命中直接使用该绘制快照
+   * frame 经过祖先和 Screen 裁剪后的本帧实际区域；x/y 同样是
+   * 相对于 Screen 原点的绝对坐标。绘制和鼠标命中直接使用该快照。
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
-  var drawFrame: Rect;
+  var clippedFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
@@ -130,7 +131,7 @@ open spec Widget {
   func doDraw(manager: ViewManager): void;
 
   /**
-   * 根据已缓存的 drawFrame 和非尺寸样式绘制当前组件。
+   * 根据已缓存的 clippedFrame 和非尺寸样式绘制当前组件。
    * 容器组件自行决定是否及如何绘制子组件。
    */
   func draw(manager: ViewManager): void;

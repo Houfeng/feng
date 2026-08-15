@@ -3,7 +3,7 @@
 > 状态：已实施并通过 std_test、全量回归及人工显示验证。
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 中 Text 组件阶段的专项开发文档。
-> Widget、Style、frame、drawFrame 和祖先裁剪的既有契约仍以
+> Widget、Style、frame、clippedFrame 和祖先裁剪的既有契约仍以
 > `docs/engineering/feng-std-tui-view-dev.md` 为准；本文只定义自动尺寸和 Text 新增行为。
 
 ## 1 目标
@@ -140,7 +140,7 @@ open type Text: TextWidget {
 ```
 
 Text 对外新增 `content` 和 `textAlign`。`lines` 是 arrange/draw 共享的内部状态；
-当前与 Widget 的 `frame`/`drawFrame`/`parent` 一样，在 spec `seal` 成员尚未
+当前与 Widget 的 `frame`/`clippedFrame`/`parent` 一样，在 spec `seal` 成员尚未
 落地时暂时作为 spec 成员，后续应改为 `seal`。
 
 `Widget.style.horizontalAlign` 决定 Text 整个 frame 在布局参照区域中的位置；
@@ -224,23 +224,23 @@ View 与 Text 必须复用统一的 reference、margin、Align、位置和裁剪
 
 ## 8 Text 绘制与裁剪
 
-Text 使用完整 frame 进行分行，使用 drawFrame 只做可见区域裁剪：
+Text 使用完整 frame 进行分行，使用 clippedFrame 只做可见区域裁剪：
 
-- drawFrame 继续由自身 frame、Screen 和最近的 `overflow == Hidden` 祖先 frame 求交；
+- clippedFrame 继续由自身 frame、Screen 和最近的 `overflow == Hidden` 祖先 frame 求交；
 - Left 从 frame 左侧开始绘制；Center 使用 `(frame.width - line.cells) / 2`；Right 使用
   `frame.width - line.cells`，所有偏移均按每一行独立计算；
 - 左侧或上侧被裁剪时，跳过对应的原始文本列或行，不能把被裁剪内容重新排到
-  drawFrame 左上角；
-- 水平裁剪以对齐后的行起点为基准，只绘制该行与 drawFrame 的交集；裁剪不能改变
-  对齐结果，也不能把可见字符重新贴到 frame 或 drawFrame 左侧；
+  clippedFrame 左上角；
+- 水平裁剪以对齐后的行起点为基准，只绘制该行与 clippedFrame 的交集；裁剪不能改变
+  对齐结果，也不能把可见字符重新贴到 frame 或 clippedFrame 左侧；
 - 裁剪宽度不重新触发自动换行，换行宽度始终来自布局阶段的完整内容宽度；
 - `TextOverflow.Clip` 保持直接裁剪；`TextOverflow.Ellipsis` 仅在最终分行数大于 Text
   自身 frame 高度时生效，不因 Screen 或祖先造成的外部裁剪而单独触发；
 - Ellipsis 在最后可显示行的 frame 最右侧预留最多三个 Cell 并绘制 ASCII `...`；
   frame 宽度小于 3 时绘制能够容纳的点，宽或高为 0 时不绘制；
-- 省略号的位置由完整 frame 决定，drawFrame 只裁剪，不把省略号移动到外部可见区域内；
-- Text 由 `Widget.doDraw()` 统一缓存 `drawFrame` 并登记绘制区域和命中顺序；
-- frame 或 drawFrame 任一轴为 0 时不写入 Buffer。
+- 省略号的位置由完整 frame 决定，clippedFrame 只裁剪，不把省略号移动到外部可见区域内；
+- Text 由 `Widget.doDraw()` 统一缓存 `clippedFrame` 并登记绘制区域和命中顺序；
+- frame 或 clippedFrame 任一轴为 0 时不写入 Buffer。
 
 Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方正确：
 
@@ -298,7 +298,7 @@ Buffer 和 Screen 同时维护列占用不变量，不仅依赖 Text 调用方�
 - Clip、Ellipsis、多行固定高度、窄于三个 Cell 以及仅发生外部裁剪的行为；
 - 前景色、指定背景色和 none 背景不覆盖已有 Cell 背景；
 - content 或可用宽度改变后重新 arrange 得到新的 frame 和分行；
-- Text 的 drawFrame、trace 和鼠标命中区域与实际可见区域一致。
+- Text 的 clippedFrame、trace 和鼠标命中区域与实际可见区域一致。
 
 测试优先新增到 `std/std_test/src/test_tui.ff`，不修改无关既有用例。若实施只修改 docs、
 std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整回归 std_test；若
@@ -308,7 +308,7 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 
 - [x] 11.1 人工 Review 并确认本文档，特别确认 Auto 默认值、换行、padding 边界和背景保留语义；
 - [x] 11.2 定义 `Auto`/`auto`，扩展 Style.width/height 并保持既有尺寸回归；
-- [x] 11.3 保留 View 原有结构，以最小可见性和尺寸参数调整让 Text 复用布局、定位及 drawFrame 逻辑；
+- [x] 11.3 保留 View 原有结构，以最小可见性和尺寸参数调整让 Text 复用布局、定位及 clippedFrame 逻辑；
 - [x] 11.4 为 Text 增加公开 content 以及无逐行字符串副本的行信息复用；
 - [x] 11.5 实现 Text 固定/百分比/Full/Auto 尺寸测量和自动换行；
 - [x] 11.6 实现 Text 绘制、原始内容偏移裁剪和 none 背景保留；

@@ -30,7 +30,7 @@
 - `TuiApp` 已将 `input.onMouse` 绑定到 `ViewManager.dispatchMouse`，但尚未接管
   `input.onKey`；
 - `Widget` 已提供 `key`、`mouseDown`、`mouseMove`、`mouseUp`、`wheel` 多播事件；
-- `ViewManager` 已根据 lock 或本帧 `drawFrame` 确定鼠标 target，并沿 parent 冒泡；
+- `ViewManager` 已根据 lock 或本帧 `clippedFrame` 确定鼠标 target，并沿 parent 冒泡；
 - `MouseEvent<Widget>` 已是引用类型，具有稳定 target 以及 `stop()`/`isStopped()`；
 - `KeyEvent<Widget>` 当时仍是 `@value` 类型，尚无传播停止状态；
 - `examples/tui_demo` 当前直接给 `app.input.onKey` 赋值处理 Ctrl+C。
@@ -142,7 +142,7 @@ open type MouseEvent<T> {
 
 鼠标事件处理顺序为：
 
-1. 根据 lock 或 `drawFrame` 命中确定 target；
+1. 根据 lock 或 `clippedFrame` 命中确定 target；
 2. 从 target 开始沿 parent 向 root 分发，或在 `stop()` 后提前结束 Widget 传播；
 3. Widget 传播正常到达 root 时触发 ViewManager 对应事件；未命中时直接触发
    ViewManager 对应事件；

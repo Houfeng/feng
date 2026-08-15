@@ -155,8 +155,8 @@ open type WidgetFrame {
 ```
 
 用户声明值保存在 `WidgetStyle` 中；`arrange()` 将布局结果写入 `frame`，`draw()` 将
-经过祖先和 Screen 裁剪的本帧实际绘制区域写入 `drawFrame`。事件命中只读取
-`drawFrame`，不在事件阶段重新遍历祖先或解析当前样式。
+经过祖先和 Screen 裁剪的本帧实际绘制区域写入 `clippedFrame`。事件命中只读取
+`clippedFrame`，不在事件阶段重新遍历祖先或解析当前样式。
 
 ### 3.5 布局脏标记
 
@@ -208,7 +208,7 @@ open spec Widget {
   let overrideStyle: StylePatch;
   var dirty: DirtyMark;
   var frame: Rect;
-  var drawFrame: Rect;
+  var clippedFrame: Rect;
   var parent: Option<ContainerWidget>;
 
   func requestReflow(): void;
@@ -236,14 +236,14 @@ open spec Widget {
 - `overrideStyle` 是框架和父布局提供的最高优先级稀疏覆盖；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
-- `drawFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
+- `clippedFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
 - `parent` 只能是容器组件，根组件的 `parent` 为 `none`；
 - `requestReflow()` 只让直接父级进入 `Layout`，更高祖先只进入
   `SubtreeLayout`；根组件调用时静默返回；
 - `doStyling()` 清理并合并 `draftStyle`，最后通过 `rtStyle.apply(draftStyle)` 的结果决定
   是否增加 `Layout` 并请求父级 Reflow；
 - `doArrange()` 是框架布局调度入口，ViewManager 和容器通过它进入组件布局；
-- `doDraw()` 是框架绘制调度入口，统一处理裁剪、`drawFrame` 缓存和 sequence 登记；
+- `doDraw()` 是框架绘制调度入口，统一处理裁剪、`clippedFrame` 缓存和 sequence 登记；
 - `arrange`、`draw` 使用 `func` 定义，不是可由外部替换的回调字段；
 - `isAncestor(w)` 判断当前组件是否为 `w` 的祖先，不把自身视为自身的祖先；
 - 键盘和鼠标处理使用不可重新绑定的多播事件字段，监听器通过 `on()`/`off()` 管理；
@@ -261,7 +261,7 @@ open type View: Widget {
   let overrideStyle: StylePatch;
   var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
   var frame: Rect;
-  var drawFrame: Rect;
+  var clippedFrame: Rect;
   var parent: Option<ContainerWidget>;
 
   func doStyling(manager: ViewManager): void;
@@ -283,8 +283,8 @@ open type View: Widget {
 `View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.doStyling()` 按
 `style`、后续状态 Patch、`overrideStyle` 的顺序生成 `draftStyle`，最后只根据
 `draftStyle -> rtStyle` 的最终变化标记布局。`View.arrange()` 和 `View.draw()` 只读取
-`rtStyle`。`View.doDraw()` 计算有效绘制区域，缓存 `drawFrame`，排除空区域并通过
-`ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `drawFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
+`rtStyle`。`View.doDraw()` 计算有效绘制区域，缓存 `clippedFrame`，排除空区域并通过
+`ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `clippedFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
@@ -330,10 +330,10 @@ arrange 阶段
 
 draw 阶段
   Widget.doDraw(manager)
-    -> 计算并缓存 drawFrame
+    -> 计算并缓存 clippedFrame
     -> 登记到 ViewManager.sequence
     -> Widget.draw(manager)
-  根据 drawFrame 和非尺寸样式绘制
+  根据 clippedFrame 和非尺寸样式绘制
 ```
 
 `ViewManager.doStyling()` 为 root 写入强制铺满 Screen 的 `overrideStyle`，再调用
@@ -384,11 +384,11 @@ draw 阶段
 
 ### 7.3 绘制裁剪
 
-`View.doDraw()` 在自身或任一祖先不是 `Visibility.Visible` 时，将 `drawFrame` 置为空且不调用
+`View.doDraw()` 在自身或任一祖先不是 `Visibility.Visible` 时，将 `clippedFrame` 置为空且不调用
 `draw()`，从而统一截断该组件子树的绘制。可见组件再查找离自身最近的
-`overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `drawFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
+`overflow == Hidden` 祖先组件。自身 `frame` 与该祖先组件 `frame` 求交后，再与 Screen 求交，得到本次有效绘制区域；不存在这样的祖先时，自身 `frame` 直接与 Screen 求交。裁剪结果不写回布局 `frame`，而是在登记 sequence 时写入 `clippedFrame`，作为本帧绘制与后续鼠标命中的共同快照。组件的 `draw()` 直接使用该快照，不重复计算裁剪或登记 sequence。
 
-裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `drawFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
+裁剪使用完整矩形求交，同时计算裁剪后的 `x`、`y`、`width` 和 `height`，不使用只能处理 Screen 右侧或下侧边界的单轴长度计算。有效区域的任一尺寸为 0 时不写入 Buffer，也不登记到 `sequence`；此时旧 `clippedFrame` 即使仍存在，也因组件不在本帧 sequence 中而不会参与命中。
 
 ## 8 ViewManager 与 sequence
 
@@ -403,7 +403,7 @@ open type ViewManager {
   open func getScreenWidth(): u32;
   open func getScreenHeight(): u32;
   open func getScreenBuffer(): Buffer;
-  open func trace(widget: Widget, drawFrame: WidgetFrame): void;
+  open func trace(widget: Widget, clippedFrame: WidgetFrame): void;
   open func doStyling(): void;
   open func doArrange(): void;
   open func doDraw(): void;
@@ -420,9 +420,9 @@ back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只�
 `screen.buffer()`，不调用同时清空 front/back 的 `Screen.clear()`，以保留正确的 diff
 基准。
 
-`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；`Widget.doDraw()` 完成有效绘制区域计算后调用 `trace(widget, drawFrame)`，该方法先将区域写入 `widget.drawFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。组件自己的 `draw()` 不感知 sequence。越靠后的组件实际绘制层级越高，容器对 children 的 `doDraw()` 调用顺序同时决定子组件在 sequence 中的顺序。
+`sequence` 是 `ViewManager` 的内部成员，不对上层公开。每轮绘制开始时清空；`Widget.doDraw()` 完成有效绘制区域计算后调用 `trace(widget, clippedFrame)`，该方法先将区域写入 `widget.clippedFrame`，再将组件登记到 `sequence`，保证绘制快照与顺序登记不会分离。组件自己的 `draw()` 不感知 sequence。越靠后的组件实际绘制层级越高，容器对 children 的 `doDraw()` 调用顺序同时决定子组件在 sequence 中的顺序。
 
-鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `drawFrame` 判断事件坐标；
+鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `clippedFrame` 判断事件坐标；
 不可见或 `pointerEvents == PointerEvents.None` 的组件不能成为目标，查找继续向下层组件进行。
 找到的第一个可响应组件即为目标。鼠标事件沿 parent 冒泡时，逐节点跳过不可见或
 `PointerEvents.None` 的 Widget，但继续向其父级路由；正常到达 root 后仍触发
@@ -430,7 +430,7 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
 锁定目标同样遵循该规则；若其祖先在锁定期间变为不可见，隐藏子树内的目标和祖先均被
 跳过，事件从隐藏边界之外的首个可见祖先继续冒泡。
 
-`drawFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `drawFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
+`clippedFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `clippedFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
 当前 `ViewManager` 已提供可选 root 的 doStyling/doArrange/doDraw 入口、back buffer 访问、sequence
 登记、逆序命中及鼠标事件路由，并持有由 `TuiApp` 传入的 Screen。焦点与键盘路由是在
@@ -480,7 +480,7 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
 鼠标事件按以下规则分发：
 
 1. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不执行坐标命中；否则从
-   `sequence` 末尾向前查找第一个 `drawFrame` 包含事件坐标的 Widget；
+   `sequence` 末尾向前查找第一个 `clippedFrame` 包含事件坐标的 Widget；
 2. 普通命中使用 `bindTarget()`，锁定路由使用 `bindLockedTarget()`，将选中的 Widget
    写入同一事件实例的 `target`，并由后者记录当前事件属于锁定目标。Widget 回调中
    `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
@@ -498,7 +498,7 @@ Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保
 两层职责不合并：InputManager 不维护订阅集合，ViewManager 不改变输入解析回调模型。
 
 `MouseEvent<Widget>.lock()` 由当前 `target` 请求锁定。首个目标取得锁定后，后续鼠标
-事件即使移出该 Widget 的 `drawFrame`，仍从锁定目标开始分发并沿其当前 parent 链冒泡。
+事件即使移出该 Widget 的 `clippedFrame`，仍从锁定目标开始分发并沿其当前 parent 链冒泡。
 同一目标重复 lock 成功，其他目标不能抢占；`unlock()` 仅允许取得锁定的事件，或由
 锁定路由绑定到该目标的后续事件释放。
 锁定状态保存在闭合事件类型 `MouseEvent<Widget>` 的静态字段中，不放入 ViewManager，
@@ -555,7 +555,7 @@ std/std/src/tui/widgets/
 1. 已完成 `Widget`/`ContainerWidget`、`View`/`Container`、组件树和 `ViewManager.sequence` 基础机制；
 2. 已完成 `View.arrange()`、`View.draw()`、root 调度及 TuiApp 渲染集成；
 3. 已将 `MouseEvent` 改为引用类型，增加 `stop()` 与 `isStopped()`；
-4. 在 draw 阶段缓存 `drawFrame`，实现基于该快照的 sequence 逆序命中；
+4. 在 draw 阶段缓存 `clippedFrame`，实现基于该快照的 sequence 逆序命中；
 5. 实现鼠标回调选择、自下向上冒泡及停止传播；
 6. 本阶段先将 `InputManager.onMouse` 单播回调接入 ViewManager，当时未接管 `onKey`；
 7. 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达路由目标类型；
@@ -569,7 +569,7 @@ std/std/src/tui/widgets/
 14. 为 Widget 增加组合式 `DirtyMark` 状态；
 15. 增加 `requestReflow()` 和 `doArrange()`，接入直接父级 Reflow、祖先子树标记、
     clean 子树跳过及 ViewManager root 调度。
-16. 增加 `doDraw()`，统一处理绘制裁剪、`drawFrame` 缓存及 sequence 登记；保持完整帧
+16. 增加 `doDraw()`，统一处理绘制裁剪、`clippedFrame` 缓存及 sequence 登记；保持完整帧
     绘制，不增加 Draw dirty。
 17. 为 Style/StylePatch 增加 `Visibility` 和 `PointerEvents`，接入 Collapse 零占位、
     Hidden 绘制截断、鼠标命中过滤及鼠标/键盘冒泡跳过规则。

@@ -1653,10 +1653,10 @@ func view_arrange_preserves_signed_geometry() {
   check(view.frame.height == 5, "tui/view/arrange-signed-height");
 
   drawStyledWidget(view, manager);
-  check(view.drawFrame.x == 0, "tui/view/draw-clip-negative-x");
-  check(view.drawFrame.y == 0, "tui/view/draw-clip-negative-y");
-  check(view.drawFrame.width == 5, "tui/view/draw-clip-negative-width");
-  check(view.drawFrame.height == 3, "tui/view/draw-clip-negative-height");
+  check(view.clippedFrame.x == 0, "tui/view/draw-clip-negative-x");
+  check(view.clippedFrame.y == 0, "tui/view/draw-clip-negative-y");
+  check(view.clippedFrame.width == 5, "tui/view/draw-clip-negative-width");
+  check(view.clippedFrame.height == 3, "tui/view/draw-clip-negative-height");
 }
 
 func view_arrange_preserves_negative_percentage_offsets() {
@@ -1785,7 +1785,7 @@ func view_do_draw_tracks_only_visible_frame() {
   view.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
-  check(view.drawFrame.x == 0 && view.drawFrame.width == 1,
+  check(view.clippedFrame.x == 0 && view.clippedFrame.width == 1,
     "tui/view/do-draw-caches-clipped-frame");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
@@ -1796,7 +1796,7 @@ func view_do_draw_tracks_only_visible_frame() {
   view.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
-  check(view.drawFrame.width == 0 && view.drawFrame.height == 0,
+  check(view.clippedFrame.width == 0 && view.clippedFrame.height == 0,
     "tui/view/do-draw-caches-empty-frame");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
@@ -2026,8 +2026,8 @@ func vstack_draws_and_hits_direct_children() {
   stack.doStyling(manager);
   manager.doArrange();
   manager.doDraw();
-  check(child.drawFrame.x == 0 && child.drawFrame.y == 0 &&
-    child.drawFrame.width == 3 && child.drawFrame.height == 1,
+  check(child.clippedFrame.x == 0 && child.clippedFrame.y == 0 &&
+    child.clippedFrame.width == 3 && child.clippedFrame.height == 1,
     "tui/vstack/child-draw-clipped");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 2, 0, 0));
@@ -2377,8 +2377,8 @@ func text_draw_wrap_unicode_and_hit_target() {
     "tui/text/draw-hard-wrapped-row");
   check(buffer.cells[1].foreColor() == (u32)0x123456,
     "tui/text/draw-foreground");
-  check(text.drawFrame.x == 1 && text.drawFrame.y == 0 &&
-    text.drawFrame.width == 3 && text.drawFrame.height == 3,
+  check(text.clippedFrame.x == 1 && text.clippedFrame.y == 0 &&
+    text.clippedFrame.width == 3 && text.clippedFrame.height == 3,
     "tui/text/draw-frame-traced");
 
   var mouseHits = 0;
@@ -2449,8 +2449,8 @@ func text_draw_clipping_preserves_content_origin() {
   drawStyledWidget(text, manager);
 
   let buffer = screen.buffer();
-  check(text.drawFrame.x == 0 && text.drawFrame.y == 0 &&
-    text.drawFrame.width == 2 && text.drawFrame.height == 2,
+  check(text.clippedFrame.x == 0 && text.clippedFrame.y == 0 &&
+    text.clippedFrame.width == 2 && text.clippedFrame.height == 2,
     "tui/text/screen-clipped-frame");
   check(buffer.cells[0].value == (u64)101 &&
     buffer.cells[1].value == (u64)102 &&
@@ -2476,8 +2476,8 @@ func text_draw_clipping_preserves_content_origin() {
   drawStyledWidget(child, hiddenManager);
 
   let hiddenBuffer = hiddenScreen.buffer();
-  check(child.drawFrame.x == 1 && child.drawFrame.y == 0 &&
-    child.drawFrame.width == 2 && child.drawFrame.height == 2,
+  check(child.clippedFrame.x == 1 && child.clippedFrame.y == 0 &&
+    child.clippedFrame.width == 2 && child.clippedFrame.height == 2,
     "tui/text/hidden-ancestor-frame");
   check(hiddenBuffer.cells[1].value == (u64)98 &&
     hiddenBuffer.cells[2].value == (u64)99 &&

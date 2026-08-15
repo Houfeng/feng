@@ -320,10 +320,10 @@ open type ViewManager {
   /**
    * 缓存组件本帧实际绘制区域并跟踪绘制顺序。
    * @param widget 需要跟踪的 widget
-   * @param drawFrame 经过祖先和 Screen 裁剪后的实际绘制区域
+   * @param clippedFrame 经过祖先和 Screen 裁剪后的实际绘制区域
    */
-  open func trace(widget: Widget, drawFrame: Rect): void {
-    widget.drawFrame = drawFrame;
+  open func trace(widget: Widget, clippedFrame: Rect): void {
+    widget.clippedFrame = clippedFrame;
     self.sequence.add(widget);
   }
 
@@ -345,7 +345,7 @@ open type ViewManager {
 
   /**
    * 按本帧实际绘制顺序从后向前查找最上层命中组件。
-   * 命中直接读取 draw 阶段缓存的 drawFrame，不重新遍历祖先或读取样式。
+   * 命中直接读取 draw 阶段缓存的 clippedFrame，不重新遍历祖先或读取样式。
    * @param x 屏幕列坐标
    * @param y 屏幕行坐标
    * @return 首个命中的组件；未命中时返回 none
@@ -357,7 +357,7 @@ open type ViewManager {
       let widget = self.sequence.get(index);
       if widget.rtStyle.visibility == Visibility.Visible &&
       widget.rtStyle.pointerEvents == PointerEvents.All &&
-      self.containsPoint(widget.drawFrame, x, y) {
+      self.containsPoint(widget.clippedFrame, x, y) {
         return widget;
       }
     }

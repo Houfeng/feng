@@ -142,7 +142,7 @@
 - **完整帧输出**：`render()` 对 `write()` 的短写继续写出剩余 ANSI 字节；resize 成功后先清空物理终端，再按新尺寸布局和绘制，避免旧画面重排后残留。
 - **终端恢复**：`exit()` 负责正常路径清理，并通过 `atexit` 注册的清理函数兜底恢复 Raw Mode。
 - **输入解析**：VT100/xterm 转义序列状态机，纯 Feng 实现。
-- **事件路由**：`InputManager<Widget>` 的鼠标与键盘单播出口已接入视图路由。鼠标未锁定时按本帧缓存的 `drawFrame` 逆序命中，锁定时直接选择锁定目标；键盘从当前焦点 Widget 开始。两类事件均沿 parent 链向上冒泡，正常到达 root 后触发 ViewManager 对应事件。键盘路由完成后始终触发应用级 `TuiApp.key`。焦点与键盘契约以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
+- **事件路由**：`InputManager<Widget>` 的鼠标与键盘单播出口已接入视图路由。鼠标未锁定时按本帧缓存的 `clippedFrame` 逆序命中，锁定时直接选择锁定目标；键盘从当前焦点 Widget 开始。两类事件均沿 parent 链向上冒泡，正常到达 root 后触发 ViewManager 对应事件。键盘路由完成后始终触发应用级 `TuiApp.key`。焦点与键盘契约以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准。
 
 ## 4 实施路线
 
@@ -217,9 +217,9 @@
 > 实现方案详见 `docs/engineering/feng-std-tui-view-dev.md`。
 
 - [x] 4.30 完善 Widget 基础机制：实现 `Thickness`、布局枚举、`WidgetStyle`、`WidgetFrame`、`Widget`/`ContainerWidget`，以及 `View`/`Container` 的基础行为和组件树关系维护
-- [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制、drawFrame 缓存及 sequence 登记
+- [x] 4.31 实现 View 布局与绘制：支持 Normal/Relative/Absolute/Fixed、尺寸与间距解析、对齐、祖先裁剪、矩形绘制、clippedFrame 缓存及 sequence 登记
 - [x] 4.32 实现 ViewManager 基础调度并集成至 TuiApp：提供可选 root、sequence、trace、`doArrange()`/`doDraw()` 入口，复用现有 Screen 并接入 `TuiApp.render()`
-- [x] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 drawFrame 实现逆序命中与自下向上冒泡
+- [x] 4.33 实现 ViewManager 鼠标事件分发：将 MouseEvent 改为支持 `stop()`/`isStopped()` 的引用类型，接入 InputManager 单播 `onMouse`，基于缓存的 clippedFrame 实现逆序命中与自下向上冒泡
 - [ ] 4.34 补充 std_test 用例：覆盖 Widget 契约、parent 维护、arrange/frame、sequence 命中、裁剪、鼠标回调选择、冒泡及停止传播
 - [x] 4.35 全量回归测试：执行 `make test`，确认全部通过
 - [x] 4.36 将 KeyEvent、MouseEvent 与 InputManager 泛型化，通过 `T` 表达事件路由目标类型；增加 MouseEvent target 与 lock/unlock/isLocked 能力，并让 ViewManager 优先向锁定目标路由

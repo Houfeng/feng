@@ -368,18 +368,18 @@ open type Text: TextWidget {
   }
 
   /**
-   * 在 Text frame 最右侧绘制落入 drawFrame 的省略号 Cell。
+   * 在 Text frame 最右侧绘制落入 clippedFrame 的省略号 Cell。
    * frame 宽度小于 3 时只绘制能够容纳的点。
    */
   seal static func drawEllipsis(text: TextWidget, buffer: Buffer,
-    drawFrame: Rect, y: int, transparent: RgbColor): void {
+    clippedFrame: Rect, y: int, transparent: RgbColor): void {
     let cells = Text.ellipsisCells(text);
     var start = text.frame.x + text.frame.width - cells;
-    if start < drawFrame.x {
-      start = drawFrame.x;
+    if start < clippedFrame.x {
+      start = clippedFrame.x;
     }
     var end = text.frame.x + text.frame.width;
-    let drawRight = drawFrame.x + drawFrame.width;
+    let drawRight = clippedFrame.x + clippedFrame.width;
     if end > drawRight {
       end = drawRight;
     }
@@ -427,29 +427,29 @@ open type Text: TextWidget {
   }
 
   /**
-   * 绘制可见背景和文本；drawFrame 只裁剪，不改变布局阶段的分行。
+   * 绘制可见背景和文本；clippedFrame 只裁剪，不改变布局阶段的分行。
    */
   @mixable
   static func draw(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
-    let drawFrame = widget.drawFrame;
-    if drawFrame.width == 0 || drawFrame.height == 0 {
+    let clippedFrame = widget.clippedFrame;
+    if clippedFrame.width == 0 || clippedFrame.height == 0 {
       return;
     }
     let buffer = manager.getScreenBuffer();
     if text.rtStyle.backColor match color: RgbColor {
       if color.a != 0 {
-        buffer.draw((u32)drawFrame.x, (u32)drawFrame.y,
-          (u32)drawFrame.width, (u32)drawFrame.height, (u64)0,
+        buffer.draw((u32)clippedFrame.x, (u32)clippedFrame.y,
+          (u32)clippedFrame.width, (u32)clippedFrame.height, (u64)0,
           none, color);
       }
     }
 
-    let firstLine = drawFrame.y - text.frame.y;
+    let firstLine = clippedFrame.y - text.frame.y;
     let transparent = RgbColor(0, 0, 0, 0);
     let ellipsisLine = Text.resolveEllipsisLine(text);
     var visibleRow = 0;
-    while visibleRow < drawFrame.height {
+    while visibleRow < clippedFrame.height {
       let lineIndex = firstLine + visibleRow;
       if lineIndex >= text.lines.size() || lineIndex >= text.frame.height {
         return;
@@ -458,11 +458,11 @@ open type Text: TextWidget {
       let ellipsis = lineIndex == ellipsisLine;
       let lineX = Text.resolveLineX(text, line);
       var visibleX = lineX;
-      if visibleX < drawFrame.x {
-        visibleX = drawFrame.x;
+      if visibleX < clippedFrame.x {
+        visibleX = clippedFrame.x;
       }
       var visibleRight = lineX + line.cells;
-      let drawRight = drawFrame.x + drawFrame.width;
+      let drawRight = clippedFrame.x + clippedFrame.width;
       if visibleRight > drawRight {
         visibleRight = drawRight;
       }
@@ -476,12 +476,12 @@ open type Text: TextWidget {
       let visibleWidth = visibleRight - visibleX;
       if visibleWidth > 0 {
         Text.drawLine(text, buffer, line,
-          lineX, drawFrame.y + visibleRow,
+          lineX, clippedFrame.y + visibleRow,
           visibleX, visibleRight, transparent);
       }
       if ellipsis {
-        Text.drawEllipsis(text, buffer, drawFrame,
-          drawFrame.y + visibleRow, transparent);
+        Text.drawEllipsis(text, buffer, clippedFrame,
+          clippedFrame.y + visibleRow, transparent);
       }
       visibleRow += 1;
     }
