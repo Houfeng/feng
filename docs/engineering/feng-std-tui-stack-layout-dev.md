@@ -71,6 +71,11 @@ children：
 不增加独立测量阶段。固定尺寸或 Full 的稳定布局只遍历直接 children 一次；Auto 或参照
 尺寸变化时由现有布局脏机制完成必要的后续轮次。
 
+VStack 在 styling 阶段通过 `overrideStyle.verticalAlign = Align.Start` 覆盖每个直接
+child 的主轴对齐方式，再调用 child 的 `doStyling()`。该覆盖不修改用户 `style`，并使
+child 在自身布局阶段自然按声明的 height/Auto 计算高度；VStack 随后只决定普通流 child
+的最终 `frame.y`。Absolute/Fixed child 本就忽略 Align，因此同一覆盖不改变其定位语义。
+
 ### 4.2 content 区域
 
 VStack 从自身 frame 扣除非负 padding 得到 content 区域。padding 百分比继续使用自身
@@ -90,8 +95,9 @@ Normal/Relative child 参与普通流：
 交叉轴规则保持现有 Align 语义：Start/Full 位于 content 起始侧，Center/End 根据最终宽度
 定位；Full 的宽度仍由 child 自身的 View/Text arrange 按现有规则解析。
 
-主轴尺寸也保持 child 的现有解析结果。VStack 只决定普通流 child 的位置，不改写其
-style、width、height 或 Align。
+主轴尺寸保持 child 声明的 height/Auto 解析结果。VStack 不改写用户 style、width 或
+height，而是通过运行时 overrideStyle 将 verticalAlign 设为 Start，避免 Full 改写高度；
+最终主轴位置仍由 VStack 决定。
 
 ### 4.4 浮动 child
 

@@ -1864,6 +1864,39 @@ func vstack_arranges_direct_children() {
   check(parentPreserved, "tui/vstack/parent-preserved");
 }
 
+/** 验证 VStack 通过 overrideStyle 忽略 child 的主轴 Full。 */
+func vstack_overrides_child_main_axis_align() {
+  let manager = ViewManager(Screen(10, 6));
+  let stack = VStack();
+  stack.style.position = Position.Fixed;
+  stack.style.width = 10;
+  stack.style.height = 6;
+
+  let first = View();
+  first.style.width = 2;
+  first.style.height = 2;
+  first.style.horizontalAlign = Align.Start;
+  let second = View();
+  second.style.width = 2;
+  second.style.height = 1;
+  second.style.horizontalAlign = Align.Start;
+  stack.addChild(first);
+  stack.addChild(second);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(first.style.verticalAlign == Align.Full &&
+    second.style.verticalAlign == Align.Full,
+    "tui/vstack/main-axis-user-style-unchanged");
+  check(first.rtStyle.verticalAlign == Align.Start &&
+    second.rtStyle.verticalAlign == Align.Start,
+    "tui/vstack/main-axis-runtime-override");
+  check(first.frame.y == 0 && first.frame.height == 2 &&
+    second.frame.y == 2 && second.frame.height == 1,
+    "tui/vstack/main-axis-frame-from-override");
+}
+
 /** 验证 VStack 的 Auto 尺寸来自普通流 children 与自身 padding。 */
 func vstack_auto_size_from_children() {
   let manager = ViewManager(Screen(30, 20));
@@ -3636,6 +3669,7 @@ open func run_tui_tests() {
     test("view_draw_alpha_background_semantics()", () { view_draw_alpha_background_semantics(); });
     test("view_do_draw_tracks_only_visible_frame()", () { view_do_draw_tracks_only_visible_frame(); });
     test("vstack_arranges_direct_children()", () { vstack_arranges_direct_children(); });
+    test("vstack_overrides_child_main_axis_align()", () { vstack_overrides_child_main_axis_align(); });
     test("vstack_auto_size_from_children()", () { vstack_auto_size_from_children(); });
     test("vstack_percentage_and_cross_axis_alignment()", () { vstack_percentage_and_cross_axis_alignment(); });
     test("vstack_floating_children_do_not_advance_flow()", () { vstack_floating_children_do_not_advance_flow(); });
