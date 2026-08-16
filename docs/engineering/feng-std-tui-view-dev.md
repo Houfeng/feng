@@ -125,6 +125,44 @@ open type WidgetStyle {
 `Hidden` 之间切换时只产生 Draw 变化；`PointerEvents` 不改变布局或绘制结果，因此不产生
 这两类变化，但仍同步写入最终 `rtStyle`。
 
+#### 3.2.2 状态样式
+
+Widget 使用一个整数 `state` 按位保存当前状态。内建伪状态只占 state 中的一组固定状态位：
+
+```feng
+open enum Pseudo {
+  Hover = 1,
+  Focus = 2,
+  Active = 4
+}
+```
+
+`Pseudo` 各成员必须显式使用互不重叠的二进制位值；`state == 0` 表示当前没有任何状态，
+因此 Pseudo 不定义值为 0 的成员。state 后续仍可容纳非 Pseudo 的组件状态。
+
+每条状态样式由一个整数 mask 和一个 StylePatch 组成：
+
+```feng
+@value
+open type StateStyle {
+  open let mask: int;
+  open let style: StylePatch;
+}
+```
+
+`StateStyles` 是内嵌在 Widget 中的值类型，内部使用 List 按首次 `use()` 的顺序保存实际定义
+的 StateStyle。`use(pseudo)` 返回已有 StylePatch，或在首次使用时创建并追加；不为未定义
+状态创建空槽位。StateStyles 只提供 `use()`、`size()` 和 `get()`，不提供组合 use 或独立
+apply。值类型副本共享其内部 List；该字段只作为框架维护的 Widget 状态样式句柄使用。
+
+styling 阶段在用户 style 之后按 StateStyles 顺序遍历规则，满足
+`(state & mask) == mask` 时把对应 StylePatch 应用到 draftStyle，最后再应用父布局和框架的
+overrideStyle。状态样式的覆盖优先级由首次定义顺序决定，后定义的匹配规则覆盖先定义的
+规则；整个过程不使用字符串、对象 key、Map 或每帧临时分配。
+
+本次只落地状态表示、状态样式存储和样式合并能力。ViewManager 自动维护 Hover、Focus、
+Active 状态的时机与路径语义在后续事件状态阶段单独实现。
+
 ### 3.3 Thickness
 
 `Thickness` 表示矩形四边的间距，供 `padding`、`margin` 及后续边框使用：
@@ -206,6 +244,8 @@ open spec Widget {
   let draftStyle: Style;
   let rtStyle: Style;
   let overrideStyle: StylePatch;
+  var state: int;
+  let stateStyles: StateStyles;
   var dirty: DirtyMark;
   var frame: Rect;
   var clippedFrame: Rect;
@@ -234,6 +274,7 @@ open spec Widget {
 - `style` 是引用不可重新绑定的用户样式；
 - `draftStyle` 是每轮完整合并样式时复用的草稿，`rtStyle` 是布局与绘制读取的最终结果；
 - `overrideStyle` 是框架和父布局提供的最高优先级稀疏覆盖；
+- `state` 是当前 Widget 的状态位集合，`stateStyles` 按定义顺序保存状态样式规则；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `clippedFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
@@ -259,6 +300,8 @@ open type View: Widget {
   let draftStyle: Style;
   let rtStyle: Style;
   let overrideStyle: StylePatch;
+  var state: int = 0;
+  let stateStyles: StateStyles = StateStyles();
   var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
   var frame: Rect;
   var clippedFrame: Rect;
@@ -281,7 +324,7 @@ open type View: Widget {
 ```
 
 `View` 通过 `@mixable` 静态方法向展开目标提供默认实例行为。`View.doStyling()` 按
-`style`、后续状态 Patch、`overrideStyle` 的顺序生成 `draftStyle`，最后只根据
+`style`、当前匹配的 `stateStyles`、`overrideStyle` 的顺序生成 `draftStyle`，最后只根据
 `draftStyle -> rtStyle` 的最终变化标记布局。`View.arrange()` 和 `View.draw()` 只读取
 `rtStyle`。`View.doDraw()` 计算有效绘制区域，缓存 `clippedFrame`，排除空区域并通过
 `ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `clippedFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame` 与最近一个 `overflow == Hidden` 祖先组件的 `clippedFrame` 的交集；不存在这样的祖先时只与 Screen 求交。
@@ -340,7 +383,7 @@ open type Container: ContainerWidget {
 ```text
 styling 阶段
   Widget.doStyling(manager)
-  style + StylePatch -> draftStyle -> rtStyle
+  style + stateStyles + overrideStyle -> draftStyle -> rtStyle
 
 arrange 阶段
   Widget.doArrange(manager)

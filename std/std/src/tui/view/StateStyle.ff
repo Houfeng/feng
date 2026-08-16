@@ -1,0 +1,75 @@
+open module std.tui.view;
+
+import std;
+import std.collections;
+
+/**
+ * 框架内建的 Widget 伪状态。
+ * 每个成员必须使用互不重叠的二进制位值，以便存入 Widget.state。
+ */
+open enum Pseudo {
+  /** 鼠标位于 Widget 对应区域或路径中。 */
+  Hover = 1,
+  /** Widget 处于焦点状态。 */
+  Focus = 2,
+  /** Widget 处于指针激活状态。 */
+  Active = 4
+}
+
+/** 一条按状态位掩码匹配的稀疏样式规则。 */
+@value
+open type StateStyle {
+  /** 该规则需要匹配的状态位掩码。 */
+  open let mask: int;
+
+  /** 该规则匹配时应用的稀疏样式。 */
+  open let style: StylePatch;
+
+  /** 使用状态位掩码及样式创建规则。 */
+  open func StateStyle(mask: int, style: StylePatch) {
+    self.mask = mask;
+    self.style = style;
+  }
+}
+
+/**
+ * 按首次 use() 顺序管理 Widget 的状态样式。
+ * StateStyles 是值类型；复制后各副本共享内部 List。
+ */
+@value
+open type StateStyles {
+  /** 实际定义的状态样式，仅在首次 use() 时分配 backing storage。 */
+  seal let items: List<StateStyle>;
+
+  /** 创建空状态样式集合。 */
+  open func StateStyles() {
+    self.items = List<StateStyle>();
+  }
+
+  /**
+   * 获取指定内建伪状态的样式；首次使用时按定义顺序创建并追加。
+   * @param pseudo - 需要配置的内建伪状态
+   * @return 可直接修改的稀疏状态样式
+   */
+  open func use(pseudo: Pseudo): StylePatch {
+    let mask = (int)pseudo;
+    for let item in self.items {
+      if item.mask == mask {
+        return item.style;
+      }
+    }
+    let style = StylePatch();
+    self.items.add(StateStyle(mask, style));
+    return style;
+  }
+
+  /** 返回实际定义的状态样式数量。 */
+  open func size(): int {
+    return self.items.size();
+  }
+
+  /** 返回指定定义顺序位置的状态样式。 */
+  open func get(index: int): StateStyle {
+    return self.items.get(index);
+  }
+}

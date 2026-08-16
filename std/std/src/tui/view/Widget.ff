@@ -34,6 +34,18 @@ open spec Widget {
   let overrideStyle: StylePatch;
 
   /**
+   * 当前组件的状态位集合；Pseudo 只占其中一组框架内建状态位。
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  var state: int;
+
+  /**
+   * 按定义顺序保存的状态样式，仅供 TUI 样式管线维护
+   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   */
+  let stateStyles: StateStyles;
+
+  /**
    * 当前组件的组合脏状态，仅供 TUI 框架维护
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */

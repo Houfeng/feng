@@ -26,6 +26,12 @@ open type View: Widget {
   /** 框架和父布局提供的最高优先级样式覆盖，仅供 TUI 框架维护。 */
   let overrideStyle: StylePatch;
 
+  /** 当前组件的状态位集合；0 表示没有任何激活状态。 */
+  var state: int = 0;
+
+  /** 按首次 use() 顺序保存的状态样式。 */
+  let stateStyles: StateStyles = StateStyles();
+
   /**
    * 当前组件的组合脏状态；新组件及其初始子树需要布局
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
@@ -163,6 +169,13 @@ open type View: Widget {
   static func doStyling(widget: Widget, manager: ViewManager): void {
     widget.draftStyle.clear();
     widget.draftStyle.apply(widget.style);
+    for var index: int = 0;
+    index < widget.stateStyles.size(); index += 1 {
+      let item = widget.stateStyles.get(index);
+      if (widget.state & item.mask) == item.mask {
+        widget.draftStyle.apply(item.style);
+      }
+    }
     widget.draftStyle.apply(widget.overrideStyle);
     let result = widget.rtStyle.apply(widget.draftStyle);
     if result.has(StyleChangeType.Layout) {
