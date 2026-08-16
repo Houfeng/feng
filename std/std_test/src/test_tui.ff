@@ -2505,9 +2505,8 @@ func text_draw_clipping_preserves_content_origin() {
   child.content = "abcdefgh";
   parent.addChild(child);
   parent.doStyling(hiddenManager);
-  parent.doDraw(hiddenManager);
   arrangeStyledWidget(child, hiddenManager);
-  drawStyledWidget(child, hiddenManager);
+  parent.doDraw(hiddenManager);
 
   let hiddenBuffer = hiddenScreen.buffer();
   check(child.clippedFrame.x == 1 && child.clippedFrame.y == 0 &&
@@ -2536,8 +2535,6 @@ func view_multilevel_hidden_clipping() {
 
   outer.doStyling(manager);
   outer.doDraw(manager);
-  middle.doDraw(manager);
-  child.doDraw(manager);
 
   check(outer.clippedFrame.x == 2 && outer.clippedFrame.y == 0 &&
     outer.clippedFrame.width == 3 && outer.clippedFrame.height == 2,
@@ -2548,6 +2545,70 @@ func view_multilevel_hidden_clipping() {
   check(child.clippedFrame.x == 2 && child.clippedFrame.y == 0 &&
     child.clippedFrame.width == 3 && child.clippedFrame.height == 2,
     "tui/view/multilevel-child-clipped-frame");
+}
+
+/** 验证 Container 默认完成直接 children 的样式、布局、绘制和树修改调度。 */
+func container_default_pipeline_and_tree_invalidation() {
+  let screen = Screen(5, 3);
+  let manager = ViewManager(screen);
+  let root = Container();
+  let first = View();
+  first.style.position = Position.Absolute;
+  first.style.x = 1;
+  first.style.y = 1;
+  first.style.width = 2;
+  first.style.height = 1;
+  first.style.backColor = RgbColor(0, 0, 0xFF);
+  var firstHits = 0;
+  first.mouseDown.on((event: MouseEvent<Widget>) { firstHits += 1; });
+  root.addChild(first);
+  manager.root = root;
+
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(root.frame.x == 0 && root.frame.y == 0 &&
+    root.frame.width == 5 && root.frame.height == 3,
+    "tui/container/default-root-layout");
+  check(first.frame.x == 1 && first.frame.y == 1 &&
+    first.frame.width == 2 && first.frame.height == 1,
+    "tui/container/default-child-layout");
+  check(first.clippedFrame.x == 1 && first.clippedFrame.y == 1 &&
+    first.clippedFrame.width == 2 && first.clippedFrame.height == 1,
+    "tui/container/default-child-draw");
+  check(screen.buffer().cells[6].backColor() == (u32)0x0000FF,
+    "tui/container/default-child-buffer");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 1, 1, 0));
+  check(firstHits == 1, "tui/container/default-child-hit");
+  check(root.dirty.isEmpty(), "tui/container/default-layout-clean");
+
+  let later = View();
+  later.style.position = Position.Absolute;
+  later.style.x = 3;
+  later.style.width = 1;
+  later.style.height = 1;
+  later.style.backColor = RgbColor(0xFF, 0, 0);
+  root.addChild(later);
+  check(root.dirty.has(DirtyType.Layout),
+    "tui/container/add-invalidates-layout");
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(later.frame.x == 3 && later.frame.y == 0 &&
+    later.clippedFrame.width == 1 && later.clippedFrame.height == 1,
+    "tui/container/added-child-pipeline");
+  check(screen.buffer().cells[3].backColor() == (u32)0xFF0000,
+    "tui/container/added-child-drawn");
+
+  root.removeChild(later);
+  check(root.dirty.has(DirtyType.Layout),
+    "tui/container/remove-invalidates-layout");
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(screen.buffer().cells[3].backColor() == (u32)0,
+    "tui/container/removed-child-not-drawn");
 }
 
 func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
@@ -3683,6 +3744,7 @@ open func run_tui_tests() {
     test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
     test("view_multilevel_hidden_clipping()", () { view_multilevel_hidden_clipping(); });
+    test("container_default_pipeline_and_tree_invalidation()", () { container_default_pipeline_and_tree_invalidation(); });
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
     test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
     test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });

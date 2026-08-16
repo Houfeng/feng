@@ -44,7 +44,8 @@
 ### 2.2 视图逻辑层（第 4 层）
 
 - **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 `doArrange()`/`doDraw()` 调度接入 `TuiApp.render()`；鼠标逆序命中与冒泡、焦点管理及键盘焦点路由已经实现，分别详见 `docs/engineering/feng-std-tui-view-dev.md` 和 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
-- **`std.tui.widgets`**：承载组件实现。当前包含 `View`、`Container` 基础实现，以及只用于验证展开机制的 Text/Button 骨架；Input/List/ScrollView、VStack/HStack/Dock 等完整组件和布局容器后续实现。
+- **`std.tui.widgets`**：承载组件实现。当前包含 `View`、具备默认样式合成/布局/绘制能力的
+  `Container` 基础实现，以及 Text、VStack 等组件；其他布局和交互组件后续实现。
 
 ### 2.3 应用控制层（第 5 层）
 

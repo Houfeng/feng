@@ -10,40 +10,9 @@ import std.tui.screen;
 import std.tui.widgets;
 import std.tui.view;
 
-/**
- * 拖动示例的根容器：占满 Screen，并按子组件顺序自治布局和绘制。
- */
+/** 拖动示例的根容器，直接复用 Container 的默认样式、布局和绘制能力。 */
 type DragSurface: ContainerWidget {
   ...: Container = Container();
-
-  /**
-   * 先布局根容器，再布局所有直接子组件。
-   */
-  @mixable
-  static func arrange(surface: ContainerWidget, manager: ViewManager): void {
-    let previousWidth = surface.frame.width;
-    let previousHeight = surface.frame.height;
-    View.arrange(surface, manager);
-    let referenceChanged = previousWidth != surface.frame.width ||
-      previousHeight != surface.frame.height;
-    for let child in surface.children {
-      if referenceChanged {
-        child.dirty.add(DirtyType.Layout);
-      }
-      child.doArrange(manager);
-    }
-  }
-
-  /**
-   * 先绘制并跟踪根容器，再按顺序绘制所有直接子组件。
-   */
-  @mixable
-  static func draw(surface: ContainerWidget, manager: ViewManager): void {
-    View.draw(surface, manager);
-    for let child in surface.children {
-      child.doDraw(manager);
-    }
-  }
 }
 
 /**

@@ -8,7 +8,8 @@ import std.tui.input;
 
 /**
  * Container 容器组件基础实现
- * 仅管理组件树关系，不默认布局或绘制子组件
+ * 默认按普通叠放语义处理直接 children 的样式、布局和绘制。
+ * 其他容器可复用组件树能力并覆盖需要扩展的阶段。
  */
 open type Container: ContainerWidget {
   /**
@@ -36,6 +37,36 @@ open type Container: ContainerWidget {
   }
 
   /**
+   * 先布局自身，再调度所有直接 children 的布局。
+   * 每次进入容器布局时都重新标记直接 child，确保父级 frame、padding 或覆盖变化生效。
+   */
+  @mixable
+  static func arrange(container: ContainerWidget,
+    manager: ViewManager): void {
+    View.arrange(container, manager);
+    for let child in container.children {
+      child.dirty.add(DirtyType.Layout);
+      child.doArrange(manager);
+    }
+  }
+
+  /** 按自身、直接 children 的顺序完成默认叠放绘制。 */
+  @mixable
+  static func draw(container: ContainerWidget, manager: ViewManager): void {
+    View.draw(container, manager);
+    for let child in container.children {
+      child.doDraw(manager);
+    }
+  }
+
+  /** 标记组件树修改引起的容器布局变化并向祖先传播。 */
+  seal static func invalidateLayout(container: ContainerWidget): void {
+    let widget = (Widget)container;
+    widget.dirty.add(DirtyType.Layout);
+    widget.requestReflow();
+  }
+
+  /**
    * 添加子组件；已有父容器时先从旧父容器移除
    * 循环关系会在修改组件树前抛出 tui/widget/cycle
    */
@@ -49,6 +80,7 @@ open type Container: ContainerWidget {
     }
     container.children.add(child);
     child.parent = container;
+    Container.invalidateLayout(container);
   }
 
   /**
@@ -60,6 +92,7 @@ open type Container: ContainerWidget {
       if container.children.get(index) == child {
         container.children.removeAt(index);
         child.parent = none;
+        Container.invalidateLayout(container);
         return;
       }
     }
@@ -70,9 +103,13 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func clearChildren(container: ContainerWidget): void {
+    if container.children.size() == 0 {
+      return;
+    }
     for let child in container.children {
       child.parent = none;
     }
     container.children.clear();
+    Container.invalidateLayout(container);
   }
 }

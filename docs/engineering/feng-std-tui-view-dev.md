@@ -284,7 +284,7 @@ open type View: Widget {
 `style`、后续状态 Patch、`overrideStyle` 的顺序生成 `draftStyle`，最后只根据
 `draftStyle -> rtStyle` 的最终变化标记布局。`View.arrange()` 和 `View.draw()` 只读取
 `rtStyle`。`View.doDraw()` 计算有效绘制区域，缓存 `clippedFrame`，排除空区域并通过
-`ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `clippedFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame`、Screen 与最近一个 `overflow == Hidden` 祖先组件 `frame` 的交集；不存在这样的祖先时只与 Screen 求交。
+`ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `clippedFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame` 与最近一个 `overflow == Hidden` 祖先组件的 `clippedFrame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
@@ -312,7 +312,21 @@ open type Container: ContainerWidget {
 }
 ```
 
-`Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并通过以 `ContainerWidget` 为首参数的 `@mixable` 静态方法实现 `addChild`、`removeChild` 和 `clearChildren`。`Container.doStyling()` 默认合并自身，再逐个清理直接 child 的 `overrideStyle` 并调用其 `doStyling()`；具体容器仍可定义同签名 `@mixable` 方法改变处理范围和顺序。`Container` 不默认布局或绘制 children。
+`Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并提供普通叠放容器所需的
+三个基础阶段：
+
+- `doStyling()` 先合并自身，再逐个清理直接 child 的 `overrideStyle` 并调用其
+  `doStyling()`；
+- `arrange()` 先调用 `View.arrange()` 计算自身绝对 frame，再标记并调用每个直接 child 的
+  `doArrange()`；child 继续按自身 position、尺寸和 Align 在 Container content 区域内布局，
+  多个普通 child 可以重叠；
+- `draw()` 先调用 `View.draw()` 绘制自身，再按 children 顺序调用每个直接 child 的
+  `doDraw()`，该顺序同时决定绘制层级和鼠标命中顺序。
+
+`addChild()`、成功的 `removeChild()` 和非空 `clearChildren()` 都标记当前容器 Layout，并通过
+`requestReflow()` 传播布局路径，使稳定帧中的组件树修改能进入下一次布局。具体容器仍可
+定义同签名 `@mixable` 方法扩展或替换某一阶段；例如 VStack 复用树管理能力，但覆盖
+styling、arrange 和 draw 实现自己的主轴规则。
 
 ## 7 styling、arrange 与 draw
 
