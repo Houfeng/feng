@@ -17,18 +17,12 @@ open type VStack: VStackWidget {
   /** 复用 Container 的组件树与 View 基础能力。 */
   ...: Container = Container();
 
-  /**
-   * 合并自身样式，并通过 overrideStyle 让直接 children 忽略主轴 Align。
-   * Start 保留 child 声明的 height/Auto；最终 Y 坐标仍由 VStack 布局决定。
-   */
+  /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
   @mixable
-  static func doStyling(stack: VStackWidget, manager: ViewManager): void {
-    View.doStyling(stack, manager);
-    for let child in stack.children {
-      child.overrideStyle.clear();
-      child.overrideStyle.verticalAlign = Align.Start;
-      child.doStyling(manager);
-    }
+  static func prepareChildOverrideStyle(stack: VStackWidget,
+    child: Widget): void {
+    Container.prepareChildOverrideStyle(stack, child);
+    child.overrideStyle.verticalAlign = Align.Start;
   }
 
   /** 判断 VStack 当前是否需要 children 提供 Auto 内在宽度。 */
@@ -257,12 +251,4 @@ open type VStack: VStackWidget {
     }
   }
 
-  /** 绘制自身背景，再按 List 顺序绘制直接 children。 */
-  @mixable
-  static func draw(stack: VStackWidget, manager: ViewManager): void {
-    View.draw(stack, manager);
-    for let child in stack.children {
-      child.doDraw(manager);
-    }
-  }
 }

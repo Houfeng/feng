@@ -296,6 +296,7 @@ open type View: Widget {
 open spec ContainerWidget: Widget {
   let children: List<Widget>;
 
+  func prepareChildOverrideStyle(child: Widget): void;
   func addChild(child: Widget): void;
   func removeChild(child: Widget): void;
   func clearChildren(): void;
@@ -315,8 +316,12 @@ open type Container: ContainerWidget {
 `Container` 构造并展开 `View` 的公共状态与 Widget 默认行为，并提供普通叠放容器所需的
 三个基础阶段：
 
-- `doStyling()` 先合并自身，再逐个清理直接 child 的 `overrideStyle` 并调用其
-  `doStyling()`；
+- `prepareChildOverrideStyle()` 是 styling 阶段的框架扩展点；默认清理直接 child 的
+  `overrideStyle`，专用容器可在清理后追加自身的运行时覆盖；
+- `doStyling()` 先合并自身，再为每个直接 child 调用
+  `prepareChildOverrideStyle()` 和 `doStyling()`；
+- `doArrange()` 区分自身 `Layout` 与纯 `SubtreeLayout`：自身需要布局时进入完整
+  `arrange()`；只有子树标记时仅向下调度，让干净的兄弟子树继续跳过；
 - `arrange()` 先调用 `View.arrange()` 计算自身绝对 frame，再标记并调用每个直接 child 的
   `doArrange()`；child 继续按自身 position、尺寸和 Align 在 Container content 区域内布局，
   多个普通 child 可以重叠；
@@ -325,8 +330,8 @@ open type Container: ContainerWidget {
 
 `addChild()`、成功的 `removeChild()` 和非空 `clearChildren()` 都标记当前容器 Layout，并通过
 `requestReflow()` 传播布局路径，使稳定帧中的组件树修改能进入下一次布局。具体容器仍可
-定义同签名 `@mixable` 方法扩展或替换某一阶段；例如 VStack 复用树管理能力，但覆盖
-styling、arrange 和 draw 实现自己的主轴规则。
+定义同签名 `@mixable` 方法扩展或替换某一阶段；例如 VStack 继承 Container 的
+`doStyling()`、`doArrange()` 和 `draw()`，只覆盖 child 样式钩子和 `arrange()` 实现主轴规则。
 
 ## 7 styling、arrange 与 draw
 

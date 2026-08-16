@@ -153,6 +153,12 @@ open spec ContainerWidget: Widget {
   let children: List<Widget>;
 
   /**
+   * 清理并准备直接 child 的运行时样式覆盖。
+   * 仅供容器 styling 阶段调用；专用容器可覆盖并追加布局约束。
+   */
+  func prepareChildOverrideStyle(child: Widget): void;
+
+  /**
    * 添加子组件；已有父容器时自动迁移
    */
   func addChild(child: Widget): void;

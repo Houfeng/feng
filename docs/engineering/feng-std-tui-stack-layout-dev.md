@@ -36,8 +36,8 @@ measure 接口。
 
 ## 3 类型结构
 
-VStack 使用独立 spec，使 `@mixable static` 的 arrange/draw 以自身契约生成实例方法，同时
-复用 Container 的组件树能力：
+VStack 使用独立 spec，使专用 `@mixable static` 布局方法以自身契约生成实例方法，同时
+复用 Container 的组件树和默认阶段调度能力：
 
 ```feng
 open spec VStackWidget: ContainerWidget {}
@@ -46,10 +46,10 @@ open type VStack: VStackWidget {
   ...: Container = Container();
 
   @mixable
-  static func arrange(stack: VStackWidget, manager: ViewManager): void;
+  static func prepareChildOverrideStyle(stack: VStackWidget, child: Widget): void;
 
   @mixable
-  static func draw(stack: VStackWidget, manager: ViewManager): void;
+  static func arrange(stack: VStackWidget, manager: ViewManager): void;
 }
 ```
 
@@ -71,10 +71,15 @@ children：
 不增加独立测量阶段。固定尺寸或 Full 的稳定布局只遍历直接 children 一次；Auto 或参照
 尺寸变化时由现有布局脏机制完成必要的后续轮次。
 
-VStack 在 styling 阶段通过 `overrideStyle.verticalAlign = Align.Start` 覆盖每个直接
-child 的主轴对齐方式，再调用 child 的 `doStyling()`。该覆盖不修改用户 `style`，并使
+VStack 继承 `Container.doStyling()`，只覆盖 `prepareChildOverrideStyle()`：先调用
+Container 的默认实现清理 child patch，再通过
+`overrideStyle.verticalAlign = Align.Start` 追加主轴覆盖。该覆盖不修改用户 `style`，并使
 child 在自身布局阶段自然按声明的 height/Auto 计算高度；VStack 随后只决定普通流 child
 的最终 `frame.y`。Absolute/Fixed child 本就忽略 Align，因此同一覆盖不改变其定位语义。
+
+VStack 同时继承 `Container.doArrange()` 的脏子树调度和 `Container.draw()` 的默认 children
+绘制，只覆盖 `arrange()` 实现垂直布局。纯 `SubtreeLayout` 不重新布局干净的兄弟子树；
+VStack 自身为 Layout 时，专用 arrange 仍完整处理直接 children 和 Auto 收敛。
 
 ### 4.2 content 区域
 
@@ -116,7 +121,7 @@ Absolute/Fixed child 脱离普通流：
 
 ## 5 绘制与事件
 
-VStack.draw：
+VStack 继承 `Container.draw()`：
 
 1. 调用 View.draw 绘制自身背景；
 2. 按 children 的 List 顺序调用每个直接 child.doDraw(manager)。
@@ -162,3 +167,4 @@ descendants，不改变祖先 overflow 裁剪、逆序命中或事件冒泡行�
 - [x] 8.6 构建 std 并运行 std_test；
 - [x] 8.7 根据实现结果更新 TODO，等待人工 Review。
 - [x] 8.8 在 tui_demo 中增加 VStack 示例并完成定向验证。
+- [x] 8.9 基于生产级 Container 调度重构 VStack，只保留 child 样式钩子和专用 arrange。

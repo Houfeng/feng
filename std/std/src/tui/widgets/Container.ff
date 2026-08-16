@@ -23,16 +23,52 @@ open type Container: ContainerWidget {
   let children: List<Widget>;
 
   /**
-   * 合并自身样式，再清理并合并所有直接 children 的样式。
-   * 具体容器可定义自己的同签名 @mixable 方法改变 children 的处理范围和顺序。
+   * 清理直接 child 的运行时覆盖；专用容器可在调用本实现后追加约束。
+   */
+  @mixable
+  static func prepareChildOverrideStyle(container: ContainerWidget,
+    child: Widget): void {
+    child.overrideStyle.clear();
+  }
+
+  /**
+   * 合并自身样式，再通过可覆盖钩子准备并合并所有直接 children 的样式。
    */
   @mixable
   static func doStyling(container: ContainerWidget,
     manager: ViewManager): void {
     View.doStyling(container, manager);
     for let child in container.children {
-      child.overrideStyle.clear();
+      container.prepareChildOverrideStyle(child);
       child.doStyling(manager);
+    }
+  }
+
+  /**
+   * 根据组合脏标记调度容器布局。
+   * 自身 Layout 进入完整 arrange；纯 SubtreeLayout 只向下访问脏路径。
+   */
+  @mixable
+  static func doArrange(container: ContainerWidget,
+    manager: ViewManager): void {
+    let widget = (Widget)container;
+    if widget.rtStyle.visibility == Visibility.Collapse ||
+    widget.dirty.has(DirtyType.Layout) {
+      View.doArrange(widget, manager);
+      return;
+    }
+    if !widget.dirty.has(DirtyType.SubtreeLayout) {
+      return;
+    }
+
+    widget.dirty.remove(DirtyType.SubtreeLayout);
+    for let child in container.children {
+      child.doArrange(manager);
+    }
+    if widget.dirty.has(DirtyType.Layout) {
+      View.doArrange(widget, manager);
+    } else {
+      widget.dirty.remove(DirtyType.SubtreeLayout);
     }
   }
 

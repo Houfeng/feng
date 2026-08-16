@@ -12,6 +12,28 @@ import std.tui.screen;
 import std.tui.view;
 import std.tui.widgets;
 
+/** 记录 arrange 调用次数，用于验证容器脏子树调度。 */
+spec CountingWidget: Widget {
+  /** 当前实际执行 arrange 的次数。 */
+  var arrangeCount: int;
+}
+
+/** 提供可观测 arrange 次数的测试组件。 */
+type CountingView: CountingWidget {
+  /** 复用 View 的 Widget 状态和默认行为。 */
+  ...: View = View();
+
+  /** 当前实际执行 arrange 的次数。 */
+  var arrangeCount: int = 0;
+
+  /** 记录调用后复用 View 的默认布局。 */
+  @mixable
+  static func arrange(view: CountingWidget, manager: ViewManager): void {
+    view.arrangeCount += 1;
+    View.arrange(view, manager);
+  }
+}
+
 // ─── 静态常量 ──────────────────────────────────────────────────────────────
 
 func cell_mask_fg() {
@@ -2611,6 +2633,38 @@ func container_default_pipeline_and_tree_invalidation() {
     "tui/container/removed-child-not-drawn");
 }
 
+/** 验证纯 SubtreeLayout 只访问脏路径，不重新布局干净的兄弟子树。 */
+func container_subtree_layout_skips_clean_siblings() {
+  let manager = ViewManager(Screen(5, 3));
+  let root = Container();
+  let dirtyBranch = Container();
+  let dirtyLeaf = CountingView();
+  let cleanSibling = CountingView();
+  dirtyBranch.addChild(dirtyLeaf);
+  root.addChild(dirtyBranch);
+  root.addChild(cleanSibling);
+  manager.root = root;
+
+  manager.doStyling();
+  manager.doArrange();
+  check(dirtyLeaf.arrangeCount == 1 && cleanSibling.arrangeCount == 1,
+    "tui/container/subtree-initial-layout-counts");
+
+  dirtyLeaf.dirty.add(DirtyType.Layout);
+  dirtyLeaf.requestReflow();
+  check(dirtyBranch.dirty.has(DirtyType.Layout) &&
+    root.dirty.has(DirtyType.SubtreeLayout) &&
+    !root.dirty.has(DirtyType.Layout),
+    "tui/container/subtree-dirty-path");
+  manager.doArrange();
+  check(dirtyLeaf.arrangeCount == 2,
+    "tui/container/subtree-dirty-leaf-rearranged");
+  check(cleanSibling.arrangeCount == 1,
+    "tui/container/subtree-clean-sibling-skipped");
+  check(root.dirty.isEmpty() && dirtyBranch.dirty.isEmpty(),
+    "tui/container/subtree-layout-consumed");
+}
+
 func makeWidgetFrame(x: int, y: int, width: int, height: int): Rect {
   let frame = Rect();
   frame.x = x;
@@ -3745,6 +3799,7 @@ open func run_tui_tests() {
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
     test("view_multilevel_hidden_clipping()", () { view_multilevel_hidden_clipping(); });
     test("container_default_pipeline_and_tree_invalidation()", () { container_default_pipeline_and_tree_invalidation(); });
+    test("container_subtree_layout_skips_clean_siblings()", () { container_subtree_layout_skips_clean_siblings(); });
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
     test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
     test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });
