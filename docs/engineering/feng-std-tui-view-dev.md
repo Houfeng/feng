@@ -164,7 +164,12 @@ Widget 提供 `addState(mask)` 和 `removeState(mask)`，内部只执行整数�
 state 限定为 Pseudo。ViewManager 当前自动维护 Hover：每次鼠标事件先按实际坐标执行
 hitTest，命中 Widget 及其到 root 的祖先路径获得 `Pseudo.Hover`，离开旧路径的部分移除
 Hover。鼠标锁定只改变事件路由 target，不改变实际坐标对应的 Hover 路径；未命中时清空
-旧 Hover 路径。Focus 和 Active 的自动状态维护留在后续步骤。
+旧 Hover 路径。
+
+ViewManager 同时自动维护 Active：非滚轮鼠标按钮按下时，实际命中 Widget 及其到 root 的
+祖先路径获得 `Pseudo.Active`；移动和鼠标锁定不改变该路径，按钮释放时整体清除。状态在
+对应鼠标事件监听器执行前更新。该路径语义与 CSS `:active` 对激活元素及祖先的匹配一致。
+Focus 的自动状态维护留在后续步骤。
 
 ### 3.3 Thickness
 
@@ -343,7 +348,8 @@ open type View: Widget {
 ViewManager 复用两条 target-to-root List 对 Hover 路径做共同祖先差分，不在每次鼠标事件中
 分配临时集合。Hover 状态在鼠标事件监听器执行前更新；下一轮 styling 根据最终 state 合并
 状态样式。Hover 路径使用本帧 `sequence` 和 `clippedFrame` 命中，因此自动继承可见性、
-PointerEvents、裁剪和绘制层级规则。
+PointerEvents、裁剪和绘制层级规则。Active 使用独立的复用路径，按下时建立、释放时清除，
+同样不产生逐事件集合分配。
 
 ## 6 ContainerWidget 与 Container
 

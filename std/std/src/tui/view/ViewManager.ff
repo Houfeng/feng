@@ -38,6 +38,9 @@ open type ViewManager {
   /** 下一 Hover 路径的复用缓冲；与 _hoverPath 在更新完成时交换。 */
   seal var _nextHoverPath: List<Widget>;
 
+  /** 当前鼠标按下激活目标到 root 的 Active 路径。 */
+  seal let _activePath: List<Widget>;
+
   /** 当前是否正在触发不可停止的焦点路径事件。 */
   seal var _focusChanging: bool;
 
@@ -80,6 +83,7 @@ open type ViewManager {
     self._nextFocusPath = List<Widget>();
     self._hoverPath = List<Widget>();
     self._nextHoverPath = List<Widget>();
+    self._activePath = List<Widget>();
     self._focusChanging = false;
     self._hasPendingFocus = false;
     self._pendingFocus = none;
@@ -408,6 +412,46 @@ open type ViewManager {
     oldPath.clear();
   }
 
+  /** 清除当前 Active 路径上的状态位并复用路径存储。 */
+  seal func clearActive(): void {
+    let activeMask = (int)Pseudo.Active;
+    for let widget in self._activePath {
+      widget.removeState(activeMask);
+    }
+    self._activePath.clear();
+  }
+
+  /**
+   * 根据鼠标按下和释放维护 Active 路径。
+   * 按下后移动及鼠标锁定不会改变路径；滚轮不属于激活操作。
+   * @param event 当前鼠标事件
+   * @param target 当前实际坐标命中的最上层 Widget
+   */
+  seal func updateActive(
+    event: MouseEvent<Widget>,
+    target: Option<Widget>
+  ): void {
+    if event.action == MouseAction.Release {
+      self.clearActive();
+      return;
+    }
+    if event.action != MouseAction.Press ||
+    event.button == MouseButton.None ||
+    event.button == MouseButton.WheelUp ||
+    event.button == MouseButton.WheelDown {
+      return;
+    }
+
+    self.clearActive();
+    if target match widget: Widget {
+      self.fillPath(widget, self._activePath);
+      let activeMask = (int)Pseudo.Active;
+      for let current in self._activePath {
+        current.addState(activeMask);
+      }
+    }
+  }
+
   /**
    * 根据鼠标动作触发组件对应的多播事件。
    * 滚轮按钮优先映射为 wheel，其余事件按 action 分发。
@@ -537,6 +581,7 @@ open type ViewManager {
   open func dispatchMouse(event: MouseEvent<Widget>): void {
     let hovered = self.hitTest(event.x, event.y);
     self.updateHover(hovered);
+    self.updateActive(event, hovered);
 
     var selected: Option<Widget> = none;
     if MouseEvent<Widget>.hasLockedTarget() {

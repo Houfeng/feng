@@ -142,6 +142,8 @@ func main(args: string[]) {
   blueRectangle.style.backColor = RgbColor(0, 0, 255);
   blueRectangle.stateStyles.use(Pseudo.Hover).backColor =
     RgbColor(0, 140, 255);
+  blueRectangle.stateStyles.use(Pseudo.Active).backColor =
+    RgbColor(0, 80, 180);
   surface.addChild(blueRectangle);
 
   // 初始靠右居中的红色矩形；最后加入，作为覆盖 Text 的最上层组件。
@@ -153,6 +155,8 @@ func main(args: string[]) {
   redRectangle.style.backColor = RgbColor(255, 0, 0);
   redRectangle.stateStyles.use(Pseudo.Hover).backColor =
     RgbColor(255, 120, 0);
+  redRectangle.stateStyles.use(Pseudo.Active).backColor =
+    RgbColor(180, 0, 80);
 
   // Text 位于蓝色矩形之上、红色矩形之下。
   let text = Text();
