@@ -32,6 +32,12 @@ open type ViewManager {
   /** 下一焦点路径的复用缓冲；与 _focusPath 在切换完成时交换。 */
   seal var _nextFocusPath: List<Widget>;
 
+  /** 当前实际鼠标命中目标到 root 的 Hover 路径。 */
+  seal var _hoverPath: List<Widget>;
+
+  /** 下一 Hover 路径的复用缓冲；与 _hoverPath 在更新完成时交换。 */
+  seal var _nextHoverPath: List<Widget>;
+
   /** 当前是否正在触发不可停止的焦点路径事件。 */
   seal var _focusChanging: bool;
 
@@ -72,6 +78,8 @@ open type ViewManager {
     self._focused = none;
     self._focusPath = List<Widget>();
     self._nextFocusPath = List<Widget>();
+    self._hoverPath = List<Widget>();
+    self._nextHoverPath = List<Widget>();
     self._focusChanging = false;
     self._hasPendingFocus = false;
     self._pendingFocus = none;
@@ -113,7 +121,7 @@ open type ViewManager {
    * @param target 路径起点
    * @param path 需要清空并写入的路径缓冲
    */
-  seal func fillFocusPath(target: Widget, path: List<Widget>): void {
+  seal func fillPath(target: Widget, path: List<Widget>): void {
     path.clear();
     var current = target;
     while true {
@@ -171,7 +179,7 @@ open type ViewManager {
       if candidate.tabIndex < 0 || !self.isInRoot(candidate) {
         return;
       }
-      self.fillFocusPath(candidate, self._nextFocusPath);
+      self.fillPath(candidate, self._nextFocusPath);
     } else {
       self._nextFocusPath.clear();
     }
@@ -365,6 +373,42 @@ open type ViewManager {
   }
 
   /**
+   * 根据实际坐标命中路径更新 Hover 状态。
+   * 路径按 target 到 root 保存，通过共同祖先差分只更新真正离开或进入的部分。
+   * @param target 当前实际坐标命中的最上层 Widget；未命中时为 none
+   */
+  seal func updateHover(target: Option<Widget>): void {
+    self._nextHoverPath.clear();
+    if target match widget: Widget {
+      self.fillPath(widget, self._nextHoverPath);
+    }
+
+    let oldPath = self._hoverPath;
+    let newPath = self._nextHoverPath;
+    var oldChangedCount = oldPath.size();
+    var newChangedCount = newPath.size();
+    while oldChangedCount > 0 && newChangedCount > 0 {
+      if oldPath.get(oldChangedCount - 1) != newPath.get(newChangedCount - 1) {
+        break;
+      }
+      oldChangedCount -= 1;
+      newChangedCount -= 1;
+    }
+
+    let hoverMask = (int)Pseudo.Hover;
+    for var index: int = 0; index < oldChangedCount; index += 1 {
+      oldPath.get(index).removeState(hoverMask);
+    }
+    for var index: int = 0; index < newChangedCount; index += 1 {
+      newPath.get(index).addState(hoverMask);
+    }
+
+    self._hoverPath = newPath;
+    self._nextHoverPath = oldPath;
+    oldPath.clear();
+  }
+
+  /**
    * 根据鼠标动作触发组件对应的多播事件。
    * 滚轮按钮优先映射为 wheel，其余事件按 action 分发。
    * @param widget 当前接收事件的组件
@@ -491,11 +535,14 @@ open type ViewManager {
    * @param event InputManager 解析得到的鼠标事件
    */
   open func dispatchMouse(event: MouseEvent<Widget>): void {
+    let hovered = self.hitTest(event.x, event.y);
+    self.updateHover(hovered);
+
     var selected: Option<Widget> = none;
     if MouseEvent<Widget>.hasLockedTarget() {
       selected = MouseEvent<Widget>.lockedTarget();
     } else {
-      selected = self.hitTest(event.x, event.y);
+      selected = hovered;
     }
     if selected match let target: Widget {
       var hiddenBoundary: Option<Widget> = none;

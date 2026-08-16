@@ -160,8 +160,11 @@ styling 阶段在用户 style 之后按 StateStyles 顺序遍历规则，满足
 overrideStyle。状态样式的覆盖优先级由首次定义顺序决定，后定义的匹配规则覆盖先定义的
 规则；整个过程不使用字符串、对象 key、Map 或每帧临时分配。
 
-本次只落地状态表示、状态样式存储和样式合并能力。ViewManager 自动维护 Hover、Focus、
-Active 状态的时机与路径语义在后续事件状态阶段单独实现。
+Widget 提供 `addState(mask)` 和 `removeState(mask)`，内部只执行整数位的添加和移除，不把
+state 限定为 Pseudo。ViewManager 当前自动维护 Hover：每次鼠标事件先按实际坐标执行
+hitTest，命中 Widget 及其到 root 的祖先路径获得 `Pseudo.Hover`，离开旧路径的部分移除
+Hover。鼠标锁定只改变事件路由 target，不改变实际坐标对应的 Hover 路径；未命中时清空
+旧 Hover 路径。Focus 和 Active 的自动状态维护留在后续步骤。
 
 ### 3.3 Thickness
 
@@ -246,6 +249,8 @@ open spec Widget {
   let overrideStyle: StylePatch;
   var state: int;
   let stateStyles: StateStyles;
+  func addState(mask: int): void;
+  func removeState(mask: int): void;
   var dirty: DirtyMark;
   var frame: Rect;
   var clippedFrame: Rect;
@@ -275,6 +280,8 @@ open spec Widget {
 - `draftStyle` 是每轮完整合并样式时复用的草稿，`rtStyle` 是布局与绘制读取的最终结果；
 - `overrideStyle` 是框架和父布局提供的最高优先级稀疏覆盖；
 - `state` 是当前 Widget 的状态位集合，`stateStyles` 按定义顺序保存状态样式规则；
+- `addState()`/`removeState()` 使用整数 mask 修改状态位，重复添加或移除不存在的位保持
+  幂等；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
 - `frame` 是 `@value` 布局结果，由 `arrange()` 整体写回；
 - `clippedFrame` 是 `@value` 绘制快照，由 `doDraw()` 计算并在登记 sequence 时整体写回；
@@ -302,6 +309,8 @@ open type View: Widget {
   let overrideStyle: StylePatch;
   var state: int = 0;
   let stateStyles: StateStyles = StateStyles();
+  func addState(mask: int): void;
+  func removeState(mask: int): void;
   var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
   var frame: Rect;
   var clippedFrame: Rect;
@@ -330,6 +339,11 @@ open type View: Widget {
 `ViewManager.trace()` 登记绘制顺序，然后调用组件自己的 `draw()`；组件及容器不再自行感知 sequence 跟踪。`View.draw()` 使用已缓存的 `clippedFrame` 及 `backColor` 在 Screen back buffer 中填充当前组件的空白矩形，前景色使用终端默认色。`foreColor` 由后续实际绘制字符的组件使用。`View.draw()` 不遍历子组件，不绘制文本或边框。有效绘制区域是自身 `frame` 与最近一个 `overflow == Hidden` 祖先组件的 `clippedFrame` 的交集；不存在这样的祖先时只与 Screen 求交。
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
+
+ViewManager 复用两条 target-to-root List 对 Hover 路径做共同祖先差分，不在每次鼠标事件中
+分配临时集合。Hover 状态在鼠标事件监听器执行前更新；下一轮 styling 根据最终 state 合并
+状态样式。Hover 路径使用本帧 `sequence` 和 `clippedFrame` 命中，因此自动继承可见性、
+PointerEvents、裁剪和绘制层级规则。
 
 ## 6 ContainerWidget 与 Container
 

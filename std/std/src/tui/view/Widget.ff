@@ -45,6 +45,12 @@ open spec Widget {
    */
   let stateStyles: StateStyles;
 
+  /** 将指定状态位加入当前状态集合。 */
+  func addState(mask: int): void;
+
+  /** 将指定状态位从当前状态集合移除。 */
+  func removeState(mask: int): void;
+
   /**
    * 当前组件的组合脏状态，仅供 TUI 框架维护
    * 注意：未来 spec 的 seal 成员实施后将改为 seal

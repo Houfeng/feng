@@ -32,6 +32,18 @@ open type View: Widget {
   /** 按首次 use() 顺序保存的状态样式。 */
   let stateStyles: StateStyles = StateStyles();
 
+  /** 将指定状态位加入当前状态集合；重复添加保持不变。 */
+  @mixable
+  static func addState(widget: Widget, mask: int): void {
+    widget.state |= mask;
+  }
+
+  /** 将指定状态位从当前状态集合移除；状态不存在时保持不变。 */
+  @mixable
+  static func removeState(widget: Widget, mask: int): void {
+    widget.state &= ~mask;
+  }
+
   /**
    * 当前组件的组合脏状态；新组件及其初始子树需要布局
    * 注意：未来 spec 的 seal 成员实施后将改为 seal
