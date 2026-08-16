@@ -140,9 +140,9 @@ func main(args: string[]) {
   blueRectangle.style.horizontalAlign = Align.Center;
   blueRectangle.style.verticalAlign = Align.Center;
   blueRectangle.style.backColor = RgbColor(0, 0, 255);
-  blueRectangle.stateStyles.use(Pseudo.Hover).backColor =
+  blueRectangle.useStateStyle(Pseudo.Hover).backColor =
     RgbColor(0, 140, 255);
-  blueRectangle.stateStyles.use(Pseudo.Active).backColor =
+  blueRectangle.useStateStyle(Pseudo.Active).backColor =
     RgbColor(0, 80, 180);
   surface.addChild(blueRectangle);
 
@@ -153,9 +153,9 @@ func main(args: string[]) {
   redRectangle.style.horizontalAlign = Align.End;
   redRectangle.style.verticalAlign = Align.Center;
   redRectangle.style.backColor = RgbColor(255, 0, 0);
-  redRectangle.stateStyles.use(Pseudo.Hover).backColor =
+  redRectangle.useStateStyle(Pseudo.Hover).backColor =
     RgbColor(255, 120, 0);
-  redRectangle.stateStyles.use(Pseudo.Active).backColor =
+  redRectangle.useStateStyle(Pseudo.Active).backColor =
     RgbColor(180, 0, 80);
 
   // Text 位于蓝色矩形之上、红色矩形之下。

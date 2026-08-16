@@ -45,6 +45,9 @@ open spec Widget {
    */
   let stateStyles: StateStyles;
 
+  /** 获取指定内建伪状态的样式，首次使用时创建。 */
+  func useStateStyle(pseudo: Pseudo): StylePatch;
+
   /** 将指定状态位加入当前状态集合。 */
   func addState(mask: int): void;
 

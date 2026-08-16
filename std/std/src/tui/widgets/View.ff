@@ -32,6 +32,12 @@ open type View: Widget {
   /** 按首次 use() 顺序保存的状态样式。 */
   let stateStyles: StateStyles = StateStyles();
 
+  /** 获取指定内建伪状态的样式，首次使用时创建。 */
+  @mixable
+  static func useStateStyle(widget: Widget, pseudo: Pseudo): StylePatch {
+    return widget.stateStyles.use(pseudo);
+  }
+
   /** 将指定状态位加入当前状态集合；重复添加保持不变。 */
   @mixable
   static func addState(widget: Widget, mask: int): void {

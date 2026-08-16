@@ -161,7 +161,8 @@ overrideStyle。状态样式的覆盖优先级由首次定义顺序决定，后�
 规则；整个过程不使用字符串、对象 key、Map 或每帧临时分配。
 
 Widget 提供 `addState(mask)` 和 `removeState(mask)`，内部只执行整数位的添加和移除，不把
-state 限定为 Pseudo。ViewManager 当前自动维护 Hover：每次鼠标事件先按实际坐标执行
+state 限定为 Pseudo；`useStateStyle(pseudo)` 是 `stateStyles.use(pseudo)` 的便捷入口。
+ViewManager 当前自动维护 Hover：每次鼠标事件先按实际坐标执行
 hitTest，命中 Widget 及其到 root 的祖先路径获得 `Pseudo.Hover`，离开旧路径的部分移除
 Hover。鼠标锁定只改变事件路由 target，不改变实际坐标对应的 Hover 路径；未命中时清空
 旧 Hover 路径。
@@ -254,6 +255,7 @@ open spec Widget {
   let overrideStyle: StylePatch;
   var state: int;
   let stateStyles: StateStyles;
+  func useStateStyle(pseudo: Pseudo): StylePatch;
   func addState(mask: int): void;
   func removeState(mask: int): void;
   var dirty: DirtyMark;
@@ -285,6 +287,7 @@ open spec Widget {
 - `draftStyle` 是每轮完整合并样式时复用的草稿，`rtStyle` 是布局与绘制读取的最终结果；
 - `overrideStyle` 是框架和父布局提供的最高优先级稀疏覆盖；
 - `state` 是当前 Widget 的状态位集合，`stateStyles` 按定义顺序保存状态样式规则；
+- `useStateStyle()` 返回指定 Pseudo 对应的 StylePatch，供组件和应用配置状态样式；
 - `addState()`/`removeState()` 使用整数 mask 修改状态位，重复添加或移除不存在的位保持
   幂等；
 - `dirty` 保存当前组件的组合脏状态，基础 View 初始包含 `Layout` 和 `SubtreeLayout`；
@@ -314,6 +317,7 @@ open type View: Widget {
   let overrideStyle: StylePatch;
   var state: int = 0;
   let stateStyles: StateStyles = StateStyles();
+  func useStateStyle(pseudo: Pseudo): StylePatch;
   func addState(mask: int): void;
   func removeState(mask: int): void;
   var dirty: DirtyMark = DirtyMark(DirtyType.Layout, DirtyType.SubtreeLayout);
