@@ -154,8 +154,8 @@ descendants，不改变祖先 overflow 裁剪、逆序命中或事件冒泡行�
 本阶段只修改 std、相关开发文档和新增的 std_test；定向构建并运行
 `./build/bin/feng run std/std_test`。发现超出当前范围的问题时暂停并交由人工决策。
 
-人工 Review 阶段在 `examples/tui_demo` 中增加一个 VStack 示例，用于直接观察多个 child 的
-垂直排列、Auto 高度和背景绘制结果。
+人工 Review 阶段在 `examples/tui_demo` 中使用 VStack 组成左侧栏，用于直接观察多个 child
+的垂直排列、交叉轴布局和全高背景绘制结果。
 
 ## 8 实施 TODO
 

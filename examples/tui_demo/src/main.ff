@@ -10,11 +10,6 @@ import std.tui.screen;
 import std.tui.widgets;
 import std.tui.view;
 
-/** 拖动示例的根容器，直接复用 Container 的默认样式、布局和绘制能力。 */
-type DragSurface: ContainerWidget {
-  ...: Container = Container();
-}
-
 /**
  * 为矩形绑定独立的鼠标锁定和拖动状态。
  * 锁定后鼠标移出矩形仍继续拖动，并将最终位置限制在 Screen 内。
@@ -87,18 +82,13 @@ func main(args: string[]) {
   });
 
   // 根容器占满 Screen，负责自治布局和绘制子组件。
-  let surface = DragSurface();
+  let surface = Container();
   app.view.root = surface;
 
-  // VStack 使用 Auto 高度，并按加入顺序垂直排列两个直接 Text child。
+  // VStack 作为全高左侧栏，并按加入顺序垂直排列两个直接 Text child。
   let stack = VStack();
-  stack.style.position = Position.Fixed;
-  stack.style.x = 2;
-  stack.style.y = 2;
   stack.style.width = 24;
-  stack.style.height = auto;
   stack.style.horizontalAlign = Align.Start;
-  stack.style.verticalAlign = Align.Start;
   let stackPadding: int = 1;
   stack.style.padding = Thickness(stackPadding);
   stack.style.backColor = RgbColor(40, 40, 40);
