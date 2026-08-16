@@ -61,6 +61,17 @@ open enum WidgetOverflow {
   Visible,
   Hidden
 }
+
+open enum TextAlign {
+  Left,
+  Center,
+  Right
+}
+
+open enum TextOverflow {
+  Clip,
+  Ellipsis
+}
 ```
 
 - `Normal`：由父组件的排列逻辑定位；
@@ -90,12 +101,18 @@ open type WidgetStyle {
   var pointerEvents: PointerEvents;
   var horizontalAlign: WidgetAlign;
   var verticalAlign: WidgetAlign;
+  var textAlign: TextAlign;
+  var textOverflow: TextOverflow;
 }
 ```
 
 尺寸和坐标使用 `Union<int, double>`：`int` 表示固定终端单元数，`double` 表示百分比。`x`/`y` 仅用于 `Absolute` 和 `Fixed`，`Normal`、`Relative` 忽略二者。`Absolute` 的相对坐标以最近的非 `Normal` 祖先组件为参照，且不受该祖先组件 `padding` 影响；不存在非 `Normal` 祖先时以屏幕为参照。`Fixed` 始终以屏幕为参照。`Absolute` 和 `Fixed` 忽略 `horizontalAlign` 和 `verticalAlign`。
 
 `foreColor`/`backColor` 为 `none` 时使用终端默认色。`overflow == Hidden` 时裁剪超出组件区域的绘制；滚动能力由后续组件实现。
+
+`textAlign` 和 `textOverflow` 是文本绘制样式，分别默认为 `Left` 和 `Clip`。基础 View
+保留但不消费这两个字段；Text 直接读取自身 `rtStyle` 中的最终值。本阶段不实现样式继承。
+两者不改变换行、内在尺寸或 frame，变化只记录为 `StyleChangeType.Draw`。
 
 `visibility` 和 `pointerEvents` 的定义如下：
 

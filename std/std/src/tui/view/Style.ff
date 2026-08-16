@@ -61,6 +61,24 @@ open enum PointerEvents {
   None
 }
 
+/** Text 每一行内容在组件 frame 内的水平对齐方式。 */
+open enum TextAlign {
+  /** 从 frame 左侧开始绘制。 */
+  Left,
+  /** 在 frame 内水平居中。 */
+  Center,
+  /** 与 frame 右侧对齐。 */
+  Right
+}
+
+/** Text 内容超出组件 frame 高度时的显示方式。 */
+open enum TextOverflow {
+  /** 直接裁剪超出 frame 的内容。 */
+  Clip,
+  /** 在最后可显示行的最右侧绘制最多三个 ASCII 点。 */
+  Ellipsis
+}
+
 /**
  * Auto 表示由组件的内在内容决定最终尺寸。
  * 零元素具名 tuple 不携带运行时数据。
@@ -207,6 +225,12 @@ open type Style {
    */
   var verticalAlign: Align;
 
+  /** Text 每一行内容在组件 frame 内的水平对齐方式。 */
+  var textAlign: TextAlign;
+
+  /** Text 内容超出组件 frame 高度时的显示方式。 */
+  var textOverflow: TextOverflow;
+
   /**
    * 将当前实例恢复为 Style 的默认状态。
    */
@@ -225,6 +249,8 @@ open type Style {
     self.pointerEvents = PointerEvents.All;
     self.horizontalAlign = Align.Full;
     self.verticalAlign = Align.Full;
+    self.textAlign = TextAlign.Left;
+    self.textOverflow = TextOverflow.Clip;
   }
 
   /**
@@ -292,6 +318,14 @@ open type Style {
     if self.verticalAlign != source.verticalAlign {
       self.verticalAlign = source.verticalAlign;
       result.add(StyleChangeType.Layout);
+    }
+    if self.textAlign != source.textAlign {
+      self.textAlign = source.textAlign;
+      result.add(StyleChangeType.Draw);
+    }
+    if self.textOverflow != source.textOverflow {
+      self.textOverflow = source.textOverflow;
+      result.add(StyleChangeType.Draw);
     }
     return result;
   }
@@ -390,6 +424,18 @@ open type Style {
       if self.verticalAlign != value {
         self.verticalAlign = value;
         result.add(StyleChangeType.Layout);
+      }
+    }
+    if patch.textAlign match value: TextAlign {
+      if self.textAlign != value {
+        self.textAlign = value;
+        result.add(StyleChangeType.Draw);
+      }
+    }
+    if patch.textOverflow match value: TextOverflow {
+      if self.textOverflow != value {
+        self.textOverflow = value;
+        result.add(StyleChangeType.Draw);
       }
     }
     return result;

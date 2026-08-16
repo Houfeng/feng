@@ -50,6 +50,12 @@ open type StylePatch {
   /** 垂直对齐方式覆盖。 */
   var verticalAlign: Option<Align>;
 
+  /** Text 行内容水平对齐方式覆盖。 */
+  var textAlign: Option<TextAlign>;
+
+  /** Text 内容高度溢出方式覆盖。 */
+  var textOverflow: Option<TextOverflow>;
+
   /** 清除全部覆盖字段。 */
   open func clear(): void {
     self.position = none;
@@ -66,5 +72,7 @@ open type StylePatch {
     self.pointerEvents = none;
     self.horizontalAlign = none;
     self.verticalAlign = none;
+    self.textAlign = none;
+    self.textOverflow = none;
   }
 }

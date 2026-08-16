@@ -1427,15 +1427,47 @@ func view_dirty_initial_state() {
     "tui/view/dirty-initial-subtree-layout");
 }
 
-/** 验证 Visibility/PointerEvents 的默认值、合并分类和 Patch 清理。 */
+/** 验证绘制及交互样式的默认值、合并分类和 Patch 清理。 */
 func style_visibility_and_pointer_events_apply() {
   let style = Style();
   style.visibility = Visibility.Collapse;
   style.pointerEvents = PointerEvents.None;
+  style.textAlign = TextAlign.Right;
+  style.textOverflow = TextOverflow.Ellipsis;
   style.clear();
   check(style.visibility == Visibility.Visible &&
-    style.pointerEvents == PointerEvents.All,
+    style.pointerEvents == PointerEvents.All &&
+    style.textAlign == TextAlign.Left &&
+    style.textOverflow == TextOverflow.Clip,
     "tui/style/interaction-defaults");
+
+  let textSource = Style();
+  textSource.clear();
+  textSource.textAlign = TextAlign.Right;
+  textSource.textOverflow = TextOverflow.Ellipsis;
+  let textSourceResult = style.apply(textSource);
+  check(style.textAlign == TextAlign.Right &&
+    style.textOverflow == TextOverflow.Ellipsis &&
+    !textSourceResult.has(StyleChangeType.Layout) &&
+    textSourceResult.has(StyleChangeType.Draw),
+    "tui/style/text-full-style-is-draw-change");
+
+  let textPatch = StylePatch();
+  textPatch.textAlign = TextAlign.Center;
+  textPatch.textOverflow = TextOverflow.Clip;
+  let textPatchResult = style.apply(textPatch);
+  check(style.textAlign == TextAlign.Center &&
+    style.textOverflow == TextOverflow.Clip &&
+    !textPatchResult.has(StyleChangeType.Layout) &&
+    textPatchResult.has(StyleChangeType.Draw),
+    "tui/style/text-patch-is-draw-change");
+  textPatch.clear();
+  let clearedTextResult = style.apply(textPatch);
+  check(style.textAlign == TextAlign.Center &&
+    style.textOverflow == TextOverflow.Clip &&
+    !clearedTextResult.has(StyleChangeType.Layout) &&
+    !clearedTextResult.has(StyleChangeType.Draw),
+    "tui/style/text-patch-clear-removes-overrides");
 
   let pointerPatch = StylePatch();
   pointerPatch.pointerEvents = PointerEvents.None;
@@ -2535,14 +2567,14 @@ func text_horizontal_alignment_and_clipping() {
   let centerScreen = Screen(7, 3);
   let centerManager = ViewManager(centerScreen);
   let centerText = Text();
-  check(centerText.textAlign == TextAlign.Left,
+  check(centerText.style.textAlign == TextAlign.Left,
     "tui/text/default-left-align");
   centerText.style.position = Position.Absolute;
   centerText.style.width = 7;
   centerText.style.height = 3;
   centerText.content = "A\nBCD\nEFGHI";
   let centerWidget: TextWidget = centerText;
-  centerWidget.textAlign = TextAlign.Center;
+  centerWidget.style.textAlign = TextAlign.Center;
   arrangeStyledWidget(centerText, centerManager);
   drawStyledWidget(centerText, centerManager);
 
@@ -2564,7 +2596,7 @@ func text_horizontal_alignment_and_clipping() {
   rightText.style.x = -2;
   rightText.style.width = 6;
   rightText.style.height = 3;
-  rightText.textAlign = TextAlign.Right;
+  rightText.style.textAlign = TextAlign.Right;
   rightText.content = "AB\nCDEF\nGHIJKL";
   arrangeStyledWidget(rightText, rightManager);
   drawStyledWidget(rightText, rightManager);
@@ -2588,7 +2620,7 @@ func text_overflow_ellipsis() {
   let clipScreen = Screen(7, 1);
   let clipManager = ViewManager(clipScreen);
   let clip = Text();
-  check(clip.textOverflow == TextOverflow.Clip,
+  check(clip.style.textOverflow == TextOverflow.Clip,
     "tui/text/overflow-default-clip");
   clip.style.position = Position.Absolute;
   clip.style.width = 7;
@@ -2607,7 +2639,7 @@ func text_overflow_ellipsis() {
   ellipsis.style.position = Position.Absolute;
   ellipsis.style.width = 7;
   ellipsis.style.height = 1;
-  ellipsis.textOverflow = TextOverflow.Ellipsis;
+  ellipsis.style.textOverflow = TextOverflow.Ellipsis;
   ellipsis.content = "abcdefgh";
   arrangeStyledWidget(ellipsis, ellipsisManager);
   drawStyledWidget(ellipsis, ellipsisManager);
@@ -2625,7 +2657,7 @@ func text_overflow_ellipsis() {
   multi.style.position = Position.Absolute;
   multi.style.width = 4;
   multi.style.height = 2;
-  multi.textOverflow = TextOverflow.Ellipsis;
+  multi.style.textOverflow = TextOverflow.Ellipsis;
   multi.content = "abcdefghij";
   arrangeStyledWidget(multi, multiManager);
   drawStyledWidget(multi, multiManager);
@@ -2644,7 +2676,7 @@ func text_overflow_ellipsis() {
   narrow.style.position = Position.Absolute;
   narrow.style.width = 2;
   narrow.style.height = 1;
-  narrow.textOverflow = TextOverflow.Ellipsis;
+  narrow.style.textOverflow = TextOverflow.Ellipsis;
   narrow.content = "abc";
   arrangeStyledWidget(narrow, narrowManager);
   drawStyledWidget(narrow, narrowManager);
@@ -2659,7 +2691,7 @@ func text_overflow_ellipsis() {
   external.style.position = Position.Absolute;
   external.style.width = 7;
   external.style.height = 1;
-  external.textOverflow = TextOverflow.Ellipsis;
+  external.style.textOverflow = TextOverflow.Ellipsis;
   external.content = "abcdefg";
   arrangeStyledWidget(external, externalManager);
   drawStyledWidget(external, externalManager);

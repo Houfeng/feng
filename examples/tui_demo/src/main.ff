@@ -161,7 +161,7 @@ func main(args: string[]) {
   // Text 位于蓝色矩形之上、红色矩形之下。
   let text = Text();
   text.content = "Feng TUI Text 😀\n中文宽字符：拖动色块穿过文字\nGrapheme: é · auto wrap\nDrag the blue rectangle";
-  text.textAlign = TextAlign.Center;
+  text.style.textAlign = TextAlign.Center;
   text.style.width = 28;
   text.style.height = auto;
   text.style.horizontalAlign = Align.Center;

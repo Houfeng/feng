@@ -28,24 +28,6 @@ extern func feng_pointer_move(ptr: string*, offset: int): string*;
 @runtime
 extern func feng_pointer_equal(left: string*, right: string*): bool;
 
-/** Text 中每一行内容的水平对齐方式。 */
-open enum TextAlign {
-  /** 从 Text frame 左侧开始绘制。 */
-  Left,
-  /** 在 Text frame 内水平居中。 */
-  Center,
-  /** 与 Text frame 右侧对齐。 */
-  Right
-}
-
-/** Text 内容超出自身 frame 高度时的显示方式。 */
-open enum TextOverflow {
-  /** 直接裁剪超出自身 frame 的内容。 */
-  Clip,
-  /** 在最后可显示行的最右侧绘制最多三个 ASCII 点。 */
-  Ellipsis
-}
-
 /**
  * TextLine 记录 Text.content 中一条最终显示行的原始字节区间。
  * 区间不包含硬换行码点，绘制时直接从原字符串解码，不创建 substring。
@@ -72,12 +54,6 @@ open spec TextWidget: Widget {
   /** 需要显示的文本内容。 */
   var content: string;
 
-  /** 每一行内容在 Text frame 内的水平对齐方式。 */
-  var textAlign: TextAlign;
-
-  /** 内容超出 Text 自身高度时的显示方式。 */
-  var textOverflow: TextOverflow;
-
   /** arrange 生成、draw 复用的最终显示行。 */
   let lines: List<TextLine>;
 }
@@ -92,12 +68,6 @@ open type Text: TextWidget {
 
   /** 需要显示的文本内容。 */
   open var content: string;
-
-  /** 每一行内容在 Text frame 内的水平对齐方式。 */
-  open var textAlign: TextAlign = TextAlign.Left;
-
-  /** 内容超出 Text 自身高度时的显示方式。 */
-  open var textOverflow: TextOverflow = TextOverflow.Clip;
 
   /** arrange 生成、draw 复用的最终显示行。 */
   seal let lines: List<TextLine> = List<TextLine>();
@@ -268,7 +238,7 @@ open type Text: TextWidget {
    */
   seal static func resolveLineX(text: TextWidget, line: TextLine): int {
     let remaining = text.frame.width - line.cells;
-    match text.textAlign {
+    match text.rtStyle.textAlign {
       TextAlign.Center {
         return text.frame.x + remaining / 2;
       }
@@ -351,7 +321,7 @@ open type Text: TextWidget {
 
   /** 返回需要显示省略号的行索引；不需要时返回 -1。 */
   seal static func resolveEllipsisLine(text: TextWidget): int {
-    if text.textOverflow == TextOverflow.Ellipsis &&
+    if text.rtStyle.textOverflow == TextOverflow.Ellipsis &&
     text.frame.width > 0 && text.frame.height > 0 &&
     text.lines.size() > text.frame.height {
       return text.frame.height - 1;

@@ -87,30 +87,14 @@ View 意外缩小为零。
 
 ## 5 Text 公开契约
 
-Text 定义继承 Widget 的 `TextWidget` 组件契约，再通过 View 获得
-Widget 基础状态、通用行为和事件：
+Text 定义继承 Widget 的 `TextWidget` 组件契约，再通过 View 获得 Widget 基础状态、通用
+行为和事件。`TextAlign`、`TextOverflow` 以及对应字段由
+`docs/engineering/feng-std-tui-view-dev.md` 的 Style 主规范统一定义：
 
 ```feng
-open enum TextAlign {
-  Left,
-  Center,
-  Right
-}
-
-open enum TextOverflow {
-  Clip,
-  Ellipsis
-}
-
 open spec TextWidget: Widget {
   /** 需要显示的文本内容。 */
   var content: string;
-
-  /** 每一行文本在 frame 内的水平对齐方式。 */
-  var textAlign: TextAlign;
-
-  /** 内容超出 Text 自身高度时的显示方式。 */
-  var textOverflow: TextOverflow;
 
   /** arrange 生成、draw 复用的内部分行信息。 */
   let lines: List<TextLine>;
@@ -121,12 +105,6 @@ open type Text: TextWidget {
 
   /** 需要显示的文本内容。 */
   open var content: string;
-
-  /** 每一行文本在 frame 内的水平对齐方式，默认左对齐。 */
-  open var textAlign: TextAlign = TextAlign.Left;
-
-  /** 内容超出 Text 自身高度时的显示方式，默认直接裁剪。 */
-  open var textOverflow: TextOverflow = TextOverflow.Clip;
 
   /** arrange 生成、draw 复用的内部分行信息。 */
   let lines: List<TextLine> = List<TextLine>();
@@ -139,15 +117,18 @@ open type Text: TextWidget {
 }
 ```
 
-Text 对外新增 `content` 和 `textAlign`。`lines` 是 arrange/draw 共享的内部状态；
+Text 对外新增 `content`。`lines` 是 arrange/draw 共享的内部状态；
 当前与 Widget 的 `frame`/`clippedFrame`/`parent` 一样，在 spec `seal` 成员尚未
 落地时暂时作为 spec 成员，后续应改为 `seal`。
 
 `Widget.style.horizontalAlign` 决定 Text 整个 frame 在布局参照区域中的位置；
-`Text.textAlign` 只决定每一条最终显示行在该 frame 内的水平位置，二者互不替代。
+`Text.style.textAlign` 只决定每一条最终显示行在该 frame 内的水平位置，二者互不替代。
 `TextAlign.Left` 是默认值。Center/Right 按各行实际 Cell 数分别计算，因此不同长度的行
 可以具有不同的起始列。本阶段不增加 Text 内部的垂直对齐；需要垂直定位时使用 Auto
 高度的 Text，并由外层容器通过 Widget Align 定位。
+
+Text 绘制时读取自身 `rtStyle.textAlign` 和 `rtStyle.textOverflow`。这两个字段可参与普通、
+状态及框架样式合并，但本阶段不从父组件继承或向内部子组件传递。
 
 Text 不增加面向使用方的自定义 `draw` API。`arrange` 和 `draw` 均为
 `@mixable static` 方法，以 `TextWidget` 为首参契约，并按目标显式优先规则
@@ -315,7 +296,7 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.7 新增 Auto、Text 测量、换行、裁剪、颜色和重排 std_test 用例；
 - [x] 11.8 构建 std 并完整回归 std_test；
 - [x] 11.9 根据实现结果更新 TODO，等待人工 Review；
-- [x] 11.10 为 TextWidget/Text 增加 TextAlign 与 textAlign，并实现逐行水平对齐及裁剪测试；
+- [x] 11.10 为 Text 增加 TextAlign 与 textAlign，并实现逐行水平对齐及裁剪测试；
 - [x] 11.11 复用 `std.text` grapheme API，实现组合字符与 Emoji 的测量、换行和绘制；
 - [x] 11.12 增加 TextOverflow.Clip/Ellipsis，并覆盖自身高度溢出与外部裁剪边界；
 - [x] 11.13 实现 TextUtil 显式 locale 初始化和 POSIX 码点列宽测量；
@@ -328,3 +309,5 @@ std 和 std_test 且不涉及 C、compiler 或 runtime，则构建 std 并完整
 - [x] 11.20 为 RgbColor 增加 alpha，令 Buffer 负责透明颜色通道合成，以 Cell 颜色存在位区分显式黑色与终端默认色，并移除 Text 对 Cell 的直接操作；
 - [ ] 11.21 Text 已通过 Review；VStack/HStack 已进入
   `docs/engineering/feng-std-tui-stack-layout-dev.md` 独立设计，Input 仍待后续设计。
+- [x] 11.22 将 textAlign/textOverflow 移入 Style/StylePatch，Text 只消费自身 rtStyle，
+  暂不实现继承。
