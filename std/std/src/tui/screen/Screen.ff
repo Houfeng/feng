@@ -4,9 +4,18 @@ import std;
 import std.collections;
 import std.text;
 import std.numeric;
+import std.process;
 import std.tui.common;
 
 // ─── ANSI 转义序列常量 ─────────────────────────────────────────────────────
+
+/** Screen 内部使用的 OSC 22 鼠标指针名称协议。 */
+seal enum PointerCursorProtocol {
+  /** CSS cursor 名称集合，供 Kitty、Ghostty、Foot 等终端使用。 */
+  Css,
+  /** X11 cursor 名称集合，供 iTerm2 和原生 xterm 使用。 */
+  X11
+}
 
 /**
  * Screen 表示终端用户界面（TUI）的渲染底座——差异同步层。
@@ -36,6 +45,9 @@ open type Screen {
   /** 当前由应用控制的鼠标指针形状；Auto 表示未控制。 */
   seal var currentPointerCursor: Cursor;
 
+  /** 当前终端使用的 OSC 22 鼠标指针名称协议。 */
+  seal var pointerCursorProtocol: PointerCursorProtocol;
+
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
@@ -48,6 +60,7 @@ open type Screen {
     self.back = Buffer(width, height);
     self.currentSgr = (u64)0;
     self.currentPointerCursor = Cursor.Auto;
+    self.pointerCursorProtocol = PointerCursorProtocol.Css;
   }
 
   // ─── 公开 API ───────────────────────────────────────────────────────────
@@ -219,7 +232,7 @@ open type Screen {
   /**
    * 设置终端鼠标指针形状。
    *
-   * 使用 OSC 22 CSS 形状名称；Auto 释放应用控制并恢复终端自行选择的形状。
+   * 使用 OSC 22 及当前终端对应的形状名称；Auto 释放应用控制并恢复终端自行选择的形状。
    * 相同值不会重复追加控制序列。不支持 OSC 22 的终端会静默忽略。
    * @param cursor - 要设置的鼠标指针形状
    */
@@ -239,6 +252,28 @@ open type Screen {
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5c); // '\\'
     self.currentPointerCursor = cursor;
+  }
+
+  /**
+   * 根据当前进程环境一次性选择 OSC 22 鼠标指针名称协议。
+   *
+   * iTerm2 通过 TERM_PROGRAM 暴露身份；原生 xterm 通过 XTERM_VERSION 暴露身份。
+   * 其他终端默认使用 CSS 名称，未知终端可静默忽略不支持的 OSC 22 序列。
+   * 该方法由 TuiApp.init() 调用，不应在渲染循环中重复调用。
+   */
+  open func detectPointerCursorProtocol(): void {
+    let terminalProgram = Process.getEnv("TERM_PROGRAM");
+    let detected = if terminalProgram == "iTerm.app" ||
+      Process.hasEnv("XTERM_VERSION") {
+      PointerCursorProtocol.X11
+    } else {
+      PointerCursorProtocol.Css
+    };
+    if self.pointerCursorProtocol != detected {
+      self.pointerCursorProtocol = detected;
+      // 协议变化后强制下一次同步重新编码，即使逻辑 Cursor 没有变化。
+      self.currentPointerCursor = Cursor.Auto;
+    }
   }
 
   /**
@@ -280,8 +315,20 @@ open type Screen {
     }
   }
 
-  /** 将 Cursor 对应的 OSC 22 标准名称追加到输出缓冲。 */
+  /** 将 Cursor 按当前终端名称协议编码并追加到输出缓冲。 */
   seal func writePointerCursorName(cursor: Cursor): void {
+    let name = if self.pointerCursorProtocol == PointerCursorProtocol.X11 {
+      self.resolveX11PointerCursorName(cursor)
+    } else {
+      self.resolveCssPointerCursorName(cursor)
+    };
+    for var index: int = 0; index < name.length(); index += 1 {
+      self.output.add(name.getByte(index));
+    }
+  }
+
+  /** 将逻辑 Cursor 映射为 CSS cursor 名称。 */
+  seal func resolveCssPointerCursorName(cursor: Cursor): string {
     let name = match cursor {
       Cursor.Alias { "alias" }
       Cursor.Cell { "cell" }
@@ -315,9 +362,48 @@ open type Screen {
       Cursor.ZoomOut { "zoom-out" }
       else { "" }
     };
-    for var index: int = 0; index < name.length(); index += 1 {
-      self.output.add(name.getByte(index));
-    }
+    return name;
+  }
+
+  /**
+   * 将逻辑 Cursor 映射为 iTerm2/xterm 支持的 X11 cursor 名称。
+   * X11 名称集合不能完整表达 CSS cursor；无法精确表达的成员退化为最接近的
+   * hand、arrow、cross 或方向 resize 名称。
+   */
+  seal func resolveX11PointerCursorName(cursor: Cursor): string {
+    return match cursor {
+      Cursor.Alias { "hand1" }
+      Cursor.Cell { "cross" }
+      Cursor.Copy { "hand2" }
+      Cursor.Crosshair { "crosshair" }
+      Cursor.Default { "arrow" }
+      Cursor.ResizeEast { "right_side" }
+      Cursor.ResizeEastWest { "sb_h_double_arrow" }
+      Cursor.Grab { "hand1" }
+      Cursor.Grabbing { "hand2" }
+      Cursor.Help { "hand1" }
+      Cursor.Move { "cross" }
+      Cursor.ResizeNorth { "based_arrow_up" }
+      Cursor.ResizeNorthEast { "based_arrow_up" }
+      Cursor.ResizeNorthEastSouthWest { "cross" }
+      Cursor.NoDrop { "X_cursor" }
+      Cursor.NotAllowed { "X_cursor" }
+      Cursor.ResizeNorthSouth { "sb_v_double_arrow" }
+      Cursor.ResizeNorthWest { "based_arrow_up" }
+      Cursor.ResizeNorthWestSouthEast { "cross" }
+      Cursor.Pointer { "hand2" }
+      Cursor.Progress { "arrow" }
+      Cursor.ResizeSouth { "based_arrow_down" }
+      Cursor.ResizeSouthEast { "based_arrow_down" }
+      Cursor.ResizeSouthWest { "based_arrow_down" }
+      Cursor.Text { "xterm" }
+      Cursor.VerticalText { "xterm" }
+      Cursor.ResizeWest { "left_side" }
+      Cursor.Wait { "arrow" }
+      Cursor.ZoomIn { "crosshair" }
+      Cursor.ZoomOut { "crosshair" }
+      else { "" }
+    };
   }
 
   /** 向输出缓冲追加完整 SGR 重置序列。 */

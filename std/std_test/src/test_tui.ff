@@ -4,6 +4,7 @@ import std;
 import std.test;
 import std.collections;
 import std.text;
+import std.process;
 
 import std.tui;
 import std.tui.common;
@@ -11,6 +12,14 @@ import std.tui.input;
 import std.tui.screen;
 import std.tui.view;
 import std.tui.widgets;
+
+/** 设置测试进程环境变量。 */
+@cdecl("libc", "setenv")
+extern func tui_test_setenv(name: string*, value: string*, overwrite: i32): i32;
+
+/** 删除测试进程环境变量。 */
+@cdecl("libc", "unsetenv")
+extern func tui_test_unsetenv(name: string*): i32;
 
 /** 记录 arrange 调用次数，用于验证容器脏子树调度。 */
 spec CountingWidget: Widget {
@@ -1060,7 +1069,7 @@ func screen_render_wide_glyph_transitions() {
     "tui/screen/wide-glyph-restored-after-overwrite");
 }
 
-/** 验证单个标准 Cursor 到 OSC 22 名称的映射。 */
+/** 验证单个 Cursor 到 OSC 22 CSS 名称的映射。 */
 func check_pointer_cursor_name(cursor: Cursor, name: string): void {
   let screen = Screen(1, 1);
   screen.setPointerCursor(cursor);
@@ -1068,8 +1077,8 @@ func check_pointer_cursor_name(cursor: Cursor, name: string): void {
     "tui/screen/pointer-cursor-name-" + name);
 }
 
-/** 验证 Screen 覆盖全部标准 Cursor 名称。 */
-func screen_pointer_cursor_standard_names() {
+/** 验证 Screen 默认覆盖全部 Cursor CSS 名称。 */
+func screen_pointer_cursor_css_names() {
   check_pointer_cursor_name(Cursor.Alias, "alias");
   check_pointer_cursor_name(Cursor.Cell, "cell");
   check_pointer_cursor_name(Cursor.Copy, "copy");
@@ -1100,6 +1109,105 @@ func screen_pointer_cursor_standard_names() {
   check_pointer_cursor_name(Cursor.Wait, "wait");
   check_pointer_cursor_name(Cursor.ZoomIn, "zoom-in");
   check_pointer_cursor_name(Cursor.ZoomOut, "zoom-out");
+}
+
+/** 在回调执行后恢复 TERM_PROGRAM 与 XTERM_VERSION，避免测试环境泄漏。 */
+func with_pointer_cursor_terminal_environment(
+  terminalProgram: string,
+  xtermVersion: string,
+  fn: TestFunction): void {
+  let terminalProgramKey = "TERM_PROGRAM";
+  let xtermVersionKey = "XTERM_VERSION";
+  let hadTerminalProgram = Process.hasEnv("TERM_PROGRAM");
+  let oldTerminalProgram = Process.getEnv("TERM_PROGRAM");
+  let hadXtermVersion = Process.hasEnv("XTERM_VERSION");
+  let oldXtermVersion = Process.getEnv("XTERM_VERSION");
+  defer {
+    if hadTerminalProgram {
+      tui_test_setenv(&terminalProgramKey, &oldTerminalProgram, (i32)1);
+    } else {
+      tui_test_unsetenv(&terminalProgramKey);
+    }
+    if hadXtermVersion {
+      tui_test_setenv(&xtermVersionKey, &oldXtermVersion, (i32)1);
+    } else {
+      tui_test_unsetenv(&xtermVersionKey);
+    }
+  }
+  if terminalProgram.length() > 0 {
+    check(tui_test_setenv(&terminalProgramKey, &terminalProgram, (i32)1) == (i32)0,
+      "tui/screen/pointer-cursor-set-term-program");
+  } else {
+    check(tui_test_unsetenv(&terminalProgramKey) == (i32)0,
+      "tui/screen/pointer-cursor-unset-term-program");
+  }
+  if xtermVersion.length() > 0 {
+    check(tui_test_setenv(&xtermVersionKey, &xtermVersion, (i32)1) == (i32)0,
+      "tui/screen/pointer-cursor-set-xterm-version");
+  } else {
+    check(tui_test_unsetenv(&xtermVersionKey) == (i32)0,
+      "tui/screen/pointer-cursor-unset-xterm-version");
+  }
+  fn();
+}
+
+/** 验证单个 Cursor 经环境检测后映射为 X11 名称。 */
+func check_x11_pointer_cursor_name(cursor: Cursor, name: string): void {
+  let screen = Screen(1, 1);
+  screen.detectPointerCursorProtocol();
+  screen.setPointerCursor(cursor);
+  check(screen.buildPatchString() == "\x1b]22;" + name + "\x1b\\",
+    "tui/screen/pointer-cursor-x11-name-" + name);
+}
+
+/** 验证 iTerm2 使用其支持的完整 X11 Cursor 退化映射。 */
+func screen_pointer_cursor_iterm_x11_names() {
+  with_pointer_cursor_terminal_environment("iTerm.app", "", () {
+    check_x11_pointer_cursor_name(Cursor.Alias, "hand1");
+    check_x11_pointer_cursor_name(Cursor.Cell, "cross");
+    check_x11_pointer_cursor_name(Cursor.Copy, "hand2");
+    check_x11_pointer_cursor_name(Cursor.Crosshair, "crosshair");
+    check_x11_pointer_cursor_name(Cursor.Default, "arrow");
+    check_x11_pointer_cursor_name(Cursor.ResizeEast, "right_side");
+    check_x11_pointer_cursor_name(Cursor.ResizeEastWest, "sb_h_double_arrow");
+    check_x11_pointer_cursor_name(Cursor.Grab, "hand1");
+    check_x11_pointer_cursor_name(Cursor.Grabbing, "hand2");
+    check_x11_pointer_cursor_name(Cursor.Help, "hand1");
+    check_x11_pointer_cursor_name(Cursor.Move, "cross");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorth, "based_arrow_up");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorthEast, "based_arrow_up");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorthEastSouthWest, "cross");
+    check_x11_pointer_cursor_name(Cursor.NoDrop, "X_cursor");
+    check_x11_pointer_cursor_name(Cursor.NotAllowed, "X_cursor");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorthSouth, "sb_v_double_arrow");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorthWest, "based_arrow_up");
+    check_x11_pointer_cursor_name(Cursor.ResizeNorthWestSouthEast, "cross");
+    check_x11_pointer_cursor_name(Cursor.Pointer, "hand2");
+    check_x11_pointer_cursor_name(Cursor.Progress, "arrow");
+    check_x11_pointer_cursor_name(Cursor.ResizeSouth, "based_arrow_down");
+    check_x11_pointer_cursor_name(Cursor.ResizeSouthEast, "based_arrow_down");
+    check_x11_pointer_cursor_name(Cursor.ResizeSouthWest, "based_arrow_down");
+    check_x11_pointer_cursor_name(Cursor.Text, "xterm");
+    check_x11_pointer_cursor_name(Cursor.VerticalText, "xterm");
+    check_x11_pointer_cursor_name(Cursor.ResizeWest, "left_side");
+    check_x11_pointer_cursor_name(Cursor.Wait, "arrow");
+    check_x11_pointer_cursor_name(Cursor.ZoomIn, "crosshair");
+    check_x11_pointer_cursor_name(Cursor.ZoomOut, "crosshair");
+  });
+}
+
+/** 验证原生 xterm 通过 XTERM_VERSION 选择 X11 名称。 */
+func screen_pointer_cursor_xterm_protocol_detection() {
+  with_pointer_cursor_terminal_environment("", "XTerm(390)", () {
+    let screen = Screen(1, 1);
+    screen.setPointerCursor(Cursor.Pointer);
+    check(screen.buildPatchString() == "\x1b]22;pointer\x1b\\",
+      "tui/screen/pointer-cursor-before-xterm-detection-css");
+    screen.detectPointerCursorProtocol();
+    screen.setPointerCursor(Cursor.Pointer);
+    check(screen.buildPatchString() == "\x1b]22;hand2\x1b\\",
+      "tui/screen/pointer-cursor-xterm-detection-resyncs-current");
+  });
 }
 
 /** 验证 Screen 仅在 Cursor 变化时输出，并由 Auto 释放控制。 */
@@ -4215,7 +4323,9 @@ open func run_tui_tests() {
     test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
     test("screen_render_combining_grapheme_clears_old_background()", () { screen_render_combining_grapheme_clears_old_background(); });
     test("screen_render_wide_glyph_transitions()", () { screen_render_wide_glyph_transitions(); });
-    test("screen_pointer_cursor_standard_names()", () { screen_pointer_cursor_standard_names(); });
+    test("screen_pointer_cursor_css_names()", () { screen_pointer_cursor_css_names(); });
+    test("screen_pointer_cursor_iterm_x11_names()", () { screen_pointer_cursor_iterm_x11_names(); });
+    test("screen_pointer_cursor_xterm_protocol_detection()", () { screen_pointer_cursor_xterm_protocol_detection(); });
     test("screen_pointer_cursor_transition_and_reset()", () { screen_pointer_cursor_transition_and_reset(); });
     // ─── TuiApp ───
     test("tuiapp_ctor_no_fds()", () { tuiapp_ctor_no_fds(); });

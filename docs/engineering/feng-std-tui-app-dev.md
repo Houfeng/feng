@@ -467,7 +467,7 @@ seal func drainResizeNotifications(buffer: byte[!]): void {
  * 启动时执行初始化渲染：清空物理终端屏幕（不擦除已绘制的 back 缓冲区内容）、
  * 隐藏光标、立即渲染首帧。这样应用在 run() 前绘制的内容首帧即可见，
  * 无需等待首个 poll 事件唤醒。
- * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
+ * 退出由 exit() 置 running = false；事件回调内退出时，本轮不再渲染。
  *
  * stdin 排空：Raw Mode 下 Ctrl+C 等按键不再产生信号，而是作为原始字节到达
  * stdin。阶段四尚无输入解析（阶段五实现），但若不排空 stdin，poll() 会因
@@ -518,6 +518,8 @@ open func run(): void {
         // n > 0: 已读取并丢弃 n 字节；n <= 0: 无数据或错误，忽略
       }
     }
+    // 输入回调可能已经调用 exit() 并完成终端清理；此时不得再提交退出后的帧。
+    if !self.running { break; }
     self.render();
   }
 }
@@ -525,7 +527,10 @@ open func run(): void {
 
 > `run()` 是主循环入口，无参数。pollfd 数组在循环前一次性构造，循环内只重置 `revents`。
 > `poll(-1)` 无事件时阻塞休眠，零 CPU。任一 fd 可读即唤醒；sigpipeR 当前已就绪的通知会先合并为一次 resize 请求，然后本轮只 render 一次。
-> 退出由 `exit()` 置 `running = false`，下一轮 poll 返回后循环结束。
+> 退出由 `exit()` 置 `running = false`。输入事件回调可能在当前 poll 轮次内直接调用
+> `exit()`；回调返回后必须先检查 `running`，已停止时立即结束循环，不得再调用
+> `render()`。否则退出清理完成后仍可能重新写入画面或终端状态（例如重新设置鼠标
+> 指针形状），造成终端状态残留。
 >
 > **stdin 排空（阶段四临时措施）**：Raw Mode 关闭 `ISIG`，Ctrl+C 等按键不产生 SIGINT，而是作为原始字节（如 `0x03`）到达 stdin。阶段四无输入解析，若不排空 stdin，`poll()` 会因 stdin 持续可读而立即返回，造成 busy-loop。因此 run() 在 stdin 可读时读取并丢弃一批字节，仅排空缓冲区。stdin 为阻塞模式，每次 poll 只读一次（`poll` 仅保证一次 `read` 不阻塞；若用 while 循环第二次 `read` 会挂起），剩余数据由下一轮 poll 立即返回 `POLLIN` 再读——有界工作，非无限空转。阶段五将此排空逻辑替换为 InputManager.feed()，把字节流解析为 `KeyEvent`/`MouseEvent` 并通过 onKey/onMouse 回调分发。详见 `docs/engineering/feng-std-tui-input-dev.md`。
 >
@@ -556,6 +561,8 @@ open func exit(): void {
 
 > `exit()` 与 atexit handler 统一使用 `uv_tty_reset_mode()`。
 > `exit()` 后调用方仍可执行业务资源释放等操作，进程退出由调用方决定。
+> 退出时先提交鼠标指针 `Auto` reset，再禁用鼠标报告。部分终端在鼠标报告开启期间只
+> 缓存应用设置的形状；若先禁用报告，会短暂或持续显示尚未清除的缓存形状。
 
 ## 6 回调函数
 

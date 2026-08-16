@@ -131,17 +131,25 @@ open type WidgetStyle {
 ViewManager 按当前实际 Hover 路径从 target 向 root 查找最近的非 `Auto` 值；整条路径均为
 `Auto` 时释放应用对指针形状的控制。该规则只属于 cursor 解析，不引入其他 Style 字段继承。
 
-除框架语义 `Auto` 外，Cursor 覆盖 OSC 22 定义的全部标准形状：`Alias`、`Cell`、
+除框架语义 `Auto` 外，Cursor 提供一组终端无关的逻辑形状：`Alias`、`Cell`、
 `Copy`、`Crosshair`、`Default`、各方向 `Resize`、`Grab`、`Grabbing`、`Help`、`Move`、
 `NoDrop`、`NotAllowed`、`Pointer`、`Progress`、`Text`、`VerticalText`、`Wait`、`ZoomIn`
-和 `ZoomOut`。枚举成员映射到协议规定的小写名称；`Auto` 不映射为形状名称。
+和 `ZoomOut`。OSC 22 没有统一的跨终端形状名称集合，Cursor 成员不绑定具体终端名称；
+Screen 在发送时按终端支持的名称集合编码，`Auto` 不映射为形状名称。
+
+TuiApp 初始化时通过进程环境一次性选择 Screen 的鼠标指针名称协议：iTerm2
+（`TERM_PROGRAM=iTerm.app`）和原生 xterm（存在 `XTERM_VERSION`）使用 X11 名称，其他
+终端默认使用 CSS 名称。检测结果由 Screen 缓存，不在渲染循环中重复读取环境变量。
+CSS 名称可直接表达全部 Cursor 成员；X11 名称不能完整表达时，Screen 使用语义最接近的
+受支持名称退化，不改变 Cursor 的公开成员定义。终端或中间复用器最终不支持所发序列时，
+继续保持静默无效。
 
 cursor 在 styling 完成后从最终 `rtStyle` 解析并同步，因此 Hover、Active 等状态样式能在
 同一渲染轮次生效。cursor 变化不改变布局和 Cell 绘制结果，不产生
 `StyleChangeType.Layout` 或 `StyleChangeType.Draw`。Screen 缓存上次已同步的值，仅在实际
 变化时使用 OSC 22 追加控制序列；`Auto` 在先前曾设置形状时追加 reset。终端不支持该协议
-时静默忽略，不执行能力查询。ViewManager 只解析组件语义，Screen 只负责协议编码，TuiApp
-在 `doStyling()` 后编排同步。
+时静默忽略，不执行能力查询。ViewManager 只解析组件语义，Screen 只负责终端检测与协议
+编码，TuiApp 在初始化时触发一次检测，并在 `doStyling()` 后编排同步。
 
 #### 3.2.1 StylePatch
 
@@ -703,7 +711,8 @@ std/std/src/tui/widgets/
 17. 为 Style/StylePatch 增加 `Visibility` 和 `PointerEvents`，接入 Collapse 零占位、
     Hidden 绘制截断、鼠标命中过滤及鼠标/键盘冒泡跳过规则。
 18. 已为 Style/StylePatch 增加 `Cursor`，按 Hover 路径解析继承值，并在 styling 后通过
-    Screen 的 OSC 22 状态机同步鼠标指针形状。
+    Screen 的 OSC 22 状态机同步鼠标指针形状；Cursor 保持终端无关，Screen 已在发送时
+    按一次性检测结果选择 CSS 或 iTerm2/xterm 的 X11 名称。
 
 ## 14 Review 关注点
 

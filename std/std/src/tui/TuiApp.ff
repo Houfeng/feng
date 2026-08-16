@@ -416,6 +416,8 @@ open type TuiApp {
     if self.initialized { return; }
     // 在任何布局或绘制前一次性启用当前环境的 Unicode locale。
     TextUtil.init();
+    // 一次性选择当前终端的 OSC 22 名称协议；渲染循环只使用缓存结果。
+    self.screen.detectPointerCursorProtocol();
     // 分配 uv_tty_t 内存
     self.tty = feng_alloc(UV_TTY_T_SIZE);
     if self.tty == 0 { throw "tui/app/alloc-failed"; }
@@ -520,12 +522,12 @@ open type TuiApp {
    * 启动时执行初始化渲染：清空物理终端屏幕（不清空 back 缓冲区，保留应用已绘制内容）、
    * 隐藏光标、立即渲染首帧。这样应用在 run() 前绘制的内容首帧即可见，
    * 无需等待首个 poll 事件唤醒。
-   * 退出由 exit() 置 running = false，下一轮 poll 返回后循环结束。
+   * 退出由 exit() 置 running = false；事件回调内退出时，本轮不再渲染。
    *
    * 输入解析（阶段五）：Raw Mode 下 Ctrl+C 等按键不再产生信号，而是作为原始字节到达
    * stdin。run() 在 stdin 可读时读取一批字节，逐字节喂入 InputManager.feed()，
    * 由状态机解析为 KeyEvent/MouseEvent 后内部直接调用 onKey/onMouse 分发。
-   * 回调返回后继续处理下一字节，本轮 poll 的字节全部处理完后调 render()。
+   * 回调返回后继续处理下一字节；本轮输入处理结束后仅在仍运行时调 render()。
    */
   open func run(): void {
     self.running = true;
@@ -569,27 +571,31 @@ open type TuiApp {
           }
         }
       }
+      // 输入回调可能已调用 exit() 并完成终端清理，退出后不得再提交新帧。
+      if !self.running { break; }
       self.render();
     }
   }
 
   /**
-   * 退出 TUI 模式与清理：停止主循环、禁用鼠标、显示光标、全局重置终端模式、关闭管道、释放 TTY 句柄。
+   * 退出 TUI 模式与清理：停止主循环、重置鼠标指针、禁用鼠标、显示光标、
+   * 全局重置终端模式、关闭管道、释放 TTY 句柄。
    * 显示光标与 run() 启动时隐藏光标对称，确保终端状态恢复。
    * 禁用鼠标与 init() 启用时对称。
    * 不退出进程——进程生命周期由调用方控制。
    * 幂等：重复调用安全。
    */
   open func exit(): void {
-    if !self.initialized { return; }
     self.running = false;
-    // 禁用鼠标 SGR 模式和全移动报告，由 InputManager 构建序列
-    let mouseDisable = self.input.buildDisableMouseSgrBytes();
-    c_write(STDOUT_FD, &mouseDisable, (uint)16);
+    if !self.initialized { return; }
+    // 先清除终端缓存的应用指针形状，再关闭鼠标报告，避免关闭时显露旧形状。
     self.screen.setPointerCursor(Cursor.Auto);
     self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
     let terminalRestore = self.screen.buildPatchBytes();
     self.writeOutput(terminalRestore);
+    // 禁用鼠标 SGR 模式和全移动报告，由 InputManager 构建序列
+    let mouseDisable = self.input.buildDisableMouseSgrBytes();
+    c_write(STDOUT_FD, &mouseDisable, (uint)16);
     uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
     c_close(self.sigpipeR);
     c_close(self.sigpipeW);

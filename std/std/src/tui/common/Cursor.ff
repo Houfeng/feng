@@ -4,7 +4,7 @@ open module std.tui.common;
  * 鼠标指针形状。
  *
  * Auto 表示当前组件不指定形状，由 ViewManager 继续向 Hover 路径祖先解析；
- * 其余成员对应 OSC 22 定义的标准鼠标指针名称。
+ * 其余成员表示终端无关的逻辑形状，由 Screen 在发送 OSC 22 时映射为终端名称。
  * 该类型不表示 Screen.hideCursor()/showCursor() 控制的终端文本光标。
  */
 open enum Cursor {
