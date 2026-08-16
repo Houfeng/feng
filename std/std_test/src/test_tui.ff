@@ -2089,6 +2089,279 @@ func vstack_draws_and_hits_direct_children() {
   check(hits == 1, "tui/vstack/direct-child-hit");
 }
 
+/** 验证 HStack 按顺序直接放置普通流 children，并保留用户 Style。 */
+func hstack_arranges_direct_children() {
+  let manager = ViewManager(Screen(20, 12));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.x = 2;
+  stack.style.y = 1;
+  stack.style.width = 12;
+  stack.style.height = 8;
+  let spacing: int = 1;
+  stack.style.padding = Thickness(spacing);
+
+  let first = View();
+  first.style.x = 91;
+  first.style.y = 92;
+  first.style.width = 3;
+  first.style.height = 2;
+  first.style.horizontalAlign = Align.End;
+  first.style.verticalAlign = Align.Start;
+  first.style.margin = Thickness(spacing);
+
+  let second = View();
+  second.style.position = Position.Relative;
+  second.style.x = 81;
+  second.style.y = 82;
+  second.style.width = 2;
+  second.style.height = 2;
+  second.style.horizontalAlign = Align.Center;
+  second.style.verticalAlign = Align.End;
+
+  stack.addChild(first);
+  stack.addChild(second);
+  manager.root = stack;
+  stack.doStyling(manager);
+  manager.doArrange();
+
+  check(stack.frame.x == 2 && stack.frame.y == 1 &&
+    stack.frame.width == 12 && stack.frame.height == 8,
+    "tui/hstack/fixed-frame");
+  check(first.frame.x == 4 && first.frame.y == 3 &&
+    first.frame.width == 3 && first.frame.height == 2,
+    "tui/hstack/first-child-position");
+  check(second.frame.x == 8 && second.frame.y == 6 &&
+    second.frame.width == 2 && second.frame.height == 2,
+    "tui/hstack/second-child-position");
+  var styleUnchanged = false;
+  if first.style.x match firstX: int &&
+  first.style.y match firstY: int &&
+  second.style.x match secondX: int &&
+  second.style.y match secondY: int {
+    styleUnchanged = firstX == 91 && firstY == 92 &&
+      secondX == 81 && secondY == 82;
+  }
+  check(styleUnchanged, "tui/hstack/style-unchanged");
+  var parentPreserved = false;
+  if first.parent match parent: ContainerWidget {
+    parentPreserved = (Widget)parent == (Widget)stack;
+  }
+  check(parentPreserved, "tui/hstack/parent-preserved");
+}
+
+/** 验证 HStack 通过 overrideStyle 忽略 child 的主轴 Full。 */
+func hstack_overrides_child_main_axis_align() {
+  let manager = ViewManager(Screen(10, 6));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.width = 10;
+  stack.style.height = 6;
+
+  let first = View();
+  first.style.width = 2;
+  first.style.height = 2;
+  first.style.verticalAlign = Align.Start;
+  let second = View();
+  second.style.width = 1;
+  second.style.height = 2;
+  second.style.verticalAlign = Align.Start;
+  stack.addChild(first);
+  stack.addChild(second);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(first.style.horizontalAlign == Align.Full &&
+    second.style.horizontalAlign == Align.Full,
+    "tui/hstack/main-axis-user-style-unchanged");
+  check(first.rtStyle.horizontalAlign == Align.Start &&
+    second.rtStyle.horizontalAlign == Align.Start,
+    "tui/hstack/main-axis-runtime-override");
+  check(first.frame.x == 0 && first.frame.width == 2 &&
+    second.frame.x == 2 && second.frame.width == 1,
+    "tui/hstack/main-axis-frame-from-override");
+}
+
+/** 验证 HStack 的 Auto 尺寸来自普通流 children，并在 child 变化后 Reflow。 */
+func hstack_auto_size_from_children() {
+  let manager = ViewManager(Screen(30, 20));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.x = 3;
+  stack.style.y = 2;
+  stack.style.width = auto;
+  stack.style.height = auto;
+  let padding: int = 1;
+  stack.style.padding = Thickness(padding);
+
+  let first = View();
+  first.style.width = 4;
+  first.style.height = 2;
+  first.style.verticalAlign = Align.Start;
+  let second = View();
+  second.style.width = 6;
+  second.style.height = 3;
+  second.style.verticalAlign = Align.End;
+  stack.addChild(first);
+  stack.addChild(second);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(stack.frame.x == 3 && stack.frame.y == 2 &&
+    stack.frame.width == 12 && stack.frame.height == 5,
+    "tui/hstack/auto-frame");
+  check(first.frame.x == 4 && first.frame.y == 3,
+    "tui/hstack/auto-first-child");
+  check(second.frame.x == 8 && second.frame.y == 3,
+    "tui/hstack/auto-second-child");
+  check(stack.dirty.isEmpty(), "tui/hstack/auto-layout-stable");
+
+  first.style.width = 6;
+  first.dirty.add(DirtyType.Layout);
+  first.requestReflow();
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(stack.frame.width == 14 && stack.frame.height == 5,
+    "tui/hstack/auto-reflow-frame");
+  check(second.frame.x == 10,
+    "tui/hstack/auto-reflow-moves-following-child");
+  check(stack.dirty.isEmpty(), "tui/hstack/auto-reflow-stable");
+}
+
+/** 验证 HStack 保留 child 的百分比尺寸和交叉轴 Full/End 语义。 */
+func hstack_percentage_and_cross_axis_alignment() {
+  let manager = ViewManager(Screen(20, 12));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.x = 1;
+  stack.style.y = 1;
+  stack.style.width = 12;
+  stack.style.height = 10;
+  let padding: int = 1;
+  stack.style.padding = Thickness(padding);
+
+  let percent = View();
+  let half: double = 0.5;
+  let quarter: double = 0.25;
+  percent.style.width = half;
+  percent.style.height = quarter;
+  percent.style.verticalAlign = Align.Start;
+
+  let full = View();
+  full.style.width = 1;
+  full.style.verticalAlign = Align.Full;
+  full.style.margin = Thickness(padding);
+
+  let end = View();
+  end.style.width = 2;
+  end.style.height = 2;
+  end.style.verticalAlign = Align.End;
+
+  stack.addChild(percent);
+  stack.addChild(full);
+  stack.addChild(end);
+  manager.root = stack;
+  stack.doStyling(manager);
+  manager.doArrange();
+
+  check(percent.frame.x == 2 && percent.frame.y == 2 &&
+    percent.frame.width == 5 && percent.frame.height == 2,
+    "tui/hstack/percentage-child");
+  check(full.frame.x == 8 && full.frame.y == 3 &&
+    full.frame.width == 1 && full.frame.height == 6,
+    "tui/hstack/full-cross-axis-child");
+  check(end.frame.x == 10 && end.frame.y == 8 &&
+    end.frame.width == 2 && end.frame.height == 2,
+    "tui/hstack/end-cross-axis-child");
+}
+
+/** 验证 Collapse 和浮动 child 不占用 HStack 普通流及 Auto 内在尺寸。 */
+func hstack_collapse_and_floating_children_do_not_advance_flow() {
+  let manager = ViewManager(Screen(20, 12));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.x = 1;
+  stack.style.y = 1;
+  stack.style.width = auto;
+  stack.style.height = auto;
+
+  let first = View();
+  first.style.width = 3;
+  first.style.height = 2;
+  first.style.verticalAlign = Align.Start;
+  let collapsed = View();
+  collapsed.style.width = 5;
+  collapsed.style.height = 5;
+  collapsed.style.visibility = Visibility.Collapse;
+  let floating = View();
+  floating.style.position = Position.Absolute;
+  floating.style.x = 5;
+  floating.style.y = 4;
+  floating.style.width = 2;
+  floating.style.height = 1;
+  let second = View();
+  second.style.width = 3;
+  second.style.height = 2;
+  second.style.verticalAlign = Align.Start;
+  stack.addChild(first);
+  stack.addChild(collapsed);
+  stack.addChild(floating);
+  stack.addChild(second);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  check(stack.frame.width == 6 && stack.frame.height == 2,
+    "tui/hstack/collapse-floating-auto-size");
+  check(first.frame.x == 1 && second.frame.x == 4,
+    "tui/hstack/collapse-floating-do-not-advance");
+  check(collapsed.frame.width == 0 && collapsed.frame.height == 0,
+    "tui/hstack/collapse-zero-frame");
+  check(floating.frame.x == 6 && floating.frame.y == 5,
+    "tui/hstack/floating-keeps-own-position");
+}
+
+/** 验证 HStack 嵌套 VStack，并复用 Container 的递归绘制、裁剪和命中。 */
+func hstack_nested_vstack_draws_and_hits() {
+  let manager = ViewManager(Screen(6, 3));
+  let stack = HStack();
+  stack.style.position = Position.Fixed;
+  stack.style.width = 4;
+  stack.style.height = 2;
+  stack.style.overflow = Overflow.Hidden;
+  let nested = VStack();
+  nested.style.width = 5;
+  nested.style.height = 2;
+  nested.style.verticalAlign = Align.Start;
+  let child = View();
+  child.style.width = 5;
+  child.style.height = 1;
+  child.style.horizontalAlign = Align.Start;
+  child.style.backColor = RgbColor(1, 2, 3);
+  var hits = 0;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    hits += 1;
+  });
+  nested.addChild(child);
+  stack.addChild(nested);
+  manager.root = stack;
+
+  stack.doStyling(manager);
+  manager.doArrange();
+  manager.doDraw();
+  check(nested.frame.x == 0 && nested.frame.y == 0 &&
+    child.frame.x == 0 && child.frame.y == 0,
+    "tui/hstack/nested-vstack-layout");
+  check(nested.clippedFrame.width == 4 &&
+    child.clippedFrame.width == 4,
+    "tui/hstack/nested-vstack-clipped");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 0, 0));
+  check(hits == 1, "tui/hstack/nested-direct-child-hit");
+}
+
 /** 验证 Text 的 Auto 宽高、硬换行、末尾换行和最终尺寸对齐。 */
 func text_auto_measure_and_alignment() {
   let manager = ViewManager(Screen(20, 10));
@@ -3789,6 +4062,12 @@ open func run_tui_tests() {
     test("vstack_percentage_and_cross_axis_alignment()", () { vstack_percentage_and_cross_axis_alignment(); });
     test("vstack_floating_children_do_not_advance_flow()", () { vstack_floating_children_do_not_advance_flow(); });
     test("vstack_draws_and_hits_direct_children()", () { vstack_draws_and_hits_direct_children(); });
+    test("hstack_arranges_direct_children()", () { hstack_arranges_direct_children(); });
+    test("hstack_overrides_child_main_axis_align()", () { hstack_overrides_child_main_axis_align(); });
+    test("hstack_auto_size_from_children()", () { hstack_auto_size_from_children(); });
+    test("hstack_percentage_and_cross_axis_alignment()", () { hstack_percentage_and_cross_axis_alignment(); });
+    test("hstack_collapse_and_floating_children_do_not_advance_flow()", () { hstack_collapse_and_floating_children_do_not_advance_flow(); });
+    test("hstack_nested_vstack_draws_and_hits()", () { hstack_nested_vstack_draws_and_hits(); });
     test("text_auto_measure_and_alignment()", () { text_auto_measure_and_alignment(); });
     test("text_wrap_and_reflow_dimensions()", () { text_wrap_and_reflow_dimensions(); });
     test("text_grapheme_wrap_and_emoji()", () { text_grapheme_wrap_and_emoji(); });

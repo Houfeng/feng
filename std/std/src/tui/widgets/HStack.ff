@@ -1,0 +1,253 @@
+open module std.tui.widgets;
+
+import std;
+import std.collections;
+import std.tui.common;
+import std.tui.view;
+import std.tui.input;
+
+/** HStack 的组件契约。 */
+open spec HStackWidget: ContainerWidget {}
+
+/**
+ * 按 children 顺序水平排列直接子组件的容器。
+ * Normal/Relative child 参与普通流，Absolute/Fixed child 脱离普通流。
+ */
+open type HStack: HStackWidget {
+  /** 复用 Container 的组件树与 View 基础能力。 */
+  ...: Container = Container();
+
+  /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
+  @mixable
+  static func prepareChildOverrideStyle(stack: HStackWidget,
+    child: Widget): void {
+    Container.prepareChildOverrideStyle(stack, child);
+    child.overrideStyle.horizontalAlign = Align.Start;
+  }
+
+  /** 判断 HStack 当前是否需要 children 提供 Auto 内在宽度。 */
+  seal static func needsIntrinsicWidth(stack: HStackWidget): bool {
+    let widget = (Widget)stack;
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.horizontalAlign == Align.Full {
+      return false;
+    }
+    return widget.rtStyle.width match Auto;
+  }
+
+  /** 判断 HStack 当前是否需要 children 提供 Auto 内在高度。 */
+  seal static func needsIntrinsicHeight(stack: HStackWidget): bool {
+    let widget = (Widget)stack;
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.rtStyle.verticalAlign == Align.Full {
+      return false;
+    }
+    return widget.rtStyle.height match Auto;
+  }
+
+  /** 按参照尺寸解析非负间距。 */
+  seal static func resolveSpacing(value: Union<int, double>,
+    reference: int): int {
+    let result = View.resolveLength(value, reference);
+    return if result > 0 { result } else { 0 };
+  }
+
+  /** 从总尺寸扣除两侧间距，结果保持非负。 */
+  seal static func resolveAvailableSize(size: int,
+    leading: int, trailing: int): int {
+    if size <= 0 || leading >= size || trailing >= size - leading {
+      return 0;
+    }
+    return size - leading - trailing;
+  }
+
+  /** 解析 Widget 在指定参照区域中的四侧非负 margin。 */
+  seal static func resolveMargin(widget: Widget,
+    reference: Rect): Tuple<int, int, int, int> {
+    let margin = widget.rtStyle.margin;
+    return (
+      HStack.resolveSpacing(margin.top, reference.height),
+      HStack.resolveSpacing(margin.right, reference.width),
+      HStack.resolveSpacing(margin.bottom, reference.height),
+      HStack.resolveSpacing(margin.left, reference.width)
+    );
+  }
+
+  /** 解析 Widget 在自身 frame 中的四侧非负 padding。 */
+  seal static func resolvePadding(widget: Widget): Tuple<int, int, int, int> {
+    let padding = widget.rtStyle.padding;
+    return (
+      HStack.resolveSpacing(padding.top, widget.frame.height),
+      HStack.resolveSpacing(padding.right, widget.frame.width),
+      HStack.resolveSpacing(padding.bottom, widget.frame.height),
+      HStack.resolveSpacing(padding.left, widget.frame.width)
+    );
+  }
+
+  /** 解析 HStack frame 内扣除非负 padding 后的 content 区域。 */
+  seal static func resolveContentFrame(stack: HStackWidget): Rect {
+    let widget = (Widget)stack;
+    let padding = HStack.resolvePadding(widget);
+    let content = Rect();
+    content.x = widget.frame.x + padding.item4;
+    content.y = widget.frame.y + padding.item1;
+    content.width = HStack.resolveAvailableSize(widget.frame.width,
+      padding.item4, padding.item2);
+    content.height = HStack.resolveAvailableSize(widget.frame.height,
+      padding.item1, padding.item3);
+    return content;
+  }
+
+  /**
+   * 根据已布局的普通流直接 children 计算 HStack 的 Auto 内在尺寸。
+   * 返回值已经包含自身 padding。
+   */
+  seal static func resolveIntrinsicSize(stack: HStackWidget): Tuple<int, int> {
+    let widget = (Widget)stack;
+    let content = HStack.resolveContentFrame(stack);
+    let padding = HStack.resolvePadding(widget);
+    var width = 0;
+    var height = 0;
+    for let child in stack.children {
+      if child.rtStyle.visibility != Visibility.Collapse &&
+      View.isNormalFlow(child.rtStyle.position) {
+        let margin = HStack.resolveMargin(child, content);
+        let outerWidth = margin.item4 + child.frame.width + margin.item2;
+        let outerHeight = margin.item1 + child.frame.height + margin.item3;
+        width += outerWidth;
+        if outerHeight > height {
+          height = outerHeight;
+        }
+      }
+    }
+    return (width + padding.item4 + padding.item2,
+      height + padding.item1 + padding.item3);
+  }
+
+  /**
+   * 使用内在尺寸解析 HStack 自身 frame。
+   * HStack 作为普通流 child 时保留直接父容器已经写入的坐标。
+   */
+  seal static func resolveFrame(stack: HStackWidget,
+    manager: ViewManager, intrinsic: Tuple<int, int>): Rect {
+    let widget = (Widget)stack;
+    let assignedX = widget.frame.x;
+    let assignedY = widget.frame.y;
+    let reference = View.resolveReferenceFrame(widget, manager);
+    let margin = HStack.resolveMargin(widget, reference);
+    let width = View.resolveWidth(widget, reference.width,
+      margin.item4, margin.item2, intrinsic.item1);
+    let height = View.resolveHeight(widget, reference.height,
+      margin.item1, margin.item3, intrinsic.item2);
+    let frame = Rect();
+    frame.x = View.resolveX(widget, reference,
+      margin.item4, margin.item2, width);
+    frame.y = View.resolveY(widget, reference,
+      margin.item1, margin.item3, height);
+    if View.isNormalFlow(widget.rtStyle.position) &&
+    widget.parent match parent: ContainerWidget {
+      frame.x = assignedX;
+      frame.y = assignedY;
+    }
+    frame.width = width;
+    frame.height = height;
+    return frame;
+  }
+
+  /** 根据交叉轴 Align 解析普通流 child 的最终纵坐标。 */
+  seal static func resolveChildY(child: Widget, content: Rect,
+    top: int, bottom: int): int {
+    let origin = content.y + top;
+    let available = HStack.resolveAvailableSize(content.height, top, bottom);
+    match child.rtStyle.verticalAlign {
+      Align.Center {
+        return origin + (available - child.frame.height) / 2;
+      }
+      Align.End {
+        return origin + available - child.frame.height;
+      }
+      else {
+        return origin;
+      }
+    }
+  }
+
+  /**
+   * 在最终 content 区域内布局直接 children，并返回普通流内在尺寸。
+   * 只调用直接 child 的公开调度方法，不访问下一层 children。
+   */
+  seal static func arrangeChildren(stack: HStackWidget,
+    manager: ViewManager): Tuple<int, int> {
+    let content = HStack.resolveContentFrame(stack);
+    var cursor = content.x;
+    var intrinsicHeight = 0;
+    for let child in stack.children {
+      child.dirty.add(DirtyType.Layout);
+      if child.rtStyle.visibility == Visibility.Collapse {
+        child.doArrange(manager);
+        continue;
+      }
+      if !View.isNormalFlow(child.rtStyle.position) {
+        child.doArrange(manager);
+        continue;
+      }
+
+      let margin = HStack.resolveMargin(child, content);
+      let childX = cursor + margin.item4;
+      let provisionalY = HStack.resolveChildY(child, content,
+        margin.item1, margin.item3);
+      if child.frame.x != childX || child.frame.y != provisionalY {
+        child.frame.x = childX;
+        child.frame.y = provisionalY;
+        child.dirty.add(DirtyType.SubtreeLayout);
+      }
+      child.doArrange(manager);
+
+      let childY = HStack.resolveChildY(child, content,
+        margin.item1, margin.item3);
+      child.frame.x = childX;
+      child.frame.y = childY;
+      let outerHeight = margin.item1 + child.frame.height + margin.item3;
+      if outerHeight > intrinsicHeight {
+        intrinsicHeight = outerHeight;
+      }
+      cursor = childX + child.frame.width + margin.item2;
+    }
+    return (cursor - content.x, intrinsicHeight);
+  }
+
+  /**
+   * 解析自身尺寸并按顺序布局直接 children。
+   * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
+   */
+  @mixable
+  static func arrange(stack: HStackWidget, manager: ViewManager): void {
+    let widget = (Widget)stack;
+    let previous = widget.frame;
+    let needsWidth = HStack.needsIntrinsicWidth(stack);
+    let needsHeight = HStack.needsIntrinsicHeight(stack);
+    var intrinsic: Tuple<int, int> = (0, 0);
+    if needsWidth || needsHeight {
+      intrinsic = HStack.resolveIntrinsicSize(stack);
+    }
+    widget.frame = HStack.resolveFrame(stack, manager, intrinsic);
+    let childrenIntrinsic = HStack.arrangeChildren(stack, manager);
+    if needsWidth || needsHeight {
+      let padding = HStack.resolvePadding(widget);
+      let finalIntrinsic: Tuple<int, int> = (
+        childrenIntrinsic.item1 + padding.item4 + padding.item2,
+        childrenIntrinsic.item2 + padding.item1 + padding.item3
+      );
+      let resolved = HStack.resolveFrame(stack, manager, finalIntrinsic);
+      if resolved.x != widget.frame.x || resolved.y != widget.frame.y ||
+      resolved.width != widget.frame.width || resolved.height != widget.frame.height {
+        widget.frame = resolved;
+        widget.dirty.add(DirtyType.Layout);
+      }
+    }
+    if previous.x != widget.frame.x || previous.y != widget.frame.y ||
+    previous.width != widget.frame.width || previous.height != widget.frame.height {
+      widget.requestReflow();
+    }
+  }
+}

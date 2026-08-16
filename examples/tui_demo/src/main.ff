@@ -112,6 +112,27 @@ func main(args: string[]) {
   stackDescription.style.foreColor = RgbColor(180, 220, 255);
   stack.addChild(stackDescription);
 
+  // 在 VStack 中嵌套一行 HStack，验证两个轴向容器的组合布局。
+  let row = HStack();
+  row.style.height = auto;
+  stack.addChild(row);
+
+  let rowTitle = Text();
+  rowTitle.content = "HStack";
+  rowTitle.style.width = auto;
+  rowTitle.style.height = auto;
+  rowTitle.style.verticalAlign = Align.Start;
+  rowTitle.style.foreColor = RgbColor(255, 160, 100);
+  row.addChild(rowTitle);
+
+  let rowDescription = Text();
+  rowDescription.content = " row";
+  rowDescription.style.width = auto;
+  rowDescription.style.height = auto;
+  rowDescription.style.verticalAlign = Align.Start;
+  rowDescription.style.foreColor = RgbColor(180, 220, 255);
+  row.addChild(rowDescription);
+
   // 初始居中的蓝色矩形。
   let blueRectangle = View();
   blueRectangle.style.width = 20;
