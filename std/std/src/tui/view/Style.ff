@@ -212,6 +212,11 @@ open type Style {
   var pointerEvents: PointerEvents;
 
   /**
+   * 鼠标指针形状；Auto 表示当前组件不指定，由 Hover 路径祖先决定。
+   */
+  var cursor: Cursor;
+
+  /**
    * Normal/Relative 布局的水平对齐方式；Absolute/Fixed 时忽略。
    * Start/Center/End 在扣除左右 margin 后的可用区域内按最终解析宽度定位；
    * Full 忽略 width 并占满该可用区域。
@@ -247,6 +252,7 @@ open type Style {
     self.overflow = Overflow.Visible;
     self.visibility = Visibility.Visible;
     self.pointerEvents = PointerEvents.All;
+    self.cursor = Cursor.Auto;
     self.horizontalAlign = Align.Full;
     self.verticalAlign = Align.Full;
     self.textAlign = TextAlign.Left;
@@ -310,6 +316,9 @@ open type Style {
     }
     if self.pointerEvents != source.pointerEvents {
       self.pointerEvents = source.pointerEvents;
+    }
+    if self.cursor != source.cursor {
+      self.cursor = source.cursor;
     }
     if self.horizontalAlign != source.horizontalAlign {
       self.horizontalAlign = source.horizontalAlign;
@@ -412,6 +421,11 @@ open type Style {
     if patch.pointerEvents match value: PointerEvents {
       if self.pointerEvents != value {
         self.pointerEvents = value;
+      }
+    }
+    if patch.cursor match value: Cursor {
+      if self.cursor != value {
+        self.cursor = value;
       }
     }
     if patch.horizontalAlign match value: Align {

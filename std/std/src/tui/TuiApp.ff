@@ -2,6 +2,7 @@ open module std.tui;
 
 import std;
 import std.collections;
+import std.tui.common;
 import std.tui.input;
 import std.tui.screen;
 import std.tui.view;
@@ -500,6 +501,8 @@ open type TuiApp {
     }
     // ViewManager 在存在 root 时合并样式、重新布局并绘制本帧；无 root 时保留现有 Screen 内容
     self.view.doStyling();
+    // styling 完成后按最终 rtStyle 同步鼠标指针，保障 Hover/Active 状态当帧生效
+    self.screen.setPointerCursor(self.view.resolveCursor());
     self.view.doArrange();
     self.view.doDraw();
     // 调用 Screen.buildPatchBytes() 生成 ANSI 序列字节
@@ -583,7 +586,10 @@ open type TuiApp {
     // 禁用鼠标 SGR 模式和全移动报告，由 InputManager 构建序列
     let mouseDisable = self.input.buildDisableMouseSgrBytes();
     c_write(STDOUT_FD, &mouseDisable, (uint)16);
+    self.screen.setPointerCursor(Cursor.Auto);
     self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
+    let terminalRestore = self.screen.buildPatchBytes();
+    self.writeOutput(terminalRestore);
     uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
     c_close(self.sigpipeR);
     c_close(self.sigpipeW);

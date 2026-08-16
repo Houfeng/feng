@@ -4,6 +4,7 @@ import std;
 import std.collections;
 import std.text;
 import std.numeric;
+import std.tui.common;
 
 // ─── ANSI 转义序列常量 ─────────────────────────────────────────────────────
 
@@ -32,6 +33,9 @@ open type Screen {
   /** render() 过程中跟踪的当前 SGR 样式编码（0 表示尚未发射任何 SGR） */
   seal var currentSgr: u64;
 
+  /** 当前由应用控制的鼠标指针形状；Auto 表示未控制。 */
+  seal var currentPointerCursor: Cursor;
+
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
@@ -43,6 +47,7 @@ open type Screen {
     self.front = Buffer(width, height);
     self.back = Buffer(width, height);
     self.currentSgr = (u64)0;
+    self.currentPointerCursor = Cursor.Auto;
   }
 
   // ─── 公开 API ───────────────────────────────────────────────────────────
@@ -212,6 +217,31 @@ open type Screen {
   }
 
   /**
+   * 设置终端鼠标指针形状。
+   *
+   * 使用 OSC 22 CSS 形状名称；Auto 释放应用控制并恢复终端自行选择的形状。
+   * 相同值不会重复追加控制序列。不支持 OSC 22 的终端会静默忽略。
+   * @param cursor - 要设置的鼠标指针形状
+   */
+  open func setPointerCursor(cursor: Cursor): void {
+    if self.currentPointerCursor == cursor {
+      return;
+    }
+    let output = self.output;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5d); // ']'
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x3b); // ';'
+    if cursor != Cursor.Auto {
+      self.writePointerCursorName(cursor);
+    }
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5c); // '\\'
+    self.currentPointerCursor = cursor;
+  }
+
+  /**
    * 清理 Buffer & Screen
    * 清空 back/front buffer，并向 output 追加清屏 ANSI 序列。
    */
@@ -247,6 +277,46 @@ open type Screen {
     while k >= (int)0 {
       output.add(tmp[k]);
       k = k - (int)1;
+    }
+  }
+
+  /** 将 Cursor 对应的 OSC 22 标准名称追加到输出缓冲。 */
+  seal func writePointerCursorName(cursor: Cursor): void {
+    let name = match cursor {
+      Cursor.Alias { "alias" }
+      Cursor.Cell { "cell" }
+      Cursor.Copy { "copy" }
+      Cursor.Crosshair { "crosshair" }
+      Cursor.Default { "default" }
+      Cursor.ResizeEast { "e-resize" }
+      Cursor.ResizeEastWest { "ew-resize" }
+      Cursor.Grab { "grab" }
+      Cursor.Grabbing { "grabbing" }
+      Cursor.Help { "help" }
+      Cursor.Move { "move" }
+      Cursor.ResizeNorth { "n-resize" }
+      Cursor.ResizeNorthEast { "ne-resize" }
+      Cursor.ResizeNorthEastSouthWest { "nesw-resize" }
+      Cursor.NoDrop { "no-drop" }
+      Cursor.NotAllowed { "not-allowed" }
+      Cursor.ResizeNorthSouth { "ns-resize" }
+      Cursor.ResizeNorthWest { "nw-resize" }
+      Cursor.ResizeNorthWestSouthEast { "nwse-resize" }
+      Cursor.Pointer { "pointer" }
+      Cursor.Progress { "progress" }
+      Cursor.ResizeSouth { "s-resize" }
+      Cursor.ResizeSouthEast { "se-resize" }
+      Cursor.ResizeSouthWest { "sw-resize" }
+      Cursor.Text { "text" }
+      Cursor.VerticalText { "vertical-text" }
+      Cursor.ResizeWest { "w-resize" }
+      Cursor.Wait { "wait" }
+      Cursor.ZoomIn { "zoom-in" }
+      Cursor.ZoomOut { "zoom-out" }
+      else { "" }
+    };
+    for var index: int = 0; index < name.length(); index += 1 {
+      self.output.add(name.getByte(index));
     }
   }
 

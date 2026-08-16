@@ -44,6 +44,9 @@ open type StylePatch {
   /** 鼠标事件响应方式覆盖。 */
   var pointerEvents: Option<PointerEvents>;
 
+  /** 鼠标指针形状覆盖。 */
+  var cursor: Option<Cursor>;
+
   /** 水平对齐方式覆盖。 */
   var horizontalAlign: Option<Align>;
 
@@ -70,6 +73,7 @@ open type StylePatch {
     self.overflow = none;
     self.visibility = none;
     self.pointerEvents = none;
+    self.cursor = none;
     self.horizontalAlign = none;
     self.verticalAlign = none;
     self.textAlign = none;

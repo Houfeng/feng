@@ -694,6 +694,21 @@ open type ViewManager {
   }
 
   /**
+   * 从当前实际 Hover target 向 root 解析鼠标指针形状。
+   * 最近的非 Auto 值优先；整条路径均未指定时返回 Auto。
+   * @return 当前应提交给 Screen 的鼠标指针形状
+   */
+  open func resolveCursor(): Cursor {
+    for let widget in self._hoverPath {
+      let cursor = widget.rtStyle.cursor;
+      if cursor != Cursor.Auto {
+        return cursor;
+      }
+    }
+    return Cursor.Auto;
+  }
+
+  /**
    * 第二阶段：布局
    * 从 Root 开始，递归调用每个 Widget 的 arrange 方法，计算每个 Widget 的位置和大小
    * 布局结阶段结束后，所有 widgets 的 frame 都已经计算完成

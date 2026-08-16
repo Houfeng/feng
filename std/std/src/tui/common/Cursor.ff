@@ -1,0 +1,73 @@
+open module std.tui.common;
+
+/**
+ * 鼠标指针形状。
+ *
+ * Auto 表示当前组件不指定形状，由 ViewManager 继续向 Hover 路径祖先解析；
+ * 其余成员对应 OSC 22 定义的标准鼠标指针名称。
+ * 该类型不表示 Screen.hideCursor()/showCursor() 控制的终端文本光标。
+ */
+open enum Cursor {
+  /** 不指定形状；整条 Hover 路径均为 Auto 时释放应用控制。 */
+  Auto,
+  /** alias */
+  Alias,
+  /** cell */
+  Cell,
+  /** copy */
+  Copy,
+  /** crosshair */
+  Crosshair,
+  /** default */
+  Default,
+  /** e-resize */
+  ResizeEast,
+  /** ew-resize */
+  ResizeEastWest,
+  /** grab */
+  Grab,
+  /** grabbing */
+  Grabbing,
+  /** help */
+  Help,
+  /** move */
+  Move,
+  /** n-resize */
+  ResizeNorth,
+  /** ne-resize */
+  ResizeNorthEast,
+  /** nesw-resize */
+  ResizeNorthEastSouthWest,
+  /** no-drop */
+  NoDrop,
+  /** not-allowed */
+  NotAllowed,
+  /** ns-resize */
+  ResizeNorthSouth,
+  /** nw-resize */
+  ResizeNorthWest,
+  /** nwse-resize */
+  ResizeNorthWestSouthEast,
+  /** pointer */
+  Pointer,
+  /** progress */
+  Progress,
+  /** s-resize */
+  ResizeSouth,
+  /** se-resize */
+  ResizeSouthEast,
+  /** sw-resize */
+  ResizeSouthWest,
+  /** text */
+  Text,
+  /** vertical-text */
+  VerticalText,
+  /** w-resize */
+  ResizeWest,
+  /** wait */
+  Wait,
+  /** zoom-in */
+  ZoomIn,
+  /** zoom-out */
+  ZoomOut
+}

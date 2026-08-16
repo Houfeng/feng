@@ -99,6 +99,7 @@ open type WidgetStyle {
   var overflow: WidgetOverflow;
   var visibility: Visibility;
   var pointerEvents: PointerEvents;
+  var cursor: Cursor;
   var horizontalAlign: WidgetAlign;
   var verticalAlign: WidgetAlign;
   var textAlign: TextAlign;
@@ -125,6 +126,23 @@ open type WidgetStyle {
 `Visibility` 默认值为 `Visible`，`PointerEvents` 默认值为 `All`。`Collapse` 组件的
 `margin` 也不占用父布局空间；父布局组件在排列直接 children 时必须排除该 child。
 
+`Cursor` 定义在 `std.tui.common`，表示鼠标指针形状，与 Screen 已有的终端文本光标
+显示/隐藏能力无关。`Style.cursor` 默认为 `Cursor.Auto`；`Auto` 表示当前组件不指定形状。
+ViewManager 按当前实际 Hover 路径从 target 向 root 查找最近的非 `Auto` 值；整条路径均为
+`Auto` 时释放应用对指针形状的控制。该规则只属于 cursor 解析，不引入其他 Style 字段继承。
+
+除框架语义 `Auto` 外，Cursor 覆盖 OSC 22 定义的全部标准形状：`Alias`、`Cell`、
+`Copy`、`Crosshair`、`Default`、各方向 `Resize`、`Grab`、`Grabbing`、`Help`、`Move`、
+`NoDrop`、`NotAllowed`、`Pointer`、`Progress`、`Text`、`VerticalText`、`Wait`、`ZoomIn`
+和 `ZoomOut`。枚举成员映射到协议规定的小写名称；`Auto` 不映射为形状名称。
+
+cursor 在 styling 完成后从最终 `rtStyle` 解析并同步，因此 Hover、Active 等状态样式能在
+同一渲染轮次生效。cursor 变化不改变布局和 Cell 绘制结果，不产生
+`StyleChangeType.Layout` 或 `StyleChangeType.Draw`。Screen 缓存上次已同步的值，仅在实际
+变化时使用 OSC 22 追加控制序列；`Auto` 在先前曾设置形状时追加 reset。终端不支持该协议
+时静默忽略，不执行能力查询。ViewManager 只解析组件语义，Screen 只负责协议编码，TuiApp
+在 `doStyling()` 后编排同步。
+
 #### 3.2.1 StylePatch
 
 `StylePatch` 是稀疏样式覆盖，只记录明确设置的字段，不改变用户声明的
@@ -140,7 +158,7 @@ open type WidgetStyle {
 内部整数按位记录 `StyleChangeType.Layout` 和 `StyleChangeType.Draw`，可同时表达两类变化。
 `Visibility` 在进入或离开 `Collapse` 时同时产生 Layout 和 Draw 变化，在 `Visible` 与
 `Hidden` 之间切换时只产生 Draw 变化；`PointerEvents` 不改变布局或绘制结果，因此不产生
-这两类变化，但仍同步写入最终 `rtStyle`。
+这两类变化；`Cursor` 同样不产生这两类变化。二者仍同步写入最终 `rtStyle`。
 
 #### 3.2.2 状态样式
 
@@ -644,6 +662,9 @@ open type TuiApp {
 std/std/src/tui/
   TuiApp.ff          # 组装 Screen、InputManager 和 ViewManager
 
+std/std/src/tui/common/
+  Cursor.ff          # View 与 Screen 共享的鼠标指针形状
+
 std/std/src/tui/view/
   Thickness.ff       # 四边间距类型（已定义）
   Widget.ff          # 布局枚举、WidgetStyle、WidgetFrame、Widget、ContainerWidget
@@ -681,6 +702,8 @@ std/std/src/tui/widgets/
     绘制，不增加 Draw dirty。
 17. 为 Style/StylePatch 增加 `Visibility` 和 `PointerEvents`，接入 Collapse 零占位、
     Hidden 绘制截断、鼠标命中过滤及鼠标/键盘冒泡跳过规则。
+18. 已为 Style/StylePatch 增加 `Cursor`，按 Hover 路径解析继承值，并在 styling 后通过
+    Screen 的 OSC 22 状态机同步鼠标指针形状。
 
 ## 14 Review 关注点
 

@@ -1060,6 +1060,70 @@ func screen_render_wide_glyph_transitions() {
     "tui/screen/wide-glyph-restored-after-overwrite");
 }
 
+/** 验证单个标准 Cursor 到 OSC 22 名称的映射。 */
+func check_pointer_cursor_name(cursor: Cursor, name: string): void {
+  let screen = Screen(1, 1);
+  screen.setPointerCursor(cursor);
+  check(screen.buildPatchString() == "\x1b]22;" + name + "\x1b\\",
+    "tui/screen/pointer-cursor-name-" + name);
+}
+
+/** 验证 Screen 覆盖全部标准 Cursor 名称。 */
+func screen_pointer_cursor_standard_names() {
+  check_pointer_cursor_name(Cursor.Alias, "alias");
+  check_pointer_cursor_name(Cursor.Cell, "cell");
+  check_pointer_cursor_name(Cursor.Copy, "copy");
+  check_pointer_cursor_name(Cursor.Crosshair, "crosshair");
+  check_pointer_cursor_name(Cursor.Default, "default");
+  check_pointer_cursor_name(Cursor.ResizeEast, "e-resize");
+  check_pointer_cursor_name(Cursor.ResizeEastWest, "ew-resize");
+  check_pointer_cursor_name(Cursor.Grab, "grab");
+  check_pointer_cursor_name(Cursor.Grabbing, "grabbing");
+  check_pointer_cursor_name(Cursor.Help, "help");
+  check_pointer_cursor_name(Cursor.Move, "move");
+  check_pointer_cursor_name(Cursor.ResizeNorth, "n-resize");
+  check_pointer_cursor_name(Cursor.ResizeNorthEast, "ne-resize");
+  check_pointer_cursor_name(Cursor.ResizeNorthEastSouthWest, "nesw-resize");
+  check_pointer_cursor_name(Cursor.NoDrop, "no-drop");
+  check_pointer_cursor_name(Cursor.NotAllowed, "not-allowed");
+  check_pointer_cursor_name(Cursor.ResizeNorthSouth, "ns-resize");
+  check_pointer_cursor_name(Cursor.ResizeNorthWest, "nw-resize");
+  check_pointer_cursor_name(Cursor.ResizeNorthWestSouthEast, "nwse-resize");
+  check_pointer_cursor_name(Cursor.Pointer, "pointer");
+  check_pointer_cursor_name(Cursor.Progress, "progress");
+  check_pointer_cursor_name(Cursor.ResizeSouth, "s-resize");
+  check_pointer_cursor_name(Cursor.ResizeSouthEast, "se-resize");
+  check_pointer_cursor_name(Cursor.ResizeSouthWest, "sw-resize");
+  check_pointer_cursor_name(Cursor.Text, "text");
+  check_pointer_cursor_name(Cursor.VerticalText, "vertical-text");
+  check_pointer_cursor_name(Cursor.ResizeWest, "w-resize");
+  check_pointer_cursor_name(Cursor.Wait, "wait");
+  check_pointer_cursor_name(Cursor.ZoomIn, "zoom-in");
+  check_pointer_cursor_name(Cursor.ZoomOut, "zoom-out");
+}
+
+/** 验证 Screen 仅在 Cursor 变化时输出，并由 Auto 释放控制。 */
+func screen_pointer_cursor_transition_and_reset() {
+  let screen = Screen(1, 1);
+  screen.setPointerCursor(Cursor.Auto);
+  check(screen.buildPatchString() == "",
+    "tui/screen/pointer-cursor-initial-auto-no-output");
+
+  screen.setPointerCursor(Cursor.Pointer);
+  check(screen.buildPatchString() == "\x1b]22;pointer\x1b\\",
+    "tui/screen/pointer-cursor-set");
+  screen.setPointerCursor(Cursor.Pointer);
+  check(screen.buildPatchString() == "",
+    "tui/screen/pointer-cursor-unchanged-no-output");
+
+  screen.setPointerCursor(Cursor.Auto);
+  check(screen.buildPatchString() == "\x1b]22;\x1b\\",
+    "tui/screen/pointer-cursor-auto-reset");
+  screen.setPointerCursor(Cursor.Auto);
+  check(screen.buildPatchString() == "",
+    "tui/screen/pointer-cursor-repeated-auto-no-output");
+}
+
 // ─── TuiApp 构造与字段初始化 ─────────────────────────────────────────────
 
 func tuiapp_ctor_no_fds() {
@@ -1120,6 +1184,34 @@ func tuiapp_render_with_content() {
   };
   check(caught == false, "tui/app/render-with-content");
   check(output == "\x1b[1;1HH\x1b[1;2Hi", "tui/app/render-with-content-output");
+}
+
+/** 验证 TuiApp 在 styling 后同步 Hover/Active 的最终 Cursor。 */
+func tuiapp_render_syncs_pointer_cursor_after_styling() {
+  let app = TuiApp();
+  app.screen.resize(4, 2);
+  let root = Container();
+  let child = View();
+  child.style.position = Position.Absolute;
+  child.style.width = 2;
+  child.style.height = 1;
+  child.useStateStyle(Pseudo.Hover).cursor = Cursor.Pointer;
+  child.useStateStyle(Pseudo.Active).cursor = Cursor.Grabbing;
+  root.addChild(child);
+  app.view.root = root;
+
+  captureStdout(() { app.render(); }, (int)64);
+  app.view.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 0, 0, 0));
+  let hoverOutput = captureStdout(() { app.render(); }, (int)64);
+  check(hoverOutput == "\x1b]22;pointer\x1b\\",
+    "tui/app/render-syncs-hover-cursor-after-styling");
+
+  app.view.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  let activeOutput = captureStdout(() { app.render(); }, (int)64);
+  check(activeOutput == "\x1b]22;grabbing\x1b\\",
+    "tui/app/render-syncs-active-cursor-after-styling");
 }
 
 func tuiapp_run_startup_clears_screen_keeps_buffer() {
@@ -1502,6 +1594,85 @@ func style_visibility_and_pointer_events_apply() {
     !clearedResult.has(StyleChangeType.Layout) &&
     !clearedResult.has(StyleChangeType.Draw),
     "tui/style/patch-clear-removes-interaction-overrides");
+}
+
+/** 验证 Cursor 参与完整样式和 Patch 合并，但不产生布局或绘制变化。 */
+func style_cursor_apply() {
+  let style = Style();
+  style.cursor = Cursor.Pointer;
+  style.clear();
+  check(style.cursor == Cursor.Auto, "tui/style/cursor-default-auto");
+
+  let source = Style();
+  source.clear();
+  source.cursor = Cursor.Text;
+  let sourceResult = style.apply(source);
+  check(style.cursor == Cursor.Text,
+    "tui/style/cursor-full-style-applied");
+  check(!sourceResult.has(StyleChangeType.Layout) &&
+    !sourceResult.has(StyleChangeType.Draw),
+    "tui/style/cursor-full-style-no-layout-or-draw-change");
+
+  let patch = StylePatch();
+  patch.cursor = Cursor.Crosshair;
+  let patchResult = style.apply(patch);
+  check(style.cursor == Cursor.Crosshair,
+    "tui/style/cursor-patch-applied");
+  check(!patchResult.has(StyleChangeType.Layout) &&
+    !patchResult.has(StyleChangeType.Draw),
+    "tui/style/cursor-patch-no-layout-or-draw-change");
+
+  patch.clear();
+  let clearedResult = style.apply(patch);
+  check(style.cursor == Cursor.Crosshair &&
+    !clearedResult.has(StyleChangeType.Layout) &&
+    !clearedResult.has(StyleChangeType.Draw),
+    "tui/style/cursor-patch-clear-removes-override");
+}
+
+/** 验证 Cursor 按 Hover 路径继承，并在 styling 后使用状态样式。 */
+func view_manager_cursor_resolution_and_state_timing() {
+  let manager = ViewManager(Screen(6, 2));
+  let root = Container();
+  root.style.cursor = Cursor.Pointer;
+  let child = View();
+  child.style.position = Position.Absolute;
+  child.style.width = 2;
+  child.style.height = 1;
+  child.useStateStyle(Pseudo.Hover).cursor = Cursor.Crosshair;
+  child.useStateStyle(Pseudo.Active).cursor = Cursor.Grabbing;
+  root.addChild(child);
+  manager.root = root;
+
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 0, 0, 0));
+  check(manager.resolveCursor() == Cursor.Pointer,
+    "tui/view/cursor-before-styling-uses-current-runtime-style");
+
+  manager.doStyling();
+  check(manager.resolveCursor() == Cursor.Crosshair,
+    "tui/view/cursor-hover-state-after-styling");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 0, 0, 0));
+  manager.doStyling();
+  check(manager.resolveCursor() == Cursor.Grabbing,
+    "tui/view/cursor-active-state-after-styling");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 0, 0, 0));
+  manager.doStyling();
+  check(manager.resolveCursor() == Cursor.Crosshair,
+    "tui/view/cursor-release-restores-hover-state");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 8, 3, 0));
+  manager.doStyling();
+  check(manager.resolveCursor() == Cursor.Auto,
+    "tui/view/cursor-no-hit-releases-control");
 }
 
 /** 验证 Collapse child 的 frame 为零，且 margin 不占用 VStack 空间。 */
@@ -4044,12 +4215,15 @@ open func run_tui_tests() {
     test("screen_render_unicode_emoji()", () { screen_render_unicode_emoji(); });
     test("screen_render_combining_grapheme_clears_old_background()", () { screen_render_combining_grapheme_clears_old_background(); });
     test("screen_render_wide_glyph_transitions()", () { screen_render_wide_glyph_transitions(); });
+    test("screen_pointer_cursor_standard_names()", () { screen_pointer_cursor_standard_names(); });
+    test("screen_pointer_cursor_transition_and_reset()", () { screen_pointer_cursor_transition_and_reset(); });
     // ─── TuiApp ───
     test("tuiapp_ctor_no_fds()", () { tuiapp_ctor_no_fds(); });
     test("tuiapp_ctor_with_fds()", () { tuiapp_ctor_with_fds(); });
     test("tuiapp_exit_idempotent_uninit()", () { tuiapp_exit_idempotent_uninit(); });
     test("tuiapp_render_empty_no_throw()", () { tuiapp_render_empty_no_throw(); });
     test("tuiapp_render_with_content()", () { tuiapp_render_with_content(); });
+    test("tuiapp_render_syncs_pointer_cursor_after_styling()", () { tuiapp_render_syncs_pointer_cursor_after_styling(); });
     test("tuiapp_run_startup_clears_screen_keeps_buffer()", () { tuiapp_run_startup_clears_screen_keeps_buffer(); });
     test("tuiapp_run_drains_stdin_and_exit_stops()", () { tuiapp_run_drains_stdin_and_exit_stops(); });
     test("tuiapp_key_remains_application_level()", () { tuiapp_key_remains_application_level(); });
@@ -4078,6 +4252,8 @@ open func run_tui_tests() {
     test("dirty_mark_mutation_and_value_copy()", () { dirty_mark_mutation_and_value_copy(); });
     test("view_dirty_initial_state()", () { view_dirty_initial_state(); });
     test("style_visibility_and_pointer_events_apply()", () { style_visibility_and_pointer_events_apply(); });
+    test("style_cursor_apply()", () { style_cursor_apply(); });
+    test("view_manager_cursor_resolution_and_state_timing()", () { view_manager_cursor_resolution_and_state_timing(); });
     test("vstack_collapse_child_has_no_space()", () { vstack_collapse_child_has_no_space(); });
     test("visibility_and_pointer_events_render_and_route()", () { visibility_and_pointer_events_render_and_route(); });
     test("visibility_skips_key_bubble_node()", () { visibility_skips_key_bubble_node(); });
