@@ -524,7 +524,8 @@ type 成员和 fit 成员都应进入同一个候选判断，不应分别复制 
 
 - [ ] 将三种成员展开形式归一为同一种直接 mix 授权关系，来源构造表达式只保留现有
   字段初始化职责。
-- [ ] 为 type 来源与可见 `fit Source` 来源建立统一的方法归属和来源身份表示。
+- [ ] 复用现有 `@mixable open static` 对 type 来源与可见 `fit Source` 来源的候选收集、
+  方法归属和来源映射；不得为 `seal` 新增独立的来源身份或候选模型。
 - [ ] 实现基于当前 type、直接 mix 关系、来源 type、来源方法及其 type/fit 归属的统一
   授权查询；该抽象不得依赖来源事实来自同包 AST 还是 imported provider。
 - [ ] 明确只有 `seal + static + is_mixable + 对应直接 mix 关系` 同时成立时才获得 seal
@@ -568,7 +569,9 @@ type 成员和 fit 成员都应进入同一个候选判断，不应分别复制 
 - [ ] 为来源及生成的 `seal + static + is_mixable` 方法提供跨包稳定、可链接的调用符号，
   同时保持 Feng visibility 为 seal。
 - [ ] 覆盖 type 来源与 fit 来源的非泛型静态方法、导入原型和完整限定静态调用。
-- [ ] 覆盖泛型 owner、泛型方法、泛型 fit 及其 reified dependencies 和 wrapper 调用链。
+- [ ] 验证 seal 来源及其生成 wrapper 的跨包调用完整复用现有 `@mixable open static`
+  的泛型 owner、泛型方法、泛型 fit、reified dependencies 与 wrapper 调用链；不得新增
+  seal 专用的泛型或 reification 路径。
 - [ ] 确保符号身份只依赖 package-public `.ft` 可恢复事实，不依赖未记录的普通 seal
   方法或 provider 私有声明顺序。
 - [ ] 确保生成 seal 静态 wrapper 进入下一层包后继续使用同一链接规则。
