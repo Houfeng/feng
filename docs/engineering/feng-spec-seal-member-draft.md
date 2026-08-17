@@ -1,11 +1,15 @@
 # `spec` 支持定义 `seal` 成员实现草案
 
 > 本文档是实现草案，不是语言权威规范。
-> 当前 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 明确规定 `spec` 成员不得声明 `open` 或 `seal`；本文描述的是待确认并写入语言规范的新能力。正式实现前，必须先更新 `feng-spec.md`、[Feng 语言 `fit` 规范](../specifications/feng-fit.md) 与相关可见性规范。
+> 当前 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 明确规定
+> `spec` 成员不得声明 `open` 或 `seal`。正式实现前，必须先将本文确认的
+> 规则写入语言权威规范。
 
 ## 1 背景
 
-object-form `spec` 目前只能声明公开成员。成员一旦成为契约 requirement，普通代码便可通过 `spec` 视角调用。这无法直接表达以下常见框架协议：
+object-form `spec` 当前只能声明公开成员。成员进入契约后，普通代码可以
+通过 `spec` 视角访问，无法表达“实现者必须提供、但只有实现该契约的
+`type` 才能通过契约视角访问”的成员：
 
 ```feng
 open spec Widget {
@@ -16,97 +20,117 @@ open spec Widget {
 
 其中：
 
-- `show` 是面向普通使用者的公开 API；
-- `draw` 是所有 `Widget` 实现者必须提供的框架入口；
-- 外部必须能看到并实现 `draw` 的签名；
-- 普通代码不应主动调用 `draw`，以免绕过框架生命周期或状态机；
-- `Widget` 实现域中的代码可以调用 `draw`。
+- `show` 是普通公开 API；
+- `draw` 是所有 `Widget` 实现者必须提供的契约成员；
+- 普通代码不能通过 `Widget` 视角访问 `draw`；
+- 实现 `Widget` 的 `type` 可以在自身成员方法、静态方法及其 `fit`
+  扩展方法中，通过 `Widget` 视角访问 `draw`；
+- 调用继续通过既有 witness 分派到实际实现成员。
 
-该需求的关键不是“隐藏 requirement”，而是分离两个当前绑定在一起的维度：
+本能力只为 `spec` 增加成员级访问控制，不改变具体 `type` 成员的任何
+既有可见性规则。
+
+## 2 范围
+
+### 2.1 目标
+
+- 允许 object-form `spec` 的实例字段、实例方法、静态字段和静态方法
+  声明 `seal`。
+- 无修饰的 `spec` 成员继续保持当前公开语义。
+- `seal` 成员与公开成员一样参与现有契约满足检查和 witness 构造。
+- 实现该成员原声明 `spec` 的 `type`，可以在自身成员方法、静态方法和
+  该 `type` 的 `fit` 扩展方法中，通过 `spec` 视角访问该 `seal` 成员。
+- 公开 `spec` requirement 只能由公开 `type` 成员满足；`spec seal`
+  requirement 可以由公开或 `seal` 的 `type` 成员满足。
+- 普通函数以及未实现该 `spec` 的 `type` 不能获得该访问权限。
+- 子 `spec` 按现有继承规则继承父 `spec` 的公开成员和 `seal` 成员。
+- 源码和 `.ft` 恢复的 `spec` 成员必须保持相同的可见性语义。
+
+### 2.2 非目标
+
+- 不修改 `type` 的 `seal` 成员访问规则。
+- 不授予 `fit` 扩展方法任何新的目标 `type` 私有访问权；`fit` 获得的
+  新权限仅限于通过 `spec` 视角访问 `spec seal` 成员。
+- 不改变跨包 `fit`、目标 `type` 可见面或私有成员发现规则。
+- 不引入新的 witness 种类、显式 witness 映射语法或运行时访问检查。
+- 不修改 `.ft` 格式、版本或 relation 模型。
+- 不把成员级 `seal` 扩展到 callable-form、union-form 或
+  intersection-form `spec`。
+- 不引入 `protected`、逐项 `friend` 或其他新的访问控制模型。
+
+## 3 核心语义
+
+### 3.1 `spec` 成员可见性
+
+object-form `spec` 成员具有以下有效可见性：
 
 ```text
-requirement visibility  谁能看到并实现成员
-member accessibility    谁能访问成员
+effective_visibility(无修饰 spec 成员) = open
+effective_visibility(seal spec 成员)   = seal
 ```
 
-`seal` spec 成员因此是一种“公开可实现、受限可访问”的契约成员，而不是 spec 内部的私有辅助成员。
-其核心规则可收敛为一句话：
+本次只新增 `seal` 写法。显式 `open` 是否允许不属于本需求，继续维持当前
+语法规则：`spec` 成员不能显式声明 `open`。
 
-> `spec` 的 `seal` 成员，所有实现该 `spec` 的 `type` 都能通过该
-> `spec` 视角访问。
+object-form `spec` 因此具有两个用途不同的成员集合：
 
-## 2 目标
-
-- 允许 object-form `spec` 的实例成员和静态成员声明 `seal`
-  requirement，覆盖字段与方法。
-- `seal` requirement 仍参与契约满足检查和 witness 构造。
-- 普通访问侧不能通过具体类型或 `spec` 视角访问该成员。
-- 满足该 `spec` 的类型进入同一个受限访问域，并可通过该 `spec`
-  视角访问其 `seal` 成员。
-- 子 `spec` 按现有继承规则完整继承父 `spec` 的公开成员和 `seal`
-  成员。
-- `open spec` 明确允许包外类型进入该访问域；封闭的 `spec` 不允许包外加入。
-- 跨包 `fit` 只能基于当前可见类型面建立关系，不能借此发现或暴露目标类型未导出的 `seal` 成员。
-- `.ft` 同时传播 `spec` 的 `seal` requirement、承担该 requirement 的
-  `type` `seal` 成员及其 witness 映射；进入 `.ft` 不改变成员的
-  `seal` 可见性，也不使其进入具体 `type` 的跨包成员访问面。
-
-## 3 非目标
-
-- 不引入基于继承关系的 `protected`。
-- 不引入 C++ 式逐项 `friend` 声明。
-- 不允许 `fit` 获得目标 `type` 定义体的特殊私有访问权。
-- 不允许运行时绕过编译期可见性检查。
-- 不把 `seal` 扩展到 callable-form、union-form 或 intersection-form；本文只定义
-  object-form `spec` 的成员可见性。
-
-## 4 核心语义
-
-### 4.1 两层成员面
-
-object-form `spec` 同时具有两层成员面：
-
-| 成员面 | 内容 | 用途 |
+| 集合 | 内容 | 用途 |
 | --- | --- | --- |
-| 公开访问面 | 默认公开的成员 | 普通 `spec` 使用者可访问 |
-| 完整实现契约 | 公开成员与 `seal` requirement | 满足检查、witness 构造和受限域访问 |
+| 公开访问面 | 无修饰成员 | 普通 `spec` 使用者访问 |
+| 完整契约 | 无修饰成员与 `seal` 成员 | 满足检查、witness 构造和实现域访问 |
 
-以 `Widget` 为例：
+成员不在公开访问面中，不表示该成员不属于契约。所有实现者仍必须提供
+完整契约所要求的成员。
+
+### 3.2 契约满足与 witness
+
+`spec seal` 成员沿用现有 object-form `spec` requirement 的结构匹配和
+witness 规则，并在匹配时增加统一的可见性兼容条件：
+
+- 字段继续按名称、静态性、绑定方式和类型匹配；
+- 方法继续按名称、静态性和 callable 签名匹配；
+- 父 `spec` requirement 继续按现有闭包规则参与满足检查；
+- 匹配成功后，继续建立现有 requirement 到 `type` 实现成员的 witness；
+- 调用继续沿现有 witness 分派，不增加新的运行时结构或分支。
+
+可见性兼容规则如下。无修饰的 `spec` 成员和 `type` 成员均按现有
+公开语义处理：
+
+| `spec` requirement | 公开 `type` 成员 | `type seal` 成员 |
+| --- | --- | --- |
+| 无修饰（公开） | 允许满足 | 拒绝满足 |
+| `seal` | 允许满足 | 允许满足 |
+
+该规则统一适用于字段和方法、实例成员和静态成员，以及 `type` 直接声明
+和 `fit` 提供的实现。满足检查、快速满足查询和 witness 选择必须复用
+同一个兼容条件，不能出现“满足检查通过但 witness 选择到不兼容成员”
+或相反的结果。
+
+公开 requirement 已找到结构匹配但仅存在 `type seal` 成员时，应报告
+实现成员可见性不足，而不是把该成员选为 witness。这同时修复当前公开
+`spec` 成员可由 `type seal` 成员满足的问题。
+
+`spec seal` 只限制 requirement 的 `spec` 访问面，不重新解释或修改
+承担该 requirement 的具体实现成员。公开实现仍按具体 `type` 规则公开，
+`seal` 实现仍按具体 `type` 规则受限。
+
+### 3.3 `seal` 成员访问域
+
+对声明 `seal` 成员 `M` 的 object-form `spec S`，访问 `M` 必须同时满足：
 
 ```text
-public access surface(Widget) = { show }
-implementation requirements(Widget) = { show, draw }
+1. 访问点位于 type T 自身的成员方法、静态方法，或 T 的 fit 扩展方法
+   实现上下文；
+2. T 在访问点满足 S；
+3. receiver 使用能够暴露 M 的 spec 静态视角；
+4. M 是该 spec 视角中由 S 声明或继承的 seal 成员。
 ```
 
-因此，“调用侧看不到 `draw`”不等于“实现侧不知道 `draw`”。
-
-### 4.2 访问域
-
-对 object-form `spec S`，定义：
-
-```text
-domain(S) = { T | T 在当前位置满足 S }
-```
-
-`S` 的 `seal` 成员只允许在 `domain(S)` 中的类型实现上下文访问。普通顶层函数、普通外部类型和仅持有 `S` 值的调用侧均不获得权限。
-
-domain 是 `spec` `seal` 成员的访问控制属性，与泛型无关。泛型只按现有
-规则进行类型替换和契约满足检查；不按泛型实参或实例化结果
-拆分 domain。
-
-权限只作用于 `spec` 成员访问，不扩大具体 `type` 实现成员的可见性。
-对实例成员，访问必须同时满足：
-
-```text
-receiver 的静态视角是 spec S
-目标成员是 S 的 seal 成员
-当前声明所在 type 满足 S
-```
-
-即使 `type T` 的 `seal` 成员 `I` 实现了 `S` 的 `seal` requirement，
-`I` 作为具体 `T` 成员时仍仅保持原有 type 私有语义；其他实现
-`S` 的类型不得通过 `T` 视角直接访问 `I`。同一契约行为必须先以
-`S` 视角表达，再通过 `S` 的 witness 分派到 `I`。
+这里的类型实现上下文识别沿用语义分析现有上下文。对 `fit` 方法，只在
+上述 `spec seal` 访问判断中把其目标 `type` 记为 `T`；这不会把 `fit`
+方法体变成目标 `type` 自身，也不会使其通过具体 `type` 视角访问目标
+`type` 的 `seal` 成员。权限不依赖是否存在 `self`，所以实例方法、静态
+方法和 `fit` 方法使用同一套 `spec seal` 判断。
 
 ```feng
 open spec Widget {
@@ -115,386 +139,272 @@ open spec Widget {
 
 open type Button: Widget {
   seal func draw(): void {
-    // ...
+    // Button 的具体实现。
   }
 
   func refresh(other: Widget): void {
-    self.draw();   // 允许：Button 访问自身 type 私有成员
-    other.draw();  // 允许：调用点位于 Widget 的实现域
+    self.draw();   // 按既有 type seal 规则访问 Button.draw
+    other.draw();  // 按本草案规则访问 Widget.draw，并经 witness 分派
+  }
+
+  static func refreshAll(other: Widget): void {
+    other.draw();  // 允许：静态方法仍属于满足 Widget 的 Button
   }
 }
 
 func renderNow(widget: Widget): void {
-  widget.draw();   // 错误：普通调用点不属于 domain(Widget)
+  widget.draw();   // 错误：顶层函数不属于任何实现 Widget 的 type
+}
+
+fit Button {
+  func refreshFromFit(other: Widget): void {
+    other.draw();  // 允许：fit 的目标 Button 满足 Widget，通过 spec 视角访问
+    self.draw();   // 错误：fit 不能直接访问 Button 的 seal 成员
+  }
 }
 ```
 
-访问权限由访问点的声明上下文和 receiver 的静态 `spec` 视角共同决定，
-而不是由运行时接收者的具体类型决定。权限检查应在编译期完成，
-不增加运行时访问检查。具体类型值若需使用契约访问，必须先按现有
-规则转换或绑定为目标 `spec` 视角。
-
-### 4.3 实例成员与静态成员
-
-`seal` 适用于 object-form `spec` 当前支持的实例和静态成员：
-
-- 实例 `let` / `var` 字段与实例 `func`；
-- `static let` / `static var` 字段与 `static func`。
-
-实例与静态 `seal` 成员共用相同的 domain 判定、契约满足与跨包
-传播原则。静态成员不允许通过 `spec` 实例值访问；现有的
-`T.member`（`T: S`）是已有的静态 spec 约束视角，可在当前声明所在
-`type` 满足 `S` 时访问 `S` 的 `seal` 静态成员。这里的泛型类型参数
-只是现有静态成员访问形式，不引入泛型 domain。
-
-具体类型名当前只表达具体 `type` 视角，不自动转为某个 `spec` 的静态
-视角。如果要让调用方对已知具体类型显式选择静态 spec 视角，还需要
-确定相应的表达形式；实现阶段不得隐式枚举具体类型满足的所有
-`spec` 来选择授权。
-
-### 4.4 父 `spec` 成员继承
-
-子 object-form `spec` 与继承公开成员一样，完整继承父 `spec` 的实例、
-静态、公开和 `seal` 成员。继承成员保留原声明的可见性与 domain；
-子 `spec` 使用不同可见性重新声明同签名成员的规则仍属于待确认边界。
-
-实现子 `spec` 的类型按现有名义契约闭包同时满足父 `spec`，因而自然
-进入父 `spec` 中所声明 `seal` 成员的 domain。该继承关系不允许反向
-从父 `spec` 获得子 `spec` 成员的访问权限。
-
-### 4.5 `open spec` 是显式授权
-
-当 `seal` requirement 定义在 `open spec` 中时，spec 作者明确允许包外类型：
-
-1. 看到该 requirement；
-2. 实现该 requirement；
-3. 通过满足关系加入该 spec 的受限访问域；
-4. 在该访问域内调用该 requirement。
-
-因此，第三方实现一个 `Widget` 后获得 `Widget` seal domain 的调用资格，是 `open spec Widget` 的直接语义结果，不属于可见性漏洞。
-
-如果 spec 作者不允许包外代码加入该域，应封闭 spec 声明；如果具体类型本身也不应被包外适配或扩展，应同时收窄 type 的声明可见性。声明级 `seal spec` / `seal type` 与成员级 `seal` 是不同维度：前者控制谁能看到并加入声明，后者控制谁能访问成员。
-
-## 5 `fit` 与可见类型面
-
-### 5.1 基本原则
-
-`fit` 是基于当前位置可见类型面建立契约关系或补充方法的机制，不是“进入目标 type 定义体”的能力。
-
-对编译上下文 `C`，记目标类型的可见面为 `visible_shape(T, C)`。外置适配：
-
-```text
-fit T : S
-```
-
-只能在以下条件成立时通过：
-
-```text
-visible_shape(T, C) 能提供 requirements(S) 所需的全部实现或 witness
-```
-
-并且 `fit` 不得改变 `visible_shape(T, C)`。
-
-换言之：
-
-> `fit` 可以解释已有信息，不能揭示隐藏信息。
-
-### 5.2 包内适配
-
-当 `T` 的完整声明在当前包内可用时，契约满足检查可以使用编译器已经掌握的声明信息，确认现有 `seal` 成员是否承担目标 spec requirement：
+同一个 `spec` 的其他实现类型也只能通过 `spec` 视角获得新增权限：
 
 ```feng
-type MyType {
+open type Icon: Widget {
   seal func draw(): void {
-    // ...
+    // Icon 的具体实现。
   }
-}
 
-spec Drawable {
-  seal func draw(): void;
-}
-
-fit MyType: Drawable;
-```
-
-该规则只说明满足检查能够识别声明，不授予 `fit` 块方法访问
-`MyType` 其他私有成员的能力。合法的 `fit T: S` 实现上下文进入
-`domain(S)`，因此可通过 `S` 视角访问 `S` 的 `seal` 成员；`fit`
-方法体中的 `self` 仍不能因该关系通过具体 `MyType` 视角访问其他私有
-成员。
-
-### 5.3 跨包适配
-
-如果 `MyType.seal draw` 没有实现任何对外契约，它不进入 `.ft`，包外看到的类型面中不存在该成员：
-
-```feng
-// package A
-open type MyType {
-  seal func draw(): void {
-    // ...
+  func refresh(widget: Widget, button: Button): void {
+    widget.draw(); // 允许：Widget 视角，经 witness 分派
+    button.draw(); // 错误：不能直接访问 Button 的 seal 成员
   }
 }
 ```
 
-```feng
-// package B
-open spec Drawable {
-  seal func draw(): void;
-}
-
-fit MyType: Drawable; // 错误：当前可见类型面无法证明 MyType 满足 Drawable
-```
-
-包 B 不能通过新建一个同签名 spec，使 package A 未导出的成员重新出现，也不能借 `self` 调用未进入可见面的成员：
-
-```feng
-fit MyType {
-  func extra(): void {
-    self.draw(); // 错误
-  }
-}
-```
-
-失败原因不是“目标 requirement 为 `seal`”，而是该 `type` 私有成员不属于
-包外可用于满足检查或成员查找的具体类型面。包外 `fit` 不得通过
-新建同签名 `spec` 重新发现该成员。
-
-### 5.4 跨包 seal domain 访问
-
-如果包 A 中的 `type` `seal` 成员已实现某个已导出 `spec` 的 `seal`
-requirement，则该成员和 witness 映射进入 `.ft`，但该成员仍不进入具体
-`type` 的跨包成员访问面。包 B 中的新 `type` 合法实现同一 `open spec`
-后，进入该 spec domain，可通过该 `spec` 视角访问成员并沿 witness 分派到
-包 A 中的实现。
-
-```feng
-// package A
-open spec Drawable {
-  seal func draw(): void;
-}
-
-open type Button: Drawable {
-  seal func draw(): void {
-    // ...
-  }
-}
-```
-
-```feng
-// package B
-open type Icon: Drawable {
-  seal func draw(): void {
-    // Icon 已进入 domain(Drawable)
-  }
-
-  func refresh(drawable: Drawable, button: Button): void {
-    drawable.draw(); // 允许：receiver 是 Drawable 视角
-    button.draw();   // 错误：receiver 是具体 Button 视角
-  }
-}
-
-func refreshNow(button: Button): void {
-  button.draw(); // 错误：普通调用点不属于 domain(Drawable)
-}
-```
-
-调用方也可先按现有规则将 `Button` 值转换或绑定为 `Drawable` 视角，再访问
-`Drawable.draw`。这是 spec domain 的跨包延续，不是将 `Button.draw` 变为
-`open`，也不允许其他实现类型直接访问 `Button.draw`。
-
-## 6 `.ft` 与符号信息传播
-
-需要区分四类信息：
+因此，本能力建立的是：
 
 ```text
-declared members       类型完整定义中的成员
-public members         普通跨包成员查找可见的成员
-contract seal members  为 witness 恢复而导出且保留 seal 可见性的实现成员
-contract bindings      requirement、实现成员与 witness 的映射
+Widget.draw -> witness -> Button.draw / Icon.draw
 ```
 
-### 6.1 纯 type 私有成员
-
-未承担对外契约的 `type` seal 成员：
-
-- 不因本能力额外进入公开 `.ft`；若因布局等既有底层需求被收录，
-  仍保持不可见；
-- 不成为包外成员匹配候选；
-- 不可被包外 `fit` 重新激活；
-- 不可被工具误报为可访问 API。
-
-### 6.2 实现已导出 seal requirement 的成员
-
-当类型实现已导出的 spec seal requirement 时，公开 `.ft` 必须同时保留：
-
-- spec `seal` requirement 的声明；
-- 承担该 requirement 的 `type` 成员，并保留其 `seal` 可见性；
-- requirement 与实现成员之间完成契约分派所需的 witness 映射。
-
-例如：
+而不是：
 
 ```text
-Button : Widget
-  seal member Button.draw
-  witness(Widget.draw) -> Button.draw
+实现 Widget -> 扩大 Button.draw / Icon.draw 的具体 type 可见性
 ```
 
-进入 `.ft` 不意味着成员变为 `open`。无权调用点的普通成员查找仍然
-不得返回该成员：
+### 3.4 实例成员与静态成员
 
-```feng
-button.draw(); // 在 domain(Widget) 之外仍然失败
-```
+实例字段、实例方法、静态字段和静态方法使用相同的 `spec seal` 访问域
+判定。
 
-处于 `domain(Widget)` 的合法访问必须先以 `Widget` 视角查找成员，再沿
-契约 witness 分派；不得通过具体 `Button` 视角绕过该边界。
+- 实例成员必须通过 `spec` 实例值访问。
+- 静态成员继续使用现有静态 spec 约束视角访问。
+- 具体类型名仍只表达具体 `type` 视角，不因该类型实现某个 `spec` 而
+  自动选择或转换为静态 spec 视角。
 
-```text
-Widget.draw -> witness -> Button implementation
-```
+本草案不增加新的静态成员访问语法，也不枚举具体类型实现的全部
+`spec` 来选择访问权限。
 
-核心原则是：
+### 3.5 父 `spec` 成员
 
-> 导出契约 witness 所需的 `seal` 实现成员，但不将该成员升级为
-> 普通公开成员，也不为它追加 spec domain 成员访问权。
+子 object-form `spec` 完整继承父 `spec` 的无修饰成员和 `seal` 成员。
+继承成员保留原声明可见性，访问域以成员原声明 `spec` 为准。
 
-## 7 编译器实现影响
+实现子 `spec` 的类型按现有名义关系同时满足父 `spec`，因此可以在自身
+成员方法、静态方法及其 `fit` 扩展方法中，通过相应 `spec` 视角访问父
+`spec` 的 `seal` 成员。仅实现父 `spec` 不会获得子 `spec` 成员的访问
+权限。
 
-### 7.1 语法与 AST
+### 3.6 成员查找与重载
 
-- object-form spec 的实例字段、实例方法、静态字段和静态方法声明需要
-  接受 `seal` 修饰符。
-- 当前 `SE0601`“spec 成员不能声明可见性”的规则需要收窄，不能继续
-  无条件拒绝 `seal` 成员。
-- 默认无修饰成员继续进入公开访问面。
-- 是否允许冗余的显式 `open`，本次对话未确认，正式规范必须单独决定。
-- AST 和 `.ft` 恢复声明必须保留 spec requirement 的可见性。
+`spec` 成员查找必须先按当前访问点过滤不可访问的 `seal` 候选，再使用
+现有字段查找、方法重载和歧义诊断规则：
 
-### 7.2 语义分析
+- 存在可访问同名成员时，继续按现有规则解析；
+- 同名成员存在但全部不可访问时，报告访问错误；
+- 完全不存在同名成员时，保持现有“成员不存在”诊断；
+- 不改变现有重载签名、重复声明和冲突规则。
 
-语义层需要分别产出：
+这只把 `spec seal` 接入现有访问过滤，不重新设计重载系统。
 
-- spec 的公开访问成员集合；
-- spec 的完整 requirement 集合；
-- 父 `spec` 闭包完整继承的公开与 `seal` 成员集合；
-- receiver 是否以目标 `spec` 静态视角进行成员查找；
-- 当前声明所在 `type` 是否满足目标 `spec`；
-- `(T, S)` 的满足关系和逐成员 witness；
-- 成员是普通公开成员、契约 `seal` 成员，还是未关联契约的 type 私有成员。
+## 4 `fit` 边界
 
-满足检查必须遍历完整 requirement 集合；普通成员访问只查询公开访问面；
-seal-domain 访问必须在 receiver 已是目标 `spec` 视角且当前声明所在
-`type` 满足该 `spec` 时才能通过，通过后沿既有 witness 查找实现。具体
-`type` 成员查找不得枚举当前类型满足的 `spec` 来扩大私有成员可见性。
-domain 计算不得引入泛型实例身份或运行时判定。
+`fit` 继续使用现有规则建立满足关系或提供扩展方法。本草案不修改
+`fit` 的类型身份和目标 `type` 私有访问权限，只把 `fit` 的目标 `type`
+纳入 `spec seal` 访问域判断：
 
-### 7.3 导入导出
+- `fit` 方法体不是目标 `type` 自身；
+- `fit` 方法体不能访问目标 `type` 的 `seal` 成员；
+- 当目标 `type T` 在访问点满足 `S` 时，`fit` 方法体可以通过 `S` 的
+  spec 视角访问 `S` 的 `seal` 成员；
+- 该权限只作用于 spec 成员访问和 witness 分派，不能作为访问目标
+  `type seal` 成员的依据；
+- `fit` 对 requirement 的满足检查使用第 3.2 节的同一可见性兼容规则。
 
-- `open spec` 的 `seal` requirement 签名必须写入 `.ft`，否则外部无法实现契约。
-- 承担已导出 spec `seal` requirement 的 `type` `seal` 成员必须写入
-  `.ft`，并保留 `seal` 可见性。
-- 已导出的满足关系需要携带足够的 requirement—实现成员 witness 映射。
-- 实现类型未参与任何 spec `seal` requirement 的 type `seal` 成员不得因
-  本能力变成公开 `.ft` 成员。
-- `.ft` 已能分离符号收录与公开可见性；实现时还必须确认现有契约
-  关系是否足以完整恢复 witness 映射，不足时再按符号表规范扩展。
-- consumer 恢复声明后，必须保持“可实现、仅通过 spec 视角受限访问”
-  的语义，不能退化为具体 `type` 公开成员或完全不可见成员。
+`T` 是否满足 `S` 继续由访问点可见的现有满足关系查询决定，包括直接
+声明和 `fit` 建立的关系。该查询既用于 `T` 自身成员方法和静态方法，
+也用于目标为 `T` 的 `fit` 方法，但不会把 `fit` 方法体变成 `T` 的实现
+上下文。
 
-### 7.4 代码生成与运行时
+## 5 跨包与 `.ft`
 
-- 实例与静态 `seal` requirement 继续使用现有 spec 实例与静态成员的
-  witness 分派机制。
-- 可见性在语义阶段完成判定；运行时不需要增加访问控制结构或分支。
-- 具体类型值进入 `spec` 视角时复用现有视角转换，不分配 wrapper 或 box；
-  随后的成员访问按 `spec` 语义走 witness 分派，相比具体 `type` 直接调用
-  可能多一次间接分派；本方案不为此增加专用优化或运行时特判。
-- `seal` 不改变 requirement 的成员签名与既有分派形式；如果 `.ft` 需要
-  追加实现成员 witness 映射，应按现有格式版本与兼容规则处理。
+### 5.1 跨包访问原则
 
-### 7.5 工具链
+通过 `spec` 视角访问 `seal` requirement 时，编译期只检查：
 
-LSP、文档生成器和符号查询应区分：
+- receiver 的静态 `spec` 视角；
+- 访问点所属 `type`，或当前 `fit` 的目标 `type`；
+- 该 `type` 在当前位置是否满足成员原声明 `spec`。
 
-- Public API；
-- Implemented contracts；
-- Contract hooks；
-- Private implementation。
+运行时接收者的具体类型及其所在包不参与访问判定。合法调用继续通过
+`spec` 值携带的既有 witness 分派到实际实现。该分派不要求、也不允许
+调用点通过具体类型成员查找看到实现成员。
 
-工具可以在 `Widget` 视角且当前声明所在 `type` 满足 `Widget` 时补全
-`Widget.draw` requirement，但不得把具体实现的 `Button.draw` 作为普通可访问成员
-补全给其他实现类型。
+具体 `type` 的跨包成员可见面、`type seal` 成员导出和跨包 `fit` 候选
+继续保持现状。本草案不要求为 `spec seal` 额外导出任何具体 `type`
+成员，也不允许把具体实现成员升级为公开 API。
 
-## 8 诊断要求
+### 5.2 `.ft` 复用现有格式
 
-至少需要覆盖以下诊断：
+`.ft` 已有成员可见性表示，object-form `spec` 的成员也属于现有声明
+骨架。本能力只要求使用现有字段忠实保存和恢复 `spec` 成员可见性：
 
-- 普通代码调用 spec seal 成员；
-- 普通代码直接调用具体类型的对应 seal 实现；
-- 实现同一 spec 的其他 type 通过具体 type 视角访问其 seal 实现；
-- 普通代码访问 spec 或具体类型的 seal 字段、静态字段或静态方法；
-- 非满足类型的实现上下文调用 seal requirement；
-- 跨包 `fit` 尝试用未导出的 type seal 成员满足 spec；
-- `fit` 方法体通过 `self` 访问当前可见面之外的 seal 成员；
-- `.ft` 恢复后丢失 witness 映射，或错误地把 contract seal 实现成员当作
-  具体 `type` 的普通公开成员；
-- 外部尝试满足不可见或封闭的 spec。
+- 无修饰成员按现有公开成员写入和恢复；
+- `seal` 成员使用现有非公开可见性表示写入和恢复；
+- object-form `spec` 的完整成员序列仍全部进入现有 spec 声明骨架；
+- 继续使用现有 type—spec relation 和 witness 构造机制；
+- 不增加 `.ft` 字段、flag、relation、格式版本或兼容分支；
+- 不改变具体 `type` 成员的 `.ft` 选择和可见性规则。
 
-诊断信息应明确区分两类失败：
+`.ft` 的既有编解码逻辑无需修改。构建待导出的 spec 符号视图时，不得
+把成员可见性统一归一化为公开；应将 AST 中已有的成员可见性原样交给
+现有编码。
 
-1. 成员存在，但当前调用点不属于访问域；
-2. 当前可见类型面中不存在可用于满足检查的成员或 witness。
+该调整只发生在 spec 符号视图构建阶段，属于保存新增 `spec seal` 语义，
+不是 `.ft` 格式或编解码逻辑变更。
 
-## 9 测试矩阵
+## 6 编译器实现影响
+
+### 6.1 语法与 AST
+
+- object-form `spec` 的实例字段、实例方法、静态字段和静态方法接受
+  `seal` 修饰符。
+- `SE0601` 收窄为继续拒绝显式 `open` 和非 object-form 场景中的成员
+  可见性，不再拒绝合法的 object-form `seal` 成员。
+- 无修饰成员继续使用当前默认可见性。
+- 复用 `FengTypeMember` 现有可见性字段，不增加新的 AST 节点或属性。
+
+### 6.2 语义分析
+
+- 完整 requirement 集合继续包含 object-form `spec` 的全部成员。
+- 满足检查、快速满足查询和 witness 构造统一应用第 3.2 节的实现成员
+  可见性兼容条件。
+- 新增统一的 `spec` 成员访问判断，接收成员原声明 `spec`、receiver 的
+  spec 视角，以及当前 type 实现上下文或当前 fit 的目标 type。
+- 实例/静态字段访问、字段写入、方法调用和方法值解析使用同一访问判断。
+- 方法重载在现有解析前过滤当前不可访问的 `spec seal` 候选。
+- 不调用具体 `type` 成员可见性判断来授权 `spec seal`，也不反向修改
+  具体 `type` 成员可见性。
+- 现有具体 `type seal` 成员访问判断保持不变，不能把当前 fit 的目标
+  type 当作当前 type 来通过该判断。
+
+### 6.3 导入导出
+
+- 复用 `.ft` 现有成员可见性编码保存 `spec seal`。
+- 导入恢复后的 `FengTypeMember.visibility` 必须与源码 AST 一致。
+- 不增加逐成员 witness relation。
+- 不改变具体 `type` 私有成员的导出选择。
+
+### 6.4 代码生成与运行时
+
+- 合法的 `spec seal` 成员访问继续使用现有 spec member access 记录和
+  witness 分派。
+- 可见性检查在语义阶段完成。
+- 不增加运行时访问检查、wrapper、box、分支或 ABI 数据结构。
+- 不改变具体 type 方法、字段或静态成员的链接可见性。
+
+### 6.5 工具链
+
+LSP、补全和符号展示只需对 `spec` 成员应用相同访问判断：
+
+- 普通位置不把 `spec seal` 成员展示为可访问成员；
+- 满足该 `spec` 的 `type` 成员方法、静态方法及其 fit 扩展方法中，可以
+  在对应 spec 视角补全该成员；
+- 不改变具体 `type` 的成员补全和可见性规则；
+- API 文档不得把 `spec seal` 成员标记为普通公开 API，但可以作为契约
+  requirement 展示。
+
+## 7 诊断要求
+
+至少覆盖以下失败：
+
+- 公开 requirement 仅找到结构匹配的 `type seal` 实现成员；
+- 普通函数通过 spec 值访问 `seal` 字段或方法；
+- 未满足目标 spec 的 type 方法访问其 `seal` 成员；
+- 目标 type 未满足目标 spec 的 fit 方法访问其 `seal` 成员；
+- 满足同一 spec 的 type 通过其他具体 type 视角访问对应实现的
+  `seal` 成员；
+- `fit` 方法体通过具体 type 视角访问目标 type 的 `seal` 成员；
+- 静态访问没有使用现有静态 spec 约束视角；
+- `.ft` 恢复后把 `spec seal` 错误恢复为公开成员。
+
+诊断应区分：
+
+1. 成员存在，但当前访问点不属于该 `spec seal` 成员的访问域；
+2. 当前 spec 成员面中不存在该成员或没有匹配的重载。
+
+公开 requirement 已有结构匹配成员但其实现可见性为 `seal` 时，诊断应
+明确表达实现成员可见性不足，并与完全缺少实现成员区分。
+
+## 8 测试矩阵
 
 | 场景 | 预期 |
 | --- | --- |
-| `open spec` 声明实例/静态 `seal` 字段与方法 | 通过 |
-| 外部 type 实现 open spec 的实例/静态 seal requirement | 通过 |
-| 普通函数通过 spec 值调用 seal requirement | 拒绝 |
-| 满足 spec 的 type 方法内调用 seal requirement | 通过 |
-| 满足 spec 的 type 方法内通过另一个 spec 值调用 seal requirement | 通过 |
-| 满足 spec 的 type 内通过 spec 视角访问 seal 成员 | 通过 |
-| 满足同一 spec 的 type 直接访问其他具体 type 的 seal 实现 | 拒绝 |
-| 子 spec 继承父 spec 的公开与 seal 实例/静态成员 | 完整继承 |
+| object-form spec 声明实例/静态 `seal` 字段与方法 | 通过 |
+| 无修饰 spec 成员保持公开 | 通过 |
+| 显式 `open` spec 成员 | 按现有规则拒绝 |
+| `seal` requirement 参与 type 满足检查和 witness 构造 | 通过 |
+| open/default type 成员承担 `seal` requirement | 通过 |
+| type seal 成员承担 `seal` requirement | 通过 |
+| 公开 requirement 由 open/default type 成员满足 | 通过 |
+| 公开 requirement 由 type seal 成员满足 | 拒绝，并报告实现可见性不足 |
+| 普通函数通过 spec 值访问 seal requirement | 拒绝 |
+| 满足 spec 的 type 实例方法通过 spec 视角访问 seal requirement | 通过 |
+| 满足 spec 的 type 静态方法通过 spec 视角访问 seal requirement | 通过 |
+| 满足 spec 的 type 通过另一个 spec 值访问 seal requirement | 通过 |
+| 未满足 spec 的 type 方法访问 seal requirement | 拒绝 |
+| 实现同一 spec 的 type 直接访问其他具体 type 的 seal 实现 | 按既有 type 规则拒绝 |
+| 目标 type 满足 spec 的 `fit` 方法通过 spec 视角访问 seal requirement | 通过 |
+| 目标 type 未满足 spec 的 `fit` 方法访问 seal requirement | 拒绝 |
+| `fit` 方法通过具体 type 视角访问目标 type 的 seal 成员 | 按既有 type 规则拒绝 |
+| 子 spec 继承父 spec 的公开与 seal 成员 | 完整继承 |
 | 实现子 spec 的 type 访问父 spec seal 成员 | 通过 |
 | 仅实现父 spec 的 type 访问子 spec seal 成员 | 拒绝 |
-| 外部 type 尝试实现不可见的 spec | 拒绝 |
-| 包内 `fit T: S` 使用已知 type seal 成员完成满足检查 | 通过 |
-| 跨包 `fit T: S` 尝试匹配未进入 `.ft` 的 type seal 成员 | 拒绝 |
-| 跨包 `fit T` 方法中的 `self` 调用目标隐藏成员 | 拒绝 |
-| 导出的 witness 在 consumer 中完成合法 seal-domain 分派 | 通过 |
-| 跨包新 type 实现 open spec 后通过 spec 视角访问已导出实现 | 通过 |
-| consumer 在 domain 外对 contract seal 实现做普通成员访问 | 拒绝 |
-| 未实现 spec seal requirement 的 type seal 成员被包外 `fit` 重新激活 | 拒绝 |
-| contract seal 实现进入 `.ft` 后变为普通公开成员 | 不得发生 |
+| 公开与 seal 同名重载同时存在 | 先过滤访问权限，再按现有规则解析 |
+| `.ft` 写入并恢复 spec seal 成员 | 保持 seal |
+| `.ft` 因 spec seal 改变具体 type 私有成员选择 | 不得发生 |
 
-测试应同时覆盖源码消费与 `.fb` / `.ft` 跨包消费，确保两条路径的成员面、满足关系和诊断一致。
+编译器测试应关注 AST 可见性、诊断码、spec member access 和 witness；
+FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验证 spec 成员
+可见性往返，不扩展到具体 `type seal` 成员导出。
 
-## 10 与现行规范的变更关系
+## 9 权威规范更新
 
-该能力与现行规范存在直接冲突，至少需要先修改：
+正式实现前，应按本文已经确认的范围更新：
 
-- `docs/specifications/feng-spec.md`：放宽 object-form spec 实例/静态字段与方法的
-  `seal` 限制，定义两层成员面、父级完整继承与访问域；
-- `docs/specifications/feng-fit.md`：定义包内/跨包满足检查使用的可见类型面，并明确 `fit` 不扩大可见性；
-- `docs/specifications/feng-visibility.md`：补充声明级 `open` / `seal` 与 spec 成员级 `seal` 的正交关系；
-- `docs/specifications/feng-symbol-table.md`：定义 `.ft` 中 requirement、contract seal 实现成员、
-  可见性与 witness 映射的传播边界；
-- `docs/specifications/feng-error-codes-se.md`：调整 `SE0601` 的适用范围，并为非法调用或跨包满足失败补充准确诊断。
+- `docs/specifications/feng-spec.md`：允许 object-form `spec seal` 成员，
+  定义公开访问面、完整契约、实现成员可见性兼容规则、实现 type 与 fit
+  访问域和现有 witness 复用；
+- `docs/specifications/feng-visibility.md`：定义 `spec seal` 只约束 spec
+  视角，不改变具体 type 成员可见性；
+- `docs/specifications/feng-symbol-table.md`：确认复用现有成员可见性编码，
+  不修改 `.ft` 格式和 relation；
+- `docs/specifications/feng-error-codes-se.md`：收窄 `SE0601` 并定义
+  spec seal 非法访问诊断。
 
-在权威规范更新前，不应直接修改 parser、semantic、codegen 或 `.ft` 格式。
+`docs/specifications/feng-fit.md`：明确 fit 不是目标 type 自身，不能直接
+访问目标 type 的 seal 成员；同时，fit 以其目标 type 参与 `spec seal`
+访问域判断，可以通过 spec 视角访问目标 type 所满足 spec 的 seal 成员。
 
-## 11 待人工确认
-
-以下内容未在本次讨论中形成结论，不能由实现阶段自行推断：
-
-- 是否允许 spec 成员显式写 `open`，还是仅允许省略修饰符或写 `seal`；
-- intersection-form 聚合 object-form spec 后如何计算 seal domain；
-- 重载集合中公开与 seal 同名成员的冲突和查找规则；
-- 已知具体 `type` 的静态 spec 视角如何显式表达；
-- `.ft` 现有契约关系是否足以恢复实现成员 witness 映射；如不足，需要追加的
-  具体编码与兼容处理；
-- 反射或未来符号查询 API 对 contract hook 暴露到何种粒度。
-
-这些决策完成并写入权威规范后，才能形成可执行的实现任务拆分。
+权威规范只定义上述新增规则，并随本能力修复公开 requirement 可由
+`type seal` 成员满足的问题；不顺带修改任何具体 type 成员可见性、
+fit 的目标 type 私有访问权、跨包可见面或运行时行为。

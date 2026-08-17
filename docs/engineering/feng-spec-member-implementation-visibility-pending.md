@@ -1,20 +1,27 @@
 # `spec` 实现成员可见性问题备忘
 
-> **状态**：待决策，暂不实施。
-> **日期**：2026-08-14。
+> **状态**：已决策，随 `spec seal` 成员能力实施。
+> **记录日期**：2026-08-14。
+> **决策日期**：2026-08-17。
 > **性质**：engineering 问题备忘，不是语言权威规范。
 
 ## 1. 目的与范围
 
-本文独立记录 object-form `spec` requirement 与具体实现成员可见性之间的语义缺口：当前公开的 `spec` 成员可以由同名、同结构的 `seal` 类型成员自动满足，并通过 `spec` 视角公开访问。
+本文记录 object-form `spec` requirement 与具体实现成员可见性之间的
+现有语义缺口及其决策：当前公开的 `spec` 成员可以由同名、同结构的
+`seal` 类型成员自动满足，并通过 `spec` 视角公开访问。
 
-本文只记录现状、问题边界和候选方向，不选择最终方案，也不修改当前编译器行为。未来若作出决策，应先更新以下权威规范，再实施代码与测试：
+该问题已纳入 [`feng-spec-seal-member-draft.md`](./feng-spec-seal-member-draft.md)
+统一处理。具体的满足兼容矩阵、访问域和实现要求只在该草案中定义；本文
+保留问题背景和决策记录，不重复定义规则。正式实施前，应先更新以下
+权威规范，再实施代码与测试：
 
 - [`feng-spec.md`](../specifications/feng-spec.md)
 - [`feng-visibility.md`](../specifications/feng-visibility.md)
 - 必要时更新 [`feng-fit.md`](../specifications/feng-fit.md)
 
-未来 `spec seal` 成员的设计仍以 [`feng-spec-seal-member-draft.md`](./feng-spec-seal-member-draft.md) 为准。本文不重复定义该能力，只记录两项设计之间需要统一的边界。
+`spec seal` 成员及本问题的工程设计均以
+[`feng-spec-seal-member-draft.md`](./feng-spec-seal-member-draft.md) 为准。
 
 ## 2. 当前行为
 
@@ -59,15 +66,17 @@ widget.lines;                 // 可通过 TextWidget 视角访问
 
 因此，当前行为是编译器现有检查规则的直接结果，不是 `TextWidget` 或 TUI 的局部行为；实例字段、静态字段、实例方法和静态方法都需要在最终方案中统一考虑。
 
-## 4. 语义问题
+## 4. 已确认的问题边界
 
-当前行为存在需要明确决策的歧义：
+本次决策确认：
 
-- `seal` 通常表达“只有定义该成员的类型自身能够访问”，但公开 `spec` 视角会间接公开该成员。
-- 类型作者只写了同名成员，没有显式声明该成员允许作为公开契约实现。
-- 该行为类似“自动显式接口实现”，但 Feng 当前没有对应的显式语法或规范术语。
-- `fit`、跨包 `.ft` 导出、API 文档、补全、查找引用和重命名都需要与最终可见性语义一致。
-- 未来引入 `spec seal` requirement 后，必须明确“公开 requirement”和“受限 requirement”分别允许由哪些可见性的类型成员满足。
+- 公开 `spec` requirement 由 `type seal` 成员满足是应修复的现有问题；
+- 该修复与 `spec seal` requirement 的新增满足规则一起实施，不另行引入
+  显式契约实现语法；
+- 字段、方法、实例成员、静态成员、直接声明和 `fit` 提供实现必须使用
+  草案定义的同一规则；
+- 该修复只改变 requirement 满足与 witness 选择，不改变具体 `type`
+  成员的固有可见性。
 
 ## 5. 其他语言的相关选择
 
@@ -92,56 +101,44 @@ widget.lines;                 // 可通过 TextWidget 视角访问
 
 ## 6. 与 `spec seal` 成员的关系
 
-[`feng-spec-seal-member-draft.md`](./feng-spec-seal-member-draft.md) 计划引入具有受限访问域的 `spec seal` requirement。当前问题早于该能力，并且不能由该草案自动解决：
+[`feng-spec-seal-member-draft.md`](./feng-spec-seal-member-draft.md) 计划引入
+具有受限访问域的 `spec seal` requirement。当前问题早于该能力，但两者
+共享同一项“requirement 可见性与实现成员可见性是否兼容”的判断，因此
+合并实施：
 
-- 当前问题是：公开 `spec` requirement 是否允许由类型的 `seal` 成员自动满足。
-- `spec seal` 草案的问题是：受限 requirement 如何由实现类型满足，以及实现者如何通过 `spec` 视角访问。
+- 新增 `spec seal` requirement 的解析、满足和访问语义；
+- 同时修复公开 requirement 选择 `type seal` 成员作为 witness 的问题；
+- 不改变承担 requirement 的具体 `type` 成员本身的可见性。
 
-两者最终必须形成一致规则，但本文不改变 `spec seal` 草案已经记录的设计方向。
+具体规则统一引用草案的“契约满足与 witness”及“`seal` 成员访问域”章节。
 
-## 7. 候选方向
+## 7. 已确认方向
 
-以下方向仅用于后续决策，不代表当前结论。
+采用“requirement 可见性不得由实现成员收窄”的方向，并由 `spec seal`
+为受限契约提供明确表达。完整兼容矩阵见
+[`feng-spec-seal-member-draft.md` 第 3.2 节](./feng-spec-seal-member-draft.md#32-契约满足与-witness)。
 
-### 7.1 可见性不得收窄
+该方向意味着：
 
-- 公开 `spec` requirement 必须由 `open` 类型成员满足。
-- `seal` 类型成员不能自动满足公开 requirement。
-- 未来的 `spec seal` requirement 可按其受限访问域决定是否允许 `seal` 或 `open` 实现。
+- 当前依赖“公开 requirement 自动映射 `type seal` 成员”的代码需要迁移为
+  明确的 `spec seal` requirement，或提供公开实现成员；
+- witness 只能从与 requirement 可见性兼容的候选中选择；
+- 通过 spec 视角访问实现成员时，权限由 requirement 决定；通过具体 type
+  视角访问时，仍由具体成员的既有可见性决定。
 
-该方向接近 C# 的隐式接口实现、Java、Swift 和 Rust 的公开契约规则。
+## 8. 实施约束
 
-### 7.2 保留当前自动契约视角
+实施时必须与主草案保持一致，尤其包括：
 
-- `seal` 类型成员仍可自动满足公开 `spec` requirement。
-- 具体类型视角保持 `seal`，`spec` 视角按 requirement 的访问面公开。
-- 需要在规范中明确这是有意支持的双访问面语义，而不是检查遗漏。
-
-该方向更接近 C++ 私有覆写公开虚方法的结果，但 Feng 的结构满足与 witness 机制并不等同于 C++ 继承。
-
-### 7.3 增加显式契约实现形式
-
-- 默认情况下，公开 requirement 要求 `open` 实现。
-- 语言另行提供显式写法，允许类型作者主动声明某个 `seal` 成员只通过指定 `spec` 视角公开。
-- 现有同名 `seal` 成员不再自动产生该映射。
-
-该方向接近 C# 的显式接口实现，但是否增加新语法、如何与 `fit` 配合均需另行设计。
-
-## 8. 后续决策点
-
-实施前至少需要明确：
-
-1. 公开 `spec` requirement 能否由 `seal` 类型成员满足。
-2. 字段、方法、实例成员和静态成员是否使用完全一致的规则。
-3. 类型直接声明满足关系与 `fit` 提供实现时是否使用一致规则。
-4. 若保留双访问面，是否必须通过显式语法授权。
-5. 跨包 `.ft` 应导出哪些实现映射，以及是否会间接暴露类型的 `seal` 成员。
-6. LSP 的补全、定义、引用和重命名应如何表示同一成员的两个访问面。
-7. 最终规则与 `spec seal` requirement 的满足及访问域如何衔接。
+- 满足验证、快速满足查询和 witness 选择复用同一个可见性兼容判断；
+- `type` 直接声明与 `fit` 提供实现不分叉；
+- 不修改 `.ft` relation 模型，不扩大具体 `type seal` 成员导出；
+- LSP 的补全、定义、引用和重命名遵守相同的 spec 访问面；
+- TUI 当前依赖该现有行为的 `TextWidget.lines` 应按最终权威规范迁移。
 
 ## 9. 待办
 
-- [ ] 确认最终语义方向。
+- [x] 确认最终语义方向。
 - [ ] 更新唯一权威的语言规范，关联工程文档仅保留引用。
 - [ ] 更新 semantic 满足检查及诊断。
 - [ ] 如有需要，更新 witness 与 `.ft` 导出规则。
@@ -149,4 +146,5 @@ widget.lines;                 // 可通过 TextWidget 视角访问
 - [ ] 补齐 LSP 补全、定义、引用和重命名测试。
 - [ ] 根据最终结论调整 TUI `TextWidget` 的内部缓存表达方式。
 
-在以上决策完成前，保留当前编译器行为，不在 TUI `Text` 实现中局部绕过或定义新的语言规则。
+在代码实施完成前，编译器仍保持当前行为。TUI 不局部定义新的语言规则，
+待权威规范更新后与编译器实现一并迁移。
