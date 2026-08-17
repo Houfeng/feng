@@ -524,15 +524,15 @@ type 成员和 fit 成员都应进入同一个候选判断，不应分别复制 
 
 - [ ] 将三种成员展开形式归一为同一种直接 mix 授权关系，来源构造表达式只保留现有
   字段初始化职责。
-- [ ] 复用现有 `@mixable open static` 对 type 来源与可见 `fit Source` 来源的候选收集、
-  方法归属和来源映射；不得为 `seal` 新增独立的来源身份或候选模型。
+- [ ] 验证 seal 路径复用现有 `@mixable open static` 对 type 来源与可见 `fit Source`
+  来源的候选收集、方法归属和来源映射；不得为 `seal` 新增独立的来源身份或候选模型。
 - [ ] 实现基于当前 type、直接 mix 关系、来源 type、来源方法及其 type/fit 归属的统一
   授权查询；该抽象不得依赖来源事实来自同包 AST 还是 imported provider。
 - [ ] 明确只有 `seal + static + is_mixable + 对应直接 mix 关系` 同时成立时才获得 seal
   mix 授权；同包、来源 type 可见、实现相同 spec 或间接 mix 均不能单独授权。
 - [ ] 让 `@mixable seal static` 的完整签名复用现有 open 方法可见性检查并沿用
   `AE0327`；不得改变其他普通 seal 方法的 type-private 签名检查。
-- [ ] 保持普通 open 访问、普通 seal 访问和 spec/witness 逻辑不变。
+- [ ] 验证普通 open 访问、普通 seal 访问和 spec/witness 逻辑保持不变。
 
 ### TODO 3：完成同包 wrapper 与访问语义
 
@@ -540,27 +540,27 @@ type 成员和 fit 成员都应进入同一个候选判断，不应分别复制 
   并让 type 来源和可见 fit 来源进入同一候选流程。
 - [ ] 验证来源 seal visibility 原样传播到目标静态 wrapper。
 - [ ] 验证静态 seal visibility 原样传播到目标实例 wrapper。
-- [ ] 保持静态 wrapper 的 mixable 事实和实例 wrapper 的非 mixable 事实。
+- [ ] 验证静态 wrapper 保留 mixable 事实、实例 wrapper 不保留 mixable 事实。
 - [ ] 让生成 wrapper 的来源静态调用使用统一授权查询。
 - [ ] 让目标显式成员中的来源静态调用使用统一授权查询。
 - [ ] 让静态重载选择先过滤无授权 seal 候选。
-- [ ] 保持现有不可访问诊断，不让无授权 seal 候选遮蔽可访问 open 候选。
+- [ ] 验证现有不可访问诊断保持不变，并验证无授权 seal 候选不会遮蔽可访问 open 候选。
 - [ ] 确保目标显式优先跳过来源 wrapper 后，来源方法授权仍然存在。
-- [ ] 复用现有泛型、变长参数、来源映射、冲突和多层传播逻辑，不增加 seal 专用生成
-  路径。
+- [ ] 验证 seal wrapper 完整复用现有泛型、变长参数、来源映射、冲突和多层传播逻辑，
+  不增加 seal 专用生成路径。
 - [ ] 完成同包 type 来源、fit 来源、显式来源调用和多层传播的完整编译语义。
 
 ### TODO 4：接入 package-public `.ft`
 
 - [ ] 让 package-public writer 在所属 type/fit 按现有规则可导出的前提下，选择
   `seal + static + is_mixable` 方法；不得因私有表示 dependency skeleton 而扩大方法面。
-- [ ] 让 reader/import 按现有字段原样恢复 visibility、static、is_mixable、完整签名、
+- [ ] 验证 reader/import 按现有字段原样恢复 visibility、static、is_mixable、完整签名、
   泛型及 reified dependencies，不引入新的 `.ft` 授权字段。
 - [ ] 让来源及生成的 seal mixable 静态 wrapper 使用同一选择规则，使下一层包能够继续
   显式 mix。
-- [ ] 保持普通 seal 方法和 `seal + !is_mixable` 实例 wrapper 不进入 package-public
+- [ ] 验证普通 seal 方法和 `seal + !is_mixable` 实例 wrapper 仍不进入 package-public
   方法面。
-- [ ] 保持 open mixable 及其生成 wrapper 的现有 `.ft` 行为不变。
+- [ ] 验证 open mixable 及其生成 wrapper 的现有 `.ft` 行为保持不变。
 - [ ] 让 imported 普通成员访问继续按 seal 拒绝，只在统一直接 mix 授权查询中放行。
 - [ ] 验证同包 AST 与 `.ft` round-trip 后的候选、授权、wrapper 和诊断结果一致。
 
@@ -568,22 +568,23 @@ type 成员和 fit 成员都应进入同一个候选判断，不应分别复制 
 
 - [ ] 为来源及生成的 `seal + static + is_mixable` 方法提供跨包稳定、可链接的调用符号，
   同时保持 Feng visibility 为 seal。
-- [ ] 覆盖 type 来源与 fit 来源的非泛型静态方法、导入原型和完整限定静态调用。
+- [ ] 实现 type 来源与 fit 来源的非泛型静态方法、导入原型和完整限定静态调用。
 - [ ] 验证 seal 来源及其生成 wrapper 的跨包调用完整复用现有 `@mixable open static`
   的泛型 owner、泛型方法、泛型 fit、reified dependencies 与 wrapper 调用链；不得新增
   seal 专用的泛型或 reification 路径。
 - [ ] 确保符号身份只依赖 package-public `.ft` 可恢复事实，不依赖未记录的普通 seal
   方法或 provider 私有声明顺序。
 - [ ] 确保生成 seal 静态 wrapper 进入下一层包后继续使用同一链接规则。
-- [ ] 禁止新增运行时动态分派、方法表、来源实例、额外参数或专用 wrapper ABI。
+- [ ] 验证变更未新增运行时动态分派、方法表、来源实例、额外参数或专用 wrapper ABI。
 
 ### TODO 6：接入 LSP
 
 - [ ] 让 completion 使用与编译器一致的直接 mix 授权查询：普通上下文隐藏 seal mixable
   方法，直接 mix 目标的合法成员上下文显示对应来源方法。
-- [ ] 让 definition 和 hover 保留目标 `...`、生成 wrapper 与来源 type/fit 方法之间的
+- [ ] 验证 definition 和 hover 保留目标 `...`、生成 wrapper 与来源 type/fit 方法之间的
   现有来源映射。
-- [ ] 保持 open mixable、普通 seal 成员和无直接 mix 关系上下文的现有 LSP 行为不变。
+- [ ] 验证 open mixable、普通 seal 成员和无直接 mix 关系上下文的现有 LSP 行为保持
+  不变。
 
 ### TODO 7：增加完整测试并全量回归
 
