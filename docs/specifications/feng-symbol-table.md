@@ -666,6 +666,10 @@ attr key 常量建议如下:
 - `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
 - 被语义分析判定为“不得导出”的声明,不进入公开 `.ft`; 本地缓存 `.ft` 可按本地需要保留。
+- object-form `spec` 的完整成员骨架必须进入已导出 spec 的 `.ft`，包括
+  `spec seal` requirement；每个成员沿用 `SYMS.flags.public` 忠实保存其
+  spec 访问面。该收录不把 `spec seal` 成员变成普通公开 API，也不要求
+  额外收录承担 requirement 的具体 `type seal` 成员。
 
 #### 6.5.1 enum / enum_item 导出与查询视图补充
 

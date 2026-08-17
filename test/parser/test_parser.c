@@ -439,6 +439,61 @@ static void test_spec_static_members_parse(void) {
     feng_program_free(program);
 }
 
+/* Object-form spec members preserve default/public versus explicit seal
+ * visibility for every supported instance/static field/method shape. */
+static void test_spec_seal_members_parse(void) {
+    const char *source =
+        "module demo.spec_seal;\n"
+        "spec Hooks {\n"
+        "    let publicField: int;\n"
+        "    seal var privateField: int;\n"
+        "    func publicMethod(): int;\n"
+        "    seal func privateMethod(): int;\n"
+        "    seal static let privateStaticField: int;\n"
+        "    seal static func privateStaticMethod(): int;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *hooks;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "spec_seal_members.f",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    hooks = program->declarations[0];
+    ASSERT(hooks->kind == FENG_DECL_SPEC);
+    ASSERT(hooks->as.spec_decl.as.object.member_count == 6U);
+    ASSERT(hooks->as.spec_decl.as.object.members[0]->visibility ==
+           FENG_VISIBILITY_DEFAULT);
+    ASSERT(hooks->as.spec_decl.as.object.members[1]->visibility ==
+           FENG_VISIBILITY_PRIVATE);
+    ASSERT(hooks->as.spec_decl.as.object.members[2]->visibility ==
+           FENG_VISIBILITY_DEFAULT);
+    ASSERT(hooks->as.spec_decl.as.object.members[3]->visibility ==
+           FENG_VISIBILITY_PRIVATE);
+    ASSERT(hooks->as.spec_decl.as.object.members[4]->visibility ==
+           FENG_VISIBILITY_PRIVATE);
+    ASSERT(hooks->as.spec_decl.as.object.members[4]->is_static);
+    ASSERT(hooks->as.spec_decl.as.object.members[5]->visibility ==
+           FENG_VISIBILITY_PRIVATE);
+    ASSERT(hooks->as.spec_decl.as.object.members[5]->is_static);
+
+    feng_program_free(program);
+
+    program = NULL;
+    ASSERT(!feng_parse_source(
+        "module demo.spec_open; spec Bad { open func run(): void; }",
+        strlen("module demo.spec_open; spec Bad { open func run(): void; }"),
+        "spec_open_member_error.f",
+        &program,
+        &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL && strcmp(error.code, "SE0601") == 0);
+}
+
 static void test_spec_static_member_parse_errors(void) {
     static const struct {
         const char *source;
@@ -3397,6 +3452,7 @@ int main(void) {
     test_member_annotations_and_constructors();
     test_static_members_parse();
     test_spec_static_members_parse();
+    test_spec_seal_members_parse();
     test_spec_static_member_parse_errors();
     test_static_member_parse_errors();
     test_ast_source_tokens();

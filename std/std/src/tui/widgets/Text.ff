@@ -55,7 +55,7 @@ open spec TextWidget: Widget {
   var content: string;
 
   /** arrange 生成、draw 复用的最终显示行。 */
-  let lines: List<TextLine>;
+  seal let lines: List<TextLine>;
 }
 
 /**

@@ -136,6 +136,48 @@ type MutableUser: MutableNamed {
   }
 }
 
+// seal spec 成员只通过 spec 视角向实现域开放。
+spec SealedCounterSurface {
+  seal var value: int;
+  seal func current(): int;
+  seal static func marker(): int;
+}
+
+type SealedCounter: SealedCounterSurface {
+  seal var value: int;
+
+  func SealedCounter(initial: int) {
+    self.value = initial;
+  }
+
+  seal func current(): int {
+    return self.value;
+  }
+
+  func peek(): int {
+    return self.value;
+  }
+
+  seal static func marker(): int {
+    return 7;
+  }
+
+  func invoke(other: SealedCounterSurface): int {
+    other.value = 41;
+    return other.value + other.current();
+  }
+
+  static func invokeStatic<T: SealedCounterSurface>(): int {
+    return T.marker();
+  }
+}
+
+fit SealedCounter {
+  func invokeFromFit(other: SealedCounterSurface): int {
+    return other.current();
+  }
+}
+
 /** spec 契约测试 */
 open func test_spec() {
   describe("spec", () {
@@ -243,6 +285,20 @@ open func test_spec() {
       mn.mname = "after";
       assert(mn.mgreet() == "after", "spec var field mutation via spec view");
       assert(mu.mname == "after", "spec var field mutation reflects on original");
+    });
+
+    test("spec seal member witness access from type and fit", () {
+      let target = SealedCounter(3);
+      let view: SealedCounterSurface = target;
+      let caller = SealedCounter(0);
+      assert(caller.invoke(view) == 82,
+             "type method accesses seal field and method through spec witness");
+      assert(target.peek() == 41,
+             "spec seal field write reaches the concrete subject");
+      assert(caller.invokeFromFit(view) == 41,
+             "fit method accesses seal method through spec witness");
+      assert(SealedCounter.invokeStatic<SealedCounter>() == 7,
+             "type static method accesses seal static method through spec witness");
     });
 
     test("spec == / != comparison", () {

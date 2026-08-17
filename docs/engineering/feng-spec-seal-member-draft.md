@@ -1,9 +1,9 @@
 # `spec` 支持定义 `seal` 成员实现草案
 
 > 本文档是实现草案，不是语言权威规范。
-> 当前 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 明确规定
-> `spec` 成员不得声明 `open` 或 `seal`。正式实现前，必须先将本文确认的
-> 规则写入语言权威规范。
+> 本文确认的规则已经写入
+> [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 等权威规范；本文
+> 继续用于跟踪实现范围和实施 TODO，最终语言语义以权威规范为准。
 
 ## 1 背景
 
@@ -300,7 +300,7 @@ Widget.draw -> witness -> Button.draw / Icon.draw
   可见性兼容条件。
 - 新增统一的 `spec` 成员访问判断，接收成员原声明 `spec`、receiver 的
   spec 视角，以及当前 type 实现上下文或当前 fit 的目标 type。
-- 实例/静态字段访问、字段写入、方法调用和方法值解析使用同一访问判断。
+- 实例/静态字段访问、字段写入和方法调用使用同一访问判断。
 - 方法重载在现有解析前过滤当前不可访问的 `spec seal` 候选。
 - 不调用具体 `type` 成员可见性判断来授权 `spec seal`，也不反向修改
   具体 `type` 成员可见性。
@@ -398,8 +398,10 @@ FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验�
   视角，不改变具体 type 成员可见性；
 - `docs/specifications/feng-symbol-table.md`：确认复用现有成员可见性编码，
   不修改 `.ft` 格式和 relation；
-- `docs/specifications/feng-error-codes-se.md`：收窄 `SE0601` 并定义
-  spec seal 非法访问诊断。
+- `docs/specifications/feng-error-codes-se.md`：收窄 `SE0601`，只拒绝 spec
+  成员显式 `open`；
+- `docs/specifications/feng-error-codes-ae.md`：定义实现成员可见性不兼容和
+  spec seal 成员越权访问诊断。
 
 `docs/specifications/feng-fit.md`：明确 fit 不是目标 type 自身，不能直接
 访问目标 type 的 seal 成员；同时，fit 以其目标 type 参与 `spec seal`
@@ -408,3 +410,24 @@ FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验�
 权威规范只定义上述新增规则，并随本能力修复公开 requirement 可由
 `type seal` 成员满足的问题；不顺带修改任何具体 type 成员可见性、
 fit 的目标 type 私有访问权、跨包可见面或运行时行为。
+
+## 10 实施 TODO
+
+- [x] 更新 `feng-spec.md`、`feng-visibility.md`、`feng-fit.md`、
+  `feng-symbol-table.md` 及 SE/AE 诊断规范。
+- [x] Parser 仅允许 object-form spec 成员使用 `seal`，保持无修饰成员为
+  公开语义，并继续拒绝显式 `open`。
+- [x] `.ft` 符号视图保存并恢复 spec 成员已有的可见性，不修改格式、版本
+  或 relation。
+- [x] 为 requirement 与实现成员增加统一可见性兼容判断，并在满足验证、
+  快速满足查询和 witness 选择中复用。
+- [x] 修复公开 spec requirement 可由同名同结构 `type seal` 成员自动满足
+  的现有问题；字段、方法、实例成员、静态成员和 fit 实现使用同一规则。
+- [x] 在实例/静态字段访问、字段写入、方法调用和重载解析入口执行
+  spec seal 访问域检查。
+- [x] 允许满足目标 spec 的 type 成员方法、静态方法及其 fit 扩展方法通过
+  spec 视角访问 seal 成员；拒绝普通函数和未满足目标 spec 的上下文。
+- [x] 保持具体 type 成员查找、type seal 可见性、跨包 fit 可见面、witness
+  运行时结构和代码生成分派形式不变。
+- [x] 补齐 Parser、AST、semantic、witness、`.ft` 往返、跨包、LSP 和 FCTS
+      测试，并执行 `make test` 全量回归。

@@ -18,6 +18,9 @@
 - active member: union-form 值当前实际持有的直接成员,由进入站点确定,由 union-form 的 `tag` 表达。
 - `type`: 具体类型声明,可通过定义头或 `fit` 显式进入一个或多个 object-form `spec`。
 - 契约满足: 指具体 `type` 满足目标 object-form `spec` 的全部字段与方法要求。
+- 公开 requirement: object-form `spec` 中省略成员可见性修饰的字段或方法要求。
+- `spec seal` requirement: object-form `spec` 中使用 `seal` 修饰、仅允许实现域
+  通过 spec 视角访问的字段或方法要求。
 - 方法签名: 方法名、参数个数、参数类型、参数顺序与返回值类型的组合。
 - 默认 witness: `spec` 默认初始化时由语言规则提供的默认实例语义。
 
@@ -48,27 +51,37 @@ type User: Named, Identified {
 }
 ```
 
-正确语法二,可调用形状:
+正确语法二,object-form `spec` 的 `seal` 成员:
+
+```feng
+spec Widget {
+  func show(): void;
+  seal func draw(): void;
+  seal static let phase: int;
+}
+```
+
+正确语法三,可调用形状:
 
 ```feng
 spec Click(): void;
 spec Mapper(x: int): int;
 ```
 
-正确语法三,union-form:
+正确语法四,union-form:
 
 ```feng
 spec Choice: int | string | User;
 ```
 
-正确语法四,intersection-form:
+正确语法五,intersection-form:
 
 ```feng
 spec ReadWrite: Readable & Writable;
 spec Comparable<T>: Eq<T> & Ord<T>;
 ```
 
-正确语法五,object-form spec 中声明静态成员:
+正确语法六,object-form spec 中声明静态成员:
 
 ```feng
 // 静态字段与静态方法签名
@@ -97,13 +110,16 @@ spec Resource {
 
 `spec` 静态成员是对 `type` 静态能力的契约描述。当返回值或参数需要表达"实现类型自身"时,使用 spec 类型参数 `T`,由满足方在 `type Widget: Factory<Widget>` 中绑定。
 
-错语法一,`spec` 中显式可见性修饰:
+错语法一,object-form `spec` 成员显式使用 `open`:
 
 ```feng
 spec Bad {
   open func run(): void;
 }
 ```
+
+object-form `spec` 成员省略修饰时已经是公开 requirement；允许使用的唯一
+成员可见性修饰符是 `seal`。
 
 错语法二,`spec` 行为签名或可调用形状参数使用 `let` / `var` 修饰:
 
@@ -185,7 +201,31 @@ type Stream: ReadWrite {}
 - 由于对象形状 `spec` 不约束物理布局,运行时可采用分发表、witness 表或其他等价机制来满足契约,因此对象形状 `spec` 不构成 ABI 稳定类型,不能进入 C ABI 边界。
 - 目前成员顺序的调整,不是兼容变更。未来增加基于编译期计算出稳定的成员 KEY 进行编译期成员重排的方式优化此问题。
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
-- `spec` 中的成员与行为签名默认公开,且不允许显式添加 `open` 或 `seal`。
+- object-form `spec` 的字段与方法默认是公开 requirement；允许显式使用
+  `seal` 将其声明为 `spec seal` requirement，不允许显式使用 `open`。
+- 公开 requirement 与 `spec seal` requirement 均属于完整契约，均参与
+  满足检查、父 spec 闭包和 witness 构造；`seal` 只把该 requirement 从
+  普通 spec 访问面中排除。
+- requirement 与实现成员的可见性兼容规则如下；省略修饰的 `type` 成员按
+  其既有公开语义处理：
+
+| object-form `spec` requirement | 公开或无修饰 `type` 成员 | `type seal` 成员 |
+| --- | --- | --- |
+| 公开或无修饰 | 允许满足 | 拒绝满足 |
+| `seal` | 允许满足 | 允许满足 |
+
+- 上述兼容规则统一适用于字段、方法、实例成员、静态成员、`type` 直接提供
+  的实现和 `fit` 提供的方法实现。公开 requirement 已找到结构匹配但仅有
+  `seal` 实现成员时，必须按实现成员可见性不兼容诊断，不得建立 witness。
+- `spec S` 的 `seal` 成员只允许在以下实现域中通过能够暴露该成员的 spec
+  静态视角访问：访问点位于满足 `S` 的 `type T` 自身成员方法、静态方法，
+  或目标为 `T` 的 `fit` 扩展方法中。普通函数和不满足 `S` 的 type/fit
+  上下文不得访问。
+- 继承得到的 `spec seal` 成员保留原声明可见性，访问域按成员原声明 spec
+  判断。实现子 spec 的 type 按现有名义闭包同时满足父 spec。
+- `spec seal` 的访问权限只作用于 spec 视角和既有 witness 分派，不改变
+  承担 requirement 的具体 type 成员可见性，也不允许通过具体 type 视角
+  访问其他 type 或 fit 目标的 `seal` 实现成员。
 - object-form `spec` 支持声明静态成员（`static let`、`static var`、`static func`）,作为 `type` 静态能力的契约描述;静态成员与实例成员采用一致的成员声明顺序。
 - 对象形状中的行为签名使用 `func` 关键字,在 `spec` 中可不写函数体。
 - object-form `spec` 是契约声明,成员面仅包含字段声明与方法签名; spec 一律不允许声明终结器（`~` 前缀的方法）。
@@ -224,7 +264,9 @@ type Stream: ReadWrite {}
 
 - object-form `spec` 中允许声明 `static let`、`static var` 与 `static func` 成员,作为 `type` 静态能力的契约描述; spec 不提供任何实现,静态字段声明不带初始值,静态方法签名不带函数体。
 - spec 静态字段声明必须以 `;` 结束,spec 静态方法签名必须以 `;` 结束;静态方法参数不可使用 `let` 或 `var` 修饰符,且必须显式声明返回类型。
-- spec 静态方法支持泛型,规则与 spec 实例方法一致; spec 静态方法支持重载,规则与 `type` 中静态方法一致; spec 静态成员不允许显式 `open` / `seal` 可见性修饰。
+- spec 静态方法支持泛型,规则与 spec 实例方法一致; spec 静态方法支持重载,
+  规则与 `type` 中静态方法一致; spec 静态成员允许 `seal`,不允许显式
+  `open`,并使用与实例成员相同的满足兼容和访问域规则。
 - spec 方法名可以与 spec 名相同（包括静态方法和实例方法）,视为普通方法; spec 一律不允许 `~` 前缀的方法（终结器只允许用于 `type`）。
 - spec 静态字段的满足来源只能是 `type` 自身（`fit` 不得声明 `static let` / `static var`）; spec 静态方法的满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - spec 静态字段匹配采用"名称 + 绑定方式（`let` / `var`） + 类型完全一致"规则; spec 静态方法匹配采用"名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致"规则。
@@ -248,6 +290,14 @@ type Stream: ReadWrite {}
 - [必须] 在 `type Foo: Bar, Baz {}` 或契约适配 `fit Foo: Bar, Baz` 中,冒号右侧每一项都必须是 object-form `spec`。
 - [必须] 判断 `type` 是否满足 `spec` 时,字段匹配采用“名称 + 绑定方式（`let` 或 `var`，即字段是否可变） + 类型完全一致”规则。
 - [必须] 判断 `type` 是否满足 `spec` 时,方法匹配采用“名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”规则。
+- [必须] object-form `spec` 的公开 requirement 只能由公开或无修饰的实现
+  成员满足；`spec seal` requirement 可以由公开、无修饰或 `seal` 实现
+  成员满足。字段、方法、实例、静态、type 与 fit 来源使用同一规则。
+- [必须] 满足 object-form `spec` 的 type 成员方法、静态方法及其 fit 扩展
+  方法可以通过 spec 视角访问该 spec 的 `seal` 成员；普通函数和不满足
+  该 spec 的实现上下文不得访问。
+- [禁止] 使用 `spec seal` 访问权限扩大任何具体 type 成员的可见性，或
+  通过具体 type 视角访问其 `seal` 实现成员。
 - [必须] 当 object-form `spec` 继承父 `spec` 后与父 `spec` 出现同名且签名完全一致的方法时,成员解析与调用重载集合必须按“子 `spec` 优先”去重处理,不得把该父方法当作额外重载候选。
 - [必须] 当同一个 `type` 同时满足多个 `spec` 时,若出现“方法名相同,且参数个数、参数类型和参数顺序一致,但返回值类型不一致”的方法签名,必须视为冲突。
 - [必须] 若某个列出的 `spec` 还要求满足其他 `spec`,则该 `type` 也必须同时满足这些额外 `spec` 的全部要求。
@@ -257,6 +307,8 @@ type Stream: ReadWrite {}
 - [禁止] `spec` 中任何参数位置使用 `let` 或 `var` 修饰符,包括对象形状中的行为签名参数与可调用形状的参数。
 - [禁止] object-form `spec` 声明终结器（`~` 前缀的方法）; 该限制属于语义规则,由语义分析阶段诊断。
 - [必须] object-form `spec` 中声明的 `static let` / `static var` / `static func` 必须不带初始值或函数体;静态字段声明必须以 `;` 结束,静态方法签名必须以 `;` 结束,静态方法必须显式声明返回类型。
+- [必须] object-form `spec` 的实例字段、实例方法、静态字段和静态方法允许
+  使用 `seal`，省略修饰时保持公开语义；显式 `open` 必须被拒绝。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
@@ -291,6 +343,10 @@ type Stream: ReadWrite {}
 - 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form、union-form 与 intersection-form `spec` 出现在父 `spec` 列表中。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form、union-form 与 intersection-form `spec`。
 - 编译器必须检查 `type` 对目标 `spec` 的字段与方法是否满足精确匹配规则。
+- 编译器必须在满足验证、快速满足查询和 witness 选择中使用同一份
+  requirement/实现成员可见性兼容判断。
+- 编译器必须在 spec 字段读取与写入、方法调用、方法值、静态约束成员访问
+  和重载候选选择时检查 `spec seal` 访问域；不可访问候选不得参与重载。
 - 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。

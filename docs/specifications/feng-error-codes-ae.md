@@ -176,6 +176,8 @@
 | AE0706 | 可见关系下重载二义性 | AE0195 | type '%.*s' satisfies specs '%.*s' and '%.*s' which both declare method '%.*s' with the same parameters but different return types |
 | AE0706 | 可见关系下重载二义性 | AE0196 | method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0706 | 可见关系下重载二义性 | AE0198 | function overloads may both match the same arguments under visible contract relations: '%.*s' |
+| AE0707 | spec 实现成员可见性兼容约束 | (新增) | type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s' |
+| AE0708 | spec seal 成员访问域约束 | (新增) | seal member '%.*s' of spec '%.*s' is only accessible from a type or fit implementation that satisfies that spec |
 | AE0709 | 类型参数约束形态 | AE0212 | type parameter '%.*s': constraint must be a spec, not a type |
 
 ## 08 Fit段

@@ -10179,6 +10179,66 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
 }
 
+/* Completion exposes spec-seal members only in type/fit implementation
+ * methods whose implementation type satisfies the receiver spec. */
+static void test_lsp_spec_seal_member_completion_respects_implementation_domain(void) {
+    static const char *kTypeSource =
+        "module test.lsp.specsealtype;\n"
+        "spec Surface {\n"
+        "    func visible(): int;\n"
+        "    seal func hidden(): int;\n"
+        "    seal static func hiddenStatic(): int;\n"
+        "}\n"
+        "type Impl: Surface {\n"
+        "    func visible(): int { return 1; }\n"
+        "    func hidden(): int { return 2; }\n"
+        "    static func hiddenStatic(): int { return 3; }\n"
+        "    func use(value: Surface): int { return value.hidden(); }\n"
+        "    static func useStatic<T: Surface>(): int { return T.hiddenStatic(); }\n"
+        "}\n"
+        "func ordinary(value: Surface): int { return value.visible(); }\n";
+    static const char *kFitSource =
+        "module test.lsp.specsealfit;\n"
+        "spec Surface {\n"
+        "    func visible(): int;\n"
+        "    seal func hidden(): int;\n"
+        "}\n"
+        "type Impl: Surface {\n"
+        "    func visible(): int { return 1; }\n"
+        "    func hidden(): int { return 2; }\n"
+        "}\n"
+        "fit Impl {\n"
+        "    func use(value: Surface): int { return value.hidden(); }\n"
+        "}\n";
+    char *output = capture_lsp_completion_response(kTypeSource,
+                                                   "value.hidden();",
+                                                   6U);
+
+    ASSERT(strstr(output, "\"label\":\"hidden\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response(kTypeSource,
+                                             "value.visible();",
+                                             6U);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"hidden\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response(kTypeSource,
+                                             "T.hiddenStatic();",
+                                             2U);
+    ASSERT(strstr(output, "\"label\":\"hiddenStatic\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response(kFitSource,
+                                             "value.hidden();",
+                                             6U);
+    ASSERT(strstr(output, "\"label\":\"hidden\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    free(output);
+}
+
 static void test_lsp_fit_extension_member_completion_on_builtin_string(void) {
     static const char *kBindingSource =
         "module test.lsp.fitstringbinding;\n"
@@ -18357,6 +18417,7 @@ int main(void) {
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
+    test_lsp_spec_seal_member_completion_respects_implementation_domain();
     test_lsp_fit_extension_member_completion_on_builtin_string();
     test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();

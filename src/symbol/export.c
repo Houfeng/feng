@@ -2666,10 +2666,7 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
                                              const FengTypeMember *member,
                                              FengSymbolError *out_error) {
     FengSymbolDeclView *decl = NULL;
-    FengVisibility member_visibility =
-        owner_source_decl != NULL && owner_source_decl->kind == FENG_DECL_SPEC
-            ? FENG_VISIBILITY_PUBLIC
-            : member->visibility;
+    FengVisibility member_visibility = member->visibility;
 
     if (owner_source_decl != NULL &&
         owner_source_decl->kind == FENG_DECL_TYPE &&

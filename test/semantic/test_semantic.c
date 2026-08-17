@@ -15556,6 +15556,321 @@ static void test_spec_member_access_callable_form_rejected(void) {
     feng_program_free(program);
 }
 
+/* Return how many semantic errors use one stable diagnostic code. */
+static size_t semantic_error_code_count(const FengSemanticError *errors,
+                                        size_t error_count,
+                                        const char *code) {
+    size_t count = 0U;
+
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strcmp(errors[index].code, code) == 0) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/* Type instance/static methods and target-type fit instance/static methods
+ * may access seal requirements only through the corresponding spec view. */
+static void test_spec_seal_member_access_from_implementation_contexts(void) {
+    const char *source =
+        "module demo.spec_seal.access_allowed;\n"
+        "spec Hooks {\n"
+        "    seal var state: int;\n"
+        "    seal func read(): int;\n"
+        "    seal static var shared: int;\n"
+        "    seal static func phase(): int;\n"
+        "}\n"
+        "type Worker: Hooks {\n"
+        "    var state: int = 1;\n"
+        "    func read(): int { return self.state; }\n"
+        "    static var shared: int = 2;\n"
+        "    static func phase(): int { return 3; }\n"
+        "    func use(other: Hooks): int {\n"
+        "        other.state = 4;\n"
+        "        return other.state + other.read();\n"
+        "    }\n"
+        "    static func useStatic<T: Hooks>(): int {\n"
+        "        T.shared = 5;\n"
+        "        return T.shared + T.phase();\n"
+        "    }\n"
+        "}\n"
+        "fit Worker {\n"
+        "    func useFromFit(other: Hooks): int { return other.read(); }\n"
+        "    static func useStaticFromFit<T: Hooks>(): int {\n"
+        "        return T.shared + T.phase();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("spec_seal_access_allowed.ff",
+                                                source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Ordinary functions, unrelated type methods, and unrelated fit methods
+ * cannot access instance/static seal requirements through a spec view. */
+static void test_spec_seal_member_access_rejected_outside_implementation(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } cases[] = {
+        {
+            "spec_seal_top_level_field.ff",
+            "module demo.spec_seal.denied_field;\n"
+            "spec Hidden { seal var value: int; }\n"
+            "type Box: Hidden { var value: int = 1; }\n"
+            "func read(value: Hidden): int { return value.value; }\n"
+        },
+        {
+            "spec_seal_top_level_method.ff",
+            "module demo.spec_seal.denied_method;\n"
+            "spec Hidden { seal func value(): int; }\n"
+            "type Box: Hidden { func value(): int { return 1; } }\n"
+            "func read(value: Hidden): int { return value.value(); }\n"
+        },
+        {
+            "spec_seal_top_level_static.ff",
+            "module demo.spec_seal.denied_static;\n"
+            "spec Hidden { seal static func value(): int; }\n"
+            "type Box: Hidden { static func value(): int { return 1; } }\n"
+            "func read<T: Hidden>(): int { return T.value(); }\n"
+        },
+        {
+            "spec_seal_unrelated_type.ff",
+            "module demo.spec_seal.denied_type;\n"
+            "spec Hidden { seal func value(): int; }\n"
+            "type Box: Hidden { func value(): int { return 1; } }\n"
+            "type Other {\n"
+            "    func read(value: Hidden): int { return value.value(); }\n"
+            "}\n"
+        },
+        {
+            "spec_seal_unrelated_fit.ff",
+            "module demo.spec_seal.denied_fit;\n"
+            "spec Hidden { seal func value(): int; }\n"
+            "type Box: Hidden { func value(): int { return 1; } }\n"
+            "type Other {}\n"
+            "fit Other {\n"
+            "    func read(value: Hidden): int { return value.value(); }\n"
+            "}\n"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path,
+                                                    cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(semantic_error_code_count(errors, error_count, "AE0708") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* The requirement/implementation visibility matrix is shared by fields,
+ * methods, static members, and fit-provided methods. */
+static void test_spec_requirement_implementation_visibility_matrix(void) {
+    const char *accepted =
+        "module demo.spec_seal.visibility_allowed;\n"
+        "spec Contract {\n"
+        "    seal let hiddenField: int;\n"
+        "    seal func hiddenMethod(): int;\n"
+        "    seal static let hiddenStaticField: int;\n"
+        "    seal static func hiddenStaticMethod(): int;\n"
+        "}\n"
+        "type PublicImpl: Contract {\n"
+        "    let hiddenField: int = 1;\n"
+        "    func hiddenMethod(): int { return 2; }\n"
+        "    static let hiddenStaticField: int = 3;\n"
+        "    static func hiddenStaticMethod(): int { return 4; }\n"
+        "}\n"
+        "type SealImpl: Contract {\n"
+        "    seal let hiddenField: int = 1;\n"
+        "    seal func hiddenMethod(): int { return 2; }\n"
+        "    seal static let hiddenStaticField: int = 3;\n"
+        "    seal static func hiddenStaticMethod(): int { return 4; }\n"
+        "}\n"
+        "func demandWitness(value: SealImpl): Contract { return value; }\n";
+    static const struct {
+        const char *path;
+        const char *source;
+    } rejected[] = {
+        {
+            "spec_public_seal_field.ff",
+            "module demo.spec_seal.public_field;\n"
+            "spec Contract { let value: int; }\n"
+            "type Value: Contract { seal let value: int = 1; }\n"
+        },
+        {
+            "spec_public_seal_static_field.ff",
+            "module demo.spec_seal.public_static_field;\n"
+            "spec Contract { static let value: int; }\n"
+            "type Value: Contract { seal static let value: int = 1; }\n"
+        },
+        {
+            "spec_public_seal_method.ff",
+            "module demo.spec_seal.public_method;\n"
+            "spec Contract { func value(): int; }\n"
+            "type Value: Contract { seal func value(): int { return 1; } }\n"
+        },
+        {
+            "spec_public_seal_static_method.ff",
+            "module demo.spec_seal.public_static_method;\n"
+            "spec Contract { static func value(): int; }\n"
+            "type Value: Contract {\n"
+            "    seal static func value(): int { return 1; }\n"
+            "}\n"
+        },
+        {
+            "spec_public_seal_fit_method.ff",
+            "module demo.spec_seal.public_fit_method;\n"
+            "spec Contract { func value(): int; }\n"
+            "type Value {}\n"
+            "fit Value: Contract { seal func value(): int { return 1; } }\n"
+        }
+    };
+    FengProgram *program = parse_program_or_die("spec_seal_visibility_allowed.ff",
+                                                accepted);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    {
+        const FengDecl *seal_impl = find_type_decl_by_name(analysis, "SealImpl");
+        const FengDecl *contract = find_spec_decl_by_name(analysis, "Contract");
+        FengSemanticSubjectKey key =
+            feng_semantic_subject_key_for_type_decl(seal_impl);
+        const FengSpecWitness *witness =
+            feng_semantic_lookup_spec_witness(analysis, &key, contract);
+
+        ASSERT(witness != NULL);
+        ASSERT(witness->member_count == 4U);
+        for (size_t member_index = 0U;
+             member_index < witness->member_count;
+             ++member_index) {
+            ASSERT(witness->members[member_index].impl_member != NULL);
+            ASSERT(witness->members[member_index].impl_member->visibility ==
+                   FENG_VISIBILITY_PRIVATE);
+        }
+    }
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    for (size_t index = 0U;
+         index < sizeof(rejected) / sizeof(rejected[0]);
+         ++index) {
+        program = parse_program_or_die(rejected[index].path,
+                                       rejected[index].source);
+        {
+            const FengProgram *rejected_programs[] = {program};
+
+            analysis = NULL;
+            errors = NULL;
+            error_count = 0U;
+            ASSERT(!feng_semantic_analyze(rejected_programs,
+                                          1U,
+                                          FENG_COMPILE_TARGET_LIB,
+                                          &analysis,
+                                          &errors,
+                                          &error_count));
+        }
+        ASSERT(semantic_error_code_count(errors, error_count, "AE0707") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Seal access follows the original declaring parent spec, and overload
+ * resolution filters inaccessible seal candidates before matching calls. */
+static void test_spec_seal_inheritance_and_overload_filtering(void) {
+    const char *accepted =
+        "module demo.spec_seal.inheritance_allowed;\n"
+        "spec Base { seal func baseValue(): int; }\n"
+        "spec Child: Base { seal func childValue(): int; }\n"
+        "spec Operations {\n"
+        "    seal func apply(value: string): int;\n"
+        "    func apply(value: int): int;\n"
+        "}\n"
+        "type Worker: Child, Operations {\n"
+        "    func baseValue(): int { return 1; }\n"
+        "    func childValue(): int { return 2; }\n"
+        "    func apply(value: string): int { return 3; }\n"
+        "    func apply(value: int): int { return value; }\n"
+        "    func use(child: Child, operations: Operations): int {\n"
+        "        return child.baseValue() + child.childValue() +\n"
+        "               operations.apply(\"x\") + operations.apply(4);\n"
+        "    }\n"
+        "}\n"
+        "func publicOverloadStillVisible(operations: Operations): int {\n"
+        "    return operations.apply(5);\n"
+        "}\n";
+    const char *rejected =
+        "module demo.spec_seal.inheritance_denied;\n"
+        "spec Base { seal func baseValue(): int; }\n"
+        "spec Child: Base { seal func childValue(): int; }\n"
+        "type BaseOnly: Base {\n"
+        "    func baseValue(): int { return 1; }\n"
+        "    func bad(value: Child): int { return value.childValue(); }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "spec_seal_inheritance_allowed.ff", accepted);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_program_or_die("spec_seal_inheritance_denied.ff",
+                                   rejected);
+    {
+        const FengProgram *rejected_programs[] = {program};
+
+        analysis = NULL;
+        errors = NULL;
+        error_count = 0U;
+        ASSERT(!feng_semantic_analyze(rejected_programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+    }
+    ASSERT(semantic_error_code_count(errors, error_count, "AE0708") == 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* --- Phase S3: SpecWitness sidecar tests (§9.5) ---------------------- */
 
 static void test_spec_witness_via_declared_head(void) {
@@ -22403,6 +22718,10 @@ int main(void) {
     test_spec_member_access_field_write();
     test_spec_member_access_method_call();
     test_spec_member_access_callable_form_rejected();
+    test_spec_seal_member_access_from_implementation_contexts();
+    test_spec_seal_member_access_rejected_outside_implementation();
+    test_spec_requirement_implementation_visibility_matrix();
+    test_spec_seal_inheritance_and_overload_filtering();
     test_spec_witness_via_declared_head();
     test_spec_witness_via_fit();
     test_spec_witness_field_member();

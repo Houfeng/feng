@@ -1698,12 +1698,13 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
     FengToken member_start = parser_current_token(parser);
     FengSlice doc_comment = doc_comment_from_token(&member_start);
     FengTypeMember *member = NULL;
+    FengVisibility member_visibility = parse_visibility(parser);
     bool is_static = false;
 
-    if (parser_check(parser, FENG_TOKEN_KW_OPEN) || parser_check(parser, FENG_TOKEN_KW_SEAL)) {
+    if (member_visibility == FENG_VISIBILITY_PUBLIC) {
         (void)parser_error_current(
             parser,
-            "SE0601", "spec members cannot declare visibility; remove 'open' or 'seal'");
+            "SE0601", "spec members cannot declare 'open'; omit 'open' or use 'seal'");
         return NULL;
     }
 
@@ -1738,7 +1739,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
             free_type_ref(binding.type);
             return NULL;
         }
-        member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->visibility = member_visibility;
         member->is_static = is_static;
         member->as.field.mutability = binding.mutability;
         member->as.field.name = binding.name;
@@ -1808,7 +1809,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
             free_block(callable.body);
             return NULL;
         }
-        member->visibility = FENG_VISIBILITY_DEFAULT;
+        member->visibility = member_visibility;
         member->is_static = is_static;
         member->as.callable = callable;
         return member;

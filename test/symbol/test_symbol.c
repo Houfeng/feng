@@ -517,6 +517,198 @@ static void test_intersection_spec_ft_roundtrip_preserves_members(void) {
     free(tmp_dir);
 }
 
+/* Object-spec member visibility survives the existing FT encoding and the
+ * synthesized imported AST without exposing seal members as public members. */
+static void test_object_spec_seal_member_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.spec_seal_roundtrip;\n"
+        "open spec Hooks {\n"
+        "    let publicField: int;\n"
+        "    seal let hiddenField: int;\n"
+        "    func publicMethod(): int;\n"
+        "    seal static func hiddenMethod(): int;\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *hooks = NULL;
+    const FengSemanticModule *semantic_module = NULL;
+    const FengDecl *synth_hooks = NULL;
+    size_t public_count = 0U;
+    size_t seal_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("spec_seal_roundtrip.ff", kSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("spec_seal_roundtrip");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    hooks = feng_symbol_module_find_public_spec(module,
+                                                slice_from_cstr("Hooks"));
+    ASSERT(hooks != NULL);
+    ASSERT(feng_symbol_decl_member_count(hooks) == 4U);
+    ASSERT(feng_symbol_decl_find_public_member(
+               hooks, slice_from_cstr("publicField")) != NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               hooks, slice_from_cstr("publicMethod")) != NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               hooks, slice_from_cstr("hiddenField")) == NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               hooks, slice_from_cstr("hiddenMethod")) == NULL);
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(hooks);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(hooks, index);
+
+        ASSERT(member != NULL);
+        if (feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PRIVATE) {
+            ++seal_count;
+        } else {
+            ++public_count;
+        }
+    }
+    ASSERT(public_count == 2U);
+    ASSERT(seal_count == 2U);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    for (size_t index = 0U;
+         index < semantic_module->programs[0]->declaration_count;
+         ++index) {
+        const FengDecl *decl =
+            semantic_module->programs[0]->declarations[index];
+
+        if (decl != NULL && decl->kind == FENG_DECL_SPEC &&
+            slice_equals_cstr(decl->as.spec_decl.name, "Hooks")) {
+            synth_hooks = decl;
+            break;
+        }
+    }
+    ASSERT(synth_hooks != NULL);
+    ASSERT(synth_hooks->as.spec_decl.as.object.member_count == 4U);
+    public_count = 0U;
+    seal_count = 0U;
+    for (size_t index = 0U;
+         index < synth_hooks->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            synth_hooks->as.spec_decl.as.object.members[index];
+
+        ASSERT(member != NULL);
+        if (member->visibility == FENG_VISIBILITY_PRIVATE) {
+            ++seal_count;
+        } else {
+            ++public_count;
+        }
+    }
+    ASSERT(public_count == 2U);
+    ASSERT(seal_count == 2U);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+/* A spec seal restored from package-public FT grants access to an importing
+ * type implementation, but remains inaccessible to an importing top-level
+ * function. The implementation member itself stays local to the consumer. */
+static void test_imported_object_spec_seal_access_semantics(void) {
+    static const char *kExternalSource =
+        "open module vendor.hooks;\n"
+        "open spec Hooks { seal func hidden(): int; }\n";
+    static const char *kAllowedSource =
+        "module demo.allowed;\n"
+        "import vendor.hooks;\n"
+        "type Worker: vendor.hooks.Hooks {\n"
+        "    func hidden(): int { return 1; }\n"
+        "    func use(value: vendor.hooks.Hooks): int { return value.hidden(); }\n"
+        "}\n";
+    static const char *kDeniedSource =
+        "module demo.denied;\n"
+        "import vendor.hooks;\n"
+        "func use(value: vendor.hooks.Hooks): int { return value.hidden(); }\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("external_hooks.ff", kExternalSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+
+    program = parse_or_die("imported_spec_seal_allowed.ff", kAllowedSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_or_die("imported_spec_seal_denied.ff", kDeniedSource);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0708") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     static const char *kSource =
         "open module feng.test.symbol.bounded;\n"
@@ -2612,6 +2804,8 @@ int main(void) {
     test_roundtrip_public_module();
     test_union_spec_ft_roundtrip_preserves_normalized_members();
     test_intersection_spec_ft_roundtrip_preserves_members();
+    test_object_spec_seal_member_ft_roundtrip();
+    test_imported_object_spec_seal_access_semantics();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_mixin_generated_members_ft_roundtrip();
     test_roundtrip_public_module_docs();

@@ -232,6 +232,7 @@ open type User {
 | module        | `seal`    |
 | module 成员    | `seal`    |
 | type 成员      | `open`    |
+| object-form spec 成员 | `open` |
 
 ## 10 有效可见范围
 
@@ -248,7 +249,8 @@ open type User {
 - 顶层声明为 `open` 时不收窄范围；为 `seal` 或省略修饰时收窄到模块私有。
 - `type`、`fit` 成员为 `open` 或省略修饰时不收窄范围；为 `seal` 时收窄到类型私有。
 - 声明的有效可见范围是 module、所属顶层声明和成员各层范围中的最窄者。
-- `spec` 成员不能声明可见性，其有效可见范围与所属 `spec` 一致。
+- object-form `spec` 成员省略修饰时为公开 requirement，可以显式使用
+  `seal` 收窄 spec 访问面，但不能显式使用 `open`。
 - `fit` 不是可命名声明：仅 `open module` 中的 `open fit` 形成包外公开签名；
   其他 `fit` 仅在声明 module 内生效，按模块私有检查。
 
@@ -258,6 +260,22 @@ open type User {
 同名成员方法形成重载集合时，访问方必须先排除在当前 type 作用域中不可见的候选，
 再按参数签名进行重载解析。不可见的 `seal` 候选不得遮蔽同名的可见候选；仅当同名
 候选全部不可见时，成员访问才按不可见处理。
+
+### 10.1 object-form `spec seal` 成员
+
+`spec seal` 是契约视角的成员访问控制，不是具体 type 成员的可见性：
+
+- 公开和 `seal` spec 成员都进入完整契约与 witness；普通 spec 使用者只能
+  访问公开成员。
+- 满足成员原声明 spec 的 type，可以在自身成员方法、静态方法及其 fit
+  扩展方法中通过 spec 视角访问该 `seal` 成员。
+- 权限按访问点的实现上下文和成员原声明 spec 在编译期判断，不按运行时
+  接收者具体类型、module 或包判断。
+- 该权限不得用于具体 type 视角的成员查找，也不得改变实现成员本身的
+  `open` 或 `seal` 可见性。
+
+requirement 与实现成员的可见性兼容矩阵由
+[Feng 语言 `spec` 规范](./feng-spec.md) 唯一定义。
 
 ## 11 公开签名的可见性一致性
 
