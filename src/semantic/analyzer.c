@@ -10524,6 +10524,87 @@ static bool type_member_is_public(const FengTypeMember *member) {
     return member != NULL && member->visibility != FENG_VISIBILITY_PRIVATE;
 }
 
+/* Return whether one target type directly expands the specified source type.
+ * All three source forms are normalized to the same resolved_source_decl. */
+static bool type_decl_directly_mixes_source(const FengDecl *target_type,
+                                            const FengDecl *source_type) {
+    size_t mixin_index;
+
+    if (target_type == NULL || source_type == NULL ||
+        target_type->kind != FENG_DECL_TYPE ||
+        source_type->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    for (mixin_index = 0U;
+         mixin_index < target_type->as.type_decl.mixin_count;
+         ++mixin_index) {
+        if (target_type->as.type_decl.mixins[mixin_index].resolved_source_decl ==
+            source_type) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Identify exactly the private method shape that can receive direct mix
+ * authorization. Ordinary seal members never pass this predicate. */
+static bool member_is_mixable_seal_static(const FengTypeMember *member) {
+    return member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+           member->visibility == FENG_VISIBILITY_PRIVATE &&
+           member->is_static && member->is_mixable;
+}
+
+/* Check direct mix authorization independently of the declaration provider.
+ * The source may own the method directly or expose it through a visible fit. */
+bool feng_semantic_type_has_mixable_seal_access(
+    const FengDecl *target_type,
+    const FengDecl *source_type,
+    const FengTypeMember *member) {
+    return member_is_mixable_seal_static(member) &&
+           type_decl_directly_mixes_source(target_type, source_type);
+}
+
+/* Resolve the direct-mix access subject for a source-level method body.
+ * Constructors, field initializers, top-level functions, and fit methods do
+ * not acquire this authorization. */
+static const FengDecl *current_mixable_seal_access_type(
+    const ResolveContext *context) {
+    if (context == NULL || context->current_fit_decl != NULL ||
+        context->current_type_decl == NULL ||
+        context->current_callable_member == NULL ||
+        context->current_callable_member->kind != FENG_TYPE_MEMBER_METHOD) {
+        return NULL;
+    }
+    return context->current_type_decl;
+}
+
+/* Check the special source-call access branch for one seal mixable method. */
+static bool mixable_seal_member_is_accessible_from(
+    const ResolveContext *context,
+    const FengDecl *source_type,
+    const FengTypeMember *member) {
+    return feng_semantic_type_has_mixable_seal_access(
+        current_mixable_seal_access_type(context), source_type, member);
+}
+
+/* Apply ordinary fit-member visibility plus the direct mix exception. The
+ * fit declaration itself must already have passed its normal visibility
+ * filter before this helper is called. */
+static bool fit_member_is_accessible_from(const ResolveContext *context,
+                                          const FengDecl *source_type,
+                                          const FengDecl *fit_decl,
+                                          const FengTypeMember *member) {
+    if (type_member_is_public(member)) {
+        return true;
+    }
+    if (context != NULL && fit_decl != NULL &&
+        context->current_fit_decl == fit_decl) {
+        return true;
+    }
+    return mixable_seal_member_is_accessible_from(
+        context, source_type, member);
+}
+
 /* When the resolver is inside a fit-block function body, accessing the target
  * type's private members (`seal` fields or `seal` methods) is forbidden, regardless
  * of whether the target lives in the same package as the fit declaration.
@@ -10558,7 +10639,9 @@ static bool type_member_is_accessible_from(const ResolveContext *context,
            (type_member_is_public(member) ||
             (context != NULL && owner_type_decl != NULL &&
              context->current_type_decl == owner_type_decl &&
-             context->current_fit_decl == NULL));
+             context->current_fit_decl == NULL) ||
+            mixable_seal_member_is_accessible_from(
+                context, owner_type_decl, member));
 }
 
 static size_t count_declared_constructors(const FengDecl *type_decl) {
@@ -13917,6 +14000,9 @@ static CallableValueResolution resolve_accessible_fit_method_value_overload(
 }
 
 typedef struct FitFirstMethodCtx {
+    const ResolveContext *context;
+    const FengDecl *source_type;
+    bool enforce_static_access;
     const FengTypeMember *result;
 } FitFirstMethodCtx;
 
@@ -13927,7 +14013,11 @@ static bool fit_first_method_visitor(const FengTypeMember *member,
     FitFirstMethodCtx *st = (FitFirstMethodCtx *)userdata;
 
     (void)fit_module;
-    (void)fit_decl;
+    if (st->enforce_static_access &&
+        !fit_member_is_accessible_from(
+            st->context, st->source_type, fit_decl, member)) {
+        return true;
+    }
     st->result = member;
     return false;
 }
@@ -13937,7 +14027,7 @@ static const FengTypeMember *find_fit_method_member_for_type(const ResolveContex
                                                              FengSlice name) {
     FitFirstMethodCtx st;
 
-    st.result = NULL;
+    memset(&st, 0, sizeof(st));
     (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true, false,
                                              fit_first_method_visitor, &st);
     return st.result;
@@ -13948,7 +14038,10 @@ static const FengTypeMember *find_fit_static_method_member_for_type(const Resolv
                                                                     FengSlice name) {
     FitFirstMethodCtx st;
 
-    st.result = NULL;
+    memset(&st, 0, sizeof(st));
+    st.context = ctx;
+    st.source_type = type_decl;
+    st.enforce_static_access = true;
     (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true, true,
                                              fit_first_method_visitor, &st);
     return st.result;
@@ -13960,7 +14053,7 @@ static const FengTypeMember *find_fit_method_member_for_owner_type(const Resolve
                                                                    FengSlice name) {
     FitFirstMethodCtx st;
 
-    st.result = NULL;
+    memset(&st, 0, sizeof(st));
     (void)visit_visible_fit_methods_for_owner_type(ctx,
                                                     owner_type_decl,
                                                     owner_type,
@@ -13978,7 +14071,10 @@ static const FengTypeMember *find_fit_static_method_member_for_owner_type(const 
                                                                           FengSlice name) {
     FitFirstMethodCtx st;
 
-    st.result = NULL;
+    memset(&st, 0, sizeof(st));
+    st.context = ctx;
+    st.source_type = owner_type_decl;
+    st.enforce_static_access = true;
     (void)visit_visible_fit_methods_for_owner_type(ctx,
                                                     owner_type_decl,
                                                     owner_type,
@@ -14188,6 +14284,7 @@ typedef struct FitOverloadResolveCtx {
     bool has_explicit_type_args;
     const FengTypeRef *const *explicit_type_args;
     size_t explicit_type_arg_count;
+    bool enforce_static_access;
     FunctionCallResolution result;
 } FitOverloadResolveCtx;
 
@@ -14198,6 +14295,13 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
 
     (void)fit_module;
+    if (st->enforce_static_access &&
+        !fit_member_is_accessible_from(st->context,
+                                       st->owner_type_decl,
+                                       fit_decl,
+                                       member)) {
+        return true;
+    }
     {
         bool rejected_existing_array_for_variadic = false;
         PrepackedVariadicRejection spread_rejection =
@@ -14285,6 +14389,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
         st.has_explicit_type_args = has_explicit_type_args;
         st.explicit_type_args = explicit_type_args;
         st.explicit_type_arg_count = explicit_type_arg_count;
+        st.enforce_static_access = false;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
                                                        NULL,
@@ -14570,6 +14675,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
     st.has_explicit_type_args = has_explicit_type_args;
     st.explicit_type_args = explicit_type_args;
     st.explicit_type_arg_count = explicit_type_arg_count;
+    st.enforce_static_access = false;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, false,
                                              fit_overload_resolve_visitor, &st);
@@ -14602,6 +14708,7 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
         st.has_explicit_type_args = has_explicit_type_args;
         st.explicit_type_args = explicit_type_args;
         st.explicit_type_arg_count = explicit_type_arg_count;
+        st.enforce_static_access = true;
         st.result = result;
         (void)visit_visible_fit_methods_for_owner_type(context,
                                                        NULL,
@@ -14692,6 +14799,7 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
     st.has_explicit_type_args = has_explicit_type_args;
     st.explicit_type_args = explicit_type_args;
     st.explicit_type_arg_count = explicit_type_arg_count;
+    st.enforce_static_access = true;
     st.result = result;
     (void)visit_visible_fit_methods_for_type(context, type_decl, name, true, true,
                                              fit_overload_resolve_visitor, &st);
@@ -29415,7 +29523,8 @@ static SignatureEffectiveVisibility signature_decl_visibility(
 static SignatureEffectiveVisibility signature_member_visibility(
     SignatureEffectiveVisibility owner_visibility,
     const FengTypeMember *member) {
-    if (member != NULL && member->visibility == FENG_VISIBILITY_PRIVATE) {
+    if (member != NULL && member->visibility == FENG_VISIBILITY_PRIVATE &&
+        !member_is_mixable_seal_static(member)) {
         return SIGNATURE_VISIBILITY_TYPE_PRIVATE;
     }
     return owner_visibility;
@@ -31921,9 +32030,12 @@ static bool target_already_has_mixin_static_wrapper(
     return false;
 }
 
-/* Validate the public source surface needed before a method can be mixed. */
+/* Validate the ordinary open or directly-authorized seal source surface
+ * needed before a method can be mixed. */
 static bool mixable_source_method_is_candidate(
     ResolveContext *context,
+    const FengDecl *target,
+    const FengDecl *source,
     const FengTypeMember *method,
     const FengDecl **out_first_spec) {
     const FengDecl *spec_decl;
@@ -31933,7 +32045,9 @@ static bool mixable_source_method_is_candidate(
     }
     if (method == NULL || method->kind != FENG_TYPE_MEMBER_METHOD ||
         !method->is_static || !method->is_mixable ||
-        !type_member_is_public(method) ||
+        (!type_member_is_public(method) &&
+         !feng_semantic_type_has_mixable_seal_access(
+             target, source, method)) ||
         method->as.callable.param_count == 0U ||
         method->as.callable.params[0].is_variadic ||
         !resolve_type_ref(context,
@@ -31965,7 +32079,11 @@ static bool append_mixin_static_wrapper_candidate(
     FengTypeMember **grown;
 
     if (!mixable_source_method_is_candidate(
-            context, source_method, &first_spec)) {
+            context,
+            target,
+            mixin->resolved_source_decl,
+            source_method,
+            &first_spec)) {
         return context->errors == NULL || context->error_count == NULL ||
                *context->error_count == 0U;
     }

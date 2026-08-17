@@ -1,0 +1,131 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.mixable_seal;
+
+/** Target using the source-less member expansion form. */
+type SealDefaultButton: SealWidget {
+  ...: SealView;
+
+  open func run(value: int): int {
+    return self.draw(value) + self.collect(1, 2, 3);
+  }
+
+  open static func callSource(value: int): int {
+    return SealView.draw(SealDefaultButton(), value);
+  }
+}
+
+/** Target using an explicit source constructor. */
+type SealBoundButton: SealWidget {
+  ...: SealView = SealView();
+
+  open func run(value: int): int {
+    return self.draw(value);
+  }
+}
+
+/** Target using inferred source type construction. */
+type SealInferredButton: SealWidget {
+  ... = SealView();
+
+  open func run(value: int): int {
+    return self.draw(value);
+  }
+}
+
+/** Target that receives an already-generated seal capability. */
+type SealLeafButton: SealWidget {
+  ...: SealMiddle;
+
+  open func run(value: int): int {
+    return self.draw(value);
+  }
+}
+
+/** Target explicitly replacing one capability while reusing its source. */
+type SealOverrideButton: SealWidget {
+  ...: SealView;
+
+  @mixable
+  seal static func draw(target: SealWidget, value: int): int {
+    return SealView.draw(target, value) + 10;
+  }
+
+  open func run(value: int): int {
+    return self.draw(value);
+  }
+}
+
+/** Target receiving fit-owned seal mix behavior. */
+type SealFitButton: SealWidget {
+  ...: SealFitView;
+
+  open func run(value: int): int {
+    return self.paint(value);
+  }
+}
+
+/** Target receiving generic-owner seal mix behavior. */
+type SealGenericButton: SealGenericWidget {
+  ...: SealGenericView<int>;
+
+  open func run(value: int): int {
+    return self.echo(value);
+  }
+}
+
+/** Target receiving a method-generic seal capability. */
+type SealGenericMethodButton: SealGenericWidget {
+  ...: SealGenericMethodView;
+
+  open func run(value: string): string {
+    return self.identity<string>(value);
+  }
+}
+
+/** Target receiving a method-generic fit-owned seal capability. */
+type SealGenericFitButton: SealGenericWidget {
+  ...: SealGenericFitView;
+
+  open func run(value: int): int {
+    return self.fitIdentity<int>(value);
+  }
+}
+
+/** Verify seal mix behavior through its authorized target-facing entries. */
+open func test_mixable_seal() {
+  describe("mixable seal methods", () {
+    test("direct wrappers and source calls", () {
+      assert(SealDefaultButton().run(5) == 11,
+             "seal instance and variadic wrappers");
+      assert(SealDefaultButton.callSource(1) == 2,
+             "target static method can call source capability");
+    });
+
+    test("all expansion forms and multi-level propagation", () {
+      assert(SealBoundButton().run(2) == 3,
+             "explicit source constructor form");
+      assert(SealInferredButton().run(3) == 4,
+             "inferred source type form");
+      assert(SealLeafButton().run(4) == 5,
+             "generated capability propagates one direct layer at a time");
+    });
+
+    test("explicit override and fit source", () {
+      assert(SealOverrideButton().run(5) == 16,
+             "explicit target method reuses source capability");
+      assert(SealFitButton().run(5) == 7,
+             "fit-owned capability uses the same wrapper path");
+    });
+
+    test("generic owner, method, and fit", () {
+      assert(SealGenericButton().run(8) == 8,
+             "generic owner capability");
+      assert(SealGenericMethodButton().run("ok") == "ok",
+             "method-generic capability");
+      assert(SealGenericFitButton().run(9) == 9,
+             "method-generic fit capability");
+    });
+  });
+}

@@ -47,6 +47,7 @@ func main(args: string[]) {
       test_generic_shared_body_reification();
       test_generic_type_owner_reification();
       test_generic_mixable_reification();
+      test_mixable_seal();
       test_generic_factory_target_inference();
       test_generic_fit_subject();
       test_generic_remaining_representation();

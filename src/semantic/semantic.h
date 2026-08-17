@@ -512,6 +512,15 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis);
 void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count);
 void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
 
+/* Return whether `target_type` has the compile-time-only authorization to
+ * access `member` as a seal mixable static method of `source_type`. The
+ * query is provider-neutral: all three mix forms use their normalized
+ * resolved_source_decl and imported declarations use the same AST facts. */
+bool feng_semantic_type_has_mixable_seal_access(
+    const FengDecl *target_type,
+    const FengDecl *source_type,
+    const FengTypeMember *member);
+
 /* Returns true if `name` is a builtin type name (standard name such as
  * i8..i64, u8..u64, f32, f64, bool, string, void).  After AST alias
  * normalization (docs/engineering/feng-scalar-alias-optimize.md §6), alias names are no

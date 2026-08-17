@@ -11096,6 +11096,72 @@ static void test_member_mix_fields_and_mixable_wrappers_codegen(void) {
     feng_program_free(program);
 }
 
+/* Seal mixable methods lower through the ordinary static and instance
+ * wrappers for both type and fit sources; access control leaves no runtime
+ * branch, method table, or alternate call ABI in the generated C. */
+static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
+    static const char *kSource =
+        "module feng.codegen.mixable_seal;\n"
+        "spec Widget {}\n"
+        "type View: Widget {\n"
+        "    @mixable seal static func draw(target: Widget, value: int): int { return value + 1; }\n"
+        "    @mixable seal static func log(target: Widget, values: int...): void {}\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "    ...: View;\n"
+        "    open func run(value: int): int { self.log(1, 2); return self.draw(value); }\n"
+        "    open static func source(value: int): int { return View.draw(Button(), value); }\n"
+        "}\n"
+        "type FitView: Widget {}\n"
+        "open fit FitView {\n"
+        "    @mixable seal static func paint(target: Widget, value: int): int { return value + 2; }\n"
+        "}\n"
+        "type FitButton: Widget {\n"
+        "    ...: FitView;\n"
+        "    open func run(value: int): int { return self.paint(value); }\n"
+        "}\n"
+        "func exercise(): int { return Button().run(1) + Button.source(2) + FitButton().run(3); }\n";
+    FengProgram *program = parse_or_die(
+        kSource, "mixable_seal_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "View__static__draw__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Button__static__draw__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Button__draw__from__i64") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Button__log__from__VA_i64") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FitView__m0__paint__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FitButton__static__paint__from__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FitButton__paint__from__i64") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A generic-owner shared wrapper may use its local layout view as `self`, but
  * object-spec coercion must build and cache the witness against the persistent
  * registered nominal instance rather than that stack-owned compiler view. */
@@ -11243,6 +11309,7 @@ int main(void) {
 
     test_multi_file_bin();
     test_member_mix_fields_and_mixable_wrappers_codegen();
+    test_mixable_seal_wrappers_use_static_codegen_path();
     test_generic_owner_mixable_coercion_uses_nominal_instance();
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();

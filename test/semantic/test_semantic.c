@@ -21938,6 +21938,306 @@ static void test_mixable_generates_static_and_instance_wrapper_chain(void) {
     feng_program_free(program);
 }
 
+/* Seal mixable methods use the existing wrapper chain while direct targets
+ * gain only the compile-time source-call authorization defined by the mix. */
+static void test_mixable_seal_generates_private_wrappers_and_direct_access(void) {
+    const char *source =
+        "module demo.mixable_seal;\n"
+        "spec Widget {}\n"
+        "type View: Widget {\n"
+        "  @mixable seal static func draw(target: Widget, value: int): int { return value + 1; }\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "  ...: View;\n"
+        "  open func callInstance(value: int): int { return self.draw(value); }\n"
+        "  open func callSource(value: int): int { return View.draw(self, value); }\n"
+        "  open static func callStatic(value: int): int { return View.draw(Button(), value); }\n"
+        "}\n"
+        "type Bound: Widget { ...: View = View(); }\n"
+        "type Inferred: Widget { ... = View(); }\n"
+        "type Middle: Widget { ...: View; }\n"
+        "type Leaf: Widget { ...: Middle; }\n"
+        "type Override: Widget {\n"
+        "  ...: View;\n"
+        "  @mixable seal static func draw(target: Widget, value: int): int {\n"
+        "    return View.draw(target, value) + 10;\n"
+        "  }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("mixable_seal.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *view;
+    const FengDecl *button;
+    const FengDecl *bound;
+    const FengDecl *inferred;
+    const FengDecl *middle;
+    const FengDecl *leaf;
+    const FengDecl *override;
+    const FengTypeMember *view_static;
+    const FengTypeMember *view_instance;
+    const FengTypeMember *button_static;
+    const FengTypeMember *button_instance;
+    const FengTypeMember *middle_static;
+    const FengTypeMember *leaf_static;
+    const FengTypeMember *override_static;
+    const FengTypeMember *override_instance;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    view = find_type_decl_by_name(analysis, "View");
+    button = find_type_decl_by_name(analysis, "Button");
+    bound = find_type_decl_by_name(analysis, "Bound");
+    inferred = find_type_decl_by_name(analysis, "Inferred");
+    middle = find_type_decl_by_name(analysis, "Middle");
+    leaf = find_type_decl_by_name(analysis, "Leaf");
+    override = find_type_decl_by_name(analysis, "Override");
+    ASSERT(view != NULL && button != NULL && bound != NULL && inferred != NULL);
+    ASSERT(middle != NULL && leaf != NULL && override != NULL);
+
+    view_static = find_type_method_named(view, "draw", true);
+    view_instance = find_type_method_named(view, "draw", false);
+    button_static = find_type_method_named(button, "draw", true);
+    button_instance = find_type_method_named(button, "draw", false);
+    middle_static = find_type_method_named(middle, "draw", true);
+    leaf_static = find_type_method_named(leaf, "draw", true);
+    override_static = find_type_method_named(override, "draw", true);
+    override_instance = find_type_method_named(override, "draw", false);
+    ASSERT(view_static != NULL && view_instance != NULL);
+    ASSERT(button_static != NULL && button_instance != NULL);
+    ASSERT(middle_static != NULL && leaf_static != NULL);
+    ASSERT(override_static != NULL && override_instance != NULL);
+
+    ASSERT(view_static->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(view_static->is_mixable && !view_static->is_mixin_static_wrapper);
+    ASSERT(view_instance->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!view_instance->is_mixable && view_instance->is_mixin_instance_wrapper);
+    ASSERT(button_static->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(button_static->is_mixable && button_static->is_mixin_static_wrapper);
+    ASSERT(button_instance->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!button_instance->is_mixable && button_instance->is_mixin_instance_wrapper);
+    ASSERT(button_static->mixin_source_member == view_static);
+    ASSERT(button_instance->mixin_source_member == button_static);
+    ASSERT(middle_static->mixin_source_member == view_static);
+    ASSERT(leaf_static->mixin_source_member == middle_static);
+    ASSERT(override_static->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(override_static->is_mixable && !override_static->is_mixin_static_wrapper);
+    ASSERT(override_instance->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(override_instance->mixin_source_member == override_static);
+
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        button, view, view_static));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        bound, view, view_static));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        inferred, view, view_static));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        middle, view, view_static));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        leaf, middle, middle_static));
+    ASSERT(!feng_semantic_type_has_mixable_seal_access(
+        leaf, view, view_static));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A visible fit contributes seal mixable methods through the same candidate,
+ * visibility propagation, and direct-access path as a type-owned method. */
+static void test_mixable_seal_fit_source_uses_same_wrapper_path(void) {
+    const char *source =
+        "module demo.mixable_seal_fit;\n"
+        "spec Widget {}\n"
+        "type View: Widget {}\n"
+        "open fit View {\n"
+        "  @mixable seal static func draw(target: Widget, value: int): int { return value + 2; }\n"
+        "}\n"
+        "type Button: Widget {\n"
+        "  ...: View;\n"
+        "  open func callSource(value: int): int { return View.draw(self, value); }\n"
+        "  open static func callStatic(value: int): int { return View.draw(Button(), value); }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_fit.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *fit_decl = program->declarations[2];
+    const FengDecl *view;
+    const FengDecl *button;
+    const FengTypeMember *fit_static;
+    const FengTypeMember *fit_instance;
+    const FengTypeMember *button_static;
+    const FengTypeMember *button_instance;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(fit_decl->kind == FENG_DECL_FIT);
+    ASSERT(fit_decl->as.fit_decl.member_count == 2U);
+    fit_static = fit_decl->as.fit_decl.members[0];
+    fit_instance = fit_decl->as.fit_decl.members[1];
+    ASSERT(fit_static->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(fit_static->is_static && fit_static->is_mixable);
+    ASSERT(fit_instance->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!fit_instance->is_static && !fit_instance->is_mixable);
+    ASSERT(fit_instance->is_mixin_instance_wrapper);
+
+    view = find_type_decl_by_name(analysis, "View");
+    button = find_type_decl_by_name(analysis, "Button");
+    button_static = find_type_method_named(button, "draw", true);
+    button_instance = find_type_method_named(button, "draw", false);
+    ASSERT(view != NULL && button != NULL);
+    ASSERT(button_static != NULL && button_instance != NULL);
+    ASSERT(button_static->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(button_static->is_mixable && button_static->is_mixin_static_wrapper);
+    ASSERT(button_instance->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!button_instance->is_mixable && button_instance->is_mixin_instance_wrapper);
+    ASSERT(button_static->mixin_source_member == fit_static);
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        button, view, fit_static));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Direct mix grants no access to ordinary seal methods, and authorization
+ * does not propagate to unrelated or merely indirect target types. */
+static void test_mixable_seal_access_rejects_unauthorized_sources(void) {
+    const char *sources[] = {
+        "module demo.mixable_seal_unrelated; spec Widget {} "
+        "type View: Widget { @mixable seal static func allowed(target: Widget): int { return 1; } } "
+        "type Other: Widget { open static func run(): int { return View.allowed(Other()); } }",
+        "module demo.mixable_seal_indirect; spec Widget {} "
+        "type View: Widget { @mixable seal static func allowed(target: Widget): int { return 1; } } "
+        "type Middle: Widget { ...: View; } "
+        "type Leaf: Widget { ...: Middle; open static func run(): int { return View.allowed(Leaf()); } }",
+        "module demo.mixable_seal_ordinary; spec Widget {} "
+        "type View: Widget { seal static func ordinary(target: Widget): int { return 1; } } "
+        "type Direct: Widget { ...: View; open static func run(): int { return View.ordinary(Direct()); } }",
+        "module demo.mixable_seal_top_level; spec Widget {} "
+        "type View: Widget { @mixable seal static func allowed(target: Widget): int { return 1; } } "
+        "type Direct: Widget { ...: View; } "
+        "func run(): int { return View.allowed(Direct()); }"
+    };
+
+    for (size_t source_index = 0U;
+         source_index < sizeof(sources) / sizeof(sources[0]);
+         ++source_index) {
+        FengProgram *program = parse_program_or_die(
+            "mixable_seal_unauthorized.ff", sources[source_index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_inaccessible = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code, "AE0305") == 0) {
+                found_inaccessible = true;
+            }
+        }
+        ASSERT(found_inaccessible);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* An inaccessible seal overload is filtered before ordinary static overload
+ * selection, so an accessible open overload with the same name still wins. */
+static void test_mixable_seal_inaccessible_overload_does_not_shadow_open(void) {
+    const char *source =
+        "module demo.mixable_seal_overload;\n"
+        "spec Widget {}\n"
+        "type View: Widget {\n"
+        "  @mixable open static func choose(target: Widget, value: int): int { return value; }\n"
+        "  @mixable seal static func choose(target: Widget, value: string): string { return value; }\n"
+        "}\n"
+        "type Caller {\n"
+        "  open static func run(): int { return View.choose(View(), 7); }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_overload.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Seal mix capabilities expose their callable surface package-wide, so every
+ * recursive signature component is checked like the same-position open
+ * method; ordinary seal methods retain the type-private signature rule. */
+static void test_mixable_seal_signature_uses_open_visibility_rules(void) {
+    const char *invalid_source =
+        "open module demo.mixable_seal_signature_invalid;\n"
+        "open spec Widget {}\n"
+        "type Hidden {}\n"
+        "spec HiddenSpec {}\n"
+        "open type View: Widget {\n"
+        "  @mixable seal static func result(target: Widget): Hidden { return Hidden(); }\n"
+        "  @mixable seal static func parameter(target: Widget, value: Hidden): void {}\n"
+        "  @mixable seal static func generic<T: HiddenSpec>(target: Widget, value: T): T { return value; }\n"
+        "  @mixable seal static func recursive(target: Widget, values: Hidden[]): void {}\n"
+        "}\n";
+    const char *valid_source =
+        "open module demo.mixable_seal_signature_valid;\n"
+        "type Hidden {}\n"
+        "spec HiddenSpec {}\n"
+        "open type View {\n"
+        "  seal static func result(): Hidden { return Hidden(); }\n"
+        "  seal static func parameter(value: Hidden): void {}\n"
+        "  seal static func generic<T: HiddenSpec>(value: T): T { return value; }\n"
+        "  seal static func recursive(values: Hidden[]): void {}\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_signature_invalid.ff", invalid_source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 4U);
+    for (size_t error_index = 0U;
+         error_index < error_count;
+         ++error_index) {
+        ASSERT(strcmp(errors[error_index].code, "AE0327") == 0);
+    }
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "mixable_seal_signature_valid.ff", valid_source);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* A visible fit mixable method derives both source and mixed instance entries. */
 static void test_mixable_fit_generates_own_and_target_instance_wrappers(void) {
     const char *source =
@@ -22668,6 +22968,11 @@ int main(void) {
     test_mixable_instance_projection_prefers_explicit_target_method();
     test_mixable_multiple_source_projection_boundaries();
     test_mixable_generates_static_and_instance_wrapper_chain();
+    test_mixable_seal_generates_private_wrappers_and_direct_access();
+    test_mixable_seal_fit_source_uses_same_wrapper_path();
+    test_mixable_seal_access_rejects_unauthorized_sources();
+    test_mixable_seal_inaccessible_overload_does_not_shadow_open();
+    test_mixable_seal_signature_uses_open_visibility_rules();
     test_mixable_fit_generates_own_and_target_instance_wrappers();
     test_mixable_accepts_transitive_parent_spec_relation();
     test_mixable_accepts_visible_fit_spec_relation();

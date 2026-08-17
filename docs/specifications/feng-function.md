@@ -188,6 +188,18 @@ type Button: Widget {
 }
 ```
 
+`@mixable` 静态方法也可以显式声明为 `seal`。它仍是私有成员，但直接展开其来源的
+目标 type 可按 §4.3 定义的受限授权生成 wrapper 并调用该方法：
+
+```feng
+type ProtectedView: Widget {
+  @mixable
+  seal static func draw(target: Widget, area: Area): void {
+    // 只供直接展开 ProtectedView 的目标复用
+  }
+}
+```
+
 错语法五，`@mixable` 带参数、标注实例方法或没有目标参数:
 
 ```feng
@@ -279,6 +291,12 @@ func main(args: string[]) { }  // 错误: 同一包中已存在顶层 main，不
 参数标记继续使用普通静态方法规则。`@mixable` 不表示来源实例、alias、类型链或其他
 参数注入，固定传入项只有目标实例。
 
+`@mixable` 不改变成员声明的可见性：省略修饰仍按普通成员规则等价于 `open`，显式
+`seal` 的方法仍是 seal 成员。由于 `@mixable seal static` 可以形成跨 type、跨包的
+受限 mix 能力，其完整签名必须按所属 type 或 fit 中同位置 open 方法的有效可见范围
+检查，包括参数、返回类型、泛型约束及递归组成类型；违反时由提供方使用现有
+`AE0327` 报错。未标注 `@mixable` 的普通 seal 方法继续使用类型私有签名范围。
+
 #### 4.3.2 声明类型的实例 wrapper
 
 一个具体类型最终成员面中每个保留的 `@mixable` 静态方法，都无条件派生一个同名普通
@@ -296,6 +314,13 @@ func draw(area: Area): void {
 实例 wrapper 保留其余签名事实与可见性，作为普通实例方法参与 `spec` 满足、方法值、
 重载、冲突、导出和代码生成；它不携带 `mixable` 声明事实，也不参与后续成员展开。
 
+来源静态方法、目标静态 wrapper 和目标实例 wrapper 的可见性固定映射如下：
+
+| 来源静态方法 | 目标静态 wrapper | 目标实例 wrapper |
+| --- | --- | --- |
+| `@mixable open static` | `@mixable open static` | `open` 实例方法 |
+| `@mixable seal static` | `@mixable seal static` | `seal` 实例方法 |
+
 如果 `@mixable` 静态方法声明在 `fit Source` 中，为 `Source` 派生的实例 wrapper
 等价于在同一个 `fit` 中手写上述普通实例方法，其归属、可见性、冲突、导出和 `.ft`
 恢复使用现有 `fit` 规则。参与某个来源成员面的 `fit Source` 方法集合由
@@ -304,7 +329,8 @@ func draw(area: Area): void {
 #### 4.3.3 展开目标的静态 wrapper
 
 目标成员展开来源时，来源成员面中每个符合条件的 `@mixable` 静态方法生成一个目标
-静态 wrapper。该 wrapper:
+静态 wrapper。符合条件的方法包括目标位置按普通规则可见的 open 方法，以及由
+§4.3.5 直接 mix 授权选中的 seal 方法。该 wrapper:
 
 - 保留来源静态方法的完整签名和可见性；
 - 方法体只执行完整限定的来源静态调用；
@@ -373,6 +399,58 @@ open func draw(area: Area): void {
 wrapper 只增加源码语义明确的普通静态调用层，不引入运行时方法表、来源实例、方法
 环境或动态 receiver 重绑定。
 
+#### 4.3.5 `@mixable seal` 的直接 mix 授权
+
+具体 type 中的以下三种合法成员展开形式都建立相同的直接 mix 关系：
+
+```feng
+...: Source;
+...: Source = SourceConstruction;
+... = SourceConstruction;
+```
+
+构造表达式只承担 [Feng 语言类型规范](./feng-type.md) 定义的字段初始化职责，不改变
+mixable 候选、wrapper 生成或 seal 授权。一个直接 mix 关系只在以下条件同时成立时，
+授予目标 type 对来源方法的受限访问：
+
+1. 当前实现上下文是目标 type 自身的实例方法、静态方法，或编译器为该目标生成的
+   mixable wrapper；
+2. 被访问方法属于对应 Source 的来源成员面，满足既有 `@mixable` 契约，并同时具有
+   `seal`、`static` 和 `mixable` 声明事实；
+3. 目标与该 Source 存在上述直接 mix 关系；间接传播关系不授予对原始来源方法的直接
+   访问；
+4. 方法声明在 `fit Source` 中时，该 fit 必须按普通 fit 可见性规则在当前 mix 位置
+   可见。
+
+授权同时用于来源 wrapper 候选选择、生成 wrapper 中的完整限定来源调用，以及目标
+自身实例方法或静态方法中的 `Source.method(...)` 显式调用。目标显式成员按既有优先
+规则跳过来源 wrapper 时，直接 mix 关系仍然存在，目标仍可显式调用来源实现。
+
+该授权不适用于顶层函数、其他 type、间接 mix 目标或共同实现相同 spec 的 type；
+也不扩展来源普通 seal 字段、实例方法、构造函数及未标注
+`@mixable` 的 seal static 方法。普通 seal 成员访问、spec/witness 与 fit 访问规则均
+保持不变。
+
+生成的 seal 静态 wrapper 保留 `mixable` 事实，因此下一层目标显式直接 mix 当前目标
+时可以继续传播；下一层获得的是对当前目标 wrapper 的直接授权，不是对原始来源方法
+的间接授权。
+
+#### 4.3.6 跨包声明与链接
+
+当所属 type 或 fit 按现有规则可导出时，package-public `.ft` 除公开方法外，还必须
+选择 `seal + static + is_mixable` 方法及生成的同类静态 wrapper，原样记录其 seal、
+static、mixable、完整签名、泛型与 reified dependencies 事实。普通 seal 方法及
+`seal + !is_mixable` 实例 wrapper 不因本规则进入 package-public 方法面。
+
+`.ft` 中存在该声明不表示普通访问可见：consumer 仍按 seal 拒绝普通成员访问，只能在
+§4.3.5 的直接 mix 授权成立时选择和调用。type 来源与当前可见 `fit Source` 来源、同包
+AST 与 imported provider 必须进入相同的候选和授权流程。
+
+来源方法及生成的 seal 静态 wrapper 必须具有由 package-public `.ft` 可恢复事实唯一
+确定的稳定跨包链接符号。链接可用性不改变 Feng visibility；实现必须复用现有 open
+mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态分派、来源实例、
+额外参数或专用 wrapper ABI。
+
 ## 5 规则
 
 分为「必须、禁止、建议」。
@@ -389,6 +467,18 @@ wrapper 只增加源码语义明确的普通静态调用层，不引入运行时
   且实例 wrapper 必须调用当前类型自己的同名静态方法。
 - [必须] 成员展开产生的静态 wrapper 必须完整限定调用来源静态方法并保留 `mixable`
   事实；实例 wrapper 不保留该事实。
+- [必须] `@mixable seal static` 的目标静态 wrapper 和实例 wrapper 必须都保留 seal
+  可见性；省略成员可见性仍按现有规则等价于 open。
+- [必须] 三种合法成员展开形式必须建立相同的直接 mix 授权；仅当当前实现上下文属于
+  目标 type、被访问方法同时为 `seal + static + mixable` 且方法属于对应 Source 来源
+  成员面时，才允许选择或调用该 seal 方法。
+- [禁止] 由间接 mix、相同 module、相同包、来源 type 可见或共同实现 spec 单独获得
+  来源 seal mixable 方法访问权。
+- [必须] `@mixable seal static` 的完整签名必须按所属 type 或 fit 中同位置 open 方法的
+  有效可见范围检查并沿用 `AE0327`；普通 seal 方法的类型私有签名规则不得改变。
+- [必须] package-public `.ft` 必须在所属 type 或 fit 可导出时记录
+  `seal + static + mixable` 方法及生成的同类静态 wrapper；该记录只表达受限 mix 能力，
+  不得使其成为普通公开成员。
 - [必须] 来源 `@mixable` 静态 wrapper 候选除完整静态成员冲突检查外，还必须与目标
   显式 `@mixable` 静态方法比较删除双方首参数后的实例投影；投影构成非法普通实例成员
   冲突时，必须由目标显式成员优先并跳过该来源候选。
@@ -437,6 +527,13 @@ wrapper 只增加源码语义明确的普通静态调用层，不引入运行时
 - 编译器必须让生成 wrapper 进入普通成员表，复用现有泛型、可见性、重载、冲突、
   `spec` 满足、方法值、导出和代码生成检查。
 - 编译器必须为生成 wrapper 保存目标成员展开声明与来源静态方法声明的位置映射。
+- 编译器必须使用同一直接 mix 授权查询处理 seal 来源候选、生成 wrapper 的来源调用、
+  目标显式成员中的完整限定来源调用、重载可访问性过滤及 LSP 成员视图；不得根据声明
+  来自同包 AST 还是 imported provider 选择不同语义路径。
+- 编译器必须先排除无直接 mix 授权的 seal 静态候选，再进行普通重载解析；无授权
+  候选不得遮蔽同名的可访问 open 候选。
+- 编译器必须为 package-public `.ft` 恢复的 `seal + static + mixable` 方法提供稳定、
+  可链接的跨包静态调用入口，同时保持其 Feng 可见性为 seal。
 - 编译器必须检查参数 `let`/`var` 的使用是否合法,并按绑定规则验证参数赋值路径。
 - 编译器必须检查构造函数与终结器函数是否满足 [Feng 语言类型规范](./feng-type.md) 中的声明约束。
 - 编译器必须检查泛型 `extern func` 的每个参数位与返回位是否都可抹除为唯一且固定的外部调用 surface; 若某一位置会随具体类型实参改变外部 surface,或需要额外的类型描述符、wrapper 或按实例分化的导入签名,必须报错并阻止通过。

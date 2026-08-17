@@ -3479,6 +3479,143 @@ static void test_direct_build_consumes_package_mixin(void) {
     free(remove_error);
 }
 
+/* A package consumer restores seal mix capabilities from .ft, links their
+ * provider bodies, and reuses the ordinary wrapper path for all mix forms,
+ * type/fit sources, explicit overrides, variadics, generics, and propagation. */
+static void test_direct_build_consumes_package_mixable_seal_methods(void) {
+    char template_path[] = "temp/feng_cli_pkg_mixable_seal_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgmixableseal",
+        "open module test.cli.pkgmixableseal;\n"
+        "open spec Widget {}\n"
+        "open spec GenericWidget {}\n"
+        "open type View: Widget {\n"
+        "  @mixable seal static func draw(target: Widget, value: int): int { return value + 1; }\n"
+        "  @mixable seal static func collect(target: Widget, values: int...): int { return 5; }\n"
+        "}\n"
+        "open type Middle: Widget { ...: View; }\n"
+        "open type FitView: Widget {}\n"
+        "open fit FitView {\n"
+        "  @mixable seal static func paint(target: Widget, value: int): int { return value + 2; }\n"
+        "}\n"
+        "open type GenericView<T>: GenericWidget {\n"
+        "  @mixable seal static func echo(target: GenericWidget, value: T): T { return value; }\n"
+        "}\n"
+        "open type GenericMethodView: GenericWidget {\n"
+        "  @mixable seal static func identity<T>(target: GenericWidget, value: T): T { return value; }\n"
+        "}\n"
+        "open type GenericFitView: GenericWidget {}\n"
+        "open fit GenericFitView {\n"
+        "  @mixable seal static func fitIdentity<T>(target: GenericWidget, value: T): T { return value; }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "module test.cli.pkgmixablesealmain;\n"
+        "import test.cli.pkgmixableseal;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "type DefaultButton: Widget {\n"
+        "  ...: View;\n"
+        "  open func run(value: int): int { return self.draw(value) + self.collect(1, 2, 3); }\n"
+        "  open static func source(value: int): int { return View.draw(DefaultButton(), value); }\n"
+        "}\n"
+        "type BoundButton: Widget {\n"
+        "  ...: View = View();\n"
+        "  open func run(value: int): int { return self.draw(value); }\n"
+        "}\n"
+        "type InferredButton: Widget {\n"
+        "  ... = View();\n"
+        "  open func run(value: int): int { return self.draw(value); }\n"
+        "}\n"
+        "type Leaf: Widget {\n"
+        "  ...: Middle;\n"
+        "  open func run(value: int): int { return self.draw(value); }\n"
+        "}\n"
+        "type OverrideButton: Widget {\n"
+        "  ...: View;\n"
+        "  @mixable seal static func draw(target: Widget, value: int): int {\n"
+        "    return View.draw(target, value) + 10;\n"
+        "  }\n"
+        "  open func run(value: int): int { return self.draw(value); }\n"
+        "}\n"
+        "type FitButton: Widget {\n"
+        "  ...: FitView;\n"
+        "  open func run(value: int): int { return self.paint(value); }\n"
+        "}\n"
+        "type GenericButton: GenericWidget {\n"
+        "  ...: GenericView<int>;\n"
+        "  open func run(value: int): int { return self.echo(value); }\n"
+        "}\n"
+        "type GenericMethodButton: GenericWidget {\n"
+        "  ...: GenericMethodView;\n"
+        "  open func run(value: string): string { return self.identity<string>(value); }\n"
+        "}\n"
+        "type GenericFitButton: GenericWidget {\n"
+        "  ...: GenericFitView;\n"
+        "  open func run(value: int): int { return self.fitIdentity<int>(value); }\n"
+        "}\n"
+        "func main(args: string[]) {\n"
+        "  if DefaultButton().run(5) == 11 && DefaultButton.source(1) == 2 &&\n"
+        "     BoundButton().run(2) == 3 && InferredButton().run(3) == 4 &&\n"
+        "     Leaf().run(4) == 5 && OverrideButton().run(5) == 16 &&\n"
+        "     FitButton().run(5) == 7 && GenericButton().run(8) == 8 &&\n"
+        "     GenericMethodButton().run(\"ok\") == \"ok\" &&\n"
+        "     GenericFitButton().run(9) == 9 {\n"
+        "    puts(&\"package mixable seal ok\");\n"
+        "  }\n"
+        "}\n",
+        "mixable_seal_main",
+        "package mixable seal ok\n");
+
+    /* The capability is present in package-public .ft for direct mixing, but
+     * an unrelated imported-type call must still follow ordinary seal access. */
+    {
+        char *rejected_src_dir = path_join(workspace_dir, "rejected/src");
+        char *rejected_source_path = path_join(rejected_src_dir, "main.ff");
+        char *rejected_out_dir = path_join(workspace_dir, "rejected/build");
+        char *out_opt = make_out_option(rejected_out_dir);
+        char *pkg_opt = make_pkg_option(bundle_path);
+        char *argv[] = {
+            rejected_source_path,
+            "--target=bin",
+            out_opt,
+            "--name=rejected_mixable_seal",
+            pkg_opt,
+        };
+
+        mkdir_p(rejected_src_dir);
+        write_text_file(
+            rejected_source_path,
+            "module test.cli.pkgmixablesealrejected;\n"
+            "import test.cli.pkgmixableseal;\n"
+            "type Other: Widget {\n"
+            "  open static func run(): int { return View.draw(Other(), 1); }\n"
+            "}\n"
+            "func main(args: string[]) { Other.run(); }\n");
+        ASSERT(run_direct_quiet_stderr(5, argv) != 0);
+
+        free(pkg_opt);
+        free(out_opt);
+        free(rejected_out_dir);
+        free(rejected_source_path);
+        free(rejected_src_dir);
+    }
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_pack_bundle_manifest_rewrites_local_dependency_versions(void) {
     char template_path[] = "temp/feng_cli_pack_manifest_XXXXXX";
     char *workspace_dir;
@@ -17772,6 +17909,133 @@ static void test_lsp_mixin_member_completion_hover_and_definition(void) {
     free(source_path);
 }
 
+/* Direct mix authorization exposes seal mixable type/fit methods to
+ * completion, while Hover and definition retain the ordinary source-member
+ * mapping used by generated wrappers. */
+static void test_lsp_mixable_seal_authorization_hover_and_definition(void) {
+    static const char *kSource =
+        "module test.lsp.mixin_seal_authorization;\n"
+        "\n"
+        "spec Widget {}\n"
+        "\n"
+        "type View: Widget {\n"
+        "    @mixable seal static func draw(target: Widget, area: int): int {\n"
+        "        return area + 1;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type FitView: Widget {}\n"
+        "\n"
+        "open fit FitView {\n"
+        "    @mixable seal static func paint(target: Widget, area: int): int {\n"
+        "        return area + 2;\n"
+        "    }\n"
+        "    @mixable open static func publicPaint(target: Widget, area: int): int {\n"
+        "        return area + 3;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type Button: Widget {\n"
+        "    ...: View;\n"
+        "    open static func invoke(area: int): int {\n"
+        "        return View.draw(Button(), area);\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type FitButton: Widget {\n"
+        "    ...: FitView;\n"
+        "    open static func invoke(area: int): int {\n"
+        "        return FitView.paint(FitButton(), area);\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "type Other: Widget {\n"
+        "    open static func inspect(area: int): int {\n"
+        "        return FitView.publicPaint(Other(), area);\n"
+        "    }\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_cli_lsp_mixin_seal_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *output;
+    char *expected_definition;
+    unsigned int source_line;
+    unsigned int source_character;
+    char *remove_error = NULL;
+
+    output = capture_lsp_completion_response(kSource,
+                                             "View.draw(Button(), area)",
+                                             strlen("View."));
+    ASSERT(strstr(output, "\"label\":\"draw\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response(kSource,
+                                             "FitView.paint(FitButton(), area)",
+                                             strlen("FitView."));
+    ASSERT(strstr(output, "\"label\":\"paint\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"publicPaint\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response(kSource,
+                                             "FitView.publicPaint(Other(), area)",
+                                             strlen("FitView."));
+    ASSERT(strstr(output, "\"label\":\"publicPaint\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"paint\"") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "View.draw(Button(), area)",
+                                        strlen("View."));
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output,
+                  "func draw(target: Widget, area:") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "    ...: View;",
+                                        strlen("    "));
+    ASSERT(strstr(output,
+                  "static func draw(target: Widget, area:") != NULL);
+    ASSERT(strstr(output, "func draw(area:") != NULL);
+    free(output);
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    find_line_character(kSource,
+                        "@mixable seal static func draw",
+                        strlen("@mixable seal static func "),
+                        &source_line,
+                        &source_character);
+    expected_definition = dup_printf(
+        "\"id\":2,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+        uri,
+        source_line,
+        source_character);
+    output = capture_lsp_position_response_at_path(source_path,
+                                                    kSource,
+                                                    kInitialize,
+                                                    "textDocument/definition",
+                                                    "View.draw(Button(), area)",
+                                                    strlen("View."),
+                                                    "\"result\":{\"uri\":");
+    ASSERT(strstr(output, expected_definition) != NULL);
+
+    free(output);
+    free(expected_definition);
+    free(uri);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Verifies that Hover on a mixin directive presents its complete generated
  * surface while every source-side syntax position reuses ordinary Hover. */
 static void test_lsp_mixin_declaration_and_source_hover(void) {
@@ -18235,6 +18499,114 @@ static void test_lsp_mixin_hover_cross_module_and_package(void) {
     free(remove_error);
 }
 
+/* Package completion must recover the seal mix capability from .ft without
+ * turning it into an ordinary public method. */
+static void test_lsp_package_mixable_seal_completion_respects_direct_target(void) {
+    static const char *kProviderSource =
+        "open module test.lsp.mixin_seal_package;\n"
+        "open spec Widget {}\n"
+        "open type View: Widget {\n"
+        "    @mixable seal static func draw(target: Widget, area: int): int {\n"
+        "        return area + 1;\n"
+        "    }\n"
+        "    @mixable open static func publicDraw(target: Widget, area: int): int {\n"
+        "        return area + 2;\n"
+        "    }\n"
+        "    seal static func ordinary(target: Widget, area: int): int {\n"
+        "        return area + 3;\n"
+        "    }\n"
+        "}\n";
+    static const char *kAuthorizedSource =
+        "module test.lsp.mixin_seal_consumer;\n"
+        "import test.lsp.mixin_seal_package;\n"
+        "type Button: Widget {\n"
+        "    ...: View;\n"
+        "    open static func inspect(area: int): int {\n"
+        "        return View.draw(Button(), area);\n"
+        "    }\n"
+        "}\n";
+    static const char *kUnauthorizedSource =
+        "module test.lsp.mixin_seal_consumer;\n"
+        "import test.lsp.mixin_seal_package;\n"
+        "type Other: Widget {\n"
+        "    open static func inspect(area: int): int {\n"
+        "        return View.publicDraw(Other(), area);\n"
+        "    }\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_lsp_package_mixin_seal_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *provider_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    bundle_path = build_single_source_package_bundle(workspace_dir,
+                                                     "lsp_mixable_seal",
+                                                     kProviderSource);
+    provider_source_path = path_join(workspace_dir, "dep/src/dep.ff");
+    ASSERT(unlink(provider_source_path) == 0);
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(consumer_src_dir);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_mixable_seal_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "\n"
+                    "[dependencies]\n"
+                    "lsp_mixable_seal: \"../lsp_mixable_seal.fb\"\n");
+
+    write_text_file(consumer_source_path, kAuthorizedSource);
+    output = capture_lsp_position_response_at_path(
+        consumer_source_path,
+        kAuthorizedSource,
+        kInitialize,
+        "textDocument/completion",
+        "View.draw(Button(), area)",
+        strlen("View."),
+        "\"label\":\"draw\"");
+    ASSERT(strstr(output, "\"label\":\"draw\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"publicDraw\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"ordinary\"") == NULL);
+    free(output);
+
+    write_text_file(consumer_source_path, kUnauthorizedSource);
+    output = capture_lsp_position_response_at_path(
+        consumer_source_path,
+        kUnauthorizedSource,
+        kInitialize,
+        "textDocument/completion",
+        "View.publicDraw(Other(), area)",
+        strlen("View."),
+        "\"label\":\"publicDraw\"");
+    ASSERT(strstr(output, "\"label\":\"publicDraw\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"draw\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"ordinary\"") == NULL);
+    free(output);
+
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(provider_source_path);
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Verifies mixin conflicts publish their original source declaration through
  * standard LSP diagnostic relatedInformation. */
 static void test_lsp_mixin_diagnostic_related_information(void) {
@@ -18450,9 +18822,11 @@ int main(void) {
     test_lsp_annotation_completion_filter_prefix();
     test_lsp_mixable_annotation_completion_and_hover();
     test_lsp_mixin_member_completion_hover_and_definition();
+    test_lsp_mixable_seal_authorization_hover_and_definition();
     test_lsp_mixin_declaration_and_source_hover();
     test_lsp_mixin_hover_generics_multilevel_and_fit();
     test_lsp_mixin_hover_cross_module_and_package();
+    test_lsp_package_mixable_seal_completion_respects_direct_target();
     test_lsp_mixin_diagnostic_related_information();
     test_direct_options_default_host_and_out_and_accept_sysroot();
     test_direct_build_cleans_stale_ir_on_frontend_failure();
@@ -18473,6 +18847,7 @@ int main(void) {
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
     test_direct_build_consumes_package_mixin();
+    test_direct_build_consumes_package_mixable_seal_methods();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_project_check_reports_enum_semantic_error_without_unknown_type();

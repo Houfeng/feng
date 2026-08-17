@@ -2396,6 +2396,16 @@ static char *cg_generic_type_static_ensure_shared_cname(
     CG *cg,
     const FengDecl *decl,
     const FengTypeMember *member);
+/* Return whether a private method is an exported mix capability while
+ * remaining inaccessible through ordinary Feng member lookup. */
+static bool cg_member_is_mixable_seal_static(
+    const FengTypeMember *member) {
+    return member != NULL &&
+           member->kind == FENG_TYPE_MEMBER_METHOD &&
+           member->visibility == FENG_VISIBILITY_PRIVATE &&
+           member->is_static &&
+           member->is_mixable;
+}
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member);
@@ -23801,6 +23811,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                                                const UserType *owner_type,
                                                const UserMethod *um,
                                                const BuiltinFit *builtin_fit,
+                                               const UserFit *user_fit,
                                                ExprResult *out) {
     const FengCallableSignature *sig = um != NULL && um->member != NULL
                                            ? &um->member->as.callable
@@ -24217,8 +24228,10 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         const char *call_name = um->c_name;
         if ((method_is_imported || owner_uses_shared_body) &&
             method_origin_decl != NULL) {
-            dispatch_name = cg_generic_type_method_shared_cname(
-                cg, method_origin_decl, um->member);
+            dispatch_name = user_fit != NULL
+                ? cg_fit_method_shared_cname(cg, user_fit, um->member)
+                : cg_generic_type_method_shared_cname(
+                      cg, method_origin_decl, um->member);
             if (dispatch_name == NULL) {
                 ok = false;
                 goto cleanup;
@@ -24387,6 +24400,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                                                         const UserType *owner_type,
                                                         const UserMethod *um,
                                                         const BuiltinFit *builtin_fit,
+                                                        const UserFit *user_fit,
                                                         ExprResult *out) {
     Buf args_buf;
     bool has_arg = false;
@@ -24406,6 +24420,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                                                   owner_type,
                                                   um,
                                                   builtin_fit,
+                                                  user_fit,
                                                   out);
     }
     if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
@@ -24617,7 +24632,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                                 ma->as.member.member.data,
                                                 ma->as.member.member.length);
             }
-            return cg_emit_static_method_call_with_user_method(cg, e, ut, um, NULL, out);
+            return cg_emit_static_method_call_with_user_method(
+                cg, e, ut, um, NULL, NULL, out);
         }
 
         if (rc->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) {
@@ -24635,7 +24651,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                                ma->as.member.member.data,
                                                ma->as.member.member.length);
                 }
-                return cg_emit_static_method_call_with_user_method(cg, e, NULL, um, bf, out);
+                return cg_emit_static_method_call_with_user_method(
+                    cg, e, NULL, um, bf, NULL, out);
             }
             {
                 const UserType *ut = cg_find_user_type_by_expr_path(cg, ma->as.member.object);
@@ -24658,7 +24675,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                             ma->as.member.member.data,
                                             ma->as.member.member.length);
                 }
-                return cg_emit_static_method_call_with_user_method(cg, e, ut, um, NULL, out);
+                return cg_emit_static_method_call_with_user_method(
+                    cg, e, ut, um, NULL, uf, out);
             }
         }
 
@@ -48729,8 +48747,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                 for (size_t mi = 0; mi < ut->static_method_count; mi++) {
                     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                           d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          ut->static_methods[mi].member->visibility !=
-                                              FENG_VISIBILITY_PRIVATE);
+                                          (ut->static_methods[mi].member->visibility !=
+                                               FENG_VISIBILITY_PRIVATE ||
+                                           cg_member_is_mixable_seal_static(
+                                               ut->static_methods[mi].member)));
                     if (ut->static_methods[mi].member->as.callable.type_param_count > 0U) {
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
@@ -48864,8 +48884,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                                 &uf->methods[mi].member->as.callable;
                             bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                                   d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                                  uf->methods[mi].member->visibility ==
-                                                      FENG_VISIBILITY_PUBLIC);
+                                                  (uf->methods[mi].member->visibility ==
+                                                       FENG_VISIBILITY_PUBLIC ||
+                                                   cg_member_is_mixable_seal_static(
+                                                       uf->methods[mi].member)));
                             const UserFit *saved_user_fit = cg->current_user_fit;
 
                             cg->current_user_fit = uf;
@@ -48913,8 +48935,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     for (size_t mi = 0; mi < bf->method_count; mi++) {
                         bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                                               d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                              bf->methods[mi].member->visibility ==
-                                                  FENG_VISIBILITY_PUBLIC);
+                                              (bf->methods[mi].member->visibility ==
+                                                   FENG_VISIBILITY_PUBLIC ||
+                                               cg_member_is_mixable_seal_static(
+                                                   bf->methods[mi].member)));
                         if (!cg_emit_builtin_fit_method(cg,
                                                         bf,
                                                         &bf->methods[mi],
@@ -52809,7 +52833,8 @@ static bool cg_generic_type_member_exports_public_surface(const FengDecl *decl,
            decl->visibility == FENG_VISIBILITY_PUBLIC &&
            member != NULL &&
            (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
-            member->visibility != FENG_VISIBILITY_PRIVATE);
+            member->visibility != FENG_VISIBILITY_PRIVATE ||
+            cg_member_is_mixable_seal_static(member));
 }
 
 static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
@@ -52818,7 +52843,8 @@ static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
            decl->visibility == FENG_VISIBILITY_PUBLIC &&
            member != NULL &&
            (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
-            member->visibility != FENG_VISIBILITY_PRIVATE);
+            member->visibility != FENG_VISIBILITY_PRIVATE ||
+            cg_member_is_mixable_seal_static(member));
 }
 
 /** Build the internal shared ensure-init symbol for one generic static field. */
@@ -52965,18 +52991,31 @@ static char *cg_fit_method_shared_cname(CG *cg,
         free(owner_mangle); free(type_san); free(method_san);
         return NULL;
     }
-    /* Compute method ordinal within the fit decl's member list. */
+    /* Preserve the existing fm<N> identity for every ordinary fit method.
+     * A seal mix capability uses its own fc<N> domain, counted only from
+     * capability facts present in package-public .ft, so private provider
+     * methods cannot perturb the consumer-visible symbol. */
     size_t ordinal = 0;
     const FengDecl *fit_decl = uf->decl;
+    bool uses_capability_symbol =
+        cg_member_is_mixable_seal_static(member);
     for (size_t i = 0; i < fit_decl->as.fit_decl.member_count; ++i) {
         const FengTypeMember *fm = fit_decl->as.fit_decl.members[i];
         if (fm->kind != FENG_TYPE_MEMBER_METHOD) continue;
+        if (uses_capability_symbol &&
+            !cg_member_is_mixable_seal_static(fm)) {
+            continue;
+        }
         if (fm == member) break;
         ordinal++;
     }
     Buf b; buf_init(&b);
-    buf_append_fmt(&b, "FengFitMethod__%s__%s__fm%zu__%s",
-                   owner_mangle, type_san, ordinal, method_san);
+    buf_append_fmt(&b, "FengFitMethod__%s__%s__%s%zu__%s",
+                   owner_mangle,
+                   type_san,
+                   uses_capability_symbol ? "fc" : "fm",
+                   ordinal,
+                   method_san);
     free(owner_mangle); free(type_san); free(method_san);
     return b.data;
 }

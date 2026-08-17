@@ -766,6 +766,12 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
     if ((decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
          decl->kind == FENG_SYMBOL_DECL_KIND_METHOD) &&
         decl->visibility != FENG_VISIBILITY_PRIVATE) return true;
+    /* A seal mixable static method is a package capability fact, not a
+     * public member. Initial-tree traversal reaches it only through an owner
+     * that already passed the ordinary package-public selection rules. */
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
+        decl->visibility == FENG_VISIBILITY_PRIVATE &&
+        decl->is_static && decl->is_mixable) return true;
     return false;
 }
 

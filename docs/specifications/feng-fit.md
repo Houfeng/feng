@@ -113,6 +113,10 @@ fit Box<T> {
 
 `fit` 静态方法与 `type` 静态方法使用同一成员关键字顺序: `[open | seal] static func ...`。引入定义该 `fit` 的模块后,公开静态方法在调用侧可见面可用,如 `User.from_name("feng")` 或 `string.fromUtf8Bytes(bytes)`。
 
+`fit Source` 中的 `@mixable` 静态方法参与成员展开时，open 与 seal 方法的候选、wrapper
+及直接 mix 授权统一遵循 [Feng 语言函数规范](./feng-function.md#43-mixable-静态方法与-wrapper)；
+fit 声明本身仍须满足本规范的现有可见性、导出和孤儿适配规则。
+
 正确语法七,泛型参数的子到父传递与直接声明一致:
 
 ```feng

@@ -6752,6 +6752,68 @@ static bool symbol_member_passes_filter(const FengSymbolDeclView *member, FengLs
 static bool completion_json_contains_label(const FengLspString *json,
                                            FengSlice label,
                                            bool *contains);
+static const FengDecl *resolve_type_constructor_expr(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengExpr *expr);
+
+/* Recover a direct mix relation for completion when the current document has
+ * only parsed successfully and the semantic pre-pass has not populated
+ * resolved_source_decl. Successful analyses still use the normalized fact. */
+static bool completion_type_directly_mixes_source(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengDecl *target_type,
+    const FengDecl *source_type) {
+    size_t mixin_index;
+
+    if (session == NULL || program == NULL || target_type == NULL ||
+        target_type->kind != FENG_DECL_TYPE || source_type == NULL ||
+        source_type->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    for (mixin_index = 0U;
+         mixin_index < target_type->as.type_decl.mixin_count;
+         ++mixin_index) {
+        const FengTypeMixinDecl *mixin =
+            &target_type->as.type_decl.mixins[mixin_index];
+        const FengDecl *resolved_source = mixin->resolved_source_decl;
+
+        if (resolved_source == NULL && mixin->source_type != NULL) {
+            resolved_source = resolve_named_type_ref(session,
+                                                     program,
+                                                     mixin->source_type);
+        }
+        if (resolved_source == NULL && mixin->source_constructor != NULL) {
+            resolved_source = resolve_type_constructor_expr(
+                session, program, mixin->source_constructor);
+        }
+        if (resolved_source == source_type) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Apply the compiler's normalized authorization first, then recover only the
+ * missing direct-source fact needed by completion on a parsed-only document. */
+static bool completion_type_has_mixable_seal_access(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengDecl *target_type,
+    const FengDecl *source_type,
+    const FengTypeMember *member) {
+    if (feng_semantic_type_has_mixable_seal_access(
+            target_type, source_type, member)) {
+        return true;
+    }
+    return member != NULL &&
+           member->kind == FENG_TYPE_MEMBER_METHOD &&
+           member->visibility == FENG_VISIBILITY_PRIVATE &&
+           member->is_static && member->is_mixable &&
+           completion_type_directly_mixes_source(
+               session, program, target_type, source_type);
+}
 
 static bool append_owner_fit_member_completion_items(FengLspString *json,
                                                      bool *first,
@@ -6759,6 +6821,8 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                                                      const FengProgram *program,
                                                      const FengDecl *owner_decl,
                                                      FengSlice owner_builtin_name,
+                                                     const FengDecl *enclosing_decl,
+                                                     const FengTypeMember *enclosing_member,
                                                      FengLspMemberFilter filter,
                                                      const FengLspRequestContext *request) {
     size_t module_index;
@@ -6803,6 +6867,18 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                     const FengTypeMember *member = decl->as.fit_decl.members[member_index];
                     bool contains = false;
 
+                    if (member->visibility == FENG_VISIBILITY_PRIVATE &&
+                        member->is_static && member->is_mixable &&
+                        (enclosing_member == NULL ||
+                         enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
+                         !completion_type_has_mixable_seal_access(
+                             session,
+                             program,
+                             enclosing_decl,
+                             owner_decl,
+                             member))) {
+                        continue;
+                    }
                     if (!member_passes_filter(member, filter)) {
                         continue;
                     }
@@ -6851,6 +6927,18 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                     const FengTypeMember *member = decl->as.fit_decl.members[member_index];
                     bool contains = false;
 
+                    if (member->visibility == FENG_VISIBILITY_PRIVATE &&
+                        member->is_static && member->is_mixable &&
+                        (enclosing_member == NULL ||
+                         enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
+                         !completion_type_has_mixable_seal_access(
+                             session,
+                             program,
+                             enclosing_decl,
+                             owner_decl,
+                             member))) {
+                        continue;
+                    }
                     if (!member_passes_filter(member, filter)) {
                         continue;
                     }
@@ -17555,6 +17643,17 @@ static bool type_member_visible_from_program(const FengLspAnalysisSession *sessi
             enclosing_decl,
             enclosing_member);
     }
+    if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE &&
+        enclosing_member != NULL &&
+        enclosing_member->kind == FENG_TYPE_MEMBER_METHOD &&
+        completion_type_has_mixable_seal_access(
+            session,
+            program,
+            enclosing_decl,
+            owner_decl,
+            member)) {
+        return true;
+    }
     if (member->visibility == FENG_VISIBILITY_PUBLIC) {
         return true;
     }
@@ -17794,6 +17893,51 @@ static bool symbol_spec_seal_member_visible_from_implementation(
                                                    owner_spec);
 }
 
+/* Check the symbol-backed form of the same direct mix authorization used by
+ * semantic analysis. This fallback is needed while completion is served from
+ * package-public .ft without a synthesized imported AST session. */
+static bool symbol_mixable_seal_member_visible_from_target(
+    const FengLspCacheQueryContext *context,
+    const FengSymbolDeclView *source_type,
+    const FengSymbolDeclView *member,
+    const FengDecl *enclosing_decl,
+    const FengTypeMember *enclosing_member) {
+    size_t mixin_index;
+
+    if (context == NULL || source_type == NULL || member == NULL ||
+        enclosing_decl == NULL || enclosing_decl->kind != FENG_DECL_TYPE ||
+        enclosing_member == NULL ||
+        enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
+        feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_METHOD ||
+        feng_symbol_decl_visibility(member) != FENG_VISIBILITY_PRIVATE ||
+        !feng_symbol_decl_is_static(member) ||
+        !feng_symbol_decl_is_mixable(member)) {
+        return false;
+    }
+    for (mixin_index = 0U;
+         mixin_index < enclosing_decl->as.type_decl.mixin_count;
+         ++mixin_index) {
+        const FengTypeMixinDecl *mixin =
+            &enclosing_decl->as.type_decl.mixins[mixin_index];
+        const FengSymbolDeclView *resolved_source = NULL;
+
+        if (mixin->source_type != NULL) {
+            resolved_source = resolve_symbol_named_type_ref(
+                context->provider,
+                context->current_module,
+                context->program,
+                mixin->source_type);
+        } else if (mixin->source_constructor != NULL) {
+            resolved_source = resolve_symbol_owner_decl_from_expr(
+                context, mixin->source_constructor, NULL);
+        }
+        if (resolved_source == source_type) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Apply module visibility or the spec implementation-domain rule. */
 static bool symbol_member_visible_from_context(
     const FengLspCacheQueryContext *context,
@@ -17811,6 +17955,16 @@ static bool symbol_member_visible_from_context(
         feng_symbol_decl_kind(owner_decl) == FENG_SYMBOL_DECL_KIND_SPEC) {
         return symbol_spec_seal_member_visible_from_implementation(
             context, owner_decl, enclosing_decl, enclosing_member);
+    }
+    if (owner_decl != NULL &&
+        feng_symbol_decl_kind(owner_decl) == FENG_SYMBOL_DECL_KIND_TYPE &&
+        symbol_mixable_seal_member_visible_from_target(
+            context,
+            owner_decl,
+            member,
+            enclosing_decl,
+            enclosing_member)) {
+        return true;
     }
     return symbol_decl_is_in_module(context->current_module, owner_decl);
 }
@@ -18985,6 +19139,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           program,
                                                           owner_decl,
                                                           owner_builtin_name,
+                                                          enclosing_decl,
+                                                          enclosing_member,
                                                           filter,
                                                           request)) {
                 local_list_dispose(&locals);
@@ -19047,6 +19203,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           program,
                                                           owner_decl,
                                                           owner_builtin_name,
+                                                          enclosing_decl,
+                                                          enclosing_member,
                                                           filter,
                                                           request)) {
                 local_list_dispose(&locals);

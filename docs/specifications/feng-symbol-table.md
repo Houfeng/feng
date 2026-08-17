@@ -175,6 +175,10 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
 - 公开顶层 `func`。
 - 公开模块级 `let` / `var`。
 - 公开成员字段与成员方法。
+- 已按现有公开导出规则收录的 type 或 fit 所拥有的
+  `seal + static + is_mixable` 方法，以及目标生成的同类静态 wrapper；它们作为
+  [Feng 语言函数规范](./feng-function.md#436-跨包声明与链接) 定义的受限 mix 能力
+  收录，仍保留非公开可见性标志。
 - 公开 `type` 的全部字段布局声明; 非公开字段只作为对象布局与跨包泛型实例化的 ABI 元信息导出,不得在 consumer 中变成可访问成员。
 - 公开构造函数与终结器函数。
 - 公开泛型声明的类型参数列表、参数顺序、参数约束目标与未实例化签名骨架。
@@ -204,7 +208,15 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 
 函数体和初始化器不在闭包阶段重新遍历; 仅由其引用且未形成 reifiable 依赖的私有声明不收录。内建类型、类型参数、数组和指针节点本身不生成顶层声明。无关私有声明不收录。
 
-收录的私有声明必须保留私有标记。读取器和 imported-module cache 可以按声明身份供编译器内部使用,但用户名称查询、`use` 和补全不得返回这些声明。
+收录的私有声明必须保留私有标记。读取器和 imported-module cache 可以按声明身份供编译器
+内部使用，但普通用户名称查询、`use` 和无授权补全不得返回这些声明；仅
+[Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 明确定义的
+直接 mix 授权查询可以选择对应的 seal mix 能力。
+
+`seal + static + is_mixable` 方法只在其 owner 已按现有规则进入 package-public 表时
+作为成员收录，不得反向把原本不可导出的私有 type 或 fit 提升为闭包根。普通 seal
+方法、seal 实例方法和 `seal + static + !is_mixable` 方法不因 mix 能力规则进入公开
+方法面；私有表示依赖闭包也不得据此扩大它们的用户可查询范围。
 
 `NAMED`、`NAMED_GENERIC` 和 `TYPE_PARAM_REF` 类型节点必须保存目标声明身份。writer 必须先确定收录闭包并为全部声明分配 symbol id,再用 `sym_ref` 序列化类型; reader 必须先创建全部声明,再按 `sym_ref` 恢复类型目标,不得把已绑定类型降格为纯名称。
 
@@ -670,6 +682,14 @@ attr key 常量建议如下:
   `spec seal` requirement；每个成员沿用 `SYMS.flags.public` 忠实保存其
   spec 访问面。该收录不把 `spec seal` 成员变成普通公开 API，也不要求
   额外收录承担 requirement 的具体 `type seal` 成员。
+- `seal + static + is_mixable` 方法沿用 `SYMS.flags.public = 0` 表达 seal，并分别使用
+  既有 `FT_ATTR_STATIC_MEMBER` 与 `FT_ATTR_MIXABLE_METHOD` 表达 static 和 mixable；
+  reader 必须原样恢复
+  可见性、完整签名、泛型和 reified dependencies。普通用户成员枚举仍过滤该声明，
+  只有函数规范定义的直接 mix 授权查询可以把它作为候选。
+- 来源方法及生成的 seal mixable 静态 wrapper 必须使用仅由 package-public `.ft`
+  可恢复事实确定的稳定链接身份；不得依赖未收录普通 seal 方法或 provider 私有声明
+  顺序。该要求不新增符号表字段，也不改变 Feng 可见性。
 
 #### 6.5.1 enum / enum_item 导出与查询视图补充
 

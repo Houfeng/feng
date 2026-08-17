@@ -53,6 +53,9 @@ open type User {
 - 需显式声明 `seal` 才能隐藏。
 - `seal` 成员仅允许所属 `type` 自身的成员实现访问；同 module、同包中的其他
   `type` 或顶层函数仍属于外部代码，不得访问。
+- `@mixable seal static` 保持 seal 可见性，但可由
+  [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 定义的
+  直接 mix 目标在受限上下文中访问；该例外不适用于其他 seal 成员。
 
 ```feng
 open type User {
@@ -277,6 +280,13 @@ open type User {
 requirement 与实现成员的可见性兼容矩阵由
 [Feng 语言 `spec` 规范](./feng-spec.md) 唯一定义。
 
+### 10.2 `@mixable seal static` 成员
+
+`@mixable seal static` 仍是具体 type 或 fit 的 seal 成员，普通成员查找必须继续按
+seal 拒绝。只有 [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权)
+定义的直接 mix 目标实现上下文可以选择和调用对应方法；该授权不改变所属 type 的其他
+seal 成员，也不来自 module、包、继承或 spec/witness 关系。
+
 ## 11 公开签名的可见性一致性
 
 声明签名中每个组成类型的有效可见范围不得小于该声明的有效可见范围。
@@ -288,6 +298,8 @@ requirement 与实现成员的可见性兼容矩阵由
 - `spec` 的泛型约束、父 `spec`，以及 object、callable、union、intersection
   四种 form 的组成类型。
 - `fit` 的目标类型、`spec` 列表，以及实例和静态成员的公开签名。
+- `@mixable seal static` 的完整签名按所属 type 或 fit 中同位置 open 方法的有效可见
+  范围检查；未标注 `@mixable` 的普通 seal 方法仍按类型私有范围处理。
 - 显式类型和推导类型；推导类型在类型推导完成后检查。
 
 组成类型按以下规则递归检查：

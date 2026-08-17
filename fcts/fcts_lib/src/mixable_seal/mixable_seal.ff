@@ -1,0 +1,63 @@
+open module fcts_lib.mixable_seal;
+
+/** Marker contract accepted by ordinary and fit-owned seal mix behavior. */
+open spec SealWidget {}
+
+/** Cross-package source for non-generic and variadic seal mix behavior. */
+open type SealView: SealWidget {
+  @mixable
+  seal static func draw(target: SealWidget, value: int): int {
+    return value + 1;
+  }
+
+  @mixable
+  seal static func collect(target: SealWidget, values: int...): int {
+    return 5;
+  }
+}
+
+/** Exported intermediate wrapper used to verify multi-package propagation. */
+open type SealMiddle: SealWidget {
+  ...: SealView;
+}
+
+/** Nominal source whose behavior is contributed by a visible fit. */
+open type SealFitView: SealWidget {}
+
+/** Cross-package fit-owned seal mix behavior. */
+open fit SealFitView {
+  @mixable
+  seal static func paint(target: SealWidget, value: int): int {
+    return value + 2;
+  }
+}
+
+/** Marker contract for generic seal mix behavior. */
+open spec SealGenericWidget {}
+
+/** Generic-owner seal mix source. */
+open type SealGenericView<T>: SealGenericWidget {
+  @mixable
+  seal static func echo(target: SealGenericWidget, value: T): T {
+    return value;
+  }
+}
+
+/** Method-generic seal mix source. */
+open type SealGenericMethodView: SealGenericWidget {
+  @mixable
+  seal static func identity<T>(target: SealGenericWidget, value: T): T {
+    return value;
+  }
+}
+
+/** Nominal source for a method-generic fit capability. */
+open type SealGenericFitView: SealGenericWidget {}
+
+/** Method-generic fit-owned seal mix behavior. */
+open fit SealGenericFitView {
+  @mixable
+  seal static func fitIdentity<T>(target: SealGenericWidget, value: T): T {
+    return value;
+  }
+}
