@@ -61,6 +61,9 @@ type Vault {
 - 通过 `@friend` 穿透 owner type、owner spec、module 或 fit 的既有可见性；
 - 修改具体 type 普通 `seal` 成员、`spec seal` 或 `@mixable seal` 的既有规则；
 - 修改 spec requirement 满足、witness 构造或具体实现成员的可见性；
+- 新增 object-form spec 方法值；该独立能力由
+  [Feng object-form `spec` 方法值分派开发草案](./feng-object-form-spec-method-value-dev.md)
+  跟踪，本草案只在现有支持的成员访问形式上增加 friend 判断；
 - 将 `@friend` 记录到 package-public `.ft`；
 - 运行时反射或动态修改 friend 集合。
 
@@ -103,6 +106,18 @@ friend 参数按 `FengTypeRef` 解析并进行普通类型合法性检查：
 
 例如，泛型 owner 上的 `@friend(Box<T>)` 在 `Owner<int>` 视角下表示
 `Box<int>`，不能自动授权 `Box<string>`。
+
+同一成员可以使用一个或多个 `@friend` 注解。语义阶段把全部参数合并为该成员
+唯一的 friend 集合；同一语义类型无论以相同文本、短名、别名或完整路径重复出现，
+都静默去重，不产生重复授权或重复诊断：
+
+```feng
+@friend(Reader, Auditor)
+@friend(other.Reader)
+seal func inspect(): void {
+  // Reader、Auditor 最终各保留一个集合项。
+}
+```
 
 ### 4.3 AST 表达
 
@@ -526,8 +541,9 @@ package-public `.ft` 不记录 `@friend` 参数或 friend 授权：
 - 重载候选过滤；
 - 编译器和 LSP 共用的可访问成员视图。
 
-不能只在最终调用发码前跳过 seal 检查，否则字段访问、方法值、重载或工具结果会
-与调用语义不一致。
+不能只在最终调用发码前跳过 seal 检查，否则字段访问、既有具体 type/fit 方法值、
+重载或工具结果会与调用语义不一致。object-form spec 方法值仍属于独立开发项；
+本草案不为其新增语义或 Codegen 路径。
 
 ### 9.5 Codegen
 
@@ -562,6 +578,8 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 
 - `@friend` 识别为内建注解；
 - 单个和多个 friend type；
+- 一个或多个 `@friend` 注解合并为唯一 friend 集合；
+- 相同文本、短名、别名和完整路径解析为同一类型时静默去重；
 - 短名、别名、完整路径和泛型类型位；
 - type 实例/静态字段和方法；
 - object-form spec 实例/静态字段和方法；
@@ -585,6 +603,8 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 - owner module、owner type/spec 和 fit 可见性不能被穿透；
 - 重载先过滤不可访问候选，open 候选不被 seal friend 候选遮蔽；
 - 字段可写性、静态性和泛型检查保持不变；
+- friend 可以在既有具体 type/fit 方法值形成点选择授权方法，非 friend 仍被拒绝；
+- object-form spec 方法值保持独立开发项的当前状态，不因 `@friend` 被提前放开；
 - 泛型 owner 的 friend 类型在代入后精确匹配，不扩大到其他实例。
 
 ### 11.3 签名可见性
@@ -634,7 +654,8 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 ### TODO 1：完成 Review 决策并更新正式规范
 
 - [ ] Review 本文的授权边界、类型位参数、同包 fit 授权和签名可见性规则。
-- [ ] 决定重复 friend 参数、多个 `@friend` 注解的归一化或诊断规则。
+- [x] 确认一个或多个 `@friend` 注解的全部参数归一化为唯一 friend 集合，按解析后的
+  语义类型静默去重。
 - [ ] 更新 `docs/specifications/feng-visibility.md`，作为 friend 成员访问和签名
   可见性的主规范。
 - [ ] 更新 `docs/specifications/feng-language.md` 的内建注解列表与数量。
@@ -654,6 +675,7 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 ### TODO 3：实现 friend 语义归一化与早期声明检查
 
 - [ ] 在 owner 泛型作用域中解析、规范化 friend type 集合。
+- [ ] 合并同一成员上的全部 `@friend` 参数，并按语义类型身份静默去重。
 - [ ] 建立可复用的 member owner decl/module/program 查询。
 - [ ] 建立统一的 owner、当前 type、当前 fit 声明是否同包的判断，不依赖
   package-public `.ft` 是否碰巧缺少某项事实进行授权。
