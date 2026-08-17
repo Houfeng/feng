@@ -633,7 +633,7 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 
 ### TODO 1：完成 Review 决策并更新正式规范
 
-- [ ] Review 本文的授权边界、类型位参数和签名可见性两条规则。
+- [ ] Review 本文的授权边界、类型位参数、同包 fit 授权和签名可见性规则。
 - [ ] 决定重复 friend 参数、多个 `@friend` 注解的归一化或诊断规则。
 - [ ] 更新 `docs/specifications/feng-visibility.md`，作为 friend 成员访问和签名
   可见性的主规范。
@@ -651,19 +651,26 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 - [ ] 为 object-form spec 成员补齐注解解析入口。
 - [ ] 验证其他现有注解的解析和 AST 不变。
 
-### TODO 3：实现声明解析与签名检查
+### TODO 3：实现 friend 语义归一化与早期声明检查
 
 - [ ] 在 owner 泛型作用域中解析、规范化 friend type 集合。
 - [ ] 建立可复用的 member owner decl/module/program 查询。
-- [ ] 检查合法成员类别、显式 seal 和参数完整性。
+- [ ] 建立统一的 owner、当前 type、当前 fit 声明是否同包的判断，不依赖
+  package-public `.ft` 是否碰巧缺少某项事实进行授权。
+- [ ] 检查 friend 参数非空、根类型为具体 type 且全部成功解析。
+- [ ] 检查标注目标属于允许的 type/spec/fit 成员并且显式声明为 `seal`。
 - [ ] 明确拒绝构造函数和终结器上的 `@friend`。
-- [ ] 复用现有签名类型递归遍历，实现第 7.2 和 7.3 节 friend 规则。
-- [ ] 覆盖字段推导类型和 callable 推导返回类型。
-- [ ] 增加稳定诊断并更新错误码规范。
+- [ ] 为非法参数、非法位置、非 seal 成员、构造函数和终结器增加已在正式规范中
+  确认的稳定诊断。
 
 ### TODO 4：实现统一访问授权
 
-- [ ] 实现基于语义类型身份和泛型代入的 friend 授权谓词。
+- [ ] 实现统一的 friend 授权主体表示：普通 type 成员使用当前词法 type，同包 fit
+  成员使用当前 fit 目标 type。
+- [ ] 实现基于语义类型身份和 owner 泛型代入的 friend 授权谓词。
+- [ ] 对 fit 授权显式检查 fit 与成员 owner 同包，其他包的 fit 一律不能恢复授权。
+- [ ] 基于现有签名类型递归遍历，提供“成员完整签名是否可从指定 module 使用”的
+  统一查询；在 fit 访问点用它执行第 7.3 节按 `FitM/OM/RM` 判断的附加条件。
 - [ ] 接入 type 实例/静态字段与方法访问。
 - [ ] 接入 object-form spec 实例/静态字段与方法访问。
 - [ ] 接入 fit 实例/静态方法访问。
@@ -672,17 +679,33 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 - [ ] 验证 fit 的 friend 身份只放行对应注解成员，不放行其他普通 seal 成员。
 - [ ] 验证上层 module/owner/fit 可见性仍先于 friend 成员授权。
 
-### TODO 5：验证 codegen、Symbol 与工具链
+### TODO 5：实现完整签名可见性检查
 
-- [ ] 验证所有成功访问继续复用既有 codegen，无新增运行时分支或 ABI。
-- [ ] 验证 spec friend 成员继续通过既有 witness 发码。
-- [ ] 验证 package-public `.ft` 不记录 friend 参数或授权。
-- [ ] 验证 completion、hover、definition 与编译器使用同一可访问成员结果。
+- [ ] 在成员类型解析和 callable 返回类型推导完成后执行完整签名检查。
+- [ ] 对每个 friend type，以其声明 module 调用 TODO 4 的统一签名查询，实现
+  第 7.2 节按 `FM/OM/RM` 判断的两条声明规则，不复制类型结构遍历。
+- [ ] 覆盖字段显式类型和推导类型。
+- [ ] 覆盖参数、显式返回类型和推导返回类型。
+- [ ] 递归覆盖泛型约束、泛型实参、数组元素、指针目标和其他现有组成类型。
+- [ ] 多 friend 分别检查，任意一个失败时拒绝整个 `@friend` 声明。
+- [ ] 为签名不可用诊断提供成员、friend type 和具体不可用类型信息。
 
-### TODO 6：补齐测试并全量回归
+### TODO 6：验证 Codegen、Symbol 与工具链
+
+- [ ] **验证**所有成功访问继续复用既有 Codegen，无新增运行时分支、helper、参数
+  或 ABI；只有验证发现既有入口无法复用时，才提交具体问题供 Review。
+- [ ] **验证**spec friend 成员继续通过既有 witness 发码，不修改 spec 满足或
+  witness 构造。
+- [ ] **验证**成员本身继续执行现有 Symbol 选择规则，同时 package-public `.ft`
+  不记录 friend 参数或授权。
+- [ ] **验证**dependency consumer 及其 `fit FriendType` 不能从 `.ft` 恢复授权。
+- [ ] **验证**completion、hover、definition 是否已经使用统一可访问成员结果；若未
+  使用，只接入第 9.4 节统一查询，不另建 LSP friend 规则。
+
+### TODO 7：补齐测试并全量回归
 
 - [ ] 按第 11 节补齐 lexer、parser、semantic、symbol、codegen 和 FCTS 用例。
-- [ ] 先执行目标测试，确认正向、负向、泛型、spec、fit 和跨 module 边界。
+- [ ] 先执行目标测试，确认正向、负向、泛型、spec、fit、跨 module 和跨包边界。
 - [ ] 执行 `make test` 全量回归。
 
 ## 13. 验收标准
