@@ -15804,6 +15804,43 @@ static void test_spec_requirement_implementation_visibility_matrix(void) {
     }
 }
 
+/* A fit may reuse private target members for seal requirements when the fit
+ * and target type belong to the package currently being compiled. */
+static void test_same_package_fit_uses_target_seal_members(void) {
+    const char *source =
+        "module demo.spec_seal.same_package_fit;\n"
+        "spec Contract {\n"
+        "    seal let hiddenField: int;\n"
+        "    seal static let hiddenStaticField: int;\n"
+        "    seal func hiddenMethod(): int;\n"
+        "    seal static func hiddenStaticMethod(): int;\n"
+        "}\n"
+        "type Value {\n"
+        "    seal let hiddenField: int = 1;\n"
+        "    seal static let hiddenStaticField: int = 2;\n"
+        "    seal func hiddenMethod(): int { return 3; }\n"
+        "    seal static func hiddenStaticMethod(): int { return 4; }\n"
+        "}\n"
+        "fit Value: Contract;\n"
+        "func demandWitness(value: Value): Contract { return value; }\n";
+    FengProgram *program = parse_program_or_die("same_package_fit_seal_members.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Seal access follows the original declaring parent spec, and overload
  * resolution filters inaccessible seal candidates before matching calls. */
 static void test_spec_seal_inheritance_and_overload_filtering(void) {
@@ -22721,6 +22758,7 @@ int main(void) {
     test_spec_seal_member_access_from_implementation_contexts();
     test_spec_seal_member_access_rejected_outside_implementation();
     test_spec_requirement_implementation_visibility_matrix();
+    test_same_package_fit_uses_target_seal_members();
     test_spec_seal_inheritance_and_overload_filtering();
     test_spec_witness_via_declared_head();
     test_spec_witness_via_fit();

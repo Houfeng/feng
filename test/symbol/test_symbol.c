@@ -709,6 +709,128 @@ static void test_imported_object_spec_seal_access_semantics(void) {
     free(tmp_dir);
 }
 
+/* A consumer package must not forge a local spec and use a fit to turn
+ * package-public private layout skeletons into witness implementations. */
+static void test_imported_type_seal_members_do_not_satisfy_consumer_fit(void) {
+    static const char *kExternalSource =
+        "open module vendor.vault;\n"
+        "open type Vault {\n"
+        "    seal let hiddenField: int = 1;\n"
+        "    seal static let hiddenStaticField: int = 2;\n"
+        "    seal func hiddenMethod(): int { return 3; }\n"
+        "    seal static func hiddenStaticMethod(): int { return 4; }\n"
+        "}\n";
+    static const char *kAllowedSource =
+        "module consumer.fit_implementation;\n"
+        "import vendor.vault;\n"
+        "spec Adapted { seal func adapted(): int; }\n"
+        "fit Vault: Adapted { seal func adapted(): int { return 5; } }\n"
+        "func demandWitness(value: Vault): Adapted { return value; }\n";
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } kRejected[] = {
+        {
+            "consumer_forged_seal_field.ff",
+            "module consumer.forged_field;\n"
+            "import vendor.vault;\n"
+            "spec Forged { seal let hiddenField: int; }\n"
+            "fit Vault: Forged;\n",
+            "AE0701"
+        },
+        {
+            "consumer_forged_seal_static_field.ff",
+            "module consumer.forged_static_field;\n"
+            "import vendor.vault;\n"
+            "spec Forged { seal static let hiddenStaticField: int; }\n"
+            "fit Vault: Forged;\n",
+            "AE0701"
+        },
+        {
+            "consumer_forged_seal_method.ff",
+            "module consumer.forged_method;\n"
+            "import vendor.vault;\n"
+            "spec Forged { seal func hiddenMethod(): int; }\n"
+            "fit Vault: Forged;\n",
+            "AE0705"
+        },
+        {
+            "consumer_forged_seal_static_method.ff",
+            "module consumer.forged_static_method;\n"
+            "import vendor.vault;\n"
+            "spec Forged { seal static func hiddenStaticMethod(): int; }\n"
+            "fit Vault: Forged;\n",
+            "AE0705"
+        }
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    size_t index;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("external_vault.ff", kExternalSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+
+    program = parse_or_die("consumer_fit_implementation.ff", kAllowedSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    for (index = 0U; index < sizeof(kRejected) / sizeof(kRejected[0]); ++index) {
+        program = parse_or_die(kRejected[index].path, kRejected[index].source);
+        programs[0] = program;
+        analysis = NULL;
+        errors = NULL;
+        error_count = 0U;
+        ASSERT(!feng_semantic_analyze_with_options(programs,
+                                                   1U,
+                                                   &options,
+                                                   &analysis,
+                                                   &errors,
+                                                   &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, kRejected[index].expected_code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     static const char *kSource =
         "open module feng.test.symbol.bounded;\n"
@@ -2806,6 +2928,7 @@ int main(void) {
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_object_spec_seal_member_ft_roundtrip();
     test_imported_object_spec_seal_access_semantics();
+    test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_mixin_generated_members_ft_roundtrip();
     test_roundtrip_public_module_docs();

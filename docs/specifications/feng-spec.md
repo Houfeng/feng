@@ -217,6 +217,11 @@ type Stream: ReadWrite {}
 - 上述兼容规则统一适用于字段、方法、实例成员、静态成员、`type` 直接提供
   的实现和 `fit` 提供的方法实现。公开 requirement 已找到结构匹配但仅有
   `seal` 实现成员时，必须按实现成员可见性不兼容诊断，不得建立 witness。
+- `type seal` 成员只有在满足关系由 `type` 声明头建立，或由与目标 `type`
+  属于同一包的 `fit` 建立时，才可以按上表承担 `spec seal` requirement。
+  跨包 `fit T: S` 不得把目标 `T` 的 `seal` 字段、方法或静态成员选为实现；
+  它仍可使用 `T` 的公开成员，或使用该 `fit` 自己显式提供的方法实现。
+  package-public `.ft` 为恢复类型布局而保留的私有字段事实不得扩大该权限。
 - `spec S` 的 `seal` 成员只允许在以下实现域中通过能够暴露该成员的 spec
   静态视角访问：访问点位于满足 `S` 的 `type T` 自身成员方法、静态方法，
   或目标为 `T` 的 `fit` 扩展方法中。普通函数和不满足 `S` 的 type/fit
@@ -293,6 +298,9 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 的公开 requirement 只能由公开或无修饰的实现
   成员满足；`spec seal` requirement 可以由公开、无修饰或 `seal` 实现
   成员满足。字段、方法、实例、静态、type 与 fit 来源使用同一规则。
+- [必须] 当 `fit T: S` 与目标 `T` 不属于同一包时，满足检查和 witness
+  选择必须排除 `T` 自身的全部 `seal` 成员；同包 `fit` 保持允许，当前
+  `fit` 自己声明的方法仍按 requirement/实现成员可见性兼容规则参与满足。
 - [必须] 满足 object-form `spec` 的 type 成员方法、静态方法及其 fit 扩展
   方法可以通过 spec 视角访问该 spec 的 `seal` 成员；普通函数和不满足
   该 spec 的实现上下文不得访问。
