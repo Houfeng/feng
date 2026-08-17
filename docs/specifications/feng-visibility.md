@@ -56,6 +56,9 @@ open type User {
 - `@mixable seal static` 保持 seal 可见性，但可由
   [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 定义的
   直接 mix 目标在受限上下文中访问；该例外不适用于其他 seal 成员。
+- `@friend(Type, ...)` 可以把一个显式 `seal` 字段或普通方法定向放行给列出的
+  具体 type 及本包 `fit Type`；该例外只替代成员自身的 seal 检查，不穿透 module、
+  owner type/spec 或 fit 的可见性。
 
 ```feng
 open type User {
@@ -287,6 +290,36 @@ seal 拒绝。只有 [Feng 语言函数规范](./feng-function.md#435-mixable-se
 定义的直接 mix 目标实现上下文可以选择和调用对应方法；该授权不改变所属 type 的其他
 seal 成员，也不来自 module、包、继承或 spec/witness 关系。
 
+### 10.3 `@friend` seal 成员
+
+`@friend(F1, F2, ...)` 是成员级定向 seal 授权，遵循以下规则：
+
+- 只能标注 `type`、object-form `spec` 或 `fit` 中显式声明为 `seal` 的实例字段、
+  静态字段、实例普通方法或静态普通方法；fit 仍不能声明字段。
+- 构造函数和终结器禁止使用 `@friend`。需要受限构造时，应使用 seal 构造函数配合
+  `@friend` seal static 工厂方法。
+- 每个参数都在注解声明位置按类型位解析，根类型必须是具体 `type`；spec、内建
+  标量、数组、指针和单独类型参数不能作为 friend 主体。短名、别名和完整路径只
+  影响名称解析，不影响最终授权身份。
+- 同一成员上的一个或多个 `@friend` 注解最终归一化为一个 friend 集合；按完成
+  泛型代入后的语义类型身份静默去重。
+- friend type 自身声明的实例方法和静态方法可以使用授权；与该成员同包声明且目标
+  类型语义等于 friend type 的 `fit FriendType` 实例方法和静态方法也可以使用。
+- `fit FriendType` 只取得目标 type 对该具体成员的 friend 身份，不因此成为目标
+  type 自身，也不能访问未标注相应 `@friend` 的其他 seal 成员。
+- 顶层函数、其他 type、其他包中的 fit、传递 friend、共同 spec 实现、共同 fit 或
+  mix 关系均不产生授权。
+- 授权只能在 module、owner type/spec、fit 可见性、静态性、可变性、泛型和重载等
+  既有规则全部通过后，替代最后一层成员 seal 检查。
+- 重载选择必须先移除对当前上下文不可访问的候选，再执行签名匹配；不可访问的
+  friend/seal 候选不能遮蔽同名 open 候选。
+- object-form spec 成员的 friend 访问只发生在 spec 视角并继续通过既有 witness；
+  不要求 friend type 实现该 spec，也不扩大具体实现成员的可见性或修改满足规则。
+- 已经支持的具体 type/fit 方法值在形成点执行同一 friend 检查；object-form spec
+  方法值是否可形成由其独立规范和开发项决定，`@friend` 不新增该能力。
+- `@friend` 不写入 package-public `.ft`，不改变成员本身的既有 Symbol 选择规则，
+  也不增加运行时访问检查或 ABI。
+
 ## 11 公开签名的可见性一致性
 
 声明签名中每个组成类型的有效可见范围不得小于该声明的有效可见范围。
@@ -334,6 +367,24 @@ open type Public {
 
 在 `seal module` 中，`open` 声明可以使用同一包内其他 `seal module` 的 `open`
 类型；两者均为包内可见。包外公开声明不能使用该类型。
+
+### 11.1 `@friend` 成员签名可见性
+
+设被标注成员的 owner 声明 module 为 `OM`，一个 friend type 的声明 module 为
+`FM`，成员完整签名中递归出现的具名类型 `R` 的声明 module 为 `RM`：
+
+1. `FM == OM` 时，该 friend type 的签名检查直接通过。
+2. `FM != OM` 时，若存在 `RM == OM` 且 `R` 自身不是 `open`，则该
+   `@friend` 声明非法；其他已经在 owner 声明位置成功解析的类型通过。
+
+多个 friend type 分别检查，任意一个失败都使整个成员声明非法。完整签名递归范围
+包括字段显式或推导类型、参数、显式或推导返回类型、方法泛型约束、泛型实参、数组
+元素和指针目标；类型参数本身不参与比较，其约束继续递归检查。
+
+同包 `fit FriendType` 使用授权时，还要把 fit 声明 module 作为 `FitM` 在访问点执行
+同构检查：`FitM == OM` 时通过；否则，若签名含有 `RM == OM` 且非 `open` 的
+类型，则该次 fit 访问被拒绝。该访问点检查不能挽救原本未通过 friend type 声明
+检查的 `@friend` 声明。
 
 ## 12 私有成员的表示类型
 

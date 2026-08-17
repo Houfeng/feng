@@ -81,11 +81,24 @@ typedef struct FengParameter {
     bool is_variadic; /* true if declared as T...; type is stored as T[] */
 } FengParameter;
 
+/* Annotation arguments are homogeneous per annotation kind.  Expression
+ * annotations retain the existing `args` view; type-position annotations use
+ * `type_args` so type syntax is never reconstructed from expressions. */
+typedef enum FengAnnotationArgumentKind {
+    FENG_ANNOTATION_ARGUMENT_NONE = 0,
+    FENG_ANNOTATION_ARGUMENT_EXPRESSION,
+    FENG_ANNOTATION_ARGUMENT_TYPE
+} FengAnnotationArgumentKind;
+
 typedef struct FengAnnotation {
     FengToken token;
     FengSlice name;
     FengAnnotationKind builtin_kind;
-    FengExpr **args;
+    FengAnnotationArgumentKind argument_kind;
+    union {
+        FengExpr **args;
+        FengTypeRef **type_args;
+    };
     size_t arg_count;
 } FengAnnotation;
 

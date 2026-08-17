@@ -1,0 +1,177 @@
+module fcts_bin;
+
+import std.test;
+
+/** Callable surface used to verify authorized concrete method values. */
+spec FriendIntProducer(): int;
+
+/** Object-form surface whose seal members are exposed only to FriendReader. */
+spec FriendSurface {
+  @friend(FriendReader)
+  seal var value: int;
+
+  @friend(FriendReader)
+  seal func read(): int;
+
+  @friend(FriendReader)
+  seal static func marker(): int;
+
+  @friend(FriendReader)
+  seal static let markerValue: int;
+}
+
+/** Concrete implementation used through FriendSurface's witness view. */
+type FriendSurfaceValue: FriendSurface {
+  var value: int;
+
+  func FriendSurfaceValue(value: int) {
+    self.value = value;
+  }
+
+  func read(): int {
+    return self.value;
+  }
+
+  static func marker(): int {
+    return 17;
+  }
+
+  static let markerValue: int = 19;
+}
+
+/** Concrete owner covering instance/static fields and methods. */
+type FriendVault {
+  @friend(FriendReader)
+  seal var value: int;
+
+  @friend(FriendReader)
+  seal static var shared: int = 10;
+
+  func FriendVault(value: int) {
+    self.value = value;
+  }
+
+  @friend(FriendReader)
+  seal func read(): int {
+    return self.value;
+  }
+
+  @friend(FriendReader)
+  seal static func readShared(): int {
+    return FriendVault.shared;
+  }
+}
+
+/** Friend type exercising direct, method-value, static and spec-view access. */
+type FriendReader {
+  func readVault(vault: FriendVault): int {
+    vault.value = vault.value + 1;
+    let producer: FriendIntProducer = vault.read;
+    return producer();
+  }
+
+  static func updateShared(): int {
+    FriendVault.shared = FriendVault.shared + 1;
+    return FriendVault.readShared();
+  }
+
+  func readSurface(surface: FriendSurface): int {
+    surface.value = surface.value + 2;
+    return surface.read();
+  }
+
+  static func readSurfaceMarker<T: FriendSurface>(): int {
+    return T.marker() + T.markerValue;
+  }
+
+  func readFitTarget(target: FriendFitTarget): int {
+    return target.fitValue();
+  }
+
+  static func readFitTargetStatic(): int {
+    return FriendFitTarget.fitStaticValue();
+  }
+}
+
+/** Same-package fit methods use FriendReader's exact friend identity. */
+fit FriendReader {
+  func readVaultFromFit(vault: FriendVault): int {
+    return vault.value;
+  }
+
+  static func readVaultStaticFromFit(): int {
+    return FriendVault.shared;
+  }
+
+  static func readSurfaceMarkerFromFit<T: FriendSurface>(): int {
+    return T.markerValue;
+  }
+}
+
+/** Target extended with fit-owned friend members. */
+type FriendFitTarget {}
+
+fit FriendFitTarget {
+  @friend(FriendReader)
+  seal func fitValue(): int {
+    return 23;
+  }
+
+  @friend(FriendReader)
+  seal static func fitStaticValue(): int {
+    return 29;
+  }
+}
+
+/** Generic owner used to verify exact owner-parameter substitution. */
+type FriendGenericOwner<T> {
+  @friend(FriendGenericReader<T>)
+  seal let value: T;
+
+  func FriendGenericOwner(value: T) {
+    self.value = value;
+  }
+}
+
+/** Generic friend whose active type argument must match the owner instance. */
+type FriendGenericReader<T> {
+  func read(owner: FriendGenericOwner<T>): T {
+    return owner.value;
+  }
+}
+
+/** Verify @friend's compile-time authorization across all runtime paths. */
+open func test_friend() {
+  describe("friend member access", () {
+    test("concrete instance, static and method-value access", () {
+      let reader = FriendReader();
+      let vault = FriendVault(5);
+      assert(reader.readVault(vault) == 6,
+             "friend instance field and bound method value");
+      assert(FriendReader.updateShared() == 11,
+             "friend static field and method");
+      assert(reader.readVaultFromFit(vault) == 6 &&
+             FriendReader.readVaultStaticFromFit() == 11,
+             "same-package fit uses target friend identity");
+    });
+
+    test("object-form spec witness access", () {
+      let reader = FriendReader();
+      let surface: FriendSurface = FriendSurfaceValue(7);
+      assert(reader.readSurface(surface) == 9,
+             "friend accesses seal spec instance members through witness");
+      assert(FriendReader.readSurfaceMarker<FriendSurfaceValue>() == 36 &&
+             FriendReader.readSurfaceMarkerFromFit<FriendSurfaceValue>() == 19,
+             "type and fit friends access seal spec static members through witness");
+    });
+
+    test("fit-owned and generic friend members", () {
+      let reader = FriendReader();
+      assert(reader.readFitTarget(FriendFitTarget()) == 23 &&
+             FriendReader.readFitTargetStatic() == 29,
+             "friend accesses fit-owned instance and static methods");
+      assert(FriendGenericReader<int>().read(FriendGenericOwner<int>(31)) == 31,
+             "generic friend identity follows owner substitution");
+    });
+  });
+}

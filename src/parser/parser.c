@@ -81,7 +81,11 @@ static void free_annotation_fields(FengAnnotation *annotation) {
         return;
     }
     for (arg_index = 0U; arg_index < annotation->arg_count; ++arg_index) {
-        free_expr(annotation->args[arg_index]);
+        if (annotation->argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE) {
+            free_type_ref(annotation->type_args[arg_index]);
+        } else {
+            free_expr(annotation->args[arg_index]);
+        }
     }
     free(annotation->args);
 }
@@ -404,6 +408,7 @@ static FengAnnotation *parse_annotations(Parser *parser, size_t *out_count) {
         annotation.token = token;
         annotation.name = (FengSlice){token.lexeme + 1, token.length - 1U};
         annotation.builtin_kind = token.annotation_kind;
+        annotation.argument_kind = FENG_ANNOTATION_ARGUMENT_NONE;
         annotation.args = NULL;
         annotation.arg_count = 0U;
         (void)parser_advance(parser);
@@ -411,24 +416,49 @@ static FengAnnotation *parse_annotations(Parser *parser, size_t *out_count) {
         if (parser_match(parser, FENG_TOKEN_LPAREN)) {
             size_t arg_capacity = 0U;
 
+            annotation.argument_kind =
+                annotation.builtin_kind == FENG_ANNOTATION_FRIEND
+                    ? FENG_ANNOTATION_ARGUMENT_TYPE
+                    : FENG_ANNOTATION_ARGUMENT_EXPRESSION;
+
             if (!parser_check(parser, FENG_TOKEN_RPAREN)) {
                 do {
-                    FengExpr *arg = parse_expression(parser);
+                    if (annotation.argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE) {
+                        FengTypeRef *arg = parse_type_ref(parser);
 
-                    if (arg == NULL) {
-                        free_annotations(annotations, count);
-                        free(arg);
-                        return NULL;
-                    }
-                    if (!APPEND_VALUE(parser,
-                                      annotation.args,
-                                      annotation.arg_count,
-                                      arg_capacity,
-                                      arg)) {
-                        free_expr(arg);
-                        free_annotations(annotations, count);
-                        free_annotation_fields(&annotation);
-                        return NULL;
+                        if (arg == NULL) {
+                            free_annotations(annotations, count);
+                            free_annotation_fields(&annotation);
+                            return NULL;
+                        }
+                        if (!APPEND_VALUE(parser,
+                                          annotation.type_args,
+                                          annotation.arg_count,
+                                          arg_capacity,
+                                          arg)) {
+                            free_type_ref(arg);
+                            free_annotations(annotations, count);
+                            free_annotation_fields(&annotation);
+                            return NULL;
+                        }
+                    } else {
+                        FengExpr *arg = parse_expression(parser);
+
+                        if (arg == NULL) {
+                            free_annotations(annotations, count);
+                            free_annotation_fields(&annotation);
+                            return NULL;
+                        }
+                        if (!APPEND_VALUE(parser,
+                                          annotation.args,
+                                          annotation.arg_count,
+                                          arg_capacity,
+                                          arg)) {
+                            free_expr(arg);
+                            free_annotations(annotations, count);
+                            free_annotation_fields(&annotation);
+                            return NULL;
+                        }
                     }
                 } while (parser_match(parser, FENG_TOKEN_COMMA));
             }
@@ -2042,12 +2072,24 @@ static FengDecl *parse_spec_declaration(Parser *parser,
         size_t member_capacity = 0U;
 
         while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-            FengTypeMember *member = parse_spec_member(parser);
+            FengAnnotation *member_annotations;
+            size_t member_annotation_count = 0U;
+            FengTypeMember *member;
 
-            if (member == NULL) {
+            member_annotations = parse_annotations(parser, &member_annotation_count);
+            if (parser->error.message != NULL) {
                 free_decl(decl);
                 return NULL;
             }
+            member = parse_spec_member(parser);
+
+            if (member == NULL) {
+                free_annotations(member_annotations, member_annotation_count);
+                free_decl(decl);
+                return NULL;
+            }
+            member->annotations = member_annotations;
+            member->annotation_count = member_annotation_count;
             if (!APPEND_VALUE(parser,
                               decl->as.spec_decl.as.object.members,
                               decl->as.spec_decl.as.object.member_count,

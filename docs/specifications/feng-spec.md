@@ -317,6 +317,10 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 中声明的 `static let` / `static var` / `static func` 必须不带初始值或函数体;静态字段声明必须以 `;` 结束,静态方法签名必须以 `;` 结束,静态方法必须显式声明返回类型。
 - [必须] object-form `spec` 的实例字段、实例方法、静态字段和静态方法允许
   使用 `seal`，省略修饰时保持公开语义；显式 `open` 必须被拒绝。
+- [必须] object-form `spec` 的实例字段、实例普通方法、静态字段和静态普通方法在
+  显式 `seal` 时允许使用 `@friend`；授权继续通过 spec witness，且不得改变
+  requirement 满足与具体实现成员可见性。完整规则统一见
+  [Feng 语言可见性规范](./feng-visibility.md#103-friend-seal-成员)。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。

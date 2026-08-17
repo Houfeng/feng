@@ -153,6 +153,8 @@ static void free_synthetic_annotation_expr(FengExpr *expr) {
     free(expr);
 }
 
+static void free_synthetic_type_ref(FengTypeRef *type_ref);
+
 static void free_synthetic_annotations(FengAnnotation *annotations, size_t count) {
     size_t index;
     size_t arg_index;
@@ -162,7 +164,13 @@ static void free_synthetic_annotations(FengAnnotation *annotations, size_t count
     }
     for (index = 0U; index < count; ++index) {
         for (arg_index = 0U; arg_index < annotations[index].arg_count; ++arg_index) {
-            free_synthetic_annotation_expr(annotations[index].args[arg_index]);
+            if (annotations[index].argument_kind == FENG_ANNOTATION_ARGUMENT_EXPRESSION) {
+                free_synthetic_annotation_expr(annotations[index].args[arg_index]);
+            } else if (annotations[index].argument_kind ==
+                       FENG_ANNOTATION_ARGUMENT_TYPE) {
+                free_synthetic_type_ref(
+                    annotations[index].type_args[arg_index]);
+            }
         }
         free(annotations[index].args);
     }
@@ -327,6 +335,7 @@ static bool synthesize_decl_annotations_from_symbol(const FengSymbolDeclView *sy
         annotations[0].name.data = annotation_name;
         annotations[0].name.length = strlen(annotation_name);
         annotations[0].builtin_kind = symbol_decl->calling_convention;
+        annotations[0].argument_kind = FENG_ANNOTATION_ARGUMENT_EXPRESSION;
         annotations[0].args = args;
         annotations[0].args[0] = arg_expr;
         if (arg_count > 1U) {

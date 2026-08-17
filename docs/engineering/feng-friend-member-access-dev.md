@@ -1,9 +1,9 @@
 # Feng `@friend` 成员访问开发草案
 
-> **状态**：待 Review，尚未实施。
+> **状态**：已完成。
 >
-> **文档定位**：本文只用于确认 `@friend` 的需求边界、编译器方案和实施
-> TODO。Review 通过后，应先把正式语义写入权威规范，再修改代码和测试。
+> **文档定位**：本文记录 `@friend` 的需求边界、编译器方案、实施任务与验证
+> 结果；正式语言语义以 `docs/specifications/` 中的权威规范为准。
 >
 > **核心范围**：`@friend` 只能标注 `seal` 成员，使注解中列出的具体
 > friend type 可以越过该成员自身的 `seal` 检查；它不改变 module、owner、
@@ -569,8 +569,11 @@ Codegen 不应增加 friend 分支。通过语义检查的访问继续使用原�
 - 非 friend 访问 seal 成员时继续使用现有成员不可访问诊断。
 
 诊断应指向注解、非法参数或导致签名泄漏的具体类型引用，并在消息中包含成员名、
-friend type 和不可用类型，避免只报告泛化的“annotation invalid”。具体错误码在
-Review 后随权威错误码文档一起确定，本文不提前占用编号。
+friend type 和不可用类型，避免只报告泛化的“annotation invalid”。本能力使用：
+
+- `AE1336`：参数缺失、参数类型非法或不能解析为具体 type；
+- `AE1337`：标注位置非法、成员不是显式 seal、构造函数或终结器使用注解；
+- `AE1338`：成员完整签名对 friend type 或实际使用授权的 fit module 不可用。
 
 ## 11. 测试计划
 
@@ -653,82 +656,82 @@ Review 后随权威错误码文档一起确定，本文不提前占用编号。
 
 ### TODO 1：完成 Review 决策并更新正式规范
 
-- [ ] Review 本文的授权边界、类型位参数、同包 fit 授权和签名可见性规则。
+- [x] Review 本文的授权边界、类型位参数、同包 fit 授权和签名可见性规则。
 - [x] 确认一个或多个 `@friend` 注解的全部参数归一化为唯一 friend 集合，按解析后的
   语义类型静默去重。
-- [ ] 更新 `docs/specifications/feng-visibility.md`，作为 friend 成员访问和签名
+- [x] 更新 `docs/specifications/feng-visibility.md`，作为 friend 成员访问和签名
   可见性的主规范。
-- [ ] 更新 `docs/specifications/feng-language.md` 的内建注解列表与数量。
-- [ ] 在 `docs/specifications/feng-type.md`、`feng-spec.md` 和 `feng-fit.md` 中只补充
+- [x] 更新 `docs/specifications/feng-language.md` 的内建注解列表与数量。
+- [x] 在 `docs/specifications/feng-type.md`、`feng-spec.md` 和 `feng-fit.md` 中只补充
   对主规范的引用和各自适用位置，不重复定义授权算法。
-- [ ] 更新 parser/annotation 相关规范和错误码文档。
+- [x] 更新注解语法入口与错误码规范。
 
 ### TODO 2：实现类型位注解参数
 
-- [ ] 为注解参数建立可区分表达式参数与类型参数的通用 AST 表示。
-- [ ] 增加 `FENG_ANNOTATION_FRIEND` 内建注解事实。
-- [ ] 让 `@friend` 参数使用现有类型位 parser，支持短名、完整路径和泛型类型。
-- [ ] 补齐 AST 释放、dump 和相关遍历。
-- [ ] 为 object-form spec 成员补齐注解解析入口。
-- [ ] 验证其他现有注解的解析和 AST 不变。
+- [x] 为注解参数建立可区分表达式参数与类型参数的通用 AST 表示。
+- [x] 增加 `FENG_ANNOTATION_FRIEND` 内建注解事实。
+- [x] 让 `@friend` 参数使用现有类型位 parser，支持短名、完整路径和泛型类型。
+- [x] 补齐 AST 释放、dump 和相关遍历。
+- [x] 为 object-form spec 成员补齐注解解析入口。
+- [x] 验证其他现有注解的解析和 AST 不变。
 
 ### TODO 3：实现 friend 语义归一化与早期声明检查
 
-- [ ] 在 owner 泛型作用域中解析、规范化 friend type 集合。
-- [ ] 合并同一成员上的全部 `@friend` 参数，并按语义类型身份静默去重。
-- [ ] 建立可复用的 member owner decl/module/program 查询。
-- [ ] 建立统一的 owner、当前 type、当前 fit 声明是否同包的判断，不依赖
+- [x] 在 owner 泛型作用域中解析、规范化 friend type 集合。
+- [x] 合并同一成员上的全部 `@friend` 参数，并按语义类型身份静默去重。
+- [x] 建立可复用的 member owner decl/module/program 查询。
+- [x] 建立统一的 owner、当前 type、当前 fit 声明是否同包的判断，不依赖
   package-public `.ft` 是否碰巧缺少某项事实进行授权。
-- [ ] 检查 friend 参数非空、根类型为具体 type 且全部成功解析。
-- [ ] 检查标注目标属于允许的 type/spec/fit 成员并且显式声明为 `seal`。
-- [ ] 明确拒绝构造函数和终结器上的 `@friend`。
-- [ ] 为非法参数、非法位置、非 seal 成员、构造函数和终结器增加已在正式规范中
+- [x] 检查 friend 参数非空、根类型为具体 type 且全部成功解析。
+- [x] 检查标注目标属于允许的 type/spec/fit 成员并且显式声明为 `seal`。
+- [x] 明确拒绝构造函数和终结器上的 `@friend`。
+- [x] 为非法参数、非法位置、非 seal 成员、构造函数和终结器增加已在正式规范中
   确认的稳定诊断。
 
 ### TODO 4：实现统一访问授权
 
-- [ ] 实现统一的 friend 授权主体表示：普通 type 成员使用当前词法 type，同包 fit
+- [x] 实现统一的 friend 授权主体表示：普通 type 成员使用当前词法 type，同包 fit
   成员使用当前 fit 目标 type。
-- [ ] 实现基于语义类型身份和 owner 泛型代入的 friend 授权谓词。
-- [ ] 对 fit 授权显式检查 fit 与成员 owner 同包，其他包的 fit 一律不能恢复授权。
-- [ ] 基于现有签名类型递归遍历，提供“成员完整签名是否可从指定 module 使用”的
+- [x] 实现基于语义类型身份和 owner 泛型代入的 friend 授权谓词。
+- [x] 对 fit 授权显式检查 fit 与成员 owner 同包，其他包的 fit 一律不能恢复授权。
+- [x] 基于现有签名类型递归遍历，提供“成员完整签名是否可从指定 module 使用”的
   统一查询；在 fit 访问点用它执行第 7.3 节按 `FitM/OM/RM` 判断的附加条件。
-- [ ] 接入 type 实例/静态字段与方法访问。
-- [ ] 接入 object-form spec 实例/静态字段与方法访问。
-- [ ] 接入 fit 实例/静态方法访问。
-- [ ] 在重载选择前过滤不可访问候选。
-- [ ] 验证只有同包 fit 可以使用其目标 type 的 friend 身份。
-- [ ] 验证 fit 的 friend 身份只放行对应注解成员，不放行其他普通 seal 成员。
-- [ ] 验证上层 module/owner/fit 可见性仍先于 friend 成员授权。
+- [x] 接入 type 实例/静态字段与方法访问。
+- [x] 接入 object-form spec 实例/静态字段与方法访问。
+- [x] 接入 fit 实例/静态方法访问。
+- [x] 在重载选择前过滤不可访问候选。
+- [x] 验证只有同包 fit 可以使用其目标 type 的 friend 身份。
+- [x] 验证 fit 的 friend 身份只放行对应注解成员，不放行其他普通 seal 成员。
+- [x] 验证上层 module/owner/fit 可见性仍先于 friend 成员授权。
 
 ### TODO 5：实现完整签名可见性检查
 
-- [ ] 在成员类型解析和 callable 返回类型推导完成后执行完整签名检查。
-- [ ] 对每个 friend type，以其声明 module 调用 TODO 4 的统一签名查询，实现
+- [x] 在成员类型解析和 callable 返回类型推导完成后执行完整签名检查。
+- [x] 对每个 friend type，以其声明 module 调用 TODO 4 的统一签名查询，实现
   第 7.2 节按 `FM/OM/RM` 判断的两条声明规则，不复制类型结构遍历。
-- [ ] 覆盖字段显式类型和推导类型。
-- [ ] 覆盖参数、显式返回类型和推导返回类型。
-- [ ] 递归覆盖泛型约束、泛型实参、数组元素、指针目标和其他现有组成类型。
-- [ ] 多 friend 分别检查，任意一个失败时拒绝整个 `@friend` 声明。
-- [ ] 为签名不可用诊断提供成员、friend type 和具体不可用类型信息。
+- [x] 覆盖字段显式类型和推导类型。
+- [x] 覆盖参数、显式返回类型和推导返回类型。
+- [x] 递归覆盖泛型约束、泛型实参、数组元素、指针目标和其他现有组成类型。
+- [x] 多 friend 分别检查，任意一个失败时拒绝整个 `@friend` 声明。
+- [x] 为签名不可用诊断提供成员、friend type 和具体不可用类型信息。
 
 ### TODO 6：验证 Codegen、Symbol 与工具链
 
-- [ ] **验证**所有成功访问继续复用既有 Codegen，无新增运行时分支、helper、参数
+- [x] **验证**所有成功访问继续复用既有 Codegen，无新增运行时分支、helper、参数
   或 ABI；只有验证发现既有入口无法复用时，才提交具体问题供 Review。
-- [ ] **验证**spec friend 成员继续通过既有 witness 发码，不修改 spec 满足或
+- [x] **验证**spec friend 成员继续通过既有 witness 发码，不修改 spec 满足或
   witness 构造。
-- [ ] **验证**成员本身继续执行现有 Symbol 选择规则，同时 package-public `.ft`
+- [x] **验证**成员本身继续执行现有 Symbol 选择规则，同时 package-public `.ft`
   不记录 friend 参数或授权。
-- [ ] **验证**dependency consumer 及其 `fit FriendType` 不能从 `.ft` 恢复授权。
-- [ ] **验证**completion、hover、definition 是否已经使用统一可访问成员结果；若未
+- [x] **验证**dependency consumer 及其 `fit FriendType` 不能从 `.ft` 恢复授权。
+- [x] **验证**completion、hover、definition 是否已经使用统一可访问成员结果；若未
   使用，只接入第 9.4 节统一查询，不另建 LSP friend 规则。
 
 ### TODO 7：补齐测试并全量回归
 
-- [ ] 按第 11 节补齐 lexer、parser、semantic、symbol、codegen 和 FCTS 用例。
-- [ ] 先执行目标测试，确认正向、负向、泛型、spec、fit、跨 module 和跨包边界。
-- [ ] 执行 `make test` 全量回归。
+- [x] 按第 11 节补齐 lexer、parser、semantic、symbol、codegen、LSP 和 FCTS 用例。
+- [x] 先执行目标测试，确认正向、负向、泛型、spec、fit、跨 module 和跨包边界。
+- [x] 执行 `make test` 全量回归。
 
 ## 13. 验收标准
 

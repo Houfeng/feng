@@ -709,6 +709,159 @@ static void test_imported_object_spec_seal_access_semantics(void) {
     free(tmp_dir);
 }
 
+/* @friend is compile-time package-local metadata: FT retains the underlying
+ * spec seal member but neither its synthesized AST nor a consumer fit can
+ * recover the friend authorization. */
+static void test_friend_metadata_is_not_exported_to_ft(void) {
+    static const char *kExternalSource =
+        "open module vendor.friend_surface;\n"
+        "open type Helper {}\n"
+        "open spec Secret {\n"
+        "    @friend(Helper) seal func hidden(): int;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.friend_consumer;\n"
+        "import vendor.friend_surface;\n"
+        "fit vendor.friend_surface.Helper {\n"
+        "    func read(value: vendor.friend_surface.Secret): int {\n"
+        "        return value.hidden();\n"
+        "    }\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengSlice segments[2];
+    const FengSemanticModule *semantic_module;
+    const FengDecl *secret_decl = NULL;
+    FengProgram *consumer;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("friend_surface.ff",
+                                kExternalSource,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    segments[0] = slice_from_cstr("vendor");
+    segments[1] = slice_from_cstr("friend_surface");
+    semantic_module = query.get_module(query.user, segments, 2U);
+    ASSERT(semantic_module != NULL);
+    for (size_t index = 0U;
+         index < semantic_module->programs[0]->declaration_count;
+         ++index) {
+        const FengDecl *decl = semantic_module->programs[0]->declarations[index];
+
+        if (decl->kind == FENG_DECL_SPEC &&
+            slice_equals_cstr(decl->as.spec_decl.name, "Secret")) {
+            secret_decl = decl;
+            break;
+        }
+    }
+    ASSERT(secret_decl != NULL);
+    ASSERT(secret_decl->as.spec_decl.as.object.member_count == 1U);
+    ASSERT(secret_decl->as.spec_decl.as.object.members[0]->annotation_count == 0U);
+
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+    consumer = parse_or_die("friend_consumer.ff", kConsumerSource);
+    programs[0] = consumer;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0708") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(consumer);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+/* The owner package may name an imported concrete friend type and define its
+ * own fit for that type. Authorization remains local because only the owner
+ * analysis contains the @friend sidecar. */
+static void test_local_friend_fit_can_target_imported_type(void) {
+    static const char *kExternalSource =
+        "open module vendor.friend_helper;\n"
+        "open type Helper {}\n";
+    static const char *kOwnerSource =
+        "module demo.friend_owner;\n"
+        "import vendor.friend_helper;\n"
+        "type Vault {\n"
+        "    @friend(vendor.friend_helper.Helper)\n"
+        "    seal let secret: int = 7;\n"
+        "}\n"
+        "fit vendor.friend_helper.Helper {\n"
+        "    func read(vault: Vault): int { return vault.secret; }\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *owner;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("friend_helper.ff",
+                                kExternalSource,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+    owner = parse_or_die("friend_owner.ff", kOwnerSource);
+    programs[0] = owner;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(owner);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* A consumer package must not forge a local spec and use a fit to turn
  * package-public private layout skeletons into witness implementations. */
 static void test_imported_type_seal_members_do_not_satisfy_consumer_fit(void) {
@@ -3114,6 +3267,8 @@ int main(void) {
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_object_spec_seal_member_ft_roundtrip();
     test_imported_object_spec_seal_access_semantics();
+    test_friend_metadata_is_not_exported_to_ft();
+    test_local_friend_fit_can_target_imported_type();
     test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_mixin_generated_members_ft_roundtrip();

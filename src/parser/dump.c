@@ -107,7 +107,11 @@ static void dump_annotations(FILE *stream, const FengAnnotation *annotations, si
                 if (arg_index != 0U) {
                     fputs(", ", stream);
                 }
-                dump_expr(stream, annotations[index].args[arg_index], 0);
+                if (annotations[index].argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE) {
+                    dump_type_ref(stream, annotations[index].type_args[arg_index]);
+                } else {
+                    dump_expr(stream, annotations[index].args[arg_index], 0);
+                }
             }
             fputc(')', stream);
         }

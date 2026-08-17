@@ -23041,7 +23041,602 @@ static void test_object_spec_upcast_rejects_out_of_scope_conversions(void) {
                                          ambiguous, "AE0511");
 }
 
+/* Friend authorization covers all concrete type member shapes, merges
+ * repeated annotations, and is independent of source declaration order. */
+static void test_friend_type_member_access_and_normalization(void) {
+    const char *source =
+        "open module demo.friend.type_access;\n"
+        "open type Helper {\n"
+        "  func inspect(vault: Vault): int {\n"
+        "    vault.value = vault.value + 1;\n"
+        "    Vault.shared = Vault.shared + 1;\n"
+        "    return vault.value + vault.read() + Vault.shared + Vault.readShared();\n"
+        "  }\n"
+        "  static func inspectStatic(vault: Vault): int { return vault.read(); }\n"
+        "}\n"
+        "open type Vault {\n"
+        "  @friend(Helper)\n"
+        "  @friend(demo.friend.type_access.Helper)\n"
+        "  seal var value: int;\n"
+        "  @friend(Helper) seal static var shared: int = 2;\n"
+        "  @friend(Helper) seal func read(): int { return self.value; }\n"
+        "  @friend(Helper) seal static func readShared(): int { return Vault.shared; }\n"
+        "  func Vault(value: int) { self.value = value; }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_type_access.ff", source);
+}
+
+/* A generic owner parameter is substituted before the current generic friend
+ * subject is compared; a different concrete owner instance remains denied. */
+static void test_friend_generic_owner_substitution_is_exact(void) {
+    const char *accepted =
+        "module demo.friend.generic_ok;\n"
+        "type Helper<T> {\n"
+        "  func read(owner: Owner<T>): T { return owner.value; }\n"
+        "}\n"
+        "type Owner<T> {\n"
+        "  @friend(Helper<T>) seal let value: T;\n"
+        "  func Owner(value: T) { self.value = value; }\n"
+        "}\n";
+    const char *rejected =
+        "module demo.friend.generic_bad;\n"
+        "type Helper<T> {\n"
+        "  func read(owner: Owner<string>): string { return owner.value; }\n"
+        "}\n"
+        "type Owner<T> {\n"
+        "  @friend(Helper<T>) seal let value: T;\n"
+        "  func Owner(value: T) { self.value = value; }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_generic_ok.ff", accepted);
+    assert_single_source_semantic_error_contains(
+        "friend_generic_bad.ff", rejected, "not accessible");
+}
+
+/* Direct type methods and same-package fit methods share the exact friend
+ * identity, while fit-owned seal methods can independently grant friendship. */
+static void test_friend_fit_access_in_both_directions(void) {
+    const char *source =
+        "module demo.friend.fit_access;\n"
+        "type Helper {}\n"
+        "type Client {\n"
+        "  func call(target: Target): int { return target.fitValue(); }\n"
+        "  static func callStatic(): int { return Target.fitStaticValue(); }\n"
+        "}\n"
+        "type Vault {\n"
+        "  @friend(Helper) seal let value: int = 4;\n"
+        "  @friend(Helper) seal static let shared: int = 5;\n"
+        "}\n"
+        "fit Helper {\n"
+        "  func read(vault: Vault): int { return vault.value; }\n"
+        "  static func readStatic(): int { return Vault.shared; }\n"
+        "}\n"
+        "type Target {}\n"
+        "fit Target {\n"
+        "  @friend(Client) seal func fitValue(): int { return 6; }\n"
+        "  @friend(Client) seal static func fitStaticValue(): int { return 7; }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_fit_access.ff", source);
+}
+
+/* Object-form spec friendship authorizes witness-view instance/static access
+ * without requiring the friend type itself to implement the spec. */
+static void test_friend_spec_member_access_uses_spec_view(void) {
+    const char *source =
+        "module demo.friend.spec_access;\n"
+        "spec Secret {\n"
+        "  @friend(Reader) seal var value: int;\n"
+        "  @friend(Reader) seal func read(): int;\n"
+        "  @friend(Reader) seal static let tag: int;\n"
+        "  @friend(Reader) seal static func marker(): int;\n"
+        "}\n"
+        "type Value: Secret {\n"
+        "  var value: int = 3;\n"
+        "  func read(): int { return self.value; }\n"
+        "  static let tag: int = 5;\n"
+        "  static func marker(): int { return 4; }\n"
+        "}\n"
+        "type Reader {\n"
+        "  func inspect(value: Secret): int {\n"
+        "    value.value = value.value + 1;\n"
+        "    return value.read();\n"
+        "  }\n"
+        "  static func inspectStatic<T: Secret>(): int { return T.marker() + T.tag; }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_spec_access.ff", source);
+}
+
+/* Invalid friend positions/types use dedicated diagnostics, and ordinary
+ * non-friends continue to receive existing seal-access diagnostics. */
+static void test_friend_declaration_and_access_diagnostics(void) {
+    static const struct {
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "module demo.friend.bad0; type F {} type V { @friend() seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad1; type F {} type V { @friend(int) seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad2; spec S {} type V { @friend(S) seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad3; type F {} type V { @friend(F) let x: int = 1; }",
+            "AE1337"
+        },
+        {
+            "module demo.friend.bad4; type F {} type V { @friend(F) seal func V() {} }",
+            "AE1337"
+        },
+        {
+            "module demo.friend.bad5; type F {} type V { @friend(F) func ~V() {} }",
+            "AE1337"
+        },
+        {
+            "module demo.friend.bad6; type F {} @friend(F) func run(): void {}",
+            "AE1337"
+        },
+        {
+            "module demo.friend.bad7; type V { @friend(F) seal let x: int = 1; } type F {} type N { func read(v: V): int { return v.x; } }",
+            "AE0308"
+        },
+        {
+            "module demo.friend.bad8; type F {} type V<T> { @friend(T) seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad9; type F {} type V { @friend(F[]) seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad10; type F {} type V { @friend(F*) seal let x: int = 1; }",
+            "AE1336"
+        },
+        {
+            "module demo.friend.bad11; type F {} type V { @friend(F) open let x: int = 1; }",
+            "AE1337"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die("friend_bad.ff",
+                                                    cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Friend signatures may use owner-module seal types only for friends in that
+ * same module; open types remain usable across modules, and a cross-module
+ * fit is checked independently at its actual access point. */
+static void test_friend_signature_visibility_rules(void) {
+    const char *same_module =
+        "module demo.friend.signature_same;\n"
+        "type Hidden {}\n"
+        "type Helper { func read(service: Service): void { service.secret(); } }\n"
+        "type Service {\n"
+        "  @friend(Helper) seal func secret(): Hidden { return Hidden(); }\n"
+        "}\n";
+    const char *friend_program_source =
+        "open module demo.friend.signature_client;\n"
+        "open type Helper {}\n";
+    const char *rejected_owner_source =
+        "open module demo.friend.signature_owner;\n"
+        "type Hidden {}\n"
+        "open type Service {\n"
+        "  @friend(demo.friend.signature_client.Helper)\n"
+        "  seal func secret(): Hidden { return Hidden(); }\n"
+        "}\n";
+    const char *accepted_owner_source =
+        "open module demo.friend.signature_open_owner;\n"
+        "open type Shared {}\n"
+        "open type Service {\n"
+        "  @friend(demo.friend.signature_client.Helper)\n"
+        "  seal func shared(): Shared { return Shared(); }\n"
+        "}\n";
+    const char *fit_owner_source =
+        "open module demo.friend.signature_fit_owner;\n"
+        "type Hidden {}\n"
+        "open type Helper {}\n"
+        "open type Service {\n"
+        "  @friend(Helper) seal func secret(): Hidden { return Hidden(); }\n"
+        "}\n";
+    const char *fit_user_source =
+        "module demo.friend.signature_fit_user;\n"
+        "import demo.friend.signature_fit_owner;\n"
+        "fit Helper {\n"
+        "  func touch(service: Service): void { service.secret(); }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_signature_same.ff", same_module);
+    {
+        FengProgram *friend_program = parse_program_or_die(
+            "friend_signature_client.ff", friend_program_source);
+        FengProgram *owner_program = parse_program_or_die(
+            "friend_signature_owner.ff", rejected_owner_source);
+        const FengProgram *programs[] = {friend_program, owner_program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(errors, error_count, "AE1338") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(friend_program);
+        feng_program_free(owner_program);
+    }
+    {
+        FengProgram *friend_program = parse_program_or_die(
+            "friend_signature_client.ff", friend_program_source);
+        FengProgram *owner_program = parse_program_or_die(
+            "friend_signature_open_owner.ff", accepted_owner_source);
+        const FengProgram *programs[] = {friend_program, owner_program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(feng_semantic_analyze(programs,
+                                     2U,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &analysis,
+                                     &errors,
+                                     &error_count));
+        ASSERT(error_count == 0U);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(friend_program);
+        feng_program_free(owner_program);
+    }
+    {
+        FengProgram *owner_program = parse_program_or_die(
+            "friend_signature_fit_owner.ff", fit_owner_source);
+        FengProgram *fit_program = parse_program_or_die(
+            "friend_signature_fit_user.ff", fit_user_source);
+        const FengProgram *programs[] = {owner_program, fit_program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(errors, error_count, "AE1338") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(owner_program);
+        feng_program_free(fit_program);
+    }
+}
+
+/* Friend filtering runs before overload selection and method-value formation;
+ * same-package fits can consume the identity but do not inherit unrelated
+ * seal access from their target type. */
+static void test_friend_overloads_method_values_and_exact_fit_scope(void) {
+    const char *accepted =
+        "module demo.friend.selection;\n"
+        "spec Producer(): int;\n"
+        "type Reader {\n"
+        "  func read(vault: Vault): int {\n"
+        "    let method: Producer = vault.secret;\n"
+        "    return method() + vault.pick(1);\n"
+        "  }\n"
+        "  func readFit(target: Target): int {\n"
+        "    let method: Producer = target.fitSecret;\n"
+        "    return method();\n"
+        "  }\n"
+        "}\n"
+        "type Stranger {\n"
+        "  func pick(vault: Vault): string { return vault.pick(\"open\"); }\n"
+        "}\n"
+        "type Vault {\n"
+        "  @friend(Reader) seal func secret(): int { return 2; }\n"
+        "  @friend(Reader) seal func pick(value: int): int { return value; }\n"
+        "  func pick(value: string): string { return value; }\n"
+        "}\n"
+        "fit Reader {\n"
+        "  func readFromFit(vault: Vault): int {\n"
+        "    let method: Producer = vault.secret;\n"
+        "    return method();\n"
+        "  }\n"
+        "}\n"
+        "type Target {}\n"
+        "fit Target {\n"
+        "  @friend(Reader) seal func fitSecret(): int { return 3; }\n"
+        "}\n";
+    static const struct {
+        const char *source;
+        const char *message;
+    } rejected[] = {
+        {"module demo.friend.exact0; type Reader { func bad(v: Vault): int { return v.other; } } type Vault { @friend(Reader) seal let allowed: int = 1; seal let other: int = 2; }", "not accessible"},
+        {"module demo.friend.exact1; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } func bad(v: Vault): int { return v.secret(); }", "not accessible"},
+        {"module demo.friend.exact2; spec Producer(): int; type Reader {} type Stranger { func bad(v: Vault): void { let method: Producer = v.secret; } } type Vault { @friend(Reader) seal func secret(): int { return 1; } }", "not accessible"},
+        {"module demo.friend.exact3; type Reader { seal let own: int = 1; } fit Reader { func bad(): int { return self.own; } }", "cannot access"},
+        {"module demo.friend.exact4; type Reader {} type Stranger { func bad(target: Target): int { return target.secret(); } } type Target {} fit Target { @friend(Reader) seal func secret(): int { return 1; } }", "has no member"},
+        {"module demo.friend.exact5; spec Secret { @friend(Reader) seal static func marker(): int; } type Reader {} type Stranger { static func bad<T: Secret>(): int { return T.marker(); } }", "only accessible"},
+        {"module demo.friend.exact6; spec Secret { @friend(Reader) seal static let tag: int; } type Reader {} func bad<T: Secret>(): int { return T.tag; }", "only accessible"}
+    };
+
+    assert_single_source_semantic_ok("friend_selection.ff", accepted);
+    for (size_t index = 0U;
+         index < sizeof(rejected) / sizeof(rejected[0]);
+         ++index) {
+        assert_single_source_semantic_error_contains(
+            "friend_exact_rejected.ff",
+            rejected[index].source,
+            rejected[index].message);
+    }
+}
+
+/* A fit of the friend type can use spec-view authorization, and inherited
+ * generic spec members project the child instance back to the parent owner
+ * before substituting the friend identity. */
+static void test_friend_fit_spec_view_and_generic_parent_projection(void) {
+    const char *source =
+        "module demo.friend.spec_fit;\n"
+        "spec Parent<T> {\n"
+        "  @friend(Reader<T>) seal func read(): T;\n"
+        "  @friend(Reader<T>) seal static let tag: T;\n"
+        "  @friend(Reader<T>) seal static func marker(): int;\n"
+        "}\n"
+        "spec Child<T>: Parent<T> {}\n"
+        "type Value: Child<int> {\n"
+        "  func read(): int { return 8; }\n"
+        "  static let tag: int = 9;\n"
+        "  static func marker(): int { return 10; }\n"
+        "}\n"
+        "type Reader<T> {}\n"
+        "fit Reader<T> {\n"
+        "  func readChild(value: Child<T>): T { return value.read(); }\n"
+        "  static func readTag<U: Parent<T>>(): T { return U.tag; }\n"
+        "  static func readMarker<U: Parent<T>>(): int { return U.marker(); }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_spec_fit.ff", source);
+}
+
+/* Metadata is normalized for the whole module before bodies are resolved, so
+ * a friend declared in another source file is independent of program order. */
+static void test_friend_same_module_multi_file_order_independence(void) {
+    const char *vault_source =
+        "module demo.friend.multifile;\n"
+        "type Vault { @friend(Helper) seal let value: int = 4; }\n";
+    const char *helper_source =
+        "module demo.friend.multifile;\n"
+        "type Helper { func read(vault: Vault): int { return vault.value; } }\n";
+    FengProgram *helper = parse_program_or_die("friend_helper.ff", helper_source);
+    FengProgram *vault = parse_program_or_die("friend_vault.ff", vault_source);
+    const FengProgram *programs[] = {helper, vault};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 2U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(helper);
+    feng_program_free(vault);
+}
+
+/* Signature validation recursively visits generic arguments, arrays, method
+ * constraints and inferred surfaces. Each case hides a different owner-module
+ * type from a friend declared in another module. */
+static void test_friend_signature_recursive_surfaces(void) {
+    static const char *owner_sources[] = {
+        "open module demo.friend.signature_nested; type Hidden {} open type Box<T> {} open type Service { @friend(demo.friend.signature_remote.Helper) seal func secret(value: Box<Hidden[]>): int { return 1; } }",
+        "open module demo.friend.signature_constraint; spec Hidden {} open type Service { @friend(demo.friend.signature_remote.Helper) seal func secret<T: Hidden>(value: T): int { return 1; } }",
+        "open module demo.friend.signature_inferred_return; type Hidden {} open type Service { @friend(demo.friend.signature_remote.Helper) seal func secret() { return Hidden(); } }",
+        "open module demo.friend.signature_inferred_field; type Hidden {} open type Service { @friend(demo.friend.signature_remote.Helper) seal let secret = Hidden(); }"
+    };
+    const char *friend_source =
+        "open module demo.friend.signature_remote; open type Helper {}\n";
+
+    for (size_t index = 0U;
+         index < sizeof(owner_sources) / sizeof(owner_sources[0]);
+         ++index) {
+        FengProgram *friend_program = parse_program_or_die(
+            "friend_signature_remote.ff", friend_source);
+        FengProgram *owner_program = parse_program_or_die(
+            "friend_signature_recursive.ff", owner_sources[index]);
+        const FengProgram *programs[] = {friend_program, owner_program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(errors,
+                                         error_count,
+                                         "AE1338") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(friend_program);
+        feng_program_free(owner_program);
+    }
+}
+
+/* Actual field reads consume friend authorization just like calls. A fit in
+ * another module is rejected when either a concrete or spec-view field leaks
+ * an owner-module-private type, including static fields. */
+static void test_friend_fit_field_signature_access_is_checked(void) {
+    static const struct {
+        const char *owner;
+        const char *fit;
+    } cases[] = {
+        {
+            "open module demo.friend.field_owner0; type Hidden {} open type Reader {} open type Service { @friend(Reader) seal let secret: Hidden = Hidden(); }",
+            "module demo.friend.field_fit0; import demo.friend.field_owner0; fit Reader { func touch(service: Service): void { service.secret; } }"
+        },
+        {
+            "open module demo.friend.field_owner1; type Hidden {} open type Reader {} open type Service { @friend(Reader) seal static let secret: Hidden = Hidden(); }",
+            "module demo.friend.field_fit1; import demo.friend.field_owner1; fit Reader { static func touch(): void { Service.secret; } }"
+        },
+        {
+            "open module demo.friend.field_owner2; type Hidden {} open type Reader {} open spec Service { @friend(Reader) seal let secret: Hidden; }",
+            "module demo.friend.field_fit2; import demo.friend.field_owner2; fit Reader { func touch(service: Service): void { service.secret; } }"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *owner = parse_program_or_die("friend_field_owner.ff",
+                                                  cases[index].owner);
+        FengProgram *fit = parse_program_or_die("friend_field_fit.ff",
+                                                cases[index].fit);
+        const FengProgram *programs[] = {owner, fit};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(errors, error_count, "AE1338") == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(owner);
+        feng_program_free(fit);
+    }
+}
+
+/* Every friend argument is checked: a local friend does not mask a remote
+ * friend that cannot consume an owner-module-private signature. */
+static void test_friend_multiple_signature_consumers_are_all_checked(void) {
+    const char *remote_source =
+        "open module demo.friend.multiple_remote; open type Remote {}\n";
+    const char *owner_source =
+        "open module demo.friend.multiple_owner;\n"
+        "type Hidden {}\n"
+        "type Local {}\n"
+        "open type Service {\n"
+        "  @friend(Local, demo.friend.multiple_remote.Remote)\n"
+        "  seal func secret(): Hidden { return Hidden(); }\n"
+        "}\n";
+    FengProgram *remote = parse_program_or_die("friend_multiple_remote.ff",
+                                               remote_source);
+    FengProgram *owner = parse_program_or_die("friend_multiple_owner.ff",
+                                              owner_source);
+    const FengProgram *programs[] = {remote, owner};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  2U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(semantic_error_code_count(errors, error_count, "AE1338") == 1U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(remote);
+    feng_program_free(owner);
+}
+
+/* Visibility probing is side-effect free: a cross-module fit that selects an
+ * open overload must not be diagnosed for an owner-private signature carried
+ * only by an unselected friend overload, including method-value formation. */
+static void test_friend_unselected_fit_candidates_do_not_consume_authorization(void) {
+    const char *owner_source =
+        "open module demo.friend.probe_owner;\n"
+        "type Hidden {}\n"
+        "open spec Producer(): int;\n"
+        "open type Reader {}\n"
+        "open type Vault {\n"
+        "  @friend(Reader) seal func pick(value: Hidden): int { return 1; }\n"
+        "  func pick(value: int): int { return value; }\n"
+        "  @friend(Reader) seal func read(value: Hidden): int { return 2; }\n"
+        "  func read(): int { return 3; }\n"
+        "}\n";
+    const char *fit_source =
+        "module demo.friend.probe_fit;\n"
+        "import demo.friend.probe_owner;\n"
+        "fit Reader {\n"
+        "  func call(vault: Vault): int { return vault.pick(4); }\n"
+        "  func value(vault: Vault): int {\n"
+        "    let method: Producer = vault.read;\n"
+        "    return method();\n"
+        "  }\n"
+        "}\n";
+    FengProgram *owner = parse_program_or_die("friend_probe_owner.ff",
+                                              owner_source);
+    FengProgram *fit = parse_program_or_die("friend_probe_fit.ff", fit_source);
+    const FengProgram *programs[] = {owner, fit};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 2U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(owner);
+    feng_program_free(fit);
+}
+
 int main(void) {
+    test_friend_type_member_access_and_normalization();
+    test_friend_generic_owner_substitution_is_exact();
+    test_friend_fit_access_in_both_directions();
+    test_friend_spec_member_access_uses_spec_view();
+    test_friend_declaration_and_access_diagnostics();
+    test_friend_signature_visibility_rules();
+    test_friend_overloads_method_values_and_exact_fit_scope();
+    test_friend_fit_spec_view_and_generic_parent_projection();
+    test_friend_same_module_multi_file_order_independence();
+    test_friend_signature_recursive_surfaces();
+    test_friend_fit_field_signature_access_is_checked();
+    test_friend_multiple_signature_consumers_are_all_checked();
+    test_friend_unselected_fit_candidates_do_not_consume_authorization();
     test_member_mix_fields_preserve_surface_and_binding_facts();
     test_member_mix_generic_field_type_is_substituted();
     test_member_mix_dependency_cycle_reports_ae0330();

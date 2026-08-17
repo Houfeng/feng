@@ -311,6 +311,63 @@ typedef struct CallableExceptionEscapeCache {
     bool changed;
 } CallableExceptionEscapeCache;
 
+/* Stable semantic identity used by one normalized @friend type. Named types
+ * retain declaration identity, while owner parameters remain symbolic until
+ * the annotated member is viewed through a concrete owner instance. */
+typedef enum FriendTypeIdentityKind {
+    FRIEND_TYPE_IDENTITY_NAMED = 0,
+    FRIEND_TYPE_IDENTITY_BUILTIN,
+    FRIEND_TYPE_IDENTITY_OWNER_PARAM,
+    FRIEND_TYPE_IDENTITY_ACTIVE_PARAM,
+    FRIEND_TYPE_IDENTITY_POINTER,
+    FRIEND_TYPE_IDENTITY_ARRAY
+} FriendTypeIdentityKind;
+
+/* Recursive semantic type identity for @friend normalization and matching. */
+typedef struct FriendTypeIdentity {
+    FriendTypeIdentityKind kind;
+    bool array_element_writable;
+    const FengTypeRef *source_ref;
+    union {
+        struct {
+            const FengDecl *decl;
+            struct FriendTypeIdentity **type_args;
+            size_t type_arg_count;
+        } named;
+        const char *builtin_name;
+        size_t owner_param_index;
+        const FengTypeParam *active_param;
+        struct FriendTypeIdentity *inner;
+    } as;
+} FriendTypeIdentity;
+
+/* One same-package fit method that consumed a friend type's authorization. */
+typedef struct FriendFitAccess {
+    const FengSemanticModule *module;
+    const FengProgram *program;
+    const FengTypeMember *callable_member;
+} FriendFitAccess;
+
+/* One member's single normalized friend set. The member/owner/module/program
+ * pointers borrow analysis/source objects; each friend identity tree is owned
+ * by this record and released with FengSemanticAnalysis. */
+struct FengFriendMemberInfo {
+    const FengTypeMember *member;
+    const FengDecl *owner_decl;
+    const FengSemanticModule *owner_module;
+    const FengProgram *owner_program;
+    size_t owner_type_param_count;
+    FriendTypeIdentity **friend_types;
+    size_t friend_type_count;
+    size_t friend_type_capacity;
+    bool signature_checked;
+    const FengDecl *owner_private_signature_decl;
+    const FengTypeRef *owner_private_signature_ref;
+    FriendFitAccess *fit_accesses;
+    size_t fit_access_count;
+    size_t fit_access_capacity;
+};
+
 /* G4: One entry per active type parameter in the current declaration scope. */
 typedef struct TypeParamEntry {
     FengSlice name;
@@ -522,6 +579,15 @@ static bool inferred_expr_types_equal(const ResolveContext *context,
 static bool type_refs_semantically_equal(const ResolveContext *context,
                                          const FengTypeRef *left,
                                          const FengTypeRef *right);
+static bool normalize_friend_member_annotations(
+    ResolveContext *context,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count);
+static bool friend_member_signature_visible_from_module(
+    const struct FengFriendMemberInfo *info,
+    const FengSemanticModule *consumer_module);
 static bool expr_is_borrowed_data_pointer_value(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 size_t depth);
@@ -1455,6 +1521,41 @@ static bool inject_external_modules_from_type_ref(
     const FengProgram *program,
     const FengTypeRef *type_ref);
 
+/* Discover full-path external modules referenced by type-position annotation
+ * arguments. Expression annotations continue through the existing expression
+ * traversal paths. */
+static bool inject_external_modules_from_member_annotations(
+    FengSemanticAnalysis *analysis,
+    const FengSemanticImportedModuleQuery *imported_query,
+    const FengProgram *program,
+    const FengTypeMember *member) {
+    if (member == NULL) {
+        return true;
+    }
+    for (size_t annotation_index = 0U;
+         annotation_index < member->annotation_count;
+         ++annotation_index) {
+        const FengAnnotation *annotation =
+            &member->annotations[annotation_index];
+
+        if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_TYPE) {
+            continue;
+        }
+        for (size_t arg_index = 0U;
+             arg_index < annotation->arg_count;
+             ++arg_index) {
+            if (!inject_external_modules_from_type_ref(
+                    analysis,
+                    imported_query,
+                    program,
+                    annotation->type_args[arg_index])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool inject_external_modules_from_expr(
     FengSemanticAnalysis *analysis,
     const FengSemanticImportedModuleQuery *imported_query,
@@ -2082,6 +2183,11 @@ static bool inject_external_modules_from_decl(
                  ++member_index) {
                 const FengTypeMember *member = decl->as.type_decl.members[member_index];
 
+                if (!inject_external_modules_from_member_annotations(
+                        analysis, imported_query, program, member)) {
+                    return false;
+                }
+
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!inject_external_modules_from_type_ref(analysis,
                                                                imported_query,
@@ -2175,6 +2281,11 @@ static bool inject_external_modules_from_decl(
                 const FengTypeMember *member =
                     decl->as.spec_decl.as.object.members[member_index];
 
+                if (!inject_external_modules_from_member_annotations(
+                        analysis, imported_query, program, member)) {
+                    return false;
+                }
+
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!inject_external_modules_from_type_ref(analysis,
                                                                imported_query,
@@ -2210,6 +2321,13 @@ static bool inject_external_modules_from_decl(
             for (size_t member_index = 0U;
                  member_index < decl->as.fit_decl.member_count;
                  ++member_index) {
+                if (!inject_external_modules_from_member_annotations(
+                        analysis,
+                        imported_query,
+                        program,
+                        decl->as.fit_decl.members[member_index])) {
+                    return false;
+                }
                 if (!inject_external_modules_from_callable(
                         analysis,
                         imported_query,
@@ -3351,6 +3469,15 @@ static bool validate_supported_decl_annotations(ResolveContext *context, const F
                     "@mixable can only be applied to static methods declared in a type or fit block"));
         }
 
+        if (annotation->builtin_kind == FENG_ANNOTATION_FRIEND) {
+            return resolver_append_error(
+                context,
+                annotation->token,
+                "AE1337",
+                format_message(
+                    "@friend can only be applied to explicitly seal fields or ordinary methods declared in a type, object-form spec, or fit block"));
+        }
+
         if (annotation->builtin_kind != FENG_ANNOTATION_CUSTOM) {
             continue;
         }
@@ -3414,6 +3541,35 @@ static bool validate_supported_member_annotations(ResolveContext *context,
                     "AE1330",
                     format_message(
                         "@mixable can only be applied to static methods declared in a type or fit block"));
+            }
+        }
+
+        if (annotation->builtin_kind == FENG_ANNOTATION_FRIEND) {
+            if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_TYPE ||
+                annotation->arg_count == 0U) {
+                return resolver_append_error(
+                    context,
+                    annotation->token,
+                    "AE1336",
+                    format_message(
+                        "@friend annotation requires at least one concrete friend type"));
+            }
+            if (member->kind != FENG_TYPE_MEMBER_FIELD &&
+                member->kind != FENG_TYPE_MEMBER_METHOD) {
+                return resolver_append_error(
+                    context,
+                    annotation->token,
+                    "AE1337",
+                    format_message(
+                        "constructors and finalizers cannot use @friend"));
+            }
+            if (member->visibility != FENG_VISIBILITY_PRIVATE) {
+                return resolver_append_error(
+                    context,
+                    annotation->token,
+                    "AE1337",
+                    format_message(
+                        "@friend can only be applied to explicitly seal fields or ordinary methods declared in a type, object-form spec, or fit block"));
             }
         }
 
@@ -3498,7 +3654,8 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
                 decl->as.function_decl.name.data));
     }
 
-    if (!extern_string_annotation_arg_is_valid(context, calling_convention->args[0])) {
+    if (calling_convention->argument_kind != FENG_ANNOTATION_ARGUMENT_EXPRESSION ||
+        !extern_string_annotation_arg_is_valid(context, calling_convention->args[0])) {
         return resolver_append_error(
             context,
             calling_convention->token,
@@ -3508,8 +3665,9 @@ static bool validate_extern_function_annotations(ResolveContext *context, const 
                 calling_convention->name.data));
     }
 
-    if (calling_convention->arg_count > 1U &&
-        !extern_string_annotation_arg_is_valid(context, calling_convention->args[1])) {
+    if (calling_convention->argument_kind != FENG_ANNOTATION_ARGUMENT_EXPRESSION ||
+        (calling_convention->arg_count > 1U &&
+         !extern_string_annotation_arg_is_valid(context, calling_convention->args[1]))) {
         return resolver_append_error(
             context,
             calling_convention->token,
@@ -5284,6 +5442,406 @@ static bool type_refs_semantically_equal(const ResolveContext *context,
     }
 
     return false;
+}
+
+/* Release one recursive @friend semantic type identity. */
+static void friend_type_identity_free(FriendTypeIdentity *identity) {
+    if (identity == NULL) {
+        return;
+    }
+    if (identity->kind == FRIEND_TYPE_IDENTITY_NAMED) {
+        for (size_t index = 0U;
+             index < identity->as.named.type_arg_count;
+             ++index) {
+            friend_type_identity_free(identity->as.named.type_args[index]);
+        }
+        free(identity->as.named.type_args);
+    } else if (identity->kind == FRIEND_TYPE_IDENTITY_POINTER ||
+               identity->kind == FRIEND_TYPE_IDENTITY_ARRAY) {
+        friend_type_identity_free(identity->as.inner);
+    }
+    free(identity);
+}
+
+/* Return the owner-parameter index denoted by one plain named reference. */
+static bool friend_type_ref_owner_param_index(
+    const FengTypeRef *type_ref,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count,
+    size_t *out_index) {
+    if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED ||
+        type_ref->as.named.segment_count != 1U ||
+        type_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+    for (size_t index = 0U; index < owner_type_param_count; ++index) {
+        if (slice_equals(type_ref->as.named.segments[0],
+                         owner_type_params[index].name)) {
+            if (out_index != NULL) {
+                *out_index = index;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Build a stable semantic identity for a source type reference. During
+ * declaration normalization owner parameters become indexed placeholders;
+ * during access matching other active parameters retain their declaration
+ * pointers so exact generic identities can be compared. */
+static FriendTypeIdentity *build_friend_type_identity(
+    const ResolveContext *context,
+    const FengTypeRef *type_ref,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count,
+    bool normalize_owner_params) {
+    FriendTypeIdentity *identity;
+
+    if (context == NULL || type_ref == NULL) {
+        return NULL;
+    }
+    identity = (FriendTypeIdentity *)calloc(1U, sizeof(*identity));
+    if (identity == NULL) {
+        return NULL;
+    }
+    identity->source_ref = type_ref;
+    if (type_ref->kind == FENG_TYPE_REF_POINTER ||
+        type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        identity->kind = type_ref->kind == FENG_TYPE_REF_POINTER
+                             ? FRIEND_TYPE_IDENTITY_POINTER
+                             : FRIEND_TYPE_IDENTITY_ARRAY;
+        identity->array_element_writable = type_ref->array_element_writable;
+        identity->as.inner = build_friend_type_identity(context,
+                                                        type_ref->as.inner,
+                                                        owner_type_params,
+                                                        owner_type_param_count,
+                                                        normalize_owner_params);
+        if (identity->as.inner == NULL) {
+            friend_type_identity_free(identity);
+            return NULL;
+        }
+        return identity;
+    }
+    if (type_ref->kind != FENG_TYPE_REF_NAMED) {
+        friend_type_identity_free(identity);
+        return NULL;
+    }
+    if (normalize_owner_params) {
+        size_t owner_param_index = 0U;
+
+        if (friend_type_ref_owner_param_index(type_ref,
+                                              owner_type_params,
+                                              owner_type_param_count,
+                                              &owner_param_index)) {
+            identity->kind = FRIEND_TYPE_IDENTITY_OWNER_PARAM;
+            identity->as.owner_param_index = owner_param_index;
+            return identity;
+        }
+    } else if (type_ref->as.named.segment_count == 1U &&
+               type_ref->as.named.type_arg_count == 0U) {
+        const TypeParamEntry *entry =
+            find_type_param(context, type_ref->as.named.segments[0]);
+
+        if (entry != NULL && entry->type_param != NULL) {
+            identity->kind = FRIEND_TYPE_IDENTITY_ACTIVE_PARAM;
+            identity->as.active_param = entry->type_param;
+            return identity;
+        }
+    }
+    if (type_ref->as.named.segment_count == 1U) {
+        const char *builtin_name = canonical_builtin_type_name(
+            type_ref->as.named.segments[0], context->pointer_size);
+
+        if (builtin_name != NULL) {
+            identity->kind = FRIEND_TYPE_IDENTITY_BUILTIN;
+            identity->as.builtin_name = builtin_name;
+            return identity;
+        }
+    }
+    identity->kind = FRIEND_TYPE_IDENTITY_NAMED;
+    identity->as.named.decl = resolve_type_ref_decl(context, type_ref);
+    identity->as.named.type_arg_count = type_ref->as.named.type_arg_count;
+    if (identity->as.named.decl == NULL) {
+        friend_type_identity_free(identity);
+        return NULL;
+    }
+    if (type_ref->as.named.type_arg_count > 0U) {
+        identity->as.named.type_args = (FriendTypeIdentity **)calloc(
+            type_ref->as.named.type_arg_count,
+            sizeof(*identity->as.named.type_args));
+        if (identity->as.named.type_args == NULL) {
+            friend_type_identity_free(identity);
+            return NULL;
+        }
+        for (size_t index = 0U;
+             index < type_ref->as.named.type_arg_count;
+             ++index) {
+            identity->as.named.type_args[index] = build_friend_type_identity(
+                context,
+                type_ref->as.named.type_args[index],
+                owner_type_params,
+                owner_type_param_count,
+                normalize_owner_params);
+            if (identity->as.named.type_args[index] == NULL) {
+                friend_type_identity_free(identity);
+                return NULL;
+            }
+        }
+    }
+    return identity;
+}
+
+/* Compare two fully materialized semantic type identities. */
+static bool friend_type_identities_equal(const FriendTypeIdentity *left,
+                                         const FriendTypeIdentity *right) {
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case FRIEND_TYPE_IDENTITY_NAMED:
+            if (left->as.named.decl != right->as.named.decl ||
+                left->as.named.type_arg_count != right->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t index = 0U;
+                 index < left->as.named.type_arg_count;
+                 ++index) {
+                if (!friend_type_identities_equal(left->as.named.type_args[index],
+                                                  right->as.named.type_args[index])) {
+                    return false;
+                }
+            }
+            return true;
+        case FRIEND_TYPE_IDENTITY_BUILTIN:
+            return left->as.builtin_name != NULL &&
+                   right->as.builtin_name != NULL &&
+                   strcmp(left->as.builtin_name, right->as.builtin_name) == 0;
+        case FRIEND_TYPE_IDENTITY_OWNER_PARAM:
+            return left->as.owner_param_index == right->as.owner_param_index;
+        case FRIEND_TYPE_IDENTITY_ACTIVE_PARAM:
+            return left->as.active_param == right->as.active_param;
+        case FRIEND_TYPE_IDENTITY_POINTER:
+            return friend_type_identities_equal(left->as.inner, right->as.inner);
+        case FRIEND_TYPE_IDENTITY_ARRAY:
+            return left->array_element_writable == right->array_element_writable &&
+                   friend_type_identities_equal(left->as.inner, right->as.inner);
+    }
+    return false;
+}
+
+/* Compare a normalized friend identity with a materialized subject, replacing
+ * owner-parameter placeholders from the concrete member-owner instance. */
+static bool normalized_friend_type_matches_subject(
+    const FriendTypeIdentity *normalized,
+    FriendTypeIdentity *const *owner_type_args,
+    size_t owner_type_arg_count,
+    const FriendTypeIdentity *subject) {
+    if (normalized == NULL || subject == NULL) {
+        return false;
+    }
+    if (normalized->kind == FRIEND_TYPE_IDENTITY_OWNER_PARAM) {
+        size_t index = normalized->as.owner_param_index;
+
+        return index < owner_type_arg_count &&
+               friend_type_identities_equal(owner_type_args[index], subject);
+    }
+    if (normalized->kind != subject->kind) {
+        return false;
+    }
+    switch (normalized->kind) {
+        case FRIEND_TYPE_IDENTITY_NAMED:
+            if (normalized->as.named.decl != subject->as.named.decl ||
+                normalized->as.named.type_arg_count !=
+                    subject->as.named.type_arg_count) {
+                return false;
+            }
+            for (size_t index = 0U;
+                 index < normalized->as.named.type_arg_count;
+                 ++index) {
+                if (!normalized_friend_type_matches_subject(
+                        normalized->as.named.type_args[index],
+                        owner_type_args,
+                        owner_type_arg_count,
+                        subject->as.named.type_args[index])) {
+                    return false;
+                }
+            }
+            return true;
+        case FRIEND_TYPE_IDENTITY_BUILTIN:
+            return normalized->as.builtin_name != NULL &&
+                   subject->as.builtin_name != NULL &&
+                   strcmp(normalized->as.builtin_name,
+                          subject->as.builtin_name) == 0;
+        case FRIEND_TYPE_IDENTITY_ACTIVE_PARAM:
+            return normalized->as.active_param == subject->as.active_param;
+        case FRIEND_TYPE_IDENTITY_POINTER:
+            return normalized_friend_type_matches_subject(
+                normalized->as.inner,
+                owner_type_args,
+                owner_type_arg_count,
+                subject->as.inner);
+        case FRIEND_TYPE_IDENTITY_ARRAY:
+            return normalized->array_element_writable ==
+                       subject->array_element_writable &&
+                   normalized_friend_type_matches_subject(
+                       normalized->as.inner,
+                       owner_type_args,
+                       owner_type_arg_count,
+                       subject->as.inner);
+        case FRIEND_TYPE_IDENTITY_OWNER_PARAM:
+            break;
+    }
+    return false;
+}
+
+/* Find normalized friend metadata for one local source member. */
+static const struct FengFriendMemberInfo *find_friend_member_info(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeMember *member) {
+    if (analysis == NULL || member == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < analysis->friend_member_info_count;
+         ++index) {
+        if (analysis->friend_member_infos[index].member == member) {
+            return &analysis->friend_member_infos[index];
+        }
+    }
+    return NULL;
+}
+
+/* Return or create the single normalized friend-set record for a member. */
+static struct FengFriendMemberInfo *ensure_friend_member_info(
+    ResolveContext *context,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member,
+    size_t owner_type_param_count) {
+    FengSemanticAnalysis *analysis;
+    struct FengFriendMemberInfo info;
+
+    if (context == NULL || context->analysis == NULL || owner_decl == NULL ||
+        member == NULL) {
+        return NULL;
+    }
+    analysis = (FengSemanticAnalysis *)context->analysis;
+    for (size_t index = 0U;
+         index < analysis->friend_member_info_count;
+         ++index) {
+        if (analysis->friend_member_infos[index].member == member) {
+            return &analysis->friend_member_infos[index];
+        }
+    }
+    memset(&info, 0, sizeof(info));
+    info.member = member;
+    info.owner_decl = owner_decl;
+    info.owner_module = context->module;
+    info.owner_program = context->program;
+    info.owner_type_param_count = owner_type_param_count;
+    if (!append_raw((void **)&analysis->friend_member_infos,
+                    &analysis->friend_member_info_count,
+                    &analysis->friend_member_info_capacity,
+                    sizeof(info),
+                    &info)) {
+        return NULL;
+    }
+    return &analysis->friend_member_infos[
+        analysis->friend_member_info_count - 1U];
+}
+
+/* Resolve all @friend type-position arguments in the owner's lexical scope,
+ * merge multiple annotations, and silently deduplicate semantic identities. */
+static bool normalize_friend_member_annotations(
+    ResolveContext *context,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member,
+    const FengTypeParam *owner_type_params,
+    size_t owner_type_param_count) {
+    struct FengFriendMemberInfo *info = NULL;
+
+    if (context == NULL || owner_decl == NULL || member == NULL) {
+        return true;
+    }
+    for (size_t annotation_index = 0U;
+         annotation_index < member->annotation_count;
+         ++annotation_index) {
+        const FengAnnotation *annotation =
+            &member->annotations[annotation_index];
+
+        if (annotation->builtin_kind != FENG_ANNOTATION_FRIEND) {
+            continue;
+        }
+        if (info == NULL) {
+            info = ensure_friend_member_info(context,
+                                             owner_decl,
+                                             member,
+                                             owner_type_param_count);
+            if (info == NULL) {
+                return false;
+            }
+        }
+        for (size_t arg_index = 0U;
+             arg_index < annotation->arg_count;
+             ++arg_index) {
+            const FengTypeRef *friend_ref = annotation->type_args[arg_index];
+            const FengDecl *friend_decl;
+            FriendTypeIdentity *identity;
+            bool duplicate = false;
+
+            if (!resolve_type_ref(context, friend_ref, false)) {
+                return false;
+            }
+            friend_decl = resolve_type_ref_decl(context, friend_ref);
+            if (friend_ref == NULL || friend_ref->kind != FENG_TYPE_REF_NAMED ||
+                friend_decl == NULL || friend_decl->kind != FENG_DECL_TYPE) {
+                char *friend_name = format_type_ref_name(friend_ref);
+                bool reported = resolver_append_error(
+                    context,
+                    friend_ref != NULL ? friend_ref->token : annotation->token,
+                    "AE1336",
+                    format_message(
+                        "@friend argument '%s' must resolve to a concrete type",
+                        friend_name != NULL ? friend_name : "<unknown>"));
+
+                free(friend_name);
+                return reported && false;
+            }
+            identity = build_friend_type_identity(context,
+                                                  friend_ref,
+                                                  owner_type_params,
+                                                  owner_type_param_count,
+                                                  true);
+            if (identity == NULL) {
+                return false;
+            }
+            for (size_t existing_index = 0U;
+                 existing_index < info->friend_type_count;
+                 ++existing_index) {
+                if (friend_type_identities_equal(
+                        info->friend_types[existing_index], identity)) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (duplicate) {
+                friend_type_identity_free(identity);
+                continue;
+            }
+            if (!append_raw((void **)&info->friend_types,
+                            &info->friend_type_count,
+                            &info->friend_type_capacity,
+                            sizeof(identity),
+                            &identity)) {
+                friend_type_identity_free(identity);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 static const FengDecl *resolve_union_spec_type_ref_decl(const ResolveContext *context,
@@ -10324,6 +10882,283 @@ static const FengTypeMember *find_spec_object_member(const ResolveContext *conte
                                               NULL);
 }
 
+/* Build the semantic identity of the current generic type declaration using
+ * its own active parameters, for example Helper<T> while resolving Helper. */
+static FriendTypeIdentity *build_friend_subject_for_type_decl(
+    const FengDecl *type_decl) {
+    FriendTypeIdentity *identity;
+
+    if (type_decl == NULL || type_decl->kind != FENG_DECL_TYPE) {
+        return NULL;
+    }
+    identity = (FriendTypeIdentity *)calloc(1U, sizeof(*identity));
+    if (identity == NULL) {
+        return NULL;
+    }
+    identity->kind = FRIEND_TYPE_IDENTITY_NAMED;
+    identity->as.named.decl = type_decl;
+    identity->as.named.type_arg_count =
+        type_decl->as.type_decl.type_param_count;
+    if (identity->as.named.type_arg_count == 0U) {
+        return identity;
+    }
+    identity->as.named.type_args = (FriendTypeIdentity **)calloc(
+        identity->as.named.type_arg_count,
+        sizeof(*identity->as.named.type_args));
+    if (identity->as.named.type_args == NULL) {
+        friend_type_identity_free(identity);
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < identity->as.named.type_arg_count;
+         ++index) {
+        FriendTypeIdentity *arg =
+            (FriendTypeIdentity *)calloc(1U, sizeof(*arg));
+
+        if (arg == NULL) {
+            friend_type_identity_free(identity);
+            return NULL;
+        }
+        arg->kind = FRIEND_TYPE_IDENTITY_ACTIVE_PARAM;
+        arg->as.active_param = &type_decl->as.type_decl.type_params[index];
+        identity->as.named.type_args[index] = arg;
+    }
+    return identity;
+}
+
+/* Build the exact type whose method body currently owns friend authority.
+ * Field initializers, constructors, finalizers and top-level functions do not
+ * acquire an enclosing type's friend permissions. */
+static FriendTypeIdentity *build_current_friend_subject(
+    const ResolveContext *context) {
+    if (context == NULL || context->current_callable_member == NULL ||
+        context->current_callable_member->kind != FENG_TYPE_MEMBER_METHOD) {
+        return NULL;
+    }
+    if (context->current_fit_decl != NULL) {
+        if (context->current_fit_target_type_ref == NULL) {
+            return NULL;
+        }
+        return build_friend_type_identity(context,
+                                          context->current_fit_target_type_ref,
+                                          NULL,
+                                          0U,
+                                          false);
+    }
+    return build_friend_subject_for_type_decl(context->current_type_decl);
+}
+
+/* Release a temporary vector of materialized owner arguments. */
+static void free_friend_owner_type_args(FriendTypeIdentity **type_args,
+                                        size_t type_arg_count) {
+    for (size_t index = 0U; index < type_arg_count; ++index) {
+        friend_type_identity_free(type_args[index]);
+    }
+    free(type_args);
+}
+
+/* Materialize the annotated owner's generic arguments from the receiver or
+ * static owner at the access site. Parent-spec members first project the
+ * concrete child-spec instance to the declaring parent surface. */
+static bool build_friend_owner_type_args(
+    ResolveContext *context,
+    const struct FengFriendMemberInfo *info,
+    const FengDecl *access_owner_decl,
+    InferredExprType owner_instance,
+    FriendTypeIdentity ***out_type_args,
+    size_t *out_type_arg_count) {
+    const FengTypeRef *owner_ref = NULL;
+    FriendTypeIdentity **type_args = NULL;
+
+    if (out_type_args == NULL || out_type_arg_count == NULL || info == NULL) {
+        return false;
+    }
+    *out_type_args = NULL;
+    *out_type_arg_count = 0U;
+    if (info->owner_type_param_count == 0U) {
+        return true;
+    }
+    if (owner_instance.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        owner_ref = owner_instance.type_ref;
+    }
+    if (info->owner_decl != NULL &&
+        info->owner_decl->kind == FENG_DECL_SPEC &&
+        access_owner_decl != NULL &&
+        access_owner_decl != info->owner_decl &&
+        access_owner_decl->kind == FENG_DECL_SPEC) {
+        owner_ref = instantiate_parent_spec_ref_for_instance(
+            context,
+            access_owner_decl,
+            owner_ref,
+            info->owner_decl);
+    }
+    type_args = (FriendTypeIdentity **)calloc(
+        info->owner_type_param_count, sizeof(*type_args));
+    if (type_args == NULL) {
+        return false;
+    }
+    if (info->owner_decl != NULL &&
+        info->owner_decl->kind == FENG_DECL_FIT &&
+        owner_ref != NULL && owner_ref->kind == FENG_TYPE_REF_ARRAY &&
+        info->owner_type_param_count == 1U) {
+        type_args[0] = build_friend_type_identity(context,
+                                                  owner_ref->as.inner,
+                                                  NULL,
+                                                  0U,
+                                                  false);
+    } else if (owner_ref != NULL &&
+               owner_ref->kind == FENG_TYPE_REF_NAMED &&
+               owner_ref->as.named.type_arg_count ==
+                   info->owner_type_param_count) {
+        for (size_t index = 0U;
+             index < info->owner_type_param_count;
+             ++index) {
+            type_args[index] = build_friend_type_identity(
+                context,
+                owner_ref->as.named.type_args[index],
+                NULL,
+                0U,
+                false);
+            if (type_args[index] == NULL) {
+                free_friend_owner_type_args(type_args,
+                                            info->owner_type_param_count);
+                return false;
+            }
+        }
+    } else {
+        free(type_args);
+        return false;
+    }
+    if (type_args[0] == NULL) {
+        free_friend_owner_type_args(type_args,
+                                    info->owner_type_param_count);
+        return false;
+    }
+    *out_type_args = type_args;
+    *out_type_arg_count = info->owner_type_param_count;
+    return true;
+}
+
+/* Remember one fit method that used a friend authorization so its declaration
+ * module can be checked after inferred member signatures are complete. */
+static bool record_friend_fit_access(
+    ResolveContext *context,
+    const struct FengFriendMemberInfo *info_const) {
+    struct FengFriendMemberInfo *info =
+        (struct FengFriendMemberInfo *)info_const;
+    FriendFitAccess access;
+
+    if (context == NULL || info == NULL ||
+        context->current_fit_decl == NULL ||
+        context->current_callable_member == NULL) {
+        return true;
+    }
+    for (size_t index = 0U; index < info->fit_access_count; ++index) {
+        if (info->fit_accesses[index].module == context->module &&
+            info->fit_accesses[index].callable_member ==
+                context->current_callable_member) {
+            return true;
+        }
+    }
+    access.module = context->module;
+    access.program = context->program;
+    access.callable_member = context->current_callable_member;
+    return append_raw((void **)&info->fit_accesses,
+                      &info->fit_access_count,
+                      &info->fit_access_capacity,
+                      sizeof(access),
+                      &access);
+}
+
+/* Query the owner-module signature rule after its recursive scan has run.
+ * Before inference completes, access is provisionally accepted and recorded;
+ * the post-pass reports any invalid cross-module fit use. */
+static bool friend_member_signature_visible_from_module(
+    const struct FengFriendMemberInfo *info,
+    const FengSemanticModule *consumer_module) {
+    if (info == NULL || consumer_module == NULL ||
+        consumer_module == info->owner_module || !info->signature_checked ||
+        info->owner_private_signature_decl == NULL) {
+        return true;
+    }
+    return false;
+}
+
+/* Check the compile-time-only friend branch for one explicitly seal member.
+ * It replaces only the member-level seal test; all enclosing type/spec/fit
+ * visibility and ordinary lookup rules are enforced by the caller first. */
+static bool friend_seal_member_is_accessible_from(
+    ResolveContext *context,
+    const FengDecl *access_owner_decl,
+    InferredExprType owner_instance,
+    const FengTypeMember *member) {
+    const struct FengFriendMemberInfo *info;
+    FriendTypeIdentity *subject;
+    FriendTypeIdentity **owner_type_args = NULL;
+    size_t owner_type_arg_count = 0U;
+    bool accessible = false;
+
+    if (context == NULL || member == NULL ||
+        member->visibility != FENG_VISIBILITY_PRIVATE) {
+        return false;
+    }
+    info = find_friend_member_info(context->analysis, member);
+    if (info == NULL || info->friend_type_count == 0U) {
+        return false;
+    }
+    if (context->current_fit_decl != NULL) {
+        if (context->module == NULL || info->owner_module == NULL ||
+            context->module->origin != FENG_SEMANTIC_MODULE_ORIGIN_LOCAL ||
+            info->owner_module->origin != FENG_SEMANTIC_MODULE_ORIGIN_LOCAL) {
+            return false;
+        }
+    }
+    subject = build_current_friend_subject(context);
+    if (subject == NULL ||
+        !build_friend_owner_type_args(context,
+                                      info,
+                                      access_owner_decl,
+                                      owner_instance,
+                                      &owner_type_args,
+                                      &owner_type_arg_count)) {
+        friend_type_identity_free(subject);
+        return false;
+    }
+    for (size_t index = 0U; index < info->friend_type_count; ++index) {
+        if (normalized_friend_type_matches_subject(info->friend_types[index],
+                                                   owner_type_args,
+                                                   owner_type_arg_count,
+                                                   subject)) {
+            accessible = true;
+            break;
+        }
+    }
+    free_friend_owner_type_args(owner_type_args, owner_type_arg_count);
+    friend_type_identity_free(subject);
+    return accessible;
+}
+
+/* Record a fit authorization only after member/overload resolution selected
+ * this exact declaration. Candidate visibility probes must remain side-effect
+ * free so an unselected friend overload cannot trigger AE1338. */
+static bool record_selected_friend_fit_access(
+    ResolveContext *context,
+    const FengDecl *access_owner_decl,
+    InferredExprType owner_instance,
+    const FengTypeMember *member) {
+    const struct FengFriendMemberInfo *info;
+
+    if (context == NULL || context->current_fit_decl == NULL || member == NULL ||
+        !friend_seal_member_is_accessible_from(context,
+                                               access_owner_decl,
+                                               owner_instance,
+                                               member)) {
+        return true;
+    }
+    info = find_friend_member_info(context->analysis, member);
+    return info == NULL || record_friend_fit_access(context, info);
+}
+
 /* Resolve the type implementation context used only by spec-seal access.
  * A fit method contributes its target type even for a static fit method,
  * where current_type_decl is intentionally not populated. */
@@ -10345,8 +11180,10 @@ static const FengDecl *current_spec_implementation_type(
  * satisfies the member's original declaring spec. This predicate never
  * consults or widens the concrete implementation member visibility. */
 static bool spec_member_is_accessible_from(
-    const ResolveContext *context,
+    ResolveContext *context,
+    const FengDecl *access_spec,
     const FengDecl *declaring_spec,
+    InferredExprType owner_instance,
     const FengTypeMember *member) {
     const FengDecl *implementation_type;
 
@@ -10357,18 +11194,23 @@ static bool spec_member_is_accessible_from(
         return true;
     }
     implementation_type = current_spec_implementation_type(context);
-    return implementation_type != NULL && declaring_spec != NULL &&
-           type_decl_satisfies_spec_decl(context,
-                                         implementation_type,
-                                         declaring_spec);
+    return (implementation_type != NULL && declaring_spec != NULL &&
+            type_decl_satisfies_spec_decl(context,
+                                          implementation_type,
+                                          declaring_spec)) ||
+           friend_seal_member_is_accessible_from(context,
+                                                 access_spec,
+                                                 owner_instance,
+                                                 member);
 }
 
 /* Find the first same-name member accessible at the current source point.
  * The complete closure is scanned so an inaccessible seal overload cannot
  * hide a later accessible overload with the same name. */
 static const FengTypeMember *find_accessible_spec_object_member(
-    const ResolveContext *context,
+    ResolveContext *context,
     const FengDecl *spec_decl,
+    InferredExprType owner_instance,
     FengSlice name,
     bool include_static,
     const FengDecl **out_declaring_spec) {
@@ -10416,7 +11258,9 @@ static const FengTypeMember *find_accessible_spec_object_member(
             }
             if (!slice_equals(candidate_name, name) ||
                 !spec_member_is_accessible_from(context,
+                                                spec_decl,
                                                 current,
+                                                owner_instance,
                                                 candidate)) {
                 continue;
             }
@@ -10590,8 +11434,9 @@ static bool mixable_seal_member_is_accessible_from(
 /* Apply ordinary fit-member visibility plus the direct mix exception. The
  * fit declaration itself must already have passed its normal visibility
  * filter before this helper is called. */
-static bool fit_member_is_accessible_from(const ResolveContext *context,
+static bool fit_member_is_accessible_from(ResolveContext *context,
                                           const FengDecl *source_type,
+                                          InferredExprType owner_instance,
                                           const FengDecl *fit_decl,
                                           const FengTypeMember *member) {
     if (type_member_is_public(member)) {
@@ -10602,7 +11447,11 @@ static bool fit_member_is_accessible_from(const ResolveContext *context,
         return true;
     }
     return mixable_seal_member_is_accessible_from(
-        context, source_type, member);
+               context, source_type, member) ||
+           friend_seal_member_is_accessible_from(context,
+                                                 source_type,
+                                                 owner_instance,
+                                                 member);
 }
 
 /* When the resolver is inside a fit-block function body, accessing the target
@@ -10632,8 +11481,9 @@ static bool fit_body_blocks_private_access(const ResolveContext *context,
 /* A seal type member is private to its owning type. Module and package
  * identity do not widen that domain, and a fit body is not the target type
  * itself even though it temporarily carries the target as current_type_decl. */
-static bool type_member_is_accessible_from(const ResolveContext *context,
+static bool type_member_is_accessible_from(ResolveContext *context,
                                            const FengDecl *owner_type_decl,
+                                           InferredExprType owner_instance,
                                            const FengTypeMember *member) {
     return member != NULL &&
            (type_member_is_public(member) ||
@@ -10641,7 +11491,11 @@ static bool type_member_is_accessible_from(const ResolveContext *context,
              context->current_type_decl == owner_type_decl &&
              context->current_fit_decl == NULL) ||
             mixable_seal_member_is_accessible_from(
-                context, owner_type_decl, member));
+                context, owner_type_decl, member) ||
+            friend_seal_member_is_accessible_from(context,
+                                                  owner_type_decl,
+                                                  owner_instance,
+                                                  member));
 }
 
 static size_t count_declared_constructors(const FengDecl *type_decl) {
@@ -12570,7 +13424,7 @@ static InferredExprType resolve_expr_owner_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengDecl **out_type_decl,
                                                 const FengSemanticModule **out_provider_module);
-static const FengTypeMember *find_fit_method_member_for_owner_type(const ResolveContext *ctx,
+static const FengTypeMember *find_fit_method_member_for_owner_type(ResolveContext *ctx,
                                                                    const FengDecl *owner_type_decl,
                                                                    InferredExprType owner_type,
                                                                    FengSlice name);
@@ -12914,7 +13768,13 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         if (member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
             continue;
         }
-        if (!type_member_is_accessible_from(context, type_decl, member) ||
+        if (!type_member_is_accessible_from(
+                context,
+                type_decl,
+                use_owner_substitution
+                    ? owner_type
+                    : inferred_expr_type_from_decl(type_decl),
+                member) ||
             fit_body_blocks_private_access(context, type_decl, member)) {
             continue;
         }
@@ -13323,7 +14183,10 @@ static CallableValueResolution resolve_accessible_method_value_overload(
         if (member->is_static ||
             member->kind != FENG_TYPE_MEMBER_METHOD ||
             !slice_equals(member->as.callable.name, name) ||
-            !type_member_is_accessible_from(context, type_decl, member) ||
+            !type_member_is_accessible_from(context,
+                                            type_decl,
+                                            owner_type,
+                                            member) ||
             fit_body_blocks_private_access(context, type_decl, member) ||
             (requires_abi_callable && !method_member_is_abi_callable_value(member))) {
             continue;
@@ -13917,6 +14780,13 @@ static bool fit_method_value_resolve_visitor(
     (void)fit_module;
     bool signature_matches;
 
+    if (!fit_member_is_accessible_from(state->context,
+                                       state->owner_type_decl,
+                                       state->owner_type,
+                                       fit_decl,
+                                       member)) {
+        return true;
+    }
     if (state->requires_abi_callable &&
         !method_member_is_abi_callable_value(member)) {
         return true;
@@ -14000,8 +14870,9 @@ static CallableValueResolution resolve_accessible_fit_method_value_overload(
 }
 
 typedef struct FitFirstMethodCtx {
-    const ResolveContext *context;
+    ResolveContext *context;
     const FengDecl *source_type;
+    InferredExprType owner_type;
     bool enforce_static_access;
     const FengTypeMember *result;
 } FitFirstMethodCtx;
@@ -14013,27 +14884,33 @@ static bool fit_first_method_visitor(const FengTypeMember *member,
     FitFirstMethodCtx *st = (FitFirstMethodCtx *)userdata;
 
     (void)fit_module;
-    if (st->enforce_static_access &&
-        !fit_member_is_accessible_from(
-            st->context, st->source_type, fit_decl, member)) {
+    if (!fit_member_is_accessible_from(
+            st->context,
+            st->source_type,
+            st->owner_type,
+            fit_decl,
+            member)) {
         return true;
     }
     st->result = member;
     return false;
 }
 
-static const FengTypeMember *find_fit_method_member_for_type(const ResolveContext *ctx,
+static const FengTypeMember *find_fit_method_member_for_type(ResolveContext *ctx,
                                                              const FengDecl *type_decl,
                                                              FengSlice name) {
     FitFirstMethodCtx st;
 
     memset(&st, 0, sizeof(st));
+    st.context = ctx;
+    st.source_type = type_decl;
+    st.owner_type = inferred_expr_type_from_decl(type_decl);
     (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true, false,
                                              fit_first_method_visitor, &st);
     return st.result;
 }
 
-static const FengTypeMember *find_fit_static_method_member_for_type(const ResolveContext *ctx,
+static const FengTypeMember *find_fit_static_method_member_for_type(ResolveContext *ctx,
                                                                     const FengDecl *type_decl,
                                                                     FengSlice name) {
     FitFirstMethodCtx st;
@@ -14041,19 +14918,23 @@ static const FengTypeMember *find_fit_static_method_member_for_type(const Resolv
     memset(&st, 0, sizeof(st));
     st.context = ctx;
     st.source_type = type_decl;
+    st.owner_type = inferred_expr_type_from_decl(type_decl);
     st.enforce_static_access = true;
     (void)visit_visible_fit_methods_for_type(ctx, type_decl, name, true, true,
                                              fit_first_method_visitor, &st);
     return st.result;
 }
 
-static const FengTypeMember *find_fit_method_member_for_owner_type(const ResolveContext *ctx,
+static const FengTypeMember *find_fit_method_member_for_owner_type(ResolveContext *ctx,
                                                                    const FengDecl *owner_type_decl,
                                                                    InferredExprType owner_type,
                                                                    FengSlice name) {
     FitFirstMethodCtx st;
 
     memset(&st, 0, sizeof(st));
+    st.context = ctx;
+    st.source_type = owner_type_decl;
+    st.owner_type = owner_type;
     (void)visit_visible_fit_methods_for_owner_type(ctx,
                                                     owner_type_decl,
                                                     owner_type,
@@ -14065,7 +14946,7 @@ static const FengTypeMember *find_fit_method_member_for_owner_type(const Resolve
     return st.result;
 }
 
-static const FengTypeMember *find_fit_static_method_member_for_owner_type(const ResolveContext *ctx,
+static const FengTypeMember *find_fit_static_method_member_for_owner_type(ResolveContext *ctx,
                                                                           const FengDecl *owner_type_decl,
                                                                           InferredExprType owner_type,
                                                                           FengSlice name) {
@@ -14074,6 +14955,7 @@ static const FengTypeMember *find_fit_static_method_member_for_owner_type(const 
     memset(&st, 0, sizeof(st));
     st.context = ctx;
     st.source_type = owner_type_decl;
+    st.owner_type = owner_type;
     st.enforce_static_access = true;
     (void)visit_visible_fit_methods_for_owner_type(ctx,
                                                     owner_type_decl,
@@ -14089,11 +14971,15 @@ static const FengTypeMember *find_fit_static_method_member_for_owner_type(const 
 static const FengTypeMember *find_accessible_type_field_member(ResolveContext *context,
                                                                const FengDecl *type_decl,
                                                                const FengSemanticModule *provider_module,
+                                                               InferredExprType owner_type,
                                                                FengSlice name) {
     const FengTypeMember *member = find_type_field_member(type_decl, name);
 
     (void)provider_module;
-    if (!type_member_is_accessible_from(context, type_decl, member)) {
+    if (!type_member_is_accessible_from(context,
+                                        type_decl,
+                                        owner_type,
+                                        member)) {
         return NULL;
     }
     if (fit_body_blocks_private_access(context, type_decl, member)) {
@@ -14105,6 +14991,7 @@ static const FengTypeMember *find_accessible_type_field_member(ResolveContext *c
 static const FengTypeMember *find_accessible_type_method_member(ResolveContext *context,
                                                                 const FengDecl *type_decl,
                                                                 const FengSemanticModule *provider_module,
+                                                                InferredExprType owner_type,
                                                                 FengSlice name) {
     size_t member_index;
 
@@ -14116,14 +15003,20 @@ static const FengTypeMember *find_accessible_type_method_member(ResolveContext *
             if (!member->is_static &&
                 member->kind == FENG_TYPE_MEMBER_METHOD &&
                 slice_equals(member->as.callable.name, name) &&
-                type_member_is_accessible_from(context, type_decl, member) &&
+                type_member_is_accessible_from(context,
+                                               type_decl,
+                                               owner_type,
+                                               member) &&
                 !fit_body_blocks_private_access(context, type_decl, member)) {
                 return member;
             }
         }
     }
     /* Fall back to any visible fit-body method for this type. */
-    return find_fit_method_member_for_type(context, type_decl, name);
+    return find_fit_method_member_for_owner_type(context,
+                                                 type_decl,
+                                                 owner_type,
+                                                 name);
 }
 
 /* Find any instance member with this name that is visible from the current
@@ -14133,16 +15026,21 @@ static const FengTypeMember *find_accessible_type_instance_member(
     ResolveContext *context,
     const FengDecl *type_decl,
     const FengSemanticModule *provider_module,
+    InferredExprType owner_type,
     FengSlice name) {
     const FengTypeMember *field = find_type_field_member(type_decl, name);
 
-    if (type_member_is_accessible_from(context, type_decl, field) &&
+    if (type_member_is_accessible_from(context,
+                                       type_decl,
+                                       owner_type,
+                                       field) &&
         !fit_body_blocks_private_access(context, type_decl, field)) {
         return field;
     }
     return find_accessible_type_method_member(context,
                                               type_decl,
                                               provider_module,
+                                              owner_type,
                                               name);
 }
 
@@ -14151,6 +15049,7 @@ static const FengTypeMember *find_accessible_type_instance_member(
 static const FengTypeMember *find_accessible_type_static_member(
     ResolveContext *context,
     const FengDecl *type_decl,
+    InferredExprType owner_type,
     FengSlice name) {
     size_t member_index;
 
@@ -14170,7 +15069,10 @@ static const FengTypeMember *find_accessible_type_static_member(
                           ? member->as.field.name
                           : member->as.callable.name;
         if (slice_equals(member_name, name) &&
-            type_member_is_accessible_from(context, type_decl, member) &&
+            type_member_is_accessible_from(context,
+                                           type_decl,
+                                           owner_type,
+                                           member) &&
             !fit_body_blocks_private_access(context, type_decl, member)) {
             return member;
         }
@@ -14262,7 +15164,10 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
             if (!member->is_static &&
                 member->kind == FENG_TYPE_MEMBER_METHOD &&
                 slice_equals(member->as.callable.name, name) &&
-                type_member_is_accessible_from(context, type_decl, member) &&
+                type_member_is_accessible_from(context,
+                                               type_decl,
+                                               owner_type,
+                                               member) &&
                 !fit_body_blocks_private_access(context, type_decl, member)) {
                 ++count;
             }
@@ -14295,9 +15200,9 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
     FitOverloadResolveCtx *st = (FitOverloadResolveCtx *)userdata;
 
     (void)fit_module;
-    if (st->enforce_static_access &&
-        !fit_member_is_accessible_from(st->context,
+    if (!fit_member_is_accessible_from(st->context,
                                        st->owner_type_decl,
+                                       st->owner_type,
                                        fit_decl,
                                        member)) {
         return true;
@@ -14450,7 +15355,9 @@ static FunctionCallResolution resolve_accessible_method_overload(
                         if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                             !slice_equals(member->as.callable.name, name) ||
                             !spec_member_is_accessible_from(context,
+                                                            type_decl,
                                                             current,
+                                                            owner_type,
                                                             member) ||
                             !callable_parameters_match_args_for_owner_instance(
                                 context,
@@ -14528,7 +15435,9 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 if (member->kind != FENG_TYPE_MEMBER_METHOD ||
                     !slice_equals(member->as.callable.name, name) ||
                     !spec_member_is_accessible_from(context,
+                                                    type_decl,
                                                     current,
+                                                    owner_type,
                                                     member) ||
                     !callable_parameters_match_args_for_owner_instance(context,
                                                                        &member->as.callable,
@@ -14611,7 +15520,10 @@ static FunctionCallResolution resolve_accessible_method_overload(
             if (member->is_static ||
                 member->kind != FENG_TYPE_MEMBER_METHOD ||
                 !slice_equals(member->as.callable.name, name) ||
-                !type_member_is_accessible_from(context, type_decl, member) ||
+                !type_member_is_accessible_from(context,
+                                                type_decl,
+                                                owner_type,
+                                                member) ||
                 fit_body_blocks_private_access(context, type_decl, member) ||
                 !callable_parameters_match_args_for_owner_instance(context,
                                                                    &member->as.callable,
@@ -14734,7 +15646,10 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
         if (!member->is_static ||
             member->kind != FENG_TYPE_MEMBER_METHOD ||
             !slice_equals(member->as.callable.name, name) ||
-            !type_member_is_accessible_from(context, type_decl, member) ||
+            !type_member_is_accessible_from(context,
+                                            type_decl,
+                                            owner_type,
+                                            member) ||
             fit_body_blocks_private_access(context, type_decl, member) ||
             !callable_parameters_match_args_for_owner_instance(context,
                                                                &member->as.callable,
@@ -16025,15 +16940,36 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
         if (type_target.is_generic_type_param &&
             type_target.constraint_spec_decl != NULL) {
             const FengDecl *declaring_spec = NULL;
+            InferredExprType constraint_owner =
+                inferred_expr_type_from_decl(type_target.constraint_spec_decl);
+            const TypeParamEntry *type_param =
+                type_target.generic_param_index < context->type_param_count
+                    ? &context->type_params[type_target.generic_param_index]
+                    : NULL;
+
+            if (type_param != NULL && type_param->type_param != NULL &&
+                type_param->type_param->constraint != NULL) {
+                constraint_owner = inferred_expr_type_from_type_ref(
+                    type_param->type_param->constraint);
+            }
             const FengTypeMember *accessible_member =
                 find_accessible_spec_object_member(
                     context,
                     type_target.constraint_spec_decl,
+                    constraint_owner,
                     expr->as.member.member,
                     /*include_static=*/true,
                     &declaring_spec);
 
             if (accessible_member != NULL) {
+                if (accessible_member->kind == FENG_TYPE_MEMBER_FIELD &&
+                    !record_selected_friend_fit_access(
+                        context,
+                        type_target.constraint_spec_decl,
+                        constraint_owner,
+                        accessible_member)) {
+                    return false;
+                }
                 return true;
             }
             {
@@ -16061,12 +16997,25 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             const FengTypeMember *accessible_static_member =
                 find_accessible_type_static_member(context,
                                                    type_target.type_decl,
+                                                   resolved_type_target_owner_type(
+                                                       &type_target),
                                                    expr->as.member.member);
 
-            if (accessible_static_member != NULL ||
-                find_fit_static_method_member_for_type(context,
-                                                       type_target.type_decl,
-                                                       expr->as.member.member) != NULL) {
+            if (accessible_static_member != NULL) {
+                if (accessible_static_member->kind == FENG_TYPE_MEMBER_FIELD &&
+                    !record_selected_friend_fit_access(
+                        context,
+                        type_target.type_decl,
+                        resolved_type_target_owner_type(&type_target),
+                        accessible_static_member)) {
+                    return false;
+                }
+                return true;
+            }
+            if (find_fit_static_method_member_for_type(
+                    context,
+                    type_target.type_decl,
+                    expr->as.member.member) != NULL) {
                 return true;
             }
             if (static_member != NULL) {
@@ -16245,10 +17194,19 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                             find_accessible_spec_object_member(
                                 context,
                                 member_decl,
+                                owner_type,
                                 expr->as.member.member,
                                 /*include_static=*/false,
                                 &declaring_spec);
                         if (member_i != NULL) {
+                            if (member_i->kind == FENG_TYPE_MEMBER_FIELD &&
+                                !record_selected_friend_fit_access(
+                                    context,
+                                    member_decl,
+                                    owner_type,
+                                    member_i)) {
+                                return false;
+                            }
                             record_spec_member_access(context, expr,
                                                       owner_type_decl, member_i);
                             return true;
@@ -16297,10 +17255,18 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             member = find_accessible_spec_object_member(
                 context,
                 owner_type_decl,
+                owner_type,
                 expr->as.member.member,
                 /*include_static=*/false,
                 &declaring_spec);
             if (member != NULL) {
+                if (member->kind == FENG_TYPE_MEMBER_FIELD &&
+                    !record_selected_friend_fit_access(context,
+                                                       owner_type_decl,
+                                                       owner_type,
+                                                       member)) {
+                    return false;
+                }
                 record_spec_member_access(context, expr, owner_type_decl, member);
                 return true;
             }
@@ -16361,11 +17327,24 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     }
 
     member = find_instance_member(owner_type_decl, expr->as.member.member);
-    if (find_accessible_type_instance_member(context,
-                                             owner_type_decl,
-                                             provider_module,
-                                             expr->as.member.member) != NULL) {
-        return true;
+    {
+        const FengTypeMember *accessible_member =
+            find_accessible_type_instance_member(context,
+                                                 owner_type_decl,
+                                                 provider_module,
+                                                 owner_type,
+                                                 expr->as.member.member);
+
+        if (accessible_member != NULL) {
+            if (accessible_member->kind == FENG_TYPE_MEMBER_FIELD &&
+                !record_selected_friend_fit_access(context,
+                                                   owner_type_decl,
+                                                   owner_type,
+                                                   accessible_member)) {
+                return false;
+            }
+            return true;
+        }
     }
     if (member == NULL) {
         if (find_type_static_member(owner_type_decl, expr->as.member.member) != NULL ||
@@ -20919,6 +21898,35 @@ static bool validate_expr_against_expected_abi_function_pointer_type(
     }
 }
 
+/* Record the exact bound method selected for a callable value. Resolver
+ * candidate probes are intentionally side-effect free; this hook runs only
+ * after target-type matching produced one unique method. */
+static bool record_selected_friend_callable_value_access(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const CallableValueResolution *resolution) {
+    const FengExpr *source_expr = expr;
+    InferredExprType owner_type;
+
+    if (context == NULL || resolution == NULL ||
+        resolution->callable_member == NULL) {
+        return true;
+    }
+    if (source_expr != NULL && source_expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        source_expr = source_expr->as.generic_target.target;
+    }
+    if (source_expr == NULL || source_expr->kind != FENG_EXPR_MEMBER ||
+        source_expr->as.member.object == NULL) {
+        return true;
+    }
+    owner_type = infer_expr_type(context, source_expr->as.member.object);
+    return record_selected_friend_fit_access(
+        context,
+        resolution->callable_owner_type_decl,
+        owner_type,
+        resolution->callable_member);
+}
+
 static bool validate_function_typed_expr(ResolveContext *context,
                                          const FengExpr *expr,
                                          const FengTypeRef *expected_type_ref) {
@@ -20932,6 +21940,11 @@ static bool validate_function_typed_expr(ResolveContext *context,
 
     resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
     if (resolution.kind == FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+        if (!record_selected_friend_callable_value_access(context,
+                                                          expr,
+                                                          &resolution)) {
+            return false;
+        }
         record_callable_spec_coercion_site(context, expr, expected_type_ref);
         return true;
     }
@@ -22848,6 +23861,16 @@ static bool record_resolved_callable_from_resolution(
         slot->callable_type_args = persistent_type_args;
         slot->callable_type_arg_count = type_arg_count;
     }
+    if (resolution->member != NULL &&
+        !record_selected_friend_fit_access(
+            context,
+            resolution->owner_type_decl,
+            persistent_owner_ref != NULL
+                ? inferred_expr_type_from_type_ref(persistent_owner_ref)
+                : inferred_expr_type_from_decl(resolution->owner_type_decl),
+            resolution->member)) {
+        return false;
+    }
     if (resolution->fit_decl != NULL) {
         slot->kind = resolution->member != NULL && resolution->member->is_static
                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
@@ -23181,11 +24204,25 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
              * is recorded so codegen can emit a witness-table dispatch. */
             if (static_target.is_generic_type_param &&
                 static_target.constraint_spec_decl != NULL) {
+                const TypeParamEntry *type_param =
+                    static_target.generic_param_index < context->type_param_count
+                        ? &context->type_params[static_target.generic_param_index]
+                        : NULL;
+                InferredExprType constraint_owner =
+                    type_param != NULL && type_param->type_param != NULL &&
+                            type_param->type_param->constraint != NULL
+                        ? inferred_expr_type_from_type_ref(
+                              type_param->type_param->constraint)
+                        : inferred_expr_type_from_decl(
+                              static_target.constraint_spec_decl);
                 const FengTypeMember *spec_member =
-                    find_spec_object_member(context,
-                                            static_target.constraint_spec_decl,
-                                            callee->as.member.member,
-                                            /*include_static=*/true);
+                    find_accessible_spec_object_member(
+                        context,
+                        static_target.constraint_spec_decl,
+                        constraint_owner,
+                        callee->as.member.member,
+                        /*include_static=*/true,
+                        NULL);
 
                 if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_METHOD) {
                     const FengCallableSignature *spec_sig = &spec_member->as.callable;
@@ -23202,6 +24239,13 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                        expr->as.call.arg_count));
                     }
                     note_callable_exception_escape(context, spec_sig);
+                    if (!record_selected_friend_fit_access(
+                            context,
+                            static_target.constraint_spec_decl,
+                            constraint_owner,
+                            spec_member)) {
+                        return false;
+                    }
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         spec_sig,
@@ -23232,6 +24276,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     ? find_accessible_type_method_member(context,
                                                          owner_type_decl,
                                                          provider_module,
+                                                         owner_type,
                                                          callee->as.member.member)
                     : owner_type_decl->kind == FENG_DECL_ENUM
                         ? find_fit_method_member_for_type(context,
@@ -23240,6 +24285,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     : find_accessible_spec_object_member(
                           context,
                           owner_type_decl,
+                          owner_type,
                           callee->as.member.member,
                           /*include_static=*/false,
                           NULL);
@@ -23255,10 +24301,12 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     ? find_accessible_type_field_member(context,
                                                         owner_type_decl,
                                                         provider_module,
+                                                        owner_type,
                                                         callee->as.member.member)
                     : find_accessible_spec_object_member(
                           context,
                           owner_type_decl,
+                          owner_type,
                           callee->as.member.member,
                           /*include_static=*/false,
                           NULL);
@@ -23651,7 +24699,11 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             return ok;
         }
 
-        if (!type_member_is_accessible_from(context, target.type_decl, field_member) ||
+        if (!type_member_is_accessible_from(
+                context,
+                target.type_decl,
+                resolved_type_target_owner_type(&target),
+                field_member) ||
             fit_body_blocks_private_access(context, target.type_decl, field_member)) {
             bool ok = resolver_append_error(
                 context,
@@ -23665,6 +24717,16 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
             free(target_name);
             free(seen_field_names);
             return ok;
+        }
+
+        if (!record_selected_friend_fit_access(
+                context,
+                target.type_decl,
+                resolved_type_target_owner_type(&target),
+                field_member)) {
+            free(target_name);
+            free(seen_field_names);
+            return false;
         }
 
         if (!validate_let_field_object_literal_binding(context,
@@ -24122,6 +25184,347 @@ static bool build_program_aliases(const FengSemanticAnalysis *analysis,
     }
 
     return true;
+}
+
+/* Find the semantic module that owns one source program. */
+static const FengSemanticModule *find_program_provider_module(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program) {
+    if (analysis == NULL || program == NULL) {
+        return NULL;
+    }
+    for (size_t module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module = &analysis->modules[module_index];
+
+        for (size_t program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            if (module->programs[program_index] == program) {
+                return module;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Append one declaration to the minimal type environment used by the public
+ * @friend query. Successfully analyzed programs already guarantee that a
+ * duplicate (name, arity) is either the same declaration or unambiguous. */
+static bool append_friend_query_visible_type(
+    VisibleTypeEntry **entries,
+    size_t *count,
+    size_t *capacity,
+    const FengSemanticModule *provider_module,
+    const FengProgram *provider_program,
+    const FengDecl *decl) {
+    VisibleTypeEntry entry;
+    FengSlice name;
+    size_t arity;
+
+    if (decl == NULL ||
+        (decl->kind != FENG_DECL_TYPE && decl->kind != FENG_DECL_ENUM &&
+         decl->kind != FENG_DECL_SPEC)) {
+        return true;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        name = decl->as.type_decl.name;
+        arity = decl->as.type_decl.type_param_count;
+    } else if (decl->kind == FENG_DECL_SPEC) {
+        name = decl->as.spec_decl.name;
+        arity = decl->as.spec_decl.type_param_count;
+    } else {
+        name = decl->as.enum_decl.name;
+        arity = 0U;
+    }
+    if (find_visible_type(*entries, *count, name, arity) != NULL) {
+        return true;
+    }
+    entry.name = name;
+    entry.provider_module = provider_module;
+    entry.provider_program = provider_program;
+    entry.decl = decl;
+    return append_raw((void **)entries,
+                      count,
+                      capacity,
+                      sizeof(entry),
+                      &entry);
+}
+
+/* Build only the type-name portion of a program's ordinary resolver
+ * environment. It is sufficient for materializing generic @friend subjects
+ * and owner arguments, and does not rerun declarations or executable code. */
+static bool build_friend_query_visible_types(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *module,
+    const FengProgram *program,
+    VisibleTypeEntry **out_entries,
+    size_t *out_count) {
+    VisibleTypeEntry *entries = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+    bool ok = true;
+
+    if (analysis == NULL || module == NULL || program == NULL ||
+        out_entries == NULL || out_count == NULL) {
+        return false;
+    }
+    for (size_t program_index = 0U;
+         program_index < module->program_count && ok;
+         ++program_index) {
+        const FengProgram *provider_program = module->programs[program_index];
+
+        for (size_t decl_index = 0U;
+             decl_index < provider_program->declaration_count && ok;
+             ++decl_index) {
+            ok = append_friend_query_visible_type(
+                &entries,
+                &count,
+                &capacity,
+                module,
+                provider_program,
+                provider_program->declarations[decl_index]);
+        }
+    }
+    for (size_t use_index = 0U;
+         use_index < program->use_count && ok;
+         ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+        size_t target_index;
+
+        if (use_decl->has_alias) {
+            continue;
+        }
+        target_index = find_module_index_by_path(
+            analysis, use_decl->segments, use_decl->segment_count);
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        {
+            const FengSemanticModule *target = &analysis->modules[target_index];
+
+            for (size_t program_index = 0U;
+                 program_index < target->program_count && ok;
+                 ++program_index) {
+                const FengProgram *provider_program =
+                    target->programs[program_index];
+
+                for (size_t decl_index = 0U;
+                     decl_index < provider_program->declaration_count && ok;
+                     ++decl_index) {
+                    const FengDecl *decl =
+                        provider_program->declarations[decl_index];
+
+                    if (!decl_is_public(decl)) {
+                        continue;
+                    }
+                    ok = append_friend_query_visible_type(
+                        &entries,
+                        &count,
+                        &capacity,
+                        target,
+                        provider_program,
+                        decl);
+                }
+            }
+        }
+    }
+    if (!ok) {
+        free(entries);
+        return false;
+    }
+    *out_entries = entries;
+    *out_count = count;
+    return true;
+}
+
+/* Build the imported-module facts used by qualified type resolution in the
+ * read-only @friend tooling query. */
+static bool build_friend_query_imported_modules(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program,
+    ImportedModuleEntry **out_entries,
+    size_t *out_count) {
+    ImportedModuleEntry *entries = NULL;
+    size_t count = 0U;
+    size_t capacity = 0U;
+
+    if (analysis == NULL || program == NULL || out_entries == NULL ||
+        out_count == NULL) {
+        return false;
+    }
+    for (size_t use_index = 0U; use_index < program->use_count; ++use_index) {
+        const FengUseDecl *use_decl = &program->uses[use_index];
+        size_t target_index = find_module_index_by_path(
+            analysis, use_decl->segments, use_decl->segment_count);
+        ImportedModuleEntry entry;
+
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        entry.target_module = &analysis->modules[target_index];
+        if (!append_raw((void **)&entries,
+                        &count,
+                        &capacity,
+                        sizeof(entry),
+                        &entry)) {
+            free(entries);
+            return false;
+        }
+    }
+    *out_entries = entries;
+    *out_count = count;
+    return true;
+}
+
+/* Release scratch type references created while projecting generic parent
+ * specs during the public @friend query. */
+static void free_friend_query_synthetic_type_refs(ResolveContext *context) {
+    if (context == NULL) {
+        return;
+    }
+    for (size_t index = 0U;
+         index < context->synthetic_type_ref_count;
+         ++index) {
+        free_synthetic_type_ref(context->synthetic_type_refs[index]);
+    }
+    free(context->synthetic_type_refs);
+    context->synthetic_type_refs = NULL;
+    context->synthetic_type_ref_count = 0U;
+    context->synthetic_type_ref_capacity = 0U;
+}
+
+/* Reuse the compiler's normalized @friend predicate for source tooling.
+ * The temporary resolver context contains only immutable lookup facts; the
+ * query never records a fit access, emits diagnostics, or changes analysis. */
+bool feng_semantic_member_has_friend_access(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program,
+    const FengDecl *access_owner_decl,
+    const FengTypeRef *owner_instance_type_ref,
+    const FengTypeMember *member,
+    const FengDecl *enclosing_decl,
+    const FengTypeMember *enclosing_member) {
+    const FengSemanticModule *module;
+    const struct FengFriendMemberInfo *info;
+    VisibleTypeEntry *visible_types = NULL;
+    size_t visible_type_count = 0U;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    ResolveContext context;
+    const TypeParamEntry *previous_type_params = NULL;
+    size_t previous_type_param_count = 0U;
+    const FengDecl *fit_target_decl = NULL;
+    InferredExprType owner_instance;
+    bool scope_pushed = false;
+    bool accessible = false;
+
+    if (analysis == NULL || program == NULL || access_owner_decl == NULL ||
+        member == NULL || enclosing_decl == NULL || enclosing_member == NULL ||
+        enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
+        member->visibility != FENG_VISIBILITY_PRIVATE) {
+        return false;
+    }
+    info = find_friend_member_info(analysis, member);
+    if (info == NULL || info->friend_type_count == 0U) {
+        return false;
+    }
+    module = find_program_provider_module(analysis, program);
+    if (module == NULL ||
+        !build_friend_query_visible_types(analysis,
+                                          module,
+                                          program,
+                                          &visible_types,
+                                          &visible_type_count) ||
+        !build_program_aliases(analysis,
+                               program,
+                               &aliases,
+                               &alias_count,
+                               &alias_capacity) ||
+        !build_friend_query_imported_modules(analysis,
+                                             program,
+                                             &imported_modules,
+                                             &imported_module_count)) {
+        free(visible_types);
+        free(aliases);
+        free(imported_modules);
+        return false;
+    }
+
+    memset(&context, 0, sizeof(context));
+    context.analysis = analysis;
+    context.module = module;
+    context.program = program;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible_types;
+    context.visible_type_count = visible_type_count;
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imported_modules;
+    context.imported_module_count = imported_module_count;
+    context.current_callable_member = enclosing_member;
+
+    if (enclosing_decl->kind == FENG_DECL_TYPE) {
+        context.current_type_decl = enclosing_decl;
+        scope_pushed = resolver_push_type_params(
+            &context,
+            enclosing_decl->as.type_decl.type_params,
+            enclosing_decl->as.type_decl.type_param_count,
+            &previous_type_params,
+            &previous_type_param_count);
+    } else if (enclosing_decl->kind == FENG_DECL_FIT) {
+        context.current_fit_decl = enclosing_decl;
+        context.current_fit_target_type_ref = enclosing_decl->as.fit_decl.target;
+        fit_target_decl = resolve_type_ref_decl(
+            &context, enclosing_decl->as.fit_decl.target);
+        if (fit_target_decl != NULL &&
+            fit_target_decl->kind == FENG_DECL_TYPE) {
+            scope_pushed = resolver_push_type_params(
+                &context,
+                fit_target_decl->as.type_decl.type_params,
+                fit_target_decl->as.type_decl.type_param_count,
+                &previous_type_params,
+                &previous_type_param_count);
+        }
+    }
+
+    if ((enclosing_decl->kind == FENG_DECL_TYPE || fit_target_decl != NULL) &&
+        (scope_pushed ||
+         (enclosing_decl->kind == FENG_DECL_TYPE
+              ? enclosing_decl->as.type_decl.type_param_count == 0U
+              : fit_target_decl->as.type_decl.type_param_count == 0U))) {
+        memset(&owner_instance, 0, sizeof(owner_instance));
+        if (owner_instance_type_ref != NULL) {
+            owner_instance = inferred_expr_type_from_type_ref(
+                owner_instance_type_ref);
+            owner_instance.type_decl = access_owner_decl;
+        } else {
+            owner_instance.kind = FENG_INFERRED_EXPR_TYPE_DECL;
+            owner_instance.type_decl = access_owner_decl;
+        }
+        accessible = friend_seal_member_is_accessible_from(
+            &context, access_owner_decl, owner_instance, member);
+        if (accessible && enclosing_decl->kind == FENG_DECL_FIT) {
+            accessible = friend_member_signature_visible_from_module(
+                info, module);
+        }
+    }
+
+    if (scope_pushed) {
+        resolver_pop_type_params(&context,
+                                 previous_type_params,
+                                 previous_type_param_count);
+    }
+    resolver_free_scopes(&context);
+    free_friend_query_synthetic_type_refs(&context);
+    free(visible_types);
+    free(aliases);
+    free(imported_modules);
+    return accessible;
 }
 
 static bool validate_program_alias_conflicts(const FengSemanticModule *current_module,
@@ -29074,6 +30477,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
 
+                if (!normalize_friend_member_annotations(
+                        context,
+                        decl,
+                        member,
+                        decl->as.type_decl.type_params,
+                        decl->as.type_decl.type_param_count)) {
+                    ok = false;
+                    break;
+                }
+
                 if (!validate_mixable_method_contract(context,
                                                        member,
                                                        decl,
@@ -29306,6 +30719,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
 
+                if (!normalize_friend_member_annotations(
+                        context,
+                        decl,
+                        member,
+                        decl->as.spec_decl.type_params,
+                        decl->as.spec_decl.type_param_count)) {
+                    ok = false;
+                    break;
+                }
+
                 if (member->kind == FENG_TYPE_MEMBER_FIELD) {
                     if (!resolve_type_ref(context, member->as.field.type, false)) {
                         ok = false;
@@ -29411,6 +30834,27 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 if (!validate_supported_member_annotations(context, member)) {
                     if (fit_scope_pushed) {
                         resolver_pop_type_params(context, prev_fit_tp, prev_fit_tp_count);
+                    }
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                    return false;
+                }
+
+                if (!normalize_friend_member_annotations(
+                        context,
+                        decl,
+                        member,
+                        fit_target_decl != NULL &&
+                                fit_target_decl->kind == FENG_DECL_TYPE
+                            ? fit_target_decl->as.type_decl.type_params
+                            : fit_scope_pushed ? &fit_local_type_param : NULL,
+                        fit_target_decl != NULL &&
+                                fit_target_decl->kind == FENG_DECL_TYPE
+                            ? fit_target_decl->as.type_decl.type_param_count
+                            : fit_scope_pushed ? 1U : 0U)) {
+                    if (fit_scope_pushed) {
+                        resolver_pop_type_params(context,
+                                                 prev_fit_tp,
+                                                 prev_fit_tp_count);
                     }
                     resolver_pop_type_params(context, prev_tp, prev_tp_count);
                     return false;
@@ -29570,6 +31014,313 @@ static bool signature_type_ref_is_type_param(
         }
     }
     return false;
+}
+
+/* Record the first member-signature type that is seal in the @friend owner's
+ * own module. This is exactly the type that cannot be consumed from another
+ * module under the friend signature rule. */
+static bool scan_friend_signature_type_ref(
+    ResolveContext *context,
+    struct FengFriendMemberInfo *info,
+    const FengTypeRef *type_ref,
+    const SignatureTypeParamScope *type_params) {
+    if (type_ref == NULL || info == NULL ||
+        info->owner_private_signature_decl != NULL) {
+        return true;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_POINTER ||
+        type_ref->kind == FENG_TYPE_REF_ARRAY) {
+        return scan_friend_signature_type_ref(context,
+                                              info,
+                                              type_ref->as.inner,
+                                              type_params);
+    }
+    if (signature_type_ref_is_type_param(type_ref, type_params)) {
+        return true;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED) {
+        const FengDecl *target = resolve_type_ref_decl(context, type_ref);
+
+        if (target != NULL &&
+            find_decl_provider_module(context->analysis, target) ==
+                info->owner_module &&
+            target->visibility != FENG_VISIBILITY_PUBLIC) {
+            info->owner_private_signature_decl = target;
+            info->owner_private_signature_ref = type_ref;
+            return true;
+        }
+        for (size_t index = 0U;
+             index < type_ref->as.named.type_arg_count;
+             ++index) {
+            if (!scan_friend_signature_type_ref(
+                    context,
+                    info,
+                    type_ref->as.named.type_args[index],
+                    type_params)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+/* Scan an inferred field/return surface using the same owner-module rule. */
+static bool scan_friend_signature_type_fact(
+    ResolveContext *context,
+    struct FengFriendMemberInfo *info,
+    const FengSemanticTypeFact *fact,
+    const SignatureTypeParamScope *type_params) {
+    if (fact == NULL || info == NULL ||
+        info->owner_private_signature_decl != NULL) {
+        return true;
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return scan_friend_signature_type_ref(context,
+                                              info,
+                                              fact->type_ref,
+                                              type_params);
+    }
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL &&
+        fact->type_decl != NULL &&
+        find_decl_provider_module(context->analysis, fact->type_decl) ==
+            info->owner_module &&
+        fact->type_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        info->owner_private_signature_decl = fact->type_decl;
+        info->owner_private_signature_ref = NULL;
+    }
+    return true;
+}
+
+/* Format the first owner-private signature type for AE1338 diagnostics. */
+static char *format_friend_hidden_signature_type(
+    const struct FengFriendMemberInfo *info) {
+    if (info == NULL || info->owner_private_signature_decl == NULL) {
+        return duplicate_cstr("<unknown>");
+    }
+    if (info->owner_private_signature_ref != NULL) {
+        return format_type_ref_name(info->owner_private_signature_ref);
+    }
+    {
+        FengSlice name = decl_typeish_name(info->owner_private_signature_decl);
+
+        return format_message("%.*s", (int)name.length, name.data);
+    }
+}
+
+/* Validate one normalized @friend member after all explicit and inferred
+ * signature types are known. Direct friends and recorded same-package fit
+ * users share the same owner-module-private type scan. */
+static bool validate_friend_member_signature_rules(
+    ResolveContext *context,
+    const FengTypeMember *member,
+    const SignatureTypeParamScope *owner_type_params) {
+    struct FengFriendMemberInfo *info;
+    FengSlice member_name;
+
+    info = (struct FengFriendMemberInfo *)find_friend_member_info(
+        context != NULL ? context->analysis : NULL, member);
+    if (info == NULL) {
+        return true;
+    }
+    info->signature_checked = false;
+    info->owner_private_signature_decl = NULL;
+    info->owner_private_signature_ref = NULL;
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        if (member->as.field.type != NULL) {
+            if (!scan_friend_signature_type_ref(context,
+                                                info,
+                                                member->as.field.type,
+                                                owner_type_params)) {
+                return false;
+            }
+        } else if (!scan_friend_signature_type_fact(
+                       context,
+                       info,
+                       feng_semantic_lookup_type_fact(context->analysis,
+                                                      member),
+                       owner_type_params)) {
+            return false;
+        }
+    } else if (member->kind == FENG_TYPE_MEMBER_METHOD) {
+        const FengCallableSignature *callable = &member->as.callable;
+        SignatureTypeParamScope callable_scope = {
+            callable->type_params,
+            callable->type_param_count,
+            owner_type_params};
+
+        for (size_t index = 0U;
+             index < callable->type_param_count;
+             ++index) {
+            if (!scan_friend_signature_type_ref(
+                    context,
+                    info,
+                    callable->type_params[index].constraint,
+                    &callable_scope)) {
+                return false;
+            }
+        }
+        for (size_t index = 0U; index < callable->param_count; ++index) {
+            if (!scan_friend_signature_type_ref(
+                    context,
+                    info,
+                    callable->params[index].type,
+                    &callable_scope)) {
+                return false;
+            }
+        }
+        if (callable->return_type != NULL) {
+            if (!scan_friend_signature_type_ref(context,
+                                                info,
+                                                callable->return_type,
+                                                &callable_scope)) {
+                return false;
+            }
+        } else if (!scan_friend_signature_type_fact(
+                       context,
+                       info,
+                       feng_semantic_lookup_type_fact(context->analysis,
+                                                      callable),
+                       &callable_scope)) {
+            return false;
+        }
+    }
+    info->signature_checked = true;
+    member_name = member->kind == FENG_TYPE_MEMBER_FIELD
+                      ? member->as.field.name
+                      : member->as.callable.name;
+    for (size_t index = 0U; index < info->friend_type_count; ++index) {
+        const FriendTypeIdentity *friend_type = info->friend_types[index];
+        const FengSemanticModule *friend_module =
+            friend_type->kind == FRIEND_TYPE_IDENTITY_NAMED
+                ? find_decl_provider_module(context->analysis,
+                                            friend_type->as.named.decl)
+                : NULL;
+
+        if (friend_module == NULL ||
+            friend_member_signature_visible_from_module(info,
+                                                        friend_module)) {
+            continue;
+        }
+        {
+            char *friend_name = format_type_ref_name(friend_type->source_ref);
+            char *hidden_name = format_friend_hidden_signature_type(info);
+            bool ok = resolver_append_error(
+                context,
+                friend_type->source_ref != NULL
+                    ? friend_type->source_ref->token
+                    : member->token,
+                "AE1338",
+                format_message(
+                    "member '%.*s' exposes type '%s' that is not accessible to friend type '%s'",
+                    (int)member_name.length,
+                    member_name.data,
+                    hidden_name != NULL ? hidden_name : "<unknown>",
+                    friend_name != NULL ? friend_name : "<unknown>"));
+
+            free(hidden_name);
+            free(friend_name);
+            return ok && false;
+        }
+    }
+    for (size_t index = 0U; index < info->fit_access_count; ++index) {
+        const FriendFitAccess *access = &info->fit_accesses[index];
+
+        if (friend_member_signature_visible_from_module(info,
+                                                        access->module)) {
+            continue;
+        }
+        {
+            char *module_name = format_module_name(
+                access->module->segments, access->module->segment_count);
+            char *hidden_name = format_friend_hidden_signature_type(info);
+            bool ok = append_error(
+                context->errors,
+                context->error_count,
+                context->error_capacity,
+                access->program != NULL ? access->program->path
+                                        : context->program->path,
+                access->callable_member != NULL
+                    ? access->callable_member->token
+                    : member->token,
+                "AE1338",
+                format_message(
+                    "@friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s'",
+                    (int)member_name.length,
+                    member_name.data,
+                    hidden_name != NULL ? hidden_name : "<unknown>",
+                    module_name != NULL ? module_name : "<unknown>"));
+
+            free(hidden_name);
+            free(module_name);
+            return ok && false;
+        }
+    }
+    return true;
+}
+
+/* Recheck recorded fit friend uses after the complete module fixpoint. This
+ * catches a use resolved after its owner program's signature pass in the same
+ * iteration, without making correctness depend on program ordering. */
+static bool validate_all_friend_fit_access_signatures(
+    const FengSemanticAnalysis *analysis,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity) {
+    if (analysis == NULL) {
+        return true;
+    }
+    for (size_t info_index = 0U;
+         info_index < analysis->friend_member_info_count;
+         ++info_index) {
+        const struct FengFriendMemberInfo *info =
+            &analysis->friend_member_infos[info_index];
+        FengSlice member_name =
+            info->member->kind == FENG_TYPE_MEMBER_FIELD
+                ? info->member->as.field.name
+                : info->member->as.callable.name;
+
+        if (!info->signature_checked ||
+            info->owner_private_signature_decl == NULL) {
+            continue;
+        }
+        for (size_t access_index = 0U;
+             access_index < info->fit_access_count;
+             ++access_index) {
+            const FriendFitAccess *access = &info->fit_accesses[access_index];
+
+            if (access->module == info->owner_module) {
+                continue;
+            }
+            {
+                char *hidden_name = format_friend_hidden_signature_type(info);
+                char *module_name = format_module_name(
+                    access->module->segments, access->module->segment_count);
+                bool ok = append_error(
+                    errors,
+                    error_count,
+                    error_capacity,
+                    access->program != NULL ? access->program->path : NULL,
+                    access->callable_member != NULL
+                        ? access->callable_member->token
+                        : info->member->token,
+                    "AE1338",
+                    format_message(
+                        "@friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s'",
+                        (int)member_name.length,
+                        member_name.data,
+                        hidden_name != NULL ? hidden_name : "<unknown>",
+                        module_name != NULL ? module_name : "<unknown>"));
+
+                free(module_name);
+                free(hidden_name);
+                if (!ok) {
+                    return false;
+                }
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 /* Return the source-level name used to identify a declaration signature in
@@ -29848,6 +31599,7 @@ static bool validate_type_member_signature_visibility(
     SignatureEffectiveVisibility owner_visibility) {
     SignatureEffectiveVisibility member_visibility;
     FengSlice member_name;
+    bool ok;
 
     if (member == NULL) {
         return true;
@@ -29855,23 +31607,29 @@ static bool validate_type_member_signature_visibility(
     member_visibility = signature_member_visibility(owner_visibility, member);
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         member_name = member->as.field.name;
-        return validate_signature_site_type_visibility(context,
-                                                       member,
-                                                       member->as.field.type,
-                                                       owner_type_params,
-                                                       member_name,
-                                                       member->token,
-                                                       member_visibility);
+        ok = validate_signature_site_type_visibility(context,
+                                                     member,
+                                                     member->as.field.type,
+                                                     owner_type_params,
+                                                     member_name,
+                                                     member->token,
+                                                     member_visibility);
+        return ok && validate_friend_member_signature_rules(context,
+                                                            member,
+                                                            owner_type_params);
     }
 
     member_name = member->as.callable.name;
-    return validate_callable_signature_visibility(
+    ok = validate_callable_signature_visibility(
         context,
         &member->as.callable,
         owner_type_params,
         member_name,
         member_visibility,
         member->kind == FENG_TYPE_MEMBER_METHOD);
+    return ok && validate_friend_member_signature_rules(context,
+                                                        member,
+                                                        owner_type_params);
 }
 
 /* Validate every signature surface declared by one top-level declaration. */
@@ -30196,6 +31954,253 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
         ok = validate_top_level_overload_overlap(&context, program);
     }
 
+    resolver_free_scopes(&context);
+    free(aliases);
+    free(imported_modules);
+    return ok;
+}
+
+/* Return whether a source member carries at least one @friend annotation. */
+static bool member_has_friend_annotation(const FengTypeMember *member) {
+    return member != NULL &&
+           annotations_contain_kind(member->annotations,
+                                    member->annotation_count,
+                                    FENG_ANNOTATION_FRIEND);
+}
+
+/* Normalize every @friend member in one declaration without resolving any
+ * executable body. This order-independent pre-pass makes all friend sets
+ * available before ordinary member access starts. */
+static bool normalize_declaration_friend_metadata(ResolveContext *context,
+                                                  const FengDecl *decl) {
+    const TypeParamEntry *previous_type_params = NULL;
+    size_t previous_type_param_count = 0U;
+    const TypeParamEntry *previous_fit_type_params = NULL;
+    size_t previous_fit_type_param_count = 0U;
+    const FengTypeParam *owner_type_params = NULL;
+    size_t owner_type_param_count = 0U;
+    FengTypeParam fit_local_type_param;
+    bool fit_scope_pushed = false;
+    bool ok = true;
+
+    if (context == NULL || decl == NULL) {
+        return true;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        owner_type_params = decl->as.type_decl.type_params;
+        owner_type_param_count = decl->as.type_decl.type_param_count;
+        if (!resolver_push_type_params(context,
+                                       owner_type_params,
+                                       owner_type_param_count,
+                                       &previous_type_params,
+                                       &previous_type_param_count)) {
+            return false;
+        }
+        for (size_t index = 0U;
+             index < decl->as.type_decl.member_count && ok;
+             ++index) {
+            const FengTypeMember *member = decl->as.type_decl.members[index];
+
+            if (!member_has_friend_annotation(member)) {
+                continue;
+            }
+            ok = validate_supported_member_annotations(context, member) &&
+                 normalize_friend_member_annotations(context,
+                                                     decl,
+                                                     member,
+                                                     owner_type_params,
+                                                     owner_type_param_count);
+        }
+        resolver_pop_type_params(context,
+                                 previous_type_params,
+                                 previous_type_param_count);
+        return ok;
+    }
+    if (decl->kind == FENG_DECL_SPEC) {
+        if (decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            return true;
+        }
+        owner_type_params = decl->as.spec_decl.type_params;
+        owner_type_param_count = decl->as.spec_decl.type_param_count;
+        if (!resolver_push_type_params(context,
+                                       owner_type_params,
+                                       owner_type_param_count,
+                                       &previous_type_params,
+                                       &previous_type_param_count)) {
+            return false;
+        }
+        for (size_t index = 0U;
+             index < decl->as.spec_decl.as.object.member_count && ok;
+             ++index) {
+            const FengTypeMember *member =
+                decl->as.spec_decl.as.object.members[index];
+
+            if (!member_has_friend_annotation(member)) {
+                continue;
+            }
+            ok = validate_supported_member_annotations(context, member) &&
+                 normalize_friend_member_annotations(context,
+                                                     decl,
+                                                     member,
+                                                     owner_type_params,
+                                                     owner_type_param_count);
+        }
+        resolver_pop_type_params(context,
+                                 previous_type_params,
+                                 previous_type_param_count);
+        return ok;
+    }
+    if (decl->kind != FENG_DECL_FIT) {
+        return true;
+    }
+    {
+        FitTargetResolution fit_target =
+            resolve_fit_target(context, decl->as.fit_decl.target);
+        const FengDecl *fit_target_decl =
+            fit_target.kind == FIT_TARGET_KIND_USER_TYPE
+                ? fit_target.type_decl
+                : NULL;
+
+        if (fit_target_decl != NULL && fit_target_decl->kind == FENG_DECL_TYPE) {
+            owner_type_params = fit_target_decl->as.type_decl.type_params;
+            owner_type_param_count =
+                fit_target_decl->as.type_decl.type_param_count;
+            if (!resolver_push_type_params(context,
+                                           owner_type_params,
+                                           owner_type_param_count,
+                                           &previous_type_params,
+                                           &previous_type_param_count)) {
+                return false;
+            }
+        }
+        if (fit_target_collect_array_local_type_param(context,
+                                                      decl->as.fit_decl.target,
+                                                      &fit_local_type_param)) {
+            owner_type_params = &fit_local_type_param;
+            owner_type_param_count = 1U;
+            if (!resolver_push_type_params(context,
+                                           owner_type_params,
+                                           owner_type_param_count,
+                                           &previous_fit_type_params,
+                                           &previous_fit_type_param_count)) {
+                resolver_pop_type_params(context,
+                                         previous_type_params,
+                                         previous_type_param_count);
+                return false;
+            }
+            fit_scope_pushed = true;
+        }
+        for (size_t index = 0U;
+             index < decl->as.fit_decl.member_count && ok;
+             ++index) {
+            const FengTypeMember *member = decl->as.fit_decl.members[index];
+
+            if (!member_has_friend_annotation(member)) {
+                continue;
+            }
+            ok = validate_supported_member_annotations(context, member) &&
+                 normalize_friend_member_annotations(context,
+                                                     decl,
+                                                     member,
+                                                     owner_type_params,
+                                                     owner_type_param_count);
+        }
+        if (fit_scope_pushed) {
+            resolver_pop_type_params(context,
+                                     previous_fit_type_params,
+                                     previous_fit_type_param_count);
+        }
+        resolver_pop_type_params(context,
+                                 previous_type_params,
+                                 previous_type_param_count);
+        return ok;
+    }
+}
+
+/* Build one program's normal lexical import context and pre-normalize only
+ * @friend metadata. No fields, callable bodies, witnesses, or codegen facts
+ * are touched in this pass. */
+static bool normalize_program_friend_metadata(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *module,
+    const FengProgram *program,
+    const VisibleTypeEntry *visible_types,
+    size_t visible_type_count,
+    const VisibleValueEntry *visible_values,
+    size_t visible_value_count,
+    const FunctionOverloadSetEntry *function_sets,
+    size_t function_set_count,
+    FengSemanticError **errors,
+    size_t *error_count,
+    size_t *error_capacity) {
+    ResolveContext context;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    size_t imported_module_capacity = 0U;
+    bool ok;
+
+    memset(&context, 0, sizeof(context));
+    context.analysis = analysis;
+    context.module = module;
+    context.program = program;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible_types;
+    context.visible_type_count = visible_type_count;
+    context.visible_values = visible_values;
+    context.visible_value_count = visible_value_count;
+    context.function_sets = function_sets;
+    context.function_set_count = function_set_count;
+    context.errors = errors;
+    context.error_count = error_count;
+    context.error_capacity = error_capacity;
+    ok = build_program_aliases(analysis,
+                               program,
+                               &aliases,
+                               &alias_count,
+                               &alias_capacity);
+    for (size_t use_index = 0U;
+         use_index < program->use_count && ok;
+         ++use_index) {
+        size_t target_index = find_module_index_by_path(
+            analysis,
+            program->uses[use_index].segments,
+            program->uses[use_index].segment_count);
+        ImportedModuleEntry entry;
+        bool duplicate = false;
+
+        if (target_index == analysis->module_count) {
+            continue;
+        }
+        entry.target_module = &analysis->modules[target_index];
+        for (size_t index = 0U;
+             index < imported_module_count;
+             ++index) {
+            if (imported_modules[index].target_module == entry.target_module) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (!duplicate) {
+            ok = append_raw((void **)&imported_modules,
+                            &imported_module_count,
+                            &imported_module_capacity,
+                            sizeof(entry),
+                            &entry);
+        }
+    }
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imported_modules;
+    context.imported_module_count = imported_module_count;
+    for (size_t decl_index = 0U;
+         decl_index < program->declaration_count && ok;
+         ++decl_index) {
+        ok = normalize_declaration_friend_metadata(
+            &context, program->declarations[decl_index]);
+    }
     resolver_free_scopes(&context);
     free(aliases);
     free(imported_modules);
@@ -30558,6 +32563,7 @@ static bool has_type_name_only_conflict(const VisibleTypeEntry *types,
 typedef enum SemanticModulePass {
     SEMANTIC_MODULE_PASS_MIXIN_SOURCES = 0,
     SEMANTIC_MODULE_PASS_MIXIN_STATIC_WRAPPERS,
+    SEMANTIC_MODULE_PASS_FRIEND_METADATA,
     SEMANTIC_MODULE_PASS_FULL
 } SemanticModulePass;
 
@@ -31121,6 +33127,20 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                        errors,
                                        error_count,
                                        error_capacity);
+        } else if (ok && pass == SEMANTIC_MODULE_PASS_FRIEND_METADATA) {
+            ok = normalize_program_friend_metadata(
+                analysis,
+                module,
+                program,
+                program_visible_types,
+                program_visible_type_count,
+                program_visible_values,
+                program_visible_value_count,
+                program_function_sets,
+                program_function_set_count,
+                errors,
+                error_count,
+                error_capacity);
         } else if (ok && pass == SEMANTIC_MODULE_PASS_MIXIN_SOURCES) {
             ok = resolve_program_mixin_sources(analysis,
                                                module,
@@ -33751,6 +35771,28 @@ static void normalize_stmt(FengStmt *stmt, size_t pointer_size) {
     }
 }
 
+/* Normalize builtin aliases appearing in type-position annotation arguments. */
+static void normalize_member_annotation_type_args(FengTypeMember *member,
+                                                  size_t pointer_size) {
+    if (member == NULL) {
+        return;
+    }
+    for (size_t annotation_index = 0U;
+         annotation_index < member->annotation_count;
+         ++annotation_index) {
+        FengAnnotation *annotation = &member->annotations[annotation_index];
+
+        if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_TYPE) {
+            continue;
+        }
+        for (size_t arg_index = 0U;
+             arg_index < annotation->arg_count;
+             ++arg_index) {
+            normalize_type_ref(annotation->type_args[arg_index], pointer_size);
+        }
+    }
+}
+
 static void normalize_decl(FengDecl *decl, size_t pointer_size) {
     size_t i;
 
@@ -33779,6 +35821,7 @@ static void normalize_decl(FengDecl *decl, size_t pointer_size) {
                 if (member == NULL) {
                     continue;
                 }
+                normalize_member_annotation_type_args(member, pointer_size);
                 switch (member->kind) {
                     case FENG_TYPE_MEMBER_FIELD:
                         normalize_type_ref(member->as.field.type, pointer_size);
@@ -33813,6 +35856,8 @@ static void normalize_decl(FengDecl *decl, size_t pointer_size) {
                         if (member == NULL) {
                             continue;
                         }
+                        normalize_member_annotation_type_args(member,
+                                                              pointer_size);
                         switch (member->kind) {
                             case FENG_TYPE_MEMBER_FIELD:
                                 normalize_type_ref(member->as.field.type, pointer_size);
@@ -33855,6 +35900,7 @@ static void normalize_decl(FengDecl *decl, size_t pointer_size) {
                 if (member == NULL) {
                     continue;
                 }
+                normalize_member_annotation_type_args(member, pointer_size);
                 switch (member->kind) {
                     case FENG_TYPE_MEMBER_FIELD:
                         normalize_type_ref(member->as.field.type, pointer_size);
@@ -34067,6 +36113,26 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         ok = append_all_mixable_instance_wrappers(analysis);
     }
 
+    /* Normalize all local @friend sets before any executable body is checked,
+     * so authorization is independent of declaration and file order. */
+    for (program_index = 0U;
+         program_index < analysis->module_count && ok && error_count == 0U;
+         ++program_index) {
+        if (analysis->modules[program_index].origin ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            continue;
+        }
+        ok = check_symbol_conflicts(analysis,
+                                    &analysis->modules[program_index],
+                                    SEMANTIC_MODULE_PASS_FRIEND_METADATA,
+                                    NULL,
+                                    NULL,
+                                    NULL,
+                                    &errors,
+                                    &error_count,
+                                    &error_capacity);
+    }
+
     /* Phase S1a: spec satisfaction relation sidecar must be available
      * during the resolve pass so coercion-site recording (Phase S1b) can
      * link each site back to its justifying relation. Imported-package
@@ -34121,6 +36187,13 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                                 &errors,
                                                 &error_count,
                                                 &error_capacity);
+    }
+
+    if (ok && error_count == 0U) {
+        ok = validate_all_friend_fit_access_signatures(analysis,
+                                                       &errors,
+                                                       &error_count,
+                                                       &error_capacity);
     }
 
     if (ok && error_count == 0U) {
@@ -34240,6 +36313,19 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->imported_symbol_identities[index].module_name);
     }
     free(analysis->imported_symbol_identities);
+    for (index = 0U; index < analysis->friend_member_info_count; ++index) {
+        struct FengFriendMemberInfo *info =
+            &analysis->friend_member_infos[index];
+
+        for (size_t friend_index = 0U;
+             friend_index < info->friend_type_count;
+             ++friend_index) {
+            friend_type_identity_free(info->friend_types[friend_index]);
+        }
+        free(info->friend_types);
+        free(info->fit_accesses);
+    }
+    free(analysis->friend_member_infos);
     /* synthesized_type_refs contains complete trees cloned or synthesized by
      * the analyzer for metadata that outlives ResolveContext. */
     for (index = 0U; index < analysis->synthesized_type_ref_count; ++index) {

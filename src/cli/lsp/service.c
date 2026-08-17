@@ -6815,11 +6815,50 @@ static bool completion_type_has_mixable_seal_access(
                session, program, target_type, source_type);
 }
 
+/* Return whether a local source member carries at least one @friend
+ * declaration. Imported symbols never expose this compile-time-only fact. */
+static bool completion_member_declares_friend(
+    const FengTypeMember *member) {
+    if (member == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < member->annotation_count; ++index) {
+        if (member->annotations[index].builtin_kind ==
+            FENG_ANNOTATION_FRIEND) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Reuse the semantic analyzer's normalized @friend access query for
+ * source-backed completion. Parsed-only recovery has no normalized friend
+ * metadata and therefore fails closed. */
+static bool completion_member_has_friend_access(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengDecl *access_owner_decl,
+    const FengTypeRef *owner_instance_type_ref,
+    const FengTypeMember *member,
+    const FengDecl *enclosing_decl,
+    const FengTypeMember *enclosing_member) {
+    return session != NULL && session->analysis != NULL &&
+           feng_semantic_member_has_friend_access(
+               session->analysis,
+               program,
+               access_owner_decl,
+               owner_instance_type_ref,
+               member,
+               enclosing_decl,
+               enclosing_member);
+}
+
 static bool append_owner_fit_member_completion_items(FengLspString *json,
                                                      bool *first,
                                                      const FengLspAnalysisSession *session,
                                                      const FengProgram *program,
                                                      const FengDecl *owner_decl,
+                                                     const FengTypeRef *owner_instance_type_ref,
                                                      FengSlice owner_builtin_name,
                                                      const FengDecl *enclosing_decl,
                                                      const FengTypeMember *enclosing_member,
@@ -6865,18 +6904,29 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                 }
                 for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
                     const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+                    bool friend_authorized =
+                        completion_member_has_friend_access(
+                            session,
+                            program,
+                            owner_decl,
+                            owner_instance_type_ref,
+                            member,
+                            enclosing_decl,
+                            enclosing_member);
+                    bool mixable_authorized =
+                        completion_type_has_mixable_seal_access(
+                            session,
+                            program,
+                            enclosing_decl,
+                            owner_decl,
+                            member);
                     bool contains = false;
 
                     if (member->visibility == FENG_VISIBILITY_PRIVATE &&
-                        member->is_static && member->is_mixable &&
-                        (enclosing_member == NULL ||
-                         enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
-                         !completion_type_has_mixable_seal_access(
-                             session,
-                             program,
-                             enclosing_decl,
-                             owner_decl,
-                             member))) {
+                        (completion_member_declares_friend(member) ||
+                         (member->is_static && member->is_mixable)) &&
+                        enclosing_decl != decl && !friend_authorized &&
+                        !mixable_authorized) {
                         continue;
                     }
                     if (!member_passes_filter(member, filter)) {
@@ -6925,18 +6975,29 @@ static bool append_owner_fit_member_completion_items(FengLspString *json,
                 }
                 for (size_t member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
                     const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+                    bool friend_authorized =
+                        completion_member_has_friend_access(
+                            session,
+                            program,
+                            owner_decl,
+                            owner_instance_type_ref,
+                            member,
+                            enclosing_decl,
+                            enclosing_member);
+                    bool mixable_authorized =
+                        completion_type_has_mixable_seal_access(
+                            session,
+                            program,
+                            enclosing_decl,
+                            owner_decl,
+                            member);
                     bool contains = false;
 
                     if (member->visibility == FENG_VISIBILITY_PRIVATE &&
-                        member->is_static && member->is_mixable &&
-                        (enclosing_member == NULL ||
-                         enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
-                         !completion_type_has_mixable_seal_access(
-                             session,
-                             program,
-                             enclosing_decl,
-                             owner_decl,
-                             member))) {
+                        (completion_member_declares_friend(member) ||
+                         (member->is_static && member->is_mixable)) &&
+                        enclosing_decl != decl && !friend_authorized &&
+                        !mixable_authorized) {
                         continue;
                     }
                     if (!member_passes_filter(member, filter)) {
@@ -7103,6 +7164,28 @@ static const FengDecl *owner_decl_from_binding(const FengLspAnalysisSession *ses
     return owner_decl_from_initializer_expr(session, program, binding->initializer);
 }
 
+/* Preserve the concrete generic type reference of a binding for visibility
+ * queries that need more than its root declaration. */
+static const FengTypeRef *owner_type_ref_from_binding(
+    const FengLspAnalysisSession *session,
+    const FengBinding *binding) {
+    const FengSemanticTypeFact *fact;
+
+    if (binding == NULL) {
+        return NULL;
+    }
+    if (binding->type != NULL) {
+        return binding->type;
+    }
+    if (session == NULL || session->analysis == NULL) {
+        return NULL;
+    }
+    fact = feng_semantic_lookup_type_fact(session->analysis, binding);
+    return fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+               ? fact->type_ref
+               : NULL;
+}
+
 static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysisSession *session,
                                                            const FengProgram *program,
                                                            const FengExpr *object,
@@ -7219,6 +7302,91 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
         (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM ||
          decl->kind == FENG_DECL_SPEC)) {
         return decl;
+    }
+    return NULL;
+}
+
+/* Resolve the concrete type-ref surface corresponding to an AST receiver.
+ * The declaration-only completion fallback remains available when inference
+ * produced only a nominal declaration. */
+static const FengTypeRef *resolve_owner_type_ref_from_object_expr(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengExpr *object,
+    const FengLspLocalList *locals) {
+    const FengSemanticTypeFact *fact;
+
+    if (object == NULL) {
+        return NULL;
+    }
+    fact = session != NULL && session->analysis != NULL
+               ? feng_semantic_lookup_type_fact(session->analysis, object)
+               : NULL;
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return fact->type_ref;
+    }
+    if (object->kind == FENG_EXPR_SELF) {
+        const FengLspLocal *self_local =
+            find_local(locals, slice_from_cstr("self"));
+
+        return self_local != NULL && self_local->self_owner_decl != NULL &&
+                       self_local->self_owner_decl->kind == FENG_DECL_FIT
+                   ? self_local->self_owner_decl->as.fit_decl.target
+                   : NULL;
+    }
+    if (object->kind == FENG_EXPR_IDENTIFIER) {
+        const FengLspLocal *local = find_local(locals, object->as.identifier);
+        const FengDecl *decl;
+
+        if (local != NULL && local->kind == FENG_LSP_LOCAL_PARAM &&
+            local->parameter != NULL) {
+            return local->parameter->type;
+        }
+        if (local != NULL && local->kind == FENG_LSP_LOCAL_BINDING &&
+            local->binding != NULL) {
+            return owner_type_ref_from_binding(session, local->binding);
+        }
+        decl = resolve_value_name(session, program, object->as.identifier);
+        if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+            return owner_type_ref_from_binding(session, &decl->as.binding);
+        }
+        return NULL;
+    }
+    if (object->kind == FENG_EXPR_MEMBER && object->as.member.object != NULL) {
+        const FengDecl *owner_decl = resolve_owner_decl_from_object_expr(
+            session, program, object->as.member.object, locals);
+        const FengTypeMember *member =
+            find_member_by_name(owner_decl, object->as.member.member);
+
+        if (member == NULL) {
+            return NULL;
+        }
+        return member->kind == FENG_TYPE_MEMBER_FIELD
+                   ? member->as.field.type
+                   : member->as.callable.return_type;
+    }
+    if (object->kind == FENG_EXPR_CALL && object->as.call.callee != NULL) {
+        const FengExpr *callee = object->as.call.callee;
+
+        if (callee->kind == FENG_EXPR_IDENTIFIER) {
+            const FengDecl *decl = resolve_value_name(
+                session, program, callee->as.identifier);
+
+            return decl != NULL && decl->kind == FENG_DECL_FUNCTION
+                       ? decl->as.function_decl.return_type
+                       : NULL;
+        }
+        if (callee->kind == FENG_EXPR_MEMBER &&
+            callee->as.member.object != NULL) {
+            const FengDecl *owner_decl = resolve_owner_decl_from_object_expr(
+                session, program, callee->as.member.object, locals);
+            const FengTypeMember *member = find_member_by_name(
+                owner_decl, callee->as.member.member);
+
+            return member != NULL && member->kind != FENG_TYPE_MEMBER_FIELD
+                       ? member->as.callable.return_type
+                       : NULL;
+        }
     }
     return NULL;
 }
@@ -7355,7 +7523,8 @@ static const FengDecl *resolve_owner_decl_from_receiver_text(
     const FengProgram *program,
     FengSlice receiver,
     const FengLspLocalList *locals,
-    FengSlice *out_builtin_name) {
+    FengSlice *out_builtin_name,
+    const FengTypeRef **out_type_ref) {
     FengLspReceiverChain chain = {0};
     FengLspAstReceiverState state = {0};
     size_t index;
@@ -7363,6 +7532,9 @@ static const FengDecl *resolve_owner_decl_from_receiver_text(
 
     if (out_builtin_name != NULL) {
         *out_builtin_name = (FengSlice){0};
+    }
+    if (out_type_ref != NULL) {
+        *out_type_ref = NULL;
     }
     if (!receiver_chain_parse(receiver, &chain) ||
         !ast_receiver_state_from_root(session, program, &chain, locals, &state)) {
@@ -7423,6 +7595,9 @@ static const FengDecl *resolve_owner_decl_from_receiver_text(
     }
     if (out_builtin_name != NULL) {
         *out_builtin_name = state.builtin_name;
+    }
+    if (out_type_ref != NULL) {
+        *out_type_ref = state.type_ref;
     }
     return state.owner_decl;
 }
@@ -17613,6 +17788,7 @@ static bool symbol_spec_seal_member_visible_from_implementation(
 static bool type_member_visible_from_program(const FengLspAnalysisSession *session,
                                              const FengProgram *program,
                                              const FengDecl *owner_decl,
+                                             const FengTypeRef *owner_instance_type_ref,
                                              const FengTypeMember *member,
                                              const FengDecl *enclosing_decl,
                                              const FengTypeMember *enclosing_member,
@@ -17632,6 +17808,16 @@ static bool type_member_visible_from_program(const FengLspAnalysisSession *sessi
                 enclosing_member)) {
             return true;
         }
+        if (completion_member_has_friend_access(
+                session,
+                program,
+                owner_decl,
+                owner_instance_type_ref,
+                member,
+                enclosing_decl,
+                enclosing_member)) {
+            return true;
+        }
         owner_symbol = cache_context != NULL
                            ? match_ast_decl_to_symbol(cache_context->current_module,
                                                       cache_context->program,
@@ -17646,13 +17832,27 @@ static bool type_member_visible_from_program(const FengLspAnalysisSession *sessi
     if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE &&
         enclosing_member != NULL &&
         enclosing_member->kind == FENG_TYPE_MEMBER_METHOD &&
-        completion_type_has_mixable_seal_access(
-            session,
-            program,
-            enclosing_decl,
-            owner_decl,
-            member)) {
+        (completion_type_has_mixable_seal_access(
+             session,
+             program,
+             enclosing_decl,
+             owner_decl,
+             member) ||
+         completion_member_has_friend_access(
+             session,
+             program,
+             owner_decl,
+             owner_instance_type_ref,
+             member,
+             enclosing_decl,
+             enclosing_member))) {
         return true;
+    }
+    if (member->visibility == FENG_VISIBILITY_PRIVATE &&
+        completion_member_declares_friend(member)) {
+        return owner_decl != NULL && enclosing_decl == owner_decl &&
+               enclosing_member != NULL &&
+               enclosing_member->kind == FENG_TYPE_MEMBER_METHOD;
     }
     if (member->visibility == FENG_VISIBILITY_PUBLIC) {
         return true;
@@ -18238,6 +18438,7 @@ static bool append_owner_member_completion_items(FengLspString *json,
                                                  const FengLspAnalysisSession *session,
                                                  const FengProgram *program,
                                                  const FengDecl *owner_decl,
+                                                 const FengTypeRef *owner_instance_type_ref,
                                                  const FengDecl *enclosing_decl,
                                                  const FengTypeMember *enclosing_member,
                                                  FengLspMemberFilter filter,
@@ -18261,6 +18462,7 @@ static bool append_owner_member_completion_items(FengLspString *json,
                 if (!type_member_visible_from_program(session,
                                                       program,
                                                       owner_decl,
+                                                      owner_instance_type_ref,
                                                       member,
                                                       enclosing_decl,
                                                       enclosing_member,
@@ -18294,6 +18496,7 @@ static bool append_owner_member_completion_items(FengLspString *json,
                 if (!type_member_visible_from_program(session,
                                                       program,
                                                       owner_decl,
+                                                      owner_instance_type_ref,
                                                       member,
                                                       enclosing_decl,
                                                       enclosing_member,
@@ -18880,6 +19083,38 @@ static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysis
     return NULL;
 }
 
+/* Preserve a simple completion receiver's concrete type arguments when they
+ * are available from a parameter, binding, or fit target. */
+static const FengTypeRef *resolve_owner_type_ref_from_object_name(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    FengSlice object_name,
+    const FengLspLocalList *locals) {
+    const FengLspLocal *local;
+    const FengDecl *decl;
+
+    if (slice_equals_cstr(object_name, "self")) {
+        local = find_local(locals, slice_from_cstr("self"));
+        return local != NULL && local->self_owner_decl != NULL &&
+                       local->self_owner_decl->kind == FENG_DECL_FIT
+                   ? local->self_owner_decl->as.fit_decl.target
+                   : NULL;
+    }
+    local = find_local(locals, object_name);
+    if (local != NULL && local->kind == FENG_LSP_LOCAL_PARAM &&
+        local->parameter != NULL) {
+        return local->parameter->type;
+    }
+    if (local != NULL && local->kind == FENG_LSP_LOCAL_BINDING &&
+        local->binding != NULL) {
+        return owner_type_ref_from_binding(session, local->binding);
+    }
+    decl = resolve_value_name(session, program, object_name);
+    return decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING
+               ? owner_type_ref_from_binding(session, &decl->as.binding)
+               : NULL;
+}
+
 static bool resolve_owner_builtin_name_from_object_name(const FengLspAnalysisSession *session,
                                                         const FengProgram *program,
                                                         FengSlice object_name,
@@ -19049,6 +19284,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
     }
     if (completion_context.is_member) {
         const FengDecl *owner_decl = NULL;
+        const FengTypeRef *owner_instance_type_ref = NULL;
         FengSlice owner_builtin_name = {0};
         bool alias_handled = false;
         bool type_param_handled = false;
@@ -19068,6 +19304,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
 
             if (constraint != NULL) {
                 owner_decl = resolve_named_type_ref(session, program, constraint);
+                owner_instance_type_ref = constraint;
                 is_static = true;
                 type_param_handled = owner_decl != NULL;
             }
@@ -19091,6 +19328,12 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                                      program,
                                                                      completion_context.object,
                                                                      &locals);
+                    owner_instance_type_ref =
+                        resolve_owner_type_ref_from_object_name(
+                            session,
+                            program,
+                            completion_context.object,
+                            &locals);
                     (void)resolve_owner_builtin_name_from_object_name(session,
                                                                       program,
                                                                       completion_context.object,
@@ -19101,7 +19344,8 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                                        program,
                                                                        completion_context.receiver,
                                                                        &locals,
-                                                                       &owner_builtin_name);
+                                                                       &owner_builtin_name,
+                                                                       &owner_instance_type_ref);
                 }
                 if (receiver_is_simple && !is_static && owner_decl != NULL &&
                     find_local(&locals, completion_context.object) == NULL &&
@@ -19125,6 +19369,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                       session,
                                                       program,
                                                       owner_decl,
+                                                      owner_instance_type_ref,
                                                       enclosing_decl,
                                                       enclosing_member,
                                                       filter,
@@ -19138,6 +19383,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           session,
                                                           program,
                                                           owner_decl,
+                                                          owner_instance_type_ref,
                                                           owner_builtin_name,
                                                           enclosing_decl,
                                                           enclosing_member,
@@ -19150,6 +19396,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
     } else if (expr != NULL && expr->kind == FENG_EXPR_MEMBER) {
         const FengSemanticModule *alias_module = NULL;
         const FengDecl *owner_decl = NULL;
+        const FengTypeRef *owner_instance_type_ref = NULL;
         FengSlice owner_builtin_name = {0};
         FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
 
@@ -19179,11 +19426,14 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                              program,
                                                              expr->as.member.object,
                                                              &locals);
+            owner_instance_type_ref = resolve_owner_type_ref_from_object_expr(
+                session, program, expr->as.member.object, &locals);
             if (!append_owner_member_completion_items(json,
                                                       &first,
                                                       session,
                                                       program,
                                                       owner_decl,
+                                                      owner_instance_type_ref,
                                                       enclosing_decl,
                                                       enclosing_member,
                                                       filter,
@@ -19202,6 +19452,7 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                                                           session,
                                                           program,
                                                           owner_decl,
+                                                          owner_instance_type_ref,
                                                           owner_builtin_name,
                                                           enclosing_decl,
                                                           enclosing_member,
@@ -19582,6 +19833,8 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 FengLspAnalysisSession source_session = {0};
                 FengCliLoadedSource source = {0};
                 const FengDecl *source_owner;
+                const FengTypeRef *source_owner_type_ref =
+                    type_param_constraint;
                 FengSlice source_builtin_name = {0};
 
                 source_session.source_module_index = context->source_module_index;
@@ -19601,17 +19854,28 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                                                context->program,
                                                completion_context.receiver,
                                                &locals,
-                                               &source_builtin_name)
+                                               &source_builtin_name,
+                                               &source_owner_type_ref)
                                          : resolve_owner_decl_from_object_expr(
                                                &source_session,
                                                context->program,
                                                member_object,
                                                &locals);
+                if (!textual_receiver_is_complex &&
+                    source_owner_type_ref == NULL) {
+                    source_owner_type_ref =
+                        resolve_owner_type_ref_from_object_expr(
+                            &source_session,
+                            context->program,
+                            member_object,
+                            &locals);
+                }
                 if (!append_owner_member_completion_items(json,
                                                           &first,
                                                           &source_session,
                                                           context->program,
                                                           source_owner,
+                                                          source_owner_type_ref,
                                                           enclosing_decl,
                                                           enclosing_member,
                                                           filter,

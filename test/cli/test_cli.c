@@ -9106,6 +9106,39 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
     return output;
 }
 
+/* Wait until asynchronous semantic analysis exposes one expected completion
+ * item, then return a final completion response from the same source. */
+static char *capture_lsp_completion_response_after_ready(
+    const char *source,
+    const char *needle,
+    size_t char_offset,
+    const char *ready_text) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_cli_lsp_completion_ready_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, source);
+    output = capture_lsp_position_response_at_path(
+        source_path,
+        source,
+        kInitialize,
+        "textDocument/completion",
+        needle,
+        char_offset,
+        ready_text);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    return output;
+}
+
 static void test_lsp_hover_uses_markdown_when_supported(void) {
     static const char *kSource =
         "module test.lsp.markdown;\n"
@@ -10374,6 +10407,171 @@ static void test_lsp_spec_seal_member_completion_respects_implementation_domain(
     ASSERT(strstr(output, "\"label\":\"hidden\"") != NULL);
     ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
     free(output);
+}
+
+/* Source tooling reuses the compiler's normalized @friend authorization for
+ * type, spec, fit-owned and generic member surfaces, while unrelated types
+ * do not receive completion entries. */
+static void test_lsp_friend_member_completion_hover_and_definition(void) {
+    static const char *kSource =
+        "module test.lsp.friend_members;\n"
+        "type FriendVault {\n"
+        "  @friend(FriendHelper) seal let value: int = 7;\n"
+        "  @friend(FriendHelper) seal static func readShared(): int { return 9; }\n"
+        "  open func visible(): int { return 1; }\n"
+        "}\n"
+        "spec FriendSurface {\n"
+        "  @friend(FriendHelper) seal func secret(): int;\n"
+        "  func visible(): int;\n"
+        "}\n"
+        "type FriendSurfaceValue: FriendSurface {\n"
+        "  func secret(): int { return 11; }\n"
+        "  func visible(): int { return 12; }\n"
+        "}\n"
+        "type FriendFitTarget {}\n"
+        "fit FriendFitTarget {\n"
+        "  @friend(FriendHelper) seal func fitValue(): int { return 13; }\n"
+        "}\n"
+        "type FriendHelper {\n"
+        "  func read(vault: FriendVault): int { return vault.value; }\n"
+        "  static func readStatic(): int { return FriendVault.readShared(); }\n"
+        "  func readSurface(surface: FriendSurface): int { return surface.secret(); }\n"
+        "  func readFitTarget(target: FriendFitTarget): int { return target.fitValue(); }\n"
+        "}\n"
+        "fit FriendHelper {\n"
+        "  func readFromFit(other: FriendVault): int { return other.value; }\n"
+        "}\n"
+        "type FriendOther {\n"
+        "  func read(vault: FriendVault): int { return vault.visible(); }\n"
+        "  func readSurface(surface: FriendSurface): int { return surface.visible(); }\n"
+        "}\n"
+        "type FriendGenericVault<T> {\n"
+        "  @friend(FriendGenericHelper<T>) seal let item: T;\n"
+        "  func FriendGenericVault(item: T) { self.item = item; }\n"
+        "}\n"
+        "type FriendGenericHelper<T> {\n"
+        "  func read(vault: FriendGenericVault<T>): T { return vault.item; }\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_cli_lsp_friend_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *expected_definition;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int field_line;
+    unsigned int field_character;
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return vault.value;",
+        strlen("return vault."),
+        "\"label\":\"value\"");
+    ASSERT(strstr(output, "\"label\":\"value\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return FriendVault.readShared();",
+        strlen("return FriendVault."),
+        "\"label\":\"readShared\"");
+    ASSERT(strstr(output, "\"label\":\"readShared\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return surface.secret();",
+        strlen("return surface."),
+        "\"label\":\"secret\"");
+    ASSERT(strstr(output, "\"label\":\"secret\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return target.fitValue();",
+        strlen("return target."),
+        "\"label\":\"fitValue\"");
+    ASSERT(strstr(output, "\"label\":\"fitValue\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return other.value;",
+        strlen("return other."),
+        "\"label\":\"value\"");
+    ASSERT(strstr(output, "\"label\":\"value\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return vault.visible();",
+        strlen("return vault."),
+        "\"label\":\"visible\"");
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"value\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return surface.visible();",
+        strlen("return surface."),
+        "\"label\":\"visible\"");
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"secret\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "return vault.item;",
+        strlen("return vault."),
+        "\"label\":\"item\"");
+    ASSERT(strstr(output, "\"label\":\"item\"") != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(
+        kSource,
+        kInitialize,
+        "return vault.value;",
+        strlen("return vault.") + 1U);
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "let value:") != NULL);
+    free(output);
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    find_line_character(kSource,
+                        "seal let value",
+                        strlen("seal let "),
+                        &field_line,
+                        &field_character);
+    expected_definition = dup_printf(
+        "\"id\":2,\"result\":{\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+        uri,
+        field_line,
+        field_character);
+    output = capture_lsp_position_response_at_path(
+        source_path,
+        kSource,
+        kInitialize,
+        "textDocument/definition",
+        "return vault.value;",
+        strlen("return vault.") + 1U,
+        "\"result\":{\"uri\":");
+    ASSERT(strstr(output, expected_definition) != NULL);
+
+    free(output);
+    free(expected_definition);
+    free(uri);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
 }
 
 static void test_lsp_fit_extension_member_completion_on_builtin_string(void) {
@@ -17747,6 +17945,36 @@ static void test_lsp_mixable_annotation_completion_and_hover(void) {
     free(output);
 }
 
+/* Verifies completion and hover metadata for the friend builtin annotation. */
+static void test_lsp_friend_annotation_completion_and_hover(void) {
+    static const char *kCompletionSource =
+        "module test.lsp.annotation.friend_completion;\n"
+        "@fri\n";
+    static const char *kHoverSource =
+        "module test.lsp.annotation.friend_hover;\n"
+        "type Helper {}\n"
+        "type Vault {\n"
+        "  @friend(Helper) seal let value: int = 1;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output = capture_lsp_completion_response(
+        kCompletionSource, "@fri\n", strlen("@fri"));
+
+    ASSERT(strstr(output, "\"label\":\"friend\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"fastcall\"") == NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kHoverSource,
+                                        kInitialize,
+                                        "@friend(Helper)",
+                                        strlen("@fri"));
+    ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
+    ASSERT(strstr(output, "@friend") != NULL);
+    ASSERT(strstr(output, "seal member friend type annotation") != NULL);
+    free(output);
+}
+
 /* Verifies generated mixin members participate in ordinary LSP surfaces and
  * go-to-definition follows their source-member mapping. */
 static void test_lsp_mixin_member_completion_hover_and_definition(void) {
@@ -18790,6 +19018,7 @@ int main(void) {
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_spec_seal_member_completion_respects_implementation_domain();
+    test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_fit_extension_member_completion_on_builtin_string();
     test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
@@ -18821,6 +19050,7 @@ int main(void) {
     test_lsp_annotation_completion_all();
     test_lsp_annotation_completion_filter_prefix();
     test_lsp_mixable_annotation_completion_and_hover();
+    test_lsp_friend_annotation_completion_and_hover();
     test_lsp_mixin_member_completion_hover_and_definition();
     test_lsp_mixable_seal_authorization_hover_and_definition();
     test_lsp_mixin_declaration_and_source_hover();

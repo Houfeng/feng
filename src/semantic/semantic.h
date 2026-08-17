@@ -451,6 +451,12 @@ typedef struct FengSemanticAnalysis {
     FengImportedSymbolIdentity *imported_symbol_identities;
     size_t imported_symbol_identity_count;
     size_t imported_symbol_identity_capacity;
+    /* Compile-time-only normalized @friend metadata. The concrete structure
+     * is private to analyzer.c: no entry is exported to FT or consumed by
+     * codegen/runtime. */
+    struct FengFriendMemberInfo *friend_member_infos;
+    size_t friend_member_info_count;
+    size_t friend_member_info_capacity;
     /* 由语义分析器合成或深拷贝、并被跨阶段元数据借用的完整 FengTypeRef 树。
      * analysis 拥有根节点及其递归 type_args / inner / segments。 */
     FengTypeRef **synthesized_type_refs;
@@ -520,6 +526,19 @@ bool feng_semantic_type_has_mixable_seal_access(
     const FengDecl *target_type,
     const FengDecl *source_type,
     const FengTypeMember *member);
+
+/* Return whether one source-backed member is visible through its normalized
+ * @friend authorization from the enclosing type/fit method. This query is
+ * read-only and compile-time-only; it exists so tooling can reuse the same
+ * generic substitution and fit/package checks as semantic member lookup. */
+bool feng_semantic_member_has_friend_access(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program,
+    const FengDecl *access_owner_decl,
+    const FengTypeRef *owner_instance_type_ref,
+    const FengTypeMember *member,
+    const FengDecl *enclosing_decl,
+    const FengTypeMember *enclosing_member);
 
 /* Returns true if `name` is a builtin type name (standard name such as
  * i8..i64, u8..u64, f32, f64, bool, string, void).  After AST alias

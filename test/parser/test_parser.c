@@ -3462,7 +3462,89 @@ static void test_type_member_mixin_invalid_forms_rejected(void) {
     }
 }
 
+/* @friend arguments are parsed as full type positions on type, object-spec,
+ * and fit members; existing expression annotations retain their own union arm. */
+static void test_friend_annotation_type_arguments_parse_on_all_members(void) {
+    const char *source =
+        "module demo.friend.parser;\n"
+        "type Helper<T> {}\n"
+        "type Owner<T> {\n"
+        "  @friend(Helper<T>, demo.other.Auditor)\n"
+        "  seal static func inspect(): int { return 1; }\n"
+        "}\n"
+        "spec Contract {\n"
+        "  @friend(Helper<int>) seal static func inspect(): int;\n"
+        "}\n"
+        "fit Owner<int> {\n"
+        "  @friend(Helper<int>) seal func inspect(): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengAnnotation *annotation;
+    const FengTypeRef *type_ref;
+    FILE *stream;
+    char buffer[4096];
+    size_t length;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "friend_annotation.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 4U);
+
+    annotation = &program->declarations[1]
+                      ->as.type_decl.members[0]
+                      ->annotations[0];
+    ASSERT(annotation->builtin_kind == FENG_ANNOTATION_FRIEND);
+    ASSERT(annotation->argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE);
+    ASSERT(annotation->arg_count == 2U);
+    type_ref = annotation->type_args[0];
+    ASSERT(type_ref->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(type_ref->as.named.segment_count == 1U);
+    assert_slice_text(type_ref->as.named.segments[0], "Helper");
+    ASSERT(type_ref->as.named.type_arg_count == 1U);
+    assert_slice_text(type_ref->as.named.type_args[0]->as.named.segments[0],
+                      "T");
+    type_ref = annotation->type_args[1];
+    ASSERT(type_ref->as.named.segment_count == 3U);
+    assert_slice_text(type_ref->as.named.segments[2], "Auditor");
+
+    annotation = &program->declarations[2]
+                      ->as.spec_decl.as.object.members[0]
+                      ->annotations[0];
+    ASSERT(annotation->builtin_kind == FENG_ANNOTATION_FRIEND);
+    ASSERT(annotation->argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE);
+    ASSERT(annotation->type_args[0]->as.named.type_arg_count == 1U);
+    assert_slice_text(
+        annotation->type_args[0]->as.named.type_args[0]->as.named.segments[0],
+        "int");
+
+    annotation = &program->declarations[3]
+                      ->as.fit_decl.members[0]
+                      ->annotations[0];
+    ASSERT(annotation->builtin_kind == FENG_ANNOTATION_FRIEND);
+    ASSERT(annotation->argument_kind == FENG_ANNOTATION_ARGUMENT_TYPE);
+    ASSERT(annotation->arg_count == 1U);
+
+    stream = tmpfile();
+    ASSERT(stream != NULL);
+    feng_program_dump(stream, program);
+    ASSERT(fflush(stream) == 0);
+    ASSERT(fseek(stream, 0L, SEEK_SET) == 0);
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, stream);
+    ASSERT(!ferror(stream));
+    buffer[length] = '\0';
+    ASSERT(fclose(stream) == 0);
+    ASSERT(strstr(buffer,
+                  "@friend(Helper<T>, demo.other.Auditor)") != NULL);
+
+    feng_program_free(program);
+}
+
 int main(void) {
+    test_friend_annotation_type_arguments_parse_on_all_members();
     test_top_level_declarations();
     test_annotation_accepts_two_arguments();
     test_extern_rejects_non_function_top_level_declarations();

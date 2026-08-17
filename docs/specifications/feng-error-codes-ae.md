@@ -308,6 +308,9 @@
 | AE1333 | @mixable 首参数 object-form spec 约束 | (新增) | @mixable static method '%.*s' first parameter must use an object-form spec |
 | AE1334 | @mixable 来源类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s' |
 | AE1335 | @mixable 目标类型名义声明 spec 约束 | (新增) | type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s' |
+| AE1336 | @friend 参数约束 | (新增) | @friend annotation requires at least one concrete friend type / @friend argument must resolve to a concrete type |
+| AE1337 | @friend 适用目标约束 | (新增) | @friend can only be applied to explicitly seal fields or ordinary methods declared in a type, object-form spec, or fit block / constructors and finalizers cannot use @friend |
+| AE1338 | @friend 签名可见性约束 | (新增) | member '%.*s' exposes type '%s' that is not accessible to friend type '%s' / @friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s' |
 
 ## 14 异常处理段
 

@@ -1916,6 +1916,14 @@ static char *resolve_abi_annotation_string_arg(const FengSemanticModule *module,
         return NULL;
     }
 
+    if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_EXPRESSION) {
+        feng_symbol_internal_set_error(
+            out_error,
+            path,
+            token,
+            role != NULL ? role : "extern callable annotation argument must be an expression");
+        return NULL;
+    }
     arg = annotation->args[arg_index];
     if (arg == NULL) {
         return NULL;

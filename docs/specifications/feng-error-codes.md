@@ -217,6 +217,9 @@
 | **AE1333** | 注解使用错误 | @mixable static method '%.*s' first parameter must use an object-form spec |
 | **AE1334** | 规约定义错误 | type '%.*s' must nominally declare spec '%.*s' before declaring @mixable static method '%.*s' |
 | **AE1335** | 规约定义错误 | type '%.*s' must nominally declare spec '%.*s' before mixing @mixable static method '%.*s' |
+| **AE1336** | 注解使用错误 | @friend annotation requires at least one concrete friend type / @friend argument must resolve to a concrete type |
+| **AE1337** | 注解使用错误 | @friend can only be applied to explicitly seal fields or ordinary methods declared in a type, object-form spec, or fit block / constructors and finalizers cannot use @friend |
+| **AE1338** | 可见性错误 | member '%.*s' exposes type '%s' that is not accessible to friend type '%s' / @friend member '%.*s' exposes type '%s' that is not accessible from fit module '%s' |
 
 成员展开生成字段或 wrapper 后，普通成员检查继续使用既有错误码，不分配 mixin 专用
 冲突码。此类诊断的主位置必须映射到产生该成员的目标 `...` 声明或 `@mixable` 声明，
