@@ -12008,6 +12008,90 @@ static void test_fit_enum_satisfies_generic_constraint(void) {
     feng_program_free(program);
 }
 
+/* An object-form child spec is itself a valid generic type argument for an
+ * ancestor constraint. The concrete generic identity remains the child spec,
+ * including through return T and instantiated parent mappings. */
+static void test_child_spec_satisfies_generic_parent_constraint(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Box<T> { let value: T; }\n"
+        "spec Parent<T> {\n"
+        "    var name: string;\n"
+        "    func payload(): T;\n"
+        "}\n"
+        "spec Middle<T>: Parent<T> {}\n"
+        "spec Child<T>: Middle<T> {}\n"
+        "spec MappedChild<T>: Parent<Box<T>> {}\n"
+        "func identity<T: Parent<int>>(value: T): T {\n"
+        "    value.name = \"updated\";\n"
+        "    let payload = value.payload();\n"
+        "    return value;\n"
+        "}\n"
+        "func mappedIdentity<T: Parent<Box<int>>>(value: T): T {\n"
+        "    return value;\n"
+        "}\n"
+        "func inferred(value: Child<int>): Child<int> {\n"
+        "    return identity(value);\n"
+        "}\n"
+        "func explicit(value: Child<int>): Child<int> {\n"
+        "    return identity<Child<int>>(value);\n"
+        "}\n"
+        "func mapped(value: MappedChild<int>): MappedChild<int> {\n"
+        "    return mappedIdentity(value);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "child_spec_generic_parent_constraint.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Nominal parent reachability must not admit unrelated specs or a different
+ * instantiated parent identity. */
+static void test_child_spec_generic_parent_constraint_rejects_unrelated_instance(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Parent<T> {}\n"
+        "spec Child<T>: Parent<T> {}\n"
+        "spec Unrelated {}\n"
+        "func accept<T: Parent<int>>(value: T): T { return value; }\n"
+        "func acceptChild<T: Child<int>>(value: T): T { return value; }\n"
+        "func badInstance(value: Child<string>): Child<string> {\n"
+        "    return accept(value);\n"
+        "}\n"
+        "func badUnrelated(value: Unrelated): Unrelated {\n"
+        "    return accept(value);\n"
+        "}\n"
+        "func badReverse(value: Parent<int>): Parent<int> {\n"
+        "    return acceptChild(value);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "child_spec_wrong_generic_parent_constraint.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 3U);
+    for (size_t index = 0U; index < error_count; ++index) {
+        ASSERT(errors[index].code != NULL);
+        ASSERT(strcmp(errors[index].code, "AE0512") == 0);
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A selected generic callable with no explicit, argument-derived or target-
  * derived type argument must fail during semantic analysis. */
 static void test_generic_call_without_inference_source_rejected(void) {
@@ -23532,6 +23616,8 @@ int main(void) {
     test_fit_enum_method_callable_on_item();
     test_fit_enum_satisfies_spec_typed_parameter();
     test_fit_enum_satisfies_generic_constraint();
+    test_child_spec_satisfies_generic_parent_constraint();
+    test_child_spec_generic_parent_constraint_rejects_unrelated_instance();
     test_generic_call_without_inference_source_rejected();
     test_generic_target_inference_rejects_unsatisfied_constraint();
     test_generic_overload_constraint_excludes_candidate();

@@ -307,6 +307,32 @@ func use_glabelled<U: GLabelled>(value: U): string {
   return use_gforward_named<U>(value);
 }
 
+// object-form 子 spec 作为父 spec 泛型约束实参的回归覆盖。
+spec GChildConstraintParent {
+  var child_constraint_name: string;
+  func child_constraint_label(): string;
+}
+
+spec GChildConstraintChild: GChildConstraintParent {
+}
+
+spec GChildConstraintGrandChild: GChildConstraintChild {
+}
+
+type GChildConstraintItem: GChildConstraintGrandChild {
+  var child_constraint_name: string;
+
+  func child_constraint_label(): string {
+    return self.child_constraint_name;
+  }
+}
+
+// T 必须保持调用点的子 spec 类型；只通过父约束 surface 访问成员。
+func update_child_constraint<T: GChildConstraintParent>(value: T, next: string): T {
+  value.child_constraint_name = next;
+  return value;
+}
+
 // 具体化父泛型 spec。
 spec GCountSequence<T> {
   func gsize_value(): int;
@@ -661,6 +687,29 @@ open func test_generic() {
     test("generic parent constraint forwarding", () {
       let item: GForwardItem = GForwardItem {};
       assert(use_glabelled<GForwardItem>(item) == "item", "generic parent constraint forwarding");
+    });
+
+    test("child spec satisfies generic parent constraint", () {
+      let inferred_source: GChildConstraintChild =
+        GChildConstraintItem { child_constraint_name: "before" };
+      let inferred_result: GChildConstraintChild =
+        update_child_constraint(inferred_source, "inferred");
+      assert(inferred_result.child_constraint_label() == "inferred",
+             "inferred child spec generic parent constraint");
+
+      let explicit_source: GChildConstraintChild =
+        GChildConstraintItem { child_constraint_name: "before" };
+      let explicit_result: GChildConstraintChild =
+        update_child_constraint<GChildConstraintChild>(explicit_source, "explicit");
+      assert(explicit_result.child_constraint_label() == "explicit",
+             "explicit child spec generic parent constraint");
+
+      let transitive_source: GChildConstraintGrandChild =
+        GChildConstraintItem { child_constraint_name: "before" };
+      let transitive_result: GChildConstraintGrandChild =
+        update_child_constraint(transitive_source, "transitive");
+      assert(transitive_result.child_constraint_label() == "transitive",
+             "transitive child spec generic parent constraint");
     });
 
     test("generic spec parent concrete inheritance", () {

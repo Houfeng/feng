@@ -7527,6 +7527,68 @@ static void test_generic_constrained_spec_value_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kGenericChildSpecParentConstraintSrc =
+    "module feng.codegen.gfparent;\n"
+    "spec Parent<T> {\n"
+    "    var name: string;\n"
+    "    func payload(): string;\n"
+    "}\n"
+    "spec Child<T>: Parent<T> {}\n"
+    "type User: Child<i32> {\n"
+    "    var name: string;\n"
+    "    func payload(): string { return self.name; }\n"
+    "}\n"
+    "func update<T: Parent<i32>>(value: T, next: string): T {\n"
+    "    value.name = next;\n"
+    "    let payload = value.payload();\n"
+    "    return value;\n"
+    "}\n"
+    "func inferred(value: Child<i32>): Child<i32> {\n"
+    "    return update(value, \"inferred\");\n"
+    "}\n"
+    "func explicit(value: Child<i32>): Child<i32> {\n"
+    "    return update<Child<i32>>(value, \"explicit\");\n"
+    "}\n";
+
+static void test_generic_child_spec_parent_constraint_codegen(void) {
+    FengProgram *program = parse_or_die(kGenericChildSpecParentConstraintSrc,
+                                       "gfparent.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr,
+                "codegen error (child spec generic parent constraint): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+
+    /* T stays Child<i32>; only its constraint dispatch surface is adapted to
+     * Parent<i32>. Both inferred and explicit calls reuse the same adapter. */
+    ASSERT(strstr(out.c_source,
+                  ".descriptor = &FengSpecAgg__feng__codegen__gfparent__Child__G__i32") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        ".witness = &FengSpecSlotWitness__") >= 2U);
+    ASSERT(strstr(out.c_source, "_value->witness->set_name") != NULL);
+    ASSERT(strstr(out.c_source, "_value->witness->payload") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kSpecAggregateFieldSrc =
     "module feng.codegen.sfagg1;\n"
     "spec Named {\n"
@@ -11423,6 +11485,7 @@ int main(void) {
     test_fit_enum_generic_constraint_codegen();
     test_generic_user_fit_object_spec_coercion_codegen();
     test_generic_constrained_spec_value_codegen();
+    test_generic_child_spec_parent_constraint_codegen();
     test_spec_aggregate_field_codegen();
     test_spec_value_field_receiver_codegen();
     test_generic_constrained_aggregate_spec_value_codegen();

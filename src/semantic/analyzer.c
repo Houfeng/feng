@@ -19790,9 +19790,26 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
          * accept so transitive generic call sites remain compilable. */
         result = true;
     } else {
-        result = type_ref_satisfies_spec_type_ref(context,
-                                                  actual_type_ref,
-                                                  constraint_ref);
+        ObjectSpecUpcastPath upcast_path;
+
+        /* A child object-form spec remains the concrete generic argument, but
+         * its declared parent view satisfies the constraint surface. Reuse the
+         * authoritative nominal upcast query so generic parent substitution,
+         * transitive parents, and rejection of unrelated specs stay identical
+         * to ordinary expected-type coercion. */
+        if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT &&
+            find_object_spec_upcast_path(
+                context,
+                inferred_expr_type_from_type_ref(actual_type_ref),
+                constraint_ref,
+                &upcast_path)) {
+            object_spec_upcast_path_free(&upcast_path);
+            result = true;
+        } else {
+            result = type_ref_satisfies_spec_type_ref(context,
+                                                      actual_type_ref,
+                                                      constraint_ref);
+        }
     }
 
     if (substituted != NULL) {
