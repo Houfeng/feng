@@ -673,6 +673,16 @@ open type ViewManager {
   open var root: Option<Widget>;
 
   /**
+   * 标记当前根组件需要重新布局；没有根组件时静默返回。
+   * Screen 尺寸等组件树外部布局条件变化时调用。
+   */
+  open func invalidateLayout(): void {
+    if self.root match root: Widget {
+      root.dirty.add(DirtyType.Layout);
+    }
+  }
+
+  /**
    * 第一阶段：样式合并
    * Root 由框架强制铺满 Screen，再从 Root 开始合并组件树的运行时样式。
    */

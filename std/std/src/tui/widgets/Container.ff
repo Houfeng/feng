@@ -18,7 +18,7 @@ open type Container: ContainerWidget {
   ...: View = View();
 
   /**
-   * 直接子组件集合
+   * 直接子组件集合；保持公开以继续参与成员展开，ContainerWidget 视角为 seal。
    */
   let children: List<Widget>;
 
@@ -26,7 +26,7 @@ open type Container: ContainerWidget {
    * 清理直接 child 的运行时覆盖；专用容器可在调用本实现后追加约束。
    */
   @mixable
-  static func prepareChildOverrideStyle(container: ContainerWidget,
+  seal static func prepareChildOverrideStyle(container: ContainerWidget,
     child: Widget): void {
     child.overrideStyle.clear();
   }
@@ -35,7 +35,7 @@ open type Container: ContainerWidget {
    * 合并自身样式，再通过可覆盖钩子准备并合并所有直接 children 的样式。
    */
   @mixable
-  static func doStyling(container: ContainerWidget,
+  seal static func doStyling(container: ContainerWidget,
     manager: ViewManager): void {
     View.doStyling(container, manager);
     for let child in container.children {
@@ -49,7 +49,7 @@ open type Container: ContainerWidget {
    * 自身 Layout 进入完整 arrange；纯 SubtreeLayout 只向下访问脏路径。
    */
   @mixable
-  static func doArrange(container: ContainerWidget,
+  seal static func doArrange(container: ContainerWidget,
     manager: ViewManager): void {
     let widget = (Widget)container;
     if widget.rtStyle.visibility == Visibility.Collapse ||
@@ -77,7 +77,7 @@ open type Container: ContainerWidget {
    * 每次进入容器布局时都重新标记直接 child，确保父级 frame、padding 或覆盖变化生效。
    */
   @mixable
-  static func arrange(container: ContainerWidget,
+  seal static func arrange(container: ContainerWidget,
     manager: ViewManager): void {
     View.arrange(container, manager);
     for let child in container.children {
@@ -88,7 +88,7 @@ open type Container: ContainerWidget {
 
   /** 按自身、直接 children 的顺序完成默认叠放绘制。 */
   @mixable
-  static func draw(container: ContainerWidget, manager: ViewManager): void {
+  seal static func draw(container: ContainerWidget, manager: ViewManager): void {
     View.draw(container, manager);
     for let child in container.children {
       child.doDraw(manager);

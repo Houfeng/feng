@@ -19,7 +19,7 @@ open type VStack: VStackWidget {
 
   /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
   @mixable
-  static func prepareChildOverrideStyle(stack: VStackWidget,
+  seal static func prepareChildOverrideStyle(stack: VStackWidget,
     child: Widget): void {
     Container.prepareChildOverrideStyle(stack, child);
     child.overrideStyle.verticalAlign = Align.Start;
@@ -133,16 +133,16 @@ open type VStack: VStackWidget {
     let widget = (Widget)stack;
     let assignedX = widget.frame.x;
     let assignedY = widget.frame.y;
-    let reference = View.resolveReferenceFrame(widget, manager);
+    let reference = Container.resolveReferenceFrame(widget, manager);
     let margin = VStack.resolveMargin(widget, reference);
-    let width = View.resolveWidth(widget, reference.width,
+    let width = Container.resolveWidth(widget, reference.width,
       margin.item4, margin.item2, intrinsic.item1);
-    let height = View.resolveHeight(widget, reference.height,
+    let height = Container.resolveHeight(widget, reference.height,
       margin.item1, margin.item3, intrinsic.item2);
     let frame = Rect();
-    frame.x = View.resolveX(widget, reference,
+    frame.x = Container.resolveX(widget, reference,
       margin.item4, margin.item2, width);
-    frame.y = View.resolveY(widget, reference,
+    frame.y = Container.resolveY(widget, reference,
       margin.item1, margin.item3, height);
     if View.isNormalFlow(widget.rtStyle.position) &&
     widget.parent match parent: ContainerWidget {
@@ -221,7 +221,7 @@ open type VStack: VStackWidget {
    * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
    */
   @mixable
-  static func arrange(stack: VStackWidget, manager: ViewManager): void {
+  seal static func arrange(stack: VStackWidget, manager: ViewManager): void {
     let widget = (Widget)stack;
     let previous = widget.frame;
     let needsWidth = VStack.needsIntrinsicWidth(stack);

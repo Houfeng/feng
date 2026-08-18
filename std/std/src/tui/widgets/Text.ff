@@ -366,7 +366,7 @@ open type Text: TextWidget {
    * 宽度先解析，Auto 高度再使用最终分行数。
    */
   @mixable
-  static func arrange(text: TextWidget, manager: ViewManager): void {
+  seal static func arrange(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.rtStyle.margin;
@@ -400,7 +400,7 @@ open type Text: TextWidget {
    * 绘制可见背景和文本；clippedFrame 只裁剪，不改变布局阶段的分行。
    */
   @mixable
-  static func draw(text: TextWidget, manager: ViewManager): void {
+  seal static func draw(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
     let clippedFrame = widget.clippedFrame;
     if clippedFrame.width == 0 || clippedFrame.height == 0 {

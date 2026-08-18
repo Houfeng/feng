@@ -9,7 +9,9 @@ import std.tui.common;
 
 /**
  * 基础视图组件
- * 基他组件可通过 mixin View 来获得基础的布局、绘制、事件处理能力
+ * 其他组件可通过 mixin View 来获得基础的布局、绘制、事件处理能力
+ * 基础状态字段保持公开以参与成员展开；框架视角的访问边界由 Widget 的
+ * 对应 seal 成员定义。
  */
 open type View: Widget {
   /**
@@ -51,31 +53,27 @@ open type View: Widget {
   }
 
   /**
-   * 当前组件的组合脏状态；新组件及其初始子树需要布局
-   * 注意：未来 spec 的 seal 成员实施后将改为 seal
+   * 当前组件的组合脏状态；新组件及其初始子树需要布局。
    */
   var dirty: DirtyMark = DirtyMark(
-    DirtyType.Layout,
-    DirtyType.SubtreeLayout
+  DirtyType.Layout,
+  DirtyType.SubtreeLayout
   );
 
   /**
    * 布局阶段计算后的最终区域；x/y 是相对于 Screen 原点的绝对坐标。
    * 父布局负责将直接 child 的相对布局结果转换为该绝对坐标。
-   * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   var frame: Rect;
 
   /**
    * frame 经过祖先和 Screen 裁剪后的本帧实际区域；x/y 同样是
    * 相对于 Screen 原点的绝对坐标。绘制和鼠标命中直接使用该快照。
-   * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   var clippedFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
-   * 注意：未来 spec 的 seal 成员实施后将改为 seal
    */
   var parent: Option<ContainerWidget>;
 
@@ -87,37 +85,37 @@ open type View: Widget {
   /**
    * 焦点首次进入当前组件子树时触发的多播事件。
    */
-  let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+  let onFocus: Event < FocusEvent<Widget >> = Event<FocusEvent<Widget>>();
 
   /**
    * 焦点最终离开当前组件子树时触发的多播事件。
    */
-  let onBlur: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();
+  let onBlur: Event < FocusEvent<Widget >> = Event<FocusEvent<Widget>>();
 
   /**
    * 键盘多播事件
    */
-  let key: Event<KeyEvent<Widget>> = Event<KeyEvent<Widget>>();
+  let key: Event < KeyEvent<Widget >> = Event<KeyEvent<Widget>>();
 
   /**
    * 鼠标按下多播事件
    */
-  let mouseDown: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let mouseDown: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
 
   /**
    * 鼠标移动多播事件
    */
-  let mouseMove: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let mouseMove: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
 
   /**
    * 鼠标释放多播事件
    */
-  let mouseUp: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let mouseUp: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
 
   /**
    * 鼠标滚轮多播事件
    */
-  let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let wheel: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
 
   /**
    * 按指定参照尺寸解析固定值或百分比。
@@ -129,7 +127,7 @@ open type View: Widget {
       fixed: int { fixed }
       ratio: double {
         if ratio != ratio { 0 }
-        else { (int)((double)reference * ratio) }
+        else {(int)((double)reference * ratio) }
       }
       else { 0 }
     };
@@ -164,7 +162,7 @@ open type View: Widget {
    * 直接父组件获得 Layout；更高祖先只获得 SubtreeLayout。
    */
   @mixable
-  static func requestReflow(widget: Widget): void {
+  seal static func requestReflow(widget: Widget): void {
     if widget.parent match parent: ContainerWidget {
       let parentWidget = (Widget)parent;
       parentWidget.dirty.add(DirtyType.Layout);
@@ -184,7 +182,7 @@ open type View: Widget {
    * 合并用户样式和框架覆盖，只按最终运行时布局样式变化请求重新布局。
    */
   @mixable
-  static func doStyling(widget: Widget, manager: ViewManager): void {
+  seal static func doStyling(widget: Widget, manager: ViewManager): void {
     widget.draftStyle.clear();
     widget.draftStyle.apply(widget.style);
     for var index: int = 0;
@@ -207,7 +205,7 @@ open type View: Widget {
    * arrange 期间直接父级收到的 Layout 请求会在本次调用内继续处理。
    */
   @mixable
-  static func doArrange(widget: Widget, manager: ViewManager): void {
+  seal static func doArrange(widget: Widget, manager: ViewManager): void {
     if !widget.dirty.has(DirtyType.Layout) &&
     !widget.dirty.has(DirtyType.SubtreeLayout) {
       return;
@@ -256,7 +254,8 @@ open type View: Widget {
    * Absolute 使用最近的非 Normal 祖先 frame；Fixed 使用整个 Screen。
    * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
-  open static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
+  @mixable
+  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
     let reference = Rect();
     reference.x = 0;
     reference.y = 0;
@@ -268,7 +267,7 @@ open type View: Widget {
     }
 
     if widget.rtStyle.position == Position.Absolute {
-      var current: Option<ContainerWidget> = widget.parent;
+      var current: Option < ContainerWidget > = widget.parent;
       while current match let parent: ContainerWidget {
         let parentWidget = (Widget)parent;
         if parentWidget.rtStyle.position != Position.Normal {
@@ -309,7 +308,8 @@ open type View: Widget {
   /**
    * 解析组件最终宽度。
    */
-  open static func resolveWidth(widget: Widget, referenceWidth: int,
+  @mixable
+  seal static func resolveWidth(widget: Widget, referenceWidth: int,
     left: int, right: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceWidth, left, right);
     if View.isNormalFlow(widget.rtStyle.position) &&
@@ -330,7 +330,8 @@ open type View: Widget {
   /**
    * 解析组件最终高度。
    */
-  open static func resolveHeight(widget: Widget, referenceHeight: int,
+  @mixable
+  seal static func resolveHeight(widget: Widget, referenceHeight: int,
     top: int, bottom: int, intrinsic: int): int {
     let available = View.resolveAvailableSize(referenceHeight, top, bottom);
     if View.isNormalFlow(widget.rtStyle.position) &&
@@ -351,7 +352,8 @@ open type View: Widget {
   /**
    * 解析组件最终横坐标。
    */
-  open static func resolveX(widget: Widget, reference: Rect,
+  @mixable
+  seal static func resolveX(widget: Widget, reference: Rect,
     left: int, right: int, width: int): int {
     let marginOrigin = View.addCoordinate(reference.x, left);
     if View.isNormalFlow(widget.rtStyle.position) {
@@ -366,7 +368,8 @@ open type View: Widget {
   /**
    * 解析组件最终纵坐标。
    */
-  open static func resolveY(widget: Widget, reference: Rect,
+  @mixable
+  seal static func resolveY(widget: Widget, reference: Rect,
     top: int, bottom: int, height: int): int {
     let marginOrigin = View.addCoordinate(reference.y, top);
     if View.isNormalFlow(widget.rtStyle.position) {
@@ -383,7 +386,7 @@ open type View: Widget {
    * 容器组件自行决定是否及如何布局子组件
    */
   @mixable
-  static func arrange(widget: Widget, manager: ViewManager): void {
+  seal static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.rtStyle.margin;
     var top = View.resolveLength(margin.top, reference.height);
@@ -448,12 +451,12 @@ open type View: Widget {
    * 存在 overflow=Hidden 祖先时与最近祖先的 clippedFrame 求交；
    * 该快照已经包含更高祖先与 Screen 的剪裁。否则直接裁剪到 Screen。
    */
-  open static func resolveClippedFrame(widget: Widget, manager: ViewManager): Rect {
+  seal static func resolveClippedFrame(widget: Widget, manager: ViewManager): Rect {
     if widget.rtStyle.visibility != Visibility.Visible {
       return Rect();
     }
     var result = widget.frame;
-    var current: Option<ContainerWidget> = widget.parent;
+    var current: Option < ContainerWidget > = widget.parent;
     while current match let parent: ContainerWidget {
       let parentWidget = (Widget)parent;
       if parentWidget.rtStyle.visibility != Visibility.Visible {
@@ -478,7 +481,7 @@ open type View: Widget {
    * 空区域不会进入 sequence，也不会调用组件的 draw 实现。
    */
   @mixable
-  static func doDraw(widget: Widget, manager: ViewManager): void {
+  seal static func doDraw(widget: Widget, manager: ViewManager): void {
     let frame = View.resolveClippedFrame(widget, manager);
     widget.clippedFrame = frame;
     if frame.width == 0 || frame.height == 0 {
@@ -493,7 +496,7 @@ open type View: Widget {
    * 不绘制文本、边框或子组件。
    */
   @mixable
-  static func draw(widget: Widget, manager: ViewManager): void {
+  seal static func draw(widget: Widget, manager: ViewManager): void {
     let frame = widget.clippedFrame;
     if frame.width == 0 || frame.height == 0 {
       return;
@@ -501,8 +504,8 @@ open type View: Widget {
     if widget.rtStyle.backColor match color: RgbColor {
       if color.a != 0 {
         manager.getScreenBuffer().draw((u32)frame.x, (u32)frame.y,
-          (u32)frame.width, (u32)frame.height, (u64)0,
-          none, color);
+        (u32)frame.width, (u32)frame.height, (u64)0,
+        none, color);
       }
     }
   }

@@ -493,9 +493,7 @@ open type TuiApp {
       let rc = uv_tty_get_winsize(self.tty, &w, &h);
       if rc == 0 {
         self.screen.resize((u32)w[0], (u32)h[0]);
-        if self.view.root match root: Widget {
-          root.dirty.add(DirtyType.Layout);
-        }
+        self.view.invalidateLayout();
         // 终端可能已重排旧画面；新 front/back 无法通过 diff 清除这些物理残留。
         self.screen.clearScreen();
       }

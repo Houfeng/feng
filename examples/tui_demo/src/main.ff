@@ -52,8 +52,8 @@ func bindDrag(rectangle: View, app: TuiApp): void {
       rectangle.style.position = Position.Fixed;
       rectangle.style.x = x;
       rectangle.style.y = y;
-      rectangle.dirty.add(DirtyType.Layout);
-      rectangle.requestReflow();
+      // rectangle.dirty.add(DirtyType.Layout);
+      // rectangle.requestReflow();
     }
   });
 
