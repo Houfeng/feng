@@ -467,7 +467,7 @@ struct FengTypeMember {
     FengTypeMemberKind kind;
     FengVisibility visibility;
     bool is_static;
-    bool is_mixable; /* normalized declaration fact for a @mixable method */
+    bool is_mixable; /* normalized declaration fact for a @mixable member */
     bool is_mixin_static_wrapper;
     bool is_mixin_instance_wrapper;
     /* Non-NULL only for a field or wrapper synthesized from a member mix.

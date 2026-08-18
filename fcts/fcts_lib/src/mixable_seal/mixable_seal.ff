@@ -61,3 +61,19 @@ open fit SealGenericFitView {
     return value;
   }
 }
+
+/** Cross-package source for seal instance-field mix capabilities. */
+open type SealFieldView {
+  @mixable
+  seal let label: string = "field";
+
+  @mixable
+  seal var value: int = 7;
+
+  seal var hidden: int = 9;
+}
+
+/** Exported generated fields verify explicit multi-level propagation. */
+open type SealFieldMiddle {
+  ...: SealFieldView = SealFieldView();
+}

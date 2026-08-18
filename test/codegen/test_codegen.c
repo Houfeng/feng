@@ -11158,21 +11158,27 @@ static void test_member_mix_fields_and_mixable_wrappers_codegen(void) {
     feng_program_free(program);
 }
 
-/* Seal mixable methods lower through the ordinary static and instance
- * wrappers for both type and fit sources; access control leaves no runtime
- * branch, method table, or alternate call ABI in the generated C. */
+/* Seal mixable methods lower through ordinary wrappers, while seal mixable
+ * fields lower through the existing struct-field path. Both access checks
+ * remain compile-time-only and add no runtime branch or alternate ABI. */
 static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
     static const char *kSource =
         "module feng.codegen.mixable_seal;\n"
         "spec Widget {}\n"
         "type View: Widget {\n"
+        "    @mixable seal var state: int = 7;\n"
+        "    @mixable seal var text: string = \"state\";\n"
+        "    seal var hiddenState: int = 9;\n"
         "    @mixable seal static func draw(target: Widget, value: int): int { return value + 1; }\n"
         "    @mixable seal static func log(target: Widget, values: int...): void {}\n"
         "}\n"
         "type Button: Widget {\n"
-        "    ...: View;\n"
+        "    ...: View = View();\n"
         "    open func run(value: int): int { self.log(1, 2); return self.draw(value); }\n"
         "    open static func source(value: int): int { return View.draw(Button(), value); }\n"
+        "    open func fields(source: View): int { source.state = 9; return self.state + source.state; }\n"
+        "    open static func sourceState(source: View): int { source.state = 11; return source.state; }\n"
+        "    open func sourceText(source: View): string { return source.text; }\n"
         "}\n"
         "type FitView: Widget {}\n"
         "open fit FitView {\n"
@@ -11182,7 +11188,12 @@ static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
         "    ...: FitView;\n"
         "    open func run(value: int): int { return self.paint(value); }\n"
         "}\n"
-        "func exercise(): int { return Button().run(1) + Button.source(2) + FitButton().run(3); }\n";
+        "func exercise(): int {\n"
+        "    let text = Button().sourceText(View());\n"
+        "    return Button().run(1) + Button.source(2) +\n"
+        "        Button().fields(View()) + Button.sourceState(View()) +\n"
+        "        FitButton().run(3);\n"
+        "}\n";
     FengProgram *program = parse_or_die(
         kSource, "mixable_seal_codegen.ff");
     const FengProgram *programs[] = {program};
@@ -11215,6 +11226,7 @@ static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
                   "FitButton__static__paint__from__") != NULL);
     ASSERT(strstr(output.c_source,
                   "FitButton__paint__from__i64") != NULL);
+    ASSERT(strstr(output.c_source, "->state") != NULL);
     compile_generated_c_or_die(output.c_source);
 
     feng_codegen_output_free(&output);

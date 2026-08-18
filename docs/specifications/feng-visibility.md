@@ -53,9 +53,12 @@ open type User {
 - 需显式声明 `seal` 才能隐藏。
 - `seal` 成员仅允许所属 `type` 自身的成员实现访问；同 module、同包中的其他
   `type` 或顶层函数仍属于外部代码，不得访问。
-- `@mixable seal static` 保持 seal 可见性，但可由
-  [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 定义的
-  直接 mix 目标在受限上下文中访问；该例外不适用于其他 seal 成员。
+- `@mixable seal` 成员保持 seal 可见性，但可由直接 mix 目标在受限上下文中访问：
+  static 方法规则由
+  [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 定义，
+  实例字段规则由
+  [Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 定义；这些例外不
+  适用于其他 seal 成员。
 - `@friend(Type, ...)` 可以把一个显式 `seal` 字段或普通方法定向放行给列出的
   具体 type 及本包 `fit Type`；该例外只替代成员自身的 seal 检查，不穿透 module、
   owner type/spec 或 fit 的可见性。
@@ -283,12 +286,17 @@ open type User {
 requirement 与实现成员的可见性兼容矩阵由
 [Feng 语言 `spec` 规范](./feng-spec.md) 唯一定义。
 
-### 10.2 `@mixable seal static` 成员
+### 10.2 `@mixable seal` 成员
 
 `@mixable seal static` 仍是具体 type 或 fit 的 seal 成员，普通成员查找必须继续按
 seal 拒绝。只有 [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权)
 定义的直接 mix 目标实现上下文可以选择和调用对应方法；该授权不改变所属 type 的其他
 seal 成员，也不来自 module、包、继承或 spec/witness 关系。
+
+`@mixable seal` 实例字段仍是具体 type 的 seal 成员。只有
+[Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 定义的直接 mix 目标
+实例方法或静态方法可以访问对应 Source 字段；`let` / `var`、静态性、owner、module、
+spec/witness 和 fit 规则均继续执行。字段的 `is_mixable` 事实单独存在不构成访问权。
 
 ### 10.3 `@friend` seal 成员
 
@@ -333,6 +341,8 @@ seal 成员，也不来自 module、包、继承或 spec/witness 关系。
 - `fit` 的目标类型、`spec` 列表，以及实例和静态成员的公开签名。
 - `@mixable seal static` 的完整签名按所属 type 或 fit 中同位置 open 方法的有效可见
   范围检查；未标注 `@mixable` 的普通 seal 方法仍按类型私有范围处理。
+- `@mixable seal` 实例字段的完整类型按所属 type 中同位置 open 字段的有效可见范围
+  检查；未标注 `@mixable` 的普通 seal 字段仍按类型私有范围处理。
 - 显式类型和推导类型；推导类型在类型推导完成后检查。
 
 组成类型按以下规则递归检查：

@@ -302,7 +302,7 @@
 | AE1324 | 借用指针对象字段存储逃逸约束 | AE0103 | object literal field '%.*s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer |
 | AE1325 | 借用指针赋值存储逃逸约束 | AE0104 | assignment target '%s' cannot store borrowed data pointer expression '%s'; borrowed data pointers are only guaranteed valid for the current extern call; retain the original owner instead of caching the raw pointer |
 | AE1329 | @mixable 无参数约束 | (新增) | @mixable annotation does not accept arguments |
-| AE1330 | @mixable 适用目标约束 | (新增) | @mixable can only be applied to static methods declared in a type or fit block |
+| AE1330 | @mixable 适用目标约束 | (新增) | @mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type |
 | AE1331 | @mixable 首参数存在性约束 | (新增) | @mixable static method '%.*s' must declare at least one parameter |
 | AE1332 | @mixable 首参数非变参约束 | (新增) | @mixable static method '%.*s' first parameter cannot be variadic |
 | AE1333 | @mixable 首参数 object-form spec 约束 | (新增) | @mixable static method '%.*s' first parameter must use an object-form spec |

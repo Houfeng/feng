@@ -29,7 +29,7 @@ static const LspAnnotationItem BUILTIN_ANNOTATIONS[] = {
     { "iterable", "iterable annotation" },
     { "iterator", "iterator annotation" },
     { "value",    "value type annotation" },
-    { "mixable",  "mixable static method annotation" },
+    { "mixable",  "mixable member annotation" },
     { "friend",   "seal member friend type annotation" },
 };
 

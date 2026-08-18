@@ -518,9 +518,14 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis);
 void feng_semantic_errors_free(FengSemanticError *errors, size_t error_count);
 void feng_semantic_infos_free(FengSemanticInfo *infos, size_t info_count);
 
+/* Return whether a member has one of the seal mix capability shapes: a
+ * mixable static method or a mixable instance field. */
+bool feng_semantic_member_is_mixable_seal_capability(
+    const FengTypeMember *member);
+
 /* Return whether `target_type` has the compile-time-only authorization to
- * access `member` as a seal mixable static method of `source_type`. The
- * query is provider-neutral: all three mix forms use their normalized
+ * access a seal mix capability member of `source_type`. The query is
+ * provider-neutral: all three mix forms use their normalized
  * resolved_source_decl and imported declarations use the same AST facts. */
 bool feng_semantic_type_has_mixable_seal_access(
     const FengDecl *target_type,

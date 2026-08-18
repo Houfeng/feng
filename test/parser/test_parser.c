@@ -3385,6 +3385,50 @@ static void test_mixable_seal_static_member_facts_parse(void) {
     feng_program_free(program);
 }
 
+/* Seal instance fields retain their mutability, visibility, and normalized
+ * mixable member fact before semantic annotation-contract validation. */
+static void test_mixable_seal_field_facts_parse(void) {
+    const char *source =
+        "module demo.mixable_seal_field_parse;\n"
+        "type State {\n"
+        "    @mixable seal let label: string = \"ready\";\n"
+        "    @mixable seal var value: int = 1;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *state;
+    const FengTypeMember *label;
+    const FengTypeMember *value;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "mixable_seal_field_parse.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 1U);
+    state = program->declarations[0];
+    ASSERT(state->kind == FENG_DECL_TYPE);
+    ASSERT(state->as.type_decl.member_count == 2U);
+    label = state->as.type_decl.members[0];
+    value = state->as.type_decl.members[1];
+
+    ASSERT(label->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(label->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!label->is_static && label->is_mixable);
+    ASSERT(label->as.field.mutability == FENG_MUTABILITY_LET);
+    ASSERT(label->annotation_count == 1U);
+    ASSERT(label->annotations[0].builtin_kind == FENG_ANNOTATION_MIXABLE);
+    ASSERT(value->kind == FENG_TYPE_MEMBER_FIELD);
+    ASSERT(value->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(!value->is_static && value->is_mixable);
+    ASSERT(value->as.field.mutability == FENG_MUTABILITY_VAR);
+    ASSERT(value->annotation_count == 1U);
+    ASSERT(value->annotations[0].builtin_kind == FENG_ANNOTATION_MIXABLE);
+
+    feng_program_free(program);
+}
+
 /* AST dump interleaves expansion directives with explicit members. */
 static void test_type_member_mixin_ast_dump_preserves_order(void) {
     const char *source =
@@ -3666,6 +3710,7 @@ int main(void) {
     test_infix_match_op_mixed_with_relational_and_equality();
     test_type_member_mixins_and_mixable_fact_parse();
     test_mixable_seal_static_member_facts_parse();
+    test_mixable_seal_field_facts_parse();
     test_type_member_mixin_ast_dump_preserves_order();
     test_type_member_mixin_invalid_forms_rejected();
     puts("parser tests passed");

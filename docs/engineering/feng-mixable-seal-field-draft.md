@@ -1,8 +1,9 @@
 # Feng `@mixable seal` 实例字段开发草案
 
-> **状态**：待 Review，尚未实施。
+> **状态**：已实施，专项测试和聚焦 FCTS 已通过；已执行全量回归，但被现有 TUI seal
+> API 与测试调用不一致的问题阻断于 `std-tests`，未进入完整 FCTS。
 >
-> **主规范归属**：Review 通过后，字段展开的正式语义统一更新到
+> **主规范归属**：字段展开的正式语义统一定义在
 > [`feng-type.md`](../specifications/feng-type.md)；
 > [`feng-function.md`](../specifications/feng-function.md) 只把 `@mixable` 的合法标注位置
 > 扩展到本草案定义的 `seal` 实例字段，并引用类型规范；
@@ -109,7 +110,7 @@ open type View {
 | object-form `spec` 成员 | 否 | 不因本草案改变 |
 | `fit` 成员 | 只有现有合法静态方法位置 | `fit` 仍不能声明字段 |
 
-本草案建议禁止在公开实例字段上写 `@mixable`。公开实例字段已经无条件参与展开；允许
+禁止在公开实例字段上写 `@mixable`。公开实例字段已经无条件参与展开；允许
 冗余注解既不增加能力，也会让读者误以为公开字段需要显式选择。若以后需要统一改为
 “所有字段都必须显式 opt-in”，应作为改变现有公开字段行为的独立设计处理。
 
@@ -611,83 +612,84 @@ LSP 必须复用语义层的直接 mix 授权查询，不得为了让某个上�
 
 ### TODO 1：正式规范与诊断
 
-- [ ] 将本草案 Review 结论写入 `feng-type.md`，唯一正式定义字段候选集合
+- [x] 将本草案 Review 结论写入 `feng-type.md`，唯一正式定义字段候选集合
   `open/default || (seal && is_mixable)`、生成映射、直接 mix 授权、初始化投影和多层
   传播。
-- [ ] 更新 `feng-function.md` 的 `@mixable` 合法位置矩阵，只引用类型规范中的字段语义，
+- [x] 更新 `feng-function.md` 的 `@mixable` 合法位置矩阵，只引用类型规范中的字段语义，
   不重复生成规则。
-- [ ] 更新 `feng-visibility.md`，明确字段仍为 seal；只有 `seal + instance + is_mixable`、
+- [x] 更新 `feng-visibility.md`，明确字段仍为 seal；只有 `seal + instance + is_mixable`、
   直接 mix 关系与目标实例/静态方法上下文同时成立时才形成受限访问例外。
-- [ ] 在诊断码主规范中分配或调整注解位置、冗余 open 字段、静态字段及签名可见性诊断。
+- [x] 在诊断码主规范中分配或调整注解位置、冗余 open 字段、静态字段及签名可见性诊断。
 
 ### TODO 2：声明事实与声明期校验
 
-- [ ] 泛化成员级 `is_mixable` 注释与内部表示，对字段解析并保存归一化事实。
-- [ ] 在字段生成前完成 mixable 成员契约校验：只允许具体 type 的显式 seal 实例字段，
+- [x] 泛化成员级 `is_mixable` 注释与内部表示，对字段解析并保存归一化事实。
+- [x] 在字段生成前完成 mixable 成员契约校验：只允许具体 type 的显式 seal 实例字段，
   拒绝 open/default 字段、静态字段、spec 成员及其他位置。
-- [ ] 保证非法声明即使从未被任何 type 展开也会在声明处报错。
-- [ ] **验证**现有 `@mixable static` 的首参数和 owner/target spec 检查结果保持不变。
+- [x] 保证非法声明即使从未被任何 type 展开也会在声明处报错。
+- [x] **验证**现有 `@mixable static` 的首参数和 owner/target spec 检查结果保持不变。
 
 ### TODO 3：字段候选与生成
 
-- [ ] 建立统一字段候选谓词：非静态实例字段且为 open/default，或者同时为 seal 与
+- [x] 建立统一字段候选谓词：非静态实例字段且为 open/default，或者同时为 seal 与
   `is_mixable`；不增加具体 type、字段名或 TUI 特判。
-- [ ] 复用现有直接 mix 关系查询，并按 member kind 区分方法资格与字段资格；不得把字段
+- [x] 复用现有直接 mix 关系查询，并按 member kind 区分方法资格与字段资格；不得把字段
   `is_mixable` 解释为 open。
-- [ ] 将现有 mixable seal 成员资格从方法专用判断泛化为按 member kind 判断，使普通成员
+- [x] 将现有 mixable seal 成员资格从方法专用判断泛化为按 member kind 判断，使普通成员
   访问入口可按直接 mix 关系放行 `seal + instance + is_mixable` 字段；不新增平行访问
   系统，并沿用 `let` / `var` 读写规则。
-- [ ] **验证**新增字段受限授权没有扩大现有 seal 访问边界：顶层、fit、构造器、字段
+- [x] **验证**新增字段受限授权没有扩大现有 seal 访问边界：顶层、fit、构造器、字段
   初始化器、其他 type、间接 mix 和共同 spec 实现者仍被拒绝；未标注 `@mixable` 的
   普通 seal 字段仍不得因直接 mix 放行。
-- [ ] 让生成字段保留 `seal + is_mixable`，供下一层展开与直接授权继续使用。
-- [ ] **验证**生成字段继续沿用现有克隆路径，保留名称、替换后类型、可变性和来源映射。
-- [ ] **验证**显式来源构造继续只从已经生成并映射的字段集合执行初始化投影，codegen
+- [x] 让生成字段保留 `seal + is_mixable`，供下一层展开与直接授权继续使用。
+- [x] **验证**生成字段继续沿用现有克隆路径，保留名称、替换后类型、可变性和来源映射。
+- [x] **验证**显式来源构造继续只从已经生成并映射的字段集合执行初始化投影，codegen
   不会重新发现或选择普通 seal 字段。
-- [ ] **验证**目标显式优先、多个来源冲突、循环检测与多层递归展开继续沿用现有规则。
-- [ ] **验证**直接字段授权只依赖直接 mix 关系，不依赖同名生成字段是否因目标显式优先
+- [x] **验证**目标显式优先、多个来源冲突、循环检测与多层递归展开继续沿用现有规则。
+- [x] **验证**直接字段授权只依赖直接 mix 关系，不依赖同名生成字段是否因目标显式优先
   而被跳过，与现有 mixable seal 静态方法授权一致。
-- [ ] **验证**中间层显式覆盖会按现有规则自然截断被跳过来源字段的传播。
+- [x] **验证**中间层显式覆盖会按现有规则自然截断被跳过来源字段的传播。
 
 ### TODO 4：Symbol / `.ft` 与有效可见范围
 
-- [ ] **验证**现有 source export、symbol 声明、`.ft` writer / reader 和 imported AST
+- [x] **验证**现有 source export、symbol 声明、`.ft` writer / reader 和 imported AST
   通用路径会原样传递字段 `is_mixable`；发现缺口时只修复通用成员属性路径。
-- [ ] **验证**package-public `.ft` wire 保持兼容；字段能力复用现有成员级 mixable 属性，
+- [x] **验证**package-public `.ft` wire 保持兼容；字段能力复用现有成员级 mixable 属性，
   不增加平行格式。
-- [ ] **验证**普通 seal 字段即使因对象布局存在于 `.ft`，仍不会被成员展开误选或被普通
+- [x] **验证**普通 seal 字段即使因对象布局存在于 `.ft`，仍不会被成员展开误选或被普通
   成员访问放行。
-- [ ] **验证**生成的 mixable seal 字段会经现有字段导出路径进入目标 `.ft`，支持跨包
+- [x] **验证**生成的 mixable seal 字段会经现有字段导出路径进入目标 `.ft`，支持跨包
   多层传播。
-- [ ] **验证**同包 AST 与 imported `.ft` 恢复字段进入同一直接授权查询，不需要
+- [x] **验证**同包 AST 与 imported `.ft` 恢复字段进入同一直接授权查询，不需要
   provider 特判。
-- [ ] **验证**`.ft` 中存在 mixable 事实本身不构成访问权，仍须同时满足直接 mix 关系和
+- [x] **验证**`.ft` 中存在 mixable 事实本身不构成访问权，仍须同时满足直接 mix 关系和
   合法目标方法上下文。
-- [ ] 复用同位置 open 字段的完整类型有效可见范围检查。
+- [x] 复用同位置 open 字段的完整类型有效可见范围检查。
 
 ### TODO 5：验证初始化与 Codegen 通路、调整 LSP
 
-- [ ] **验证**默认零值形式可直接处理生成 seal 字段；预计无需专用 codegen。
-- [ ] **验证**显式来源构造的现有字段借用路径可直接读取被选中的 seal capability 字段，
-  包括值/引用语义、泛型 reified layout、RC 和跨包来源；预计不增加 runtime helper。
-- [ ] **验证**固定布局跨包来源可由 `.ft` 字段顺序重建布局，reified 泛型来源可继续使用
+- [x] **验证**默认零值形式可直接处理生成 seal 字段，无需专用 codegen。
+- [x] **验证**显式来源构造的现有字段借用路径可直接读取被选中的 seal capability 字段，
+  包括值/引用语义、泛型 reified layout、RC 和跨包来源；不增加 runtime helper。
+- [x] **验证**固定布局跨包来源可由 `.ft` 字段顺序重建布局，reified 泛型来源可继续使用
   现有 field index / offset，不新增字段 offset ABI。
-- [ ] **验证**现有 `let` 绑定事实计算、目标布局、销毁与来源位置映射可直接复用；发现缺口
+- [x] **验证**现有 `let` 绑定事实计算、目标布局、销毁与来源位置映射可直接复用；发现缺口
   时只修复通用字段展开路径。
-- [ ] **验证**Target 对 Source 字段的已授权读写可直接复用普通字段 codegen，不新增
+- [x] **验证**Target 对 Source 字段的已授权读写可直接复用普通字段 codegen，不新增
   runtime helper、动态检查或间接访问。
-- [ ] 调整 LSP：Source 原始字段只在获得直接授权的 Target 实例/静态方法上下文中展示，
+- [x] 调整 LSP：Source 原始字段只在获得直接授权的 Target 实例/静态方法上下文中展示，
   其他上下文继续隐藏；目标生成字段保留 definition 来源映射。
 
 ### TODO 6：新增验证用例与回归
 
-- [ ] **验证**新增 Parser/AST 与非法位置诊断用例。
-- [ ] **验证**新增 Semantic 成员面、Target 实例/静态方法直接读写、越权拒绝、冲突、
+- [x] **验证**新增 Parser/AST 与非法位置诊断用例。
+- [x] **验证**新增 Semantic 成员面、Target 实例/静态方法直接读写、越权拒绝、冲突、
   spec 满足、泛型和多层直接/间接授权用例。
-- [ ] **验证**新增默认零值、显式来源一次求值、seal `let` / `var`、IR/codegen 与 FCTS
-  行为用例。
-- [ ] **验证**新增同包、跨 module、跨包 `.ft` / `.fb` 及三包传播用例。
-- [ ] **验证**执行专项测试后，在非 Codex 沙箱环境执行 `make test` 全量回归。
+- [x] **验证**新增默认零值、显式来源一次求值、seal `let` / `var`、IR/codegen 与 FCTS
+  行为用例；聚焦 FCTS 的 5 项行为用例全部通过。
+- [x] **验证**新增同包、跨 module、跨包 `.ft` / `.fb` 及三包传播用例。
+- [x] **验证**执行专项测试后，在非 Codex 沙箱环境执行 `make test` 全量回归；UBSan
+  单元测试、CLI/LSP、symbol、smoke 和 CLI 脚本均通过，现有 TUI 错误阻断 `std-tests`。
 
 ## 13. Review 要点
 
@@ -710,4 +712,4 @@ LSP 必须复用语义层的直接 mix 授权查询，不得为了让某个上�
    扩展。
 10. 不允许以 runtime helper、动态字段表、额外间接访问或新字段 offset ABI 实现该能力。
 
-Review 通过后再更新正式规范和实施代码。
+正式规范与实现已经落地；现有 TUI 回归阻断解除并完成 FCTS 后关闭本草案。

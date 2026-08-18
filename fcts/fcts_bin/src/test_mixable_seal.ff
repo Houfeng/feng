@@ -93,6 +93,56 @@ type SealGenericFitButton: SealGenericWidget {
   }
 }
 
+/** Target receiving cross-package seal field capabilities. */
+type SealFieldButton {
+  ...: SealFieldView = SealFieldView();
+
+  open func ownValue(): int {
+    return self.value;
+  }
+
+  open func sourceLabel(source: SealFieldView): string {
+    return source.label;
+  }
+
+  open static func updateSource(source: SealFieldView): int {
+    source.value = 11;
+    return source.value;
+  }
+}
+
+/** Inferred construction uses the same seal field selection. */
+type SealInferredFieldButton {
+  ... = SealFieldView();
+
+  open func ownLabel(): string {
+    return self.label;
+  }
+}
+
+/** Generated seal field capabilities propagate through each direct edge. */
+type SealFieldLeaf {
+  ...: SealFieldMiddle = SealFieldMiddle();
+
+  open func ownValue(): int {
+    return self.value;
+  }
+}
+
+/** Explicit target priority skips generation without erasing source access. */
+type SealFieldOverride {
+  ...: SealFieldView = SealFieldView();
+  seal var value: int = 100;
+
+  open func ownValue(): int {
+    return self.value;
+  }
+
+  open static func sourceValue(source: SealFieldView): int {
+    return source.value;
+  }
+}
+
 /** Verify seal mix behavior through its authorized target-facing entries. */
 open func test_mixable_seal() {
   describe("mixable seal methods", () {
@@ -126,6 +176,23 @@ open func test_mixable_seal() {
              "method-generic capability");
       assert(SealGenericFitButton().run(9) == 9,
              "method-generic fit capability");
+    });
+
+    test("cross-package seal fields", () {
+      assert(SealFieldButton().ownValue() == 7,
+             "explicit source construction copies a mixable seal var");
+      assert(SealFieldButton().sourceLabel(SealFieldView()) == "field",
+             "direct target instance method reads the source seal let");
+      assert(SealFieldButton.updateSource(SealFieldView()) == 11,
+             "direct target static method writes the source seal var");
+      assert(SealInferredFieldButton().ownLabel() == "field",
+             "inferred construction copies the seal let");
+      assert(SealFieldLeaf().ownValue() == 7,
+             "generated seal fields propagate through direct mix edges");
+      assert(SealFieldOverride().ownValue() == 100,
+             "explicit target field retains priority");
+      assert(SealFieldOverride.sourceValue(SealFieldView()) == 7,
+             "field priority does not erase direct source authorization");
     });
   });
 }

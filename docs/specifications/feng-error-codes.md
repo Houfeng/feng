@@ -211,7 +211,7 @@
 | **AE0329** | 成员展开构造错误 | member mix initializer must be an object construction expression |
 | **AE0330** | 循环依赖 | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
 | **AE1329** | 注解使用错误 | @mixable annotation does not accept arguments |
-| **AE1330** | 注解使用错误 | @mixable can only be applied to static methods declared in a type or fit block |
+| **AE1330** | 注解使用错误 | @mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type |
 | **AE1331** | 注解使用错误 | @mixable static method '%.*s' must declare at least one parameter |
 | **AE1332** | 注解使用错误 | @mixable static method '%.*s' first parameter cannot be variadic |
 | **AE1333** | 注解使用错误 | @mixable static method '%.*s' first parameter must use an object-form spec |

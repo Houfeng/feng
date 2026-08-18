@@ -6807,10 +6807,7 @@ static bool completion_type_has_mixable_seal_access(
             target_type, source_type, member)) {
         return true;
     }
-    return member != NULL &&
-           member->kind == FENG_TYPE_MEMBER_METHOD &&
-           member->visibility == FENG_VISIBILITY_PRIVATE &&
-           member->is_static && member->is_mixable &&
+    return feng_semantic_member_is_mixable_seal_capability(member) &&
            completion_type_directly_mixes_source(
                session, program, target_type, source_type);
 }
@@ -18103,15 +18100,24 @@ static bool symbol_mixable_seal_member_visible_from_target(
     const FengDecl *enclosing_decl,
     const FengTypeMember *enclosing_member) {
     size_t mixin_index;
+    FengSymbolDeclKind member_kind;
+    bool capability_shape;
 
     if (context == NULL || source_type == NULL || member == NULL ||
         enclosing_decl == NULL || enclosing_decl->kind != FENG_DECL_TYPE ||
         enclosing_member == NULL ||
         enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
-        feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_METHOD ||
         feng_symbol_decl_visibility(member) != FENG_VISIBILITY_PRIVATE ||
-        !feng_symbol_decl_is_static(member) ||
         !feng_symbol_decl_is_mixable(member)) {
+        return false;
+    }
+    member_kind = feng_symbol_decl_kind(member);
+    capability_shape =
+        (member_kind == FENG_SYMBOL_DECL_KIND_METHOD &&
+         feng_symbol_decl_is_static(member)) ||
+        (member_kind == FENG_SYMBOL_DECL_KIND_FIELD &&
+         !feng_symbol_decl_is_static(member));
+    if (!capability_shape) {
         return false;
     }
     for (mixin_index = 0U;

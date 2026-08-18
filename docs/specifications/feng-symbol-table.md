@@ -179,7 +179,11 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
   `seal + static + is_mixable` 方法，以及目标生成的同类静态 wrapper；它们作为
   [Feng 语言函数规范](./feng-function.md#436-跨包声明与链接) 定义的受限 mix 能力
   收录，仍保留非公开可见性标志。
-- 公开 `type` 的全部字段布局声明; 非公开字段只作为对象布局与跨包泛型实例化的 ABI 元信息导出,不得在 consumer 中变成可访问成员。
+- 公开 `type` 的全部字段布局声明；其中 `seal + instance + is_mixable` 来源字段和生成
+  字段必须原样保留 mixable 事实，供
+  [Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 定义的受限 mix
+  能力查询使用。其他非公开字段只作为对象布局与跨包泛型实例化的 ABI 元信息导出，
+  不得在 consumer 中变成可访问成员。
 - 公开构造函数与终结器函数。
 - 公开泛型声明的类型参数列表、参数顺序、参数约束目标与未实例化签名骨架。
 - 公开泛型父 `spec` 使用、泛型 `fit` 契约使用以及其有序类型实参事实。
@@ -210,8 +214,9 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 
 收录的私有声明必须保留私有标记。读取器和 imported-module cache 可以按声明身份供编译器
 内部使用，但普通用户名称查询、`use` 和无授权补全不得返回这些声明；仅
-[Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 明确定义的
-直接 mix 授权查询可以选择对应的 seal mix 能力。
+[Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 和
+[Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 明确定义的直接 mix
+授权查询可以选择对应的 seal mix 能力。
 
 `seal + static + is_mixable` 方法只在其 owner 已按现有规则进入 package-public 表时
 作为成员收录，不得反向把原本不可导出的私有 type 或 fit 提升为闭包根。普通 seal
@@ -687,6 +692,11 @@ attr key 常量建议如下:
   reader 必须原样恢复
   可见性、完整签名、泛型和 reified dependencies。普通用户成员枚举仍过滤该声明，
   只有函数规范定义的直接 mix 授权查询可以把它作为候选。
+- `seal + instance + is_mixable` 字段同样沿用 `SYMS.flags.public = 0` 表达 seal，并
+  复用既有 `FT_ATTR_MIXABLE_METHOD` wire 属性表达成员级 mixable 事实；历史属性名不
+  限制其成员 kind。reader 必须原样恢复 visibility、instance、mixable、类型、可变性和
+  绑定事实。普通用户成员枚举仍过滤该字段，只有类型规范定义的直接 mix 授权查询可以
+  放行。
 - 来源方法及生成的 seal mixable 静态 wrapper 必须使用仅由 package-public `.ft`
   可恢复事实确定的稳定链接身份；不得依赖未收录普通 seal 方法或 provider 私有声明
   顺序。该要求不新增符号表字段，也不改变 Feng 可见性。

@@ -3466,7 +3466,7 @@ static bool validate_supported_decl_annotations(ResolveContext *context, const F
                 annotation->token,
                 "AE1330",
                 format_message(
-                    "@mixable can only be applied to static methods declared in a type or fit block"));
+                    "@mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type"));
         }
 
         if (annotation->builtin_kind == FENG_ANNOTATION_FRIEND) {
@@ -3534,13 +3534,17 @@ static bool validate_supported_member_annotations(ResolveContext *context,
                     "AE1329",
                     format_message("@mixable annotation does not accept arguments"));
             }
-            if (member->kind != FENG_TYPE_MEMBER_METHOD || !member->is_static) {
+            if (!((member->kind == FENG_TYPE_MEMBER_METHOD &&
+                   member->is_static) ||
+                  (member->kind == FENG_TYPE_MEMBER_FIELD &&
+                   !member->is_static &&
+                   member->visibility == FENG_VISIBILITY_PRIVATE))) {
                 return resolver_append_error(
                     context,
                     annotation->token,
                     "AE1330",
                     format_message(
-                        "@mixable can only be applied to static methods declared in a type or fit block"));
+                        "@mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type"));
             }
         }
 
@@ -11390,12 +11394,17 @@ static bool type_decl_directly_mixes_source(const FengDecl *target_type,
     return false;
 }
 
-/* Identify exactly the private method shape that can receive direct mix
+/* Identify exactly the private member shapes that can receive direct mix
  * authorization. Ordinary seal members never pass this predicate. */
-static bool member_is_mixable_seal_static(const FengTypeMember *member) {
-    return member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
-           member->visibility == FENG_VISIBILITY_PRIVATE &&
-           member->is_static && member->is_mixable;
+bool feng_semantic_member_is_mixable_seal_capability(
+    const FengTypeMember *member) {
+    if (member == NULL ||
+        member->visibility != FENG_VISIBILITY_PRIVATE ||
+        !member->is_mixable) {
+        return false;
+    }
+    return (member->kind == FENG_TYPE_MEMBER_METHOD && member->is_static) ||
+           (member->kind == FENG_TYPE_MEMBER_FIELD && !member->is_static);
 }
 
 /* Check direct mix authorization independently of the declaration provider.
@@ -11404,7 +11413,7 @@ bool feng_semantic_type_has_mixable_seal_access(
     const FengDecl *target_type,
     const FengDecl *source_type,
     const FengTypeMember *member) {
-    return member_is_mixable_seal_static(member) &&
+    return feng_semantic_member_is_mixable_seal_capability(member) &&
            type_decl_directly_mixes_source(target_type, source_type);
 }
 
@@ -11422,7 +11431,7 @@ static const FengDecl *current_mixable_seal_access_type(
     return context->current_type_decl;
 }
 
-/* Check the special source-call access branch for one seal mixable method. */
+/* Check the special source-member access branch for one seal mix capability. */
 static bool mixable_seal_member_is_accessible_from(
     const ResolveContext *context,
     const FengDecl *source_type,
@@ -30332,8 +30341,8 @@ static bool resolve_type_member_mix_initializers(ResolveContext *context,
     return true;
 }
 
-/* Validate one normalized mixable declaration before ordinary member checks. */
-static bool validate_mixable_method_contract(ResolveContext *context,
+/* Validate one normalized mixable member before ordinary member checks. */
+static bool validate_mixable_member_contract(ResolveContext *context,
                                              const FengTypeMember *member,
                                              const FengDecl *owner_type,
                                              const char *nominal_error_code) {
@@ -30342,13 +30351,34 @@ static bool validate_mixable_method_contract(ResolveContext *context,
     if (member == NULL || !member->is_mixable) {
         return true;
     }
+    if (member->kind == FENG_TYPE_MEMBER_FIELD) {
+        if (owner_type != NULL && owner_type->kind == FENG_DECL_TYPE &&
+            !member->is_static &&
+            member->visibility == FENG_VISIBILITY_PRIVATE) {
+            return true;
+        }
+        return resolver_append_error(
+            context,
+            member->token,
+            "AE1330",
+            format_message(
+                "@mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type"));
+    }
+    if (owner_type != NULL && owner_type->kind == FENG_DECL_SPEC) {
+        return resolver_append_error(
+            context,
+            member->token,
+            "AE1330",
+            format_message(
+                "@mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type"));
+    }
     if (member->kind != FENG_TYPE_MEMBER_METHOD || !member->is_static) {
         return resolver_append_error(
             context,
             member->token,
             "AE1330",
             format_message(
-                "@mixable can only be applied to static methods declared in a type or fit block"));
+                "@mixable can only be applied to static methods declared in a type or fit block, or seal instance fields declared in a type"));
     }
     if (member->as.callable.param_count == 0U) {
         return resolver_append_error(
@@ -30487,7 +30517,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
 
-                if (!validate_mixable_method_contract(context,
+                if (!validate_mixable_member_contract(context,
                                                        member,
                                                        decl,
                                                        "AE1334")) {
@@ -30719,6 +30749,14 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
 
+                if (!validate_mixable_member_contract(context,
+                                                       member,
+                                                       decl,
+                                                       "AE1334")) {
+                    ok = false;
+                    break;
+                }
+
                 if (!normalize_friend_member_annotations(
                         context,
                         decl,
@@ -30860,7 +30898,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     return false;
                 }
 
-                if (!validate_mixable_method_contract(context,
+                if (!validate_mixable_member_contract(context,
                                                        member,
                                                        fit_target_decl,
                                                        "AE1334")) {
@@ -30985,7 +31023,7 @@ static SignatureEffectiveVisibility signature_member_visibility(
     SignatureEffectiveVisibility owner_visibility,
     const FengTypeMember *member) {
     if (member != NULL && member->visibility == FENG_VISIBILITY_PRIVATE &&
-        !member_is_mixable_seal_static(member)) {
+        !feng_semantic_member_is_mixable_seal_capability(member)) {
         return SIGNATURE_VISIBILITY_TYPE_PRIVATE;
     }
     return owner_visibility;
@@ -33354,6 +33392,7 @@ static FengTypeMember *create_mixed_field(const FengTypeMixinDecl *mixin,
     field->kind = FENG_TYPE_MEMBER_FIELD;
     field->visibility = source_field->visibility;
     field->is_static = false;
+    field->is_mixable = source_field->is_mixable;
     field->mixin_origin = mixin;
     field->mixin_source_member = source_field;
     field->as.field.mutability = source_field->as.field.mutability;
@@ -34241,7 +34280,9 @@ static bool expand_type_mixed_fields(FengDecl *target) {
                 if (source_member == NULL ||
                     source_member->kind != FENG_TYPE_MEMBER_FIELD ||
                     source_member->is_static ||
-                    !type_member_is_public(source_member) ||
+                    (!type_member_is_public(source_member) &&
+                     !feng_semantic_member_is_mixable_seal_capability(
+                         source_member)) ||
                     target_explicit_member_conflicts_with_mixed_field(
                         target, source_member->as.field.name)) {
                     continue;

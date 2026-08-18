@@ -21654,6 +21654,267 @@ static void test_member_mix_reverse_declaration_order_is_complete(void) {
     feng_program_free(program);
 }
 
+/* Mixable seal fields join the ordinary field-expansion pipeline, preserve
+ * their field facts through every direct edge, and authorize only direct
+ * target methods to access the corresponding source field. */
+static void test_mixable_seal_fields_expand_and_authorize_direct_targets(void) {
+    const char *source =
+        "module demo.mixable_seal_fields;\n"
+        "spec State { seal let label: string; seal var value: int; }\n"
+        "type Source {\n"
+        "  @mixable seal let label: string = \"source\";\n"
+        "  @mixable seal var value: int = 7;\n"
+        "  seal var hidden: int = 9;\n"
+        "}\n"
+        "type Default {\n"
+        "  ...: Source;\n"
+        "  func Default() { self.label = \"default\"; }\n"
+        "  func readSource(source: Source): int { return source.value; }\n"
+        "  static func writeSource(source: Source): int { source.value = 11; return source.value; }\n"
+        "}\n"
+        "type Bound: State { ...: Source = Source(); }\n"
+        "type Inferred { ... = Source(); }\n"
+        "type Middle { ...: Source = Source(); }\n"
+        "type Leaf { ...: Middle = Middle(); }\n"
+        "type Override {\n"
+        "  ...: Source = Source();\n"
+        "  seal var value: int = 100;\n"
+        "  func sourceValue(source: Source): int { return source.value; }\n"
+        "}\n"
+        "type OverrideLeaf { ...: Override = Override(); }\n"
+        "func demandState(value: Bound): State { return value; }\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_fields.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *source_type;
+    const FengDecl *state_spec;
+    const FengDecl *default_type;
+    const FengDecl *bound;
+    const FengDecl *inferred;
+    const FengDecl *middle;
+    const FengDecl *leaf;
+    const FengDecl *override;
+    const FengDecl *override_leaf;
+    const FengTypeMember *source_label;
+    const FengTypeMember *source_value;
+    const FengTypeMember *source_hidden;
+    const FengTypeMember *default_label;
+    const FengTypeMember *default_value;
+    const FengTypeMember *middle_value;
+    const FengTypeMember *leaf_value;
+    const FengTypeMember *override_value;
+    const FengSpecWitness *state_witness;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    source_type = find_type_decl_by_name(analysis, "Source");
+    state_spec = find_spec_decl_by_name(analysis, "State");
+    default_type = find_type_decl_by_name(analysis, "Default");
+    bound = find_type_decl_by_name(analysis, "Bound");
+    inferred = find_type_decl_by_name(analysis, "Inferred");
+    middle = find_type_decl_by_name(analysis, "Middle");
+    leaf = find_type_decl_by_name(analysis, "Leaf");
+    override = find_type_decl_by_name(analysis, "Override");
+    override_leaf = find_type_decl_by_name(analysis, "OverrideLeaf");
+    ASSERT(source_type != NULL && state_spec != NULL);
+    ASSERT(default_type != NULL && bound != NULL);
+    ASSERT(inferred != NULL && middle != NULL && leaf != NULL && override != NULL);
+    ASSERT(override_leaf != NULL);
+
+    source_label = find_type_field_named(source_type, "label");
+    source_value = find_type_field_named(source_type, "value");
+    source_hidden = find_type_field_named(source_type, "hidden");
+    default_label = find_type_field_named(default_type, "label");
+    default_value = find_type_field_named(default_type, "value");
+    middle_value = find_type_field_named(middle, "value");
+    leaf_value = find_type_field_named(leaf, "value");
+    override_value = find_type_field_named(override, "value");
+    ASSERT(source_label != NULL && source_value != NULL && source_hidden != NULL);
+    ASSERT(default_label != NULL && default_value != NULL);
+    ASSERT(middle_value != NULL && leaf_value != NULL && override_value != NULL);
+
+    ASSERT(feng_semantic_member_is_mixable_seal_capability(source_label));
+    ASSERT(feng_semantic_member_is_mixable_seal_capability(source_value));
+    ASSERT(!feng_semantic_member_is_mixable_seal_capability(source_hidden));
+    ASSERT(default_label->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(default_label->as.field.mutability == FENG_MUTABILITY_LET);
+    ASSERT(default_label->is_mixable);
+    ASSERT(default_label->mixin_source_member == source_label);
+    ASSERT(default_value->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(default_value->as.field.mutability == FENG_MUTABILITY_VAR);
+    ASSERT(default_value->is_mixable);
+    ASSERT(default_value->mixin_source_member == source_value);
+    ASSERT(find_type_field_named(default_type, "hidden") == NULL);
+    ASSERT(find_type_field_named(bound, "label") != NULL);
+    ASSERT(find_type_field_named(inferred, "value") != NULL);
+    ASSERT(middle_value->mixin_source_member == source_value);
+    ASSERT(leaf_value->mixin_source_member == middle_value);
+    ASSERT(leaf_value->is_mixable);
+
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        default_type, source_type, source_value));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        bound, source_type, source_label));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        inferred, source_type, source_value));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        middle, source_type, source_value));
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        leaf, middle, middle_value));
+    ASSERT(!feng_semantic_type_has_mixable_seal_access(
+        leaf, source_type, source_value));
+
+    {
+        FengSemanticSubjectKey key =
+            feng_semantic_subject_key_for_type_decl(bound);
+
+        state_witness = feng_semantic_lookup_spec_witness(
+            analysis, &key, state_spec);
+    }
+    ASSERT(state_witness != NULL);
+    ASSERT(state_witness->member_count == 2U);
+    ASSERT(state_witness->members[0].impl_member != NULL);
+    ASSERT(state_witness->members[1].impl_member != NULL);
+    ASSERT(state_witness->members[0].impl_member->is_mixable);
+    ASSERT(state_witness->members[1].impl_member->is_mixable);
+
+    /* Target-explicit priority skips only field generation. It does not erase
+     * the direct source relation used by target method authorization. */
+    ASSERT(!override_value->is_mixable);
+    ASSERT(override_value->mixin_source_member == NULL);
+    ASSERT(feng_semantic_type_has_mixable_seal_access(
+        override, source_type, source_value));
+    ASSERT(find_type_field_named(override_leaf, "label") != NULL);
+    ASSERT(find_type_field_named(override_leaf, "value") == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Same-package modules use the same normalized source relation as a local
+ * declaration; module boundaries neither grant nor suppress direct access. */
+static void test_mixable_seal_field_cross_module_direct_access(void) {
+    const char *provider_source =
+        "open module demo.mixable_field_provider;\n"
+        "open type Source { @mixable seal var value: int = 7; }\n";
+    const char *consumer_source =
+        "module demo.mixable_field_consumer;\n"
+        "import demo.mixable_field_provider;\n"
+        "type Target {\n"
+        "  ...: Source = Source();\n"
+        "  func read(source: Source): int { return source.value; }\n"
+        "  static func write(source: Source): int { source.value = 8; return source.value; }\n"
+        "}\n";
+    FengProgram *provider = parse_program_or_die(
+        "mixable_field_provider.ff", provider_source);
+    FengProgram *consumer = parse_program_or_die(
+        "mixable_field_consumer.ff", consumer_source);
+    const FengProgram *programs[] = {provider, consumer};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(provider);
+    feng_program_free(consumer);
+}
+
+/* The mix capability remains method-context and direct-edge scoped. These
+ * cases verify that existing type-member visibility is not widened. */
+static void test_mixable_seal_field_access_rejects_unauthorized_contexts(void) {
+    const char *sources[] = {
+        "module demo.mixable_field_unrelated; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Other { func read(source: Source): int { return source.value; } }",
+        "module demo.mixable_field_indirect; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Middle { ...: Source = Source(); } "
+        "type Leaf { ...: Middle = Middle(); func read(source: Source): int { return source.value; } }",
+        "module demo.mixable_field_ordinary; "
+        "type Source { seal var hidden: int = 1; } "
+        "type Direct { ...: Source = Source(); func read(source: Source): int { return source.hidden; } }",
+        "module demo.mixable_field_top_level; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Direct { ...: Source = Source(); } "
+        "func read(source: Source): int { return source.value; }",
+        "module demo.mixable_field_constructor; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Direct { ...: Source = Source(); func Direct(source: Source) { let copy = source.value; } }",
+        "module demo.mixable_field_initializer; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Direct { ...: Source = Source(); let copy: int = Source().value; }",
+        "module demo.mixable_field_fit; "
+        "type Source { @mixable seal var value: int = 1; } "
+        "type Direct { ...: Source = Source(); } "
+        "fit Direct { func read(source: Source): int { return source.value; } }",
+        "module demo.mixable_field_common_spec; "
+        "spec Shared {} "
+        "type Source: Shared { @mixable seal var value: int = 1; } "
+        "type Peer: Shared { func read(source: Source): int { return source.value; } }"
+    };
+
+    for (size_t source_index = 0U;
+         source_index < sizeof(sources) / sizeof(sources[0]);
+         ++source_index) {
+        FengProgram *program = parse_program_or_die(
+            "mixable_seal_field_unauthorized.ff", sources[source_index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_inaccessible = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code, "AE0308") == 0) {
+                found_inaccessible = true;
+            }
+        }
+        ASSERT(found_inaccessible);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Authorized reads do not weaken ordinary `let` assignment rules. */
+static void test_mixable_seal_let_field_remains_immutable(void) {
+    const char *source =
+        "module demo.mixable_seal_let; "
+        "type Source { @mixable seal let value: int = 1; } "
+        "type Direct { ...: Source = Source(); "
+        "func write(source: Source) { source.value = 2; } }";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_let.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool found_immutable = false;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    for (size_t index = 0U; index < error_count; ++index) {
+        if (strcmp(errors[index].code, "AE0104") == 0) {
+            found_immutable = true;
+        }
+    }
+    ASSERT(found_immutable);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Invalid source kinds and source expressions retain their assigned codes. */
 static void test_member_mix_source_diagnostics_are_stable(void) {
     const char *sources[] = {
@@ -22322,6 +22583,47 @@ static void test_mixable_seal_signature_uses_open_visibility_rules(void) {
     feng_program_free(program);
 }
 
+/* A mixable seal field can materialize in another public type, so its full
+ * field type follows the same effective visibility as an open field. */
+static void test_mixable_seal_field_type_uses_open_visibility_rules(void) {
+    const char *invalid_source =
+        "open module demo.mixable_seal_field_signature_invalid;\n"
+        "type Hidden {}\n"
+        "open type Source {\n"
+        "  @mixable seal var value: Hidden;\n"
+        "}\n";
+    const char *valid_source =
+        "open module demo.mixable_seal_field_signature_valid;\n"
+        "type Hidden {}\n"
+        "open type Source { seal var value: Hidden; }\n";
+    FengProgram *program = parse_program_or_die(
+        "mixable_seal_field_signature_invalid.ff", invalid_source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0327") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "mixable_seal_field_signature_valid.ff", valid_source);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* A visible fit mixable method derives both source and mixed instance entries. */
 static void test_mixable_fit_generates_own_and_target_instance_wrappers(void) {
     const char *source =
@@ -22437,6 +22739,42 @@ static void test_mixable_contract_diagnostics_are_stable(void) {
 
     for (size_t index = 0U; index < 7U; ++index) {
         FengProgram *program = parse_program_or_die("mixable_bad.ff", sources[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, codes[index]) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Field support adds exactly one annotation shape: an argument-free,
+ * explicitly seal, non-static instance field owned by a concrete type. */
+static void test_mixable_seal_field_contract_diagnostics_are_stable(void) {
+    const char *sources[] = {
+        "module demo.mf0; type V { @mixable(1) seal var value: int; }",
+        "module demo.mf1; type V { @mixable var value: int; }",
+        "module demo.mf2; type V { @mixable open let value: int = 1; }",
+        "module demo.mf3; type V { @mixable seal static var value: int = 1; }",
+        "module demo.mf4; spec S { @mixable seal var value: int; }",
+        "module demo.mf5; type V { @mixable func V() {} }",
+        "module demo.mf6; type V { @mixable func ~V() {} }"
+    };
+    const char *codes[] = {
+        "AE1329", "AE1330", "AE1330", "AE1330",
+        "AE1330", "AE1330", "AE1330"
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(sources) / sizeof(sources[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(
+            "mixable_seal_field_bad.ff", sources[index]);
         const FengProgram *programs[] = {program};
         FengSemanticAnalysis *analysis = NULL;
         FengSemanticError *errors = NULL;
@@ -23641,6 +23979,10 @@ int main(void) {
     test_member_mix_generic_field_type_is_substituted();
     test_member_mix_dependency_cycle_reports_ae0330();
     test_member_mix_reverse_declaration_order_is_complete();
+    test_mixable_seal_fields_expand_and_authorize_direct_targets();
+    test_mixable_seal_field_cross_module_direct_access();
+    test_mixable_seal_field_access_rejects_unauthorized_contexts();
+    test_mixable_seal_let_field_remains_immutable();
     test_member_mix_source_diagnostics_are_stable();
     test_mixable_wrapper_conflict_preserves_source_relation();
     test_mixable_static_candidate_skips_explicit_overlapping_method();
@@ -23652,10 +23994,12 @@ int main(void) {
     test_mixable_seal_access_rejects_unauthorized_sources();
     test_mixable_seal_inaccessible_overload_does_not_shadow_open();
     test_mixable_seal_signature_uses_open_visibility_rules();
+    test_mixable_seal_field_type_uses_open_visibility_rules();
     test_mixable_fit_generates_own_and_target_instance_wrappers();
     test_mixable_accepts_transitive_parent_spec_relation();
     test_mixable_accepts_visible_fit_spec_relation();
     test_mixable_contract_diagnostics_are_stable();
+    test_mixable_seal_field_contract_diagnostics_are_stable();
     test_match_range_label_overlap_rejected();
     test_match_single_label_overlap_rejected();
     test_match_range_invalid_bounds_rejected();

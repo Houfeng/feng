@@ -3479,10 +3479,10 @@ static void test_direct_build_consumes_package_mixin(void) {
     free(remove_error);
 }
 
-/* A package consumer restores seal mix capabilities from .ft, links their
- * provider bodies, and reuses the ordinary wrapper path for all mix forms,
- * type/fit sources, explicit overrides, variadics, generics, and propagation. */
-static void test_direct_build_consumes_package_mixable_seal_methods(void) {
+/* A package consumer restores seal mix capabilities from .ft. Methods reuse
+ * the ordinary wrapper path, while fields reuse ordinary layout/copy code and
+ * direct-target access for all mix forms and explicit propagation edges. */
+static void test_direct_build_consumes_package_mixable_seal_members(void) {
     char template_path[] = "temp/feng_cli_pkg_mixable_seal_XXXXXX";
     char *workspace_dir;
     char *bundle_path;
@@ -3498,6 +3498,8 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
         "open spec Widget {}\n"
         "open spec GenericWidget {}\n"
         "open type View: Widget {\n"
+        "  @mixable seal var state: int = 7;\n"
+        "  seal var hiddenState: int = 9;\n"
         "  @mixable seal static func draw(target: Widget, value: int): int { return value + 1; }\n"
         "  @mixable seal static func collect(target: Widget, values: int...): int { return 5; }\n"
         "}\n"
@@ -3515,6 +3517,9 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
         "open type GenericFitView: GenericWidget {}\n"
         "open fit GenericFitView {\n"
         "  @mixable seal static func fitIdentity<T>(target: GenericWidget, value: T): T { return value; }\n"
+        "}\n"
+        "open type GenericFieldView<T> {\n"
+        "  @mixable seal var item: T;\n"
         "}\n");
 
     compile_consumer_with_package_and_expect_stdout(
@@ -3528,25 +3533,33 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
         "  ...: View;\n"
         "  open func run(value: int): int { return self.draw(value) + self.collect(1, 2, 3); }\n"
         "  open static func source(value: int): int { return View.draw(DefaultButton(), value); }\n"
+        "  open func fieldValue(): int { return self.state; }\n"
+        "  open static func sourceField(view: View): int { view.state = 12; return view.state; }\n"
         "}\n"
         "type BoundButton: Widget {\n"
         "  ...: View = View();\n"
         "  open func run(value: int): int { return self.draw(value); }\n"
+        "  open func fieldValue(): int { return self.state; }\n"
         "}\n"
         "type InferredButton: Widget {\n"
         "  ... = View();\n"
         "  open func run(value: int): int { return self.draw(value); }\n"
+        "  open func fieldValue(): int { return self.state; }\n"
         "}\n"
         "type Leaf: Widget {\n"
         "  ...: Middle;\n"
         "  open func run(value: int): int { return self.draw(value); }\n"
+        "  open func fieldValue(): int { return self.state; }\n"
         "}\n"
         "type OverrideButton: Widget {\n"
         "  ...: View;\n"
         "  @mixable seal static func draw(target: Widget, value: int): int {\n"
         "    return View.draw(target, value) + 10;\n"
         "  }\n"
+        "  seal var state: int = 20;\n"
         "  open func run(value: int): int { return self.draw(value); }\n"
+        "  open func fieldValue(): int { return self.state; }\n"
+        "  open static func sourceField(view: View): int { return view.state; }\n"
         "}\n"
         "type FitButton: Widget {\n"
         "  ...: FitView;\n"
@@ -3564,21 +3577,33 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
         "  ...: GenericFitView;\n"
         "  open func run(value: int): int { return self.fitIdentity<int>(value); }\n"
         "}\n"
+        "type GenericFieldButton {\n"
+        "  ...: GenericFieldView<int> = GenericFieldView<int>();\n"
+        "  open func update(source: GenericFieldView<int>): int {\n"
+        "    self.item = 12; source.item = 13; return self.item + source.item;\n"
+        "  }\n"
+        "}\n"
         "func main(args: string[]) {\n"
         "  if DefaultButton().run(5) == 11 && DefaultButton.source(1) == 2 &&\n"
-        "     BoundButton().run(2) == 3 && InferredButton().run(3) == 4 &&\n"
-        "     Leaf().run(4) == 5 && OverrideButton().run(5) == 16 &&\n"
+        "     DefaultButton().fieldValue() == 0 &&\n"
+        "     DefaultButton.sourceField(View()) == 12 &&\n"
+        "     BoundButton().run(2) == 3 && BoundButton().fieldValue() == 7 &&\n"
+        "     InferredButton().run(3) == 4 && InferredButton().fieldValue() == 7 &&\n"
+        "     Leaf().run(4) == 5 && Leaf().fieldValue() == 0 &&\n"
+        "     OverrideButton().run(5) == 16 && OverrideButton().fieldValue() == 20 &&\n"
+        "     OverrideButton.sourceField(View()) == 7 &&\n"
         "     FitButton().run(5) == 7 && GenericButton().run(8) == 8 &&\n"
         "     GenericMethodButton().run(\"ok\") == \"ok\" &&\n"
-        "     GenericFitButton().run(9) == 9 {\n"
+        "     GenericFitButton().run(9) == 9 &&\n"
+        "     GenericFieldButton().update(GenericFieldView<int>()) == 25 {\n"
         "    puts(&\"package mixable seal ok\");\n"
         "  }\n"
         "}\n",
         "mixable_seal_main",
         "package mixable seal ok\n");
 
-    /* The capability is present in package-public .ft for direct mixing, but
-     * an unrelated imported-type call must still follow ordinary seal access. */
+    /* Capabilities are present in package-public .ft for direct mixing, but
+     * an unrelated imported type must still follow ordinary seal access. */
     {
         char *rejected_src_dir = path_join(workspace_dir, "rejected/src");
         char *rejected_source_path = path_join(rejected_src_dir, "main.ff");
@@ -3599,9 +3624,10 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
             "module test.cli.pkgmixablesealrejected;\n"
             "import test.cli.pkgmixableseal;\n"
             "type Other: Widget {\n"
+            "  open static func read(view: View): int { return view.state; }\n"
             "  open static func run(): int { return View.draw(Other(), 1); }\n"
             "}\n"
-            "func main(args: string[]) { Other.run(); }\n");
+            "func main(args: string[]) { Other.read(View()); Other.run(); }\n");
         ASSERT(run_direct_quiet_stderr(5, argv) != 0);
 
         free(pkg_opt);
@@ -3612,6 +3638,93 @@ static void test_direct_build_consumes_package_mixable_seal_methods(void) {
     }
 
     free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* A generated seal field capability can cross two independent package
+ * boundaries: package B consumes package A and exports its generated field,
+ * then package C mixes only B without seeing A. */
+static void test_package_mixable_seal_field_three_package_propagation(void) {
+    char template_path[] = "temp/feng_cli_pkg_mixable_field_chain_XXXXXX";
+    char *workspace_dir;
+    char *source_bundle;
+    char *middle_src_dir;
+    char *middle_source_path;
+    char *middle_out_dir;
+    char *middle_library_path;
+    char *middle_mod_root;
+    char *middle_bundle;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_bundle = build_single_source_package_bundle(
+        workspace_dir,
+        "mixfieldsource",
+        "open module test.cli.mixfieldsource;\n"
+        "open type Source { @mixable seal var state: int = 7; }\n");
+
+    middle_src_dir = path_join(workspace_dir, "middle/src");
+    middle_source_path = path_join(middle_src_dir, "middle.ff");
+    middle_out_dir = path_join(workspace_dir, "middle/build");
+    middle_library_path = host_static_library_output_path(
+        middle_out_dir, "mixfieldmiddle");
+    middle_mod_root = path_join(middle_out_dir, "mod");
+    middle_bundle = path_join(workspace_dir, "mixfieldmiddle.fb");
+    mkdir_p(middle_src_dir);
+    write_text_file(
+        middle_source_path,
+        "open module test.cli.mixfieldmiddle;\n"
+        "import test.cli.mixfieldsource;\n"
+        "open type Middle { ...: Source; }\n");
+    {
+        char *out_opt = make_out_option(middle_out_dir);
+        char *pkg_opt = make_pkg_option(source_bundle);
+        char *argv[] = {
+            middle_source_path,
+            "--target=lib",
+            out_opt,
+            "--name=mixfieldmiddle",
+            pkg_opt,
+        };
+
+        ASSERT(run_direct_for_host(5, argv) == 0);
+        free(pkg_opt);
+        free(out_opt);
+    }
+    ASSERT(path_exists(middle_library_path));
+    ASSERT(path_exists(middle_mod_root));
+    write_library_bundle_or_die(middle_bundle,
+                                "mixfieldmiddle",
+                                "0.1.0",
+                                middle_library_path,
+                                middle_mod_root);
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        middle_bundle,
+        "module test.cli.mixfieldleaf;\n"
+        "import test.cli.mixfieldmiddle;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "type Leaf {\n"
+        "  ...: Middle;\n"
+        "  open func update(): int { self.state = 9; return self.state; }\n"
+        "}\n"
+        "func main(args: string[]) {\n"
+        "  if Leaf().update() == 9 { puts(&\"three package field ok\"); }\n"
+        "}\n",
+        "mixable_field_chain_main",
+        "three package field ok\n");
+
+    free(middle_bundle);
+    free(middle_mod_root);
+    free(middle_library_path);
+    free(middle_out_dir);
+    free(middle_source_path);
+    free(middle_src_dir);
+    free(source_bundle);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
 }
@@ -17941,7 +18054,7 @@ static void test_lsp_mixable_annotation_completion_and_hover(void) {
                                         strlen("@mix"));
     ASSERT(strstr(output, "\"id\":2,\"result\":null") == NULL);
     ASSERT(strstr(output, "@mixable") != NULL);
-    ASSERT(strstr(output, "mixable static method annotation") != NULL);
+    ASSERT(strstr(output, "mixable member annotation") != NULL);
     free(output);
 }
 
@@ -18727,13 +18840,16 @@ static void test_lsp_mixin_hover_cross_module_and_package(void) {
     free(remove_error);
 }
 
-/* Package completion must recover the seal mix capability from .ft without
- * turning it into an ordinary public method. */
+/* Package completion recovers method and field capabilities from .ft without
+ * turning either one into an ordinary public member. */
 static void test_lsp_package_mixable_seal_completion_respects_direct_target(void) {
     static const char *kProviderSource =
         "open module test.lsp.mixin_seal_package;\n"
         "open spec Widget {}\n"
         "open type View: Widget {\n"
+        "    @mixable seal var state: int = 1;\n"
+        "    open var publicState: int = 2;\n"
+        "    seal var hiddenState: int = 3;\n"
         "    @mixable seal static func draw(target: Widget, area: int): int {\n"
         "        return area + 1;\n"
         "    }\n"
@@ -18752,6 +18868,9 @@ static void test_lsp_package_mixable_seal_completion_respects_direct_target(void
         "    open static func inspect(area: int): int {\n"
         "        return View.draw(Button(), area);\n"
         "    }\n"
+        "    open func inspectField(view: View): int {\n"
+        "        return view.state;\n"
+        "    }\n"
         "}\n";
     static const char *kUnauthorizedSource =
         "module test.lsp.mixin_seal_consumer;\n"
@@ -18759,6 +18878,9 @@ static void test_lsp_package_mixable_seal_completion_respects_direct_target(void
         "type Other: Widget {\n"
         "    open static func inspect(area: int): int {\n"
         "        return View.publicDraw(Other(), area);\n"
+        "    }\n"
+        "    open func inspectField(view: View): int {\n"
+        "        return view.publicState;\n"
         "    }\n"
         "}\n";
     static const char *kInitialize =
@@ -18811,6 +18933,19 @@ static void test_lsp_package_mixable_seal_completion_respects_direct_target(void
     ASSERT(strstr(output, "\"label\":\"ordinary\"") == NULL);
     free(output);
 
+    output = capture_lsp_position_response_at_path(
+        consumer_source_path,
+        kAuthorizedSource,
+        kInitialize,
+        "textDocument/completion",
+        "view.state",
+        strlen("view."),
+        "\"label\":\"state\"");
+    ASSERT(strstr(output, "\"label\":\"state\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"publicState\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"hiddenState\"") == NULL);
+    free(output);
+
     write_text_file(consumer_source_path, kUnauthorizedSource);
     output = capture_lsp_position_response_at_path(
         consumer_source_path,
@@ -18823,6 +18958,19 @@ static void test_lsp_package_mixable_seal_completion_respects_direct_target(void
     ASSERT(strstr(output, "\"label\":\"publicDraw\"") != NULL);
     ASSERT(strstr(output, "\"label\":\"draw\"") == NULL);
     ASSERT(strstr(output, "\"label\":\"ordinary\"") == NULL);
+    free(output);
+
+    output = capture_lsp_position_response_at_path(
+        consumer_source_path,
+        kUnauthorizedSource,
+        kInitialize,
+        "textDocument/completion",
+        "view.publicState",
+        strlen("view."),
+        "\"label\":\"publicState\"");
+    ASSERT(strstr(output, "\"label\":\"publicState\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"state\"") == NULL);
+    ASSERT(strstr(output, "\"label\":\"hiddenState\"") == NULL);
     free(output);
 
     free(consumer_source_path);
@@ -19077,7 +19225,8 @@ int main(void) {
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
     test_direct_build_consumes_package_mixin();
-    test_direct_build_consumes_package_mixable_seal_methods();
+    test_direct_build_consumes_package_mixable_seal_members();
+    test_package_mixable_seal_field_three_package_propagation();
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_project_check_reports_enum_semantic_error_without_unknown_type();

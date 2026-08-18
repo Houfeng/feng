@@ -1536,6 +1536,10 @@ static FengDecl *parse_type_declaration(Parser *parser,
             member->is_static = is_static;
             member->annotations = member_annotations;
             member->annotation_count = member_annotation_count;
+            member->is_mixable = parsed_annotations_contain_kind(
+                member_annotations,
+                member_annotation_count,
+                FENG_ANNOTATION_MIXABLE);
             member->as.field.mutability = binding.mutability;
             member->as.field.name = binding.name;
             member->as.field.type = binding.type;
@@ -2090,6 +2094,10 @@ static FengDecl *parse_spec_declaration(Parser *parser,
             }
             member->annotations = member_annotations;
             member->annotation_count = member_annotation_count;
+            member->is_mixable = parsed_annotations_contain_kind(
+                member_annotations,
+                member_annotation_count,
+                FENG_ANNOTATION_MIXABLE);
             if (!APPEND_VALUE(parser,
                               decl->as.spec_decl.as.object.members,
                               decl->as.spec_decl.as.object.member_count,
