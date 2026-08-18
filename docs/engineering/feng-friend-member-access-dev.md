@@ -62,7 +62,7 @@ type Vault {
 - 修改具体 type 普通 `seal` 成员、`spec seal` 或 `@mixable seal` 的既有规则；
 - 修改 spec requirement 满足、witness 构造或具体实现成员的可见性；
 - 新增 object-form spec 方法值；该独立能力由
-  [Feng object-form `spec` 方法值分派开发草案](./feng-object-form-spec-method-value-dev.md)
+  [Feng 成员方法值补齐开发草案](./feng-object-form-spec-method-value-dev.md)
   跟踪，本草案只在现有支持的成员访问形式上增加 friend 判断；
 - 将 `@friend` 记录到 package-public `.ft`；
 - 运行时反射或动态修改 friend 集合。

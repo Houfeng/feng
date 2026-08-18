@@ -265,7 +265,7 @@ object-form spec 泛型方法：
 ### 4.2 本次不包含
 
 - object-form spec 方法值；该能力由
-  [object-form spec 方法值开发文档](./feng-object-form-spec-method-value-dev.md)
+  [成员方法值补齐开发草案](./feng-object-form-spec-method-value-dev.md)
   独立跟踪；
 - callable-form spec 对开放泛型函数/方法的反向推导；
 - 新的 variance、结构满足或运行时泛型机制；
@@ -339,4 +339,3 @@ object-form spec 方法值不纳入本专项 FCTS。
 
 实施中若无法在既有泛型 callable ABI 上表达 spec witness 方法槽位，或约束兼容
 需要引入运行时判断，必须暂停并由人工决策，不得增加专用特判。
-
