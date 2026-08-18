@@ -4104,10 +4104,9 @@ static void package_selection_insert(FengSymbolPackageSelection *selection,
 }
 
 bool feng_symbol_build_package_selection(
-    const FengSemanticAnalysis *analysis,
+    const FengSymbolGraph *graph,
     FengSymbolPackageSelection **out_selection,
     FengSymbolError *out_error) {
-    FengSymbolGraph *graph = NULL;
     FengSymbolPackageSelection *selection = NULL;
     const void **source_nodes = NULL;
     size_t source_node_count = 0U;
@@ -4115,13 +4114,10 @@ bool feng_symbol_build_package_selection(
     size_t module_index;
     bool ok = false;
 
-    if (analysis == NULL || out_selection == NULL) {
+    if (graph == NULL || out_selection == NULL) {
         return false;
     }
     *out_selection = NULL;
-    if (!feng_symbol_build_graph(analysis, &graph, out_error)) {
-        return false;
-    }
     for (module_index = 0U;
          module_index < graph->module_count;
          ++module_index) {
@@ -4243,7 +4239,6 @@ bool feng_symbol_build_package_selection(
 cleanup:
     free(source_nodes);
     feng_symbol_package_selection_free(selection);
-    feng_symbol_graph_free(graph);
     return ok;
 }
 

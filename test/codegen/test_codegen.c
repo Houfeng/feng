@@ -75,6 +75,79 @@ static FengProgram *parse_or_die(const char *source, const char *path) {
     return program;
 }
 
+/* Exact source-node set used to exercise Codegen's package-symbol query
+ * boundary without coupling the Codegen unit under test to Symbol internals. */
+typedef struct TestPackageSymbolSelection {
+    const void *nodes[64];
+    size_t node_count;
+} TestPackageSymbolSelection;
+
+/* Return whether a source declaration was selected by the test fixture. */
+static bool test_package_symbol_selection_contains(const void *user,
+                                                   const void *source_node) {
+    const TestPackageSymbolSelection *selection =
+        (const TestPackageSymbolSelection *)user;
+    size_t index;
+
+    if (selection == NULL || source_node == NULL) {
+        return false;
+    }
+    for (index = 0U; index < selection->node_count; ++index) {
+        if (selection->nodes[index] == source_node) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Add every type/fit method with the requested name to one exact test set. */
+static void test_package_symbol_selection_add_methods_named(
+    TestPackageSymbolSelection *selection,
+    const FengProgram *program,
+    const char *name) {
+    size_t decl_index;
+    size_t name_length;
+
+    ASSERT(selection != NULL);
+    ASSERT(program != NULL);
+    ASSERT(name != NULL);
+    name_length = strlen(name);
+    for (decl_index = 0U;
+         decl_index < program->declaration_count;
+         ++decl_index) {
+        const FengDecl *decl = program->declarations[decl_index];
+        FengTypeMember *const *members = NULL;
+        size_t member_count = 0U;
+        size_t member_index;
+
+        if (decl->kind == FENG_DECL_TYPE) {
+            members = decl->as.type_decl.members;
+            member_count = decl->as.type_decl.member_count;
+        } else if (decl->kind == FENG_DECL_FIT) {
+            members = decl->as.fit_decl.members;
+            member_count = decl->as.fit_decl.member_count;
+        } else {
+            continue;
+        }
+        for (member_index = 0U;
+             member_index < member_count;
+             ++member_index) {
+            const FengTypeMember *member = members[member_index];
+
+            if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+                member->as.callable.name.length != name_length ||
+                memcmp(member->as.callable.name.data,
+                       name,
+                       name_length) != 0) {
+                continue;
+            }
+            ASSERT(selection->node_count <
+                   sizeof(selection->nodes) / sizeof(selection->nodes[0]));
+            selection->nodes[selection->node_count++] = member;
+        }
+    }
+}
+
 typedef struct ImportedSourceFixture {
     FengProgram *program;
     FengSemanticAnalysis *analysis;
@@ -11427,6 +11500,14 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
     size_t error_count = 0U;
     FengCodegenOutput output = {0};
     FengCodegenError codegen_error = {0};
+    TestPackageSymbolSelection package_selection = {0};
+    FengCodegenPackageSymbolQuery package_query = {
+        .user = &package_selection,
+        .contains_source_node = test_package_symbol_selection_contains,
+    };
+    FengCodegenOptions codegen_options = {
+        .package_symbols = &package_query,
+    };
     bool is_static = false;
     const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
     char expected[256];
@@ -11434,9 +11515,13 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
+    test_package_symbol_selection_add_methods_named(
+        &package_selection, program, "value");
+    test_package_symbol_selection_add_methods_named(
+        &package_selection, program, "marker");
     ASSERT(feng_codegen_emit_program(analysis,
                                      FENG_COMPILE_TARGET_LIB,
-                                     NULL,
+                                     &codegen_options,
                                      &output,
                                      &codegen_error));
     ASSERT(output.c_source != NULL);
@@ -11605,13 +11690,27 @@ static void test_reified_callable_dependency_uses_package_symbol_without_linkage
     size_t error_count = 0U;
     FengCodegenOutput output = {0};
     FengCodegenError codegen_error = {0};
+    TestPackageSymbolSelection package_selection = {0};
+    FengCodegenPackageSymbolQuery package_query = {
+        .user = &package_selection,
+        .contains_source_node = test_package_symbol_selection_contains,
+    };
+    FengCodegenOptions codegen_options = {
+        .package_symbols = &package_query,
+    };
     bool is_static = false;
 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
+    test_package_symbol_selection_add_methods_named(
+        &package_selection, program, "dependency");
+    test_package_symbol_selection_add_methods_named(
+        &package_selection, program, "value");
     ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
-                                     NULL, &output, &codegen_error));
+                                     &codegen_options,
+                                     &output,
+                                     &codegen_error));
     ASSERT(output.c_source != NULL);
 
     ASSERT(generated_function_definition_is_static(

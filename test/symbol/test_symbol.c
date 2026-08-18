@@ -728,6 +728,78 @@ static void test_selected_seal_spec_implementations_enter_package_ft(void) {
     free(tmp_dir);
 }
 
+/* The query adapter reuses one already-built Symbol graph and exposes the
+ * writer's exact source-node closure, including transitive callable deps. */
+static void test_package_selection_uses_existing_graph(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.package_selection;\n"
+        "open spec Producer<T>(): T;\n"
+        "open spec Contract<T> { seal func value(): T; }\n"
+        "open type Generic<T>: Contract<T> {\n"
+        "    seal func dependency(): T { let result: T; return result; }\n"
+        "    seal func value(): T {\n"
+        "        let producer: Producer<T> = self.dependency;\n"
+        "        return producer();\n"
+        "    }\n"
+        "    seal func unrelated(): T { let result: T; return result; }\n"
+        "}\n";
+    FengProgram *program = parse_or_die("package_selection.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolGraph *graph = NULL;
+    FengSymbolPackageSelection *selection = NULL;
+    FengSymbolError error = {0};
+    const FengDecl *generic_decl = NULL;
+    const FengTypeMember *dependency = NULL;
+    const FengTypeMember *value = NULL;
+    const FengTypeMember *unrelated = NULL;
+    size_t decl_index;
+
+    for (decl_index = 0U;
+         decl_index < program->declaration_count;
+         ++decl_index) {
+        const FengDecl *candidate = program->declarations[decl_index];
+
+        if (candidate->kind == FENG_DECL_TYPE &&
+            slice_equals_cstr(candidate->as.type_decl.name, "Generic")) {
+            generic_decl = candidate;
+            break;
+        }
+    }
+    ASSERT(generic_decl != NULL);
+    for (size_t member_index = 0U;
+         member_index < generic_decl->as.type_decl.member_count;
+         ++member_index) {
+        const FengTypeMember *member =
+            generic_decl->as.type_decl.members[member_index];
+
+        if (member->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        if (slice_equals_cstr(member->as.callable.name, "dependency")) {
+            dependency = member;
+        } else if (slice_equals_cstr(member->as.callable.name, "value")) {
+            value = member;
+        } else if (slice_equals_cstr(member->as.callable.name, "unrelated")) {
+            unrelated = member;
+        }
+    }
+    ASSERT(dependency != NULL);
+    ASSERT(value != NULL);
+    ASSERT(unrelated != NULL);
+    ASSERT(feng_symbol_build_graph(analysis, &graph, &error));
+    ASSERT(feng_symbol_build_package_selection(graph, &selection, &error));
+    ASSERT(feng_symbol_package_selection_contains(selection, generic_decl));
+    ASSERT(feng_symbol_package_selection_contains(selection, value));
+    ASSERT(feng_symbol_package_selection_contains(selection, dependency));
+    ASSERT(!feng_symbol_package_selection_contains(selection, unrelated));
+
+    feng_symbol_package_selection_free(selection);
+    feng_symbol_graph_free(graph);
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Static fields selected as seal spec implementations keep seal visibility
  * in package-public FT; compiler codegen reuse must not make them ordinary
  * public members. */
@@ -3590,6 +3662,7 @@ int main(void) {
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_object_spec_seal_member_ft_roundtrip();
     test_selected_seal_spec_implementations_enter_package_ft();
+    test_package_selection_uses_existing_graph();
     test_selected_seal_static_fields_remain_seal_in_package_ft();
     test_imported_object_spec_seal_access_semantics();
     test_friend_metadata_is_not_exported_to_ft();

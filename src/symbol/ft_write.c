@@ -1119,8 +1119,8 @@ static bool writer_prepare_decl_ids(WriterContext *ctx,
 }
 
 /* Expose the writer's exact package-public closure as source identities so
- * provider Codegen can share symbol-domain membership without duplicating
- * initial-tree or dependency-closure logic. */
+ * an outer driver can adapt it to a neutral query without duplicating the
+ * initial-tree or dependency-closure logic in core Codegen. */
 bool feng_symbol_ft_collect_package_source_nodes(
     const FengSymbolModuleGraph *module,
     const void ***out_source_nodes,

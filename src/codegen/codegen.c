@@ -23,7 +23,6 @@
 
 #include "lexer/token.h"
 #include "parser/parser.h"
-#include "symbol/export.h"
 
 /* ===================== string buffer ===================== */
 
@@ -1796,9 +1795,6 @@ typedef struct CG {
      * up Phase 1B cyclicity markers without re-running SCC. */
     const FengSemanticAnalysis *analysis;
     const FengCodegenOptions *options;
-    /* Exact provider package-public declaration closure shared with the
-     * Symbol writer; imported declarations are already FT-filtered. */
-    FengSymbolPackageSelection *package_selection;
     FengCodegenMapingInfo debug_info;
 
     /* Currently active source program for diagnostics and per-module
@@ -4952,13 +4948,14 @@ static const FengProgram *cg_find_decl_owner_program(const CG *cg, const FengDec
 }
 
 /* Return whether one private method belongs to the stable package symbol
- * domain. Local providers consume the exact Symbol writer selection;
- * imported declarations are already the package-public FT projection. */
+ * domain. Local providers consume only the outer driver's abstract symbol
+ * query; imported declarations are already the package-public projection. */
 static bool cg_member_is_package_symbol_dependency(
     const CG *cg,
     const FengDecl *owner_decl,
     const FengTypeMember *member) {
     const FengProgram *owner_program;
+    const FengCodegenPackageSymbolQuery *query;
 
     if (cg == NULL || owner_decl == NULL || member == NULL ||
         owner_decl->visibility != FENG_VISIBILITY_PUBLIC ||
@@ -4973,8 +4970,9 @@ static bool cg_member_is_package_symbol_dependency(
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
         return true;
     }
-    return feng_symbol_package_selection_contains(cg->package_selection,
-                                                  member);
+    query = cg->options != NULL ? cg->options->package_symbols : NULL;
+    return query != NULL && query->contains_source_node != NULL &&
+           query->contains_source_node(query->user, member);
 }
 
 static bool cg_member_uses_package_callable_surface(
@@ -56123,7 +56121,6 @@ static void cg_dispose(CG *cg) {
         cgtype_free(cg->expr_narrowings[i].type);
     }
     free(cg->expr_narrowings);
-    feng_symbol_package_selection_free(cg->package_selection);
 }
 
 bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
@@ -56165,26 +56162,6 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         cg_dispose(&cg);
         return false;
     }
-    {
-        FengSymbolError symbol_error = {0};
-
-        if (!feng_symbol_build_package_selection(analysis,
-                                                 &cg.package_selection,
-                                                 &symbol_error)) {
-            cg_fail(&cg,
-                    symbol_error.token,
-                    "IE0001",
-                    "codegen: cannot compute package-public declaration selection: %s",
-                    symbol_error.message != NULL
-                        ? symbol_error.message
-                        : "unknown symbol selection error");
-            feng_symbol_error_free(&symbol_error);
-            cg_dispose(&cg);
-            return false;
-        }
-        feng_symbol_error_free(&symbol_error);
-    }
-
     const FengProgram **programs = calloc(program_total, sizeof(*programs));
     if (!programs) {
         cg_fail(&cg, (FengToken){0}, "IE0001", "codegen: out of memory collecting programs");

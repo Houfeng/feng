@@ -33,11 +33,11 @@ bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
                                  const FengSymbolExportOptions *options,
                                  FengSymbolError *out_error);
 
-/* Build the package-public declaration selection without serializing FT.
- * Codegen uses this to share the writer's final compiler-dependency boundary
- * even when it is invoked directly by tests or embedding clients. */
+/* Build the package-public declaration selection for an existing graph
+ * without serializing FT. Outer compilation drivers may adapt this opaque
+ * result to a core query interface without exposing Symbol types to Codegen. */
 bool feng_symbol_build_package_selection(
-    const FengSemanticAnalysis *analysis,
+    const FengSymbolGraph *graph,
     FengSymbolPackageSelection **out_selection,
     FengSymbolError *out_error);
 

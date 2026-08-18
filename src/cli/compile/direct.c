@@ -21,6 +21,15 @@
 
 /* --- helpers ------------------------------------------------------------- */
 
+/* Adapt the Symbol-owned package selection to Codegen's implementation-free
+ * query interface. The outer driver owns both the selection and its lifetime. */
+static bool package_symbol_query_contains(const void *user,
+                                          const void *source_node) {
+    return feng_symbol_package_selection_contains(
+        (const FengSymbolPackageSelection *)user,
+        source_node);
+}
+
 /* Recursively `mkdir -p` for an arbitrary directory path. Returns 0 on
  * success or if the directory already exists; non-zero with errno set on
  * failure. The path is mutated in-place during traversal but restored
@@ -296,6 +305,7 @@ int feng_cli_direct_run(const char *program,
     FengCliLoadedSource *sources = NULL;
     size_t source_count = 0U;
     FengSymbolImportedModuleCache *imported_module_cache = NULL;
+    FengSymbolPackageSelection *package_selection = NULL;
     char **bundle_paths = NULL;
     size_t bundle_count = 0U;
     FengCliFrontendInput input = {
@@ -339,9 +349,27 @@ int feng_cli_direct_run(const char *program,
             .emit_docs = true,
             .emit_spans = true,
         };
+        FengSymbolGraph *symbol_graph = NULL;
         FengSymbolError symbol_error = {0};
+        bool symbol_ok = feng_symbol_build_graph(
+            analysis,
+            &symbol_graph,
+            &symbol_error);
 
-        if (!feng_symbol_export_analysis(analysis, &symbol_options, &symbol_error)) {
+        if (symbol_ok) {
+            symbol_ok = feng_symbol_export_graph(
+                symbol_graph,
+                &symbol_options,
+                &symbol_error);
+        }
+        if (symbol_ok) {
+            symbol_ok = feng_symbol_build_package_selection(
+                symbol_graph,
+                &package_selection,
+                &symbol_error);
+        }
+        feng_symbol_graph_free(symbol_graph);
+        if (!symbol_ok) {
             const FengCliLoadedSource *blame_src = NULL;
 
             if (symbol_error.path != NULL) {
@@ -363,6 +391,7 @@ int feng_cli_direct_run(const char *program,
             free(public_symbol_dir);
             free(ir_dir);
             free(artifact_dir);
+            feng_symbol_package_selection_free(package_selection);
             feng_semantic_analysis_free(analysis);
             feng_symbol_imported_module_cache_free(imported_module_cache);
             feng_cli_frontend_bundle_paths_dispose(bundle_paths, bundle_count);
@@ -373,21 +402,30 @@ int feng_cli_direct_run(const char *program,
     }
 
     /* Codegen aggregate (multi-file capable, see P3). */
-    FengCodegenOptions codegen_options = {0};
-    const FengCodegenOptions *active_codegen_options = NULL;
+    FengCodegenPackageSymbolQuery package_symbol_query = {
+        .user = package_selection,
+        .contains_source_node = package_symbol_query_contains,
+    };
+    FengCodegenOptions codegen_options = {
+        .package_symbols = &package_symbol_query,
+    };
+    bool emit_debug_info = debug_context != NULL &&
+                           !opts.release &&
+                           debug_context->source_count > 0U;
     FengCodegenOutput out = {0};
     FengCodegenError cgerr = {0};
-    if (debug_context != NULL && !opts.release && debug_context->source_count > 0U) {
+    if (emit_debug_info) {
         codegen_options.emit_line_directives = true;
         codegen_options.debug_source_mappings = debug_context->sources;
         codegen_options.debug_source_mapping_count = debug_context->source_count;
-        active_codegen_options = &codegen_options;
     }
     bool cg_ok = feng_codegen_emit_program(analysis,
                                            opts.target,
-                                           active_codegen_options,
+                                           &codegen_options,
                                            &out,
                                            &cgerr);
+    feng_symbol_package_selection_free(package_selection);
+    package_selection = NULL;
     if (!cg_ok) {
         const FengCliLoadedSource *blame_src = NULL;
         if (cgerr.path != NULL) {
@@ -510,7 +548,7 @@ int feng_cli_direct_run(const char *program,
     }
 
     char *fd_path = NULL;
-    if (active_codegen_options != NULL) {
+    if (emit_debug_info) {
         fd_path = artifact_fd_path(artifact_path);
         if (fd_path == NULL) {
             fprintf(stderr, "out of memory composing debug sidecar path\n");
@@ -592,7 +630,7 @@ int feng_cli_direct_run(const char *program,
     };
     int drv_rc = feng_cli_compile_driver_invoke(&drv);
 
-    if (drv_rc == 0 && active_codegen_options != NULL && fd_path != NULL) {
+    if (drv_rc == 0 && emit_debug_info && fd_path != NULL) {
         char *fd_error = NULL;
         bool write_ok;
 

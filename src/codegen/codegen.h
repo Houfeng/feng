@@ -53,10 +53,25 @@
 extern "C" {
 #endif
 
+/* Read-only package symbol-table facts supplied by the outer compilation
+ * driver. The implementation and user object remain opaque to core Codegen;
+ * callers may adapt an in-memory symbol graph, a persisted table, or a test
+ * double without exposing any symbol-module type through this interface. */
+typedef struct FengCodegenPackageSymbolQuery {
+    const void *user;
+    /* Return whether one source declaration belongs to the stable package
+     * symbol domain selected for the current compilation output. */
+    bool (*contains_source_node)(const void *user, const void *source_node);
+} FengCodegenPackageSymbolQuery;
+
 typedef struct FengCodegenOptions {
     bool emit_line_directives;   /* if true, emit #line for source mapping */
     const FengCodegenMapingSourceMapping *debug_source_mappings;
     size_t debug_source_mapping_count;
+    /* Borrowed for the duration of feng_codegen_emit_program(). Required by
+     * provider-library emission when private compiler dependencies need a
+     * stable cross-package symbol identity. */
+    const FengCodegenPackageSymbolQuery *package_symbols;
 } FengCodegenOptions;
 
 typedef struct FengCodegenOutput {

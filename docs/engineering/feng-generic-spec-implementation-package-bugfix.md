@@ -1,6 +1,7 @@
 # Feng 泛型 `spec` 满足关系及跨包实现符号修复开发文档
 
-> 状态：已实施并通过全量回归（2026-08-18）
+> 状态：已完成（行为修复、依赖方向修正及全量回归均通过）
+> （2026-08-19）
 >
 > 本文档只处理泛型 `type` / 泛型 `fit` 已声明的 object-form `spec` 名义满足关系
 > 在同包和跨包使用时的正确关闭，以及跨 package-public `.ft` / `.fb` 边界时实现
@@ -24,6 +25,9 @@
   materialization、Symbol 选择及 package-callable 发码链路；不得按 imported 状态、
   成员名或测试场景增加特判，也不得为 type/fit 分别建立平行算法；type 与 fit 的
   关系模板来源差异只能由现有 relation source 抽象统一承载；
+- 必须保持符号表规范既有的单向依赖：Exporter 消费 Semantic 结果并生成符号表，
+  核心编译器只能通过不暴露 `symbol` 类型的抽象查询接口消费符号事实；Semantic
+  和 Codegen 均不得包含 `symbol/*` 头文件、调用 Exporter 或进入 FT writer；
 - 已经工作的非泛型关系、普通公开泛型 fit、fit 可见性、Feng 成员可见性、witness
   ABI、公开/capability 符号身份及运行时开销必须保持不变。
 
@@ -256,6 +260,51 @@ spec-value 仍使用各自现有 subject-key/slot-witness 路径。该修复不�
 上述三项都只调整编译期注册、去重或代码复用顺序，不增加运行时查找、分支、数据
 结构或调用层级。
 
+### 2.8 上一轮实现曾引入 Codegen 到 Exporter 的反向依赖
+
+上一轮行为实现完成后复查确认，`src/codegen/codegen.c` 曾直接包含
+`symbol/export.h`，并在每次
+`feng_codegen_emit_program()` 时调用 `feng_symbol_build_package_selection()`。该入口
+会重新构建完整 Symbol graph，再进入 FT writer 的 package-public declaration
+selection。这不是“核心通过抽象接口查询符号事实”，而是 Codegen 直接调用
+Exporter，并间接依赖 FT writer 的选择实现。
+
+该实现违反 [Feng 符号表规范](../specifications/feng-symbol-table.md#40-分层边界) 和
+[外部包 use 支持交付](./feng-use-pkg-delivered.md#2-关键架构事实) 已确立的依赖方向：
+
+```text
+Semantic result -> Exporter -> symbol table/query implementation
+                                      |
+                                      v
+                         neutral abstract query
+                                      |
+                                      v
+                                  Codegen
+```
+
+允许的依赖是 Exporter 依赖核心编译器的数据模型，以及核心编译器依赖中立的抽象
+查询接口；禁止出现 `Codegen -> symbol/export`、`Codegen -> FT writer` 或把 Symbol
+具体类型放进核心公共 API。
+
+正常 CLI 编译当时还会先调用 Symbol export，然后在 Codegen 内再次构建 Symbol
+graph 和 package selection。该重复工作只影响编译期，不增加生成程序的运行时
+开销，但仍属于不应保留的职责耦合和重复计算。
+
+当前修正已在 Codegen 公共 API 中增加不暴露 Symbol 类型的只读 package symbol
+query；Symbol selection 改为消费外层已经构建的 graph，CLI 使用同一 graph 完成
+符号表输出和 selection 构建，再把独立 selection 适配为抽象 query 注入 Codegen。
+`src/codegen/` 和 `src/semantic/` 均不再包含 `symbol/*` 或调用 `feng_symbol_*`。
+Symbol graph 在 selection 建立后即可释放；selection 只借用仍由 Semantic analysis
+持有的 source declaration identity，并由 CLI 持有到本次 Codegen 返回。
+
+在改为由外层始终注入 package symbol query 后，定向 CLI 验证还暴露了一个调用方
+契约错误：原代码曾用“Codegen options 非空”间接判断 debug context 是否存在；
+query 使非调试构建也需要 options 后，该判断会在 `.fd` 写出路径解引用空的
+debug context。当前修正使用独立的 `emit_debug_info` 条件统一控制 line directive、
+`.fd` 路径及 `.fd` 写出，不能继续把一个可扩展 options 容器是否存在当作某项
+独立能力的开关。该修正只恢复原有非调试行为，不改变调试格式、Codegen ABI 或
+生成程序开销。
+
 ## 3 正确性模型
 
 ### 3.1 声明时做结构证明
@@ -407,17 +456,24 @@ consumer 使用按需 witness selection 即可归一符号域”并不充分。`
   相对顺序。
 
 因此本专项不新增 FT flag/attr，也不让 consumer 推断某个成员“满足了哪个 spec”。
-应把现有 package-public 方法收录闭包抽成 provider Symbol 与 Codegen 共用的
-编译期选择结果：provider 用它决定 package 符号域及成员编号；shared body 是否
-取得 package linkage 仍只由 3.4 节既有 package-callable 语义判定决定，不因某个
-方法仅作为 reifiable dependency 被收录就擅自扩大链接面。
+package-public 方法收录闭包继续由 Symbol 层拥有；provider Codegen 只能通过核心
+公共头文件定义的只读抽象查询接口询问某个 source declaration 是否进入该闭包，
+不得包含 Symbol 头文件、持有 Symbol graph/selection 类型，或自行调用 Exporter/FT
+writer。shared body 是否取得 package linkage 仍只由 3.4 节既有 package-callable
+语义判定决定，不因某个方法仅作为 reifiable dependency 被收录就擅自扩大链接面。
 consumer 对 imported type/fit 而言，只把 package-public FT 中实际存在的私有方法
 视为 package-public 中额外收录的编译器依赖成员。后者只决定 C 符号身份，不参与
 Feng 成员查找、spec 满足证明或 witness slot 选择，因而不会扩大 seal 可见性。
 
-该选择结果必须由可复用的编译期入口生成或缓存；`feng_codegen_emit_program()`
-直接调用时也必须得到与 Symbol writer 相同的结果，不能依赖 CLI 恰好先执行过
-`.ft` 导出，也不能在每个成员命名点重复重建收录闭包。
+抽象查询接口只表达 Codegen 所需的中立事实，例如“该 source declaration 是否属于
+当前 package 的稳定符号域”；`user`、索引结构和查询实现均由外层持有，接口中不得
+出现 `.ft`、writer、provider 或 Symbol graph 类型。编译驱动负责在 Semantic 成功
+后构建一次 Symbol graph、完成符号表输出、取得基于同一 graph 的只读查询并注入
+Codegen，且保证查询及其借用的 source declaration identity 生命周期覆盖本次发码；
+query 若已形成独立快照，不要求继续持有 Symbol graph。
+`feng_codegen_emit_program()` 的直接
+调用者若要生成依赖 package 符号域的库代码，也必须显式注入该抽象查询；Codegen
+不得通过隐藏回退重新构建 Symbol graph，也不得复制一套近似的收录算法。
 
 为避免新增 spec seal 实现扰动已经工作的公开泛型符号，package 编号顺序固定为：
 
@@ -437,9 +493,9 @@ Feng 成员查找、spec 满足证明或 witness slot 选择，因而不会扩�
 
 `fi<N>` 是所有 provider-local 泛型 fit 方法的内部域，不是 spec seal 专用 ABI；它
 只作为现有 `cg_fit_method_shared_cname()` 链路内的内部命名域，不新增发码、调用或
-链接链路，不进入 package contract，也不增加运行时开销。上述 package selection
-抽象和内部符号域属于本轮 Review 内容；未经确认不得改为 FT 新标志、consumer
-结构扫描或具体测试名称特判。
+链接链路，不进入 package contract，也不增加运行时开销。package selection 的所有
+权仍属于 Symbol 层；核心只能消费中立查询结果。不得改为 FT 新标志、consumer
+结构扫描、Codegen 内部重建选择闭包或具体测试名称特判。
 
 ### 3.6 `.ft` 边界
 
@@ -493,6 +549,8 @@ witness。
 ## 5 性能与兼容性
 
 - 关系关闭和实现选择全部在编译期完成；
+- 正常编译流程只构建一次本地 Symbol graph；Codegen 通过外层注入的只读抽象查询
+  消费稳定符号域事实，不得再次构建 Symbol graph 或进入 FT selection；
 - 生成程序不增加运行时名称查找、关系搜索、成员扫描、缓存、锁或分配；
 - witness 布局和每次调用间接层级不变；
 - 选中 seal 方法只改变 provider package symbol 的链接能力和 consumer 对该既有
@@ -534,6 +592,11 @@ witness。
 - Codegen：同一泛型 type/fit 声明同时存在多个闭合实例，且目标闭合实例只作为
   显式方法类型实参出现时，验证泛型描述符使用该实例的精确 witness，不得按 type
   declaration 误取先注册的其他实例；
+- 依赖边界：`src/codegen/` 与 `src/semantic/` 不包含 `symbol/*` 头文件、不调用
+  `feng_symbol_*`；Codegen 单测通过假实现注入抽象查询，CLI 隔离用例通过 Symbol
+  实现注入同一接口，二者对相同 source declaration 得到一致稳定符号域；
+- 编译流程：验证正常 CLI 路径复用同一个本地 Symbol graph 完成导出和 Codegen
+  查询，不在 Codegen 内重新构建 graph 或 package selection；
 - CLI：provider 独立 `pack` 后，consumer 只依赖 `.fb` 完成 coercion、witness
   调用和链接。
 
@@ -603,12 +666,26 @@ witness。
 - [x] **验证（普通泛型 fit 基线）**：固定现有公开泛型 fit 的隔离 `.fb` 正向用例；
   对照同包矩阵验证 fit direct head 与泛型父 spec 的精确关闭。该项只验证，不重写
   fit visibility、已经工作的 fit target 参数映射或同包直接 fit 路径。
-- [x] **实际变更（复用 package 方法收录闭包）**：把 Symbol writer 当前由
-  initial tree 与 dependency closure 得到的 package 方法选择，收敛为
-  provider Symbol/Codegen 可共同消费的编译期结果；必须覆盖既有公开、mixable、
-  spec implementation dependency 与可达 reifiable callable dependency，且保持
-  非泛型和现有公开/capability 泛型发码行为不变。不得在 Codegen 复制一套近似的
-  可达性扫描或新增平行选择链路。
+- [x] **实际变更（Symbol package 方法收录闭包）**：Symbol writer 的 initial tree
+  与 dependency closure 已统一得到 package 方法选择，覆盖既有公开、mixable、
+  spec implementation dependency 与可达 reifiable callable dependency；该闭包
+  继续由 Symbol 层拥有，不授权核心直接调用其构建入口。
+- [x] **实际变更（核心抽象查询接口）**：在核心公共 API 定义只读、实现无关的
+  package symbol query，只接受 opaque `user` 与核心 source declaration identity，
+  返回稳定符号域事实；接口不得暴露 Symbol、FT、provider 或 writer 类型，也不得
+  改变现有 `FengSemanticImportedModuleQuery` 的模块查询职责。
+- [x] **实际变更（Symbol 查询适配）**：让 Symbol 层基于已经构建的同一个 graph
+  提供上述查询的实现，复用 writer 的最终 package-public selection；不得从
+  `FengSemanticAnalysis` 再构建第二个 graph，也不得在 CLI 或 Codegen 复制闭包
+  算法。
+- [x] **实际变更（外层生命周期与注入）**：编译驱动在 Semantic 成功后只构建一次
+  Symbol graph，用它完成公开/workspace FT 输出并取得只读查询，再通过 Codegen
+  options 注入；独立 query selection 的生命周期覆盖发码，graph 在 selection
+  建立后即可释放，二者均由外层负责。
+- [x] **实际变更（解除 Codegen 反向依赖）**：删除 `src/codegen/codegen.c` 对
+  `symbol/export.h`、`FengSymbolPackageSelection` 和 `feng_symbol_*` 的全部依赖；
+  provider 成员符号域只查询注入接口，imported declaration 继续消费抽象模块查询
+  已恢复的核心声明事实，不新增 current/imported 语义规则。
 - [x] **实际变更（复用泛型 callable linkage 判定）**：让泛型 type/fit 的 provider
   shared body 导出复用 3.4 节现有 package-callable 判定，使 spec selection 选中的
   seal 方法取得 package linkage；不得把“仅被 Symbol 依赖闭包收录”直接等同于
@@ -652,11 +729,22 @@ witness。
   现有 `#if 0` 探针中属于本专项的部分。
 - [x] **验证（FCTS）**：补齐泛型 type/fit seal 实现的同包与跨包可观察行为用例，
   两侧对相同合法场景必须一致。
-- [x] **验证（回归）**：定向测试通过后，已在沙箱外执行 `make test`；UBSan 与正常
-  `-O2 -Werror` 两轮均通过，FCTS 两轮均为 799/799，CLI、std、性能、增量构建、
-  发布脚本和 bundled package 检查全部通过。
+- [x] **验证（行为修复基线）**：依赖方向问题发现前的实现已在沙箱外执行
+  `make test`；UBSan 与正常 `-O2 -Werror` 两轮均通过，FCTS 两轮均为 799/799，
+  CLI、std、性能、增量构建、发布脚本和 bundled package 检查全部通过。该结果只
+  作为行为基线，不代表当前专项已经完成架构验收。
+- [x] **验证（抽象接口与依赖边界）**：Codegen 单测使用假查询验证 package-base、
+  package-dependency 与 internal 域；Symbol/CLI 用例验证真实 adapter 返回同一结果；
+  静态检查核心目录不存在 `symbol/*` include 和 `feng_symbol_*` 调用；同时验证非调试
+  编译即使注入 query 也不会进入 `.fd` 写出路径。
+- [x] **验证（修正后全量回归）**：已在沙箱外重新执行 `make test`；UBSan 与默认
+  `-O2 -Werror` 两阶段均通过，std 两轮均为 579/579，FCTS 两轮均为 799/799，
+  smoke、CLI、性能约束、增量构建、发布脚本、bundled package 与预构建工具链检查
+  全部通过。
 
 实施应分成“关系模板/名义关闭”和“package callable/稳定符号”两个明确阶段；前一
-阶段不依赖 3.5 节的符号事实决策，后一阶段必须等本轮 Review 结论。不得为了统一
-改动而改变 fit visibility、既有普通泛型 fit target 参数映射或非泛型 callable
-路径。
+阶段不依赖 3.5 节的符号事实决策。本专项已完成 2.8 节依赖方向修正并重新回归；
+后续为 `Host<T>.invoke<U: Surface<T>>` 建立独立 bugfix 文档。object-form spec
+方法级泛型继续由 `feng-object-form-spec-generic-method-bugfix.md` 单独处理。三个问题
+不得合并实施，也不得为了统一改动而改变 fit visibility、既有普通泛型 fit target
+参数映射或非泛型 callable 路径。
