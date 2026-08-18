@@ -2839,6 +2839,10 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
 
     decl->is_static = member->is_static;
     decl->is_mixable = member->is_mixable;
+    decl->is_spec_implementation_dependency =
+        feng_semantic_member_is_package_spec_implementation_dependency(
+            ctx->analysis,
+            member);
 
     if (!register_source_decl(ctx, member, decl, path, member->token, out_error)) {
         feng_symbol_internal_decl_free_members(decl);

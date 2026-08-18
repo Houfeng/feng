@@ -28272,6 +28272,7 @@ static const FengTypeMember *find_visible_fit_matching_method_in_spec_ref(
 
 static bool verify_type_satisfies_spec(ResolveContext *ctx,
                                        const FengDecl *type_decl,
+                                       const FengDecl *relation_owner_decl,
                                        const FengDecl *spec_decl,
                                        const FengTypeRef *spec_type_ref,
                                        FengToken err_token,
@@ -28359,6 +28360,20 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     free(actual);
                     return ok;
                 }
+            }
+            if (!feng_semantic_record_spec_implementation_selection(
+                    ctx->analysis,
+                    ctx->module,
+                    relation_owner_decl,
+                    spec_decl,
+                    spec_m,
+                    t)) {
+                return resolver_append_error(
+                    ctx,
+                    err_token,
+                    "IE0001",
+                    format_message(
+                        "out of memory while recording spec implementation selection"));
             }
         } else if (spec_m->kind == FENG_TYPE_MEMBER_METHOD) {
             const FengTypeMember *match = type_find_matching_method_in_spec_ref(
@@ -28476,6 +28491,20 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                         spec_m->as.callable.name.data,
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data));
+            }
+            if (!feng_semantic_record_spec_implementation_selection(
+                    ctx->analysis,
+                    ctx->module,
+                    relation_owner_decl,
+                    spec_decl,
+                    spec_m,
+                    match)) {
+                return resolver_append_error(
+                    ctx,
+                    err_token,
+                    "IE0001",
+                    format_message(
+                        "out of memory while recording spec implementation selection"));
             }
         }
     }
@@ -29777,6 +29806,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
             declared_spec_ref->as.named.type_arg_count > 0U) {
             ok = verify_type_satisfies_spec(context,
                                             type_decl,
+                                            type_decl,
                                             spec,
                                             declared_spec_ref,
                                             type_decl->token,
@@ -29835,7 +29865,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
                 }
             }
 
-            ok = verify_type_satisfies_spec(context, type_decl, closure[i],
+            ok = verify_type_satisfies_spec(context, type_decl, type_decl, closure[i],
                                             instantiated_spec_ref,
                                             type_decl->token, NULL, 0U,
                                             /*allow_type_private_implementations=*/true);
@@ -30024,6 +30054,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             ok = verify_type_satisfies_spec(
                 context,
                 target,
+                fit_decl,
                 spec,
                 fit_spec_ref,
                 fit_decl->token,
@@ -30083,7 +30114,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
             }
 
             ok = verify_type_satisfies_spec(
-                context, target, closure[i], instantiated_spec_ref, fit_decl->token,
+                context, target, fit_decl, closure[i], instantiated_spec_ref, fit_decl->token,
                 (const FengTypeMember *const *)fit_decl->as.fit_decl.members,
                 fit_decl->as.fit_decl.member_count,
                 allow_target_private_implementations);
@@ -36342,6 +36373,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         free(analysis->spec_witnesses[index].members);
     }
     free(analysis->spec_witnesses);
+    free(analysis->spec_implementation_selections);
     free(analysis->spec_equalities);
     for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
         free(analysis->reifiable_dep_sets[index].deps);

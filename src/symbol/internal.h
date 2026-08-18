@@ -107,6 +107,9 @@ struct FengSymbolDeclView {
     bool is_iterable;
     bool is_iterator;
     bool is_mixable;
+    /* Compile-time provider marker used only by package-public selection.
+     * It is intentionally not serialized as an FT attribute. */
+    bool is_spec_implementation_dependency;
     FengAnnotationKind calling_convention;
     char *abi_library;
     char *abi_symbol;

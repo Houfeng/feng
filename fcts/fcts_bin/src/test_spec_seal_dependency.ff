@@ -1,0 +1,45 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.spec_seal_dependency;
+
+/** Verify exported spec relationships retain selected seal method code. */
+open func test_spec_seal_dependency() {
+  describe("spec seal implementation dependency", () {
+    test("direct type instance and static methods", () {
+      let value = PackageSealDirect();
+      let surface: PackageSealSurface = value;
+
+      assert(value.invoke(surface) == 11,
+             "direct seal instance implementation remains callable by witness");
+      assert(PackageSealDirect.invokeStatic<PackageSealDirect>() == 12,
+             "direct seal static implementation remains callable by witness");
+    });
+
+    test("fit instance and static methods", () {
+      let value = PackageSealFitValue();
+      let surface: PackageSealSurface = value;
+
+      assert(value.invoke(surface) == 21,
+             "fit seal instance implementation remains callable by witness");
+      assert(PackageSealFitValue.invokeStatic<PackageSealFitValue>() == 22,
+             "fit seal static implementation remains callable by witness");
+    });
+
+    test("parent spec method", () {
+      let value = PackageSealChildValue();
+      let surface: PackageSealParent = value;
+
+      assert(value.invoke(surface) == 31,
+             "parent seal requirement retains the selected implementation");
+    });
+
+    test("mixable generated wrapper", () {
+      let value = PackageSealMixedDrawable();
+      let surface: PackageSealDrawable = value;
+
+      assert(value.invoke(surface, 40) == 41,
+             "generated seal wrapper remains callable by witness");
+    });
+  });
+}

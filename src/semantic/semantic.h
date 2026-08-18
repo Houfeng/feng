@@ -442,6 +442,9 @@ typedef struct FengSemanticAnalysis {
     struct FengSpecWitness *spec_witnesses;
     size_t spec_witness_count;
     size_t spec_witness_capacity;
+    struct FengSpecImplementationSelection *spec_implementation_selections;
+    size_t spec_implementation_selection_count;
+    size_t spec_implementation_selection_capacity;
     struct FengSpecEquality *spec_equalities;
     size_t spec_equality_count;
     size_t spec_equality_capacity;
@@ -878,6 +881,42 @@ void feng_semantic_upgrade_spec_member_access_to_write(
 const FengSpecMemberAccess *feng_semantic_lookup_spec_member_access(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
+
+/* --- SpecImplementationSelection (declaration-time contract proof) ---- */
+
+/* One implementation member selected while validating a declared
+ * `type: spec` or `fit Type: Spec` relationship. Unlike SpecWitness, this
+ * sidecar is declaration-driven and therefore exists even when no coercion
+ * site requests a runtime witness. `relation_owner_decl` is the type or fit
+ * that declares the nominal relationship; `relation_owner_module` is the
+ * module whose package-public surface owns that relationship. */
+typedef struct FengSpecImplementationSelection {
+    const FengSemanticModule *relation_owner_module;
+    const FengDecl *relation_owner_decl;
+    const FengDecl *spec_decl;
+    const FengTypeMember *spec_member;
+    const FengTypeMember *impl_member;
+} FengSpecImplementationSelection;
+
+/* Record one declaration-time requirement-to-implementation selection.
+ * Duplicate tuples are ignored. Returns false only for invalid input or an
+ * allocation failure. The sidecar is compile-time-only and is not serialized
+ * into FT. */
+bool feng_semantic_record_spec_implementation_selection(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticModule *relation_owner_module,
+    const FengDecl *relation_owner_decl,
+    const FengDecl *spec_decl,
+    const FengTypeMember *spec_member,
+    const FengTypeMember *impl_member);
+
+/* Return true when `member` is a non-public implementation dependency of at
+ * least one nominal relationship that is eligible for the package-public FT
+ * surface. This query is used by provider Symbol/Codegen only; it does not
+ * grant Feng source-level member access. */
+bool feng_semantic_member_is_package_spec_implementation_dependency(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeMember *member);
 
 /* --- SpecWitness (Phase S3, §6.5 / §8.1 / §8.2 / §9.5) --------------- */
 

@@ -3268,6 +3268,190 @@ static void test_direct_build_consumes_package_generic_spec_constraint(void) {
     free(remove_error);
 }
 
+/* A binary-package consumer reconstructs witnesses from package-public FT
+ * when exported nominal relationships select seal method implementations.
+ * The selected methods keep seal visibility but reuse ordinary open method
+ * symbols for non-generic direct types, fits, inherited specs, static
+ * constraint dispatch, and generated wrappers. Existing field skeletons are
+ * exercised through the same cross-package witnesses. */
+static void test_direct_build_consumes_package_spec_seal_implementations(void) {
+    char template_path[] = "temp/feng_cli_pkg_spec_seal_impl_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkgspecsealimpl",
+        "open module test.cli.pkgspecsealimpl;\n"
+        "open spec Surface {\n"
+        "  seal var state: int;\n"
+#if 0
+        /* Pending independent analysis: the field skeleton is restored from
+         * package-public FT, but provider storage/ensure symbols for a seal
+         * static field do not yet have cross-package linkage. */
+        "  seal static var shared: int;\n"
+#endif
+        "  seal func value(): int;\n"
+        "  seal static func marker(): int;\n"
+        "}\n"
+        "open type Direct: Surface {\n"
+        "  seal var state: int = 10;\n"
+#if 0
+        "  seal static var shared: int = 20;\n"
+#endif
+        "  seal func value(): int { return 1; }\n"
+        "  seal static func marker(): int { return 2; }\n"
+        "  seal func unrelated(): int { return 90; }\n"
+        "  open func invoke(other: Surface): int { return other.value(); }\n"
+        "  open func update(other: Surface): int {\n"
+        "    other.state = other.state + 1;\n"
+        "    return other.state;\n"
+        "  }\n"
+        "  open static func invokeStatic<T: Surface>(): int { return T.marker(); }\n"
+#if 0
+        "  open static func updateStatic<T: Surface>(): int {\n"
+        "    T.shared = T.shared + 1;\n"
+        "    return T.shared;\n"
+        "  }\n"
+#endif
+        "}\n"
+        "open type FitValue {\n"
+        "  seal var state: int = 30;\n"
+#if 0
+        "  seal static var shared: int = 40;\n"
+#endif
+        "}\n"
+        "open fit FitValue: Surface {\n"
+        "  seal func value(): int { return 4; }\n"
+        "  seal static func marker(): int { return 5; }\n"
+        "  open func invoke(other: Surface): int { return other.value(); }\n"
+        "  open func update(other: Surface): int {\n"
+        "    other.state = other.state + 1;\n"
+        "    return other.state;\n"
+        "  }\n"
+        "  open static func invokeStatic<T: Surface>(): int { return T.marker(); }\n"
+#if 0
+        "  open static func updateStatic<T: Surface>(): int {\n"
+        "    T.shared = T.shared + 1;\n"
+        "    return T.shared;\n"
+        "  }\n"
+#endif
+        "  seal func unrelatedFit(): int { return 91; }\n"
+        "}\n"
+        "open spec ParentSurface { seal func parentValue(): int; }\n"
+        "open spec ChildSurface: ParentSurface {}\n"
+        "open type ChildValue: ChildSurface {\n"
+        "  seal func parentValue(): int { return 6; }\n"
+        "  open func invoke(other: ParentSurface): int { return other.parentValue(); }\n"
+        "}\n"
+#if 0
+        /* Pending independent analysis: an equivalent open requirement and
+         * open implementation also fail cross-package conversion with
+         * AE1003, before seal implementation selection is relevant. */
+        "open spec GenericSurface<T> { seal func value(): T; }\n"
+        "open type GenericValue<T>: GenericSurface<T> {\n"
+        "  var stored: T;\n"
+        "  func GenericValue(value: T) { self.stored = value; }\n"
+        "  seal func value(): T { return self.stored; }\n"
+        "  open func invoke(other: GenericSurface<T>): T { return other.value(); }\n"
+        "}\n"
+        "open type GenericFitValue<T> {}\n"
+        "open fit GenericFitValue<T>: GenericSurface<T> {\n"
+        "  seal func value(): T { let result: T; return result; }\n"
+        "  open func invoke(other: GenericSurface<T>): T { return other.value(); }\n"
+        "}\n"
+#endif
+#if 0
+        /* Pending independent analysis: object-form spec method type
+         * parameters currently fail semantic resolution with AE1013 before
+         * spec implementation selection begins. */
+        "open spec GenericMethodSurface {\n"
+        "  seal func identity<T>(value: T): T;\n"
+        "}\n"
+        "open type GenericMethodValue: GenericMethodSurface {\n"
+        "  seal func identity<T>(value: T): T { return value; }\n"
+        "  open func invoke(other: GenericMethodSurface): int {\n"
+        "    return other.identity<int>(41);\n"
+        "  }\n"
+        "}\n"
+#endif
+        "open spec MixTarget {}\n"
+        "open spec Drawable { seal func draw(value: int): int; }\n"
+        "open type MixedDrawable: MixTarget, Drawable {\n"
+        "  @mixable seal static func draw(target: MixTarget, value: int): int {\n"
+        "    return value + 1;\n"
+        "  }\n"
+        "  open func invoke(other: Drawable, value: int): int {\n"
+        "    return other.draw(value);\n"
+        "  }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "module test.cli.pkgspecsealimplmain;\n"
+        "import test.cli.pkgspecsealimpl;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "func main(args: string[]) {\n"
+        "  let direct = Direct();\n"
+        "  let directView: Surface = direct;\n"
+        "  let fitValue = FitValue();\n"
+        "  let fitView: Surface = fitValue;\n"
+        "  let child = ChildValue();\n"
+        "  let parentView: ParentSurface = child;\n"
+#if 0
+        /* Kept with the disabled generic owner/fit provider cases above. */
+        "  let generic = GenericValue<int>(9);\n"
+        "  let genericView: GenericSurface<int> = generic;\n"
+        "  let genericFit = GenericFitValue<int>();\n"
+        "  let genericFitView: GenericSurface<int> = genericFit;\n"
+#endif
+#if 0
+        /* Kept with the disabled provider case above. */
+        "  let genericMethod = GenericMethodValue();\n"
+        "  let genericMethodView: GenericMethodSurface = genericMethod;\n"
+#endif
+        "  let mixed = MixedDrawable();\n"
+        "  let mixedView: Drawable = mixed;\n"
+        "  if direct.invoke(directView) == 1 &&\n"
+        "     direct.update(directView) == 11 &&\n"
+        "     Direct.invokeStatic<Direct>() == 2 &&\n"
+#if 0
+        "     Direct.updateStatic<Direct>() == 21 &&\n"
+#endif
+        "     fitValue.invoke(fitView) == 4 &&\n"
+        "     fitValue.update(fitView) == 31 &&\n"
+        "     FitValue.invokeStatic<FitValue>() == 5 &&\n"
+#if 0
+        "     FitValue.updateStatic<FitValue>() == 41 &&\n"
+#endif
+        "     child.invoke(parentView) == 6 &&\n"
+#if 0
+        /* Kept with the disabled generic owner/fit provider cases above. */
+        "     generic.invoke(genericView) == 9 &&\n"
+        "     genericFit.invoke(genericFitView) == 0 &&\n"
+#endif
+#if 0
+        /* Kept with the disabled provider case above. */
+        "     genericMethod.invoke(genericMethodView) == 41 &&\n"
+#endif
+        "     mixed.invoke(mixedView, 8) == 9 {\n"
+        "    puts(&\"package spec seal implementations ok\");\n"
+        "  }\n"
+        "}\n",
+        "spec_seal_impl_main",
+        "package spec seal implementations ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 static void test_direct_build_consumes_package_constrained_generic_function(void) {
     char template_path[] = "temp/feng_cli_pkg_constrained_generic_fn_XXXXXX";
     char *workspace_dir;
@@ -19222,6 +19406,7 @@ int main(void) {
     test_direct_build_consumes_package_generic_type();
     test_direct_build_consumes_package_enum();
     test_direct_build_consumes_package_generic_spec_constraint();
+    test_direct_build_consumes_package_spec_seal_implementations();
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
     test_direct_build_consumes_package_mixin();

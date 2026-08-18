@@ -772,6 +772,9 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
     if (decl->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
         decl->visibility == FENG_VISIBILITY_PRIVATE &&
         decl->is_static && decl->is_mixable) return true;
+    /* A declaration-time selected seal implementation is compiler ABI data,
+     * while its serialized visibility remains seal. */
+    if (decl->is_spec_implementation_dependency) return true;
     return false;
 }
 

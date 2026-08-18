@@ -2406,6 +2406,13 @@ static bool cg_member_is_mixable_seal_static(
            member->is_static &&
            member->is_mixable;
 }
+/* Return whether one provider method uses the existing package-callable
+ * symbol path. Selected seal implementations consume the declaration-time
+ * semantic fact; ordinary and mixable methods retain their existing rules. */
+static bool cg_member_uses_package_callable_surface(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member);
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member);
@@ -4931,6 +4938,22 @@ static const FengProgram *cg_find_decl_owner_program(const CG *cg, const FengDec
     }
 
     return NULL;
+}
+
+static bool cg_member_uses_package_callable_surface(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member) {
+    if (cg == NULL || owner_decl == NULL || member == NULL ||
+        member->kind != FENG_TYPE_MEMBER_METHOD ||
+        owner_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return false;
+    }
+    return member->visibility != FENG_VISIBILITY_PRIVATE ||
+           cg_member_is_mixable_seal_static(member) ||
+           feng_semantic_member_is_package_spec_implementation_dependency(
+               cg->analysis,
+               member);
 }
 
 static char *cg_enum_typedef_name(const CG *cg, const FengDecl *enum_decl) {
@@ -48719,10 +48742,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     }
                 }
                 for (size_t mi = 0; mi < ut->method_count; mi++) {
-                    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
-                                          d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          ut->methods[mi].member->visibility !=
-                                              FENG_VISIBILITY_PRIVATE);
+                    bool needs_static =
+                        !(target == FENG_COMPILE_TARGET_LIB &&
+                          cg_member_uses_package_callable_surface(
+                              cg, d, ut->methods[mi].member));
                     if (ut->methods[mi].member->as.callable.type_param_count > 0U) {
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
@@ -48745,12 +48768,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     }
                 }
                 for (size_t mi = 0; mi < ut->static_method_count; mi++) {
-                    bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
-                                          d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                          (ut->static_methods[mi].member->visibility !=
-                                               FENG_VISIBILITY_PRIVATE ||
-                                           cg_member_is_mixable_seal_static(
-                                               ut->static_methods[mi].member)));
+                    bool needs_static =
+                        !(target == FENG_COMPILE_TARGET_LIB &&
+                          cg_member_uses_package_callable_surface(
+                              cg, d, ut->static_methods[mi].member));
                     if (ut->static_methods[mi].member->as.callable.type_param_count > 0U) {
                         if (!cg_emit_generic_type_method_shared(cg,
                                                                d,
@@ -48882,12 +48903,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                         for (size_t mi = 0; mi < uf->method_count; mi++) {
                             const FengCallableSignature *signature =
                                 &uf->methods[mi].member->as.callable;
-                            bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
-                                                  d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                                  (uf->methods[mi].member->visibility ==
-                                                       FENG_VISIBILITY_PUBLIC ||
-                                                   cg_member_is_mixable_seal_static(
-                                                       uf->methods[mi].member)));
+                            bool needs_static =
+                                !(target == FENG_COMPILE_TARGET_LIB &&
+                                  cg_member_uses_package_callable_surface(
+                                      cg, d, uf->methods[mi].member));
                             const UserFit *saved_user_fit = cg->current_user_fit;
 
                             cg->current_user_fit = uf;
@@ -48933,12 +48952,10 @@ static bool cg_pass_emit_decls(CG *cg, const FengProgram *prog,
                     if (bf->decl != d) continue;
                     emitted_fit = true;
                     for (size_t mi = 0; mi < bf->method_count; mi++) {
-                        bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
-                                              d->visibility == FENG_VISIBILITY_PUBLIC &&
-                                              (bf->methods[mi].member->visibility ==
-                                                   FENG_VISIBILITY_PUBLIC ||
-                                               cg_member_is_mixable_seal_static(
-                                                   bf->methods[mi].member)));
+                        bool needs_static =
+                            !(target == FENG_COMPILE_TARGET_LIB &&
+                              cg_member_uses_package_callable_surface(
+                                  cg, d, bf->methods[mi].member));
                         if (!cg_emit_builtin_fit_method(cg,
                                                         bf,
                                                         &bf->methods[mi],

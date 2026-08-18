@@ -15654,6 +15654,113 @@ static size_t semantic_error_code_count(const FengSemanticError *errors,
     return count;
 }
 
+/* Find one declared method on a type or fit by its Feng name. */
+static const FengTypeMember *find_contract_method(
+    const FengDecl *owner,
+    const char *name) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+    size_t name_length = strlen(name);
+
+    if (owner == NULL) {
+        return NULL;
+    }
+    if (owner->kind == FENG_DECL_TYPE) {
+        members = owner->as.type_decl.members;
+        member_count = owner->as.type_decl.member_count;
+    } else if (owner->kind == FENG_DECL_FIT) {
+        members = owner->as.fit_decl.members;
+        member_count = owner->as.fit_decl.member_count;
+    } else {
+        return NULL;
+    }
+    for (size_t index = 0U; index < member_count; ++index) {
+        const FengTypeMember *member = members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == name_length &&
+            memcmp(member->as.callable.name.data, name, name_length) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* Declared nominal relationships record their exact implementation members
+ * independently of on-demand witness materialization. Only public relation
+ * owners expose selected seal methods as package implementation dependencies. */
+static void test_declared_spec_relationship_records_implementation_selection(void) {
+    const char *source =
+        "open module demo.spec_seal.implementation_selection;\n"
+        "open spec Contract {\n"
+        "    seal func value(): int;\n"
+        "    seal static func marker(): int;\n"
+        "}\n"
+        "open type Direct: Contract {\n"
+        "    seal func value(): int { return 1; }\n"
+        "    seal static func marker(): int { return 2; }\n"
+        "    seal func unrelated(): int { return 3; }\n"
+        "}\n"
+        "open type FitValue {}\n"
+        "open fit FitValue: Contract {\n"
+        "    seal func value(): int { return 4; }\n"
+        "    seal static func marker(): int { return 5; }\n"
+        "    seal func unrelatedFit(): int { return 6; }\n"
+        "}\n"
+        "type Local: Contract {\n"
+        "    seal func value(): int { return 7; }\n"
+        "    seal static func marker(): int { return 8; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "spec_implementation_selection.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *direct;
+    const FengDecl *fit_value;
+    const FengDecl *local;
+    const FengDecl *fit_decl = NULL;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(analysis->spec_witness_count == 0U);
+    ASSERT(analysis->spec_implementation_selection_count == 6U);
+
+    direct = find_type_decl_by_name(analysis, "Direct");
+    fit_value = find_type_decl_by_name(analysis, "FitValue");
+    local = find_type_decl_by_name(analysis, "Local");
+    ASSERT(direct != NULL && fit_value != NULL && local != NULL);
+    for (size_t index = 0U;
+         index < program->declaration_count;
+         ++index) {
+        if (program->declarations[index]->kind == FENG_DECL_FIT) {
+            fit_decl = program->declarations[index];
+            break;
+        }
+    }
+    ASSERT(fit_decl != NULL);
+    ASSERT(feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(direct, "value")));
+    ASSERT(feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(direct, "marker")));
+    ASSERT(!feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(direct, "unrelated")));
+    ASSERT(feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(fit_decl, "value")));
+    ASSERT(feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(fit_decl, "marker")));
+    ASSERT(!feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(fit_decl, "unrelatedFit")));
+    ASSERT(!feng_semantic_member_is_package_spec_implementation_dependency(
+        analysis, find_contract_method(local, "value")));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Type instance/static methods and target-type fit instance/static methods
  * may access seal requirements only through the corresponding spec view. */
 static void test_spec_seal_member_access_from_implementation_contexts(void) {
@@ -24083,6 +24190,7 @@ int main(void) {
     test_spec_member_access_field_write();
     test_spec_member_access_method_call();
     test_spec_member_access_callable_form_rejected();
+    test_declared_spec_relationship_records_implementation_selection();
     test_spec_seal_member_access_from_implementation_contexts();
     test_spec_seal_member_access_rejected_outside_implementation();
     test_spec_requirement_implementation_visibility_matrix();

@@ -60,6 +60,7 @@ func main(args: string[]) {
       test_cross_package_private_representation();
       test_spec_upcast();
       test_spec_borrowed_getter_assign();
+      test_spec_seal_dependency();
       test_seal_member_visibility();
       test_tui_widget_iteration();
   });

@@ -1,0 +1,87 @@
+open module fcts_lib.spec_seal_dependency;
+
+/** Contract whose seal methods are implemented by an exported type. */
+open spec PackageSealSurface {
+  seal func value(): int;
+  seal static func marker(): int;
+}
+
+/** Direct provider of cross-package seal instance and static methods. */
+open type PackageSealDirect: PackageSealSurface {
+  seal func value(): int {
+    return 11;
+  }
+
+  seal static func marker(): int {
+    return 12;
+  }
+
+  open func invoke(other: PackageSealSurface): int {
+    return other.value();
+  }
+
+  open static func invokeStatic<T: PackageSealSurface>(): int {
+    return T.marker();
+  }
+}
+
+/** Target whose exported fit provides the contract implementation. */
+open type PackageSealFitValue {}
+
+/** Fit-owned cross-package seal instance and static methods. */
+open fit PackageSealFitValue: PackageSealSurface {
+  seal func value(): int {
+    return 21;
+  }
+
+  seal static func marker(): int {
+    return 22;
+  }
+
+  open func invoke(other: PackageSealSurface): int {
+    return other.value();
+  }
+
+  open static func invokeStatic<T: PackageSealSurface>(): int {
+    return T.marker();
+  }
+}
+
+/** Parent contract used to verify declaration-closure selection. */
+open spec PackageSealParent {
+  seal func parentValue(): int;
+}
+
+/** Child contract inheriting the parent's seal requirement. */
+open spec PackageSealChild: PackageSealParent {}
+
+/** Provider satisfying a seal method inherited from the parent contract. */
+open type PackageSealChildValue: PackageSealChild {
+  seal func parentValue(): int {
+    return 31;
+  }
+
+  open func invoke(other: PackageSealParent): int {
+    return other.parentValue();
+  }
+}
+
+/** Target contract consumed by the mixable static method. */
+open spec PackageSealMixTarget {}
+
+/** Contract satisfied by the generated mixable instance wrapper. */
+open spec PackageSealDrawable {
+  seal func draw(value: int): int;
+}
+
+/** Provider whose selected seal implementation is a generated wrapper. */
+open type PackageSealMixedDrawable: PackageSealMixTarget, PackageSealDrawable {
+  @mixable
+  seal static func draw(target: PackageSealMixTarget, value: int): int {
+    return value + 1;
+  }
+
+  open func invoke(other: PackageSealDrawable, value: int): int {
+    return other.draw(value);
+  }
+}

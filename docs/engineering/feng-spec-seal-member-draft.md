@@ -5,8 +5,10 @@
 > [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 等权威规范；本文
 > 继续用于跟踪实现范围和实施 TODO，最终语言语义以权威规范为准。
 >
-> **当前状态**：`spec seal` 核心语义已实现；第 5 节记录的
-> 跨包编译器 ABI 依赖缺失尚待实施。
+> **当前状态**：`spec seal` 核心语义及非泛型方法的跨包编译器 ABI
+> 依赖修复已实现；泛型 owner、方法级泛型、泛型 `fit` 以及
+> `seal static` 字段的跨包验证用例已保留并暂停，待独立分析对应的
+> 既有泛型解析、泛型导入符号面和静态字段链接问题。
 
 ## 1 背景
 
@@ -294,8 +296,8 @@ Feng 公开 API。
 
 "选中"必须是声明期契约满足检查的结果，不得在 `.ft` writer
 中按方法名、`requestReflow`、`@mixable` 或其他具体场景重新推断。
-满足检查、witness 选择、`.ft` 选择与 Codegen 必须消费同一份
-统一语义事实。该事实只存在于当次编译的 Semantic sidecar，
+满足检查、witness 选择、`.ft` 选择与 provider Codegen 必须消费同一份
+统一语义事实。该事实只存在于 provider 当次编译的 Semantic sidecar，
 不写入 `.ft`。
 
 consumer 仍以现有名义 relation 判定关系是否可用，并只在为该
@@ -309,25 +311,43 @@ consumer 仍以现有名义 relation 判定关系是否可用，并只在为该
 
 ### 5.3 编译器 ABI 链接
 
-仅让方法骨架进入 `.ft` 不足以完成修复。consumer 生成的现有
-witness thunk 会调用 provider 的实现符号，因此同一份声明期
-实现依赖事实还必须驱动 Codegen：
+被选中的 `seal` 实现成员不建立新的链接机制，而是直接复用对应
+`open` 成员的现有发码、符号命名、声明和链接路径。两者唯一保留的
+差异是源码 AST 和 `.ft` 中记录的语言可见性：前者仍为 `seal`，
+语义分析、名称查找、补全和文档仍按 `seal` 拒绝普通访问。
 
-- 被选中的 `seal` 实例方法和静态方法获得跨包编译器 ABI
-  链接能力；
-- 符号身份必须只依赖 package-public `.ft` 可恢复的声明事实，
-  泛型 owner、泛型方法和泛型 `fit` 的 provider/consumer 必须生成
-  一致符号；
-- 被选中的 `seal static` 字段已经进入 `.ft`，无需修改字段
-  导出选择；其 storage/ensure 符号需获得同等的编译器 ABI
-  链接能力；
+具体规则如下：
+
+- provider Codegen 将声明期选中的非泛型 `seal` 实例方法和静态方法
+  纳入现有 package callable surface，后续处理与 `open` 方法相同；
+- 非泛型 consumer 继续使用现有稳定方法符号和 witness 调用路径，
+  不根据使用点是否已物化 witness 再次推断；
+- 不为 `spec seal` 新增独立符号前缀、序号域、thunk 种类或 ABI；
+  非泛型 `type`、非泛型 `fit` 和生成 wrapper 均保持现有 `open`
+  成员路径的行为；
 - 实例字段继续由现有布局骨架和 witness 字段访问路径处理，
   不新增实现符号。
 
-这些链接符号是编译器 ABI，不是 Feng 公开成员。语义分析、
-名称查找、补全和文档仍必须按 `seal` 拒绝普通访问。本次不修改
-运行时 witness 布局、槽位、调用层级或分派路径，因此不增加
-运行时开销。
+`seal static` 字段的声明骨架虽已进入 `.ft`，但其 provider storage 与
+`ensure_init` 当前仍只按公开字段获得跨包链接能力。该问题在本次方法
+依赖修复前已经存在，不由“选中的 seal 方法进入 `.ft`”引入；对应验证
+用例保留并暂停，后续作为独立静态字段链接问题处理。
+
+workspace-cache `.ft` 继续只服务现有工具链用途，不参与本次 package
+Codegen 判定。本次不修改运行时 witness 布局、槽位、调用层级或分派
+路径，因此不增加运行时开销。
+
+泛型 owner 的 package-public `.ft` 还可能因 reified callable dependency
+收录普通 `seal` helper。因此，consumer 不能仅根据“某个 `seal` 方法出现
+在 package-public `.ft`”就把它划入公开泛型符号序号域。泛型 owner、
+泛型实现方法和泛型 `fit` 的跨包符号分类不在本次最小修复中增加特判或
+新 FT 标记；对应验证用例保留并暂停，后续独立分析。
+
+object-form `spec` 的方法级类型参数还有一个更早的既有解析问题：spec
+成员签名当前没有像 type/fit 方法一样进入统一 callable 类型参数作用域，
+所以无修饰（公开）与 `seal` 的方法级泛型都会在声明解析阶段对参数或
+返回值中的类型参数报告 `AE1013`。该问题发生在契约满足和本次实现依赖
+选择之前，不属于本次跨包方法依赖修复。
 
 ## 6 编译器实现影响
 
@@ -347,8 +367,8 @@ witness thunk 会调用 provider 的实现符号，因此同一份声明期
   可见性兼容条件。
 - 契约满足选择成功时，记录“名义关系、requirement、被选中
   实现成员及实现来源”的统一 Semantic sidecar 事实。该事实
-  同时服务于 witness、package-public 依赖选择和 Codegen，不得为
-  `.ft` 或特定成员另写一套匹配逻辑。
+  同时服务于 witness、package-public 依赖选择和 provider Codegen，
+  不得为 `.ft`、Codegen 或特定成员另写一套匹配逻辑。
 - 该 sidecar 按关系来源保留选择结果，不能只使用“某成员曾参与
   任意 spec 满足”的无主体布尔标记；只有进入 package-public
   `.ft` 的名义关系才能导出其非公开实现依赖。
@@ -383,11 +403,13 @@ witness thunk 会调用 provider 的实现符号，因此同一份声明期
 - 合法的 `spec seal` 成员访问继续使用现有 spec member access 记录和
   witness 分派。
 - 可见性检查在语义阶段完成。
-- 已导出名义关系选中的 `seal` 实例/静态方法使用编译器
-  ABI 外部链接；被选中的 `seal static` 字段对应 storage/ensure
-  使用同等链接规则。
-- provider 和 consumer 的非泛型、泛型、`type` 与 `fit` 方法符号
-  必须仅依赖 `.ft` 可恢复声明事实并保持一致。
+- 已导出名义关系选中的非泛型 `seal` 实例/静态方法加入现有 package
+  callable surface，完全复用 `open` 方法的发码和链接路径。
+- provider 通过声明期 sidecar 识别选中成员；非泛型 consumer 复用现有
+  稳定符号和 witness 调用路径。不得增加 `spec seal` 专用符号域或按
+  materialized witness 重新分类。
+- 泛型 owner、泛型方法和泛型 `fit` 的跨包符号分类留待独立分析，
+  本次不得以“导入的 seal 方法均为 spec 实现依赖”的过宽规则处理。
 - 不增加运行时访问检查、wrapper、box、分支或 ABI 数据结构。
 - 不改变 Feng 层的具体 type 成员可见性，不增加运行时开销。
 
@@ -453,9 +475,11 @@ LSP、补全和符号展示只需对 `spec` 成员应用相同访问判断：
 | 已导出 `type: spec` 关系选中 seal 实例/静态方法 | 方法以 seal 进入 `.ft`，witness 跨包可执行 |
 | 已导出 `open fit Type: Spec` 选中 fit 的 seal 实例/静态方法 | 方法以 seal 进入 `.ft`，导入 fit 后 witness 可执行 |
 | 编译器生成的 seal 实例 wrapper 被选中 | wrapper 以 seal 进入 `.ft`，witness 跨包可执行 |
-| 父 spec 或泛型 spec 选中 seal 方法 | provider/consumer 恢复相同符号并正常执行 |
+| 父 spec 选中 seal 方法 | 复用 open 发码路径并正常执行 |
+| 泛型 owner、泛型方法或泛型 fit 选中 seal 方法 | 保留验证用例，待独立分析现有泛型导入与符号面问题 |
 | 已导出 type 中与 spec 实现无关的普通 seal 方法 | 不因本次修复进入 package-public `.ft` |
-| seal 实例/静态字段 | 继续使用已有 `.ft` 字段骨架，跨包 witness 正常执行 |
+| seal 实例字段 | 继续使用已有 `.ft` 字段骨架，跨包 witness 正常执行 |
+| seal static 字段 | `.ft` 骨架已存在；跨包 storage/ensure 链接用例保留，待独立修复 |
 | 外包自定义 spec/fit 尝试选择导入 type 的 seal 成员 | 继续拒绝 |
 
 编译器测试应关注 AST 可见性、诊断码、spec member access 和 witness；
@@ -512,7 +536,7 @@ fit 的目标 type 私有访问权、跨包可见面或运行时行为。
 - [x] 补齐 Parser、AST、semantic、witness、`.ft` 往返、跨包、LSP 和 FCTS
       测试，并执行 `make test` 全量回归。
 
-### 10.2 待实施的跨包编译器 ABI 依赖修复
+### 10.2 跨包编译器 ABI 依赖修复
 
 下列任务中，“实际变更”会修改编译器行为；“验证”只补齐或执行
 用例，不得借机改变其他语义。
@@ -520,31 +544,42 @@ fit 的目标 type 私有访问权、跨包可见面或运行时行为。
 - [x] **实际变更（文档）**：将方案收敛为“已导出名义关系选中的
   seal 实现方法进入 `.ft` 并具备编译器 ABI 链接能力”，明确
   不增加 witness plan、`.ft` 格式或运行时机制。
-- [ ] **实际变更（Semantic）**：让声明期契约满足选择生成关系级
+- [x] **实际变更（Semantic）**：让声明期契约满足选择生成关系级
   实现成员 sidecar，记录 requirement、确切实现成员和 `type`/`fit`
   实现来源；复用现有统一可见性与签名匹配，不得增加
   `requestReflow`、`@mixable` 或成员名特判。
-- [ ] **实际变更（Symbol）**：package-public 选择复用同一 sidecar，只让
+- [x] **实际变更（Symbol）**：package-public 选择复用同一 sidecar，只让
   已导出名义关系选中的 `seal` 实例/静态方法、`type`/`fit`
   方法和生成 wrapper 进入 `.ft`，并原样保留 `seal`。
-- [ ] **实际变更（Codegen）**：为上述方法生成稳定的编译器
-  ABI 外部链接符号；非泛型、泛型 owner、泛型方法、泛型 `fit`
-  和生成 wrapper 使用同一判定。
-- [ ] **实际变更（Codegen）**：不改变字段 `.ft` 选择，仅为被已导出
-  名义关系选中的 `seal static` 字段补齐 storage/ensure 编译器
-  ABI 链接。
-- [ ] **验证（现有行为）**：确认 object-form `spec` 全部成员、`type`
+- [x] **实际变更（Codegen，非泛型）**：把上述非泛型方法加入现有
+  package callable surface，直接复用 `open` 方法的发码、符号命名和
+  链接路径；未新增 `spec seal` 专用符号前缀、序号域、thunk 或按
+  materialized witness 推断的分类。
+- [x] **验证（Codegen，实例字段）**：不改变字段 `.ft` 选择；实例字段
+  继续使用已有布局骨架和 witness 字段访问路径。
+- [ ] **待独立分析（保留禁用用例）**：`seal static` 字段虽然已进入
+  `.ft`，provider storage/ensure 尚未获得跨包链接能力；该问题不由
+  本次方法依赖修复引入，不得在本次方法修复中顺带修改。
+- [x] **验证（现有行为）**：确认 object-form `spec` 全部成员、`type`
   全部实例/静态字段以及现有名义 relation 已进入 `.ft`，不修改
   其编解码或选择逻辑。
-- [ ] **验证（需新增用例）**：覆盖 `type: spec` 与已导入的
+- [x] **验证（需新增编译器用例）**：覆盖 `type: spec` 与已导入的
   `open fit Type: Spec`
-  选中的 seal 实例方法、静态方法、实例字段和静态字段，
-  并执行跨包 witness 调用/读写。
-- [ ] **验证（需新增用例）**：覆盖父 spec、泛型 owner、泛型方法、
-  泛型 `fit`、reified dependencies 与 `@mixable seal static` 生成实例
-  wrapper；这些任务只验证现有通用路径已被新选择事实覆盖。
-- [ ] **验证（需新增用例）**：确认无关普通 seal 方法仍不进入
+  选中的 seal 实例方法、静态方法和实例字段，并执行跨包 witness
+  调用/读写；静态字段按上一项单独保留。
+- [x] **验证（需新增用例）**：覆盖父 spec 与 `@mixable seal static`
+  生成实例 wrapper；这些任务只验证现有 `open` 通用路径已被新选择
+  事实覆盖，不修改该路径的既有行为。
+- [ ] **待独立分析（保留禁用用例）**：泛型 owner、泛型方法、泛型
+  `fit` 及 reified dependencies 的跨包符号分类；不得把 package-public
+  `.ft` 中因其他编译器依赖出现的普通 `seal` helper 误判为 spec
+  实现依赖。
+- [x] **验证（需新增用例）**：确认无关普通 seal 方法仍不进入
   package-public `.ft`，普通访问仍被 `seal` 拒绝，外包自定义
   spec/fit 仍不能选择导入 type 的 seal 成员。
-- [ ] **验证（回归）**：先执行定向 symbol、semantic、codegen、CLI 与 FCTS
-  用例，再在沙箱外执行 `make test` 全量回归。
+- [x] **验证（需新增 FCTS 用例）**：通过 `fcts_lib -> fcts_bin` 包边界
+  覆盖非泛型 `type: spec`、`open fit Type: Spec`、父 spec、seal 实例/
+  静态实现方法及 `@mixable seal static` 生成 wrapper 的 witness 调用。
+- [x] **验证（回归）**：先执行定向 symbol、semantic、codegen、CLI 与 FCTS
+  用例，确认编译 consumer 使用 package-public 而非 workspace-cache
+  `.ft`，再在沙箱外执行 `make test` 全量回归。

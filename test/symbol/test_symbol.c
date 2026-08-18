@@ -628,6 +628,106 @@ static void test_object_spec_seal_member_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Package-public FT includes only seal methods selected by exported nominal
+ * spec relationships. Their language visibility remains seal, and unrelated
+ * seal methods stay absent for both direct type and fit implementations. */
+static void test_selected_seal_spec_implementations_enter_package_ft(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.spec_impl_dependency;\n"
+        "open spec Contract {\n"
+        "    seal func value(): int;\n"
+        "    seal static func marker(): int;\n"
+        "}\n"
+        "open type Direct: Contract {\n"
+        "    seal func value(): int { return 1; }\n"
+        "    seal static func marker(): int { return 2; }\n"
+        "    seal func unrelated(): int { return 3; }\n"
+        "}\n"
+        "open type FitValue {}\n"
+        "open fit FitValue: Contract {\n"
+        "    seal func value(): int { return 4; }\n"
+        "    seal static func marker(): int { return 5; }\n"
+        "    seal func unrelatedFit(): int { return 6; }\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module;
+    const FengSymbolDeclView *direct;
+    const FengSymbolDeclView *fit_decl;
+    size_t direct_selected_count = 0U;
+    size_t fit_selected_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die(
+        "spec_impl_dependency.ff", kSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("spec_impl_dependency");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    direct = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("Direct"));
+    ASSERT(direct != NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               direct, slice_from_cstr("value")) == NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               direct, slice_from_cstr("marker")) == NULL);
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(direct);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(direct, index);
+        FengSlice name = feng_symbol_decl_name(member);
+
+        ASSERT(!slice_equals_cstr(name, "unrelated"));
+        if (slice_equals_cstr(name, "value") ||
+            slice_equals_cstr(name, "marker")) {
+            ++direct_selected_count;
+            ASSERT(feng_symbol_decl_kind(member) ==
+                   FENG_SYMBOL_DECL_KIND_METHOD);
+            ASSERT(feng_symbol_decl_visibility(member) ==
+                   FENG_VISIBILITY_PRIVATE);
+        }
+    }
+    ASSERT(direct_selected_count == 2U);
+
+    ASSERT(feng_symbol_module_fit_count(module) == 1U);
+    fit_decl = feng_symbol_fit_decl(feng_symbol_module_fit_at(module, 0U));
+    ASSERT(fit_decl != NULL);
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(fit_decl);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(fit_decl, index);
+        FengSlice name = feng_symbol_decl_name(member);
+
+        ASSERT(!slice_equals_cstr(name, "unrelatedFit"));
+        if (slice_equals_cstr(name, "value") ||
+            slice_equals_cstr(name, "marker")) {
+            ++fit_selected_count;
+            ASSERT(feng_symbol_decl_kind(member) ==
+                   FENG_SYMBOL_DECL_KIND_METHOD);
+            ASSERT(feng_symbol_decl_visibility(member) ==
+                   FENG_VISIBILITY_PRIVATE);
+        }
+    }
+    ASSERT(fit_selected_count == 2U);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* A spec seal restored from package-public FT grants access to an importing
  * type implementation, but remains inaccessible to an importing top-level
  * function. The implementation member itself stays local to the consumer. */
@@ -3325,6 +3425,7 @@ int main(void) {
     test_union_spec_ft_roundtrip_preserves_normalized_members();
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_object_spec_seal_member_ft_roundtrip();
+    test_selected_seal_spec_implementations_enter_package_ft();
     test_imported_object_spec_seal_access_semantics();
     test_friend_metadata_is_not_exported_to_ft();
     test_local_friend_fit_can_target_imported_type();
