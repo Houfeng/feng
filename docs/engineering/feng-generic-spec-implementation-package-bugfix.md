@@ -337,8 +337,8 @@ consumer 使用按需 witness selection 即可归一符号域”并不充分。`
 取得 package linkage 仍只由 3.4 节既有 package-callable 语义判定决定，不因某个
 方法仅作为 reifiable dependency 被收录就擅自扩大链接面。
 consumer 对 imported type/fit 而言，只把 package-public FT 中实际存在的私有方法
-视为 compiler package-symbol dependency。后者只决定 C 符号身份，不参与 Feng
-成员查找、spec 满足证明或 witness slot 选择，因而不会扩大 seal 可见性。
+视为 package-public 中额外收录的编译器依赖成员。后者只决定 C 符号身份，不参与
+Feng 成员查找、spec 满足证明或 witness slot 选择，因而不会扩大 seal 可见性。
 
 该选择结果必须由可复用的编译期入口生成或缓存；`feng_codegen_emit_program()`
 直接调用时也必须得到与 Symbol writer 相同的结果，不能依赖 CLI 恰好先执行过
@@ -347,17 +347,17 @@ consumer 对 imported type/fit 而言，只把 package-public FT 中实际存在
 为避免新增 spec seal 实现扰动已经工作的公开泛型符号，package 编号顺序固定为：
 
 1. 先按现有规则编号原有公开/既有 capability 域成员；
-2. 再按源声明相对顺序编号其余 compiler package-symbol dependency；
+2. 再按源声明相对顺序编号 package-public 中额外收录的编译器依赖成员；
 3. 未进入 package-public 收录闭包的 provider-local 方法不参与上述编号。
 
 据此：
 
 - 泛型 type 继续复用现有 `m<N>` / `i<N>` 前缀；原有公开方法、构造器、finalizer
-  和既有 `@mixable seal static` 保持当前 `m<N>` 编号，其他 package dependency
+  和既有 `@mixable seal static` 保持当前 `m<N>` 编号，额外收录的编译器依赖成员
   追加在该域尾部；未收录私有方法继续使用 `i<N>`；
 - 泛型 fit 的原有普通公开方法继续使用 `fm<N>`，`@mixable seal static` 继续使用
-  现有 `fc<N>`；其他 package dependency 追加在 `fm<N>` 的公开方法之后；普通
-  provider-local 方法必须进入与 `fm<N>` 不相交的通用 internal 域（建议
+  现有 `fc<N>`；额外收录的编译器依赖成员追加在 `fm<N>` 的公开方法之后；普通
+  provider-local 方法必须进入与 `fm<N>` 不相交的通用 internal 域（采用
   `fi<N>`），否则同名重载可能与重新编号后的 `fm<N>` 冲突。
 
 `fi<N>` 是所有 provider-local 泛型 fit 方法的内部域，不是 spec seal 专用 ABI；它
@@ -482,12 +482,11 @@ witness。
   builder；reader 已具备对应类型节点与关系列表恢复路径；consumer 的直接 type
   查询缺少具体 source type ref 并错误地重新扫描开放成员，且该查询由同包和跨包
   共用；现有 fit 精确匹配仅覆盖直接 RHS。根因和代码位置见 2.2 节。
-- [ ] **Review 决策（第二阶段实施前置）**：确认 3.5 节方案，即复用现有 package-public
-  方法收录闭包、不增加 FT 标志；确认该集合只用于稳定符号域/编号，linkage 继续
-  使用 3.4 节既有判定；同时确认 package dependency 追加编号规则和泛型 fit 通用
-  provider-local `fi<N>` 内部域。若不接受，必须先重新收敛方案与后续 TODO，不得
-  边实施边自行改变。任何获准方案都必须保持现有公开/capability 符号身份和同包
-  调用行为。
+- [x] **Review 决策（已批准，2026-08-18）**：复用现有 package-public 方法收录
+  闭包，不增加 FT 标志；该集合只用于稳定符号域/编号，linkage 继续使用 3.4 节
+  既有判定；package-public 中额外收录的编译器依赖成员采用追加编号，泛型 fit 的
+  provider-local 方法采用通用 `fi<N>` 内部域。实施必须保持现有
+  公开/capability 符号身份和同包调用行为。
 - [ ] **实际变更（Symbol 关系模板写出）**：让泛型 type 的 `declared_specs` 与泛型
   spec 的 `parent_specs` 复用 `fill_declared_specs_with_tparams()`；保持现有
   `FT_ATTR_DECLARED_SPECS` 和类型节点 wire，不新增另一套 relation 表示。
@@ -527,10 +526,11 @@ witness。
   symbol；不按 fit/type、实例/static 或具体成员名增加分支。
 - [ ] **实际变更（稳定符号域）**：使选中 seal 泛型 type 方法与泛型 fit 方法的
   public/private 符号域、shared symbol 和成员序号只由 package-public `.ft` 可恢复的
-  owner、fit、成员及签名事实决定。保持原有公开/capability 成员编号不变，将其他
-  package dependency 追加到对应 package 域；泛型 type 复用 `m/i`，泛型 fit 复用
-  `fm/fc`，provider-local 方法进入经 Review 确认的通用 `fi` 域。不得计入未收录
-  的普通 seal 成员，不得增加 spec-seal 专用符号前缀或 thunk ABI。
+  owner、fit、成员及签名事实决定。保持原有公开/capability 成员编号不变，将
+  package-public 中额外收录的编译器依赖成员追加到对应 package 域；泛型 type
+  复用 `m/i`，泛型 fit 复用 `fm/fc`，provider-local 方法进入已批准的通用 `fi`
+  域。不得计入未收录的普通 seal 成员，不得增加 spec-seal 专用符号前缀或 thunk
+  ABI。
 - [ ] **验证（reified dependencies）**：只验证被选中实现现有 shared body、薄
   wrapper 所需的 aggregate、managed type 与 callable dependencies 已完整往返；
   同时放置一个因 reifiable callable dependency 收录的 seal 方法，验证其参与
