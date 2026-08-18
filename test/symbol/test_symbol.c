@@ -728,6 +728,75 @@ static void test_selected_seal_spec_implementations_enter_package_ft(void) {
     free(tmp_dir);
 }
 
+/* Static fields selected as seal spec implementations keep seal visibility
+ * in package-public FT; compiler codegen reuse must not make them ordinary
+ * public members. */
+static void test_selected_seal_static_fields_remain_seal_in_package_ft(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.spec_seal_static_field;\n"
+        "open spec State {\n"
+        "    seal static let initial: int;\n"
+        "    seal static var current: int;\n"
+        "}\n"
+        "open type Store: State {\n"
+        "    seal static let initial: int = 1;\n"
+        "    seal static var current: int = 2;\n"
+        "    seal static let unrelated: int = 3;\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module;
+    const FengSymbolDeclView *store;
+    size_t seal_static_field_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die(
+        "spec_seal_static_field.ff", kSource, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("spec_seal_static_field");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    store = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("Store"));
+    ASSERT(store != NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               store, slice_from_cstr("initial")) == NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               store, slice_from_cstr("current")) == NULL);
+    ASSERT(feng_symbol_decl_find_public_member(
+               store, slice_from_cstr("unrelated")) == NULL);
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(store);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(store, index);
+
+        if (member != NULL &&
+            feng_symbol_decl_kind(member) == FENG_SYMBOL_DECL_KIND_FIELD) {
+            ++seal_static_field_count;
+            ASSERT(feng_symbol_decl_is_static(member));
+            ASSERT(feng_symbol_decl_visibility(member) ==
+                   FENG_VISIBILITY_PRIVATE);
+        }
+    }
+    ASSERT(seal_static_field_count == 3U);
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* A spec seal restored from package-public FT grants access to an importing
  * type implementation, but remains inaccessible to an importing top-level
  * function. The implementation member itself stays local to the consumer. */
@@ -3426,6 +3495,7 @@ int main(void) {
     test_intersection_spec_ft_roundtrip_preserves_members();
     test_object_spec_seal_member_ft_roundtrip();
     test_selected_seal_spec_implementations_enter_package_ft();
+    test_selected_seal_static_fields_remain_seal_in_package_ft();
     test_imported_object_spec_seal_access_semantics();
     test_friend_metadata_is_not_exported_to_ft();
     test_local_friend_fit_can_target_imported_type();

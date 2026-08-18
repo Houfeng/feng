@@ -2413,6 +2413,13 @@ static bool cg_member_uses_package_callable_surface(
     const CG *cg,
     const FengDecl *owner_decl,
     const FengTypeMember *member);
+/* Return whether one static field reuses the existing open static-binding
+ * codegen path. This compiler-only decision never changes the member
+ * visibility restored from .ft or ordinary Feng access checks. */
+static bool cg_member_uses_package_static_binding_codegen(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member);
 static char *cg_generic_type_method_shared_cname(CG *cg,
                                                  const FengDecl *decl,
                                                  const FengTypeMember *member);
@@ -4954,6 +4961,38 @@ static bool cg_member_uses_package_callable_surface(
            feng_semantic_member_is_package_spec_implementation_dependency(
                cg->analysis,
                member);
+}
+
+/* Reuse the open static-field codegen path for every language-open member and
+ * for a seal member selected by a package-public nominal spec relation. The
+ * latter remains seal in .ft and is not exposed to ordinary member lookup. */
+static bool cg_member_uses_package_static_binding_codegen(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member) {
+    const FengProgram *owner_program;
+
+    if (cg == NULL || owner_decl == NULL || member == NULL ||
+        owner_decl->kind != FENG_DECL_TYPE ||
+        owner_decl->visibility != FENG_VISIBILITY_PUBLIC ||
+        member->kind != FENG_TYPE_MEMBER_FIELD ||
+        !member->is_static) {
+        return false;
+    }
+    if (member->visibility != FENG_VISIBILITY_PRIVATE) {
+        return true;
+    }
+
+    owner_program = cg_find_decl_owner_program(cg, owner_decl);
+    if (cg_program_origin(cg, owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return feng_semantic_member_is_selected_spec_witness_implementation(
+            cg->analysis,
+            member);
+    }
+    return feng_semantic_member_is_package_spec_implementation_dependency(
+        cg->analysis,
+        member);
 }
 
 static char *cg_enum_typedef_name(const CG *cg, const FengDecl *enum_decl) {
@@ -12748,9 +12787,10 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
 
                 if (!cg_init_type_static_binding(cg, t, m, sb)) return false;
                 sb->exports_public_surface =
-                    m->visibility == FENG_VISIBILITY_PUBLIC &&
-                    t->decl != NULL &&
-                    t->decl->visibility == FENG_VISIBILITY_PUBLIC &&
+                    cg_member_uses_package_static_binding_codegen(
+                        cg,
+                        t->decl,
+                        m) &&
                     (target == FENG_COMPILE_TARGET_LIB ||
                      cg_program_origin(cg, t->owner_program) ==
                          FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE);
@@ -53328,8 +53368,9 @@ static bool cg_emit_generic_type_static_binding_ensure_shared(
                           : "FengTypeDescriptor";
     exports_public_surface =
         target == FENG_COMPILE_TARGET_LIB &&
-        cg_generic_type_member_uses_public_symbol(decl,
-                                                  member);
+        cg_member_uses_package_static_binding_codegen(cg,
+                                                       decl,
+                                                       member);
     buf_append_fmt(&cg->fn_protos,
                    "%svoid %s(const %s *_type_desc, "
                    "FengStaticBindingState *_state);\n",

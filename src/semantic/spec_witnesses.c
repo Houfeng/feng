@@ -324,3 +324,25 @@ bool feng_semantic_spec_witness_append_member(
     slot->provider_module = provider_module;
     return true;
 }
+
+bool feng_semantic_member_is_selected_spec_witness_implementation(
+        const FengSemanticAnalysis *analysis,
+        const FengTypeMember *member) {
+    if (analysis == NULL || member == NULL) {
+        return false;
+    }
+    for (size_t witness_index = 0U;
+         witness_index < analysis->spec_witness_count;
+         ++witness_index) {
+        const FengSpecWitness *witness = &analysis->spec_witnesses[witness_index];
+
+        for (size_t member_index = 0U;
+             member_index < witness->member_count;
+             ++member_index) {
+            if (witness->members[member_index].impl_member == member) {
+                return true;
+            }
+        }
+    }
+    return false;
+}

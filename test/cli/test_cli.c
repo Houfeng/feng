@@ -3289,20 +3289,15 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "open module test.cli.pkgspecsealimpl;\n"
         "open spec Surface {\n"
         "  seal var state: int;\n"
-#if 0
-        /* Pending independent analysis: the field skeleton is restored from
-         * package-public FT, but provider storage/ensure symbols for a seal
-         * static field do not yet have cross-package linkage. */
+        "  seal static let baseline: int;\n"
         "  seal static var shared: int;\n"
-#endif
         "  seal func value(): int;\n"
         "  seal static func marker(): int;\n"
         "}\n"
         "open type Direct: Surface {\n"
         "  seal var state: int = 10;\n"
-#if 0
+        "  seal static let baseline: int = 100;\n"
         "  seal static var shared: int = 20;\n"
-#endif
         "  seal func value(): int { return 1; }\n"
         "  seal static func marker(): int { return 2; }\n"
         "  seal func unrelated(): int { return 90; }\n"
@@ -3312,18 +3307,15 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "    return other.state;\n"
         "  }\n"
         "  open static func invokeStatic<T: Surface>(): int { return T.marker(); }\n"
-#if 0
         "  open static func updateStatic<T: Surface>(): int {\n"
         "    T.shared = T.shared + 1;\n"
-        "    return T.shared;\n"
+        "    return T.baseline + T.shared;\n"
         "  }\n"
-#endif
         "}\n"
         "open type FitValue {\n"
         "  seal var state: int = 30;\n"
-#if 0
+        "  seal static let baseline: int = 200;\n"
         "  seal static var shared: int = 40;\n"
-#endif
         "}\n"
         "open fit FitValue: Surface {\n"
         "  seal func value(): int { return 4; }\n"
@@ -3334,13 +3326,23 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "    return other.state;\n"
         "  }\n"
         "  open static func invokeStatic<T: Surface>(): int { return T.marker(); }\n"
-#if 0
         "  open static func updateStatic<T: Surface>(): int {\n"
         "    T.shared = T.shared + 1;\n"
-        "    return T.shared;\n"
+        "    return T.baseline + T.shared;\n"
         "  }\n"
-#endif
         "  seal func unrelatedFit(): int { return 91; }\n"
+        "}\n"
+        "open spec OpenStaticSurface {\n"
+        "  static let defaultValue: int;\n"
+        "  static var explicitValue: int;\n"
+        "}\n"
+        "open type OpenStaticValue: OpenStaticSurface {\n"
+        "  static let defaultValue: int = 300;\n"
+        "  open static var explicitValue: int = 4;\n"
+        "  open static func inspect<T: OpenStaticSurface>(): int {\n"
+        "    T.explicitValue = T.explicitValue + 1;\n"
+        "    return T.defaultValue + T.explicitValue;\n"
+        "  }\n"
         "}\n"
         "open spec ParentSurface { seal func parentValue(): int; }\n"
         "open spec ChildSurface: ParentSurface {}\n"
@@ -3421,15 +3423,12 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "  if direct.invoke(directView) == 1 &&\n"
         "     direct.update(directView) == 11 &&\n"
         "     Direct.invokeStatic<Direct>() == 2 &&\n"
-#if 0
-        "     Direct.updateStatic<Direct>() == 21 &&\n"
-#endif
+        "     Direct.updateStatic<Direct>() == 121 &&\n"
         "     fitValue.invoke(fitView) == 4 &&\n"
         "     fitValue.update(fitView) == 31 &&\n"
         "     FitValue.invokeStatic<FitValue>() == 5 &&\n"
-#if 0
-        "     FitValue.updateStatic<FitValue>() == 41 &&\n"
-#endif
+        "     FitValue.updateStatic<FitValue>() == 241 &&\n"
+        "     OpenStaticValue.inspect<OpenStaticValue>() == 305 &&\n"
         "     child.invoke(parentView) == 6 &&\n"
 #if 0
         /* Kept with the disabled generic owner/fit provider cases above. */

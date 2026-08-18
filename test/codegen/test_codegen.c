@@ -3485,6 +3485,105 @@ static void test_imported_public_static_members_codegen_compiles(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* An imported witness may reference static fields that remain seal in FT
+ * when an exported nominal spec relation selected them. Their declarations
+ * reuse the same imported static-binding path as open/default fields. */
+static void test_imported_selected_seal_static_fields_codegen_compiles(void) {
+    static const char *kImportedSource =
+        "open module vendor.seal_static_state;\n"
+        "open spec State {\n"
+        "    static let publicValue: int;\n"
+        "    seal static let initial: int;\n"
+        "    seal static var current: int;\n"
+        "}\n"
+        "open type Store: State {\n"
+        "    static let publicValue: int = 3;\n"
+        "    seal static let initial: int = 5;\n"
+        "    seal static var current: int = 7;\n"
+        "    seal static let unrelated: int = 11;\n"
+        "    open static func advance<T: State>(): int {\n"
+        "        T.current = T.current + 1;\n"
+        "        return T.publicValue + T.initial + T.current;\n"
+        "    }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.main;\n"
+        "import vendor.seal_static_state;\n"
+        "func project(): int {\n"
+        "    return Store.advance<Store>();\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+    char expected[256];
+
+    imported_source_fixture_init(
+        &fixture,
+        "tests/imported_seal_static_state_vendor.ff",
+        kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
+
+    program = parse_or_die(
+        kConsumerSource,
+        "tests/imported_seal_static_state_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &out, &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "extern %s Feng__vendor__seal_static_state__Store__static__publicValue;",
+               int_c_type) > 0);
+    ASSERT(strstr(out.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "extern %s Feng__vendor__seal_static_state__Store__static__initial;",
+               int_c_type) > 0);
+    ASSERT(strstr(out.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "extern %s Feng__vendor__seal_static_state__Store__static__current;",
+               int_c_type) > 0);
+    ASSERT(strstr(out.c_source, expected) != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void Feng__vendor__seal_static_state__Store__static__initial__ensure_init(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void Feng__vendor__seal_static_state__Store__static__current__ensure_init(void);") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "extern void Feng__vendor__seal_static_state__Store__static__unrelated__ensure_init(void);") == NULL);
+
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_imported_public_var_binding_read_write_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.state;\n"
@@ -11268,19 +11367,35 @@ static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
     feng_program_free(program);
 }
 
-/* Non-generic seal methods selected by exported spec relationships reuse the
- * ordinary package-callable linkage. Unrelated seal methods retain internal
- * linkage. Generic-owner verification is preserved below but disabled while
- * the independent imported-generic symbol-surface issue is analyzed. */
+/* Non-generic seal methods and static fields selected by exported spec
+ * relationships reuse their ordinary open codegen paths. Their unrelated
+ * seal siblings retain internal linkage. Generic-owner verification is
+ * preserved below but disabled while the independent imported-generic
+ * symbol-surface issue is analyzed. */
 static void test_selected_seal_spec_implementations_use_open_codegen_path(void) {
     static const char *kSource =
         "open module feng.codegen.spec_impl_dependency;\n"
-        "open spec Contract { seal func value(): int; }\n"
+        "open spec Contract {\n"
+        "    static let publicDefault: int;\n"
+        "    seal static let selectedLet: int;\n"
+        "    seal static var selectedVar: int;\n"
+        "    seal func value(): int;\n"
+        "}\n"
         "open type Direct: Contract {\n"
+        "    static let publicDefault: int = 5;\n"
+        "    open static let explicitOpen: int = 6;\n"
+        "    seal static let selectedLet: int = 7;\n"
+        "    seal static var selectedVar: int = 8;\n"
+        "    seal static let unrelatedField: int = 9;\n"
         "    seal func value(): int { return 1; }\n"
         "    seal func unrelated(): int { return 2; }\n"
         "}\n"
-        "open type FitValue {}\n"
+        "open type FitValue {\n"
+        "    static let publicDefault: int = 10;\n"
+        "    seal static let selectedLet: int = 11;\n"
+        "    seal static var selectedVar: int = 12;\n"
+        "    seal static let unrelatedField: int = 13;\n"
+        "}\n"
         "open fit FitValue: Contract {\n"
         "    seal func value(): int { return 3; }\n"
         "    seal func unrelatedFit(): int { return 4; }\n"
@@ -11302,6 +11417,8 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
     FengCodegenOutput output = {0};
     FengCodegenError codegen_error = {0};
     bool is_static = false;
+    const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
+    char expected[256];
 
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                  &analysis, &errors, &error_count));
@@ -11324,6 +11441,63 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
     ASSERT(!is_static);
     ASSERT(generated_function_definition_is_static(
         output.c_source, "__m0__unrelatedFit__from__void", &is_static));
+    ASSERT(is_static);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "%s Feng__feng__codegen__spec_impl_dependency__Direct__static__publicDefault = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "%s Feng__feng__codegen__spec_impl_dependency__Direct__static__explicitOpen = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "%s Feng__feng__codegen__spec_impl_dependency__Direct__static__selectedLet = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "%s Feng__feng__codegen__spec_impl_dependency__Direct__static__selectedVar = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "static %s Feng__feng__codegen__spec_impl_dependency__Direct__static__unrelatedField = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "%s Feng__feng__codegen__spec_impl_dependency__FitValue__static__selectedLet = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(snprintf(
+               expected,
+               sizeof(expected),
+               "static %s Feng__feng__codegen__spec_impl_dependency__FitValue__static__unrelatedField = 0;",
+               int_c_type) > 0);
+    ASSERT(strstr(output.c_source, expected) != NULL);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "Direct__static__selectedLet__ensure_init",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "Direct__static__selectedVar__ensure_init",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "Direct__static__unrelatedField__ensure_init",
+        &is_static));
     ASSERT(is_static);
 #if 0
     ASSERT(generated_function_definition_is_static(
@@ -11547,6 +11721,7 @@ int main(void) {
     test_imported_full_path_type_annotations_codegen_compile_without_use();
     test_imported_public_let_binding_codegen_compiles();
     test_imported_public_static_members_codegen_compiles();
+    test_imported_selected_seal_static_fields_codegen_compiles();
     test_imported_public_var_binding_read_write_codegen_compiles();
     test_imported_public_binding_address_of_codegen_compiles();
     test_public_binding_lib_exports_slot_and_ensure_init_codegen();

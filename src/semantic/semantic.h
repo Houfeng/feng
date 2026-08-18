@@ -1003,6 +1003,13 @@ bool feng_semantic_spec_witness_append_member(
     const FengDecl *via_fit_decl,
     const FengSemanticModule *provider_module);
 
+/* Return true when `member` is the exact implementation selected by at least
+ * one already-materialized SpecWitness. This compile-time query does not
+ * materialize witnesses or grant source-level member access. */
+bool feng_semantic_member_is_selected_spec_witness_implementation(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeMember *member);
+
 /* --- SpecEquality (Phase S4, §6.6 / §9.6) ---------------------------- */
 
 /* Operator kind for a recorded equality site. The semantic conclusion is

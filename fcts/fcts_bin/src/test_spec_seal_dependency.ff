@@ -14,6 +14,14 @@ open func test_spec_seal_dependency() {
              "direct seal instance implementation remains callable by witness");
       assert(PackageSealDirect.invokeStatic<PackageSealDirect>() == 12,
              "direct seal static implementation remains callable by witness");
+      assert(PackageSealDirect.updateStatic<PackageSealDirect>() == 16,
+             "direct seal static let and var use the provider state");
+      assert(PackageSealDirect.updateStatic<PackageSealDirect>() == 17,
+             "direct seal static var keeps one provider state");
+      assert(PackageSealDirect.readLabel<PackageSealDirect>() == "direct",
+             "direct managed seal static field remains callable by witness");
+      assert(PackageSealDirect.readPoint<PackageSealDirect>() == 9,
+             "direct aggregate seal static field remains callable by witness");
     });
 
     test("fit instance and static methods", () {
@@ -24,6 +32,14 @@ open func test_spec_seal_dependency() {
              "fit seal instance implementation remains callable by witness");
       assert(PackageSealFitValue.invokeStatic<PackageSealFitValue>() == 22,
              "fit seal static implementation remains callable by witness");
+      assert(PackageSealFitValue.updateStatic<PackageSealFitValue>() == 61,
+             "fit target seal static let and var use the provider state");
+      assert(PackageSealFitValue.updateStatic<PackageSealFitValue>() == 62,
+             "fit target seal static var keeps one provider state");
+      assert(PackageSealFitValue.readLabel<PackageSealFitValue>() == "fit",
+             "fit target managed seal static field remains callable by witness");
+      assert(PackageSealFitValue.readPoint<PackageSealFitValue>() == 40,
+             "fit target aggregate seal static field remains callable by witness");
     });
 
     test("parent spec method", () {

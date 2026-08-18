@@ -1,13 +1,30 @@
 open module fcts_lib.spec_seal_dependency;
 
-/** Contract whose seal methods are implemented by an exported type. */
+/** Aggregate value stored behind a seal static spec field. */
+@value
+open type PackageSealPoint {
+  let x: int;
+}
+
+/** Contract whose seal members are implemented by exported types. */
 open spec PackageSealSurface {
+  static let publicValue: int;
+  seal static let initial: int;
+  seal static var current: int;
+  seal static let label: string;
+  seal static let point: PackageSealPoint;
   seal func value(): int;
   seal static func marker(): int;
 }
 
-/** Direct provider of cross-package seal instance and static methods. */
+/** Direct provider of cross-package seal instance and static members. */
 open type PackageSealDirect: PackageSealSurface {
+  static let publicValue: int = 3;
+  seal static let initial: int = 5;
+  seal static var current: int = 7;
+  seal static let label: string = "direct";
+  seal static let point: PackageSealPoint = PackageSealPoint { x: 9 };
+
   seal func value(): int {
     return 11;
   }
@@ -23,10 +40,29 @@ open type PackageSealDirect: PackageSealSurface {
   open static func invokeStatic<T: PackageSealSurface>(): int {
     return T.marker();
   }
+
+  open static func updateStatic<T: PackageSealSurface>(): int {
+    T.current = T.current + 1;
+    return T.publicValue + T.initial + T.current;
+  }
+
+  open static func readLabel<T: PackageSealSurface>(): string {
+    return T.label;
+  }
+
+  open static func readPoint<T: PackageSealSurface>(): int {
+    return T.point.x;
+  }
 }
 
 /** Target whose exported fit provides the contract implementation. */
-open type PackageSealFitValue {}
+open type PackageSealFitValue {
+  static let publicValue: int = 10;
+  seal static let initial: int = 20;
+  seal static var current: int = 30;
+  seal static let label: string = "fit";
+  seal static let point: PackageSealPoint = PackageSealPoint { x: 40 };
+}
 
 /** Fit-owned cross-package seal instance and static methods. */
 open fit PackageSealFitValue: PackageSealSurface {
@@ -44,6 +80,19 @@ open fit PackageSealFitValue: PackageSealSurface {
 
   open static func invokeStatic<T: PackageSealSurface>(): int {
     return T.marker();
+  }
+
+  open static func updateStatic<T: PackageSealSurface>(): int {
+    T.current = T.current + 1;
+    return T.publicValue + T.initial + T.current;
+  }
+
+  open static func readLabel<T: PackageSealSurface>(): string {
+    return T.label;
+  }
+
+  open static func readPoint<T: PackageSealSurface>(): int {
+    return T.point.x;
   }
 }
 
