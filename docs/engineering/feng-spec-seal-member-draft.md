@@ -4,6 +4,9 @@
 > 本文确认的规则已经写入
 > [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 等权威规范；本文
 > 继续用于跟踪实现范围和实施 TODO，最终语言语义以权威规范为准。
+>
+> **当前状态**：`spec seal` 核心语义已实现；第 5 节记录的
+> 跨包编译器 ABI 依赖缺失尚待实施。
 
 ## 1 背景
 
@@ -53,7 +56,8 @@ open spec Widget {
   新权限仅限于通过 `spec` 视角访问 `spec seal` 成员。
 - 不改变跨包 `fit`、目标 `type` 可见面或私有成员发现规则。
 - 不引入新的 witness 种类、显式 witness 映射语法或运行时访问检查。
-- 不修改 `.ft` 格式、版本或 relation 模型。
+- 不修改现有名义 relation 模型，不在 `.ft` 中增加逐槽
+  witness plan。
 - 不把成员级 `seal` 扩展到 callable-form、union-form 或
   intersection-form `spec`。
 - 不引入 `protected`、逐项 `friend` 或其他新的访问控制模型。
@@ -259,28 +263,71 @@ Widget.draw -> witness -> Button.draw / Icon.draw
 `spec` 值携带的既有 witness 分派到实际实现。该分派不要求、也不允许
 调用点通过具体类型成员查找看到实现成员。
 
-具体 `type` 的跨包成员可见面、`type seal` 成员导出和跨包 `fit` 候选
-继续保持现状。本草案不要求为 `spec seal` 额外导出任何具体 `type`
-成员，也不允许把具体实现成员升级为公开 API。
+具体 `type` 的跨包成员可见面和跨包 `fit` 候选继续保持现状。
+为使已导出的名义满足关系能够在 consumer 中构造现有 witness，
+声明期已选中的非公开实现方法可以作为编译器 ABI 依赖进入
+package-public `.ft`，但必须保持 `seal`，不得因此升级为
+Feng 公开 API。
 
-### 5.2 `.ft` 复用现有格式
+### 5.2 声明期实现依赖选择
 
-`.ft` 已有成员可见性表示，object-form `spec` 的成员也属于现有声明
-骨架。本能力只要求使用现有字段忠实保存和恢复 `spec` 成员可见性：
+现有 package-public `.ft` 已经保存：
 
-- 无修饰成员按现有公开成员写入和恢复；
-- `seal` 成员使用现有非公开可见性表示写入和恢复；
 - object-form `spec` 的完整成员序列仍全部进入现有 spec 声明骨架；
-- 继续使用现有 type—spec relation 和 witness 构造机制；
-- 不增加 `.ft` 字段、flag、relation、格式版本或兼容分支；
-- 不改变具体 `type` 成员的 `.ft` 选择和可见性规则。
+- 已导出 `type`、`fit` 与 `spec` 的现有名义 relation；
+- 已收录 `type` 的全部字段骨架，包括实例、静态、公开和
+  `seal` 字段。
 
-`.ft` 的既有编解码逻辑无需修改。构建待导出的 spec 符号视图时，不得
-把成员可见性统一归一化为公开；应将 AST 中已有的成员可见性原样交给
-现有编码。
+本次只补齐方法实现依赖。对每个进入 package-public `.ft` 的
+`type/fit -> spec` 名义关系，声明期满足检查选中的实现方法
+按以下统一规则处理：
 
-该调整只发生在 spec 符号视图构建阶段，属于保存新增 `spec seal` 语义，
-不是 `.ft` 格式或编解码逻辑变更。
+- 公开实现方法继续按现有规则进入 `.ft`；
+- `seal` 实现方法作为该名义关系的编译器 ABI 依赖进入
+  `.ft`；
+- 实例方法、静态方法、`type` 自有方法、`fit` 方法和编译器
+  生成 wrapper 使用同一规则；
+- 父 `spec` 闭包中 requirement 选中的实现方法使用同一规则；
+- 未被任何已导出名义关系选中的无关具体 `type`/`fit seal`
+  实现方法不因本次
+  修复进入 package-public `.ft`。
+
+"选中"必须是声明期契约满足检查的结果，不得在 `.ft` writer
+中按方法名、`requestReflow`、`@mixable` 或其他具体场景重新推断。
+满足检查、witness 选择、`.ft` 选择与 Codegen 必须消费同一份
+统一语义事实。该事实只存在于当次编译的 Semantic sidecar，
+不写入 `.ft`。
+
+consumer 仍以现有名义 relation 判定关系是否可用，并只在为该
+已证明关系构造 witness 时使用上述非公开实现方法。方法存在于
+`.ft` 不是新的结构满足授权，外包不得因此使用自定义 spec
+或 `fit` 选择导入 type 的 `seal` 成员。
+
+本次不新增 `.ft` section、flag、relation 或版本，也不修改已有编解码
+布局。具体 package-public 成员选择规则统一见
+[`feng-symbol-table.md`](../specifications/feng-symbol-table.md)。
+
+### 5.3 编译器 ABI 链接
+
+仅让方法骨架进入 `.ft` 不足以完成修复。consumer 生成的现有
+witness thunk 会调用 provider 的实现符号，因此同一份声明期
+实现依赖事实还必须驱动 Codegen：
+
+- 被选中的 `seal` 实例方法和静态方法获得跨包编译器 ABI
+  链接能力；
+- 符号身份必须只依赖 package-public `.ft` 可恢复的声明事实，
+  泛型 owner、泛型方法和泛型 `fit` 的 provider/consumer 必须生成
+  一致符号；
+- 被选中的 `seal static` 字段已经进入 `.ft`，无需修改字段
+  导出选择；其 storage/ensure 符号需获得同等的编译器 ABI
+  链接能力；
+- 实例字段继续由现有布局骨架和 witness 字段访问路径处理，
+  不新增实现符号。
+
+这些链接符号是编译器 ABI，不是 Feng 公开成员。语义分析、
+名称查找、补全和文档仍必须按 `seal` 拒绝普通访问。本次不修改
+运行时 witness 布局、槽位、调用层级或分派路径，因此不增加
+运行时开销。
 
 ## 6 编译器实现影响
 
@@ -298,6 +345,16 @@ Widget.draw -> witness -> Button.draw / Icon.draw
 - 完整 requirement 集合继续包含 object-form `spec` 的全部成员。
 - 满足检查、快速满足查询和 witness 构造统一应用第 3.2 节的实现成员
   可见性兼容条件。
+- 契约满足选择成功时，记录“名义关系、requirement、被选中
+  实现成员及实现来源”的统一 Semantic sidecar 事实。该事实
+  同时服务于 witness、package-public 依赖选择和 Codegen，不得为
+  `.ft` 或特定成员另写一套匹配逻辑。
+- 该 sidecar 按关系来源保留选择结果，不能只使用“某成员曾参与
+  任意 spec 满足”的无主体布尔标记；只有进入 package-public
+  `.ft` 的名义关系才能导出其非公开实现依赖。
+- 不得使用“某个使用点已构造 witness”作为是否导出的条件；
+  即使 provider 内部没有发生 spec coercion，已导出关系的必需实现
+  依赖也必须完整。
 - 新增统一的 `spec` 成员访问判断，接收成员原声明 `spec`、receiver 的
   spec 视角，以及当前 type 实现上下文或当前 fit 的目标 type。
 - 实例/静态字段访问、字段写入和方法调用使用同一访问判断。
@@ -312,15 +369,27 @@ Widget.draw -> witness -> Button.draw / Icon.draw
 - 复用 `.ft` 现有成员可见性编码保存 `spec seal`。
 - 导入恢复后的 `FengTypeMember.visibility` 必须与源码 AST 一致。
 - 不增加逐成员 witness relation。
-- 不改变具体 `type` 私有成员的导出选择。
+- package-public writer 使用第 6.2 节的统一 sidecar，收录已导出
+  名义关系选中的 `seal` 实例/静态方法、`type`/`fit` 方法和
+  生成 wrapper。
+- 字段继续使用已有的完整骨架选择，不修改 writer 的字段规则。
+- 未被已导出名义关系选中的无关具体 `type`/`fit seal`
+  实现方法继续不进入
+  package-public `.ft`。
+- 不增加 `.ft` 字段、属性、section、relation 或格式版本。
 
 ### 6.4 代码生成与运行时
 
 - 合法的 `spec seal` 成员访问继续使用现有 spec member access 记录和
   witness 分派。
 - 可见性检查在语义阶段完成。
+- 已导出名义关系选中的 `seal` 实例/静态方法使用编译器
+  ABI 外部链接；被选中的 `seal static` 字段对应 storage/ensure
+  使用同等链接规则。
+- provider 和 consumer 的非泛型、泛型、`type` 与 `fit` 方法符号
+  必须仅依赖 `.ft` 可恢复声明事实并保持一致。
 - 不增加运行时访问检查、wrapper、box、分支或 ABI 数据结构。
-- 不改变具体 type 方法、字段或静态成员的链接可见性。
+- 不改变 Feng 层的具体 type 成员可见性，不增加运行时开销。
 
 ### 6.5 工具链
 
@@ -381,11 +450,19 @@ LSP、补全和符号展示只需对 `spec` 成员应用相同访问判断：
 | 仅实现父 spec 的 type 访问子 spec seal 成员 | 拒绝 |
 | 公开与 seal 同名重载同时存在 | 先过滤访问权限，再按现有规则解析 |
 | `.ft` 写入并恢复 spec seal 成员 | 保持 seal |
-| `.ft` 因 spec seal 改变具体 type 私有成员选择 | 不得发生 |
+| 已导出 `type: spec` 关系选中 seal 实例/静态方法 | 方法以 seal 进入 `.ft`，witness 跨包可执行 |
+| 已导出 `open fit Type: Spec` 选中 fit 的 seal 实例/静态方法 | 方法以 seal 进入 `.ft`，导入 fit 后 witness 可执行 |
+| 编译器生成的 seal 实例 wrapper 被选中 | wrapper 以 seal 进入 `.ft`，witness 跨包可执行 |
+| 父 spec 或泛型 spec 选中 seal 方法 | provider/consumer 恢复相同符号并正常执行 |
+| 已导出 type 中与 spec 实现无关的普通 seal 方法 | 不因本次修复进入 package-public `.ft` |
+| seal 实例/静态字段 | 继续使用已有 `.ft` 字段骨架，跨包 witness 正常执行 |
+| 外包自定义 spec/fit 尝试选择导入 type 的 seal 成员 | 继续拒绝 |
 
 编译器测试应关注 AST 可见性、诊断码、spec member access 和 witness；
-FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验证 spec 成员
-可见性往返，不扩展到具体 `type seal` 成员导出。
+FCTS 验证能够执行的正向语言行为。涉及 `.ft` 的测试还必须区分
+“被已导出 spec 关系选中的编译器 ABI 依赖”与“无关 seal
+成员”，并验证前者可用于 witness、后者仍不进入 package-public
+方法骨架。
 
 ## 9 权威规范更新
 
@@ -397,7 +474,8 @@ FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验�
 - `docs/specifications/feng-visibility.md`：定义 `spec seal` 只约束 spec
   视角，不改变具体 type 成员可见性；
 - `docs/specifications/feng-symbol-table.md`：确认复用现有成员可见性编码，
-  不修改 `.ft` 格式和 relation；
+  已导出 spec 关系选中的 seal 实现方法作为编译器 ABI
+  依赖进入 package-public `.ft`，且不修改 `.ft` 格式和 relation；
 - `docs/specifications/feng-error-codes-se.md`：收窄 `SE0601`，只拒绝 spec
   成员显式 `open`；
 - `docs/specifications/feng-error-codes-ae.md`：定义实现成员可见性不兼容和
@@ -412,6 +490,8 @@ FCTS 只验证能够执行的正向语言行为。涉及 `.ft` 的测试只验�
 fit 的目标 type 私有访问权、跨包可见面或运行时行为。
 
 ## 10 实施 TODO
+
+### 10.1 已完成的 `spec seal` 核心能力
 
 - [x] 更新 `feng-spec.md`、`feng-visibility.md`、`feng-fit.md`、
   `feng-symbol-table.md` 及 SE/AE 诊断规范。
@@ -431,3 +511,40 @@ fit 的目标 type 私有访问权、跨包可见面或运行时行为。
   运行时结构和代码生成分派形式不变。
 - [x] 补齐 Parser、AST、semantic、witness、`.ft` 往返、跨包、LSP 和 FCTS
       测试，并执行 `make test` 全量回归。
+
+### 10.2 待实施的跨包编译器 ABI 依赖修复
+
+下列任务中，“实际变更”会修改编译器行为；“验证”只补齐或执行
+用例，不得借机改变其他语义。
+
+- [x] **实际变更（文档）**：将方案收敛为“已导出名义关系选中的
+  seal 实现方法进入 `.ft` 并具备编译器 ABI 链接能力”，明确
+  不增加 witness plan、`.ft` 格式或运行时机制。
+- [ ] **实际变更（Semantic）**：让声明期契约满足选择生成关系级
+  实现成员 sidecar，记录 requirement、确切实现成员和 `type`/`fit`
+  实现来源；复用现有统一可见性与签名匹配，不得增加
+  `requestReflow`、`@mixable` 或成员名特判。
+- [ ] **实际变更（Symbol）**：package-public 选择复用同一 sidecar，只让
+  已导出名义关系选中的 `seal` 实例/静态方法、`type`/`fit`
+  方法和生成 wrapper 进入 `.ft`，并原样保留 `seal`。
+- [ ] **实际变更（Codegen）**：为上述方法生成稳定的编译器
+  ABI 外部链接符号；非泛型、泛型 owner、泛型方法、泛型 `fit`
+  和生成 wrapper 使用同一判定。
+- [ ] **实际变更（Codegen）**：不改变字段 `.ft` 选择，仅为被已导出
+  名义关系选中的 `seal static` 字段补齐 storage/ensure 编译器
+  ABI 链接。
+- [ ] **验证（现有行为）**：确认 object-form `spec` 全部成员、`type`
+  全部实例/静态字段以及现有名义 relation 已进入 `.ft`，不修改
+  其编解码或选择逻辑。
+- [ ] **验证（需新增用例）**：覆盖 `type: spec` 与已导入的
+  `open fit Type: Spec`
+  选中的 seal 实例方法、静态方法、实例字段和静态字段，
+  并执行跨包 witness 调用/读写。
+- [ ] **验证（需新增用例）**：覆盖父 spec、泛型 owner、泛型方法、
+  泛型 `fit`、reified dependencies 与 `@mixable seal static` 生成实例
+  wrapper；这些任务只验证现有通用路径已被新选择事实覆盖。
+- [ ] **验证（需新增用例）**：确认无关普通 seal 方法仍不进入
+  package-public `.ft`，普通访问仍被 `seal` 拒绝，外包自定义
+  spec/fit 仍不能选择导入 type 的 seal 成员。
+- [ ] **验证（回归）**：先执行定向 symbol、semantic、codegen、CLI 与 FCTS
+  用例，再在沙箱外执行 `make test` 全量回归。

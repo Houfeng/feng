@@ -179,6 +179,11 @@ Provider 的第一版实现可以在注册 `.fb` 时预加载其中的公开 `.f
   `seal + static + is_mixable` 方法，以及目标生成的同类静态 wrapper；它们作为
   [Feng 语言函数规范](./feng-function.md#436-跨包声明与链接) 定义的受限 mix 能力
   收录，仍保留非公开可见性标志。
+- 已导出 object-form `type/fit -> spec` 名义关系在声明期满足
+  检查中选中的 `seal` 实现方法；实例方法、静态方法、
+  `type` 自有方法、`fit` 方法、编译器生成 wrapper 和父 `spec`
+  requirement 使用同一规则。这些方法只是已声明关系的编译器
+  ABI 依赖，必须保留非公开可见性标志。
 - 公开 `type` 的全部字段布局声明；其中 `seal + instance + is_mixable` 来源字段和生成
   字段必须原样保留 mixable 事实，供
   [Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 定义的受限 mix
@@ -216,12 +221,20 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 内部使用，但普通用户名称查询、`use` 和无授权补全不得返回这些声明；仅
 [Feng 语言函数规范](./feng-function.md#435-mixable-seal-的直接-mix-授权) 和
 [Feng 语言类型规范](./feng-type.md#4221-mixable-seal-实例字段) 明确定义的直接 mix
-授权查询可以选择对应的 seal mix 能力。
+授权查询可以选择对应的 seal mix 能力；另外，已声明名义关系的
+witness materialization 可以选择该关系声明期已选中的 seal 实现
+依赖。后者不是普通成员查询，也不得用于为外包自定义 spec/fit
+重新建立结构满足。
 
 `seal + static + is_mixable` 方法只在其 owner 已按现有规则进入 package-public 表时
-作为成员收录，不得反向把原本不可导出的私有 type 或 fit 提升为闭包根。普通 seal
-方法、seal 实例方法和 `seal + static + !is_mixable` 方法不因 mix 能力规则进入公开
-方法面；私有表示依赖闭包也不得据此扩大它们的用户可查询范围。
+作为成员收录，不得反向把原本不可导出的私有 type 或 fit 提升为闭包根。
+同样，只有其所属名义关系本身已进入 package-public 表时，该关系
+选中的 seal 实现方法才作为编译器 ABI 依赖收录。普通 seal
+方法、seal 实例方法和 `seal + static + !is_mixable` 方法不因 mix 能力
+或无关 spec 关系进入 package-public 方法骨架；这里的“普通
+seal 方法”只指具体 `type`/`fit` 实现方法，不包括已导出 spec
+必须保留的完整 requirement 骨架。私有表示依赖闭包也
+不得据此扩大它们的用户可查询范围。
 
 `NAMED`、`NAMED_GENERIC` 和 `TYPE_PARAM_REF` 类型节点必须保存目标声明身份。writer 必须先确定收录闭包并为全部声明分配 symbol id,再用 `sym_ref` 序列化类型; reader 必须先创建全部声明,再按 `sym_ref` 恢复类型目标,不得把已绑定类型降格为纯名称。
 
@@ -441,13 +454,14 @@ Header
 | `FT_SEC_RELS` | `0x0005` | 必需 | 全部 | 关系记录 |
 | `FT_SEC_DOCS` | `0x0006` | 可选 | 全部 | 文档注释 |
 | `FT_SEC_ATTRS` | `0x0007` | 可选 | 全部 | 扩展属性 |
+| `FT_SEC_CALLABLE_DEPS` | `0x0008` | 条件必需 | 全部 | 直接泛型 callable 依赖 |
 | `FT_SEC_SPNS` | `0x0010` | 可选 | workspace-cache | 源码位置 |
 | `FT_SEC_USES` | `0x0011` | 可选 | workspace-cache | 依赖模块与指纹 |
 | `FT_SEC_META` | `0x0012` | 可选 | workspace-cache | 缓存失效信息 |
 
 保留规则:
 
-- `0x0008` 至 `0x000F` 预留给未来核心节。
+- `0x0009` 至 `0x000F` 预留给未来核心节。
 - `0x0013` 至 `0x001F` 预留给未来 workspace-cache 专用节。
 - package-public profile 不得出现 `0x0010` 以上的 workspace-only 节。
 
@@ -685,8 +699,12 @@ attr key 常量建议如下:
 - 被语义分析判定为“不得导出”的声明,不进入公开 `.ft`; 本地缓存 `.ft` 可按本地需要保留。
 - object-form `spec` 的完整成员骨架必须进入已导出 spec 的 `.ft`，包括
   `spec seal` requirement；每个成员沿用 `SYMS.flags.public` 忠实保存其
-  spec 访问面。该收录不把 `spec seal` 成员变成普通公开 API，也不要求
-  额外收录承担 requirement 的具体 `type seal` 成员。
+  spec 访问面。该收录不把 `spec seal` 成员变成普通公开 API。
+- 已导出名义关系的声明期满足选择必须形成统一的编译器内部
+  实现依赖事实。package-public writer 只对其中的 seal 方法补充
+  收录；实例/静态、`type`/`fit`、生成 wrapper 及父 spec requirement
+  不得分别使用特判。该内部选择事实不写入 `.ft`，不增加新的
+  flag、attr、relation、section 或格式版本。
 - `seal + static + is_mixable` 方法沿用 `SYMS.flags.public = 0` 表达 seal，并分别使用
   既有 `FT_ATTR_STATIC_MEMBER` 与 `FT_ATTR_MIXABLE_METHOD` 表达 static 和 mixable；
   reader 必须原样恢复
@@ -697,9 +715,12 @@ attr key 常量建议如下:
   限制其成员 kind。reader 必须原样恢复 visibility、instance、mixable、类型、可变性和
   绑定事实。普通用户成员枚举仍过滤该字段，只有类型规范定义的直接 mix 授权查询可以
   放行。
-- 来源方法及生成的 seal mixable 静态 wrapper 必须使用仅由 package-public `.ft`
-  可恢复事实确定的稳定链接身份；不得依赖未收录普通 seal 方法或 provider 私有声明
-  顺序。该要求不新增符号表字段，也不改变 Feng 可见性。
+- 来源方法、生成的 seal mixable wrapper 以及上述 spec 实现依赖方法
+  必须使用仅由 package-public `.ft` 可恢复事实确定的稳定链接身份；
+  不得依赖未收录普通 seal 方法或 provider 私有声明顺序。被选中的
+  seal 静态字段已经由字段骨架规则收录，其 storage/ensure 也必须
+  提供对应的编译器 ABI 链接身份。这些要求不新增符号表字段，
+  也不改变 Feng 可见性。
 
 #### 6.5.1 enum / enum_item 导出与查询视图补充
 
