@@ -75,7 +75,7 @@ open type Text: TextWidget {
   /** 判断当前宽度声明是否需要扫描内在内容宽度。 */
   seal static func needsIntrinsicWidth(text: TextWidget): bool {
     if (text.rtStyle.position == Position.Normal ||
-    text.rtStyle.position == Position.Relative) &&
+      text.rtStyle.position == Position.Relative) &&
     text.rtStyle.horizontalAlign == Align.Full {
       return false;
     }
@@ -210,8 +210,8 @@ open type Text: TextWidget {
         if chunkBytes > 0 &&
         chunkBytes + runeBytes > TextUtil.MAX_CELL_BYTES {
           let state = Text.layoutCell(text, width,
-            graphemeStart + chunkStart,
-            TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
+          graphemeStart + chunkStart,
+          TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
           lineStart = state.item1;
           lineCells = state.item2;
           chunkStart = graphemeOffset;
@@ -224,8 +224,8 @@ open type Text: TextWidget {
       }
       if chunkBytes > 0 {
         let state = Text.layoutCell(text, width,
-          graphemeStart + chunkStart,
-          TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
+        graphemeStart + chunkStart,
+        TextUtil.resolveCellWidth(chunkWidth), lineStart, lineCells);
         lineStart = state.item1;
         lineCells = state.item2;
       }
@@ -291,7 +291,7 @@ open type Text: TextWidget {
           }
           if x >= clipLeft && x + width <= clipRight {
             buffer.draw((u32)x, (u32)y, cellValue,
-              text.rtStyle.foreColor, transparent);
+            text.rtStyle.foreColor, transparent);
           }
           column += width;
           cellValue = 0;
@@ -311,7 +311,7 @@ open type Text: TextWidget {
         }
         if x >= clipLeft && x + width <= clipRight {
           buffer.draw((u32)x, (u32)y, cellValue,
-            text.rtStyle.foreColor, transparent);
+          text.rtStyle.foreColor, transparent);
         }
         column += width;
       }
@@ -356,7 +356,7 @@ open type Text: TextWidget {
     var x = start;
     while x < end {
       buffer.draw((u32)x, (u32)y, (u64)46,
-        text.rtStyle.foreColor, transparent);
+      text.rtStyle.foreColor, transparent);
       x += 1;
     }
   }
@@ -366,7 +366,7 @@ open type Text: TextWidget {
    * 宽度先解析，Auto 高度再使用最终分行数。
    */
   @mixable
-  seal static func arrange(text: TextWidget, manager: ViewManager): void {
+  static func arrange(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.rtStyle.margin;
@@ -383,10 +383,10 @@ open type Text: TextWidget {
       intrinsicWidth = Text.measureIntrinsicWidth(text);
     }
     let width = View.resolveWidth(widget, reference.width,
-      left, right, intrinsicWidth);
+    left, right, intrinsicWidth);
     Text.layoutLines(text, width);
     let height = View.resolveHeight(widget, reference.height,
-      top, bottom, text.lines.size());
+    top, bottom, text.lines.size());
 
     let frame = Rect();
     frame.x = View.resolveX(widget, reference, left, right, width);
@@ -400,7 +400,7 @@ open type Text: TextWidget {
    * 绘制可见背景和文本；clippedFrame 只裁剪，不改变布局阶段的分行。
    */
   @mixable
-  seal static func draw(text: TextWidget, manager: ViewManager): void {
+  static func draw(text: TextWidget, manager: ViewManager): void {
     let widget = (Widget)text;
     let clippedFrame = widget.clippedFrame;
     if clippedFrame.width == 0 || clippedFrame.height == 0 {
@@ -410,8 +410,8 @@ open type Text: TextWidget {
     if text.rtStyle.backColor match color: RgbColor {
       if color.a != 0 {
         buffer.draw((u32)clippedFrame.x, (u32)clippedFrame.y,
-          (u32)clippedFrame.width, (u32)clippedFrame.height, (u64)0,
-          none, color);
+        (u32)clippedFrame.width, (u32)clippedFrame.height, (u64)0,
+        none, color);
       }
     }
 
@@ -438,7 +438,7 @@ open type Text: TextWidget {
       }
       if ellipsis {
         let ellipsisStart = text.frame.x + text.frame.width -
-          Text.ellipsisCells(text);
+        Text.ellipsisCells(text);
         if visibleRight > ellipsisStart {
           visibleRight = ellipsisStart;
         }
@@ -446,12 +446,12 @@ open type Text: TextWidget {
       let visibleWidth = visibleRight - visibleX;
       if visibleWidth > 0 {
         Text.drawLine(text, buffer, line,
-          lineX, clippedFrame.y + visibleRow,
-          visibleX, visibleRight, transparent);
+        lineX, clippedFrame.y + visibleRow,
+        visibleX, visibleRight, transparent);
       }
       if ellipsis {
         Text.drawEllipsis(text, buffer, clippedFrame,
-          clippedFrame.y + visibleRow, transparent);
+        clippedFrame.y + visibleRow, transparent);
       }
       visibleRow += 1;
     }

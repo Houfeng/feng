@@ -26,7 +26,7 @@ open type Container: ContainerWidget {
    * 清理直接 child 的运行时覆盖；专用容器可在调用本实现后追加约束。
    */
   @mixable
-  seal static func prepareChildOverrideStyle(container: ContainerWidget,
+  static func prepareChildOverrideStyle(container: ContainerWidget,
     child: Widget): void {
     child.overrideStyle.clear();
   }
@@ -35,7 +35,7 @@ open type Container: ContainerWidget {
    * 合并自身样式，再通过可覆盖钩子准备并合并所有直接 children 的样式。
    */
   @mixable
-  seal static func doStyling(container: ContainerWidget,
+  static func doStyling(container: ContainerWidget,
     manager: ViewManager): void {
     View.doStyling(container, manager);
     for let child in container.children {
@@ -49,7 +49,7 @@ open type Container: ContainerWidget {
    * 自身 Layout 进入完整 arrange；纯 SubtreeLayout 只向下访问脏路径。
    */
   @mixable
-  seal static func doArrange(container: ContainerWidget,
+  static func doArrange(container: ContainerWidget,
     manager: ViewManager): void {
     let widget = (Widget)container;
     if widget.rtStyle.visibility == Visibility.Collapse ||
@@ -77,7 +77,7 @@ open type Container: ContainerWidget {
    * 每次进入容器布局时都重新标记直接 child，确保父级 frame、padding 或覆盖变化生效。
    */
   @mixable
-  seal static func arrange(container: ContainerWidget,
+  static func arrange(container: ContainerWidget,
     manager: ViewManager): void {
     View.arrange(container, manager);
     for let child in container.children {
@@ -88,7 +88,7 @@ open type Container: ContainerWidget {
 
   /** 按自身、直接 children 的顺序完成默认叠放绘制。 */
   @mixable
-  seal static func draw(container: ContainerWidget, manager: ViewManager): void {
+  static func draw(container: ContainerWidget, manager: ViewManager): void {
     View.draw(container, manager);
     for let child in container.children {
       child.doDraw(manager);
@@ -96,7 +96,7 @@ open type Container: ContainerWidget {
   }
 
   /** 标记组件树修改引起的容器布局变化并向祖先传播。 */
-  seal static func invalidateLayout(container: ContainerWidget): void {
+  static func invalidateLayout(container: ContainerWidget): void {
     let widget = (Widget)container;
     widget.dirty.add(DirtyType.Layout);
     widget.requestReflow();

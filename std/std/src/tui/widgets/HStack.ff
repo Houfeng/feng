@@ -19,7 +19,7 @@ open type HStack: HStackWidget {
 
   /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
   @mixable
-  seal static func prepareChildOverrideStyle(stack: HStackWidget,
+  static func prepareChildOverrideStyle(stack: HStackWidget,
     child: Widget): void {
     Container.prepareChildOverrideStyle(stack, child);
     child.overrideStyle.horizontalAlign = Align.Start;
@@ -92,9 +92,9 @@ open type HStack: HStackWidget {
     content.x = widget.frame.x + padding.item4;
     content.y = widget.frame.y + padding.item1;
     content.width = HStack.resolveAvailableSize(widget.frame.width,
-      padding.item4, padding.item2);
+    padding.item4, padding.item2);
     content.height = HStack.resolveAvailableSize(widget.frame.height,
-      padding.item1, padding.item3);
+    padding.item1, padding.item3);
     return content;
   }
 
@@ -136,14 +136,14 @@ open type HStack: HStackWidget {
     let reference = Container.resolveReferenceFrame(widget, manager);
     let margin = HStack.resolveMargin(widget, reference);
     let width = Container.resolveWidth(widget, reference.width,
-      margin.item4, margin.item2, intrinsic.item1);
+    margin.item4, margin.item2, intrinsic.item1);
     let height = Container.resolveHeight(widget, reference.height,
-      margin.item1, margin.item3, intrinsic.item2);
+    margin.item1, margin.item3, intrinsic.item2);
     let frame = Rect();
     frame.x = Container.resolveX(widget, reference,
-      margin.item4, margin.item2, width);
+    margin.item4, margin.item2, width);
     frame.y = Container.resolveY(widget, reference,
-      margin.item1, margin.item3, height);
+    margin.item1, margin.item3, height);
     if View.isNormalFlow(widget.rtStyle.position) &&
     widget.parent match parent: ContainerWidget {
       frame.x = assignedX;
@@ -195,7 +195,7 @@ open type HStack: HStackWidget {
       let margin = HStack.resolveMargin(child, content);
       let childX = cursor + margin.item4;
       let provisionalY = HStack.resolveChildY(child, content,
-        margin.item1, margin.item3);
+      margin.item1, margin.item3);
       if child.frame.x != childX || child.frame.y != provisionalY {
         child.frame.x = childX;
         child.frame.y = provisionalY;
@@ -204,7 +204,7 @@ open type HStack: HStackWidget {
       child.doArrange(manager);
 
       let childY = HStack.resolveChildY(child, content,
-        margin.item1, margin.item3);
+      margin.item1, margin.item3);
       child.frame.x = childX;
       child.frame.y = childY;
       let outerHeight = margin.item1 + child.frame.height + margin.item3;
@@ -221,7 +221,7 @@ open type HStack: HStackWidget {
    * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
    */
   @mixable
-  seal static func arrange(stack: HStackWidget, manager: ViewManager): void {
+  static func arrange(stack: HStackWidget, manager: ViewManager): void {
     let widget = (Widget)stack;
     let previous = widget.frame;
     let needsWidth = HStack.needsIntrinsicWidth(stack);

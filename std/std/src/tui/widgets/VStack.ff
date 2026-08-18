@@ -19,7 +19,7 @@ open type VStack: VStackWidget {
 
   /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
   @mixable
-  seal static func prepareChildOverrideStyle(stack: VStackWidget,
+  static func prepareChildOverrideStyle(stack: VStackWidget,
     child: Widget): void {
     Container.prepareChildOverrideStyle(stack, child);
     child.overrideStyle.verticalAlign = Align.Start;
@@ -92,9 +92,9 @@ open type VStack: VStackWidget {
     content.x = widget.frame.x + padding.item4;
     content.y = widget.frame.y + padding.item1;
     content.width = VStack.resolveAvailableSize(widget.frame.width,
-      padding.item4, padding.item2);
+    padding.item4, padding.item2);
     content.height = VStack.resolveAvailableSize(widget.frame.height,
-      padding.item1, padding.item3);
+    padding.item1, padding.item3);
     return content;
   }
 
@@ -136,14 +136,14 @@ open type VStack: VStackWidget {
     let reference = Container.resolveReferenceFrame(widget, manager);
     let margin = VStack.resolveMargin(widget, reference);
     let width = Container.resolveWidth(widget, reference.width,
-      margin.item4, margin.item2, intrinsic.item1);
+    margin.item4, margin.item2, intrinsic.item1);
     let height = Container.resolveHeight(widget, reference.height,
-      margin.item1, margin.item3, intrinsic.item2);
+    margin.item1, margin.item3, intrinsic.item2);
     let frame = Rect();
     frame.x = Container.resolveX(widget, reference,
-      margin.item4, margin.item2, width);
+    margin.item4, margin.item2, width);
     frame.y = Container.resolveY(widget, reference,
-      margin.item1, margin.item3, height);
+    margin.item1, margin.item3, height);
     if View.isNormalFlow(widget.rtStyle.position) &&
     widget.parent match parent: ContainerWidget {
       frame.x = assignedX;
@@ -176,7 +176,7 @@ open type VStack: VStackWidget {
    * 在最终 content 区域内布局直接 children，并返回普通流内在尺寸。
    * 只调用直接 child 的公开调度方法，不访问下一层 children。
    */
-  seal static func arrangeChildren(stack: VStackWidget,
+  static func arrangeChildren(stack: VStackWidget,
     manager: ViewManager): Tuple<int, int> {
     let content = VStack.resolveContentFrame(stack);
     var cursor = content.y;
@@ -194,7 +194,7 @@ open type VStack: VStackWidget {
 
       let margin = VStack.resolveMargin(child, content);
       let provisionalX = VStack.resolveChildX(child, content,
-        margin.item4, margin.item2);
+      margin.item4, margin.item2);
       let childY = cursor + margin.item1;
       if child.frame.x != provisionalX || child.frame.y != childY {
         child.frame.x = provisionalX;
@@ -204,7 +204,7 @@ open type VStack: VStackWidget {
       child.doArrange(manager);
 
       let childX = VStack.resolveChildX(child, content,
-        margin.item4, margin.item2);
+      margin.item4, margin.item2);
       child.frame.x = childX;
       child.frame.y = childY;
       let outerWidth = margin.item4 + child.frame.width + margin.item2;
@@ -221,12 +221,12 @@ open type VStack: VStackWidget {
    * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
    */
   @mixable
-  seal static func arrange(stack: VStackWidget, manager: ViewManager): void {
+  static func arrange(stack: VStackWidget, manager: ViewManager): void {
     let widget = (Widget)stack;
     let previous = widget.frame;
     let needsWidth = VStack.needsIntrinsicWidth(stack);
     let needsHeight = VStack.needsIntrinsicHeight(stack);
-    var intrinsic: Tuple<int, int> = (0, 0);
+    var intrinsic: Tuple < int, int > = (0, 0);
     if needsWidth || needsHeight {
       intrinsic = VStack.resolveIntrinsicSize(stack);
     }
@@ -234,7 +234,7 @@ open type VStack: VStackWidget {
     let childrenIntrinsic = VStack.arrangeChildren(stack, manager);
     if needsWidth || needsHeight {
       let padding = VStack.resolvePadding(widget);
-      let finalIntrinsic: Tuple<int, int> = (
+      let finalIntrinsic: Tuple < int, int > = (
         childrenIntrinsic.item1 + padding.item4 + padding.item2,
         childrenIntrinsic.item2 + padding.item1 + padding.item3
       );

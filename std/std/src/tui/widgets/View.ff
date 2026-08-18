@@ -162,7 +162,7 @@ open type View: Widget {
    * 直接父组件获得 Layout；更高祖先只获得 SubtreeLayout。
    */
   @mixable
-  seal static func requestReflow(widget: Widget): void {
+  static func requestReflow(widget: Widget): void {
     if widget.parent match parent: ContainerWidget {
       let parentWidget = (Widget)parent;
       parentWidget.dirty.add(DirtyType.Layout);
@@ -182,7 +182,7 @@ open type View: Widget {
    * 合并用户样式和框架覆盖，只按最终运行时布局样式变化请求重新布局。
    */
   @mixable
-  seal static func doStyling(widget: Widget, manager: ViewManager): void {
+  static func doStyling(widget: Widget, manager: ViewManager): void {
     widget.draftStyle.clear();
     widget.draftStyle.apply(widget.style);
     for var index: int = 0;
@@ -205,7 +205,7 @@ open type View: Widget {
    * arrange 期间直接父级收到的 Layout 请求会在本次调用内继续处理。
    */
   @mixable
-  seal static func doArrange(widget: Widget, manager: ViewManager): void {
+  static func doArrange(widget: Widget, manager: ViewManager): void {
     if !widget.dirty.has(DirtyType.Layout) &&
     !widget.dirty.has(DirtyType.SubtreeLayout) {
       return;
@@ -233,7 +233,7 @@ open type View: Widget {
    * 根据对齐方式在一个轴的可用区域中定位组件。
    * 组件尺寸超过可用区域时仍保持 Center/End 语义，允许结果位于参照区域之前。
    */
-  seal static func resolveAlignedPosition(origin: int, available: int,
+  static func resolveAlignedPosition(origin: int, available: int,
     size: int, align: Align): int {
     match align {
       Align.Center {
@@ -255,7 +255,7 @@ open type View: Widget {
    * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
   @mixable
-  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
+  static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
     let reference = Rect();
     reference.x = 0;
     reference.y = 0;
@@ -386,7 +386,7 @@ open type View: Widget {
    * 容器组件自行决定是否及如何布局子组件
    */
   @mixable
-  seal static func arrange(widget: Widget, manager: ViewManager): void {
+  static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.rtStyle.margin;
     var top = View.resolveLength(margin.top, reference.height);
@@ -481,7 +481,7 @@ open type View: Widget {
    * 空区域不会进入 sequence，也不会调用组件的 draw 实现。
    */
   @mixable
-  seal static func doDraw(widget: Widget, manager: ViewManager): void {
+  static func doDraw(widget: Widget, manager: ViewManager): void {
     let frame = View.resolveClippedFrame(widget, manager);
     widget.clippedFrame = frame;
     if frame.width == 0 || frame.height == 0 {
@@ -496,7 +496,7 @@ open type View: Widget {
    * 不绘制文本、边框或子组件。
    */
   @mixable
-  seal static func draw(widget: Widget, manager: ViewManager): void {
+  static func draw(widget: Widget, manager: ViewManager): void {
     let frame = widget.clippedFrame;
     if frame.width == 0 || frame.height == 0 {
       return;
