@@ -1,6 +1,6 @@
 # Feng 泛型 `spec` 满足关系及跨包实现符号修复开发文档
 
-> 状态：草案，已按当前代码现状修订，待 Review（2026-08-18）
+> 状态：已实施并通过全量回归（2026-08-18）
 >
 > 本文档只处理泛型 `type` / 泛型 `fit` 已声明的 object-form `spec` 名义满足关系
 > 在同包和跨包使用时的正确关闭，以及跨 package-public `.ft` / `.fb` 边界时实现
@@ -85,7 +85,9 @@ FCTS 已经覆盖：
 
 这些用例证明普通泛型 spec/fit 组合的主体能力存在，但不能替代一个严格的
 “provider 先独立打包，consumer 只读取 package-public `.ft` 和归档库”的
-CLI 回归。当前 `test/cli/test_cli.c` 中对应严格探针仍被 `#if 0` 禁用。
+CLI 回归。实施前 `test/cli/test_cli.c` 中对应严格探针仍被 `#if 0` 禁用；本专项已
+恢复其中属于泛型 owner/fit 关系的部分，方法级泛型 requirement 探针继续留给独立
+专项。
 
 ### 2.2 泛型 type 声明头关系存在两个已定位缺口
 
@@ -108,7 +110,7 @@ provider 可以构建和打包；consumer 从 `.fb` 导入 `Value<int>` 后，�
 进入当前错误的开放成员重检路径。代码排查已经定位到两个彼此独立、触发范围不同
 但均需修复的通用缺口。
 
-第一处位于 Symbol writer：
+第一处在实施前位于 Symbol writer：
 
 - `FENG_DECL_TYPE` 的 `declared_specs` 当前调用不带类型参数作用域的
   `fill_declared_specs()`；
@@ -123,7 +125,7 @@ provider 可以构建和打包；consumer 从 `.fb` 导入 `Value<int>` 后，�
 复用 generic fit 已经工作的 `_with_tparams` writer 路径，并用 round-trip 测试验证
 reader。
 
-第二处位于同包与跨包共用的使用点名义实例查询，而且也是当前 `AE1003` 的直接
+第二处在实施前位于同包与跨包共用的使用点名义实例查询，而且也是原 `AE1003` 的直接
 触发点：
 
 - `type_decl_satisfies_spec_type_ref()` 先按 `FengSpecRelation` 确认 type/spec 声明
@@ -190,6 +192,70 @@ package surface 没有完整复用声明期已经记录的 spec implementation d
 泛型专用判断。因此修复必须让这些路径复用现有统一语义事实，不能只针对
 `FengFitMethod...` 名称或某个具体测试增加导出分支。
 
+### 2.5 泛型参数的 spec 约束视角未按精确实例关闭 static 成员签名
+
+在验证泛型 seal static requirement 的 witness 调用时，已确认以下同包最小场景
+会在 Semantic 阶段错误地报 `AE1003`：
+
+```feng
+spec Surface<A> {
+  static func marker(): A;
+}
+
+func invoke<U: Surface<int>>(): int {
+  return U.marker();
+}
+```
+
+当前 `U.marker()` 和 `U.field` 的类型推导没有使用约束中的精确
+`Surface<int>` 实例，而是误把 callable 类型参数 `U` 当作 spec owner 类型参数，
+按参数名替换成员类型。现有部分 FCTS 中 callable 参数与 spec 参数都恰好命名为
+`T`，因而没有暴露这一错误；只要两侧改名，递归形态 `U: Surface<U>` 同样失败。
+
+该缺口直接影响本专项要求验证的泛型 spec seal static 方法调用，且与 3.2 节的
+名义关系实例关闭遵循同一个不变量：成员签名必须由“声明该成员的 spec + 从约束
+实例投影得到的精确 declaring-spec 实例”关闭，参数名不构成类型身份。修复应复用
+现有 `substitute_spec_member_type_ref_for_instance()` 和父 spec 实例化能力，同时覆盖
+static 方法返回值、参数和 static 字段类型；不得增加按参数名、是否跨包或成员名的
+特判。
+
+本项不包含 object-form spec requirement 自身声明方法级泛参时的解析、匹配或
+witness ABI；该问题仍由独立专项处理。
+
+### 2.6 具体泛型类型实参的 witness 物化曾丢失闭合实例身份
+
+在验证同一泛型声明的多个闭合实例时，已确认以下 Codegen 缺口：显式传入
+`Direct<int>` 作为受 `Surface<int>` 约束的方法类型实参，类型解析结果本身正确；
+但泛型描述符生成路径曾把该具体 `UserType` 降为只含 type declaration 的
+`FengSemanticSubjectKey`，随后按声明查找已注册实例。若 `Direct<string>` 先被注册，
+该查找可能错误复用其 witness。
+
+这不是新的满足规则，也不是跨包特判。object-form spec coercion 已有
+`cg_ensure_witness_instance_for_type()`，能够以完整 `UserType` 保留闭合类型实参并
+选择精确 witness。泛型描述符路径必须复用该现有入口；builtin、enum、array 与
+spec-value 仍使用各自现有 subject-key/slot-witness 路径。该修复不改变 descriptor
+或 witness ABI，不增加运行时判断及调用开销。
+
+### 2.7 完整合法矩阵暴露的三个既有 Codegen 链路缺口
+
+在按本专项要求验证多闭合实例、泛型 fit 和 `@value` owner 时，还确认了三个直接
+阻断这些合法场景的既有缺口。它们不是新增语言能力，也不应以测试特判绕过：
+
+- object/intersection-form 的闭合泛型 spec 实例共享 carrier struct tag；该 tag
+  不能区分 `Surface<int>` 与 `Surface<string>`。闭合实例去重必须改用现有、按实例
+  唯一的 aggregate descriptor 名称；callable-form 同理使用其 closure descriptor
+  名称，不改变任何生成布局或 ABI；
+- 泛型 fit shell 原先晚于 type/spec member 关闭注册，而具体 fit target 的替换可能
+  首次发现新的闭合 spec 实例。fit shell 必须在统一 member-registration 阶段之前
+  注册，使 type、spec 与 fit 发现的闭合实例继续经过同一成员关闭链路；
+- `@value` owner 的 object-form spec witness 使用 box storage，但 static witness
+  slot 与 subject storage 无关。应抽取 reference owner 已有的 static method/field
+  thunk 生成逻辑并由两类 witness 共用；这只复用既有 static slot、storage 与
+  ensure-init ABI，不增加新的静态字段链接模型。
+
+上述三项都只调整编译期注册、去重或代码复用顺序，不增加运行时查找、分支、数据
+结构或调用层级。
+
 ## 3 正确性模型
 
 ### 3.1 声明时做结构证明
@@ -227,6 +293,15 @@ open fit FitValue<T>: Surface<T> { ... }
 4. 名义证明成立后，复用现有 witness materialization，从当前声明或
    package-public `.ft` 已恢复的实现骨架中解析并绑定对应 slot，取得既有发码所需
    的实现声明和链接信息。
+
+当具体泛型 type 实参进入第 4 步时，witness materialization 必须保留完整闭合
+`UserType` 身份；只含 declaration 的 subject key 不能区分同一声明的多个闭合实例，
+不得用于选择具体 type witness。
+
+通过泛型参数的约束视角访问 static 成员时，还必须以该参数声明中的完整 spec
+类型引用作为实例，并在成员来自父 spec 时先投影到实际 declaring spec，再关闭
+成员参数、返回值或字段类型。该过程只消费已经解析的名义约束，不重新证明结构
+满足。
 
 第 4 步中的成员解析只负责恢复 witness 所需的实现信息，不得反过来作为满足关系
 证明。使用点不重新进行一般结构满足，也不因为 imported `.ft` 中恰好存在同名
@@ -394,6 +469,8 @@ witness。
   替换；fit 左侧仍必须按现有规范逐位置直接引用目标 type 的全部泛参，不允许
   特化、增删、重排或嵌套改写；
 - 泛型 type/fit 中被公开关系选中的 seal 实例方法和静态方法；
+- 通过泛型参数的精确 object-form spec 约束访问上述静态方法，以及同一既有约束
+  视角下 static 方法签名和 static 字段类型的实例关闭；
 - 父 object-form spec 闭包及其逐层结构化类型实参替换；
 - 引用 type 与 `@value type` 的现有泛型 owner 路径；
 - provider 独立 pack、consumer 只读 `.fb` 的编译、链接和运行。
@@ -401,6 +478,9 @@ witness。
 ### 4.2 本次不包含
 
 - object-form spec requirement 自身声明方法级泛参时的解析、匹配和 witness ABI；
+- 泛型 owner 的方法级约束引用 owner 类型参数时的 Codegen 开放 spec 实例注册，
+  例如 `Host<T>.invoke<U: Surface<T>>`；同一最小用例已在当前分支和干净 `HEAD`
+  编译器上得到相同 `CE0031`，确认是既有独立缺陷，而非本专项引入的回归；
 - spec static 字段实现的 storage/ensure 链接；
 - 重写已经工作的非泛型 type/fit package-callable 路径；
 - 新增结构满足、variance、运行时关系查询或 witness 缓存；
@@ -436,6 +516,9 @@ witness。
 - Semantic：provider 开放泛型 type/fit 声明期满足检查与选择 sidecar；在同一
   analysis 中覆盖直接泛型 type、直接泛型 fit、泛型父 spec 的正向关闭，以及类型
   实参不一致的拒绝；
+- Semantic：以不同的 callable/spec 类型参数名覆盖 `U: Surface<U>` 与
+  `U: Surface<int>` 的 static 方法返回值、参数及 static 字段类型，确认按完整约束
+  实例而不是按参数名关闭；父 spec 成员必须先投影到 declaring-spec 实例；
 - Symbol：package-public `.ft` 对泛型 type `declared_specs`、泛型 spec
   `parent_specs`、泛型 fit target/specs 中 `TYPE_PARAM_REF`，以及选中 seal 方法签名
   和 reified dependencies 的 round-trip；同时验证普通 seal 方法不进入
@@ -448,6 +531,9 @@ witness。
   方法，并让同一 owner 的多个已导出关系只在 consumer 使用其中一个，验证符号身份
   不受私有成员或 witness 物化集合影响；非泛型、公开泛型和现有 capability
   package-callable 基线保持不变；
+- Codegen：同一泛型 type/fit 声明同时存在多个闭合实例，且目标闭合实例只作为
+  显式方法类型实参出现时，验证泛型描述符使用该实例的精确 witness，不得按 type
+  declaration 误取先注册的其他实例；
 - CLI：provider 独立 `pack` 后，consumer 只依赖 `.fb` 完成 coercion、witness
   调用和链接。
 
@@ -487,62 +573,88 @@ witness。
   既有判定；package-public 中额外收录的编译器依赖成员采用追加编号，泛型 fit 的
   provider-local 方法采用通用 `fi<N>` 内部域。实施必须保持现有
   公开/capability 符号身份和同包调用行为。
-- [ ] **实际变更（Symbol 关系模板写出）**：让泛型 type 的 `declared_specs` 与泛型
+- [x] **实际变更（Symbol 关系模板写出）**：让泛型 type 的 `declared_specs` 与泛型
   spec 的 `parent_specs` 复用 `fill_declared_specs_with_tparams()`；保持现有
   `FT_ATTR_DECLARED_SPECS` 和类型节点 wire，不新增另一套 relation 表示。
-- [ ] **验证（Symbol reader 与 round-trip）**：增加 type 声明头和 spec 父关系的
+- [x] **验证（Symbol reader 与 round-trip）**：增加 type 声明头和 spec 父关系的
   `TYPE_PARAM_REF` round-trip，验证现有 reader 可直接恢复；该项原则上只增加测试，
   只有测试证明 reader 的通用恢复路径确有缺口时才转为实际修复并暂停 Review。
-- [ ] **实际变更（名义关系实例关闭）**：在现有
+- [x] **实际变更（名义关系实例关闭）**：在现有
   `type_ref_satisfies_spec_type_ref()` 及 relation source 查询链路中收敛统一的关系
   模板关闭：直接 type 从 `declared_specs`、可见 fit 从 `specs` 取得 head，使用具体
   subject 类型实参关闭，并复用现有类型参数替换、父 spec 递归实例化与语义类型
   相等能力。`FengSpecRelation` 继续只承担 declaration 候选索引和 fit 可见性过滤；
   不新增 current/imported、type/fit 各自独立的查询链路。
-- [ ] **实际变更（移除使用时结构证明）**：让 `type_ref -> spec type ref` 的满足查询
+- [x] **实际变更（移除使用时结构证明）**：让 `type_ref -> spec type ref` 的满足查询
   使用上一步的精确闭合名义关系；不再由
   `type_decl_satisfies_spec_type_ref()` 扫描 type/fit 成员证明满足。声明期
   `verify_type_satisfies_spec()` 与名义证明之后的 witness slot 绑定保持现状。
-- [ ] **验证（同包名义关系）**：增加同一 analysis 内直接泛型 type、直接泛型 fit、
+- [x] **实际变更（约束视角成员签名关闭）**：让泛型参数的 object-form spec 约束
+  保留并消费完整 constraint type ref；static 成员来自父 spec 时先复用现有父实例
+  投影，再通过 declaring spec 的类型参数关闭方法参数、返回值和字段类型。删除
+  当前把 callable 类型参数误作 spec owner 参数的按名替换，不新增跨包/static
+  特判，也不扩展到 requirement 自身的方法级泛型 ABI。
+- [x] **验证（约束视角成员签名）**：增加 callable/spec 参数异名、闭合约束、递归
+  约束和父 spec 约束用例；验证 static 方法调用及 static 字段读写的类型检查，并
+  保持现有同名参数用例行为不变。
+- [x] **验证（同包名义关系）**：增加同一 analysis 内直接泛型 type、直接泛型 fit、
   type/fit 泛型父 spec、嵌套/重排类型实参的正负用例；确认 `Value<int>` 只能满足
   精确关闭后的 spec 实例，并确认现有同包直接泛型 fit 行为不变。
-- [ ] **验证（普通泛型 fit 基线）**：固定现有公开泛型 fit 的隔离 `.fb` 正向用例；
+- [x] **验证（普通泛型 fit 基线）**：固定现有公开泛型 fit 的隔离 `.fb` 正向用例；
   对照同包矩阵验证 fit direct head 与泛型父 spec 的精确关闭。该项只验证，不重写
   fit visibility、已经工作的 fit target 参数映射或同包直接 fit 路径。
-- [ ] **实际变更（复用 package 方法收录闭包）**：把 Symbol writer 当前由
+- [x] **实际变更（复用 package 方法收录闭包）**：把 Symbol writer 当前由
   initial tree 与 dependency closure 得到的 package 方法选择，收敛为
   provider Symbol/Codegen 可共同消费的编译期结果；必须覆盖既有公开、mixable、
   spec implementation dependency 与可达 reifiable callable dependency，且保持
   非泛型和现有公开/capability 泛型发码行为不变。不得在 Codegen 复制一套近似的
   可达性扫描或新增平行选择链路。
-- [ ] **实际变更（复用泛型 callable linkage 判定）**：让泛型 type/fit 的 provider
+- [x] **实际变更（复用泛型 callable linkage 判定）**：让泛型 type/fit 的 provider
   shared body 导出复用 3.4 节现有 package-callable 判定，使 spec selection 选中的
   seal 方法取得 package linkage；不得把“仅被 Symbol 依赖闭包收录”直接等同于
   package linkage，保持非泛型路径与 reified callable 既有行为不变。
-- [ ] **实际变更（复用泛型 package 符号域判定）**：provider 使用 package 方法
+- [x] **实际变更（复用泛型 package 符号域判定）**：provider 使用 package 方法
   收录结果，consumer 对 imported type/fit 仅按 package-public FT 实际保留的方法
   集合恢复 package symbol 域；该分类不得进入成员可见性、名义满足、witness 选择
   或 linkage 授权。consumer 薄 wrapper 保持现有本地闭合路径并引用同一 shared
   symbol；不按 fit/type、实例/static 或具体成员名增加分支。
-- [ ] **实际变更（稳定符号域）**：使选中 seal 泛型 type 方法与泛型 fit 方法的
+- [x] **实际变更（稳定符号域）**：使选中 seal 泛型 type 方法与泛型 fit 方法的
   public/private 符号域、shared symbol 和成员序号只由 package-public `.ft` 可恢复的
   owner、fit、成员及签名事实决定。保持原有公开/capability 成员编号不变，将
   package-public 中额外收录的编译器依赖成员追加到对应 package 域；泛型 type
   复用 `m/i`，泛型 fit 复用 `fm/fc`，provider-local 方法进入已批准的通用 `fi`
   域。不得计入未收录的普通 seal 成员，不得增加 spec-seal 专用符号前缀或 thunk
   ABI。
-- [ ] **验证（reified dependencies）**：只验证被选中实现现有 shared body、薄
+- [x] **验证（reified dependencies）**：只验证被选中实现现有 shared body、薄
   wrapper 所需的 aggregate、managed type 与 callable dependencies 已完整往返；
   同时放置一个因 reifiable callable dependency 收录的 seal 方法，验证其参与
   package 符号域稳定编号但不被误当作 spec 实现或新增 linkage 授权。只有确认存在
   通用事实丢失时才列为实际修复，不扩展到其他 reified 行为，也不为当前用例增加
   依赖特判。
-- [ ] **验证（编译器用例）**：补齐 Semantic、Symbol、Codegen、Imported Semantic
+- [x] **实际变更（精确闭合 witness 物化）**：具体泛型 type 作为受 object-form
+  spec 约束的方法类型实参时，泛型描述符复用现有
+  `cg_ensure_witness_instance_for_type()`，不再把完整 `UserType` 降为只能表示声明
+  身份的 subject key；其他 subject 类别保持既有路径。
+- [x] **验证（精确闭合 witness 物化）**：同一泛型 type/fit 的其他闭合实例先注册，
+  目标实例只出现在显式方法类型实参中，验证生成 C 绑定目标闭合实例 witness，且
+  不串用先注册实例。
+- [x] **实际变更（闭合实例与注册顺序）**：闭合泛型 spec 按现有实例唯一 descriptor
+  身份去重，并把泛型 fit shell 注册提前到统一 member-registration 之前；不新增
+  carrier、descriptor、witness 或 fit 专用链路。
+- [x] **实际变更（共用 static witness thunk）**：抽取 reference owner 已有的
+  subject-independent static method/field thunk，由 reference 与 boxed value witness
+  共用；保持既有 slot、storage、ensure-init 和调用 ABI。
+- [x] **验证（完整 Codegen 合法矩阵）**：以多个闭合 spec 实例、generic fit、
+  mapped parent 和 `@value` owner 的实例/static witness 覆盖上述编译期链路，并验证
+  生成 C 可编译、跨包行为与同包一致。
+- [x] **验证（编译器用例）**：补齐 Semantic、Symbol、Codegen、Imported Semantic
   和隔离 `.fb` CLI 正负用例；同包与 imported Semantic 使用同一场景矩阵，并恢复
   现有 `#if 0` 探针中属于本专项的部分。
-- [ ] **验证（FCTS）**：补齐泛型 type/fit seal 实现的同包与跨包可观察行为用例，
+- [x] **验证（FCTS）**：补齐泛型 type/fit seal 实现的同包与跨包可观察行为用例，
   两侧对相同合法场景必须一致。
-- [ ] **验证（回归）**：执行定向测试后，在沙箱外执行 `make test` 全量回归。
+- [x] **验证（回归）**：定向测试通过后，已在沙箱外执行 `make test`；UBSan 与正常
+  `-O2 -Werror` 两轮均通过，FCTS 两轮均为 799/799，CLI、std、性能、增量构建、
+  发布脚本和 bundled package 检查全部通过。
 
 实施应分成“关系模板/名义关闭”和“package callable/稳定符号”两个明确阶段；前一
 阶段不依赖 3.5 节的符号事实决策，后一阶段必须等本轮 Review 结论。不得为了统一

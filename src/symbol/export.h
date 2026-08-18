@@ -17,6 +17,10 @@ typedef struct FengSymbolExportOptions {
     bool emit_spans;
 } FengSymbolExportOptions;
 
+/* Opaque compile-time set of source declarations selected by the exact
+ * package-public Symbol writer closure. */
+typedef struct FengSymbolPackageSelection FengSymbolPackageSelection;
+
 bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
                              FengSymbolGraph **out_graph,
                              FengSymbolError *out_error);
@@ -28,6 +32,24 @@ bool feng_symbol_export_graph(const FengSymbolGraph *graph,
 bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
                                  const FengSymbolExportOptions *options,
                                  FengSymbolError *out_error);
+
+/* Build the package-public declaration selection without serializing FT.
+ * Codegen uses this to share the writer's final compiler-dependency boundary
+ * even when it is invoked directly by tests or embedding clients. */
+bool feng_symbol_build_package_selection(
+    const FengSemanticAnalysis *analysis,
+    FengSymbolPackageSelection **out_selection,
+    FengSymbolError *out_error);
+
+/* Return whether one AST declaration/member belongs to the selected
+ * package-public declaration closure. */
+bool feng_symbol_package_selection_contains(
+    const FengSymbolPackageSelection *selection,
+    const void *source_node);
+
+/* Release a package-public source selection. */
+void feng_symbol_package_selection_free(
+    FengSymbolPackageSelection *selection);
 
 #ifdef __cplusplus
 }

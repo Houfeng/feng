@@ -8,7 +8,14 @@
 #include <sys/types.h>
 
 #include "symbol/ft.h"
+#include "symbol/ft_internal.h"
 #include "symbol/internal.h"
+
+struct FengSymbolPackageSelection {
+    const void **slots;
+    size_t slot_capacity;
+    size_t source_count;
+};
 
 typedef struct DeclSourceMap {
     const void *source;
@@ -1386,34 +1393,6 @@ static FengSymbolTypeView *build_type_from_fact(const BuildContext *ctx,
      * _with_tparams variant with an empty scope; it still correctly
      * handles concrete generic applications (e.g. `List<byte>`). */
     return build_type_from_fact_with_tparams(ctx, fact, NULL, 0U, path, token, out_error);
-}
-
-static bool fill_declared_specs(const BuildContext *ctx,
-                                FengSymbolDeclView *decl,
-                                const FengTypeRef *const *specs,
-                                size_t spec_count,
-                                const char *path,
-                                FengToken token,
-                                FengSymbolError *out_error) {
-    size_t index;
-
-    for (index = 0U; index < spec_count; ++index) {
-        FengSymbolTypeView *type = build_type_from_type_ref(ctx, specs[index], path, token, out_error);
-        if (specs[index] != NULL && type == NULL) {
-            return false;
-        }
-        if (!append_type_pointer(&decl->declared_specs,
-                                 &decl->declared_spec_count,
-                                 type,
-                                 path,
-                                 token,
-                                 out_error)) {
-            feng_symbol_internal_type_free(type);
-            return false;
-        }
-    }
-
-    return true;
 }
 
 static bool fill_declared_specs_with_tparams(const BuildContext *ctx,
@@ -2926,12 +2905,16 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
             }
             decl->is_tuple = source_decl->as.type_decl.is_tuple;
             decl->is_value = source_decl->as.type_decl.is_value;
-            if (!fill_declared_specs(ctx, decl,
-                                     (const FengTypeRef *const *)source_decl->as.type_decl.declared_specs,
-                                     source_decl->as.type_decl.declared_spec_count,
-                                     path,
-                                     source_decl->token,
-                                     out_error) ||
+            if (!fill_declared_specs_with_tparams(
+                    ctx,
+                    decl,
+                    (const FengTypeRef *const *)source_decl->as.type_decl.declared_specs,
+                    source_decl->as.type_decl.declared_spec_count,
+                    source_decl->as.type_decl.type_params,
+                    source_decl->as.type_decl.type_param_count,
+                    path,
+                    source_decl->token,
+                    out_error) ||
                 !apply_decl_annotations(decl,
                                         ctx->module,
                                         source_decl->annotations,
@@ -3020,12 +3003,16 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
                 free(decl);
                 return NULL;
             }
-            if (!fill_declared_specs(ctx, decl,
-                                     (const FengTypeRef *const *)source_decl->as.spec_decl.parent_specs,
-                                     source_decl->as.spec_decl.parent_spec_count,
-                                     path,
-                                     source_decl->token,
-                                     out_error) ||
+            if (!fill_declared_specs_with_tparams(
+                    ctx,
+                    decl,
+                    (const FengTypeRef *const *)source_decl->as.spec_decl.parent_specs,
+                    source_decl->as.spec_decl.parent_spec_count,
+                    source_decl->as.spec_decl.type_params,
+                    source_decl->as.spec_decl.type_param_count,
+                    path,
+                    source_decl->token,
+                    out_error) ||
                 !apply_decl_annotations(decl,
                                         ctx->module,
                                         source_decl->annotations,
@@ -4083,4 +4070,207 @@ bool feng_symbol_export_analysis(const FengSemanticAnalysis *analysis,
     ok = feng_symbol_export_graph(graph, options, out_error);
     feng_symbol_graph_free(graph);
     return ok;
+}
+
+/* Hash one stable-in-analysis source identity for the package selection set. */
+static size_t package_selection_hash(const void *source_node,
+                                     size_t slot_capacity) {
+    uintptr_t hash = (uintptr_t)source_node;
+
+    hash ^= hash >> 4U;
+    hash *= (uintptr_t)0x9e3779b1U;
+    hash ^= hash >> (sizeof(hash) * 4U);
+    return (size_t)hash & (slot_capacity - 1U);
+}
+
+/* Insert one non-NULL source identity into the open-addressed selection. */
+static void package_selection_insert(FengSymbolPackageSelection *selection,
+                                     const void *source_node) {
+    size_t slot;
+
+    if (selection == NULL || source_node == NULL ||
+        selection->slot_capacity == 0U) {
+        return;
+    }
+    slot = package_selection_hash(source_node, selection->slot_capacity);
+    while (selection->slots[slot] != NULL &&
+           selection->slots[slot] != source_node) {
+        slot = (slot + 1U) & (selection->slot_capacity - 1U);
+    }
+    if (selection->slots[slot] == NULL) {
+        selection->slots[slot] = source_node;
+        selection->source_count++;
+    }
+}
+
+bool feng_symbol_build_package_selection(
+    const FengSemanticAnalysis *analysis,
+    FengSymbolPackageSelection **out_selection,
+    FengSymbolError *out_error) {
+    FengSymbolGraph *graph = NULL;
+    FengSymbolPackageSelection *selection = NULL;
+    const void **source_nodes = NULL;
+    size_t source_node_count = 0U;
+    size_t source_node_capacity = 0U;
+    size_t module_index;
+    bool ok = false;
+
+    if (analysis == NULL || out_selection == NULL) {
+        return false;
+    }
+    *out_selection = NULL;
+    if (!feng_symbol_build_graph(analysis, &graph, out_error)) {
+        return false;
+    }
+    for (module_index = 0U;
+         module_index < graph->module_count;
+         ++module_index) {
+        const FengSymbolModuleGraph *module = graph->modules[module_index];
+        const void **module_nodes = NULL;
+        size_t module_node_count = 0U;
+        size_t needed;
+
+        if (!visibility_is_public(module->visibility)) {
+            continue;
+        }
+        if (!feng_symbol_ft_collect_package_source_nodes(module,
+                                                         &module_nodes,
+                                                         &module_node_count,
+                                                         out_error)) {
+            free(module_nodes);
+            goto cleanup;
+        }
+        if (module_node_count > SIZE_MAX - source_node_count) {
+            free(module_nodes);
+            feng_symbol_internal_set_error(
+                out_error,
+                module->primary_path,
+                module->root_decl.token,
+                "package-public source declaration count exceeds platform range");
+            goto cleanup;
+        }
+        needed = source_node_count + module_node_count;
+        if (needed > source_node_capacity) {
+            size_t new_capacity = source_node_capacity == 0U
+                ? 32U
+                : source_node_capacity;
+            const void **grown;
+
+            while (new_capacity < needed) {
+                if (new_capacity > SIZE_MAX / 2U) {
+                    new_capacity = needed;
+                    break;
+                }
+                new_capacity *= 2U;
+            }
+            grown = (const void **)realloc(
+                source_nodes,
+                new_capacity * sizeof(*grown));
+            if (grown == NULL) {
+                free(module_nodes);
+                feng_symbol_internal_set_error(
+                    out_error,
+                    module->primary_path,
+                    module->root_decl.token,
+                    "out of memory collecting package-public source declarations");
+                goto cleanup;
+            }
+            source_nodes = grown;
+            source_node_capacity = new_capacity;
+        }
+        if (module_node_count > 0U) {
+            memcpy((void *)(source_nodes + source_node_count),
+                   module_nodes,
+                   module_node_count * sizeof(*module_nodes));
+            source_node_count += module_node_count;
+        }
+        free(module_nodes);
+    }
+
+    selection = (FengSymbolPackageSelection *)calloc(1U, sizeof(*selection));
+    if (selection == NULL) {
+        feng_symbol_internal_set_error(
+            out_error,
+            NULL,
+            (FengToken){0},
+            "out of memory allocating package-public source selection");
+        goto cleanup;
+    }
+    if (source_node_count > 0U) {
+        size_t slot_capacity = 16U;
+        size_t required_slots;
+
+        if (source_node_count > SIZE_MAX / 2U) {
+            feng_symbol_internal_set_error(
+                out_error,
+                NULL,
+                (FengToken){0},
+                "package-public source selection exceeds platform range");
+            goto cleanup;
+        }
+        required_slots = source_node_count * 2U;
+        while (slot_capacity < required_slots) {
+            if (slot_capacity > SIZE_MAX / 2U) {
+                feng_symbol_internal_set_error(
+                    out_error,
+                    NULL,
+                    (FengToken){0},
+                    "package-public source selection exceeds platform range");
+                goto cleanup;
+            }
+            slot_capacity *= 2U;
+        }
+        selection->slots = (const void **)calloc(
+            slot_capacity,
+            sizeof(*selection->slots));
+        if (selection->slots == NULL) {
+            feng_symbol_internal_set_error(
+                out_error,
+                NULL,
+                (FengToken){0},
+                "out of memory allocating package-public source selection");
+            goto cleanup;
+        }
+        selection->slot_capacity = slot_capacity;
+        for (size_t index = 0U; index < source_node_count; ++index) {
+            package_selection_insert(selection, source_nodes[index]);
+        }
+    }
+    *out_selection = selection;
+    selection = NULL;
+    ok = true;
+
+cleanup:
+    free(source_nodes);
+    feng_symbol_package_selection_free(selection);
+    feng_symbol_graph_free(graph);
+    return ok;
+}
+
+bool feng_symbol_package_selection_contains(
+    const FengSymbolPackageSelection *selection,
+    const void *source_node) {
+    size_t slot;
+
+    if (selection == NULL || source_node == NULL ||
+        selection->slot_capacity == 0U) {
+        return false;
+    }
+    slot = package_selection_hash(source_node, selection->slot_capacity);
+    while (selection->slots[slot] != NULL) {
+        if (selection->slots[slot] == source_node) {
+            return true;
+        }
+        slot = (slot + 1U) & (selection->slot_capacity - 1U);
+    }
+    return false;
+}
+
+void feng_symbol_package_selection_free(
+    FengSymbolPackageSelection *selection) {
+    if (selection == NULL) {
+        return;
+    }
+    free(selection->slots);
+    free(selection);
 }

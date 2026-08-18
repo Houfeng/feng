@@ -7185,7 +7185,7 @@ static void test_unbound_callable_explicit_cast_codegen(void) {
                          "(((struct Feng__feng__codegen__unbound_callable_cast__DirectOwner *)_self))->marker"));
     ASSERT(find_generated_function_body(
         output.c_source,
-        "static void FengFitMethod__feng__codegen__unbound_callable_cast__FitOwner__fm0__echo",
+        "static void FengFitMethod__feng__codegen__unbound_callable_cast__FitOwner__fi0__echo",
         &body_start, &body_end));
     ASSERT(span_contains(body_start, body_end,
                          "((*(struct Feng__feng__codegen__unbound_callable_cast__FitOwner *)_self)).item1"));
@@ -11367,11 +11367,10 @@ static void test_mixable_seal_wrappers_use_static_codegen_path(void) {
     feng_program_free(program);
 }
 
-/* Non-generic seal methods and static fields selected by exported spec
- * relationships reuse their ordinary open codegen paths. Their unrelated
- * seal siblings retain internal linkage. Generic-owner verification is
- * preserved below but disabled while the independent imported-generic
- * symbol-surface issue is analyzed. */
+/* Seal methods and static fields selected by exported spec relationships
+ * reuse their ordinary package-callable codegen paths. Unrelated seal
+ * siblings retain internal linkage; generic type/fit members use stable
+ * package and provider-local symbol domains. */
 static void test_selected_seal_spec_implementations_use_open_codegen_path(void) {
     static const char *kSource =
         "open module feng.codegen.spec_impl_dependency;\n"
@@ -11400,13 +11399,25 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
         "    seal func value(): int { return 3; }\n"
         "    seal func unrelatedFit(): int { return 4; }\n"
         "}\n"
-#if 0
-        "open spec GenericContract<T> { seal func value(): T; }\n"
-        "open type Generic<T>: GenericContract<T> {\n"
-        "    seal func value(): T { let result: T; return result; }\n"
-        "    seal func unrelated(): T { let result: T; return result; }\n"
+        "open spec GenericContract<T> {\n"
+        "    seal func value(): T;\n"
+        "    seal static func marker(): T;\n"
         "}\n"
-#endif
+        "open type Generic<T>: GenericContract<T> {\n"
+        "    seal func unrelatedBefore(): T { let result: T; return result; }\n"
+        "    open func publicBefore(): T { let result: T; return result; }\n"
+        "    seal func value(): T { let result: T; return result; }\n"
+        "    seal static func marker(): T { let result: T; return result; }\n"
+        "    seal func unrelatedAfter(): T { let result: T; return result; }\n"
+        "}\n"
+        "open type GenericFit<T> {}\n"
+        "open fit GenericFit<T>: GenericContract<T> {\n"
+        "    seal func unrelatedBefore(): T { let result: T; return result; }\n"
+        "    open func publicBefore(): T { let result: T; return result; }\n"
+        "    seal func value(): T { let result: T; return result; }\n"
+        "    seal static func marker(): T { let result: T; return result; }\n"
+        "    seal func unrelatedAfter(): T { let result: T; return result; }\n"
+        "}\n"
         ;
     FengProgram *program = parse_or_die(
         kSource, "spec_impl_dependency_codegen.ff");
@@ -11499,18 +11510,196 @@ static void test_selected_seal_spec_implementations_use_open_codegen_path(void) 
         "Direct__static__unrelatedField__ensure_init",
         &is_static));
     ASSERT(is_static);
-#if 0
     ASSERT(generated_function_definition_is_static(
         output.c_source,
-        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__m0__value",
+        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__m0__publicBefore",
         &is_static));
     ASSERT(!is_static);
     ASSERT(generated_function_definition_is_static(
         output.c_source,
-        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__i0__unrelated",
+        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__m1__value",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__m2__marker",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__i0__unrelatedBefore",
         &is_static));
     ASSERT(is_static);
-#endif
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengGenericMethod__feng__codegen__spec_impl_dependency__Generic__i1__unrelatedAfter",
+        &is_static));
+    ASSERT(is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_dependency__GenericFit__fm0__publicBefore",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_dependency__GenericFit__fm1__value",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_dependency__GenericFit__fm2__marker",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_dependency__GenericFit__fi0__unrelatedBefore",
+        &is_static));
+    ASSERT(is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_dependency__GenericFit__fi1__unrelatedAfter",
+        &is_static));
+    ASSERT(is_static);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A seal helper reached only through a selected implementation's callable
+ * value dependency participates in the stable package symbol domain, but it
+ * is not itself a spec implementation and therefore retains internal C
+ * linkage. Cover the shared type and fit package-selection path. */
+static void test_reified_callable_dependency_uses_package_symbol_without_linkage(void) {
+    static const char *kSource =
+        "open module feng.codegen.spec_impl_callable_dependency;\n"
+        "open spec Producer<T>(): T;\n"
+        "open spec Contract<T> {\n"
+        "    seal func value(): T;\n"
+        "}\n"
+        "open type Generic<T>: Contract<T> {\n"
+        "    open func publicBefore(): T { let result: T; return result; }\n"
+        "    seal func dependency(): T { let result: T; return result; }\n"
+        "    seal func value(): T {\n"
+        "        let producer: Producer<T> = self.dependency;\n"
+        "        return producer();\n"
+        "    }\n"
+        "}\n"
+        "open type GenericFit<T> {}\n"
+        "open fit GenericFit<T>: Contract<T> {\n"
+        "    open func publicBefore(): T { let result: T; return result; }\n"
+        "    seal func dependency(): T { let result: T; return result; }\n"
+        "    seal func value(): T {\n"
+        "        let producer: Producer<T> = self.dependency;\n"
+        "        return producer();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "spec_impl_callable_dependency_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    bool is_static = false;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengGenericMethod__feng__codegen__spec_impl_callable_dependency__Generic__m1__dependency",
+        &is_static));
+    ASSERT(is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengGenericMethod__feng__codegen__spec_impl_callable_dependency__Generic__m2__value",
+        &is_static));
+    ASSERT(!is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_callable_dependency__GenericFit__fm1__dependency",
+        &is_static));
+    ASSERT(is_static);
+    ASSERT(generated_function_definition_is_static(
+        output.c_source,
+        "FengFitMethod__feng__codegen__spec_impl_callable_dependency__GenericFit__fm2__value",
+        &is_static));
+    ASSERT(!is_static);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A constrained generic call must keep the exact closed UserType identity
+ * when materializing its witness. Another closed instance of the same generic
+ * declaration may already exist, while the requested instance appears only
+ * as an explicit method type argument. Cover both type-head and fit sources. */
+static void test_generic_descriptor_uses_exact_closed_spec_implementation(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_descriptor_exact_witness;\n"
+        "spec Surface<T> {\n"
+        "    seal func read(): T;\n"
+        "    seal static func echo(value: T): T;\n"
+        "}\n"
+        "type Direct<T>: Surface<T> {\n"
+        "    let value: T;\n"
+        "    func Direct(value: T) { self.value = value; }\n"
+        "    seal func read(): T { return self.value; }\n"
+        "    seal static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type FitValue<T> {\n"
+        "    open let value: T;\n"
+        "    func FitValue(value: T) { self.value = value; }\n"
+        "}\n"
+        "fit FitValue<T>: Surface<T> {\n"
+        "    seal func read(): T { return self.value; }\n"
+        "    seal static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type Access: Surface<int> {\n"
+        "    seal func read(): int { return 0; }\n"
+        "    seal static func echo(value: int): int { return value; }\n"
+        "    static func invoke<U: Surface<int>>(value: int): int {\n"
+        "        return U.echo(value);\n"
+        "    }\n"
+        "}\n"
+        "func use(): int {\n"
+        "    let directText = Direct<string>(\"direct\");\n"
+        "    let fitText = FitValue<string>(\"fit\");\n"
+        "    directText;\n"
+        "    fitText;\n"
+        "    return Access.invoke<Direct<int>>(21) +\n"
+        "           Access.invoke<FitValue<int>>(22);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_descriptor_exact_witness_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "Direct_i64___as") != NULL);
+    ASSERT(strstr(output.c_source, "FitValue_i64___as") != NULL);
     compile_generated_c_or_die(output.c_source);
 
     feng_codegen_output_free(&output);
@@ -11669,6 +11858,8 @@ int main(void) {
     test_member_mix_fields_and_mixable_wrappers_codegen();
     test_mixable_seal_wrappers_use_static_codegen_path();
     test_selected_seal_spec_implementations_use_open_codegen_path();
+    test_reified_callable_dependency_uses_package_symbol_without_linkage();
+    test_generic_descriptor_uses_exact_closed_spec_implementation();
     test_generic_owner_mixable_coercion_uses_nominal_instance();
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();

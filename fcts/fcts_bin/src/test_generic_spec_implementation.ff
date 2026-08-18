@@ -1,0 +1,179 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_spec_implementation;
+
+/** Same-package generic contract used to verify the local relation path. */
+spec LocalRelationSurface<T> {
+  /** Read the subject payload. */
+  seal func read(): T;
+
+  /** Echo one value through a static witness slot. */
+  seal static func echo(value: T): T;
+}
+
+/** Same-package type-head implementation. */
+type LocalRelationDirect<T>: LocalRelationSurface<T> {
+  /** Stored payload. */
+  seal var stored: T;
+
+  /** Construct one direct implementation. */
+  func LocalRelationDirect(value: T) {
+    self.stored = value;
+  }
+
+  /** Satisfy the local seal instance requirement. */
+  seal func read(): T {
+    return self.stored;
+  }
+
+  /** Satisfy the local seal static requirement. */
+  seal static func echo(value: T): T {
+    return value;
+  }
+
+  /** Consume the local contract through its spec view. */
+  open func readThrough(other: LocalRelationSurface<T>): T {
+    return other.read();
+  }
+}
+
+/** Same-package fit-backed subject. */
+type LocalRelationFit<T> {
+  /** Stored payload. */
+  open var stored: T;
+
+  /** Construct one fit-backed subject. */
+  func LocalRelationFit(value: T) {
+    self.stored = value;
+  }
+}
+
+/** Same-package fit implementation. */
+fit LocalRelationFit<T>: LocalRelationSurface<T> {
+  /** Satisfy the local seal instance requirement. */
+  seal func read(): T {
+    return self.stored;
+  }
+
+  /** Satisfy the local seal static requirement. */
+  seal static func echo(value: T): T {
+    return value;
+  }
+
+  /** Consume the local fit subject through its spec view. */
+  open func readThrough(other: LocalRelationSurface<T>): T {
+    return other.read();
+  }
+}
+
+/** Authorized implementation used to invoke an imported static seal slot. */
+type PackageRelationStaticAccess: PackageRelationSurface<int> {
+  /** Satisfy the instance requirement. */
+  seal func read(): int {
+    return 0;
+  }
+
+  /** Satisfy the static requirement. */
+  seal static func echo(value: int): int {
+    return value;
+  }
+
+  /** Invoke the static requirement through an exact generic constraint. */
+  open static func invoke<U: PackageRelationSurface<int>>(
+    value: int
+  ): int {
+    return U.echo(value);
+  }
+}
+
+/** Authorized implementation used to invoke a local static seal slot. */
+type LocalRelationStaticAccess: LocalRelationSurface<int> {
+  /** Satisfy the instance requirement. */
+  seal func read(): int {
+    return 0;
+  }
+
+  /** Satisfy the static requirement. */
+  seal static func echo(value: int): int {
+    return value;
+  }
+
+  /** Invoke the static requirement through an exact generic constraint. */
+  open static func invoke<U: LocalRelationSurface<int>>(
+    value: int
+  ): int {
+    return U.echo(value);
+  }
+}
+
+/** Verify same-package and package-restored generic spec implementations. */
+open func test_generic_spec_implementation(): void {
+  describe("generic spec implementation relations", () {
+    test("same-package generic type and fit use seal witnesses", () {
+      let direct = LocalRelationDirect<string>("local-direct");
+      let directView: LocalRelationSurface<string> = direct;
+      let fitted = LocalRelationFit<string>("local-fit");
+      let fitView: LocalRelationSurface<string> = fitted;
+
+      assert(direct.readThrough(directView) == "local-direct",
+             "local type relation closes its owner argument");
+      assert(fitted.readThrough(fitView) == "local-fit",
+             "local fit relation closes its owner argument");
+      assert(LocalRelationStaticAccess.invoke<
+               LocalRelationDirect<int>
+             >(21) == 21,
+             "local type static witness uses the exact spec instance");
+      assert(LocalRelationStaticAccess.invoke<
+               LocalRelationFit<int>
+             >(22) == 22,
+             "local fit static witness uses the exact spec instance");
+    });
+
+    test("package generic type and fit preserve seal implementations", () {
+      let direct = PackageRelationDirect<string>("package-direct");
+      let directView: PackageRelationSurface<string> = direct;
+      let fitted = PackageRelationFit<string>("package-fit");
+      let fitView: PackageRelationSurface<string> = fitted;
+
+      assert(direct.readThrough(directView) == "package-direct",
+             "package type witness reaches its selected seal method");
+      assert(fitted.readThrough(fitView) == "package-fit",
+             "package fit witness reaches its selected seal method");
+      assert(PackageRelationStaticAccess.invoke<
+               PackageRelationDirect<int>
+             >(31) == 31,
+             "package type static seal implementation remains linkable");
+      assert(PackageRelationStaticAccess.invoke<
+               PackageRelationFit<int>
+             >(32) == 32,
+             "package fit static seal implementation remains linkable");
+    });
+
+    test("package value type shares the subject-free static witness path", () {
+      let value = PackageRelationValue<int>(41);
+      let view: PackageRelationSurface<int> = value;
+
+      assert(value.readThrough(view) == 41,
+             "boxed value witness preserves the instance payload");
+      assert(PackageRelationStaticAccess.invoke<
+               PackageRelationValue<int>
+             >(42) == 42,
+             "boxed value static witness does not receive a subject");
+    });
+
+    test("mapped generic parents close for type and fit relations", () {
+      let direct = PackageRelationChildDirect<int>(51);
+      let directParent:
+        PackageRelationParent<PackageRelationBox<int>> = direct;
+      let fitted = PackageRelationChildFit<int>(52);
+      let fitParent:
+        PackageRelationParent<PackageRelationBox<int>> = fitted;
+
+      assert(direct.readParent(directParent) == 51,
+             "package child type projects to Parent<Box<int>>");
+      assert(fitted.readParent(fitParent) == 52,
+             "package child fit projects to Parent<Box<int>>");
+    });
+  });
+}

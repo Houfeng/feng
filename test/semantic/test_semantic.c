@@ -9405,6 +9405,242 @@ static void test_external_imported_declared_specs_enable_spec_coercion(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* Current-source type and fit relations close owner arguments before exact
+ * comparison, including reordered and nested parent-spec substitutions. */
+static void test_generic_spec_relation_instances_close_exactly(void) {
+    const char *accepted =
+        "module demo.generic_relation.local_ok;\n"
+        "type Box<T> {}\n"
+        "spec Parent<A, B> {\n"
+        "  seal func project(value: A): B;\n"
+        "  seal static func empty(): B;\n"
+        "}\n"
+        "spec Child<T, U>: Parent<Box<U>, T> {}\n"
+        "type Direct<T, U>: Child<T, U> {\n"
+        "  seal func project(value: Box<U>): T { let result: T; return result; }\n"
+        "  seal static func empty(): T { let result: T; return result; }\n"
+        "}\n"
+        "type FitValue<T, U> {}\n"
+        "fit FitValue<T, U>: Child<T, U> {\n"
+        "  seal func project(value: Box<U>): T { let result: T; return result; }\n"
+        "  seal static func empty(): T { let result: T; return result; }\n"
+        "}\n"
+        "func direct(value: Direct<int, string>): Parent<Box<string>, int> {\n"
+        "  return value;\n"
+        "}\n"
+        "func fitted(value: FitValue<int, string>): Parent<Box<string>, int> {\n"
+        "  return value;\n"
+        "}\n";
+    const char *rejected =
+        "module demo.generic_relation.local_bad;\n"
+        "type Box<T> {}\n"
+        "spec Parent<A, B> {}\n"
+        "spec Child<T, U>: Parent<Box<U>, T> {}\n"
+        "type Direct<T, U>: Child<T, U> {}\n"
+        "func bad(value: Direct<int, string>): Parent<Box<int>, string> {\n"
+        "  return value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_relation_local_ok.ff", accepted);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_program_or_die("generic_relation_local_bad.ff", rejected);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE1003") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Imported ASTs restored from the Symbol surface use the same relation-head
+ * closing algorithm as current source, rather than a package-specific path. */
+static void test_external_imported_generic_spec_relation_instances_close_exactly(void) {
+    const char *external_source =
+        "open module vendor.generic_relation;\n"
+        "open type Box<T> {}\n"
+        "open spec Parent<A, B> {\n"
+        "  seal func project(value: A): B;\n"
+        "  seal static func empty(): B;\n"
+        "}\n"
+        "open spec Child<T, U>: Parent<Box<U>, T> {}\n"
+        "open type Direct<T, U>: Child<T, U> {\n"
+        "  seal func project(value: Box<U>): T { let result: T; return result; }\n"
+        "  seal static func empty(): T { let result: T; return result; }\n"
+        "}\n"
+        "open type FitValue<T, U> {}\n"
+        "open fit FitValue<T, U>: Child<T, U> {\n"
+        "  seal func project(value: Box<U>): T { let result: T; return result; }\n"
+        "  seal static func empty(): T { let result: T; return result; }\n"
+        "}\n";
+    const char *accepted =
+        "module demo.generic_relation.imported_ok;\n"
+        "import vendor.generic_relation as api;\n"
+        "func direct(\n"
+        "  value: api.Direct<int, string>\n"
+        "): api.Parent<api.Box<string>, int> { return value; }\n"
+        "func fitted(\n"
+        "  value: api.FitValue<int, string>\n"
+        "): api.Parent<api.Box<string>, int> { return value; }\n";
+    const char *rejected =
+        "module demo.generic_relation.imported_bad;\n"
+        "import vendor.generic_relation as api;\n"
+        "func bad(\n"
+        "  value: api.Direct<int, string>\n"
+        "): api.Parent<api.Box<int>, string> { return value; }\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture,
+                                 "external_generic_relation.ff",
+                                 external_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
+
+    program = parse_program_or_die(
+        "imported_generic_relation_ok.ff", accepted);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "imported_generic_relation_bad.ff", rejected);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE1003") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
+/* Generic-parameter static dispatch closes methods and fields through the
+ * complete constraint instance. Callable parameter names are unrelated to
+ * spec-owner parameter names, and inherited members first project to their
+ * exact declaring parent instance. */
+static void test_generic_constraint_static_members_close_exact_spec_instance(void) {
+    const char *accepted =
+        "module demo.generic_constraint.static_exact;\n"
+        "type Box<T> {\n"
+        "  open let value: T;\n"
+        "  func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "spec Surface<A> {\n"
+        "  seal static let initial: A;\n"
+        "  seal static var current: A;\n"
+        "  seal static func echo(value: A): A;\n"
+        "}\n"
+        "type DirectAccess: Surface<int> {\n"
+        "  seal static let initial: int = 1;\n"
+        "  seal static var current: int = 2;\n"
+        "  seal static func echo(value: int): int { return value; }\n"
+        "  static func invoke<U: Surface<int>>(value: int): int {\n"
+        "    U.current = value;\n"
+        "    return U.echo(U.initial);\n"
+        "  }\n"
+        "}\n"
+        "spec Parent<A> {\n"
+        "  seal static let initial: A;\n"
+        "  seal static var current: A;\n"
+        "  seal static func echo(value: A): A;\n"
+        "}\n"
+        "spec Child<B>: Parent<Box<B>> {}\n"
+        "type ParentAccess: Child<int> {\n"
+        "  seal static let initial: Box<int> = Box<int>(3);\n"
+        "  seal static var current: Box<int> = Box<int>(4);\n"
+        "  seal static func echo(value: Box<int>): Box<int> { return value; }\n"
+        "  static func invoke<U: Child<int>>(value: Box<int>): Box<int> {\n"
+        "    U.current = value;\n"
+        "    return U.echo(U.initial);\n"
+        "  }\n"
+        "}\n"
+        "spec Recursive<A> { static func echo(value: A): A; }\n"
+        "type RecursiveAccess: Recursive<RecursiveAccess> {\n"
+        "  static func echo(value: RecursiveAccess): RecursiveAccess {\n"
+        "    return value;\n"
+        "  }\n"
+        "  static func invoke<U: Recursive<U>>(value: U): U {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n";
+    const char *rejected =
+        "module demo.generic_constraint.static_mismatch;\n"
+        "spec Surface<A> { static func echo(value: A): A; }\n"
+        "type Access: Surface<int> {\n"
+        "  static func echo(value: int): int { return value; }\n"
+        "  static func bad<U: Surface<int>>(value: string): int {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_constraint_static_exact.ff", accepted);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "generic_constraint_static_mismatch.ff", rejected);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0512") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_external_imported_enum_item_participates_in_typecheck(void) {
     const char *external_source =
         "open module vendor.http;\n"
@@ -24580,6 +24816,9 @@ int main(void) {
     test_external_full_path_type_refs_do_not_require_use();
     test_external_alias_type_ref_still_requires_use_alias();
     test_external_imported_declared_specs_enable_spec_coercion();
+    test_generic_spec_relation_instances_close_exactly();
+    test_external_imported_generic_spec_relation_instances_close_exactly();
+    test_generic_constraint_static_members_close_exact_spec_instance();
     test_external_imported_enum_item_participates_in_typecheck();
     test_external_imported_enum_conflicts_with_local_type_name();
     test_external_imported_private_enum_is_not_visible();

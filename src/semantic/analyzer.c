@@ -507,8 +507,11 @@ typedef struct ResolvedTypeTarget {
      * following fields record which type parameter is being referenced
      * and the constraint spec used to find its static members. */
     bool is_generic_type_param;
-    size_t generic_param_index;
     const FengDecl *constraint_spec_decl;
+    /* Complete declared constraint instance (for example Surface<int> or
+     * Surface<U>). Member signatures must be closed through this type ref;
+     * generic parameter names are not spec-owner type arguments. */
+    const FengTypeRef *constraint_spec_type_ref;
 } ResolvedTypeTarget;
 
 typedef struct AbiTrace {
@@ -4119,12 +4122,6 @@ static bool resolver_track_synthetic_type_ref(ResolveContext *context, FengTypeR
                       &type_ref);
 }
 
-/* Build a fresh named FENG_TYPE_REF_NAMED reference for a generic type
- * parameter.  The synthesized reference is registered with the resolver
- * so it is released when the ResolveContext is torn down. */
-static FengTypeRef *synthesize_type_ref_for_type_param(const ResolveContext *context,
-                                                       const TypeParamEntry *tp);
-
 /* Transfer a synthetic type_ref to Analysis-level lifetime management.
  * Synthetic type_refs stored in AST nodes for consumption by post-analysis
  * passes (e.g. reifiable_deps) must outlive the ResolveContext that created
@@ -4454,6 +4451,29 @@ static const FengTypeRef *instantiate_parent_spec_ref_for_instance(
         }
     }
     return NULL;
+}
+
+/* Project a generic parameter's exact constraint instance to the spec that
+ * actually declares a selected member. Direct members retain the declared
+ * constraint ref; inherited members reuse the ordinary parent-spec
+ * instantiation path so nested and reordered type arguments stay closed. */
+static const FengTypeRef *constraint_member_declaring_spec_instance(
+    ResolveContext *context,
+    const ResolvedTypeTarget *target,
+    const FengDecl *declaring_spec) {
+    if (context == NULL || target == NULL || declaring_spec == NULL ||
+        target->constraint_spec_decl == NULL ||
+        target->constraint_spec_type_ref == NULL) {
+        return NULL;
+    }
+    if (target->constraint_spec_decl == declaring_spec) {
+        return target->constraint_spec_type_ref;
+    }
+    return instantiate_parent_spec_ref_for_instance(
+        context,
+        target->constraint_spec_decl,
+        target->constraint_spec_type_ref,
+        declaring_spec);
 }
 
 /* Compiler-owned scratch path for one object-spec upcast probe. Each entry
@@ -4929,11 +4949,9 @@ static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
 static bool subject_key_satisfies_spec_decl(const ResolveContext *ctx,
                                             const FengSemanticSubjectKey *subject_key,
                                             const FengDecl *spec_decl);
-static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
-                                                   const FengDecl *source_type_decl,
-                                                   const FengTypeRef *source_type_ref,
-                                                   const FengDecl *spec_decl,
-                                                   const FengTypeRef *spec_type_ref);
+static bool spec_relation_source_visible_from_context(
+    const ResolveContext *ctx,
+    const FengSpecRelationSource *source);
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *source_type_ref,
                                              const FengTypeRef *spec_type_ref);
@@ -6089,17 +6107,6 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
             target_decl = resolve_type_ref_decl(context, type_ref);
             if (expr_builtin != NULL && target_decl != NULL &&
                 target_decl->kind == FENG_DECL_SPEC) {
-                FengSemanticSubjectKey sk =
-                    feng_semantic_subject_key_for_builtin(expr_builtin);
-
-                if (!subject_key_satisfies_spec_decl(context, &sk, target_decl)) {
-                    return false;
-                }
-                if (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-                    type_ref->kind != FENG_TYPE_REF_NAMED ||
-                    type_ref->as.named.type_arg_count == 0U) {
-                    return true;
-                }
                 FengSlice seg = slice_from_cstr(expr_builtin);
                 FengTypeRef src_ref;
 
@@ -6109,11 +6116,9 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
                 src_ref.as.named.segment_count = 1U;
                 src_ref.as.named.type_args = NULL;
                 src_ref.as.named.type_arg_count = 0U;
-                return visible_fit_instantiates_spec_type_ref(context,
-                                                              NULL,
-                                                              &src_ref,
-                                                              target_decl,
-                                                              type_ref);
+                return type_ref_satisfies_spec_type_ref(context,
+                                                        &src_ref,
+                                                        type_ref);
             }
             return false;
 
@@ -16462,38 +16467,38 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                        static_target.constraint_spec_decl != NULL) {
                 /* G4: generic type parameter static method dispatch —
                  * `T.method(args)` where T: S and S declares `static func
-                 * method(...)`. Resolution uses the spec's static method
-                 * member, substituting the type parameter for any
-                 * self-referential use in the return type. */
+                 * method(...)`. Close the selected member through the exact
+                 * constraint instance, including a declaring-parent
+                 * projection when the method is inherited. */
+                const FengDecl *declaring_spec = NULL;
                 const FengTypeMember *member =
-                    find_spec_object_member(context,
-                                            static_target.constraint_spec_decl,
-                                            callee->as.member.member,
-                                            /*include_static=*/true);
+                    find_spec_object_member_with_owner(
+                        context,
+                        static_target.constraint_spec_decl,
+                        callee->as.member.member,
+                        /*include_static=*/true,
+                        &declaring_spec);
 
                 if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
                     const FengCallableSignature *spec_sig = &member->as.callable;
                     InferredExprType return_type = inferred_expr_type_unknown();
 
                     if (spec_sig->return_type != NULL) {
-                        const TypeParamEntry *tp =
-                            &context->type_params[static_target.generic_param_index];
-                        FengTypeRef *T = synthesize_type_ref_for_type_param(context, tp);
-                        FengTypeRef *substituted = NULL;
+                        const FengTypeRef *declaring_spec_instance =
+                            constraint_member_declaring_spec_instance(
+                                context,
+                                &static_target,
+                                declaring_spec);
+                        const FengTypeRef *closed_return =
+                            substitute_spec_member_type_ref_for_instance(
+                                context,
+                                declaring_spec,
+                                declaring_spec_instance,
+                                spec_sig->return_type);
 
-                        if (T != NULL) {
-                            const FengTypeParam *owner_param = tp->type_param;
-                            FengTypeRef *type_args[1] = {T};
-                            size_t type_param_count = 1U;
-
-                            substituted = clone_type_ref_substituting_type_params(
-                                spec_sig->return_type,
-                                owner_param,
-                                type_param_count,
-                                type_args);
-                        }
-                        if (substituted != NULL) {
-                            return_type = inferred_expr_type_from_type_ref(substituted);
+                        if (closed_return != NULL) {
+                            return_type =
+                                inferred_expr_type_from_type_ref(closed_return);
                         }
                     }
                     if (inferred_expr_type_is_known(return_type)) {
@@ -16950,17 +16955,11 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
             type_target.constraint_spec_decl != NULL) {
             const FengDecl *declaring_spec = NULL;
             InferredExprType constraint_owner =
-                inferred_expr_type_from_decl(type_target.constraint_spec_decl);
-            const TypeParamEntry *type_param =
-                type_target.generic_param_index < context->type_param_count
-                    ? &context->type_params[type_target.generic_param_index]
-                    : NULL;
-
-            if (type_param != NULL && type_param->type_param != NULL &&
-                type_param->type_param->constraint != NULL) {
-                constraint_owner = inferred_expr_type_from_type_ref(
-                    type_param->type_param->constraint);
-            }
+                type_target.constraint_spec_type_ref != NULL
+                    ? inferred_expr_type_from_type_ref(
+                          type_target.constraint_spec_type_ref)
+                    : inferred_expr_type_from_decl(
+                          type_target.constraint_spec_decl);
             const FengTypeMember *accessible_member =
                 find_accessible_spec_object_member(
                     context,
@@ -18248,7 +18247,6 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
 
                     if (tp != NULL) {
                         result.is_generic_type_param = true;
-                        result.generic_param_index = (size_t)(tp - context->type_params);
                         if (tp->type_param != NULL && tp->type_param->constraint != NULL) {
                             const FengDecl *constraint_spec = NULL;
 
@@ -18270,6 +18268,10 @@ static ResolvedTypeTarget resolve_type_target_expr(ResolveContext *context,
                                 }
                             }
                             result.constraint_spec_decl = constraint_spec;
+                            result.constraint_spec_type_ref =
+                                constraint_spec != NULL
+                                    ? tp->type_param->constraint
+                                    : NULL;
                         }
                     }
                 }
@@ -18382,37 +18384,6 @@ static InferredExprType resolved_type_target_owner_type(const ResolvedTypeTarget
     return inferred_expr_type_from_decl(target->type_decl);
 }
 
-/* Build a synthetic named type reference for a generic type parameter
- * (e.g., `T` in `func f<T: Factory<T>>() { T.make(); }`). The single
- * segment matches the type parameter name so downstream substitution
- * via `clone_type_ref_substituting_type_params` works. */
-static FengTypeRef *synthesize_type_ref_for_type_param(const ResolveContext *context,
-                                                       const TypeParamEntry *tp) {
-    FengTypeRef *ref;
-
-    if (tp == NULL || context == NULL) {
-        return NULL;
-    }
-    ref = (FengTypeRef *)calloc(1U, sizeof(*ref));
-    if (ref == NULL) {
-        return NULL;
-    }
-    ref->token = tp->type_param != NULL ? tp->type_param->token : (FengToken){0};
-    ref->kind = FENG_TYPE_REF_NAMED;
-    ref->as.named.segments = (FengSlice *)malloc(sizeof(FengSlice));
-    if (ref->as.named.segments == NULL) {
-        free(ref);
-        return NULL;
-    }
-    ref->as.named.segments[0] = tp->name;
-    ref->as.named.segment_count = 1U;
-    if (!resolver_track_synthetic_type_ref((ResolveContext *)context, ref)) {
-        free_synthetic_type_ref(ref);
-        return NULL;
-    }
-    return ref;
-}
-
 /* Returns the semantic type of one module-level binding, including inferred
  * initializer facts recorded for bindings without an explicit type. */
 static InferredExprType infer_global_binding_decl_type(ResolveContext *context,
@@ -18455,35 +18426,34 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
     ResolvedTypeTarget type_target = resolve_type_target_expr(context, expr->as.member.object, false);
 
     /* G4: generic type parameter static field access (T.field where T: S
-     * and S declares `static let field`). The type is the field type with
-     * the type parameter substituted for any self-reference. */
+     * and S declares `static let field`). Close the field type through the
+     * exact constraint/declaring-spec instance instead of parameter names. */
     if (type_target.is_generic_type_param &&
         type_target.constraint_spec_decl != NULL) {
+        const FengDecl *declaring_spec = NULL;
         const FengTypeMember *member =
-            find_spec_object_member(context,
-                                    type_target.constraint_spec_decl,
-                                    expr->as.member.member,
-                                    /*include_static=*/true);
+            find_spec_object_member_with_owner(
+                context,
+                type_target.constraint_spec_decl,
+                expr->as.member.member,
+                /*include_static=*/true,
+                &declaring_spec);
 
         if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
-            const TypeParamEntry *tp =
-                &context->type_params[type_target.generic_param_index];
-            FengTypeRef *T = synthesize_type_ref_for_type_param(context, tp);
-            FengTypeRef *substituted = NULL;
+            const FengTypeRef *declaring_spec_instance =
+                constraint_member_declaring_spec_instance(
+                    context,
+                    &type_target,
+                    declaring_spec);
+            const FengTypeRef *closed_field =
+                substitute_spec_member_type_ref_for_instance(
+                    context,
+                    declaring_spec,
+                    declaring_spec_instance,
+                    member->as.field.type);
 
-            if (T != NULL && member->as.field.type != NULL) {
-                const FengTypeParam *owner_param = tp->type_param;
-                FengTypeRef *type_args[1] = {T};
-                size_t type_param_count = 1U;
-
-                substituted = clone_type_ref_substituting_type_params(
-                    member->as.field.type,
-                    owner_param,
-                    type_param_count,
-                    type_args);
-            }
-            if (substituted != NULL) {
-                return inferred_expr_type_from_type_ref(substituted);
+            if (closed_field != NULL) {
+                return inferred_expr_type_from_type_ref(closed_field);
             }
             return inferred_expr_type_unknown();
         }
@@ -20520,14 +20490,20 @@ static void record_object_spec_coercion_site_if_applicable(
             return;
         }
     }
-    if (src_type_decl != NULL &&
-        !type_decl_satisfies_spec_type_ref(context, src_type_decl, expected_type_ref)) {
-        if (expr_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
-            !type_ref_satisfies_spec_type_ref(context, expr_type.type_ref, expected_type_ref)) {
-        /* Match must have been by exact type identity (src == target spec is
-         * impossible since target is SPEC and src is TYPE), so absence here
-         * means the match was a non-spec path (should not happen given the
-         * SPEC target check above). Defensive no-op. */
+    if (src_type_decl != NULL) {
+        bool satisfies = expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+            ? type_ref_satisfies_spec_type_ref(context,
+                                                expr_type.type_ref,
+                                                expected_type_ref)
+            : type_decl_satisfies_spec_type_ref(context,
+                                                src_type_decl,
+                                                expected_type_ref);
+
+        if (!satisfies) {
+            /* Match must have been by exact type identity (src == target spec
+             * is impossible since target is SPEC and src is TYPE), so absence
+             * here means the match was a non-spec path (should not happen
+             * given the SPEC target check above). Defensive no-op. */
             return;
         }
     } else if (src_type_decl == NULL) {
@@ -21026,8 +21002,10 @@ static void materialize_object_spec_constraint_witness_if_applicable(
     }
 
     if (decl_is_named_fit_target(actual_type_decl)) {
-        if (!type_decl_satisfies_spec_type_ref(context, actual_type_decl,
-                                               type_param->constraint)) {
+        if (actual_type_ref == NULL || instantiated_constraint == NULL ||
+            !type_ref_satisfies_spec_type_ref(context,
+                                              actual_type_ref,
+                                              instantiated_constraint)) {
             return;
         }
         compute_spec_witness_if_absent(context,
@@ -24213,15 +24191,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
              * is recorded so codegen can emit a witness-table dispatch. */
             if (static_target.is_generic_type_param &&
                 static_target.constraint_spec_decl != NULL) {
-                const TypeParamEntry *type_param =
-                    static_target.generic_param_index < context->type_param_count
-                        ? &context->type_params[static_target.generic_param_index]
-                        : NULL;
+                const FengDecl *declaring_spec = NULL;
                 InferredExprType constraint_owner =
-                    type_param != NULL && type_param->type_param != NULL &&
-                            type_param->type_param->constraint != NULL
+                    static_target.constraint_spec_type_ref != NULL
                         ? inferred_expr_type_from_type_ref(
-                              type_param->type_param->constraint)
+                              static_target.constraint_spec_type_ref)
                         : inferred_expr_type_from_decl(
                               static_target.constraint_spec_decl);
                 const FengTypeMember *spec_member =
@@ -24231,12 +24205,47 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                         constraint_owner,
                         callee->as.member.member,
                         /*include_static=*/true,
-                        NULL);
+                        &declaring_spec);
 
                 if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_METHOD) {
                     const FengCallableSignature *spec_sig = &spec_member->as.callable;
+                    const FengTypeRef *declaring_spec_instance =
+                        constraint_member_declaring_spec_instance(
+                            context,
+                            &static_target,
+                            declaring_spec);
+                    InferredExprType declaring_owner =
+                        declaring_spec_instance != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  declaring_spec_instance)
+                            : inferred_expr_type_from_decl(declaring_spec);
+                    bool rejected_existing_array_for_variadic = false;
+                    PrepackedVariadicRejection spread_rejection =
+                        FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
-                    if (expr->as.call.arg_count != spec_sig->param_count) {
+                    if (!callable_parameters_match_args_for_owner_instance(
+                            context,
+                            spec_sig,
+                            declaring_spec,
+                            NULL,
+                            declaring_owner,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            (const FengTypeRef *const *)
+                                expr->as.call.explicit_type_args,
+                            expr->as.call.explicit_type_arg_count,
+                            false,
+                            &rejected_existing_array_for_variadic,
+                            &spread_rejection)) {
+                        if (spread_rejection !=
+                            FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                            return report_prepacked_variadic_rejection(
+                                context, callee, spread_rejection);
+                        }
+                        if (rejected_existing_array_for_variadic) {
+                            return report_existing_array_rejected_for_variadic_call(
+                                context, callee);
+                        }
                         return resolver_append_error(
                             context,
                             callee->token,
@@ -28088,6 +28097,124 @@ static bool callable_signatures_match_for_satisfaction_in_spec_ref(
     return true;
 }
 
+/* Compare one requirement and implementation after closing both their spec
+ * owner and concrete subject owner. This is used only after a nominal
+ * relation has already been proved; it selects the declaration for a witness
+ * slot without re-proving structural satisfaction. */
+static bool callable_signatures_match_for_witness_instances(
+    ResolveContext *ctx,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengDecl *fit_decl,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengCallableSignature *spec_sig,
+    const FengCallableSignature *impl_sig) {
+    InferredExprType source_type;
+    size_t param_index;
+    bool spec_variadic;
+    bool impl_variadic;
+
+    if (ctx == NULL || spec_decl == NULL || spec_type_ref == NULL ||
+        spec_sig == NULL || impl_sig == NULL ||
+        spec_sig->param_count != impl_sig->param_count) {
+        return false;
+    }
+    spec_variadic = spec_sig->param_count > 0U &&
+                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
+    impl_variadic = impl_sig->param_count > 0U &&
+                    impl_sig->params[impl_sig->param_count - 1U].is_variadic;
+    if (spec_variadic != impl_variadic) {
+        return false;
+    }
+
+    source_type = inferred_expr_type_from_type_ref(source_type_ref);
+    for (param_index = 0U; param_index < spec_sig->param_count; ++param_index) {
+        const FengTypeRef *expected_param =
+            substitute_spec_member_type_ref_for_instance(
+                ctx,
+                spec_decl,
+                spec_type_ref,
+                spec_sig->params[param_index].type);
+        const FengTypeRef *actual_param = substitute_type_ref_for_owner_instance(
+            ctx,
+            source_type_decl,
+            source_type,
+            impl_sig->params[param_index].type);
+
+        actual_param = substitute_type_ref_for_fit_instance(ctx,
+                                                            fit_decl,
+                                                            source_type,
+                                                            actual_param);
+        if (!type_refs_semantically_equal(ctx, expected_param, actual_param)) {
+            return false;
+        }
+    }
+    {
+        const FengTypeRef *expected_return =
+            substitute_spec_member_type_ref_for_instance(ctx,
+                                                         spec_decl,
+                                                         spec_type_ref,
+                                                         spec_sig->return_type);
+        const FengTypeRef *actual_return = substitute_type_ref_for_owner_instance(
+            ctx,
+            source_type_decl,
+            source_type,
+            impl_sig->return_type);
+
+        actual_return = substitute_type_ref_for_fit_instance(ctx,
+                                                             fit_decl,
+                                                             source_type,
+                                                             actual_return);
+        return type_refs_semantically_equal(ctx,
+                                            expected_return,
+                                            actual_return);
+    }
+}
+
+/* Select one type-owned witness implementation against closed owner/spec
+ * instances. Declaration-time validation remains authoritative for whether
+ * the nominal relationship is legal. */
+static const FengTypeMember *type_find_matching_method_for_witness(
+    ResolveContext *ctx,
+    const FengDecl *type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengTypeMember *spec_member) {
+    size_t member_index;
+
+    if (ctx == NULL || type_decl == NULL || type_decl->kind != FENG_DECL_TYPE ||
+        spec_decl == NULL || spec_type_ref == NULL || spec_member == NULL ||
+        spec_member->kind != FENG_TYPE_MEMBER_METHOD) {
+        return NULL;
+    }
+    for (member_index = 0U;
+         member_index < type_decl->as.type_decl.member_count;
+         ++member_index) {
+        const FengTypeMember *member =
+            type_decl->as.type_decl.members[member_index];
+
+        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->is_static == spec_member->is_static &&
+            slice_eq(member->as.callable.name,
+                     spec_member->as.callable.name) &&
+            spec_requirement_accepts_implementation(spec_member, member) &&
+            callable_signatures_match_for_witness_instances(
+                ctx,
+                type_decl,
+                source_type_ref,
+                NULL,
+                spec_decl,
+                spec_type_ref,
+                &spec_member->as.callable,
+                &member->as.callable)) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
 static const FengTypeMember *type_find_matching_method(
     const ResolveContext *ctx,
     const FengDecl *type_decl,
@@ -28511,162 +28638,180 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
     return true;
 }
 
-static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
-                                              const FengDecl *type_decl,
-                                              const FengTypeRef *spec_type_ref) {
+/* Return whether one closed relation head is exactly the requested spec
+ * instance, either directly or through the existing object-spec parent path. */
+static bool spec_relation_head_instance_matches(
+    const ResolveContext *ctx,
+    const FengTypeRef *head_instance_ref,
+    const FengTypeRef *spec_type_ref) {
+    const FengDecl *head_decl;
     const FengDecl *spec_decl;
-    size_t i;
+    ObjectSpecUpcastPath upcast_path;
+    bool matches;
 
-    if (ctx == NULL || type_decl == NULL || spec_type_ref == NULL ||
-        !decl_is_named_fit_target(type_decl)) {
+    if (ctx == NULL || head_instance_ref == NULL || spec_type_ref == NULL) {
         return false;
     }
-
+    head_decl = resolve_type_ref_decl(ctx, head_instance_ref);
     spec_decl = resolve_type_ref_decl(ctx, spec_type_ref);
-    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+    if (head_decl == NULL || spec_decl == NULL ||
+        head_decl->kind != FENG_DECL_SPEC || spec_decl->kind != FENG_DECL_SPEC) {
         return false;
     }
-    if (!type_decl_satisfies_spec_decl(ctx, type_decl, spec_decl)) {
-        return false;
+    if (head_decl == spec_decl) {
+        return type_refs_semantically_equal(ctx,
+                                            head_instance_ref,
+                                            spec_type_ref);
     }
-    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-        spec_type_ref->kind != FENG_TYPE_REF_NAMED ||
-        spec_type_ref->as.named.type_arg_count == 0U) {
-        return true;
+    matches = find_object_spec_upcast_path(
+        ctx,
+        inferred_expr_type_from_type_ref(head_instance_ref),
+        spec_type_ref,
+        &upcast_path);
+    if (matches) {
+        object_spec_upcast_path_free(&upcast_path);
     }
-
-    for (i = 0U; i < spec_decl->as.spec_decl.as.object.member_count; ++i) {
-        const FengTypeMember *spec_m = spec_decl->as.spec_decl.as.object.members[i];
-
-        if (spec_m->kind == FENG_TYPE_MEMBER_FIELD) {
-            const FengTypeMember *field = spec_m->is_static
-                ? find_type_static_field_member(type_decl, spec_m->as.field.name)
-                : type_find_field(type_decl, spec_m->as.field.name);
-            const FengTypeRef *expected_field_type;
-
-            if (field == NULL || field->as.field.mutability != spec_m->as.field.mutability) {
-                return false;
-            }
-            if (!spec_requirement_accepts_implementation(spec_m, field)) {
-                return false;
-            }
-            expected_field_type = substitute_spec_member_type_ref_for_instance(
-                (ResolveContext *)ctx,
-                spec_decl,
-                spec_type_ref,
-                spec_m->as.field.type);
-            if (!type_refs_semantically_equal(ctx, field->as.field.type, expected_field_type)) {
-                return false;
-            }
-            continue;
-        }
-        if (spec_m->kind == FENG_TYPE_MEMBER_METHOD) {
-            const FengTypeMember *match = type_find_matching_method_in_spec_ref(
-                (ResolveContext *)ctx,
-                type_decl,
-                spec_decl,
-                spec_type_ref,
-                spec_m,
-                NULL,
-                0U,
-                spec_m->is_static,
-                /*allow_type_private_implementations=*/true,
-                /*require_compatible_visibility=*/true);
-
-            if (match == NULL) {
-                match = find_visible_fit_matching_method_in_spec_ref(
-                    ctx,
-                    type_decl,
-                    spec_decl,
-                    spec_type_ref,
-                    spec_m,
-                    spec_m->is_static,
-                    /*require_compatible_visibility=*/true);
-            }
-            if (match == NULL) {
-                return false;
-            }
-        }
-    }
-    return true;
+    return matches;
 }
 
-static bool fit_decl_instantiates_spec_type_ref(const ResolveContext *ctx,
-                                                const FengDecl *fit_decl,
-                                                const FengDecl *source_type_decl,
-                                                const FengTypeRef *source_type_ref,
-                                                const FengDecl *spec_decl,
-                                                const FengTypeRef *spec_type_ref) {
-    const FengDecl *fit_target_decl;
+/* Close one declared-spec or fit-spec template against the concrete subject.
+ * The relation source supplies provenance; current and imported declarations
+ * use the same structured AST templates restored by the Symbol reader. */
+static FengTypeRef *instantiate_spec_relation_template(
+    const ResolveContext *ctx,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengSpecRelationSource *source,
+    const FengTypeRef *template_ref) {
     const FengTypeParam *type_params = NULL;
     size_t type_param_count = 0U;
     FengTypeRef *const *type_args = NULL;
-    size_t spec_index;
 
-    if (ctx == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
-        (source_type_decl == NULL && source_type_ref == NULL) ||
-        spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC || spec_type_ref == NULL) {
-        return false;
+    if (ctx == NULL || source == NULL || template_ref == NULL) {
+        return NULL;
     }
-    fit_target_decl = resolve_type_ref_decl(ctx, fit_decl->as.fit_decl.target);
-    if (source_type_decl != NULL) {
-        if (!decl_is_named_fit_target(source_type_decl) ||
-            fit_target_decl != source_type_decl) {
-            return false;
+    if (source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD ||
+        source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT) {
+        if (source_type_decl == NULL ||
+            source_type_decl->kind != FENG_DECL_TYPE) {
+            return NULL;
         }
-        if (source_type_decl->kind == FENG_DECL_TYPE) {
+        type_params = source_type_decl->as.type_decl.type_params;
+        type_param_count = source_type_decl->as.type_decl.type_param_count;
+    } else {
+        const FengDecl *fit_decl = source->via_fit_decl;
+
+        if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+            return NULL;
+        }
+        if (source_type_decl != NULL &&
+            source_type_decl->kind == FENG_DECL_TYPE) {
+            /* Generic fit target parameters are the target type's declared
+             * parameters; fit syntax does not introduce a parallel list. */
             type_params = source_type_decl->as.type_decl.type_params;
             type_param_count = source_type_decl->as.type_decl.type_param_count;
         }
-    } else if (!type_refs_semantically_equal(ctx,
-                                              fit_decl->as.fit_decl.target,
-                                              source_type_ref)) {
-        return false;
     }
-    if (source_type_decl != NULL && type_param_count > 0U) {
-        const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
 
-        if (source_type_ref == NULL || source_type_ref->kind != FENG_TYPE_REF_NAMED ||
-            source_type_ref->as.named.type_arg_count != type_param_count ||
-            target_ref == NULL || target_ref->kind != FENG_TYPE_REF_NAMED ||
-            target_ref->as.named.type_arg_count != type_param_count) {
-            return false;
+    if (type_param_count > 0U) {
+        FengTypeRef *closed_fit_target = NULL;
+
+        /* Open generic declaration contexts retain the relation template.
+         * Exact comparison below can prove only an equally open target; a
+         * concrete mismatched instance still fails without guessing args. */
+        if (source_type_ref == NULL) {
+            return clone_type_ref_for_inference(template_ref);
         }
-        for (size_t i = 0U; i < type_param_count; ++i) {
-            const FengTypeRef *arg = target_ref->as.named.type_args[i];
-
-            if (arg == NULL || arg->kind != FENG_TYPE_REF_NAMED ||
-                arg->as.named.segment_count != 1U ||
-                arg->as.named.type_arg_count != 0U ||
-                !slice_equals(arg->as.named.segments[0], type_params[i].name)) {
-                return false;
-            }
+        if (source_type_ref->kind != FENG_TYPE_REF_NAMED ||
+            source_type_ref->as.named.type_arg_count != type_param_count) {
+            return NULL;
         }
         type_args = source_type_ref->as.named.type_args;
+        if (source->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
+            source->kind == FENG_SPEC_RELATION_SOURCE_FIT_PARENT) {
+            closed_fit_target = clone_type_ref_substituting_type_params(
+                source->via_fit_decl->as.fit_decl.target,
+                type_params,
+                type_param_count,
+                type_args);
+            if (closed_fit_target == NULL ||
+                !type_refs_semantically_equal(ctx,
+                                              closed_fit_target,
+                                              source_type_ref)) {
+                free_synthetic_type_ref(closed_fit_target);
+                return NULL;
+            }
+            free_synthetic_type_ref(closed_fit_target);
+        }
+    } else if ((source->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
+                source->kind == FENG_SPEC_RELATION_SOURCE_FIT_PARENT) &&
+               source_type_ref != NULL &&
+               !type_refs_semantically_equal(ctx,
+                                             source->via_fit_decl->as.fit_decl.target,
+                                             source_type_ref)) {
+        return NULL;
     }
 
-    for (spec_index = 0U; spec_index < fit_decl->as.fit_decl.spec_count; ++spec_index) {
-        const FengTypeRef *fit_spec_ref = fit_decl->as.fit_decl.specs[spec_index];
-        const FengDecl *fit_spec_decl = resolve_type_ref_decl(ctx, fit_spec_ref);
-        const FengTypeRef *candidate_ref = fit_spec_ref;
-        FengTypeRef *substituted = NULL;
+    return clone_type_ref_substituting_type_params(template_ref,
+                                                   type_params,
+                                                   type_param_count,
+                                                   type_args);
+}
+
+/* Close every head template represented by one relation source and compare
+ * the resulting direct or transitive spec instance with the requested type. */
+static bool spec_relation_source_instantiates_type_ref(
+    const ResolveContext *ctx,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengSpecRelationSource *source,
+    const FengTypeRef *spec_type_ref) {
+    FengTypeRef *const *head_refs = NULL;
+    size_t head_ref_count = 0U;
+    size_t head_index;
+
+    if (ctx == NULL || source == NULL || spec_type_ref == NULL ||
+        source->via_spec_decl == NULL) {
+        return false;
+    }
+    if (source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD ||
+        source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT) {
+        if (source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE) {
+            return false;
+        }
+        head_refs = source_type_decl->as.type_decl.declared_specs;
+        head_ref_count = source_type_decl->as.type_decl.declared_spec_count;
+    } else {
+        const FengDecl *fit_decl = source->via_fit_decl;
+
+        if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+            return false;
+        }
+        head_refs = fit_decl->as.fit_decl.specs;
+        head_ref_count = fit_decl->as.fit_decl.spec_count;
+    }
+
+    for (head_index = 0U; head_index < head_ref_count; ++head_index) {
+        const FengTypeRef *head_ref = head_refs[head_index];
+        const FengDecl *head_decl = resolve_type_ref_decl(ctx, head_ref);
+        FengTypeRef *head_instance_ref;
         bool matches;
 
-        if (fit_spec_decl != spec_decl) {
+        if (head_decl != source->via_spec_decl) {
             continue;
         }
-        if (type_param_count > 0U) {
-            substituted = clone_type_ref_substituting_type_params(fit_spec_ref,
-                                                                  type_params,
-                                                                  type_param_count,
-                                                                  type_args);
-            if (substituted == NULL) {
-                return false;
-            }
-            candidate_ref = substituted;
+        head_instance_ref = instantiate_spec_relation_template(ctx,
+                                                               source_type_decl,
+                                                               source_type_ref,
+                                                               source,
+                                                               head_ref);
+        if (head_instance_ref == NULL) {
+            continue;
         }
-        matches = type_refs_semantically_equal(ctx, candidate_ref, spec_type_ref);
-        free_synthetic_type_ref(substituted);
+        matches = spec_relation_head_instance_matches(ctx,
+                                                      head_instance_ref,
+                                                      spec_type_ref);
+        free_synthetic_type_ref(head_instance_ref);
         if (matches) {
             return true;
         }
@@ -28674,46 +28819,74 @@ static bool fit_decl_instantiates_spec_type_ref(const ResolveContext *ctx,
     return false;
 }
 
-static bool visible_fit_instantiates_spec_type_ref(const ResolveContext *ctx,
-                                                   const FengDecl *source_type_decl,
-                                                   const FengTypeRef *source_type_ref,
-                                                   const FengDecl *spec_decl,
-                                                   const FengTypeRef *spec_type_ref) {
-    size_t module_index;
+/* Prove one exact object-spec instance from the existing nominal relation
+ * index. Structural satisfaction remains a declaration-time responsibility. */
+static bool subject_satisfies_spec_type_ref(
+    const ResolveContext *ctx,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengSemanticSubjectKey *subject_key,
+    const FengTypeRef *spec_type_ref) {
+    const FengDecl *spec_decl;
+    const FengSpecRelation *relation;
+    size_t source_index;
 
-    if (ctx == NULL || ctx->analysis == NULL) {
+    if (ctx == NULL || ctx->analysis == NULL || subject_key == NULL ||
+        spec_type_ref == NULL) {
         return false;
     }
-    for (module_index = 0U; module_index < ctx->analysis->module_count; ++module_index) {
-        const FengSemanticModule *module = &ctx->analysis->modules[module_index];
-        size_t program_index;
+    spec_decl = resolve_type_ref_decl(ctx, spec_type_ref);
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        return subject_key_satisfies_spec_decl(ctx, subject_key, spec_decl);
+    }
+    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return false;
+    }
 
-        for (program_index = 0U; program_index < module->program_count; ++program_index) {
-            const FengProgram *program = module->programs[program_index];
-            size_t decl_index;
+    relation = feng_semantic_lookup_spec_relation(ctx->analysis,
+                                                  subject_key,
+                                                  spec_decl);
+    if (relation == NULL) {
+        return false;
+    }
+    for (source_index = 0U;
+         source_index < relation->source_count;
+         ++source_index) {
+        const FengSpecRelationSource *source = &relation->sources[source_index];
 
-            if (program == NULL) {
-                continue;
-            }
-            for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
-                const FengDecl *fit_decl = program->declarations[decl_index];
-
-                if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
-                    !fit_decl_is_visible_from(ctx, module, fit_decl)) {
-                    continue;
-                }
-                if (fit_decl_instantiates_spec_type_ref(ctx,
-                                                        fit_decl,
-                                                        source_type_decl,
-                                                        source_type_ref,
-                                                        spec_decl,
-                                                        spec_type_ref)) {
-                    return true;
-                }
-            }
+        if (spec_relation_source_visible_from_context(ctx, source) &&
+            spec_relation_source_instantiates_type_ref(ctx,
+                                                       source_type_decl,
+                                                       source_type_ref,
+                                                       source,
+                                                       spec_type_ref)) {
+            return true;
         }
     }
     return false;
+}
+
+/* Declaration-only adapter for non-generic inferred subjects. Concrete
+ * generic subjects must use type_ref_satisfies_spec_type_ref so their type
+ * arguments participate in nominal relation closing. */
+static bool type_decl_satisfies_spec_type_ref(const ResolveContext *ctx,
+                                              const FengDecl *type_decl,
+                                              const FengTypeRef *spec_type_ref) {
+    FengSemanticSubjectKey subject_key;
+
+    if (ctx == NULL || type_decl == NULL || spec_type_ref == NULL ||
+        !decl_is_named_fit_target(type_decl)) {
+        return false;
+    }
+    subject_key = feng_semantic_subject_key_for_type_decl(type_decl);
+    return subject_satisfies_spec_type_ref(ctx,
+                                           type_decl,
+                                           NULL,
+                                           &subject_key,
+                                           spec_type_ref);
 }
 
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
@@ -28732,39 +28905,22 @@ static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
         return false;
     }
 
-    if (source_type_decl != NULL) {
-        if (source_type_decl->kind == FENG_DECL_TYPE) {
-            if (type_decl_satisfies_spec_type_ref(ctx, source_type_decl, spec_type_ref)) {
-                return true;
-            }
-            if (!type_decl_satisfies_spec_decl(ctx, source_type_decl, spec_decl)) {
-                return false;
-            }
-        } else if (decl_is_enum_type(source_type_decl)) {
-            if (!init_spec_witness_subject_key(source_type_decl, NULL, ctx->pointer_size, &subject_key) ||
-                !subject_key_satisfies_spec_decl(ctx, &subject_key, spec_decl)) {
-                return false;
-            }
-        } else {
-            return false;
-        }
-    } else {
-        if (!init_spec_witness_subject_key(NULL, source_type_ref, ctx->pointer_size, &subject_key) ||
-            !subject_key_satisfies_spec_decl(ctx, &subject_key, spec_decl)) {
-            return false;
-        }
+    if (source_type_decl != NULL &&
+        source_type_decl->kind != FENG_DECL_TYPE &&
+        !decl_is_enum_type(source_type_decl)) {
+        return false;
     }
-
-    if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-        spec_type_ref->kind != FENG_TYPE_REF_NAMED ||
-        spec_type_ref->as.named.type_arg_count == 0U) {
-        return true;
+    if (!init_spec_witness_subject_key(source_type_decl,
+                                       source_type_ref,
+                                       ctx->pointer_size,
+                                       &subject_key)) {
+        return false;
     }
-    return visible_fit_instantiates_spec_type_ref(ctx,
-                                                  source_type_decl,
-                                                  source_type_ref,
-                                                  spec_decl,
-                                                  spec_type_ref);
+    return subject_satisfies_spec_type_ref(ctx,
+                                           source_type_decl,
+                                           source_type_ref,
+                                           &subject_key,
+                                           spec_type_ref);
 }
 
 /* Phase S3 — SpecWitness compute (§6.5 / §8.1 / §8.2).
@@ -28812,20 +28968,23 @@ static bool witness_fit_collect_visitor(const FengTypeMember *member,
     if (!spec_requirement_accepts_implementation(st->spec_member, member)) {
         return true;
     }
-    if (!callable_signatures_match_for_satisfaction_in_spec_ref(
-            (ResolveContext *)st->ctx,
-            st->spec_decl,
-            st->spec_type_ref,
-            st->spec_sig,
-            &member->as.callable)) {
-        if (!fit_decl_instantiates_spec_type_ref(st->ctx,
-                                                fit_decl,
-                                                st->source_type_decl,
-                                                st->source_type_ref,
-                                                st->spec_decl,
-                                                st->spec_type_ref)) {
+    if (st->spec_decl != NULL && st->spec_type_ref != NULL) {
+        if (!callable_signatures_match_for_witness_instances(
+                (ResolveContext *)st->ctx,
+                st->source_type_decl,
+                st->source_type_ref,
+                fit_decl,
+                st->spec_decl,
+                st->spec_type_ref,
+                st->spec_sig,
+                &member->as.callable)) {
             return true;
         }
+    } else if (!callable_signatures_match_for_satisfaction(
+                   st->ctx,
+                   st->spec_sig,
+                   &member->as.callable)) {
+        return true;
     }
     if (st->count == st->capacity) {
         size_t new_cap = st->capacity == 0U ? 4U : st->capacity * 2U;
@@ -29041,28 +29200,6 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
             /* Method member — collect signature-matching candidates from T
              * and from every visible fit. */
             {
-                const FengTypeMember *t_method =
-                    (type_decl != NULL)
-                        ? type_find_matching_method(
-                              context, type_decl, sm, NULL, 0U)
-                        : NULL;
-                WitnessFitCollectCtx fit_st;
-                size_t total;
-
-                if (type_decl != NULL && cur == spec_decl && spec_type_ref != NULL) {
-                    t_method = type_find_matching_method_in_spec_ref(
-                        context,
-                        type_decl,
-                        spec_decl,
-                        spec_type_ref,
-                        sm,
-                        NULL,
-                        0U,
-                        sm->is_static,
-                        /*allow_type_private_implementations=*/true,
-                        /*require_compatible_visibility=*/true);
-                }
-
                 const FengTypeRef *cur_spec_type_ref =
                     cur == spec_decl
                         ? spec_type_ref
@@ -29071,19 +29208,25 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                               spec_decl,
                               spec_type_ref,
                               cur);
+                const FengTypeMember *t_method = NULL;
+                WitnessFitCollectCtx fit_st;
+                size_t total;
 
                 if (type_decl != NULL && cur_spec_type_ref != NULL) {
-                    t_method = type_find_matching_method_in_spec_ref(
+                    t_method = type_find_matching_method_for_witness(
                         context,
                         type_decl,
+                        source_type_ref,
                         cur,
                         cur_spec_type_ref,
+                        sm);
+                } else if (type_decl != NULL) {
+                    t_method = type_find_matching_method(
+                        context,
+                        type_decl,
                         sm,
                         NULL,
-                        0U,
-                        sm->is_static,
-                        /*allow_type_private_implementations=*/true,
-                        /*require_compatible_visibility=*/true);
+                        0U);
                 }
 
                 fit_st.ctx = context;

@@ -23,6 +23,7 @@
 
 #include "lexer/token.h"
 #include "parser/parser.h"
+#include "symbol/export.h"
 
 /* ===================== string buffer ===================== */
 
@@ -1795,6 +1796,9 @@ typedef struct CG {
      * up Phase 1B cyclicity markers without re-running SCC. */
     const FengSemanticAnalysis *analysis;
     const FengCodegenOptions *options;
+    /* Exact provider package-public declaration closure shared with the
+     * Symbol writer; imported declarations are already FT-filtered. */
+    FengSymbolPackageSelection *package_selection;
     FengCodegenMapingInfo debug_info;
 
     /* Currently active source program for diagnostics and per-module
@@ -4945,6 +4949,32 @@ static const FengProgram *cg_find_decl_owner_program(const CG *cg, const FengDec
     }
 
     return NULL;
+}
+
+/* Return whether one private method belongs to the stable package symbol
+ * domain. Local providers consume the exact Symbol writer selection;
+ * imported declarations are already the package-public FT projection. */
+static bool cg_member_is_package_symbol_dependency(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member) {
+    const FengProgram *owner_program;
+
+    if (cg == NULL || owner_decl == NULL || member == NULL ||
+        owner_decl->visibility != FENG_VISIBILITY_PUBLIC ||
+        member->kind != FENG_TYPE_MEMBER_METHOD ||
+        member->visibility != FENG_VISIBILITY_PRIVATE ||
+        cg_member_is_mixable_seal_static(member)) {
+        return false;
+    }
+    owner_program = cg_find_decl_owner_program(cg, owner_decl);
+    if (owner_program != NULL &&
+        cg_program_origin(cg, owner_program) ==
+            FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    return feng_symbol_package_selection_contains(cg->package_selection,
+                                                  member);
 }
 
 static bool cg_member_uses_package_callable_surface(
@@ -8607,10 +8637,12 @@ static char *cg_closed_generic_type_struct_name(
     return struct_name.data;
 }
 
-/* Build the canonical primary C tag of one closed generic spec instance.
- * Callable specs use their closure tag; all value-form specs use the spec
- * value tag. Both are the actual emitted-symbol identity used for dedup. */
-static char *cg_closed_generic_spec_primary_tag(
+/* Build the canonical emitted identity of one closed generic spec instance.
+ * Generic object/intersection values intentionally share one carrier tag per
+ * declaration, so they cannot identify an instance. Value-form aggregate
+ * descriptors and callable-form closure descriptors remain instance-specific
+ * and are therefore the stable deduplication identity across FT AST copies. */
+static char *cg_closed_generic_spec_identity_name(
     CG *cg,
     const GenericSpecDecl *generic_decl,
     FengTypeRef *const *type_args,
@@ -8655,8 +8687,8 @@ static char *cg_closed_generic_spec_primary_tag(
     buf_init(&tag);
     buf_append_fmt(&tag,
                    decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE
-                       ? "FengClosure__%s__%s"
-                       : "FengSpecValue__%s__%s",
+                       ? "FengClosureDesc__%s__%s"
+                       : "FengSpecAgg__%s__%s",
                    owner_mangle,
                    symbol.data);
     free(owner_mangle);
@@ -8697,34 +8729,34 @@ static UserSpec *cg_find_generic_instance_user_spec_with_context(CG *cg,
     if (context_count == 0U) {
         const GenericSpecDecl *generic_decl =
             cg_find_generic_spec_decl_by_decl(cg, origin_decl);
-        char *canonical_tag = cg_closed_generic_spec_primary_tag(
+        char *canonical_identity = cg_closed_generic_spec_identity_name(
             cg,
             generic_decl,
             type_args,
             type_arg_count);
 
-        if (canonical_tag == NULL) {
+        if (canonical_identity == NULL) {
             return NULL;
         }
         for (size_t i = 0U; i < cg->user_spec_count; ++i) {
             UserSpec *candidate = &cg->user_specs[i];
-            const char *candidate_tag;
+            const char *candidate_identity;
 
             if (!candidate->is_generic_instance ||
                 candidate->generic_context_type_param_count != 0U ||
                 candidate->form != origin_decl->as.spec_decl.form) {
                 continue;
             }
-            candidate_tag = candidate->form == FENG_SPEC_FORM_CALLABLE
-                                ? candidate->c_closure_struct_name
-                                : candidate->c_value_struct_name;
-            if (candidate_tag != NULL &&
-                strcmp(candidate_tag, canonical_tag) == 0) {
-                free(canonical_tag);
+            candidate_identity = candidate->form == FENG_SPEC_FORM_CALLABLE
+                                     ? candidate->c_closure_desc_name
+                                     : candidate->c_aggregate_desc_name;
+            if (candidate_identity != NULL &&
+                strcmp(candidate_identity, canonical_identity) == 0) {
+                free(canonical_identity);
                 return candidate;
             }
         }
-        free(canonical_tag);
+        free(canonical_identity);
     }
     return NULL;
 }
@@ -41846,14 +41878,11 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
     if (cg_generic_constraint_requires_witness(constraint_spec)) {
         if (t && t->kind == CG_TYPE_OBJECT && t->user) {
             const char *witness_var = NULL;
-            FengSemanticSubjectKey subject_key =
-                feng_semantic_subject_key_for_type_decl(t->user->decl);
-            if (!cg_ensure_witness_instance(cg,
-                                            &subject_key,
-                                            constraint_spec,
-                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
-                                            *tok,
-                                            &witness_var)) {
+            if (!cg_ensure_witness_instance_for_type(cg,
+                                                     t->user,
+                                                     constraint_spec,
+                                                     *tok,
+                                                     &witness_var)) {
                 buf_free(&b);
                 return false;
             }
@@ -46028,6 +46057,226 @@ static bool cg_ensure_witness_instance_for_subject_key(
                                       out_var);
 }
 
+/* Emit one subject-independent witness thunk for a static spec member.
+ * Reference types and boxed value types share this path because static slots
+ * neither consume nor inspect the object-form spec subject. */
+static bool cg_emit_static_user_spec_member_thunk(
+    CG *cg,
+    const UserType *type,
+    const UserSpec *spec,
+    const UserSpecMember *spec_member,
+    const CGWitnessBinding *binding,
+    const char *prefix,
+    FengToken blame) {
+    if (cg == NULL || type == NULL || spec == NULL || spec_member == NULL ||
+        binding == NULL || prefix == NULL || !spec_member->is_static) {
+        return false;
+    }
+
+    if (spec_member->kind == USM_KIND_METHOD) {
+        const UserMethod *method = binding->method;
+
+        if (method == NULL) {
+            return cg_fail(cg, blame,
+                "CE0342", "codegen: internal: type '%s' has no static method '%s' to satisfy spec '%s'",
+                type->feng_name, spec_member->feng_name, spec->feng_name);
+        }
+        if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            Buf *prototype = &cg->fn_protos;
+            Buf *definition = &cg->witness_defs;
+
+            buf_append_fmt(prototype, "static void %s__%s(",
+                           prefix, spec_member->c_field_name);
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                if (index > 0U) buf_append_cstr(prototype, ", ");
+                cg_emit_callable_abi_param_type(
+                    prototype,
+                    spec_member->param_types[index],
+                    spec_member->param_abi_kinds[index]);
+                buf_append_fmt(prototype, " p%zu", index);
+            }
+            if (spec_member->param_count > 0U) {
+                buf_append_cstr(prototype, ", ");
+            }
+            buf_append_cstr(prototype, "void *_out);\n");
+
+            buf_append_fmt(definition, "static void %s__%s(",
+                           prefix, spec_member->c_field_name);
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                if (index > 0U) buf_append_cstr(definition, ", ");
+                cg_emit_callable_abi_param_type(
+                    definition,
+                    spec_member->param_types[index],
+                    spec_member->param_abi_kinds[index]);
+                buf_append_fmt(definition, " p%zu", index);
+            }
+            if (spec_member->param_count > 0U) {
+                buf_append_cstr(definition, ", ");
+            }
+            buf_append_cstr(definition, "void *_out) {\n    ");
+            cg_emit_c_type(definition, method->return_type);
+            buf_append_fmt(definition, " _ret = %s(", method->c_name);
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                char parameter_name[32];
+
+                snprintf(parameter_name, sizeof parameter_name,
+                         "p%zu", index);
+                if (index > 0U) buf_append_cstr(definition, ", ");
+                if (!cg_append_witness_forward_arg(
+                        cg,
+                        definition,
+                        spec_member->param_types[index],
+                        method->param_types[index],
+                        spec_member->param_abi_kinds[index],
+                        parameter_name,
+                        blame)) {
+                    return false;
+                }
+            }
+            buf_append_cstr(
+                definition,
+                ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+            return true;
+        }
+
+        {
+            Buf *prototype = &cg->fn_protos;
+            Buf *definition = &cg->witness_defs;
+
+            buf_append_cstr(prototype, "static ");
+            cg_emit_c_type(prototype, spec_member->type);
+            buf_append_fmt(prototype, " %s__%s(",
+                           prefix, spec_member->c_field_name);
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                if (index > 0U) buf_append_cstr(prototype, ", ");
+                cg_emit_callable_abi_param_type(
+                    prototype,
+                    spec_member->param_types[index],
+                    spec_member->param_abi_kinds[index]);
+                buf_append_fmt(prototype, " p%zu", index);
+            }
+            if (spec_member->param_count == 0U) {
+                buf_append_cstr(prototype, "void");
+            }
+            buf_append_cstr(prototype, ");\n");
+
+            buf_append_cstr(definition, "static ");
+            cg_emit_c_type(definition, spec_member->type);
+            buf_append_fmt(definition, " %s__%s(",
+                           prefix, spec_member->c_field_name);
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                if (index > 0U) buf_append_cstr(definition, ", ");
+                cg_emit_callable_abi_param_type(
+                    definition,
+                    spec_member->param_types[index],
+                    spec_member->param_abi_kinds[index]);
+                buf_append_fmt(definition, " p%zu", index);
+            }
+            if (spec_member->param_count == 0U) {
+                buf_append_cstr(definition, "void");
+            }
+            buf_append_cstr(definition, ") {\n");
+            if (spec_member->type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(definition, "    %s(", method->c_name);
+            } else {
+                buf_append_fmt(definition, "    return %s(", method->c_name);
+            }
+            for (size_t index = 0U;
+                 index < spec_member->param_count;
+                 ++index) {
+                char parameter_name[32];
+
+                snprintf(parameter_name, sizeof parameter_name,
+                         "p%zu", index);
+                if (index > 0U) buf_append_cstr(definition, ", ");
+                if (!cg_append_witness_forward_arg(
+                        cg,
+                        definition,
+                        spec_member->param_types[index],
+                        method->param_types[index],
+                        spec_member->param_abi_kinds[index],
+                        parameter_name,
+                        blame)) {
+                    return false;
+                }
+            }
+            buf_append_cstr(definition, ");\n}\n\n");
+            return true;
+        }
+    }
+
+    if (spec_member->kind == USM_KIND_FIELD) {
+        const TypeStaticBinding *static_binding = binding->static_binding;
+        Buf *prototype = &cg->fn_protos;
+        Buf *definition = &cg->witness_defs;
+
+        if (static_binding == NULL) {
+            return cg_fail(cg, blame,
+                "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
+                type->feng_name, spec_member->feng_name, spec->feng_name);
+        }
+        buf_append_cstr(definition, "static ");
+        cg_emit_c_type(definition, spec_member->type);
+        buf_append_fmt(definition,
+                       " %s__get_%s(void) {\n    %s();\n    return %s;\n}\n\n",
+                       prefix,
+                       spec_member->c_field_name,
+                       static_binding->c_ensure_init_name,
+                       static_binding->c_name);
+        buf_append_cstr(prototype, "static ");
+        cg_emit_c_type(prototype, spec_member->type);
+        buf_append_fmt(prototype, " %s__get_%s(void);\n",
+                       prefix, spec_member->c_field_name);
+        if (spec_member->is_var) {
+            buf_append_fmt(definition, "static void %s__set_%s(",
+                           prefix, spec_member->c_field_name);
+            cg_emit_c_type(definition, spec_member->type);
+            buf_append_cstr(definition, " value) {\n    ");
+            buf_append_fmt(definition, "%s();\n",
+                           static_binding->c_ensure_init_name);
+            if (cgtype_is_managed(spec_member->type)) {
+                buf_append_fmt(definition,
+                    "    feng_assign((void **)&%s, value);\n",
+                    static_binding->c_name);
+            } else if (cgtype_is_aggregate(spec_member->type)) {
+                const char *aggregate_descriptor =
+                    cg_aggregate_desc_name(spec_member->type);
+
+                if (aggregate_descriptor == NULL) {
+                    return cg_fail(cg, blame,
+                        "CE0348", "codegen: missing aggregate descriptor for spec static field write");
+                }
+                buf_append_fmt(definition,
+                    "    feng_aggregate_assign(&%s, &value, &%s);\n",
+                    static_binding->c_name,
+                    aggregate_descriptor);
+            } else {
+                buf_append_fmt(definition, "    %s = value;\n",
+                               static_binding->c_name);
+            }
+            buf_append_cstr(definition, "}\n\n");
+            buf_append_fmt(prototype, "static void %s__set_%s(",
+                           prefix, spec_member->c_field_name);
+            cg_emit_c_type(prototype, spec_member->type);
+            buf_append_cstr(prototype, " value);\n");
+        }
+        return true;
+    }
+
+    return cg_fail(cg, blame,
+                   "CE0342", "codegen: unsupported static spec member");
+}
+
 /* Value-semantics (tuple or @value) spec coercion stores the subject in a
  * managed box, while generic constraint dispatch still passes an address of
  * the by-value struct. This separate witness table reads `box->value` before
@@ -46134,7 +46383,9 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                         "CE0335", "codegen: tuple type '%s' cannot satisfy spec method '%s' without a fit method",
                         t->feng_name, sm->feng_name);
                 }
-                binding.method = cg_user_type_method_by_member(t, wm->impl_member);
+                binding.method = sm->is_static
+                    ? cg_user_type_static_method_by_member(t, wm->impl_member)
+                    : cg_user_type_method_by_member(t, wm->impl_member);
                 if (binding.method == NULL) {
                     buf_free(&prefix); free(t_san); free(s_san);
                     return cg_fail(cg, blame,
@@ -46142,14 +46393,28 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                         t->feng_name, sm->feng_name, s->feng_name);
                 }
             } else if (sm->kind == USM_KIND_FIELD) {
-                binding.field = cg_user_type_field(t,
-                                                   wm->impl_member->as.field.name.data,
-                                                   wm->impl_member->as.field.name.length);
-                if (binding.field == NULL) {
-                    buf_free(&prefix); free(t_san); free(s_san);
-                    return cg_fail(cg, blame,
-                        "CE0334", "codegen: internal: value type '%s' has no field '%s' to satisfy spec '%s'",
-                        t->feng_name, sm->feng_name, s->feng_name);
+                if (sm->is_static) {
+                    binding.static_binding = cg_user_type_static_binding(
+                        t,
+                        wm->impl_member->as.field.name.data,
+                        wm->impl_member->as.field.name.length);
+                    if (binding.static_binding == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
+                            t->feng_name, sm->feng_name, s->feng_name);
+                    }
+                } else {
+                    binding.field = cg_user_type_field(
+                        t,
+                        wm->impl_member->as.field.name.data,
+                        wm->impl_member->as.field.name.length);
+                    if (binding.field == NULL) {
+                        buf_free(&prefix); free(t_san); free(s_san);
+                        return cg_fail(cg, blame,
+                            "CE0334", "codegen: internal: value type '%s' has no field '%s' to satisfy spec '%s'",
+                            t->feng_name, sm->feng_name, s->feng_name);
+                    }
                 }
             } else {
                 buf_free(&prefix); free(t_san); free(s_san);
@@ -46160,6 +46425,15 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
             buf_free(&prefix); free(t_san); free(s_san);
             return false;
+        }
+
+        if (sm->is_static) {
+            if (!cg_emit_static_user_spec_member_thunk(
+                    cg, t, s, sm, &binding, prefix.data, blame)) {
+                buf_free(&prefix); free(t_san); free(s_san);
+                return false;
+            }
+            continue;
         }
 
         if (binding.source_kind == FENG_SPEC_WITNESS_SOURCE_FIT_METHOD) {
@@ -46507,6 +46781,11 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                                sm->c_field_name);
             } else {
                 buf_append_fmt(fd, "    .get_%s = &%s__get_%s,\n",
+                               sm->c_field_name, prefix.data,
+                               sm->c_field_name);
+            }
+            if (sm->is_var) {
+                buf_append_fmt(fd, "    .set_%s = &%s__set_%s,\n",
                                sm->c_field_name, prefix.data,
                                sm->c_field_name);
             }
@@ -46885,162 +47164,10 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
         }
 
         if (sm->is_static) {
-            /* Static spec member — witness slot signature has no _subject.
-             * Forward directly to the type's static method or static field
-             * storage; no subject cast needed. */
-            if (sm->kind == USM_KIND_METHOD) {
-                const UserMethod *um = binding.method;
-                if (um == NULL) {
-                    buf_free(&prefix); free(t_san); free(s_san);
-                    return cg_fail(cg, blame,
-                        "CE0342", "codegen: internal: type '%s' has no static method '%s' to satisfy spec '%s'",
-                        t->feng_name, sm->feng_name, s->feng_name);
-                }
-                /* Aggregate return path: spec static method returning a generic
-                 * type parameter (e.g., static func make(): T) writes the
-                 * return through a trailing void *_out. */
-            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-                    Buf *fp = &cg->fn_protos;
-                    buf_append_fmt(fp, "static void %s__%s(", prefix.data, sm->c_field_name);
-                    for (size_t pi = 0; pi < sm->param_count; pi++) {
-                        if (pi > 0) buf_append_cstr(fp, ", ");
-                        cg_emit_callable_abi_param_type(fp,
-                                                        sm->param_types[pi],
-                                                        sm->param_abi_kinds[pi]);
-                        buf_append_fmt(fp, " p%zu", pi);
-                    }
-                    if (sm->param_count > 0) buf_append_cstr(fp, ", ");
-                    buf_append_cstr(fp, "void *_out);\n");
-
-                    Buf *fd = &cg->witness_defs;
-                    buf_append_fmt(fd, "static void %s__%s(", prefix.data, sm->c_field_name);
-                    for (size_t pi = 0; pi < sm->param_count; pi++) {
-                        if (pi > 0) buf_append_cstr(fd, ", ");
-                        cg_emit_callable_abi_param_type(fd,
-                                                        sm->param_types[pi],
-                                                        sm->param_abi_kinds[pi]);
-                        buf_append_fmt(fd, " p%zu", pi);
-                    }
-                    if (sm->param_count > 0) buf_append_cstr(fd, ", ");
-                    buf_append_cstr(fd, "void *_out) {\n    ");
-                    cg_emit_c_type(fd, um->return_type);
-                    buf_append_fmt(fd, " _ret = %s(", um->c_name);
-                    for (size_t pi = 0; pi < sm->param_count; pi++) {
-                        char pname[32];
-                        snprintf(pname, sizeof pname, "p%zu", pi);
-                        if (pi > 0) buf_append_cstr(fd, ", ");
-                        if (!cg_append_witness_forward_arg(cg,
-                                                           fd,
-                                                           sm->param_types[pi],
-                                                           um->param_types[pi],
-                                                           sm->param_abi_kinds[pi],
-                                                           pname,
-                                                           blame)) {
-                            buf_free(&prefix); free(t_san); free(s_san);
-                            return false;
-                        }
-                    }
-                    buf_append_cstr(fd, ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
-                    continue;
-                }
-                /* Plain static method thunk. */
-                Buf *fp = &cg->fn_protos;
-                buf_append_cstr(fp, "static ");
-                cg_emit_c_type(fp, sm->type);
-                buf_append_fmt(fp, " %s__%s(", prefix.data, sm->c_field_name);
-                for (size_t pi = 0; pi < sm->param_count; pi++) {
-                    if (pi > 0) buf_append_cstr(fp, ", ");
-                        cg_emit_callable_abi_param_type(fp,
-                                                        sm->param_types[pi],
-                                                        sm->param_abi_kinds[pi]);
-                    buf_append_fmt(fp, " p%zu", pi);
-                }
-                if (sm->param_count == 0) buf_append_cstr(fp, "void");
-                buf_append_cstr(fp, ");\n");
-
-                Buf *fd = &cg->witness_defs;
-                buf_append_cstr(fd, "static ");
-                cg_emit_c_type(fd, sm->type);
-                buf_append_fmt(fd, " %s__%s(", prefix.data, sm->c_field_name);
-                for (size_t pi = 0; pi < sm->param_count; pi++) {
-                    if (pi > 0) buf_append_cstr(fd, ", ");
-                        cg_emit_callable_abi_param_type(fd,
-                                                        sm->param_types[pi],
-                                                        sm->param_abi_kinds[pi]);
-                    buf_append_fmt(fd, " p%zu", pi);
-                }
-                if (sm->param_count == 0) buf_append_cstr(fd, "void");
-                buf_append_cstr(fd, ") {\n");
-                if (sm->type->kind == CG_TYPE_VOID) {
-                    buf_append_fmt(fd, "    %s(", um->c_name);
-                } else {
-                    buf_append_fmt(fd, "    return %s(", um->c_name);
-                }
-                for (size_t pi = 0; pi < sm->param_count; pi++) {
-                    char pname[32];
-                    snprintf(pname, sizeof pname, "p%zu", pi);
-                    if (pi > 0) buf_append_cstr(fd, ", ");
-                    if (!cg_append_witness_forward_arg(cg,
-                                                       fd,
-                                                           sm->param_types[pi],
-                                                           um->param_types[pi],
-                                                           sm->param_abi_kinds[pi],
-                                                           pname,
-                                                       blame)) {
-                        buf_free(&prefix); free(t_san); free(s_san);
-                        return false;
-                    }
-                }
-                buf_append_cstr(fd, ");\n}\n\n");
-                continue;
-            }
-            /* sm->kind == USM_KIND_FIELD — static field accessor thunks. */
-            const TypeStaticBinding *sb = binding.static_binding;
-            if (sb == NULL) {
+            if (!cg_emit_static_user_spec_member_thunk(
+                    cg, t, s, sm, &binding, prefix.data, blame)) {
                 buf_free(&prefix); free(t_san); free(s_san);
-                return cg_fail(cg, blame,
-                    "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
-                    t->feng_name, sm->feng_name, s->feng_name);
-            }
-            Buf *fp = &cg->fn_protos;
-            Buf *fd = &cg->witness_defs;
-
-            buf_append_cstr(fd, "static ");
-            cg_emit_c_type(fd, sm->type);
-            buf_append_fmt(fd, " %s__get_%s(void) {\n    %s();\n    return %s;\n}\n\n",
-                           prefix.data, sm->c_field_name,
-                           sb->c_ensure_init_name, sb->c_name);
-            buf_append_cstr(fp, "static ");
-            cg_emit_c_type(fp, sm->type);
-            buf_append_fmt(fp, " %s__get_%s(void);\n",
-                           prefix.data, sm->c_field_name);
-            if (sm->is_var) {
-                buf_append_fmt(fd, "static void %s__set_%s(",
-                               prefix.data, sm->c_field_name);
-                cg_emit_c_type(fd, sm->type);
-                buf_append_cstr(fd, " value) {\n    ");
-                buf_append_fmt(fd, "%s();\n", sb->c_ensure_init_name);
-                if (cgtype_is_managed(sm->type)) {
-                    buf_append_fmt(fd,
-                        "    feng_assign((void **)&%s, value);\n",
-                        sb->c_name);
-                } else if (cgtype_is_aggregate(sm->type)) {
-                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
-                    if (agg_desc == NULL) {
-                        buf_free(&prefix); free(t_san); free(s_san);
-                        return cg_fail(cg, blame,
-                            "CE0348", "codegen: missing aggregate descriptor for spec static field write");
-                    }
-                    buf_append_fmt(fd,
-                        "    feng_aggregate_assign(&%s, &value, &%s);\n",
-                        sb->c_name, agg_desc);
-                } else {
-                    buf_append_fmt(fd, "    %s = value;\n", sb->c_name);
-                }
-                buf_append_cstr(fd, "}\n\n");
-                buf_append_fmt(fp, "static void %s__set_%s(", prefix.data, sm->c_field_name);
-                cg_emit_c_type(fp, sm->type);
-                buf_append_cstr(fp, " value);\n");
+                return false;
             }
             continue;
         }
@@ -49337,6 +49464,14 @@ static bool cg_emit_all_programs(CG *cg,
             return false;
         }
     }
+    /* Pass 1.8: register fit shells before closing any type/spec members.
+     * Substituting a generic fit for each concrete target can discover more
+     * closed type/spec instances. Keeping that discovery in the shell phase
+     * lets the existing member-registration passes close every instance,
+     * including inherited parent specs, through one common path. */
+    for (size_t p = 0; p < program_count; p++) {
+        if (!cg_pass_register_fit_shells(cg, programs[p])) return false;
+    }
     /* Pass 2: register fields/methods (uses cg_resolve_type which now sees
      * every shell, regardless of owning program). cur_program is pinned to
      * each type's owning program so cg_resolve_type's visibility filter
@@ -49373,13 +49508,9 @@ static bool cg_emit_all_programs(CG *cg,
         cg->cur_program = NULL;
         if (!ok) return false;
     }
-    /* Pass 2.7: register fit shells (mangled per owning program), then
-     * fit members. The fit-body's name lookups must see the fit's own
-     * program (not the target type's), so cur_program is set from the
-     * fit declaration's owning program when registering members. */
-    for (size_t p = 0; p < program_count; p++) {
-        if (!cg_pass_register_fit_shells(cg, programs[p])) return false;
-    }
+    /* Pass 2.7: register fit members. The fit-body's name lookups must see
+     * the fit's own program (not the target type's), so cur_program is set
+     * from the fit declaration's owning program. */
     for (size_t i = 0; i < cg->user_fit_count; i++) {
         /* Locate the owning program by scanning programs for the fit decl. */
         const FengProgram *owner = NULL;
@@ -52877,31 +53008,55 @@ static bool cg_generic_type_param_names(CG *cg, const FengDecl *decl,
     return true;
 }
 
-/* Public-surface generic type callables use ordinal m<N> so consumers that
- * only see the bundle interface assign the same index as the library. A
- * generic finalizer of a public type is always a generated ABI symbol: its
- * source visibility still controls Feng access, while the consumer needs the
- * shared body to construct the closed runtime finalizer thunk. */
-static bool cg_generic_type_member_exports_public_surface(const FengDecl *decl,
-                                                          const FengTypeMember *member,
-                                                          FengCompileTarget target) {
-    return target == FENG_COMPILE_TARGET_LIB &&
-           decl != NULL &&
-           decl->visibility == FENG_VISIBILITY_PUBLIC &&
-           member != NULL &&
-           (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
-            member->visibility != FENG_VISIBILITY_PRIVATE ||
-            cg_member_is_mixable_seal_static(member));
+typedef enum CGGenericTypeMemberSymbolDomain {
+    CG_GENERIC_TYPE_MEMBER_SYMBOL_INTERNAL = 0,
+    CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_BASE,
+    CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_DEPENDENCY
+} CGGenericTypeMemberSymbolDomain;
+
+/* Classify one generic type callable into the existing public domain, the
+ * appended compiler-dependency portion of that domain, or the internal
+ * domain. Existing public/capability ordinals are intentionally independent
+ * of newly selected seal dependencies. */
+static CGGenericTypeMemberSymbolDomain cg_generic_type_member_symbol_domain(
+    const CG *cg,
+    const FengDecl *decl,
+    const FengTypeMember *member) {
+    if (decl == NULL || member == NULL ||
+        decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return CG_GENERIC_TYPE_MEMBER_SYMBOL_INTERNAL;
+    }
+    if (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
+        member->visibility != FENG_VISIBILITY_PRIVATE ||
+        cg_member_is_mixable_seal_static(member)) {
+        return CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_BASE;
+    }
+    if (cg_member_is_package_symbol_dependency(cg, decl, member)) {
+        return CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_DEPENDENCY;
+    }
+    return CG_GENERIC_TYPE_MEMBER_SYMBOL_INTERNAL;
 }
 
-static bool cg_generic_type_member_uses_public_symbol(const FengDecl *decl,
-                                                      const FengTypeMember *member) {
-    return decl != NULL &&
-           decl->visibility == FENG_VISIBILITY_PUBLIC &&
-           member != NULL &&
-           (member->kind == FENG_TYPE_MEMBER_FINALIZER ||
-            member->visibility != FENG_VISIBILITY_PRIVATE ||
-            cg_member_is_mixable_seal_static(member));
+/* Return whether a local generic shared body keeps the existing package
+ * linkage. Symbol-domain membership alone does not grant linkage to a member
+ * that was collected only as a reifiable dependency. */
+static bool cg_generic_member_exports_package_callable(
+    const CG *cg,
+    const FengDecl *owner_decl,
+    const FengTypeMember *member,
+    FengCompileTarget target) {
+    if (target != FENG_COMPILE_TARGET_LIB || owner_decl == NULL ||
+        member == NULL ||
+        owner_decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return false;
+    }
+    if (member->kind == FENG_TYPE_MEMBER_METHOD) {
+        return cg_member_uses_package_callable_surface(cg,
+                                                       owner_decl,
+                                                       member);
+    }
+    return member->kind == FENG_TYPE_MEMBER_FINALIZER ||
+           member->visibility != FENG_VISIBILITY_PRIVATE;
 }
 
 /** Build the internal shared ensure-init symbol for one generic static field. */
@@ -52997,34 +53152,88 @@ static char *cg_generic_type_method_shared_cname(CG *cg,
         return NULL;
     }
     Buf b; buf_init(&b);
-    /* Public callables use the public ordinal (m<N>, counting public methods,
-     * constructors, and the generated-ABI finalizer). Private/internal
-     * callables use their private ordinal (i<N>). */
-    bool is_pub = cg_generic_type_member_uses_public_symbol(decl, member);
-    size_t ordinal = 0;
-    for (size_t _i = 0; _i < decl->as.type_decl.member_count; ++_i) {
-        const FengTypeMember *_c = decl->as.type_decl.members[_i];
-        if (_c->kind != FENG_TYPE_MEMBER_METHOD &&
-            _c->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
-            _c->kind != FENG_TYPE_MEMBER_FINALIZER) continue;
-        if (cg_generic_type_member_uses_public_symbol(decl, _c) != is_pub) continue;
-        if (_c == member) break;
+    CGGenericTypeMemberSymbolDomain domain =
+        cg_generic_type_member_symbol_domain(cg, decl, member);
+    size_t ordinal = 0U;
+
+    if (domain == CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_DEPENDENCY) {
+        /* Preserve every existing package-base ordinal, then append selected
+         * compiler dependencies in declaration-relative order. */
+        for (size_t index = 0U;
+             index < decl->as.type_decl.member_count;
+             ++index) {
+            const FengTypeMember *candidate =
+                decl->as.type_decl.members[index];
+
+            if ((candidate->kind == FENG_TYPE_MEMBER_METHOD ||
+                 candidate->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+                 candidate->kind == FENG_TYPE_MEMBER_FINALIZER) &&
+                cg_generic_type_member_symbol_domain(cg, decl, candidate) ==
+                    CG_GENERIC_TYPE_MEMBER_SYMBOL_PACKAGE_BASE) {
+                ordinal++;
+            }
+        }
+    }
+    for (size_t index = 0U;
+         index < decl->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *candidate = decl->as.type_decl.members[index];
+
+        if (candidate->kind != FENG_TYPE_MEMBER_METHOD &&
+            candidate->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
+            candidate->kind != FENG_TYPE_MEMBER_FINALIZER) {
+            continue;
+        }
+        if (cg_generic_type_member_symbol_domain(cg, decl, candidate) != domain) {
+            continue;
+        }
+        if (candidate == member) {
+            break;
+        }
         ordinal++;
     }
     buf_append_fmt(&b, "FengGenericMethod__%s__%s__%s%zu__%s",
                    owner_mangle,
                    type_san,
-                   is_pub ? "m" : "i",
+                   domain == CG_GENERIC_TYPE_MEMBER_SYMBOL_INTERNAL ? "i" : "m",
                    ordinal,
                    method_san);
     free(owner_mangle); free(type_san); free(method_san);
     return b.data;
 }
 
+typedef enum CGGenericFitMethodSymbolDomain {
+    CG_GENERIC_FIT_METHOD_SYMBOL_INTERNAL = 0,
+    CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_BASE,
+    CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_DEPENDENCY,
+    CG_GENERIC_FIT_METHOD_SYMBOL_CAPABILITY
+} CGGenericFitMethodSymbolDomain;
+
+/* Classify one generic fit method using its existing capability facts and the
+ * shared package-public Symbol selection. */
+static CGGenericFitMethodSymbolDomain cg_generic_fit_method_symbol_domain(
+    const CG *cg,
+    const UserFit *uf,
+    const FengTypeMember *member) {
+    if (uf == NULL || uf->decl == NULL || member == NULL ||
+        uf->decl->visibility != FENG_VISIBILITY_PUBLIC) {
+        return CG_GENERIC_FIT_METHOD_SYMBOL_INTERNAL;
+    }
+    if (cg_member_is_mixable_seal_static(member)) {
+        return CG_GENERIC_FIT_METHOD_SYMBOL_CAPABILITY;
+    }
+    if (member->visibility != FENG_VISIBILITY_PRIVATE) {
+        return CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_BASE;
+    }
+    if (cg_member_is_package_symbol_dependency(cg, uf->decl, member)) {
+        return CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_DEPENDENCY;
+    }
+    return CG_GENERIC_FIT_METHOD_SYMBOL_INTERNAL;
+}
+
 /* Build a stable C symbol name for a fit method's shared body. Generic target
  * instances use their common origin declaration; a non-generic target uses
- * its declaration directly when the fit method itself is generic. The method
- * ordinal is taken from the fit declaration rather than the target type. */
+ * its declaration directly when the fit method itself is generic. */
 static char *cg_fit_method_shared_cname(CG *cg,
                                         const UserFit *uf,
                                         const FengTypeMember *member) {
@@ -53048,29 +53257,48 @@ static char *cg_fit_method_shared_cname(CG *cg,
         free(owner_mangle); free(type_san); free(method_san);
         return NULL;
     }
-    /* Preserve the existing fm<N> identity for every ordinary fit method.
-     * A seal mix capability uses its own fc<N> domain, counted only from
-     * capability facts present in package-public .ft, so private provider
-     * methods cannot perturb the consumer-visible symbol. */
-    size_t ordinal = 0;
+    CGGenericFitMethodSymbolDomain domain =
+        cg_generic_fit_method_symbol_domain(cg, uf, member);
+    size_t ordinal = 0U;
     const FengDecl *fit_decl = uf->decl;
-    bool uses_capability_symbol =
-        cg_member_is_mixable_seal_static(member);
-    for (size_t i = 0; i < fit_decl->as.fit_decl.member_count; ++i) {
-        const FengTypeMember *fm = fit_decl->as.fit_decl.members[i];
-        if (fm->kind != FENG_TYPE_MEMBER_METHOD) continue;
-        if (uses_capability_symbol &&
-            !cg_member_is_mixable_seal_static(fm)) {
+
+    if (domain == CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_DEPENDENCY) {
+        for (size_t index = 0U;
+             index < fit_decl->as.fit_decl.member_count;
+             ++index) {
+            const FengTypeMember *candidate =
+                fit_decl->as.fit_decl.members[index];
+
+            if (candidate->kind == FENG_TYPE_MEMBER_METHOD &&
+                cg_generic_fit_method_symbol_domain(cg, uf, candidate) ==
+                    CG_GENERIC_FIT_METHOD_SYMBOL_PACKAGE_BASE) {
+                ordinal++;
+            }
+        }
+    }
+    for (size_t index = 0U;
+         index < fit_decl->as.fit_decl.member_count;
+         ++index) {
+        const FengTypeMember *candidate = fit_decl->as.fit_decl.members[index];
+
+        if (candidate->kind != FENG_TYPE_MEMBER_METHOD ||
+            cg_generic_fit_method_symbol_domain(cg, uf, candidate) != domain) {
             continue;
         }
-        if (fm == member) break;
+        if (candidate == member) {
+            break;
+        }
         ordinal++;
     }
     Buf b; buf_init(&b);
     buf_append_fmt(&b, "FengFitMethod__%s__%s__%s%zu__%s",
                    owner_mangle,
                    type_san,
-                   uses_capability_symbol ? "fc" : "fm",
+                   domain == CG_GENERIC_FIT_METHOD_SYMBOL_CAPABILITY
+                       ? "fc"
+                       : (domain == CG_GENERIC_FIT_METHOD_SYMBOL_INTERNAL
+                              ? "fi"
+                              : "fm"),
                    ordinal,
                    method_san);
     free(owner_mangle); free(type_san); free(method_san);
@@ -53498,7 +53726,14 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         ? strdup(shared_name_override)
         : cg_generic_type_method_shared_cname(cg, decl, member);
     if (!shared_name) return cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
-    bool export_shared = cg_generic_type_member_exports_public_surface(decl, member, target);
+    const FengDecl *package_owner = reification_owner_decl != NULL
+        ? reification_owner_decl
+        : decl;
+    bool export_shared = cg_generic_member_exports_package_callable(
+        cg,
+        package_owner,
+        member,
+        target);
     bool is_static_method = member->is_static;
 
     size_t outer_tp_count = decl->as.type_decl.type_param_count;
@@ -55888,6 +56123,7 @@ static void cg_dispose(CG *cg) {
         cgtype_free(cg->expr_narrowings[i].type);
     }
     free(cg->expr_narrowings);
+    feng_symbol_package_selection_free(cg->package_selection);
 }
 
 bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
@@ -55928,6 +56164,25 @@ bool feng_codegen_emit_program(const FengSemanticAnalysis *analysis,
         cg_fail(&cg, (FengToken){0}, "CE0372", "codegen: no programs to compile");
         cg_dispose(&cg);
         return false;
+    }
+    {
+        FengSymbolError symbol_error = {0};
+
+        if (!feng_symbol_build_package_selection(analysis,
+                                                 &cg.package_selection,
+                                                 &symbol_error)) {
+            cg_fail(&cg,
+                    symbol_error.token,
+                    "IE0001",
+                    "codegen: cannot compute package-public declaration selection: %s",
+                    symbol_error.message != NULL
+                        ? symbol_error.message
+                        : "unknown symbol selection error");
+            feng_symbol_error_free(&symbol_error);
+            cg_dispose(&cg);
+            return false;
+        }
+        feng_symbol_error_free(&symbol_error);
     }
 
     const FengProgram **programs = calloc(program_total, sizeof(*programs));

@@ -3350,10 +3350,6 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "  seal func parentValue(): int { return 6; }\n"
         "  open func invoke(other: ParentSurface): int { return other.parentValue(); }\n"
         "}\n"
-#if 0
-        /* Pending independent analysis: an equivalent open requirement and
-         * open implementation also fail cross-package conversion with
-         * AE1003, before seal implementation selection is relevant. */
         "open spec GenericSurface<T> { seal func value(): T; }\n"
         "open type GenericValue<T>: GenericSurface<T> {\n"
         "  var stored: T;\n"
@@ -3366,7 +3362,6 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "  seal func value(): T { let result: T; return result; }\n"
         "  open func invoke(other: GenericSurface<T>): T { return other.value(); }\n"
         "}\n"
-#endif
 #if 0
         /* Pending independent analysis: object-form spec method type
          * parameters currently fail semantic resolution with AE1013 before
@@ -3406,13 +3401,10 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "  let fitView: Surface = fitValue;\n"
         "  let child = ChildValue();\n"
         "  let parentView: ParentSurface = child;\n"
-#if 0
-        /* Kept with the disabled generic owner/fit provider cases above. */
         "  let generic = GenericValue<int>(9);\n"
         "  let genericView: GenericSurface<int> = generic;\n"
         "  let genericFit = GenericFitValue<int>();\n"
         "  let genericFitView: GenericSurface<int> = genericFit;\n"
-#endif
 #if 0
         /* Kept with the disabled provider case above. */
         "  let genericMethod = GenericMethodValue();\n"
@@ -3430,11 +3422,8 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "     FitValue.updateStatic<FitValue>() == 241 &&\n"
         "     OpenStaticValue.inspect<OpenStaticValue>() == 305 &&\n"
         "     child.invoke(parentView) == 6 &&\n"
-#if 0
-        /* Kept with the disabled generic owner/fit provider cases above. */
         "     generic.invoke(genericView) == 9 &&\n"
         "     genericFit.invoke(genericFitView) == 0 &&\n"
-#endif
 #if 0
         /* Kept with the disabled provider case above. */
         "     genericMethod.invoke(genericMethodView) == 41 &&\n"
@@ -3445,6 +3434,119 @@ static void test_direct_build_consumes_package_spec_seal_implementations(void) {
         "}\n",
         "spec_seal_impl_main",
         "package spec seal implementations ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* A strict bundle consumer closes generic type/fit relations from package FT
+ * and links selected seal instance/static shared bodies with stable ordinals. */
+static void test_direct_build_consumes_package_generic_spec_implementations(void) {
+    char template_path[] = "temp/feng_cli_pkg_generic_spec_impl_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkggenericspecimpl",
+        "open module test.cli.pkggenericspecimpl;\n"
+        "open type Box<T> {\n"
+        "  open let value: T;\n"
+        "  func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "open spec Surface<T> {\n"
+        "  seal func value(): T;\n"
+        "  seal static func marker(): T;\n"
+        "}\n"
+        "open spec Extra<T> { seal func extra(): T; }\n"
+        "open type Direct<T>: Surface<T>, Extra<T> {\n"
+        "  var stored: T;\n"
+        "  func Direct(value: T) { self.stored = value; }\n"
+        "  seal func unrelatedBefore(): T { let result: T; return result; }\n"
+        "  open func invoke(other: Surface<T>): T { return other.value(); }\n"
+        "  seal func value(): T { return self.stored; }\n"
+        "  seal static func marker(): T { let result: T; return result; }\n"
+        "  seal func extra(): T { return self.stored; }\n"
+        "}\n"
+        "open type FitValue<T> {\n"
+        "  var stored: T;\n"
+        "  func FitValue(value: T) { self.stored = value; }\n"
+        "}\n"
+        "open fit FitValue<T>: Surface<T> {\n"
+        "  seal func unrelatedBefore(): T { let result: T; return result; }\n"
+        "  open func invoke(other: Surface<T>): T { return other.value(); }\n"
+        "  seal func value(): T { return self.stored; }\n"
+        "  seal static func marker(): T { let result: T; return result; }\n"
+        "}\n"
+        "@value\n"
+        "open type Scalar<T>: Surface<T> {\n"
+        "  var stored: T;\n"
+        "  func Scalar(value: T) { self.stored = value; }\n"
+        "  seal func value(): T { return self.stored; }\n"
+        "  seal static func marker(): T { let result: T; return result; }\n"
+        "  open func invoke(other: Surface<T>): T { return other.value(); }\n"
+        "}\n"
+        "open spec Parent<T> { seal func parentValue(): T; }\n"
+        "open spec Child<T>: Parent<Box<T>> {}\n"
+        "open type ChildValue<T>: Child<T> {\n"
+        "  var stored: T;\n"
+        "  func ChildValue(value: T) { self.stored = value; }\n"
+        "  seal func parentValue(): Box<T> { return Box<T>(self.stored); }\n"
+        "  open func invoke(other: Parent<Box<T>>): T { return other.parentValue().value; }\n"
+        "}\n"
+        "open type FitChildValue<T> {\n"
+        "  var stored: T;\n"
+        "  func FitChildValue(value: T) { self.stored = value; }\n"
+        "}\n"
+        "open fit FitChildValue<T>: Child<T> {\n"
+        "  seal func parentValue(): Box<T> { return Box<T>(self.stored); }\n"
+        "  open func invoke(other: Parent<Box<T>>): T { return other.parentValue().value; }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "module test.cli.pkggenericspecimplmain;\n"
+        "import test.cli.pkggenericspecimpl;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "type StaticAccess: Surface<int> {\n"
+        "  func value(): int { return 0; }\n"
+        "  static func marker(): int { return 0; }\n"
+        "  static func invoke<U: Surface<int>>(): int { return U.marker(); }\n"
+        "}\n"
+        "func main(args: string[]) {\n"
+        "  let direct = Direct<int>(9);\n"
+        "  let directView: Surface<int> = direct;\n"
+        "  let text = Direct<string>(\"direct\");\n"
+        "  let textView: Surface<string> = text;\n"
+        "  let fitted = FitValue<int>(10);\n"
+        "  let fitView: Surface<int> = fitted;\n"
+        "  let fitText = FitValue<string>(\"fit\");\n"
+        "  let fitTextView: Surface<string> = fitText;\n"
+        "  let scalar = Scalar<int>(11);\n"
+        "  let scalarView: Surface<int> = scalar;\n"
+        "  let child = ChildValue<int>(12);\n"
+        "  let parent: Parent<Box<int>> = child;\n"
+        "  let fitChild = FitChildValue<int>(13);\n"
+        "  let fitParent: Parent<Box<int>> = fitChild;\n"
+        "  if direct.invoke(directView) == 9 &&\n"
+        "     text.invoke(textView) == \"direct\" &&\n"
+        "     StaticAccess.invoke<Direct<int>>() == 0 &&\n"
+        "     fitted.invoke(fitView) == 10 &&\n"
+        "     fitText.invoke(fitTextView) == \"fit\" &&\n"
+        "     StaticAccess.invoke<FitValue<int>>() == 0 &&\n"
+        "     scalar.invoke(scalarView) == 11 &&\n"
+        "     child.invoke(parent) == 12 && fitChild.invoke(fitParent) == 13 {\n"
+        "    puts(&\"package generic spec implementations ok\");\n"
+        "  }\n"
+        "}\n",
+        "generic_spec_impl_main",
+        "package generic spec implementations ok\n");
 
     free(bundle_path);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
@@ -19406,6 +19508,7 @@ int main(void) {
     test_direct_build_consumes_package_enum();
     test_direct_build_consumes_package_generic_spec_constraint();
     test_direct_build_consumes_package_spec_seal_implementations();
+    test_direct_build_consumes_package_generic_spec_implementations();
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
     test_direct_build_consumes_package_mixin();

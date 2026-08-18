@@ -224,6 +224,14 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                                           const char *path,
                                           FengSymbolError *out_error);
 
+/* Run the exact package-public writer selection and return its non-NULL
+ * source identities without serializing an FT file. */
+bool feng_symbol_ft_collect_package_source_nodes(
+    const FengSymbolModuleGraph *module,
+    const void ***out_source_nodes,
+    size_t *out_source_node_count,
+    FengSymbolError *out_error);
+
 bool feng_symbol_ft_read_file_internal(const char *path,
                                        const FengSymbolFtReadOptions *options,
                                        FengSymbolGraph **out_graph,

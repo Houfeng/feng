@@ -1118,6 +1118,65 @@ static bool writer_prepare_decl_ids(WriterContext *ctx,
                                   out_error);
 }
 
+/* Expose the writer's exact package-public closure as source identities so
+ * provider Codegen can share symbol-domain membership without duplicating
+ * initial-tree or dependency-closure logic. */
+bool feng_symbol_ft_collect_package_source_nodes(
+    const FengSymbolModuleGraph *module,
+    const void ***out_source_nodes,
+    size_t *out_source_node_count,
+    FengSymbolError *out_error) {
+    WriterContext ctx;
+    const void **source_nodes = NULL;
+    size_t source_node_count = 0U;
+    size_t index;
+    bool ok = false;
+
+    if (module == NULL || out_source_nodes == NULL ||
+        out_source_node_count == NULL) {
+        return false;
+    }
+    *out_source_nodes = NULL;
+    *out_source_node_count = 0U;
+    memset(&ctx, 0, sizeof(ctx));
+    ctx.module = module;
+    ctx.profile = FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC;
+
+    if (!writer_prepare_decl_ids(&ctx,
+                                 module->primary_path,
+                                 out_error)) {
+        goto cleanup;
+    }
+    if (ctx.decl_id_count > 0U) {
+        source_nodes = (const void **)calloc(ctx.decl_id_count,
+                                             sizeof(*source_nodes));
+        if (source_nodes == NULL) {
+            feng_symbol_internal_set_error(
+                out_error,
+                module->primary_path,
+                module->root_decl.token,
+                "out of memory collecting package-public source declarations");
+            goto cleanup;
+        }
+    }
+    for (index = 0U; index < ctx.decl_id_count; ++index) {
+        const void *source_node = ctx.decl_ids[index].decl->source_node;
+
+        if (source_node != NULL) {
+            source_nodes[source_node_count++] = source_node;
+        }
+    }
+    *out_source_nodes = source_nodes;
+    *out_source_node_count = source_node_count;
+    source_nodes = NULL;
+    ok = true;
+
+cleanup:
+    free(source_nodes);
+    free(ctx.decl_ids);
+    return ok;
+}
+
 static uint16_t writer_symbol_kind(const FengSymbolDeclView *decl) {
     switch (decl->kind) {
         case FENG_SYMBOL_DECL_KIND_MODULE:

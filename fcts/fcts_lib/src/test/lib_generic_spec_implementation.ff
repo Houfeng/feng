@@ -1,0 +1,162 @@
+open module fcts_lib.test.generic_spec_implementation;
+
+/** Generic payload used to verify mapped parent-spec arguments. */
+open type PackageRelationBox<T> {
+  /** Stored payload. */
+  open let value: T;
+
+  /** Construct one payload box. */
+  func PackageRelationBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Package-visible generic contract whose implementation members stay seal. */
+open spec PackageRelationSurface<T> {
+  /** Read the subject payload. */
+  seal func read(): T;
+
+  /** Echo one value through a static witness slot. */
+  seal static func echo(value: T): T;
+}
+
+/** Generic type-head implementation of the package contract. */
+open type PackageRelationDirect<T>: PackageRelationSurface<T> {
+  /** Stored payload. */
+  seal var stored: T;
+
+  /** Construct one direct implementation. */
+  func PackageRelationDirect(value: T) {
+    self.stored = value;
+  }
+
+  /** Satisfy the seal instance requirement. */
+  seal func read(): T {
+    return self.stored;
+  }
+
+  /** Satisfy the seal static requirement. */
+  seal static func echo(value: T): T {
+    return value;
+  }
+
+  /** Consume the same contract through its object-form spec view. */
+  open func readThrough(other: PackageRelationSurface<T>): T {
+    return other.read();
+  }
+}
+
+/** Generic subject implemented through an exported fit. */
+open type PackageRelationFit<T> {
+  /** Stored payload. */
+  open var stored: T;
+
+  /** Construct one fit-backed subject. */
+  func PackageRelationFit(value: T) {
+    self.stored = value;
+  }
+}
+
+/** Generic fit implementation using seal instance and static members. */
+open fit PackageRelationFit<T>: PackageRelationSurface<T> {
+  /** Satisfy the seal instance requirement. */
+  seal func read(): T {
+    return self.stored;
+  }
+
+  /** Satisfy the seal static requirement. */
+  seal static func echo(value: T): T {
+    return value;
+  }
+
+  /** Consume the fit subject through the exported spec view. */
+  open func readThrough(other: PackageRelationSurface<T>): T {
+    return other.read();
+  }
+}
+
+/** Generic value-semantics implementation sharing the static witness path. */
+@value
+open type PackageRelationValue<T>: PackageRelationSurface<T> {
+  /** Stored payload. */
+  seal var stored: T;
+
+  /** Construct one value implementation. */
+  func PackageRelationValue(value: T) {
+    self.stored = value;
+  }
+
+  /** Satisfy the seal instance requirement. */
+  seal func read(): T {
+    return self.stored;
+  }
+
+  /** Satisfy the seal static requirement without a boxed subject argument. */
+  seal static func echo(value: T): T {
+    return value;
+  }
+
+  /** Consume a boxed spec view while preserving value semantics. */
+  open func readThrough(other: PackageRelationSurface<T>): T {
+    return other.read();
+  }
+}
+
+/** Generic parent contract used by a mapped child relation. */
+open spec PackageRelationParent<T> {
+  /** Return the mapped parent payload. */
+  seal func parentValue(): T;
+}
+
+/** Map Child<T> to Parent<Box<T>>. */
+open spec PackageRelationChild<T>:
+  PackageRelationParent<PackageRelationBox<T>> {}
+
+/** Generic type-head implementation of the mapped child relation. */
+open type PackageRelationChildDirect<T>: PackageRelationChild<T> {
+  /** Stored child payload. */
+  seal var stored: T;
+
+  /** Construct one direct child subject. */
+  func PackageRelationChildDirect(value: T) {
+    self.stored = value;
+  }
+
+  /** Satisfy the inherited seal parent requirement. */
+  seal func parentValue(): PackageRelationBox<T> {
+    return PackageRelationBox<T>(self.stored);
+  }
+
+  /** Read the mapped parent view through its witness. */
+  open func readParent(
+    parent: PackageRelationParent<PackageRelationBox<T>>
+  ): T {
+    return parent.parentValue().value;
+  }
+}
+
+/** Generic child subject implemented through a fit. */
+open type PackageRelationChildFit<T> {
+  /** Stored child payload. */
+  open var stored: T;
+
+  /** Construct one fit-backed child subject. */
+  func PackageRelationChildFit(value: T) {
+    self.stored = value;
+  }
+}
+
+/** Fit implementation whose direct child relation closes its mapped parent. */
+open fit PackageRelationChildFit<T>: PackageRelationChild<T> {
+  /** Satisfy the inherited seal parent requirement. */
+  seal func parentValue(): PackageRelationBox<T> {
+    return PackageRelationBox<T>(self.stored);
+  }
+
+  /** Read the mapped parent view through its witness. */
+  open func readParent(
+    parent: PackageRelationParent<PackageRelationBox<T>>
+  ): T {
+    return parent.parentValue().value;
+  }
+}
