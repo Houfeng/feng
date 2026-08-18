@@ -1,10 +1,10 @@
-# Feng 泛型 `spec` 满足关系跨包修复开发文档
+# Feng 泛型 `spec` 满足关系及跨包实现符号修复开发文档
 
 > 状态：草案，已按当前代码现状修订，待 Review（2026-08-18）
 >
-> 本文档只处理泛型 `type` / 泛型 `fit` 已声明的 object-form `spec` 名义
-> 满足关系在 package-public `.ft` / `.fb` 边界上的恢复和实现符号可链接性。
-> 方法级泛型 requirement 与静态字段链接分别由其他专项处理。
+> 本文档只处理泛型 `type` / 泛型 `fit` 已声明的 object-form `spec` 名义满足关系
+> 在同包和跨包使用时的正确关闭，以及跨 package-public `.ft` / `.fb` 边界时实现
+> 符号的可链接性。方法级泛型 requirement 与静态字段链接分别由其他专项处理。
 
 ## 1 依据与目标
 
@@ -16,7 +16,19 @@
 - [Feng 符号表规范](../specifications/feng-symbol-table.md)；
 - [Feng 语言 `fit` 规范](../specifications/feng-fit.md)。
 
-需要保证下面两类 provider 声明在独立打包后仍可由 consumer 正确使用：
+本专项必须同时满足以下实施约束：
+
+- 同一编译分析中的同包使用和只读取 `.fb` 的跨包使用必须全部正确，不允许只修
+  其中一侧；
+- 同包和跨包必须复用现有名义关系查询、类型参数替换、父 spec 实例化、witness
+  materialization、Symbol 选择及 package-callable 发码链路；不得按 imported 状态、
+  成员名或测试场景增加特判，也不得为 type/fit 分别建立平行算法；type 与 fit 的
+  关系模板来源差异只能由现有 relation source 抽象统一承载；
+- 已经工作的非泛型关系、普通公开泛型 fit、fit 可见性、Feng 成员可见性、witness
+  ABI、公开/capability 符号身份及运行时开销必须保持不变。
+
+需要保证下面两类声明在同一编译分析中可以正确使用，并且 provider 独立打包后仍
+可由 consumer 正确使用：
 
 ```feng
 open spec Reader<T> {
@@ -40,7 +52,7 @@ open fit FitReader<T>: Reader<T> {
 }
 ```
 
-consumer 只导入 `.fb` 时必须能够：
+同包使用点或只导入 `.fb` 的 consumer 必须能够：
 
 ```feng
 let direct = DirectReader<int>();
@@ -50,8 +62,8 @@ let fitted = FitReader<int>();
 let fittedView: Reader<int> = fitted;
 ```
 
-并通过现有 witness 调用 provider 中声明期选中的实现方法。consumer 不得
-读取 provider 源码、workspace-cache `.ft`，也不得重新进行无名义结构满足。
+并通过现有 witness 调用声明期选中的实现方法。跨包 consumer 不得读取 provider
+源码、workspace-cache `.ft`，任何使用点都不得重新进行无名义结构满足。
 
 ## 2 已确认的现状
 
@@ -92,8 +104,9 @@ open type Value<T>: Surface<T> {
 ```
 
 provider 可以构建和打包；consumer 从 `.fb` 导入 `Value<int>` 后，将其赋给
-`Surface<int>` 报 `AE1003`。代码排查已经定位到两个彼此独立、均需修复的通用
-缺口。
+`Surface<int>` 报 `AE1003`。同一 `Value<int> -> Surface<int>` 关系在同包使用点也会
+进入当前错误的开放成员重检路径。代码排查已经定位到两个彼此独立、触发范围不同
+但均需修复的通用缺口。
 
 第一处位于 Symbol writer：
 
@@ -110,12 +123,14 @@ provider 可以构建和打包；consumer 从 `.fb` 导入 `Value<int>` 后，�
 复用 generic fit 已经工作的 `_with_tparams` writer 路径，并用 round-trip 测试验证
 reader。
 
-第二处位于 consumer 名义实例查询，而且也是当前 `AE1003` 的直接触发点：
+第二处位于同包与跨包共用的使用点名义实例查询，而且也是当前 `AE1003` 的直接
+触发点：
 
 - `type_decl_satisfies_spec_type_ref()` 先按 `FengSpecRelation` 确认 type/spec 声明
   身份，随后却再次逐个扫描 requirement；
 - 该函数只接收开放的 `type_decl`，没有具体 source type ref，因而会把 type 成员
   中的 `T` 直接与 `Surface<int>` requirement 中已经关闭的 `int` 比较；
+- 该路径不区分声明来自当前 source 还是 imported FT，因此不是跨包专属问题；
 - 失败后的 `visible_fit_instantiates_spec_type_ref()` 只处理可见 fit 的直接 RHS，
   没有与之对应的 type 声明头实例关闭路径，也没有覆盖 fit RHS 的泛型父 spec
   关闭。
@@ -126,7 +141,8 @@ relation source/可见性，不保存类型实参；它适合继续作为名义�
 type `declared_specs` 或 fit `specs` 取得结构化关系模板，使用现有类型参数替换和
 父 spec 实例化能力完成关闭，再比较完整 spec 类型身份。
 
-不得通过 consumer 使用点对成员重新做结构满足来绕过上述名义实例关闭。
+不得通过同包或跨包使用点对成员重新做结构满足来绕过上述名义实例关闭，也不得
+分别实现两套实例关闭算法。
 
 ### 2.3 普通泛型 fit 关系可恢复
 
@@ -202,21 +218,22 @@ open fit FitValue<T>: Surface<T> { ... }
 
 ### 3.2 使用时做名义关系关闭
 
-consumer 使用 `Value<int>` 或 `FitValue<int>` 时，只执行：
+同包或跨包使用点使用 `Value<int>` / `FitValue<int>` 时，都只执行同一流程：
 
 1. 通过 `FengSpecRelation` 查询当前位置可见的 relation source；
 2. 从 relation source 对应的 type `declared_specs` 或 fit `specs` 取得直接关系
    模板，按具体 subject 的类型实参关闭直接 spec 使用，再逐层关闭父 spec 使用；
 3. 按现有语义类型身份精确比较关闭后的 spec 实例；
-4. 名义证明成立后，复用现有 witness materialization，从 package-public `.ft`
-   已收录的实现骨架中解析并绑定对应 slot，取得既有发码所需的实现声明和链接
-   信息。
+4. 名义证明成立后，复用现有 witness materialization，从当前声明或
+   package-public `.ft` 已恢复的实现骨架中解析并绑定对应 slot，取得既有发码所需
+   的实现声明和链接信息。
 
 第 4 步中的成员解析只负责恢复 witness 所需的实现信息，不得反过来作为满足关系
-证明。consumer 不重新进行一般结构满足，也不因为 imported `.ft` 中恰好存在同名
+证明。使用点不重新进行一般结构满足，也不因为 imported `.ft` 中恰好存在同名
 seal 方法而建立新关系；外包自定义 spec/fit 仍不能据此选择 imported type 的 seal
 成员。provider 的 `SpecImplementationSelection` 不存在于 consumer，本文也不新增
-序列化 selection 映射。
+序列化 selection 映射。同包与跨包只允许在关系模板和实现声明的来源上不同，关系
+关闭及 witness 选择算法必须相同。
 
 关闭结果必须满足以下不变量：
 
@@ -344,9 +361,10 @@ consumer 对 imported type/fit 而言，只把 package-public FT 中实际存在
   `fi<N>`），否则同名重载可能与重新编号后的 `fm<N>` 冲突。
 
 `fi<N>` 是所有 provider-local 泛型 fit 方法的内部域，不是 spec seal 专用 ABI；它
-不进入 package contract，也不增加运行时开销。上述 package selection 抽象和内部
-符号域属于本轮 Review 内容；未经确认不得改为 FT 新标志、consumer 结构扫描或
-具体测试名称特判。
+只作为现有 `cg_fit_method_shared_cname()` 链路内的内部命名域，不新增发码、调用或
+链接链路，不进入 package contract，也不增加运行时开销。上述 package selection
+抽象和内部符号域属于本轮 Review 内容；未经确认不得改为 FT 新标志、consumer
+结构扫描或具体测试名称特判。
 
 ### 3.6 `.ft` 边界
 
@@ -369,6 +387,7 @@ witness。
 
 ### 4.1 本次包含
 
+- 同一编译分析中的泛型 type/fit 名义关系关闭、父 spec 关闭和 witness 调用；
 - `open type Owner<T>: Spec<T>` 及 spec 右侧的多类型参数、重排/嵌套类型
   实参，例如 `Owner<T, U>: Spec<Box<U>, T>`；
 - `open fit Owner<T>: Spec<T>` 的现有可见关系，以及其 spec 右侧的同类类型实参
@@ -399,6 +418,12 @@ witness。
 - 选中 seal 方法只改变 provider package symbol 的链接能力和 consumer 对该既有
   符号的编译期引用身份，不改变其 Feng visibility；
 - 普通公开泛型 type/fit 路径保持现有发码和开销；
+- 在等价 relation/fit 可见面条件下，同包与跨包的合法/非法关系集合必须一致；修复
+  前已经工作的同包直接泛型 fit、非泛型 type/fit 和公开泛型成员不得改变语义或
+  生成程序行为；
+- 公开/capability 泛型方法保持现有 C 符号身份和编号；经 Review 允许新增的
+  provider-local 内部域只改变非 package contract 的内部 C 身份，不得改变调用
+  行为；
 - 未被导出关系选中的 seal helper 不得新增二进制公开符号。
 
 如果正确修复需要修改 runtime ABI、增加运行时分支或把 fit 关系变为无条件全局
@@ -408,18 +433,21 @@ witness。
 
 ### 6.1 编译器测试
 
-- Semantic：provider 开放泛型 type/fit 声明期满足检查与选择 sidecar；
+- Semantic：provider 开放泛型 type/fit 声明期满足检查与选择 sidecar；在同一
+  analysis 中覆盖直接泛型 type、直接泛型 fit、泛型父 spec 的正向关闭，以及类型
+  实参不一致的拒绝；
 - Symbol：package-public `.ft` 对泛型 type `declared_specs`、泛型 spec
   `parent_specs`、泛型 fit target/specs 中 `TYPE_PARAM_REF`，以及选中 seal 方法签名
   和 reified dependencies 的 round-trip；同时验证普通 seal 方法不进入
   package-public 收录闭包；
-- Imported Semantic：consumer 关闭 `Owner<int> -> Spec<int>`，验证直接 type 与
-  可见 fit 两种关系；同时验证类型实参不一致和父 spec 嵌套替换不会退化为只比较
-  声明身份；
-- Codegen：泛型 type/fit 被选中 seal 实例/static 方法使用 package callable
-  shared body、薄 wrapper 和稳定符号；在选中方法之前插入未导出的普通 seal 方法，
-  并让同一 owner 的多个已导出关系只在 consumer 使用其中一个，验证符号身份不受
-  私有成员或 witness 物化集合影响；非泛型 package-callable 基线保持不变；
+- Imported Semantic：对与同包 Semantic 相同的关系矩阵，验证 consumer 关闭
+  `Owner<int> -> Spec<int>`；同时验证类型实参不一致和父 spec 嵌套替换不会退化为
+  只比较声明身份，确保 imported 与 current-source 只更换事实来源、不更换算法；
+- Codegen：分别验证同包和跨包的泛型 type/fit 被选中 seal 实例/static 方法使用
+  现有 shared body、薄 wrapper 和稳定符号；在选中方法之前插入未导出的普通 seal
+  方法，并让同一 owner 的多个已导出关系只在 consumer 使用其中一个，验证符号身份
+  不受私有成员或 witness 物化集合影响；非泛型、公开泛型和现有 capability
+  package-callable 基线保持不变；
 - CLI：provider 独立 `pack` 后，consumer 只依赖 `.fb` 完成 coercion、witness
   调用和链接。
 
@@ -435,7 +463,8 @@ witness。
 
 ### 6.2 FCTS
 
-在 `fcts_lib -> fcts_bin` 增加独立行为组，至少覆盖：
+在 `fcts_bin` 增加同包行为组，并在 `fcts_lib -> fcts_bin` 增加对应跨包行为组；两组
+至少覆盖：
 
 - 泛型 type 声明头关系；
 - 泛型 fit 关系；
@@ -444,42 +473,49 @@ witness。
 - reference/value owner；
 - 多个闭合实例，确认 witness 和返回值不串实例。
 
-FCTS 之外必须保留隔离 `.fb` CLI 用例，防止本地 workspace-cache 或依赖源码
-偶然掩盖 package-public 事实缺失。
+两组对相同合法场景必须得到一致结果。FCTS 之外必须保留隔离 `.fb` CLI 用例，
+防止本地 workspace-cache 或依赖源码偶然掩盖 package-public 事实缺失。
 
 ## 7 TODO 与实施顺序
 
 - [x] **验证（根因定位）**：已确认 type/spec Symbol writer 未使用现有类型参数
   builder；reader 已具备对应类型节点与关系列表恢复路径；consumer 的直接 type
-  查询缺少具体 source type ref 并错误地重新扫描开放成员，现有 fit 精确匹配仅覆盖
-  直接 RHS。根因和代码位置见 2.2 节。
-- [ ] **Review 决策（实施前置）**：确认 3.5 节方案，即复用现有 package-public
+  查询缺少具体 source type ref 并错误地重新扫描开放成员，且该查询由同包和跨包
+  共用；现有 fit 精确匹配仅覆盖直接 RHS。根因和代码位置见 2.2 节。
+- [ ] **Review 决策（第二阶段实施前置）**：确认 3.5 节方案，即复用现有 package-public
   方法收录闭包、不增加 FT 标志；确认该集合只用于稳定符号域/编号，linkage 继续
   使用 3.4 节既有判定；同时确认 package dependency 追加编号规则和泛型 fit 通用
   provider-local `fi<N>` 内部域。若不接受，必须先重新收敛方案与后续 TODO，不得
-  边实施边自行改变。
+  边实施边自行改变。任何获准方案都必须保持现有公开/capability 符号身份和同包
+  调用行为。
 - [ ] **实际变更（Symbol 关系模板写出）**：让泛型 type 的 `declared_specs` 与泛型
   spec 的 `parent_specs` 复用 `fill_declared_specs_with_tparams()`；保持现有
   `FT_ATTR_DECLARED_SPECS` 和类型节点 wire，不新增另一套 relation 表示。
 - [ ] **验证（Symbol reader 与 round-trip）**：增加 type 声明头和 spec 父关系的
   `TYPE_PARAM_REF` round-trip，验证现有 reader 可直接恢复；该项原则上只增加测试，
   只有测试证明 reader 的通用恢复路径确有缺口时才转为实际修复并暂停 Review。
-- [ ] **实际变更（名义关系实例关闭）**：在 relation source 查询层增加统一的关系
-  模板关闭能力：直接 type 从 `declared_specs`、可见 fit 从 `specs` 取得 head，使用
-  具体 subject 类型实参关闭，并复用现有父 spec 递归替换与语义类型相等比较。
-  `FengSpecRelation` 继续只承担 declaration 候选索引和 fit 可见性过滤。
+- [ ] **实际变更（名义关系实例关闭）**：在现有
+  `type_ref_satisfies_spec_type_ref()` 及 relation source 查询链路中收敛统一的关系
+  模板关闭：直接 type 从 `declared_specs`、可见 fit 从 `specs` 取得 head，使用具体
+  subject 类型实参关闭，并复用现有类型参数替换、父 spec 递归实例化与语义类型
+  相等能力。`FengSpecRelation` 继续只承担 declaration 候选索引和 fit 可见性过滤；
+  不新增 current/imported、type/fit 各自独立的查询链路。
 - [ ] **实际变更（移除使用时结构证明）**：让 `type_ref -> spec type ref` 的满足查询
   使用上一步的精确闭合名义关系；不再由
   `type_decl_satisfies_spec_type_ref()` 扫描 type/fit 成员证明满足。声明期
   `verify_type_satisfies_spec()` 与名义证明之后的 witness slot 绑定保持现状。
+- [ ] **验证（同包名义关系）**：增加同一 analysis 内直接泛型 type、直接泛型 fit、
+  type/fit 泛型父 spec、嵌套/重排类型实参的正负用例；确认 `Value<int>` 只能满足
+  精确关闭后的 spec 实例，并确认现有同包直接泛型 fit 行为不变。
 - [ ] **验证（普通泛型 fit 基线）**：固定现有公开泛型 fit 的隔离 `.fb` 正向用例；
-  同时验证 fit direct head 与泛型父 spec 的精确关闭。该项只验证，不重写 fit
-  visibility 或已经工作的 fit target 参数映射。
+  对照同包矩阵验证 fit direct head 与泛型父 spec 的精确关闭。该项只验证，不重写
+  fit visibility、已经工作的 fit target 参数映射或同包直接 fit 路径。
 - [ ] **实际变更（复用 package 方法收录闭包）**：把 Symbol writer 当前由
   initial tree 与 dependency closure 得到的 package 方法选择，收敛为
   provider Symbol/Codegen 可共同消费的编译期结果；必须覆盖既有公开、mixable、
   spec implementation dependency 与可达 reifiable callable dependency，且保持
-  非泛型发码行为不变。不得在 Codegen 复制一套近似的可达性扫描。
+  非泛型和现有公开/capability 泛型发码行为不变。不得在 Codegen 复制一套近似的
+  可达性扫描或新增平行选择链路。
 - [ ] **实际变更（复用泛型 callable linkage 判定）**：让泛型 type/fit 的 provider
   shared body 导出复用 3.4 节现有 package-callable 判定，使 spec selection 选中的
   seal 方法取得 package linkage；不得把“仅被 Symbol 依赖闭包收录”直接等同于
@@ -502,8 +538,10 @@ FCTS 之外必须保留隔离 `.fb` CLI 用例，防止本地 workspace-cache �
   通用事实丢失时才列为实际修复，不扩展到其他 reified 行为，也不为当前用例增加
   依赖特判。
 - [ ] **验证（编译器用例）**：补齐 Semantic、Symbol、Codegen、Imported Semantic
-  和隔离 `.fb` CLI 正负用例，并恢复现有 `#if 0` 探针中属于本专项的部分。
-- [ ] **验证（FCTS）**：补齐泛型 type/fit seal 实现的跨包可观察行为用例。
+  和隔离 `.fb` CLI 正负用例；同包与 imported Semantic 使用同一场景矩阵，并恢复
+  现有 `#if 0` 探针中属于本专项的部分。
+- [ ] **验证（FCTS）**：补齐泛型 type/fit seal 实现的同包与跨包可观察行为用例，
+  两侧对相同合法场景必须一致。
 - [ ] **验证（回归）**：执行定向测试后，在沙箱外执行 `make test` 全量回归。
 
 实施应分成“关系模板/名义关闭”和“package callable/稳定符号”两个明确阶段；前一
