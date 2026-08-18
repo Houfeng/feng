@@ -4958,7 +4958,10 @@ static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
 static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    const FengCallableSignature *callable,
                                                    size_t type_param_index,
-                                                   FengTypeRef *const *type_args);
+                                                   FengTypeRef *const *type_args,
+                                                   const FengDecl *owner_type_decl,
+                                                   const FengDecl *fit_decl,
+                                                   InferredExprType owner_type);
 static bool fit_target_collect_array_local_type_param(const ResolveContext *context,
                                                       const FengTypeRef *target_ref,
                                                       FengTypeParam *out_type_param);
@@ -5001,6 +5004,61 @@ static const FengTypeRef *substitute_type_ref_for_fit_instance(
         return member_type_ref;
     }
     return substituted;
+}
+
+/* Instantiate one callable-local constraint in the same order used for its
+ * parameter and return surfaces: owner, fit target, then callable arguments.
+ * The returned reference is borrowed unless `out_owned` is non-NULL; callers
+ * either free that owned result after a probe or transfer it to a semantic
+ * lifetime tracker before recording a witness. */
+static const FengTypeRef *instantiate_callable_constraint_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    size_t type_param_index,
+    FengTypeRef *const *type_args,
+    const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type,
+    FengTypeRef **out_owned) {
+    const FengTypeRef *constraint;
+    FengTypeRef *substituted;
+
+    if (out_owned != NULL) {
+        *out_owned = NULL;
+    }
+    if (context == NULL || callable == NULL ||
+        type_param_index >= callable->type_param_count) {
+        return NULL;
+    }
+    constraint = callable->type_params[type_param_index].constraint;
+    if (constraint == NULL) {
+        return NULL;
+    }
+    constraint = substitute_type_ref_for_owner_instance(context,
+                                                        owner_type_decl,
+                                                        owner_type,
+                                                        constraint);
+    constraint = substitute_type_ref_for_fit_instance(context,
+                                                      fit_decl,
+                                                      owner_type,
+                                                      constraint);
+    if (type_args == NULL || callable->type_param_count == 0U) {
+        return constraint;
+    }
+    substituted = clone_type_ref_substituting_type_params(
+        constraint,
+        callable->type_params,
+        callable->type_param_count,
+        type_args);
+    if (substituted == NULL) {
+        return constraint;
+    }
+    if (out_owned != NULL) {
+        *out_owned = substituted;
+        return substituted;
+    }
+    free_synthetic_type_ref(substituted);
+    return constraint;
 }
 
 /* Return the callable signature identified by one resolved call record. */
@@ -12988,7 +13046,10 @@ static bool callable_parameters_match_args(ResolveContext *context,
             if (!generic_type_arg_satisfies_constraint(context,
                                                        callable,
                                                        type_param_index,
-                                                       type_args)) {
+                                                       type_args,
+                                                       NULL,
+                                                       NULL,
+                                                       inferred_expr_type_unknown())) {
                 ok = false;
                 break;
             }
@@ -13232,7 +13293,10 @@ static bool callable_parameters_match_args_for_owner_instance(
             if (!generic_type_arg_satisfies_constraint(context,
                                                        callable,
                                                        type_param_index,
-                                                       type_args)) {
+                                                       type_args,
+                                                       owner_type_decl,
+                                                       fit_decl,
+                                                       owner_type)) {
                 ok = false;
                 break;
             }
@@ -13936,7 +14000,10 @@ static bool function_type_decl_matches_explicit_callable_signature(
                 context,
                 callable,
                 param_index,
-                (FengTypeRef *const *)explicit_type_args)) {
+                (FengTypeRef *const *)explicit_type_args,
+                owner_type_decl,
+                fit_decl,
+                owner_type)) {
             return false;
         }
     }
@@ -20680,11 +20747,14 @@ static void record_object_arg_coercion_sites_for_resolved_call(
 static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    const FengCallableSignature *callable,
                                                    size_t type_param_index,
-                                                   FengTypeRef *const *type_args) {
+                                                   FengTypeRef *const *type_args,
+                                                   const FengDecl *owner_type_decl,
+                                                   const FengDecl *fit_decl,
+                                                   InferredExprType owner_type) {
     const FengTypeParam *type_param;
     const FengTypeRef *actual_type_ref;
     const FengDecl *constraint_decl;
-    FengTypeRef *substituted = NULL;
+    FengTypeRef *owned_constraint = NULL;
     const FengTypeRef *constraint_ref;
     bool result = false;
 
@@ -20698,8 +20768,26 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         return true;
     }
 
-    constraint_decl = resolve_type_ref_decl(context, type_param->constraint);
+    constraint_ref = instantiate_callable_constraint_for_owner_instance(
+        context,
+        callable,
+        type_param_index,
+        type_args,
+        owner_type_decl,
+        fit_decl,
+        owner_type,
+        &owned_constraint);
+    if (constraint_ref == NULL) {
+        return true;
+    }
+    if (callable->type_param_count > 0U && owned_constraint == NULL) {
+        /* Preserve the existing deferred decision when another callable type
+         * argument is still unknown and the constraint cannot be closed. */
+        return true;
+    }
+    constraint_decl = resolve_type_ref_decl(context, constraint_ref);
     if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
+        free_synthetic_type_ref(owned_constraint);
         return true;
     }
     if (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
@@ -20707,6 +20795,7 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         /* callable-form / union-form constraints keep the pre-existing lenient
          * behavior; only object-form and intersection-form constraints are
          * enforced here. */
+        free_synthetic_type_ref(owned_constraint);
         return true;
     }
 
@@ -20715,24 +20804,9 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         /* The type argument could not be inferred from the call (e.g. a
          * parameter-less generic relying on explicit type args). Leave the
          * decision to the caller / later stages instead of rejecting. */
+        free_synthetic_type_ref(owned_constraint);
         return true;
     }
-
-    /* Substitute type parameters referenced inside the constraint (for example
-     * JsonSerializable<T> -> JsonSerializable<Actual>) before checking. When
-     * substitution cannot complete (some referenced type param has no inferred
-     * value, e.g. an explicit-type-args call where T is bound by the caller but
-     * not by argument inference) we conservatively accept: the constraint
-     * cannot be evaluated here and the post-selection materializer will
-     * finalize. */
-    substituted = clone_type_ref_substituting_type_params(type_param->constraint,
-                                                            callable->type_params,
-                                                            callable->type_param_count,
-                                                            type_args);
-    if (substituted == NULL) {
-        return true;
-    }
-    constraint_ref = substituted;
 
     /* Reflexive case: when the inferred argument equals the required constraint
      * structurally (e.g. `rewrite<HasChild>(...)` binds T to the spec HasChild
@@ -20776,9 +20850,7 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         }
     }
 
-    if (substituted != NULL) {
-        free_synthetic_type_ref(substituted);
-    }
+    free_synthetic_type_ref(owned_constraint);
     return result;
 }
 
@@ -21132,25 +21204,36 @@ static void materialize_callable_type_param_constraint_witnesses(
     for (i = 0U; i < callable->type_param_count; ++i) {
         const FengDecl *actual_type_decl = NULL;
         const FengTypeRef *actual_type_ref = NULL;
-        const FengTypeRef *instantiated_constraint = callable->type_params[i].constraint;
+        const FengTypeRef *instantiated_constraint;
+        FengTypeRef *owned_constraint = NULL;
 
         if (type_args[i] != NULL) {
             actual_type_ref = type_args[i];
             actual_type_decl = resolve_type_ref_decl(context, type_args[i]);
         }
-        if (instantiated_constraint != NULL && callable->type_param_count > 0U) {
-            FengTypeRef *subst = clone_type_ref_substituting_type_params(
-                instantiated_constraint,
-                callable->type_params,
-                callable->type_param_count,
-                (FengTypeRef *const *)type_args);
-            if (subst != NULL) {
-                if (resolver_track_synthetic_type_ref(context, subst)) {
-                    instantiated_constraint = subst;
-                } else {
-                    free_synthetic_type_ref(subst);
-                }
-            }
+        instantiated_constraint = instantiate_callable_constraint_for_owner_instance(
+            context,
+            callable,
+            i,
+            type_args,
+            owner_type_decl,
+            fit_decl,
+            owner_type,
+            &owned_constraint);
+        if (owned_constraint != NULL &&
+            !resolver_track_synthetic_type_ref(context, owned_constraint)) {
+            free_synthetic_type_ref(owned_constraint);
+            owned_constraint = NULL;
+            instantiated_constraint =
+                instantiate_callable_constraint_for_owner_instance(
+                    context,
+                    callable,
+                    i,
+                    NULL,
+                    owner_type_decl,
+                    fit_decl,
+                    owner_type,
+                    NULL);
         }
 
         materialize_object_spec_constraint_witness_if_applicable(context,

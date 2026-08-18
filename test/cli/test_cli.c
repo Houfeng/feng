@@ -3655,6 +3655,111 @@ static void test_direct_build_consumes_package_constrained_generic_type(void) {
     free(remove_error);
 }
 
+/* A strict package consumer closes method constraints that reference the
+ * imported generic owner. Generic type and exported generic-fit methods use
+ * the same instance/static witness and wrapper path, including nested owner
+ * arguments and an explicitly closed instance method value. */
+static void test_direct_build_consumes_package_generic_owner_method_constraint(void) {
+    char template_path[] = "temp/feng_cli_pkg_generic_owner_constraint_XXXXXX";
+    char *workspace_dir;
+    char *bundle_path;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    bundle_path = build_single_source_package_bundle(
+        workspace_dir,
+        "pkggenericownerconstraint",
+        "open module test.cli.pkggenericownerconstraint;\n"
+        "open type Box<T> {\n"
+        "  open let value: T;\n"
+        "  func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "open spec Surface<T> {\n"
+        "  func read(): T;\n"
+        "  static func echo(value: T): T;\n"
+        "}\n"
+        "open type Direct<T>: Surface<T> {\n"
+        "  open let value: T;\n"
+        "  func Direct(value: T) { self.value = value; }\n"
+        "  open func read(): T { return self.value; }\n"
+        "  open static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "open type FitValue<T> {\n"
+        "  open let value: T;\n"
+        "  func FitValue(value: T) { self.value = value; }\n"
+        "}\n"
+        "open fit FitValue<T>: Surface<T> {\n"
+        "  open func read(): T { return self.value; }\n"
+        "  open static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "open type Host<T> {\n"
+        "  open func read<U: Surface<T>>(subject: U): T {\n"
+        "    return subject.read();\n"
+        "  }\n"
+        "  open static func echo<U: Surface<T>>(value: T): T {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "  open func map<U: Surface<T>>(value: T): T {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "  open static func nested<U: Surface<Box<T>>>(\n"
+        "    value: Box<T>\n"
+        "  ): Box<T> { return U.echo(value); }\n"
+        "}\n"
+        "open type FitHost<T> {}\n"
+        "open fit FitHost<T> {\n"
+        "  open func read<U: Surface<T>>(subject: U): T {\n"
+        "    return subject.read();\n"
+        "  }\n"
+        "  open static func echo<U: Surface<T>>(value: T): T {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "  open func map<U: Surface<T>>(value: T): T {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "  open static func nested<U: Surface<Box<T>>>(\n"
+        "    value: Box<T>\n"
+        "  ): Box<T> { return U.echo(value); }\n"
+        "}\n");
+
+    compile_consumer_with_package_and_expect_stdout(
+        workspace_dir,
+        bundle_path,
+        "module test.cli.pkggenericownerconstraintmain;\n"
+        "import test.cli.pkggenericownerconstraint;\n"
+        "@cdecl(\"libc\")\n"
+        "extern func puts(msg: string*): int;\n"
+        "spec IntMapper(value: int): int;\n"
+        "func main(args: string[]) {\n"
+        "  let host = Host<int>();\n"
+        "  let fitHost = FitHost<int>();\n"
+        "  let direct = Direct<int>(10);\n"
+        "  let fitted = FitValue<int>(20);\n"
+        "  let box = Box<int>(30);\n"
+        "  let typeMapper: IntMapper = host.map<Direct<int>>;\n"
+        "  let fitMapper: IntMapper = fitHost.map<FitValue<int>>;\n"
+        "  let nestedType = Host<int>.nested<Direct<Box<int>>>(box);\n"
+        "  let nestedFit = FitHost<int>.nested<FitValue<Box<int>>>(box);\n"
+        "  if host.read<Direct<int>>(direct) == 10 &&\n"
+        "     host.read(fitted) == 20 && Host<int>.echo<Direct<int>>(1) == 1 &&\n"
+        "     fitHost.read<FitValue<int>>(fitted) == 20 &&\n"
+        "     fitHost.read(direct) == 10 &&\n"
+        "     FitHost<int>.echo<FitValue<int>>(2) == 2 &&\n"
+        "     nestedType.value == 30 && nestedFit.value == 30 &&\n"
+        "     typeMapper(3) == 3 && fitMapper(4) == 4 {\n"
+        "    puts(&\"package generic owner constraint ok\");\n"
+        "  }\n"
+        "}\n",
+        "generic_owner_constraint_main",
+        "package generic owner constraint ok\n");
+
+    free(bundle_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Verifies a binary-package consumer uses ordinary source construction before
  * copying mixed fields, while the no-source form remains direct zero-init. */
 static void test_direct_build_consumes_package_mixin(void) {
@@ -19511,6 +19616,7 @@ int main(void) {
     test_direct_build_consumes_package_generic_spec_implementations();
     test_direct_build_consumes_package_constrained_generic_function();
     test_direct_build_consumes_package_constrained_generic_type();
+    test_direct_build_consumes_package_generic_owner_method_constraint();
     test_direct_build_consumes_package_mixin();
     test_direct_build_consumes_package_mixable_seal_members();
     test_package_mixable_seal_field_three_package_propagation();

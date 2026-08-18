@@ -744,7 +744,8 @@ witness。
 
 实施应分成“关系模板/名义关闭”和“package callable/稳定符号”两个明确阶段；前一
 阶段不依赖 3.5 节的符号事实决策。本专项已完成 2.8 节依赖方向修正并重新回归；
-后续为 `Host<T>.invoke<U: Surface<T>>` 建立独立 bugfix 文档。object-form spec
-方法级泛型继续由 `feng-object-form-spec-generic-method-bugfix.md` 单独处理。三个问题
+后续由 [泛型 owner 方法约束引用 owner 泛参修复](feng-generic-owner-method-constraint-bugfix.md)
+处理 `Host<T>.invoke<U: Surface<T>>`。object-form spec 方法级泛型继续由
+`feng-object-form-spec-generic-method-bugfix.md` 单独处理。三个问题
 不得合并实施，也不得为了统一改动而改变 fit visibility、既有普通泛型 fit target
 参数映射或非泛型 callable 路径。

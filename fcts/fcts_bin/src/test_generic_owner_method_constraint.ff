@@ -1,0 +1,216 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_owner_method_constraint;
+
+/** Callable surface used to observe captured generic instance methods. */
+spec OwnerConstraintIntMapper(value: int): int;
+
+/** Same-package payload used by a nested method constraint. */
+type LocalOwnerConstraintBox<T> {
+  /** Stored payload. */
+  open let value: T;
+
+  /** Construct one local payload box. */
+  func LocalOwnerConstraintBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Same-package generic contract closed from an owner argument. */
+spec LocalOwnerConstraintSurface<T> {
+  /** Read one subject value. */
+  func read(): T;
+
+  /** Echo one value through a static witness slot. */
+  static func echo(value: T): T;
+}
+
+/** Same-package type-head implementation. */
+type LocalOwnerConstraintDirect<T>: LocalOwnerConstraintSurface<T> {
+  /** Stored subject value. */
+  open let value: T;
+
+  /** Construct one direct subject. */
+  func LocalOwnerConstraintDirect(value: T) {
+    self.value = value;
+  }
+
+  /** Satisfy the instance requirement. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Satisfy the static requirement. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Same-package subject implemented through a generic fit. */
+type LocalOwnerConstraintFitValue<T> {
+  /** Stored subject value. */
+  open let value: T;
+
+  /** Construct one fit-backed subject. */
+  func LocalOwnerConstraintFitValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Same-package generic fit implementation. */
+fit LocalOwnerConstraintFitValue<T>: LocalOwnerConstraintSurface<T> {
+  /** Satisfy the instance requirement. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Satisfy the static requirement. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Same-package generic type owner. */
+type LocalOwnerConstraintHost<T> {
+  /** Read through a method constraint closed as Surface<T>. */
+  open func read<U: LocalOwnerConstraintSurface<T>>(subject: U): T {
+    return subject.read();
+  }
+
+  /** Invoke a static witness through a method constraint closed by T. */
+  open static func echo<U: LocalOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Expose a capturable generic instance method. */
+  open func map<U: LocalOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Close a nested owner-dependent constraint as Surface<Box<T>>. */
+  open static func nested<
+    U: LocalOwnerConstraintSurface<LocalOwnerConstraintBox<T>>
+  >(
+    value: LocalOwnerConstraintBox<T>
+  ): LocalOwnerConstraintBox<T> {
+    return U.echo(value);
+  }
+}
+
+/** Same-package generic fit target. */
+type LocalOwnerConstraintFitHost<T> {}
+
+/** Same-package fit methods sharing target and method generic parameters. */
+fit LocalOwnerConstraintFitHost<T> {
+  /** Read through a method constraint closed as Surface<T>. */
+  open func read<U: LocalOwnerConstraintSurface<T>>(subject: U): T {
+    return subject.read();
+  }
+
+  /** Invoke a static witness through a method constraint closed by T. */
+  open static func echo<U: LocalOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Expose a capturable generic fit instance method. */
+  open func map<U: LocalOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Close a nested target-dependent constraint as Surface<Box<T>>. */
+  open static func nested<
+    U: LocalOwnerConstraintSurface<LocalOwnerConstraintBox<T>>
+  >(
+    value: LocalOwnerConstraintBox<T>
+  ): LocalOwnerConstraintBox<T> {
+    return U.echo(value);
+  }
+}
+
+/** Verify owner-dependent method constraints in one package and across one package boundary. */
+open func test_generic_owner_method_constraint(): void {
+  describe("generic owner method constraints", () {
+    test("same-package generic type and fit owners", () {
+      let host = LocalOwnerConstraintHost<int>();
+      let fitHost = LocalOwnerConstraintFitHost<int>();
+      let direct = LocalOwnerConstraintDirect<int>(11);
+      let fitted = LocalOwnerConstraintFitValue<int>(12);
+      let box = LocalOwnerConstraintBox<int>(17);
+      let typeMapper: OwnerConstraintIntMapper =
+        host.map<LocalOwnerConstraintDirect<int>>;
+      let fitMapper: OwnerConstraintIntMapper =
+        fitHost.map<LocalOwnerConstraintFitValue<int>>;
+      let nestedType = LocalOwnerConstraintHost<int>.nested<
+        LocalOwnerConstraintDirect<LocalOwnerConstraintBox<int>>
+      >(box);
+      let nestedFit = LocalOwnerConstraintFitHost<int>.nested<
+        LocalOwnerConstraintFitValue<LocalOwnerConstraintBox<int>>
+      >(LocalOwnerConstraintBox<int>(18));
+
+      assert(host.read<LocalOwnerConstraintDirect<int>>(direct) == 11,
+             "local type owner accepts an explicit method argument");
+      assert(host.read(fitted) == 12,
+             "local type owner infers a fit-backed method argument");
+      assert(LocalOwnerConstraintHost<int>.echo<
+               LocalOwnerConstraintDirect<int>
+             >(13) == 13,
+             "local type owner invokes a static witness");
+      assert(fitHost.read<LocalOwnerConstraintFitValue<int>>(fitted) == 12,
+             "local fit owner accepts an explicit method argument");
+      assert(fitHost.read(direct) == 11,
+             "local fit owner infers a type-head method argument");
+      assert(LocalOwnerConstraintFitHost<int>.echo<
+               LocalOwnerConstraintFitValue<int>
+             >(14) == 14,
+             "local fit owner invokes a static witness");
+      assert(typeMapper(15) == 15,
+             "local type owner method value preserves its constraint witness");
+      assert(fitMapper(16) == 16,
+             "local fit owner method value preserves its constraint witness");
+      assert(nestedType.value == 17 && nestedFit.value == 18,
+             "local nested owner arguments close before witness selection");
+    });
+
+    test("package generic type and fit owners", () {
+      let host = PackageOwnerConstraintHost<int>();
+      let fitHost = PackageOwnerConstraintFitHost<int>();
+      let direct = PackageOwnerConstraintDirect<int>(21);
+      let fitted = PackageOwnerConstraintFitValue<int>(22);
+      let box = PackageOwnerConstraintBox<int>(27);
+      let typeMapper: OwnerConstraintIntMapper =
+        host.map<PackageOwnerConstraintDirect<int>>;
+      let fitMapper: OwnerConstraintIntMapper =
+        fitHost.map<PackageOwnerConstraintFitValue<int>>;
+      let nestedType = PackageOwnerConstraintHost<int>.nested<
+        PackageOwnerConstraintDirect<PackageOwnerConstraintBox<int>>
+      >(box);
+      let nestedFit = PackageOwnerConstraintFitHost<int>.nested<
+        PackageOwnerConstraintFitValue<PackageOwnerConstraintBox<int>>
+      >(PackageOwnerConstraintBox<int>(28));
+
+      assert(host.read<PackageOwnerConstraintDirect<int>>(direct) == 21,
+             "package type owner accepts an explicit method argument");
+      assert(host.read(fitted) == 22,
+             "package type owner infers a fit-backed method argument");
+      assert(PackageOwnerConstraintHost<int>.echo<
+               PackageOwnerConstraintDirect<int>
+             >(23) == 23,
+             "package type owner invokes an imported static witness");
+      assert(fitHost.read<PackageOwnerConstraintFitValue<int>>(fitted) == 22,
+             "package fit owner accepts an explicit method argument");
+      assert(fitHost.read(direct) == 21,
+             "package fit owner infers a type-head method argument");
+      assert(PackageOwnerConstraintFitHost<int>.echo<
+               PackageOwnerConstraintFitValue<int>
+             >(24) == 24,
+             "package fit owner invokes an imported static witness");
+      assert(typeMapper(25) == 25,
+             "package type owner method value preserves its constraint witness");
+      assert(fitMapper(26) == 26,
+             "package fit owner method value preserves its constraint witness");
+      assert(nestedType.value == 27 && nestedFit.value == 28,
+             "package nested owner arguments close before witness selection");
+    });
+  });
+}

@@ -1,0 +1,129 @@
+open module fcts_lib.test.generic_owner_method_constraint;
+
+/** Payload used by a nested owner-dependent method constraint. */
+open type PackageOwnerConstraintBox<T> {
+  /** Stored payload. */
+  open let value: T;
+
+  /** Construct one payload box. */
+  func PackageOwnerConstraintBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Generic contract closed by a generic owner's concrete argument. */
+open spec PackageOwnerConstraintSurface<T> {
+  /** Read one subject value. */
+  func read(): T;
+
+  /** Echo one value through a static witness slot. */
+  static func echo(value: T): T;
+}
+
+/** Type-head implementation of the package contract. */
+open type PackageOwnerConstraintDirect<T>:
+  PackageOwnerConstraintSurface<T> {
+  /** Stored subject value. */
+  open let value: T;
+
+  /** Construct one direct subject. */
+  func PackageOwnerConstraintDirect(value: T) {
+    self.value = value;
+  }
+
+  /** Satisfy the instance requirement. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Satisfy the static requirement. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Subject whose package contract is supplied by a generic fit. */
+open type PackageOwnerConstraintFitValue<T> {
+  /** Stored subject value. */
+  open let value: T;
+
+  /** Construct one fit-backed subject. */
+  func PackageOwnerConstraintFitValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Generic fit implementation of the package contract. */
+open fit PackageOwnerConstraintFitValue<T>:
+  PackageOwnerConstraintSurface<T> {
+  /** Satisfy the instance requirement. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Satisfy the static requirement. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Generic type owner whose method constraints reference its own T. */
+open type PackageOwnerConstraintHost<T> {
+  /** Read through a method constraint closed as Surface<T>. */
+  open func read<U: PackageOwnerConstraintSurface<T>>(subject: U): T {
+    return subject.read();
+  }
+
+  /** Invoke a static witness through a method constraint closed by T. */
+  open static func echo<U: PackageOwnerConstraintSurface<T>>(
+    value: T
+  ): T {
+    return U.echo(value);
+  }
+
+  /** Expose a capturable generic instance method using the same constraint. */
+  open func map<U: PackageOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Close a nested owner-dependent constraint as Surface<Box<T>>. */
+  open static func nested<
+    U: PackageOwnerConstraintSurface<PackageOwnerConstraintBox<T>>
+  >(
+    value: PackageOwnerConstraintBox<T>
+  ): PackageOwnerConstraintBox<T> {
+    return U.echo(value);
+  }
+}
+
+/** Generic fit target whose methods reference the target's T. */
+open type PackageOwnerConstraintFitHost<T> {}
+
+/** Fit methods sharing the generic target and method-parameter scope. */
+open fit PackageOwnerConstraintFitHost<T> {
+  /** Read through a method constraint closed as Surface<T>. */
+  open func read<U: PackageOwnerConstraintSurface<T>>(subject: U): T {
+    return subject.read();
+  }
+
+  /** Invoke a static witness through a method constraint closed by T. */
+  open static func echo<U: PackageOwnerConstraintSurface<T>>(
+    value: T
+  ): T {
+    return U.echo(value);
+  }
+
+  /** Expose a capturable generic fit instance method. */
+  open func map<U: PackageOwnerConstraintSurface<T>>(value: T): T {
+    return U.echo(value);
+  }
+
+  /** Close a nested target-dependent constraint as Surface<Box<T>>. */
+  open static func nested<
+    U: PackageOwnerConstraintSurface<PackageOwnerConstraintBox<T>>
+  >(
+    value: PackageOwnerConstraintBox<T>
+  ): PackageOwnerConstraintBox<T> {
+    return U.echo(value);
+  }
+}

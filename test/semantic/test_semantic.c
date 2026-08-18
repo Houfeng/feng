@@ -18343,6 +18343,126 @@ static void test_generic_method_rejects_owner_and_method_type_argument_mismatch(
     feng_program_free(program);
 }
 
+/* Method constraints are instantiated under the complete generic owner +
+ * callable scope for type and fit owners. Explicit calls, inferred calls,
+ * supported instance method values, and nested/reordered owner arguments all
+ * use the same constraint surface; an unrelated type remains excluded. */
+static void test_generic_owner_method_constraints_use_closed_owner_arguments(void) {
+    const char *accepted =
+        "module demo.generic_owner_method_constraint.accepted;\n"
+        "type Box<T> {\n"
+        "  let value: T;\n"
+        "  func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "type Pair<A, B> {\n"
+        "  let first: A;\n"
+        "  let second: B;\n"
+        "  func Pair(first: A, second: B) {\n"
+        "    self.first = first; self.second = second;\n"
+        "  }\n"
+        "}\n"
+        "spec Surface<T> {\n"
+        "  func read(): T;\n"
+        "  static func echo(value: T): T;\n"
+        "}\n"
+        "spec IntMapper(value: int): int;\n"
+        "type Value<T>: Surface<T> {\n"
+        "  let value: T;\n"
+        "  func Value(value: T) { self.value = value; }\n"
+        "  func read(): T { return self.value; }\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type FitValue<T> {\n"
+        "  open let value: T;\n"
+        "  func FitValue(value: T) { self.value = value; }\n"
+        "}\n"
+        "fit FitValue<T>: Surface<T> {\n"
+        "  func read(): T { return self.value; }\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type Host<T> {\n"
+        "  func read<U: Surface<T>>(subject: U): T { return subject.read(); }\n"
+        "  static func echo<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  func map<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  static func nested<U: Surface<Box<T>>>(value: Box<T>): Box<T> {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n"
+        "type FitHost<T> {}\n"
+        "fit FitHost<T> {\n"
+        "  func read<U: Surface<T>>(subject: U): T { return subject.read(); }\n"
+        "  static func echo<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  func map<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  static func nested<U: Surface<Box<T>>>(value: Box<T>): Box<T> {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n"
+        "type ReorderedHost<A, B> {\n"
+        "  static func echo<U: Surface<Pair<B, A>>>(\n"
+        "    value: Pair<B, A>\n"
+        "  ): Pair<B, A> { return U.echo(value); }\n"
+        "}\n"
+        "func use(): int {\n"
+        "  let host = Host<int>();\n"
+        "  let fitHost = FitHost<int>();\n"
+        "  let direct = Value<int>(10);\n"
+        "  let fitted = FitValue<int>(20);\n"
+        "  let box = Box<int>(30);\n"
+        "  let typeMapper: IntMapper = host.map<Value<int>>;\n"
+        "  let fitMapper: IntMapper = fitHost.map<FitValue<int>>;\n"
+        "  let nestedType = Host<int>.nested<Value<Box<int>>>(box);\n"
+        "  let nestedFit = FitHost<int>.nested<FitValue<Box<int>>>(box);\n"
+        "  let pair = Pair<string, int>(\"pair\", 40);\n"
+        "  let reordered = ReorderedHost<int, string>.echo<\n"
+        "    Value<Pair<string, int>>\n"
+        "  >(pair);\n"
+        "  return host.read<Value<int>>(direct) + host.read(fitted) +\n"
+        "         Host<int>.echo<Value<int>>(1) +\n"
+        "         fitHost.read<FitValue<int>>(fitted) + fitHost.read(direct) +\n"
+        "         FitHost<int>.echo<FitValue<int>>(2) +\n"
+        "         nestedType.value + nestedFit.value + reordered.second +\n"
+        "         typeMapper(3) + fitMapper(4);\n"
+        "}\n";
+    const char *rejected =
+        "module demo.generic_owner_method_constraint.rejected;\n"
+        "spec Surface<T> { static func echo(value: T): T; }\n"
+        "type Value<T>: Surface<T> {\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type Wrong {}\n"
+        "type Host<T> {\n"
+        "  static func echo<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "}\n"
+        "func bad(): int { return Host<int>.echo<Wrong>(1); }\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_owner_method_constraint_accepted.ff", accepted);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    program = parse_program_or_die(
+        "generic_owner_method_constraint_rejected.ff", rejected);
+    programs[0] = program;
+    analysis = NULL;
+    errors = NULL;
+    error_count = 0U;
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE0512") == 0);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* G7 semantic additions */
 
 static void test_generic_function_two_type_params_ok(void) {
@@ -25045,6 +25165,7 @@ int main(void) {
     test_generic_type_explicit_type_args_static_field_access();
     test_generic_method_type_param_collides_with_type_param();
     test_generic_method_rejects_owner_and_method_type_argument_mismatch();
+    test_generic_owner_method_constraints_use_closed_owner_arguments();
     test_generic_function_two_type_params_ok();
     test_generic_spec_generic_parent_forwarding_ok();
     test_generic_duplicate_fn_by_type_param_name_only_rejected();

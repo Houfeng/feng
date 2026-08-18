@@ -8523,6 +8523,100 @@ static void test_generic_type_generic_method_codegen(void) {
     feng_program_free(program);
 }
 
+/* Generic type and fit owners share one owner + method constraint scope.
+ * Exercise instance/static witness dispatch, explicit and inferred method
+ * arguments, nested owner arguments, and a supported instance method value;
+ * the generated C must compile with the existing wrapper ABI. */
+static void test_generic_owner_method_constraint_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_owner_method_constraint;\n"
+        "type Box<T> {\n"
+        "  let value: T;\n"
+        "  func Box(value: T) { self.value = value; }\n"
+        "}\n"
+        "spec Surface<T> {\n"
+        "  func read(): T;\n"
+        "  static func echo(value: T): T;\n"
+        "}\n"
+        "spec IntMapper(value: int): int;\n"
+        "type Value<T>: Surface<T> {\n"
+        "  let value: T;\n"
+        "  func Value(value: T) { self.value = value; }\n"
+        "  func read(): T { return self.value; }\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type FitValue<T> {\n"
+        "  open let value: T;\n"
+        "  func FitValue(value: T) { self.value = value; }\n"
+        "}\n"
+        "fit FitValue<T>: Surface<T> {\n"
+        "  func read(): T { return self.value; }\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type Host<T> {\n"
+        "  func read<U: Surface<T>>(subject: U): T { return subject.read(); }\n"
+        "  static func echo<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  func map<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  static func nested<U: Surface<Box<T>>>(value: Box<T>): Box<T> {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n"
+        "type FitHost<T> {}\n"
+        "fit FitHost<T> {\n"
+        "  func read<U: Surface<T>>(subject: U): T { return subject.read(); }\n"
+        "  static func echo<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  func map<U: Surface<T>>(value: T): T { return U.echo(value); }\n"
+        "  static func nested<U: Surface<Box<T>>>(value: Box<T>): Box<T> {\n"
+        "    return U.echo(value);\n"
+        "  }\n"
+        "}\n"
+        "func use(): int {\n"
+        "  let host = Host<int>();\n"
+        "  let fitHost = FitHost<int>();\n"
+        "  let direct = Value<int>(10);\n"
+        "  let fitted = FitValue<int>(20);\n"
+        "  let box = Box<int>(30);\n"
+        "  let typeMapper: IntMapper = host.map<Value<int>>;\n"
+        "  let fitMapper: IntMapper = fitHost.map<FitValue<int>>;\n"
+        "  let nestedType = Host<int>.nested<Value<Box<int>>>(box);\n"
+        "  let nestedFit = FitHost<int>.nested<FitValue<Box<int>>>(box);\n"
+        "  return host.read<Value<int>>(direct) + host.read(fitted) +\n"
+        "         Host<int>.echo<Value<int>>(1) +\n"
+        "         fitHost.read<FitValue<int>>(fitted) + fitHost.read(direct) +\n"
+        "         FitHost<int>.echo<FitValue<int>>(2) +\n"
+        "         nestedType.value + nestedFit.value +\n"
+        "         typeMapper(3) + fitMapper(4);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_owner_method_constraint_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengGenericMethod__feng__codegen__generic_owner_method_constraint__Host") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengFitMethod__feng__codegen__generic_owner_method_constraint__FitHost") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengSpecWitness__feng__codegen__generic_owner_method_constraint__Surface") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kGenericScalarInstanceDirectCallSrc =
     "module feng.codegen.gd13;\n"
     "type Set<T> {\n"
@@ -12086,6 +12180,7 @@ int main(void) {
     test_generic_aggregate_return_codegen();
     test_generic_value_construction_uses_reified_storage_codegen();
     test_generic_type_generic_method_codegen();
+    test_generic_owner_method_constraint_codegen();
     test_generic_scalar_instance_direct_call_codegen();
     test_phase_e_aggregate_generic_arg_three_entrances_codegen();
     test_type_field_initializers_codegen();
