@@ -1,358 +1,362 @@
-# Feng 泛型 owner 的 `spec` witness 方法依赖闭合修复开发文档
+# Feng 泛型 owner 普通方法依赖闭合修复开发文档
 
-> 状态：待 Review，尚未实施（2026-08-19）
+> 状态：已完成实际代码分析，待 Review，尚未实施（2026-08-19）
 >
-> 本文只跟踪：已经闭合的泛型 `type` owner 通过 object-form `spec` witness
-> 调用一个**没有方法级泛参**的实现方法时，witness 物化链路没有完整复用该
-> closed method wrapper 的 callable dependency 注册结果，因而在编译期报告
-> `CE0031` 的问题。
+> 本文最初由 object-form `spec` witness 调用失败引出。实际代码与隔离用例已经
+> 证明：根因不在 `spec` 或 witness，而在 closed generic `type` 实例没有主动预登记
+> 普通成员方法的 reifiable dependencies。`spec` witness 只是没有像直接方法调用那样
+> 偶然补齐该缺口。
 
-## 1. 依据与范围
+## 1. 问题结论
 
-本修复复用以下既有设计，不重新定义泛型或 `spec` 语义：
+本文只修复既有具化管线的登记遗漏，不重新定义 descriptor 或 witness 语义；相关既有
+设计继续以
+[Feng 泛型共享体具化修复开发文档](./feng-generic-shared-body-reification-bugfix-dev.md)
+和
+[Feng 泛型 `spec` 满足关系及跨包实现符号修复开发文档](./feng-generic-spec-implementation-package-bugfix.md)
+为准。
 
-- [Feng 泛型共享体具化修复开发文档](./feng-generic-shared-body-reification-bugfix-dev.md)：
-  定义 `_type_desc`、`FengFunctionDescriptor`、closed wrapper 与静态
-  descriptor graph；
-- [Feng 泛型 `spec` 满足关系及跨包实现符号修复开发文档](./feng-generic-spec-implementation-package-bugfix.md)：
-  定义泛型 type/fit 关系关闭、witness 物化与跨包实现恢复；
-- [Feng object-form `spec` 方法级泛型修复开发文档](./feng-object-form-spec-generic-method-bugfix.md)：
-  单独跟踪 requirement 自身声明方法级泛参时的动态实现 descriptor 路由问题。
+当前编译器对泛型 `type` 的 reifiable dependency 已经按用途分为两类：
 
-本专项只处理如下组合：
+- 字段、字段初始化器、构造器、终结器等依赖记录在 type declaration dep set；
+- 普通成员方法（包括实例方法和静态方法）的依赖记录在独立的 member dep set。
+
+当 `A<T>` 被闭合为 `A<int>` 时，Codegen 当前会：
+
+1. 建立并发布 `A<int>` 的 `UserType` shell；
+2. 收集替换后的成员签名所引用的泛型实例；
+3. 关闭并登记 type declaration dep set；
+4. 之后为 `A<int>` 的普通方法生成 closed wrapper 和
+   `FengFunctionDescriptor`。
+
+缺失的是：在第 4 步以前，Codegen 没有关闭并登记普通方法各自的 member dep set。
+因此，只要某个方法自身没有泛参的成员方法在实现体中依赖 `Box<T>`，生成
+`A<int>.method` 的 closed function descriptor 时就可能找不到 `Box<int>`，报告
+`CE0031`。
+
+直接调用 `A<int>.method(...)` 当前能够通过，是因为调用表达式收集阶段会另外查找该
+方法的 member dep set，并提前登记 `Box<int>`。这只是另一条链路偶然掩盖了缺口；
+只构造 `A<int>` 而不直接调用该方法、通过 `spec` witness 调用，或者通过其他不含该
+直接调用表达式的合法路径，都会暴露相同问题。
+
+所以，本次通用修复应当是：
+
+> closed generic `type` shell 在 owner 闭合时，主动关闭并预登记每个“方法自身没有
+> 泛参”的普通成员方法 dep set，保证后续任何 closed wrapper 使用者都能取得同一棵
+> 已闭合 descriptor tree。
+
+本次不得在 `spec`、witness 或具体成员处增加特判。
+
+## 2. 实际代码现状
+
+### 2.1 Semantic 已经按正确归属记录依赖
+
+`src/semantic/reifiable_deps.c` 的 `collect_for_type()` 当前行为是：
+
+- 泛型 type 的字段、初始化器、构造器和终结器使用 declaration dep set；
+- 只要 owner 有类型参数，或者方法自身有类型参数，普通
+  `FENG_TYPE_MEMBER_METHOD` 就使用
+  `feng_semantic_get_or_create_member_reifiable_dep_set()` 建立 member dep set；
+- `collect_from_callable()` 已经把方法体中的 `Box<T>` 等直接依赖记录到该集合。
+
+因此，本问题不需要改变 Parser、AST、Semantic 依赖发现规则或 dep set 数据结构。
+
+### 2.2 generic type shell 漏掉了 member dep set
+
+`src/codegen/codegen.c` 的 `cg_register_generic_type_instance_shell()` 当前已经：
+
+- 先把 generic `UserType` instance shell 放入 `cg->user_types`，符合 shell-first；
+- 通过 `cg_collect_instantiated_callable_member_instances()` 收集替换后成员签名中的
+  泛型类型；
+- 通过 `cg_collect_closed_reifiable_dep_instances()` 关闭 declaration dep set。
+
+但函数最后只调用：
 
 ```text
-泛型实现 owner A<T>
-  + 已闭合 owner 实例 A<int>
-  + 已闭合 spec 实例 Surface<int>
-  + 非方法泛型 requirement / implementation
-  + 实现方法体含依赖 T 的 callable-local reified dependency
-  + 通过 spec witness 调用
+feng_semantic_lookup_reifiable_dep_set(analysis, type_decl)
 ```
 
-本专项不处理：
+没有逐个调用：
 
-- `spec` requirement 自身声明 `<U>` 等方法级泛参；
+```text
+feng_semantic_lookup_member_reifiable_dep_set(
+    analysis, type_decl, member)
+```
+
+所以成员签名中的泛型实例会被登记，成员实现体仅通过 member dep set 记录的闭合实例
+不会在这里登记。
+
+### 2.3 closed method wrapper 是依赖的正确使用者
+
+`cg_emit_generic_type_method_wrapper_into()` 对以下组合已有明确处理：
+
+- owner 已完全闭合，即 `generic_context_type_param_count == 0`；
+- 普通成员方法；
+- 方法自身 `type_param_count == 0`。
+
+该分支查找方法的 member dep set，并调用 `cg_emit_closed_callable_fdesc()` 生成 closed
+`FengFunctionDescriptor`。owner 的 `T = int` 仍由 `A<int>` 的 type descriptor
+提供；方法描述符只承载 `Box<int>` 等 callable-local dependencies。
+
+这条 wrapper/descriptor 生成逻辑方向正确。它的前置条件是 `Box<int>` 等实例已经由
+实例收集阶段登记；当前缺失的正是该前置登记，而不是 descriptor 的表示或传参能力。
+
+### 2.4 直接调用为什么会掩盖问题
+
+`cg_collect_resolved_call_reifiable_dep_instances()` 当前会处理解析为
+`FENG_RESOLVED_CALLABLE_TYPE_METHOD` 或
+`FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD` 的直接调用：
+
+1. 找到声明 owner 与具体 owner instance；
+2. 合并 owner 类型实参与方法类型实参；
+3. 查找该实现成员的 member dep set；
+4. 调用 `cg_collect_closed_reifiable_dep_instances()` 递归登记依赖。
+
+因此，源代码中出现 `A<int>.method(...)` 时，调用点先补齐了 `Box<int>`，随后 wrapper
+发码不再失败。没有该直接调用表达式时，generic type instance 注册链路自身无法保证
+wrapper 的依赖已登记。
+
+### 2.5 `spec` witness 不是修复点
+
+object-form `spec` 调用在源码收集阶段只知道 requirement 身份，不应该静态选择
+`A<T>` 或 `B<T>` 的具体实现依赖树。运行时 witness 负责选择已经确定的实现 wrapper；
+当前 witness thunk 也已经调用 closed implementation wrapper。
+
+例如：
+
+```feng
+let surface: Surface<int> = A<int>();
+surface.identity(42);
+```
+
+witness 只需路由到 `A<int>.identity` wrapper；wrapper 再静态传入 `A<int>` 的 type
+descriptor 和 `A<int>.identity` 的 function descriptor。只要 generic type instance
+注册阶段已预登记该 wrapper 的依赖，现有链路即可工作。
+
+因此本次不需要：
+
+- 给 witness 增加 dependency slot；
+- 让 witness thunk 动态构造或查找 descriptor；
+- 改变 witness、`FengTypeDescriptor` 或 `FengFunctionDescriptor` 的 ABI；
+- 让 requirement dep set 代替 implementation member dep set；
+- 为 object-form `spec` 调用增加运行时分支、缓存或 resolver。
+
+### 2.6 隔离验证结果
+
+基于当前代码进行的最小隔离验证结果如下：
+
+| 场景 | 当前结果 | 说明 |
+|---|---|---|
+| 泛型 `type A<T>`，只构造 `A<int>`，普通实例方法体使用 `Box<T>` | `CE0031` | 不含 `spec`，证明根因与 witness 无关 |
+| 上述场景增加直接调用 `a.identity(42)` | 通过 | 直接调用表达式提前登记 member dependencies |
+| `type A<T>: Surface<T>`，经 `Surface<int>` witness 调用 | `CE0031` | witness 路径暴露同一缺口 |
+| 泛型 managed type 的普通静态方法体使用 `Box<T>` | `CE0031` | 静态方法属于同一 member dep 归属 |
+| 泛型 `@value type` 的普通方法体使用泛型依赖 | `CE0031` | value type 也复用 generic `UserType` shell 路径 |
+
+这组结果说明，本次实际代码变更不应以“是否参与 spec 满足”或“是否由 witness 调用”
+为条件；只要 closed generic type 会生成该普通方法的 closed wrapper，就必须先登记其
+member dependencies。
+
+## 3. 修复范围
+
+### 3.1 本次实际修复
+
+本次只修复 generic `type` instance 注册遗漏，覆盖：
+
+- managed generic type；
+- `@value` generic type；
+- 普通实例方法；
+- 普通静态方法；
+- owner 已完全闭合；
+- 方法自身没有方法级类型参数。
+
+修复后，下列两类入口必须得到相同结果：
+
+- 仅形成 `A<int>`，不依赖直接方法调用表达式触发补登记；
+- 通过直接调用、`spec` witness 或其他既有合法链路使用
+  `A<int>.method` closed wrapper。
+
+### 3.2 保持现状的路径
+
+- 字段、初始化器、构造器和终结器继续使用 declaration dep set；
+- 方法自身声明 `<U>` 时，依赖继续在具体调用点以 owner 实参和方法实参共同关闭；
+- owner 仍含开放上下文参数时，继续使用现有开放 wrapper/descriptor 传递路径；
+- 直接调用的依赖收集继续保留，它仍负责方法级泛参以及独立调用需求；
+- `.ft` 已经通过 `fill_reifiable_deps()` 与
+  `restore_imported_reifiable_deps()` 序列化、恢复成员 dep set，本次不增加新的符号格式
+  或跨包依赖链路；
+- `spec` 满足、witness 选择和 thunk 发码保持现状。
+
+### 3.3 不纳入本次的独立问题
+
+以下问题不属于本次 generic type shell 修复：
+
+- object-form `spec` requirement 声明方法级泛参；该限制与后续方向由
+  [Feng object-form `spec` 方法级泛型限制备注](./feng-object-form-spec-method-generic-restriction-note.md)
+  跟踪；
 - object-form `spec` 方法值；
-- 新的泛型推导、满足、可见性或跨包导出规则；
 - descriptor 提升或其他性能优化；
-- runtime descriptor 构造、缓存、名称查找或反射；
+- 泛型推导、满足关系、可见性或成员导出规则变更；
 - runtime 私有 ABI 变更。
 
-## 2. 已确认事实
+## 4. 泛型 `fit` 的实际边界
 
-### 2.1 基础 `Surface<T>` 路径已经工作
-
-以下基础路径目前可以正确编译和运行：
+隔离验证还发现：
 
 ```feng
-spec Surface<T> {
-  func read(): T;
-}
+type Host<T> {}
 
-type Value<T>: Surface<T> {
-  let value: T;
-
-  func read(): T {
-    return self.value;
-  }
-}
-
-let view: Surface<int> = Value<int>();
-view.read();
-```
-
-现有 FCTS 已覆盖：
-
-- 同包与跨包的泛型 type/fit 满足关系；
-- `Surface<int>` / `Surface<string>` object-form 值及实例 witness 调用；
-- 泛型 type、泛型 fit、泛型 value type；
-- 实例成员、静态成员和映射后的泛型父 spec。
-
-代表用例：
-
-- `fcts/fcts_lib/src/test/lib_generic_spec_implementation.ff`；
-- `fcts/fcts_bin/src/test_generic_spec_implementation.ff`；
-- `fcts/fcts_bin/src/test_generic.ff`。
-
-因此，本问题不能描述为“Feng 不支持泛型 object-form spec”或“`Surface<T>`
-无法闭合”。
-
-### 2.2 最小失败场景
-
-隔离验证确认以下合法代码在当前编译器中失败：
-
-```feng
-type Box<T> {
-  let value: T;
-
-  func Box(value: T) {
-    self.value = value;
-  }
-}
-
-spec Surface<T> {
-  func identity(value: T): T;
-}
-
-type A<T>: Surface<T> {
+fit Host<T> {
   func identity(value: T): T {
     let box = Box<T>(value);
     return box.value;
   }
 }
 
-func invoke(subject: Surface<int>, value: int): int {
-  return subject.identity(value);
-}
-
-let subject: Surface<int> = A<int>();
-invoke(subject, 42);
+let host = Host<int>();
 ```
 
-Semantic 已经接受该程序；Codegen 在处理 `A<T>.identity` 时报告：
+当前同样报告 `CE0031`，即使没有调用 `identity`。但它不能直接并入本次代码改动：
+
+- `collect_for_fit()` 当前把一个 fit 的全部成员依赖收集到 fit declaration dep set；
+- 该集合可能同时包含 owner 参数 `T` 与某些 fit 方法自己的方法级参数 `U`；
+- `cg_register_user_fit_shell_for_target()` 只收集替换后的成员签名；
+- `cg_emit_closed_generic_fit_descriptors()` 之后按 owner 参数关闭 fit 级集合。
+
+如果直接在 closed `Host<int>` 注册时关闭整个 fit dep set，含 `U` 的依赖并没有具体
+方法调用实参，不能正确关闭。泛型 fit 因此涉及“依赖集合的参数域与 descriptor 归属”
+问题，不是 generic type 已有 member dep set 的简单漏用。
+
+本次不得通过跳过未闭合项、按参数名判断或只处理 `T` 等特判绕过。泛型 fit 应另立
+专项，在确认其 member-level dependency 归属方案后修复；本文件只记录这个已确认边界，
+不把它列为本次实施 TODO。
+
+## 5. 实施方案
+
+### 5.1 在现有 generic type shell 链路补齐预登记
+
+在 `cg_register_generic_type_instance_shell()` 已发布 `UserType` shell 之后、任何 closed
+method descriptor 发码之前，复用现有成员遍历和
+`cg_collect_closed_reifiable_dep_instances()`：
+
+1. 确认当前 owner instance 已完全闭合；
+2. 遍历 `FENG_TYPE_MEMBER_METHOD`；
+3. 对方法自身 `type_param_count == 0` 的成员，使用
+   `feng_semantic_lookup_member_reifiable_dep_set()` 取得既有集合；
+4. 使用原 owner 类型参数和当前 closed type args 关闭该集合；
+5. 让现有递归收集器登记 `Box<int>` 等直接及传递 generic instances。
+
+该改动与当前 declaration dep set 收集处于同一 generic instance shell 注册阶段，不
+增加新的 collector、缓存或旁路入口。
+
+### 5.2 条件必须与 closed wrapper 消费条件一致
+
+预登记范围应与 `cg_emit_generic_type_method_wrapper_into()` 静态生成 closed callable
+descriptor 的条件一致：
+
+- owner 完全闭合；
+- 成员是普通方法；
+- 方法自身没有方法级泛参。
+
+不得在 owner 仍开放或方法仍有 `<U>` 时尝试提前关闭；这些信息应继续由最终合法调用点
+提供并通过现有调用收集链路关闭。
+
+### 5.3 保持 shell-first 与依赖方向
+
+必须先发布 `A<int>` shell，再递归登记 `A<int>.method` 的 `Box<int>` 等依赖。递归
+登记过程中不得依赖可能因 `cg->user_types` 扩容而失效的 `UserType *` 地址；应继续使用
+稳定的 origin declaration、type args 和既有查找/注册抽象。
+
+修复只改变编译期预登记时机，不改变生成 C 的调用层次：
 
 ```text
-CE0031: codegen: generic type/spec instance 'Box<...>' was not registered
+spec witness thunk（如有）
+  -> A<int>.method closed wrapper
+  -> A<T>.method shared body(
+       A<int> type descriptor,
+       A<int>.method function descriptor,
+       ...)
 ```
 
-失败发生在编译期，尚未生成可执行文件，不是运行时 witness 调错方法或读取空
-descriptor slot。
+## 6. 测试要求
 
-### 2.3 对照验证限定了问题边界
+### 6.1 Compiler tests
 
-同一轮隔离验证结果如下：
+在 `test/codegen/test_codegen.c` 增加回归，至少验证：
 
-| 场景 | 当前结果 |
-|---|---|
-| `A<int>().identity(42)`，方法体使用 `Box<T>` | 通过并正确运行 |
-| `A<T>: Surface<T>`，但只直接调用 `A<int>.identity` | 通过 |
-| 非泛型 `A: Surface<int>`，实现方法使用 `Box<int>`，再经 `Surface<int>` 调用 | 通过并正确运行 |
-| `A<T>: Surface<T>`，实现方法不含 callable-local 泛型依赖，再经 `Surface<int>` 调用 | 通过 |
-| `A<T>: Surface<T>`，实现方法使用 `Box<T>`，再经 `Surface<int>` 调用 | `CE0031` |
+- 只形成 closed generic type、没有直接调用该成员时，不再报告 `CE0031`；
+- 普通实例方法与普通静态方法；
+- managed type 与 `@value type`；
+- `Box<int>` 等依赖进入对应成员的 closed `FengFunctionDescriptor`；
+- owner 参数仍从 type descriptor 获取；
+- witness thunk 继续引用同一个 closed implementation wrapper；
+- 没有新增 runtime helper、descriptor 参数或 witness slot；
+- 方法级泛参 `<U>` 仍由调用点关闭，现有行为不受影响。
 
-因此，当前证据把问题限定为：
+### 6.2 FCTS
 
-> spec witness 对 closed generic owner 方法产生需求时，没有建立与普通直接调用
-> 相同的 closed callable dependency ensure/register 顺序。
+在 `fcts/` 增加语言行为用例，至少覆盖：
 
-它不是普通泛型共享体不能闭合 `Box<T>`，也不是 `A<T>: Surface<T>` 的名义满足
-关系错误。
-
-### 2.4 当前方法 ABI 已按 owner 与 callable domain 分离
-
-当前直接调用探针生成的共享方法 ABI 等价于：
-
-```c
-static void A_identity_shared(
-    void *_self,
-    const FengTypeDescriptor *_type_desc,
-    const FengFunctionDescriptor *_func_desc,
-    const void *_value,
-    void *_out
-) {
-    const FengGenericParamDescriptor *_T =
-        _type_desc->reified_generic_params[0];
-
-    const FengTypeDescriptor *box_desc =
-        _func_desc->reified_type_deps[0];
-    /* ... */
-}
-```
-
-其中：
-
-- owner 类型参数 `T` 不作为独立隐藏参数重复传入；
-- `T` 从 `A<int>` 的 `_type_desc->reified_generic_params[0]` 读取；
-- `_func_desc` 只承载 `A<int>.identity` 自己的直接 callable-local 依赖，例如
-  `Box<int>`；
-- closed wrapper 静态传入 `A<int>` 的 type descriptor 和
-  `A<int>.identity` 的 function descriptor。
-
-直接调用已经生成如下等价结构：
-
-```c
-A_int_identity(self, value) {
-    return A_identity_shared(
-        self,
-        &A_int_type_desc,
-        &A_int_identity_func_desc,
-        value
-    );
-}
-```
-
-所以本修复不得新增独立 `_T` 参数，也不得把 callable-local dependency 移入
-`FengTypeDescriptor`。
-
-### 2.5 正常 witness 已经调用 closed wrapper
-
-对“不含 `Box<T>` 依赖”的等价成功场景检查生成 C，当前 witness thunk 已经采用：
-
-```c
-static void A_int_as_Surface_int_identity(
-    void *_subject,
-    const void *value,
-    void *out
-) {
-    /* 调用 closed A<int> wrapper，而不是直接调用开放共享体。 */
-    int result = A_int_identity((A_int *)_subject, *(const int *)value);
-    memcpy(out, &result, sizeof result);
-}
-```
-
-而 `A_int_identity` 再负责把静态 `_type_desc` 和 `_func_desc` 传给共享体。由此可见：
-
-- witness 函数槽与 closed wrapper 的现有 ABI 方向正确；
-- 不需要给 witness 增加 descriptor slot；
-- 不需要在 witness 调用点运行时拼装描述符；
-- 当前缺口发生在带 callable dependency 的 closed wrapper/descriptor 尚未完整注册
-  之前，不能仅靠修改 thunk 参数规避。
-
-## 3. 正确性不变量
-
-### 3.1 类型级泛参必须在 witness 物化前闭合
-
-当程序形成：
-
-```feng
-let subject: Surface<int> = A<int>();
-```
-
-编译器已经同时知道：
-
-- subject 类型为 `A<int>`；
-- target spec 为 `Surface<int>`；
-- requirement 对应的实现为 `A<int>.identity`；
-- owner 泛参 `T = int`；
-- `A<int>.identity` 的直接依赖为 `Box<int>`。
-
-这些信息必须在编译期闭合。该路径不存在方法级泛参调用中“调用点知道 `U`、运行时
-witness 才知道 A/B”的信息分离。
-
-### 3.2 owner 参数与方法依赖保持现有分工
-
-- `_type_desc` 保存 owner 的具体泛参、字段布局和类型结构依赖；
-- `_func_desc` 保存当前 callable 的 aggregate/type/callable 直接依赖；
-- 方法入口可为方便读取而建立局部 `_T`，但 `_T` 只是
-  `_type_desc->reified_generic_params[i]` 的别名，不是额外 ABI 参数；
-- 每层 descriptor 继续只保存直接依赖，不拍平依赖树。
-
-### 3.3 witness 必须复用 closed implementation wrapper
-
-对于已闭合关系 `(A<int>, Surface<int>)`，witness 方法槽必须调用现有
-`A<int>.identity` closed wrapper，或调用一个 ABI 完全等价且复用同一 closed
-callable descriptor 的 wrapper。
-
-不得：
-
-- 从 requirement 的开放签名重新构造另一套 implementation descriptor；
-- 把 `Surface<int>` 的 descriptor 当作 `A<int>.identity` 的 function descriptor；
-- 让 witness thunk 直接调用共享体却遗漏 `_func_desc`；
-- 按类型名、成员名、`Box` 或是否跨包增加特判。
-
-### 3.4 不增加运行时开销
-
-修复只调整编译期 closed generic demand 的收集、注册和发码顺序。修复后：
-
-- 不新增运行时分支、查找、缓存或堆分配；
-- 不新增 witness slot；
-- 不改变 `FengTypeDescriptor`、`FengFunctionDescriptor` 或 witness struct 布局；
-- 不改变共享方法或 closed wrapper 的隐藏参数顺序；
-- 成功路径仍为一次既有 witness 间接调用，再进入 closed wrapper/shared body。
-
-## 4. 修复方向
-
-### 4.1 复用现有 closed callable dependency 管线
-
-spec witness 对一个 closed generic subject 产生需求时，必须让所选实现方法进入普通
-closed generic method 使用的现有流程：
-
-```text
-closed subject/spec witness demand
-  -> 取得声明期选中的 implementation callable
-  -> 用 closed owner 实参关闭 implementation owner
-  -> 复用现有 callable dependency collect/ensure/register
-  -> 递归登记 Box<int> 等直接依赖
-  -> 取得/生成现有 closed implementation wrapper
-  -> witness thunk 引用该 wrapper
-```
-
-如果当前 witness demand 从另一 generic instance 注册入口进入，应把它接到现有统一
-closed instance / callable surface 收集入口，不得复制一套仅供 spec witness 使用的
-dependency collector。
-
-### 4.2 保持 shell-first 注册顺序
-
-closed owner、closed callable descriptor 及其递归依赖必须继续遵守现有
-shell-first 规则：先登记稳定身份 shell，再解析和连接依赖，避免 `A<int>.identity ->
-Box<int>` 在递归收集期间因尚未登记而产生假缺失。
-
-具体缺失入口需在实施前由调用链确认；如果实际问题不能通过复用现有
-ensure/register 抽象解决，必须暂停并由人工决定，不能增加回退查找或旁路注册。
-
-### 4.3 type、fit、实例与静态路径的边界
-
-当前已确认失败的是“泛型 type 声明头实现 + 实例方法”。泛型 fit、静态 requirement
-和跨包恢复是否触发同一缺口，实施时必须按现有合法语言形态进行验证：
-
-- 如果它们已复用正确的 closed callable 管线，只保留回归用例，不作代码修改；
-- 如果它们命中同一个通用缺口，由同一抽象修复；
-- 如果发现独立根因或需要改变 ABI/运行时开销，记录为独立问题并暂停，交由人工决策。
-
-## 5. 测试要求
-
-### 5.1 Compiler tests
-
-在 `test/` 中验证：
-
-- Semantic 接受最小合法场景；
-- Codegen 不再报告 `CE0031`；
-- `Box<int>` 等闭合依赖进入实现方法的 `FengFunctionDescriptor`；
-- owner `T` 仍从 `_type_desc->reified_generic_params[i]` 读取，没有新增 `_T`
-  隐藏参数；
-- witness thunk 调用 closed implementation wrapper；
-- wrapper 静态传入正确的 `_type_desc` 与 `_func_desc`；
-- 两个实现 `A<T>` / `B<T>` 使用不同依赖 `Box<T>` / `Cell<T>` 时，两个 witness
-  分别引用各自 closed wrapper 和 descriptor tree；
-- 未使用 callable-local dependency 的既有 witness 生成保持不变。
-
-### 5.2 FCTS
-
-在 `fcts/` 中增加实际运行用例，至少覆盖：
-
-- 同一个 `Surface<int>` 视角分别承载 `A<int>` 与 `B<int>`；
-- `A<int>.identity` 使用 `Box<int>`，`B<int>.identity` 使用另一闭合泛型类型；
-- 两条 witness 调用均返回正确值；
+- 无 `spec` 的 generic type，方法体包含 owner-dependent 泛型依赖；
+- 同一 `Surface<int>` 分别承载 `A<int>` 与 `B<int>`，两个实现使用不同的依赖类型，
+  witness 调用分别返回正确结果；
+- 普通静态方法；
+- generic `@value type`；
 - 同包路径；
-- provider 定义泛型 type/spec、consumer 仅使用 package surface 的跨包路径。
+- provider 定义 generic type/spec、consumer 只经 package surface 使用的跨包路径。
 
-泛型 fit、静态 requirement、value type 和嵌套依赖属于验证项：若当前合法基线支持
-相应形态，应增加回归覆盖；不得为了制造覆盖而引入新的语言能力。
+泛型 fit 不作为本次通过标准，避免把独立架构问题混入；其失败用例应在后续专项中
+落地。
 
-### 5.3 回归与性能边界
+### 6.3 回归与性能边界
 
 - 运行相关 compiler tests；
 - 运行相关 FCTS；
-- 检查生成 C 没有新增 runtime resolver/cache/helper 调用；
+- 检查生成 C 与 descriptor/witness struct 布局没有 ABI 变化；
+- 检查成功路径没有新增运行时分支、查找、缓存、分配或 helper 调用；
 - 最终在非沙箱环境执行全量 `make test`。
 
-## 6. TODO
+## 7. TODO
 
-- [ ] **[验证]** 以最小探针再次锁定失败和 2.3 节对照矩阵，记录准确失败调用链；
-- [ ] **[实际变更]** 找到 spec witness demand 进入 generic instance 注册的入口，让其
-  复用现有 closed callable surface/dependency collect/ensure/register 管线；
-- [ ] **[实际变更]** 保证 closed implementation wrapper 的
-  `FengFunctionDescriptor` shell 及 `Box<int>` 等递归依赖在 witness thunk 发码前完成
-  注册；
-- [ ] **[验证]** 确认 witness thunk 继续调用现有 closed wrapper，不增加 descriptor
-  参数、witness slot、runtime helper 或缓存；
-- [ ] **[验证]** 覆盖 generic type 的实例方法及两个不同实现/依赖树；
-- [ ] **[验证]** 检查 generic fit、静态 requirement、value type、嵌套依赖的等价合法
-  路径；只有命中同一通用根因时才由本修复处理；
-- [ ] **[验证]** 覆盖同包与跨包 package consumer，确认两者复用同一闭合链路；
-- [ ] **[验证]** 在 `test/` 增加 Semantic、Codegen 与生成 C 结构回归；
-- [ ] **[验证]** 在 `fcts/` 增加实际语言行为回归；
-- [ ] **[验证]** 检查无类型名、成员名、依赖类型、包或测试场景特判；
-- [ ] **[验证]** 在非沙箱环境执行全量 `make test`。
+TODO 按“先锁定通用闭合点，再实施最小改动，最后分层验证”的顺序执行：
 
+- [x] **[分析]** 核对 Semantic dependency 归属，确认普通 generic owner 方法已有独立
+  member dep set；
+- [x] **[分析]** 核对 generic type shell、直接调用收集、closed wrapper 和 witness
+  thunk 链路，确认缺口在 generic type instance 的 member dep 预登记；
+- [x] **[分析]** 用无 `spec`、直接调用、witness、静态方法、`@value type` 探针确认
+  根因与覆盖边界；
+- [x] **[分析]** 核对泛型 fit 的依赖表示，确认它是不同的参数域/descriptor 归属问题，
+  不纳入本次实施；
+- [ ] **[实际变更]** 在 `cg_register_generic_type_instance_shell()` 的既有 shell-first
+  链路中，为 fully closed owner 中方法自身没有泛参的普通成员逐一关闭并预登记 member dep
+  set；
+- [ ] **[验证]** 确认实际变更只复用
+  `feng_semantic_lookup_member_reifiable_dep_set()` 与
+  `cg_collect_closed_reifiable_dep_instances()`，没有新增 spec/witness 特判、collector、
+  runtime helper 或 ABI；
+- [ ] **[验证]** 确认 owner 开放实例和方法级泛参成员没有被提前关闭，继续走既有调用点
+  闭合链路；
+- [ ] **[测试变更]** 在 `test/codegen/test_codegen.c` 增加无直接调用、实例/静态、
+  managed/value、witness 与生成 C 结构回归；
+- [ ] **[测试变更]** 在 `fcts/` 增加无 `spec`、两个 witness 实现、同包与跨包的行为
+  回归；
+- [ ] **[验证]** 复查 `.ft` 的 member reifiable dependency 写入/恢复继续复用现有链路，
+  不新增符号格式；
+- [ ] **[验证]** 检查 diff，不包含泛型 fit、object-form spec 方法级泛参、方法值、性能
+  优化或其他无关变更；
+- [ ] **[回归]** 运行相关 compiler tests 与 FCTS；
+- [ ] **[全量回归]** 在非沙箱环境执行 `make test`。
+
+## 8. 完成标准
+
+本专项仅在以下条件全部满足时完成：
+
+1. closed generic type 不再依赖源码中存在直接成员调用，便可完整登记其中方法自身没有
+   泛参的普通成员 callable dependencies；
+2. 无 `spec` 路径与 object-form `spec` witness 路径都不再出现该 `CE0031`；
+3. 实例/静态、managed/value、同包/跨包用例通过；
+4. 方法级泛参、开放 owner、既有直接调用、满足关系和可见性行为不变；
+5. 没有 spec/witness 特判，没有新依赖收集链路，没有运行时开销或 ABI 变化；
+6. 泛型 fit 独立问题未被旁路或混入本次改动；
+7. 全量 `make test` 通过。
