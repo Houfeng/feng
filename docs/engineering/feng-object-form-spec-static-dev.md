@@ -14,6 +14,9 @@
 - 泛型约束中支持 `T.make()` 和 `T.field`（`T` 为类型参数，`T: Spec`）
 - 非 spec 视角（直接 `Widget.make()`）调用开销不变，仍为直接 C 函数调用
 - spec 视角（泛型 `T.make()`）通过 witness 表间接分派
+- 当前只支持使用 spec owner 泛参的静态 requirement；object-form spec 静态方法
+  自己声明方法级泛参时由 Semantic 前置拒绝，详见
+  [方法级泛参暂不支持备注](./feng-object-form-spec-method-generic-restriction-note.md)
 
 **静态方法的语义边界（关键决策）：**
 
@@ -162,7 +165,7 @@ spec Registry<T> {
 }
 
 spec GenericFactory<T> {
-  static func create<U>(): T;
+  static func create(): T;
 }
 
 // 静态方法名与 spec 名相同，视为普通静态方法（无构造器歧义）
@@ -252,7 +255,8 @@ let gs = createAll<Gadget>(3);  // 3 个 Gadget.make()
 - spec 静态方法必须显式声明返回类型
 - **spec 一律不允许 `~` 前缀**（不论静态或实例）：终结器只允许用于 type，已在语义层（AE0620）统一拒绝，解析器无需新增特判
 - **spec 静态方法名可以与 spec 名相同**（视为普通静态方法，无构造器/终结器概念）
-- spec 静态方法支持泛型，规则与 spec 实例方法一致
+- spec 静态方法可使用 spec owner 的类型参数，但当前不得自己声明方法级泛参；
+  Parser 保留语法，Semantic 在成员签名检查处前置拒绝
 - spec 静态方法支持重载，规则与 type 中静态方法一致
 - spec 静态成员不允许显式 `open` / `seal` 可见性修饰（与 spec 所有成员一致）
 

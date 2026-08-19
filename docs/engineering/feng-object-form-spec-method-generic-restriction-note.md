@@ -1,7 +1,7 @@
 # Feng object-form `spec` 方法级泛参暂不支持备注
 
-> 状态：语义限制已确定，尚待按本文 TODO 更新主规范、Semantic 与测试
-> （2026-08-19）。
+> 状态：已完成主规范、Semantic、未完成路径清理与测试更新，并已通过
+> `make test` 全量回归（2026-08-19）。
 >
 > 本文只记录暂不支持的边界、原因、现状和实施任务。规则落地后，当前语言语义
 > 仍以 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 为唯一权威来源；
@@ -24,7 +24,7 @@ spec Surface {
 该限制统一适用于：
 
 - 实例方法和静态方法；
-- 无修饰、`open` 和 `seal` 方法；
+- 无修饰（语义为 `open`）和 `seal` 方法；显式 `open` 仍由既有 spec 成员规则拒绝；
 - `spec` 自有成员以及从父 `spec` 继承后形成的 requirement surface。
 
 语法结构本身没有错误，因此不得从 Parser 语法或 AST 中删除方法泛参，也不得把
@@ -207,27 +207,44 @@ C# 接口允许声明和实现泛型方法；C# 语言规范还单独规定了�
 模型并不是 Feng 当前静态 witness + descriptor tree 的零增量方案，不能直接作为
 Feng 本轮修复的依据。
 
-## 5 已完成部分及保留结论
+## 5 既有基线、独立修复与本轮清理边界
 
 现有
 [方法级泛型修复文档](./feng-object-form-spec-generic-method-bugfix.md)
-对应的部分代码已经落地，但尚未形成完整语言能力。
+记录了此前尝试支持该能力时完成的部分修改。当前决定不是把未完成实现冻结在
+编译器内，而是区分既有基线、独立修复和只服务该能力的新增路径：前两类保留，
+第三类随 Semantic 限制一并移除。
 
-| 已完成部分 | 当前事实 | 处理结论 |
+| 部分 | 当前事实 | 处理结论 |
 | --- | --- | --- |
-| Parser / AST 保留 spec 方法泛参 | `FengCallableSignature.type_params` 已完整记录语法 | **必须保留**；语法合法，由 Semantic 决定当前不可用 |
+| Parser / AST 对方法泛参的表示 | 尝试修复前已经存在，`FengCallableSignature.type_params` 已完整记录语法 | **保持既有逻辑不变**；这不是本轮新增或修复，语法合法，由 Semantic 决定当前不可用 |
 | spec 方法统一进入 `resolve_callable()` | `c66d2e93` 已复用 type/fit 方法的 owner + callable 双层作用域 | **保留**；这是通用声明解析收敛，非泛型 spec 方法也继续走统一入口 |
-| requirement/实现 callable 签名比较 | `c66d2e93` 已加入泛参 arity、按位置 alpha-equivalent 映射和约束兼容比较 | **保留**；比较抽象同时服务非泛型成员，泛型分支在当前限制下不决定合法性，供未来恢复 |
-| spec 调用的 resolved-callable 身份与类型实参替换 | `bc4e2e67` 已记录 requirement、witness surface、subject 和方法类型实参，并补过返回类型替换 | **保留**；均为编译期通用调用事实，不增加合法程序的运行时成本 |
-| reifiable dependency 与 generic spec witness Codegen 骨架 | `bc4e2e67` 已接入部分收集、成员表示、调用和 thunk 路径 | **保留但冻结**；动态实现 descriptor 路由未完成，Semantic 限制落地后该方法级泛型路径不可达，不得宣称已支持 |
+| requirement/实现 callable 的普通签名比较、owner 闭合与 witness 选择 | 同一比较抽象也服务非泛型成员及泛型 spec owner | **保留独立正确性逻辑**；只为被禁止方法泛参增加的 arity、alpha 映射和约束分支不作为当前能力 |
+| 父 spec 声明 owner 投影、generic owner 参数/返回类型替换、static/实例筛选与参数适配 | 对没有方法级泛参的合法 spec 调用也成立 | **保留独立正确性修复** |
+| `SPEC_METHOD` / `SPEC_STATIC_METHOD` 调用种类 | 准确区分普通 spec witness 调用与 type/fit 直接方法调用 | **保留通用 Semantic 身份**；不得因此保留方法级泛型专用 payload 或 Codegen |
+| 方法级泛型专用 resolved-callable witness payload、reifiable callable dependency、`UserSpecMember` 双层 Codegen 解析、witness 泛型 ABI、调用 emitter 与 type/fit thunk | 均由 `bc4e2e67` 为本次未完成能力新增 | **移除**；前置限制后没有合法消费者，不能以未来可能恢复为由保留不可达骨架 |
 
-本次不得为了加入 Semantic 拒绝而回滚上述通用抽象，也不得继续扩展未完成的泛型
-spec witness ABI。未来若永久取消该能力，再单独评估不可达 Codegen 骨架是否清理；
-“暂不支持”阶段优先保留已验证方向，避免反复拆装并影响普通 spec 调用。
+本轮清理不得整体回滚 `bc4e2e67`，以免同时删除其中已经证明对普通 spec、泛型
+spec owner 或父 spec 有独立价值的修复。代码应按调用边界拆除方法级泛型专用
+部分，普通 spec witness 的 ABI、行为和开销保持原状。
+
+`owner_instance_type_ref` 对普通 spec 调用只承担声明 owner 投影及参数/返回类型
+替换，不代表共享体还需要一个独立的 owner-spec aggregate descriptor。spec 调用
+已经通过 receiver 或泛参描述符携带 subject witness；reifiable dependency 收集不得
+再次把该 owner surface 本身加入 descriptor slots。返回类型中的真实依赖继续由
+owner 替换后的返回类型收集链路处理。这样既保留泛型 spec owner 的正确类型闭合，
+也不会把枚举等具体类型的发码表示误组成另一个名义 spec 实例。
+
+实施过程中曾出现过一次“声明域泛参 index 被 caller 域 descriptor 查询误用”的
+中间缺陷。尝试修复前，spec 方法泛参尚未进入 `UserSpecMember` Codegen 作用域，
+不存在该 index 错位；缺陷是在新增双层 Codegen 作用域、但尚未替换旧 spec 调用
+路径时产生，随后又由 generic spec 调用 emitter 消除。它不是原始编译器的独立
+Bug，也不是保留未完成 emitter 的理由。未来若恢复能力，仍须遵守“不同泛参作用域
+的 index 不得跨域解释”的通用不变量。
 
 原 bugfix 文档应继续保留。它已经准确记录了：
 
-- 声明作用域索引不能跨 caller 作用域误用；
+- 尝试实现中出现过的跨泛参作用域 index 误用及其形成条件；
 - 静态实现身份路径如何复用现有 callable dependency tree；
 - 动态 witness 只路由函数、没有同步路由实现 descriptor 子树的根因；
 - callable-form spec 当前为何不存在同一开放调用问题；
@@ -253,23 +270,32 @@ spec witness ABI。未来若永久取消该能力，再单独评估不可达 Cod
 
 ## 7 实施 TODO
 
-- [ ] **实际变更（主规范）**：在 `feng-spec.md` 唯一规定当前 Semantic 限制，
+- [x] **实际变更（主规范）**：在 `feng-spec.md` 唯一规定当前 Semantic 限制，
   `feng-generics-draft.md` 只引用；同步收敛第 6 节列出的工程与 std 规划文档。
-- [ ] **实际变更（Semantic）**：只在编译 object-form spec 时的成员方法签名
-  统一验证入口前置检查 `type_param_count > 0`，以专用 AE 诊断拒绝；实例/static、
-  open/seal 使用同一规则。不得修改 Parser、`resolve_callable()`、`AE1013` 检查、
-  满足比较或现有 Codegen 逻辑。
-- [ ] **实际变更（代码注释）**：在上述前置检查处说明语法与 AST 合法；当前拒绝
+- [x] **实际变更（Semantic）**：只在编译 object-form spec 时的成员方法签名
+  统一验证入口前置检查 `type_param_count > 0`，以专用 `AE0331` 诊断拒绝；
+  实例/static、无修饰（语义为 `open`）/seal 使用同一规则。不得修改 Parser、
+  `resolve_callable()` 或 `AE1013` 检查。
+- [x] **实际变更（代码注释）**：在上述前置检查处说明语法与 AST 合法；当前拒绝
   是因为动态 witness 尚不能同步路由实现函数与对应 descriptor 子树，防止未来
   将该检查误改为 Parser 限制或无理由删除。
-- [ ] **验证（Parser / AST）**：确认实例和 static spec 泛型方法仍可解析，方法泛参、
+- [x] **实际变更（清理未完成路径）**：移除只服务 object-form spec 方法级泛参的
+  resolved-callable witness payload、reifiable callable dependency 字段与收集分支、
+  `UserSpecMember` 方法泛参 Codegen 解析、witness 泛型方法 ABI、调用 emitter 和
+  type/fit thunk；保留 `SPEC_METHOD` / `SPEC_STATIC_METHOD` 通用调用种类以及普通
+  spec 的 owner 投影、返回类型替换和参数适配。
+- [x] **实际变更（依赖收敛）**：保留普通 spec 调用的 owner instance 作为编译期
+  签名替换事实，但验证其本身不进入 reifiable descriptor slots；只收集 owner
+  替换后的真实返回类型依赖。
+- [x] **验证（Parser / AST）**：确认实例和 static spec 泛型方法仍可解析，方法泛参、
   约束、参数和返回类型完整保留；不得新增 Parser 错误。
-- [ ] **验证（限制边界）**：增加编译器诊断用例，覆盖实例/static、open/seal，
-  并验证泛型 spec owner、type/fit 泛型方法、泛型约束及 callable-form spec 不受
-  影响。
-- [ ] **验证（既有部分）**：确认普通非泛型 spec 满足、spec seal、父 spec、fit、
+- [x] **验证（限制边界）**：增加编译器诊断用例，覆盖实例/static、无修饰
+  （语义为 `open`）/seal，并确认 `AE0331` 在声明期产生；显式 `open` 的既有
+  禁止规则保持不变。验证泛型 spec owner、type/fit 泛型方法、泛型约束及
+  callable-form spec 不受影响。
+- [x] **验证（既有部分）**：确认普通非泛型 spec 满足、spec seal、父 spec、fit、
   同包和跨包行为保持不变；不得删除既有测试。
-- [ ] **验证（回归）**：完成非文档变更后执行定向测试，并在沙箱外执行
+- [x] **验证（回归）**：完成非文档变更后执行定向测试，并在沙箱外执行
   `make test` 全量回归。
 
 当前限制不得通过删除 Parser 语法、删除 AST 字段、特判某个方法名、改变 type/fit

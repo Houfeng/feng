@@ -82,7 +82,7 @@ spec owner 与 callable member 上下文。该修改同时收敛了非泛型 spe
 `AE1013` 检查均原样保留；Semantic 只在编译 spec 的成员方法签名验证处增加
 更早的专用限制诊断，因此该声明不会继续进入上述通用解析路径。
 
-### 2.2 已修复：满足检查表达方法泛参身份
+### 2.2 未来需要：满足检查表达方法泛参身份
 
 原满足检查只比较显式参数和返回类型，没有先检查方法泛参 arity，也没有把
 requirement 与实现方法的泛参按声明位置建立对应关系。正确匹配必须同时处理：
@@ -93,15 +93,12 @@ requirement 与实现方法的泛参按声明位置建立对应关系。正确�
 - 参数、返回值与变长参数形态；
 - “实现约束不得比 requirement 更严格”的约束兼容方向。
 
-`c66d2e93` 已实现统一 callable 满足比较：先检查泛参 arity，再按声明位置做
-alpha-equivalent 映射，同时替换 spec owner 实参，并按“实现约束不得更严格”检查
-约束方向。满足验证、快速满足查询和最终 witness 选择复用该比较抽象。
+`c66d2e93` 曾在统一 callable 满足比较中加入泛参 arity、alpha-equivalent 映射与
+约束方向检查。当前清理只保留该抽象中服务普通 requirement、泛型 spec owner
+闭合和 witness 选择的独立逻辑；只服务被禁止方法泛参的匹配分支随未完成能力一并
+移除。未来恢复能力时，仍必须在同一比较抽象中重新实现上述规则，不能复制旁路。
 
-该抽象也承担普通非泛型 requirement 的签名比较，因此必须保留。当前限制落地后，
-其中方法泛参分支不再使 spec 泛型方法成为合法声明，只作为未来恢复能力的已完成
-基础。
-
-### 2.3 已部分修复：调用表示与 witness ABI 尚缺动态 descriptor 路由
+### 2.3 历史尝试：调用表示与 witness ABI 尚缺动态 descriptor 路由
 
 原 `UserSpecMember` 只记录普通参数、返回类型、static 等事实，没有记录：
 
@@ -123,7 +120,7 @@ alpha-equivalent 映射，同时替换 spec owner 实参，并按“实现约束
           -> 方法泛参 descriptors -> 显式参数 -> [out]
 ```
 
-`bc4e2e67` 已完成以下部分：
+`bc4e2e67` 曾加入以下部分：
 
 - resolved-callable 记录 requirement、witness spec surface、subject 和已解析的方法
   类型实参；
@@ -133,9 +130,11 @@ alpha-equivalent 映射，同时替换 spec owner 实参，并按“实现约束
   witness 槽位和 type/fit thunk 骨架；
 - 原声明作用域泛参索引不再直接查询另一个 caller 作用域的 descriptor。
 
-因此，签名和实现体都不需要 reified dependency 的基础用例已经可以完成
-Semantic 与 Codegen。但该提交没有解决“动态 witness 所选实现 + 同一实现
-descriptor 子树”的一致路由，完整能力仍不正确。
+这些修改只能让签名和实现体都不需要 reified dependency 的基础用例完成
+Semantic 与 Codegen，没有解决“动态 witness 所选实现 + 同一实现 descriptor
+子树”的一致路由。当前决定在 Semantic 前置拒绝，并删除上述只服务该能力的
+resolved-callable payload、dependency、成员表示和 Codegen/witness 骨架；它们
+不再作为冻结代码留在编译器中。
 
 2026-08-19 的实施过程曾隔离确认：声明解析与满足检查通过后，
 `subject.identity<int>(value)` 的返回类型仍保留 requirement 中未替换的方法泛参，
@@ -149,9 +148,10 @@ object-form `spec` 参数上调用 `subject.identity<int>(value)` 时报告：
 CE0237: codegen: missing generic descriptor for erased storage
 ```
 
-实际代码排查确认，`CE0237` 这一处历史失败本身不是 2.5 的动态 descriptor 路由
-问题，而是旧 spec witness 调用分支直接使用 `UserSpecMember` 开放签名中的泛参索引，
-并把该索引交给只查询
+实际代码排查确认，`CE0237` 是尝试实现过程中的中间缺陷，不是尝试前已经存在的
+独立 Bug。尝试前，spec 方法泛参尚未进入 `UserSpecMember` Codegen 作用域，会更早
+报告未知类型；新增双层作用域后，旧 spec witness 调用分支开始直接使用
+`UserSpecMember` 开放签名中的泛参索引，并把该索引交给只查询
 **当前 caller 泛参作用域**的 `cg_generic_param_desc_name()`。前者属于 spec owner +
 spec 方法声明作用域，后者属于当前函数/方法作用域，二者索引即使数值相同也没有
 身份关系：
@@ -160,10 +160,11 @@ spec 方法声明作用域，后者属于当前函数/方法作用域，二者�
 - 泛型 caller 中若恰好存在相同下标，旧路径可能误取 caller 的其他泛参
   descriptor，属于作用域身份错误，不能视为合法复用。
 
-`bc4e2e67` 已先使用 resolved-callable 中的方法类型实参闭合 spec 方法的参数和
-返回类型，再按既有泛型 callable 规则生成并传递方法泛参 descriptor，从而消除
-这处跨作用域索引误用。其通用不变量必须保留：任何声明作用域中的开放泛参索引
-都不得直接用于查询另一个 caller 作用域的 descriptor。
+`bc4e2e67` 随后使用 resolved-callable 中的方法类型实参闭合参数和返回类型，再按
+既有泛型 callable 规则传递 descriptor，消除了该中间缺陷。当前清理会同时删除
+产生该状态的双层 `UserSpecMember` Codegen 路径及其 generic spec emitter；前置
+Semantic 限制后两者都不再可达。未来恢复能力时，仍必须遵守“任何声明作用域中的
+开放泛参索引都不得直接查询另一个 caller 作用域 descriptor”的不变量。
 
 ### 2.4 实现身份静态已知时，既有 callable dependency tree 可以闭合
 
@@ -275,8 +276,9 @@ subject.witness == B witness
 > 方法泛参能够闭合，实际实现也能由 witness 在运行时选择；但当前 ABI 只路由
 > 实现函数，没有把同一实现对应的闭合 descriptor 树与函数一起路由。
 
-本问题与 2.3 的泛参索引作用域误用相互独立。索引误用必须作为编译器正确性 Bug
-修复；修复索引后仍需解决本节的实现 descriptor 路由。
+本问题与 2.3 的实现过程中间缺陷不同：当前清理会同时删除产生 index 跨域解释的
+未完成路径及其补救 emitter；未来重新支持该能力时不得再次跨作用域解释 index，
+但即使正确处理 index，仍需解决本节的实现 descriptor 路由。
 
 ### 2.6 callable-form `spec` 当前为什么没有同一问题
 
@@ -652,10 +654,11 @@ object-form spec 方法值不纳入本专项 FCTS。
 - [x] **历史变更（未来规则基础）**：曾把方法泛参约束兼容方向写入
   `feng-spec.md` 并由 `feng-generics-draft.md` 引用；当前限制落地时，主规范将
   改为暂不允许，详细匹配规则只保留在本文供未来恢复参考。
-- [x] **实际变更（Semantic 声明，待最终回归）**：让 object-form spec 普通
+- [x] **历史变更（Semantic 声明）**：让 object-form spec 普通
   方法统一复用 `resolve_callable()`。
-- [x] **实际变更（Semantic 满足，待最终回归）**：实现按位置 alpha-equivalent
-  的泛型 callable 签名比较，统一覆盖 type、fit、父 spec 和 witness 选择。
+- [ ] **未来实际变更（Semantic 满足）**：在统一 callable 签名比较中实现按位置
+  alpha-equivalent 的泛参映射和约束兼容；当前代码只保留普通 requirement 与
+  泛型 owner 闭合所需逻辑。
 - [x] **分析（动态路由现状）**：确认 A/B 实现 descriptor 树均可生成；当前
   object-form witness 只路由函数，不能让同一个动态调用点静态选择匹配的 A/B
   实现 descriptor 树；该问题与泛参索引作用域误用相互独立。
@@ -663,21 +666,21 @@ object-form spec 方法值不纳入本专项 FCTS。
   tree、witness 表示和跨包开放世界约束，分析“实现函数 + 同一实现的闭合
   descriptor 树”一致路由方案；凡涉及新 ABI、运行时机制或增量运行时开销的
   方案，须先由人工 Review。
-- [x] **实际变更（Semantic 调用表示基础）**：通用 resolved callable 已补充
-  witness-dispatched spec 方法形态，并记录 requirement、owner/receiver、
-  实例/static、方法类型实参和 witness 来源；动态实现 descriptor 路由不由该
-  Semantic 事实单独解决。
-- [x] **部分实际变更（dependency 收集基础）**：spec 泛型方法调用已经能够进入
-  现有 `FengReifiableDepSet.callable_deps` 并保留 witness surface；实现身份静态
-  已知时的实际实现映射和动态身份路径仍分别受后续闭合与设计决策约束。
+- [ ] **未来实际变更（Semantic 调用表示）**：在通用 resolved callable 中表达
+  requirement、owner/receiver、实例/static、方法类型实参和 witness 来源；当前只
+  保留普通 spec 调用所需的 `SPEC_METHOD` / `SPEC_STATIC_METHOD` 种类。
+- [ ] **未来实际变更（dependency 收集）**：让 spec 泛型方法调用进入现有
+  `FengReifiableDepSet.callable_deps` 并保留 witness surface；当前清理删除未完成
+  dependency payload 与收集分支。
 - [ ] **实际变更（静态实现 descriptor 闭合）**：扩展现有 callable dependency
   解析，按已具化 witness 关系映射到实际 type/fit 实现，并复用
   `cg_emit_closed_callable_fdesc()` 递归闭合子树；不得新增并行 emitter。
-- [x] **实际变更（Codegen 成员表示基础）**：`UserSpecMember` 的解析、克隆和
-  实例化路径已经能够保存并解析方法泛参及 owner + method 双层泛型签名模板。
-- [x] **部分实际变更（Codegen witness ABI 骨架）**：实例/static 泛型方法槽位、
-  调用点及 type/fit thunk 已能转发 function descriptor、方法泛参 descriptor、
-  显式参数和 `_out`；这只完成 ABI 形状，不代表 descriptor 内容正确。
+- [ ] **未来实际变更（Codegen 成员表示）**：`UserSpecMember` 的解析、克隆和
+  实例化路径保存并解析方法泛参及 owner + method 双层泛型签名模板；当前清理
+  删除此前未完成实现。
+- [ ] **未来实际变更（Codegen witness ABI）**：在 descriptor 一致路由方案通过
+  Review 后，再统一实现实例/static 泛型方法槽位、调用点及 type/fit thunk；当前
+  不保留只完成参数形状的 ABI 骨架。
 - [ ] **实际变更（Codegen descriptor 一致路由）**：在设计决策通过后，让
   实例/static、type/fit、父 spec/intersection/slot adapter 和 default witness
   一致选择“实现函数 + 同一实现 descriptor 子树”，不得把 requirement 空

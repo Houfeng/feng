@@ -99,6 +99,7 @@
 | AE0328 | 成员展开来源具体类型约束 | (新增) | member mix source must resolve to a concrete object type but found '%s' |
 | AE0329 | 成员展开来源构造约束 | (新增) | member mix initializer must be an object construction expression |
 | AE0330 | 成员展开依赖无环约束 | (新增) | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
+| AE0331 | object-form spec 方法级泛参禁用 | (新增) | object-form spec method '%.*s' cannot declare type parameters |
 
 ## 04 枚举段
 

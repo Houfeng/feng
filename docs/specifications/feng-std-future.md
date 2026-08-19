@@ -51,7 +51,7 @@
 | 符号 | 签名 | 说明 |
 | --- | --- | --- |
 | `Scheduler` | `open spec Scheduler { ... }` | 调度器抽象接口，定义等待策略 |
-| `Scheduler.awaitFuture` | `func awaitFuture<T>(future: Future<T>): T` | 等待 Future 完成并返回结果，具体等待方式由实现决定 |
+| `Scheduler.awaitFuture` | 原规划为 `func awaitFuture<T>(future: Future<T>): T` | 该 object-form spec 方法级泛参签名当前不合法；在 Scheduler 实施前必须另行设计非方法泛型接口，或等待语言恢复该能力，不得直接落入 std |
 
 ## 3 语义
 

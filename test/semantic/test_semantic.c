@@ -18020,6 +18020,94 @@ static void test_finalizer_method_type_params_rejected(void) {
     feng_program_free(program);
 }
 
+/* Object-form spec method generics remain parseable, but Semantic rejects the
+ * declaration before resolving its callable-local types or building a
+ * satisfaction/witness surface. Instance/static and default/seal members use
+ * the same declaration-time diagnostic. */
+static void test_object_spec_method_type_params_rejected(void) {
+    static const struct {
+        const char *source;
+        const char *method_name;
+    } cases[] = {
+        {
+            "module demo.spec_method_generic.instance_default;\n"
+            "spec Surface { func identity<T>(value: T): T; }\n",
+            "identity"
+        },
+        {
+            "module demo.spec_method_generic.instance_seal;\n"
+            "spec Surface { seal func identity<T>(value: T): T; }\n",
+            "identity"
+        },
+        {
+            "module demo.spec_method_generic.static_default;\n"
+            "spec Surface { static func create<T>(value: T): T; }\n",
+            "create"
+        },
+        {
+            "module demo.spec_method_generic.static_seal;\n"
+            "spec Surface { seal static func create<T>(value: T): T; }\n",
+            "create"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(
+            "spec_method_type_params_rejected.f",
+            cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, "AE0331") == 0);
+        ASSERT(strstr(errors[0].message,
+                      "object-form spec method") != NULL);
+        ASSERT(strstr(errors[0].message, cases[index].method_name) != NULL);
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* A generic type method is not an implementation of a non-generic spec
+ * requirement merely because one instantiation could have the same shape.
+ * Callable arity remains part of ordinary satisfaction matching. */
+static void test_generic_method_does_not_satisfy_non_generic_spec(void) {
+    const char *source =
+        "module demo.spec_method_generic.implementation_arity;\n"
+        "spec Surface { func identity(value: int): int; }\n"
+        "type Value: Surface {\n"
+        "    func identity<T>(value: T): T { return value; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "generic_method_spec_satisfaction.f",
+        source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strstr(errors[0].message, "signature does not match") != NULL);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_generic_explicit_type_args_adapts_tuple_literal(void) {
     /* Tuple literal arg must be adapted to the explicit type arg when
      * the type param position receives a named tuple type. */
@@ -25157,6 +25245,8 @@ int main(void) {
     test_generic_type_with_finalizer_allowed();
     test_constructor_method_type_params_rejected();
     test_finalizer_method_type_params_rejected();
+    test_object_spec_method_type_params_rejected();
+    test_generic_method_does_not_satisfy_non_generic_spec();
     test_generic_explicit_type_args_arity_mismatch();
     test_generic_type_constructor_explicit_type_args_ok();
     test_generic_type_constructor_explicit_type_args_arity_mismatch();

@@ -79,10 +79,12 @@ let mapper: IntMapper = Math.double; // 当前不支持
 - [`feng-value-type-method-value-capture-dev.md`](./feng-value-type-method-value-capture-dev.md)
   只处理具体值接收者的方法值，不把值接收者改写为 spec box。
 
-object-form spec requirement 自身声明方法级泛参的正确性先由
-[方法级泛型修复文档](./feng-object-form-spec-generic-method-bugfix.md) 独立完成；本文只在
-该签名已经能够正常解析、满足和 witness 调用的基础上支持显式闭合后形成方法值，不重复
-实现方法级泛型 requirement。
+object-form spec requirement 自身声明方法级泛参当前由
+[方法级泛参暂不支持备注](./feng-object-form-spec-method-generic-restriction-note.md)
+明确禁止。本文当前只设计非方法泛型 spec requirement 的方法值，以及既有合法的
+type/fit 泛型方法在显式闭合后形成方法值；未来若恢复 spec 方法级泛参，相关方法值
+能力再以
+[未来支持分析](./feng-object-form-spec-generic-method-bugfix.md) 为前置条件纳入。
 
 本文作为一个独立开发项补齐上述成员方法值能力。文件名为避免已有引用失效暂时保留，
 其范围以本文标题和正文为准。
@@ -120,7 +122,7 @@ object-form spec requirement 自身声明方法级泛参的正确性先由
 - 允许具体 `type` 和可见 `fit` 的静态方法通过 `Type.method` 形成 callable value；
 - 公开方法和合法可访问的 `seal` 方法分别遵守现有 spec/type/fit 成员访问域；
 - 重载方法由目标 callable-form `spec` 唯一选择；
-- 泛型方法必须显式提供完整类型实参后再形成方法值；
+- 对既有合法的 type/fit 泛型方法，必须显式提供完整类型实参后再形成方法值；
 - receiver、subject、witness、泛型描述符和 callable closure 生命周期正确；
 - 本包、跨包 `.ft`、普通闭合代码和共享泛型体行为一致；
 - 不改变直接 spec/具体静态方法调用和既有具体 type/fit 实例方法值的行为或开销。
@@ -215,9 +217,11 @@ let inferred = value.read; // 没有 callable-form spec 目标
 返回类型、变长参数和泛型形状唯一选择候选。返回类型继续只用于目标 callable 匹配，
 不改变普通方法调用的重载规则。
 
-### 4.3 泛型方法
+### 4.3 泛型来源方法
 
-声明方法级泛参的 spec 方法形成方法值时，必须显式提供完整类型实参：
+既有合法的 type/fit 泛型方法形成方法值时，必须显式提供完整类型实参。object-form
+spec 方法自己声明方法级泛参当前不合法，因此下例只保留为未来恢复该语言能力后的
+目标，不属于本文当前可实施范围：
 
 ```feng
 open spec Transformer {
@@ -231,9 +235,11 @@ func bind(value: Transformer): IntTransform {
 }
 ```
 
-目标 callable-form `spec` 不反向推导来源方法泛参。Semantic 先检查显式实参数量和
-约束，闭合来源签名，再执行普通 target-typed callable 匹配。形成后的值不再携带可由
-调用者选择的方法级泛参，调用时只写 `callable(args...)`。
+对当前合法的 type/fit 来源，目标 callable-form `spec` 不反向推导来源方法泛参。
+Semantic 先检查显式实参数量和约束，闭合来源签名，再执行普通 target-typed
+callable 匹配。形成后的值不再携带可由调用者选择的方法级泛参，调用时只写
+`callable(args...)`。未来的 object-form spec 泛型方法值也必须遵守同一闭合边界，
+但需先完成其动态 witness descriptor 路由能力。
 
 ### 4.4 `seal` 方法与 capability 传递
 
@@ -562,7 +568,7 @@ requirement 原声明、完整泛型实例或 witness slot 身份，应先完善
 - 存在同名方法，但没有签名匹配目标 callable；
 - 多个重载同时匹配目标 callable；
 - `spec seal` 或具体 type/fit seal 方法在非法上下文形成方法值；
-- 泛型方法未显式提供完整类型实参、实参数量错误或约束不满足；
+- 当前合法的 type/fit 泛型方法未显式提供完整类型实参、实参数量错误或约束不满足；
 - 通过实例值形成静态方法值，或通过不能确定实现 witness 的 spec 名形成静态方法值；
 - 具体 type target 上只有不可见 fit 或不可访问静态候选；
 - callable 字段读取与同名方法值候选发生现有规则无法消解的冲突。
@@ -628,8 +634,8 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 | 无 callable 目标的 `let value = spec.method` | 拒绝 |
 | 重载由目标 callable 唯一选择 | 通过 |
 | 无匹配或多个匹配 | 分别报告不匹配或歧义 |
-| 显式闭合泛型 spec 方法值 | 通过 |
-| 未闭合或约束不满足的泛型方法值 | 拒绝 |
+| object-form spec 方法自己声明方法级泛参 | 当前由 spec 声明检查前置拒绝，不进入方法值解析 |
+| 既有合法的 type/fit 泛型方法值未闭合或约束不满足 | 拒绝 |
 | 合法实现上下文形成 `spec seal` 方法值 | 通过 |
 | 普通函数或无关 type 形成 `spec seal` 方法值 | 拒绝 |
 | callable 字段读取 | 保持现有字段语义，不误判为方法值 |

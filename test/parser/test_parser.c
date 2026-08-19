@@ -2012,6 +2012,68 @@ static void test_generic_spec_declaration(void) {
     feng_program_free(program);
 }
 
+/* Object-form spec methods retain callable-local generic syntax in the AST.
+ * Semantic analysis, rather than the parser, owns the current restriction on
+ * using this otherwise well-formed declaration shape. */
+static void test_object_spec_method_type_params_parse(void) {
+    const char *source =
+        "module demo.spec_method_type_params;\n"
+        "spec Named {}\n"
+        "spec Surface<T> {\n"
+        "    func identity<U: Named>(value: U): U;\n"
+        "    seal static func convert<V>(owner: T, value: V): V;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *surface;
+    const FengTypeMember *identity;
+    const FengTypeMember *convert;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "spec_method_type_params.f",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    surface = program->declarations[1];
+    ASSERT(surface->kind == FENG_DECL_SPEC);
+    ASSERT(surface->as.spec_decl.type_param_count == 1U);
+    ASSERT(surface->as.spec_decl.as.object.member_count == 2U);
+
+    identity = surface->as.spec_decl.as.object.members[0];
+    ASSERT(identity->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(!identity->is_static);
+    ASSERT(identity->visibility == FENG_VISIBILITY_DEFAULT);
+    ASSERT(identity->as.callable.type_param_count == 1U);
+    assert_slice_text(identity->as.callable.type_params[0].name, "U");
+    ASSERT(identity->as.callable.type_params[0].constraint != NULL);
+    assert_slice_text(
+        identity->as.callable.type_params[0].constraint->as.named.segments[0],
+        "Named");
+    ASSERT(identity->as.callable.param_count == 1U);
+    assert_slice_text(identity->as.callable.params[0].type->as.named.segments[0],
+                      "U");
+    assert_slice_text(identity->as.callable.return_type->as.named.segments[0],
+                      "U");
+
+    convert = surface->as.spec_decl.as.object.members[1];
+    ASSERT(convert->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(convert->is_static);
+    ASSERT(convert->visibility == FENG_VISIBILITY_PRIVATE);
+    ASSERT(convert->as.callable.type_param_count == 1U);
+    assert_slice_text(convert->as.callable.type_params[0].name, "V");
+    ASSERT(convert->as.callable.param_count == 2U);
+    assert_slice_text(convert->as.callable.params[0].type->as.named.segments[0],
+                      "T");
+    assert_slice_text(convert->as.callable.params[1].type->as.named.segments[0],
+                      "V");
+    assert_slice_text(convert->as.callable.return_type->as.named.segments[0],
+                      "V");
+
+    feng_program_free(program);
+}
+
 static void test_generic_function_declaration(void) {
     /* func identity<T>(value: T): T with one type parameter */
     const char *source =
@@ -3664,6 +3726,7 @@ int main(void) {
     test_generic_type_declaration();
     test_generic_type_declaration_with_constraint();
     test_generic_spec_declaration();
+    test_object_spec_method_type_params_parse();
     test_generic_function_declaration();
     test_generic_function_multi_type_params();
     test_generic_type_ref_with_args();
