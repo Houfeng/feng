@@ -258,7 +258,8 @@ let gs = createAll<Gadget>(3);  // 3 个 Gadget.make()
 - spec 静态方法可使用 spec owner 的类型参数，但当前不得自己声明方法级泛参；
   Parser 保留语法，Semantic 在成员签名检查处前置拒绝
 - spec 静态方法支持重载，规则与 type 中静态方法一致
-- spec 静态成员不允许显式 `open` / `seal` 可见性修饰（与 spec 所有成员一致）
+- spec 静态成员允许显式 `open` / `seal` 可见性修饰：`open` 与省略修饰符
+  均为公开 requirement，`seal` 收窄 spec 访问面（与 spec 实例成员一致）
 
 ### 满足性规则
 

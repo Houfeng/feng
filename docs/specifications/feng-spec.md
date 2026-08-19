@@ -111,18 +111,20 @@ spec Resource {
 
 `spec` 静态成员是对 `type` 静态能力的契约描述。当返回值或参数需要表达"实现类型自身"时,使用 spec 类型参数 `T`,由满足方在 `type Widget: Factory<Widget>` 中绑定。
 
-错语法一,object-form `spec` 成员显式使用 `open`:
+正确语法七,object-form `spec` 成员显式使用 `open`:
 
 ```feng
-spec Bad {
+spec Service {
   open func run(): void;
+  open static let version: int;
 }
 ```
 
-object-form `spec` 成员省略修饰时已经是公开 requirement；允许使用的唯一
-成员可见性修饰符是 `seal`。
+object-form `spec` 成员显式 `open` 与省略修饰符具有相同的公开 requirement
+语义。Parser / AST 分别保留显式 `open` 与省略修饰符的声明事实，Semantic
+统一按公开 requirement 处理；`seal` 用于收窄 spec 访问面。
 
-错语法二,`spec` 行为签名或可调用形状参数使用 `let` / `var` 修饰:
+错语法一,`spec` 行为签名或可调用形状参数使用 `let` / `var` 修饰:
 
 ```feng
 // 对象形状中的行为签名
@@ -134,7 +136,7 @@ spec Bad {
 spec BadMapper(let x: int): int;
 ```
 
-错语法三,`spec` 静态字段带初始值或静态方法带函数体:
+错语法二,`spec` 静态字段带初始值或静态方法带函数体:
 
 ```feng
 spec Bad {
@@ -143,14 +145,14 @@ spec Bad {
 }
 ```
 
-错语法四,循环声明满足:
+错语法三,循环声明满足:
 
 ```feng
 spec A: B {}
 spec B: A {}
 ```
 
-错语法五,`type` 声明头满足 callable-form `spec`:
+错语法四,`type` 声明头满足 callable-form `spec`:
 
 ```feng
 spec Click(): void;
@@ -158,7 +160,7 @@ spec Click(): void;
 type Button: Click {}
 ```
 
-错语法六,`type` 声明头满足 union-form `spec`:
+错语法五,`type` 声明头满足 union-form `spec`:
 
 ```feng
 spec Choice: int | string;
@@ -166,19 +168,19 @@ spec Choice: int | string;
 type Box: Choice {}
 ```
 
-错语法七,union-form `spec` 使用块体:
+错语法六,union-form `spec` 使用块体:
 
 ```feng
 spec Choice: int | string {}
 ```
 
-错语法八,intersection-form `spec` 使用块体:
+错语法七,intersection-form `spec` 使用块体:
 
 ```feng
 spec ReadWrite: Readable & Writable {}
 ```
 
-错语法九,`type` 声明头满足 intersection-form `spec`:
+错语法八,`type` 声明头满足 intersection-form `spec`:
 
 ```feng
 spec ReadWrite: Readable & Writable;
@@ -202,8 +204,9 @@ type Stream: ReadWrite {}
 - 由于对象形状 `spec` 不约束物理布局,运行时可采用分发表、witness 表或其他等价机制来满足契约,因此对象形状 `spec` 不构成 ABI 稳定类型,不能进入 C ABI 边界。
 - 目前成员顺序的调整,不是兼容变更。未来增加基于编译期计算出稳定的成员 KEY 进行编译期成员重排的方式优化此问题。
 - 可调用形状 `spec` 仅描述函数签名形状,不引入数据布局,因此可在标记 `@abi` 后作为 ABI 函数签名类型使用; 对应的原生函数指针类型写作 `Foo*`,详见 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
-- object-form `spec` 的字段与方法默认是公开 requirement；允许显式使用
-  `seal` 将其声明为 `spec seal` requirement，不允许显式使用 `open`。
+- object-form `spec` 的字段与方法默认是公开 requirement；可以显式使用
+  `open` 表达相同的公开语义，也可以使用 `seal` 将其声明为 `spec seal`
+  requirement。
 - 公开 requirement 与 `spec seal` requirement 均属于完整契约，均参与
   满足检查、父 spec 闭包和 witness 构造；`seal` 只把该 requirement 从
   普通 spec 访问面中排除。
@@ -330,7 +333,9 @@ type Stream: ReadWrite {}
 - [禁止] object-form `spec` 声明终结器（`~` 前缀的方法）; 该限制属于语义规则,由语义分析阶段诊断。
 - [必须] object-form `spec` 中声明的 `static let` / `static var` / `static func` 必须不带初始值或函数体;静态字段声明必须以 `;` 结束,静态方法签名必须以 `;` 结束,静态方法必须显式声明返回类型。
 - [必须] object-form `spec` 的实例字段、实例方法、静态字段和静态方法允许
-  使用 `seal`，省略修饰时保持公开语义；显式 `open` 必须被拒绝。
+  使用 `open` 或 `seal`；显式 `open` 与省略修饰符均为公开 requirement，
+  `seal` 收窄 spec 访问面。Parser / AST 必须保留显式修饰事实，Semantic
+  负责解释其有效可见性。
 - [必须] object-form `spec` 的实例字段、实例普通方法、静态字段和静态普通方法在
   显式 `seal` 时允许使用 `@friend`；授权继续通过 spec witness，且不得改变
   requirement 满足与具体实现成员可见性。完整规则统一见

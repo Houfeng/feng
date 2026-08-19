@@ -72,18 +72,20 @@ object-form `spec` 成员具有以下有效可见性：
 
 ```text
 effective_visibility(无修饰 spec 成员) = open
+effective_visibility(open spec 成员)   = open
 effective_visibility(seal spec 成员)   = seal
 ```
 
-本次只新增 `seal` 写法。显式 `open` 是否允许不属于本需求，继续维持当前
-语法规则：`spec` 成员不能显式声明 `open`。
+显式 `open` 与省略修饰符具有相同的公开 requirement 语义。Parser / AST
+继续分别记录 `PUBLIC` 与 `DEFAULT` 声明事实，Semantic 负责将两者解释为
+相同的公开成员可见性；`seal` 记录为 `PRIVATE` 并收窄 spec 访问面。
 
 object-form `spec` 因此具有两个用途不同的成员集合：
 
 | 集合 | 内容 | 用途 |
 | --- | --- | --- |
-| 公开访问面 | 无修饰成员 | 普通 `spec` 使用者访问 |
-| 完整契约 | 无修饰成员与 `seal` 成员 | 满足检查、witness 构造和实现域访问 |
+| 公开访问面 | 无修饰或显式 `open` 成员 | 普通 `spec` 使用者访问 |
+| 完整契约 | 无修饰、显式 `open` 与 `seal` 成员 | 满足检查、witness 构造和实现域访问 |
 
 成员不在公开访问面中，不表示该成员不属于契约。所有实现者仍必须提供
 完整契约所要求的成员。
@@ -355,9 +357,10 @@ object-form `spec` 的方法级类型参数还有一个更早的既有解析问�
 
 - object-form `spec` 的实例字段、实例方法、静态字段和静态方法接受
   `seal` 修饰符。
-- `SE0601` 收窄为继续拒绝显式 `open` 和非 object-form 场景中的成员
-  可见性，不再拒绝合法的 object-form `seal` 成员。
-- 无修饰成员继续使用当前默认可见性。
+- object-form `spec` 成员允许显式 `open` 或 `seal`；`SE0601` 不再用于
+  拒绝显式 `open`。
+- AST 原样保留无修饰、显式 `open` 与显式 `seal` 的可见性事实，不在
+  Parser 中归一化。
 - 复用 `FengTypeMember` 现有可见性字段，不增加新的 AST 节点或属性。
 
 ### 6.2 语义分析
@@ -452,7 +455,7 @@ LSP、补全和符号展示只需对 `spec` 成员应用相同访问判断：
 | --- | --- |
 | object-form spec 声明实例/静态 `seal` 字段与方法 | 通过 |
 | 无修饰 spec 成员保持公开 | 通过 |
-| 显式 `open` spec 成员 | 按现有规则拒绝 |
+| 显式 `open` spec 实例/静态字段与方法 | 通过，与省略修饰符语义等价 |
 | `seal` requirement 参与 type 满足检查和 witness 构造 | 通过 |
 | open/default type 成员承担 `seal` requirement | 通过 |
 | type seal 成员承担 `seal` requirement | 通过 |
@@ -500,8 +503,8 @@ FCTS 验证能够执行的正向语言行为。涉及 `.ft` 的测试还必须�
 - `docs/specifications/feng-symbol-table.md`：确认复用现有成员可见性编码，
   已导出 spec 关系选中的 seal 实现方法作为编译器 ABI
   依赖进入 package-public `.ft`，且不修改 `.ft` 格式和 relation；
-- `docs/specifications/feng-error-codes-se.md`：收窄 `SE0601`，只拒绝 spec
-  成员显式 `open`；
+- `docs/specifications/feng-error-codes-se.md`：将不再有触发场景的 `SE0601`
+  标记为失效；
 - `docs/specifications/feng-error-codes-ae.md`：定义实现成员可见性不兼容和
   spec seal 成员越权访问诊断。
 
@@ -519,8 +522,9 @@ fit 的目标 type 私有访问权、跨包可见面或运行时行为。
 
 - [x] 更新 `feng-spec.md`、`feng-visibility.md`、`feng-fit.md`、
   `feng-symbol-table.md` 及 SE/AE 诊断规范。
-- [x] Parser 仅允许 object-form spec 成员使用 `seal`，保持无修饰成员为
-  公开语义，并继续拒绝显式 `open`。
+- [x] Parser 允许 object-form spec 成员使用 `open` 或 `seal`，并原样保留
+  `DEFAULT`、`PUBLIC` 与 `PRIVATE` AST 事实；Semantic 将无修饰与显式
+  `open` 统一解释为公开 requirement。
 - [x] `.ft` 符号视图保存并恢复 spec 成员已有的可见性，不修改格式、版本
   或 relation。
 - [x] 为 requirement 与实现成员增加统一可见性兼容判断，并在满足验证、

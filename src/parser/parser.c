@@ -1735,13 +1735,6 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
     FengVisibility member_visibility = parse_visibility(parser);
     bool is_static = false;
 
-    if (member_visibility == FENG_VISIBILITY_PUBLIC) {
-        (void)parser_error_current(
-            parser,
-            "SE0601", "spec members cannot declare 'open'; omit 'open' or use 'seal'");
-        return NULL;
-    }
-
     is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
 
     if (parser_match(parser, FENG_TOKEN_KW_LET) || parser_match(parser, FENG_TOKEN_KW_VAR)) {

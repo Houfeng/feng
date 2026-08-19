@@ -93,6 +93,32 @@ type NamedEntity: HasName {
   let name: string;
 }
 
+// 显式 open 与省略修饰符具有相同的公开 requirement 语义。
+spec ExplicitOpenSurface {
+  open let value: int;
+  open func read(): int;
+  open static let base: int;
+  open static func marker(): int;
+}
+
+type ExplicitOpenValue: ExplicitOpenSurface {
+  let value: int;
+  static let base: int = 40;
+
+  func read(): int {
+    return self.value;
+  }
+
+  static func marker(): int {
+    return 2;
+  }
+}
+
+/** 通过泛型约束访问显式 open 的 spec 静态 requirement。 */
+func read_explicit_open_static<T: ExplicitOpenSurface>(): int {
+  return T.base + T.marker();
+}
+
 // 用于 spec 参数/返回值测试
 spec SpecGreetable {
   func spec_greet(): string;
@@ -257,6 +283,15 @@ open func test_spec() {
       let entity = NamedEntity { name: "entity1" };
       let hn: HasName = entity;
       assert(hn.name == "entity1", "spec field matching");
+    });
+
+    test("explicit open spec members", () {
+      let value = ExplicitOpenValue { value: 42 };
+      let view: ExplicitOpenSurface = value;
+      assert(view.value == 42 && view.read() == 42,
+             "explicit open instance requirements use the public witness path");
+      assert(read_explicit_open_static<ExplicitOpenValue>() == 42,
+             "explicit open static requirements use the public witness path");
     });
 
     test("default witness (spec default value)", () {

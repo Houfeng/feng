@@ -24,7 +24,8 @@ spec Surface {
 该限制统一适用于：
 
 - 实例方法和静态方法；
-- 无修饰（语义为 `open`）和 `seal` 方法；显式 `open` 仍由既有 spec 成员规则拒绝；
+- 无修饰、显式 `open` 和 `seal` 方法；无修饰与显式 `open` 均为公开
+  requirement；
 - `spec` 自有成员以及从父 `spec` 继承后形成的 requirement surface。
 
 语法结构本身没有错误，因此不得从 Parser 语法或 AST 中删除方法泛参，也不得把
@@ -289,10 +290,9 @@ Bug，也不是保留未完成 emitter 的理由。未来若恢复能力，仍�
   替换后的真实返回类型依赖。
 - [x] **验证（Parser / AST）**：确认实例和 static spec 泛型方法仍可解析，方法泛参、
   约束、参数和返回类型完整保留；不得新增 Parser 错误。
-- [x] **验证（限制边界）**：增加编译器诊断用例，覆盖实例/static、无修饰
-  （语义为 `open`）/seal，并确认 `AE0331` 在声明期产生；显式 `open` 的既有
-  禁止规则保持不变。验证泛型 spec owner、type/fit 泛型方法、泛型约束及
-  callable-form spec 不受影响。
+- [x] **验证（限制边界）**：增加编译器诊断用例，覆盖实例/static、无修饰、
+  显式 `open` 与 `seal`，并确认 `AE0331` 在声明期产生。验证泛型 spec owner、
+  type/fit 泛型方法、泛型约束及 callable-form spec 不受影响。
 - [x] **验证（既有部分）**：确认普通非泛型 spec 满足、spec seal、父 spec、fit、
   同包和跨包行为保持不变；不得删除既有测试。
 - [x] **验证（回归）**：完成非文档变更后执行定向测试，并在沙箱外执行

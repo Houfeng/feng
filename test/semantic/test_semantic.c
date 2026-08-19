@@ -18022,8 +18022,8 @@ static void test_finalizer_method_type_params_rejected(void) {
 
 /* Object-form spec method generics remain parseable, but Semantic rejects the
  * declaration before resolving its callable-local types or building a
- * satisfaction/witness surface. Instance/static and default/seal members use
- * the same declaration-time diagnostic. */
+ * satisfaction/witness surface. Instance/static and default/open/seal members
+ * use the same declaration-time diagnostic. */
 static void test_object_spec_method_type_params_rejected(void) {
     static const struct {
         const char *source;
@@ -18035,6 +18035,11 @@ static void test_object_spec_method_type_params_rejected(void) {
             "identity"
         },
         {
+            "module demo.spec_method_generic.instance_open;\n"
+            "spec Surface { open func identity<T>(value: T): T; }\n",
+            "identity"
+        },
+        {
             "module demo.spec_method_generic.instance_seal;\n"
             "spec Surface { seal func identity<T>(value: T): T; }\n",
             "identity"
@@ -18042,6 +18047,11 @@ static void test_object_spec_method_type_params_rejected(void) {
         {
             "module demo.spec_method_generic.static_default;\n"
             "spec Surface { static func create<T>(value: T): T; }\n",
+            "create"
+        },
+        {
+            "module demo.spec_method_generic.static_open;\n"
+            "spec Surface { open static func create<T>(value: T): T; }\n",
             "create"
         },
         {

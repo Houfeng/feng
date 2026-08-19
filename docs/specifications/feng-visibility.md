@@ -258,8 +258,9 @@ open type User {
 - 顶层声明为 `open` 时不收窄范围；为 `seal` 或省略修饰时收窄到模块私有。
 - `type`、`fit` 成员为 `open` 或省略修饰时不收窄范围；为 `seal` 时收窄到类型私有。
 - 声明的有效可见范围是 module、所属顶层声明和成员各层范围中的最窄者。
-- object-form `spec` 成员省略修饰时为公开 requirement，可以显式使用
-  `seal` 收窄 spec 访问面，但不能显式使用 `open`。
+- object-form `spec` 成员省略修饰时为公开 requirement；显式 `open` 具有
+  相同语义，显式 `seal` 收窄 spec 访问面。显式修饰事实由 Parser / AST
+  保留，有效可见性由 Semantic 解释。
 - `fit` 不是可命名声明：仅 `open module` 中的 `open fit` 形成包外公开签名；
   其他 `fit` 仅在声明 module 内生效，按模块私有检查。
 

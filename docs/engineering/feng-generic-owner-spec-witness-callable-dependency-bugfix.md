@@ -371,8 +371,9 @@ TODO 按“先锁定通用闭合点，再实施最小改动，最后分层验证
   owner generic parameter slot 的行为继续由既有 generic type owner reification 用例
   覆盖。这是测试断言边界修正，不是编译器缺陷，也不需要产品代码变更。
 - 2026-08-19：新增跨包 FCTS 时，provider 的 open `spec` 成员最初冗余声明了
-  `open`，触发既有诊断 `SE0601`。Feng 的 `spec` 成员默认即为 open，只允许省略
-  visibility 或声明 `seal`；测试已按既有语义移除冗余修饰符，不涉及编译器变更。
+  `open`，在当时的 Parser 规则下触发诊断 `SE0601`；测试随即按当时语义移除了
+  冗余修饰符。后续 object-form `spec` 已允许显式 `open`，当前规则统一见
+  [Feng 语言 `spec` 规范](../specifications/feng-spec.md)；本条仅保留当时的实施记录。
 - 2026-08-19：定向 `test_codegen` 通过；FCTS 新增 4 组行为测试后共 805/805 通过；
   非沙箱全量 `make test` 的 sanitize 与 normal 两阶段全部通过，其中 smoke 91/91、
   std 579/579、FCTS 805/805，性能约束、增量构建、发布与工具链检查均通过。
