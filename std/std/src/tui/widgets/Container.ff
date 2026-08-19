@@ -78,8 +78,10 @@ open type Container: ContainerWidget {
    * 每次进入容器布局时都重新标记直接 child，确保父级 frame、padding 或覆盖变化生效。
    */
   @mixable
-  seal static func arrange(container: ContainerWidget,
-    manager: ViewManager): void {
+  seal static func arrange(
+    container: ContainerWidget,
+    manager: ViewManager
+  ): void {
     View.arrange(container, manager);
     for let child in container.children {
       child.dirty.add(DirtyType.Layout);
@@ -89,7 +91,10 @@ open type Container: ContainerWidget {
 
   /** 按自身、直接 children 的顺序完成默认叠放绘制。 */
   @mixable
-  seal static func draw(container: ContainerWidget, manager: ViewManager): void {
+  seal static func draw(
+    container: ContainerWidget,
+    manager: ViewManager
+  ): void {
     View.draw(container, manager);
     for let child in container.children {
       child.doDraw(manager);
@@ -125,7 +130,9 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func removeChild(container: ContainerWidget, child: Widget): void {
-    container.children.remove(child);
+    let children = container.children;
+    if !children.contains(child) { return; }
+    children.remove(child);
     child.parent = none;
     Container.invalidateLayout(container);
   }
@@ -135,13 +142,10 @@ open type Container: ContainerWidget {
    */
   @mixable
   static func clearChildren(container: ContainerWidget): void {
-    if container.children.size() == 0 {
-      return;
-    }
-    for let child in container.children {
-      child.parent = none;
-    }
-    container.children.clear();
+    let children = container.children;
+    if children.size() == 0 { return; }
+    for let child in children { child.parent = none; }
+    children.clear();
     Container.invalidateLayout(container);
   }
 }
