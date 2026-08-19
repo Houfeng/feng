@@ -21,7 +21,8 @@
 - 公开 requirement: object-form `spec` 中省略成员可见性修饰的字段或方法要求。
 - `spec seal` requirement: object-form `spec` 中使用 `seal` 修饰、仅允许实现域
   通过 spec 视角访问的字段或方法要求。
-- 方法签名: 方法名、参数个数、参数类型、参数顺序与返回值类型的组合。
+- 方法签名: 方法名、方法泛参数量、参数个数、参数类型、参数顺序、变长参数
+  形态与返回值类型的组合。方法泛参名称不属于签名身份。
 - 默认 witness: `spec` 默认初始化时由语言规则提供的默认实例语义。
 
 ## 3 语法
@@ -274,7 +275,9 @@ type Stream: ReadWrite {}
   `open`,并使用与实例成员相同的满足兼容和访问域规则。
 - spec 方法名可以与 spec 名相同（包括静态方法和实例方法）,视为普通方法; spec 一律不允许 `~` 前缀的方法（终结器只允许用于 `type`）。
 - spec 静态字段的满足来源只能是 `type` 自身（`fit` 不得声明 `static let` / `static var`）; spec 静态方法的满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
-- spec 静态字段匹配采用"名称 + 绑定方式（`let` / `var`） + 类型完全一致"规则; spec 静态方法匹配采用"名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致"规则。
+- spec 静态字段匹配采用"名称 + 绑定方式（`let` / `var`） + 类型完全一致"规则;
+  spec 静态方法复用实例方法的完整签名匹配规则，包括方法泛参按位置对应和
+  约束兼容检查。
 - 泛型 spec 中的类型参数在满足检查时按 `type Widget: Factory<Widget>` 中的实参替换后精确匹配,复用与 spec 实例方法相同的机制。
 - 通过具体类型名访问静态成员（如 `Widget.make()`、`Widget.tag`）为直接调用或直接访问,运行时不引入额外开销。
 - 通过泛型约束中的类型参数访问静态成员（如 `T.make()`、`T.field`,其中 `T: SomeSpec`）通过编译期 witness 表完成静态分派,不开销与现有泛型实例方法分派一致。
@@ -294,7 +297,17 @@ type Stream: ReadWrite {}
 - [禁止] object-form `spec` 的父 `spec` 列表中出现 callable-form、union-form 或 intersection-form `spec`；object-form `spec` 的父级只能是 object-form `spec`。
 - [必须] 在 `type Foo: Bar, Baz {}` 或契约适配 `fit Foo: Bar, Baz` 中,冒号右侧每一项都必须是 object-form `spec`。
 - [必须] 判断 `type` 是否满足 `spec` 时,字段匹配采用“名称 + 绑定方式（`let` 或 `var`，即字段是否可变） + 类型完全一致”规则。
-- [必须] 判断 `type` 是否满足 `spec` 时,方法匹配采用“名称 + 参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”规则。
+- [必须] 判断 `type` 是否满足 object-form `spec` 时，非泛型方法匹配采用
+  “名称 + 参数个数 + 参数类型 + 参数顺序 + 变长参数形态 + 返回值类型完全
+  一致”规则。泛型方法还必须具有相同的方法泛参数量；双方方法泛参按声明
+  位置一一对应，泛参名称不参与匹配，参数与返回类型在该位置映射及 spec
+  owner 实参替换后按上述规则比较。
+- [必须] object-form `spec` 泛型方法的实现约束不得比 requirement 更严格：
+  requirement 无约束时实现也必须无约束；requirement 有约束而实现无约束时
+  允许；双方都有约束时，必须在 owner 实参替换及方法泛参位置映射后，依据
+  当前可见的名义 spec 关系证明 requirement 约束满足实现约束。无法证明或
+  实现约束更窄时，必须拒绝满足。该规则统一适用于实例方法、静态方法、
+  `type` 自有实现、`fit` 实现、父 spec 闭包和 witness 选择。
 - [必须] object-form `spec` 的公开 requirement 只能由公开或无修饰的实现
   成员满足；`spec seal` requirement 可以由公开、无修饰或 `seal` 实现
   成员满足。字段、方法、实例、静态、type 与 fit 来源使用同一规则。

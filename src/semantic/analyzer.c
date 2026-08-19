@@ -28105,34 +28105,242 @@ static bool fit_may_use_target_private_implementations(
            target_module->origin == FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
 }
 
-static bool callable_signatures_match_for_satisfaction(const ResolveContext *ctx,
-                                                       const FengCallableSignature *spec_sig,
-                                                       const FengCallableSignature *type_sig) {
-    size_t i;
-    bool spec_variadic;
-    bool type_variadic;
+/* Clone one requirement type surface while alpha-renaming its callable-local
+ * type parameters to the implementation declaration's names. Method type
+ * parameter names are not contract identity; declaration order is. */
+static FengTypeRef *clone_type_ref_for_callable_alpha_mapping(
+    const FengTypeRef *type_ref,
+    const FengCallableSignature *requirement,
+    const FengCallableSignature *implementation) {
+    FengTypeRef *target_refs = NULL;
+    FengTypeRef **target_args = NULL;
+    FengSlice *target_segments = NULL;
+    FengTypeRef *result = NULL;
+    size_t count;
 
-    if (spec_sig->param_count != type_sig->param_count) {
+    if (type_ref == NULL || requirement == NULL || implementation == NULL ||
+        requirement->type_param_count != implementation->type_param_count) {
+        return NULL;
+    }
+    count = requirement->type_param_count;
+    if (count == 0U) {
+        return clone_type_ref_for_inference(type_ref);
+    }
+    target_refs = (FengTypeRef *)calloc(count, sizeof(*target_refs));
+    target_args = (FengTypeRef **)calloc(count, sizeof(*target_args));
+    target_segments = (FengSlice *)calloc(count, sizeof(*target_segments));
+    if (target_refs == NULL || target_args == NULL || target_segments == NULL) {
+        goto cleanup;
+    }
+    for (size_t index = 0U; index < count; ++index) {
+        target_segments[index] = implementation->type_params[index].name;
+        target_refs[index].token = implementation->type_params[index].token;
+        target_refs[index].kind = FENG_TYPE_REF_NAMED;
+        target_refs[index].as.named.segments = &target_segments[index];
+        target_refs[index].as.named.segment_count = 1U;
+        target_args[index] = &target_refs[index];
+    }
+    result = clone_type_ref_substituting_type_params(
+        type_ref,
+        requirement->type_params,
+        count,
+        target_args);
+
+cleanup:
+    free(target_segments);
+    free(target_args);
+    free(target_refs);
+    return result;
+}
+
+/* Close one requirement member surface against its object-spec owner, when
+ * the caller is comparing a concrete generic spec instance. */
+static const FengTypeRef *close_spec_requirement_member_type_ref(
+    ResolveContext *ctx,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengTypeRef *member_type_ref) {
+    if (spec_decl == NULL || spec_type_ref == NULL) {
+        return member_type_ref;
+    }
+    return substitute_spec_member_type_ref_for_instance(
+        ctx, spec_decl, spec_type_ref, member_type_ref);
+}
+
+/* Close one implementation member surface against the concrete subject and
+ * an optional array-fit target. Declaration-time comparisons without a
+ * concrete subject intentionally retain the original owner parameter names. */
+static const FengTypeRef *close_spec_implementation_member_type_ref(
+    ResolveContext *ctx,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengDecl *fit_decl,
+    const FengTypeRef *member_type_ref) {
+    const FengTypeRef *closed = member_type_ref;
+    InferredExprType source_type;
+
+    if (source_type_ref == NULL) {
+        return closed;
+    }
+    source_type = inferred_expr_type_from_type_ref(source_type_ref);
+    closed = substitute_type_ref_for_owner_instance(
+        ctx, source_type_decl, source_type, closed);
+    return substitute_type_ref_for_fit_instance(
+        ctx, fit_decl, source_type, closed);
+}
+
+/* Return whether the requirement constraint is at least as strong as the
+ * implementation constraint. This is the contravariant acceptance rule for
+ * a method type parameter: every call allowed by the requirement must also
+ * be accepted by the implementation. */
+static bool callable_requirement_constraint_satisfies_implementation(
+    ResolveContext *ctx,
+    const FengTypeRef *requirement_constraint,
+    const FengTypeRef *implementation_constraint) {
+    ObjectSpecUpcastPath upcast_path;
+
+    if (requirement_constraint == NULL) {
+        return implementation_constraint == NULL;
+    }
+    if (implementation_constraint == NULL) {
+        return true;
+    }
+    if (type_refs_semantically_equal(ctx,
+                                     requirement_constraint,
+                                     implementation_constraint)) {
+        return true;
+    }
+    if (find_object_spec_upcast_path(
+            ctx,
+            inferred_expr_type_from_type_ref(requirement_constraint),
+            implementation_constraint,
+            &upcast_path)) {
+        object_spec_upcast_path_free(&upcast_path);
+        return true;
+    }
+    return type_ref_satisfies_spec_type_ref(ctx,
+                                            requirement_constraint,
+                                            implementation_constraint);
+}
+
+/* Compare one object-spec requirement and implementation callable after
+ * closing both optional owner instances. All satisfaction and witness paths
+ * share this routine so generic arity, alpha mapping and constraint direction
+ * cannot diverge between declaration validation and runtime slot selection. */
+static bool callable_signatures_match_for_satisfaction_instances(
+    ResolveContext *ctx,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref,
+    const FengDecl *fit_decl,
+    const FengCallableSignature *spec_sig,
+    const FengCallableSignature *type_sig) {
+    size_t index;
+
+    if (ctx == NULL || spec_sig == NULL || type_sig == NULL ||
+        spec_sig->type_param_count != type_sig->type_param_count ||
+        spec_sig->param_count != type_sig->param_count) {
         return false;
     }
-    /* Variadic flag must match: a variadic spec method can only be satisfied
-     * by a variadic implementation and vice versa. */
-    spec_variadic = spec_sig->param_count > 0U &&
-                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
-    type_variadic = type_sig->param_count > 0U &&
-                    type_sig->params[type_sig->param_count - 1U].is_variadic;
-    if (spec_variadic != type_variadic) {
-        return false;
-    }
-    for (i = 0U; i < spec_sig->param_count; ++i) {
-        if (!type_refs_semantically_equal(ctx, spec_sig->params[i].type, type_sig->params[i].type)) {
+    for (index = 0U; index < spec_sig->param_count; ++index) {
+        const FengTypeRef *expected = close_spec_requirement_member_type_ref(
+            ctx,
+            spec_decl,
+            spec_type_ref,
+            spec_sig->params[index].type);
+        const FengTypeRef *actual = close_spec_implementation_member_type_ref(
+            ctx,
+            source_type_decl,
+            source_type_ref,
+            fit_decl,
+            type_sig->params[index].type);
+        FengTypeRef *mapped_expected;
+        bool equal;
+
+        if (spec_sig->params[index].is_variadic !=
+            type_sig->params[index].is_variadic) {
+            return false;
+        }
+        mapped_expected = clone_type_ref_for_callable_alpha_mapping(
+            expected, spec_sig, type_sig);
+        if (mapped_expected == NULL) {
+            return false;
+        }
+        equal = type_refs_semantically_equal(ctx, mapped_expected, actual);
+        free_synthetic_type_ref(mapped_expected);
+        if (!equal) {
             return false;
         }
     }
-    if (!type_refs_semantically_equal(ctx, spec_sig->return_type, type_sig->return_type)) {
-        return false;
+    {
+        const FengTypeRef *expected = close_spec_requirement_member_type_ref(
+            ctx, spec_decl, spec_type_ref, spec_sig->return_type);
+        const FengTypeRef *actual = close_spec_implementation_member_type_ref(
+            ctx,
+            source_type_decl,
+            source_type_ref,
+            fit_decl,
+            type_sig->return_type);
+        FengTypeRef *mapped_expected =
+            clone_type_ref_for_callable_alpha_mapping(
+                expected, spec_sig, type_sig);
+        bool equal;
+
+        if (mapped_expected == NULL) {
+            return false;
+        }
+        equal = type_refs_semantically_equal(ctx, mapped_expected, actual);
+        free_synthetic_type_ref(mapped_expected);
+        if (!equal) {
+            return false;
+        }
+    }
+    for (index = 0U; index < spec_sig->type_param_count; ++index) {
+        const FengTypeRef *expected = close_spec_requirement_member_type_ref(
+            ctx,
+            spec_decl,
+            spec_type_ref,
+            spec_sig->type_params[index].constraint);
+        const FengTypeRef *actual = close_spec_implementation_member_type_ref(
+            ctx,
+            source_type_decl,
+            source_type_ref,
+            fit_decl,
+            type_sig->type_params[index].constraint);
+        FengTypeRef *mapped_expected = NULL;
+        bool compatible;
+
+        if (expected != NULL) {
+            mapped_expected = clone_type_ref_for_callable_alpha_mapping(
+                expected, spec_sig, type_sig);
+            if (mapped_expected == NULL) {
+                return false;
+            }
+        }
+        compatible =
+            callable_requirement_constraint_satisfies_implementation(
+                ctx, mapped_expected, actual);
+        free_synthetic_type_ref(mapped_expected);
+        if (!compatible) {
+            return false;
+        }
     }
     return true;
+}
+
+static bool callable_signatures_match_for_satisfaction(const ResolveContext *ctx,
+                                                       const FengCallableSignature *spec_sig,
+                                                       const FengCallableSignature *type_sig) {
+    return callable_signatures_match_for_satisfaction_instances(
+        (ResolveContext *)ctx,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        NULL,
+        spec_sig,
+        type_sig);
 }
 
 static bool callable_signatures_match_for_satisfaction_in_spec_ref(
@@ -28141,43 +28349,15 @@ static bool callable_signatures_match_for_satisfaction_in_spec_ref(
     const FengTypeRef *spec_type_ref,
     const FengCallableSignature *spec_sig,
     const FengCallableSignature *type_sig) {
-    size_t i;
-    bool spec_variadic;
-    bool type_variadic;
-
-    if (spec_sig->param_count != type_sig->param_count) {
-        return false;
-    }
-    spec_variadic = spec_sig->param_count > 0U &&
-                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
-    type_variadic = type_sig->param_count > 0U &&
-                    type_sig->params[type_sig->param_count - 1U].is_variadic;
-    if (spec_variadic != type_variadic) {
-        return false;
-    }
-    for (i = 0U; i < spec_sig->param_count; ++i) {
-        const FengTypeRef *expected_param = substitute_spec_member_type_ref_for_instance(
-            ctx,
-            spec_decl,
-            spec_type_ref,
-            spec_sig->params[i].type);
-
-        if (!type_refs_semantically_equal(ctx, expected_param, type_sig->params[i].type)) {
-            return false;
-        }
-    }
-    {
-        const FengTypeRef *expected_return = substitute_spec_member_type_ref_for_instance(
-            ctx,
-            spec_decl,
-            spec_type_ref,
-            spec_sig->return_type);
-
-        if (!type_refs_semantically_equal(ctx, expected_return, type_sig->return_type)) {
-            return false;
-        }
-    }
-    return true;
+    return callable_signatures_match_for_satisfaction_instances(
+        ctx,
+        spec_decl,
+        spec_type_ref,
+        NULL,
+        NULL,
+        NULL,
+        spec_sig,
+        type_sig);
 }
 
 /* Compare one requirement and implementation after closing both their spec
@@ -28193,66 +28373,15 @@ static bool callable_signatures_match_for_witness_instances(
     const FengTypeRef *spec_type_ref,
     const FengCallableSignature *spec_sig,
     const FengCallableSignature *impl_sig) {
-    InferredExprType source_type;
-    size_t param_index;
-    bool spec_variadic;
-    bool impl_variadic;
-
-    if (ctx == NULL || spec_decl == NULL || spec_type_ref == NULL ||
-        spec_sig == NULL || impl_sig == NULL ||
-        spec_sig->param_count != impl_sig->param_count) {
-        return false;
-    }
-    spec_variadic = spec_sig->param_count > 0U &&
-                    spec_sig->params[spec_sig->param_count - 1U].is_variadic;
-    impl_variadic = impl_sig->param_count > 0U &&
-                    impl_sig->params[impl_sig->param_count - 1U].is_variadic;
-    if (spec_variadic != impl_variadic) {
-        return false;
-    }
-
-    source_type = inferred_expr_type_from_type_ref(source_type_ref);
-    for (param_index = 0U; param_index < spec_sig->param_count; ++param_index) {
-        const FengTypeRef *expected_param =
-            substitute_spec_member_type_ref_for_instance(
-                ctx,
-                spec_decl,
-                spec_type_ref,
-                spec_sig->params[param_index].type);
-        const FengTypeRef *actual_param = substitute_type_ref_for_owner_instance(
-            ctx,
-            source_type_decl,
-            source_type,
-            impl_sig->params[param_index].type);
-
-        actual_param = substitute_type_ref_for_fit_instance(ctx,
-                                                            fit_decl,
-                                                            source_type,
-                                                            actual_param);
-        if (!type_refs_semantically_equal(ctx, expected_param, actual_param)) {
-            return false;
-        }
-    }
-    {
-        const FengTypeRef *expected_return =
-            substitute_spec_member_type_ref_for_instance(ctx,
-                                                         spec_decl,
-                                                         spec_type_ref,
-                                                         spec_sig->return_type);
-        const FengTypeRef *actual_return = substitute_type_ref_for_owner_instance(
-            ctx,
-            source_type_decl,
-            source_type,
-            impl_sig->return_type);
-
-        actual_return = substitute_type_ref_for_fit_instance(ctx,
-                                                             fit_decl,
-                                                             source_type,
-                                                             actual_return);
-        return type_refs_semantically_equal(ctx,
-                                            expected_return,
-                                            actual_return);
-    }
+    return callable_signatures_match_for_satisfaction_instances(
+        ctx,
+        spec_decl,
+        spec_type_ref,
+        source_type_decl,
+        source_type_ref,
+        fit_decl,
+        spec_sig,
+        impl_sig);
 }
 
 /* Select one type-owned witness implementation against closed owner/spec
@@ -31030,21 +31159,20 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     }
                     continue;
                 }
-                if (!resolve_type_ref(context, member->as.callable.return_type, true)) {
-                    ok = false;
-                    break;
-                }
                 {
-                    size_t param_index;
-                    for (param_index = 0U;
-                         ok && param_index < member->as.callable.param_count;
-                         ++param_index) {
-                        if (!resolve_type_ref(context,
-                                              member->as.callable.params[param_index].type,
-                                              false)) {
-                            ok = false;
-                        }
-                    }
+                    const FengDecl *previous_type_decl =
+                        context->current_type_decl;
+                    const FengTypeMember *previous_callable_member =
+                        context->current_callable_member;
+
+                    context->current_type_decl = decl;
+                    context->current_callable_member = member;
+                    ok = resolve_callable(context,
+                                          &member->as.callable,
+                                          /*allow_self=*/false);
+                    context->current_callable_member =
+                        previous_callable_member;
+                    context->current_type_decl = previous_type_decl;
                 }
             }
             if (ok) {

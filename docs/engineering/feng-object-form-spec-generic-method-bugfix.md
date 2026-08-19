@@ -1,6 +1,7 @@
 # Feng object-form `spec` 方法级泛型修复开发文档
 
-> 状态：草案，待 Review（2026-08-18）
+> 状态：修复方案已按既有静态 descriptor tree 重新收敛，待 Review
+> （2026-08-19）
 >
 > 本文档只跟踪 object-form `spec` 方法级泛型从声明解析、满足检查到
 > witness 调用的完整正确性修复。`spec seal` 的可见性与授权语义继续以
@@ -16,8 +17,8 @@
 - [Feng 语言函数规范](../specifications/feng-function.md)；
 - [Feng 符号表规范](../specifications/feng-symbol-table.md)。
 
-现有规范已经规定 object-form `spec` 的实例方法和静态方法支持泛型，
-但当前实现不能完整处理以下合法声明：
+现有规范已经规定 object-form `spec` 的实例方法和静态方法支持方法级泛型，
+但当前实现不能完整处理以下合法声明与调用：
 
 ```feng
 open spec Mapper {
@@ -36,8 +37,8 @@ open type MapperImpl: Mapper {
 }
 ```
 
-本专项的目标是让 object-form `spec` 方法级泛型完整进入现有泛型 callable
-模型，并覆盖：
+本专项的目标是让 object-form `spec` 方法级泛型完整进入**现有泛型
+callable 与静态 descriptor tree 模型**，并覆盖：
 
 - 实例方法与静态方法；
 - 无修饰（公开）与 `seal` requirement；
@@ -46,9 +47,11 @@ open type MapperImpl: Mapper {
 - 显式类型实参、现有类型实参推导、泛型约束和返回值；
 - 同包调用以及只依赖 package-public `.ft` / `.fb` 的跨包调用。
 
-## 2 已确认的问题
+本专项不得增加运行时 descriptor 构造、缓存、查找、反射或额外动态分派。
 
-### 2.1 声明解析没有进入方法泛参作用域
+## 2 当前事实与问题根因
+
+### 2.1 Parser 已保留方法泛参，Semantic 声明解析未进入其作用域
 
 Parser 已经把方法级类型参数写入 `FengCallableSignature.type_params`，无需
 增加语法或 AST。Semantic 解析 object-form `spec` 成员时却直接解析方法
@@ -72,40 +75,107 @@ open spec Identity {
 object-form `spec` 方法签名没有方法体，但仍应复用该入口；不得复制一套
 只处理 `spec` 的泛参作用域逻辑。
 
-### 2.2 满足检查没有表达方法泛参身份
+### 2.2 满足检查没有完整表达方法泛参身份
 
-当前 spec requirement 与实现方法的签名匹配只比较显式参数和返回类型，
-没有先检查方法泛参 arity，也没有把双方方法泛参按声明位置建立对应关系。
-这会产生两类错误：
+原满足检查只比较显式参数和返回类型，没有先检查方法泛参 arity，也没有把
+requirement 与实现方法的泛参按声明位置建立对应关系。正确匹配必须同时处理：
 
-1. 泛参名称不同但结构等价的方法可能被误判为不匹配；
-2. owner 泛参与方法泛参恰好同名或类型文本相同的不同签名可能被误判为
-   匹配。
+- 方法泛参 arity；
+- 按位置建立的 alpha-equivalent 映射，泛参名称不参与身份；
+- spec owner 实参与实现 owner 实参替换；
+- 参数、返回值与变长参数形态；
+- “实现约束不得比 requirement 更严格”的约束兼容方向。
 
-方法泛参名称不是运行时或契约身份。满足检查必须先按 arity 建立位置映射，
-再在该映射下比较参数、返回类型、变长参数形态和方法泛参约束。
+满足验证、快速满足查询和最终 witness 选择必须复用同一比较抽象，不能各自
+保留一套近似规则。
 
-### 2.3 object-form witness 没有方法级泛型调用面
+### 2.3 Codegen 的 spec 成员表示与 witness ABI 缺少方法泛型面
 
-当前 `UserSpecMember` 只记录普通参数、返回类型和 static 等事实，没有记录
-方法泛参数量及其约束。object-form witness 的方法槽位也只接收：
+当前 `UserSpecMember` 只记录普通参数、返回类型、static 等事实，没有记录：
+
+- 方法泛参声明顺序及约束；
+- owner 泛参 + 方法泛参的双层未闭合签名；
+- 方法级泛型参数在稳定 callable ABI 中的对应位置。
+
+因此 `UserSpecMember` 解析签名中的 `T` 时会报告
+`CE0032: codegen: unknown type 'T'`。当前 object-form witness 方法槽位也只有：
 
 ```text
 [subject] -> 显式参数 -> [out]
 ```
 
-现有 type/fit 泛型方法共享体则已经使用：
+而现有 type/fit 泛型方法共享体已经接收：
 
 ```text
 [subject] -> [owner descriptor] -> function descriptor
           -> 方法泛参 descriptors -> 显式参数 -> [out]
 ```
 
-如果只修复声明解析，代码会继续在 spec member 类型解析、witness 槽位生成、
-调用点或 thunk 转发阶段失败。因此本专项必须完整修复 witness ABI，不能只
-消除 `AE1013`。
+所以只消除 Semantic 的 `AE1013` 不能完成修复；spec 成员表示、调用点、
+witness 槽位和 thunk 必须一起接入既有泛型 callable ABI。
 
-## 3 修复规则
+### 2.4 spec witness 调用没有进入现有 callable dependency tree
+
+当前共享体的泛型调用链已经采用静态 descriptor tree：
+
+1. Semantic 为共享 callable 收集 `FengReifiableDepSet.callable_deps`；
+2. `cg_emit_closed_callable_fdesc()` 在最终具化点递归闭合被调用 callable 的
+   descriptor 子树；
+3. 子树按固定 slot 写入
+   `FengFunctionDescriptor.reified_callable_deps`；
+4. 共享体通过 `_desc->reified_callable_deps[slot]` 取得下一层 descriptor，
+   传给下一共享体；下一共享体重复相同逻辑。
+
+该链路本身可以表达任意层次的合法嵌套调用。当前缺失的是：通过 object-form
+`spec` requirement 发生的方法调用，没有形成与普通 type/fit 方法调用等价的
+**witness-dispatched callable dependency 节点**。
+
+具体表现为：
+
+- `FengResolvedCallableKind` 和 `FengReifiableCallableDep` 当前只表达已直接
+  解析到 function/type/fit/constructor 的 callable；
+- spec 视角调用没有保存 requirement 成员身份、spec owner 实例、方法类型
+  实参及 witness 分派来源；
+- `collect_from_expr()` 因而不能把该调用加入 caller 的 callable dependency
+  集合；
+- Codegen 也就无法为该调用分配稳定 slot、递归闭合实现方法的 dependency
+  子树并把 descriptor 传入 witness。
+
+因此，本问题不是现有 descriptor tree 无法表达动态 witness，也不需要增加
+runtime provider。它是 spec witness 调用边没有进入既有树形收集、闭合与下传
+链路的完整性问题。
+
+### 2.5 正确的闭合不变量
+
+泛型声明体允许保留尚未闭合的类型表达式。例如：
+
+```feng
+func invoke<T: Surface>(value: T): Object {
+  return value.create<int>();
+}
+```
+
+分析 `invoke` 时，`T` 尚未闭合是正常状态，`value.create<int>()` 不应在此处
+报错。编译器应记录 caller 视角的开放 dependency 节点。
+
+正确不变量如下：
+
+1. 类型 owner 泛参从类型描述符取得；方法泛参从本次调用的方法泛参描述符
+   取得；二者共同参与类型表达式替换。
+2. 当共享体 A 调用共享体 B 时，B 的 callable dependency 子树进入 A 的固定
+   slot；若 A 自身仍开放，该子树随 A 的开放 dependency 继续向外传播。
+3. 共享体 B 再调用共享体 C 时，B 以同样方式从自己的 descriptor slot 取得
+   C 的 descriptor 并继续下传；嵌套层数不改变处理模型。
+4. 最终合法具化点必须提供全部显式或推导得到的根类型实参，并递归闭合整棵
+   descriptor tree；所有生成结果继续是 `static const`。
+5. 若调用缺少且无法推导类型实参，或约束不满足，应在 Semantic 阶段按非法
+   调用诊断；若 Semantic 已判定调用合法，而最终具化仍留下开放节点或缺少
+   slot，则属于编译器 dependency 收集、传播或闭合错误。
+
+不得把“声明体分析阶段仍开放”误判为运行时才能具化，也不得通过 runtime
+provider/cache 弥补编译期 dependency tree 的漏收集。
+
+## 3 修复方案
 
 ### 3.1 声明解析
 
@@ -117,8 +187,8 @@ object-form `spec` 的字段继续按字段类型规则解析；每个普通方�
 - 构造器、终结器等非法 spec member 继续由既有成员种类检查拒绝；
 - 不增加 spec 专用类型参数表、类型引用种类或诊断码。
 
-无修饰和 `seal` 方法必须走完全相同的泛型声明解析；visibility 不参与类型
-参数作用域建立。
+无修饰和 `seal` 方法走完全相同的泛型声明解析；visibility 不参与类型参数
+作用域建立。
 
 ### 3.2 requirement 与实现方法的泛型签名匹配
 
@@ -132,19 +202,11 @@ object-form `spec` 的字段继续按字段类型规则解析；每个普通方�
 5. 在同一环境下比较返回类型；
 6. 检查实现方法的泛参约束能够接受 requirement 允许的全部调用。
 
-该比较必须实现为可复用的 callable 泛型签名比较抽象，供直接 `type`、
-`fit`、父 spec requirement 和 witness 选择统一调用；不得在各入口分别按
-类型参数名称或字符串实现匹配。
-
-#### 3.2.1 待 Review：方法泛参约束兼容方向
-
-建议采用“实现不得比 requirement 更严格”的安全规则：
+约束兼容采用“实现不得比 requirement 更严格”的安全规则：
 
 ```text
 allowed(requirement constraint) ⊆ allowed(implementation constraint)
 ```
-
-具体含义：
 
 - requirement 无约束时，实现也必须无约束；
 - requirement 有约束而实现无约束时允许；
@@ -152,81 +214,124 @@ allowed(requirement constraint) ⊆ allowed(implementation constraint)
   requirement 约束能够满足实现约束；
 - 实现约束更窄、或无法证明上述包含关系时拒绝满足。
 
-例如：
+该比较必须是可复用的 callable 泛型签名比较抽象，供直接 `type`、`fit`、
+父 spec requirement 和 witness 选择统一调用；不得在各入口按类型参数名称
+或字符串分别实现。
 
-```feng
-open spec Parent {}
-open spec Child: Parent {}
+### 3.3 统一表达 witness-dispatched callable dependency
 
-open spec Contract {
-  func use<T: Child>(value: T): T;
-}
+在现有 resolved callable / reifiable callable dependency 抽象中增加能够表达
+object-form spec 方法调用的通用形态。该 dependency 至少保留：
 
-open type Impl: Contract {
-  // 安全：所有满足 Child 的 T 都满足 Parent。
-  func use<U: Parent>(value: U): U {
-    return value;
-  }
-}
-```
+- requirement 的原始 `FengTypeMember` 身份；
+- spec 声明及 caller 视角的 spec owner 实例类型；
+- receiver/subject 的 caller 视角类型；
+- 方法类型实参，顺序与 requirement 声明一致；
+- 实例或 static 分派形态；
+- 编译期已选定的名义 witness 关系或可继续具化的 witness 来源。
 
-备选的“约束必须完全相同”规则实现更简单，但会拒绝安全的更宽实现。该决策
-必须在编码前由 Review 确认，并只在权威规范中定义一次；本开发文档随后只
-引用最终规则。
+该表示不是 spec 专用 descriptor 旁路，而是现有 callable dependency 的一种
+分派来源。排序 key、去重、slot 分配、递归闭合、导入导出和调用点查询继续
+复用同一套 callable dependency 基础设施。
 
-### 3.3 调用解析
+调用解析继续复用普通泛型 callable 的规则：
 
-通过 object-form spec 视角调用泛型方法时，继续复用普通泛型 callable 的
-调用解析结果：
+- 显式类型实参数量必须与 requirement 的方法泛参 arity 一致；
+- 无显式类型实参时，按现有规则从实参和目标上下文推导；
+- 类型实参约束按 requirement 检查；满足检查已保证实现能够接受该调用；
+- 参数 coercion、返回类型替换和变长参数规则保持一致；
+- 不允许在运行时根据 witness 函数地址重新解析重载或推导类型实参。
 
-- 显式类型实参数量必须与 spec requirement 的方法泛参 arity 一致；
-- 无显式类型实参时，按现有方法泛型推导规则从实参和既有目标上下文推导；
-- 类型实参约束按 spec requirement 检查；满足检查已保证实际实现能够接受
-  该调用，不在运行时重复检查实现约束；
-- 参数 coercion、返回类型替换、变长参数和 reified dependency 收集复用
-  现有 callable sidecar；
-- `spec seal` 的编译期访问检查先于发码，合法调用与公开方法使用同一泛型
-  witness 分派。
+### 3.4 descriptor tree 的收集、传播与闭合
 
-不允许根据 witness 中实际函数地址重新解析重载或重新推导类型实参。
+新增的 witness-dispatched dependency 必须进入现有
+`FengReifiableDepSet.callable_deps`，并按现有树形规则处理：
 
-### 3.4 witness 方法槽位 ABI
+1. **收集**：`collect_from_expr()` 从 Semantic 已解析的 spec 调用事实追加
+   dependency；不得从成员名或生成后的 C 函数名反推。
+2. **开放传播**：若 receiver、spec owner 或方法类型实参仍引用 caller 泛参，
+   保留 caller 视角的开放类型树；共享体本身不要求提前闭合。
+3. **实现绑定**：当当前层的 witness 来源被具化为具体 type/fit 实现时，复用
+   现有 `FengSpecWitness` 选择结果，把 requirement 节点映射到实际实现 callable；
+   不重新做结构满足检查。
+4. **递归闭合**：复用 `cg_emit_closed_callable_fdesc()` 的既有递归过程，以
+   实际实现的 `FengReifiableDepSet` 和本次 owner/method 类型实参生成子树；
+   实现方法继续按自己的固定 dependency slot surface 读取。
+5. **固定 slot**：子树继续写入 caller descriptor 的
+   `reified_callable_deps[slot]`；共享体只做一次固定下标读取。
+6. **继续下传**：若实现共享体再调用其他共享 callable，其 descriptor 已是
+   当前子树的下一层，继续按相同规则取 slot 并传递。
 
-object-form spec 的泛型方法槽位使用现有泛型方法隐藏参数类型，固定顺序为：
+闭合参数顺序继续复用现有 callable 规则：先放 owner 泛参，再放方法泛参。
+例如 `Host<X>.invoke<U: Surface<X>>(value: U)` 内调用 `value.create<U>()`，而实际
+`create<V>()` 实现体继续调用 `Helper<X, V>` 时：`X` 由 `Host` 的类型描述符
+提供，`U` 由 `invoke` 的方法泛参描述符提供，`create` 的 `V` 在 dependency
+边上被映射为 caller 的 `U`；最终 wrapper 递归替换后形成
+`invoke -> create -> Helper<X, U>` 的闭合 descriptor 子树。不存在只闭合一层
+或只收集直接复合类型的例外。
+
+最终具化点只生成不可变 `static const FengFunctionDescriptor` 及其子节点。
+不得增加运行时类型树遍历、descriptor 合成、cache、interning 或按名字查找。
+
+### 3.5 witness 方法槽位 ABI
+
+泛型 spec 方法的 witness 槽位使用与现有泛型 shared callable 一致的隐藏输入，
+其中 `FengFunctionDescriptor *` 指向 3.4 已闭合的**实际实现子树**：
 
 ```text
 实例方法：subject
        -> FengFunctionDescriptor
-       -> 方法泛参 FengGenericParamDescriptor（按声明顺序）
+       -> 方法泛参 FengGenericParamDescriptor（按 requirement 声明顺序）
        -> 显式参数（按声明顺序）
        -> 可选 out
 
 静态方法：FengFunctionDescriptor
-       -> 方法泛参 FengGenericParamDescriptor（按声明顺序）
+       -> 方法泛参 FengGenericParamDescriptor（按 requirement 声明顺序）
        -> 显式参数（按声明顺序）
        -> 可选 out
 ```
 
-其中：
+调用点取得 descriptor 的规则统一为：
 
-- owner 泛参继续由具体 subject/type/fit 的既有 owner descriptor 提供，不在
-  witness slot 中重复展开；
-- 方法泛参 descriptor 由调用点确定，不能收归到 owner descriptor；
-- `FengFunctionDescriptor` 和方法泛参 descriptor 的构造、依赖 slot、参数
-  地址 ABI 与返回 `_out` 规则直接复用现有泛型 type/fit 方法；
-- witness thunk 只适配 receiver/owner 并按原顺序转发描述符和显式参数；
-- 不新增运行时名称查询、动态泛型实例化、装箱、缓存或额外 witness 层。
+- 当前位于共享体内：从当前 `_desc->reified_callable_deps[slot]` 读取；
+- 当前已经是最终闭合调用点：由既有 closed callable descriptor emitter 返回
+  对应静态节点地址。
 
-普通非泛型 spec 方法保持现有槽位布局。runtime 库公开 ABI 不变；新增的
-compiler-generated witness 槽位只服务此前不能正确发码的方法级泛型能力。
+concrete type/fit witness thunk 只负责既有 ABI 适配，然后把同一个子树 descriptor
+传给实际实现共享体：
 
-### 3.5 Codegen 成员表示
+```text
+实例实现：subject
+       -> owner descriptor
+       -> FengFunctionDescriptor
+       -> 方法泛参 FengGenericParamDescriptor
+       -> 显式参数
+       -> 可选 out
+
+静态实现：owner descriptor
+       -> FengFunctionDescriptor
+       -> 方法泛参 FengGenericParamDescriptor
+       -> 显式参数
+       -> 可选 out
+```
+
+- type、fit、managed/value subject 与 static 形态继续复用现有 owner descriptor
+  和参数 direct/address ABI 适配；
+- spec-to-spec slot witness、父 spec 与 intersection adapter 只转发 descriptor、
+  方法泛参 descriptors、显式参数和 `_out`，不得截断子树；
+- default witness 按既有默认方法语义消费新增隐藏参数，不创建实现依赖；
+- requirement 与实现方法泛参按位置对应。若约束 surface 不同，只能复用编译期
+  已证明安全的现有 witness 前缀/父约束适配，不增加运行时约束检查。
+
+不得复制实现方法体，不得另建 generic spec 专用 shared ABI，也不得在 thunk
+内重新排序或重新生成 dependency tree。
+
+### 3.6 Codegen 成员表示
 
 `UserSpecMember` 的方法表示需要保留至少以下声明级事实：
 
-- 方法泛参 arity 和声明顺序；
-- 泛参约束及其 owner/method 双层作用域；
-- 未闭合参数与返回类型模板；
+- 方法泛参 arity、声明顺序和约束；
+- owner + method 双层作用域中的未闭合参数与返回类型模板；
 - 每个显式参数和返回值的稳定 generic callable ABI 分类；
 - 对应的原始 `FengTypeMember` 身份。
 
@@ -234,21 +339,30 @@ compiler-generated witness 槽位只服务此前不能正确发码的方法级�
 具体类型实参重新决定 direct/address 表示。父 spec、intersection 展平和 slot
 adapter 克隆成员时必须完整复制上述事实。
 
-### 3.6 `.ft` 与跨包
+### 3.7 `.ft` 与跨包
 
-符号表规范已经要求公开泛型成员保留方法类型参数、约束、未实例化签名骨架
-和 reified dependencies。本专项首先验证当前 writer/reader 是否已经完整往返
-object-form spec 泛型方法：
+跨包继续复用通用 callable dependency symbol graph：
 
-- 若事实完整，只修复 Semantic/Codegen 消费路径，不改 `.ft` 格式；
-- 若发现字段缺失，必须先按符号表通用 callable 表示补齐 writer/reader，不能
-  增加 spec 专用 attr、section 或格式旁路；
-- consumer 只能依赖 package-public `.ft` 和 provider 二进制生成 witness，不能
-  读取 provider 源码或 workspace-cache `.ft`。
+- requirement 方法的泛参、约束和未实例化签名必须完整 round-trip；
+- caller 的 witness-dispatched callable dependency 必须保留稳定 requirement
+  身份、owner/receiver 类型表达式和方法类型实参；
+- 实际 type/fit 实现 callable 的 reifiable dependency graph 继续由其既有
+  compiler dependency symbol 事实提供；
+- consumer 在最终具化时沿符号身份递归闭合 descriptor tree，不读取 provider
+  源码，也不重新进行结构满足检查；
+- seal 实现只作为编译器依赖参与闭合，`.ft` 中仍保持 seal，普通成员访问不得
+  因此获得可见性。
 
-跨包实现方法的链接可用性由
+实施时先验证当前 `.ft` writer/reader 能否承载上述通用事实：
+
+- 若现有字段足够，只修复 Semantic/Codegen 消费；
+- 若 callable dependency 缺少 witness 分派身份，则扩展**通用 callable
+  dependency 表示及其 writer/reader**；
+- 不增加 spec 专用 section、字符串拼接链接协议或运行时查找表。
+
+跨包实现方法的名义满足关系与实现符号恢复继续复用
 [泛型 spec 满足关系跨包修复开发文档](./feng-generic-spec-implementation-package-bugfix.md)
-独立处理。本专项负责方法级泛型 witness ABI；两项修复不得互相隐藏失败。
+已经建立的通用链路；本专项不得复制另一条 package 恢复路径。
 
 ## 4 范围边界
 
@@ -260,7 +374,9 @@ object-form spec 泛型方法：
 - owner 泛参和方法泛参同时出现；
 - 方法泛参约束引用 owner 泛参或其他已在作用域中的方法泛参；
 - 标量、managed、aggregate/object-form spec 类型实参及返回值；
-- 同包、package `.fb` 和泛型约束调用。
+- 同包、package `.fb` 和泛型约束调用；
+- witness-dispatched callable dependency 在既有 descriptor tree 中的收集、
+  固定 slot 分配、递归闭合和下传。
 
 ### 4.2 本次不包含
 
@@ -268,7 +384,8 @@ object-form spec 泛型方法：
   [成员方法值补齐开发草案](./feng-object-form-spec-method-value-dev.md)
   独立跟踪；
 - callable-form spec 对开放泛型函数/方法的反向推导；
-- 新的 variance、结构满足或运行时泛型机制；
+- 新的 variance、结构满足、JIT、运行时名称解析或反射式泛型调用；
+- runtime descriptor provider、descriptor cache/interning 或动态 metadata 构造；
 - 更改 `spec seal`、`type seal`、`@friend`、`@mixable` 的访问规则；
 - 泛型 owner/fit 的 package 名义关系恢复及 seal 实现符号导出；
 - 静态字段 storage/ensure 跨包链接；
@@ -276,34 +393,43 @@ object-form spec 泛型方法：
 
 ## 5 性能与兼容性
 
-- 非泛型 spec 方法的 witness 布局和每次调用开销不变；
-- 泛型 spec 方法与现有泛型 type/fit 方法一样传递函数描述符和方法泛参
-  descriptors，不增加额外动态查找；
-- 仍只有一次既有 witness 函数指针间接调用，不新增第二层分派；
-- 不修改 runtime 库数据结构或函数 API；
-- 不改变任何成员的 Feng 可见性，也不让 `.ft` 中的 seal 实现成为普通可见
-  成员。
+- 非泛型 spec 方法的 witness 布局和发码路径保持不变；
+- 普通泛型 function/type/fit 方法继续使用现有编译期 descriptor tree；
+- 泛型 spec 方法复用泛型 shared callable 本来就需要的 function descriptor
+  与方法泛参 descriptor 隐藏参数，不增加额外动态分派层；
+- 每一层共享体仍只进行固定下标 slot 读取，并把子 descriptor 指针传给下一层；
+- 所有 descriptor 继续是 `.rodata` 中的 `static const` 数据；
+- 不增加运行时分配、cache、锁、名称查找、类型树遍历、反射或约束检查；
+- 不改变任何成员的 Feng 可见性，也不让 `.ft` 中的 seal 实现成为普通可见成员。
 
-凡实施中发现需要增加运行时查找、缓存、额外间接调用或改变非泛型 ABI，必须
-暂停并由人工决策。
+若实施中发现合法调用无法在最终具化点闭合 descriptor tree，必须先定位是
+dependency 未收集、开放表达式未传播、witness 实现未绑定，还是 package 符号
+事实缺失；不得改用运行时 provider 绕过。若事实证明需要改变上述性能边界，
+必须暂停并由人工决策。
 
 ## 6 测试要求
 
 ### 6.1 编译器测试
 
-- Parser：验证 object-form spec 实例/静态泛型方法 AST 已完整保留，无需新语法；
+- Parser（验证）：确认 object-form spec 实例/static 泛型方法 AST 已完整保留；
 - Semantic：公开/seal、实例/static、显式/推导类型实参、约束、泛参改名、arity
   不匹配、约束方向不兼容；
 - 满足选择：type、fit、父 spec、泛型 owner + 方法泛型双层替换；
-- Symbol：package-public `.ft` 对方法泛参、约束、签名和 reified dependencies
-  完整 round-trip；
+- dependency 收集：spec witness 调用形成稳定 callable dependency 节点，开放
+  类型表达式可跨多层共享 callable 向外传播；
+- descriptor tree：最终具化递归闭合两层以上 shared-call 子树，所有调用点从
+  固定 slot 取 descriptor；
 - Codegen：标量、managed、aggregate 参数与返回值，实例/static witness thunk，
-  type/fit 实现，以及生成 C 可编译；
-- CLI：provider 先打包 `.fb`，consumer 只通过包导入并执行泛型 spec 方法。
+  type/fit 实现，以及同一 requirement 的不同实现具有不同 dependency graph；
+- Symbol：package-public `.ft` 对 requirement surface、witness dependency 身份
+  和递归 callable dependency graph 完整 round-trip；
+- CLI：provider 先打包 `.fb`，consumer 只通过包导入并执行泛型 spec 方法；
+- 生成 C（验证）：descriptor 均为 `static const`，不存在新增 runtime provider、
+  cache 或按名称查找路径。
 
 ### 6.2 FCTS
 
-必须在 `fcts_lib -> fcts_bin` 增加语言行为覆盖：
+必须在 `fcts_lib -> fcts_bin` 增加可观察语言行为覆盖：
 
 - 公开实例方法与 seal 实例方法；
 - 公开静态方法与 seal 静态方法；
@@ -311,31 +437,47 @@ object-form spec 泛型方法：
 - 泛型 spec owner 与非泛型 spec owner；
 - 方法泛参名称不同但位置等价；
 - 约束、显式类型实参、推导及 aggregate/object-form spec 实参；
+- `invoke<T: Surface>()` 内调用 spec 泛型方法，并再进入至少一层泛型 shared
+  callable，验证 descriptor tree 连续下传；
+- 同一 requirement 的两个实现使用不同 reified dependency 子树；
 - 返回值和副作用均可观察，避免只验证“能够编译”。
 
 object-form spec 方法值不纳入本专项 FCTS。
 
 ## 7 TODO 与实施顺序
 
-- [ ] **实际变更（规范）**：Review 并把方法泛参约束兼容方向写入
-  `feng-spec.md` / `feng-generics-draft.md` 的唯一权威位置；关联文档只引用。
-- [ ] **实际变更（Semantic 声明）**：让 object-form spec 普通方法统一复用
-  `resolve_callable()`，删除手写参数/返回类型解析分支。
-- [ ] **实际变更（Semantic 满足）**：实现按位置 alpha-equivalent 的泛型 callable
-  签名比较，统一覆盖 type、fit、父 spec 和 witness 选择。
-- [ ] **实际变更（Semantic 调用）**：确保 spec 视角泛型方法调用记录完整 callable
-  类型实参、约束 witness 与参数/返回 coercion 事实。
-- [ ] **实际变更（Codegen 表示）**：扩展 `UserSpecMember` 及其克隆/实例化路径，保存
-  方法泛参和双层泛型签名模板。
-- [ ] **实际变更（Codegen witness）**：为实例/static 泛型方法槽位、调用点和
-  type/fit thunk 复用现有函数描述符、方法泛参 descriptors、参数地址 ABI 与 `_out`
-  规则。
-- [ ] **验证（Symbol）**：确认 `.ft` 已完整 round-trip；只有验证发现通用 callable
-  事实确实缺失时，才把 writer/reader 补齐列为实际变更，不增加 spec 特判格式。
-- [ ] **验证（编译器用例）**：补齐 Parser、Semantic、Symbol、Codegen 和隔离 `.fb`
-  CLI 正负用例。
-- [ ] **验证（FCTS）**：补齐跨包可观察行为用例并注册执行。
+- [x] **实际变更（规范）**：把方法泛参约束兼容方向写入
+  `feng-spec.md` 的唯一权威位置，并由 `feng-generics-draft.md` 引用。
+- [x] **实际变更（Semantic 声明，待最终回归）**：让 object-form spec 普通
+  方法统一复用 `resolve_callable()`。
+- [x] **实际变更（Semantic 满足，待最终回归）**：实现按位置 alpha-equivalent
+  的泛型 callable 签名比较，统一覆盖 type、fit、父 spec 和 witness 选择。
+- [ ] **实际变更（Semantic 调用表示）**：在通用 resolved callable 表示中补充
+  witness-dispatched spec 方法形态，记录 requirement、owner/receiver、实例/static、
+  方法类型实参和 witness 来源。
+- [ ] **实际变更（dependency 收集）**：让 spec 泛型方法调用进入现有
+  `FengReifiableDepSet.callable_deps`；复用规范化 key、去重和固定 slot 分配。
+- [ ] **实际变更（descriptor 闭合）**：扩展现有 callable dependency 解析，按
+  已具化 witness 关系映射到实际 type/fit 实现，并复用
+  `cg_emit_closed_callable_fdesc()` 递归闭合子树；不得新增并行 emitter。
+- [ ] **实际变更（Codegen 成员表示）**：扩展 `UserSpecMember` 及其克隆/实例化
+  路径，保存方法泛参和 owner + method 双层泛型签名模板。
+- [ ] **实际变更（Codegen witness ABI）**：为实例/static 泛型方法槽位、调用点、
+  type/fit thunk、父 spec/intersection/slot adapter 和 default witness 补齐 function
+  descriptor 与方法泛参 descriptor 的转发，复用现有参数 ABI 与 `_out` 规则。
+- [ ] **验证（Symbol 现状）**：确认 `.ft` 已完整 round-trip requirement 方法泛参、
+  约束、签名和现有 callable dependency graph。
+- [ ] **条件性实际变更（Symbol）**：仅当上一项证明通用 callable dependency
+  无法表达 witness 分派身份时，扩展通用 symbol view/writer/reader；不得新增
+  spec 专用 section 或旁路。
+- [ ] **验证（既有泛型 owner/fit package 链路）**：确认本专项直接复用最近完成的
+  名义关系、实现符号和 callable dependency 恢复，不复制 package 恢复逻辑。
+- [ ] **验证（编译器用例）**：补齐 Parser、Semantic、dependency、Symbol、
+  Codegen、生成 C 和隔离 `.fb` CLI 正负用例，重点覆盖多层 descriptor tree。
+- [ ] **验证（FCTS）**：补齐同包与跨包可观察行为用例并注册执行。
 - [ ] **验证（回归）**：执行定向测试后，在沙箱外执行 `make test` 全量回归。
 
-实施中若无法在既有泛型 callable ABI 上表达 spec witness 方法槽位，或约束兼容
-需要引入运行时判断，必须暂停并由人工决策，不得增加专用特判。
+实施中若出现合法调用在最终具化点仍不能闭合，先把未闭合节点沿
+“调用解析 → dependency 收集 → symbol round-trip → witness 实现绑定 →
+descriptor 递归闭合 → slot 下传”逐层定位。非架构性漏接可按本文修复并补充
+用例；若需要新运行时机制、额外运行时成本或独立 ABI，必须暂停并由人工决策。
