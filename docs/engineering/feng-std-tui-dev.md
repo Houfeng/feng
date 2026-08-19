@@ -45,7 +45,8 @@
 
 - **`std.tui.view`**：承载布局声明、布局结果、`Widget`/`ContainerWidget` 契约和 `ViewManager`。当前已实现 `View.arrange()` 的自身布局计算和 `View.draw()` 的矩形绘制，并将 ViewManager 的 `doArrange()`/`doDraw()` 调度接入 `TuiApp.render()`；鼠标逆序命中与冒泡、焦点管理及键盘焦点路由已经实现，分别详见 `docs/engineering/feng-std-tui-view-dev.md` 和 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`。
 - **`std.tui.widgets`**：承载组件实现。当前包含 `View`、具备默认样式合成/布局/绘制能力的
-  `Container` 基础实现，以及 Text、VStack 等组件；其他布局和交互组件后续实现。
+  `Container` 基础实现，以及 Text、VStack/HStack 等组件；单行 Input 的公开契约与
+  实施方案以 `docs/engineering/feng-std-tui-input-widget-dev.md` 为准。
 
 ### 2.3 应用控制层（第 5 层）
 
@@ -232,11 +233,16 @@
 - [x] 4.41 实现焦点管理、不可停止的 `FocusEvent` 路径事件、鼠标自动聚焦、ViewManager 多播事件、键盘焦点路由及不可被视图停止的 `TuiApp.key`；详见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`
 - [x] 4.41a 修复 SGR 完整状态转换：移除背景色、前景色或样式标志时重置并重放目标样式，覆盖透明上层组件跨多背景绘制场景
 - [x] 4.41b 将真实焦点目标同步到 `Pseudo.Focus`，仅目标持有该状态，祖先焦点子树语义留给未来独立的 `Pseudo.FocusWithin`
+- [x] 4.41c 收敛单行 Input 专项规范：公开值与 grapheme caret、编辑事件、键盘消费、水平滚动、组件绘制 caret 和鼠标定位；详见 `docs/engineering/feng-std-tui-input-widget-dev.md`
+- [x] 4.41d 实现单行 Input 的公共契约、编辑状态、grapheme 导航与水平滚动绘制
+- [x] 4.41e 新增 Input std_test 用例、更新 tui_demo，并执行全量回归测试
+- [ ] 4.41f 等待人工 Review：开发者审查 Input 规范、实现、测试与终端显示效果，通过后再进入 Tab 焦点遍历阶段
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。
 > Text 通过人工验证后，VStack/HStack 的后续布局契约与实现计划详见
-> `docs/engineering/feng-std-tui-stack-layout-dev.md`；Input 仍在更后阶段单独设计。
+> `docs/engineering/feng-std-tui-stack-layout-dev.md`；Input 的独立阶段以
+> `docs/engineering/feng-std-tui-input-widget-dev.md` 为准。
 
 ### 第八阶段：测试与验证
 
@@ -274,7 +280,10 @@ std/std/src/tui/
   widgets/                 # std.tui.widgets：组件实现
     View.ff                # Widget 基础实现
     Container.ff           # ContainerWidget 基础实现
-    Text.ff                # View 展开验证骨架
+    Text.ff                # 文本测量、分行与绘制
+    VStack.ff              # 垂直流布局容器
+    HStack.ff              # 水平流布局容器
+    Input.ff               # 单行文本输入组件
     Button.ff              # View 展开验证骨架
 ```
 

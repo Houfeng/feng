@@ -1,0 +1,665 @@
+open module std.tui.widgets;
+
+import std;
+import std.text;
+import std.tui.common;
+import std.tui.input;
+import std.tui.screen;
+import std.tui.view;
+
+/** libunistring：返回当前 extended grapheme cluster 之前的位置。 */
+@cdecl("feng_std_unistring", "u8_grapheme_prev")
+extern func input_u8_grapheme_prev(s: string*, start: string*): string*;
+
+/** runtime：返回两个字符串数据指针之间的字节距离。 */
+@runtime
+extern func feng_pointer_diff(a: string*, b: string*): int;
+
+/** Input 组件的公开值、事件和内部编辑状态契约。 */
+open spec InputWidget: Widget {
+  /** 返回当前单行值。 */
+  func value(): string;
+
+  /** 程序化设置单行值；不触发 change，并将 caret 移到末尾。 */
+  func value(value: string): void;
+
+  /** 返回 caret 之前的 extended grapheme cluster 数。 */
+  func caret(): int;
+
+  /** 按 extended grapheme cluster 索引设置 caret。 */
+  func caret(index: int): void;
+
+  /** 用户编辑实际改变值后触发。 */
+  let change: Event<string>;
+
+  /** 用户按下无修饰键 Enter 时触发。 */
+  let submit: Event<string>;
+
+  /** 当前单行 UTF-8 值。 */
+  seal var _value: string;
+
+  /** caret 在 _value 中的 UTF-8 字节偏移。 */
+  seal var _caretOffset: int;
+
+  /** 当前可见内容起点在 _value 中的 UTF-8 字节偏移。 */
+  seal var _scrollOffset: int;
+}
+
+/**
+ * 单行文本输入组件。
+ * 使用 grapheme 边界维护 caret，并在固定宽度内自动水平滚动。
+ */
+open type Input: InputWidget {
+  /** 展开 View 的 Widget 基础状态和未被 Input 覆盖的默认行为。 */
+  ...: View = View();
+
+  /** 用户编辑实际改变值后触发。 */
+  open let change: Event<string> = Event<string>();
+
+  /** 用户按下无修饰键 Enter 时触发。 */
+  open let submit: Event<string> = Event<string>();
+
+  /** 当前单行 UTF-8 值。 */
+  seal var _value: string = "";
+
+  /** caret 在 _value 中的 UTF-8 字节偏移。 */
+  seal var _caretOffset: int = 0;
+
+  /** 当前可见内容起点在 _value 中的 UTF-8 字节偏移。 */
+  seal var _scrollOffset: int = 0;
+
+  /** 创建具有单行高度、文本鼠标指针和默认焦点资格的 Input。 */
+  func Input() {
+    self.tabIndex = 0;
+    self.style.height = auto;
+    self.style.verticalAlign = Align.Start;
+    self.style.cursor = Cursor.Text;
+    self.key.on((event: KeyEvent<Widget>) {
+      Input.handleKey(self, event);
+    });
+    self.mouseDown.on((event: MouseEvent<Widget>) {
+      Input.handleMouseDown(self, event);
+    });
+  }
+
+  /** 返回当前单行值。 */
+  @mixable
+  static func value(input: InputWidget): string {
+    return input._value;
+  }
+
+  /** 判断候选值是否包含单行 Input 禁止的 CR 或 LF。 */
+  seal static func containsHardBreak(value: string): bool {
+    var index = 0;
+    while index < value.length() {
+      let current = value.getByte(index);
+      if current == (byte)0x0A || current == (byte)0x0D {
+        return true;
+      }
+      index += 1;
+    }
+    return false;
+  }
+
+  /** 为值变化标记自身布局，并沿既有 reflow 路径通知祖先。 */
+  seal static func invalidateValue(input: InputWidget): void {
+    let widget = (Widget)input;
+    widget.dirty.add(DirtyType.Layout);
+    widget.requestReflow();
+  }
+
+  /**
+   * 程序化设置单行值；相同值保持不变，不触发 change。
+   * @throws "tui/input/multiline-value" 候选值包含 CR 或 LF
+   */
+  @mixable
+  static func value(input: InputWidget, value: string): void {
+    if Input.containsHardBreak(value) {
+      throw "tui/input/multiline-value";
+    }
+    if input._value == value {
+      return;
+    }
+    input._value = value;
+    input._caretOffset = value.length();
+    input._scrollOffset = 0;
+    Input.invalidateValue(input);
+  }
+
+  /** 返回 offset 之后的 grapheme 边界；末尾或无效边界返回字符串末尾。 */
+  seal static func nextBoundary(value: string, offset: int): int {
+    let length = value.length();
+    if offset >= length {
+      return length;
+    }
+    let data: string* = &value;
+    let cursor = feng_pointer_move(data, offset);
+    let end = feng_pointer_move(data, length);
+    let next = text_u8_grapheme_next(cursor, end);
+    if feng_pointer_is_null(next) {
+      return length;
+    }
+    return feng_pointer_diff(next, data);
+  }
+
+  /** 返回 offset 之前的 grapheme 边界；开头或无效边界返回 0。 */
+  seal static func previousBoundary(value: string, offset: int): int {
+    if offset <= 0 {
+      return 0;
+    }
+    let data: string* = &value;
+    let cursor = feng_pointer_move(data, offset);
+    let previous = input_u8_grapheme_prev(cursor, data);
+    if feng_pointer_is_null(previous) {
+      return 0;
+    }
+    return feng_pointer_diff(previous, data);
+  }
+
+  /** 返回 caret 之前的 grapheme 数。 */
+  @mixable
+  static func caret(input: InputWidget): int {
+    var offset = 0;
+    var result = 0;
+    while offset < input._caretOffset {
+      let next = Input.nextBoundary(input._value, offset);
+      if next <= offset {
+        return result;
+      }
+      offset = next;
+      result += 1;
+    }
+    return result;
+  }
+
+  /**
+   * 按 grapheme 索引设置 caret，不改变值也不触发 change。
+   * @throws "tui/input/caret-out-of-bounds" 索引不在 0..graphemeCount
+   */
+  @mixable
+  static func caret(input: InputWidget, index: int): void {
+    if index < 0 {
+      throw "tui/input/caret-out-of-bounds";
+    }
+    var offset = 0;
+    var current = 0;
+    let length = input._value.length();
+    while current < index && offset < length {
+      let next = Input.nextBoundary(input._value, offset);
+      if next <= offset {
+        throw "tui/input/caret-out-of-bounds";
+      }
+      offset = next;
+      current += 1;
+    }
+    if current != index {
+      throw "tui/input/caret-out-of-bounds";
+    }
+    input._caretOffset = offset;
+  }
+
+  /** 判断码点是否为 Input 可以插入的 Unicode scalar。 */
+  seal static func isInsertableScalar(value: u32): bool {
+    if value == (u32)0 || value == (u32)0x0A || value == (u32)0x0D ||
+    value > (u32)0x10FFFF {
+      return false;
+    }
+    return value < (u32)0xD800 || value > (u32)0xDFFF;
+  }
+
+  /** 将合法 Unicode scalar 编码为独立 UTF-8 字符串。 */
+  seal static func encodeScalar(value: u32): string {
+    let bytes: byte[!] = byte[:4];
+    var length = 0;
+    if value < (u32)0x80 {
+      bytes[0] = (byte)value;
+      length = 1;
+    } else if value < (u32)0x800 {
+      bytes[0] = (byte)((u32)0xC0 | (value >> (u32)6));
+      bytes[1] = (byte)((u32)0x80 | (value & (u32)0x3F));
+      length = 2;
+    } else if value < (u32)0x10000 {
+      bytes[0] = (byte)((u32)0xE0 | (value >> (u32)12));
+      bytes[1] = (byte)((u32)0x80 |
+        ((value >> (u32)6) & (u32)0x3F));
+      bytes[2] = (byte)((u32)0x80 | (value & (u32)0x3F));
+      length = 3;
+    } else {
+      bytes[0] = (byte)((u32)0xF0 | (value >> (u32)18));
+      bytes[1] = (byte)((u32)0x80 |
+        ((value >> (u32)12) & (u32)0x3F));
+      bytes[2] = (byte)((u32)0x80 |
+        ((value >> (u32)6) & (u32)0x3F));
+      bytes[3] = (byte)((u32)0x80 | (value & (u32)0x3F));
+      length = 4;
+    }
+    return string.fromUtf8Bytes((byte[])bytes, length);
+  }
+
+  /** 返回用 replacement 替换原值 [start, end) 后的新字符串。 */
+  seal static func replaceRange(value: string, start: int,
+    end: int, replacement: string): string {
+    var result = "";
+    if start > 0 {
+      result = value.clone(0, start);
+    }
+    result = result + replacement;
+    if end < value.length() {
+      result = result + value.clone(end, value.length());
+    }
+    return result;
+  }
+
+  /** 提交一次用户值修改并同步触发 change。 */
+  seal static func commitEdit(input: InputWidget, value: string,
+    caretOffset: int): void {
+    input._value = value;
+    input._caretOffset = caretOffset;
+    Input.invalidateValue(input);
+    let changeEvent = input.change;
+    changeEvent.emit(value);
+  }
+
+  /** 消费 Input 已识别的键盘事件。 */
+  seal static func consumeKey(event: KeyEvent<Widget>): void {
+    event.stop();
+    event.preventDefault();
+  }
+
+  /** 处理无修饰键可打印 scalar 的插入。 */
+  seal static func insertScalar(input: InputWidget, value: u32,
+    event: KeyEvent<Widget>): void {
+    if !Input.isInsertableScalar(value) {
+      return;
+    }
+    let replacement = Input.encodeScalar(value);
+    let offset = input._caretOffset;
+    let updated = Input.replaceRange(input._value,
+      offset, offset, replacement);
+    Input.commitEdit(input, updated, offset + replacement.length());
+    Input.consumeKey(event);
+  }
+
+  /** 处理 Input 支持的无修饰键特殊按键。 */
+  seal static func handleSpecialKey(input: InputWidget, key: SpecialKey,
+    event: KeyEvent<Widget>): void {
+    match key {
+      SpecialKey.ArrowLeft {
+        input._caretOffset = Input.previousBoundary(
+          input._value, input._caretOffset);
+      }
+      SpecialKey.ArrowRight {
+        input._caretOffset = Input.nextBoundary(
+          input._value, input._caretOffset);
+      }
+      SpecialKey.Home {
+        input._caretOffset = 0;
+      }
+      SpecialKey.End {
+        input._caretOffset = input._value.length();
+      }
+      SpecialKey.Backspace {
+        let end = input._caretOffset;
+        let start = Input.previousBoundary(input._value, end);
+        if start != end {
+          let updated = Input.replaceRange(input._value, start, end, "");
+          Input.commitEdit(input, updated, start);
+        }
+      }
+      SpecialKey.Delete {
+        let start = input._caretOffset;
+        let end = Input.nextBoundary(input._value, start);
+        if start != end {
+          let updated = Input.replaceRange(input._value, start, end, "");
+          Input.commitEdit(input, updated, start);
+        }
+      }
+      SpecialKey.Enter {
+        let submitEvent = input.submit;
+        submitEvent.emit(input._value);
+      }
+      else {
+        return;
+      }
+    }
+    Input.consumeKey(event);
+  }
+
+  /** 解释路由到当前 Input 的首版编辑按键。 */
+  seal static func handleKey(input: InputWidget,
+    event: KeyEvent<Widget>): void {
+    if event.mods != (u8)0 {
+      return;
+    }
+    match event.content {
+      value: u32 {
+        Input.insertScalar(input, value, event);
+      }
+      key: SpecialKey {
+        Input.handleSpecialKey(input, key, event);
+      }
+    }
+  }
+
+  /** 返回一个 grapheme 按 8 字节 Cell 规则拆分后的显示列数。 */
+  seal static func graphemeCells(start: string*, end: string*): int {
+    var cursor = start;
+    var result = 0;
+    var chunkBytes = 0;
+    var chunkWidth = 0;
+    while !feng_pointer_equal(cursor, end) {
+      var value: u32 = 0;
+      let next = text_u8_next(&value, cursor);
+      if feng_pointer_is_null(next) {
+        return result;
+      }
+      let encoded = TextUtil.encodeCellValue(value);
+      let encodedBytes = TextUtil.cellValueByteLength(encoded);
+      if chunkBytes > 0 &&
+      chunkBytes + encodedBytes > TextUtil.MAX_CELL_BYTES {
+        result += TextUtil.resolveCellWidth(chunkWidth);
+        chunkBytes = 0;
+        chunkWidth = 0;
+      }
+      chunkBytes += encodedBytes;
+      chunkWidth += TextUtil.measureCellWidth(value);
+      cursor = next;
+    }
+    if chunkBytes > 0 {
+      result += TextUtil.resolveCellWidth(chunkWidth);
+    }
+    return result;
+  }
+
+  /** 返回字节区间内所有完整 grapheme 的显示列数。 */
+  seal static func rangeCells(value: string, start: int, end: int): int {
+    if start >= end {
+      return 0;
+    }
+    let data: string* = &value;
+    var cursor = feng_pointer_move(data, start);
+    let rangeEnd = feng_pointer_move(data, end);
+    var result = 0;
+    while !feng_pointer_equal(cursor, rangeEnd) {
+      let graphemeEnd = text_u8_grapheme_next(cursor, rangeEnd);
+      if feng_pointer_is_null(graphemeEnd) {
+        return result;
+      }
+      result += Input.graphemeCells(cursor, graphemeEnd);
+      cursor = graphemeEnd;
+    }
+    return result;
+  }
+
+  /** 返回当前值的完整显示列数。 */
+  seal static func valueCells(input: InputWidget): int {
+    return Input.rangeCells(input._value, 0, input._value.length());
+  }
+
+  /**
+   * 按当前 frame 保持 caret 可见，并在空间变宽后向前回填完整 grapheme。
+   */
+  seal static func adjustScroll(input: InputWidget): void {
+    let width = input.frame.width;
+    if width <= 0 {
+      return;
+    }
+    let length = input._value.length();
+    if input._scrollOffset > input._caretOffset ||
+    input._scrollOffset > length {
+      input._scrollOffset = input._caretOffset;
+    }
+
+    var distance = Input.rangeCells(input._value,
+      input._scrollOffset, input._caretOffset);
+    var caretWidth = 1;
+    if input._caretOffset < length {
+      let next = Input.nextBoundary(input._value, input._caretOffset);
+      caretWidth = Input.rangeCells(input._value,
+        input._caretOffset, next);
+    }
+
+    while input._scrollOffset < input._caretOffset &&
+    distance + caretWidth > width {
+      let next = Input.nextBoundary(input._value, input._scrollOffset);
+      if next <= input._scrollOffset || next > input._caretOffset {
+        break;
+      }
+      distance -= Input.rangeCells(input._value,
+        input._scrollOffset, next);
+      input._scrollOffset = next;
+    }
+
+    while input._scrollOffset > 0 {
+      let previous = Input.previousBoundary(
+        input._value, input._scrollOffset);
+      if previous >= input._scrollOffset {
+        break;
+      }
+      let previousWidth = Input.rangeCells(input._value,
+        previous, input._scrollOffset);
+      if previousWidth + distance + caretWidth > width {
+        break;
+      }
+      input._scrollOffset = previous;
+      distance += previousWidth;
+    }
+  }
+
+  /** 绘制一个已经确认能完整放入 frame 的 grapheme。 */
+  seal static func drawGrapheme(input: InputWidget, buffer: Buffer,
+    start: string*, end: string*, x: int, y: int,
+    clipLeft: int, clipRight: int, caret: bool,
+    transparent: RgbColor): void {
+    var cursor = start;
+    var column = 0;
+    var cellValue: u64 = 0;
+    var cellBytes = 0;
+    var cellWidth = 0;
+    while !feng_pointer_equal(cursor, end) {
+      var value: u32 = 0;
+      let next = text_u8_next(&value, cursor);
+      if feng_pointer_is_null(next) {
+        return;
+      }
+      let encoded = TextUtil.encodeCellValue(value);
+      let encodedBytes = TextUtil.cellValueByteLength(encoded);
+      if cellBytes > 0 &&
+      cellBytes + encodedBytes > TextUtil.MAX_CELL_BYTES {
+        let width = TextUtil.resolveCellWidth(cellWidth);
+        let drawX = x + column;
+        if drawX >= clipLeft && drawX + width <= clipRight {
+          if caret {
+            buffer.draw((u32)drawX, (u32)y, cellValue,
+              input.rtStyle.foreColor, transparent, CellStyle.Reverse);
+          } else {
+            buffer.draw((u32)drawX, (u32)y, cellValue,
+              input.rtStyle.foreColor, transparent);
+          }
+        }
+        column += width;
+        cellValue = 0;
+        cellBytes = 0;
+        cellWidth = 0;
+      }
+      cellValue |= encoded << (u64)(cellBytes * 8);
+      cellBytes += encodedBytes;
+      cellWidth += TextUtil.measureCellWidth(value);
+      cursor = next;
+    }
+    if cellBytes > 0 {
+      let width = TextUtil.resolveCellWidth(cellWidth);
+      let drawX = x + column;
+      if drawX >= clipLeft && drawX + width <= clipRight {
+        if caret {
+          buffer.draw((u32)drawX, (u32)y, cellValue,
+            input.rtStyle.foreColor, transparent, CellStyle.Reverse);
+        } else {
+          buffer.draw((u32)drawX, (u32)y, cellValue,
+            input.rtStyle.foreColor, transparent);
+        }
+      }
+    }
+  }
+
+  /** 在完整落入 frame 与 clippedFrame 时绘制一个反色空白 caret。 */
+  seal static func drawBlankCaret(input: InputWidget, buffer: Buffer,
+    x: int, y: int, clipLeft: int, clipRight: int,
+    transparent: RgbColor): void {
+    if x < input.frame.x || x >= input.frame.x + input.frame.width ||
+    x < clipLeft || x >= clipRight {
+      return;
+    }
+    buffer.draw((u32)x, (u32)y, (u64)0,
+      input.rtStyle.foreColor, transparent, CellStyle.Reverse);
+  }
+
+  /** 判断当前 Input 是否为 ViewManager 的真实焦点目标。 */
+  seal static func isFocused(input: InputWidget,
+    manager: ViewManager): bool {
+    if manager.focused() match target: Widget {
+      return target == (Widget)input;
+    }
+    return false;
+  }
+
+  /**
+   * 测量值的内在宽度和单行高度，并按 View 的通用几何规则写回 frame。
+   */
+  @mixable
+  static func arrange(input: InputWidget, manager: ViewManager): void {
+    let widget = (Widget)input;
+    let reference = View.resolveReferenceFrame(widget, manager);
+    let margin = widget.rtStyle.margin;
+    var top = View.resolveLength(margin.top, reference.height);
+    var right = View.resolveLength(margin.right, reference.width);
+    var bottom = View.resolveLength(margin.bottom, reference.height);
+    var left = View.resolveLength(margin.left, reference.width);
+    if top < 0 { top = 0; }
+    if right < 0 { right = 0; }
+    if bottom < 0 { bottom = 0; }
+    if left < 0 { left = 0; }
+
+    let intrinsicWidth = Input.valueCells(input) + 1;
+    let width = View.resolveWidth(widget, reference.width,
+      left, right, intrinsicWidth);
+    let height = View.resolveHeight(widget, reference.height,
+      top, bottom, 1);
+
+    let frame = Rect();
+    frame.x = View.resolveX(widget, reference, left, right, width);
+    frame.y = View.resolveY(widget, reference, top, bottom, height);
+    frame.width = width;
+    frame.height = height;
+    widget.frame = frame;
+  }
+
+  /**
+   * 绘制背景、水平滚动后的单行值，以及真实焦点目标的可见 caret。
+   */
+  @mixable
+  static func draw(input: InputWidget, manager: ViewManager): void {
+    View.draw(input, manager);
+    let clippedFrame = input.clippedFrame;
+    if clippedFrame.width <= 0 || clippedFrame.height <= 0 ||
+    input.frame.width <= 0 || input.frame.height <= 0 ||
+    input.frame.y < clippedFrame.y ||
+    input.frame.y >= clippedFrame.y + clippedFrame.height {
+      return;
+    }
+
+    Input.adjustScroll(input);
+    let buffer = manager.getScreenBuffer();
+    let transparent = RgbColor(0, 0, 0, 0);
+    let clipLeft = clippedFrame.x;
+    let clipRight = clippedFrame.x + clippedFrame.width;
+    let frameRight = input.frame.x + input.frame.width;
+    let focused = Input.isFocused(input, manager);
+    var backgroundClearedRow = false;
+    if input.rtStyle.backColor match color: RgbColor {
+      backgroundClearedRow = color.a != 0;
+    }
+    if !backgroundClearedRow {
+      buffer.draw((u32)clipLeft, (u32)input.frame.y,
+        (u32)clippedFrame.width, (u32)1, (u64)0,
+        transparent, transparent);
+    }
+    let data: string* = &input._value;
+    let length = input._value.length();
+    let end = feng_pointer_move(data, length);
+    var offset = input._scrollOffset;
+    var cursor = feng_pointer_move(data, offset);
+    var x = input.frame.x;
+
+    while !feng_pointer_equal(cursor, end) {
+      let graphemeEnd = text_u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(graphemeEnd) {
+        return;
+      }
+      let width = Input.graphemeCells(cursor, graphemeEnd);
+      let caret = focused && offset == input._caretOffset;
+      if x + width > frameRight {
+        if caret {
+          Input.drawBlankCaret(input, buffer, x, input.frame.y,
+            clipLeft, clipRight, transparent);
+        }
+        return;
+      }
+      Input.drawGrapheme(input, buffer, cursor, graphemeEnd,
+        x, input.frame.y, clipLeft, clipRight, caret, transparent);
+      x += width;
+      cursor = graphemeEnd;
+      offset = feng_pointer_diff(cursor, data);
+    }
+
+    if focused && input._caretOffset == length {
+      Input.drawBlankCaret(input, buffer, x, input.frame.y,
+        clipLeft, clipRight, transparent);
+    }
+  }
+
+  /** 将屏幕列坐标映射为当前可见值中的最近 grapheme 边界。 */
+  seal static func caretOffsetAt(input: InputWidget, x: int): int {
+    var column = x - input.frame.x;
+    if column <= 0 {
+      return input._scrollOffset;
+    }
+    let data: string* = &input._value;
+    let length = input._value.length();
+    let end = feng_pointer_move(data, length);
+    var offset = input._scrollOffset;
+    var cursor = feng_pointer_move(data, offset);
+    var current = 0;
+    while !feng_pointer_equal(cursor, end) {
+      let graphemeEnd = text_u8_grapheme_next(cursor, end);
+      if feng_pointer_is_null(graphemeEnd) {
+        return offset;
+      }
+      let width = Input.graphemeCells(cursor, graphemeEnd);
+      if column < current + width {
+        if column - current < (width + 1) / 2 {
+          return offset;
+        }
+        return feng_pointer_diff(graphemeEnd, data);
+      }
+      current += width;
+      if current >= input.frame.width {
+        return feng_pointer_diff(graphemeEnd, data);
+      }
+      cursor = graphemeEnd;
+      offset = feng_pointer_diff(cursor, data);
+    }
+    return length;
+  }
+
+  /** 处理左键 Press 的 caret 定位，并保留 ViewManager 默认聚焦。 */
+  seal static func handleMouseDown(input: InputWidget,
+    event: MouseEvent<Widget>): void {
+    if event.action != MouseAction.Press ||
+    event.button != MouseButton.Left {
+      return;
+    }
+    input._caretOffset = Input.caretOffsetAt(input, event.x);
+    event.stop();
+  }
+}

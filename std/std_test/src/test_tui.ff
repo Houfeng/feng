@@ -3192,6 +3192,311 @@ func text_draw_clipping_preserves_content_origin() {
     "tui/text/hidden-clip-keeps-origin");
 }
 
+/** 验证 Input 默认配置、程序化值、单行不变量和公开 grapheme caret。 */
+func input_widget_value_and_caret_contract() {
+  let input = Input();
+  check(input.tabIndex == 0,
+    "tui/input-widget/default-focusable");
+  check(input.style.verticalAlign == Align.Start &&
+    input.style.cursor == Cursor.Text,
+    "tui/input-widget/default-style");
+  check(input.value() == "" && input.caret() == 0,
+    "tui/input-widget/default-value-caret");
+
+  var changes = 0;
+  input.change.on((value: string) {
+    changes += 1;
+  });
+  input.value("Aé中");
+  check(input.value() == "Aé中" && input.caret() == 3,
+    "tui/input-widget/programmatic-value-caret-end");
+  check(changes == 0,
+    "tui/input-widget/programmatic-value-no-change-event");
+  input.caret(1);
+  check(input.caret() == 1,
+    "tui/input-widget/programmatic-grapheme-caret");
+  input.value("Aé中");
+  check(input.caret() == 1,
+    "tui/input-widget/same-value-preserves-caret");
+
+  var multilineError = false;
+  try input.value("first\nsecond") catch error: string {
+    multilineError = error == "tui/input/multiline-value";
+  };
+  check(multilineError && input.value() == "Aé中" && input.caret() == 1,
+    "tui/input-widget/reject-multiline-atomically");
+
+  var caretError = false;
+  try input.caret(4) catch error: string {
+    caretError = error == "tui/input/caret-out-of-bounds";
+  };
+  check(caretError && input.caret() == 1,
+    "tui/input-widget/reject-caret-out-of-bounds");
+}
+
+/** 验证 Input 用户编辑、change/submit 载荷和键盘事件消费。 */
+func input_widget_keyboard_edit_and_events() {
+  let manager = ViewManager(Screen(12, 2));
+  let root = Container();
+  let input = Input();
+  input.style.position = Position.Absolute;
+  input.style.width = 8;
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  check(manager.focus(input),
+    "tui/input-widget/focus-for-edit");
+
+  var changeCount = 0;
+  var changedValue = "";
+  var submitCount = 0;
+  var submittedValue = "";
+  var parentKeys = 0;
+  input.change.on((value: string) {
+    changeCount += 1;
+    changedValue = value;
+  });
+  input.submit.on((value: string) {
+    submitCount += 1;
+    submittedValue = value;
+  });
+  root.key.on((event: KeyEvent<Widget>) {
+    parentKeys += 1;
+  });
+
+  let ascii = KeyEvent<Widget>((u32)0x41, 0);
+  manager.dispatchKey(ascii);
+  let chinese = KeyEvent<Widget>((u32)0x4E2D, 0);
+  manager.dispatchKey(chinese);
+  check(input.value() == "A中" && input.caret() == 2 &&
+    changeCount == 2 && changedValue == "A中",
+    "tui/input-widget/insert-and-change-state");
+  check(ascii.isStopped() && ascii.isPrevented() &&
+    chinese.isStopped() && chinese.isPrevented() && parentKeys == 0,
+    "tui/input-widget/edit-keys-consumed");
+
+  let enter = KeyEvent<Widget>(SpecialKey.Enter, 0);
+  manager.dispatchKey(enter);
+  check(submitCount == 1 && submittedValue == "A中" &&
+    enter.isStopped() && enter.isPrevented() && parentKeys == 0,
+    "tui/input-widget/submit-snapshot-consumed");
+}
+
+/** 验证组合字符和超长 Emoji 始终按 extended grapheme cluster 移动、删除。 */
+func input_widget_grapheme_navigation_and_deletion() {
+  let manager = ViewManager(Screen(20, 2));
+  let root = Container();
+  let input = Input();
+  input.value("Aé👨‍👩‍👧‍👦中");
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  check(manager.focus(input) && input.caret() == 4,
+    "tui/input-widget/grapheme-initial-caret");
+
+  var changes = 0;
+  input.change.on((value: string) {
+    changes += 1;
+  });
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.ArrowLeft, 0));
+  check(input.caret() == 3,
+    "tui/input-widget/left-by-grapheme");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Backspace, 0));
+  check(input.value() == "Aé中" && input.caret() == 2,
+    "tui/input-widget/backspace-removes-long-grapheme");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Home, 0));
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Delete, 0));
+  check(input.value() == "é中" && input.caret() == 0,
+    "tui/input-widget/delete-first-grapheme");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.End, 0));
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Backspace, 0));
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Backspace, 0));
+  check(input.value() == "" && input.caret() == 0 && changes == 4,
+    "tui/input-widget/delete-combining-grapheme");
+
+  let boundary = KeyEvent<Widget>(SpecialKey.Backspace, 0);
+  manager.dispatchKey(boundary);
+  check(changes == 4 && boundary.isStopped() && boundary.isPrevented(),
+    "tui/input-widget/boundary-delete-consumed-without-change");
+}
+
+/** 验证 Tab、修饰键和无效 scalar 保持未消费并沿现有路径冒泡。 */
+func input_widget_unhandled_keys_bubble() {
+  let manager = ViewManager(Screen(8, 2));
+  let root = Container();
+  let input = Input();
+  input.value("ab");
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.focus(input);
+
+  var rootKeys = 0;
+  var managerKeys = 0;
+  root.key.on((event: KeyEvent<Widget>) {
+    rootKeys += 1;
+  });
+  manager.key.on((event: KeyEvent<Widget>) {
+    managerKeys += 1;
+  });
+  let tab = KeyEvent<Widget>(SpecialKey.Tab, 0);
+  let shifted = KeyEvent<Widget>(SpecialKey.ArrowLeft, MOD_SHIFT);
+  let invalid = KeyEvent<Widget>((u32)0xD800, 0);
+  let control = KeyEvent<Widget>((u32)0x01, MOD_CONTROL);
+  manager.dispatchKey(tab);
+  manager.dispatchKey(shifted);
+  manager.dispatchKey(invalid);
+  manager.dispatchKey(control);
+
+  check(rootKeys == 4 && managerKeys == 4 && input.value() == "ab" &&
+    input.caret() == 2,
+    "tui/input-widget/unhandled-keys-bubble");
+  check(!tab.isStopped() && !tab.isPrevented() &&
+    !shifted.isStopped() && !shifted.isPrevented() &&
+    !invalid.isStopped() && !invalid.isPrevented() &&
+    !control.isStopped() && !control.isPrevented(),
+    "tui/input-widget/unhandled-event-state");
+}
+
+/** 验证 Input 内在尺寸、Focus 状态样式、内容和失焦 caret 清理。 */
+func input_widget_layout_focus_and_caret_draw() {
+  let screen = Screen(10, 2);
+  let manager = ViewManager(screen);
+  let root = Container();
+  let input = Input();
+  input.style.position = Position.Absolute;
+  input.style.horizontalAlign = Align.Start;
+  input.value("A中");
+  let focusedColor = RgbColor(0x12, 0x34, 0x56);
+  input.useStateStyle(Pseudo.Focus).foreColor = focusedColor;
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  check(input.frame.width == 4 && input.frame.height == 1,
+    "tui/input-widget/auto-intrinsic-size");
+  check(manager.focus(input),
+    "tui/input-widget/focus-before-draw");
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+
+  let buffer = screen.buffer();
+  check(buffer.cells[0].value == (u64)65 &&
+    buffer.cells[1].value == TextUtil.encodeCellValue((u32)0x4E2D) &&
+    buffer.cells[2].value == Cell.CONTINUATION,
+    "tui/input-widget/draw-wide-value");
+  check(buffer.cells[0].foreColor() == (u32)0x123456 &&
+    buffer.cells[3].value == (u64)0 && buffer.cells[3].reverse(),
+    "tui/input-widget/focus-style-and-end-caret");
+
+  manager.clearFocus();
+  manager.doStyling();
+  manager.doDraw();
+  check(!buffer.cells[3].reverse(),
+    "tui/input-widget/blur-clears-caret");
+}
+
+/** 验证固定宽度滚动、向前回填、窄宽字符降级 caret 和 Screen 左裁剪。 */
+func input_widget_horizontal_scroll_and_clipping() {
+  let screen = Screen(8, 2);
+  let manager = ViewManager(screen);
+  let root = Container();
+  let input = Input();
+  input.style.position = Position.Absolute;
+  input.style.width = 4;
+  input.value("abcdef");
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.focus(input);
+  manager.doDraw();
+
+  let buffer = screen.buffer();
+  check(buffer.cells[0].value == (u64)100 &&
+    buffer.cells[1].value == (u64)101 &&
+    buffer.cells[2].value == (u64)102 && buffer.cells[3].reverse(),
+    "tui/input-widget/scroll-keeps-end-caret-visible");
+  input.caret(2);
+  manager.doDraw();
+  check(buffer.cells[0].value == (u64)97 &&
+    buffer.cells[1].value == (u64)98 &&
+    buffer.cells[2].value == (u64)99 && buffer.cells[2].reverse() &&
+    buffer.cells[3].value == (u64)100,
+    "tui/input-widget/scroll-backfills-before-caret");
+
+  let narrowScreen = Screen(1, 1);
+  let narrowManager = ViewManager(narrowScreen);
+  let narrowRoot = Container();
+  let narrow = Input();
+  narrow.style.position = Position.Absolute;
+  narrow.style.width = 1;
+  narrow.value("中");
+  narrow.caret(0);
+  narrowRoot.addChild(narrow);
+  narrowManager.root = narrowRoot;
+  narrowManager.doStyling();
+  narrowManager.doArrange();
+  narrowManager.focus(narrow);
+  narrowManager.doDraw();
+  check(narrowScreen.buffer().cells[0].value == (u64)0 &&
+    narrowScreen.buffer().cells[0].reverse(),
+    "tui/input-widget/narrow-wide-grapheme-caret");
+
+  let clippedScreen = Screen(3, 1);
+  let clippedManager = ViewManager(clippedScreen);
+  let clippedRoot = Container();
+  let clipped = Input();
+  clipped.style.position = Position.Absolute;
+  clipped.style.x = -1;
+  clipped.style.width = 3;
+  clipped.value("abc");
+  clipped.caret(0);
+  clippedRoot.addChild(clipped);
+  clippedManager.root = clippedRoot;
+  clippedManager.doStyling();
+  clippedManager.doArrange();
+  clippedManager.doDraw();
+  check(clippedScreen.buffer().cells[0].value == (u64)98 &&
+    clippedScreen.buffer().cells[1].value == (u64)99,
+    "tui/input-widget/screen-clip-keeps-content-origin");
+}
+
+/** 验证鼠标按显示列定位 caret、停止父级冒泡且保留默认聚焦。 */
+func input_widget_mouse_caret_and_default_focus() {
+  let manager = ViewManager(Screen(8, 2));
+  let root = Container();
+  let input = Input();
+  input.style.position = Position.Absolute;
+  input.style.width = 6;
+  input.value("A中B");
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+
+  var parentMouse = 0;
+  root.mouseDown.on((event: MouseEvent<Widget>) {
+    parentMouse += 1;
+  });
+  let click = MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 2, 0, 0);
+  manager.dispatchMouse(click);
+  var focused = false;
+  if manager.focused() match target: Widget {
+    focused = target == (Widget)input;
+  }
+  check(focused && input.caret() == 2,
+    "tui/input-widget/mouse-caret-and-default-focus");
+  check(click.isStopped() && !click.isPrevented() && parentMouse == 0,
+    "tui/input-widget/mouse-stop-keeps-default");
+}
+
 /** 验证最近 Hidden 祖先的 clippedFrame 传递全部上层剪裁。 */
 func view_multilevel_hidden_clipping() {
   let manager = ViewManager(Screen(8, 4));
@@ -4562,6 +4867,13 @@ open func run_tui_tests() {
     test("text_draw_wrap_unicode_and_hit_target()", () { text_draw_wrap_unicode_and_hit_target(); });
     test("text_draw_background_semantics()", () { text_draw_background_semantics(); });
     test("text_draw_clipping_preserves_content_origin()", () { text_draw_clipping_preserves_content_origin(); });
+    test("input_widget_value_and_caret_contract()", () { input_widget_value_and_caret_contract(); });
+    test("input_widget_keyboard_edit_and_events()", () { input_widget_keyboard_edit_and_events(); });
+    test("input_widget_grapheme_navigation_and_deletion()", () { input_widget_grapheme_navigation_and_deletion(); });
+    test("input_widget_unhandled_keys_bubble()", () { input_widget_unhandled_keys_bubble(); });
+    test("input_widget_layout_focus_and_caret_draw()", () { input_widget_layout_focus_and_caret_draw(); });
+    test("input_widget_horizontal_scroll_and_clipping()", () { input_widget_horizontal_scroll_and_clipping(); });
+    test("input_widget_mouse_caret_and_default_focus()", () { input_widget_mouse_caret_and_default_focus(); });
     test("view_multilevel_hidden_clipping()", () { view_multilevel_hidden_clipping(); });
     test("container_default_pipeline_and_tree_invalidation()", () { container_default_pipeline_and_tree_invalidation(); });
     test("container_subtree_layout_skips_clean_siblings()", () { container_subtree_layout_skips_clean_siblings(); });
