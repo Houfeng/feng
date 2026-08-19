@@ -171,8 +171,9 @@ open type ViewManager {
   }
 
   /**
-   * 执行一次焦点路径差分并同步焦点状态。
-   * 状态和路径在事件触发前更新，使监听器读取 focused() 时看到本次新状态。
+   * 执行一次焦点路径差分并同步焦点目标及其 Focus 状态。
+   * 状态和路径在事件触发前更新，使监听器读取 focused() 和 Widget.state 时
+   * 看到本次新状态。Pseudo.Focus 只属于真实焦点目标，不传播到祖先。
    * @param next 本次请求的下一焦点
    */
   seal func performFocusChange(next: Option<Widget>): void {
@@ -199,6 +200,14 @@ open type ViewManager {
       }
       oldChangedCount -= 1;
       newChangedCount -= 1;
+    }
+
+    let focusMask = (int)Pseudo.Focus;
+    if previous match oldTarget: Widget {
+      oldTarget.removeState(focusMask);
+    }
+    if next match newTarget: Widget {
+      newTarget.addState(focusMask);
     }
 
     self._focused = next;

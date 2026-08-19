@@ -231,6 +231,7 @@
 - [x] 4.40 等待人工 Review：开发者审查鼠标 target 与 lock 设计和实现，通过后再处理焦点和键盘路由
 - [x] 4.41 实现焦点管理、不可停止的 `FocusEvent` 路径事件、鼠标自动聚焦、ViewManager 多播事件、键盘焦点路由及不可被视图停止的 `TuiApp.key`；详见 `docs/engineering/feng-std-tui-focus-key-routing-dev.md`
 - [x] 4.41a 修复 SGR 完整状态转换：移除背景色、前景色或样式标志时重置并重放目标样式，覆盖透明上层组件跨多背景绘制场景
+- [x] 4.41b 将真实焦点目标同步到 `Pseudo.Focus`，仅目标持有该状态，祖先焦点子树语义留给未来独立的 `Pseudo.FocusWithin`
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。

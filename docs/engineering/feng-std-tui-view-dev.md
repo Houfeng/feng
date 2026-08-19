@@ -213,7 +213,15 @@ Hover。鼠标锁定只改变事件路由 target，不改变实际坐标对应�
 ViewManager 同时自动维护 Active：非滚轮鼠标按钮按下时，实际命中 Widget 及其到 root 的
 祖先路径获得 `Pseudo.Active`；移动和鼠标锁定不改变该路径，按钮释放时整体清除。状态在
 对应鼠标事件监听器执行前更新。该路径语义与 CSS `:active` 对激活元素及祖先的匹配一致。
-Focus 的自动状态维护留在后续步骤。
+
+ViewManager 自动维护 Focus：焦点从旧 Widget 切换到新 Widget 时，在触发 `onBlur` 和
+`onFocus` 前从旧焦点目标移除 `Pseudo.Focus`，并向新焦点目标添加
+`Pseudo.Focus`。只有 `focused()` 返回的真实焦点目标持有该状态，祖先不因后代获得焦点而
+持有 `Pseudo.Focus`；未来若需要祖先感知焦点子树，应单独定义 `Pseudo.FocusWithin`，
+不得改变 `Pseudo.Focus` 的目标语义。重复聚焦同一 Widget 不修改状态；焦点因
+`tabIndex` 失效、脱离当前 root 或显式 `clearFocus()` 被清除时，同样移除旧目标状态。
+状态样式沿用现有 styling 时序，在下一轮 styling 后进入 `rtStyle`，焦点切换本身不立即
+改写运行时样式。
 
 ### 3.3 Thickness
 

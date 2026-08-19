@@ -3599,6 +3599,91 @@ func view_manager_focus_invalid_path_and_reentrant_request() {
   check(managerHasFocus(reentrantManager, last), "tui/focus-event/reentrant-final-focus");
 }
 
+/** 验证真实焦点目标独占 Pseudo.Focus，并按 styling 时序应用状态样式。 */
+func view_manager_focus_state_sync() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let first = View();
+  let second = View();
+  first.tabIndex = 0;
+  second.tabIndex = 0;
+  root.useStateStyle(Pseudo.Focus).cursor = Cursor.Crosshair;
+  first.useStateStyle(Pseudo.Focus).cursor = Cursor.Pointer;
+  second.useStateStyle(Pseudo.Focus).cursor = Cursor.Text;
+  root.addChild(first);
+  root.addChild(second);
+  manager.root = root;
+
+  manager.doStyling();
+  check(Inspector.getRtStyle(root).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(first).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(second).cursor == Cursor.Auto,
+    "tui/focus-state/initially-inactive");
+
+  check(manager.focus(first), "tui/focus-state/focus-first");
+  check(Inspector.getRtStyle(first).cursor == Cursor.Auto,
+    "tui/focus-state/waits-for-styling");
+  manager.doStyling();
+  check(Inspector.getRtStyle(root).cursor == Cursor.Auto,
+    "tui/focus-state/not-propagated-to-ancestor");
+  check(Inspector.getRtStyle(first).cursor == Cursor.Pointer &&
+    Inspector.getRtStyle(second).cursor == Cursor.Auto,
+    "tui/focus-state/first-target-only");
+
+  check(manager.focus(second), "tui/focus-state/switch-to-second");
+  check(Inspector.getRtStyle(first).cursor == Cursor.Pointer &&
+    Inspector.getRtStyle(second).cursor == Cursor.Auto,
+    "tui/focus-state/switch-waits-for-styling");
+  manager.doStyling();
+  check(Inspector.getRtStyle(first).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(second).cursor == Cursor.Text,
+    "tui/focus-state/switches-target-state");
+
+  manager.clearFocus();
+  manager.doStyling();
+  check(Inspector.getRtStyle(first).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(second).cursor == Cursor.Auto,
+    "tui/focus-state/clear-removes-state");
+
+  check(manager.focus(first), "tui/focus-state/refocus-first");
+  manager.doStyling();
+  first.tabIndex = -1;
+  check(managerHasNoFocus(manager), "tui/focus-state/invalid-focus-cleared");
+  manager.doStyling();
+  check(Inspector.getRtStyle(first).cursor == Cursor.Auto,
+    "tui/focus-state/invalid-focus-removes-state");
+
+  let reentrantManager = ViewManager(Screen(20, 10));
+  let reentrantRoot = Container();
+  let requested = View();
+  let skipped = View();
+  let finalTarget = View();
+  requested.tabIndex = 0;
+  skipped.tabIndex = 0;
+  finalTarget.tabIndex = 0;
+  requested.useStateStyle(Pseudo.Focus).cursor = Cursor.Pointer;
+  skipped.useStateStyle(Pseudo.Focus).cursor = Cursor.Crosshair;
+  finalTarget.useStateStyle(Pseudo.Focus).cursor = Cursor.Text;
+  reentrantRoot.addChild(requested);
+  reentrantRoot.addChild(skipped);
+  reentrantRoot.addChild(finalTarget);
+  reentrantManager.root = reentrantRoot;
+  requested.onFocus.on((event: FocusEvent<Widget>) {
+    reentrantManager.focus(skipped);
+    reentrantManager.focus(finalTarget);
+  });
+
+  check(reentrantManager.focus(requested),
+    "tui/focus-state/reentrant-first-request");
+  check(managerHasFocus(reentrantManager, finalTarget),
+    "tui/focus-state/reentrant-final-target");
+  reentrantManager.doStyling();
+  check(Inspector.getRtStyle(requested).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(skipped).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(finalTarget).cursor == Cursor.Text,
+    "tui/focus-state/reentrant-final-target-only");
+}
+
 /** 验证鼠标传播、ViewManager 事件及自动聚焦默认行为的组合规则。 */
 func view_manager_mouse_default_focus_and_propagation() {
   let manager = ViewManager(Screen(30, 15));
@@ -4483,6 +4568,7 @@ open func run_tui_tests() {
     test("view_manager_focus_lifecycle()", () { view_manager_focus_lifecycle(); });
     test("view_manager_focus_path_events()", () { view_manager_focus_path_events(); });
     test("view_manager_focus_invalid_path_and_reentrant_request()", () { view_manager_focus_invalid_path_and_reentrant_request(); });
+    test("view_manager_focus_state_sync()", () { view_manager_focus_state_sync(); });
     test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
     test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
     test("view_manager_key_focus_route()", () { view_manager_key_focus_route(); });

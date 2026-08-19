@@ -331,7 +331,8 @@ InputManager.onKey
 - [x] 12.19 串行处理焦点事件监听器中的重入焦点请求；
 - [x] 12.20 补齐 KeyEvent 默认行为和 FocusEvent 路径切换 std_test 用例；
 - [x] 12.21 构建 std 并回归 std_test，更新实施状态；
-- [ ] 12.22 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
+- [x] 12.22 将真实焦点目标同步到 `Pseudo.Focus`，覆盖切换、清除、失效、重入和状态样式时序；
+- [ ] 12.23 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
 
 ## 13 实施结论与后续 Review
 
@@ -340,6 +341,10 @@ InputManager.onKey
 - 自动聚焦覆盖除滚轮外的全部 `MouseAction.Press`；
 - KeyEvent 使用引用类型，共享 target、停止状态和默认行为状态；该分配变化已经人工确认；
 - Widget 与 ViewManager 已提供不可停止的 `onFocus`/`onBlur`，共同祖先不重复触发；
+- `Pseudo.Focus` 只表示真实焦点目标，不传播到祖先；祖先焦点子树语义未来使用独立的
+  `Pseudo.FocusWithin` 表达；
 - 此前 `make test` 已完整通过，其中 std_test 521/521、fcts 768/768；本轮按人工确认仅
   构建 std 并回归 std_test，结果为 524/524；
-- Tab 同值顺序、循环和阻止规则仍留到 12.22 单独决策与实施。
+- `Pseudo.Focus` 状态同步新增用例后，std_test 580/580、fcts 816/816，沙箱外完整
+  `make test` 通过；
+- Tab 同值顺序、循环和阻止规则仍留到 12.23 单独决策与实施。
