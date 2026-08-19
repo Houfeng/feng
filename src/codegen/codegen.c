@@ -1150,9 +1150,13 @@ static void cg_append_callable_abi_argument_value(Buf *out,
                                                   CGCallableABIKind abi_kind,
                                                   const char *argument_name) {
     if (abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-        buf_append_cstr(out, "(*(const ");
+        /* The address points to one value slot. Put const on that slot, not
+         * on a managed value's pointee: `T * const *` dereferences to the
+         * original managed `T *`, while `const T **` would silently change
+         * the Feng value type and make ownership helpers discard const. */
+        buf_append_cstr(out, "(*(");
         cg_emit_c_type(out, type);
-        buf_append_fmt(out, " *)%s)", argument_name);
+        buf_append_fmt(out, " const *)%s)", argument_name);
     } else if (abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
         buf_append_cstr(out, "((");
         cg_emit_c_type(out, type);
@@ -13235,12 +13239,6 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                                                       &s->union_member_types[member_index])) {
                 return false;
             }
-            if (s->union_member_types[member_index] != NULL &&
-                s->union_member_types[member_index]->kind == CG_TYPE_GENERIC_PARAM) {
-                return cg_fail(cg,
-                               member_ref != NULL ? member_ref->token : decl->token,
-                               "CE0045", "codegen: union-form spec member layout requires a concrete type argument");
-            }
         }
         return true;
     }
@@ -14391,13 +14389,28 @@ static void cg_emit_user_spec_forward(CG *cg, const UserSpec *s) {
         /* Union spec struct body is emitted by cg_emit_value_and_union_struct_bodies_sorted
          * (Pass 3.5a) which topologically sorts value types and union specs together.
          * Its tag was emitted by cg_emit_user_spec_tag_forwards; here we emit
-         * only the witness body and descriptor declaration. */
+         * only the witness body and descriptor declaration. An open generic
+         * union is an overlay used by shared bodies; its concrete aggregate
+         * descriptor is supplied by a reified dependency slot, so declaring
+         * a layout-authoritative static descriptor here would be incorrect. */
         cg_emit_witness_struct_body(cg, s, &cg->headers);
-        bool ext_visible = cg_user_spec_descriptor_is_externally_visible(cg, s);
-        buf_append_fmt(&cg->headers,
-            ext_visible ? "extern const FengAggregateDescriptor %s;\n"
-                        : "static const FengAggregateDescriptor %s;\n",
-            s->c_aggregate_desc_name);
+        if (s->generic_context_type_param_count > 0U) {
+            /* Other open generic overlays may retain this declaration as a
+             * compile-time dependency identity. Keep it translation-unit
+             * local and zero-only: no shared body may use it as concrete
+             * layout authority. Closed wrappers replace it through the
+             * existing reified dependency slot. */
+            buf_append_fmt(&cg->headers,
+                           "static const FengAggregateDescriptor %s;\n",
+                           s->c_aggregate_desc_name);
+        } else {
+            bool ext_visible =
+                cg_user_spec_descriptor_is_externally_visible(cg, s);
+            buf_append_fmt(&cg->headers,
+                ext_visible ? "extern const FengAggregateDescriptor %s;\n"
+                            : "static const FengAggregateDescriptor %s;\n",
+                s->c_aggregate_desc_name);
+        }
         return;
     }
     /* OBJECT and INTERSECTION forms share the same value layout
@@ -14757,6 +14770,21 @@ static bool cg_emit_default_spec_method_thunk(CG *cg,
 /* Emit W(DefaultSubject(root), target). Parent views reuse root's default
  * member thunks so every projection keeps the same hidden subject storage.
  * The (root,target) cache makes a diamond converge on one ancestor witness. */
+/* Compare the exact default-witness identity of two registered spec views.
+ * Generic object specs share one canonical witness struct ABI across closed
+ * instances, so the struct name alone is intentionally insufficient here. */
+static bool cg_spec_default_witness_identity_equal(const UserSpec *left,
+                                                   const UserSpec *right) {
+    if (left == right) {
+        return true;
+    }
+    return left != NULL && right != NULL &&
+           left->c_default_witness_name != NULL &&
+           right->c_default_witness_name != NULL &&
+           strcmp(left->c_default_witness_name,
+                  right->c_default_witness_name) == 0;
+}
+
 static bool cg_ensure_default_parent_witness(CG *cg,
                                              const UserSpec *root,
                                              const UserSpec *target,
@@ -14775,8 +14803,12 @@ static bool cg_ensure_default_parent_witness(CG *cg,
     for (size_t index = 0U;
          index < cg->default_parent_witness_count;
          ++index) {
-        if (cg->default_parent_witnesses[index].root == root &&
-            cg->default_parent_witnesses[index].target == target) {
+        if (cg_spec_default_witness_identity_equal(
+                cg->default_parent_witnesses[index].root,
+                root) &&
+            cg_spec_default_witness_identity_equal(
+                cg->default_parent_witnesses[index].target,
+                target)) {
             *out_var = cg->default_parent_witnesses[index].c_var;
             return true;
         }
@@ -14810,8 +14842,8 @@ static bool cg_ensure_default_parent_witness(CG *cg,
     buf_init(&var);
     buf_append_fmt(&var,
                    "FengSpecDefaultProjection__%s__as__%s",
-                   root->c_witness_struct_name,
-                   target->c_witness_struct_name);
+                   root->c_default_witness_name,
+                   target->c_default_witness_name);
     if (var.data == NULL) {
         free(parent_witness_vars);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
@@ -15133,6 +15165,15 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     }
     if (s->form == FENG_SPEC_FORM_UNION) {
         Buf slot_descriptor;
+
+        /* Shared generic bodies use this instance only as a C overlay for
+         * fixed metadata/payload offsets. The final call site places the
+         * closed union descriptor in reified_agg_deps; do not manufacture a
+         * pseudo-closed size/default authority from the open overlay. */
+        if (s->generic_context_type_param_count > 0U) {
+            return;
+        }
+
         buf_init(&slot_descriptor);
         if (s->union_member_count == 0U) {
             (void)cg_fail(cg, s->decl->token,
@@ -15629,9 +15670,18 @@ static void cg_emit_module_binding_ensure_init_call(CG *cg,
     buf_append_fmt(cg->cur_body, "    %s();\n", mb->c_ensure_init_name);
 }
 
-static bool cg_emit_type_static_binding_ensure_init_call(
+/* Append one static-binding ensure call to an arbitrary generated-code
+ * buffer. Generic instances reuse the declaration's shared initializer with
+ * their exact descriptor/state entry; ordinary types keep the zero-argument
+ * ensure function. */
+static bool cg_append_type_static_binding_ensure_init_call(
     CG *cg,
+    Buf *out,
     const TypeStaticBinding *binding) {
+    if (cg == NULL || out == NULL || binding == NULL ||
+        binding->owner_type == NULL) {
+        return false;
+    }
     if (cg_user_type_is_generic_origin_instance(binding->owner_type)) {
         char *state_expr = cg_type_static_binding_state_expr_dup(binding);
         char *ensure_name = cg_generic_type_static_ensure_shared_cname(
@@ -15652,7 +15702,7 @@ static bool cg_emit_type_static_binding_ensure_init_call(
                                : (FengToken){0},
                            "IE0001", "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body,
+        buf_append_fmt(out,
                        "    %s(&%s, &%s);\n",
                        ensure_name,
                        descriptor_name,
@@ -15661,8 +15711,18 @@ static bool cg_emit_type_static_binding_ensure_init_call(
         free(ensure_name);
         return true;
     }
-    buf_append_fmt(cg->cur_body, "    %s();\n", binding->c_ensure_init_name);
+    buf_append_fmt(out, "    %s();\n", binding->c_ensure_init_name);
     return true;
+}
+
+/* Emit one static-binding ensure call into the active function body. */
+static bool cg_emit_type_static_binding_ensure_init_call(
+    CG *cg,
+    const TypeStaticBinding *binding) {
+    return cg != NULL &&
+           cg_append_type_static_binding_ensure_init_call(cg,
+                                                          cg->cur_body,
+                                                          binding);
 }
 
 /** Return whether an erased generic body must select this static via a descriptor. */
@@ -26394,6 +26454,102 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     return cg_emit_registered_call(cg, e, fn, ext, out);
 }
 
+/* Read one static spec field whose open generic declaration selected the
+ * address-return ABI. The closed member type may be a scalar, a direct
+ * generic parameter, or a descriptor-sized aggregate; in every case the
+ * witness getter writes into exact caller-owned storage. The result remains
+ * a borrow of the static binding, so this helper deliberately registers no
+ * cleanup for the shallow copy written by the getter. */
+static bool cg_emit_spec_static_field_address_read(
+    CG *cg,
+    const UserSpec *spec,
+    const UserSpecMember *field,
+    const char *generic_descriptor,
+    FengToken blame,
+    ExprResult *out) {
+    char *storage_name;
+    const char *out_prefix = "&";
+
+    er_init(out);
+    if (cg == NULL || spec == NULL || field == NULL ||
+        field->kind != USM_KIND_FIELD || !field->is_static ||
+        field->value_abi_kind != CG_CALLABLE_ABI_ADDRESS ||
+        generic_descriptor == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "IE0001", "codegen: invalid static spec field address read");
+    }
+
+    storage_name = cg_fresh_temp(cg, "_spec_field");
+    if (storage_name == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    if (field->type->kind == CG_TYPE_GENERIC_PARAM) {
+        if (!cg_emit_erased_generic_storage_declaration(
+                cg,
+                field->type,
+                storage_name,
+                blame,
+                &out->erased_generic_descriptor_c_name,
+                &out->erased_generic_size_c_name)) {
+            free(storage_name);
+            er_free(out);
+            return false;
+        }
+        out->uses_erased_generic_storage = true;
+        out->is_storage_address = true;
+        out_prefix = "";
+    } else if (cg_type_uses_reified_storage(cg, field->type)) {
+        if (!cg_emit_reified_storage_declaration(
+                cg,
+                field->type,
+                storage_name,
+                blame,
+                &out->reified_descriptor_c_name,
+                &out->reified_size_c_name)) {
+            free(storage_name);
+            er_free(out);
+            return false;
+        }
+        out->uses_reified_storage = true;
+        out->is_storage_address = true;
+        out_prefix = "";
+    } else {
+        char *storage_type = cg_ctype_dup(field->type);
+
+        if (storage_type == NULL) {
+            free(storage_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s;\n",
+                       storage_type,
+                       storage_name);
+        free(storage_type);
+    }
+
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(
+        cg->cur_body,
+        "    ((const struct %s *)%s->witness)->get_%s(%s%s);\n",
+        spec->c_witness_struct_name,
+        generic_descriptor,
+        field->c_field_name,
+        out_prefix,
+        storage_name);
+    out->c_expr = strdup(storage_name);
+    out->type = cgtype_clone(field->type);
+    out->owns_ref = false;
+    out->is_addressable = true;
+    free(storage_name);
+    if (out->c_expr == NULL || out->type == NULL) {
+        er_free(out);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return true;
+}
+
 /* Borrow one field through an already-evaluated object-form spec receiver.
  * A direct generic parameter obtains the witness from its active descriptor;
  * an ordinary spec value carries the subject and witness together. */
@@ -26413,6 +26569,19 @@ static bool cg_emit_spec_field_borrow(CG *cg,
         return cg_fail(cg,
                        blame,
                        "IE0001", "codegen: invalid spec field receiver");
+    }
+    if (receiver->type->kind == CG_TYPE_GENERIC_PARAM &&
+        field->is_static &&
+        field->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        bool ok = cg_emit_spec_static_field_address_read(cg,
+                                                         spec,
+                                                         field,
+                                                         generic_descriptor,
+                                                         blame,
+                                                         out);
+
+        er_free(receiver);
+        return ok;
     }
     uses_storage_borrow = cg_spec_field_uses_storage_borrow(field);
 
@@ -33985,7 +34154,21 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
 
-                if (sm->is_static) {
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    if (sm->is_static) {
+                        buf_append_fmt(cg->cur_body,
+                            "    %s %s;\n"
+                            "    ((const struct %s *)%s->witness)->get_%s(&%s);\n",
+                            field_cty, old_tmp, us->c_witness_struct_name,
+                            desc_name, sm->c_field_name, old_tmp);
+                    } else {
+                        buf_append_fmt(cg->cur_body,
+                            "    %s %s = *(const %s *)((const struct %s *)%s->witness)->borrow_%s(%s);\n",
+                            field_cty, old_tmp, field_cty,
+                            us->c_witness_struct_name, desc_name,
+                            sm->c_field_name, subject_expr);
+                    }
+                } else if (sm->is_static) {
                     buf_append_fmt(cg->cur_body,
                         "    %s %s = ((const struct %s *)%s->witness)->get_%s();\n",
                         field_cty, old_tmp, us->c_witness_struct_name,
@@ -34021,7 +34204,35 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         "CE0255", "codegen: unsupported compound spec field assignment operator");
                 }
 
-                if (sm->is_static) {
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    char *new_tmp = cg_fresh_temp(cg, "_new");
+
+                    if (new_tmp == NULL) {
+                        buf_free(&expr);
+                        er_free(&v);
+                        free(old_tmp);
+                        free(field_cty);
+                        free(subject_expr);
+                        er_free(&recv);
+                        return cg_fail(cg, stmt->token,
+                                       "IE0001", "codegen: out of memory");
+                    }
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s %s = (%s)(%s);\n",
+                                   field_cty, new_tmp, field_cty, expr.data);
+                    if (sm->is_static) {
+                        buf_append_fmt(cg->cur_body,
+                            "    ((const struct %s *)%s->witness)->set_%s(&%s);\n",
+                            us->c_witness_struct_name, desc_name,
+                            sm->c_field_name, new_tmp);
+                    } else {
+                        buf_append_fmt(cg->cur_body,
+                            "    ((const struct %s *)%s->witness)->set_%s(%s, &%s);\n",
+                            us->c_witness_struct_name, desc_name,
+                            sm->c_field_name, subject_expr, new_tmp);
+                    }
+                    free(new_tmp);
+                } else if (sm->is_static) {
                     buf_append_fmt(cg->cur_body,
                         "    ((const struct %s *)%s->witness)->set_%s((%s)(%s));\n",
                         us->c_witness_struct_name, desc_name,
@@ -34049,6 +34260,33 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 free(subject_expr);
                 er_free(&recv);
                 return false;
+            }
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                char *argument_expr = cg_shared_callable_argument_expr_dup(
+                    cg, &v, true, "_spec_field_arg");
+
+                if (argument_expr == NULL) {
+                    er_free(&v);
+                    free(subject_expr);
+                    er_free(&recv);
+                    return false;
+                }
+                if (sm->is_static) {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s(%s);\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, argument_expr);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    ((const struct %s *)%s->witness)->set_%s(%s, %s);\n",
+                        us->c_witness_struct_name, desc_name,
+                        sm->c_field_name, subject_expr, argument_expr);
+                }
+                free(argument_expr);
+                er_free(&v);
+                free(subject_expr);
+                er_free(&recv);
+                return true;
             }
             if (cgtype_is_managed(sm->type) && v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
@@ -34124,9 +34362,17 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
 
-                buf_append_fmt(cg->cur_body,
-                    "    %s %s = %s.witness->get_%s(%s.subject);\n",
-                    field_cty, old_tmp, recv.c_expr, sm->c_field_name, recv.c_expr);
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    buf_append_fmt(cg->cur_body,
+                        "    %s %s = *(const %s *)%s.witness->borrow_%s(%s.subject);\n",
+                        field_cty, old_tmp, field_cty,
+                        recv.c_expr, sm->c_field_name, recv.c_expr);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    %s %s = %s.witness->get_%s(%s.subject);\n",
+                        field_cty, old_tmp, recv.c_expr,
+                        sm->c_field_name, recv.c_expr);
+                }
 
                 if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                     free(old_tmp);
@@ -34150,9 +34396,31 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         "CE0255", "codegen: unsupported compound spec field assignment operator");
                 }
 
-                buf_append_fmt(cg->cur_body,
-                    "    %s.witness->set_%s(%s.subject, (%s)(%s));\n",
-                    recv.c_expr, sm->c_field_name, recv.c_expr, field_cty, expr.data);
+                if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                    char *new_tmp = cg_fresh_temp(cg, "_new");
+
+                    if (new_tmp == NULL) {
+                        buf_free(&expr);
+                        er_free(&v);
+                        free(old_tmp);
+                        free(field_cty);
+                        er_free(&recv);
+                        return cg_fail(cg, stmt->token,
+                                       "IE0001", "codegen: out of memory");
+                    }
+                    buf_append_fmt(cg->cur_body,
+                                   "    %s %s = (%s)(%s);\n"
+                                   "    %s.witness->set_%s(%s.subject, &%s);\n",
+                                   field_cty, new_tmp, field_cty, expr.data,
+                                   recv.c_expr, sm->c_field_name,
+                                   recv.c_expr, new_tmp);
+                    free(new_tmp);
+                } else {
+                    buf_append_fmt(cg->cur_body,
+                        "    %s.witness->set_%s(%s.subject, (%s)(%s));\n",
+                        recv.c_expr, sm->c_field_name,
+                        recv.c_expr, field_cty, expr.data);
+                }
 
                 buf_free(&expr);
                 er_free(&v);
@@ -34167,6 +34435,24 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                                 sm->type,
                                                 &v)) {
                 er_free(&recv); return false;
+            }
+            if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                char *argument_expr = cg_shared_callable_argument_expr_dup(
+                    cg, &v, true, "_spec_field_arg");
+
+                if (argument_expr == NULL) {
+                    er_free(&v);
+                    er_free(&recv);
+                    return false;
+                }
+                buf_append_fmt(cg->cur_body,
+                    "    %s.witness->set_%s(%s.subject, %s);\n",
+                    recv.c_expr, sm->c_field_name,
+                    recv.c_expr, argument_expr);
+                free(argument_expr);
+                er_free(&v);
+                er_free(&recv);
+                return true;
             }
             /* Setter takes ownership semantics inside the thunk (managed →
              * feng_assign). For an owns_ref RHS we must pass it as +1 and
@@ -44511,6 +44797,43 @@ static bool cg_type_matches_open_spec_context_parameter(
     return true;
 }
 
+/* Match one implementation field type against an open or closed generic spec
+ * field pattern. Method matching already performs the same binding walk over
+ * the complete signature; fields have one type position but must preserve the
+ * identical open-context substitution rule. */
+static bool cg_field_type_matches_spec_member(const CG *cg,
+                                              const CGType *field_type,
+                                              const UserSpec *spec,
+                                              const UserSpecMember *member) {
+    if (cg == NULL || field_type == NULL || spec == NULL || member == NULL ||
+        member->kind != USM_KIND_FIELD || member->type == NULL) {
+        return false;
+    }
+    if (spec->generic_context_type_param_count == 0U) {
+        return cg_types_equal(field_type, member->type);
+    }
+    for (size_t index = 0U;
+         index < spec->generic_context_type_param_count;
+         ++index) {
+        const FengTypeRef *binding = NULL;
+        FengTypeRef *owned_binding = NULL;
+        bool matches = cg_type_matches_open_spec_context_parameter(
+            cg,
+            field_type,
+            member->type,
+            spec,
+            spec->generic_context_type_param_names[index],
+            &binding,
+            &owned_binding);
+
+        cg_type_ref_free(owned_binding);
+        if (!matches) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Match one concrete method against an open or closed spec slot. Open spec
  * parameters are bound consistently across the entire callable signature. */
 static bool cg_user_method_matches_spec_member(const CG *cg,
@@ -45240,7 +45563,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
                     "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
                     t->feng_name, s->feng_name, sm->feng_name);
             }
-            if (!cg_types_equal(sb->type, sm->type)) {
+            if (!cg_field_type_matches_spec_member(cg, sb->type, s, sm)) {
                 return cg_fail(cg, blame,
                     "CE0316", "codegen: field '%s' on type '%s' does not match spec '%s' field type",
                     sm->feng_name, t->feng_name, s->feng_name);
@@ -45257,7 +45580,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
                 "CE0315", "codegen: type '%s' is missing an implementation for spec '%s' member '%s'",
                 t->feng_name, s->feng_name, sm->feng_name);
         }
-        if (!cg_types_equal(field->type, sm->type)) {
+        if (!cg_field_type_matches_spec_member(cg, field->type, s, sm)) {
             return cg_fail(cg, blame,
                 "CE0316", "codegen: field '%s' on type '%s' does not match spec '%s' field type",
                 sm->feng_name, t->feng_name, s->feng_name);
@@ -46371,49 +46694,112 @@ static bool cg_emit_static_user_spec_member_thunk(
                 "CE0343", "codegen: internal: type '%s' has no static field '%s' to satisfy spec '%s'",
                 type->feng_name, spec_member->feng_name, spec->feng_name);
         }
+
+        /* A generic spec selects this slot's ABI from the open declaration.
+         * Keep that ABI after the member type is closed: in particular,
+         * `static let/var value: T` uses an out pointer even when T later
+         * becomes a direct C scalar. */
         buf_append_cstr(definition, "static ");
-        cg_emit_c_type(definition, spec_member->type);
-        buf_append_fmt(definition,
-                       " %s__get_%s(void) {\n    %s();\n    return %s;\n}\n\n",
-                       prefix,
-                       spec_member->c_field_name,
-                       static_binding->c_ensure_init_name,
-                       static_binding->c_name);
-        buf_append_cstr(prototype, "static ");
-        cg_emit_c_type(prototype, spec_member->type);
-        buf_append_fmt(prototype, " %s__get_%s(void);\n",
+        cg_emit_callable_abi_return_type(definition,
+                                         spec_member->type,
+                                         spec_member->value_abi_kind);
+        buf_append_fmt(definition, " %s__get_%s(",
                        prefix, spec_member->c_field_name);
+        if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_cstr(definition, "void *_out");
+        } else {
+            buf_append_cstr(definition, "void");
+        }
+        buf_append_cstr(definition, ") {\n");
+        if (!cg_append_type_static_binding_ensure_init_call(cg,
+                                                            definition,
+                                                            static_binding)) {
+            return false;
+        }
+        if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_fmt(definition,
+                           "    memcpy(_out, &%s, sizeof %s);\n}\n\n",
+                           static_binding->c_name,
+                           static_binding->c_name);
+        } else {
+            buf_append_cstr(definition, "    return ");
+            if (spec_member->value_abi_kind ==
+                CG_CALLABLE_ABI_ERASED_POINTER) {
+                buf_append_cstr(definition, "(void *)");
+            }
+            buf_append_fmt(definition, "%s;\n}\n\n",
+                           static_binding->c_name);
+        }
+
+        buf_append_cstr(prototype, "static ");
+        cg_emit_callable_abi_return_type(prototype,
+                                         spec_member->type,
+                                         spec_member->value_abi_kind);
+        buf_append_fmt(prototype, " %s__get_%s(",
+                       prefix, spec_member->c_field_name);
+        if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_cstr(prototype, "void *_out");
+        } else {
+            buf_append_cstr(prototype, "void");
+        }
+        buf_append_cstr(prototype, ");\n");
+
         if (spec_member->is_var) {
             buf_append_fmt(definition, "static void %s__set_%s(",
                            prefix, spec_member->c_field_name);
-            cg_emit_c_type(definition, spec_member->type);
-            buf_append_cstr(definition, " value) {\n    ");
-            buf_append_fmt(definition, "%s();\n",
-                           static_binding->c_ensure_init_name);
-            if (cgtype_is_managed(spec_member->type)) {
-                buf_append_fmt(definition,
-                    "    feng_assign((void **)&%s, value);\n",
-                    static_binding->c_name);
-            } else if (cgtype_is_aggregate(spec_member->type)) {
+            cg_emit_callable_abi_param_type(definition,
+                                            spec_member->type,
+                                            spec_member->value_abi_kind);
+            buf_append_cstr(definition, " value) {\n");
+            if (!cg_append_type_static_binding_ensure_init_call(
+                    cg,
+                    definition,
+                    static_binding)) {
+                return false;
+            }
+            if (cgtype_is_managed(static_binding->type)) {
+                buf_append_fmt(definition, "    feng_assign((void **)&%s, ",
+                               static_binding->c_name);
+                cg_append_callable_abi_argument_value(
+                    definition,
+                    static_binding->type,
+                    spec_member->value_abi_kind,
+                    "value");
+                buf_append_cstr(definition, ");\n");
+            } else if (cgtype_is_aggregate(static_binding->type)) {
                 const char *aggregate_descriptor =
-                    cg_aggregate_desc_name(spec_member->type);
+                    cg_aggregate_desc_name(static_binding->type);
 
                 if (aggregate_descriptor == NULL) {
                     return cg_fail(cg, blame,
                         "CE0348", "codegen: missing aggregate descriptor for spec static field write");
                 }
-                buf_append_fmt(definition,
-                    "    feng_aggregate_assign(&%s, &value, &%s);\n",
-                    static_binding->c_name,
-                    aggregate_descriptor);
-            } else {
-                buf_append_fmt(definition, "    %s = value;\n",
+                buf_append_fmt(definition, "    feng_aggregate_assign(&%s, ",
                                static_binding->c_name);
+                if (spec_member->value_abi_kind ==
+                    CG_CALLABLE_ABI_ADDRESS) {
+                    buf_append_cstr(definition, "value");
+                } else {
+                    buf_append_cstr(definition, "&value");
+                }
+                buf_append_fmt(definition, ", &%s);\n",
+                               aggregate_descriptor);
+            } else {
+                buf_append_fmt(definition, "    %s = ",
+                               static_binding->c_name);
+                cg_append_callable_abi_argument_value(
+                    definition,
+                    static_binding->type,
+                    spec_member->value_abi_kind,
+                    "value");
+                buf_append_cstr(definition, ";\n");
             }
             buf_append_cstr(definition, "}\n\n");
             buf_append_fmt(prototype, "static void %s__set_%s(",
                            prefix, spec_member->c_field_name);
-            cg_emit_c_type(prototype, spec_member->type);
+            cg_emit_callable_abi_param_type(prototype,
+                                            spec_member->type,
+                                            spec_member->value_abi_kind);
             buf_append_cstr(prototype, " value);\n");
         }
         return true;
@@ -47609,35 +47995,57 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             if (sm->is_var) {
                 /* Setter: managed slots route through feng_assign so the
                  * old reference is released and the new one retained
-                 * atomically; trivial slots use a direct store. */
+                 * atomically; trivial slots use a direct store. Its C
+                 * signature follows the spec's stable declaration ABI,
+                 * while storage operations use the closed implementation
+                 * field type. */
                 buf_append_fmt(fd, "static void %s__set_%s(void *_subject, ",
                                prefix.data, sm->c_field_name);
-                cg_emit_c_type(fd, sm->type);
+                cg_emit_callable_abi_param_type(fd,
+                                                sm->type,
+                                                sm->value_abi_kind);
                 buf_append_cstr(fd, " value) {\n");
-                if (cgtype_is_managed(sm->type)) {
+                if (cgtype_is_managed(uf->type)) {
                     buf_append_fmt(fd,
-                        "    feng_assign((void **)&((struct %s *)_subject)->%s, value);\n",
+                        "    feng_assign((void **)&((struct %s *)_subject)->%s, ",
                         t->c_struct_name, uf->c_name);
-                } else if (cgtype_is_aggregate(sm->type)) {
-                    const char *agg_desc = cg_aggregate_desc_name(sm->type);
+                    cg_append_callable_abi_argument_value(fd,
+                                                          uf->type,
+                                                          sm->value_abi_kind,
+                                                          "value");
+                    buf_append_cstr(fd, ");\n");
+                } else if (cgtype_is_aggregate(uf->type)) {
+                    const char *agg_desc = cg_aggregate_desc_name(uf->type);
                     if (agg_desc == NULL) {
                         buf_free(&prefix); free(t_san); free(s_san);
                         return cg_fail(cg, blame,
                             "CE0348", "codegen: missing aggregate descriptor for spec field write");
                     }
                     buf_append_fmt(fd,
-                        "    feng_aggregate_assign(&((struct %s *)_subject)->%s, &value, &%s);\n",
-                        t->c_struct_name, uf->c_name, agg_desc);
-                } else {
-                    buf_append_fmt(fd,
-                        "    ((struct %s *)_subject)->%s = value;\n",
+                        "    feng_aggregate_assign(&((struct %s *)_subject)->%s, ",
                         t->c_struct_name, uf->c_name);
+                    if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+                        buf_append_cstr(fd, "value");
+                    } else {
+                        buf_append_cstr(fd, "&value");
+                    }
+                    buf_append_fmt(fd, ", &%s);\n", agg_desc);
+                } else {
+                    buf_append_fmt(fd, "    ((struct %s *)_subject)->%s = ",
+                                   t->c_struct_name, uf->c_name);
+                    cg_append_callable_abi_argument_value(fd,
+                                                          uf->type,
+                                                          sm->value_abi_kind,
+                                                          "value");
+                    buf_append_cstr(fd, ";\n");
                 }
                 buf_append_cstr(fd, "}\n\n");
 
                 buf_append_fmt(fp, "static void %s__set_%s(void *_subject, ",
                                prefix.data, sm->c_field_name);
-                cg_emit_c_type(fp, sm->type);
+                cg_emit_callable_abi_param_type(fp,
+                                                sm->type,
+                                                sm->value_abi_kind);
                 buf_append_cstr(fp, " value);\n");
             }
         }

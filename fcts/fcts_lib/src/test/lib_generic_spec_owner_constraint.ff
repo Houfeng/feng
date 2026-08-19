@@ -1,0 +1,118 @@
+open module fcts_lib.test.generic_spec_owner_constraint;
+
+/** Public base constraint used by every generic spec form in this module. */
+open spec PackageSpecConstraintNamed {
+  /** Return a stable label. */
+  open func label(): string;
+}
+
+/** Stronger child constraint used when forwarding to a weaker parent. */
+open spec PackageSpecConstraintStrong: PackageSpecConstraintNamed {}
+
+/** Concrete type satisfying the stronger owner constraint. */
+open type PackageSpecConstraintToken: PackageSpecConstraintStrong {
+  /** Stored label. */
+  open let value: string;
+
+  /** Construct one token. */
+  func PackageSpecConstraintToken(value: string) {
+    self.value = value;
+  }
+
+  /** Return the stored label. */
+  open func label(): string {
+    return self.value;
+  }
+}
+
+/** Two-parameter object contract whose first owner parameter is constrained. */
+open spec PackageSpecConstraintParent<T: PackageSpecConstraintNamed, U> {
+  /** Constrained payload. */
+  open let first: T;
+
+  /** Independent mutable payload. */
+  open var second: U;
+}
+
+/** Forward a stronger owner constraint to the weaker generic parent. */
+open spec PackageSpecConstraintChild<T: PackageSpecConstraintStrong, U>:
+  PackageSpecConstraintParent<T, U> {}
+
+/** Generic implementation of the constrained child contract. */
+open type PackageSpecConstraintPair<T: PackageSpecConstraintStrong, U>:
+  PackageSpecConstraintChild<T, U> {
+  /** Constrained payload implementation. */
+  open let first: T;
+
+  /** Mutable payload implementation. */
+  open var second: U;
+
+  /** Construct one pair. */
+  func PackageSpecConstraintPair(first: T, second: U) {
+    self.first = first;
+    self.second = second;
+  }
+}
+
+/** Callable-form spec whose owner parameter carries an object constraint. */
+open spec PackageSpecConstraintFormatter<T: PackageSpecConstraintNamed>(
+  value: T
+): string;
+
+/** Generic formatter used as a closed callable value. */
+open func packageSpecConstraintFormat<T: PackageSpecConstraintNamed>(
+  value: T
+): string {
+  return value.label();
+}
+
+/** Union-form spec whose generic member is constrained. */
+open spec PackageSpecConstraintChoice<T: PackageSpecConstraintNamed>:
+  int | T;
+
+/** Enter the constrained generic member of the union. */
+open func packageSpecConstraintChoose<T: PackageSpecConstraintNamed>(
+  value: T
+): PackageSpecConstraintChoice<T> {
+  return value;
+}
+
+/** First member surface of the constrained generic intersection. */
+open spec PackageSpecConstraintReader<T> {
+  /** Read one value. */
+  open func read(value: T): string;
+}
+
+/** Second member surface of the constrained generic intersection. */
+open spec PackageSpecConstraintEcho<T> {
+  /** Echo one value. */
+  open func echo(value: T): T;
+}
+
+/** Intersection-form spec with a constrained owner parameter. */
+open spec PackageSpecConstraintComposite<T: PackageSpecConstraintNamed>:
+  PackageSpecConstraintReader<T> & PackageSpecConstraintEcho<T>;
+
+/** Concrete subject satisfying both intersection member surfaces. */
+open type PackageSpecConstraintOps:
+  PackageSpecConstraintReader<PackageSpecConstraintToken>,
+  PackageSpecConstraintEcho<PackageSpecConstraintToken> {
+  /** Read the token label. */
+  open func read(value: PackageSpecConstraintToken): string {
+    return value.label();
+  }
+
+  /** Echo the token. */
+  open func echo(
+    value: PackageSpecConstraintToken
+  ): PackageSpecConstraintToken {
+    return value;
+  }
+}
+
+/** Consume the imported constrained intersection through its merged witness. */
+open func packageSpecConstraintUseComposite<
+  U: PackageSpecConstraintComposite<PackageSpecConstraintToken>
+>(subject: U, value: PackageSpecConstraintToken): string {
+  return subject.read(subject.echo(value));
+}

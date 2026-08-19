@@ -225,7 +225,9 @@ let host = Host<int>();
 
 如果直接在 closed `Host<int>` 注册时关闭整个 fit dep set，含 `U` 的依赖并没有具体
 方法调用实参，不能正确关闭。泛型 fit 因此涉及“依赖集合的参数域与 descriptor 归属”
-问题，不是 generic type 已有 member dep set 的简单漏用。
+问题，不是 generic type 已有 member dep set 的简单漏用。后续通用修复由
+[Feng 泛型 fit 成员 reifiable dependency 闭合修复开发文档](./feng-generic-fit-member-reifiable-dependency-bugfix.md)
+单独跟踪。
 
 本次不得通过跳过未闭合项、按参数名判断或只处理 `T` 等特判绕过。泛型 fit 应另立
 专项，在确认其 member-level dependency 归属方案后修复；本文件只记录这个已确认边界，

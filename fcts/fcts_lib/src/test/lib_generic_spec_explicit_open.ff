@@ -1,0 +1,63 @@
+open module fcts_lib.test.generic_spec_explicit_open;
+
+/** Imported generic parent whose members are explicitly public requirements. */
+open spec PackageExplicitOpenBase<T> {
+  /** Preserve the initial value. */
+  open let initial: T;
+
+  /** Mutable value exposed through the spec witness. */
+  open var value: T;
+
+  /** Replace and return the current value. */
+  open func replace(next: T): T;
+
+  /** Default value for this closed implementation type. */
+  open static let empty: T;
+
+  /** Mutable static value for this closed implementation type. */
+  open static var current: T;
+}
+
+/** Imported child proving explicit-open requirements survive parent recovery. */
+open spec PackageExplicitOpenSurface<T>: PackageExplicitOpenBase<T> {
+  /** Read the mutable value. */
+  open func read(): T;
+
+  /** Echo a value through a static witness slot. */
+  open static func echo(value: T): T;
+}
+
+/** Exercise imported instance fields and methods from provider shared code. */
+open func packageExplicitOpenReplace<T>(
+  subject: PackageExplicitOpenSurface<T>,
+  next: T
+): T {
+  subject.value = next;
+  return subject.replace(next);
+}
+
+/** Exercise imported static fields and methods from provider shared code. */
+open func packageExplicitOpenStatic<
+  T,
+  U: PackageExplicitOpenSurface<T>
+>(value: T): T {
+  U.current = U.echo(value);
+  return U.current;
+}
+
+/** Read an immutable static field through the imported generic constraint. */
+open func packageExplicitOpenEmpty<
+  T,
+  U: PackageExplicitOpenSurface<T>
+>(): T {
+  return U.empty;
+}
+
+/** Exercise inherited address-ABI fields through a constrained subject. */
+open func packageExplicitOpenAccumulate<
+  U: PackageExplicitOpenSurface<int>
+>(subject: U, amount: int): int {
+  subject.value += amount;
+  U.current += amount;
+  return subject.value + U.current;
+}

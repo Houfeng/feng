@@ -52,6 +52,8 @@ func main(args: string[]) {
       test_generic_factory_target_inference();
       test_generic_fit_subject();
       test_generic_spec_implementation();
+      test_generic_spec_explicit_open();
+      test_generic_spec_owner_constraint();
       test_generic_owner_method_dependency();
       test_generic_owner_method_constraint();
       test_generic_remaining_representation();

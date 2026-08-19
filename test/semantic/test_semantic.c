@@ -16207,6 +16207,24 @@ static void test_spec_requirement_implementation_visibility_matrix(void) {
             "spec Contract { func value(): int; }\n"
             "type Value {}\n"
             "fit Value: Contract { seal func value(): int { return 1; } }\n"
+        },
+        {
+            "spec_explicit_open_generic_seal_type_method.ff",
+            "module demo.spec_seal.explicit_open_generic_type;\n"
+            "spec Contract<T> { open func value(): T; }\n"
+            "type Value<T>: Contract<T> {\n"
+            "    let stored: T;\n"
+            "    seal func value(): T { return self.stored; }\n"
+            "}\n"
+        },
+        {
+            "spec_explicit_open_generic_seal_fit_static_method.ff",
+            "module demo.spec_seal.explicit_open_generic_fit;\n"
+            "spec Contract<T> { open static func echo(value: T): T; }\n"
+            "type Value<T> {}\n"
+            "fit Value<T>: Contract<T> {\n"
+            "    seal static func echo(value: T): T { return value; }\n"
+            "}\n"
         }
     };
     FengProgram *program = parse_program_or_die("spec_seal_visibility_allowed.ff",

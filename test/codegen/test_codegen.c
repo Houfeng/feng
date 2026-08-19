@@ -12193,6 +12193,104 @@ static void test_object_spec_upcast_witness_and_lowering_codegen(void) {
     feng_program_free(program);
 }
 
+/* Generic spec fields keep the declaration-selected address ABI after the
+ * owner and implementation close. Cover open/closed constraint receivers,
+ * ordinary spec values, inherited fields, static state initialization, and
+ * exact default-parent projection identity in one generated C translation
+ * unit. */
+static void test_generic_spec_field_stable_address_abi_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_spec_field_abi;\n"
+        "spec Base<T> {\n"
+        "    let initial: T;\n"
+        "    var value: T;\n"
+        "    static let empty: T;\n"
+        "    static var current: T;\n"
+        "}\n"
+        "spec Child<T>: Base<T> {}\n"
+        "type Holder<T>: Child<T> {\n"
+        "    let initial: T;\n"
+        "    var value: T;\n"
+        "    static let empty: T;\n"
+        "    static var current: T;\n"
+        "    func Holder(value: T) {\n"
+        "        self.initial = value;\n"
+        "        self.value = value;\n"
+        "    }\n"
+        "}\n"
+        "func openWrite<T, U: Child<T>>(subject: U, next: T): T {\n"
+        "    subject.value = next;\n"
+        "    U.current = next;\n"
+        "    return U.current;\n"
+        "}\n"
+        "func closedCompound<U: Child<int>>(subject: U): int {\n"
+        "    subject.value += 1;\n"
+        "    U.current += 2;\n"
+        "    return subject.value + U.current;\n"
+        "}\n"
+        "func specWrite(subject: Child<int>): int {\n"
+        "    subject.value = 5;\n"
+        "    subject.value += 1;\n"
+        "    return subject.value;\n"
+        "}\n"
+        "func run_case(): int {\n"
+        "    let ints = Holder<int>(1);\n"
+        "    let intView: Child<int> = ints;\n"
+        "    let strings = Holder<string>(\"value\");\n"
+        "    let stringView: Child<string> = strings;\n"
+        "    let first = openWrite<int, Holder<int>>(ints, 3);\n"
+        "    let second = openWrite<string, Holder<string>>(strings, \"next\");\n"
+        "    let third = closedCompound<Holder<int>>(ints);\n"
+        "    if second != stringView.value { return 0; }\n"
+        "    return first + third + specWrite(intView);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "generic_spec_field_abi.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    bool semantic_ok = feng_semantic_analyze(
+        programs, 1U, FENG_COMPILE_TARGET_LIB,
+        &analysis, &errors, &error_count);
+    if (!semantic_ok || error_count != 0U) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "semantic error (generic spec field ABI): %s: %s\n",
+                    errors[index].code != NULL ? errors[index].code : "(none)",
+                    errors[index].message != NULL
+                        ? errors[index].message
+                        : "(unknown)");
+        }
+    }
+    ASSERT(semantic_ok);
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &output, &codegen_error)) {
+        fprintf(stderr, "codegen error (generic spec field ABI): %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "unknown codegen error");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "void (*get_current)(void *_out);") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "void (*set_current)(const void * value);") != NULL);
+    ASSERT(strstr(output.c_source, "->get_current(&") != NULL);
+    ASSERT(strstr(output.c_source, "->borrow_value(") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -12226,6 +12324,7 @@ int main(void) {
     test_generic_param_static_field_read_codegen();
     test_generic_param_static_field_write_codegen();
     test_spec_inherited_static_slot_codegen();
+    test_generic_spec_field_stable_address_abi_codegen();
     test_module_binding_default_zero_ensure_init_codegen();
     test_extern_calling_convention_codegen();
     test_extern_c_symbol_name_codegen();

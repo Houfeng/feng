@@ -10954,6 +10954,144 @@ static const FengTypeMember *find_spec_object_member(const ResolveContext *conte
                                               NULL);
 }
 
+/* Exact instantiated surface for one member selected through a spec value or
+ * generic constraint. `declaring_spec_type_ref` carries the owner arguments
+ * after object-parent or intersection-member projection; member signature
+ * substitution must use this ref rather than the outer constraint ref. */
+typedef struct SpecMemberSurface {
+    const FengTypeMember *member;
+    const FengDecl *declaring_spec;
+    const FengTypeRef *declaring_spec_type_ref;
+} SpecMemberSurface;
+
+/* Find the first named member while preserving the exact generic path from
+ * `spec_type_ref` to the spec that declares it. Object-form parents and
+ * intersection-form members are both type-ref edges, so the same recursive
+ * substitution rule handles direct, inherited, nested, reordered and fixed
+ * owner arguments. Declaration validation has already rejected cycles. */
+static bool find_spec_member_surface_for_instance(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    FengSlice name,
+    bool include_static,
+    SpecMemberSurface *out_surface) {
+    if (out_surface == NULL || spec_decl == NULL ||
+        spec_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+
+    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        const FengDecl *declaring_spec = NULL;
+        const FengTypeMember *member = find_spec_object_member_with_owner(
+            context, spec_decl, name, include_static, &declaring_spec);
+        const FengTypeRef *declaring_ref = spec_type_ref;
+
+        if (member == NULL || declaring_spec == NULL) {
+            return false;
+        }
+        if (declaring_spec != spec_decl) {
+            declaring_ref = instantiate_parent_spec_ref_for_instance(
+                context, spec_decl, spec_type_ref, declaring_spec);
+        }
+        out_surface->member = member;
+        out_surface->declaring_spec = declaring_spec;
+        out_surface->declaring_spec_type_ref = declaring_ref;
+        return true;
+    }
+
+    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        size_t member_index;
+
+        for (member_index = 0U;
+             member_index < spec_decl->as.spec_decl.as.intersection_form.member_count;
+             ++member_index) {
+            const FengTypeRef *declared_member_ref =
+                spec_decl->as.spec_decl.as.intersection_form.members[member_index];
+            const FengTypeRef *member_ref =
+                substitute_spec_member_type_ref_for_instance(
+                    context, spec_decl, spec_type_ref, declared_member_ref);
+            const FengDecl *member_decl = resolve_type_ref_decl(context, member_ref);
+
+            if (member_decl != NULL && member_decl->kind == FENG_DECL_SPEC &&
+                find_spec_member_surface_for_instance(context,
+                                                      member_decl,
+                                                      member_ref,
+                                                      name,
+                                                      include_static,
+                                                      out_surface)) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+/* Resolve a bare active type parameter to its complete declared spec
+ * constraint. The constraint ref, not the parameter name, is the root of all
+ * subsequent owner-argument projection. */
+static bool resolve_generic_param_spec_constraint(
+    const ResolveContext *context,
+    InferredExprType owner_type,
+    const FengDecl **out_spec_decl,
+    const FengTypeRef **out_spec_type_ref) {
+    const TypeParamEntry *type_param;
+    const FengDecl *constraint_decl;
+
+    if (out_spec_decl == NULL || out_spec_type_ref == NULL) {
+        return false;
+    }
+    *out_spec_decl = NULL;
+    *out_spec_type_ref = NULL;
+    if (owner_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        owner_type.type_ref == NULL ||
+        owner_type.type_ref->kind != FENG_TYPE_REF_NAMED ||
+        owner_type.type_ref->as.named.segment_count != 1U ||
+        owner_type.type_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+
+    type_param = find_type_param(
+        context, owner_type.type_ref->as.named.segments[0]);
+    if (type_param == NULL || type_param->type_param == NULL ||
+        type_param->type_param->constraint == NULL) {
+        return false;
+    }
+    constraint_decl = resolve_type_ref_decl(
+        context, type_param->type_param->constraint);
+    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+
+    *out_spec_decl = constraint_decl;
+    *out_spec_type_ref = type_param->type_param->constraint;
+    return true;
+}
+
+/* Resolve one member selected from a generic parameter value through the
+ * parameter's exact constraint instance. */
+static bool find_generic_param_spec_member_surface(
+    ResolveContext *context,
+    InferredExprType owner_type,
+    FengSlice name,
+    bool include_static,
+    SpecMemberSurface *out_surface) {
+    const FengDecl *constraint_decl = NULL;
+    const FengTypeRef *constraint_ref = NULL;
+
+    return resolve_generic_param_spec_constraint(context,
+                                                 owner_type,
+                                                 &constraint_decl,
+                                                 &constraint_ref) &&
+           find_spec_member_surface_for_instance(context,
+                                                 constraint_decl,
+                                                 constraint_ref,
+                                                 name,
+                                                 include_static,
+                                                 out_surface);
+}
+
 /* Build the semantic identity of the current generic type declaration using
  * its own active parameters, for example Helper<T> while resolving Helper. */
 static FriendTypeIdentity *build_friend_subject_for_type_decl(
@@ -16700,18 +16838,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
             }
 
             /* G4: instance method dispatch on a generic type parameter value
-             * — v.method() where v: T and T's constraint is a spec. Resolve
-             * the method through the constraint spec's method set and infer
-             * the return type. For generic OBJECT-form constraints (e.g.
-             * `K: Cloneable<K>`), substitute the spec's own type params with
-             * the constraint ref's type args (so `Cloneable<T>.cloneValue():T`
-             * becomes `K` when the constraint is `Cloneable<K>`). For
-             * INTERSECTION-form constraints, search each flattened member
-             * spec's closure (9.8 members are non-generic, so the return type
-             * is cloned as-is). Codegen resolves the call independently
-             * through the generic param descriptor's witness table
-             * (cg_emit_call line 15967+), so this path only provides type
-             * inference. */
+             * — v.method() where v: T and T's constraint is a spec. Preserve
+             * the exact type-ref path from the constraint to the member's
+             * declaring object spec before closing its return type. This is
+             * the same surface rule used by generic-parameter field access.
+             * Codegen independently dispatches through the generic parameter
+             * descriptor's witness table; this path supplies type inference. */
             if (resolution.kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 owner_type_decl == NULL &&
                 owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
@@ -16719,86 +16851,39 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                 owner_type.type_ref->kind == FENG_TYPE_REF_NAMED &&
                 owner_type.type_ref->as.named.segment_count == 1U &&
                 owner_type.type_ref->as.named.type_arg_count == 0U) {
-                const TypeParamEntry *tp =
-                    find_type_param(context, owner_type.type_ref->as.named.segments[0]);
+                SpecMemberSurface surface;
 
-                if (tp != NULL && tp->type_param != NULL &&
-                    tp->type_param->constraint != NULL) {
-                    const FengDecl *constraint_decl =
-                        resolve_type_ref_decl(context, tp->type_param->constraint);
+                memset(&surface, 0, sizeof(surface));
+                if (find_generic_param_spec_member_surface(
+                        context,
+                        owner_type,
+                        callee->as.member.member,
+                        /*include_static=*/false,
+                        &surface) &&
+                    surface.member->kind == FENG_TYPE_MEMBER_METHOD) {
+                    const FengCallableSignature *spec_sig =
+                        &surface.member->as.callable;
 
-                    if (constraint_decl != NULL &&
-                        constraint_decl->kind == FENG_DECL_SPEC) {
-                        const FengTypeMember *spec_member = NULL;
-                        /* The spec decl that actually owns spec_member (used to
-                         * pick the right type_params for substitution). For
-                         * OBJECT-form this is constraint_decl itself; for
-                         * INTERSECTION-form it is the flattened member where
-                         * the method was found. */
-                        const FengDecl *member_owner_decl = NULL;
+                    if (spec_sig->return_type != NULL) {
+                        InferredExprType declaring_owner =
+                            surface.declaring_spec_type_ref != NULL
+                                ? inferred_expr_type_from_type_ref(
+                                      surface.declaring_spec_type_ref)
+                                : inferred_expr_type_from_decl(
+                                      surface.declaring_spec);
+                        const FengTypeRef *closed_return =
+                            substitute_callable_return_type_for_call(
+                                context,
+                                surface.declaring_spec,
+                                NULL,
+                                declaring_owner,
+                                expr,
+                                spec_sig,
+                                false);
 
-                        if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
-                            spec_member = find_spec_object_member(context,
-                                                                  constraint_decl,
-                                                                  callee->as.member.member,
-                                                                  /*include_static=*/false);
-                            member_owner_decl = constraint_decl;
-                        } else if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
-                            const FengIntersectionSpecInfo *info =
-                                feng_semantic_lookup_intersection_spec_info(
-                                    context->analysis, constraint_decl);
-                            if (info != NULL) {
-                                size_t mi;
-                                for (mi = 0U;
-                                     mi < info->flattened_member_count && spec_member == NULL;
-                                     ++mi) {
-                                    spec_member = find_spec_object_member(context,
-                                                                          info->flattened_members[mi],
-                                                                          callee->as.member.member,
-                                                                          /*include_static=*/false);
-                                    if (spec_member != NULL) {
-                                        member_owner_decl = info->flattened_members[mi];
-                                    }
-                                }
-                            }
-                        }
-                        if (spec_member != NULL &&
-                            spec_member->kind == FENG_TYPE_MEMBER_METHOD &&
-                            member_owner_decl != NULL) {
-                            const FengCallableSignature *spec_sig = &spec_member->as.callable;
-
-                            if (spec_sig->return_type != NULL) {
-                                const FengTypeRef *constraint_ref =
-                                    tp->type_param->constraint;
-                                const FengTypeRef *declaring_ref =
-                                    constraint_decl == member_owner_decl
-                                        ? constraint_ref
-                                        : instantiate_parent_spec_ref_for_instance(
-                                              context,
-                                              constraint_decl,
-                                              constraint_ref,
-                                              member_owner_decl);
-                                InferredExprType declaring_owner =
-                                    declaring_ref != NULL
-                                        ? inferred_expr_type_from_type_ref(
-                                              declaring_ref)
-                                        : inferred_expr_type_from_decl(
-                                              member_owner_decl);
-                                const FengTypeRef *closed_return =
-                                    substitute_callable_return_type_for_call(
-                                        context,
-                                        member_owner_decl,
-                                        NULL,
-                                        declaring_owner,
-                                        expr,
-                                        spec_sig,
-                                        false);
-
-                                if (closed_return != NULL) {
-                                    return inferred_expr_type_from_type_ref(
-                                        closed_return);
-                                }
-                            }
+                        if (closed_return != NULL) {
+                            return inferred_expr_type_from_type_ref(
+                                closed_return);
                         }
                     }
                 }
@@ -18624,9 +18709,34 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
     }
 
     InferredExprType owner_type = infer_expr_type(context, expr->as.member.object);
-    const FengDecl *owner_type_decl =
-        resolve_inferred_expr_type_decl(context, owner_type);
+    const FengDecl *owner_type_decl;
     const FengTypeMember *field_member;
+
+    {
+        SpecMemberSurface surface;
+
+        memset(&surface, 0, sizeof(surface));
+        if (find_generic_param_spec_member_surface(
+                context,
+                owner_type,
+                expr->as.member.member,
+                /*include_static=*/false,
+                &surface) &&
+            surface.member->kind == FENG_TYPE_MEMBER_FIELD) {
+            const FengTypeRef *closed_field =
+                substitute_spec_member_type_ref_for_instance(
+                    context,
+                    surface.declaring_spec,
+                    surface.declaring_spec_type_ref,
+                    surface.member->as.field.type);
+
+            return closed_field != NULL
+                       ? inferred_expr_type_from_type_ref(closed_field)
+                       : inferred_expr_type_unknown();
+        }
+    }
+
+    owner_type_decl = resolve_inferred_expr_type_decl(context, owner_type);
 
     if (owner_type_decl == NULL) {
         return inferred_expr_type_unknown();

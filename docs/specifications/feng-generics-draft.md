@@ -393,7 +393,8 @@ spec Reader<T: Bar> { ... }
 - 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
 - 类型参数可选择声明泛型约束，语法为 `T: SomeSpec`；无约束时直接写作 `T`。
 - 当前阶段每个类型参数至多声明一个泛型约束。
-- 泛型约束只能是 `spec` 引用，包括 object-form、callable-form 和 union-form。
+- 泛型约束只能是 `spec` 引用，包括 object-form、callable-form、union-form 和
+  intersection-form。
 - 当调用点省略显式类型实参时，编译器必须尝试执行泛型推导。
 - 泛型推导至少可利用三类信息：实参位置上的已知类型、方法接收者的静态类型，以及当前表达式所在位置已知的目标类型。
 - 泛型顶层函数或实例方法作为 callable value 时不执行上述省略推导；必须使用 `function<TypeArgs...>` 或 `object.method<TypeArgs...>` 显式提供完整类型实参，并由明确的 callable-form `spec` 目标承载该闭合值。
@@ -403,6 +404,9 @@ spec Reader<T: Bar> { ... }
 - 若泛型约束是 object-form `spec`，则该类型参数在泛型声明体内可按该 `spec` 已声明的字段与行为签名使用。
 - 若泛型约束是 callable-form `spec`，则该类型参数在泛型声明体内可按该可调用签名直接调用。
 - 若泛型约束是 union-form `spec`，则该类型参数在泛型声明体内遵循 union-form 的既有规则；是否允许成员访问、比较或其他操作，仍取决于 union-form 自身是否要求先收窄。
+- 若泛型约束是 intersection-form `spec`，则该类型参数在泛型声明体内按
+  intersection-form 合并后的成员表面与 witness 使用；冲突与缺项继续遵循
+  intersection-form 的既有规则。
 - 约束语法不引入新的结构匹配或鸭子类型语义；它只表示“该类型参数在当前泛型声明体内可按泛型约束已有语义使用”。
 - 在 `spec Child: Parent<int>`、`spec Child<T>: Parent<T>` 这类父 `spec` 列表中，`Parent<int>`、`Parent<T>` 都属于对泛型 `spec` 的使用，而不是新的类型参数定义。
 - 因此，父 `spec` 列表允许写具体类型实参，也允许把当前 `spec` 自己的类型参数继续传递给父泛型 `spec`。
@@ -442,7 +446,8 @@ spec Reader<T: Bar> { ... }
 - [必须] 泛型参数定义位置必须写参数名；具体 `type` 或 `spec` 引用都不能直接写在参数列表中。
 - [必须] 约束类型参数使用 `T: SomeSpec` 语法；无约束类型参数直接写作 `T`。
 - [必须] 当前阶段每个类型参数至多声明一个泛型约束。
-- [必须] 泛型约束只能是 `spec` 引用，包括 object-form、callable-form 和 union-form。
+- [必须] 泛型约束只能是 `spec` 引用，包括 object-form、callable-form、union-form 和
+  intersection-form。
 - [必须] 当调用点省略显式类型实参时，编译器必须尝试推导全部类型参数；若不能唯一确定，则编译期报错。
 - [必须] 类型构造调用未显式携带类型实参时，构造目标必须按 `(name, arity=0)` 精确解析；函数或方法的调用点泛型推导不得用于推导构造目标所属 `type` 的类型参数。
 - [必须] 在 `spec Child: Parent<int>` 或 `spec Child<T>: Parent<T>` 中，父 `spec` 列表右侧属于泛型 `spec` 使用位置，不属于类型参数定义位置。
@@ -559,7 +564,9 @@ spec Reader<T: Bar> { ... }
 
 - 为每个泛型声明建立独立的类型参数作用域，并把类型参数作为可解析名字引入该作用域。
 - 为每个带约束的类型参数记录其泛型约束；该泛型约束必须是任意 form 的 `spec` 引用。
-- 若泛型约束是 object-form `spec`，在泛型声明体内按该 `spec` 视角提供可见成员集；若是 callable-form `spec`，则提供可调用签名；若是 union-form `spec`，则继续复用 union-form 的既有访问/收窄规则。
+- 若泛型约束是 object-form `spec`，在泛型声明体内按该 `spec` 视角提供可见成员集；若是
+  callable-form `spec`，则提供可调用签名；若是 union-form `spec`，则继续复用 union-form
+  的既有访问/收窄规则；若是 intersection-form `spec`，则使用合并后的成员表面与 witness。
 - 在分析 `spec Child: Parent<int>` 或 `spec Child<T>: Parent<T>` 时，把 `Parent<...>` 视为父 `spec` 的实例化使用，并沿用 `spec` 既有继承/满足链规则。
 - 若子 `spec` 向父泛型 `spec` 传递自己的类型参数，则在当前声明处验证该传递是否满足父 `spec` 的对应约束；不得等到某个后续具体实例化点再补做。
 - 若当前类型参数自身已经带有更强泛型约束，则在需要满足父 `spec` 约束时，进一步基于该泛型约束已声明的满足关系完成证明。

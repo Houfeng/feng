@@ -1,0 +1,150 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_spec_owner_constraint;
+
+/** Same-package base constraint for a generic object-form spec owner. */
+spec LocalSpecConstraintNamed {
+  /** Return a stable label. */
+  func label(): string;
+}
+
+/** Same-package stronger constraint. */
+spec LocalSpecConstraintStrong: LocalSpecConstraintNamed {}
+
+/** Same-package concrete constrained argument. */
+type LocalSpecConstraintToken: LocalSpecConstraintStrong {
+  /** Stored label. */
+  let value: string;
+
+  /** Construct one token. */
+  func LocalSpecConstraintToken(value: string) {
+    self.value = value;
+  }
+
+  /** Return the stored label. */
+  func label(): string {
+    return self.value;
+  }
+}
+
+/** Same-package multi-parameter parent with one constrained owner parameter. */
+spec LocalSpecConstraintParent<T: LocalSpecConstraintNamed, U> {
+  /** Constrained payload. */
+  let first: T;
+
+  /** Independent mutable payload. */
+  var second: U;
+}
+
+/** Forward the stronger owner constraint to the weaker generic parent. */
+spec LocalSpecConstraintChild<T: LocalSpecConstraintStrong, U>:
+  LocalSpecConstraintParent<T, U> {}
+
+/** Same-package generic implementation. */
+type LocalSpecConstraintPair<T: LocalSpecConstraintStrong, U>:
+  LocalSpecConstraintChild<T, U> {
+  /** Constrained payload implementation. */
+  let first: T;
+
+  /** Mutable payload implementation. */
+  var second: U;
+
+  /** Construct one pair. */
+  func LocalSpecConstraintPair(first: T, second: U) {
+    self.first = first;
+    self.second = second;
+  }
+}
+
+/** Mutate a constrained multi-parameter object spec through a generic subject. */
+func localSpecConstraintUpdate<
+  T: LocalSpecConstraintStrong,
+  U,
+  V: LocalSpecConstraintChild<T, U>
+>(subject: V, next: U): string {
+  subject.second = next;
+  return subject.first.label();
+}
+
+/** Verify every legal generic-spec owner-constraint form. */
+open func test_generic_spec_owner_constraint(): void {
+  describe("generic spec owner parameter constraints", () {
+    test("same-package object form forwards strong constraints", () {
+      let token = LocalSpecConstraintToken("local");
+      let pair = LocalSpecConstraintPair<
+        LocalSpecConstraintToken,
+        int
+      >(token, 1);
+      let child: LocalSpecConstraintChild<
+        LocalSpecConstraintToken,
+        int
+      > = pair;
+      let parent: LocalSpecConstraintParent<
+        LocalSpecConstraintToken,
+        int
+      > = child;
+
+      assert(localSpecConstraintUpdate<
+               LocalSpecConstraintToken,
+               int,
+               LocalSpecConstraintPair<LocalSpecConstraintToken, int>
+             >(pair, 2) == "local" &&
+             child.second == 2 && parent.first.label() == "local",
+             "multi-parameter child preserves constrained parent mapping");
+    });
+
+    test("package object constraint metadata survives FT recovery", () {
+      let token = PackageSpecConstraintToken("package-object");
+      let pair = PackageSpecConstraintPair<
+        PackageSpecConstraintToken,
+        string
+      >(token, "before");
+      let child: PackageSpecConstraintChild<
+        PackageSpecConstraintToken,
+        string
+      > = pair;
+      let parent: PackageSpecConstraintParent<
+        PackageSpecConstraintToken,
+        string
+      > = child;
+
+      parent.second = "after";
+      assert(child.first.label() == "package-object" &&
+             child.second == "after",
+             "imported object spec restores owner and parent constraints");
+    });
+
+    test("package callable owner constraint closes normally", () {
+      let token = PackageSpecConstraintToken("package-callable");
+      let formatter: PackageSpecConstraintFormatter<
+        PackageSpecConstraintToken
+      > = packageSpecConstraintFormat<PackageSpecConstraintToken>;
+
+      assert(formatter(token) == "package-callable",
+             "imported callable spec accepts its constrained argument");
+    });
+
+    test("package union owner constraint preserves narrowing", () {
+      let choice = packageSpecConstraintChoose(
+        PackageSpecConstraintToken("package-union")
+      );
+
+      if choice match let token: PackageSpecConstraintToken {
+        assert(token.label() == "package-union",
+               "imported union closes its constrained member");
+      } else {
+        assert(false, "constrained union keeps the selected member");
+      }
+    });
+
+    test("package intersection owner constraint builds merged witness", () {
+      let ops = PackageSpecConstraintOps();
+      let token = PackageSpecConstraintToken("package-intersection");
+
+      assert(packageSpecConstraintUseComposite(ops, token) ==
+               "package-intersection",
+             "imported intersection closes its constrained member specs");
+    });
+  });
+}

@@ -276,8 +276,9 @@ type Stream: ReadWrite {}
 - spec 静态方法与实例方法一样，当前均不得自己声明方法级泛参；泛型 spec owner
   的类型参数仍可用于静态方法签名。Parser 继续识别方法泛参语法，Semantic 必须
   在 object-form spec 成员签名检查处拒绝。spec 静态方法支持重载，规则与 `type`
-  中静态方法一致；spec 静态成员允许 `seal`,不允许显式
-  `open`,并使用与实例成员相同的满足兼容和访问域规则。
+  中静态方法一致；spec 静态成员允许显式 `open` 或 `seal`。显式 `open` 与省略
+  修饰符均为公开 requirement，`seal` 收窄 spec 访问面；静态成员使用与实例成员
+  相同的满足兼容和访问域规则。
 - spec 方法名可以与 spec 名相同（包括静态方法和实例方法）,视为普通方法; spec 一律不允许 `~` 前缀的方法（终结器只允许用于 `type`）。
 - spec 静态字段的满足来源只能是 `type` 自身（`fit` 不得声明 `static let` / `static var`）; spec 静态方法的满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - spec 静态字段匹配采用"名称 + 绑定方式（`let` / `var`） + 类型完全一致"规则;

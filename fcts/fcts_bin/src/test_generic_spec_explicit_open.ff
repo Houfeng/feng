@@ -1,0 +1,305 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_spec_explicit_open;
+
+/** Same-package generic contract with every member kind explicitly open. */
+spec LocalExplicitOpenSurface<T> {
+  /** Preserve the initial value. */
+  open let initial: T;
+
+  /** Mutable value exposed through the spec witness. */
+  open var value: T;
+
+  /** Read the mutable value. */
+  open func read(): T;
+
+  /** Replace and return the mutable value. */
+  open func replace(next: T): T;
+
+  /** Default value for this closed implementation type. */
+  open static let empty: T;
+
+  /** Mutable static value for this closed implementation type. */
+  open static var current: T;
+
+  /** Echo a value through a static witness slot. */
+  open static func echo(value: T): T;
+}
+
+/** Same-package direct generic implementation. */
+type LocalExplicitOpenDirect<T>: LocalExplicitOpenSurface<T> {
+  /** Initial value. */
+  open let initial: T;
+
+  /** Mutable value. */
+  open var value: T;
+
+  /** Default static value. */
+  open static let empty: T;
+
+  /** Per-closed-type mutable static value. */
+  open static var current: T;
+
+  /** Construct one direct implementation. */
+  func LocalExplicitOpenDirect(value: T) {
+    self.initial = value;
+    self.value = value;
+  }
+
+  /** Read the mutable value. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Replace and return the mutable value. */
+  open func replace(next: T): T {
+    self.value = next;
+    return self.value;
+  }
+
+  /** Echo a value. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Same-package generic target whose relation is supplied by a fit. */
+type LocalExplicitOpenFit<T> {
+  /** Initial value used to satisfy the field requirement. */
+  open let initial: T;
+
+  /** Mutable value used to satisfy the field requirement. */
+  open var value: T;
+
+  /** Default static value used to satisfy the static field requirement. */
+  open static let empty: T;
+
+  /** Mutable static value used to satisfy the static field requirement. */
+  open static var current: T;
+
+  /** Construct one fit-backed implementation. */
+  func LocalExplicitOpenFit(value: T) {
+    self.initial = value;
+    self.value = value;
+  }
+}
+
+/** Same-package generic fit satisfying explicit-open methods. */
+fit LocalExplicitOpenFit<T>: LocalExplicitOpenSurface<T> {
+  /** Read the target's mutable field. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Replace and return the target's mutable field. */
+  open func replace(next: T): T {
+    self.value = next;
+    return self.value;
+  }
+
+  /** Echo a value through the fit static method. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Consumer-local direct implementation of an imported generic spec. */
+type PackageExplicitOpenDirect<T>: PackageExplicitOpenSurface<T> {
+  /** Initial value. */
+  open let initial: T;
+
+  /** Mutable value. */
+  open var value: T;
+
+  /** Default static value. */
+  open static let empty: T;
+
+  /** Per-closed-type mutable static value. */
+  open static var current: T;
+
+  /** Construct one imported-spec implementation. */
+  func PackageExplicitOpenDirect(value: T) {
+    self.initial = value;
+    self.value = value;
+  }
+
+  /** Read the mutable value. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Replace and return the mutable value. */
+  open func replace(next: T): T {
+    self.value = next;
+    return self.value;
+  }
+
+  /** Echo a value. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Consumer-local fit target for an imported generic spec. */
+type PackageExplicitOpenFit<T> {
+  /** Initial value used to satisfy the imported field requirement. */
+  open let initial: T;
+
+  /** Mutable value used to satisfy the imported field requirement. */
+  open var value: T;
+
+  /** Default static value used to satisfy the imported static requirement. */
+  open static let empty: T;
+
+  /** Mutable static value used to satisfy the imported static requirement. */
+  open static var current: T;
+
+  /** Construct one imported-spec fit target. */
+  func PackageExplicitOpenFit(value: T) {
+    self.initial = value;
+    self.value = value;
+  }
+}
+
+/** Consumer-local fit satisfying a generic spec restored from the package. */
+fit PackageExplicitOpenFit<T>: PackageExplicitOpenSurface<T> {
+  /** Read the target's mutable field. */
+  open func read(): T {
+    return self.value;
+  }
+
+  /** Replace and return the target's mutable field. */
+  open func replace(next: T): T {
+    self.value = next;
+    return self.value;
+  }
+
+  /** Echo a value through the fit static method. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Exercise same-package static requirements through a generic constraint. */
+func localExplicitOpenStatic<T, U: LocalExplicitOpenSurface<T>>(
+  value: T
+): T {
+  U.current = U.echo(value);
+  return U.current;
+}
+
+/** Exercise an open owner field through a constrained implementation type. */
+func localExplicitOpenWrite<T, U: LocalExplicitOpenSurface<T>>(
+  subject: U,
+  value: T
+): T {
+  subject.value = value;
+  U.current = value;
+  return subject.value;
+}
+
+/** Exercise closed numeric address-ABI getter/setter and compound lowering. */
+func localExplicitOpenAccumulate<U: LocalExplicitOpenSurface<int>>(
+  subject: U,
+  amount: int
+): int {
+  subject.value += amount;
+  U.current += amount;
+  return subject.value + U.current;
+}
+
+/** Verify all direct explicit-open and generic-spec combinations. */
+open func test_generic_spec_explicit_open(): void {
+  describe("generic spec explicit-open requirements", () {
+    test("same-package generic type satisfies every member kind", () {
+      let direct = LocalExplicitOpenDirect<int>(11);
+      let view: LocalExplicitOpenSurface<int> = direct;
+
+      assert(view.initial == 11 && view.read() == 11,
+             "generic type exposes explicit-open instance requirements");
+      view.value = 12;
+      assert(view.replace(13) == 13 && view.read() == 13,
+             "generic type witness reads and writes the closed field type");
+      assert(localExplicitOpenStatic<int, LocalExplicitOpenDirect<int>>(14) == 14,
+             "generic type exposes explicit-open static requirements");
+      assert(localExplicitOpenWrite<
+               int,
+               LocalExplicitOpenDirect<int>
+             >(direct, 15) == 15,
+             "constrained generic receiver writes the open owner field");
+      view.value += 1;
+      assert(localExplicitOpenAccumulate<
+               LocalExplicitOpenDirect<int>
+             >(direct, 2) == 35 && view.value == 18,
+             "spec value and constrained receiver preserve compound writes");
+      assert(LocalExplicitOpenDirect<int>.empty == 0,
+             "generic type supplies the explicit-open static let requirement");
+    });
+
+    test("same-package generic fit satisfies every member kind", () {
+      let fitted = LocalExplicitOpenFit<string>("fit-initial");
+      let view: LocalExplicitOpenSurface<string> = fitted;
+
+      assert(view.initial == "fit-initial" && view.read() == "fit-initial",
+             "generic fit combines target fields with fit methods");
+      view.value = "fit-field";
+      assert(view.replace("fit-method") == "fit-method" &&
+             view.read() == "fit-method",
+             "generic fit witness preserves the owner type argument");
+      assert(localExplicitOpenStatic<
+               string,
+               LocalExplicitOpenFit<string>
+             >("fit-static") == "fit-static",
+             "generic fit supplies the explicit-open static method");
+      assert(localExplicitOpenWrite<
+               string,
+               LocalExplicitOpenFit<string>
+             >(fitted, "fit-generic") == "fit-generic" &&
+             view.read() == "fit-generic",
+             "generic fit field keeps the managed address ABI");
+      assert(LocalExplicitOpenFit<string>.empty == "",
+             "generic fit target supplies the explicit-open static let");
+    });
+
+    test("cross-package generic spec restores parent and member surfaces", () {
+      let direct = PackageExplicitOpenDirect<int>(21);
+      let directView: PackageExplicitOpenSurface<int> = direct;
+      let fitted = PackageExplicitOpenFit<string>("package-initial");
+      let fitView: PackageExplicitOpenSurface<string> = fitted;
+
+      assert(directView.initial == 21 &&
+             packageExplicitOpenReplace<int>(directView, 22) == 22 &&
+             directView.read() == 22,
+             "consumer type satisfies imported inherited requirements");
+      assert(fitView.initial == "package-initial" &&
+             packageExplicitOpenReplace<string>(fitView, "package-fit") ==
+               "package-fit" &&
+             fitView.read() == "package-fit",
+             "consumer fit satisfies imported inherited requirements");
+      assert(packageExplicitOpenStatic<
+               int,
+               PackageExplicitOpenDirect<int>
+             >(23) == 23,
+             "provider shared code dispatches to the consumer type witness");
+      assert(packageExplicitOpenStatic<
+               string,
+               PackageExplicitOpenFit<string>
+             >("package-static") == "package-static",
+             "provider shared code dispatches to the consumer fit witness");
+      assert(packageExplicitOpenEmpty<
+               int,
+               PackageExplicitOpenDirect<int>
+             >() == 0 &&
+             packageExplicitOpenEmpty<
+               string,
+               PackageExplicitOpenFit<string>
+             >() == "",
+             "imported explicit-open static let preserves the closed type");
+      assert(packageExplicitOpenAccumulate<
+               PackageExplicitOpenDirect<int>
+             >(direct, 2) == 49 && directView.value == 24,
+             "provider shared code preserves inherited compound field ABI");
+    });
+  });
+}
