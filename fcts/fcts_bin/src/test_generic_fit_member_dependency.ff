@@ -1,0 +1,190 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_fit_member_dependency;
+
+/** Managed dependency used by a same-package generic fit method. */
+type LocalFitMemberBox<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one managed dependency. */
+  func LocalFitMemberBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Distinct local dependency used by another method in the same fit. */
+type LocalFitMemberCell<T> {
+  /** Marker keeps this dependency layout distinct from the box. */
+  open let marker: string;
+
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one alternate managed dependency. */
+  func LocalFitMemberCell(value: T) {
+    self.marker = "cell";
+    self.value = value;
+  }
+}
+
+/** Aggregate dependency used by a local generic value fit. */
+@value
+type LocalFitMemberValue<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one aggregate dependency. */
+  func LocalFitMemberValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Aggregate dependency closed from owner and method parameters together. */
+@value
+type LocalFitMemberPair<T, U> {
+  /** Value closed by the fit target. */
+  open let ownerValue: T;
+
+  /** Value closed by the method call. */
+  open let methodValue: U;
+
+  /** Construct one combined dependency. */
+  func LocalFitMemberPair(ownerValue: T, methodValue: U) {
+    self.ownerValue = ownerValue;
+    self.methodValue = methodValue;
+  }
+}
+
+/** Same-package surface implemented by generic fit methods. */
+spec LocalFitMemberSurface<T> {
+  /** Read one subject value. */
+  func read(): T;
+}
+
+/** Same-package generic fit target. */
+type LocalFitMemberOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one fit target. */
+  func LocalFitMemberOwner(value: T) {
+    self.value = value;
+  }
+}
+
+/** Same-package fit with independent member dependency trees. */
+fit LocalFitMemberOwner<T>: LocalFitMemberSurface<T> {
+  /** Keep one owner-dependent method uncalled. */
+  func hiddenDependency(): T {
+    let dependency = LocalFitMemberBox<T>(self.value);
+    return dependency.value;
+  }
+
+  /** Satisfy the surface through the first managed tree. */
+  func read(): T {
+    let dependency = LocalFitMemberBox<T>(self.value);
+    return dependency.value;
+  }
+
+  /** Exercise a second managed tree in the same fit. */
+  func alternate(): T {
+    let dependency = LocalFitMemberCell<T>(self.value);
+    dependency.marker;
+    return dependency.value;
+  }
+
+  /** Exercise a static fit method with an owner-dependent tree. */
+  static func transform(value: T): T {
+    let dependency = LocalFitMemberBox<T>(value);
+    return dependency.value;
+  }
+
+  /** Close one dependency from owner T and method U together. */
+  func wrap<U>(value: U): U {
+    let dependency = LocalFitMemberPair<T, U>(self.value, value);
+    return dependency.methodValue;
+  }
+}
+
+/** Same-package value-semantics fit target. */
+@value
+type LocalFitMemberValueOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one value target. */
+  func LocalFitMemberValueOwner(value: T) {
+    self.value = value;
+  }
+}
+
+/** Same-package value fit using an aggregate dependency. */
+fit LocalFitMemberValueOwner<T>: LocalFitMemberSurface<T> {
+  /** Satisfy the surface through the aggregate tree. */
+  func read(): T {
+    let dependency = LocalFitMemberValue<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Read a local implementation through a spec witness. */
+func readLocalFitMember(value: LocalFitMemberSurface<int>): int {
+  return value.read();
+}
+
+/** Read an imported implementation through a spec witness. */
+func readPackageFitMember(value: PackageFitMemberSurface<int>): int {
+  return value.read();
+}
+
+/** Verify generic fit member dependency closure and routing. */
+open func test_generic_fit_member_dependency(): void {
+  describe("generic fit member dependencies", () {
+    test("same-package member descriptors stay independent", () {
+      let owner = LocalFitMemberOwner<int>(11);
+      let view: LocalFitMemberSurface<int> = owner;
+      let valueView: LocalFitMemberSurface<int> =
+        LocalFitMemberValueOwner<int>(12);
+      let explicit = owner.wrap<string>("explicit");
+      let inferred = owner.wrap("inferred");
+
+      assert(owner.value == 11,
+             "forming a closed owner registers an uncalled fit dependency");
+      assert(readLocalFitMember(view) == 11,
+             "a witness reaches the managed member descriptor");
+      assert(owner.alternate() == 11,
+             "a second method keeps its distinct managed descriptor");
+      assert(LocalFitMemberOwner<int>.transform(13) == 13,
+             "a static method binds its own member descriptor");
+      assert(readLocalFitMember(valueView) == 12,
+             "a value fit reaches its aggregate descriptor");
+      assert(explicit == "explicit" && inferred == "inferred",
+             "explicit and inferred method args close owner-plus-method trees");
+    });
+
+    test("package member metadata restores through ft", () {
+      let owner = PackageFitMemberOwner<int>(21);
+      let view: PackageFitMemberSurface<int> = owner;
+      let valueView: PackageFitMemberSurface<int> =
+        PackageFitMemberValueOwner<int>(22);
+      let explicit = owner.wrap<string>("package-explicit");
+      let inferred = owner.wrap("package-inferred");
+
+      assert(owner.value == 21,
+             "an imported closed owner registers an uncalled fit dependency");
+      assert(readPackageFitMember(view) == 21,
+             "an imported witness uses restored managed metadata");
+      assert(owner.alternate() == 21,
+             "an imported alternate method keeps its descriptor tree");
+      assert(PackageFitMemberOwner<int>.transform(23) == 23,
+             "an imported static method uses restored member metadata");
+      assert(readPackageFitMember(valueView) == 22,
+             "an imported value fit restores aggregate metadata");
+      assert(explicit == "package-explicit" &&
+             inferred == "package-inferred",
+             "imported method args close the restored combined tree");
+    });
+  });
+}

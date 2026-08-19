@@ -1,0 +1,127 @@
+open module fcts_lib.test.generic_fit_member_dependency;
+
+/** Managed dependency used by an exported generic fit method. */
+open type PackageFitMemberBox<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one managed dependency. */
+  func PackageFitMemberBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Distinct managed dependency used by another method in the same fit. */
+open type PackageFitMemberCell<T> {
+  /** Marker keeps this dependency layout distinct from the box. */
+  open let marker: string;
+
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one alternate managed dependency. */
+  func PackageFitMemberCell(value: T) {
+    self.marker = "cell";
+    self.value = value;
+  }
+}
+
+/** Aggregate dependency used by an exported generic value fit. */
+@value
+open type PackageFitMemberValue<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one aggregate dependency. */
+  func PackageFitMemberValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Aggregate dependency whose two arguments close at different stages. */
+@value
+open type PackageFitMemberPair<T, U> {
+  /** Value closed by the fit target. */
+  open let ownerValue: T;
+
+  /** Value closed by the method call. */
+  open let methodValue: U;
+
+  /** Construct one owner-plus-method dependency. */
+  func PackageFitMemberPair(ownerValue: T, methodValue: U) {
+    self.ownerValue = ownerValue;
+    self.methodValue = methodValue;
+  }
+}
+
+/** Exported surface implemented by generic fit methods. */
+open spec PackageFitMemberSurface<T> {
+  /** Read one subject value. */
+  func read(): T;
+}
+
+/** Exported generic target whose implementation lives in a fit. */
+open type PackageFitMemberOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one fit target. */
+  func PackageFitMemberOwner(value: T) {
+    self.value = value;
+  }
+}
+
+/** Exported generic fit with independent member dependency trees. */
+open fit PackageFitMemberOwner<T>: PackageFitMemberSurface<T> {
+  /** Keep one owner-dependent method uncalled to test owner-only closure. */
+  open func hiddenDependency(): T {
+    let dependency = PackageFitMemberBox<T>(self.value);
+    return dependency.value;
+  }
+
+  /** Satisfy the surface through the first managed tree. */
+  open func read(): T {
+    let dependency = PackageFitMemberBox<T>(self.value);
+    return dependency.value;
+  }
+
+  /** Exercise a second managed tree in the same fit. */
+  open func alternate(): T {
+    let dependency = PackageFitMemberCell<T>(self.value);
+    dependency.marker;
+    return dependency.value;
+  }
+
+  /** Exercise a static fit method with an owner-dependent tree. */
+  open static func transform(value: T): T {
+    let dependency = PackageFitMemberBox<T>(value);
+    return dependency.value;
+  }
+
+  /** Close one aggregate dependency from owner T and method U together. */
+  open func wrap<U>(value: U): U {
+    let dependency = PackageFitMemberPair<T, U>(self.value, value);
+    return dependency.methodValue;
+  }
+}
+
+/** Exported value-semantics fit target. */
+@value
+open type PackageFitMemberValueOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one value target. */
+  func PackageFitMemberValueOwner(value: T) {
+    self.value = value;
+  }
+}
+
+/** Exported value fit using an aggregate dependency. */
+open fit PackageFitMemberValueOwner<T>: PackageFitMemberSurface<T> {
+  /** Satisfy the surface through the aggregate tree. */
+  open func read(): T {
+    let dependency = PackageFitMemberValue<T>(self.value);
+    return dependency.value;
+  }
+}

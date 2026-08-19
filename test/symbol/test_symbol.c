@@ -3177,6 +3177,141 @@ static void test_generic_fit_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Reifiable dependencies of generic fit methods are exported on the method
+ * that owns the FengFunctionDescriptor, never merged onto the fit decl. */
+static void test_generic_fit_member_dependency_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.generic_fit_member_deps;\n"
+        "open type ManagedDep<T> {\n"
+        "    open let value: T;\n"
+        "    func ManagedDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "open type AggregateDep<T> {\n"
+        "    open let value: T;\n"
+        "    func AggregateDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "open type PairDep<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "    func PairDep(first: T, second: U) {\n"
+        "        self.first = first; self.second = second;\n"
+        "    }\n"
+        "}\n"
+        "open type Host<T> {\n"
+        "    open let value: T;\n"
+        "    func Host(value: T) { self.value = value; }\n"
+        "}\n"
+        "open fit Host<T> {\n"
+        "    open func managed(): T {\n"
+        "        let dep = ManagedDep<T>(self.value); return dep.value;\n"
+        "    }\n"
+        "    open func aggregate(): T {\n"
+        "        let dep = AggregateDep<T>(self.value); return dep.value;\n"
+        "    }\n"
+        "    open func pair<U>(value: U): U {\n"
+        "        let dep = PairDep<T, U>(self.value, value);\n"
+        "        return dep.second;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        "generic_fit_member_deps.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module = NULL;
+    FengSlice segments[4];
+    const FengSymbolFitView *fit_view;
+    const FengSymbolDeclView *fit_decl;
+    const FengSymbolDeclView *managed_method;
+    const FengSymbolDeclView *aggregate_method;
+    const FengSymbolDeclView *pair_method;
+    const FengSymbolTypeView *dependency;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    feng_symbol_error_free(&error);
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("generic_fit_member_deps");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    ASSERT(feng_symbol_module_fit_count(module) == 1U);
+    fit_view = feng_symbol_module_fit_at(module, 0U);
+    ASSERT(fit_view != NULL);
+    fit_decl = feng_symbol_fit_decl(fit_view);
+    ASSERT(fit_decl != NULL);
+    ASSERT(fit_decl->reifiable_type_dep_count == 0U);
+    ASSERT(fit_decl->reifiable_agg_dep_count == 0U);
+
+    managed_method = feng_symbol_decl_find_public_member(
+        fit_decl, slice_from_cstr("managed"));
+    aggregate_method = feng_symbol_decl_find_public_member(
+        fit_decl, slice_from_cstr("aggregate"));
+    pair_method = feng_symbol_decl_find_public_member(
+        fit_decl, slice_from_cstr("pair"));
+    ASSERT(managed_method != NULL);
+    ASSERT(aggregate_method != NULL);
+    ASSERT(pair_method != NULL);
+    ASSERT(managed_method->reifiable_type_dep_count == 1U);
+    ASSERT(managed_method->reifiable_agg_dep_count == 0U);
+    ASSERT(aggregate_method->reifiable_type_dep_count == 0U);
+    ASSERT(aggregate_method->reifiable_agg_dep_count == 1U);
+    ASSERT(pair_method->reifiable_type_dep_count == 0U);
+    ASSERT(pair_method->reifiable_agg_dep_count == 1U);
+
+    dependency = managed_method->reifiable_type_deps[0];
+    ASSERT(feng_symbol_type_kind(dependency) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_segment_at(
+            dependency,
+            feng_symbol_type_segment_count(dependency) - 1U),
+        "ManagedDep"));
+    dependency = aggregate_method->reifiable_agg_deps[0];
+    ASSERT(feng_symbol_type_kind(dependency) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_segment_at(
+            dependency,
+            feng_symbol_type_segment_count(dependency) - 1U),
+        "AggregateDep"));
+    dependency = pair_method->reifiable_agg_deps[0];
+    ASSERT(feng_symbol_type_kind(dependency) ==
+           FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC);
+    ASSERT(feng_symbol_type_generic_arg_count(dependency) == 2U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            feng_symbol_type_generic_arg_at(dependency, 0U)),
+        "T"));
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(
+            feng_symbol_type_generic_arg_at(dependency, 1U)),
+        "U"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_generic_fit_named_generic_return_ft_roundtrip(void) {
     static const char *kSource =
         "open module feng.test.symbol.generic_fit_named_generic_return;\n"
@@ -3691,6 +3826,7 @@ int main(void) {
     test_inferred_generic_field_ft_roundtrip();
     test_generic_spec_relation_ft_roundtrip();
     test_generic_fit_ft_roundtrip();
+    test_generic_fit_member_dependency_ft_roundtrip();
     test_generic_fit_named_generic_return_ft_roundtrip();
     test_fit_builtin_and_array_target_nodes_ft_roundtrip();
     test_fit_array_type_param_target_ft_roundtrip();

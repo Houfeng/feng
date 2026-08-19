@@ -889,6 +889,160 @@ static void test_private_representation_cross_package_ft_codegen(void) {
     free(tmp_dir);
 }
 
+/* Package-public .ft metadata keeps generic fit dependencies on each method.
+ * The consumer closes the owner without calling one dependent method, then
+ * exercises witness, static, and method-generic paths from the restored sets. */
+static void test_generic_fit_member_dependencies_cross_package_codegen(void) {
+    static const char *kProviderSource =
+        "open module vendor.generic_fit_member_deps;\n"
+        "open type PackageFitDep<T> {\n"
+        "    open let value: T;\n"
+        "    func PackageFitDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "open type PackageFitPair<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "    func PackageFitPair(first: T, second: U) {\n"
+        "        self.first = first; self.second = second;\n"
+        "    }\n"
+        "}\n"
+        "open spec PackageFitSurface<T> { func read(): T; }\n"
+        "open type PackageFitOwner<T> {\n"
+        "    open let value: T;\n"
+        "    func PackageFitOwner(value: T) { self.value = value; }\n"
+        "}\n"
+        "open fit PackageFitOwner<T>: PackageFitSurface<T> {\n"
+        "    open func hiddenDependency(): T {\n"
+        "        let dep = PackageFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    open func read(): T {\n"
+        "        let dep = PackageFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    open static func transform(value: T): T {\n"
+        "        let dep = PackageFitDep<T>(value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    open func wrap<U>(value: U): U {\n"
+        "        let dep = PackageFitPair<T, U>(self.value, value);\n"
+        "        return dep.second;\n"
+        "    }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.generic_fit_member_deps;\n"
+        "import vendor.generic_fit_member_deps;\n"
+        "func readPackage(value: PackageFitSurface<int>): int {\n"
+        "    return value.read();\n"
+        "}\n"
+        "func use(): int {\n"
+        "    let owner = PackageFitOwner<int>(40);\n"
+        "    let view: PackageFitSurface<int> = owner;\n"
+        "    let explicit = owner.wrap<string>(\"explicit\");\n"
+        "    let inferred = owner.wrap(\"inferred\");\n"
+        "    explicit; inferred;\n"
+        "    return readPackage(view) +\n"
+        "           PackageFitOwner<int>.transform(2);\n"
+        "}\n";
+    FengProgram *provider_program = parse_or_die(
+        kProviderSource, "generic_fit_member_deps_provider.ff");
+    const FengProgram *provider_programs[1] = {provider_program};
+    FengSemanticAnalysis *provider_analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolExportOptions export_options = {0};
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query = {0};
+    FengSemanticAnalyzeOptions analyze_options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *consumer_program = NULL;
+    const FengProgram *consumer_programs[1];
+    FengSemanticAnalysis *consumer_analysis = NULL;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(provider_programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &provider_analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_options.public_root = public_root;
+    ASSERT(feng_symbol_export_analysis(provider_analysis,
+                                       &export_options,
+                                       &symbol_error));
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    analyze_options.target = FENG_COMPILE_TARGET_LIB;
+    analyze_options.imported_modules = &query;
+    analyze_options.pointer_size = sizeof(void *);
+
+    consumer_program = parse_or_die(
+        kConsumerSource, "generic_fit_member_deps_consumer.ff");
+    consumer_programs[0] = consumer_program;
+    ASSERT(feng_semantic_analyze_with_options(consumer_programs,
+                                              1U,
+                                              &analyze_options,
+                                              &consumer_analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_symbol_imported_module_cache_populate_codegen_metadata(
+        cache, consumer_analysis);
+    if (!feng_codegen_emit_program(consumer_analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "cross-package generic fit dependency codegen error: %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".name = \"hiddenDependency\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".name = \"read\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".name = \"transform\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".name = \"wrap\", "
+                  ".reified_agg_deps_count = 1") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(consumer_analysis);
+    feng_program_free(consumer_program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    feng_semantic_analysis_free(provider_analysis);
+    feng_program_free(provider_program);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+}
+
 static void test_c_variadic_cross_package_ft_codegen(void) {
     static const char *kProviderSource =
         "open module vendor.c_variadic;\n"
@@ -5796,6 +5950,133 @@ static void test_closed_generic_owner_method_dependencies_codegen(void) {
                   "const FengTypeDescriptor *_type_desc, "
                   "const FengFunctionDescriptor *_desc") != NULL);
     ASSERT(strstr(out.c_source,
+                  "const FengGenericParamDescriptor *_U") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Generic fit methods use the same per-member descriptor ownership as type
+ * methods. Cover owner-only dependencies without a direct call, independent
+ * method trees, static and witness entry points, aggregate targets, and an
+ * owner-plus-method generic dependency closed at the final call site. */
+static void test_closed_generic_fit_member_dependencies_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_fit_member_dependencies;\n"
+        "type ManagedFitDep<T> {\n"
+        "    open let value: T;\n"
+        "    func ManagedFitDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "type AlternateFitDep<T> {\n"
+        "    open let value: T;\n"
+        "    func AlternateFitDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "type AggregateFitDep<T> {\n"
+        "    open let value: T;\n"
+        "    func AggregateFitDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "type PairFitDep<T, U> {\n"
+        "    open let first: T;\n"
+        "    open let second: U;\n"
+        "    func PairFitDep(first: T, second: U) {\n"
+        "        self.first = first;\n"
+        "        self.second = second;\n"
+        "    }\n"
+        "}\n"
+        "spec FitSurface<T> {\n"
+        "    func read(): T;\n"
+        "}\n"
+        "type FitOwner<T> {\n"
+        "    open let value: T;\n"
+        "    func FitOwner(value: T) { self.value = value; }\n"
+        "}\n"
+        "fit FitOwner<T>: FitSurface<T> {\n"
+        "    func hiddenDependency(): T {\n"
+        "        let dep = ManagedFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    func read(): T {\n"
+        "        let dep = ManagedFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    func alternate(): T {\n"
+        "        let dep = AlternateFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    static func transform(value: T): T {\n"
+        "        let dep = ManagedFitDep<T>(value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "    func wrap<U>(value: U): U {\n"
+        "        let dep = PairFitDep<T, U>(self.value, value);\n"
+        "        return dep.second;\n"
+        "    }\n"
+        "}\n"
+        "@value\n"
+        "type ValueFitOwner<T> {\n"
+        "    open let value: T;\n"
+        "    func ValueFitOwner(value: T) { self.value = value; }\n"
+        "}\n"
+        "fit ValueFitOwner<T>: FitSurface<T> {\n"
+        "    func read(): T {\n"
+        "        let dep = AggregateFitDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "func readFit(value: FitSurface<int>): int { return value.read(); }\n"
+        "func use(): int {\n"
+        "    let owner = FitOwner<int>(40);\n"
+        "    let view: FitSurface<int> = owner;\n"
+        "    let valueView: FitSurface<int> = ValueFitOwner<int>(2);\n"
+        "    let control = owner.wrap<string>(\"method\");\n"
+        "    let inferred = owner.wrap(\"inferred\");\n"
+        "    control; inferred;\n"
+        "    return readFit(view) + owner.alternate() +\n"
+        "           FitOwner<int>.transform(1) + readFit(valueView);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_fit_member_dependencies.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr,
+                "codegen error (closed generic fit member deps): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"hiddenDependency\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"alternate\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"transform\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"read\", "
+                  ".reified_agg_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"wrap\", "
+                  ".reified_agg_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengFunctionDescriptor *_desc, "
                   "const FengGenericParamDescriptor *_U") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -12305,6 +12586,7 @@ int main(void) {
     test_multi_file_lib();
     test_private_generic_representation_same_package_codegen();
     test_private_representation_cross_package_ft_codegen();
+    test_generic_fit_member_dependencies_cross_package_codegen();
     test_c_variadic_cross_package_ft_codegen();
     test_module_binding_lazy_ensure_init_codegen();
     test_address_of_module_binding_uses_storage_slot_codegen();
@@ -12384,6 +12666,7 @@ int main(void) {
     test_generic_shared_body_direct_dependencies_codegen();
     test_generic_shared_method_descriptor_order_codegen();
     test_closed_generic_owner_method_dependencies_codegen();
+    test_closed_generic_fit_member_dependencies_codegen();
     test_generic_type_owner_reification_codegen();
     test_non_generic_default_zero_stays_direct_codegen();
     test_closed_generic_default_zero_stays_direct_codegen();

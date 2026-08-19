@@ -2282,6 +2282,8 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
         for (di = 0U; di < program->decl_count; ++di) {
             SynthDecl *sd = &program->decls[di];
             const FengSymbolDeclView *sv = sd->symbol_view;
+            FengTypeMember *const *ast_members = NULL;
+            size_t ast_member_count = 0U;
             size_t symbol_member_index;
             size_t ast_member_index;
 
@@ -2293,13 +2295,20 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
             restore_imported_reifiable_deps(
                 cache, analysis, sd, &sd->decl, NULL, sv);
 
-            if (sd->decl.kind != FENG_DECL_TYPE) {
+            if (sd->decl.kind == FENG_DECL_TYPE) {
+                ast_members = sd->decl.as.type_decl.members;
+                ast_member_count = sd->decl.as.type_decl.member_count;
+            } else if (sd->decl.kind == FENG_DECL_FIT) {
+                ast_members = sd->decl.as.fit_decl.members;
+                ast_member_count = sd->decl.as.fit_decl.member_count;
+            } else {
                 continue;
             }
 
             /* Symbol views store method type parameters as children, while
              * the synthesized AST member array excludes them. Walk both
-             * representations in their common concrete-member order. */
+             * representations in their common concrete-member order. Type
+             * and fit methods use the same member-level dependency metadata. */
             ast_member_index = 0U;
             for (symbol_member_index = 0U;
                  symbol_member_index < sv->member_count;
@@ -2311,7 +2320,7 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
                     member_view->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
                     continue;
                 }
-                if (ast_member_index >= sd->decl.as.type_decl.member_count) {
+                if (ast_member_index >= ast_member_count) {
                     break;
                 }
                 if (member_view->kind == FENG_SYMBOL_DECL_KIND_METHOD) {
@@ -2320,7 +2329,7 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
                         analysis,
                         sd,
                         &sd->decl,
-                        sd->decl.as.type_decl.members[ast_member_index],
+                        ast_members[ast_member_index],
                         member_view);
                 }
                 ++ast_member_index;

@@ -1927,7 +1927,6 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
     size_t type_level_param_count = 0U;
     FengTypeParam implicit_type_param;
     bool has_generic_context;
-    FengReifiableDepSet *dep_set;
     CollectContext ctx;
     size_t i;
 
@@ -1965,21 +1964,26 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
         return;
     }
 
-    dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
-    if (dep_set == NULL) {
-        return;
-    }
-
     memset(&ctx, 0, sizeof(ctx));
     ctx.analysis = analysis;
-    ctx.dep_set = dep_set;
     ctx.type_params = type_level_params;
     ctx.type_param_count = type_level_param_count;
 
-    /* 遍历各 member method。collect_from_callable 内部会合并方法级
-     * type_params。 */
+    /* 每个 fit 方法都有独立的 FengFunctionDescriptor，因此依赖必须按成员
+     * 收集，不能合并到 fit 声明级集合中。collect_from_callable 内部会在
+     * owner 泛参之外临时合并该方法自己的方法级泛参。 */
     for (i = 0U; i < decl->as.fit_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.fit_decl.members[i];
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD) {
+            continue;
+        }
+        ctx.dep_set =
+            feng_semantic_get_or_create_member_reifiable_dep_set(
+                analysis, decl, member);
+        if (ctx.dep_set == NULL) {
+            continue;
+        }
         collect_from_callable(&ctx, &member->as.callable);
     }
 }
