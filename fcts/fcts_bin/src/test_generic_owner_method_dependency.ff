@@ -1,0 +1,213 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.generic_owner_method_dependency;
+
+/** Managed dependency used by same-package generic owner methods. */
+type LocalMethodBox<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one managed dependency. */
+  func LocalMethodBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Distinct local dependency used to verify separate witness trees. */
+type LocalMethodCell<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one alternate dependency. */
+  func LocalMethodCell(value: T) {
+    self.value = value;
+  }
+}
+
+/** Local aggregate dependency used by a generic value type. */
+@value
+type LocalMethodValue<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one aggregate dependency. */
+  func LocalMethodValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Generic owner whose dependent method is intentionally never called. */
+type LocalUnusedOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one unused-method owner. */
+  func LocalUnusedOwner(value: T) {
+    self.value = value;
+  }
+
+  /** Exercise an owner-dependent managed type in an uncalled method body. */
+  func hiddenDependency(): T {
+    let dependency = LocalMethodBox<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Same-package generic object-form surface. */
+spec LocalMethodSurface<T> {
+  /** Resolve one implementation value. */
+  func resolve(): T;
+}
+
+/** First same-package managed implementation. */
+type LocalMethodFirst<T>: LocalMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the first implementation. */
+  func LocalMethodFirst(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through the first managed dependency tree. */
+  func resolve(): T {
+    let dependency = LocalMethodBox<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Second same-package managed implementation. */
+type LocalMethodSecond<T>: LocalMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the second implementation. */
+  func LocalMethodSecond(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through the alternate managed dependency tree. */
+  func resolve(): T {
+    let dependency = LocalMethodCell<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Same-package value implementation with an aggregate dependency. */
+@value
+type LocalMethodAggregate<T>: LocalMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the value implementation. */
+  func LocalMethodAggregate(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through an aggregate dependency tree. */
+  func resolve(): T {
+    let dependency = LocalMethodValue<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Static surface used to reach an implementation without a direct call. */
+spec LocalMethodStaticSurface<T> {
+  /** Transform one value through a static witness slot. */
+  static func transform(value: T): T;
+}
+
+/** Same-package generic static implementation. */
+type LocalMethodStatic<T>: LocalMethodStaticSurface<T> {
+  /** Transform through an owner-dependent managed type. */
+  static func transform(value: T): T {
+    let dependency = LocalMethodBox<T>(value);
+    return dependency.value;
+  }
+}
+
+/** Method-generic control whose dependency remains call-site closed. */
+type LocalMethodGenericOwner<T> {
+  /** Close a method-local dependency independently of owner T. */
+  func wrap<U>(value: U): U {
+    let dependency = LocalMethodBox<U>(value);
+    return dependency.value;
+  }
+}
+
+/** Form an open generic owner inside a shared function body. */
+func makeLocalOpen<T>(value: T): LocalUnusedOwner<T> {
+  return LocalUnusedOwner<T>(value);
+}
+
+/** Invoke a local static requirement through its generic witness. */
+func invokeLocalStatic<U: LocalMethodStaticSurface<int>>(
+  value: int
+): int {
+  return U.transform(value);
+}
+
+/** Invoke an imported static requirement through its generic witness. */
+func invokePackageStatic<U: PackageMethodStaticSurface<int>>(
+  value: int
+): int {
+  return U.transform(value);
+}
+
+/** Verify generic owner ordinary-method dependency registration. */
+open func test_generic_owner_method_dependency(): void {
+  describe("generic owner ordinary method dependencies", () {
+    test("same-package owner registration is independent of direct calls", () {
+      let unused = LocalUnusedOwner<int>(40);
+      let openControl = makeLocalOpen<int>(41);
+
+      assert(unused.value == 40,
+             "closed owner registers an uncalled member dependency");
+      assert(openControl.value == 41,
+             "open owner registration keeps its existing descriptor path");
+    });
+
+    test("same-package witnesses keep distinct managed and aggregate trees", () {
+      let first: LocalMethodSurface<int> = LocalMethodFirst<int>(51);
+      let second: LocalMethodSurface<int> = LocalMethodSecond<int>(52);
+      let aggregate: LocalMethodSurface<int> =
+        LocalMethodAggregate<int>(53);
+
+      assert(first.resolve() == 51,
+             "first witness uses the first managed dependency tree");
+      assert(second.resolve() == 52,
+             "second witness uses the alternate managed dependency tree");
+      assert(aggregate.resolve() == 53,
+             "value witness uses its aggregate dependency tree");
+    });
+
+    test("same-package static and method-generic paths retain their domains", () {
+      let methodOwner = LocalMethodGenericOwner<int>();
+
+      assert(invokeLocalStatic<LocalMethodStatic<int>>(61) == 61,
+             "static witness reaches a closed owner method descriptor");
+      assert(methodOwner.wrap<string>("method") == "method",
+             "method-local generic dependency remains call-site closed");
+    });
+
+    test("package surfaces restore ordinary member dependency metadata", () {
+      let unused = PackageUnusedOwner<int>(70);
+      let first: PackageMethodSurface<int> = PackageMethodFirst<int>(71);
+      let second: PackageMethodSurface<int> = PackageMethodSecond<int>(72);
+      let aggregate: PackageMethodSurface<int> =
+        PackageMethodAggregate<int>(73);
+
+      assert(unused.value == 70,
+             "imported closed owner registers an uncalled member dependency");
+      assert(first.resolve() == 71,
+             "imported first witness restores its managed dependency");
+      assert(second.resolve() == 72,
+             "imported second witness restores its alternate dependency");
+      assert(aggregate.resolve() == 73,
+             "imported value witness restores its aggregate dependency");
+      assert(invokePackageStatic<PackageMethodStatic<int>>(74) == 74,
+             "imported static witness restores its member dependency");
+    });
+  });
+}

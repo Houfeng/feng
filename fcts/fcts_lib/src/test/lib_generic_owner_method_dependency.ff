@@ -1,0 +1,125 @@
+open module fcts_lib.test.generic_owner_method_dependency;
+
+/** Managed dependency used by exported generic owner methods. */
+open type PackageMethodBox<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one managed dependency. */
+  func PackageMethodBox(value: T) {
+    self.value = value;
+  }
+}
+
+/** Distinct managed dependency used to verify separate implementation trees. */
+open type PackageMethodCell<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one alternate managed dependency. */
+  func PackageMethodCell(value: T) {
+    self.value = value;
+  }
+}
+
+/** Aggregate dependency used by an exported generic value type. */
+@value
+open type PackageMethodValue<T> {
+  /** Stored dependency value. */
+  open let value: T;
+
+  /** Construct one aggregate dependency. */
+  func PackageMethodValue(value: T) {
+    self.value = value;
+  }
+}
+
+/** Exported generic owner whose dependent method is never directly called. */
+open type PackageUnusedOwner<T> {
+  /** Stored owner value. */
+  open let value: T;
+
+  /** Construct one unused-method owner. */
+  func PackageUnusedOwner(value: T) {
+    self.value = value;
+  }
+
+  /** Exercise an owner-dependent managed type in an uncalled method body. */
+  open func hiddenDependency(): T {
+    let dependency = PackageMethodBox<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Exported generic object-form surface. */
+open spec PackageMethodSurface<T> {
+  /** Resolve one implementation value. */
+  func resolve(): T;
+}
+
+/** First exported managed implementation. */
+open type PackageMethodFirst<T>: PackageMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the first implementation. */
+  func PackageMethodFirst(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through the first managed dependency tree. */
+  open func resolve(): T {
+    let dependency = PackageMethodBox<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Second exported managed implementation. */
+open type PackageMethodSecond<T>: PackageMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the second implementation. */
+  func PackageMethodSecond(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through the alternate managed dependency tree. */
+  open func resolve(): T {
+    let dependency = PackageMethodCell<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Exported value-semantics implementation with an aggregate dependency. */
+@value
+open type PackageMethodAggregate<T>: PackageMethodSurface<T> {
+  /** Stored implementation value. */
+  open let value: T;
+
+  /** Construct the value-semantics implementation. */
+  func PackageMethodAggregate(value: T) {
+    self.value = value;
+  }
+
+  /** Resolve through an aggregate dependency tree. */
+  open func resolve(): T {
+    let dependency = PackageMethodValue<T>(self.value);
+    return dependency.value;
+  }
+}
+
+/** Exported static surface used to avoid a direct implementation call. */
+open spec PackageMethodStaticSurface<T> {
+  /** Transform a value through a static witness slot. */
+  static func transform(value: T): T;
+}
+
+/** Exported generic static implementation with a managed dependency. */
+open type PackageMethodStatic<T>: PackageMethodStaticSurface<T> {
+  /** Transform through an owner-dependent managed type. */
+  open static func transform(value: T): T {
+    let dependency = PackageMethodBox<T>(value);
+    return dependency.value;
+  }
+}

@@ -9905,6 +9905,29 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                     generic_decl->owner_program)) {
                 return false;
             }
+
+            /* A fully closed generic owner emits one closed function
+             * descriptor for each non-method-generic ordinary method. Close
+             * that method's implementation dependencies while registering
+             * the owner shell, before any wrapper attempts to resolve their
+             * descriptor symbols. Direct calls also collect this set, but
+             * owner registration must be complete on its own for witness and
+             * other indirect wrapper consumers. */
+            if (!has_open_type_arg &&
+                member->kind == FENG_TYPE_MEMBER_METHOD &&
+                callable->type_param_count == 0U &&
+                !cg_collect_closed_reifiable_dep_instances(
+                    cg,
+                    feng_semantic_lookup_member_reifiable_dep_set(
+                        cg->analysis, decl, member),
+                    decl->as.type_decl.type_params,
+                    decl->as.type_decl.type_param_count,
+                    type_args,
+                    member_scope,
+                    generic_decl->owner_program,
+                    member->token)) {
+                return false;
+            }
         }
     }
     if (!cg_collect_closed_reifiable_dep_instances(

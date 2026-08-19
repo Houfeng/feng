@@ -1,6 +1,6 @@
 # Feng 泛型 owner 普通方法依赖闭合修复开发文档
 
-> 状态：已完成实际代码分析，待 Review，尚未实施（2026-08-19）
+> 状态：已实施并通过全量回归（2026-08-19）
 >
 > 本文最初由 object-form `spec` witness 调用失败引出。实际代码与隔离用例已经
 > 证明：根因不在 `spec` 或 witness，而在 closed generic `type` 实例没有主动预登记
@@ -328,25 +328,25 @@ TODO 按“先锁定通用闭合点，再实施最小改动，最后分层验证
   根因与覆盖边界；
 - [x] **[分析]** 核对泛型 fit 的依赖表示，确认它是不同的参数域/descriptor 归属问题，
   不纳入本次实施；
-- [ ] **[实际变更]** 在 `cg_register_generic_type_instance_shell()` 的既有 shell-first
-  链路中，为 fully closed owner 中方法自身没有泛参的普通成员逐一关闭并预登记 member dep
-  set；
-- [ ] **[验证]** 确认实际变更只复用
+- [x] **[实际变更]** 在 `cg_register_generic_type_instance_shell()` 的既有 shell-first
+  链路中，为 fully closed owner 中方法自身没有泛参的普通成员逐一关闭并预登记
+  member dep set；
+- [x] **[验证]** 确认实际变更只复用
   `feng_semantic_lookup_member_reifiable_dep_set()` 与
   `cg_collect_closed_reifiable_dep_instances()`，没有新增 spec/witness 特判、collector、
   runtime helper 或 ABI；
-- [ ] **[验证]** 确认 owner 开放实例和方法级泛参成员没有被提前关闭，继续走既有调用点
+- [x] **[验证]** 确认 owner 开放实例和方法级泛参成员没有被提前关闭，继续走既有调用点
   闭合链路；
-- [ ] **[测试变更]** 在 `test/codegen/test_codegen.c` 增加无直接调用、实例/静态、
+- [x] **[测试变更]** 在 `test/codegen/test_codegen.c` 增加无直接调用、实例/静态、
   managed/value、witness 与生成 C 结构回归；
-- [ ] **[测试变更]** 在 `fcts/` 增加无 `spec`、两个 witness 实现、同包与跨包的行为
+- [x] **[测试变更]** 在 `fcts/` 增加无 `spec`、两个 witness 实现、同包与跨包的行为
   回归；
-- [ ] **[验证]** 复查 `.ft` 的 member reifiable dependency 写入/恢复继续复用现有链路，
+- [x] **[验证]** 复查 `.ft` 的 member reifiable dependency 写入/恢复继续复用现有链路，
   不新增符号格式；
-- [ ] **[验证]** 检查 diff，不包含泛型 fit、object-form spec 方法级泛参、方法值、性能
+- [x] **[验证]** 检查 diff，不包含泛型 fit、object-form spec 方法级泛参、方法值、性能
   优化或其他无关变更；
-- [ ] **[回归]** 运行相关 compiler tests 与 FCTS；
-- [ ] **[全量回归]** 在非沙箱环境执行 `make test`。
+- [x] **[回归]** 运行相关 compiler tests 与 FCTS；
+- [x] **[全量回归]** 在非沙箱环境执行 `make test`。
 
 ## 8. 完成标准
 
@@ -360,3 +360,19 @@ TODO 按“先锁定通用闭合点，再实施最小改动，最后分层验证
 5. 没有 spec/witness 特判，没有新依赖收集链路，没有运行时开销或 ABI 变化；
 6. 泛型 fit 独立问题未被旁路或混入本次改动；
 7. 全量 `make test` 通过。
+
+## 9. 实施记录
+
+- 2026-08-19：新增 Codegen 回归时，最初按固定生成文本断言方法体必须读取
+  `_type_desc->reified_generic_params[...]`。隔离检查确认，用例中的方法只通过已经闭合的
+  member dependency 操作 `T`，共享体虽然继续接收 owner type descriptor，但没有语义
+  操作要求读取其中的 generic parameter slot，因此 Codegen 正确地没有生成该读取。
+  本专项改为验证既有 `_type_desc + FengFunctionDescriptor` 共享方法 ABI；需要实际读取
+  owner generic parameter slot 的行为继续由既有 generic type owner reification 用例
+  覆盖。这是测试断言边界修正，不是编译器缺陷，也不需要产品代码变更。
+- 2026-08-19：新增跨包 FCTS 时，provider 的 open `spec` 成员最初冗余声明了
+  `open`，触发既有诊断 `SE0601`。Feng 的 `spec` 成员默认即为 open，只允许省略
+  visibility 或声明 `seal`；测试已按既有语义移除冗余修饰符，不涉及编译器变更。
+- 2026-08-19：定向 `test_codegen` 通过；FCTS 新增 4 组行为测试后共 805/805 通过；
+  非沙箱全量 `make test` 的 sanitize 与 normal 两阶段全部通过，其中 smoke 91/91、
+  std 579/579、FCTS 805/805，性能约束、增量构建、发布与工具链检查均通过。

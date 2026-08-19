@@ -5656,6 +5656,156 @@ static void test_generic_shared_method_descriptor_order_codegen(void) {
     feng_program_free(program);
 }
 
+/* A closed generic type must pre-register every non-method-generic ordinary
+ * method dependency when its owner shell is formed. Direct calls used to
+ * hide this omission by collecting the member dep set at the call site;
+ * cover no-call, static, managed/value, witness, and open-owner controls. */
+static void test_closed_generic_owner_method_dependencies_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_owner_method_dependencies;\n"
+        "type ManagedDep<T> {\n"
+        "    open let value: T;\n"
+        "    func ManagedDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "type AlternateDep<T> {\n"
+        "    open let value: T;\n"
+        "    func AlternateDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "@value\n"
+        "type AggregateDep<T> {\n"
+        "    open let value: T;\n"
+        "    func AggregateDep(value: T) { self.value = value; }\n"
+        "}\n"
+        "spec Surface<T> {\n"
+        "    func read(): T;\n"
+        "}\n"
+        "type NoSpecOwner<T> {\n"
+        "    open let value: T;\n"
+        "    func NoSpecOwner(value: T) { self.value = value; }\n"
+        "    func hiddenDependency(): T {\n"
+        "        let dep = ManagedDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "type StaticOwner<T> {\n"
+        "    func StaticOwner() {}\n"
+        "    static func hiddenStatic(value: T): T {\n"
+        "        let dep = ManagedDep<T>(value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "type First<T>: Surface<T> {\n"
+        "    open let value: T;\n"
+        "    func First(value: T) { self.value = value; }\n"
+        "    func read(): T {\n"
+        "        let dep = ManagedDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "type Second<T>: Surface<T> {\n"
+        "    open let value: T;\n"
+        "    func Second(value: T) { self.value = value; }\n"
+        "    func read(): T {\n"
+        "        let dep = AlternateDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "@value\n"
+        "type ValueOwner<T>: Surface<T> {\n"
+        "    open let value: T;\n"
+        "    func ValueOwner(value: T) { self.value = value; }\n"
+        "    func read(): T {\n"
+        "        let dep = AggregateDep<T>(self.value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "type MethodGenericOwner<T> {\n"
+        "    func MethodGenericOwner() {}\n"
+        "    func wrap<U>(value: U): U {\n"
+        "        let dep = ManagedDep<U>(value);\n"
+        "        return dep.value;\n"
+        "    }\n"
+        "}\n"
+        "func readSurface(value: Surface<int>): int {\n"
+        "    return value.read();\n"
+        "}\n"
+        "func makeOpen<T>(value: T): NoSpecOwner<T> {\n"
+        "    return NoSpecOwner<T>(value);\n"
+        "}\n"
+        "func use(): int {\n"
+        "    let unused = NoSpecOwner<int>(40);\n"
+        "    let staticOnly = StaticOwner<int>();\n"
+        "    let first: Surface<int> = First<int>(1);\n"
+        "    let second: Surface<int> = Second<int>(2);\n"
+        "    let aggregate: Surface<int> = ValueOwner<int>(3);\n"
+        "    let methodOwner = MethodGenericOwner<int>();\n"
+        "    let control = methodOwner.wrap<string>(\"control\");\n"
+        "    let openControl = makeOpen<int>(4);\n"
+        "    unused; staticOnly; control; openControl;\n"
+        "    return readSurface(first) + readSurface(second) +\n"
+        "           readSurface(aggregate);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_owner_method_dependencies.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr,
+                "codegen error (closed generic owner method deps): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+
+    /* The no-call instance and static methods each own a closed managed
+     * dependency descriptor. Their presence proves owner registration no
+     * longer relies on a resolved direct call expression. */
+    ASSERT(strstr(out.c_source,
+                  ".name = \"hiddenDependency\", "
+                  ".reified_type_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"hiddenStatic\", "
+                  ".reified_type_deps_count = 1") != NULL);
+
+    /* Managed implementations and the value implementation keep separate
+     * descriptor domains while all witness thunks target closed wrappers. */
+    ASSERT(count_substr(out.c_source,
+                        ".name = \"read\", "
+                        ".reified_type_deps_count = 1") >= 2U);
+    ASSERT(strstr(out.c_source,
+                  ".name = \"read\", "
+                  ".reified_agg_deps_count = 1") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengWitness__feng__codegen__"
+                  "generic_owner_method_dependencies") != NULL);
+
+    /* Closed ordinary wrappers keep the existing owner-type plus callable
+     * descriptor ABI; the method-generic control continues to receive its
+     * existing `_U` descriptor. An owner slot read is intentionally not
+     * required when the method has no operation that consumes one. */
+    ASSERT(strstr(out.c_source,
+                  "const FengTypeDescriptor *_type_desc, "
+                  "const FengFunctionDescriptor *_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "const FengGenericParamDescriptor *_U") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Type-owner shared bodies use one closed type descriptor for field,
  * constructor, static-initializer, and finalizer dependencies. Open generic
  * reference fields must also use the closed descriptor's physical offsets. */
@@ -12134,6 +12284,7 @@ int main(void) {
     test_generic_fn_call_codegen();
     test_generic_shared_body_direct_dependencies_codegen();
     test_generic_shared_method_descriptor_order_codegen();
+    test_closed_generic_owner_method_dependencies_codegen();
     test_generic_type_owner_reification_codegen();
     test_non_generic_default_zero_stays_direct_codegen();
     test_closed_generic_default_zero_stays_direct_codegen();
