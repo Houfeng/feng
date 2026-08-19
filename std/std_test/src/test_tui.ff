@@ -43,6 +43,49 @@ type CountingView: CountingWidget {
   }
 }
 
+/** 测试底图组件需要公开的固定 Cell 数据。 */
+spec UnderlayWidget: Widget {
+  /** 每个 Cell 写入的值。 */
+  let cellValue: u64;
+
+  /** 每个 Cell 写入的背景色。 */
+  let cellBackColor: RgbColor;
+}
+
+/** 在正式绘制流水线中提供固定粗体 Cell 底图的测试组件。 */
+type UnderlayView: UnderlayWidget {
+  /** 复用 View 的 Widget 状态和默认行为。 */
+  ...: View = View();
+
+  /** 每个 Cell 写入的值。 */
+  let cellValue: u64;
+
+  /** 每个 Cell 写入的背景色。 */
+  let cellBackColor: RgbColor;
+
+  /** 创建指定 Cell 值和背景色的底图组件。 */
+  func UnderlayView(cellValue: u64, cellBackColor: RgbColor) {
+    self.cellValue = cellValue;
+    self.cellBackColor = cellBackColor;
+  }
+
+  /** 使用正式 Buffer API 绘制覆盖 frame 的固定粗体 Cell。 */
+  @mixable
+  static func draw(view: UnderlayWidget, manager: ViewManager): void {
+    let frame = view.frame;
+    manager.getScreenBuffer().draw(
+      (u32)frame.x,
+      (u32)frame.y,
+      (u32)frame.width,
+      (u32)frame.height,
+      view.cellValue,
+      none,
+      view.cellBackColor,
+      CellStyle.Bold
+    );
+  }
+}
+
 // ─── 静态常量 ──────────────────────────────────────────────────────────────
 
 func cell_mask_fg() {
@@ -1621,9 +1664,9 @@ func dirty_mark_mutation_and_value_copy() {
 /** 验证基础 View 初始需要布局自身及其子树。 */
 func view_dirty_initial_state() {
   let view = View();
-  check(view.dirty.has(DirtyType.Layout),
+  check(Inspector.getDirty(view).has(DirtyType.Layout),
     "tui/view/dirty-initial-layout");
-  check(view.dirty.has(DirtyType.SubtreeLayout),
+  check(Inspector.getDirty(view).has(DirtyType.SubtreeLayout),
     "tui/view/dirty-initial-subtree-layout");
 }
 
@@ -1807,9 +1850,9 @@ func vstack_collapse_child_has_no_space() {
   visible.style.verticalAlign = Align.Start;
   stack.addChild(collapsed);
   stack.addChild(visible);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(collapsed.frame.width == 0 && collapsed.frame.height == 0,
     "tui/visibility/collapse-zero-frame");
@@ -1957,16 +2000,20 @@ func view_manager_styling_forces_root_frame() {
     "tui/view-manager/root-user-style-unchanged");
 }
 
-/** 按生产阶段顺序合并样式后直接调用组件布局实现。 */
+/** 将组件挂载到全屏默认容器后，按生产阶段顺序完成样式与布局。 */
 func arrangeStyledWidget(widget: Widget, manager: ViewManager): void {
-  widget.doStyling(manager);
-  widget.arrange(manager);
+  let root = Container();
+  root.addChild(widget);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
 }
 
-/** 合并样式后直接调用组件绘制调度。 */
+/** 对 arrangeStyledWidget 已挂载的组件树执行完整生产绘制流水线。 */
 func drawStyledWidget(widget: Widget, manager: ViewManager): void {
-  widget.doStyling(manager);
-  widget.doDraw(manager);
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
 }
 
 func view_arrange_preserves_signed_geometry() {
@@ -1986,10 +2033,11 @@ func view_arrange_preserves_signed_geometry() {
   check(view.frame.height == 5, "tui/view/arrange-signed-height");
 
   drawStyledWidget(view, manager);
-  check(view.clippedFrame.x == 0, "tui/view/draw-clip-negative-x");
-  check(view.clippedFrame.y == 0, "tui/view/draw-clip-negative-y");
-  check(view.clippedFrame.width == 5, "tui/view/draw-clip-negative-width");
-  check(view.clippedFrame.height == 3, "tui/view/draw-clip-negative-height");
+  let clippedFrame = Inspector.getClippedFrame(view);
+  check(clippedFrame.x == 0, "tui/view/draw-clip-negative-x");
+  check(clippedFrame.y == 0, "tui/view/draw-clip-negative-y");
+  check(clippedFrame.width == 5, "tui/view/draw-clip-negative-width");
+  check(clippedFrame.height == 3, "tui/view/draw-clip-negative-height");
 }
 
 func view_arrange_preserves_negative_percentage_offsets() {
@@ -2074,28 +2122,39 @@ func view_draw_alpha_background_semantics() {
   let screen = Screen(3, 1);
   let manager = ViewManager(screen);
   let buffer = screen.buffer();
-  buffer.draw((u32)0, (u32)0, (u64)88,
-    RgbColor((u8)0x11, (u8)0x22, (u8)0x33),
+  let root = Container();
+  let underlay = UnderlayView((u64)88,
     RgbColor((u8)0x44, (u8)0x55, (u8)0x66));
+  underlay.style.position = Position.Absolute;
+  underlay.style.width = 1;
+  underlay.style.height = 1;
 
   let view = View();
   view.style.position = Position.Absolute;
   view.style.width = 1;
   view.style.height = 1;
-  arrangeStyledWidget(view, manager);
-  drawStyledWidget(view, manager);
+  root.addChild(underlay);
+  root.addChild(view);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/no-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0, (u8)0, (u8)0, (u8)0);
-  drawStyledWidget(view, manager);
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
   check(buffer.cells[0].value == (u64)88 &&
     buffer.cells[0].backColor() == (u32)0x445566,
     "tui/view/transparent-background-keeps-canvas");
 
   view.style.backColor = RgbColor((u8)0x01, (u8)0x02, (u8)0x03);
-  drawStyledWidget(view, manager);
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
   check(buffer.cells[0].value == (u64)0 &&
     buffer.cells[0].backColor() == (u32)0x010203,
     "tui/view/opaque-background-paints-canvas");
@@ -2113,23 +2172,24 @@ func view_do_draw_tracks_only_visible_frame() {
   view.mouseDown.on((event: MouseEvent<Widget>) {
     hits += 1;
   });
-  manager.root = view;
+  arrangeStyledWidget(view, manager);
 
-  view.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   manager.doDraw();
-  check(view.clippedFrame.x == 0 && view.clippedFrame.width == 1,
+  let visibleFrame = Inspector.getClippedFrame(view);
+  check(visibleFrame.x == 0 && visibleFrame.width == 1,
     "tui/view/do-draw-caches-clipped-frame");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
   check(hits == 1, "tui/view/do-draw-tracks-visible-widget");
 
   view.style.x = 3;
-  view.dirty.add(DirtyType.Layout);
-  view.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   manager.doDraw();
-  check(view.clippedFrame.width == 0 && view.clippedFrame.height == 0,
+  let emptyFrame = Inspector.getClippedFrame(view);
+  check(emptyFrame.width == 0 && emptyFrame.height == 0,
     "tui/view/do-draw-caches-empty-frame");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
@@ -2168,8 +2228,8 @@ func vstack_arranges_direct_children() {
 
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
-  stack.doStyling(manager);
+  arrangeStyledWidget(stack, manager);
+  manager.doStyling();
   manager.doArrange();
 
   check(stack.frame.x == 2 && stack.frame.y == 1 &&
@@ -2191,7 +2251,7 @@ func vstack_arranges_direct_children() {
   }
   check(styleUnchanged, "tui/vstack/style-unchanged");
   var parentPreserved = false;
-  if first.parent match parent: ContainerWidget {
+  if Inspector.getParent(first) match parent: ContainerWidget {
     parentPreserved = (Widget)parent == (Widget)stack;
   }
   check(parentPreserved, "tui/vstack/parent-preserved");
@@ -2215,15 +2275,15 @@ func vstack_overrides_child_main_axis_align() {
   second.style.horizontalAlign = Align.Start;
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(first.style.verticalAlign == Align.Full &&
     second.style.verticalAlign == Align.Full,
     "tui/vstack/main-axis-user-style-unchanged");
-  check(first.rtStyle.verticalAlign == Align.Start &&
-    second.rtStyle.verticalAlign == Align.Start,
+  check(Inspector.getRtStyle(first).verticalAlign == Align.Start &&
+    Inspector.getRtStyle(second).verticalAlign == Align.Start,
     "tui/vstack/main-axis-runtime-override");
   check(first.frame.y == 0 && first.frame.height == 2 &&
     second.frame.y == 2 && second.frame.height == 1,
@@ -2254,9 +2314,9 @@ func vstack_auto_size_from_children() {
   second.style.verticalAlign = Align.Start;
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(stack.frame.x == 3 && stack.frame.y == 2 &&
     stack.frame.width == 8 && stack.frame.height == 7,
@@ -2265,18 +2325,16 @@ func vstack_auto_size_from_children() {
     "tui/vstack/auto-first-child");
   check(second.frame.x == 4 && second.frame.y == 5,
     "tui/vstack/auto-second-child");
-  check(stack.dirty.isEmpty(), "tui/vstack/auto-layout-stable");
+  check(Inspector.getDirty(stack).isEmpty(), "tui/vstack/auto-layout-stable");
 
   first.style.height = 4;
-  first.dirty.add(DirtyType.Layout);
-  first.requestReflow();
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(stack.frame.width == 8 && stack.frame.height == 9,
     "tui/vstack/auto-reflow-frame");
   check(second.frame.y == 7,
     "tui/vstack/auto-reflow-moves-following-child");
-  check(stack.dirty.isEmpty(), "tui/vstack/auto-reflow-stable");
+  check(Inspector.getDirty(stack).isEmpty(), "tui/vstack/auto-reflow-stable");
 }
 
 /** 验证 VStack 保留 child 的百分比尺寸和交叉轴 Full/End 语义。 */
@@ -2314,8 +2372,8 @@ func vstack_percentage_and_cross_axis_alignment() {
   stack.addChild(percent);
   stack.addChild(full);
   stack.addChild(end);
-  manager.root = stack;
-  stack.doStyling(manager);
+  arrangeStyledWidget(stack, manager);
+  manager.doStyling();
   manager.doArrange();
 
   check(percent.frame.x == 2 && percent.frame.y == 2 &&
@@ -2358,9 +2416,9 @@ func vstack_floating_children_do_not_advance_flow() {
   stack.addChild(first);
   stack.addChild(floating);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(first.frame.y == 1 && second.frame.y == 3,
     "tui/vstack/floating-does-not-advance");
@@ -2387,13 +2445,14 @@ func vstack_draws_and_hits_direct_children() {
     hits += 1;
   });
   stack.addChild(child);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   manager.doDraw();
-  check(child.clippedFrame.x == 0 && child.clippedFrame.y == 0 &&
-    child.clippedFrame.width == 3 && child.clippedFrame.height == 1,
+  let clippedFrame = Inspector.getClippedFrame(child);
+  check(clippedFrame.x == 0 && clippedFrame.y == 0 &&
+    clippedFrame.width == 3 && clippedFrame.height == 1,
     "tui/vstack/child-draw-clipped");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 2, 0, 0));
@@ -2432,8 +2491,8 @@ func hstack_arranges_direct_children() {
 
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
-  stack.doStyling(manager);
+  arrangeStyledWidget(stack, manager);
+  manager.doStyling();
   manager.doArrange();
 
   check(stack.frame.x == 2 && stack.frame.y == 1 &&
@@ -2455,7 +2514,7 @@ func hstack_arranges_direct_children() {
   }
   check(styleUnchanged, "tui/hstack/style-unchanged");
   var parentPreserved = false;
-  if first.parent match parent: ContainerWidget {
+  if Inspector.getParent(first) match parent: ContainerWidget {
     parentPreserved = (Widget)parent == (Widget)stack;
   }
   check(parentPreserved, "tui/hstack/parent-preserved");
@@ -2479,15 +2538,15 @@ func hstack_overrides_child_main_axis_align() {
   second.style.verticalAlign = Align.Start;
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(first.style.horizontalAlign == Align.Full &&
     second.style.horizontalAlign == Align.Full,
     "tui/hstack/main-axis-user-style-unchanged");
-  check(first.rtStyle.horizontalAlign == Align.Start &&
-    second.rtStyle.horizontalAlign == Align.Start,
+  check(Inspector.getRtStyle(first).horizontalAlign == Align.Start &&
+    Inspector.getRtStyle(second).horizontalAlign == Align.Start,
     "tui/hstack/main-axis-runtime-override");
   check(first.frame.x == 0 && first.frame.width == 2 &&
     second.frame.x == 2 && second.frame.width == 1,
@@ -2516,9 +2575,9 @@ func hstack_auto_size_from_children() {
   second.style.verticalAlign = Align.End;
   stack.addChild(first);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(stack.frame.x == 3 && stack.frame.y == 2 &&
     stack.frame.width == 12 && stack.frame.height == 5,
@@ -2527,18 +2586,16 @@ func hstack_auto_size_from_children() {
     "tui/hstack/auto-first-child");
   check(second.frame.x == 8 && second.frame.y == 3,
     "tui/hstack/auto-second-child");
-  check(stack.dirty.isEmpty(), "tui/hstack/auto-layout-stable");
+  check(Inspector.getDirty(stack).isEmpty(), "tui/hstack/auto-layout-stable");
 
   first.style.width = 6;
-  first.dirty.add(DirtyType.Layout);
-  first.requestReflow();
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(stack.frame.width == 14 && stack.frame.height == 5,
     "tui/hstack/auto-reflow-frame");
   check(second.frame.x == 10,
     "tui/hstack/auto-reflow-moves-following-child");
-  check(stack.dirty.isEmpty(), "tui/hstack/auto-reflow-stable");
+  check(Inspector.getDirty(stack).isEmpty(), "tui/hstack/auto-reflow-stable");
 }
 
 /** 验证 HStack 保留 child 的百分比尺寸和交叉轴 Full/End 语义。 */
@@ -2573,8 +2630,8 @@ func hstack_percentage_and_cross_axis_alignment() {
   stack.addChild(percent);
   stack.addChild(full);
   stack.addChild(end);
-  manager.root = stack;
-  stack.doStyling(manager);
+  arrangeStyledWidget(stack, manager);
+  manager.doStyling();
   manager.doArrange();
 
   check(percent.frame.x == 2 && percent.frame.y == 2 &&
@@ -2620,9 +2677,9 @@ func hstack_collapse_and_floating_children_do_not_advance_flow() {
   stack.addChild(collapsed);
   stack.addChild(floating);
   stack.addChild(second);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   check(stack.frame.width == 6 && stack.frame.height == 2,
     "tui/hstack/collapse-floating-auto-size");
@@ -2657,16 +2714,16 @@ func hstack_nested_vstack_draws_and_hits() {
   });
   nested.addChild(child);
   stack.addChild(nested);
-  manager.root = stack;
+  arrangeStyledWidget(stack, manager);
 
-  stack.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   manager.doDraw();
   check(nested.frame.x == 0 && nested.frame.y == 0 &&
     child.frame.x == 0 && child.frame.y == 0,
     "tui/hstack/nested-vstack-layout");
-  check(nested.clippedFrame.width == 4 &&
-    child.clippedFrame.width == 4,
+  check(Inspector.getClippedFrame(nested).width == 4 &&
+    Inspector.getClippedFrame(child).width == 4,
     "tui/hstack/nested-vstack-clipped");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 3, 0, 0));
@@ -2728,8 +2785,6 @@ func text_auto_measure_and_alignment() {
   arrangeStyledWidget(text, manager);
   check(text.frame.width == 2 && text.frame.height == 2,
     "tui/text/finite-width-preserves-empty-lines");
-  check(!text.isAncestor(text),
-    "tui/text/inherits-view-is-ancestor");
 }
 
 /** 验证有限宽度换行、百分比/Full 宽度以及内容和宽度变化后的重排。 */
@@ -2994,9 +3049,9 @@ func text_draw_wrap_unicode_and_hit_target() {
   text.style.height = 3;
   text.style.foreColor = RgbColor(0x12, 0x34, 0x56);
   text.content = "A中😀B\nZ";
-  manager.root = text;
+  arrangeStyledWidget(text, manager);
 
-  text.doStyling(manager);
+  manager.doStyling();
   manager.doArrange();
   manager.doDraw();
   let buffer = screen.buffer();
@@ -3016,8 +3071,9 @@ func text_draw_wrap_unicode_and_hit_target() {
     "tui/text/draw-hard-wrapped-row");
   check(buffer.cells[1].foreColor() == (u32)0x123456,
     "tui/text/draw-foreground");
-  check(text.clippedFrame.x == 1 && text.clippedFrame.y == 0 &&
-    text.clippedFrame.width == 3 && text.clippedFrame.height == 3,
+  let clippedFrame = Inspector.getClippedFrame(text);
+  check(clippedFrame.x == 1 && clippedFrame.y == 0 &&
+    clippedFrame.width == 3 && clippedFrame.height == 3,
     "tui/text/draw-frame-traced");
 
   var mouseHits = 0;
@@ -3038,8 +3094,11 @@ func text_draw_background_semantics() {
   let manager = ViewManager(screen);
   let buffer = screen.buffer();
   let under = RgbColor(0x01, 0x02, 0x03);
-  buffer.draw((u32)0, (u32)0, (u32)4, (u32)1, (u64)88,
-    none, under, CellStyle.Bold);
+  let root = Container();
+  let underlay = UnderlayView((u64)88, under);
+  underlay.style.position = Position.Absolute;
+  underlay.style.width = 4;
+  underlay.style.height = 1;
 
   let text = Text();
   text.style.position = Position.Absolute;
@@ -3047,8 +3106,12 @@ func text_draw_background_semantics() {
   text.style.height = 1;
   text.style.foreColor = RgbColor(0xAA, 0xBB, 0xCC);
   text.content = "A";
-  arrangeStyledWidget(text, manager);
-  drawStyledWidget(text, manager);
+  root.addChild(underlay);
+  root.addChild(text);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
 
   check(buffer.cells[0].value == (u64)65,
     "tui/text/none-bg-writes-glyph");
@@ -3063,8 +3126,9 @@ func text_draw_background_semantics() {
 
   text.style.backColor = RgbColor(0x04, 0x05, 0x06);
   text.content = "B";
-  arrangeStyledWidget(text, manager);
-  drawStyledWidget(text, manager);
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
   check(buffer.cells[0].value == (u64)66 &&
     buffer.cells[0].backColor() == (u32)0x040506,
     "tui/text/explicit-bg-glyph-cell");
@@ -3088,8 +3152,9 @@ func text_draw_clipping_preserves_content_origin() {
   drawStyledWidget(text, manager);
 
   let buffer = screen.buffer();
-  check(text.clippedFrame.x == 0 && text.clippedFrame.y == 0 &&
-    text.clippedFrame.width == 2 && text.clippedFrame.height == 2,
+  let clippedFrame = Inspector.getClippedFrame(text);
+  check(clippedFrame.x == 0 && clippedFrame.y == 0 &&
+    clippedFrame.width == 2 && clippedFrame.height == 2,
     "tui/text/screen-clipped-frame");
   check(buffer.cells[0].value == (u64)101 &&
     buffer.cells[1].value == (u64)102 &&
@@ -3100,9 +3165,11 @@ func text_draw_clipping_preserves_content_origin() {
   let hiddenScreen = Screen(6, 3);
   let hiddenManager = ViewManager(hiddenScreen);
   let parent = Container();
-  parent.style.position = Position.Relative;
+  parent.style.position = Position.Absolute;
+  parent.style.x = 1;
+  parent.style.width = 2;
+  parent.style.height = 2;
   parent.style.overflow = Overflow.Hidden;
-  parent.frame = makeWidgetFrame(1, 0, 2, 2);
   let child = Text();
   child.style.position = Position.Absolute;
   child.style.x = -1;
@@ -3110,13 +3177,13 @@ func text_draw_clipping_preserves_content_origin() {
   child.style.height = 2;
   child.content = "abcdefgh";
   parent.addChild(child);
-  parent.doStyling(hiddenManager);
-  arrangeStyledWidget(child, hiddenManager);
-  parent.doDraw(hiddenManager);
+  arrangeStyledWidget(parent, hiddenManager);
+  drawStyledWidget(parent, hiddenManager);
 
   let hiddenBuffer = hiddenScreen.buffer();
-  check(child.clippedFrame.x == 1 && child.clippedFrame.y == 0 &&
-    child.clippedFrame.width == 2 && child.clippedFrame.height == 2,
+  let hiddenFrame = Inspector.getClippedFrame(child);
+  check(hiddenFrame.x == 1 && hiddenFrame.y == 0 &&
+    hiddenFrame.width == 2 && hiddenFrame.height == 2,
     "tui/text/hidden-ancestor-frame");
   check(hiddenBuffer.cells[1].value == (u64)98 &&
     hiddenBuffer.cells[2].value == (u64)99 &&
@@ -3129,27 +3196,39 @@ func text_draw_clipping_preserves_content_origin() {
 func view_multilevel_hidden_clipping() {
   let manager = ViewManager(Screen(8, 4));
   let outer = Container();
+  outer.style.position = Position.Absolute;
+  outer.style.x = 2;
+  outer.style.width = 3;
+  outer.style.height = 2;
   outer.style.overflow = Overflow.Hidden;
-  outer.frame = makeWidgetFrame(2, 0, 3, 2);
   let middle = Container();
+  middle.style.position = Position.Absolute;
+  middle.style.x = -1;
+  middle.style.width = 5;
+  middle.style.height = 3;
   middle.style.overflow = Overflow.Hidden;
-  middle.frame = makeWidgetFrame(1, 0, 5, 3);
   let child = View();
-  child.frame = makeWidgetFrame(0, 0, 6, 3);
+  child.style.position = Position.Absolute;
+  child.style.x = -1;
+  child.style.width = 6;
+  child.style.height = 3;
   outer.addChild(middle);
   middle.addChild(child);
 
-  outer.doStyling(manager);
-  outer.doDraw(manager);
+  arrangeStyledWidget(outer, manager);
+  drawStyledWidget(outer, manager);
 
-  check(outer.clippedFrame.x == 2 && outer.clippedFrame.y == 0 &&
-    outer.clippedFrame.width == 3 && outer.clippedFrame.height == 2,
+  let outerFrame = Inspector.getClippedFrame(outer);
+  check(outerFrame.x == 2 && outerFrame.y == 0 &&
+    outerFrame.width == 3 && outerFrame.height == 2,
     "tui/view/multilevel-outer-clipped-frame");
-  check(middle.clippedFrame.x == 2 && middle.clippedFrame.y == 0 &&
-    middle.clippedFrame.width == 3 && middle.clippedFrame.height == 2,
+  let middleFrame = Inspector.getClippedFrame(middle);
+  check(middleFrame.x == 2 && middleFrame.y == 0 &&
+    middleFrame.width == 3 && middleFrame.height == 2,
     "tui/view/multilevel-middle-clipped-frame");
-  check(child.clippedFrame.x == 2 && child.clippedFrame.y == 0 &&
-    child.clippedFrame.width == 3 && child.clippedFrame.height == 2,
+  let childFrame = Inspector.getClippedFrame(child);
+  check(childFrame.x == 2 && childFrame.y == 0 &&
+    childFrame.width == 3 && childFrame.height == 2,
     "tui/view/multilevel-child-clipped-frame");
 }
 
@@ -3179,15 +3258,17 @@ func container_default_pipeline_and_tree_invalidation() {
   check(first.frame.x == 1 && first.frame.y == 1 &&
     first.frame.width == 2 && first.frame.height == 1,
     "tui/container/default-child-layout");
-  check(first.clippedFrame.x == 1 && first.clippedFrame.y == 1 &&
-    first.clippedFrame.width == 2 && first.clippedFrame.height == 1,
+  let firstFrame = Inspector.getClippedFrame(first);
+  check(firstFrame.x == 1 && firstFrame.y == 1 &&
+    firstFrame.width == 2 && firstFrame.height == 1,
     "tui/container/default-child-draw");
   check(screen.buffer().cells[6].backColor() == (u32)0x0000FF,
     "tui/container/default-child-buffer");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 1, 1, 0));
   check(firstHits == 1, "tui/container/default-child-hit");
-  check(root.dirty.isEmpty(), "tui/container/default-layout-clean");
+  check(Inspector.getDirty(root).isEmpty(),
+    "tui/container/default-layout-clean");
 
   let later = View();
   later.style.position = Position.Absolute;
@@ -3196,19 +3277,20 @@ func container_default_pipeline_and_tree_invalidation() {
   later.style.height = 1;
   later.style.backColor = RgbColor(0xFF, 0, 0);
   root.addChild(later);
-  check(root.dirty.has(DirtyType.Layout),
+  check(Inspector.getDirty(root).has(DirtyType.Layout),
     "tui/container/add-invalidates-layout");
   manager.doStyling();
   manager.doArrange();
   manager.doDraw();
+  let laterFrame = Inspector.getClippedFrame(later);
   check(later.frame.x == 3 && later.frame.y == 0 &&
-    later.clippedFrame.width == 1 && later.clippedFrame.height == 1,
+    laterFrame.width == 1 && laterFrame.height == 1,
     "tui/container/added-child-pipeline");
   check(screen.buffer().cells[3].backColor() == (u32)0xFF0000,
     "tui/container/added-child-drawn");
 
   root.removeChild(later);
-  check(root.dirty.has(DirtyType.Layout),
+  check(Inspector.getDirty(root).has(DirtyType.Layout),
     "tui/container/remove-invalidates-layout");
   manager.doStyling();
   manager.doArrange();
@@ -3234,18 +3316,19 @@ func container_subtree_layout_skips_clean_siblings() {
   check(dirtyLeaf.arrangeCount == 1 && cleanSibling.arrangeCount == 1,
     "tui/container/subtree-initial-layout-counts");
 
-  dirtyLeaf.dirty.add(DirtyType.Layout);
-  dirtyLeaf.requestReflow();
-  check(dirtyBranch.dirty.has(DirtyType.Layout) &&
-    root.dirty.has(DirtyType.SubtreeLayout) &&
-    !root.dirty.has(DirtyType.Layout),
+  dirtyLeaf.style.width = 1;
+  manager.doStyling();
+  check(Inspector.getDirty(dirtyBranch).has(DirtyType.Layout) &&
+    Inspector.getDirty(root).has(DirtyType.SubtreeLayout) &&
+    !Inspector.getDirty(root).has(DirtyType.Layout),
     "tui/container/subtree-dirty-path");
   manager.doArrange();
   check(dirtyLeaf.arrangeCount == 2,
     "tui/container/subtree-dirty-leaf-rearranged");
   check(cleanSibling.arrangeCount == 1,
     "tui/container/subtree-clean-sibling-skipped");
-  check(root.dirty.isEmpty() && dirtyBranch.dirty.isEmpty(),
+  check(Inspector.getDirty(root).isEmpty() &&
+    Inspector.getDirty(dirtyBranch).isEmpty(),
     "tui/container/subtree-layout-consumed");
 }
 

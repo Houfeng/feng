@@ -286,6 +286,33 @@ open type DirtyMark {
   `reflowRequested` 状态字段；
 - 绘制脏标记及具体布局容器仍由后续阶段实现。
 
+### 3.6 Inspector 调试查询
+
+`std.tui.view.Inspector` 是面向测试、调试工具和诊断界面的正式公开查询 API。它只提供
+静态方法，无参构造函数为 `seal`，调用方不能创建 Inspector 实例。初版接口如下：
+
+```feng
+open type Inspector {
+  seal func Inspector() {}
+
+  open static func getRtStyle(widget: Widget): Style;
+  open static func getDirty(widget: Widget): DirtyMark;
+  open static func getClippedFrame(widget: Widget): Rect;
+  open static func getParent(widget: Widget): Option<ContainerWidget>;
+}
+```
+
+- `getRtStyle()` 返回 Widget 当前持有的实时运行时 `Style` 引用，不创建副本；该对象反映
+  最近一次 styling 的结果，下一轮 styling 可能原地更新它；
+- `getDirty()` 返回 `DirtyMark` 值，遵循值类型复制语义；
+- `getClippedFrame()` 返回最近一次 draw 缓存的 `Rect` 值，尚未 draw 时返回当前默认值；
+- `getParent()` 返回当前父容器，根组件和未挂载组件返回 `none`；
+- Inspector 不提供脏状态写入、Reflow 请求或 styling、arrange、draw 调度入口。组件状态
+  变更和生命周期推进继续通过 Style、组件树 API 与 ViewManager 的公开流水线完成。
+
+Widget 只在上述四个成员上通过 `@friend(Inspector)` 定向授权。Inspector 不改变这些成员
+的 `seal` 可见性，也不授权访问其他内部成员。
+
 ## 4 Widget 契约
 
 `Widget` 不是继承基类，而是组件参与视图树的能力契约。组件多态通过 spec 实现，代码复用通过组合实现。

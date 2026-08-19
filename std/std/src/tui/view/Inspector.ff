@@ -1,0 +1,51 @@
+open module std.tui.view;
+
+import std;
+import std.tui.common;
+
+/**
+ * 提供 Widget 内部运行时状态的正式调试查询入口。
+ *
+ * Inspector 只包含静态查询方法，不能创建实例。返回结果遵循各类型既有的
+ * 引用或值语义，不额外创建快照。
+ */
+open type Inspector {
+  /** 禁止创建 Inspector 实例。 */
+  seal func Inspector() {}
+
+  /**
+   * 获取 Widget 当前持有的实时运行时样式。
+   * @param widget - 要查询的 Widget
+   * @return 最近一次 styling 生成的运行时 Style 引用
+   */
+  open static func getRtStyle(widget: Widget): Style {
+    return widget.rtStyle;
+  }
+
+  /**
+   * 获取 Widget 当前的组合脏状态。
+   * @param widget - 要查询的 Widget
+   * @return 当前 DirtyMark 值
+   */
+  open static func getDirty(widget: Widget): DirtyMark {
+    return widget.dirty;
+  }
+
+  /**
+   * 获取 Widget 最近一次 draw 缓存的有效绘制区域。
+   * @param widget - 要查询的 Widget
+   * @return 当前 clippedFrame 值
+   */
+  open static func getClippedFrame(widget: Widget): Rect {
+    return widget.clippedFrame;
+  }
+
+  /**
+   * 获取 Widget 当前的父容器。
+   * @param widget - 要查询的 Widget
+   * @return 父容器；根组件或未挂载组件返回 none
+   */
+  open static func getParent(widget: Widget): Option<ContainerWidget> {
+    return widget.parent;
+  }
+}

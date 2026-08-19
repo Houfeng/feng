@@ -23,7 +23,7 @@ open spec Widget {
   /**
    * 当前已经生效的运行时样式，仅供 TUI 框架维护
    */
-  @friend(ViewManager)
+  @friend(ViewManager, Inspector)
   seal let rtStyle: Style;
 
   /**
@@ -54,7 +54,7 @@ open spec Widget {
   /**
    * 当前组件的组合脏状态，仅供 TUI 框架维护
    */
-  @friend(ViewManager)
+  @friend(ViewManager, Inspector)
   seal var dirty: DirtyMark;
 
   /**
@@ -67,13 +67,13 @@ open spec Widget {
    * frame 经过祖先和 Screen 裁剪后的本帧实际区域；x/y 同样是
    * 相对于 Screen 原点的绝对坐标。绘制和鼠标命中直接使用该快照。
    */
-  @friend(ViewManager)
+  @friend(ViewManager, Inspector)
   seal var clippedFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
    */
-  @friend(ViewManager)
+  @friend(ViewManager, Inspector)
   seal var parent: Option<ContainerWidget>;
 
   /**

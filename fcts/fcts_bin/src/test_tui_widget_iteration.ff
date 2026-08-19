@@ -38,13 +38,13 @@ open func test_tui_widget_iteration() {
 
       assert(container.countChildren() == 2,
              "List<Widget> iterator visits every child");
-      if first.parent match parent: ContainerWidget {
+      if Inspector.getParent(first) match parent: ContainerWidget {
         assert((Widget)parent == (Widget)container,
                "first child keeps its container parent");
       } else {
         assert(false, "first child has a container parent");
       }
-      if second.parent match parent: ContainerWidget {
+      if Inspector.getParent(second) match parent: ContainerWidget {
         assert((Widget)parent == (Widget)container,
                "second child keeps its container parent");
       } else {
