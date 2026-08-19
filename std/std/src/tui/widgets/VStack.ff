@@ -19,7 +19,7 @@ open type VStack: VStackWidget {
 
   /** 为直接 child 追加主轴 Align 覆盖，其他样式准备复用 Container。 */
   @mixable
-  static func prepareChildOverrideStyle(stack: VStackWidget,
+  seal static func prepareChildOverrideStyle(stack: VStackWidget,
     child: Widget): void {
     Container.prepareChildOverrideStyle(stack, child);
     child.overrideStyle.verticalAlign = Align.Start;
@@ -176,7 +176,7 @@ open type VStack: VStackWidget {
    * 在最终 content 区域内布局直接 children，并返回普通流内在尺寸。
    * 只调用直接 child 的公开调度方法，不访问下一层 children。
    */
-  static func arrangeChildren(stack: VStackWidget,
+  seal static func arrangeChildren(stack: VStackWidget,
     manager: ViewManager): Tuple<int, int> {
     let content = VStack.resolveContentFrame(stack);
     var cursor = content.y;
@@ -221,7 +221,7 @@ open type VStack: VStackWidget {
    * children 产生的新内在尺寸通过既有 Layout 标记在本地继续收敛。
    */
   @mixable
-  static func arrange(stack: VStackWidget, manager: ViewManager): void {
+  seal static func arrange(stack: VStackWidget, manager: ViewManager): void {
     let widget = (Widget)stack;
     let previous = widget.frame;
     let needsWidth = VStack.needsIntrinsicWidth(stack);

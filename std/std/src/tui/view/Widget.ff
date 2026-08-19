@@ -18,29 +18,29 @@ open spec Widget {
   /**
    * 当前样式阶段复用的草稿样式，仅供 TUI 框架维护
    */
-  let draftStyle: Style;
+  seal let draftStyle: Style;
 
   /**
    * 当前已经生效的运行时样式，仅供 TUI 框架维护
    */
-  // @friend(ViewManager)
-  let rtStyle: Style;
+  @friend(ViewManager)
+  seal let rtStyle: Style;
 
   /**
    * 框架和父布局提供的最高优先级样式覆盖，仅供 TUI 框架维护
    */
-  // @friend(ViewManager)
-  let overrideStyle: StylePatch;
+  @friend(ViewManager)
+  seal let overrideStyle: StylePatch;
 
   /**
    * 当前组件的状态位集合；Pseudo 只占其中一组框架内建状态位。
    */
-  var state: int;
+  seal var state: int;
 
   /**
    * 按定义顺序保存的状态样式，仅供 TUI 样式管线维护
    */
-  let stateStyles: StateStyles;
+  seal let stateStyles: StateStyles;
 
   /** 获取指定内建伪状态的样式，首次使用时创建。 */
   func useStateStyle(pseudo: Pseudo): StylePatch;
@@ -54,8 +54,8 @@ open spec Widget {
   /**
    * 当前组件的组合脏状态，仅供 TUI 框架维护
    */
-  // @friend(ViewManager)
-  var dirty: DirtyMark;
+  @friend(ViewManager)
+  seal var dirty: DirtyMark;
 
   /**
    * 布局阶段计算后的最终区域；x/y 是相对于 Screen 原点的绝对坐标。
@@ -67,14 +67,14 @@ open spec Widget {
    * frame 经过祖先和 Screen 裁剪后的本帧实际区域；x/y 同样是
    * 相对于 Screen 原点的绝对坐标。绘制和鼠标命中直接使用该快照。
    */
-  // @friend(ViewManager)
-  var clippedFrame: Rect;
+  @friend(ViewManager)
+  seal var clippedFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
    */
-  // @friend(ViewManager)
-  var parent: Option<ContainerWidget>;
+  @friend(ViewManager)
+  seal var parent: Option<ContainerWidget>;
 
   /**
    * 焦点资格与后续 Tab 顺序。
@@ -121,46 +121,47 @@ open spec Widget {
    * 请求直接父组件重新布局。
    * 更高祖先只标记子树布局路径；没有父组件时静默返回。
    */
-  func requestReflow(): void;
+  seal func requestReflow(): void;
 
   /**
    * 合并本轮有效样式，并根据最终布局样式变化标记布局。
    * 容器组件自行决定是否及如何处理子组件。
    */
-  // @friend(ViewManager)
-  func doStyling(manager: ViewManager): void;
+  @friend(ViewManager)
+  seal func doStyling(manager: ViewManager): void;
 
   /**
    * 根据布局脏标记调度 arrange。
    * 仅供 ViewManager 和负责子组件布局的组件调用。
    */
-  // @friend(ViewManager)
-  func doArrange(manager: ViewManager): void;
+  @friend(ViewManager)
+  seal func doArrange(manager: ViewManager): void;
 
   /**
    * 对齐并计算当前组件的 frame
    * 容器组件自行决定是否及如何布局子组件
    */
-  func arrange(manager: ViewManager): void;
+  seal func arrange(manager: ViewManager): void;
 
   /**
    * 计算并缓存有效绘制区域、登记绘制顺序，再调度 draw。
    * 仅供 ViewManager 和负责绘制子组件的组件调用。
    */
-  // @friend(ViewManager)
-  func doDraw(manager: ViewManager): void;
+  @friend(ViewManager)
+  seal func doDraw(manager: ViewManager): void;
 
   /**
    * 根据已缓存的 clippedFrame 和非尺寸样式绘制当前组件。
    * 容器组件自行决定是否及如何绘制子组件。
    */
-  func draw(manager: ViewManager): void;
+  seal func draw(manager: ViewManager): void;
 
   /**
    * 检查当前组件是否为指定组件的祖先
    * 当前组件与指定组件相同时返回 false
    */
-  func isAncestor(w: Widget): bool;
+  @friend(ViewManager)
+  seal func isAncestor(w: Widget): bool;
 }
 
 /**
@@ -170,13 +171,13 @@ open spec ContainerWidget: Widget {
   /**
    * 直接子组件集合
    */
-  let children: List<Widget>;
+  seal let children: List<Widget>;
 
   /**
    * 清理并准备直接 child 的运行时样式覆盖。
    * 仅供容器 styling 阶段调用；专用容器可覆盖并追加布局约束。
    */
-  func prepareChildOverrideStyle(child: Widget): void;
+  seal func prepareChildOverrideStyle(child: Widget): void;
 
   /**
    * 添加子组件；已有父容器时自动迁移

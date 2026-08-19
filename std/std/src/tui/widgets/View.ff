@@ -20,19 +20,24 @@ open type View: Widget {
   let style: Style;
 
   /** 当前样式阶段复用的草稿样式，仅供 TUI 框架维护。 */
-  let draftStyle: Style;
+  @mixable
+  seal let draftStyle: Style;
 
   /** 当前已经生效的运行时样式，仅供 TUI 框架维护。 */
-  let rtStyle: Style;
+  @mixable
+  seal let rtStyle: Style;
 
   /** 框架和父布局提供的最高优先级样式覆盖，仅供 TUI 框架维护。 */
-  let overrideStyle: StylePatch;
+  @mixable
+  seal let overrideStyle: StylePatch;
 
   /** 当前组件的状态位集合；0 表示没有任何激活状态。 */
-  var state: int = 0;
+  @mixable
+  seal var state: int = 0;
 
   /** 按首次 use() 顺序保存的状态样式。 */
-  let stateStyles: StateStyles = StateStyles();
+  @mixable
+  seal let stateStyles: StateStyles = StateStyles();
 
   /** 获取指定内建伪状态的样式，首次使用时创建。 */
   @mixable
@@ -55,7 +60,8 @@ open type View: Widget {
   /**
    * 当前组件的组合脏状态；新组件及其初始子树需要布局。
    */
-  var dirty: DirtyMark = DirtyMark(
+  @mixable
+  seal var dirty: DirtyMark = DirtyMark(
   DirtyType.Layout,
   DirtyType.SubtreeLayout
   );
@@ -64,18 +70,21 @@ open type View: Widget {
    * 布局阶段计算后的最终区域；x/y 是相对于 Screen 原点的绝对坐标。
    * 父布局负责将直接 child 的相对布局结果转换为该绝对坐标。
    */
+  // @mixable
   var frame: Rect;
 
   /**
    * frame 经过祖先和 Screen 裁剪后的本帧实际区域；x/y 同样是
    * 相对于 Screen 原点的绝对坐标。绘制和鼠标命中直接使用该快照。
    */
-  var clippedFrame: Rect;
+  @mixable
+  seal var clippedFrame: Rect;
 
   /**
    * 父组件；仅由组件树 API 维护
    */
-  var parent: Option<ContainerWidget>;
+  @mixable
+  seal var parent: Option<ContainerWidget>;
 
   /**
    * 焦点资格与后续 Tab 顺序；默认 -1 表示不可获得焦点。
@@ -162,7 +171,7 @@ open type View: Widget {
    * 直接父组件获得 Layout；更高祖先只获得 SubtreeLayout。
    */
   @mixable
-  static func requestReflow(widget: Widget): void {
+  seal static func requestReflow(widget: Widget): void {
     if widget.parent match parent: ContainerWidget {
       let parentWidget = (Widget)parent;
       parentWidget.dirty.add(DirtyType.Layout);
@@ -182,7 +191,7 @@ open type View: Widget {
    * 合并用户样式和框架覆盖，只按最终运行时布局样式变化请求重新布局。
    */
   @mixable
-  static func doStyling(widget: Widget, manager: ViewManager): void {
+  seal static func doStyling(widget: Widget, manager: ViewManager): void {
     widget.draftStyle.clear();
     widget.draftStyle.apply(widget.style);
     for var index: int = 0;
@@ -205,7 +214,7 @@ open type View: Widget {
    * arrange 期间直接父级收到的 Layout 请求会在本次调用内继续处理。
    */
   @mixable
-  static func doArrange(widget: Widget, manager: ViewManager): void {
+  seal static func doArrange(widget: Widget, manager: ViewManager): void {
     if !widget.dirty.has(DirtyType.Layout) &&
     !widget.dirty.has(DirtyType.SubtreeLayout) {
       return;
@@ -255,7 +264,7 @@ open type View: Widget {
    * Absolute 不存在非 Normal 祖先、或普通流组件无 parent 时使用整个 Screen。
    */
   @mixable
-  static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
+  seal static func resolveReferenceFrame(widget: Widget, manager: ViewManager): Rect {
     let reference = Rect();
     reference.x = 0;
     reference.y = 0;
@@ -386,7 +395,7 @@ open type View: Widget {
    * 容器组件自行决定是否及如何布局子组件
    */
   @mixable
-  static func arrange(widget: Widget, manager: ViewManager): void {
+  seal static func arrange(widget: Widget, manager: ViewManager): void {
     let reference = View.resolveReferenceFrame(widget, manager);
     let margin = widget.rtStyle.margin;
     var top = View.resolveLength(margin.top, reference.height);
@@ -481,7 +490,7 @@ open type View: Widget {
    * 空区域不会进入 sequence，也不会调用组件的 draw 实现。
    */
   @mixable
-  static func doDraw(widget: Widget, manager: ViewManager): void {
+  seal static func doDraw(widget: Widget, manager: ViewManager): void {
     let frame = View.resolveClippedFrame(widget, manager);
     widget.clippedFrame = frame;
     if frame.width == 0 || frame.height == 0 {
@@ -496,7 +505,7 @@ open type View: Widget {
    * 不绘制文本、边框或子组件。
    */
   @mixable
-  static func draw(widget: Widget, manager: ViewManager): void {
+  seal static func draw(widget: Widget, manager: ViewManager): void {
     let frame = widget.clippedFrame;
     if frame.width == 0 || frame.height == 0 {
       return;
@@ -515,7 +524,7 @@ open type View: Widget {
    * 使用循环沿 parent 链向上查找，不使用递归
    */
   @mixable
-  static func isAncestor(widget: Widget, w: Widget): bool {
+  seal static func isAncestor(widget: Widget, w: Widget): bool {
     var current: Option < ContainerWidget > = w.parent;
     while current match let parent: ContainerWidget {
       if widget == (Widget)parent {
