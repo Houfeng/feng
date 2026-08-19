@@ -54,19 +54,32 @@ typedef enum FengResolvedCallableKind {
     FENG_RESOLVED_CALLABLE_FIT_METHOD,       /* method declared in a fit body */
     FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD, /* static method declared in a type body */
     FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD,  /* static method declared in a fit body */
+    FENG_RESOLVED_CALLABLE_SPEC_METHOD,      /* instance requirement dispatched through a spec witness */
+    FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD, /* static requirement dispatched through a spec witness */
     FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR  /* constructor of a concrete type */
 } FengResolvedCallableKind;
 
 typedef struct FengResolvedCallable {
     FengResolvedCallableKind kind;
     const FengDecl *function_decl;     /* set for FUNCTION */
-    const FengDecl *owner_type_decl;   /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
+    /* Declaring nominal owner. TYPE/FIT/CONSTRUCTOR calls use a type decl;
+     * witness-dispatched SPEC calls use the spec decl that owns `member`. */
+    const FengDecl *owner_type_decl;
     const FengTypeMember *member;      /* set for TYPE_METHOD/FIT_METHOD/TYPE_CONSTRUCTOR */
     const FengDecl *fit_decl;          /* set for FIT_METHOD */
     /* 调用点 receiver 的具体化类型引用（含 type_args）。用于 post-pass
      * 对方法返回类型做参数代入以收集间接泛型依赖。由语义分析结果持有完整
      * 类型树，本字段仅借用 FengSemanticAnalysis 生命周期。 */
     const FengTypeRef *owner_instance_type_ref;
+    /* SPEC_METHOD/SPEC_STATIC_METHOD only: exact witness surface selected by
+     * the caller and the caller-view subject type.  `owner_type_decl` and
+     * `owner_instance_type_ref` identify the object-form spec that originally
+     * declares `member`; these fields retain the possibly-derived dispatch
+     * surface and the concrete/open subject whose witness selects the
+     * implementation.  All type refs share FengSemanticAnalysis lifetime. */
+    const FengDecl *witness_spec_decl;
+    const FengTypeRef *witness_spec_type_ref;
+    const FengTypeRef *witness_subject_type_ref;
     /* 调用解析得到的函数/方法级泛型实参，顺序与 callable 声明一致。
      * 数组由 AST 节点拥有；各 type_ref 由 FengSemanticAnalysis 持有。 */
     const FengTypeRef **callable_type_args;

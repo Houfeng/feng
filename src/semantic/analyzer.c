@@ -264,6 +264,13 @@ typedef struct FunctionCallResolution {
     const FengTypeMember *member;       /* set for type-method / fit-method */
     const FengDecl *owner_type_decl;    /* set for type-method / fit-method */
     const FengDecl *fit_decl;           /* set for fit-method */
+    /* Object-form spec calls keep both the member-declaring owner and the
+     * witness dispatch surface.  The subject may remain an open caller type
+     * parameter; all refs are borrowed from the active analysis context. */
+    const FengTypeRef *owner_instance_type_ref;
+    const FengDecl *witness_spec_decl;
+    const FengTypeRef *witness_spec_type_ref;
+    const FengTypeRef *witness_subject_type_ref;
 } FunctionCallResolution;
 
 typedef enum CallableValueResolutionKind {
@@ -4640,6 +4647,34 @@ static FengTypeRef *create_named_type_ref_for_inference(FengToken token,
     return type_ref;
 }
 
+/* Materialize one active type-parameter name as a tracked caller-view type
+ * reference. Static spec-witness calls use this identity to retain the
+ * subject type until the enclosing callable is concretely reified. */
+static const FengTypeRef *create_tracked_type_param_ref(
+    ResolveContext *context, FengToken token, FengSlice name) {
+    FengSlice *segments;
+    FengTypeRef *type_ref;
+
+    if (context == NULL || name.data == NULL) {
+        return NULL;
+    }
+    segments = (FengSlice *)malloc(sizeof(*segments));
+    if (segments == NULL) {
+        return NULL;
+    }
+    segments[0] = name;
+    type_ref = create_named_type_ref_for_inference(token, segments, 1U);
+    if (type_ref == NULL) {
+        free(segments);
+        return NULL;
+    }
+    if (!resolver_track_synthetic_type_ref(context, type_ref)) {
+        free_synthetic_type_ref(type_ref);
+        return NULL;
+    }
+    return type_ref;
+}
+
 static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *type, FengToken token) {
     FengTypeRef *type_ref;
     FengSlice *segments;
@@ -5075,7 +5110,9 @@ static const FengCallableSignature *resolved_callable_signature(
     if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
-         resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+         resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
         resolved->member != NULL) {
         return &resolved->member->as.callable;
     }
@@ -15433,7 +15470,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                         PrepackedVariadicRejection spread_rejection =
                             FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
-                        if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+                        if (member->is_static ||
+                            member->kind != FENG_TYPE_MEMBER_METHOD ||
                             !slice_equals(member->as.callable.name, name) ||
                             !spec_member_is_accessible_from(context,
                                                             type_decl,
@@ -15443,7 +15481,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
                             !callable_parameters_match_args_for_owner_instance(
                                 context,
                                 &member->as.callable,
-                                type_decl,
+                                current,
                                 NULL,
                                 owner_type,
                                 args,
@@ -15467,7 +15505,7 @@ static FunctionCallResolution resolve_accessible_method_overload(
                             callable_parameters_exactly_match_args_for_owner_instance(
                                 context,
                                 &member->as.callable,
-                                type_decl,
+                                current,
                                 NULL,
                                 owner_type,
                                 args,
@@ -15480,7 +15518,11 @@ static FunctionCallResolution resolve_accessible_method_overload(
                             result.decl = NULL;
                             result.callable = &member->as.callable;
                             result.member = member;
-                            result.owner_type_decl = type_decl;
+                            result.owner_type_decl = current;
+                            result.owner_instance_type_ref = NULL;
+                            result.witness_spec_decl = type_decl;
+                            result.witness_spec_type_ref = owner_type.type_ref;
+                            result.witness_subject_type_ref = owner_type.type_ref;
                             continue;
                         }
                         if (priority > result.match_priority) {
@@ -15502,9 +15544,24 @@ static FunctionCallResolution resolve_accessible_method_overload(
         }
         for (i = 0U; i < closure_count; ++i) {
             const FengDecl *current = closure[i];
+            const FengTypeRef *current_instance_ref = owner_type.type_ref;
+            InferredExprType current_owner = owner_type;
 
             if (current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
                 continue;
+            }
+            if (current != type_decl && owner_type.type_ref != NULL) {
+                const FengTypeRef *projected =
+                    instantiate_parent_spec_ref_for_instance(
+                        context,
+                        type_decl,
+                        owner_type.type_ref,
+                        current);
+
+                if (projected != NULL) {
+                    current_instance_ref = projected;
+                    current_owner = inferred_expr_type_from_type_ref(projected);
+                }
             }
             for (j = 0U; j < current->as.spec_decl.as.object.member_count; ++j) {
                 const FengTypeMember *member = current->as.spec_decl.as.object.members[j];
@@ -15513,7 +15570,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 PrepackedVariadicRejection spread_rejection =
                     FENG_PREPACKED_VARIADIC_REJECTION_NONE;
 
-                if (member->kind != FENG_TYPE_MEMBER_METHOD ||
+                if (member->is_static ||
+                    member->kind != FENG_TYPE_MEMBER_METHOD ||
                     !slice_equals(member->as.callable.name, name) ||
                     !spec_member_is_accessible_from(context,
                                                     type_decl,
@@ -15522,9 +15580,9 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                     member) ||
                     !callable_parameters_match_args_for_owner_instance(context,
                                                                        &member->as.callable,
-                                                                       type_decl,
+                                                                       current,
                                                                        NULL,
-                                                                       owner_type,
+                                                                       current_owner,
                                                                        args,
                                                                        arg_count,
                                                                        explicit_type_args,
@@ -15543,12 +15601,12 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     has_explicit_type_args,
                     explicit_type_arg_count,
                     member->as.callable.type_param_count,
-                    callable_parameters_exactly_match_args_for_owner_instance(
-                        context,
-                        &member->as.callable,
-                        type_decl,
-                        NULL,
-                        owner_type,
+                        callable_parameters_exactly_match_args_for_owner_instance(
+                            context,
+                            &member->as.callable,
+                            current,
+                            NULL,
+                            current_owner,
                         args,
                         arg_count));
 
@@ -15559,7 +15617,11 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     result.decl = NULL;
                     result.callable = &member->as.callable;
                     result.member = member;
-                    result.owner_type_decl = type_decl;
+                    result.owner_type_decl = current;
+                    result.owner_instance_type_ref = current_instance_ref;
+                    result.witness_spec_decl = type_decl;
+                    result.witness_spec_type_ref = owner_type.type_ref;
+                    result.witness_subject_type_ref = owner_type.type_ref;
                     continue;
                 }
                 if (priority > result.match_priority) {
@@ -15571,8 +15633,8 @@ static FunctionCallResolution resolve_accessible_method_overload(
                     callable_signatures_equal_for_owner_instance(context,
                                                                  result.callable,
                                                                  &member->as.callable,
-                                                                 type_decl,
-                                                                 owner_type)) {
+                                                                 current,
+                                                                 current_owner)) {
                     continue;
                 }
 
@@ -15580,6 +15642,10 @@ static FunctionCallResolution resolve_accessible_method_overload(
                 result.callable = NULL;
                 result.member = NULL;
                 result.owner_type_decl = NULL;
+                result.owner_instance_type_ref = NULL;
+                result.witness_spec_decl = NULL;
+                result.witness_spec_type_ref = NULL;
+                result.witness_subject_type_ref = NULL;
             }
         }
         free(closure);
@@ -15916,7 +15982,9 @@ static bool validate_explicit_prepacked_variadic_argument(
     } else if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
                 resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
                 resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
-                resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+                resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+                resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+                resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
                resolved->member != NULL) {
         callable = &resolved->member->as.callable;
     }
@@ -16556,12 +16624,20 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                 context,
                                 &static_target,
                                 declaring_spec);
+                        InferredExprType declaring_owner =
+                            declaring_spec_instance != NULL
+                                ? inferred_expr_type_from_type_ref(
+                                      declaring_spec_instance)
+                                : inferred_expr_type_from_decl(declaring_spec);
                         const FengTypeRef *closed_return =
-                            substitute_spec_member_type_ref_for_instance(
+                            substitute_callable_return_type_for_call(
                                 context,
                                 declaring_spec,
-                                declaring_spec_instance,
-                                spec_sig->return_type);
+                                NULL,
+                                declaring_owner,
+                                expr,
+                                spec_sig,
+                                false);
 
                         if (closed_return != NULL) {
                             return_type =
@@ -16638,11 +16714,18 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                 InferredExprType return_type;
 
                 if (resolution.callable->return_type != NULL) {
+                    InferredExprType callable_owner_type =
+                        resolution.owner_instance_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  resolution.owner_instance_type_ref)
+                            : owner_type;
                     const FengTypeRef *return_type_ref =
                         substitute_callable_return_type_for_call(context,
-                                                                 owner_type_decl,
+                                                                 resolution.owner_type_decl != NULL
+                                                                     ? resolution.owner_type_decl
+                                                                     : owner_type_decl,
                                                                  resolution.fit_decl,
-                                                                 owner_type,
+                                                                 callable_owner_type,
                                                                  expr,
                                                                  resolution.callable,
                                                                  false);
@@ -16726,32 +16809,35 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                             const FengCallableSignature *spec_sig = &spec_member->as.callable;
 
                             if (spec_sig->return_type != NULL) {
-                                FengTypeRef *substituted = NULL;
+                                const FengTypeRef *constraint_ref =
+                                    tp->type_param->constraint;
+                                const FengTypeRef *declaring_ref =
+                                    constraint_decl == member_owner_decl
+                                        ? constraint_ref
+                                        : instantiate_parent_spec_ref_for_instance(
+                                              context,
+                                              constraint_decl,
+                                              constraint_ref,
+                                              member_owner_decl);
+                                InferredExprType declaring_owner =
+                                    declaring_ref != NULL
+                                        ? inferred_expr_type_from_type_ref(
+                                              declaring_ref)
+                                        : inferred_expr_type_from_decl(
+                                              member_owner_decl);
+                                const FengTypeRef *closed_return =
+                                    substitute_callable_return_type_for_call(
+                                        context,
+                                        member_owner_decl,
+                                        NULL,
+                                        declaring_owner,
+                                        expr,
+                                        spec_sig,
+                                        false);
 
-                                if (member_owner_decl->as.spec_decl.type_param_count > 0U) {
-                                    /* Generic spec: substitute the spec's own
-                                     * type params with the constraint ref's
-                                     * type args (e.g. Cloneable<T> with
-                                     * constraint Cloneable<K> maps T -> K). */
-                                    const FengTypeRef *constraint_ref =
-                                        tp->type_param->constraint;
-                                    if (constraint_ref != NULL &&
-                                        constraint_ref->kind == FENG_TYPE_REF_NAMED &&
-                                        constraint_ref->as.named.type_arg_count ==
-                                            member_owner_decl->as.spec_decl.type_param_count) {
-                                        substituted = clone_type_ref_substituting_type_params(
-                                            spec_sig->return_type,
-                                            member_owner_decl->as.spec_decl.type_params,
-                                            member_owner_decl->as.spec_decl.type_param_count,
-                                            constraint_ref->as.named.type_args);
-                                    }
-                                } else {
-                                    /* Non-generic spec: return type has no
-                                     * type-param references; clone as-is. */
-                                    substituted = clone_type_ref_for_inference(spec_sig->return_type);
-                                }
-                                if (substituted != NULL) {
-                                    return inferred_expr_type_from_type_ref(substituted);
+                                if (closed_return != NULL) {
+                                    return inferred_expr_type_from_type_ref(
+                                        closed_return);
                                 }
                             }
                         }
@@ -23727,6 +23813,37 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
     return true;
 }
 
+/* Persist one caller-view type expression attached to a resolved call. */
+static bool persist_resolved_callable_type_ref(
+    ResolveContext *context,
+    const FengExpr *call_expr,
+    const FengTypeRef *source,
+    const char *role,
+    const FengTypeRef **out_ref) {
+    FengTypeRef *persistent;
+
+    if (out_ref == NULL) {
+        return false;
+    }
+    *out_ref = NULL;
+    if (source == NULL) {
+        return true;
+    }
+    persistent = clone_type_ref_for_inference(source);
+    if (persistent == NULL ||
+        !analysis_track_synthetic_type_ref(context->analysis, persistent)) {
+        free_synthetic_type_ref(persistent);
+        return resolver_append_error(
+            context,
+            call_expr->token,
+            "IE0001",
+            format_message("out of memory while recording resolved callable %s",
+                           role != NULL ? role : "type"));
+    }
+    *out_ref = persistent;
+    return true;
+}
+
 /* Record overload-resolution metadata that is consumed after ResolveContext
  * teardown.  owner_instance_type_ref may come from the resolver's temporary
  * type-ref pool, so persist a complete clone in the analysis before attaching
@@ -23737,13 +23854,19 @@ static bool record_resolved_callable_from_resolution(
     const FengTypeRef *owner_instance_type_ref) {
     FengExpr *mutable_expr = (FengExpr *)call_expr;
     FengResolvedCallable *slot;
-    FengTypeRef *persistent_owner_ref = NULL;
+    const FengTypeRef *persistent_owner_ref = NULL;
+    const FengTypeRef *persistent_witness_spec_ref = NULL;
+    const FengTypeRef *persistent_subject_ref = NULL;
     FengTypeRef *synthetic_owner_ref = NULL;
 
     if (mutable_expr == NULL || mutable_expr->kind != FENG_EXPR_CALL ||
         resolution == NULL ||
         resolution->kind != FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
         return true;
+    }
+
+    if (resolution->owner_instance_type_ref != NULL) {
+        owner_instance_type_ref = resolution->owner_instance_type_ref;
     }
 
     /* `self.method()` is inferred from the owner declaration and therefore
@@ -23810,25 +23933,33 @@ static bool record_resolved_callable_from_resolution(
         }
     }
 
-    if (owner_instance_type_ref != NULL) {
-        persistent_owner_ref =
-            clone_type_ref_for_inference(owner_instance_type_ref);
-        if (persistent_owner_ref == NULL ||
-            !analysis_track_synthetic_type_ref(context->analysis,
-                                               persistent_owner_ref)) {
-            free_synthetic_type_ref(persistent_owner_ref);
-            resolver_append_error(
-                context,
-                call_expr->token,
-                "IE0001",
-                format_message("out of memory while recording resolved callable"));
-            return false;
-        }
+    if (!persist_resolved_callable_type_ref(context,
+                                            call_expr,
+                                            owner_instance_type_ref,
+                                            "owner type",
+                                            &persistent_owner_ref) ||
+        !persist_resolved_callable_type_ref(
+            context,
+            call_expr,
+            resolution->witness_spec_type_ref,
+            "witness spec type",
+            &persistent_witness_spec_ref) ||
+        !persist_resolved_callable_type_ref(
+            context,
+            call_expr,
+            resolution->witness_subject_type_ref,
+            "witness subject type",
+            &persistent_subject_ref)) {
+        free_synthetic_type_ref(synthetic_owner_ref);
+        return false;
     }
     free_synthetic_type_ref(synthetic_owner_ref);
 
     slot = &mutable_expr->as.call.resolved_callable;
     slot->owner_instance_type_ref = persistent_owner_ref;
+    slot->witness_spec_decl = resolution->witness_spec_decl;
+    slot->witness_spec_type_ref = persistent_witness_spec_ref;
+    slot->witness_subject_type_ref = persistent_subject_ref;
     free((void *)slot->callable_type_args);
     slot->callable_type_args = NULL;
     slot->callable_type_arg_count = 0U;
@@ -23948,6 +24079,15 @@ static bool record_resolved_callable_from_resolution(
         slot->owner_type_decl = resolution->owner_type_decl;
         slot->member = resolution->member;
         slot->fit_decl = resolution->fit_decl;
+        return true;
+    }
+    if (resolution->witness_spec_decl != NULL &&
+        resolution->member != NULL) {
+        slot->kind = resolution->member->is_static
+                         ? FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD
+                         : FENG_RESOLVED_CALLABLE_SPEC_METHOD;
+        slot->owner_type_decl = resolution->owner_type_decl;
+        slot->member = resolution->member;
         return true;
     }
     if (resolution->member != NULL) {
@@ -24290,7 +24430,9 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                         /*include_static=*/true,
                         &declaring_spec);
 
-                if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_METHOD) {
+                if (spec_member != NULL &&
+                    spec_member->kind == FENG_TYPE_MEMBER_METHOD &&
+                    spec_member->is_static) {
                     const FengCallableSignature *spec_sig = &spec_member->as.callable;
                     const FengTypeRef *declaring_spec_instance =
                         constraint_member_declaring_spec_instance(
@@ -24305,6 +24447,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     bool rejected_existing_array_for_variadic = false;
                     PrepackedVariadicRejection spread_rejection =
                         FENG_PREPACKED_VARIADIC_REJECTION_NONE;
+                    const FengTypeRef *subject_type_ref;
+                    FunctionCallResolution spec_resolution;
 
                     if (!callable_parameters_match_args_for_owner_instance(
                             context,
@@ -24337,22 +24481,71 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                        object->as.identifier.data,
                                                        (int)callee->as.member.member.length,
                                                        callee->as.member.member.data,
-                                                       expr->as.call.arg_count));
+                            expr->as.call.arg_count));
                     }
-                    note_callable_exception_escape(context, spec_sig);
-                    if (!record_selected_friend_fit_access(
+                    if (!validate_borrowed_data_pointer_call_arguments(
                             context,
-                            static_target.constraint_spec_decl,
-                            constraint_owner,
-                            spec_member)) {
+                            callee,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            spec_sig->params,
+                            spec_sig->param_count,
+                            false)) {
                         return false;
                     }
-                    materialize_callable_type_param_constraint_witnesses(context,
-                                                                        expr,
-                                                                        spec_sig,
-                                                                        NULL,
-                                                                        NULL,
-                                                                        inferred_expr_type_unknown());
+                    subject_type_ref = create_tracked_type_param_ref(
+                        context, object->token, object->as.identifier);
+                    if (subject_type_ref == NULL) {
+                        return resolver_append_error(
+                            context,
+                            object->token,
+                            "IE0001",
+                            format_message(
+                                "out of memory while recording static spec witness subject"));
+                    }
+                    memset(&spec_resolution, 0, sizeof(spec_resolution));
+                    spec_resolution.kind =
+                        FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+                    spec_resolution.callable = spec_sig;
+                    spec_resolution.member = spec_member;
+                    spec_resolution.owner_type_decl = declaring_spec;
+                    spec_resolution.owner_instance_type_ref =
+                        declaring_spec_instance;
+                    spec_resolution.witness_spec_decl =
+                        static_target.constraint_spec_decl;
+                    spec_resolution.witness_spec_type_ref =
+                        static_target.constraint_spec_type_ref;
+                    spec_resolution.witness_subject_type_ref =
+                        subject_type_ref;
+                    note_callable_exception_escape(context, spec_sig);
+                    materialize_callable_type_param_constraint_witnesses(
+                        context,
+                        expr,
+                        spec_sig,
+                        declaring_spec,
+                        NULL,
+                        declaring_owner);
+                    if (!record_resolved_callable_from_resolution(
+                            context,
+                            expr,
+                            &spec_resolution,
+                            declaring_spec_instance)) {
+                        return false;
+                    }
+                    record_object_arg_coercion_sites_for_resolved_call(
+                        context,
+                        expr,
+                        spec_sig,
+                        declaring_spec,
+                        declaring_owner);
+                    commit_literal_arg_adaptations_for_resolved_call(
+                        context,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        spec_sig,
+                        declaring_spec,
+                        NULL,
+                        declaring_owner);
                     return true;
                 }
                 return resolver_append_error(
@@ -24528,6 +24721,102 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                          callee,
                                                          expr->as.call.args,
                                                          expr->as.call.arg_count);
+            }
+        }
+
+        /* Resolve an instance method through a generic parameter's exact
+         * object-spec constraint.  The selected requirement remains a spec
+         * callable, while the caller-view subject stays as the open type
+         * parameter so the reifiable dependency can be closed later. */
+        if (owner_type_decl == NULL &&
+            owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+            owner_type.type_ref != NULL &&
+            owner_type.type_ref->kind == FENG_TYPE_REF_NAMED &&
+            owner_type.type_ref->as.named.segment_count == 1U &&
+            owner_type.type_ref->as.named.type_arg_count == 0U) {
+            const TypeParamEntry *type_param = find_type_param(
+                context, owner_type.type_ref->as.named.segments[0]);
+            const FengTypeRef *constraint_ref =
+                type_param != NULL && type_param->type_param != NULL
+                    ? type_param->type_param->constraint
+                    : NULL;
+            const FengDecl *constraint_decl =
+                resolve_type_ref_decl(context, constraint_ref);
+
+            if (constraint_decl != NULL &&
+                constraint_decl->kind == FENG_DECL_SPEC &&
+                constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                InferredExprType constraint_owner =
+                    inferred_expr_type_from_type_ref(constraint_ref);
+
+                resolution = resolve_accessible_method_overload(
+                    context,
+                    constraint_decl,
+                    find_decl_provider_module(context->analysis,
+                                              constraint_decl),
+                    constraint_owner,
+                    callee->as.member.member,
+                    expr->as.call.args,
+                    expr->as.call.arg_count,
+                    expr->as.call.has_explicit_type_args,
+                    (const FengTypeRef *const *)
+                        expr->as.call.explicit_type_args,
+                    expr->as.call.explicit_type_arg_count);
+                if (resolution.kind ==
+                    FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    resolution.witness_subject_type_ref =
+                        owner_type.type_ref;
+                    if (!validate_borrowed_data_pointer_call_arguments(
+                            context,
+                            callee,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            resolution.callable->params,
+                            resolution.callable->param_count,
+                            false)) {
+                        return false;
+                    }
+                    note_callable_exception_escape(
+                        context, resolution.callable);
+                    materialize_callable_type_param_constraint_witnesses(
+                        context,
+                        expr,
+                        resolution.callable,
+                        resolution.owner_type_decl,
+                        NULL,
+                        resolution.owner_instance_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  resolution.owner_instance_type_ref)
+                            : constraint_owner);
+                    if (!record_resolved_callable_from_resolution(
+                            context,
+                            expr,
+                            &resolution,
+                            resolution.owner_instance_type_ref)) {
+                        return false;
+                    }
+                    record_object_arg_coercion_sites_for_resolved_call(
+                        context,
+                        expr,
+                        resolution.callable,
+                        resolution.owner_type_decl,
+                        resolution.owner_instance_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  resolution.owner_instance_type_ref)
+                            : constraint_owner);
+                    commit_literal_arg_adaptations_for_resolved_call(
+                        context,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        resolution.callable,
+                        resolution.owner_type_decl,
+                        NULL,
+                        resolution.owner_instance_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  resolution.owner_instance_type_ref)
+                            : constraint_owner);
+                    return true;
+                }
             }
         }
 
@@ -26437,7 +26726,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 } else if ((rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
                             rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
                             rc->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+                            rc->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+                            rc->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+                            rc->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
                            rc->member != NULL) {
                     callable_type_param_count =
                         rc->member->as.callable.type_param_count;

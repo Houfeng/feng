@@ -360,6 +360,11 @@ typedef struct FengReifiableCallableDep {
     const FengTypeMember *member;
     const FengDecl *fit_decl;
     const FengTypeRef *owner_instance_type_ref;
+    /* SPEC_* only: dispatch surface and caller-view subject retained until the
+     * dependency is closed at a concrete reification point. */
+    const FengDecl *witness_spec_decl;
+    const FengTypeRef *witness_spec_type_ref;
+    const FengTypeRef *witness_subject_type_ref;
     const FengTypeRef *const *callable_type_args;
     size_t callable_type_arg_count;
     /* CALLABLE_VALUE only: callable-form spec selected by the target-typed

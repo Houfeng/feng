@@ -12086,6 +12086,8 @@ static bool resolve_callable_target(const FengResolvedCallable *callable,
             return callable->function_decl != NULL;
         case FENG_RESOLVED_CALLABLE_TYPE_METHOD:
         case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR:
         case FENG_RESOLVED_CALLABLE_FIT_METHOD:
         case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:

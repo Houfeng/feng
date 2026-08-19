@@ -314,6 +314,12 @@ static bool rd_resolved_callable_uses_shared_abi(
                      resolved->fit_decl->as.fit_decl.target,
                      &implicit_fit_param)));
     }
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+        resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) {
+        return resolved->member != NULL &&
+               resolved->member->kind == FENG_TYPE_MEMBER_METHOD &&
+               resolved->member->as.callable.type_param_count > 0U;
+    }
     return false;
 }
 
@@ -338,8 +344,13 @@ static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
             existing->owner_type_decl != resolved->owner_type_decl ||
             existing->member != resolved->member ||
             existing->fit_decl != resolved->fit_decl ||
+            existing->witness_spec_decl != resolved->witness_spec_decl ||
             !rd_type_ref_equals(existing->owner_instance_type_ref,
                                 resolved->owner_instance_type_ref) ||
+            !rd_type_ref_equals(existing->witness_spec_type_ref,
+                                resolved->witness_spec_type_ref) ||
+            !rd_type_ref_equals(existing->witness_subject_type_ref,
+                                resolved->witness_subject_type_ref) ||
             existing->callable_type_arg_count !=
                 resolved->callable_type_arg_count) {
             continue;
@@ -380,6 +391,9 @@ static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
     slot->member = resolved->member;
     slot->fit_decl = resolved->fit_decl;
     slot->owner_instance_type_ref = resolved->owner_instance_type_ref;
+    slot->witness_spec_decl = resolved->witness_spec_decl;
+    slot->witness_spec_type_ref = resolved->witness_spec_type_ref;
+    slot->witness_subject_type_ref = resolved->witness_subject_type_ref;
     slot->callable_type_args = resolved->callable_type_args;
     slot->callable_type_arg_count = resolved->callable_type_arg_count;
     return true;
@@ -1220,6 +1234,8 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
         case FENG_RESOLVED_CALLABLE_FIT_METHOD:
         case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD:
             if (rc->member != NULL) {
                 callable = &rc->member->as.callable;
                 return_type_ref = rc->member->as.callable.return_type;
@@ -1242,13 +1258,18 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
 
     /* 2. 先代入 owner 类型参数。 */
     if (rc->owner_type_decl != NULL &&
-        rc->owner_type_decl->kind == FENG_DECL_TYPE &&
+        (rc->owner_type_decl->kind == FENG_DECL_TYPE ||
+         rc->owner_type_decl->kind == FENG_DECL_SPEC) &&
         rc->owner_instance_type_ref != NULL &&
         rc->owner_instance_type_ref->kind == FENG_TYPE_REF_NAMED) {
         const FengTypeParam *owner_type_params =
-            rc->owner_type_decl->as.type_decl.type_params;
+            rc->owner_type_decl->kind == FENG_DECL_TYPE
+                ? rc->owner_type_decl->as.type_decl.type_params
+                : rc->owner_type_decl->as.spec_decl.type_params;
         size_t owner_type_param_count =
-            rc->owner_type_decl->as.type_decl.type_param_count;
+            rc->owner_type_decl->kind == FENG_DECL_TYPE
+                ? rc->owner_type_decl->as.type_decl.type_param_count
+                : rc->owner_type_decl->as.spec_decl.type_param_count;
         const FengTypeRef *const *owner_type_args =
             (const FengTypeRef *const *)
                 rc->owner_instance_type_ref->as.named.type_args;
@@ -1466,6 +1487,12 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             try_collect_type_ref(
                 ctx,
                 expr->as.call.resolved_callable.owner_instance_type_ref);
+            try_collect_type_ref(
+                ctx,
+                expr->as.call.resolved_callable.witness_spec_type_ref);
+            try_collect_type_ref(
+                ctx,
+                expr->as.call.resolved_callable.witness_subject_type_ref);
             (void)rd_append_callable_dep(
                 ctx->dep_set, &expr->as.call.resolved_callable);
             rd_try_collect_call_return_type_dep(ctx, expr);
