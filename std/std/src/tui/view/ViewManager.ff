@@ -339,6 +339,48 @@ open type ViewManager {
   }
 
   /**
+   * 请求设置焦点 Widget 的终端光标位置，不改变可见性。
+   * 只有当前真实焦点可以提交，且坐标必须位于该 Widget 本帧 clippedFrame 内。
+   * @param widget 请求终端光标位置的 Widget
+   * @param x Screen 的零基列坐标
+   * @param y Screen 的零基行坐标
+   * @return 请求通过焦点、裁剪和 Screen 边界校验时返回 true
+   */
+  open func requestCursorPosition(widget: Widget, x: int, y: int): bool {
+    if x < 0 || y < 0 || !self.containsPoint(widget.clippedFrame, x, y) {
+      return false;
+    }
+    if self.validFocus() match focused: Widget {
+      if focused == widget {
+        return self.screen.setCursorPosition((u32)x, (u32)y);
+      }
+    }
+    return false;
+  }
+
+  /**
+   * 原子请求设置焦点 Widget 的终端光标位置和可见性。
+   * 只有当前真实焦点可以提交，且坐标必须位于该 Widget 本帧 clippedFrame 内。
+   * @param widget 请求终端光标状态的 Widget
+   * @param x Screen 的零基列坐标
+   * @param y Screen 的零基行坐标
+   * @param visible 最终终端光标是否可见
+   * @return 请求通过焦点、裁剪和 Screen 边界校验时返回 true
+   */
+  open func requestCursorPosition(widget: Widget, x: int, y: int,
+    visible: bool): bool {
+    if x < 0 || y < 0 || !self.containsPoint(widget.clippedFrame, x, y) {
+      return false;
+    }
+    if self.validFocus() match focused: Widget {
+      if focused == widget {
+        return self.screen.setCursorPosition((u32)x, (u32)y, visible);
+      }
+    }
+    return false;
+  }
+
+  /**
    * 缓存组件本帧实际绘制区域并跟踪绘制顺序。
    * @param widget 需要跟踪的 widget
    * @param clippedFrame 经过祖先和 Screen 裁剪后的实际绘制区域
@@ -746,6 +788,8 @@ open type ViewManager {
   open func doDraw() {
     self.sequence.clear();
     if self.root match root: Widget {
+      // 组件树每帧默认隐藏；焦点组件可以原子覆盖最终位置和可见性请求。
+      self.screen.hideCursor();
       self.screen.buffer().clear();
       root.doDraw(self);
     }

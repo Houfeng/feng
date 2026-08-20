@@ -514,6 +514,12 @@ open type Input: InputWidget {
       input.rtStyle.foreColor, transparent, CellStyle.Reverse);
   }
 
+  /** 为自绘 caret 请求相同坐标的隐藏终端光标。 */
+  seal static func requestCursorPosition(input: InputWidget,
+    manager: ViewManager, x: int, y: int): void {
+    manager.requestCursorPosition((Widget)input, x, y, false);
+  }
+
   /** 判断当前 Input 是否为 ViewManager 的真实焦点目标。 */
   seal static func isFocused(input: InputWidget,
     manager: ViewManager): bool {
@@ -602,11 +608,15 @@ open type Input: InputWidget {
         if caret {
           Input.drawBlankCaret(input, buffer, x, input.frame.y,
             clipLeft, clipRight, transparent);
+          Input.requestCursorPosition(input, manager, x, input.frame.y);
         }
         return;
       }
       Input.drawGrapheme(input, buffer, cursor, graphemeEnd,
         x, input.frame.y, clipLeft, clipRight, caret, transparent);
+      if caret {
+        Input.requestCursorPosition(input, manager, x, input.frame.y);
+      }
       x += width;
       cursor = graphemeEnd;
       offset = feng_pointer_diff(cursor, data);
@@ -615,6 +625,7 @@ open type Input: InputWidget {
     if focused && input._caretOffset == length {
       Input.drawBlankCaret(input, buffer, x, input.frame.y,
         clipLeft, clipRight, transparent);
+      Input.requestCursorPosition(input, manager, x, input.frame.y);
     }
   }
 

@@ -479,7 +479,7 @@ seal func drainResizeNotifications(buffer: byte[!]): void {
  */
 open func run(): void {
   self.running = true;
-  // 启动初始化渲染：清屏 + 隐藏光标 + 首帧
+  // 启动初始化渲染：清屏 + 请求隐藏光标 + 首帧统一输出
   self.screen.clearScreen();
   self.screen.hideCursor();
   self.render();
@@ -547,7 +547,8 @@ open func run(): void {
 open func exit(): void {
   if !self.initialized { return; }
   self.running = false;
-  self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
+  self.screen.showCursor();   // 请求恢复光标显示，由最终 patch 统一输出
+  self.writeOutput(self.screen.buildPatchBytes());
   uv_tty_reset_mode();       // 全局重置，与 atexit handler 一致
   c_close(self.sigpipeR);
   c_close(self.sigpipeW);

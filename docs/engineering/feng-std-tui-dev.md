@@ -115,16 +115,31 @@
   - 渲染完成后将 back 的内容覆盖到 front（memcpy，**不交换指针**——交换会导致 back 残留上一帧内容、被迫全刷，性能反而下降）。
   - **SGR 状态机优化**：跟踪当前 SGR 样式编码，仅当 style 变化时发射 SGR 序列，连续相同 style 的 cell 不逐 cell 重发。Cell style 表示完整目标状态；当前状态中存在目标已移除的前景色、背景色或样式标志时，先发射 `\x1b[0m`，再发射完整目标样式，避免终端沿用已删除的状态。纯新增样式或显式颜色替换不增加重置。`buildPatchBytes()` 结束后重置 SGR（`\x1b[0m`）。
   - 光标定位：`\x1b[y;xH`（1-based 坐标）。
+  - **终端光标状态同步**：Screen 只感知通用终端光标的位置和可见性，不感知 Input、
+    caret 或输入法。光标 API 只更新本帧请求，不立即编码 ANSI；`buildPatchBytes()` 在
+    Cell diff 和 SGR 重置后统一定位，并按最终可见性输出显示或隐藏序列。同一帧后一次
+    请求覆盖前一次请求。
+  - 光标位置请求在每次 `buildPatchBytes()` 后消费；已确认的终端物理位置和可见性跨帧
+    保留，用于跳过无变化请求。任一 Cell diff、清屏或 resize 都使已知物理位置失效，
+    但不会改变已知可见性。
+  - 最终请求隐藏时在 Cell diff 前隐藏；保持可见且存在最终位置请求时，Screen 在首个
+    Cell diff 前临时隐藏光标，并在 diff 后先定位再显示，避免原生光标暴露中间位置。
 - **公开 API**：
   - `buffer(): Buffer` — 返回 back 引用，应用在此绘制。`resize()` 后需重新调用获取最新引用。
   - `size(): Tuple<u32, u32>` — 返回当前屏幕尺寸（width, height）。
   - `clearBuffer()` — 清空 back/front 缓冲区（将所有 Cell 重置为默认值）并重置 SGR 状态机，不发射任何 ANSI 序列。用于应用主动重置画布数据。
   - `clearScreen()` — 仅向 output 追加清屏序列（`\x1b[2J\x1b[H`），不清空缓冲区。供 TuiApp.run() 启动时清空物理终端屏幕，保留应用已绘制内容供首帧 diff 输出。
   - `clear()` — 组合 `clearBuffer()` + `clearScreen()`，完整重置（清空缓冲区 + 清物理终端）。
-  - `hideCursor()` — 发射隐藏光标序列（`\x1b[?25l`）到 output 缓冲。
-  - `showCursor()` — 发射显示光标序列（`\x1b[?25h`）到 output 缓冲。
-  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责重新布局）。`TuiApp` 在 resize 后先清空物理终端，再重新绘制 back 并生成新尺寸下的 diff。
-  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法不执行 I/O；构建完成后会同步 front、重置并清空内部输出状态。已写入 output 的清屏/光标序列会与 diff 序列一同输出。
+  - `setCursorPosition(x, y)` — 请求本帧结束时将终端光标定位到 Screen 零基坐标，
+    不改变可见性；坐标越界返回 `false` 且不改变已有请求。
+  - `setCursorPosition(x, y, visible)` — 原子请求本帧最终位置和可见性；坐标越界返回
+    `false` 且位置、可见性请求均保持不变。
+  - `hideCursor()` — 请求在下一次 patch 中隐藏终端光标，不立即编码 ANSI。
+  - `showCursor()` — 请求在下一次 patch 中显示终端光标，不立即编码 ANSI。
+  - `resize(width, height)` — 重建 front/back 为新尺寸空白 Buffer，并清除尚未应用的光标
+    位置与可见性请求；旧内容不迁移（TUI resize 时旧内容无法对齐，由上层组件树负责
+    重新布局）。`TuiApp` 在 resize 后先清空物理终端，再重新绘制 back 并生成新尺寸下的 diff。
+  - `buildPatchBytes(): byte[]` — 构建 diff 后的 ANSI 转义序列字节，由调用方直接写入 stdout，零 string 中间转换。主体实现方法不执行 I/O；构建完成后会同步 front、应用并消费本帧终端光标请求、重置并清空内部输出状态。已写入 output 的清屏序列会与 diff 序列一同输出。
   - `buildPatchString(): string` — 调用 `buildPatchBytes()` 后 `string.fromUtf8Bytes()` 转换返回，供测试使用。
 - **ANSI 序列生成**：
   - SGR（Select Graphic Rendition）：前景色 `38;2;r;g;b`，背景色 `48;2;r;g;b`，样式标志 `1`(bold) `2`(dim) `3`(italic) `4`(underline) `5`(blink) `7`(reverse) `8`(hidden) `9`(strikethrough)。
@@ -236,7 +251,14 @@
 - [x] 4.41c 收敛单行 Input 专项规范：公开值与 grapheme caret、编辑事件、键盘消费、水平滚动、组件绘制 caret 和鼠标定位；详见 `docs/engineering/feng-std-tui-input-widget-dev.md`
 - [x] 4.41d 实现单行 Input 的公共契约、编辑状态、grapheme 导航与水平滚动绘制
 - [x] 4.41e 新增 Input std_test 用例、更新 tui_demo，并执行全量回归测试
-- [ ] 4.41f 等待人工 Review：开发者审查 Input 规范、实现、测试与终端显示效果，通过后再进入 Tab 焦点遍历阶段
+- [x] 4.41f 人工 Review 发现中文输入法非稳定预编辑文本错误跟随 Screen 最后写入位置，并确认实施通用隐藏物理光标锚点优化
+- [x] 4.41g 收敛文本输入锚点规范：仅真实焦点组件提交，Screen 在 diff 末尾按需定位，无变化帧不重复输出
+- [x] 4.41h 实现 ViewManager 通用锚点仲裁、Screen 物理位置跟踪与 Input caret 坐标提交
+- [x] 4.41i 新增锚点 std_test 用例，执行 PTY 最终光标位置验证与全量回归测试
+- [x] 4.41j 人工 Review：真实中文输入法的非稳定预编辑文本和候选窗口已正确跟随 Input caret
+- [x] 4.41k 收敛通用终端光标规范：Screen 只提供逐帧位置和可见性请求，Input 自行决定原生或自绘 caret 策略
+- [x] 4.41l 将文本输入锚点重构为 Screen/ViewManager 通用终端光标请求，并保持 Input 现有反色自绘行为
+- [x] 4.41m 更新光标状态测试，执行定向测试与全量回归测试
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。

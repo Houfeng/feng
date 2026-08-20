@@ -481,8 +481,8 @@ open type TuiApp {
    * 渲染一帧：检查 resize、调度 View 布局与绘制、生成 Screen patch 并写入 stdout。
    * 单帧渲染，由 run() 事件循环调用，也可在测试中单独调用。
    * 直接使用 byte[]，不经过 string 中间转换。
-   * run() 启动时已通过 clearScreen()/hideCursor() 写入 output 的清屏与光标序列，
-   * 会随首帧 buildPatchBytes() 一同输出到终端。
+   * run() 启动时已通过 clearScreen() 追加清屏序列并通过 hideCursor() 请求隐藏光标，
+   * 两者会随首帧 buildPatchBytes() 一同输出到终端。
    * @throws "tui/app/write-failed" — stdout 无法继续写出
    */
   open func render(): void {
@@ -529,7 +529,7 @@ open type TuiApp {
    */
   open func run(): void {
     self.running = true;
-    // 启动初始化渲染：清屏（仅物理终端，不清缓冲区）+ 隐藏光标 + 首帧
+    // 启动初始化渲染：清屏（仅物理终端，不清缓冲区）+ 请求隐藏光标 + 首帧
     self.screen.clearScreen();
     self.screen.hideCursor();
     self.render();
@@ -588,7 +588,7 @@ open type TuiApp {
     if !self.initialized { return; }
     // 先清除终端缓存的应用指针形状，再关闭鼠标报告，避免关闭时显露旧形状。
     self.screen.setPointerCursor(Cursor.Auto);
-    self.screen.showCursor();   // 恢复光标显示，与 run() 启动时隐藏对称
+    self.screen.showCursor();   // 请求恢复光标显示，与 run() 启动时隐藏对称
     let terminalRestore = self.screen.buildPatchBytes();
     self.writeOutput(terminalRestore);
     // 禁用鼠标 SGR 模式和全移动报告，由 InputManager 构建序列

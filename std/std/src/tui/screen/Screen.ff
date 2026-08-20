@@ -48,6 +48,36 @@ open type Screen {
   /** 当前终端使用的 OSC 22 鼠标指针名称协议。 */
   seal var pointerCursorProtocol: PointerCursorProtocol;
 
+  /** 当前 patch 是否存在终端光标位置请求。 */
+  seal var hasCursorPositionRequest: bool;
+
+  /** 当前 patch 请求的终端光标 Screen 列坐标。 */
+  seal var cursorRequestX: u32;
+
+  /** 当前 patch 请求的终端光标 Screen 行坐标。 */
+  seal var cursorRequestY: u32;
+
+  /** 当前 patch 是否存在终端光标可见性请求。 */
+  seal var hasCursorVisibilityRequest: bool;
+
+  /** 当前 patch 请求的终端光标可见性。 */
+  seal var cursorRequestVisible: bool;
+
+  /** 已记录的终端物理光标坐标是否仍可信。 */
+  seal var physicalCursorKnown: bool;
+
+  /** 最近一次确认的终端物理光标列坐标。 */
+  seal var physicalCursorX: u32;
+
+  /** 最近一次确认的终端物理光标行坐标。 */
+  seal var physicalCursorY: u32;
+
+  /** 已记录的终端物理光标可见性是否仍可信。 */
+  seal var physicalCursorVisibilityKnown: bool;
+
+  /** 最近一次确认的终端物理光标是否可见。 */
+  seal var physicalCursorVisible: bool;
+
   // ─── 构造函数 ─────────────────────────────────────────────────────────────
 
   /**
@@ -61,6 +91,16 @@ open type Screen {
     self.currentSgr = (u64)0;
     self.currentPointerCursor = Cursor.Auto;
     self.pointerCursorProtocol = PointerCursorProtocol.Css;
+    self.hasCursorPositionRequest = false;
+    self.cursorRequestX = (u32)0;
+    self.cursorRequestY = (u32)0;
+    self.hasCursorVisibilityRequest = false;
+    self.cursorRequestVisible = true;
+    self.physicalCursorKnown = false;
+    self.physicalCursorX = (u32)0;
+    self.physicalCursorY = (u32)0;
+    self.physicalCursorVisibilityKnown = false;
+    self.physicalCursorVisible = true;
   }
 
   // ─── 公开 API ───────────────────────────────────────────────────────────
@@ -95,6 +135,9 @@ open type Screen {
     self.front = Buffer(width, height);
     self.back = Buffer(width, height);
     self.currentSgr = (u64)0;
+    self.hasCursorPositionRequest = false;
+    self.hasCursorVisibilityRequest = false;
+    self.physicalCursorKnown = false;
   }
 
   // 使用 List<byte> 收集输出，避免 string 拼接的 O(n²) 复制开销
@@ -110,14 +153,28 @@ open type Screen {
    */
   open func buildPatchBytes(): byte[] {
     let output = self.output;
-    // 每次生成 patch 后，清空输出缓冲区，为下次发射差异序列做好准备
-    defer { output.clear(); }
+    // 每次生成 patch 后消费本帧光标请求并清空输出缓冲区。
+    defer {
+      self.hasCursorPositionRequest = false;
+      self.hasCursorVisibilityRequest = false;
+      output.clear();
+    }
     // 初始化一些局部变量
     let w = self.back.width;
     let h = self.back.height;
     let total = (int)((u64)w * (u64)h);
     let frontCells = self.front.cells;
     let backCells = self.back.cells;
+    // 最终请求隐藏时先隐藏，避免可见光标跟随 diff 的中间定位移动。
+    if self.hasCursorVisibilityRequest && !self.cursorRequestVisible {
+      self.ensureTerminalCursorVisibility(false);
+    }
+    // 保持可见的已定位光标在 diff 期间临时隐藏，最终位置恢复后再显示。
+    let restoreVisibleAfterDiff = self.hasCursorPositionRequest &&
+      ((self.hasCursorVisibilityRequest && self.cursorRequestVisible) ||
+      (!self.hasCursorVisibilityRequest &&
+      self.physicalCursorVisibilityKnown && self.physicalCursorVisible));
+    var hasCellDiff = false;
     // 逐 cell 比较并发射差异序列
     var i: int = 0;
     while i < total {
@@ -127,16 +184,17 @@ open type Screen {
       // 其他 Cell 仅在值或样式变化时发射。
       if b.value != Cell.CONTINUATION &&
       (f.value != b.value || f.style != b.style) {
+        if !hasCellDiff {
+          if restoreVisibleAfterDiff {
+            self.ensureTerminalCursorVisibility(false);
+          }
+          hasCellDiff = true;
+        }
         // 计算此 cell 的 (x, y) 坐标
         let y = (u32)((u64)i / (u64)w);
         let x = (u32)((u64)i % (u64)w);
         // 光标定位：\x1b[y;xH（1-based）
-        output.add((byte)0x1b); // ESC
-        output.add((byte)0x5b); // '['
-        self.writeDecimal(y + (u32)1);
-        output.add((byte)0x3b); // ';'
-        self.writeDecimal(x + (u32)1);
-        output.add((byte)0x48); // 'H'
+        self.writeTerminalCursorPosition(x, y);
         // SGR 状态机：仅当 style 变化时发射 SGR 序列
         if self.currentSgr != b.style {
           self.writeSgr(b.style);
@@ -147,10 +205,31 @@ open type Screen {
       }
       i = i + (int)1;
     }
+    // 终端打印后的最终列受 Cell 宽度和行尾行为影响，不继续猜测其坐标。
+    if hasCellDiff {
+      self.physicalCursorKnown = false;
+    }
     // 渲染完成后重置 SGR（避免样式泄漏到后续终端输出）
     if self.currentSgr != (u64)0 {
       self.writeSgrReset();
       self.currentSgr = (u64)0;
+    }
+    // 在所有 diff 后应用本帧请求的通用终端光标位置。
+    if self.hasCursorPositionRequest &&
+    (!self.physicalCursorKnown ||
+    self.physicalCursorX != self.cursorRequestX ||
+    self.physicalCursorY != self.cursorRequestY) {
+      self.writeTerminalCursorPosition(
+        self.cursorRequestX, self.cursorRequestY);
+      self.physicalCursorKnown = true;
+      self.physicalCursorX = self.cursorRequestX;
+      self.physicalCursorY = self.cursorRequestY;
+    }
+    // 显示请求必须在最终定位之后执行；二参数定位则恢复进入 diff 前的可见性。
+    if self.hasCursorVisibilityRequest && self.cursorRequestVisible {
+      self.ensureTerminalCursorVisibility(true);
+    } else if restoreVisibleAfterDiff {
+      self.ensureTerminalCursorVisibility(true);
     }
     // back → front 覆盖（memcpy，不交换指针）
     var j: int = 0;
@@ -199,34 +278,58 @@ open type Screen {
     output.add((byte)0x1b); // ESC
     output.add((byte)0x5b); // '['
     output.add((byte)0x48); // 'H'
+    // 清屏和 Home 的实际结果可能受终端尺寸变化影响，由最终位置请求重新确认。
+    self.physicalCursorKnown = false;
   }
 
-  /**
-   * 隐藏光标
-   * ANSI 序列：`\x1b[?25l`。
-   */
+  /** 请求在下一次 buildPatchBytes() 中隐藏终端光标。 */
   open func hideCursor(): void {
-    let output = self.output;
-    output.add((byte)0x1b); // ESC
-    output.add((byte)0x5b); // '['
-    output.add((byte)0x3f); // '?'
-    output.add((byte)0x32); // '2'
-    output.add((byte)0x35); // '5'
-    output.add((byte)0x6c); // 'l'
+    self.hasCursorVisibilityRequest = true;
+    self.cursorRequestVisible = false;
+  }
+
+  /** 请求在下一次 buildPatchBytes() 中显示终端光标。 */
+  open func showCursor(): void {
+    self.hasCursorVisibilityRequest = true;
+    self.cursorRequestVisible = true;
   }
 
   /**
-   * 显示光标
-   * ANSI 序列：`\x1b[?25h`。
+   * 请求在本帧 diff 末尾设置终端光标位置，不改变可见性。
+   * 坐标必须落在当前 Screen 内；无效坐标返回 false 且保留已有请求。
+   * 该方法只更新请求状态，ANSI 定位由 buildPatchBytes() 统一追加。
+   * @param x Screen 的零基列坐标
+   * @param y Screen 的零基行坐标
+   * @return 坐标有效并已接受时返回 true
    */
-  open func showCursor(): void {
-    let output = self.output;
-    output.add((byte)0x1b); // ESC
-    output.add((byte)0x5b); // '['
-    output.add((byte)0x3f); // '?'
-    output.add((byte)0x32); // '2'
-    output.add((byte)0x35); // '5'
-    output.add((byte)0x68); // 'h'
+  open func setCursorPosition(x: u32, y: u32): bool {
+    if x >= self.back.width || y >= self.back.height {
+      return false;
+    }
+    self.hasCursorPositionRequest = true;
+    self.cursorRequestX = x;
+    self.cursorRequestY = y;
+    return true;
+  }
+
+  /**
+   * 原子请求在本帧 diff 末尾设置终端光标位置和可见性。
+   * 坐标必须落在当前 Screen 内；无效坐标返回 false 且不改变已有请求。
+   * @param x Screen 的零基列坐标
+   * @param y Screen 的零基行坐标
+   * @param visible 最终终端光标是否可见
+   * @return 坐标有效并已接受时返回 true
+   */
+  open func setCursorPosition(x: u32, y: u32, visible: bool): bool {
+    if x >= self.back.width || y >= self.back.height {
+      return false;
+    }
+    self.hasCursorPositionRequest = true;
+    self.cursorRequestX = x;
+    self.cursorRequestY = y;
+    self.hasCursorVisibilityRequest = true;
+    self.cursorRequestVisible = visible;
+    return true;
   }
 
   /**
@@ -313,6 +416,35 @@ open type Screen {
       output.add(tmp[k]);
       k = k - (int)1;
     }
+  }
+
+  /** 将零基 Screen 坐标编码为 ANSI 物理光标定位序列。 */
+  seal func writeTerminalCursorPosition(x: u32, y: u32): void {
+    let output = self.output;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    self.writeDecimal(y + (u32)1);
+    output.add((byte)0x3b); // ';'
+    self.writeDecimal(x + (u32)1);
+    output.add((byte)0x48); // 'H'
+  }
+
+  /** 按需编码终端光标可见性，并同步已知物理状态。 */
+  seal func ensureTerminalCursorVisibility(visible: bool): void {
+    if self.physicalCursorVisibilityKnown &&
+    self.physicalCursorVisible == visible {
+      return;
+    }
+    let output = self.output;
+    output.add((byte)0x1b); // ESC
+    output.add((byte)0x5b); // '['
+    output.add((byte)0x3f); // '?'
+    output.add((byte)0x32); // '2'
+    output.add((byte)0x35); // '5'
+    let command = if visible { (byte)0x68 } else { (byte)0x6c }; // 'h' / 'l'
+    output.add(command);
+    self.physicalCursorVisibilityKnown = true;
+    self.physicalCursorVisible = visible;
   }
 
   /** 将 Cursor 按当前终端名称协议编码并追加到输出缓冲。 */

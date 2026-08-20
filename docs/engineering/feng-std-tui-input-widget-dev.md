@@ -1,6 +1,6 @@
 # Feng TUI Input 组件开发方案
 
-> 状态：已实施并通过 std_test、全量回归与真实终端验证，待人工 Review。
+> 状态：通用终端光标请求重构已实施；真实中文输入法验证和全量回归均已通过。
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 中单行 Input 组件阶段的
 > 唯一专项规范。终端输入解析仍以 `docs/engineering/feng-std-tui-input-dev.md`
@@ -19,11 +19,13 @@
 - 固定宽度不足时按 grapheme 边界水平滚动，并始终尽力保持 caret 可见；
 - 复用 Text/Buffer 的显示列宽度与 8 字节 Cell 内联规则；
 - 支持鼠标左键按显示列定位 caret，并继续使用 ViewManager 的默认聚焦行为；
+- 自绘 caret 时请求将隐藏的终端光标定位到可见 caret，供系统输入法定位预编辑文本；
 - 保持逐帧绘制热路径无 substring、List 或逐 grapheme 堆分配。
 
 本阶段不实现多行文本、文本选择、Shift 选择、单词级移动、剪贴板、撤销/重做、
-placeholder、password、输入法预编辑（IME composition）、验证规则、Tab 焦点遍历或
-终端原生物理光标。上述能力分别在后续专项阶段设计，不在首版中预留特判。
+placeholder、password、由 Input 自行维护的输入法预编辑（IME composition）状态、验证规则、
+Tab 焦点遍历或可见的终端原生 caret。系统或终端仍负责绘制非稳定预编辑文本；Input 只提供
+与组件 caret 一致的隐藏物理光标坐标，不接收、不保存也不提交 composition 内容。
 
 ## 2 分层边界
 
@@ -33,6 +35,10 @@ Input 是 `std.tui.widgets` 中的 Widget，不是 `std.tui.input.InputManager` 
 - ViewManager 选择焦点或命中目标并完成事件冒泡与默认聚焦；
 - Input 只在自身成为事件目标时解释编辑按键、维护文本编辑状态并绘制内容；
 - Screen、Buffer 和 Cell 不感知 Input，也不增加 Input 专用分支；
+- ViewManager 只接受真实焦点 Widget 提交的通用终端光标请求，并校验坐标位于该组件的
+  `clippedFrame` 与 Screen 内；
+- Screen 的终端光标契约只定义通用位置和可见性请求，不感知 Input、caret 或输入法；
+  具体契约以 `docs/engineering/feng-std-tui-dev.md` 的 Screen 主规范为准；
 - Input 不直接更改 `Pseudo.Focus`，该状态继续由 ViewManager 根据真实焦点统一同步。
 
 Input 的内部键盘编辑与鼠标 caret 定位复用 Widget 已公开的 `key` / `mouseDown` Event，
@@ -200,12 +206,36 @@ Input 使用完整 frame 确定内容原点，使用 `clippedFrame` 只做祖先
 - 只有 `ViewManager.focused()` 的真实目标就是当前 Input 时才绘制 caret；
 - caret 使用 `CellStyle.Reverse` 绘制下一个完整 grapheme；位于末尾或内容无法完整放入时
   绘制一个反色空白 Cell；
-- TuiApp 继续隐藏终端原生物理光标。Input 不改变 Screen diff 的最终物理光标位置，
-  从而避免多个组件竞争全局终端光标，也不新增光标闪烁计时器。
+- TuiApp 继续隐藏终端原生物理光标，组件绘制的反色 caret 仍是用户可见的唯一 caret；
+- 焦点 Input 在确认 caret 起始 Cell 位于自身 `clippedFrame` 后，向 ViewManager 原子提交
+  该 Screen 绝对坐标和 `visible = false`；是否自绘反色 caret、是否请求原生光标可见均
+  属于 Input 的表现策略，不进入 Screen。
 
 组件绘制的 caret 属于 back buffer 内容，因此自动参与现有双缓冲 diff 和祖先裁剪。
 焦点变化后下一帧会移除旧 Input 的 caret，并在新 Input 绘制 caret；`Pseudo.Focus`
 样式与 caret 都读取同一真实焦点，不建立第二套焦点状态。
+
+### 9.1 自绘 caret 与隐藏终端光标
+
+中文等输入法的非稳定预编辑文本由系统或终端绘制，其位置跟随终端物理光标，即使该光标
+已通过 `CSI ? 25 l` 隐藏。若 Screen 在 diff 后把物理光标留在最后写入的 Cell，预编辑文本
+就会错误显示在画面末尾。因此 Input 使用 Screen 主规范定义的通用终端光标能力，不直接
+输出 ANSI：
+
+1. ViewManager 在存在 root 组件树时，每帧绘制开始默认请求隐藏终端光标；没有 root 时
+   不接管直接使用 Screen 的光标状态；
+2. 只有真实焦点 Widget 可以通过 ViewManager 请求光标位置，坐标必须位于该 Widget
+   本帧的 `clippedFrame` 和 Screen 内；无效请求不改变本帧请求；
+3. Input 完成水平滚动后，以实际绘制 caret 的起始 Cell 提交隐藏光标位置；caret 被完全裁掉时
+   不提交；
+4. Screen 在全部 Cell diff 与 SGR 重置之后统一定位；位置和隐藏状态均未变化时不重复
+   输出控制序列；
+5. 当前 Input 继续使用反色 Cell caret，因此固定提交 `visible = false`。未来若 Input
+   选择原生 caret，应停止绘制反色 Cell，并在相同坐标提交 `visible = true`，无需改变
+   Screen 契约。
+
+该机制只解决预编辑文本和候选窗口的位置。InputManager 仍只接收输入法最终提交到 stdin
+的 UTF-8 字节，不扩展 composition 生命周期或公开事件。
 
 ## 10 鼠标定位
 
@@ -239,6 +269,10 @@ std/std/src/tui/widgets/Input.ff
 - 焦点 caret、失焦 caret、`Pseudo.Focus` 样式和 Buffer Cell 样式；
 - 鼠标定位、停止冒泡以及未阻止 ViewManager 默认聚焦；
 - Screen/Hidden 祖先裁剪保持内容原点。
+- Screen 最终光标位置位于所有 Cell diff 之后，位置和可见性请求按需输出，clear/resize
+  后重新同步位置；
+- 只有真实焦点且 caret 可见的 Input 能提交光标请求，水平滚动和宽 grapheme 使用实际 caret 坐标；
+- 在真实终端使用中文输入法验证非稳定预编辑文本与候选窗口跟随 Input caret。
 
 `examples/tui_demo` 增加一个可实际输入和提交的 Input，用于人工验证焦点样式、Unicode
 编辑、水平滚动和 caret 显示；Tab 切换不作为本阶段验收项。

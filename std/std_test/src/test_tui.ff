@@ -883,6 +883,78 @@ func screen_render_cursor_position() {
   check(out.contains("\x1b[2;3H"), "tui/screen/render-cursor-position");
 }
 
+/** 验证通用终端光标位置在 diff 后同步，并跳过相同的逐帧请求。 */
+func screen_cursor_position_request_and_idle_optimization() {
+  let scr = Screen((u32)6, (u32)2);
+  scr.buffer().draw((u32)5, (u32)1, (u64)88);
+  check(scr.setCursorPosition((u32)1, (u32)0, false),
+    "tui/screen/cursor-request-accepts-screen-coordinate");
+  let changed = scr.buildPatchString();
+  check(changed.endsWith("\x1b[1;2H"),
+    "tui/screen/cursor-request-after-cell-diff");
+  scr.setCursorPosition((u32)1, (u32)0, false);
+  check(scr.buildPatchString() == "",
+    "tui/screen/cursor-request-idle-frame-no-output");
+
+  check(scr.setCursorPosition((u32)2, (u32)1, false),
+    "tui/screen/cursor-request-accepts-move");
+  check(scr.buildPatchString() == "\x1b[2;3H" &&
+    scr.buildPatchString() == "",
+    "tui/screen/cursor-request-consumed-after-move");
+
+  scr.clearScreen();
+  scr.setCursorPosition((u32)2, (u32)1, false);
+  check(scr.buildPatchString() == "\x1b[2J\x1b[H\x1b[2;3H",
+    "tui/screen/cursor-request-resyncs-after-clear");
+  scr.resize((u32)3, (u32)1);
+  check(!scr.setCursorPosition((u32)3, (u32)0, true) &&
+    scr.buildPatchString() == "",
+    "tui/screen/cursor-invalid-request-preserves-visibility");
+  check(scr.setCursorPosition((u32)2, (u32)0, false) &&
+    scr.buildPatchString() == "\x1b[1;3H",
+    "tui/screen/cursor-request-resize-bounds-and-resync");
+}
+
+/** 验证光标可见性请求延迟输出、去重及可见光标的安全 diff 顺序。 */
+func screen_cursor_visibility_request_and_diff_order() {
+  let scr = Screen((u32)3, (u32)1);
+  scr.hideCursor();
+  scr.showCursor();
+  check(scr.buildPatchString() == "\x1b[?25h",
+    "tui/screen/cursor-visibility-last-request-wins");
+  scr.showCursor();
+  check(scr.buildPatchString() == "",
+    "tui/screen/cursor-visibility-idle-request-no-output");
+
+  check(scr.setCursorPosition((u32)1, (u32)0, true) &&
+    scr.buildPatchString() == "\x1b[1;2H",
+    "tui/screen/cursor-visible-atomic-position");
+  scr.setCursorPosition((u32)1, (u32)0, true);
+  check(scr.buildPatchString() == "",
+    "tui/screen/cursor-visible-atomic-idle-no-output");
+
+  scr.buffer().draw((u32)2, (u32)0, (u64)90);
+  scr.setCursorPosition((u32)1, (u32)0, true);
+  check(scr.buildPatchString() ==
+    "\x1b[?25l\x1b[1;3HZ\x1b[1;2H\x1b[?25h",
+    "tui/screen/cursor-visible-hidden-during-diff");
+
+  scr.hideCursor();
+  check(scr.buildPatchString() == "\x1b[?25l",
+    "tui/screen/cursor-hide-request");
+  scr.hideCursor();
+  check(scr.buildPatchString() == "",
+    "tui/screen/cursor-hide-idle-no-output");
+  check(scr.setCursorPosition((u32)0, (u32)0) &&
+    scr.buildPatchString() == "\x1b[1;1H",
+    "tui/screen/cursor-position-preserves-hidden-state");
+  scr.showCursor();
+  scr.buildPatchString();
+  check(scr.setCursorPosition((u32)2, (u32)0) &&
+    scr.buildPatchString() == "\x1b[1;3H",
+    "tui/screen/cursor-position-preserves-visible-state");
+}
+
 func screen_render_cell_value_output() {
   let scr = Screen((u32)5, (u32)2);
   scr.buffer().draw((u32)0, (u32)0, (u64)65);  // 'A'
@@ -3497,6 +3569,82 @@ func input_widget_mouse_caret_and_default_focus() {
     "tui/input-widget/mouse-stop-keeps-default");
 }
 
+/** 验证 ViewManager 只接受真实焦点组件在其裁剪区域内提交光标请求。 */
+func view_manager_cursor_request_focus_and_clip_arbitration() {
+  let screen = Screen((u32)6, (u32)2);
+  let manager = ViewManager(screen);
+  let root = Container();
+  let focused = View();
+  focused.style.position = Position.Absolute;
+  focused.style.x = 2;
+  focused.style.width = 2;
+  focused.style.height = 1;
+  focused.tabIndex = 0;
+  let other = View();
+  other.style.position = Position.Absolute;
+  other.style.x = 4;
+  other.style.width = 2;
+  other.style.height = 1;
+  other.tabIndex = 0;
+  root.addChild(focused);
+  root.addChild(other);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  check(manager.focus(focused),
+    "tui/view/cursor-request-focus-target");
+  manager.doDraw();
+
+  check(!manager.requestCursorPosition(other, 4, 0, true) &&
+    !manager.requestCursorPosition(focused, 1, 0, true) &&
+    manager.requestCursorPosition(focused, 2, 0, false),
+    "tui/view/cursor-request-focus-and-clip-arbitration");
+  check(screen.buildPatchString() == "\x1b[?25l\x1b[1;3H",
+    "tui/view/cursor-request-forwarded-to-screen");
+
+  manager.doDraw();
+  screen.buffer().draw((u32)5, (u32)1, (u64)90);
+  check(screen.buildPatchString().endsWith("Z"),
+    "tui/view/cursor-position-request-consumed-before-next-draw");
+}
+
+/** 验证 Input 隐藏光标请求跟随滚动后的 caret，并在静止帧保持零输出。 */
+func input_widget_hidden_cursor_tracks_visible_caret() {
+  let screen = Screen((u32)8, (u32)2);
+  let manager = ViewManager(screen);
+  let root = Container();
+  let input = Input();
+  input.style.position = Position.Absolute;
+  input.style.x = 1;
+  input.style.y = 1;
+  input.style.width = 4;
+  input.value("abcdef");
+  root.addChild(input);
+  manager.root = root;
+  manager.doStyling();
+  manager.doArrange();
+  manager.focus(input);
+  manager.doDraw();
+  check(screen.buildPatchString().endsWith("\x1b[2;5H"),
+    "tui/input-widget/hidden-cursor-at-scrolled-end-caret");
+
+  manager.doDraw();
+  check(screen.buildPatchString() == "",
+    "tui/input-widget/hidden-cursor-idle-frame-no-output");
+  input.caret(2);
+  manager.doDraw();
+  check(screen.buildPatchString().endsWith("\x1b[2;4H"),
+    "tui/input-widget/hidden-cursor-follows-backfilled-caret");
+
+  input.style.x = -1;
+  input.caret(0);
+  manager.doStyling();
+  manager.doArrange();
+  manager.doDraw();
+  check(!screen.buildPatchString().endsWith("H"),
+    "tui/input-widget/fully-clipped-caret-has-no-cursor-position");
+}
+
 /** 验证最近 Hidden 祖先的 clippedFrame 传递全部上层剪裁。 */
 func view_multilevel_hidden_clipping() {
   let manager = ViewManager(Screen(8, 4));
@@ -4780,6 +4928,8 @@ open func run_tui_tests() {
     test("screen_render_empty_no_diff()", () { screen_render_empty_no_diff(); });
     test("screen_render_full_diff()", () { screen_render_full_diff(); });
     test("screen_render_cursor_position()", () { screen_render_cursor_position(); });
+    test("screen_cursor_position_request_and_idle_optimization()", () { screen_cursor_position_request_and_idle_optimization(); });
+    test("screen_cursor_visibility_request_and_diff_order()", () { screen_cursor_visibility_request_and_diff_order(); });
     test("screen_render_cell_value_output()", () { screen_render_cell_value_output(); });
     test("screen_render_cell_value_zero_to_space()", () { screen_render_cell_value_zero_to_space(); });
     test("screen_render_sgr_reset()", () { screen_render_sgr_reset(); });
@@ -4874,6 +5024,8 @@ open func run_tui_tests() {
     test("input_widget_layout_focus_and_caret_draw()", () { input_widget_layout_focus_and_caret_draw(); });
     test("input_widget_horizontal_scroll_and_clipping()", () { input_widget_horizontal_scroll_and_clipping(); });
     test("input_widget_mouse_caret_and_default_focus()", () { input_widget_mouse_caret_and_default_focus(); });
+    test("view_manager_cursor_request_focus_and_clip_arbitration()", () { view_manager_cursor_request_focus_and_clip_arbitration(); });
+    test("input_widget_hidden_cursor_tracks_visible_caret()", () { input_widget_hidden_cursor_tracks_visible_caret(); });
     test("view_multilevel_hidden_clipping()", () { view_multilevel_hidden_clipping(); });
     test("container_default_pipeline_and_tree_invalidation()", () { container_default_pipeline_and_tree_invalidation(); });
     test("container_subtree_layout_skips_clean_siblings()", () { container_subtree_layout_skips_clean_siblings(); });
