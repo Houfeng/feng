@@ -356,6 +356,7 @@ open spec Widget {
   let mouseMove: Event<MouseEvent<Widget>>;
   let mouseUp: Event<MouseEvent<Widget>>;
   let wheel: Event<MouseEvent<Widget>>;
+  let click: Event<MouseEvent<Widget>>;
 }
 ```
 
@@ -416,6 +417,7 @@ open type View: Widget {
   let mouseMove: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
   let mouseUp: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
   let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+  let click: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
 }
 ```
 
@@ -630,7 +632,7 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
 
 - `key: Event<KeyEvent<Widget>>`；
 - `onFocus`、`onBlur: Event<FocusEvent<Widget>>`；
-- `mouseDown`、`mouseMove`、`mouseUp`、`wheel: Event<MouseEvent<Widget>>`。
+- `mouseDown`、`mouseMove`、`mouseUp`、`wheel`、`click: Event<MouseEvent<Widget>>`。
 
 各事件字段不可重新绑定。调用方通过 `on(listener)` 和 `off(listener)` 订阅或退订；
 `ViewManager` 通过 `emit(event)` 按注册顺序触发当前 Widget 的全部监听器。
@@ -655,12 +657,39 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
    `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
    表示最初命中或锁定的事件来源，不随当前接收回调的 Widget 改变；
 3. `wheelUp`/`wheelDown` 触发 `wheel.emit(event)`，其余事件按 `press`、`move`、
-   `release` 分别触发 `mouseDown`、`mouseMove`、`mouseUp`；
+   `release`、`click` 分别触发 `mouseDown`、`mouseMove`、`mouseUp`、`click`；
 4. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则结束 Widget
    传播，否则沿 `parent` 继续向上传递；
 5. ViewManager 事件、未命中路径、`preventDefault()` 与自动聚焦属于后续焦点路由扩展，
    统一以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准；
 6. 当前不定义捕获阶段、`currentTarget`、透明穿透、事件克隆或事件池化。
+
+### 10.1 click 合成
+
+click 是 ViewManager 根据左键原始事件合成的通用 Widget 事件，不由 Button 等具体组件
+重复识别。ViewManager 与 Widget 均公开 `click: Event<MouseEvent<Widget>>`；合成事件的
+`action == MouseAction.Click`，按钮、坐标和修饰键取自完成本次 click 的 release 事件。
+
+ViewManager 使用内部 `ClickState.Idle/Pressed/Moved` 和一个
+`Tuple<int, int>` 起始位置维护单指针 click 状态：
+
+1. 收到 `MouseButton.Left + MouseAction.Press` 时记录 `(x, y)` 并进入 `Pressed`；新的
+   press 会终止旧候选，非左键 press 保持 `Idle`；
+2. `Pressed` 状态收到坐标不同于起始位置的 move 后进入 `Moved`；之后即使回到起始位置
+   也不恢复；
+3. 收到任意 release 时，先根据“左键 release、状态仍为 `Pressed`、release 坐标等于
+   起始位置”计算是否满足 click，再无条件恢复 `Idle`；停止传播和阻止默认行为都不能
+   阻止该状态清理；
+4. 原始 mouseUp 完成路由后，只有候选满足且 mouseDown、mouseUp 均未调用
+   `preventDefault()` 时才合成 click；`stop()` 只停止对应原始事件的冒泡，不取消候选；
+5. click 使用 release 坐标的实际命中结果作为 target，不受鼠标锁定目标影响；命中 Widget
+   时从该目标向 root 冒泡并在未停止时到达 ViewManager，未命中时只触发 ViewManager
+   click；click 使用新的 MouseEvent 实例，不继承 mouseUp 的停止或阻止状态；
+6. 当前只支持 click，不区分 doubleClick 或 longPress，因此不读取时间，也不设置按压
+   时长阈值；未来增加其他点击手势时再统一设计单调时间与阈值配置。
+
+release 处理在进入 mouseUp 回调前即恢复 `Idle`，保证 mouseUp 或 click 回调重入
+ViewManager 时不会观察或清除上一轮候选。`Idle` 状态下保存的位置没有语义，不要求清零。
 
 Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保持
 `Action<MouseEvent<Widget>>` 单播，只负责把解析后的输入直接交给 ViewManager。
@@ -748,6 +777,9 @@ std/std/src/tui/widgets/
 18. 已为 Style/StylePatch 增加 `Cursor`，按 Hover 路径解析继承值，并在 styling 后通过
     Screen 的 OSC 22 状态机同步鼠标指针形状；Cursor 保持终端无关，Screen 已在发送时
     按一次性检测结果选择 CSS 或 iTerm2/xterm 的 X11 名称。
+19. [x] 为 Widget/ViewManager 增加 click 多播事件，使用三态和起始位置在 ViewManager
+    合成、路由 click；新增用例后 std_test 599/599、fcts 816/816，沙箱外完整
+    `make test` 通过。
 
 ## 14 Review 关注点
 

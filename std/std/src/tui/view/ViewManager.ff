@@ -6,6 +6,16 @@ import std.tui.common;
 import std.tui.input;
 import std.tui.screen;
 
+/** ViewManager 内部使用的单指针 click 识别状态。 */
+seal enum ClickState {
+  /** 当前没有待识别的 click。 */
+  Idle,
+  /** 左键已按下，且尚未观察到坐标变化。 */
+  Pressed,
+  /** 左键按下后已经移动，本轮不能再产生 click。 */
+  Moved
+}
+
 /**
  * ViewManager 是一个管理所有 widgets 的类
  * 它负责管理 widgets 的布局、绘制、事件处理等功能
@@ -41,6 +51,12 @@ open type ViewManager {
   /** 当前鼠标按下激活目标到 root 的 Active 路径。 */
   seal let _activePath: List<Widget>;
 
+  /** 当前单指针 click 识别状态。 */
+  seal var _clickState: ClickState;
+
+  /** 最近一次左键按下的起始坐标；Idle 状态下没有语义。 */
+  seal var _clickPosition: Tuple<int, int>;
+
   /** 当前是否正在触发不可停止的焦点路径事件。 */
   seal var _focusChanging: bool;
 
@@ -71,6 +87,9 @@ open type ViewManager {
   /** root 之后的鼠标滚轮多播事件。 */
   let wheel: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
 
+  /** root 之后的 click 多播事件。 */
+  let click: Event<MouseEvent<Widget>> = Event<MouseEvent<Widget>>();
+
   /**
    * 使用已有 Screen 创建 ViewManager。
    * @param screen 视图布局和绘制使用的 Screen
@@ -84,6 +103,8 @@ open type ViewManager {
     self._hoverPath = List<Widget>();
     self._nextHoverPath = List<Widget>();
     self._activePath = List<Widget>();
+    self._clickState = ClickState.Idle;
+    self._clickPosition = (0, 0);
     self._focusChanging = false;
     self._hasPendingFocus = false;
     self._pendingFocus = none;
@@ -644,6 +665,42 @@ open type ViewManager {
   }
 
   /**
+   * 根据原始鼠标事件推进单指针 click 状态机。
+   * 当前只支持 click，不区分 doubleClick 或 longPress，因此不读取时间，也不设置
+   * 按压时长阈值。Release 始终先恢复 Idle，确保后续回调停止传播、阻止默认行为或
+   * 重入分发时都不会保留上一轮状态。
+   * @param event 当前鼠标事件
+   * @return 当前 release 是否满足 click 的位置与状态条件
+   */
+  seal func updateClickState(event: MouseEvent<Widget>): bool {
+    if event.action == MouseAction.Press {
+      self._clickState = ClickState.Idle;
+      if event.button == MouseButton.Left {
+        self._clickPosition = (event.x, event.y);
+        self._clickState = ClickState.Pressed;
+      }
+      return false;
+    }
+    if event.action == MouseAction.Move {
+      if self._clickState == ClickState.Pressed &&
+      (event.x != self._clickPosition.item1 ||
+      event.y != self._clickPosition.item2) {
+        self._clickState = ClickState.Moved;
+      }
+      return false;
+    }
+    if event.action == MouseAction.Release {
+      let shouldClick = event.button == MouseButton.Left &&
+      self._clickState == ClickState.Pressed &&
+      event.x == self._clickPosition.item1 &&
+      event.y == self._clickPosition.item2;
+      self._clickState = ClickState.Idle;
+      return shouldClick;
+    }
+    return false;
+  }
+
+  /**
    * 根据鼠标动作触发组件对应的多播事件。
    * 滚轮按钮优先映射为 wheel，其余事件按 action 分发。
    * @param widget 当前接收事件的组件
@@ -666,6 +723,10 @@ open type ViewManager {
       }
       MouseAction.Release {
         let targetEvent = widget.mouseUp;
+        targetEvent.emit(event);
+      }
+      MouseAction.Click {
+        let targetEvent = widget.click;
         targetEvent.emit(event);
       }
     }
@@ -694,6 +755,64 @@ open type ViewManager {
         let targetEvent = self.mouseUp;
         targetEvent.emit(event);
       }
+      MouseAction.Click {
+        let targetEvent = self.click;
+        targetEvent.emit(event);
+      }
+    }
+  }
+
+  /**
+   * 从指定目标开始路由一个鼠标事件；未指定目标时只触发 ViewManager 事件。
+   * @param event 需要路由的鼠标事件
+   * @param selected 路由起点
+   * @param locked selected 是否来自当前鼠标锁定目标
+   */
+  seal func routeMouse(
+    event: MouseEvent<Widget>,
+    selected: Option<Widget>,
+    locked: bool
+  ): void {
+    if selected match let target: Widget {
+      var hiddenBoundary: Option<Widget> = none;
+      var insideHiddenBoundary = false;
+      if locked {
+        event.bindLockedTarget(target);
+        hiddenBoundary = self.resolveLockedHiddenBoundary(target);
+        if hiddenBoundary match boundary: Widget {
+          insideHiddenBoundary = true;
+        }
+      } else {
+        event.bindTarget(target);
+      }
+      var current = target;
+      var routing = true;
+      while routing {
+        if !insideHiddenBoundary &&
+        current.rtStyle.visibility == Visibility.Visible &&
+        current.rtStyle.pointerEvents == PointerEvents.All {
+          self.invokeMouse(current, event);
+        }
+        if insideHiddenBoundary {
+          if hiddenBoundary match boundary: Widget {
+            if current == boundary {
+              insideHiddenBoundary = false;
+            }
+          }
+        }
+        if event.isStopped() {
+          routing = false;
+        } else if self.isCurrentRoot(current) {
+          self.invokeManagerMouse(event);
+          routing = false;
+        } else if current.parent match let parent: ContainerWidget {
+          current = (Widget)parent;
+        } else {
+          routing = false;
+        }
+      }
+    } else {
+      self.invokeManagerMouse(event);
     }
   }
 
@@ -772,55 +891,29 @@ open type ViewManager {
   open func dispatchMouse(event: MouseEvent<Widget>): void {
     let hovered = self.hitTest(event.x, event.y);
     self.updateHover(hovered);
+    let shouldClick = self.updateClickState(event);
     self.updateActive(event, hovered);
 
     var selected: Option<Widget> = none;
-    if MouseEvent<Widget>.hasLockedTarget() {
+    let locked = MouseEvent<Widget>.hasLockedTarget();
+    if locked {
       selected = MouseEvent<Widget>.lockedTarget();
     } else {
       selected = hovered;
     }
+    self.routeMouse(event, selected, locked);
     if selected match let target: Widget {
-      var hiddenBoundary: Option<Widget> = none;
-      var insideHiddenBoundary = false;
-      if MouseEvent<Widget>.hasLockedTarget() {
-        event.bindLockedTarget(target);
-        hiddenBoundary = self.resolveLockedHiddenBoundary(target);
-        if hiddenBoundary match boundary: Widget {
-          insideHiddenBoundary = true;
-        }
-      } else {
-        event.bindTarget(target);
-      }
-      var current = target;
-      var routing = true;
-      while routing {
-        if !insideHiddenBoundary &&
-        current.rtStyle.visibility == Visibility.Visible &&
-        current.rtStyle.pointerEvents == PointerEvents.All {
-          self.invokeMouse(current, event);
-        }
-        if insideHiddenBoundary {
-          if hiddenBoundary match boundary: Widget {
-            if current == boundary {
-              insideHiddenBoundary = false;
-            }
-          }
-        }
-        if event.isStopped() {
-          routing = false;
-        } else if self.isCurrentRoot(current) {
-          self.invokeManagerMouse(event);
-          routing = false;
-        } else if current.parent match let parent: ContainerWidget {
-          current = (Widget)parent;
-        } else {
-          routing = false;
-        }
-      }
       self.applyMouseDefault(target, event);
-    } else {
-      self.invokeManagerMouse(event);
+    }
+
+    if event.action == MouseAction.Press &&
+    event.button == MouseButton.Left && event.isPrevented() {
+      self._clickState = ClickState.Idle;
+    }
+    if shouldClick && !event.isPrevented() {
+      let clickEvent = MouseEvent<Widget>(MouseAction.Click,
+        event.button, event.x, event.y, event.mods);
+      self.routeMouse(clickEvent, hovered, false);
     }
   }
 

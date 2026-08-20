@@ -1591,6 +1591,12 @@ func mouse_action_enum() {
   check(e3.action == MouseAction.Move, "tui/mouse/action-move");
 }
 
+/** 验证 Click 可作为 ViewManager 合成事件的公开 MouseAction。 */
+func mouse_action_click_enum() {
+  let event = MouseEvent<i32>(MouseAction.Click, MouseButton.Left, 4, 2, 0);
+  check(event.action == MouseAction.Click, "tui/mouse/action-click");
+}
+
 func mouse_button_enum() {
   // 通过 MouseEvent 构造间接验证枚举值可访问
   let e1 = MouseEvent<i32>(MouseAction.Press, MouseButton.None, 0, 0, 0);
@@ -4251,6 +4257,196 @@ func view_manager_mouse_event_mapping() {
   check(managerHasNoFocus(manager), "tui/mouse/wheel-does-not-focus");
 }
 
+/** 验证同坐标左键按下和释放合成独立 click，并按 Widget 路径冒泡。 */
+func view_manager_click_synthesis_and_route() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let child = View();
+  root.addChild(child);
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 20, 10));
+  manager.trace(child, makeWidgetFrame(2, 2, 6, 4));
+
+  var order = 0;
+  var targetStable = true;
+  var payloadStable = true;
+  var managerSawUnbound = false;
+  child.click.on((event: MouseEvent<Widget>) {
+    order = order * 10 + 1;
+    targetStable = targetStable && event.hasTarget() &&
+      event.target == (Widget)child;
+    payloadStable = payloadStable && event.action == MouseAction.Click &&
+      event.button == MouseButton.Left && event.x == 3 && event.y == 3 &&
+      event.mods == MOD_SHIFT && !event.isStopped() && !event.isPrevented();
+  });
+  root.click.on((event: MouseEvent<Widget>) {
+    order = order * 10 + 2;
+    targetStable = targetStable && event.hasTarget() &&
+      event.target == (Widget)child;
+  });
+  manager.click.on((event: MouseEvent<Widget>) {
+    order = order * 10 + 3;
+    if (!event.hasTarget()) {
+      managerSawUnbound = true;
+    }
+  });
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, MOD_SHIFT));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, MOD_SHIFT));
+  check(order == 123, "tui/click/widget-root-manager-order");
+  check(targetStable, "tui/click/target-stable");
+  check(payloadStable, "tui/click/synthetic-payload");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 25, 12, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 25, 12, 0));
+  check(managerSawUnbound, "tui/click/no-hit-manager-event");
+}
+
+/** 验证移动、错位释放和非左键不会合成 click，且 release 会结束旧候选。 */
+func view_manager_click_movement_and_release_reset() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = View();
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 20, 10));
+  var clicks = 0;
+  root.click.on((event: MouseEvent<Widget>) { clicks += 1; });
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.Left, 4, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(clicks == 0, "tui/click/move-back-stays-cancelled");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 4, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(clicks == 0, "tui/click/mismatched-release-resets-idle");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Right, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Right, 3, 3, 0));
+  check(clicks == 0, "tui/click/right-button-ignored");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(clicks == 1, "tui/click/fresh-sequence-after-cancel");
+}
+
+/** 验证 stop 不取消 click，preventDefault 会取消，且 release 始终结束旧状态。 */
+func view_manager_click_stop_prevent_and_idle_reset() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let child = View();
+  root.addChild(child);
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 20, 10));
+  manager.trace(child, makeWidgetFrame(2, 2, 6, 4));
+
+  var mode = 0;
+  var childClicks = 0;
+  var rootClicks = 0;
+  var managerClicks = 0;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    if mode == 1 {
+      event.preventDefault();
+    }
+  });
+  child.mouseUp.on((event: MouseEvent<Widget>) {
+    if mode == 2 {
+      event.preventDefault();
+    } else if mode == 3 {
+      event.stop();
+    }
+  });
+  child.click.on((event: MouseEvent<Widget>) { childClicks += 1; });
+  root.click.on((event: MouseEvent<Widget>) { rootClicks += 1; });
+  manager.click.on((event: MouseEvent<Widget>) { managerClicks += 1; });
+
+  mode = 1;
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(childClicks == 0 && rootClicks == 0 && managerClicks == 0,
+    "tui/click/mousedown-prevent-and-release-reset");
+
+  mode = 2;
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(childClicks == 0 && rootClicks == 0 && managerClicks == 0,
+    "tui/click/mouseup-prevent-and-release-reset");
+
+  mode = 3;
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 3, 3, 0));
+  check(childClicks == 1 && rootClicks == 1 && managerClicks == 1,
+    "tui/click/mouseup-stop-keeps-click-and-resets");
+}
+
+/** 验证 click 使用 release 的实际命中目标，不沿用原始 mouseUp 的锁定目标。 */
+func view_manager_click_uses_release_hit_not_lock() {
+  let manager = ViewManager(Screen(30, 10));
+  let root = Container();
+  let lockOwner = View();
+  let releaseTarget = View();
+  root.addChild(lockOwner);
+  root.addChild(releaseTarget);
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 30, 10));
+  manager.trace(lockOwner, makeWidgetFrame(1, 1, 5, 4));
+  manager.trace(releaseTarget, makeWidgetFrame(12, 1, 5, 4));
+
+  var acquireLock = true;
+  var ownerClicks = 0;
+  var targetClicks = 0;
+  lockOwner.mouseDown.on((event: MouseEvent<Widget>) {
+    if acquireLock {
+      check(event.lock(), "tui/click/acquire-lock");
+      acquireLock = false;
+    }
+  });
+  lockOwner.mouseUp.on((event: MouseEvent<Widget>) { event.unlock(); });
+  lockOwner.click.on((event: MouseEvent<Widget>) { ownerClicks += 1; });
+  releaseTarget.click.on((event: MouseEvent<Widget>) {
+    targetClicks += 1;
+    check(event.target == (Widget)releaseTarget,
+      "tui/click/release-hit-target-bound");
+  });
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Right, 2, 2, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 13, 2, 0));
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 13, 2, 0));
+  check(ownerClicks == 0 && targetClicks == 1,
+    "tui/click/release-hit-bypasses-lock");
+}
+
 /** 验证键盘事件从焦点 Widget 到 root、ViewManager 的路由和停止规则。 */
 func view_manager_key_focus_route() {
   let manager = ViewManager(Screen(20, 10));
@@ -5117,6 +5313,7 @@ open func run_tui_tests() {
     test("key_event_prevent_default_is_independent()", () { key_event_prevent_default_is_independent(); });
     // ─── Phase 5: MouseEvent ───
     test("mouse_action_enum()", () { mouse_action_enum(); });
+    test("mouse_action_click_enum()", () { mouse_action_click_enum(); });
     test("mouse_button_enum()", () { mouse_button_enum(); });
     test("mouse_event_default_ctor()", () { mouse_event_default_ctor(); });
     test("mouse_event_left_click()", () { mouse_event_left_click(); });
@@ -5179,6 +5376,10 @@ open func run_tui_tests() {
     test("view_manager_focus_state_sync()", () { view_manager_focus_state_sync(); });
     test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
     test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
+    test("view_manager_click_synthesis_and_route()", () { view_manager_click_synthesis_and_route(); });
+    test("view_manager_click_movement_and_release_reset()", () { view_manager_click_movement_and_release_reset(); });
+    test("view_manager_click_stop_prevent_and_idle_reset()", () { view_manager_click_stop_prevent_and_idle_reset(); });
+    test("view_manager_click_uses_release_hit_not_lock()", () { view_manager_click_uses_release_hit_not_lock(); });
     test("view_manager_key_focus_route()", () { view_manager_key_focus_route(); });
     test("view_manager_tab_sequence_navigation()", () { view_manager_tab_sequence_navigation(); });
     test("view_manager_tab_candidates_and_default_behavior()", () { view_manager_tab_candidates_and_default_behavior(); });

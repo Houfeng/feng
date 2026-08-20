@@ -261,7 +261,8 @@
 - [x] 4.41m 更新光标状态测试，执行定向测试与全量回归测试
 - [x] 4.41n 收敛 Tab 焦点切换规范：始终使用 `sequence`，按 `(tabIndex, sequenceIndex)` 稳定排序并支持正反向循环
 - [x] 4.41o 实现 Shift+Tab 解析、ViewManager Tab 默认行为和对应 std_test，并执行全量回归测试
-- [x] 4.41p 在 `tui_demo` 中加入多个连续 Input，构建并交付人工终端验证 Tab/Shift+Tab
+- [x] 4.41p 在 `tui_demo` 中加入多个连续 Input，并通过人工终端验证 Tab/Shift+Tab
+- [x] 4.41q 为 Widget/ViewManager 增加通用 click 事件，由 ViewManager 使用三态和起始位置合成、冒泡
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。

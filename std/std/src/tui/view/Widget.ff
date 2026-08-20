@@ -118,6 +118,11 @@ open spec Widget {
   let wheel: Event<MouseEvent<Widget>>;
 
   /**
+   * ViewManager 根据左键按下和释放合成的 click 多播事件
+   */
+  let click: Event<MouseEvent<Widget>>;
+
+  /**
    * 请求直接父组件重新布局。
    * 更高祖先只标记子树布局路径；没有父组件时静默返回。
    */

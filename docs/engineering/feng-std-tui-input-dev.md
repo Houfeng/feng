@@ -210,7 +210,8 @@ open type KeyEvent<T> {
 open enum MouseAction {
   press = 0,
   release = 1,
-  move = 2
+  move = 2,
+  click = 3
 }
 
 open enum MouseButton {
@@ -222,6 +223,10 @@ open enum MouseButton {
   wheelDown = 5
 }
 ```
+
+`press`、`release` 和 `move` 来自 InputManager 解析的原始终端输入；`click` 只由
+ViewManager 根据原始事件合成，InputManager 不直接产生。click 的识别、target、冒泡和
+默认行为规则统一由 `docs/engineering/feng-std-tui-view-dev.md` 定义。
 
 ### 2.6 MouseEvent（MouseEvent.ff）
 

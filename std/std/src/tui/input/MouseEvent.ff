@@ -11,7 +11,9 @@ open enum MouseAction {
   /** 释放按钮 */
   Release = 1,
   /** 移动（含拖动和悬停） */
-  Move = 2
+  Move = 2,
+  /** ViewManager 根据左键按下和释放合成的 click。 */
+  Click = 3
 }
 
 /**

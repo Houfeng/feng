@@ -127,6 +127,11 @@ open type View: Widget {
   let wheel: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
 
   /**
+   * ViewManager 根据左键按下和释放合成的 click 多播事件
+   */
+  let click: Event < MouseEvent<Widget >> = Event<MouseEvent<Widget>>();
+
+  /**
    * 按指定参照尺寸解析固定值或百分比。
    * 结果保留正负方向；NaN 解析为 0。
    */

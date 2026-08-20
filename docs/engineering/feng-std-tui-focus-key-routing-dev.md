@@ -367,7 +367,7 @@ Shift+Tab 应按相反方向循环；每个 Input 保持独立编辑值、焦点
 - [x] 12.25 实现 ViewManager 无排序、无临时集合的 Tab 正向/反向焦点切换；
 - [x] 12.26 补齐 Tab 解析、顺序、循环、过滤和默认行为 std_test 用例；
 - [x] 12.27 执行定向测试与全量回归，更新实施状态并等待人工 Review。
-- [x] 12.28 在 `tui_demo` 中加入三个连续 Input，构建并交付人工终端验证 Tab/Shift+Tab。
+- [x] 12.28 在 `tui_demo` 中加入三个连续 Input，并通过人工终端验证 Tab/Shift+Tab。
 
 ## 13 实施结论与后续 Review
 
