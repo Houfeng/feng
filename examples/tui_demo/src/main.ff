@@ -64,7 +64,25 @@ func bindDrag(rectangle: View, app: TuiApp): void {
 }
 
 /**
- * TUI demo: 使用 ViewManager 绘制 Text/Input，并独立拖动蓝色和红色矩形。
+ * 创建一个具有统一演示样式和独立提交行为的单行 Input。
+ * @param initialValue 初始输入值
+ * @return 可直接加入组件树的 Input
+ */
+func makeDemoInput(initialValue: string): Input {
+  let input = Input();
+  input.value(initialValue);
+  input.style.backColor = RgbColor(25, 25, 25);
+  input.style.foreColor = RgbColor(220, 220, 220);
+  input.useStateStyle(Pseudo.Focus).backColor = RgbColor(0, 80, 140);
+  input.useStateStyle(Pseudo.Focus).foreColor = RgbColor(255, 255, 255);
+  input.submit.on((value: string) {
+    input.value("✓ " + value);
+  });
+  return input;
+}
+
+/**
+ * TUI demo: 使用 ViewManager 绘制 Text/多个 Input，并独立拖动蓝色和红色矩形。
  *
  * 运行方式：./build/bin/feng run ./examples/tui_demo
  * 退出方式：Ctrl+C 终止进程（atexit handler 会恢复终端模式）。
@@ -133,9 +151,9 @@ func main(args: string[]) {
   rowDescription.style.foreColor = RgbColor(180, 220, 255);
   row.addChild(rowDescription);
 
-  // 单行 Input 默认可聚焦；焦点状态控制颜色，Enter 通过 submit 回写提交结果。
+  // 连续 Input 共享默认 tabIndex=0，用于验证 Tab/Shift+Tab 的 sequence 循环顺序。
   let inputLabel = Text();
-  inputLabel.content = "Input (Enter submits):";
+  inputLabel.content = "Inputs: Tab / Shift+Tab";
   inputLabel.style.width = auto;
   inputLabel.style.height = auto;
   inputLabel.style.horizontalAlign = Align.Start;
@@ -143,16 +161,12 @@ func main(args: string[]) {
   inputLabel.style.foreColor = RgbColor(180, 220, 255);
   stack.addChild(inputLabel);
 
-  let input = Input();
-  input.value("Feng 输入 😀");
-  input.style.backColor = RgbColor(25, 25, 25);
-  input.style.foreColor = RgbColor(220, 220, 220);
-  input.useStateStyle(Pseudo.Focus).backColor = RgbColor(0, 80, 140);
-  input.useStateStyle(Pseudo.Focus).foreColor = RgbColor(255, 255, 255);
-  input.submit.on((value: string) {
-    input.value("✓ " + value);
-  });
-  stack.addChild(input);
+  let firstInput = makeDemoInput("First: Feng 输入 😀");
+  let secondInput = makeDemoInput("Second: 中文输入");
+  let thirdInput = makeDemoInput("Third: grapheme é");
+  stack.addChild(firstInput);
+  stack.addChild(secondInput);
+  stack.addChild(thirdInput);
 
   // 初始居中的蓝色矩形。
   let blueRectangle = View();
@@ -203,7 +217,7 @@ func main(args: string[]) {
   bindDrag(redRectangle, app);
 
   // 首帧直接展示 Focus 状态样式和组件绘制的可见 caret。
-  app.view.focus(input);
+  app.view.focus(firstInput);
 
   app.run();
 }

@@ -4309,6 +4309,132 @@ func view_manager_key_focus_route() {
   check(managerHasNoFocus(manager), "tui/key-route/invalid-focus-cleared");
 }
 
+/** 验证 Tab 按 tabIndex 与 sequence 稳定顺序正反向切换并循环。 */
+func view_manager_tab_sequence_navigation() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let a = View();
+  let b = View();
+  let c = View();
+  let d = View();
+  // 组件树顺序刻意与 sequence 相反，确认 Tab 始终只使用 sequence。
+  root.addChild(d);
+  root.addChild(c);
+  root.addChild(b);
+  root.addChild(a);
+  a.tabIndex = 1;
+  b.tabIndex = 0;
+  c.tabIndex = 1;
+  d.tabIndex = 0;
+  manager.root = root;
+  manager.trace(a, makeWidgetFrame(0, 0, 1, 1));
+  manager.trace(b, makeWidgetFrame(1, 0, 1, 1));
+  manager.trace(c, makeWidgetFrame(2, 0, 1, 1));
+  manager.trace(d, makeWidgetFrame(3, 0, 1, 1));
+
+  let first = KeyEvent<Widget>(SpecialKey.Tab, 0);
+  manager.dispatchKey(first);
+  check(managerHasFocus(manager, b) && !first.hasTarget(),
+    "tui/tab/no-focus-selects-minimum");
+
+  let second = KeyEvent<Widget>(SpecialKey.Tab, 0);
+  manager.dispatchKey(second);
+  check(managerHasFocus(manager, d) && second.hasTarget() &&
+    second.target == (Widget)b,
+    "tui/tab/same-index-follows-sequence-and-keeps-old-target");
+
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasFocus(manager, a), "tui/tab/next-tab-index");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasFocus(manager, c), "tui/tab/next-same-index");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasFocus(manager, b), "tui/tab/forward-wrap");
+
+  let reverse = KeyEvent<Widget>(SpecialKey.Tab, MOD_SHIFT);
+  manager.dispatchKey(reverse);
+  check(managerHasFocus(manager, c) && reverse.target == (Widget)b,
+    "tui/tab/reverse-wrap");
+}
+
+/** 验证 Tab 候选过滤、默认行为阻止和停止传播的独立语义。 */
+func view_manager_tab_candidates_and_default_behavior() {
+  let manager = ViewManager(Screen(20, 10));
+  let root = Container();
+  let negative = View();
+  let hidden = View();
+  let detached = View();
+  let pointerless = View();
+  let eligible = View();
+  let undrawn = View();
+  negative.tabIndex = -1;
+  hidden.tabIndex = 0;
+  detached.tabIndex = 0;
+  pointerless.tabIndex = 0;
+  eligible.tabIndex = 0;
+  undrawn.tabIndex = 0;
+  hidden.style.visibility = Visibility.Hidden;
+  pointerless.style.pointerEvents = PointerEvents.None;
+  root.addChild(negative);
+  root.addChild(hidden);
+  root.addChild(pointerless);
+  root.addChild(eligible);
+  root.addChild(undrawn);
+  manager.root = root;
+  manager.doStyling();
+  manager.trace(negative, makeWidgetFrame(0, 0, 1, 1));
+  manager.trace(hidden, makeWidgetFrame(1, 0, 1, 1));
+  manager.trace(detached, makeWidgetFrame(2, 0, 1, 1));
+  manager.trace(pointerless, makeWidgetFrame(3, 0, 1, 1));
+  manager.trace(eligible, makeWidgetFrame(4, 0, 1, 1));
+
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasFocus(manager, pointerless),
+    "tui/tab/skips-ineligible-but-not-pointerless");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasFocus(manager, eligible),
+    "tui/tab/skips-undrawn-candidate");
+
+  check(manager.focus(undrawn), "tui/tab/focus-undrawn-programmatically");
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, MOD_SHIFT));
+  check(managerHasFocus(manager, eligible),
+    "tui/tab/current-outside-sequence-reverse-selects-maximum");
+
+  var mode = 0;
+  eligible.key.on((event: KeyEvent<Widget>) {
+    if mode == 1 {
+      event.stop();
+    } else if mode == 2 {
+      event.preventDefault();
+    }
+  });
+  mode = 1;
+  let stopped = KeyEvent<Widget>(SpecialKey.Tab, 0);
+  manager.dispatchKey(stopped);
+  check(stopped.isStopped() && managerHasFocus(manager, pointerless),
+    "tui/tab/stop-does-not-prevent-default");
+
+  check(manager.focus(eligible), "tui/tab/refocus-before-prevent");
+  mode = 2;
+  let prevented = KeyEvent<Widget>(SpecialKey.Tab, 0);
+  manager.dispatchKey(prevented);
+  check(prevented.isPrevented() && managerHasFocus(manager, eligible),
+    "tui/tab/prevent-default-keeps-focus");
+
+  mode = 0;
+  let modified = KeyEvent<Widget>(SpecialKey.Tab, MOD_CONTROL);
+  manager.dispatchKey(modified);
+  check(managerHasFocus(manager, eligible),
+    "tui/tab/non-shift-modifier-has-no-default");
+
+  manager.clearFocus();
+  manager.key.on((event: KeyEvent<Widget>) {
+    event.preventDefault();
+  });
+  manager.dispatchKey(KeyEvent<Widget>(SpecialKey.Tab, 0));
+  check(managerHasNoFocus(manager),
+    "tui/tab/manager-can-prevent-without-focus");
+}
+
 /** 验证 TuiApp.key 始终位于可停止的 Widget/ViewManager 路由之后。 */
 func tuiapp_key_remains_application_level() {
   let app = TuiApp();
@@ -4508,6 +4634,24 @@ func input_tab_key() {
   check(capturedKey.isPrintable() == false, "tui/input/tab-not-printable");
 }
 
+/** 验证终端 BackTab 序列解析为仅带 Shift 的 Tab。 */
+func input_shift_tab_csi() {
+  let mgr = makeInputManager();
+  let seq: byte[!] = byte[:3];
+  seq[0] = (byte)0x1B;
+  seq[1] = (byte)0x5B;
+  seq[2] = (byte)0x5A;
+  feedBytes(mgr, (byte[])seq);
+  var isTab = false;
+  match capturedKey.content {
+    key: SpecialKey { isTab = key == SpecialKey.Tab; }
+    value: u32 { isTab = false; }
+  }
+  check(keyCaptured && isTab, "tui/input/shift-tab-captured");
+  check(capturedKey.isShift() && !capturedKey.isControl(),
+    "tui/input/shift-tab-modifiers");
+}
+
 func input_backspace_bs() {
   let mgr = makeInputManager();
   mgr.feed((u8)0x08);  // BS = Backspace
@@ -4693,9 +4837,9 @@ func input_invalid_utf8_resets() {
 
 func input_unknown_csi_dropped() {
   let mgr = makeInputManager();
-  // ESC[Z 是未知 CSI 序列，应丢弃，无回调
+  // ESC[X 是未知 CSI 序列，应丢弃，无回调
   let seq: byte[!] = byte[:3];
-  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x5A;
+  seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x58;
   feedBytes(mgr, (byte[])seq);
   check(keyCaptured == false, "tui/input/unknown-csi-no-callback");
 }
@@ -5036,11 +5180,14 @@ open func run_tui_tests() {
     test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
     test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
     test("view_manager_key_focus_route()", () { view_manager_key_focus_route(); });
+    test("view_manager_tab_sequence_navigation()", () { view_manager_tab_sequence_navigation(); });
+    test("view_manager_tab_candidates_and_default_behavior()", () { view_manager_tab_candidates_and_default_behavior(); });
     test("view_manager_mouse_target_lock_and_bubble()", () { view_manager_mouse_target_lock_and_bubble(); });
     // ─── Phase 5: InputManager ───
     test("input_printable_ascii()", () { input_printable_ascii(); });
     test("input_enter_key()", () { input_enter_key(); });
     test("input_tab_key()", () { input_tab_key(); });
+    test("input_shift_tab_csi()", () { input_shift_tab_csi(); });
     test("input_backspace_bs()", () { input_backspace_bs(); });
     test("input_backspace_del()", () { input_backspace_del(); });
     test("input_ctrl_c()", () { input_ctrl_c(); });

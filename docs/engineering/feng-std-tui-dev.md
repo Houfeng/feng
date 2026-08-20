@@ -259,6 +259,9 @@
 - [x] 4.41k 收敛通用终端光标规范：Screen 只提供逐帧位置和可见性请求，Input 自行决定原生或自绘 caret 策略
 - [x] 4.41l 将文本输入锚点重构为 Screen/ViewManager 通用终端光标请求，并保持 Input 现有反色自绘行为
 - [x] 4.41m 更新光标状态测试，执行定向测试与全量回归测试
+- [x] 4.41n 收敛 Tab 焦点切换规范：始终使用 `sequence`，按 `(tabIndex, sequenceIndex)` 稳定排序并支持正反向循环
+- [x] 4.41o 实现 Shift+Tab 解析、ViewManager Tab 默认行为和对应 std_test，并执行全量回归测试
+- [x] 4.41p 在 `tui_demo` 中加入多个连续 Input，构建并交付人工终端验证 Tab/Shift+Tab
 
 > Text 与自动尺寸作为后续独立阶段设计，详见
 > `docs/engineering/feng-std-tui-text-dev.md`；VStack/HStack 和 Input 不并入该阶段。

@@ -1,6 +1,6 @@
 # Feng TUI 焦点与键盘路由开发方案
 
-> 状态：已实施，等待人工 Review。
+> 状态：基础焦点及 Tab 正向/反向切换均已实施，并通过 std_test 与全量回归，等待人工 Review。
 >
 > 本文档是 `docs/engineering/feng-std-tui-dev.md` 中焦点管理与键盘焦点路由阶段的
 > 专项开发文档。既有鼠标命中、target、lock 和 Widget 冒泡规则仍以
@@ -260,19 +260,40 @@ InputManager.onKey
 本阶段不为 TuiApp 增加鼠标事件。鼠标仍由 `InputManager.onMouse` 直接进入
 `ViewManager.dispatchMouse`。
 
-## 9 Tab 切换的阶段边界
+## 9 Tab 切换契约
 
-`tabIndex` 在本阶段先完成公开契约、默认值和焦点资格判断。Tab 切换作为焦点基础能力
-稳定后的独立步骤，至少需要覆盖：
+### 9.1 顺序来源与候选资格
 
-- 按 `tabIndex` 数值确定切换顺序；
-- 同一 `tabIndex` 下保持稳定顺序；
-- 跳过不可聚焦及当前帧不可交互的 Widget；
-- 到达末尾后的循环规则；
-- 终端能够可靠表达的反向切换输入；
-- Tab 默认切换与键盘事件传播之间的阻止规则。
+Tab 始终使用 `ViewManager.sequence` 作为顺序来源，不遍历组件树，也不因未来引入
+`zIndex` 改用其他顺序。`sequence` 是上一轮完整绘制形成的交互快照；尚未绘制、完全
+裁剪或没有有效绘制区域的 Widget 不参与本次切换。
 
-上述细节尚未在本轮讨论中全部确定，因此不在基础焦点与键盘路由步骤中提前实现。
+每个候选项的顺序键为 `(tabIndex, sequenceIndex)`：先按非负 `tabIndex` 从小到大排序，
+同值时按 `sequence` 登记位置保持稳定顺序。反向切换使用该顺序的完全逆序。候选 Widget
+还必须满足当前 `rtStyle.visibility == Visibility.Visible` 且仍属于当前 root；
+`pointerEvents` 只控制鼠标，不影响键盘焦点资格。
+
+### 9.2 正向、反向与循环
+
+- Tab 从当前候选的顺序键移动到下一个候选，到达末尾后循环到最小候选；
+- Shift+Tab 移动到上一个候选，到达开头后循环到最大候选；
+- 没有当前焦点，或当前焦点不再是 `sequence` 中的有效候选时，Tab 选择最小候选，
+  Shift+Tab 选择最大候选；
+- 只有一个候选时允许选择自身，由既有 `focus()` 幂等语义保证不重复触发焦点事件；
+- 没有候选时保持当前焦点，不产生焦点事件。
+
+终端普通 Tab 字节 `0x09` 继续产出 `SpecialKey.Tab`；反向 Tab 的标准 `CSI Z`
+（`ESC [ Z`）产出 `SpecialKey.Tab + MOD_SHIFT`。键盘默认行为只处理无修饰 Tab 和仅带
+`MOD_SHIFT` 的 Tab；含其他修饰位的合成事件不触发焦点切换。
+
+### 9.3 默认行为时序
+
+Tab 切换是 `ViewManager.dispatchKey()` 的默认行为：先使用按键发生时的旧焦点完成 Widget
+和 ViewManager 路由，再在路由结束后检查 `event.isPrevented()` 并切换焦点。因此事件的
+`target` 始终保持旧焦点；切换完成后 `focused()` 返回新焦点。`stop()` 只停止后续视图
+传播，不阻止默认行为；Widget 或 ViewManager 需要保留 Tab 时必须调用
+`preventDefault()`。`TuiApp.key` 位于 ViewManager 默认行为之后，能够观察切换结果，
+但不能事后取消已经完成的切换。
 
 ## 10 性能约束
 
@@ -280,8 +301,9 @@ InputManager.onKey
 - ViewManager 构造时创建并复用两条有序焦点路径；焦点切换不创建 List、HashSet 或临时
   组件集合，并可在组件脱离树后使用旧路径完成 blur；
 - ViewManager 的多播 Event 在 ViewManager 构造时创建，不在每次分发时创建；
-- 本阶段不为 Tab 顺序引入每次按键排序；其数据结构和更新策略在 Tab 步骤实现前单独
-  Review；
+- Tab 切换不排序、不从 root 枚举组件树，也不创建临时集合；先定位当前焦点的
+  `sequenceIndex`，再顺序扫描候选，同时选择相邻项和循环项。顺序选择为 O(n)；候选
+  通过既有 parent 链确认当前 root 归属，最坏复杂度为 O(nh)，其中 h 为组件树深度；
 - `FocusEvent` 使用值类型；除已经明确列出的 KeyEvent 引用类型分配外，不增加新的
   每事件运行时分配。
 
@@ -303,7 +325,15 @@ InputManager.onKey
 - Widget 停止键盘传播后，`TuiApp.key` 仍被触发；
 - TuiApp 多个 key 监听器、退订及 Ctrl+C 所需的应用级路径；
 - InputManager 单播出口、ViewManager 路由和 TuiApp.key 的集成；
+- `CSI Z` 的 Shift+Tab 解析，以及真正未知 CSI 仍被丢弃；
+- `tabIndex` 数值顺序、同值 `sequence` 稳定顺序、正反向循环和无焦点起点；
+- 不可聚焦、未登记、不可见、脱离 root 和 `pointerEvents == None` 的候选规则；
+- Tab 默认行为与 `stop()`、`preventDefault()`、旧事件 target 及新焦点的时序；
 - `examples/tui_demo` 改用 `app.key` 后可以构建并正常退出。
+
+人工终端验证在 `examples/tui_demo` 的同一 VStack 中连续放置三个默认
+`tabIndex == 0` 的 Input：首个 Input 初始获得焦点，Tab 应按 `sequence` 自上而下循环，
+Shift+Tab 应按相反方向循环；每个 Input 保持独立编辑值、焦点样式和 submit 行为。
 
 测试只新增或按人工批准调整相关 TUI 用例。此前基础阶段已经执行 `make test` 全量回归；
 本轮仅变更 std 及 std_test，按人工确认构建 std 并完整回归 std_test。
@@ -332,7 +362,12 @@ InputManager.onKey
 - [x] 12.20 补齐 KeyEvent 默认行为和 FocusEvent 路径切换 std_test 用例；
 - [x] 12.21 构建 std 并回归 std_test，更新实施状态；
 - [x] 12.22 将真实焦点目标同步到 `Pseudo.Focus`，覆盖切换、清除、失效、重入和状态样式时序；
-- [ ] 12.23 基础阶段通过 Review 后，单独设计并实施 Tab 正向/反向焦点切换。
+- [x] 12.23 确认 Tab 始终使用 `sequence`，并收敛顺序、候选、循环和默认行为契约；
+- [x] 12.24 将 `CSI Z` 解析为 `SpecialKey.Tab + MOD_SHIFT`；
+- [x] 12.25 实现 ViewManager 无排序、无临时集合的 Tab 正向/反向焦点切换；
+- [x] 12.26 补齐 Tab 解析、顺序、循环、过滤和默认行为 std_test 用例；
+- [x] 12.27 执行定向测试与全量回归，更新实施状态并等待人工 Review。
+- [x] 12.28 在 `tui_demo` 中加入三个连续 Input，构建并交付人工终端验证 Tab/Shift+Tab。
 
 ## 13 实施结论与后续 Review
 
@@ -347,4 +382,5 @@ InputManager.onKey
   构建 std 并回归 std_test，结果为 524/524；
 - `Pseudo.Focus` 状态同步新增用例后，std_test 580/580、fcts 816/816，沙箱外完整
   `make test` 通过；
-- Tab 同值顺序、循环和阻止规则仍留到 12.23 单独决策与实施。
+- Tab 顺序、循环和阻止规则已按第 9 节完成实施；新增用例后 std_test 594/594、
+  fcts 816/816，沙箱外完整 `make test` 通过。

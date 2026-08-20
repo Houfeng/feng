@@ -696,6 +696,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | Delete | `ESC [ 3 ~` | onKey(KeyEvent(content=SpecialKey.delete)) |
 | F1 (SS3) | `ESC O P` | onKey(KeyEvent(content=SpecialKey.f1)) |
 | F5 (CSI) | `ESC [ 1 5 ~` | onKey(KeyEvent(content=SpecialKey.f5)) |
+| Shift+Tab | `ESC [ Z` | onKey(KeyEvent(content=SpecialKey.tab, mods=MOD_SHIFT)) |
 | Shift+Up | `ESC [ 1 ; 2 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_SHIFT)) |
 | Ctrl+Up | `ESC [ 1 ; 5 A` | onKey(KeyEvent(content=SpecialKey.arrowUp, mods=MOD_CONTROL)) |
 | UTF-8 中文 | `0xE4 0xBD 0xA0` | onKey(KeyEvent(content=u32(0x4F60))) |
@@ -706,7 +707,7 @@ InputManager 的 `feed()` 无返回值，测试通过 mock 回调验证解析结
 | 按住左键拖动 | `ESC [ < 32 ; 10 ; 5 M` | onMouse(MouseEvent(action=move, button=left, x=9, y=4)) |
 | 悬停移动（无按键） | `ESC [ < 35 ; 10 ; 5 M` | onMouse(MouseEvent(action=move, button=none, x=9, y=4)) |
 | 非法 UTF-8 | `0xC0 0x00` | 重置状态机，无回调触发 |
-| 未知 CSI | `ESC [ Z` | 无回调触发，丢弃 |
+| 未知 CSI | `ESC [ X` | 无回调触发，丢弃 |
 
 ### 6.2 回调注册与分发测试
 

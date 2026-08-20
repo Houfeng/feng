@@ -312,6 +312,146 @@ open type ViewManager {
   }
 
   /**
+   * 判断 sequence 中的 Widget 当前是否可以参与 Tab 切换。
+   * sequence 已保证 Widget 在上一帧具有有效绘制区域；此处只补充实时焦点资格、
+   * 可见性和 root 归属检查。pointerEvents 只控制鼠标，不影响键盘焦点。
+   * @param widget sequence 中的候选 Widget
+   * @return 当前是否为有效 Tab 候选
+   */
+  seal func isTabCandidate(widget: Widget): bool {
+    return widget.tabIndex >= 0 &&
+      widget.rtStyle.visibility == Visibility.Visible &&
+      self.isInRoot(widget);
+  }
+
+  /**
+   * 比较两个 Tab 候选的稳定顺序键 `(tabIndex, sequenceIndex)`。
+   * @param left 左侧候选
+   * @param leftIndex 左侧候选在 sequence 中的位置
+   * @param right 右侧候选
+   * @param rightIndex 右侧候选在 sequence 中的位置
+   * @return left 的顺序严格位于 right 之前时返回 true
+   */
+  seal func isTabOrderBefore(left: Widget, leftIndex: int,
+    right: Widget, rightIndex: int): bool {
+    if left.tabIndex != right.tabIndex {
+      return left.tabIndex < right.tabIndex;
+    }
+    return leftIndex < rightIndex;
+  }
+
+  /**
+   * 沿 sequence 的稳定 Tab 顺序移动焦点。
+   * 先定位当前焦点的 sequenceIndex，再扫描全部候选，同时选择相邻项与循环项；
+   * 不排序、不遍历组件树，也不创建临时集合。
+   * @param forward true 表示 Tab 正向，false 表示 Shift+Tab 反向
+   * @return 找到候选且 focus() 接受目标时返回 true
+   */
+  seal func moveTabFocus(forward: bool): bool {
+    var currentIndex = -1;
+    var currentTabIndex = -1;
+    if self.validFocus() match current: Widget {
+      var index = 0;
+      while index < self.sequence.size() {
+        if self.sequence.get(index) == current {
+          if self.isTabCandidate(current) {
+            currentIndex = index;
+            currentTabIndex = current.tabIndex;
+          }
+          break;
+        }
+        index += 1;
+      }
+    }
+
+    let hasCurrent = currentIndex >= 0;
+    var adjacent: Option<Widget> = none;
+    var adjacentIndex = -1;
+    var wrap: Option<Widget> = none;
+    var wrapIndex = -1;
+
+    var index = 0;
+    while index < self.sequence.size() {
+      let candidate = self.sequence.get(index);
+      if self.isTabCandidate(candidate) {
+        if wrap match currentWrap: Widget {
+          let replaceWrap = if forward {
+            self.isTabOrderBefore(candidate, index, currentWrap, wrapIndex)
+          } else {
+            self.isTabOrderBefore(currentWrap, wrapIndex, candidate, index)
+          };
+          if replaceWrap {
+            wrap = candidate;
+            wrapIndex = index;
+          }
+        } else {
+          wrap = candidate;
+          wrapIndex = index;
+        }
+
+        var beyondCurrent = !hasCurrent;
+        if hasCurrent {
+          if forward {
+            beyondCurrent = candidate.tabIndex > currentTabIndex ||
+              (candidate.tabIndex == currentTabIndex && index > currentIndex);
+          } else {
+            beyondCurrent = candidate.tabIndex < currentTabIndex ||
+              (candidate.tabIndex == currentTabIndex && index < currentIndex);
+          }
+        }
+        if beyondCurrent {
+          if adjacent match currentAdjacent: Widget {
+            let replaceAdjacent = if forward {
+              self.isTabOrderBefore(candidate, index,
+                currentAdjacent, adjacentIndex)
+            } else {
+              self.isTabOrderBefore(currentAdjacent, adjacentIndex,
+                candidate, index)
+            };
+            if replaceAdjacent {
+              adjacent = candidate;
+              adjacentIndex = index;
+            }
+          } else {
+            adjacent = candidate;
+            adjacentIndex = index;
+          }
+        }
+      }
+      index += 1;
+    }
+
+    if adjacent match target: Widget {
+      return self.focus(target);
+    }
+    if wrap match target: Widget {
+      return self.focus(target);
+    }
+    return false;
+  }
+
+  /**
+   * 在键盘视图路由完成后执行 Tab 默认焦点切换。
+   * 仅处理无修饰 Tab 和仅带 Shift 的 Tab；stop() 不影响默认行为，
+   * preventDefault() 可以阻止切换。
+   * @param event 已完成 Widget/ViewManager 路由的同一键盘事件
+   */
+  seal func applyKeyDefault(event: KeyEvent<Widget>): void {
+    if event.isPrevented() {
+      return;
+    }
+    if event.content match key: SpecialKey {
+      if key == SpecialKey.Tab {
+        if event.mods == 0 {
+          self.moveTabFocus(true);
+        } else if event.mods == MOD_SHIFT {
+          self.moveTabFocus(false);
+        }
+      }
+    }
+  }
+
+  /**
    * 获取当前 Screen 宽度。
    * @return Screen 列数
    */
@@ -715,6 +855,7 @@ open type ViewManager {
       let managerEvent = self.key;
       managerEvent.emit(event);
     }
+    self.applyKeyDefault(event);
   }
 
   /**

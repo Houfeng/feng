@@ -274,8 +274,9 @@ std/std/src/tui/widgets/Input.ff
 - 只有真实焦点且 caret 可见的 Input 能提交光标请求，水平滚动和宽 grapheme 使用实际 caret 坐标；
 - 在真实终端使用中文输入法验证非稳定预编辑文本与候选窗口跟随 Input caret。
 
-`examples/tui_demo` 增加一个可实际输入和提交的 Input，用于人工验证焦点样式、Unicode
-编辑、水平滚动和 caret 显示；Tab 切换不作为本阶段验收项。
+`examples/tui_demo` 使用多个可独立输入和提交的 Input，用于人工验证焦点样式、Unicode
+编辑、水平滚动和 caret 显示；多个 Input 之间的 Tab/Shift+Tab 人工验证规则只引用
+`docs/engineering/feng-std-tui-focus-key-routing-dev.md`，不在本文重复定义。
 
 实施顺序固定为：规范 → 公共契约与编辑状态 → grapheme/滚动/绘制 → 新增测试 →
 demo → 定向测试 → 沙箱外 `make test` 全量回归 → 人工 Review。

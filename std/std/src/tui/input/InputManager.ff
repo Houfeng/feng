@@ -417,6 +417,8 @@ open type InputManager<T> {
       self.emitKey(SpecialKey.F3, mods);
     } else if final == (u8)0x53 { // 'S'
       self.emitKey(SpecialKey.F4, mods);
+    } else if final == (u8)0x5A { // 'Z'（BackTab / Shift+Tab）
+      self.emitKey(SpecialKey.Tab, mods | MOD_SHIFT);
     } else if final == (u8)0x7E { // '~'
       self.handleCsiTilde(mods);
     }
