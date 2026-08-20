@@ -295,6 +295,16 @@ imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consu
 - `FengGenericParamDescriptor` 的设计目标必须是“泛型参数使用契约”，而不是“把值本体或一等 `spec` 载体塞进 descriptor”。未来新增类型时，只要编译器能为该类型生成正确的 `FengGenericParamDescriptor`（必要时连同已有 aggregate 描述符体系与 witness 实例一起接入），泛型共享主体就不应改动。
 - 共享主体只通过 `_T` 操作值、通过 `_T->witness` 使用约束；具体值本体始终在单态化字段、局部临时或普通实参里。
 
+##### 1.1 描述符存储与转发不变量
+
+- 对编译期已经闭合的泛型实参，`FengGenericParamDescriptor` 的值分类、底层 descriptor 地址和可选 witness 地址均为编译期常量。Codegen 必须为该组合生成或复用 C 生成单元内的文件级 `static const` 实例，调用点只传递其地址；禁止在可执行路径中用 block-scope compound literal 重复构造等价实例。
+- 静态实例按“值分类 + descriptor 符号 + witness 符号”这一完整内容组合缓存。缓存只负责同一 C 生成单元内的去重；`FengGenericParamDescriptor` 的地址不具有 Feng 语言语义，跨生成单元不要求地址唯一。
+- open generic 共享主体接收的 `_T` 已经是当前实际类型参数的 descriptor 权威。向相同约束面转发时必须直接传递 `_T`，不得复制其字段形成临时 `FengGenericParamDescriptor`。
+- 从子约束面向已经由 semantic 验证为 witness 前缀兼容的父约束面转发时，只要 descriptor 与 witness 表示均未发生转换，也必须直接传递 `_T`。编译期约束兼容性证明不要求运行时 carrier 复制。
+- 只有语义上确实改变值分类、底层 descriptor 或 witness 的转换才能产生不同的 `FengGenericParamDescriptor`。当前闭合 wrapper/consumer 模型下，这类不同组合仍应由具化点静态生成并以指针传入，不引入运行时查找、分配或 descriptor 工厂。
+
+因此，二进制分发与泛型共享体保留的必要成本只有隐藏 descriptor 指针传递及共享体按需读取；闭合 descriptor 的逐调用构造，以及 open descriptor 的逐字段复制，都不属于共享 ABI 的必要成本。
+
 #### 2. 宿主布局输入
 
 - 泛型共享主体不得把具体字段偏移硬编码进共享实现。

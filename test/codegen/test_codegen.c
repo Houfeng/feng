@@ -2932,11 +2932,13 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
     {
         /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
-        char expected[256];
-        snprintf(expected, sizeof(expected),
-                 "feng_array_get_length(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, values)",
+        char descriptor_definition[320];
+        snprintf(descriptor_definition, sizeof(descriptor_definition),
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
                  int_descriptor);
-        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "feng_array_get_length(&_feng_closed_generic_param_desc_0, values)") != NULL);
     }
     compile_generated_c_or_die(out.c_source);
 
@@ -2979,11 +2981,13 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
     {
         /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
-        char expected[256];
-        snprintf(expected, sizeof(expected),
-                 "feng_array_get_length(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, values)",
+        char descriptor_definition[320];
+        snprintf(descriptor_definition, sizeof(descriptor_definition),
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
                  int_descriptor);
-        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "feng_array_get_length(&_feng_closed_generic_param_desc_0, values)") != NULL);
     }
     compile_generated_c_or_die(out.c_source);
 
@@ -3041,9 +3045,11 @@ static void test_array_storage_runtime_contract_codegen(void) {
 
     snprintf(descriptor,
              sizeof(descriptor),
-             "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}",
+             "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
              int_descriptor);
-    ASSERT(count_substr(out.c_source, descriptor) == 5U);
+    ASSERT(count_substr(out.c_source, descriptor) == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "&_feng_closed_generic_param_desc_0") == 5U);
     ASSERT(count_substr(out.c_source,
                         "feng_array_storage_get_capacity(") == 2U);
     ASSERT(count_substr(out.c_source,
@@ -3099,12 +3105,14 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
         /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
         const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
-        char expected[256];
+        char descriptor_definition[320];
         char rga_pattern[64];
-        snprintf(expected, sizeof(expected),
-                 "feng_expression_equal(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, &_rga",
+        snprintf(descriptor_definition, sizeof(descriptor_definition),
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
                  int_descriptor);
-        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "feng_expression_equal(&_feng_closed_generic_param_desc_0, &_rga") != NULL);
         snprintf(rga_pattern, sizeof(rga_pattern), "%s _rga", int_c_type);
         ASSERT(count_substr(out.c_source, rga_pattern) == 2U);
     }
@@ -3150,13 +3158,15 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
         /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
         const char *int_c_type = sizeof(void *) >= 8U ? "int64_t" : "int32_t";
-        char expected[256];
+        char descriptor_definition[320];
         char rga_pattern[64];
         char rgr_pattern[64];
-        snprintf(expected, sizeof(expected),
-                 "__test_value_identity(&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL}, &_rga",
+        snprintf(descriptor_definition, sizeof(descriptor_definition),
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
                  int_descriptor);
-        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
+        ASSERT(strstr(out.c_source,
+                      "__test_value_identity(&_feng_closed_generic_param_desc_0, &_rga") != NULL);
         ASSERT(strstr(out.c_source, ", &_rgr") != NULL);
         snprintf(rga_pattern, sizeof(rga_pattern), "%s _rga", int_c_type);
         snprintf(rgr_pattern, sizeof(rgr_pattern), "%s _rgr", int_c_type);
@@ -3169,6 +3179,49 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
     feng_codegen_error_free(&cgerr);
     feng_semantic_analysis_free(analysis);
     free(errors);
+    feng_program_free(program);
+}
+
+/* An array descriptor that still depends on an incoming open type parameter
+ * is not a compile-time constant. Keep its generic-parameter carrier scoped
+ * to the shared body instead of unsafely promoting it to file-scope data. */
+static void test_open_generic_param_descriptor_remains_runtime_scoped(void) {
+    static const char *kSource =
+        "module feng.codegen.open_generic_param_descriptor;\n"
+        "func identity<U>(value: U): U { return value; }\n"
+        "func copy<T>(values: T[]): T[] {\n"
+        "    return identity<T[]>(values);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "open_generic_param_descriptor_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "&(const FengGenericParamDescriptor){"
+                  ".kind = FENG_VALUE_MANAGED_POINTER, "
+                  ".descriptor = &(const FengTypeDescriptor){") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".reified_generic_params = "
+                  "(const FengGenericParamDescriptor *const[]){_T}") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_feng_closed_generic_param_desc_") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -8208,11 +8261,14 @@ static void test_generic_child_spec_parent_constraint_codegen(void) {
     ASSERT(out.c_source != NULL);
 
     /* T stays Child<i32>; only its constraint dispatch surface is adapted to
-     * Parent<i32>. Both inferred and explicit calls reuse the same adapter. */
+     * Parent<i32>. Both inferred and explicit calls reuse one static generic
+     * parameter descriptor containing the selected slot witness. */
     ASSERT(strstr(out.c_source,
                   ".descriptor = &FengSpecAgg__feng__codegen__gfparent__Child__G__i32") != NULL);
     ASSERT(count_substr(out.c_source,
-                        ".witness = &FengSpecSlotWitness__") >= 2U);
+                        ".witness = &FengSpecSlotWitness__") == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "&_feng_closed_generic_param_desc_0") == 2U);
     ASSERT(strstr(out.c_source, "_value->witness->set_name") != NULL);
     ASSERT(strstr(out.c_source, "_value->witness->payload") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -12267,6 +12323,76 @@ static void test_reified_callable_dependency_uses_package_symbol_without_linkage
     feng_program_free(program);
 }
 
+/* Closed generic arguments reuse one file-scope descriptor, while an open
+ * child-constraint parameter forwards its existing descriptor directly to a
+ * prefix-compatible parent constraint without constructing an adapter. */
+static void test_generic_param_descriptor_static_storage_and_forwarding(void) {
+    static const char *kSource =
+        "module feng.codegen.generic_param_descriptor_storage;\n"
+        "spec Parent { func value(): i64; }\n"
+        "spec Child: Parent {}\n"
+        "type Item: Child {\n"
+        "    func value(): i64 { return 41; }\n"
+        "}\n"
+        "func useParent<T: Parent>(value: T): i64 {\n"
+        "    return value.value();\n"
+        "}\n"
+        "func useChild<U: Child>(value: U): i64 {\n"
+        "    return useParent<U>(value);\n"
+        "}\n"
+        "func run(first: Item, second: Item): i64 {\n"
+        "    return useChild<Item>(first) + useChild<Item>(second);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "generic_param_descriptor_storage_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(count_substr(
+               output.c_source,
+               "static const FengGenericParamDescriptor "
+               "_feng_closed_generic_param_desc_0 = {") == 1U);
+    ASSERT(strstr(output.c_source,
+                  ".descriptor = &FengTypeDesc__feng__codegen__"
+                  "generic_param_descriptor_storage__Item") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness = &FengWitness__feng__codegen__"
+                  "generic_param_descriptor_storage__Item__as__feng__codegen__"
+                  "generic_param_descriptor_storage__Child") != NULL);
+    ASSERT(count_substr(output.c_source,
+                        "&_feng_closed_generic_param_desc_0") == 2U);
+    ASSERT(strstr(output.c_source,
+                  "generic_param_descriptor_storage__useParent_G__from__X") != NULL);
+    ASSERT(strstr(output.c_source, ".kind = _U->kind") == NULL);
+    ASSERT(strstr(output.c_source, ".descriptor = _U->descriptor") == NULL);
+    ASSERT(strstr(output.c_source, ".witness = _U->witness") == NULL);
+    ASSERT(strstr(output.c_source,
+                  "generic_param_descriptor_storage__useParent_G__from__X"
+                  "(&(const FengFunctionDescriptor){.name = "
+                  "\"feng__feng__codegen__generic_param_descriptor_storage__"
+                  "useParent_G__from__X\"}, _U,") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "&(const FengGenericParamDescriptor){") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A constrained generic call must keep the exact closed UserType identity
  * when materializing its witness. Another closed instance of the same generic
  * declaration may already exist, while the requested instance appears only
@@ -12581,6 +12707,7 @@ int main(void) {
     test_mixable_seal_wrappers_use_static_codegen_path();
     test_selected_seal_spec_implementations_use_open_codegen_path();
     test_reified_callable_dependency_uses_package_symbol_without_linkage();
+    test_generic_param_descriptor_static_storage_and_forwarding();
     test_generic_descriptor_uses_exact_closed_spec_implementation();
     test_generic_owner_mixable_coercion_uses_nominal_instance();
     test_multi_file_lib();
@@ -12625,6 +12752,7 @@ int main(void) {
     test_array_storage_runtime_contract_codegen();
     test_generic_runtime_extern_expression_equal_codegen();
     test_generic_runtime_extern_direct_type_param_return_codegen();
+    test_open_generic_param_descriptor_remains_runtime_scoped();
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_unsupported_pointer_pointee_reports_explicit_error();
     test_generic_function_codegen_failure_propagates();

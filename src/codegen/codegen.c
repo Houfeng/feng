@@ -1597,6 +1597,14 @@ typedef struct CGClosedArrayDescriptorNode {
     char *c_name;
 } CGClosedArrayDescriptorNode;
 
+/* One compile-time node for a closed generic-parameter descriptor. The key
+ * contains the complete initializer so equivalent call sites reuse one
+ * read-only object without giving its address language-level identity. */
+typedef struct CGClosedGenericParamDescriptorNode {
+    char *key;
+    char *c_name;
+} CGClosedGenericParamDescriptorNode;
+
 /* Generated support shared by ordinary fixed-layout binding and reified
  * method-value formation. All strings are owned by the CG registry. */
 typedef struct CGCallableMethodValueSupport {
@@ -1896,6 +1904,9 @@ typedef struct CG {
     CGClosedArrayDescriptorNode *closed_array_descriptor_nodes;
     size_t       closed_array_descriptor_node_count;
     size_t       closed_array_descriptor_node_capacity;
+    CGClosedGenericParamDescriptorNode *closed_generic_param_descriptor_nodes;
+    size_t       closed_generic_param_descriptor_node_count;
+    size_t       closed_generic_param_descriptor_node_capacity;
     char       **captured_binding_names;
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
@@ -42202,10 +42213,10 @@ static bool cg_generic_constraint_requires_witness(
            constraint_spec->form != FENG_SPEC_FORM_UNION;
 }
 
-/* Return whether a managed type expression is fully closed at code-generation
- * time. Closed arrays can be emitted once as read-only descriptor nodes;
- * expressions that still contain a callable/owner generic parameter remain
- * wrapper data and must use that parameter's incoming descriptor. */
+/* Return whether a type expression is fully closed at code-generation time.
+ * Only closed expressions may contribute file-scope generic-parameter
+ * descriptor nodes; expressions that still contain a callable/owner generic
+ * parameter remain wrapper data and use incoming descriptor authority. */
 static bool cg_type_descriptor_is_statically_closed(const CGType *type) {
     if (type == NULL) {
         return false;
@@ -42362,6 +42373,103 @@ static bool cg_closed_array_descriptor_expr(CG *cg,
     return *out != NULL;
 }
 
+/* Return a file-scope read-only generic-parameter descriptor for one fully
+ * closed initializer. Nodes are interned within the generated C translation
+ * unit so repeated calls only pass an existing static address. */
+static bool cg_closed_generic_param_descriptor_expr(
+    CG *cg,
+    const char *kind_expr,
+    const char *descriptor_expr,
+    const char *witness_expr,
+    const FengToken *tok,
+    char **out) {
+    Buf key;
+    Buf expression;
+    CGClosedGenericParamDescriptorNode *node;
+
+    if (cg == NULL || kind_expr == NULL || descriptor_expr == NULL ||
+        witness_expr == NULL || tok == NULL || out == NULL) {
+        return false;
+    }
+
+    buf_init(&key);
+    buf_append_fmt(&key,
+                   "%s|%s|%s",
+                   kind_expr,
+                   descriptor_expr,
+                   witness_expr);
+    if (key.data == NULL) {
+        return cg_fail(cg, *tok, "IE0001", "codegen: out of memory");
+    }
+    for (size_t index = 0U;
+         index < cg->closed_generic_param_descriptor_node_count;
+         ++index) {
+        node = &cg->closed_generic_param_descriptor_nodes[index];
+        if (strcmp(node->key, key.data) == 0) {
+            buf_init(&expression);
+            buf_append_fmt(&expression, "&%s", node->c_name);
+            buf_free(&key);
+            *out = expression.data;
+            return *out != NULL;
+        }
+    }
+
+    if (cg->closed_generic_param_descriptor_node_count ==
+        cg->closed_generic_param_descriptor_node_capacity) {
+        size_t new_capacity =
+            cg->closed_generic_param_descriptor_node_capacity == 0U
+                ? 16U
+                : cg->closed_generic_param_descriptor_node_capacity * 2U;
+        CGClosedGenericParamDescriptorNode *grown =
+            (CGClosedGenericParamDescriptorNode *)realloc(
+                cg->closed_generic_param_descriptor_nodes,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            buf_free(&key);
+            return cg_fail(cg, *tok, "IE0001", "codegen: out of memory");
+        }
+        cg->closed_generic_param_descriptor_nodes = grown;
+        cg->closed_generic_param_descriptor_node_capacity = new_capacity;
+    }
+
+    node = &cg->closed_generic_param_descriptor_nodes[
+        cg->closed_generic_param_descriptor_node_count];
+    memset(node, 0, sizeof(*node));
+    node->key = key.data;
+    {
+        Buf name;
+
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "_feng_closed_generic_param_desc_%zu",
+                       cg->closed_generic_param_descriptor_node_count);
+        node->c_name = name.data;
+    }
+    if (node->c_name == NULL) {
+        free(node->key);
+        memset(node, 0, sizeof(*node));
+        return cg_fail(cg, *tok, "IE0001", "codegen: out of memory");
+    }
+    cg->closed_generic_param_descriptor_node_count++;
+
+    buf_append_fmt(&cg->headers,
+                   "static const FengGenericParamDescriptor %s;\n",
+                   node->c_name);
+    buf_append_fmt(
+        &cg->statics,
+        "static const FengGenericParamDescriptor %s = {"
+        ".kind = %s, .descriptor = %s, .witness = %s};\n",
+        node->c_name,
+        kind_expr,
+        descriptor_expr,
+        witness_expr);
+    buf_init(&expression);
+    buf_append_fmt(&expression, "&%s", node->c_name);
+    *out = expression.data;
+    return *out != NULL;
+}
+
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
                                        const FengToken *tok, char **out) {
@@ -42380,18 +42488,14 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 return cg_fail(cg, *tok,
                     "CE0293", "codegen: forwarding a generic type argument across a different constraint surface requires a parent-compatible witness surface (G6)");
             }
-            Buf adapter; buf_init(&adapter);
-            buf_append_fmt(&adapter,
-                "&(const FengGenericParamDescriptor){.kind = %s->kind, .descriptor = %s->descriptor, .witness = %s->witness}",
-                desc, desc, desc);
-            *out = adapter.data;
-            return *out != NULL;
         }
         *out = strdup(desc);
         return *out != NULL;
     }
 
     Buf b; buf_init(&b);
+    const bool type_is_statically_closed =
+        cg_type_descriptor_is_statically_closed(t);
     const char *witness_expr = "NULL";
     char *owned_witness_expr = NULL;
 
@@ -42480,14 +42584,37 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 return cg_fail(cg, *tok,
                     "CE0296", "codegen: trivial generic type argument requires a trivial descriptor");
             }
-            buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_TRIVIAL, .descriptor = %s, .witness = %s}",
-                descriptor_expr, witness_expr);
+            if (type_is_statically_closed) {
+                if (!cg_closed_generic_param_descriptor_expr(
+                        cg,
+                        "FENG_VALUE_TRIVIAL",
+                        descriptor_expr,
+                        witness_expr,
+                        tok,
+                        out)) {
+                    free(descriptor_expr);
+                    free(owned_witness_expr);
+                    buf_free(&b);
+                    return false;
+                }
+                free(descriptor_expr);
+                free(owned_witness_expr);
+                buf_free(&b);
+                return true;
+            }
+            buf_append_fmt(
+                &b,
+                "&(const FengGenericParamDescriptor){"
+                ".kind = FENG_VALUE_TRIVIAL, "
+                ".descriptor = %s, .witness = %s}",
+                descriptor_expr,
+                witness_expr);
             free(descriptor_expr);
             break;
         }
         case CG_VK_MANAGED_POINTER: {
             char *descriptor_expr = NULL;
+            bool descriptor_is_static = type_is_statically_closed;
 
             if (t != NULL && t->kind == CG_TYPE_ARRAY) {
                 if (!cg_closed_array_descriptor_expr(cg,
@@ -42507,9 +42634,31 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 return cg_fail(cg, *tok,
                     "CE0297", "codegen: managed generic type argument requires a type descriptor");
             }
-            buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_MANAGED_POINTER, .descriptor = %s, .witness = %s}",
-                descriptor_expr, witness_expr);
+            if (descriptor_is_static) {
+                if (!cg_closed_generic_param_descriptor_expr(
+                        cg,
+                        "FENG_VALUE_MANAGED_POINTER",
+                        descriptor_expr,
+                        witness_expr,
+                        tok,
+                        out)) {
+                    free(descriptor_expr);
+                    free(owned_witness_expr);
+                    buf_free(&b);
+                    return false;
+                }
+                free(descriptor_expr);
+                free(owned_witness_expr);
+                buf_free(&b);
+                return true;
+            }
+            buf_append_fmt(
+                &b,
+                "&(const FengGenericParamDescriptor){"
+                ".kind = FENG_VALUE_MANAGED_POINTER, "
+                ".descriptor = %s, .witness = %s}",
+                descriptor_expr,
+                witness_expr);
             free(descriptor_expr);
             break;
         }
@@ -42523,9 +42672,36 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 return cg_fail(cg, *tok,
                     "CE0298", "codegen: aggregate type as generic type argument not yet supported (missing flatten rule) (G6)");
             }
-            buf_append_fmt(&b,
-                "&(const FengGenericParamDescriptor){.kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, .descriptor = &%s, .witness = %s}",
-                facts.descriptor_name, witness_expr);
+            if (type_is_statically_closed) {
+                Buf descriptor;
+
+                buf_init(&descriptor);
+                buf_append_fmt(&descriptor, "&%s", facts.descriptor_name);
+                if (descriptor.data == NULL ||
+                    !cg_closed_generic_param_descriptor_expr(
+                        cg,
+                        "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS",
+                        descriptor.data,
+                        witness_expr,
+                        tok,
+                        out)) {
+                    buf_free(&descriptor);
+                    free(owned_witness_expr);
+                    buf_free(&b);
+                    return false;
+                }
+                buf_free(&descriptor);
+                free(owned_witness_expr);
+                buf_free(&b);
+                return true;
+            }
+            buf_append_fmt(
+                &b,
+                "&(const FengGenericParamDescriptor){"
+                ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, "
+                ".descriptor = &%s, .witness = %s}",
+                facts.descriptor_name,
+                witness_expr);
             break;
         }
     }
@@ -43668,8 +43844,9 @@ cleanup:
 /* Emit a call to a generic function.
  *
  * Protocol at the call site:
- *   1. For each type parameter: build a FengGenericParamDescriptor
- *      compound literal and pass its address.
+ *   1. For each closed type parameter: reuse one file-scope static
+ *      FengGenericParamDescriptor. Forwarded open parameters reuse their
+ *      incoming descriptor pointer without copying its fields.
  *   2. For each parameter whose by-value representation depends on a type
  *      parameter: reuse an existing stable value address or materialise once,
  *      then pass that address.
@@ -56497,6 +56674,13 @@ static void cg_dispose(CG *cg) {
         free(cg->closed_array_descriptor_nodes[i].c_name);
     }
     free(cg->closed_array_descriptor_nodes);
+    for (size_t i = 0U;
+         i < cg->closed_generic_param_descriptor_node_count;
+         ++i) {
+        free(cg->closed_generic_param_descriptor_nodes[i].key);
+        free(cg->closed_generic_param_descriptor_nodes[i].c_name);
+    }
+    free(cg->closed_generic_param_descriptor_nodes);
     for (size_t i = 0; i < cg->expr_narrowing_count; i++) {
         free(cg->expr_narrowings[i].c_expr);
         cgtype_free(cg->expr_narrowings[i].type);
