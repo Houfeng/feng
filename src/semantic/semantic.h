@@ -200,7 +200,8 @@ typedef enum FengSpecCoercionForm {
 typedef enum FengSpecCoercionCallableSource {
     /* A top-level (module-scope) function value, possibly overload-resolved. */
     FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN = 0,
-    /* A bound method value `obj.method` taken as a callable. */
+    /* A member method reference taken as a callable: either bound
+     * `obj.method` or receiver-free `Type.method`. */
     FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE,
     /* A lambda literal at the coercion site. */
     FENG_SPEC_COERCION_CALLABLE_SOURCE_LAMBDA,
@@ -264,18 +265,21 @@ typedef struct FengSpecCoercionSite {
      * for FORM_OBJECT. */
     FengSpecCoercionCallableSource callable_source;
     /* CALLABLE form only: exact resolved implementation surface. Top-level
-     * functions set callable_decl, method values set callable_member plus
-     * callable_owner_type_decl, lambda literals set callable_lambda_expr,
-     * and already-callable values leave all of these NULL. */
+     * functions set callable_decl; instance and static method values set
+     * callable_member plus their owner/fit identity; lambda literals set
+     * callable_lambda_expr; already-callable values leave all of these NULL. */
     const FengDecl *callable_decl;
     const FengTypeMember *callable_member;
     const FengDecl *callable_owner_type_decl;
     const FengDecl *callable_fit_decl;
-    /* METHOD_VALUE only: caller-view receiver instance, preserving open
-     * generic arguments such as Cell<T> or Owner<T>. */
+    /* METHOD_VALUE only: caller-view owner instance type. Instance methods
+     * use it for the bound receiver representation; static methods use the
+     * same field only to preserve owner generic arguments and capture no
+     * runtime receiver. */
     const FengTypeRef *callable_receiver_type_ref;
     /* TOP_LEVEL_FN / METHOD_VALUE only: explicit callable-local type
-     * arguments supplied by `function<T...>` / `object.method<T...>`.
+     * arguments supplied by `function<T...>`, `object.method<T...>`, or
+     * `Type.method<T...>`.
      * The pointer array and every referenced type tree are owned by the
      * semantic analysis. Empty for ordinary non-generic callable values. */
     const FengTypeRef *const *callable_type_args;

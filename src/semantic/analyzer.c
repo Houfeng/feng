@@ -14472,7 +14472,8 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     const FengTypeRef *expected_type_ref,
     const FengDecl *function_type_decl,
     const FengTypeRef *const *explicit_type_args,
-    size_t explicit_type_arg_count) {
+    size_t explicit_type_arg_count,
+    bool require_static) {
     size_t member_index;
     CallableValueResolution result;
     bool requires_abi_callable;
@@ -14490,7 +14491,7 @@ static CallableValueResolution resolve_accessible_method_value_overload(
         const FengTypeMember *member = type_decl->as.type_decl.members[member_index];
         bool signature_matches;
 
-        if (member->is_static ||
+        if (member->is_static != require_static ||
             member->kind != FENG_TYPE_MEMBER_METHOD ||
             !slice_equals(member->as.callable.name, name) ||
             !type_member_is_accessible_from(context,
@@ -14499,6 +14500,13 @@ static CallableValueResolution resolve_accessible_method_value_overload(
                                             member) ||
             fit_body_blocks_private_access(context, type_decl, member) ||
             (requires_abi_callable && !method_member_is_abi_callable_value(member))) {
+            continue;
+        }
+        /* Method-local generic parameters are never inferred from the target
+         * callable shape. Static references without an explicit generic
+         * target therefore cannot select a generic method candidate. */
+        if (require_static && explicit_type_args == NULL &&
+            member->as.callable.type_param_count > 0U) {
             continue;
         }
         signature_matches = explicit_type_args != NULL
@@ -15169,6 +15177,7 @@ typedef struct FitMethodValueResolveCtx {
     bool requires_abi_callable;
     const FengTypeRef *const *explicit_type_args;
     size_t explicit_type_arg_count;
+    bool require_static;
     CallableValueResolution result;
 } FitMethodValueResolveCtx;
 
@@ -15183,7 +15192,8 @@ static bool fit_method_value_resolve_visitor(
     (void)fit_module;
     bool signature_matches;
 
-    if (!fit_member_is_accessible_from(state->context,
+    if (member == NULL || member->is_static != state->require_static ||
+        !fit_member_is_accessible_from(state->context,
                                        state->owner_type_decl,
                                        state->owner_type,
                                        fit_decl,
@@ -15192,6 +15202,10 @@ static bool fit_method_value_resolve_visitor(
     }
     if (state->requires_abi_callable &&
         !method_member_is_abi_callable_value(member)) {
+        return true;
+    }
+    if (state->require_static && state->explicit_type_args == NULL &&
+        member->as.callable.type_param_count > 0U) {
         return true;
     }
     signature_matches = state->explicit_type_args != NULL
@@ -15247,7 +15261,8 @@ static CallableValueResolution resolve_accessible_fit_method_value_overload(
     const FengTypeRef *expected_type_ref,
     const FengDecl *function_type_decl,
     const FengTypeRef *const *explicit_type_args,
-    size_t explicit_type_arg_count) {
+    size_t explicit_type_arg_count,
+    bool require_static) {
     FitMethodValueResolveCtx state;
 
     memset(&state, 0, sizeof state);
@@ -15260,16 +15275,93 @@ static CallableValueResolution resolve_accessible_fit_method_value_overload(
         function_type_decl_is_abi_callable_type(function_type_decl);
     state.explicit_type_args = explicit_type_args;
     state.explicit_type_arg_count = explicit_type_arg_count;
+    state.require_static = require_static;
     (void)visit_visible_fit_methods_for_owner_type(
         context,
         owner_type_decl,
         owner_type,
         name,
         true,
-        false,
+        require_static,
         fit_method_value_resolve_visitor,
         &state);
     return state.result;
+}
+
+/* Merge the type-owned and visible-fit halves of one target-typed member
+ * reference. Any match on both independent declaration surfaces remains an
+ * ambiguity, matching the existing method-value overload rule. */
+static CallableValueResolution merge_callable_value_resolutions(
+    CallableValueResolution primary,
+    CallableValueResolution extension) {
+    CallableValueResolution result;
+
+    if (primary.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+        return extension;
+    }
+    if (extension.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+        return primary;
+    }
+    memset(&result, 0, sizeof(result));
+    result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
+    return result;
+}
+
+/* Resolve `Concrete.method` against the same type-owned and visible-fit
+ * static member surface used by direct calls. Generic owner arguments are
+ * part of owner_type; method-local arguments, when present, are explicit. */
+static CallableValueResolution resolve_concrete_static_method_value(
+    ResolveContext *context,
+    const ResolvedTypeTarget *target,
+    FengSlice name,
+    const FengTypeRef *expected_type_ref,
+    const FengDecl *function_type_decl,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count) {
+    CallableValueResolution owned;
+    CallableValueResolution fit;
+    InferredExprType owner_type;
+
+    memset(&owned, 0, sizeof(owned));
+    memset(&fit, 0, sizeof(fit));
+    if (target == NULL ||
+        (target->type_decl == NULL && !target->is_builtin_type_name) ||
+        (target->type_decl != NULL &&
+         target->type_decl->kind != FENG_DECL_TYPE)) {
+        return owned;
+    }
+    /* A generic concrete owner has no anonymous or target-inferred instance;
+     * its complete owner argument list must be present on the type target. */
+    if (target->type_decl != NULL &&
+        target->type_decl->as.type_decl.type_param_count > 0U &&
+        target->type_ref == NULL) {
+        return owned;
+    }
+    owner_type = resolved_type_target_owner_type(target);
+    if (target->type_decl != NULL) {
+        owned = resolve_accessible_method_value_overload(
+            context,
+            target->type_decl,
+            target->provider_module,
+            owner_type,
+            name,
+            expected_type_ref,
+            function_type_decl,
+            explicit_type_args,
+            explicit_type_arg_count,
+            true);
+    }
+    fit = resolve_accessible_fit_method_value_overload(
+        context,
+        target->type_decl,
+        owner_type,
+        name,
+        expected_type_ref,
+        function_type_decl,
+        explicit_type_args,
+        explicit_type_arg_count,
+        true);
+    return merge_callable_value_resolutions(owned, fit);
 }
 
 typedef struct FitFirstMethodCtx {
@@ -19553,9 +19645,10 @@ static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
            inferred_expr_types_equal(context, left_body_type, right_body_type);
 }
 
-/* Resolve `function<T...>` or `object.method<T...>` against a target callable
- * form. The explicit arguments close only the selected source callable's own
- * generic parameters; no target-driven inference is performed here. */
+/* Resolve `function<T...>`, `object.method<T...>`, or
+ * `Concrete.method<T...>` against a target callable form. The explicit
+ * arguments close only the selected source callable's own generic parameters;
+ * no target-driven inference is performed here. */
 static CallableValueResolution resolve_explicit_generic_callable_value(
     ResolveContext *context,
     const FengExpr *expr,
@@ -19618,6 +19711,23 @@ static CallableValueResolution resolve_explicit_generic_callable_value(
         }
 
         {
+            ResolvedTypeTarget static_target =
+                resolve_type_target_expr(context, object, false);
+
+            if (static_target.type_decl != NULL ||
+                static_target.is_builtin_type_name) {
+                return resolve_concrete_static_method_value(
+                    context,
+                    &static_target,
+                    target->as.member.member,
+                    expected_type_ref,
+                    function_type_decl,
+                    explicit_type_args,
+                    explicit_type_arg_count);
+            }
+        }
+
+        {
             const FengDecl *owner_type_decl = NULL;
             const FengSemanticModule *provider_module = NULL;
             InferredExprType owner_type = resolve_expr_owner_type(
@@ -19640,7 +19750,8 @@ static CallableValueResolution resolve_explicit_generic_callable_value(
                     expected_type_ref,
                     function_type_decl,
                     explicit_type_args,
-                    explicit_type_arg_count);
+                    explicit_type_arg_count,
+                    false);
             }
             fit_result = resolve_accessible_fit_method_value_overload(
                 context,
@@ -19650,16 +19761,10 @@ static CallableValueResolution resolve_explicit_generic_callable_value(
                 expected_type_ref,
                 function_type_decl,
                 explicit_type_args,
-                explicit_type_arg_count);
-            if (method_result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                return fit_result;
-            }
-            if (fit_result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                memset(&result, 0, sizeof(result));
-                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
-                return result;
-            }
-            return method_result;
+                explicit_type_arg_count,
+                false);
+            return merge_callable_value_resolutions(method_result,
+                                                    fit_result);
         }
     }
 
@@ -19768,6 +19873,23 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
             }
 
             {
+                ResolvedTypeTarget static_target =
+                    resolve_type_target_expr(context, object, false);
+
+                if (static_target.type_decl != NULL ||
+                    static_target.is_builtin_type_name) {
+                    return resolve_concrete_static_method_value(
+                        context,
+                        &static_target,
+                        expr->as.member.member,
+                        expected_type_ref,
+                        function_type_decl,
+                        NULL,
+                        0U);
+                }
+            }
+
+            {
                 const FengDecl *owner_type_decl = NULL;
                 const FengDecl *generic_constraint_decl = NULL;
                 const FengTypeRef *generic_constraint_ref = NULL;
@@ -19788,7 +19910,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                                                       expected_type_ref,
                                                                       function_type_decl,
                                                                       NULL,
-                                                                      0U);
+                                                                      0U,
+                                                                      false);
                 } else if (owner_type_decl != NULL &&
                            owner_type_decl->kind == FENG_DECL_SPEC &&
                            owner_type_decl->as.spec_decl.form ==
@@ -19837,14 +19960,11 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                         expected_type_ref,
                         function_type_decl,
                         NULL,
-                        0U);
+                        0U,
+                        false);
                 }
-                if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                    result = fit_result;
-                } else if (fit_result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                    memset(&result, 0, sizeof result);
-                    result.kind = FENG_CALLABLE_VALUE_RESOLUTION_AMBIGUOUS;
-                }
+                result = merge_callable_value_resolutions(result,
+                                                          fit_result);
                 if (result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                     return result;
                 }
@@ -20674,6 +20794,55 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
                 if (alias != NULL) {
                     return count_module_public_function_overloads(alias->target_module,
                                                                   expr->as.member.member) > 0U;
+                }
+            }
+
+            {
+                ResolvedTypeTarget static_target =
+                    resolve_type_target_expr(context, object, false);
+
+                if (static_target.type_decl != NULL ||
+                    static_target.is_builtin_type_name) {
+                    InferredExprType owner_type;
+                    size_t member_index;
+
+                    if (static_target.type_decl != NULL &&
+                        static_target.type_decl->kind == FENG_DECL_TYPE &&
+                        static_target.type_decl->as.type_decl.type_param_count > 0U &&
+                        static_target.type_ref == NULL) {
+                        return false;
+                    }
+                    owner_type = resolved_type_target_owner_type(&static_target);
+                    if (static_target.type_decl != NULL &&
+                        static_target.type_decl->kind == FENG_DECL_TYPE) {
+                        for (member_index = 0U;
+                             member_index < static_target.type_decl->as.type_decl.member_count;
+                             ++member_index) {
+                            const FengTypeMember *member =
+                                static_target.type_decl->as.type_decl.members[member_index];
+
+                            if (member != NULL && member->is_static &&
+                                member->kind == FENG_TYPE_MEMBER_METHOD &&
+                                slice_equals(member->as.callable.name,
+                                             expr->as.member.member) &&
+                                type_member_is_accessible_from(
+                                    context,
+                                    static_target.type_decl,
+                                    owner_type,
+                                    member) &&
+                                !fit_body_blocks_private_access(
+                                    context,
+                                    static_target.type_decl,
+                                    member)) {
+                                return true;
+                            }
+                        }
+                    }
+                    return find_fit_static_method_member_for_owner_type(
+                               context,
+                               static_target.type_decl,
+                               owner_type,
+                               expr->as.member.member) != NULL;
                 }
             }
 
@@ -21652,11 +21821,25 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
     if (source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE &&
         source_expr != NULL && source_expr->kind == FENG_EXPR_MEMBER &&
         source_expr->as.member.object != NULL) {
-        InferredExprType receiver_type =
-            infer_expr_type(context, source_expr->as.member.object);
+        InferredExprType receiver_type;
+
+        if (resolution.callable_member != NULL &&
+            resolution.callable_member->is_static) {
+            ResolvedTypeTarget static_target = resolve_type_target_expr(
+                context, source_expr->as.member.object, false);
+
+            receiver_type = resolved_type_target_owner_type(&static_target);
+        } else {
+            receiver_type =
+                infer_expr_type(context, source_expr->as.member.object);
+        }
 
         if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
             receiver_type_ref = receiver_type.type_ref;
+        } else if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
+            synthetic_receiver_type_ref =
+                create_type_ref_from_inferred_type(&receiver_type, expr->token);
+            receiver_type_ref = synthetic_receiver_type_ref;
         } else if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
                    receiver_type.type_decl != NULL &&
                    receiver_type.type_decl->kind == FENG_DECL_TYPE) {
@@ -22290,9 +22473,9 @@ static bool validate_expr_against_expected_abi_function_pointer_type(
     }
 }
 
-/* Record the exact bound method selected for a callable value. Resolver
+/* Record the exact member method selected for a callable value. Resolver
  * candidate probes are intentionally side-effect free; this hook runs only
- * after target-type matching produced one unique method. */
+ * after target-type matching produced one unique instance or static method. */
 static bool record_selected_friend_callable_value_access(
     ResolveContext *context,
     const FengExpr *expr,
@@ -22311,7 +22494,15 @@ static bool record_selected_friend_callable_value_access(
         source_expr->as.member.object == NULL) {
         return true;
     }
-    owner_type = infer_expr_type(context, source_expr->as.member.object);
+    if (resolution->callable_member->is_static) {
+        ResolvedTypeTarget static_target = resolve_type_target_expr(
+            context, source_expr->as.member.object, false);
+
+        owner_type = resolved_type_target_owner_type(&static_target);
+    } else {
+        owner_type = infer_expr_type(context,
+                                     source_expr->as.member.object);
+    }
     return record_selected_friend_fit_access(
         context,
         resolution->callable_owner_type_decl,

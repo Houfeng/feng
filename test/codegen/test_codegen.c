@@ -7469,6 +7469,101 @@ static void test_constrained_generic_spec_method_value_codegen(void) {
     feng_program_free(program);
 }
 
+/* A concrete static method value is a receiver-free immortal singleton. Type,
+ * fit, generic-owner and generic-method sources all call their already closed
+ * thin wrapper directly; shared generic bodies consume the same descriptor
+ * slot without allocating a runtime closure or performing a member lookup. */
+static void test_concrete_static_method_value_codegen_uses_singletons(void) {
+    const char *source =
+        "module feng.codegen.concrete_static_method_value;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "type Math {\n"
+        "  static func double(value: int): int { return value * 2; }\n"
+        "}\n"
+        "type ExtendedMath {}\n"
+        "fit ExtendedMath {\n"
+        "  static func triple(value: int): int { return value * 3; }\n"
+        "}\n"
+        "type GenericMath<T> {\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "  static func identity<U>(value: U): U { return value; }\n"
+        "}\n"
+        "type GenericExtendedMath<T> {}\n"
+        "fit GenericExtendedMath<T> {\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "  static func identity<U>(value: U): U { return value; }\n"
+        "}\n"
+        "fit int {\n"
+        "  static func increment(value: int): int { return value + 1; }\n"
+        "}\n"
+        "func makeType<T>(): Mapper<T> { return GenericMath<T>.echo; }\n"
+        "func makeFit<T>(): Mapper<T> { return GenericExtendedMath<T>.echo; }\n"
+        "func run(): int {\n"
+        "  let owned: IntMapper = Math.double;\n"
+        "  let fitted: IntMapper = ExtendedMath.triple;\n"
+        "  let ownerGeneric: IntMapper = GenericMath<int>.echo;\n"
+        "  let methodGeneric: IntMapper = GenericMath<string>.identity<int>;\n"
+        "  let fitOwnerGeneric: IntMapper = GenericExtendedMath<int>.echo;\n"
+        "  let fitMethodGeneric: IntMapper =\n"
+        "    GenericExtendedMath<string>.identity<int>;\n"
+        "  let builtinFit: IntMapper = int.increment;\n"
+        "  let sharedType = makeType<int>();\n"
+        "  let sharedFit = makeFit<int>();\n"
+        "  return owned(1) + fitted(1) + ownerGeneric(1) +\n"
+        "    methodGeneric(1) + fitOwnerGeneric(1) +\n"
+        "    fitMethodGeneric(1) + builtinFit(1) +\n"
+        "    sharedType(1) + sharedFit(1);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "concrete_static_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* Every distinct closed source/target pair owns one compile-time static
+     * callable. Formation reads that pointer; neither direct nor shared
+     * generic paths invoke the allocating bound-method machinery. */
+    ASSERT(count_substr(
+               output.c_source,
+               ".callable_value = {.static_value = &FengCallableStaticValue__") ==
+           9U);
+    ASSERT(count_substr(output.c_source,
+                        ".refcount = FENG_REFCOUNT_IMMORTAL") >= 9U);
+    ASSERT(strstr(output.c_source,
+                  "->callable_value.static_value") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_object_new(_callable_value_desc") == NULL);
+    ASSERT(strstr(output.c_source, "FengSpecMethodValueBind__") == NULL);
+
+    /* Adapters have no receiver and enter the selected closed type, user-fit
+     * or builtin-fit wrapper. Generic method adapters also carry their fixed
+     * function/type descriptors entirely in static storage. */
+    ASSERT(strstr(output.c_source, "(void)_closure;") != NULL);
+    ASSERT(strstr(output.c_source, "__static__double__from__") != NULL);
+    ASSERT(strstr(output.c_source, "FengFitUser__") != NULL);
+    ASSERT(strstr(output.c_source, "FengFitBuiltin__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".reified_callable_deps_count = 1") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Closed and shared value-receiver method formation both allocate exactly one
  * callable closure and never route the receiver through a spec box. */
 static void test_value_method_capture_codegen_has_direct_closure_lowering(void) {
@@ -13077,6 +13172,7 @@ int main(void) {
     test_callable_spec_method_coercion_codegen();
     test_object_spec_method_value_codegen_uses_bound_witness();
     test_constrained_generic_spec_method_value_codegen();
+    test_concrete_static_method_value_codegen_uses_singletons();
     test_value_method_capture_codegen_has_direct_closure_lowering();
     test_generic_callable_value_reification_codegen();
     test_unbound_callable_explicit_cast_codegen();

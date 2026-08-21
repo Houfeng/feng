@@ -21,7 +21,8 @@
 - 可调用形状: 由 `spec Name(args): ReturnType;` 声明的可调用契约。
 - Lambda: 函数实现或函数字面量的简写形式,不是独立的可调用形状声明,也不产生匿名函数类型; 单表达式 Lambda 使用 `->`,多行 Lambda 直接使用块体。
 - 闭包: 捕获外部作用域变量的函数值。
-- 方法值: 以 `obj.method` 形式取出的成员方法函数值。
+- 方法值: 以 `obj.method` 形式取出的、绑定接收者的实例方法 callable value，或以
+  `Type.method` 形式取出的、不带接收者的静态方法 callable value。
 - 可复用静态方法: 标注无参数内建注解 `@mixable`、以 object-form `spec` 作为第一个
   参数，并可通过成员展开传播的静态方法。
 - 静态 wrapper: 成员展开为目标生成的、保留来源完整签名并完整限定调用来源静态方法
@@ -169,6 +170,30 @@ let methodReader: ReadInt = owner.read<int>;
 let convertedMethodReader = (ReadInt)owner.read<int>;
 ```
 
+正确语法四-c，具体类型与可见 `fit` 的静态方法值：
+
+```feng
+spec IntMapper(value: int): int;
+
+type Math {
+    static func double(value: int): int {
+        return value * 2;
+    }
+}
+
+type ExtendedMath {}
+
+fit ExtendedMath {
+    static func triple(value: int): int {
+        return value * 3;
+    }
+}
+
+let double: IntMapper = Math.double;
+let triple: IntMapper = ExtendedMath.triple;
+let converted = (IntMapper)Math.double;
+```
+
 正确语法五，`@mixable` 静态方法:
 
 ```feng
@@ -245,11 +270,23 @@ type Bad: Widget {
   `spec` 目标下形成方法值。来源 requirement 仍按 `T` 的约束实例选择，但 receiver
   保持 `T`：闭合 `T` 为引用类型时复制并保留同一引用，闭合 `T` 为值类型时复制形成点
   的值。形成方法值不得先把 receiver 转换或装箱为 object-form `spec` 值。
+- 具体类型的自有静态方法和当前位置可见的 `fit` 静态方法，可以通过 `Type.method`
+  在明确 callable-form `spec` 目标下形成静态方法值。候选面、可见性过滤、owner/fit
+  泛型代入和重载选择与同一 `Type.method(args)` 直接调用一致；形成点固定唯一的 owner、
+  fit 与方法声明，不求值或保存 receiver、subject、witness，也不引入 `self`。
 - 对重载函数值或重载方法值,可用于消歧的上下文包括参数位置的目标可调用形状、显式绑定类型与已声明返回类型。
-- 声明了函数级或方法级泛参的顶层函数或实例方法作为值时，必须使用 `function<TypeArgs...>` 或 `object.method<TypeArgs...>` 显式提供完整类型实参；目标 callable-form `spec` 不隐式推导来源泛参。显式类型实参数量和约束检查通过后，编译器先闭合来源签名，再按普通未绑定 callable 的规则与目标 callable-form `spec` 做结构匹配。
+- 声明了函数级或方法级泛参的顶层函数、实例方法或具体静态方法作为值时，必须使用
+  `function<TypeArgs...>`、`object.method<TypeArgs...>` 或 `Type.method<TypeArgs...>`
+  显式提供完整方法类型实参；目标 callable-form `spec` 不隐式推导来源泛参。泛型 owner
+  的类型实参仍由 `Type<OwnerArgs...>.method` 显式给出。类型实参数量和约束检查通过后，
+  编译器先闭合来源签名，再按普通未绑定 callable 的规则与目标 callable-form `spec`
+  做结构匹配。
 - 显式闭合的泛型函数值或方法值仍必须出现在具有明确 callable-form `spec` 目标的绑定、实参或返回位置；`let reader = read<int>;` 不推导匿名 callable 类型。形成后的值是普通闭合 callable，调用形式为 `reader()`，不能再写 `reader<int>()`。
 - `read<T>` 或 `self.read<T>` 中的类型实参可以引用当前活动的类型级或函数/方法级泛参；泛型共享体在最终具化点为每组具体实参生成对应的闭合 callable 描述信息。
-- callable-form `spec` 的显式转换目标也构成明确的 callable 目标上下文，因此未绑定的非泛型函数或方法引用可以直接写为 `(TargetSpec)function` / `(TargetSpec)object.method`；泛型来源必须先显式闭合，写为 `(TargetSpec)function<TypeArgs...>` / `(TargetSpec)object.method<TypeArgs...>`。转换目标不反向推导来源泛参。
+- callable-form `spec` 的显式转换目标也构成明确的 callable 目标上下文，因此未绑定的
+  非泛型函数或方法引用可以直接写为 `(TargetSpec)function`、
+  `(TargetSpec)object.method` 或 `(TargetSpec)Type.method`；泛型来源必须先显式闭合。
+  转换目标不反向推导来源泛参。
 
 ### 4.2 main 函数
 
@@ -528,7 +565,12 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - [必须] object-form `spec` 约束下的泛型值实例方法引用，在具有明确 callable-form
   `spec` 目标时必须复用该约束实例的 requirement 选择，并按闭合 `T` 的值模型绑定
   receiver；不得为形成方法值把 `T` coercion 或装箱为 object-form `spec` 值。
-- [必须] callable-form `spec` 的显式转换可以直接以尚未绑定到 spec 的顶层函数或实例方法引用作为操作数；编译器必须以转换目标完成来源选择、结构匹配和 callable value 形成。泛型来源必须先通过显式泛型 target 提供完整类型实参。
+- [必须] 具体类型自有或当前位置可见 `fit` 的静态方法引用，在具有明确 callable-form
+  `spec` 目标时，必须复用对应静态直接调用的候选面、访问过滤、泛型代入与重载规则，
+  并固定唯一来源；不得伪造 receiver、subject 或 witness。
+- [必须] callable-form `spec` 的显式转换可以直接以尚未绑定到 spec 的顶层函数、实例
+  方法或具体静态方法引用作为操作数；编译器必须以转换目标完成来源选择、结构匹配和
+  callable value 形成。泛型来源必须先通过显式泛型 target 提供完整类型实参。
 - [禁止] 通过 callable-form `spec` 目标的参数或返回类型隐式推导并消除来源函数或方法自身声明的泛参。
 - [禁止] 通过 `import` 导入的同名函数与当前文件内声明的顶层函数或同一文件内其他导入来源共同组成新的重载集合。
 - [禁止] 多行 Lambda 使用 `->`。
@@ -577,6 +619,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 编译器解析 object-form `spec` 约束下的泛型值实例方法值时，还必须保留 receiver 的
   完整 `T` 类型事实；共享泛型体与最终闭合代码必须消费同一已解析 requirement，不得
   依赖运行时成员搜索或把 receiver 改写为 spec 值。
+- 编译器解析具体静态方法值时，必须稳定保留已经选中的 owner、fit、方法声明、owner
+  实例类型、显式方法类型实参和目标 callable-form `spec`；本地与 imported 来源、普通
+  代码与共享泛型体必须消费同一编译期来源身份，不得在代码生成或运行时按名称重选。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
 ## 7 运行时
@@ -595,6 +640,8 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - object-form `spec` 约束下的泛型 receiver 在方法值形成时按闭合 `T` 复制或保留；形成
   结果只拥有一个 callable closure，不增加 spec box、第二个 receiver 分配或每次调用
   的动态候选查找。
+- 完全闭合且无捕获的具体静态方法值使用编译期固定的静态 callable 表示；形成时不分配
+  动态 closure，不执行成员搜索或运行时目标选择，调用时直接进入形成点选定的方法实现。
 - 顶层函数、成员方法与闭包在运行时都表现为可调用值,但其可见性、是否重载以及是否绑定 `self` 由编译期规则先行确定。
 
 ## 8 关联

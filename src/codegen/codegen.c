@@ -1618,6 +1618,18 @@ typedef struct CGCallableMethodValueSupport {
     char *c_closure_desc;
 } CGCallableMethodValueSupport;
 
+/* Generated support for one receiver-free static method value. The closed
+ * function descriptor fixes the owner, optional fit, method arguments and
+ * callable target; generated runtime code only borrows the immortal closure. */
+typedef struct CGCallableStaticMethodValueSupport {
+    const struct UserSpec *spec;
+    const FengTypeMember *member;
+    const FengDecl *fit_decl;
+    char *descriptor_c_name;
+    char *c_adapter_fn;
+    char *c_var;
+} CGCallableStaticMethodValueSupport;
+
 /* Generated support for one object-form spec method value. The extended
  * closure keeps the ordinary callable prefix, plus the receiver's immutable
  * witness pointer; `_self` retains the captured subject. */
@@ -1746,6 +1758,9 @@ typedef struct CG {
     } *callable_fn_values;
     size_t callable_fn_value_count;
     size_t callable_fn_value_capacity;
+    CGCallableStaticMethodValueSupport *callable_static_method_values;
+    size_t callable_static_method_value_count;
+    size_t callable_static_method_value_capacity;
     CGCallableMethodValueSupport *callable_method_values;
     size_t callable_method_value_count;
     size_t callable_method_value_capacity;
@@ -6907,6 +6922,319 @@ cleanup:
     free(adapter_name);
     free(var_name);
     return ok;
+}
+
+/* Emit or reuse the adapter and immortal closure for one fully closed static
+ * method source. The adapter calls the compile-time selected thin wrapper,
+ * imported shared dispatch or builtin-fit entry and binds all descriptors as
+ * constants; forming the Feng callable value performs no allocation or lookup. */
+static bool cg_ensure_callable_static_method_value(
+    CG *cg,
+    const UserSpec *spec,
+    const UserType *owner,
+    const UserMethod *method,
+    const BuiltinFit *builtin_fit,
+    const UserFit *user_fit,
+    const char *callee_c_name,
+    const char *owner_descriptor_expr,
+    bool uses_shared_dispatch,
+    const char *descriptor_c_name,
+    const char *const *method_descriptor_exprs,
+    size_t method_descriptor_count,
+    const bool *param_uses_address,
+    FengToken blame,
+    const char **out_var,
+    const char **out_adapter) {
+    const FengCallableSignature *signature;
+    const FengDecl *fit_decl = builtin_fit != NULL
+                                   ? builtin_fit->decl
+                                   : (user_fit != NULL ? user_fit->decl : NULL);
+    bool returns_value;
+    bool passes_function_descriptor;
+    bool provider_returns_via_out;
+    char *adapter_name = NULL;
+    char *var_name = NULL;
+
+    if (cg == NULL || spec == NULL ||
+        spec->form != FENG_SPEC_FORM_CALLABLE || method == NULL ||
+        method->member == NULL || !method->member->is_static ||
+        callee_c_name == NULL ||
+        (uses_shared_dispatch && owner_descriptor_expr == NULL) ||
+        descriptor_c_name == NULL || out_var == NULL || out_adapter == NULL ||
+        (builtin_fit == NULL && owner == NULL)) {
+        return cg_fail(cg,
+                       blame,
+                       "IE0002",
+                       "codegen: invalid static callable method-value request");
+    }
+    *out_var = NULL;
+    *out_adapter = NULL;
+    signature = &method->member->as.callable;
+    if (signature->param_count != spec->callable_param_count ||
+        signature->type_param_count != method_descriptor_count ||
+        (signature->param_count > 0U && param_uses_address == NULL) ||
+        (method_descriptor_count > 0U &&
+         method_descriptor_exprs == NULL)) {
+        return cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: closed static method-value signature is inconsistent");
+    }
+    if (builtin_fit != NULL &&
+        builtin_fit->target_type_param_count > 0U) {
+        return cg_fail(
+            cg,
+            blame,
+            "CE0144",
+            "codegen: generic builtin static fit methods are not supported yet");
+    }
+    if (owner != NULL && owner->generic_context_type_param_count > 0U) {
+        return cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: static method-value owner was not fully closed");
+    }
+    for (size_t index = 0U;
+         index < cg->callable_static_method_value_count;
+         ++index) {
+        const CGCallableStaticMethodValueSupport *support =
+            &cg->callable_static_method_values[index];
+
+        if (support->spec == spec && support->member == method->member &&
+            support->fit_decl == fit_decl &&
+            strcmp(support->descriptor_c_name,
+                   descriptor_c_name) == 0) {
+            *out_var = support->c_var;
+            *out_adapter = support->c_adapter_fn;
+            return true;
+        }
+    }
+
+    {
+        char *descriptor_san = cg_sanitize(
+            descriptor_c_name, strlen(descriptor_c_name));
+        Buf name;
+
+        if (descriptor_san == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengCallableStaticInvoke__%s__%s",
+                       spec->c_closure_struct_name,
+                       descriptor_san);
+        adapter_name = name.data;
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengCallableStaticValue__%s__%s",
+                       spec->c_closure_struct_name,
+                       descriptor_san);
+        var_name = name.data;
+        free(descriptor_san);
+    }
+    if (adapter_name == NULL || var_name == NULL) {
+        free(adapter_name);
+        free(var_name);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_callable_abi_return_type(&cg->headers,
+                                     spec->callable_return_type,
+                                     spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t index = 0U;
+         index < spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_callable_abi_param_type(&cg->headers,
+                                        spec->callable_param_types[index],
+                                        spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->headers, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(&cg->headers,
+                                         spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->headers, ");\n");
+
+    returns_value = spec->callable_return_type != NULL &&
+                    spec->callable_return_type->kind != CG_TYPE_VOID;
+    passes_function_descriptor =
+        uses_shared_dispatch || builtin_fit != NULL ||
+        signature->type_param_count > 0U;
+    provider_returns_via_out =
+        returns_value &&
+        (uses_shared_dispatch ||
+         (builtin_fit != NULL
+             ? cg_builtin_fit_return_uses_out(builtin_fit, method)
+             : signature->type_param_count > 0U));
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_callable_abi_return_type(&cg->witness_defs,
+                                     spec->callable_return_type,
+                                     spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs, " %s(void *_closure", adapter_name);
+    for (size_t index = 0U;
+         index < spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_callable_abi_param_type(&cg->witness_defs,
+                                        spec->callable_param_types[index],
+                                        spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(&cg->witness_defs,
+                                         spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->witness_defs, ") {\n    (void)_closure;\n");
+    if (provider_returns_via_out &&
+        spec->callable_return_abi_kind != CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "    ");
+        cg_emit_c_type(&cg->witness_defs, spec->callable_return_type);
+        buf_append_cstr(&cg->witness_defs, " _result;\n");
+    }
+    buf_append_cstr(&cg->witness_defs, "    ");
+    if (!provider_returns_via_out && returns_value) {
+        if (spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+            buf_append_cstr(&cg->witness_defs, "*(");
+            cg_emit_c_type(&cg->witness_defs,
+                           spec->callable_return_type);
+            buf_append_cstr(&cg->witness_defs, " *)_out = ");
+        } else {
+            buf_append_cstr(&cg->witness_defs, "return ");
+        }
+    }
+    buf_append_fmt(&cg->witness_defs, "%s(", callee_c_name);
+    {
+        bool has_argument = false;
+
+        if (uses_shared_dispatch) {
+            buf_append_cstr(&cg->witness_defs, owner_descriptor_expr);
+            has_argument = true;
+        }
+        if (passes_function_descriptor) {
+            if (has_argument) {
+                buf_append_cstr(&cg->witness_defs, ", ");
+            }
+            buf_append_fmt(&cg->witness_defs,
+                           "&%s",
+                           descriptor_c_name);
+            has_argument = true;
+        }
+        for (size_t index = 0U;
+             index < method_descriptor_count;
+             ++index) {
+            if (has_argument) {
+                buf_append_cstr(&cg->witness_defs, ", ");
+            }
+            buf_append_cstr(&cg->witness_defs,
+                            method_descriptor_exprs[index]);
+            has_argument = true;
+        }
+        for (size_t index = 0U;
+             index < spec->callable_param_count;
+             ++index) {
+            char argument_name[32];
+
+            if (has_argument) {
+                buf_append_cstr(&cg->witness_defs, ", ");
+            }
+            (void)snprintf(argument_name,
+                           sizeof argument_name,
+                           "_arg%zu",
+                           index);
+            if (param_uses_address[index]) {
+                buf_append_fmt(
+                    &cg->witness_defs,
+                    "%s%s",
+                    spec->callable_param_abi_kinds[index] ==
+                            CG_CALLABLE_ABI_ADDRESS
+                        ? ""
+                        : "&",
+                    argument_name);
+            } else {
+                cg_append_callable_abi_argument_value(
+                    &cg->witness_defs,
+                    spec->callable_param_types[index],
+                    spec->callable_param_abi_kinds[index],
+                    argument_name);
+            }
+            has_argument = true;
+        }
+        if (provider_returns_via_out) {
+            if (has_argument) {
+                buf_append_cstr(&cg->witness_defs, ", ");
+            }
+            buf_append_cstr(
+                &cg->witness_defs,
+                spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS
+                    ? "_out"
+                    : "&_result");
+        }
+    }
+    buf_append_cstr(&cg->witness_defs, ");\n");
+    if (provider_returns_via_out &&
+        spec->callable_return_abi_kind != CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "    return _result;\n");
+    } else if (provider_returns_via_out || !returns_value) {
+        buf_append_cstr(&cg->witness_defs, "    return;\n");
+    }
+    buf_append_cstr(&cg->witness_defs, "}\n\n");
+
+    buf_append_fmt(&cg->statics,
+                   "static struct %s %s = {\n"
+                   "    ._hdr = { .desc = &%s, .tag = FENG_TYPE_TAG_CLOSURE, "
+                   ".refcount = FENG_REFCOUNT_IMMORTAL },\n"
+                   "    ._self = NULL,\n"
+                   "    .invoke = %s\n"
+                   "};\n",
+                   spec->c_closure_struct_name,
+                   var_name,
+                   spec->c_closure_desc_name,
+                   adapter_name);
+
+    if (cg->callable_static_method_value_count ==
+        cg->callable_static_method_value_capacity) {
+        size_t new_capacity =
+            cg->callable_static_method_value_capacity == 0U
+                ? 4U
+                : cg->callable_static_method_value_capacity * 2U;
+        CGCallableStaticMethodValueSupport *grown =
+            (CGCallableStaticMethodValueSupport *)realloc(
+                cg->callable_static_method_values,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            free(adapter_name);
+            free(var_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->callable_static_method_values = grown;
+        cg->callable_static_method_value_capacity = new_capacity;
+    }
+    {
+        CGCallableStaticMethodValueSupport *support =
+            &cg->callable_static_method_values[
+                cg->callable_static_method_value_count];
+
+        memset(support, 0, sizeof(*support));
+        support->spec = spec;
+        support->member = method->member;
+        support->fit_decl = fit_decl;
+        support->descriptor_c_name = strdup(descriptor_c_name);
+        support->c_adapter_fn = adapter_name;
+        support->c_var = var_name;
+        if (support->descriptor_c_name == NULL) {
+            free(adapter_name);
+            free(var_name);
+            memset(support, 0, sizeof(*support));
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->callable_static_method_value_count++;
+        *out_var = support->c_var;
+        *out_adapter = support->c_adapter_fn;
+    }
+    return true;
 }
 
 /* Emit the callable adapter, one-allocation closure layout, and binder for a
@@ -21002,6 +21330,71 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         return cg_fail(cg, e->token,
             "CE0105", "codegen: callable coercion target was not registered as a callable-form spec");
     }
+    if (cs->callable_member != NULL &&
+        cs->callable_member->is_static) {
+        FengReifiableCallableDep dependency;
+        Buf expression;
+
+        if (cs->callable_receiver_type_ref == NULL) {
+            return cg_fail(
+                cg,
+                e->token,
+                "CE0111",
+                "codegen: callable static method coercion is missing its owner type");
+        }
+        memset(&dependency, 0, sizeof(dependency));
+        dependency.purpose = FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE;
+        dependency.kind = cs->callable_fit_decl != NULL
+                              ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
+                              : FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD;
+        dependency.owner_type_decl = cs->callable_owner_type_decl;
+        dependency.member = cs->callable_member;
+        dependency.fit_decl = cs->callable_fit_decl;
+        dependency.owner_instance_type_ref =
+            cs->callable_receiver_type_ref;
+        dependency.callable_type_args = cs->callable_type_args;
+        dependency.callable_type_arg_count =
+            cs->callable_type_arg_count;
+        dependency.target_callable_type_ref = cs->target_spec_type_ref;
+        callable_descriptor_expr =
+            cg_try_callable_descriptor_expr_for_dep(cg, &dependency);
+        if (callable_descriptor_expr == NULL &&
+            !cg_emit_closed_callable_dep_expr(cg,
+                                              &dependency,
+                                              NULL,
+                                              0U,
+                                              NULL,
+                                              cg->cur_program,
+                                              e->token,
+                                              &callable_descriptor_expr)) {
+            return false;
+        }
+        if (callable_descriptor_expr == NULL) {
+            return cg_fail(
+                cg,
+                e->token,
+                "IE0002",
+                "codegen: static method-value descriptor was not materialized");
+        }
+        buf_init(&expression);
+        buf_append_fmt(&expression,
+                       "((struct %s *)((%s)->callable_value.static_value))",
+                       target_spec->c_closure_struct_name,
+                       callable_descriptor_expr);
+        free(callable_descriptor_expr);
+        out->c_expr = expression.data;
+        out->type = cgtype_new(CG_TYPE_CALLABLE);
+        if (out->c_expr == NULL || out->type == NULL) {
+            er_free(out);
+            return cg_fail(cg,
+                           e->token,
+                           "IE0001",
+                           "codegen: out of memory");
+        }
+        out->type->user_spec = target_spec;
+        out->owns_ref = false;
+        return true;
+    }
     if (cs->callable_member == NULL || cs->callable_owner_type_decl == NULL) {
         return cg_fail(cg, e->token,
             "CE0111", "codegen: callable method coercion is missing semantic resolution data");
@@ -25064,6 +25457,33 @@ static bool cg_generic_static_method_param_uses_address_abi(
         cg, origin, origin_member, param_index, out_uses_address);
 }
 
+/* Return whether a static method call must enter the exported shared body
+ * instead of a local thin wrapper. This is the same choice used by direct
+ * generic static calls: imported generic methods and imported generic owner
+ * instances expose only the shared package symbol, while a local closed
+ * instance keeps its existing thin wrapper. */
+static bool cg_static_method_uses_shared_dispatch(
+    const CG *cg,
+    const UserType *owner_type,
+    const UserMethod *method) {
+    const FengCallableSignature *signature =
+        method != NULL && method->member != NULL
+            ? &method->member->as.callable
+            : NULL;
+    bool owner_is_imported;
+
+    if (cg == NULL || owner_type == NULL || signature == NULL) {
+        return false;
+    }
+    owner_is_imported =
+        cg_program_origin(cg, owner_type->owner_program) ==
+        FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+    return owner_type->generic_context_type_param_count > 0U ||
+           (owner_is_imported &&
+            (owner_type->is_generic_instance ||
+             signature->type_param_count > 0U));
+}
+
 static bool cg_emit_generic_static_method_call(CG *cg,
                                                const FengExpr *e,
                                                const UserType *owner_type,
@@ -25515,16 +25935,15 @@ static bool cg_emit_generic_static_method_call(CG *cg,
          * function (FengGenericMethod__...) instead of the file-local
          * static function.  This applies uniformly to both generic type
          * instances and non-generic types with method-level type params. */
-        bool owner_uses_shared_body = owner_type != NULL &&
-            owner_type->generic_context_type_param_count > 0U;
+        bool uses_shared_dispatch =
+            cg_static_method_uses_shared_dispatch(cg, owner_type, um);
         const FengDecl *method_origin_decl = owner_type != NULL
             ? (owner_type->generic_origin_decl != NULL
                    ? owner_type->generic_origin_decl
                    : owner_type->decl)
             : NULL;
         const char *call_name = um->c_name;
-        if ((method_is_imported || owner_uses_shared_body) &&
-            method_origin_decl != NULL) {
+        if (uses_shared_dispatch && method_origin_decl != NULL) {
             dispatch_name = user_fit != NULL
                 ? cg_fit_method_shared_cname(cg, user_fit, um->member)
                 : cg_generic_type_method_shared_cname(
@@ -40971,6 +41390,16 @@ static char *cg_callable_dep_identity_name(
                 return cg_fit_method_shared_cname(cg, fit, dep->member);
             }
         }
+        {
+            const BuiltinFit *fit =
+                cg_find_builtin_fit_by_decl(cg, dep->fit_decl);
+            const UserMethod *method =
+                cg_builtin_fit_method_by_member(fit, dep->member);
+
+            if (method != NULL && method->c_name != NULL) {
+                return strdup(method->c_name);
+            }
+        }
     }
     if (dep->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
         dep->member != NULL) {
@@ -42730,6 +43159,426 @@ cleanup:
     return ok;
 }
 
+/* Close one concrete type/fit static method value. The emitted descriptor
+ * owns an immortal receiver-free closure whose adapter binds the exact method
+ * wrapper and all generic descriptor arguments at compile time. */
+static bool cg_emit_closed_callable_static_method_value_dep_expr(
+    CG *cg,
+    const FengReifiableCallableDep *callable_dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    const FengProgram *caller_reference_program,
+    FengToken blame,
+    char **out_expr) {
+    const FengReifiableDepSet *callee_dep_set = NULL;
+    const FengDecl *reference_decl;
+    const FengProgram *callee_reference_program;
+    FengTypeRef *closed_owner_ref = NULL;
+    FengTypeRef *closed_target_ref = NULL;
+    CGType *owner_type = NULL;
+    CGType *target_type = NULL;
+    bool owner_handled = false;
+    bool target_handled = false;
+    const UserType *owner = NULL;
+    const UserFit *user_fit = NULL;
+    const BuiltinFit *builtin_fit = NULL;
+    const UserMethod *method = NULL;
+    FengTypeParam *callee_params = NULL;
+    FengTypeRef **callee_args = NULL;
+    size_t callee_count = 0U;
+    const UserSpec **method_constraint_specs = NULL;
+    CGType **method_type_args = NULL;
+    char **method_descriptor_exprs = NULL;
+    size_t method_type_param_count = 0U;
+    bool *param_uses_address = NULL;
+    char *identity = NULL;
+    char *display = NULL;
+    char *surface_key = NULL;
+    char *descriptor_c_name = NULL;
+    char *shared_callee_name = NULL;
+    char *owner_descriptor_expr = NULL;
+    char *static_value_expr = NULL;
+    const char *callee_c_name = NULL;
+    const char *static_value = NULL;
+    const char *adapter = NULL;
+    bool uses_shared_dispatch = false;
+    CGClosedCallableValueInit value_init;
+    bool ok = false;
+
+    if (cg == NULL || callable_dep == NULL || out_expr == NULL ||
+        (callable_dep->kind !=
+             FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD &&
+         callable_dep->kind !=
+             FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) ||
+        callable_dep->member == NULL ||
+        !callable_dep->member->is_static ||
+        callable_dep->owner_instance_type_ref == NULL ||
+        callable_dep->target_callable_type_ref == NULL) {
+        return cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: invalid static method-value dependency");
+    }
+    *out_expr = NULL;
+    reference_decl = callable_dep->fit_decl != NULL
+                         ? callable_dep->fit_decl
+                         : callable_dep->owner_type_decl;
+    callee_reference_program =
+        cg_find_decl_owner_program(cg, reference_decl);
+    if (caller_reference_program == NULL) {
+        caller_reference_program = callee_reference_program;
+    }
+
+    closed_owner_ref = cg_type_ref_substitute(
+        callable_dep->owner_instance_type_ref,
+        caller_type_params,
+        caller_type_param_count,
+        caller_type_args);
+    closed_target_ref = cg_type_ref_substitute(
+        callable_dep->target_callable_type_ref,
+        caller_type_params,
+        caller_type_param_count,
+        caller_type_args);
+    if (closed_owner_ref == NULL || closed_target_ref == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (!cg_try_resolve_declared_generic_type_ref(
+            cg,
+            callable_dep->owner_instance_type_ref,
+            closed_owner_ref,
+            caller_reference_program,
+            &blame,
+            &owner_type,
+            &owner_handled) ||
+        (!owner_handled &&
+         !cg_resolve_type_from_program(cg,
+                                       closed_owner_ref,
+                                       caller_reference_program,
+                                       &blame,
+                                       &owner_type)) ||
+        !cg_try_resolve_declared_generic_type_ref(
+            cg,
+            callable_dep->target_callable_type_ref,
+            closed_target_ref,
+            caller_reference_program,
+            &blame,
+            &target_type,
+            &target_handled) ||
+        (!target_handled &&
+         !cg_resolve_type_from_program(cg,
+                                       closed_target_ref,
+                                       caller_reference_program,
+                                       &blame,
+                                       &target_type))) {
+        goto cleanup;
+    }
+    if (target_type == NULL || target_type->kind != CG_TYPE_CALLABLE ||
+        target_type->user_spec == NULL) {
+        (void)cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: closed static method-value target is not callable");
+        goto cleanup;
+    }
+
+    if (callable_dep->kind ==
+        FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD) {
+        if (owner_type == NULL || owner_type->kind != CG_TYPE_OBJECT ||
+            owner_type->user == NULL) {
+            (void)cg_fail(
+                cg,
+                blame,
+                "IE0002",
+                "codegen: closed type static method-value owner is invalid");
+            goto cleanup;
+        }
+        owner = owner_type->user;
+        method = cg_user_type_static_method_by_member(
+            owner, callable_dep->member);
+    } else {
+        builtin_fit =
+            cg_find_builtin_fit_by_decl(cg, callable_dep->fit_decl);
+        if (builtin_fit != NULL) {
+            method = cg_builtin_fit_method_by_member(
+                builtin_fit, callable_dep->member);
+        } else if (owner_type != NULL &&
+                   owner_type->kind == CG_TYPE_OBJECT &&
+                   owner_type->user != NULL) {
+            owner = owner_type->user;
+            user_fit = cg_find_user_fit_by_decl_and_target(
+                cg, callable_dep->fit_decl, owner);
+            method = cg_user_fit_method_by_member(
+                user_fit, callable_dep->member);
+        }
+    }
+    if (method == NULL) {
+        (void)cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: closed static method-value source was not registered");
+        goto cleanup;
+    }
+    if (builtin_fit != NULL &&
+        builtin_fit->target_type_param_count > 0U) {
+        (void)cg_fail(
+            cg,
+            blame,
+            "CE0144",
+            "codegen: generic builtin static fit methods are not supported yet");
+        goto cleanup;
+    }
+
+    uses_shared_dispatch =
+        cg_static_method_uses_shared_dispatch(cg, owner, method);
+    callee_c_name = method->c_name;
+    if (uses_shared_dispatch) {
+        const FengDecl *origin_decl = owner->generic_origin_decl != NULL
+                                          ? owner->generic_origin_decl
+                                          : owner->decl;
+        const char *owner_descriptor = cg_user_type_is_value(owner)
+                                           ? owner->c_aggregate_desc_name
+                                           : owner->c_desc_name;
+        Buf expression;
+
+        shared_callee_name = user_fit != NULL
+                                 ? cg_fit_method_shared_cname(
+                                       cg, user_fit, method->member)
+                                 : cg_generic_type_method_shared_cname(
+                                       cg, origin_decl, method->member);
+        if (shared_callee_name == NULL || owner_descriptor == NULL) {
+            (void)cg_fail(
+                cg,
+                blame,
+                "IE0002",
+                "codegen: imported static method-value shared dispatch is incomplete");
+            goto cleanup;
+        }
+        buf_init(&expression);
+        buf_append_fmt(&expression, "&%s", owner_descriptor);
+        owner_descriptor_expr = expression.data;
+        if (owner_descriptor_expr == NULL) {
+            (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        callee_c_name = shared_callee_name;
+    }
+
+    if (!cg_close_callable_dep_type_args(
+            cg,
+            callable_dep,
+            caller_type_params,
+            caller_type_param_count,
+            caller_type_args,
+            blame,
+            &callee_params,
+            &callee_args,
+            &callee_count)) {
+        goto cleanup;
+    }
+    callee_dep_set = cg_callable_dep_set(cg, callable_dep);
+    identity = cg_callable_dep_identity_name(cg, callable_dep);
+    display = strdup(method->feng_name);
+    surface_key = cg_reifiable_sort_key(
+        closed_target_ref, NULL, 0U, true);
+    memset(&value_init, 0, sizeof(value_init));
+    value_init.surface_key = surface_key;
+    descriptor_c_name = cg_closed_callable_descriptor_c_name_for(
+        cg,
+        callee_count,
+        callee_args,
+        identity,
+        display,
+        &value_init);
+    if (identity == NULL || display == NULL || surface_key == NULL ||
+        descriptor_c_name == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+
+    {
+        const FengCallableSignature *signature =
+            &callable_dep->member->as.callable;
+        size_t owner_type_param_count =
+            callable_dep->owner_type_decl != NULL &&
+                    callable_dep->owner_type_decl->kind == FENG_DECL_TYPE
+                ? callable_dep->owner_type_decl->as.type_decl.type_param_count
+                : 0U;
+
+        method_type_param_count = signature->type_param_count;
+        method_type_args = method_type_param_count > 0U
+                               ? (CGType **)calloc(
+                                     method_type_param_count,
+                                     sizeof(*method_type_args))
+                               : NULL;
+        method_descriptor_exprs = method_type_param_count > 0U
+                                      ? (char **)calloc(
+                                            method_type_param_count,
+                                            sizeof(*method_descriptor_exprs))
+                                      : NULL;
+        param_uses_address = signature->param_count > 0U
+                                 ? (bool *)calloc(
+                                       signature->param_count,
+                                       sizeof(*param_uses_address))
+                                 : NULL;
+        if ((method_type_param_count > 0U &&
+             (method_type_args == NULL ||
+              method_descriptor_exprs == NULL)) ||
+            (signature->param_count > 0U &&
+             param_uses_address == NULL) ||
+            !cg_build_method_type_param_constraints(
+                cg,
+                owner,
+                signature,
+                blame,
+                &method_constraint_specs)) {
+            if (!cg->failed) {
+                (void)cg_fail(cg,
+                              blame,
+                              "IE0001",
+                              "codegen: out of memory");
+            }
+            goto cleanup;
+        }
+        /* The adapter follows the same call surface as direct static calls.
+         * Local closed sources use their thin-wrapper ABI; imported generic
+         * sources use the provider's declared shared-body ABI. */
+        for (size_t index = 0U;
+             index < signature->param_count;
+             ++index) {
+            if (uses_shared_dispatch) {
+                if (!cg_generic_static_method_param_uses_address_abi(
+                        cg,
+                        owner,
+                        method,
+                        builtin_fit,
+                        user_fit,
+                        index,
+                        &param_uses_address[index])) {
+                    if (!cg->failed) {
+                        (void)cg_fail(
+                            cg,
+                            blame,
+                            "IE0002",
+                            "codegen: static method-value shared parameter ABI could not be resolved");
+                    }
+                    goto cleanup;
+                }
+            } else {
+                param_uses_address[index] = builtin_fit != NULL
+                    ? method->param_types[index] != NULL &&
+                          method->param_types[index]->kind ==
+                              CG_TYPE_GENERIC_PARAM
+                    : cg_shared_generic_param_uses_address(
+                          method->param_types[index]);
+            }
+        }
+        for (size_t index = 0U;
+             index < method_type_param_count;
+             ++index) {
+            size_t closed_index = owner_type_param_count + index;
+
+            if (closed_index >= callee_count ||
+                !cg_resolve_type_from_program(
+                    cg,
+                    callee_args[closed_index],
+                    caller_reference_program,
+                    &blame,
+                    &method_type_args[index]) ||
+                !cg_generic_descriptor_expr(
+                    cg,
+                    method_type_args[index],
+                    method_constraint_specs[index],
+                    &blame,
+                    &method_descriptor_exprs[index])) {
+                goto cleanup;
+            }
+        }
+    }
+
+    if (!cg_ensure_callable_static_method_value(
+            cg,
+            target_type->user_spec,
+            owner,
+            method,
+            builtin_fit,
+            user_fit,
+            callee_c_name,
+            owner_descriptor_expr,
+            uses_shared_dispatch,
+            descriptor_c_name,
+            (const char *const *)method_descriptor_exprs,
+            method_type_param_count,
+            param_uses_address,
+            blame,
+            &static_value,
+            &adapter)) {
+        goto cleanup;
+    }
+    (void)adapter;
+    {
+        Buf expression;
+
+        buf_init(&expression);
+        buf_append_fmt(&expression, "&%s", static_value);
+        static_value_expr = expression.data;
+    }
+    if (static_value_expr == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    value_init.static_value_expr = static_value_expr;
+    ok = cg_emit_closed_callable_fdesc(
+        cg,
+        callee_dep_set,
+        callee_params,
+        callee_count,
+        callee_args,
+        callee_reference_program,
+        blame,
+        identity,
+        display,
+        &value_init,
+        out_expr);
+
+cleanup:
+    for (size_t index = 0U;
+         index < method_type_param_count;
+         ++index) {
+        cgtype_free(method_type_args != NULL
+                        ? method_type_args[index]
+                        : NULL);
+        free(method_descriptor_exprs != NULL
+                 ? method_descriptor_exprs[index]
+                 : NULL);
+    }
+    free(method_type_args);
+    free(method_descriptor_exprs);
+    free((void *)method_constraint_specs);
+    free(param_uses_address);
+    free(identity);
+    free(display);
+    free(surface_key);
+    free(descriptor_c_name);
+    free(shared_callee_name);
+    free(owner_descriptor_expr);
+    free(static_value_expr);
+    for (size_t index = 0U; index < callee_count; ++index) {
+        cg_type_ref_free(callee_args[index]);
+    }
+    free(callee_args);
+    free(callee_params);
+    cgtype_free(owner_type);
+    cgtype_free(target_type);
+    cg_type_ref_free(closed_owner_ref);
+    cg_type_ref_free(closed_target_ref);
+    return ok;
+}
+
 /* Close one direct generic callable dependency against the current owner or
  * function type arguments and emit/reuse its function descriptor graph. */
 static bool cg_emit_closed_callable_dep_expr(
@@ -42769,6 +43618,20 @@ static bool cg_emit_closed_callable_dep_expr(
         }
         if (callable_dep->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD) {
             return cg_emit_closed_callable_spec_method_value_dep_expr(
+                cg,
+                callable_dep,
+                caller_type_params,
+                caller_type_param_count,
+                caller_type_args,
+                caller_reference_program,
+                blame,
+                out_expr);
+        }
+        if (callable_dep->kind ==
+                FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
+            callable_dep->kind ==
+                FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) {
+            return cg_emit_closed_callable_static_method_value_dep_expr(
                 cg,
                 callable_dep,
                 caller_type_params,
@@ -57916,6 +58779,14 @@ static void cg_dispose(CG *cg) {
         free(cg->callable_fn_values[i].c_var);
     }
     free(cg->callable_fn_values);
+    for (size_t i = 0U;
+         i < cg->callable_static_method_value_count;
+         ++i) {
+        free(cg->callable_static_method_values[i].descriptor_c_name);
+        free(cg->callable_static_method_values[i].c_adapter_fn);
+        free(cg->callable_static_method_values[i].c_var);
+    }
+    free(cg->callable_static_method_values);
     for (size_t i = 0; i < cg->callable_method_value_count; ++i) {
         free(cg->callable_method_values[i].c_target_fn);
         free(cg->callable_method_values[i].c_bind_fn);

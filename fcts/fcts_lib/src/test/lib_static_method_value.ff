@@ -1,0 +1,51 @@
+open module fcts_lib.test.lib_static_method_value;
+
+/** Imported generic callable target used by MV03 package-boundary coverage. */
+open spec LibStaticMapper<T>(value: T): T;
+
+/** Imported non-generic owner with ordinary and generic static methods. */
+open type LibStaticMath {
+  /** Double one integer through a provider-owned static implementation. */
+  open static func double(value: int): int {
+    return value * 2;
+  }
+
+  /** Return an explicitly selected method-generic value unchanged. */
+  open static func identity<T>(value: T): T {
+    return value;
+  }
+}
+
+/** Imported generic owner with a non-generic static method. */
+open type LibStaticGenericMath<T> {
+  /** Return the owner-generic value unchanged. */
+  open static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Imported generic owner whose static methods are supplied by a visible fit. */
+open type LibStaticExtendedMath<T> {}
+
+/** Provider-owned fit supplying ordinary and method-generic static sources. */
+open fit LibStaticExtendedMath<T> {
+  /** Return the owner-generic fit argument unchanged. */
+  open static func echo(value: T): T {
+    return value;
+  }
+
+  /** Return the explicitly selected method-generic fit argument unchanged. */
+  open static func identity<U>(value: U): U {
+    return value;
+  }
+}
+
+/** Form a type-owned static method value inside an imported shared body. */
+open func makeLibStaticTypeMapper<T>(): LibStaticMapper<T> {
+  return LibStaticGenericMath<T>.echo;
+}
+
+/** Form a fit-owned static method value inside an imported shared body. */
+open func makeLibStaticFitMapper<T>(): LibStaticMapper<T> {
+  return LibStaticExtendedMath<T>.echo;
+}

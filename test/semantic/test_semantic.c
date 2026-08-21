@@ -23962,6 +23962,339 @@ static void test_constrained_generic_spec_method_values_preserve_receiver(void) 
     feng_program_free(program);
 }
 
+/* Concrete static method values retain the exact type/fit source selected by
+ * the target callable, including closed owner arguments and explicit
+ * method-local arguments. Shared generic bodies record the same source as a
+ * reifiable callable dependency without inventing a receiver. */
+static void test_concrete_static_method_values_record_exact_source(void) {
+    const char *source =
+        "module demo.static_method_value.target_context;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec Mapper<T>(value: T): T;\n"
+        "type Math {\n"
+        "  static func double(value: int): int { return value * 2; }\n"
+        "  static func identity<T>(value: T): T { return value; }\n"
+        "}\n"
+        "type ExtendedMath {}\n"
+        "fit ExtendedMath {\n"
+        "  static func triple(value: int): int { return value * 3; }\n"
+        "}\n"
+        "type GenericMath<T> {\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "type GenericExtendedMath<T> {}\n"
+        "fit GenericExtendedMath<T> {\n"
+        "  static func echo(value: T): T { return value; }\n"
+        "}\n"
+        "func accept(mapper: IntMapper): IntMapper { return mapper; }\n"
+        "func sharedType<T>(): Mapper<T> { return GenericMath<T>.echo; }\n"
+        "func sharedFit<T>(): Mapper<T> { return GenericExtendedMath<T>.echo; }\n"
+        "func exercise(): IntMapper {\n"
+        "  let owned: IntMapper = Math.double;\n"
+        "  let fitted: IntMapper = ExtendedMath.triple;\n"
+        "  let genericOwner: IntMapper = GenericMath<int>.echo;\n"
+        "  let genericMethod: IntMapper = Math.identity<int>;\n"
+        "  let casted = (IntMapper)ExtendedMath.triple;\n"
+        "  return accept(Math.double);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "concrete_static_method_value_target_context.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *math;
+    const FengDecl *extended_math;
+    const FengDecl *generic_math;
+    const FengDecl *generic_extended_math;
+    const FengDecl *exercise;
+    const FengDecl *shared_type;
+    const FengDecl *shared_fit;
+    const FengExpr *sites[6];
+    const FengSpecCoercionSite *site;
+    const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    math = find_type_decl_by_name(analysis, "Math");
+    extended_math = find_type_decl_by_name(analysis, "ExtendedMath");
+    generic_math = find_type_decl_by_name(analysis, "GenericMath");
+    generic_extended_math =
+        find_type_decl_by_name(analysis, "GenericExtendedMath");
+    exercise = find_function_decl_in_program(program, "exercise");
+    shared_type = find_function_decl_in_program(program, "sharedType");
+    shared_fit = find_function_decl_in_program(program, "sharedFit");
+    ASSERT(math != NULL && extended_math != NULL && generic_math != NULL);
+    ASSERT(generic_extended_math != NULL && exercise != NULL);
+    ASSERT(shared_type != NULL && shared_fit != NULL);
+
+    for (size_t index = 0U; index < 5U; ++index) {
+        sites[index] = nth_let_initializer(&exercise->as.function_decl, index);
+        ASSERT(sites[index] != NULL);
+    }
+    ASSERT(sites[4]->kind == FENG_EXPR_CAST);
+    sites[4] = sites[4]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 6U);
+    ASSERT(exercise->as.function_decl.body->statements[5]->kind ==
+           FENG_STMT_RETURN);
+    sites[5] = exercise->as.function_decl.body->statements[5]->as.return_value;
+    ASSERT(sites[5] != NULL && sites[5]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[5]->as.call.arg_count == 1U);
+    sites[5] = sites[5]->as.call.args[0];
+
+    for (size_t index = 0U; index < 6U; ++index) {
+        site = feng_semantic_lookup_spec_coercion_site(analysis, sites[index]);
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->callable_member != NULL);
+        ASSERT(site->callable_member->is_static);
+    }
+
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[0]);
+    ASSERT(site->callable_owner_type_decl == math);
+    ASSERT(site->callable_fit_decl == NULL);
+    ASSERT(site->callable_type_arg_count == 0U);
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[1]);
+    ASSERT(site->callable_owner_type_decl == extended_math);
+    ASSERT(site->callable_fit_decl != NULL);
+    ASSERT(site->callable_type_arg_count == 0U);
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[2]);
+    ASSERT(site->callable_owner_type_decl == generic_math);
+    ASSERT(site->callable_fit_decl == NULL);
+    ASSERT(site->callable_type_arg_count == 0U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_receiver_type_ref,
+                                        "GenericMath"));
+    ASSERT(site->callable_receiver_type_ref->as.named.type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(
+        site->callable_receiver_type_ref->as.named.type_args[0],
+        int_canonical));
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[3]);
+    ASSERT(site->callable_owner_type_decl == math);
+    ASSERT(site->callable_fit_decl == NULL);
+    ASSERT(site->callable_type_arg_count == 1U);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_type_args[0],
+                                        int_canonical));
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[4]);
+    ASSERT(site->callable_owner_type_decl == extended_math);
+    ASSERT(site->callable_fit_decl != NULL);
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[5]);
+    ASSERT(site->callable_owner_type_decl == math);
+    ASSERT(site->callable_fit_decl == NULL);
+
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, shared_type);
+        const FengReifiableCallableDep *dependency;
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 1U);
+        dependency = &dep_set->callable_deps[0];
+        ASSERT(dependency->purpose ==
+               FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+        ASSERT(dependency->kind ==
+               FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD);
+        ASSERT(dependency->owner_type_decl == generic_math);
+        ASSERT(dependency->member != NULL && dependency->member->is_static);
+        ASSERT(dependency->fit_decl == NULL);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->owner_instance_type_ref, "GenericMath"));
+    }
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, shared_fit);
+        const FengReifiableCallableDep *dependency;
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 1U);
+        dependency = &dep_set->callable_deps[0];
+        ASSERT(dependency->purpose ==
+               FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+        ASSERT(dependency->kind ==
+               FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD);
+        ASSERT(dependency->owner_type_decl == generic_extended_math);
+        ASSERT(dependency->member != NULL && dependency->member->is_static);
+        ASSERT(dependency->fit_decl != NULL);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->owner_instance_type_ref, "GenericExtendedMath"));
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Concrete static method values preserve the existing diagnostic boundary:
+ * an absent target, incompatible target, unresolved method-local arguments,
+ * ambiguous type/fit source, inaccessible seal and invisible fit all fail
+ * before code generation. */
+static void test_concrete_static_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "concrete_static_method_value_without_target.ff",
+            "module demo.static_method_value.no_target;\n"
+            "type Math { static func map(value: int): int { return value; } }\n"
+            "func run(): void { let mapper = Math.map; }\n",
+            "AE0523"
+        },
+        {
+            "concrete_static_method_value_signature_mismatch.ff",
+            "module demo.static_method_value.mismatch;\n"
+            "spec WrongMapper(flag: bool): int;\n"
+            "type Math { static func map(value: int): int { return value; } }\n"
+            "func run(): WrongMapper { return Math.map; }\n",
+            "AE0522"
+        },
+        {
+            "concrete_static_method_value_missing_type_args.ff",
+            "module demo.static_method_value.missing_type_args;\n"
+            "spec IntMapper(value: int): int;\n"
+            "type Math { static func map<T>(value: T): T { return value; } }\n"
+            "func run(): IntMapper { return Math.map; }\n",
+            "AE0522"
+        },
+        {
+            "concrete_static_method_value_ambiguous.ff",
+            "module demo.static_method_value.ambiguous;\n"
+            "spec IntMapper(value: int): int;\n"
+            "type Math { static func map(value: int): int { return value; } }\n"
+            "fit Math { static func map(value: int): int { return value + 1; } }\n"
+            "func run(): IntMapper { return Math.map; }\n",
+            "AE0521"
+        },
+        {
+            "concrete_static_method_value_seal_access.ff",
+            "module demo.static_method_value.seal_access;\n"
+            "spec IntMapper(value: int): int;\n"
+            "type Friend {}\n"
+            "type Math { @friend(Friend) seal static func map(value: int): int { return value; } }\n"
+            "func run(): IntMapper { return Math.map; }\n",
+            "AE0305"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(cases[case_index].path,
+                                                    cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_expected = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code,
+                       cases[case_index].expected_code) == 0) {
+                found_expected = true;
+                break;
+            }
+        }
+        ASSERT(found_expected);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+
+    {
+        const char *type_source =
+            "open module demo.static_method_value.types;\n"
+            "open type Math {}\n";
+        const char *fit_source =
+            "open module demo.static_method_value.adapter;\n"
+            "import demo.static_method_value.types;\n"
+            "open fit Math {\n"
+            "  open static func triple(value: int): int { return value * 3; }\n"
+            "}\n";
+        const char *consumer_source =
+            "module demo.static_method_value.consumer;\n"
+            "import demo.static_method_value.types;\n"
+            "spec IntMapper(value: int): int;\n"
+            "func run(): IntMapper { return Math.triple; }\n";
+        FengProgram *type_program = parse_program_or_die(
+            "concrete_static_method_value_types.ff", type_source);
+        FengProgram *fit_program = parse_program_or_die(
+            "concrete_static_method_value_adapter.ff", fit_source);
+        FengProgram *consumer_program = parse_program_or_die(
+            "concrete_static_method_value_consumer.ff", consumer_source);
+        const FengProgram *programs[] = {
+            type_program, fit_program, consumer_program
+        };
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_no_member = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 3U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code, "AE0309") == 0) {
+                found_no_member = true;
+                break;
+            }
+        }
+        ASSERT(found_no_member);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(type_program);
+        feng_program_free(fit_program);
+        feng_program_free(consumer_program);
+    }
+}
+
+/* Friend authorization applies to concrete static method values formed from
+ * field initializers, constructors and finalizers without changing the
+ * existing friend implementation-context regression. */
+static void test_friend_static_method_values_in_type_contexts(void) {
+    const char *source =
+        "module demo.static_method_value.friend_contexts;\n"
+        "spec Producer(): int;\n"
+        "type Vault {\n"
+        "  @friend(Reader)\n"
+        "  seal static func readShared(): int { return 10; }\n"
+        "}\n"
+        "type Reader {\n"
+        "  let initialized: Producer = Vault.readShared;\n"
+        "  let constructed: int;\n"
+        "  func Reader() {\n"
+        "    let method: Producer = Vault.readShared;\n"
+        "    self.constructed = method();\n"
+        "  }\n"
+        "  func ~Reader() {\n"
+        "    let method: Producer = Vault.readShared;\n"
+        "    method();\n"
+        "  }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "concrete_static_method_value_friend_contexts.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Object-form spec method values retain the existing callable diagnostics:
  * missing target, structural mismatch, mismatching explicit cast and an
  * inaccessible seal requirement are all rejected before code generation. */
@@ -25308,6 +25641,9 @@ int main(void) {
     test_explicit_generic_callable_values_and_unbound_casts();
     test_object_spec_method_values_record_exact_target_context();
     test_constrained_generic_spec_method_values_preserve_receiver();
+    test_concrete_static_method_values_record_exact_source();
+    test_concrete_static_method_values_reject_invalid_sources();
+    test_friend_static_method_values_in_type_contexts();
     test_object_spec_method_values_reject_invalid_sources();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();

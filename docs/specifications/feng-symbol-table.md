@@ -212,6 +212,11 @@ requirement 的符号身份、caller 视角的 receiver `T` 和目标 callable-f
 consumer 必须原样恢复这些编译期事实，不得把来源降格为普通 type/fit 方法或按名称重新
 查找 requirement。该语义复用现有记录布局，不新增 section、字段或格式版本。
 
+公开共享泛型声明中的具体静态方法值同样使用既有 callable dependency 记录：依赖必须
+保留 type/fit 静态来源 kind、owner、可选 fit、方法声明、owner 实例类型、显式方法类型
+实参和目标 callable-form `spec`。consumer 在闭合点直接恢复该编译期身份，不按名称重新
+查找静态成员；该要求不新增 section、字段、枚举值、记录尺寸或格式版本。
+
 闭包按以下规则递归:
 
 - 泛型实参、数组元素和指针目标继续参与遍历。

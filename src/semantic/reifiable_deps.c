@@ -406,12 +406,21 @@ static bool rd_append_callable_value_dep_resolved(
                   resolved->function_decl != NULL &&
                   resolved->function_decl->kind == FENG_DECL_FUNCTION;
     is_method = resolved->member != NULL &&
-                resolved->owner_type_decl != NULL &&
                 resolved->owner_instance_type_ref != NULL &&
                 (((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
-                   resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD) &&
+                   resolved->kind ==
+                       FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD) &&
+                  resolved->owner_type_decl != NULL &&
                   resolved->owner_type_decl->kind == FENG_DECL_TYPE) ||
+                 ((resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
+                   resolved->kind ==
+                       FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
+                  resolved->fit_decl != NULL &&
+                  resolved->fit_decl->kind == FENG_DECL_FIT &&
+                  (resolved->owner_type_decl == NULL ||
+                   resolved->owner_type_decl->kind == FENG_DECL_TYPE)) ||
                  (resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
+                  resolved->owner_type_decl != NULL &&
                   resolved->owner_type_decl->kind == FENG_DECL_SPEC));
     if (!is_function && !is_method) {
         return true;
@@ -528,8 +537,12 @@ static bool rd_append_callable_value_dep(
                                     FENG_DECL_SPEC
                             ? FENG_RESOLVED_CALLABLE_SPEC_METHOD
                             : (site->callable_fit_decl != NULL
-                                   ? FENG_RESOLVED_CALLABLE_FIT_METHOD
-                                   : FENG_RESOLVED_CALLABLE_TYPE_METHOD);
+                                   ? (site->callable_member->is_static
+                                          ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
+                                          : FENG_RESOLVED_CALLABLE_FIT_METHOD)
+                                   : (site->callable_member->is_static
+                                          ? FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD
+                                          : FENG_RESOLVED_CALLABLE_TYPE_METHOD));
         resolved.owner_type_decl = site->callable_owner_type_decl;
         resolved.member = site->callable_member;
         resolved.fit_decl = site->callable_fit_decl;

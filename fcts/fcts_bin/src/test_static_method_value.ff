@@ -1,0 +1,224 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_static_method_value;
+
+/** Local non-generic callable target used by MV03 behavior coverage. */
+spec StaticIntMapper(value: int): int;
+
+/** Local generic callable target used by shared-body MV03 coverage. */
+spec StaticMapper<T>(value: T): T;
+
+/** Callable target used by the independent friend-context regression. */
+spec StaticFriendProducer(): int;
+
+/** Finalizer observations for the independent friend-context regression. */
+type StaticFriendState {
+  seal static var countValue: int = 0;
+  seal static var totalValue: int = 0;
+
+  /** Reset all finalizer observations. */
+  static func reset(): void {
+    StaticFriendState.countValue = 0;
+    StaticFriendState.totalValue = 0;
+  }
+
+  /** Record one value observed from a completed finalizer. */
+  static func record(value: int): void {
+    StaticFriendState.countValue = StaticFriendState.countValue + 1;
+    StaticFriendState.totalValue = StaticFriendState.totalValue + value;
+  }
+
+  /** Return the number of completed finalizers. */
+  static func count(): int {
+    return StaticFriendState.countValue;
+  }
+
+  /** Return the sum observed by completed finalizers. */
+  static func total(): int {
+    return StaticFriendState.totalValue;
+  }
+}
+
+/** Owner exposing one static method only to the independent reader. */
+type StaticFriendVault {
+  /** Return a stable value through a friend-only static method. */
+  @friend(StaticFriendReader)
+  seal static func readShared(): int {
+    return 10;
+  }
+}
+
+/** Exercise friend static method values in every type implementation context. */
+type StaticFriendReader {
+  /** Form a friend static method value in an instance field initializer. */
+  seal let initialized: StaticFriendProducer = StaticFriendVault.readShared;
+
+  /** Value produced by a friend static method value in the constructor. */
+  seal let constructed: int;
+
+  /** Form and invoke the constructor-local friend static method value. */
+  func StaticFriendReader() {
+    let method: StaticFriendProducer = StaticFriendVault.readShared;
+    self.constructed = method();
+  }
+
+  /** Form and invoke the finalizer-local friend static method value. */
+  func ~StaticFriendReader() {
+    let method: StaticFriendProducer = StaticFriendVault.readShared;
+    StaticFriendState.record(method());
+  }
+
+  /** Return the field-initializer and constructor observations. */
+  func contextTotal(): int {
+    return self.initialized() + self.constructed;
+  }
+}
+
+/** Construct and release one independent friend-context reader. */
+func exerciseStaticFriendContexts(): int {
+  let reader = StaticFriendReader();
+  return reader.contextTotal();
+}
+
+/** Local owner with ordinary and generic static method-value sources. */
+type StaticMath {
+  /** Double one integer. */
+  static func double(value: int): int {
+    return value * 2;
+  }
+
+  /** Return an explicitly selected method-generic argument unchanged. */
+  static func identity<T>(value: T): T {
+    return value;
+  }
+}
+
+/** Local generic owner with a non-generic static method. */
+type StaticGenericMath<T> {
+  /** Return the owner-generic argument unchanged. */
+  static func echo(value: T): T {
+    return value;
+  }
+}
+
+/** Local generic owner whose methods are supplied by a fit. */
+type StaticExtendedMath<T> {}
+
+/** Visible user-type fit supplying ordinary and generic static methods. */
+fit StaticExtendedMath<T> {
+  /** Return the owner-generic fit argument unchanged. */
+  static func echo(value: T): T {
+    return value;
+  }
+
+  /** Return an explicitly selected method-generic argument unchanged. */
+  static func identity<U>(value: U): U {
+    return value;
+  }
+}
+
+/** Visible builtin fit proving static method values do not require a type decl. */
+fit int {
+  /** Increment one integer through the builtin fit source. */
+  static func mv03Increment(value: int): int {
+    return value + 1;
+  }
+}
+
+/** Invoke a static method value supplied in parameter position. */
+func applyStaticMethodValue(mapper: StaticIntMapper, value: int): int {
+  return mapper(value);
+}
+
+/** Return a type-owned static method value from a completed local scope. */
+func returnStaticTypeMethodValue(): StaticIntMapper {
+  return StaticMath.double;
+}
+
+/** Return a fit-owned static method value from a completed local scope. */
+func returnStaticFitMethodValue(): StaticIntMapper {
+  return StaticExtendedMath<int>.echo;
+}
+
+/** Form a generic-owner type static value inside a shared generic body. */
+func makeStaticTypeMapper<T>(): StaticMapper<T> {
+  return StaticGenericMath<T>.echo;
+}
+
+/** Form a generic-owner fit static value inside a shared generic body. */
+func makeStaticFitMapper<T>(): StaticMapper<T> {
+  return StaticExtendedMath<T>.echo;
+}
+
+/** Execute local, generic and imported concrete static method values. */
+open func test_static_method_value(): void {
+  describe("concrete static method values", () {
+    test("type source can be saved, passed, returned and converted", () {
+      let saved: StaticIntMapper = StaticMath.double;
+      let converted = (StaticIntMapper)StaticMath.double;
+      let returned = returnStaticTypeMethodValue();
+      assert(saved(4) == 8, "saved type static method value");
+      assert(applyStaticMethodValue(StaticMath.double, 5) == 10,
+             "type static method value in parameter position");
+      assert(returned(6) == 12, "returned type static method value");
+      assert(converted(7) == 14, "explicitly converted type static value");
+    });
+
+    test("user and builtin fit static sources call the selected fit", () {
+      let fitted: StaticIntMapper = StaticExtendedMath<int>.echo;
+      let builtin: StaticIntMapper = int.mv03Increment;
+      let returned = returnStaticFitMethodValue();
+      assert(fitted(3) == 3 && returned(4) == 4,
+             "user fit static method values");
+      assert(builtin(9) == 10, "builtin fit static method value");
+    });
+
+    test("generic owner, generic method and shared bodies close exactly", () {
+      let owner: StaticIntMapper = StaticGenericMath<int>.echo;
+      let method: StaticIntMapper = StaticMath.identity<int>;
+      let fitOwner: StaticIntMapper = StaticExtendedMath<int>.echo;
+      let fitMethod: StaticIntMapper =
+        StaticExtendedMath<string>.identity<int>;
+      let sharedType = makeStaticTypeMapper<int>();
+      let sharedFit = makeStaticFitMapper<int>();
+      assert(owner(21) == 21 && method(22) == 22,
+             "type generic static method values");
+      assert(fitOwner(8) == 8 && fitMethod(23) == 23,
+             "fit generic static method values");
+      assert(sharedType(24) == 24 && sharedFit(9) == 9,
+             "shared generic static method values");
+    });
+
+    test("imported type and fit sources form in the consumer", () {
+      let owned: StaticIntMapper = LibStaticMath.double;
+      let genericMethod: StaticIntMapper = LibStaticMath.identity<int>;
+      let genericOwner: StaticIntMapper = LibStaticGenericMath<int>.echo;
+      let fitted: StaticIntMapper = LibStaticExtendedMath<int>.echo;
+      let fitGeneric: StaticIntMapper =
+        LibStaticExtendedMath<string>.identity<int>;
+      assert(owned(11) == 22 && genericMethod(12) == 12 &&
+             genericOwner(13) == 13,
+             "imported type static method values");
+      assert(fitted(14) == 14 && fitGeneric(15) == 15,
+             "imported fit static method values");
+    });
+
+    test("provider shared bodies restore static callable dependencies", () {
+      let owned = makeLibStaticTypeMapper<int>();
+      let fitted = makeLibStaticFitMapper<int>();
+      assert(owned(16) == 16 && fitted(17) == 17,
+             "imported shared static method values");
+    });
+
+    test("friend type contexts form static method values independently", () {
+      StaticFriendState.reset();
+      let contextTotal = exerciseStaticFriendContexts();
+      assert(contextTotal == 20,
+             "field initializer and constructor form friend static values");
+      assert(StaticFriendState.count() == 1 &&
+             StaticFriendState.total() == 10,
+             "finalizer forms and invokes a friend static method value");
+    });
+  });
+}

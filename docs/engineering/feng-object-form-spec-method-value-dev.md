@@ -1,6 +1,6 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02 已完成，可分别独立交付；其余分项尚未实施。
+> **状态**：MV01、MV02、MV03 已完成，可分别独立交付；其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -230,23 +230,23 @@ type 自有静态方法和当前位置可见的 fit 静态方法已经属于同�
 
 #### 修复任务
 
-- [ ] 更新函数、type、fit、可见性、泛型和诊断主规范，定义具体静态方法值。
-- [ ] 复用具体静态直接调用的 type/fit 候选、可见性过滤、owner 代入和重载结果。
-- [ ] 让目标 callable 匹配接受已解析的具体静态方法来源，不伪造 receiver 或 spec witness。
-- [ ] 分析并复用现有无捕获 callable value 能力；如实现认为必须动态分配，先提交性能决策。
-- [ ] 保持本地、imported、普通闭合和共享泛型体使用同一来源身份与调用语义。
+- [x] 更新函数、type、fit、可见性、泛型和诊断主规范，定义具体静态方法值。
+- [x] 复用具体静态直接调用的 type/fit 候选、可见性过滤、owner 代入和重载结果。
+- [x] 让目标 callable 匹配接受已解析的具体静态方法来源，不伪造 receiver 或 spec witness。
+- [x] 分析并复用现有无捕获 callable value 能力；如实现认为必须动态分配，先提交性能决策。
+- [x] 保持本地、imported、普通闭合和共享泛型体使用同一来源身份与调用语义。
 
 #### 验证与交付
 
-- [ ] Semantic：type 自有静态方法和可见 fit 静态方法均可形成值。
-- [ ] Semantic：不可见 fit、不可访问 seal、签名不匹配、歧义和缺失显式方法实参稳定拒绝。
-- [ ] FCTS：type 与 fit 静态方法值分别调用正确实现，并可保存、传递和返回。
-- [ ] 泛型：普通/泛型 owner、普通/泛型静态方法、本地/imported 来源均有代表用例。
-- [ ] 性能：完全闭合且无捕获的静态来源不产生不必要的动态 closure 分配。
-- [ ] 恢复 friend 专项 P01 中字段初始化、构造函数和终结器的 `Vault.readShared` 方法值覆盖，
+- [x] Semantic：type 自有静态方法和可见 fit 静态方法均可形成值。
+- [x] Semantic：不可见 fit、不可访问 seal、签名不匹配、歧义和缺失显式方法实参稳定拒绝。
+- [x] FCTS：type 与 fit 静态方法值分别调用正确实现，并可保存、传递和返回。
+- [x] 泛型：普通/泛型 owner、普通/泛型静态方法、本地/imported 来源均有代表用例。
+- [x] 性能：完全闭合且无捕获的静态来源不产生不必要的动态 closure 分配。
+- [x] 恢复 friend 专项 P01 中字段初始化、构造函数和终结器的 `Vault.readShared` 方法值覆盖，
       不增加 friend 专用实现路径。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV03 可独立交付。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV03 可独立交付。
 
 ### 4.4 MV04：`T: ObjectSpec` 类型参数的静态方法值
 
@@ -699,6 +699,173 @@ func bind<T: CombinedFactory>(): Creator {
   stdlib、FCTS、性能约束、增量构建与发布脚本测试。
 - **未解决问题**：MV02 无未解决问题；MV03 及后续未完成分项继续按第 3、4 节实施。
 - **建议 commit message**：`feat: support constrained generic spec method values`
+
+### ISSUE-005：闭合泛型 owner 静态方法值 adapter 误用共享体参数 ABI
+
+- **关联分项**：MV03
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec IntMapper(value: int): int;
+
+  type GenericMath<T> {
+    static func echo(value: T): T {
+      return value;
+    }
+  }
+
+  let echo: IntMapper = GenericMath<int>.echo;
+  ```
+
+- **实际结果**：Semantic 与 Feng Codegen 均完成，但 host C 编译拒绝生成代码；静态方法值
+  adapter 把 `_arg0` 的地址传给已经闭合为 `int` 直接参数的 thin wrapper，产生
+  `int*` 到 `int` 的不兼容调用。
+- **期望结果**：`GenericMath<int>.echo` 形成 `IntMapper`，adapter 使用实际目标 thin wrapper
+  的直接参数 ABI 调用，且形成时不分配 closure。
+- **根因**：静态方法值 adapter 最终调用的是已完成 owner 代入的 concrete thin wrapper，
+  但首次实现复用了该方法原始共享体的参数 ABI 判定。原始 `T` 在共享体中按地址传递；
+  `GenericMath<int>` thin wrapper 的对应参数已经闭合为直接 `int`，两层 ABI 不同。
+- **通用修复方案**：adapter 始终按其实际调用层的注册参数面选择 ABI：user type/fit 使用
+  已闭合 `UserMethod.param_types` 与 thin wrapper 的既有 address 判定；builtin fit 使用其
+  现有方法入口的泛参擦除判定。adapter 继续负责在 callable 目标 ABI 与该 wrapper ABI
+  之间做静态桥接，不绕过 thin wrapper，也不按具体类型或方法名特判。
+- **运行时性能影响**：无增量开销；只修正生成 C 中参数表达式是传值还是取地址，不增加
+  分支、分配、查找或调用层。
+- **runtime ABI / `.ft` / 兼容性影响**：无；未修改任何 runtime 定义、ABI、`.ft` 字段、
+  枚举或版本。
+- **是否需要人工决策**：否；这是 adapter 与其实际 callee ABI 不一致的实现错误，修复
+  完全复用既有 thin wrapper 规则，不触发专项停止条件。
+- **专项验证结果**：普通 type/fit、闭合泛型 owner、显式泛型静态方法以及共享泛型函数
+  返回的静态方法值均已通过 Semantic、Codegen、Symbol、生成 C 严格编译和 FCTS 真实执行。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-006：FCTS 泛型 fit 用例对无约束 `T` 使用数值加法
+
+- **关联分项**：MV03
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  type Extended<T> {}
+
+  fit Extended<T> {
+    static func triple(value: T): T {
+      return value + value + value;
+    }
+  }
+  ```
+
+- **实际结果**：FCTS 编译在两个 `+` 位置报告 `AE0030`；无约束泛型 `T` 不能使用数值或
+  字符串加法。
+- **期望结果**：MV03 的泛型 fit 静态方法值用例仅使用对任意 `T` 合法的函数体，使测试
+  失败能够反映静态方法值形成或调用问题，而不是无关的泛型运算约束。
+- **根因**：用例为了让 fit 结果易于观察，误把只在闭合为 `int` 时合法的 `triple`
+  实现写进对所有 `T` 都要先完成语义检查的共享泛型声明；其函数体与 MV03 的静态方法值
+  目标无关。
+- **通用修复方案**：将泛型 fit 方法改为对任意 `T` 都合法的 `echo(value: T): T`，并通过
+  type 自有 `double`、builtin fit `mv03Increment` 以及来源身份断言继续区分实际选中的实现；
+  不添加约束特判，也不削减静态方法值覆盖面。
+- **运行时性能影响**：无；只修正 FCTS 用例函数体及对应期望值，不修改产品代码。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；诊断符合既有泛型与运算符规范，修复仅移除测试中的无关非法
+  表达式，不改变需求或实现方案。
+- **专项验证结果**：FCTS 重新编译并真实执行通过，MV03 与完整 FCTS 共 835 项全部通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-007：跨包泛型静态方法值 adapter 缺少 imported thin-wrapper 声明
+
+- **关联分项**：MV03
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  // provider
+  open type Math {
+    open static func identity<T>(value: T): T {
+      return value;
+    }
+  }
+
+  // consumer
+  spec IntMapper(value: int): int;
+  let mapper: IntMapper = Math.identity<int>;
+  ```
+
+- **实际结果**：Semantic 与 Feng Codegen 成功；consumer 的静态 callable adapter 调用 provider
+  generic static method thin wrapper，但生成 C 未声明该 wrapper，host C 以隐式函数声明错误拒绝。
+- **期望结果**：跨包 generic static method value 与既有直接调用使用同一 imported wrapper 声明面；
+  adapter 能严格编译并链接到 provider 实现。
+- **根因**：静态 method-value adapter 首次实现统一调用 `UserMethod.c_name`。本地闭合来源的
+  该符号是可用 thin wrapper；但 imported generic method 的 thin wrapper 仅具 provider 文件内
+  链接，跨包原本就只公开 `FengGenericMethod__...` / `FengFitMethod__...` shared dispatch。既有
+  直接调用已做这一区分，method-value adapter 尚未复用。
+- **通用修复方案**：抽取并复用直接静态调用的 call-surface 判定。对本地闭合来源继续调用
+  thin wrapper；对 imported generic method 或 imported generic owner 实例，adapter 直接静态调用
+  既有 exported shared dispatch，并按其既有 ABI 传入 owner descriptor、function descriptor、
+  显式方法类型 descriptor、声明参数表示和返回 out storage。
+- **运行时性能影响**：无增量开销；选择在编译期完成，不增加分配、查找或运行时分支；跨包
+  adapter 直接进入既有 shared dispatch，也不增加代理调用层。
+- **runtime ABI / `.ft` / 兼容性影响**：无；仅复用已有 exported shared symbol 与签名，未修改
+  runtime 定义、公开/私有 ABI、`.ft` 字段、枚举或版本。
+- **是否需要人工决策**：否；修复使 method value 与既有直接调用恢复同一跨包调用面，不引入
+  特判或新的表示决策。
+- **专项验证结果**：Codegen 专项通过；FCTS 的 imported 普通/泛型 owner、普通/泛型 type/fit
+  静态方法值及 provider shared-body dependency 均真实执行通过，完整 FCTS 为 835/835。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-008：P01 恢复直接改写了既有 friend 用例
+
+- **关联分项**：MV03
+- **状态**：已解决
+- **最小复现**：为恢复 friend P01，直接向既有
+  `test_friend_type_implementation_contexts_are_authorized` 与 FCTS
+  `type implementation contexts execute friend access` 夹具增加静态方法值，并调整既有
+  FCTS 合计期望。
+- **实际结果**：行为覆盖与全量回归均通过，但最终合规审查确认该做法改写了既有测试
+  夹具和断言，不满足第 1 节第 8 项“不得修改或删除任何既有测试用例”的最严格解释。
+- **期望结果**：保留原 friend 用例逐字不变，通过独立新增的 MV03 Semantic/FCTS 用例
+  覆盖字段初始化、构造函数和终结器中的 friend 静态方法值。
+- **根因**：首次恢复沿用了 P01 原问题所在夹具，以最短路径把静态方法值断言插回原测试；
+  没有把“恢复行为覆盖”与“不可改写既有用例”同时落实为独立新增用例。
+- **通用修复方案**：撤销对两个既有 friend 用例的修改；在 MV03 新增测试域中定义独立
+  friend owner/target/state，分别验证三个类型实现上下文，并保留原测试及其期望不变。
+- **运行时性能影响**：无；只重组新增测试覆盖，不修改产品实现。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；该修复直接落实已经明确的强制规则，不改变语言语义、实现
+  范围或验收目标。
+- **专项验证结果**：原 `test_friend` 与原 Semantic friend 用例恢复为零差异；独立新增的
+  Semantic 用例通过，FCTS 在三个类型实现上下文中真实形成并调用 friend 静态方法值，
+  最终为 `836 passed, 0 failed, 0 skipped`。
+- **全量回归结果**：迁移后的最终工作树在沙箱外完整 `make test` 通过。
+
+### MV03 独立交付记录
+
+- **变更范围**：补齐具体 `type` 自有与当前位置可见 `fit` 静态方法值的函数、type、fit、
+  泛型、可见性、诊断和符号表规范，以及 Semantic、共享泛型依赖与 Codegen；没有扩大
+  实例/静态成员访问边界，也没有改变既有直接调用规则。
+- **实现结果**：Semantic 复用静态直接调用的 type/fit 候选面、访问过滤、owner 代入和
+  结构匹配，并稳定记录 owner、可选 fit、方法、owner 实例类型、显式方法类型实参及目标
+  callable。Codegen 只消费这些已解析事实；本地闭合来源进入既有 thin wrapper，跨包泛型
+  来源进入与直接调用相同的 exported shared dispatch，均不在生成期或运行时按名称重选。
+- **运行时成本**：此前所有合法路径没有新增运行时指令、分支、分配或查找。新支持的完全
+  闭合静态来源使用编译期生成的 immortal callable singleton；形成时只取得其静态地址，
+  不分配 closure、不捕获 receiver/subject/witness，也不执行运行时成员或 fit 查找。
+- **ABI 与格式**：没有修改 runtime、runtime 私有 ABI、公开 ABI、结构布局、字段、枚举值、
+  `.ft` 记录尺寸或版本；静态方法值依赖复用既有 callable dependency 记录。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen`、`build/bin/test_symbol`
+  均通过；覆盖 type/fit/builtin-fit、泛型 owner、显式泛型方法、共享泛型体、目标缺失、
+  签名不匹配、歧义、seal、fit 可见性及 `.ft` 往返，生成 C 通过严格编译。
+- **FCTS**：覆盖保存、传参、返回、显式转换，本地与 imported type/fit，普通与泛型 owner/
+  方法、provider shared-body dependency 及独立 friend 类型实现上下文；最终结果为
+  `836 passed, 0 failed, 0 skipped`。
+- **friend P01**：已恢复字段初始化、构造函数和终结器中的 `Vault.readShared` 静态方法值，
+  复用同一 friend 访问检查，没有 friend 专用方法值路径。
+- **全量回归**：沙箱外完整 `make test` 通过，包含 UBSan、普通 `-O2 -Werror`、两轮
+  91/91 smoke、CLI、stdlib、两轮 FCTS 836/836、性能约束、增量构建与发布脚本测试。
+- **实施问题**：ISSUE-005、ISSUE-006、ISSUE-007、ISSUE-008 均已按先记录、后分析、
+  再修复的流程解决并完成专项及全量验证；MV03 无未解决问题。
+- **建议 commit message**：`feat: support concrete static method values`
 
 ### ISSUE-待编号：待填写
 
