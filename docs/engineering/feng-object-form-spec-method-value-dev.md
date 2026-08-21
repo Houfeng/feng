@@ -4,9 +4,10 @@
 >
 > **性质**：独立 engineering 开发草案，不是语言权威规范。
 >
-> 本文统一规划两类尚未支持的成员方法值：通过 object-form `spec` 视角形成
-> 实例/静态方法值，以及通过具体 `type` / 可见 `fit` 视角形成静态方法值。
-> 两者属于同一个“成员引用形成 callable value”能力，不再拆分为平行专项。
+> 本文统一规划尚未支持的成员方法值：通过 object-form / intersection-form `spec`
+> 参数值或受约束泛型值形成实例方法值，通过受约束类型参数形成静态方法值，以及
+> 通过具体 `type` / 可见 `fit` 视角形成静态方法值。这些入口属于同一个“对既有合法
+> 成员解析结果形成 callable value”的能力，不再拆分为平行专项。
 > 本文不修改 [`spec seal` 成员草案](./feng-spec-seal-member-draft.md)，不修改
 > `@mixable` 语义。Review 通过后，正式语言行为必须收敛到
 > [Feng 函数规范](../specifications/feng-function.md)、
@@ -21,13 +22,36 @@
 Feng 已支持：
 
 - 通过 object-form `spec` 值调用实例方法，并经 witness 分派到实际实现；
+- 通过 intersection-form `spec` 值及受其约束的泛型值调用实例方法，并经 merged
+  witness 分派到实际实现；
 - 通过受 object-form `spec` 约束的类型参数调用静态方法；
 - 具体 `type` 实例方法、可见 `fit` 实例方法和显式闭合的泛型实例方法形成方法值；
 - 顶层函数、方法值和 lambda 进入 callable-form `spec`；
 - callable value 的保存、参数传递、返回、复制、调用和生命周期管理。
 
-目前存在两类同源缺口。第一类是 object-form `spec` 方法只能立即调用，不能通过
-`spec` 视角形成方法值：
+### 1.1 当前调用与方法值基线
+
+本表只核对按既有成员访问规范本来合法的来源；实例成员与静态成员之间的访问边界不在
+本专项重新定义。最小探针和现有回归确认当前基线如下：
+
+| 来源 | 直接调用现状 | 方法值现状 | 本专项定位 |
+| --- | --- | --- | --- |
+| object-form `spec` 参数/局部值的实例方法 | 已支持 | `AE0522` | `SPEC_INSTANCE` |
+| `T: ObjectSpec` 的泛型值实例方法 | 已支持 | `AE0522` | `SPEC_INSTANCE`，receiver 保持 `T` 的值语义 |
+| 具体 `type` / 可见 `fit` 的静态方法 | 已支持 | `AE0522` | `CONCRETE_STATIC`；包含 friend 修复 P01 的 `Vault.readShared` |
+| `T: ObjectSpec` 的类型参数静态方法 | 已支持 | `AE0522` | `SPEC_STATIC` |
+| intersection-form `spec` 参数/局部值的实例方法 | 已支持 | `AE0522` | `SPEC_INSTANCE`，使用 merged witness |
+| `T: IntersectionSpec` 的泛型值实例方法 | 已支持 | `AE0522` | `SPEC_INSTANCE`，receiver 保持 `T` 的值语义并使用 merged witness |
+| `T: IntersectionSpec` 的类型参数静态方法 | `AE0512` | 尚未进入方法值解析 | 直接调用已有独立基线缺口；对应方法值依赖其先修复 |
+
+前六行的成员直接调用均已闭环，当前缺失只发生在把同一合法成员引用形成 callable
+value 时。最后一行不是方法值根因：当前 `T.staticMethod()` 已在直接调用解析阶段报告
+`AE0512`，因此不能把对应 `T.staticMethod` 的失败记作方法值缺口。是否在本专项中把该
+直接调用问题作为前置修复，必须由第 2 节 Review 决定。
+
+方法值层面的缺口可以按运行时绑定方式归为两类。第一类是 spec-backed 方法只能立即
+调用，不能通过 spec 参数值、受约束泛型值或受约束类型参数形成方法值。例如
+object-form `spec` 参数值：
 
 ```feng
 open spec Readable {
@@ -59,6 +83,8 @@ let mapper: IntMapper = Math.double; // 当前不支持
 验证已经确认，无约束非泛型 `Plain.map`、显式闭合泛型
 `Plain.genericMap<string>` 和泛型 owner `Generic<int>.map` 均会在方法值形成阶段被拒绝；
 这是具体静态方法形成 callable value 的统一能力缺口，不是某个泛型修复的回归。
+同一最小矩阵也确认 object-form / intersection-form 参数值、受约束泛型值以及
+object-form `spec` 约束类型参数的合法方法引用均在形成方法值时报告 `AE0522`。
 
 现有 Semantic 已能解析具体 type/fit 的静态方法直接调用，也能为具体实例方法值完成
 目标 callable 匹配；现有 Codegen 则分别具备静态方法直接调用和实例方法值绑定能力。
@@ -66,11 +92,15 @@ let mapper: IntMapper = Math.double; // 当前不支持
 
 - 已有的具体实例方法值；
 - 新增的具体 type/fit 静态方法值；
-- 新增的 object-form spec 实例方法值；
-- 新增的受 spec 约束类型参数静态方法值。
+- 新增的 object-form / intersection-form spec 参数值实例方法值；
+- 新增的受 object-form / intersection-form spec 约束泛型值实例方法值；
+- 新增的受 object-form spec 约束类型参数静态方法值；
+- 在直接调用基线修复后，新增的受 intersection-form spec 约束类型参数静态方法值。
 
-不同来源仍使用各自合适的绑定方式：具体静态方法绑定已解析函数身份，spec 方法绑定
-形成点的 subject/witness 方法槽。不得因为统一语言能力而强行统一运行时表示。
+不同来源仍使用各自合适的绑定方式：具体静态方法绑定已解析函数身份；显式 spec 值
+绑定形成点的 subject/witness 方法槽；受约束泛型值必须按 `T` 的既有值语义捕获
+receiver，并绑定 descriptor 中的 witness 方法槽。不得因为统一语言能力而强行统一
+运行时表示，也不得把受约束泛型值装箱成 object-form spec 值。
 
 此前两个已完成专项均明确把该能力排除在各自范围之外：
 
@@ -99,33 +129,45 @@ type/fit 泛型方法在显式闭合后形成方法值；未来若恢复 spec �
 2. **权限在形成点检查**：spec 方法复用 `spec seal` 访问判断；具体 type/fit 静态方法
    复用现有成员可见性、fit 可见面及 `@friend` / `@mixable` 等既有授权查询。合法形成
    后的 callable 可以作为普通值传递，调用点不重复检查来源成员的访问权限。
-3. **绑定一次、调用目标固定**：实例 spec receiver 在形成点只求值一次，closure 保存
-   该次得到的 subject 和 witness 方法槽；静态方法值在形成点固定已解析具体方法或当前
-   类型参数 witness 方法槽。后续环境变化不重新执行成员选择。
+3. **绑定一次、调用目标固定**：实例 receiver 在形成点只求值一次；显式 spec 值
+   closure 保存该次得到的 subject 和 witness 方法槽，受约束泛型值 closure 按 `T` 的
+   descriptor 保存 receiver payload 和 witness 方法槽。静态方法值在形成点固定已解析
+   具体方法或当前类型参数 witness 方法槽。后续环境变化不重新执行成员选择。
 4. **按来源使用最小表示**：实例 spec 方法值只形成一个 callable closure，不增加独立
-   receiver box 或通用 lambda capture cell；受约束类型参数的静态 spec 方法值不捕获
-   subject，只保存所需 witness 方法槽；完全闭合的具体 type/fit 静态方法没有动态捕获，
-   应复用现有无捕获 callable value/descriptor 路径，不增加每次形成时的堆分配。
+   receiver box 或通用 lambda capture cell；受约束泛型 receiver 使用 closure 内联
+   payload，不装箱为 spec 值；受约束类型参数的静态 spec 方法值不捕获 subject，只保存
+   所需 witness 方法槽；完全闭合的具体 type/fit 静态方法没有动态捕获，应复用现有无
+   捕获 callable value/descriptor 路径，不增加每次形成时的堆分配。
 5. **静态方法值并入同一专项**：具体 type 静态方法、可见 fit 静态方法和受 object-form
-   spec 约束类型参数的静态方法值，与 object-form spec 实例方法值统一设计、实施和
-   验收，不再拆为后续独立能力。
+   spec 约束类型参数的静态方法值，与 object-form / intersection-form spec 实例方法值
+   统一设计、实施和验收，不再拆为后续独立能力。
 6. **不增加 runtime ABI 和 `.ft` 格式**：复用现有 callable closure、witness、泛型
    descriptor 和 reified callable dependency 抽象；如实施中证明必须改变 runtime
    私有 ABI、增加动态查找或增加额外分配，应停止并提交人工决策。
+7. **intersection 静态调用前置项**：`T: IntersectionSpec` 的 `T.staticMethod()` 当前
+   报告 `AE0512`。Review 必须决定是先在本交付中修复该直接调用基线，再补齐对应方法值，
+   还是暂缓 intersection 静态方法值；不得在方法值 lowering 中绕过直接调用解析器增加
+   特判。
 
 ## 3 目标与非目标
 
 ### 3.1 目标
 
-- 允许 object-form `spec` 实例方法通过 `value.method` 形成 callable value；
+- 允许 object-form / intersection-form `spec` 参数值的实例方法通过 `value.method`
+  形成 callable value；
+- 允许受 object-form / intersection-form `spec` 约束的泛型值通过 `value.method`
+  形成 callable value，并保持 receiver 的既有值语义；
 - 允许受 object-form `spec` 约束的类型参数通过 `T.method` 形成静态 callable value；
+- 在第 2 节决定并完成直接调用前置修复后，允许受 intersection-form `spec` 约束的类型
+  参数通过 `T.method` 形成静态 callable value；
 - 允许具体 `type` 和可见 `fit` 的静态方法通过 `Type.method` 形成 callable value；
 - 公开方法和合法可访问的 `seal` 方法分别遵守现有 spec/type/fit 成员访问域；
 - 重载方法由目标 callable-form `spec` 唯一选择；
 - 对既有合法的 type/fit 泛型方法，必须显式提供完整类型实参后再形成方法值；
 - receiver、subject、witness、泛型描述符和 callable closure 生命周期正确；
 - 本包、跨包 `.ft`、普通闭合代码和共享泛型体行为一致；
-- 不改变直接 spec/具体静态方法调用和既有具体 type/fit 实例方法值的行为或开销。
+- 除第 2 节可能决定纳入的 intersection 静态调用前置修复外，不改变直接 spec/具体
+  静态方法调用和既有具体 type/fit 实例方法值的行为或开销。
 
 ### 3.2 非目标
 
@@ -134,7 +176,6 @@ type/fit 泛型方法在显式闭合后形成方法值；未来若恢复 spec �
 - 不支持形成后仍保留未闭合方法级泛参的 first-class polymorphic callable；
 - 不修改 `type seal`、`fit` 私有访问权或 `spec seal` 的既有访问域；
 - 不修改 `@mixable` 来源传播、wrapper 或具体 type 互访规则；
-- 不把静态 spec 方法改为实例值成员，也不允许 `value.staticMethod`；
 - 不增加运行时可见性检查、按类型名搜索、tag 分派或动态 descriptor 工厂；
 - 不以单态化共享泛型体作为正确性前提；
 - 不处理 object-form spec 普通成员访问的重复表达式提升；该性能方向继续由
@@ -189,6 +230,40 @@ func run(value: Readable): string {
 object-form spec 值已经具有 `{ subject, witness }` 表示。方法值捕获的是该 spec
 视角已经持有的 subject 身份，不重新复制具体对象内容。若具体值语义 subject 在进入
 object-form spec 时已经按现有规则装箱，方法值保留同一个 box，不进行第二次装箱。
+
+受 spec 约束的泛型值也允许形成同一实例 requirement 的方法值：
+
+```feng
+func bindGeneric<T: Readable>(value: T): Reader {
+  return value.read;
+}
+```
+
+这里 `value` 仍是 `T` 的值，不是一等 object-form spec 值。方法值必须复用既有泛型值
+捕获能力，按闭合 descriptor 的值模型复制或保留 receiver，并从 `T` 的约束 witness
+保存选中方法槽；不得为了复用 `{ subject, witness }` 路径把 `T` 装箱。`SPEC_INSTANCE`
+描述的是 witness 分派类别，不代表所有 receiver 都使用同一种捕获布局。
+
+intersection-form 的实例方法值使用相同规则。显式 intersection-form 参数值保存当前
+subject 与 merged witness；受 intersection-form 约束的泛型值保持 `T` 的值语义，并从
+merged witness 保存选中成员槽。二者都归入 `SPEC_INSTANCE`，不新增 intersection 专用
+绑定类别：
+
+```feng
+open spec Traceable {
+  func trace(): string;
+}
+
+open spec ReadableTraceable: Readable & Traceable;
+
+func bindIntersection(value: ReadableTraceable): Reader {
+  return value.read;
+}
+
+func bindGenericIntersection<T: ReadableTraceable>(value: T): Reader {
+  return value.read;
+}
+```
 
 ### 4.2 目标类型与重载
 
@@ -273,7 +348,7 @@ callable 时不再检查其来源方法的可见性。这与现有访问控制�
 
 ### 4.5 静态成员方法值
 
-静态 spec 方法值只能从能够确定实现类型 witness 的静态 spec 约束视角形成：
+object-form spec 约束类型参数的静态方法值使用已有合法的类型参数成员引用：
 
 ```feng
 open spec Factory {
@@ -292,10 +367,14 @@ spec 约束视角规则如下：
 - `T.create` 在形成点从 `T` 的 descriptor/witness 选择静态方法槽；
 - 静态方法值不捕获 subject；
 - `seal static` 方法使用与直接静态 spec 方法访问相同的实现上下文判断；
-- object-form spec 声明名 `Factory.create` 本身不能选定满足类型或 witness，因此不能据此
-  形成 spec 静态方法值；
-- `value.create` 通过实例值访问静态成员，继续非法；
 - 具体类型名上的 `Concrete.create` 仍属于 type/fit 视角，不改写为 spec 视角。
+
+intersection-form 约束类型参数的静态路径当前不能直接套用上述规则。实测
+`T: IntersectionSpec` 下的 `T.staticMethod()` 在直接调用阶段报告 `AE0512`，说明现有
+静态 requirement 查找尚未进入 intersection merged surface；对应 `T.staticMethod`
+方法值也因此尚不可到达。若 Review 决定补齐该前置能力，直接调用与方法值必须复用同一
+intersection 静态成员解析结果，方法值继续归入 `SPEC_STATIC`，不得增加 intersection
+专用 callable 绑定类别。
 
 具体 type/fit 静态方法值使用同一目标类型驱动规则：
 
@@ -333,25 +412,36 @@ let triple: IntMapper = ExtendedMath.triple;
   泛参继续遵守第 4.3 节“形成方法值时必须显式闭合”的统一规则；
 - 形成后的 callable 调用不重新执行 type/fit 成员查找或访问检查。
 
+[`feng-friend-type-implementation-context-bugfix.md`](./feng-friend-type-implementation-context-bugfix.md)
+P01 中的 `Vault.readShared` 正是本节的具体 type 静态方法值，并额外组合了 `@friend`
+访问域以及字段初始化、构造函数、终结器形成点。该语言能力由本文统一实现；完成后必须
+恢复 P01 当时移除的方法值覆盖，不为 friend 场景增加专用路径。
+
 ## 5 Semantic 设计
 
 ### 5.1 复用现有成员闭包与访问过滤
 
-Semantic 应建立统一的成员方法值解析入口。该入口先根据来源表达式区分 object-form
-spec receiver、受 spec 约束类型参数或具体 type target，再复用对应的现有成员面：
+Semantic 应建立统一的成员方法值解析入口。该入口先根据来源表达式区分显式 spec
+receiver、受 spec 约束的泛型 receiver、受 spec 约束的类型参数静态 target 或具体
+type target，再复用对应的现有成员面：
 
-1. object-form spec receiver 从现有 spec 完整成员闭包枚举同名实例 requirement；
-2. 受 spec 约束类型参数从同一闭包枚举同名 static requirement；
-3. 具体 type target 复用现有 type 自有静态方法与可见 fit 静态方法候选枚举；
-4. 分别使用现有 spec seal 或 type/fit 成员访问查询过滤当前不可访问候选；
-5. 使用目标 callable-form `spec` 的已实例化签名匹配候选；
-6. 对显式方法类型实参检查数量与约束，并在 owner 实例之后关闭方法签名；
-7. 产生唯一、无匹配或歧义结论；
-8. 只在唯一成功后记录稳定的成员方法值语义事实。
+1. object-form / intersection-form spec receiver 从现有完整成员闭包枚举同名实例
+   requirement；intersection 使用已经展平、去重的 merged surface；
+2. 受 object-form / intersection-form spec 约束的泛型 receiver 从同一约束 surface
+   枚举同名实例 requirement，同时保留 receiver 的完整 `T` 类型和 descriptor 事实；
+3. 受 object-form spec 约束的类型参数从同一闭包枚举同名 static requirement；
+   intersection 静态路径只有在第 2 节前置项完成后才能进入本步骤；
+4. 具体 type target 复用现有 type 自有静态方法与可见 fit 静态方法候选枚举；
+5. 分别使用现有 spec seal 或 type/fit 成员访问查询过滤当前不可访问候选；
+6. 使用目标 callable-form `spec` 的已实例化签名匹配候选；
+7. 对显式方法类型实参检查数量与约束，并在 owner 实例之后关闭方法签名；
+8. 产生唯一、无匹配或歧义结论；
+9. 只在唯一成功后记录稳定的成员方法值语义事实。
 
 直接方法调用和方法值必须复用各自已有的成员闭包、owner/fit 实例替换、可见性过滤与
 callable 签名比较基础设施。不得为方法值复制 spec 父成员展开、type/fit 静态成员枚举、
-fit 可见面或 `seal` 授权算法。
+fit 可见面、intersection surface 合并或 `seal` 授权算法。intersection 静态直接调用的
+`AE0512` 前置问题也必须在通用静态成员解析中解决，不得只让方法值路径额外识别该成员。
 
 ### 5.2 Callable source 分类
 
@@ -375,10 +465,11 @@ receiver”或表达式语法形状猜测来源。
 成功站点至少要稳定记录：
 
 - 成员绑定类别；
-- 具体 owner type、选中的 type/fit 方法及 fit 声明身份，或 source object-form spec
-  的声明和完整实例类型；
+- 具体 owner type、选中的 type/fit 方法及 fit 声明身份，或 source object-form /
+  intersection-form spec 的声明和完整实例类型；
 - spec 来源选中的 requirement 及其原声明 spec，用于父 spec 和 `seal` 语义；
-- 实例来源的 receiver 表达式；静态来源不伪造 receiver；
+- 实例来源的 receiver 表达式及其实际静态类型；受约束泛型 receiver 还必须记录其
+  descriptor/value-model 来源，静态来源不伪造 receiver；
 - 目标 callable-form spec 的声明和完整实例类型；
 - 已显式闭合的方法级类型实参；
 - owner/fit 实例替换后的来源签名。
@@ -405,13 +496,15 @@ FENG_SPEC_MEMBER_ACCESS_KIND_METHOD_VALUE
 
 ### 5.4 共享泛型体依赖
 
-当来源 owner/spec、目标 callable-form spec、方法级实参或静态约束类型仍包含活动泛参
-时，provider 必须把成员方法值形成需求写入现有 reified callable dependency 固定 slot。
+当来源 owner/spec、receiver 类型、目标 callable-form spec、方法级实参或静态约束类型
+仍包含活动泛参时，provider 必须把成员方法值形成需求写入现有 reified callable
+dependency 固定 slot。
 consumer 在闭合点生成：
 
 - 闭合 callable adapter；
 - 闭合 closure descriptor；
 - 参数与返回值 ABI bridge 所需的类型描述符；
+- 受约束泛型 receiver 的复制、保留、释放和捕获 payload 布局所需的闭合类型描述符；
 - 具体 type/fit 静态方法值所需的闭合方法身份；
 - spec 静态方法值所需的实际 witness 方法槽来源。
 
@@ -435,6 +528,11 @@ struct SpecValue {
 `subject` 是托管引用；`witness` 指向只读静态表，不参与 retain/release。直接 spec 方法
 调用已经通过 `witness->method(subject, args...)` 分派。
 
+intersection-form spec 值使用等价的 subject + merged witness 分发模型。受 spec 约束
+的直接泛参 `T` 则不是上述 spec 值：值本体继续按 `FengGenericParamDescriptor` 的
+`size/kind/aggregate` 表示，约束能力才从 descriptor 的 witness 取得。该既有差异必须
+延续到方法值 receiver 捕获。
+
 现有具体方法值路径生成 callable closure，保存具体 receiver，并由 typed invoke
 adapter 直接调用已解析的 type/fit 实现。该路径明确要求 receiver 是 concrete object，
 不能承载运行时才由 spec witness 决定的实现方法。
@@ -446,8 +544,9 @@ adapter 直接调用已解析的 type/fit 实现。该路径明确要求 receive
 ### 6.2 按绑定类别选择表示
 
 spec 实例方法和受约束类型参数的 spec 静态方法需要在形成点保存动态方法槽。建议为
-每个闭合的“source spec method + target callable-form spec ABI”组合生成一种
-codegen-private closure。概念布局如下：
+每个闭合的“source spec method + target callable-form spec ABI”组合生成
+codegen-private closure。显式 object-form / intersection-form spec 值 receiver 的概念
+布局如下：
 
 ```c
 struct BoundSpecMethod {
@@ -458,7 +557,7 @@ struct BoundSpecMethod {
 };
 ```
 
-形成实例方法值时：
+从显式 spec 值形成实例方法值时：
 
 1. 物化 receiver，保证 receiver 表达式只求值一次；
 2. 分配一个 closure；
@@ -467,6 +566,24 @@ struct BoundSpecMethod {
 5. 保存生成的 target callable invoke adapter；
 6. 返回普通 callable-form spec 值。
 
+从受 object-form / intersection-form spec 约束的泛型值 `T` 形成实例方法值时，不能
+套用固定 `_self` 指针布局：
+
+1. 物化 receiver，保证表达式只求值一次；
+2. 使用闭合 `T` descriptor 在同一个 method-value closure 的内联 payload 中复制或
+   保留 receiver；
+3. 从 `T` descriptor 的 object-form witness 或 intersection merged witness 读取选中
+   requirement 的 typed 方法槽；
+4. invoke adapter 按闭合 `T` 的既有 value/address ABI 把内联 payload 作为 receiver
+   传给该方法槽；
+5. closure cleanup 复用既有 generic value capture/aggregate cleanup，恰好释放一次
+   receiver 的托管叶子；
+6. 不创建 spec box、第二个 receiver box 或通用 lambda capture cell。
+
+两种实例来源均归入 `SPEC_INSTANCE`；具体 closure payload 由 receiver 值模型决定，
+不能用绑定类别代替布局分类。intersection 只改变 witness surface，不改变 closure
+类别、receiver 值语义或 callable ABI。
+
 形成 spec 静态方法值时：
 
 1. 从约束类型参数 descriptor/witness 读取选中的静态方法槽；
@@ -474,8 +591,9 @@ struct BoundSpecMethod {
 3. 保存 typed 方法槽和 invoke adapter；
 4. 返回普通 callable-form spec 值。
 
-closure descriptor 只把 `_self` 标记为托管槽；`target` 是非托管函数指针。不得保存栈
-地址，不得把 witness 表或函数指针作为托管对象处理。
+显式 spec 值 closure descriptor 只把 `_self` 标记为托管槽；泛型 receiver closure
+descriptor 按闭合 receiver descriptor 描述内联 payload 的复制和清理；`target` 始终是
+非托管函数指针。不得保存栈地址，不得把 witness 表或函数指针作为托管对象处理。
 
 形成具体 type/fit 静态方法值时：
 
@@ -498,6 +616,9 @@ closure descriptor 只把 `_self` 标记为托管槽；`target` 是非托管函�
 ```c
 return closure->target(closure->_self, args...);
 ```
+
+受约束泛型 receiver 的 adapter 不固定读取 `_self`，而是按闭合 descriptor 的 ABI 将
+closure 内联 payload 的值或地址传给 `target`。不得先把 payload 转换成 spec box。
 
 spec 静态方法 adapter 的概念调用为：
 
@@ -526,6 +647,11 @@ adapter 必须复用现有 callable ABI bridge：
 spec 视角。Codegen 复用现有 object-form spec 向上转换和父 witness 投影，取得与直接
 方法调用相同的 witness view 后再读取方法槽。
 
+intersection-form 来源必须先复用直接实例调用的展平、去重和 merged witness 槽映射，
+再按 requirement 原声明读取方法槽。受 intersection-form 约束的泛型 receiver 使用同一
+merged witness，但 receiver 仍按 `T` 的闭合 descriptor 捕获。未来修复 intersection
+静态直接调用时，也必须先产出同一稳定槽映射，方法值只消费该结果。
+
 不得假定父 requirement 在子 witness 中具有相同字段偏移，也不得仅按方法名从最外层
 witness 猜测目标槽。
 
@@ -534,8 +660,13 @@ witness 猜测目标槽。
 - 引用类型 subject：closure retain 同一对象引用；调用作用于同一实例。
 - 已装箱的值类型 subject：closure retain 现有 spec box；不重新复制或二次装箱。
 - 默认 object-form spec 值：closure retain 默认 subject，并保存对应默认 witness 槽。
-- receiver 临时值：形成方法值前必须物化为具有稳定生命周期的 spec subject；不得借用
-  会在形成表达式后失效的栈地址。
+- intersection-form spec 值：closure retain 同一 subject，并保存形成点 merged witness
+  中的选中方法槽，不拆成多个 object-form spec 值。
+- 受 spec 约束的泛型 receiver：closure 按闭合 `T` descriptor 复制或保留完整值，最后
+  通过同一 descriptor/aggregate cleanup 清理；不得装箱成 spec subject。
+- 显式 spec receiver 临时值：形成方法值前必须物化为具有稳定生命周期的 spec
+  subject；受约束泛型 receiver 临时值必须立即复制到 closure 内联 payload；两者均不得
+  借用会在形成表达式后失效的栈地址。
 - callable 复制：继续使用现有 callable 托管引用语义，多个绑定共享同一个 closure。
 - callable 覆盖、正常离开作用域和异常展开：最后一个引用释放时恰好释放一次 subject。
 - spec 静态方法值：没有 subject retain/release，只管理用于保存 witness 方法槽的 callable
@@ -547,7 +678,8 @@ witness 猜测目标槽。
 
 本能力预计不增加 `.ft` 格式字段：
 
-- object-form spec method requirement、可见性、泛型签名和父 spec 关系已经进入符号表；
+- object-form spec method requirement、可见性、泛型签名和父 spec 关系，以及
+  intersection-form 的展平成员关系已经进入符号表；
 - package-public type/fit 静态方法的 owner、成员签名、fit 来源和泛型 callable 依赖已经
   由现有直接调用/具名 callable 机制恢复；
 - callable-form spec 目标签名已经可跨包恢复；
@@ -569,9 +701,11 @@ requirement 原声明、完整泛型实例或 witness slot 身份，应先完善
 - 多个重载同时匹配目标 callable；
 - `spec seal` 或具体 type/fit seal 方法在非法上下文形成方法值；
 - 当前合法的 type/fit 泛型方法未显式提供完整类型实参、实参数量错误或约束不满足；
-- 通过实例值形成静态方法值，或通过不能确定实现 witness 的 spec 名形成静态方法值；
 - 具体 type target 上只有不可见 fit 或不可访问静态候选；
 - callable 字段读取与同名方法值候选发生现有规则无法消解的冲突。
+
+`T: IntersectionSpec` 下静态直接调用当前产生的 `AE0512` 属于第 1.1 节调用基线缺口，
+在该前置项修复前不得用新的“方法值不匹配”诊断掩盖它。
 
 诊断码和最终消息在权威规范阶段确定，不在本文预先占用编号。
 
@@ -582,7 +716,7 @@ LSP、hover 和 completion 继续显示 spec/type/fit 方法声明本身。具�
 
 ## 10 性能约束
 
-实例 spec 方法值的目标成本：
+显式 object-form / intersection-form spec 值实例方法值的目标成本：
 
 | 阶段 | 成本 |
 | --- | --- |
@@ -590,6 +724,12 @@ LSP、hover 和 completion 继续显示 spec/type/fit 方法声明本身。具�
 | 复制 | 现有 callable 引用复制 |
 | 调用 | 一次 callable adapter 调用、一次已保存方法函数指针间接调用 |
 | 释放 | closure 最后释放时一次 subject release |
+
+受 spec 约束泛型值的实例方法值仍只有一次 method-value closure 分配。形成时按闭合
+`T` descriptor 执行既定的 receiver 值复制/retain，并读取一次 witness 方法槽；调用时
+使用一次 callable adapter 和已保存的方法函数指针；释放时按同一 descriptor 清理内联
+payload。不得增加 spec box 或第二次 receiver 分配。intersection merged witness 不应
+增加形成次数、分配次数或每次调用的间接层数。
 
 受约束类型参数的静态 spec 方法值不执行 subject retain/release；形成时至多保存一次
 witness 方法槽，调用时不再读取 witness。
@@ -601,10 +741,12 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 实现不得：
 
 - 为实例 receiver 增加第二个 box 或 capture cell；
+- 把受约束泛型 receiver 装箱为 object-form spec 值；
 - 每次 callable 调用重新读取 witness slot；
 - 每次 callable 调用分配临时对象；
 - 增加运行时可见性检查；
 - 为既有具体实例方法值、直接 spec 调用或直接具体静态调用增加新分支或额外间接层；
+- 在 intersection 静态调用前置修复中增加运行时成员搜索、额外 witness 遍历或调用层；
 - 为完全闭合的具体 type/fit 静态方法值增加不必要的动态 closure 分配。
 
 如果正确实现必须增加上述成本、修改 runtime 私有 ABI 或引入新的动态查找，应停止
@@ -628,8 +770,11 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 
 | 场景 | 预期 |
 | --- | --- |
-| 公开实例 spec 方法进入显式 callable 绑定 | 通过 |
-| 公开实例 spec 方法直接作为参数或返回值 | 通过 |
+| object-form spec 参数/局部值的公开实例方法进入显式 callable 绑定 | 通过 |
+| object-form spec 参数/局部值的公开实例方法直接作为参数或返回值 | 通过 |
+| `T: ObjectSpec` 的泛型值实例方法形成方法值 | 通过，保留 `T` 的 receiver 值语义 |
+| intersection-form spec 参数/局部值的实例方法形成方法值 | 通过，使用 merged witness |
+| `T: IntersectionSpec` 的泛型值实例方法形成方法值 | 通过，保留 `T` 的值语义并使用 merged witness |
 | 显式 callable-form spec 转换承接 spec 方法值 | 通过 |
 | 无 callable 目标的 `let value = spec.method` | 拒绝 |
 | 重载由目标 callable 唯一选择 | 通过 |
@@ -640,12 +785,14 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 | 普通函数或无关 type 形成 `spec seal` 方法值 | 拒绝 |
 | callable 字段读取 | 保持现有字段语义，不误判为方法值 |
 | 子 spec 视角形成父 spec 方法值 | 通过并记录正确原声明 |
-| 受约束类型参数形成公开/合法 seal 静态方法值 | 通过 |
+| 受 object-form spec 约束类型参数形成公开/合法 seal 静态方法值 | 通过 |
+| 受 intersection-form spec 约束类型参数直接调用静态方法 | 当前基线为 `AE0512`；按第 2 节 Review 结果先修复或延期 |
+| 受 intersection-form spec 约束类型参数形成静态方法值 | 只有直接调用前置项完成后才应通过 |
 | 具体 type 自有公开静态方法形成方法值 | 通过 |
 | 当前位置可见 fit 静态方法形成方法值 | 通过并记录 fit 身份 |
 | 不可见 fit、不可访问 seal 静态方法形成方法值 | 拒绝 |
 | 具体泛型 owner 静态方法与显式闭合泛型静态方法形成方法值 | 通过 |
-| 通过实例值或 spec 名形成静态方法值 | 拒绝 |
+| P01 的 `Vault.readShared` 在 friend 字段初始化、构造函数和终结器形成方法值 | 通过，复用具体静态方法值与既有 friend 授权 |
 
 ### 11.3 Codegen 与 FCTS
 
@@ -655,6 +802,9 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 - 方法值从创建函数返回后继续有效；
 - 方法值保存到字段、复制、覆盖和释放；
 - 修改型方法通过方法值修改同一个引用 subject 或现有 spec box；
+- 受约束泛型 receiver 分别闭合为托管引用、trivial 值和 descriptor-sized 值时，方法值
+  按闭合 `T` 值语义捕获，不生成 spec box；
+- intersection-form 参数值和受约束泛型值分别通过 merged witness 形成实例方法值；
 - object-form 子 spec 向父 spec 投影后形成父 requirement 方法值；
 - 默认 spec 值形成公开方法值；
 - 本地与 imported spec、直接关系与可见 fit relation；
@@ -662,6 +812,8 @@ callable value，不分配动态 closure；调用执行既有 callable adapter �
 - 参数或返回值包含标量、托管引用、tuple、`@value type`、object-form spec 和
   callable-form spec 的 ABI 代表组合；
 - 静态 spec 方法值在不同闭合类型参数下进入各自 witness 实现；
+- 若纳入 intersection 静态调用前置修复，直接调用与方法值必须读取同一 merged witness
+  静态槽，且对应本地、共享泛型体和跨包路径均有覆盖；
 - 具体 type 与 fit 静态方法值分别调用已选实现，重载、同名 type/fit 候选和 fit 可见面
   与直接调用结果一致；
 - 具体静态方法值覆盖普通/泛型 owner、普通/泛型方法、同包和 imported package；
@@ -678,36 +830,45 @@ Codegen 测试只锁定 closure、witness slot、描述符和 ABI 结构；用�
 ## 12 实施 TODO
 
 - [ ] Review 并确认第 2 节全部设计决策。
+- [ ] Review 并决定 intersection-form 约束类型参数静态直接调用 `AE0512` 是否作为本专项
+  前置修复；若延期，同步明确延期对应静态方法值，不以特判绕过。
 - [ ] 更新 `feng-function.md`、`feng-spec.md`、`feng-fit.md`、`feng-visibility.md` 及相应
   诊断规范，将正式语言语义收敛到权威规范。
 - [ ] 将现有 `METHOD_VALUE` 收敛为带明确绑定类别的统一成员方法值来源，保留既有具体
   实例方法值行为，并增加稳定 sidecar 记录。
 - [ ] 让具体 type/可见 fit 静态方法值复用现有静态调用候选、访问过滤、owner/fit 实例化
   与 target-typed callable 匹配。
-- [ ] 增加 object-form spec 实例/静态方法值的统一 Semantic 候选解析。
+- [ ] 增加 object-form / intersection-form spec 参数值及受约束泛型值实例方法值的统一
+  Semantic 候选解析；intersection 复用 merged surface，不新增候选算法。
+- [ ] 增加受 object-form spec 约束类型参数静态方法值的 Semantic 解析；若纳入
+  intersection 静态前置修复，先让直接调用复用 merged static surface，再接入同一结果。
 - [ ] 区分 spec `METHOD_CALL` 与 `METHOD_VALUE` 成员访问用途。
 - [ ] 接入 spec/type/fit 公开及合法 seal 方法的形成点访问检查、重载匹配和显式泛型闭合。
 - [ ] 让完全闭合的具体 type/fit 静态方法值复用无捕获静态 callable value，并让共享泛型
   体复用既有 reified callable dependency；不新增专用 ABI。
-- [ ] 实现一次分配的 spec method callable closure、typed witness slot 捕获和 ABI adapter。
+- [ ] 实现一次分配的 spec method callable closure、typed witness slot 捕获和 ABI adapter；
+  受约束泛型 receiver 使用 descriptor 驱动的内联 payload，不增加 spec box。
 - [ ] 接入父 spec witness 投影、共享泛型 reified dependency 和 spec 静态方法值。
 - [ ] 验证 imported `.ft` 恢复，不修改格式、版本和 relation 模型；如无法复用则停止并
   提交 Review。
-- [ ] 补齐 Semantic、Codegen、跨包、生命周期、LSP 和 FCTS 测试。
+- [ ] 补齐 Semantic、Codegen、跨包、生命周期、LSP 和 FCTS 测试，并恢复 friend 修复 P01
+  中字段初始化、构造函数和终结器的 `Vault.readShared` 方法值覆盖。
 - [ ] 执行 `make test` 全量回归并记录结果。
 
 ## 13 完成标准
 
 只有同时满足以下条件，本开发项才可标记完成：
 
-1. 权威规范已经定义 object-form spec 实例/静态方法值、具体 type/fit 静态方法值、
-   target typing、绑定和 seal capability 语义；
-2. 本地与跨包、公开与合法 seal、type 与 fit、普通与泛型、实例与静态路径均有有效证据；
+1. 权威规范已经定义 object-form / intersection-form spec 实例方法值、受约束类型参数
+   静态方法值、具体 type/fit 静态方法值、target typing、绑定和 seal capability 语义；
+2. 本地与跨包、公开与合法 seal、type 与 fit、普通与泛型、object-form 与
+   intersection-form、实例与静态路径均有有效证据；若 intersection 静态路径经 Review
+   延期，文档和完成状态必须明确排除，不能宣称已经完整支持；
 3. spec 方法值动态分派到形成点 witness 对应实现，具体静态方法值调用形成点已选定的
    type/fit 方法，receiver 生命周期和修改语义正确；
 4. 每个动态 spec 方法值只产生既定的一次 closure 分配，不增加 receiver box/capture
    cell；完全闭合的具体静态方法值不产生每次形成的动态分配；
 5. 直接 spec 调用、直接具体静态调用、既有具体实例方法值、lambda 和无关泛型路径没有
-   新增运行时成本；
+   新增运行时成本；若修复 intersection 静态直接调用，不增加运行时搜索或额外间接层；
 6. `.ft`、runtime 私有 ABI 和 `@mixable` 保持本文边界；
 7. `make test` 全量通过。
