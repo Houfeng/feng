@@ -41,7 +41,8 @@ type Vault {
 4. 支持 object-form spec 的实例字段、静态字段、实例方法和静态方法，包括
    `spec seal` 成员。
 5. 支持 fit 块声明的实例方法和静态方法；fit 仍不新增字段能力。
-6. friend type 自身的实例方法和静态方法可以访问被授权成员。
+6. friend type 的词法类型实现上下文可以访问被授权成员，包括实例/静态字段初始化、
+   实例/静态普通方法、构造函数和终结器。
 7. 与 `@friend` 成员位于同一包的 `fit FriendType` 实例方法和静态方法，也可以
    使用该 friend type 的授权。
 8. `@friend` 参数使用类型位语法和类型身份，不使用运行时表达式语义。
@@ -197,11 +198,14 @@ type 所在 module。被扩展 type 可以来自其他包，不改变 friend 的
 
 ### 5.4 构造函数和终结器
 
-构造函数和终结器均禁止使用 `@friend`：
+构造函数和终结器均禁止标注 `@friend`：
 
 - 终结器不存在需要由 friend type 直接调用的合法场景；
 - friend 构造需求可以由 seal 构造函数配合 `@friend` seal static 工厂方法表达，
   首版不再为构造函数增加直接授权入口。
+
+该限制只约束 `@friend` 的注解目标。构造函数和终结器仍属于其 owner type 的词法
+类型实现上下文，可以消费该 type 从其他成员取得的 friend 权限。
 
 ```feng
 type Session {
@@ -226,9 +230,9 @@ type Session {
 ```text
 1. module、owner type/spec 和 fit 等上层声明按既有规则可访问；
 2. M 本身是显式 seal 成员；
-3. 当前访问点位于 F 自身声明的实例方法或静态方法中，或者位于与 M 同包声明、
-   目标类型为 F 的 fit 实例方法或静态方法中；
-4. 当前词法 type 或当前 fit 目标经泛型代入后与 friend 类型 F 语义相等；
+3. 当前访问点位于 F 的词法类型实现上下文中，或者位于与 M 同包声明、目标类型为 F
+   的 fit 实例方法或静态方法中；
+4. 当前词法类型实现 owner 或当前 fit 目标经泛型代入后与 friend 类型 F 语义相等；
 5. fit 访问时，被授权成员的完整签名对 fit 声明 module 可用；
 6. 普通成员查找、静态性、可变性、泛型和重载规则全部通过。
 ```
@@ -245,13 +249,18 @@ ordinary_member_accessible
 
 ### 6.2 当前 friend 授权主体
 
-friend 身份来自访问代码实际声明所在的具体 type，或当前同包 fit 的目标 type：
+friend 身份来自访问代码所属的词法类型实现 owner，或当前同包 fit 的目标 type：
 
-- type 的实例方法可以使用该 type 的 friend 权限；
-- type 的静态方法可以使用该 type 的 friend 权限；
+- type 的实例字段和静态字段初始化表达式可以使用该 type 的 friend 权限；
+- type 的实例方法和静态方法可以使用该 type 的 friend 权限；
+- type 的构造函数和终结器可以使用该 type 的 friend 权限；
+- 上述实现上下文中的嵌套 lambda 继承其词法 owner type 的 friend 权限；
 - 同包 `fit FriendType` 的实例方法和静态方法可以使用 `FriendType` 的 friend 权限；
 - 顶层函数不属于任何 friend type；
 - 依赖包中的 fit 不能恢复或使用未导出的 friend 权限。
+
+字段初始化仍执行原有初始化顺序和 `self` 捕获规则；friend 只替代被访问成员最后一层
+seal 检查，不扩大字段初始化器的其他能力。
 
 `fit FriendType` 获得的只是 `FriendType` 在具体 `@friend` 成员上的定向授权身份，
 不会使 fit 成为目标 type 自身，也不会使 fit 访问目标 type 或其他 owner 的普通
@@ -595,7 +604,9 @@ friend type 和不可用类型，避免只报告泛化的“annotation invalid�
 
 ### 11.2 Semantic
 
-- friend type 的实例方法和静态方法均能访问授权字段、方法和静态成员；
+- friend type 的实例/静态字段初始化、实例/静态普通方法、构造函数和终结器均能访问
+  授权字段、方法和静态成员；
+- 上述类型实现上下文中的嵌套 lambda 继承其词法 owner type 的 friend 权限；
 - 非 friend type、顶层函数和普通外部调用仍被拒绝；
 - 同包 `fit FriendType` 的实例方法和静态方法均能访问授权成员；
 - `fit FriendType` 仍不能访问未标注对应 `@friend` 的普通 seal 成员；
@@ -690,8 +701,8 @@ friend type 和不可用类型，避免只报告泛化的“annotation invalid�
 
 ### TODO 4：实现统一访问授权
 
-- [x] 实现统一的 friend 授权主体表示：普通 type 成员使用当前词法 type，同包 fit
-  成员使用当前 fit 目标 type。
+- [x] 实现统一的 friend 授权主体表示：type 的字段初始化与全部 callable 实现上下文
+  使用当前词法 owner type，同包 fit 方法使用当前 fit 目标 type。
 - [x] 实现基于语义类型身份和 owner 泛型代入的 friend 授权谓词。
 - [x] 对 fit 授权显式检查 fit 与成员 owner 同包，其他包的 fit 一律不能恢复授权。
 - [x] 基于现有签名类型递归遍历，提供“成员完整签名是否可从指定 module 使用”的

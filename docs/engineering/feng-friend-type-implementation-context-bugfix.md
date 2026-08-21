@@ -1,6 +1,6 @@
 # Feng `@friend` 类型实现上下文授权修复方案
 
-> **状态**：待人工 Review，尚未实施。
+> **状态**：已完成。
 >
 > **文档定位**：本文只记录本次问题、修复语义、实现范围与验证计划，不是正式
 > 语言规范。Review 通过后，先修改
@@ -344,20 +344,167 @@ friend 元数据继续不导出到 package-public `.ft`。同包全部源码在�
 实现时应使用成对保存/恢复的上下文切换，并通过正反测试覆盖连续声明、嵌套 lambda、
 同文件多 type 和跨文件顺序，不能依赖声明顺序或残留状态。
 
-## 9. 实施顺序
+## 9. 实施任务清单
 
-Review 通过后严格按以下顺序实施：
+Review 通过后严格按以下顺序实施。任务完成并验证后将对应项从 `- [ ]` 更新为
+`- [x]`；部分完成的任务保持未勾选，并在任务下记录当前进度。
 
-1. 修改正式可见性规范，确立“词法类型实现上下文”语义；
-2. 同步既有 `@friend` 工程文档，引用正式规范；
-3. 修改语义分析器的上下文表示和 friend subject 构建；
-4. 同步 LSP 的 friend completion 查询；
-5. 新增 Semantic、LSP 与 FCTS 测试，不修改既有测试用例；
-6. 运行定向测试；
-7. 在非 Codex 沙箱环境运行全量 `make test`；
-8. 记录验证结果，提交人工 Review。
+### 9.1 正式规范与工程文档
 
-## 10. Review 检查点
+- [x] 修改 `docs/specifications/feng-visibility.md`，将 friend 消费位置统一定义为
+  “词法类型实现上下文”。
+- [x] 在正式规范中明确类型实现上下文包含实例/静态字段初始化、实例/静态普通方法、
+  构造函数和终结器。
+- [x] 在正式规范中明确构造函数和终结器不能标注 `@friend`，但可以消费所属 type
+  已取得的 friend 权限。
+- [x] 确认正式规范中的同包 `fit FriendType`、签名可见性、非传递性和 `.ft` 不导出
+  规则保持不变。
+- [x] 同步 `docs/engineering/feng-friend-member-access-dev.md` 的设计目标、授权语义、
+  测试计划和完成状态，并引用正式规范。
+
+### 9.2 Semantic 实现
+
+- [x] 在 Resolver 上下文中增加明确的词法类型实现 owner 状态。
+- [x] 在实例字段和静态字段初始化表达式解析前设置实现 owner，并在退出时恢复前值。
+- [x] 在普通实例方法和静态方法解析前设置实现 owner，并在退出时恢复前值。
+- [x] 在构造函数和终结器解析前设置实现 owner，并在退出时恢复前值。
+- [x] 调整 friend subject 构建，优先保持现有 fit 分支，否则使用词法类型实现 owner。
+- [x] 删除 friend 消费位置对 `FENG_TYPE_MEMBER_METHOD` 的错误单一限制。
+- [x] 确认普通调用与方法值形成继续复用同一个 friend 成员访问谓词。
+- [x] 确认泛型身份代入、签名可见性、重载过滤和包边界逻辑保持不变。
+
+### 9.3 LSP 实现
+
+- [x] 调整 `feng_semantic_member_has_friend_access` 的接口和注释，使其能够表达词法
+  类型实现上下文。
+- [x] 让 completion 在 friend type 的字段初始化、构造函数和终结器中展示授权成员。
+- [x] 确认非 friend type、顶层上下文、外包 fit 和 parsed-only recovery 继续 fail closed。
+- [x] 确认 LSP 复用 Semantic 的 friend 类型身份、泛型代入和包判断，不复制独立算法。
+
+### 9.4 Semantic 测试
+
+- [x] 新增实例字段初始化表达式消费 friend 权限的正向测试。
+- [x] 新增静态字段初始化表达式消费 friend 权限的正向测试。
+- [x] 新增构造函数消费 friend 权限的普通调用与方法值测试。
+- [x] 新增终结器消费 friend 权限的普通调用与方法值测试。
+- [x] 新增嵌套 lambda 继承词法 owner type 权限的测试。
+- [x] 新增同包不同 module 的正向测试。
+- [x] 新增泛型 friend 精确身份匹配的正向与反向测试。
+- [x] 新增非 friend type 在字段初始化、构造函数和终结器中的反向测试。
+- [x] 新增顶层初始化、顶层函数、外包 fit 和未授权 seal 成员的反向测试。
+- [x] 确认构造函数和终结器标注 `@friend` 继续产生既有非法注解诊断。
+- [x] 确认字段初始化、构造函数和终结器的既有专用规则不退化。
+
+### 9.5 LSP 与 FCTS 测试
+
+- [x] 新增字段初始化、构造函数和终结器中的 friend completion 正向测试。
+- [x] 新增非 friend type、顶层上下文和 imported/parsed-only recovery 的 completion
+  反向测试。
+- [x] 新增 FCTS 可执行行为测试，覆盖字段初始化、构造函数和终结器直接调用授权成员。
+- [x] 确认普通方法、静态方法和同包 fit 的既有 friend 行为不退化。
+
+### 9.6 验证与交付
+
+- [x] 运行 friend Semantic 定向测试。
+- [x] 运行 LSP 定向测试。
+- [x] 运行 FCTS 定向测试。
+- [x] 在非 Codex 沙箱环境运行全量 `make test`。
+- [x] 将定向测试和全量回归结果记录到本文档。
+- [x] 更新本文档状态和全部已完成任务的勾选状态。
+- [x] 检查“实施过程问题记录”中的问题均已解决，或已经明确交由人工决策。
+- [x] 提交全部变更供人工 Review，不自动提交 Git commit。
+
+### 9.7 验证记录
+
+2026-08-21 完成以下验证：
+
+- `make build/bin/test_semantic && build/bin/test_semantic` 通过；
+- 沙箱外 `build/bin/test_cli` 通过，覆盖类型实现上下文 completion、非 friend/顶层
+  隐藏、parsed-only fail-closed 和 package-public friend 成员不导出；
+- 沙箱外 `make fcts-tests` 通过：`Total: 817, Passed: 817, Failed: 0, Skipped: 0`；
+- 沙箱外 `make test` 退出码为 0；UBSan 与普通构建两轮均通过，包含全部单元测试、
+  两轮 91/91 smoke、CLI 项目测试、std/FCTS、性能约束、增量构建、发布脚本和工具链
+  预构建包获取验证。
+
+## 10. 实施过程问题记录
+
+实施过程中发现任何偏离本文方案、现有规范或预期测试结果的问题时，必须先在本节新增
+记录，再进行原因分析和解决；不得先加入特判或扩大变更范围。尚未解决的问题保留
+`状态：处理中` 或 `状态：等待人工决策`，人工决定不纳入当前任务的问题标记为
+`状态：已延期（人工决定）`，解决并验证后更新为 `状态：已解决`。
+
+### P01：新增用例误用了尚不支持的静态方法值
+
+- 状态：已解决
+- 发现阶段：Semantic 正向测试
+- 现象：字段初始化、构造函数和终结器中的 `Vault.readShared` 静态方法值形成产生
+  `AE0522`；同一静态方法的直接调用和实例方法值均未产生 friend 访问诊断。
+- 影响：仅影响新增测试组合，不影响本次 friend 类型实现上下文语义。
+- 事实与复现：最小诊断源的三个 `Vault.readShared` 方法值位置均报告“不匹配预期函数
+  类型 `Producer`”，没有报告 `AE0308` 等成员不可访问诊断。
+- 原因分析：当前 Feng 已支持的具体成员方法值范围包含实例方法，不包含该静态方法值
+  形式；本次修复不能借 friend 测试扩大独立的方法值能力。
+- 决策：正向用例保留实例方法值，并分别在字段初始化、构造函数和终结器中通过直接调用
+  覆盖静态 friend 方法；不修改静态方法值语言能力。
+- 解决：已移除新增测试中的静态方法值断言，保留实例方法值和静态方法直接调用覆盖。
+- 验证：`make build/bin/test_semantic && build/bin/test_semantic` 通过，新增与既有
+  Semantic 用例全部通过。
+
+### P02：终结器中的 lambda 捕获 `self` 未完成 codegen lowering
+
+- 状态：已延期（人工决定）
+- 发现阶段：Semantic/FCTS 正向测试设计验证
+- 现象：终结器中声明 `() -> self.retained.read()` 的 lambda 已通过 Semantic，但直接
+  编译在 codegen 阶段产生 `CE0103: lambda self capture was not lowered to a capture cell`。
+- 影响：阻止“终结器中的嵌套 lambda 继承词法 owner”进入可执行 FCTS 覆盖；普通终结器
+  friend 访问和不捕获 `self` 的 lambda 是否受影响仍待隔离验证。
+- 事实与复现：当前最小诊断源稳定在终结器 lambda 的 `()` 位置报告 CE0103，错误发生
+  在 friend Semantic 检查之后，不是 seal/friend 访问诊断。
+- 原因分析：已使用不含 `@friend` 的独立最小复现确认：普通 type 的终结器只要通过
+  lambda 捕获 `self`，就会产生同一 CE0103。该问题是既有 finalizer lambda capture
+  codegen lowering 缺陷，与本次 friend Semantic 修改无关。
+- 决策：人工确认该独立终结器问题不影响 friend 优化，本次不扩大范围修复。
+- 解决：friend 用例避免终结器 lambda 捕获 `self`；终结器通过直接访问覆盖实例 friend
+  成员，并通过不捕获 `self` 的 lambda 覆盖嵌套词法 owner 授权。CE0103 留待后续专项。
+- 验证：friend Semantic 定向测试通过；沙箱外 `make fcts-tests` 为
+  `Total: 817, Passed: 817, Failed: 0, Skipped: 0`，不捕获 `self` 的终结器 lambda、
+  终结器直接访问和实例方法值均成功执行。
+
+### P03：CLI 定向测试在既有进程管理用例提前失败
+
+- 状态：已解决
+- 发现阶段：LSP 定向测试
+- 现象：运行完整 `build/bin/test_cli` 时，在到达新增 friend LSP 用例前输出
+  `error: process exited with status -1 (no such process)`，随后于
+  `test/cli/test_cli.c:634` 的 `WEXITSTATUS(status) == 0` 断言失败。
+- 影响：当前无法用该次完整 CLI 测试结果验证新增 LSP 用例；是否为既有易波动问题或
+  本次变更影响尚待隔离。
+- 事实与复现：`build/bin/test_cli` 已成功以 `-Werror` 编译；首次完整运行约 18 秒后在
+  既有进程等待辅助逻辑失败，输出发生在新增 friend LSP 测试之前。
+- 原因分析：两次沙箱内运行均在既有 DAP 子进程用例稳定失败；同一测试二进制移到
+  沙箱外后通过，确认是测试执行环境不符合仓库进程测试要求，不是 friend 代码变更。
+- 决策：不修改或规避既有测试；所有 CLI/LSP 与全量测试均按仓库要求在沙箱外执行。
+- 解决：未改动既有进程测试；改用沙箱外验证。
+- 验证：新增 imported fail-closed 用例落盘并重新构建后，沙箱外
+  `build/bin/test_cli` 通过；最终沙箱外 `make test` 也以退出码 0 完成。
+
+新增问题使用以下模板：
+
+```markdown
+### PXX：问题标题
+
+- 状态：处理中 / 等待人工决策 / 已延期（人工决定） / 已解决
+- 发现阶段：对应的实施任务
+- 现象：可复现的实际表现和诊断信息
+- 影响：受影响的规范、Semantic、LSP、测试或兼容性范围
+- 事实与复现：相关源码位置、最小复现和已执行的检查
+- 原因分析：基于事实确认的根因；未确认内容明确标记为待验证
+- 决策：采用的通用方案；需要扩大语义或加入特殊处理时记录人工决定
+- 解决：实际修改内容
+- 验证：定向测试与回归结果
+```
+
+## 11. Review 检查点
 
 本方案请求人工确认以下结论：
 
@@ -368,4 +515,3 @@ Review 通过后严格按以下顺序实施：
 5. 同包 `fit FriendType` 规则保持不变；
 6. 顶层代码、其他 type 和其他包 fit 继续不能消费权限；
 7. 实现使用明确的词法实现 owner，不采用成员类别逐项特判。
-

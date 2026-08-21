@@ -24019,6 +24019,135 @@ static void test_friend_type_member_access_and_normalization(void) {
     assert_single_source_semantic_ok("friend_type_access.ff", source);
 }
 
+/* A friend type's lexical implementation owner authorizes field initializers,
+ * constructors, finalizers, and nested lambdas in addition to ordinary
+ * instance/static methods. Calls and method values share the same predicate. */
+static void test_friend_type_implementation_contexts_are_authorized(void) {
+    const char *source =
+        "module demo.friend.implementation_contexts;\n"
+        "spec Producer(): int;\n"
+        "type Vault {\n"
+        "  @friend(Reader) seal let value: int;\n"
+        "  @friend(Reader) seal static let shared: int = 11;\n"
+        "  func Vault(value: int) { self.value = value; }\n"
+        "  @friend(Reader) seal func read(): int { return self.value; }\n"
+        "  @friend(Reader) seal static func readShared(): int { return Vault.shared; }\n"
+        "}\n"
+        "type Reader {\n"
+        "  let initializedField: int = Vault(1).value;\n"
+        "  static let initializedStaticField: int = Vault.shared;\n"
+        "  let initializedCall: int = Vault(2).read();\n"
+        "  static let initializedStaticCall: int = Vault.readShared();\n"
+        "  let initializedMethod: Producer = Vault(3).read;\n"
+        "  let initializedLambda: Producer = () -> Vault(4).read();\n"
+        "  seal let retained: Vault;\n"
+        "  func Reader(vault: Vault) {\n"
+        "    self.retained = vault;\n"
+        "    vault.value;\n"
+        "    Vault.shared;\n"
+        "    vault.read();\n"
+        "    Vault.readShared();\n"
+        "    let method: Producer = vault.read;\n"
+        "    let nested: Producer = () -> vault.read();\n"
+        "    method(); nested();\n"
+        "  }\n"
+        "  func ~Reader() {\n"
+        "    self.retained.value;\n"
+        "    Vault.shared;\n"
+        "    self.retained.read();\n"
+        "    Vault.readShared();\n"
+        "    let method: Producer = self.retained.read;\n"
+        "    let nested: Producer = () -> Vault(5).read();\n"
+        "    method(); nested();\n"
+        "  }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_implementation_contexts.ff", source);
+}
+
+/* A fully qualified friend identity works across local modules from field,
+ * constructor, and finalizer contexts; source order does not affect the
+ * package-local friend metadata pre-pass. */
+static void test_friend_type_implementation_contexts_cross_module(void) {
+    const char *reader_source =
+        "open module demo.friend.context_reader;\n"
+        "import demo.friend.context_owner;\n"
+        "open type Reader {\n"
+        "  let initialized: int = Vault().secret();\n"
+        "  func Reader(vault: Vault) {\n"
+        "    let method: Producer = vault.secret;\n"
+        "    method();\n"
+        "  }\n"
+        "  func ~Reader() { Vault().secret(); }\n"
+        "}\n";
+    const char *owner_source =
+        "open module demo.friend.context_owner;\n"
+        "open spec Producer(): int;\n"
+        "open type Vault {\n"
+        "  @friend(demo.friend.context_reader.Reader)\n"
+        "  seal func secret(): int { return 17; }\n"
+        "}\n";
+    FengProgram *reader = parse_program_or_die(
+        "friend_context_reader.ff", reader_source);
+    FengProgram *owner = parse_program_or_die(
+        "friend_context_owner.ff", owner_source);
+    const FengProgram *programs[] = {reader, owner};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 2U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(reader);
+    feng_program_free(owner);
+}
+
+/* The lexical implementation owner remains exact: unrelated types, top-level
+ * code, and mismatched generic friend instances do not gain authorization in
+ * any newly accepted context. */
+static void test_friend_type_implementation_contexts_remain_exact(void) {
+    static const char *rejected[] = {
+        "module demo.friend.context_bad_field; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } type Other { let value: int = Vault().secret(); }",
+        "module demo.friend.context_bad_constructor; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } type Other { func Other(vault: Vault) { vault.secret(); } }",
+        "module demo.friend.context_bad_finalizer; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } type Other { func ~Other() { Vault().secret(); } }",
+        "module demo.friend.context_bad_lambda; spec Producer(): int; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } type Other { let value: Producer = () -> Vault().secret(); }",
+        "module demo.friend.context_bad_binding; type Reader {} type Vault { @friend(Reader) seal static func secret(): int { return 1; } } let value: int = Vault.secret();",
+        "module demo.friend.context_bad_function; type Reader {} type Vault { @friend(Reader) seal func secret(): int { return 1; } } func read(vault: Vault): int { return vault.secret(); }",
+        "module demo.friend.context_bad_generic; type Reader<T> { let marker: int = Vault<string>.secret(); } type Vault<T> { @friend(Reader<T>) seal static func secret(): int { return 1; } }"
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(rejected) / sizeof(rejected[0]);
+         ++index) {
+        assert_single_source_semantic_error_contains(
+            "friend_context_rejected.ff", rejected[index], "not accessible");
+    }
+}
+
+/* Generic friend identity is substituted from the lexical owner in
+ * constructors and field initializers just as it is in ordinary methods. */
+static void test_friend_generic_implementation_context_identity(void) {
+    const char *source =
+        "module demo.friend.context_generic;\n"
+        "type Reader<T> {\n"
+        "  let marker: int = Vault<T>.secret();\n"
+        "  func Reader(vault: Vault<T>) { vault.value; }\n"
+        "}\n"
+        "type Vault<T> {\n"
+        "  @friend(Reader<T>) seal let value: T;\n"
+        "  func Vault(value: T) { self.value = value; }\n"
+        "  @friend(Reader<T>) seal static func secret(): int { return 1; }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("friend_context_generic.ff", source);
+}
+
 /* A generic owner parameter is substituted before the current generic friend
  * subject is compared; a different concrete owner instance remains denied. */
 static void test_friend_generic_owner_substitution_is_exact(void) {
@@ -24577,6 +24706,10 @@ static void test_friend_unselected_fit_candidates_do_not_consume_authorization(v
 
 int main(void) {
     test_friend_type_member_access_and_normalization();
+    test_friend_type_implementation_contexts_are_authorized();
+    test_friend_type_implementation_contexts_cross_module();
+    test_friend_type_implementation_contexts_remain_exact();
+    test_friend_generic_implementation_context_identity();
     test_friend_generic_owner_substitution_is_exact();
     test_friend_fit_access_in_both_directions();
     test_friend_spec_member_access_uses_spec_view();

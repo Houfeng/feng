@@ -404,6 +404,11 @@ typedef struct ResolveContext {
     size_t scope_count;
     size_t scope_capacity;
     const FengDecl *current_type_decl;
+    /* Lexical concrete type whose executable implementation is currently
+     * being resolved. This covers field initializers, ordinary methods,
+     * constructors, and finalizers. Friend access uses this explicit owner
+     * instead of inferring authority from one FengTypeMemberKind. */
+    const FengDecl *current_type_implementation_owner;
     /* When non-NULL, the resolver is currently inside the body of a fit-block
      * function. `current_type_decl` is set to the fit's resolved target type so
      * that `self`/instance lookups still work, and `current_fit_decl` is used
@@ -11136,17 +11141,18 @@ static FriendTypeIdentity *build_friend_subject_for_type_decl(
     return identity;
 }
 
-/* Build the exact type whose method body currently owns friend authority.
- * Field initializers, constructors, finalizers and top-level functions do not
- * acquire an enclosing type's friend permissions. */
+/* Build the exact type whose lexical implementation context currently owns
+ * friend authority. Same-package fit methods keep their existing target-type
+ * branch; ordinary type implementation contexts use their explicit owner. */
 static FriendTypeIdentity *build_current_friend_subject(
     const ResolveContext *context) {
-    if (context == NULL || context->current_callable_member == NULL ||
-        context->current_callable_member->kind != FENG_TYPE_MEMBER_METHOD) {
+    if (context == NULL) {
         return NULL;
     }
     if (context->current_fit_decl != NULL) {
-        if (context->current_fit_target_type_ref == NULL) {
+        if (context->current_callable_member == NULL ||
+            context->current_callable_member->kind != FENG_TYPE_MEMBER_METHOD ||
+            context->current_fit_target_type_ref == NULL) {
             return NULL;
         }
         return build_friend_type_identity(context,
@@ -11155,7 +11161,8 @@ static FriendTypeIdentity *build_current_friend_subject(
                                           0U,
                                           false);
     }
-    return build_friend_subject_for_type_decl(context->current_type_decl);
+    return build_friend_subject_for_type_decl(
+        context->current_type_implementation_owner);
 }
 
 /* Release a temporary vector of materialized owner arguments. */
@@ -25820,8 +25827,10 @@ static void free_friend_query_synthetic_type_refs(ResolveContext *context) {
 }
 
 /* Reuse the compiler's normalized @friend predicate for source tooling.
- * The temporary resolver context contains only immutable lookup facts; the
- * query never records a fit access, emits diagnostics, or changes analysis. */
+ * The enclosing member identifies a concrete type implementation context or
+ * a fit method. The temporary resolver context contains only immutable lookup
+ * facts; the query never records a fit access, emits diagnostics, or changes
+ * analysis. */
 bool feng_semantic_member_has_friend_access(
     const FengSemanticAnalysis *analysis,
     const FengProgram *program,
@@ -25849,7 +25858,6 @@ bool feng_semantic_member_has_friend_access(
 
     if (analysis == NULL || program == NULL || access_owner_decl == NULL ||
         member == NULL || enclosing_decl == NULL || enclosing_member == NULL ||
-        enclosing_member->kind != FENG_TYPE_MEMBER_METHOD ||
         member->visibility != FENG_VISIBILITY_PRIVATE) {
         return false;
     }
@@ -25894,6 +25902,7 @@ bool feng_semantic_member_has_friend_access(
 
     if (enclosing_decl->kind == FENG_DECL_TYPE) {
         context.current_type_decl = enclosing_decl;
+        context.current_type_implementation_owner = enclosing_decl;
         scope_pushed = resolver_push_type_params(
             &context,
             enclosing_decl->as.type_decl.type_params,
@@ -25901,6 +25910,12 @@ bool feng_semantic_member_has_friend_access(
             &previous_type_params,
             &previous_type_param_count);
     } else if (enclosing_decl->kind == FENG_DECL_FIT) {
+        if (enclosing_member->kind != FENG_TYPE_MEMBER_METHOD) {
+            free(visible_types);
+            free(aliases);
+            free(imported_modules);
+            return false;
+        }
         context.current_fit_decl = enclosing_decl;
         context.current_fit_target_type_ref = enclosing_decl->as.fit_decl.target;
         fit_target_decl = resolve_type_ref_decl(
@@ -31097,12 +31112,20 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
             }
-            if (ok && !resolve_type_member_mix_initializers(context, decl)) {
-                ok = false;
+            if (ok) {
+                const FengDecl *previous_implementation_owner =
+                    context->current_type_implementation_owner;
+
+                context->current_type_implementation_owner = decl;
+                ok = resolve_type_member_mix_initializers(context, decl);
+                context->current_type_implementation_owner =
+                    previous_implementation_owner;
             }
             for (index = 0U; ok && index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
                 const FengDecl *previous_type_decl = context->current_type_decl;
+                const FengDecl *previous_implementation_owner =
+                    context->current_type_implementation_owner;
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
 
                 if (!validate_supported_member_annotations(context, member)) {
@@ -31147,6 +31170,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                      * implementation and may use that type's seal static
                      * members. This does not make direct self capture legal. */
                     context->current_type_decl = decl;
+                    context->current_type_implementation_owner = decl;
                     /* Per docs/specifications/feng-function.md: a callable-spec field whose
                      * initializer is a lambda may capture the enclosing
                      * type's `self`, because the lambda runs only when the
@@ -31173,6 +31197,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             context->self_capturable = prev_self_capturable;
                         }
                         if (!init_ok || !match_ok) {
+                            context->current_type_implementation_owner =
+                                previous_implementation_owner;
                             context->current_type_decl = previous_type_decl;
                             ok = false;
                             break;
@@ -31210,6 +31236,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                                                          member->as.field.initializer);
                         }
                         if (!record_type_fact_for_site(context, member, field_type)) {
+                            context->current_type_implementation_owner =
+                                previous_implementation_owner;
                             context->current_type_decl = previous_type_decl;
                             ok = false;
                             break;
@@ -31228,6 +31256,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                             FENG_SPEC_DEFAULT_BINDING_POSITION_TYPE_FIELD,
                             member->as.field.type);
                     }
+                    context->current_type_implementation_owner =
+                        previous_implementation_owner;
                     context->current_type_decl = previous_type_decl;
                     continue;
                 }
@@ -31238,20 +31268,27 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 }
 
                 context->current_type_decl = decl;
+                context->current_type_implementation_owner = decl;
                 context->current_callable_member = member;
                 if (!resolve_callable(context, &member->as.callable, !member->is_static)) {
                     context->current_callable_member = previous_callable_member;
+                    context->current_type_implementation_owner =
+                        previous_implementation_owner;
                     context->current_type_decl = previous_type_decl;
                     ok = false;
                     break;
                 }
                 if (!validate_abi_callable_member(context, member)) {
                     context->current_callable_member = previous_callable_member;
+                    context->current_type_implementation_owner =
+                        previous_implementation_owner;
                     context->current_type_decl = previous_type_decl;
                     ok = false;
                     break;
                 }
                 context->current_callable_member = previous_callable_member;
+                context->current_type_implementation_owner =
+                    previous_implementation_owner;
                 context->current_type_decl = previous_type_decl;
             }
 

@@ -536,9 +536,10 @@ bool feng_semantic_type_has_mixable_seal_access(
     const FengTypeMember *member);
 
 /* Return whether one source-backed member is visible through its normalized
- * @friend authorization from the enclosing type/fit method. This query is
- * read-only and compile-time-only; it exists so tooling can reuse the same
- * generic substitution and fit/package checks as semantic member lookup. */
+ * @friend authorization from the enclosing type implementation context or fit
+ * method. This query is read-only and compile-time-only; it exists so tooling
+ * can reuse the same generic substitution and fit/package checks as semantic
+ * member lookup. */
 bool feng_semantic_member_has_friend_access(
     const FengSemanticAnalysis *analysis,
     const FengProgram *program,

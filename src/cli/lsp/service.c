@@ -17829,29 +17829,32 @@ static bool type_member_visible_from_program(const FengLspAnalysisSession *sessi
             enclosing_member);
     }
     if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE &&
-        enclosing_member != NULL &&
-        enclosing_member->kind == FENG_TYPE_MEMBER_METHOD &&
-        (completion_type_has_mixable_seal_access(
-             session,
-             program,
-             enclosing_decl,
-             owner_decl,
-             member) ||
-         completion_member_has_friend_access(
-             session,
-             program,
-             owner_decl,
-             owner_instance_type_ref,
-             member,
-             enclosing_decl,
-             enclosing_member))) {
-        return true;
+        enclosing_member != NULL) {
+        bool mixable_authorized =
+            enclosing_member->kind == FENG_TYPE_MEMBER_METHOD &&
+            completion_type_has_mixable_seal_access(
+                session,
+                program,
+                enclosing_decl,
+                owner_decl,
+                member);
+        bool friend_authorized = completion_member_has_friend_access(
+            session,
+            program,
+            owner_decl,
+            owner_instance_type_ref,
+            member,
+            enclosing_decl,
+            enclosing_member);
+
+        if (mixable_authorized || friend_authorized) {
+            return true;
+        }
     }
     if (member->visibility == FENG_VISIBILITY_PRIVATE &&
         completion_member_declares_friend(member)) {
         return owner_decl != NULL && enclosing_decl == owner_decl &&
-               enclosing_member != NULL &&
-               enclosing_member->kind == FENG_TYPE_MEMBER_METHOD;
+               enclosing_member != NULL;
     }
     if (member->visibility == FENG_VISIBILITY_PUBLIC) {
         return true;

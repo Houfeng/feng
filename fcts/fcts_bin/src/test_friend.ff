@@ -140,6 +140,137 @@ type FriendGenericReader<T> {
   }
 }
 
+/** Observable lifecycle state for friend implementation-context execution. */
+type FriendImplementationState {
+  /** Number of finalized friend implementation-context readers. */
+  seal static var finalizedCountValue: int = 0;
+
+  /** Sum recorded by finalized friend implementation-context readers. */
+  seal static var finalizedTotalValue: int = 0;
+
+  /** Reset the lifecycle observations before one executable test. */
+  static func reset(): void {
+    FriendImplementationState.finalizedCountValue = 0;
+    FriendImplementationState.finalizedTotalValue = 0;
+  }
+
+  /** Record values computed through friend access in a finalizer. */
+  static func record(total: int): void {
+    FriendImplementationState.finalizedCountValue += 1;
+    FriendImplementationState.finalizedTotalValue += total;
+  }
+
+  /** Return the number of observed finalizer executions. */
+  static func finalizedCount(): int {
+    return FriendImplementationState.finalizedCountValue;
+  }
+
+  /** Return the aggregate recorded by observed finalizers. */
+  static func finalizedTotal(): int {
+    return FriendImplementationState.finalizedTotalValue;
+  }
+}
+
+/** Friend owner used by every executable type implementation context. */
+type FriendImplementationVault {
+  /** Instance value available only to the designated reader. */
+  @friend(FriendImplementationReader)
+  seal let value: int;
+
+  /** Static value available only to the designated reader. */
+  @friend(FriendImplementationReader)
+  seal static let shared: int = 10;
+
+  /** Construct one vault with a stable observable value. */
+  func FriendImplementationVault(value: int) {
+    self.value = value;
+  }
+
+  /** Read the instance value through a friend-only method. */
+  @friend(FriendImplementationReader)
+  seal func read(): int {
+    return self.value;
+  }
+
+  /** Read the static value through a friend-only method. */
+  @friend(FriendImplementationReader)
+  seal static func readShared(): int {
+    return FriendImplementationVault.shared;
+  }
+}
+
+/** Exercise friend authorization in fields, construction and finalization. */
+type FriendImplementationReader {
+  /** Direct instance-field friend access from an instance initializer. */
+  seal let initializedField: int = FriendImplementationVault(31).value;
+
+  /** Direct static-field friend access from a static initializer. */
+  seal static let initializedStaticField: int = FriendImplementationVault.shared;
+
+  /** Instance-method friend call from an instance initializer. */
+  seal let initializedCall: int = FriendImplementationVault(32).read();
+
+  /** Static-method friend call from a static initializer. */
+  seal static let initializedStaticCall: int = FriendImplementationVault.readShared();
+
+  /** Bound friend method formed from an instance initializer. */
+  seal let initializedMethod: FriendIntProducer = FriendImplementationVault(33).read;
+
+  /** Nested lambda inheriting the instance initializer's lexical owner. */
+  seal let initializedLambda: FriendIntProducer =
+    () -> FriendImplementationVault(34).read();
+
+  /** Vault retained until the finalizer executes. */
+  seal let retained: FriendImplementationVault;
+
+  /** Constructor result from direct instance and static friend accesses. */
+  seal let constructedDirect: int;
+
+  /** Constructor result from a bound friend method. */
+  seal let constructedMethod: int;
+
+  /** Constructor result from a nested lambda capturing its parameter. */
+  seal let constructedLambda: int;
+
+  /** Construct a reader while consuming its lexical owner's friend rights. */
+  func FriendImplementationReader(vault: FriendImplementationVault) {
+    self.retained = vault;
+    self.constructedDirect = vault.value + vault.read() +
+      FriendImplementationVault.shared + FriendImplementationVault.readShared();
+    let method: FriendIntProducer = vault.read;
+    let nested: FriendIntProducer = () -> vault.read();
+    self.constructedMethod = method();
+    self.constructedLambda = nested();
+  }
+
+  /** Consume the same friend rights before this reader's fields are released. */
+  func ~FriendImplementationReader() {
+    let method: FriendIntProducer = self.retained.read;
+    // P02 is intentionally isolated: this lambda verifies lexical friend
+    // authorization without exercising the deferred finalizer self-capture bug.
+    let nested: FriendIntProducer = () -> FriendImplementationVault(35).read();
+    FriendImplementationState.record(
+      self.retained.value + self.retained.read() +
+      FriendImplementationVault.shared + FriendImplementationVault.readShared() +
+      method() + nested()
+    );
+  }
+
+  /** Return all field-initializer and constructor observations. */
+  func contextTotal(): int {
+    return self.initializedField + FriendImplementationReader.initializedStaticField +
+      self.initializedCall + FriendImplementationReader.initializedStaticCall +
+      self.initializedMethod() + self.initializedLambda() +
+      self.constructedDirect + self.constructedMethod + self.constructedLambda;
+  }
+}
+
+/** Construct and release one reader so its finalizer is observable by caller. */
+func exerciseFriendImplementationContexts(): int {
+  let reader = FriendImplementationReader(FriendImplementationVault(40));
+  return reader.contextTotal();
+}
+
 /** Verify @friend's compile-time authorization across all runtime paths. */
 open func test_friend() {
   describe("friend member access", () {
@@ -172,6 +303,16 @@ open func test_friend() {
              "friend accesses fit-owned instance and static methods");
       assert(FriendGenericReader<int>().read(FriendGenericOwner<int>(31)) == 31,
              "generic friend identity follows owner substitution");
+    });
+
+    test("type implementation contexts execute friend access", () {
+      FriendImplementationState.reset();
+      let contextTotal = exerciseFriendImplementationContexts();
+      assert(contextTotal == 330,
+             "field initializers and constructor execute friend access");
+      assert(FriendImplementationState.finalizedCount() == 1 &&
+             FriendImplementationState.finalizedTotal() == 175,
+             "finalizer executes direct, method-value and nested friend access");
     });
   });
 }

@@ -10922,7 +10922,9 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
         "  @friend(FriendHelper) seal let value: int = 7;\n"
         "  @friend(FriendHelper) seal static func readShared(): int { return 9; }\n"
         "  open func visible(): int { return 1; }\n"
+        "  open static func visibleShared(): int { return 2; }\n"
         "}\n"
+        "let topVisible: int = FriendVault().visible();\n"
         "spec FriendSurface {\n"
         "  @friend(FriendHelper) seal func secret(): int;\n"
         "  func visible(): int;\n"
@@ -10936,6 +10938,14 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
         "  @friend(FriendHelper) seal func fitValue(): int { return 13; }\n"
         "}\n"
         "type FriendHelper {\n"
+        "  let initializedValue: int = FriendVault().value;\n"
+        "  static let initializedShared: int = FriendVault.readShared();\n"
+        "  func FriendHelper(vault: FriendVault) {\n"
+        "    let constructedValue: int = vault.value;\n"
+        "  }\n"
+        "  func ~FriendHelper() {\n"
+        "    let finalizedValue: int = FriendVault.readShared();\n"
+        "  }\n"
         "  func read(vault: FriendVault): int { return vault.value; }\n"
         "  static func readStatic(): int { return FriendVault.readShared(); }\n"
         "  func readSurface(surface: FriendSurface): int { return surface.secret(); }\n"
@@ -10945,6 +10955,14 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
         "  func readFromFit(other: FriendVault): int { return other.value; }\n"
         "}\n"
         "type FriendOther {\n"
+        "  let initializedVisible: int = FriendVault().visible();\n"
+        "  static let initializedVisibleShared: int = FriendVault.visibleShared();\n"
+        "  func FriendOther(vault: FriendVault) {\n"
+        "    let constructedVisible: int = vault.visible();\n"
+        "  }\n"
+        "  func ~FriendOther() {\n"
+        "    let finalizedVisible: int = FriendVault.visibleShared();\n"
+        "  }\n"
         "  func read(vault: FriendVault): int { return vault.visible(); }\n"
         "  func readSurface(surface: FriendSurface): int { return surface.visible(); }\n"
         "}\n"
@@ -10966,6 +10984,40 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
     char *remove_error = NULL;
     unsigned int field_line;
     unsigned int field_character;
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let initializedValue: int = FriendVault().value;",
+        strlen("let initializedValue: int = FriendVault()."),
+        "\"label\":\"value\"");
+    ASSERT(strstr(output, "\"label\":\"value\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "static let initializedShared: int = FriendVault.readShared();",
+        strlen("static let initializedShared: int = FriendVault."),
+        "\"label\":\"readShared\"");
+    ASSERT(strstr(output, "\"label\":\"readShared\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"visibleShared\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let constructedValue: int = vault.value;",
+        strlen("let constructedValue: int = vault."),
+        "\"label\":\"value\"");
+    ASSERT(strstr(output, "\"label\":\"value\"") != NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let finalizedValue: int = FriendVault.readShared();",
+        strlen("let finalizedValue: int = FriendVault."),
+        "\"label\":\"readShared\"");
+    ASSERT(strstr(output, "\"label\":\"readShared\"") != NULL);
+    free(output);
 
     output = capture_lsp_completion_response_after_ready(
         kSource,
@@ -11035,6 +11087,51 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
     ASSERT(strstr(output, "\"label\":\"item\"") != NULL);
     free(output);
 
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let initializedVisible: int = FriendVault().visible();",
+        strlen("let initializedVisible: int = FriendVault()."),
+        "\"label\":\"visible\"");
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"value\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "static let initializedVisibleShared: int = FriendVault.visibleShared();",
+        strlen("static let initializedVisibleShared: int = FriendVault."),
+        "\"label\":\"visibleShared\"");
+    ASSERT(strstr(output, "\"label\":\"visibleShared\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"readShared\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let constructedVisible: int = vault.visible();",
+        strlen("let constructedVisible: int = vault."),
+        "\"label\":\"visible\"");
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"value\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let finalizedVisible: int = FriendVault.visibleShared();",
+        strlen("let finalizedVisible: int = FriendVault."),
+        "\"label\":\"visibleShared\"");
+    ASSERT(strstr(output, "\"label\":\"visibleShared\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"readShared\"") == NULL);
+    free(output);
+
+    output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let topVisible: int = FriendVault().visible();",
+        strlen("let topVisible: int = FriendVault()."),
+        "\"label\":\"visible\"");
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"value\"") == NULL);
+    free(output);
+
     output = capture_lsp_hover_response(
         kSource,
         kInitialize,
@@ -11075,6 +11172,31 @@ static void test_lsp_friend_member_completion_hover_and_definition(void) {
     free(source_path);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
+}
+
+/* Parsed-only completion has no normalized friend metadata, so even a lexical
+ * friend type field initializer fails closed while ordinary members remain
+ * available. */
+static void test_lsp_friend_completion_parsed_only_fails_closed(void) {
+    static const char *kSource =
+        "module test.lsp.friend_parsed_only;\n"
+        "type ParsedFriendVault {\n"
+        "  @friend(ParsedFriendHelper) seal let secret: int = 7;\n"
+        "  open let visible: int = 9;\n"
+        "}\n"
+        "type ParsedFriendHelper {\n"
+        "  let initialized: int = ParsedFriendVault().visible;\n"
+        "}\n"
+        "func forceSemanticFailure(value: MissingFriendType): void {}\n";
+    char *output = capture_lsp_completion_response_after_ready(
+        kSource,
+        "let initialized: int = ParsedFriendVault().visible;",
+        strlen("let initialized: int = ParsedFriendVault()."),
+        "\"label\":\"visible\"");
+
+    ASSERT(strstr(output, "\"label\":\"visible\"") != NULL);
+    ASSERT(strstr(output, "\"label\":\"secret\"") == NULL);
+    free(output);
 }
 
 static void test_lsp_fit_extension_member_completion_on_builtin_string(void) {
@@ -17743,10 +17865,13 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     static const char *kPackageSource =
         "open module test.lsp.pkg.collections;\n"
         "\n"
+        "type PackageFriend {}\n"
+        "\n"
         "/**\n"
         " * Package map docs.\n"
         " */\n"
         "open type Map<K, V> {\n"
+        "    @friend(PackageFriend) seal let hiddenFriend: int = 7;\n"
         "    /**\n"
         "     * Number of stored entries.\n"
         "     */\n"
@@ -18004,6 +18129,8 @@ static void test_lsp_external_package_hover_docs_and_completion(void) {
     ASSERT(strstr(local_dep_bare_completion_output, "\"label\":\"Map<K, V>\",\"kind\":6,\"detail\":\"type Map<K, V>\"") != NULL);
     ASSERT(strstr(member_completion_output, "\"id\":2,\"result\":[]") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"count\"") != NULL);
+    /* Package-public metadata does not export friend-only seal members. */
+    ASSERT(strstr(member_completion_output, "hiddenFriend") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"K\"") == NULL);
     ASSERT(strstr(member_completion_output, "\"label\":\"V\"") == NULL);
 
@@ -19557,6 +19684,7 @@ int main(void) {
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_spec_seal_member_completion_respects_implementation_domain();
     test_lsp_friend_member_completion_hover_and_definition();
+    test_lsp_friend_completion_parsed_only_fails_closed();
     test_lsp_fit_extension_member_completion_on_builtin_string();
     test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();

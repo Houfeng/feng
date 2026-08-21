@@ -305,15 +305,20 @@ spec/witness 和 fit 规则均继续执行。字段的 `is_mixable` 事实单独
 
 - 只能标注 `type`、object-form `spec` 或 `fit` 中显式声明为 `seal` 的实例字段、
   静态字段、实例普通方法或静态普通方法；fit 仍不能声明字段。
-- 构造函数和终结器禁止使用 `@friend`。需要受限构造时，应使用 seal 构造函数配合
-  `@friend` seal static 工厂方法。
+- 构造函数和终结器禁止标注 `@friend`。需要受限构造时，应使用 seal 构造函数配合
+  `@friend` seal static 工厂方法；该限制只约束注解目标，不限制构造函数和终结器
+  消费所属 type 已取得的 friend 权限。
 - 每个参数都在注解声明位置按类型位解析，根类型必须是具体 `type`；spec、内建
   标量、数组、指针和单独类型参数不能作为 friend 主体。短名、别名和完整路径只
   影响名称解析，不影响最终授权身份。
 - 同一成员上的一个或多个 `@friend` 注解最终归一化为一个 friend 集合；按完成
   泛型代入后的语义类型身份静默去重。
-- friend type 自身声明的实例方法和静态方法可以使用授权；与该成员同包声明且目标
-  类型语义等于 friend type 的 `fit FriendType` 实例方法和静态方法也可以使用。
+- friend type 的词法类型实现上下文可以使用授权。类型实现上下文包括实例字段和
+  静态字段的初始化表达式、实例普通方法和静态普通方法、构造函数及终结器；嵌套
+  lambda 继承其外层类型实现上下文的词法 owner type。friend 不改变字段初始化顺序、
+  `self` 捕获或其他既有初始化规则。
+- 与该成员同包声明且目标类型语义等于 friend type 的 `fit FriendType` 实例方法和
+  静态方法也可以使用授权。
 - `fit FriendType` 只取得目标 type 对该具体成员的 friend 身份，不因此成为目标
   type 自身，也不能访问未标注相应 `@friend` 的其他 seal 成员。
 - 顶层函数、其他 type、其他包中的 fit、传递 friend、共同 spec 实现、共同 fit 或
