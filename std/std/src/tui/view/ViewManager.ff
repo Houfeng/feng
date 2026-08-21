@@ -16,6 +16,16 @@ seal enum ClickState {
   Moved
 }
 
+/** ViewManager 状态阶段对当前 Active 路径执行的变更。 */
+seal enum ActiveChange {
+  /** 保留已有 Active 路径。 */
+  Keep,
+  /** 使用当前鼠标 target 路径替换 Active 路径。 */
+  Replace,
+  /** 清空已有 Active 路径。 */
+  Clear
+}
+
 /**
  * ViewManager 是一个管理所有 widgets 的类
  * 它负责管理 widgets 的布局、绘制、事件处理等功能
@@ -49,13 +59,19 @@ open type ViewManager {
   seal var _nextHoverPath: List<Widget>;
 
   /** 当前鼠标按下激活目标到 root 的 Active 路径。 */
-  seal let _activePath: List<Widget>;
+  seal var _activePath: List<Widget>;
+
+  /** 下一 Active 路径的复用缓冲；与 _activePath 在更新完成时交换。 */
+  seal var _nextActivePath: List<Widget>;
 
   /** 当前单指针 click 识别状态。 */
   seal var _clickState: ClickState;
 
   /** 最近一次左键按下的起始坐标；Idle 状态下没有语义。 */
   seal var _clickPosition: Tuple<int, int>;
+
+  /** 当前是否正在处理一个原始鼠标事件；同步重入调用直接忽略。 */
+  seal var _dispatchingMouse: bool;
 
   /** 当前是否正在触发不可停止的焦点路径事件。 */
   seal var _focusChanging: bool;
@@ -103,8 +119,10 @@ open type ViewManager {
     self._hoverPath = List<Widget>();
     self._nextHoverPath = List<Widget>();
     self._activePath = List<Widget>();
+    self._nextActivePath = List<Widget>();
     self._clickState = ClickState.Idle;
     self._clickPosition = (0, 0);
+    self._dispatchingMouse = false;
     self._focusChanging = false;
     self._hasPendingFocus = false;
     self._pendingFocus = none;
@@ -145,49 +163,60 @@ open type ViewManager {
    * 将 target 到当前 root 的路径写入复用缓冲。
    * @param target 路径起点
    * @param path 需要清空并写入的路径缓冲
+   * @return 路径到达当前 root 时返回 true；否则清空路径并返回 false
    */
-  seal func fillPath(target: Widget, path: List<Widget>): void {
+  seal func fillPath(target: Widget, path: List<Widget>): bool {
     path.clear();
     var current = target;
     while true {
       path.add(current);
       if self.isCurrentRoot(current) {
-        return;
+        return true;
       }
       if current.parent match let parent: ContainerWidget {
         current = (Widget)parent;
       } else {
         path.clear();
-        return;
+        return false;
       }
     }
   }
 
   /**
-   * 按 target 到共同祖先之前的顺序触发不可停止的 blur 事件。
-   * @param path 旧焦点路径
-   * @param count 发生焦点离开状态变化的路径长度
-   * @param target 真正失去焦点的 Widget
+   * 在同一差分循环中触发新旧焦点路径的不可停止事件。
+   * 两条路径内部均保持 target-to-root 顺序；两组事件之间不定义全局顺序。
+   * @param oldPath 旧焦点路径
+   * @param oldCount 旧路径独有部分长度
+   * @param previous 真正失去焦点的 Widget
+   * @param newPath 新焦点路径
+   * @param newCount 新路径独有部分长度
+   * @param next 真正获得焦点的 Widget
    */
-  seal func emitBlurPath(path: List<Widget>, count: int, target: Widget): void {
-    let event = FocusEvent<Widget>(target);
-    for var index: int = 0; index < count; index += 1 {
-      let targetEvent = path.get(index).onBlur;
-      targetEvent.emit(event);
-    }
-  }
-
-  /**
-   * 按 target 到共同祖先之前的顺序触发不可停止的 focus 事件。
-   * @param path 新焦点路径
-   * @param count 发生焦点进入状态变化的路径长度
-   * @param target 真正获得焦点的 Widget
-   */
-  seal func emitFocusPath(path: List<Widget>, count: int, target: Widget): void {
-    let event = FocusEvent<Widget>(target);
-    for var index: int = 0; index < count; index += 1 {
-      let targetEvent = path.get(index).onFocus;
-      targetEvent.emit(event);
+  seal func emitFocusChanges(
+    oldPath: List<Widget>,
+    oldCount: int,
+    previous: Option<Widget>,
+    newPath: List<Widget>,
+    newCount: int,
+    next: Option<Widget>
+  ): void {
+    var index: int = 0;
+    while index < oldCount || index < newCount {
+      if index < newCount {
+        if next match newTarget: Widget {
+          let event = FocusEvent<Widget>(newTarget);
+          let targetEvent = newPath.get(index).onFocus;
+          targetEvent.emit(event);
+        }
+      }
+      if index < oldCount {
+        if previous match oldTarget: Widget {
+          let event = FocusEvent<Widget>(oldTarget);
+          let targetEvent = oldPath.get(index).onBlur;
+          targetEvent.emit(event);
+        }
+      }
+      index += 1;
     }
   }
 
@@ -196,17 +225,24 @@ open type ViewManager {
    * 状态和路径在事件触发前更新，使监听器读取 focused() 和 Widget.state 时
    * 看到本次新状态。Pseudo.Focus 只属于真实焦点目标，不传播到祖先。
    * @param next 本次请求的下一焦点
+   * @return 请求目标有效或与当前有效焦点相同时返回 true
    */
-  seal func performFocusChange(next: Option<Widget>): void {
-    if self.isSameFocus(next) {
-      return;
-    }
+  seal func performFocusChange(next: Option<Widget>): bool {
     if next match candidate: Widget {
-      if candidate.tabIndex < 0 || !self.isInRoot(candidate) {
-        return;
+      if candidate.tabIndex < 0 {
+        return false;
       }
-      self.fillPath(candidate, self._nextFocusPath);
+      if self.isSameFocus(next) {
+        return self.isInRoot(candidate);
+      }
+      // 路径建立同时完成 root 归属验证，避免先 isInRoot() 再重复遍历。
+      if !self.fillPath(candidate, self._nextFocusPath) {
+        return false;
+      }
     } else {
+      if self.isSameFocus(next) {
+        return true;
+      }
       self._nextFocusPath.clear();
     }
 
@@ -236,16 +272,13 @@ open type ViewManager {
     self._nextFocusPath = oldPath;
     defer { oldPath.clear(); }
 
+    self.emitFocusChanges(oldPath, oldChangedCount, previous,
+      newPath, newChangedCount, next);
+
     var hadPrevious = false;
     var hasNext = false;
-    if previous match oldTarget: Widget {
-      hadPrevious = true;
-      self.emitBlurPath(oldPath, oldChangedCount, oldTarget);
-    }
-    if next match newTarget: Widget {
-      hasNext = true;
-      self.emitFocusPath(newPath, newChangedCount, newTarget);
-    }
+    if previous match oldTarget: Widget { hadPrevious = true; }
+    if next match newTarget: Widget { hasNext = true; }
     if hadPrevious && !hasNext {
       if previous match oldTarget: Widget {
         let event = FocusEvent<Widget>(oldTarget);
@@ -259,17 +292,24 @@ open type ViewManager {
         managerEvent.emit(event);
       }
     }
+    return true;
   }
 
   /**
    * 提交焦点变更；焦点事件内的重入请求在本轮事件完成后串行处理，最后一次请求生效。
    * @param next 请求的下一焦点
+   * @return 本次请求有效或请求清除焦点时返回 true
    */
-  seal func requestFocus(next: Option<Widget>): void {
+  seal func requestFocus(next: Option<Widget>): bool {
     if self._focusChanging {
+      if next match candidate: Widget {
+        if candidate.tabIndex < 0 || !self.isInRoot(candidate) {
+          return false;
+        }
+      }
       self._pendingFocus = next;
       self._hasPendingFocus = true;
-      return;
+      return true;
     }
     self._focusChanging = true;
     defer {
@@ -278,14 +318,20 @@ open type ViewManager {
       self._pendingFocus = none;
     }
     var requested = next;
+    var firstRequest = true;
+    var firstAccepted = false;
     while true {
       self._hasPendingFocus = false;
-      self.performFocusChange(requested);
+      let accepted = self.performFocusChange(requested);
+      if firstRequest {
+        firstAccepted = accepted;
+        firstRequest = false;
+      }
       if self._hasPendingFocus {
         requested = self._pendingFocus;
         self._pendingFocus = none;
       } else {
-        return;
+        return firstAccepted;
       }
     }
   }
@@ -310,11 +356,7 @@ open type ViewManager {
    * @return 设置成功或已经获得焦点时返回 true
    */
   open func focus(widget: Widget): bool {
-    if widget.tabIndex < 0 || !self.isInRoot(widget) {
-      return false;
-    }
-    self.requestFocus(widget);
-    return true;
+    return self.requestFocus(widget);
   }
 
   /**
@@ -589,80 +631,151 @@ open type ViewManager {
   }
 
   /**
-   * 根据当前 Hover target 路径更新 Hover 状态。
-   * 路径按 target 到 root 保存，通过共同祖先差分只更新真正离开或进入的部分。
-   * 未锁定时 target 来自实际坐标命中，锁定时来自锁定目标。
-   * @param target 当前 Hover target；没有目标时为 none
+   * 根据鼠标动作选择本次 Active 路径变更。
+   * @param event 当前原始鼠标事件
+   * @return 保留、替换或清空 Active 路径
    */
-  seal func updateHover(target: Option<Widget>): void {
-    self._nextHoverPath.clear();
-    if target match widget: Widget {
-      self.fillPath(widget, self._nextHoverPath);
+  seal func resolveActiveChange(event: MouseEvent<Widget>): ActiveChange {
+    if event.action == MouseAction.Release {
+      return ActiveChange.Clear;
     }
-
-    let oldPath = self._hoverPath;
-    let newPath = self._nextHoverPath;
-    var oldChangedCount = oldPath.size();
-    var newChangedCount = newPath.size();
-    while oldChangedCount > 0 && newChangedCount > 0 {
-      if oldPath.get(oldChangedCount - 1) != newPath.get(newChangedCount - 1) {
-        break;
-      }
-      oldChangedCount -= 1;
-      newChangedCount -= 1;
+    if event.action == MouseAction.Press &&
+    event.button != MouseButton.None &&
+    event.button != MouseButton.WheelUp &&
+    event.button != MouseButton.WheelDown {
+      return ActiveChange.Replace;
     }
-
-    let hoverMask = (int)Pseudo.Hover;
-    for var index: int = 0; index < oldChangedCount; index += 1 {
-      oldPath.get(index).removeState(hoverMask);
-    }
-    for var index: int = 0; index < newChangedCount; index += 1 {
-      newPath.get(index).addState(hoverMask);
-    }
-
-    self._hoverPath = newPath;
-    self._nextHoverPath = oldPath;
-    oldPath.clear();
-  }
-
-  /** 清除当前 Active 路径上的状态位并复用路径存储。 */
-  seal func clearActive(): void {
-    let activeMask = (int)Pseudo.Active;
-    for let widget in self._activePath {
-      widget.removeState(activeMask);
-    }
-    self._activePath.clear();
+    return ActiveChange.Keep;
   }
 
   /**
-   * 根据鼠标按下和释放维护 Active 路径。
-   * 按下后移动及鼠标锁定不会改变路径；滚轮不属于激活操作。
-   * @param event 当前鼠标事件
-   * @param target 当前鼠标事件的路由目标
+   * 在鼠标事件传播前统一建立路径并差分 Hover、Active 与默认焦点候选。
+   * 当前路径只建立一次；共同路径不写状态，所有状态机制共用比较与变更循环。
+   * @param target 当前鼠标事件或解锁后的 Hover target
+   * @param activeChange 本次 Active 路径变更
+   * @param findFocus 是否收集最近的默认焦点候选
+   * @return 最近的默认焦点候选；不存在时为 none
    */
-  seal func updateActive(
-    event: MouseEvent<Widget>,
-    target: Option<Widget>
-  ): void {
-    if event.action == MouseAction.Release {
-      self.clearActive();
-      return;
-    }
-    if event.action != MouseAction.Press ||
-    event.button == MouseButton.None ||
-    event.button == MouseButton.WheelUp ||
-    event.button == MouseButton.WheelDown {
-      return;
+  seal func prepareMouseState(
+    target: Option<Widget>,
+    activeChange: ActiveChange,
+    findFocus: bool
+  ): Option<Widget> {
+    let oldHoverPath = self._hoverPath;
+    let newHoverPath = self._nextHoverPath;
+    newHoverPath.clear();
+
+    let oldActivePath = self._activePath;
+    let newActivePath = self._nextActivePath;
+    let changesActive = activeChange != ActiveChange.Keep;
+    if changesActive {
+      newActivePath.clear();
     }
 
-    self.clearActive();
+    var focusCandidate: Option<Widget> = none;
+    var hasFocusCandidate = false;
+    var reachesRoot = false;
     if target match widget: Widget {
-      self.fillPath(widget, self._activePath);
-      let activeMask = (int)Pseudo.Active;
-      for let current in self._activePath {
-        current.addState(activeMask);
+      var current = widget;
+      while true {
+        newHoverPath.add(current);
+        if activeChange == ActiveChange.Replace {
+          newActivePath.add(current);
+        }
+        if findFocus && !hasFocusCandidate &&
+        current.rtStyle.visibility == Visibility.Visible &&
+        current.rtStyle.pointerEvents == PointerEvents.All &&
+        current.tabIndex >= 0 {
+          focusCandidate = current;
+          hasFocusCandidate = true;
+        }
+        if self.isCurrentRoot(current) {
+          reachesRoot = true;
+          break;
+        }
+        if current.parent match let parent: ContainerWidget {
+          current = (Widget)parent;
+        } else {
+          break;
+        }
       }
     }
+    if !reachesRoot {
+      newHoverPath.clear();
+      if changesActive {
+        newActivePath.clear();
+      }
+      focusCandidate = none;
+    }
+
+    var oldHoverChanged = oldHoverPath.size();
+    var newHoverChanged = newHoverPath.size();
+    var oldActiveChanged = 0;
+    var newActiveChanged = 0;
+    if changesActive {
+      oldActiveChanged = oldActivePath.size();
+      newActiveChanged = newActivePath.size();
+    }
+    var comparesHover = true;
+    var comparesActive = changesActive;
+    while comparesHover || comparesActive {
+      if comparesHover {
+        if oldHoverChanged == 0 || newHoverChanged == 0 {
+          comparesHover = false;
+        } else {
+          if oldHoverPath.get(oldHoverChanged - 1) ==
+          newHoverPath.get(newHoverChanged - 1) {
+            oldHoverChanged -= 1;
+            newHoverChanged -= 1;
+          } else {
+            comparesHover = false;
+          }
+        }
+      }
+      if comparesActive {
+        if oldActiveChanged == 0 || newActiveChanged == 0 {
+          comparesActive = false;
+        } else {
+          if oldActivePath.get(oldActiveChanged - 1) ==
+          newActivePath.get(newActiveChanged - 1) {
+            oldActiveChanged -= 1;
+            newActiveChanged -= 1;
+          } else {
+            comparesActive = false;
+          }
+        }
+      }
+    }
+
+    let hoverMask = (int)Pseudo.Hover;
+    let activeMask = (int)Pseudo.Active;
+    var index: int = 0;
+    while index < oldHoverChanged || index < newHoverChanged ||
+    index < oldActiveChanged || index < newActiveChanged {
+      if index < oldHoverChanged {
+        oldHoverPath.get(index).removeState(hoverMask);
+      }
+      if index < newHoverChanged {
+        newHoverPath.get(index).addState(hoverMask);
+      }
+      if index < oldActiveChanged {
+        oldActivePath.get(index).removeState(activeMask);
+      }
+      if index < newActiveChanged {
+        newActivePath.get(index).addState(activeMask);
+      }
+      index += 1;
+    }
+
+    self._hoverPath = newHoverPath;
+    self._nextHoverPath = oldHoverPath;
+    oldHoverPath.clear();
+    if changesActive {
+      self._activePath = newActivePath;
+      self._nextActivePath = oldActivePath;
+      oldActivePath.clear();
+    }
+    return focusCandidate;
   }
 
   /**
@@ -775,41 +888,25 @@ open type ViewManager {
     locked: bool
   ): void {
     if selected match let target: Widget {
-      var hiddenBoundary: Option<Widget> = none;
-      var insideHiddenBoundary = false;
       if locked {
         event.bindLockedTarget(target);
-        hiddenBoundary = self.resolveLockedHiddenBoundary(target);
-        if hiddenBoundary match boundary: Widget {
-          insideHiddenBoundary = true;
-        }
       } else {
         event.bindTarget(target);
       }
       var current = target;
-      var routing = true;
-      while routing {
-        if !insideHiddenBoundary &&
-        current.rtStyle.visibility == Visibility.Visible &&
-        current.rtStyle.pointerEvents == PointerEvents.All {
-          self.invokeMouse(current, event);
-        }
-        if insideHiddenBoundary {
-          if hiddenBoundary match boundary: Widget {
-            if current == boundary {
-              insideHiddenBoundary = false;
-            }
-          }
-        }
+      while true {
+        self.invokeMouse(current, event);
         if event.isStopped() {
-          routing = false;
-        } else if self.isCurrentRoot(current) {
+          return;
+        }
+        if self.isCurrentRoot(current) {
           self.invokeManagerMouse(event);
-          routing = false;
-        } else if current.parent match let parent: ContainerWidget {
+          return;
+        }
+        if current.parent match let parent: ContainerWidget {
           current = (Widget)parent;
         } else {
-          routing = false;
+          return;
         }
       }
     } else {
@@ -831,53 +928,21 @@ open type ViewManager {
 
   /**
    * 执行鼠标按下后的默认聚焦行为。
-   * 从原始 target 向上选择最近的可聚焦 Widget；滚轮及已阻止事件不处理。
-   * @param target 鼠标最初命中或锁定的 target
+   * 候选已经由状态阶段统一收集；滚轮及已阻止事件不处理。
+   * @param candidate 最近的可聚焦候选
    * @param event 已完成视图路由的鼠标事件
    */
-  seal func applyMouseDefault(target: Widget, event: MouseEvent<Widget>): void {
+  seal func applyMouseDefault(
+    candidate: Option<Widget>,
+    event: MouseEvent<Widget>
+  ): void {
     if event.action != MouseAction.Press ||
     event.button == MouseButton.WheelUp || event.button == MouseButton.WheelDown ||
     event.isPrevented() {
       return;
     }
-    var current = target;
-    while true {
-      if current.rtStyle.visibility == Visibility.Visible &&
-      current.rtStyle.pointerEvents == PointerEvents.All &&
-      current.tabIndex >= 0 {
-        self.focus(current);
-        return;
-      }
-      if current.parent match let parent: ContainerWidget {
-        current = (Widget)parent;
-      } else {
-        return;
-      }
-    }
-  }
-
-  /**
-   * 查找锁定目标到 root 路径中最外层的不可见 Widget。
-   * 路由将跳过该边界及其内部子树，再从边界的可见父级继续冒泡。
-   * @param target 当前锁定的鼠标目标
-   * @return 最外层不可见边界；整条路径可见时返回 none
-   */
-  seal func resolveLockedHiddenBoundary(target: Widget): Option<Widget> {
-    var result: Option<Widget> = none;
-    var current = target;
-    while true {
-      if current.rtStyle.visibility != Visibility.Visible {
-        result = current;
-      }
-      if self.isCurrentRoot(current) {
-        return result;
-      }
-      if current.parent match let parent: ContainerWidget {
-        current = (Widget)parent;
-      } else {
-        return result;
-      }
+    if candidate match let target: Widget {
+      self.focus(target);
     }
   }
 
@@ -885,14 +950,21 @@ open type ViewManager {
    * 从锁定目标或本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
    * 锁定目标优先于坐标命中，并同时作为当前 Hover target；选定目标会写入
    * event.target，并在本次冒泡期间保持不变。
-   * 当前组件的全部监听器返回后检查 event.isStopped()；停止后不再触发父组件或
-   * ViewManager 事件。正常到达 root 后触发 ViewManager 对应事件，随后执行默认聚焦。
+   * 传播前统一完成 Hover、Active 和默认焦点候选处理；当前组件的全部监听器返回后检查
+   * event.isStopped()，停止后可直接结束传播。正常到达 root 后触发 ViewManager 对应
+   * 事件，随后依据 preventDefault() 决定是否执行默认聚焦。
    * 未命中任何组件时直接触发 ViewManager 对应事件。
    * Release 完成原始路由和默认行为后总是自动解除锁定，并恢复实际坐标 Hover；click
    * 仍使用 release 的实际命中目标。
    * @param event InputManager 解析得到的鼠标事件
    */
   open func dispatchMouse(event: MouseEvent<Widget>): void {
+    if self._dispatchingMouse {
+      return;
+    }
+    self._dispatchingMouse = true;
+    defer { self._dispatchingMouse = false; }
+
     let locked = MouseEvent<Widget>.hasLockedTarget();
     var selected: Option<Widget> = none;
     var actual: Option<Widget> = none;
@@ -907,14 +979,16 @@ open type ViewManager {
       selected = actual;
     }
 
-    self.updateHover(selected);
     let shouldClick = self.updateClickState(event);
-    self.updateActive(event, selected);
+    let activeChange = self.resolveActiveChange(event);
+    let findsFocus = event.action == MouseAction.Press &&
+      event.button != MouseButton.WheelUp &&
+      event.button != MouseButton.WheelDown;
+    let focusCandidate = self.prepareMouseState(
+      selected, activeChange, findsFocus);
 
     self.routeMouse(event, selected, locked);
-    if selected match let target: Widget {
-      self.applyMouseDefault(target, event);
-    }
+    self.applyMouseDefault(focusCandidate, event);
 
     if event.action == MouseAction.Press &&
     event.button == MouseButton.Left && event.isPrevented() {
@@ -931,7 +1005,7 @@ open type ViewManager {
       if event.action != MouseAction.Release {
         actual = self.hitTest(event.x, event.y);
       }
-      self.updateHover(actual);
+      self.prepareMouseState(actual, ActiveChange.Keep, false);
     }
 
     if shouldClick && !event.isPrevented() {

@@ -1940,7 +1940,7 @@ func vstack_collapse_child_has_no_space() {
     "tui/visibility/collapse-not-in-auto-size");
 }
 
-/** 验证 Hidden 与 PointerEvents 在绘制、命中和冒泡中的统一行为。 */
+/** 验证 Hidden/PointerEvents 只影响绘制与命中，不过滤目标确定后的冒泡。 */
 func visibility_and_pointer_events_render_and_route() {
   let screen = Screen(3, 1);
   let manager = ViewManager(screen);
@@ -1999,8 +1999,8 @@ func visibility_and_pointer_events_render_and_route() {
   manager.doDraw();
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
-  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 3,
-    "tui/pointer-events/none-skips-bubble-node");
+  check(bottomHits == 3 && topHits == 0 && rootHits == 3 && managerHits == 3,
+    "tui/pointer-events/none-ancestor-still-bubbles");
 
   root.style.visibility = Visibility.Hidden;
   manager.doStyling();
@@ -2011,8 +2011,8 @@ func visibility_and_pointer_events_render_and_route() {
     "tui/visibility/hidden-stops-draw-subtree");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
-  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 4,
-    "tui/visibility/hidden-subtree-reaches-manager-only");
+  check(bottomHits == 3 && topHits == 0 && rootHits == 3 && managerHits == 4,
+    "tui/visibility/hidden-subtree-has-no-hit");
 
   let lockOwner = MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0);
@@ -2020,8 +2020,8 @@ func visibility_and_pointer_events_render_and_route() {
   check(lockOwner.lock(), "tui/visibility/lock-hidden-subtree-target");
   manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
     MouseButton.Left, 0, 0, 0));
-  check(bottomHits == 3 && topHits == 0 && rootHits == 2 && managerHits == 5,
-    "tui/visibility/locked-hidden-subtree-skips-widgets");
+  check(bottomHits == 4 && topHits == 0 && rootHits == 4 && managerHits == 5,
+    "tui/visibility/locked-hidden-subtree-still-bubbles");
   lockOwner.unlock();
 }
 
@@ -3855,7 +3855,7 @@ func view_manager_focus_lifecycle() {
   check(managerHasNoFocus(manager), "tui/focus/clear-idempotent");
 }
 
-/** 验证焦点路径差分、事件顺序、共同祖先去重和 ViewManager 边界。 */
+/** 验证焦点路径差分、各路径内部顺序、共同祖先去重和 ViewManager 边界。 */
 func view_manager_focus_path_events() {
   let manager = ViewManager(Screen(30, 15));
   let root = Container();
@@ -3874,7 +3874,8 @@ func view_manager_focus_path_events() {
   childC.tabIndex = 0;
   manager.root = root;
 
-  var order = 0;
+  var focusOrder = 0;
+  var blurOrder = 0;
   var targetsStable = true;
   var leftFocus = 0;
   var leftBlur = 0;
@@ -3886,97 +3887,105 @@ func view_manager_focus_path_events() {
   var managerBlur = 0;
 
   childA.onFocus.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 1;
+    focusOrder = focusOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childA;
   });
   childA.onBlur.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 1;
+    blurOrder = blurOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childA;
   });
   childB.onFocus.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 2;
+    focusOrder = focusOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childB;
   });
   childB.onBlur.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 1;
+    blurOrder = blurOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childB;
   });
   childC.onFocus.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 3;
+    focusOrder = focusOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
   childC.onBlur.on((event: FocusEvent<Widget>) {
-    order = order * 10 + 1;
+    blurOrder = blurOrder * 10 + 1;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
   left.onFocus.on((event: FocusEvent<Widget>) {
     leftFocus += 1;
-    order = order * 10 + 2;
+    focusOrder = focusOrder * 10 + 2;
     targetsStable = targetsStable && event.target == (Widget)childA;
   });
   left.onBlur.on((event: FocusEvent<Widget>) {
     leftBlur += 1;
-    order = order * 10 + 2;
+    blurOrder = blurOrder * 10 + 2;
     targetsStable = targetsStable && event.target == (Widget)childB;
   });
   right.onFocus.on((event: FocusEvent<Widget>) {
     rightFocus += 1;
-    order = order * 10 + 4;
+    focusOrder = focusOrder * 10 + 2;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
   right.onBlur.on((event: FocusEvent<Widget>) {
     rightBlur += 1;
-    order = order * 10 + 2;
+    blurOrder = blurOrder * 10 + 2;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
   root.onFocus.on((event: FocusEvent<Widget>) {
     rootFocus += 1;
-    order = order * 10 + 3;
+    focusOrder = focusOrder * 10 + 3;
     targetsStable = targetsStable && event.target == (Widget)childA;
   });
   root.onBlur.on((event: FocusEvent<Widget>) {
     rootBlur += 1;
-    order = order * 10 + 3;
+    blurOrder = blurOrder * 10 + 3;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
   manager.onFocus.on((event: FocusEvent<Widget>) {
     managerFocus += 1;
-    order = order * 10 + 4;
+    focusOrder = focusOrder * 10 + 4;
     targetsStable = targetsStable && event.target == (Widget)childA;
   });
   manager.onBlur.on((event: FocusEvent<Widget>) {
     managerBlur += 1;
-    order = order * 10 + 4;
+    blurOrder = blurOrder * 10 + 4;
     targetsStable = targetsStable && event.target == (Widget)childC;
   });
 
   check(manager.focus(left) == false, "tui/focus-event/reject-negative-tab-index");
   check(leftFocus == 0, "tui/focus-event/rejected-target-emits-no-focus");
   check(manager.focus(childA), "tui/focus-event/focus-first-child");
-  check(order == 1234, "tui/focus-event/none-to-child-order");
+  check(focusOrder == 1234 && blurOrder == 0,
+    "tui/focus-event/none-to-child-order");
   check(leftFocus == 1 && rootFocus == 1 && managerFocus == 1,
     "tui/focus-event/none-to-child-path");
 
-  order = 0;
+  focusOrder = 0;
+  blurOrder = 0;
   check(manager.focus(childB), "tui/focus-event/focus-sibling");
-  check(order == 12, "tui/focus-event/sibling-only-targets");
+  check(focusOrder == 1 && blurOrder == 1,
+    "tui/focus-event/sibling-diff-targets");
   check(leftFocus == 1 && leftBlur == 0 && rootFocus == 1 && rootBlur == 0 &&
     managerFocus == 1 && managerBlur == 0,
     "tui/focus-event/sibling-common-ancestors-stable");
 
-  order = 0;
+  focusOrder = 0;
+  blurOrder = 0;
   check(manager.focus(childC), "tui/focus-event/focus-other-branch");
-  check(order == 1234, "tui/focus-event/blur-before-focus-branch-order");
+  check(focusOrder == 12 && blurOrder == 12,
+    "tui/focus-event/branch-path-local-order");
   check(leftBlur == 1 && rightFocus == 1 && rootFocus == 1 && rootBlur == 0 &&
     managerFocus == 1 && managerBlur == 0,
     "tui/focus-event/root-common-ancestor-stable");
 
-  order = 0;
+  focusOrder = 0;
+  blurOrder = 0;
   check(manager.focus(childC), "tui/focus-event/repeat-focus-success");
-  check(order == 0, "tui/focus-event/repeat-focus-no-events");
+  check(focusOrder == 0 && blurOrder == 0,
+    "tui/focus-event/repeat-focus-no-events");
 
   manager.clearFocus();
-  check(order == 1234, "tui/focus-event/clear-blur-order");
+  check(focusOrder == 0 && blurOrder == 1234,
+    "tui/focus-event/clear-blur-order");
   check(rightBlur == 1 && rootBlur == 1 && managerBlur == 1,
     "tui/focus-event/clear-full-path");
   check(targetsStable, "tui/focus-event/target-stable");
@@ -4255,6 +4264,68 @@ func view_manager_mouse_event_mapping() {
   check(up == 1, "tui/mouse/manager-maps-up");
   check(wheel == 1, "tui/mouse/manager-maps-wheel");
   check(managerHasNoFocus(manager), "tui/mouse/wheel-does-not-focus");
+}
+
+/** 验证鼠标监听器的同步重入分发在任何副作用前忽略。 */
+func view_manager_mouse_reentry_is_ignored() {
+  let manager = ViewManager(Screen(30, 10));
+  let root = Container();
+  let child = View();
+  let other = View();
+  other.tabIndex = 0;
+  child.useStateStyle(Pseudo.Hover).cursor = Cursor.Pointer;
+  child.useStateStyle(Pseudo.Active).cursor = Cursor.Grabbing;
+  other.useStateStyle(Pseudo.Hover).cursor = Cursor.Text;
+  root.addChild(child);
+  root.addChild(other);
+  manager.root = root;
+  manager.trace(root, makeWidgetFrame(0, 0, 30, 10));
+  manager.trace(child, makeWidgetFrame(1, 1, 5, 4));
+  manager.trace(other, makeWidgetFrame(12, 1, 5, 4));
+
+  let nested = MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 13, 2, 0);
+  var otherDown = 0;
+  var otherMoves = 0;
+  var childUps = 0;
+  var childClicks = 0;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    manager.dispatchMouse(nested);
+  });
+  other.mouseDown.on((event: MouseEvent<Widget>) { otherDown += 1; });
+  other.mouseMove.on((event: MouseEvent<Widget>) { otherMoves += 1; });
+  child.mouseUp.on((event: MouseEvent<Widget>) { childUps += 1; });
+  child.click.on((event: MouseEvent<Widget>) { childClicks += 1; });
+
+  let outer = MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 2, 2, 0);
+  manager.dispatchMouse(outer);
+  manager.doStyling();
+  check(outer.hasTarget() && outer.target == (Widget)child,
+    "tui/mouse-reentry/outer-target-routes");
+  check(!nested.hasTarget() && otherDown == 0,
+    "tui/mouse-reentry/nested-event-has-no-route-side-effects");
+  check(managerHasNoFocus(manager),
+    "tui/mouse-reentry/nested-event-has-no-focus-side-effect");
+  check(Inspector.getRtStyle(child).cursor == Cursor.Grabbing &&
+    Inspector.getRtStyle(other).cursor == Cursor.Auto,
+    "tui/mouse-reentry/nested-event-has-no-state-side-effects");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 2, 2, 0));
+  manager.doStyling();
+  check(childUps == 1 && childClicks == 1,
+    "tui/mouse-reentry/nested-event-keeps-outer-click-state");
+  check(Inspector.getRtStyle(child).cursor == Cursor.Pointer,
+    "tui/mouse-reentry/release-clears-active-state");
+
+  let accepted = MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 13, 2, 0);
+  manager.dispatchMouse(accepted);
+  manager.doStyling();
+  check(accepted.hasTarget() && accepted.target == (Widget)other &&
+    otherMoves == 1 && Inspector.getRtStyle(other).cursor == Cursor.Text,
+    "tui/mouse-reentry/guard-restores-after-outer-event");
 }
 
 /** 验证同坐标左键按下和释放合成独立 click，并按 Widget 路径冒泡。 */
@@ -5472,6 +5543,7 @@ open func run_tui_tests() {
     test("view_manager_focus_state_sync()", () { view_manager_focus_state_sync(); });
     test("view_manager_mouse_default_focus_and_propagation()", () { view_manager_mouse_default_focus_and_propagation(); });
     test("view_manager_mouse_event_mapping()", () { view_manager_mouse_event_mapping(); });
+    test("view_manager_mouse_reentry_is_ignored()", () { view_manager_mouse_reentry_is_ignored(); });
     test("view_manager_click_synthesis_and_route()", () { view_manager_click_synthesis_and_route(); });
     test("view_manager_click_movement_and_release_reset()", () { view_manager_click_movement_and_release_reset(); });
     test("view_manager_click_stop_prevent_and_idle_reset()", () { view_manager_click_stop_prevent_and_idle_reset(); });

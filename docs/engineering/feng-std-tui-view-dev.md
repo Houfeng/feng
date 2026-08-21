@@ -117,11 +117,15 @@ open type WidgetStyle {
 
 `visibility` 和 `pointerEvents` 的定义如下：
 
-- `Visibility.Visible`：正常参与布局、绘制和事件路由；
-- `Visibility.Hidden`：继续参与布局并保留占位，但不绘制自身及其子树，不参与事件命中；事件沿既有目标向上路由时跳过该 Widget；
+- `Visibility.Visible`：正常参与布局、绘制和事件命中；
+- `Visibility.Hidden`：继续参与布局并保留占位，但不绘制自身及其子树，也不参与事件命中；
 - `Visibility.Collapse`：不占位，公共布局调度将最终 `frame.width` 和 `frame.height` 置为 0；绘制与事件行为同 `Hidden`；
-- `PointerEvents.All`：正常参与鼠标命中和鼠标事件路由；
-- `PointerEvents.None`：仍参与布局和绘制，但自身不作为鼠标命中目标，鼠标事件冒泡时跳过该 Widget。该字段不影响键盘和焦点事件。
+- `PointerEvents.All`：正常参与鼠标命中；
+- `PointerEvents.None`：仍参与布局和绘制，但自身不作为鼠标命中目标。该字段不影响键盘和焦点事件。
+
+`visibility` 和 `pointerEvents` 只参与普通坐标命中。一旦普通命中或鼠标锁定确定了 target，
+后续传播路径不再读取这两个样式字段；target 与其祖先即使在传播前改变样式，也仍按同一套
+target-to-root 规则处理，只有 `stop()` 能阻止后续 Widget 事件。
 
 `Visibility` 默认值为 `Visible`，`PointerEvents` 默认值为 `All`。`Collapse` 组件的
 `margin` 也不占用父布局空间；父布局组件在排列直接 children 时必须排除该 child。
@@ -431,12 +435,32 @@ open type View: Widget {
 
 `View.isAncestor(w)` 使用循环沿 `w.parent` 向上查找，不使用递归。后续组件可以展开 `View` 复用公共状态与默认行为，也可以直接实现 `Widget` spec。复用 `View` 状态的组件使用 `...: View = View();`，通过普通来源构造语义完整初始化 `Event<T>` 等字段；`...: View;` 只展开定义并执行字段类型的默认零值初始化，不适用于这些需要执行 `View` 字段初始化器的组件。
 
-ViewManager 复用两条 target-to-root List 对 Hover 路径做共同祖先差分，不在每次鼠标事件中
-分配临时集合。Hover 状态在鼠标事件监听器执行前更新；下一轮 styling 根据最终 state 合并
-状态样式。未锁定 Hover 路径使用本帧 `sequence` 和 `clippedFrame` 命中，因此自动继承
-可见性、PointerEvents、裁剪和绘制层级规则；锁定期间直接使用锁定 target 路径，不再为
-实际坐标执行独立命中和 Hover 更新。Active 使用独立的复用路径，按下时建立、释放时清除，
-同样不产生逐事件集合分配。
+ViewManager 复用两组 target-to-root 路径缓冲维护 Hover 和 Active，不在每次鼠标事件中
+创建临时集合。鼠标原始事件固定为三个阶段：输入事实状态、事件传播、可取消的默认行为。
+第一阶段至多一次沿 parent 建立当前路径，在同一过程中准备 Hover、Active 和默认焦点
+候选；新旧路径的公共后缀比较复用持久路径缓冲，只有差分节点发生状态写入。
+第二阶段至多一次从 target 沿 parent 传播，`stop()` 可以提前结束。第三阶段只在非滚轮
+按下、事件未阻止默认行为且存在候选时进行焦点差分；`focus()` 至多一次沿 parent
+验证当前焦点或建立并验证新焦点路径。
+
+状态机制不得各自重新遍历当前路径，未来机制只能加入现有阶段的单节点处理；若要
+增加新的完整路径遍历或新阶段，必须由人工决策。共同路径既不移除再添加状态，也不产生
+其他状态写入；只有新旧路径独有部分发生真实状态变化。
+
+状态阶段在鼠标监听器执行前完成，因此监听器读取自身及路径状态时看到本次最终结果。传播
+阶段不再维护状态，当前 Widget 的全部监听器返回后若 `stop()` 已设置，可直接结束传播；
+不需要为了继续状态同步而保留局部传播标记。未锁定 target 使用本帧 `sequence` 和
+`clippedFrame` 命中；锁定只替换 target 的取得方式，不改变后续状态与传播逻辑。
+该执行机制只复用既有事件和路径容器，不因统一差分或传播引入临时对象分配。鼠标按下的
+自动焦点候选在状态阶段一并记录，但实际 `focus()` 属于传播后的默认行为；监听器调用
+`preventDefault()` 时只阻止该默认焦点切换，不回滚已经同步的 Hover/Active。
+
+`ViewManager.dispatchMouse()` 是公开的鼠标事件注入入口，`TuiApp` 将
+`InputManager.onMouse` 绑定到该方法。ViewManager 在整个原始事件处理期间保持分发标记；监听器
+通过已绑定的 `InputManager.onMouse`、`feed()` 或其他路径同步重入该入口时，新调用在任何
+命中、状态、click 或事件处理前直接忽略。分发标记使用作用域清理，正常返回和异常退出都会
+恢复。该契约只禁止同一个 ViewManager 的同步鼠标重入，不影响监听器调用 `focus()` 等其他
+公开状态 API。
 
 ## 6 ContainerWidget 与 Container
 
@@ -598,11 +622,10 @@ back buffer，保留现有直接通过 Screen 绘制的使用方式。逐帧只�
 
 鼠标命中时从 `sequence` 末尾向前查找，并直接使用每个组件缓存的 `clippedFrame` 判断事件坐标；
 不可见或 `pointerEvents == PointerEvents.None` 的组件不能成为目标，查找继续向下层组件进行。
-找到的第一个可响应组件即为目标。鼠标事件沿 parent 冒泡时，逐节点跳过不可见或
-`PointerEvents.None` 的 Widget，但继续向其父级路由；正常到达 root 后仍触发
-ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 `PointerEvents` 影响。
-锁定目标同样遵循该规则；若其祖先在锁定期间变为不可见，隐藏子树内的目标和祖先均被
-跳过，事件从隐藏边界之外的首个可见祖先继续冒泡。
+找到的第一个可响应组件即为目标。target 确定后，鼠标事件沿 parent 冒泡时不再检查
+`visibility` 或 `pointerEvents`；正常到达 root 后触发 ViewManager 对应事件。键盘事件
+仍保持自己的可见性规则，不受 `PointerEvents` 影响。鼠标锁定只令锁定目标替代普通命中
+结果；锁定与未锁定共用完全相同的后续状态差分和传播逻辑，不定义锁定专属隐藏边界。
 
 `clippedFrame` 表示用户当前看到的上一帧区域。即使布局、样式或组件树在绘制后发生修改，事件阶段也不重新计算命中区域；下一次 draw 会更新 sequence 与 `clippedFrame`。这既保持命中与实际画面一致，也避免 1003 鼠标移动事件中反复遍历祖先。
 
@@ -653,20 +676,24 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
 
 鼠标事件按以下规则分发：
 
-1. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不为当前 Hover 和事件路由执行
-   坐标命中，并把同一条 target-to-root 路径用于二者；否则从 `sequence` 末尾向前查找
-   第一个 `clippedFrame` 包含事件坐标的 Widget；
-2. 普通命中使用 `bindTarget()`，锁定路由使用 `bindLockedTarget()`，将选中的 Widget
+1. `dispatchMouse()` 是公开入口；同一 ViewManager 正在处理鼠标事件时，重入调用在
+   任何副作用前直接忽略；
+2. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不为当前 Hover 和事件路由执行
+   坐标命中；否则从 `sequence` 末尾向前查找第一个 `clippedFrame` 包含事件坐标的
+   Widget。两者只在 target 取得方式上不同；
+3. 普通命中使用 `bindTarget()`，锁定路由使用 `bindLockedTarget()`，将选中的 Widget
    写入同一事件实例的 `target`，并由后者记录当前事件属于锁定目标。Widget 回调中
    `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
    表示最初命中或锁定的事件来源，不随当前接收回调的 Widget 改变；
-3. `wheelUp`/`wheelDown` 触发 `wheel.emit(event)`，其余事件按 `press`、`move`、
+4. `wheelUp`/`wheelDown` 触发 `wheel.emit(event)`，其余事件按 `press`、`move`、
    `release`、`click` 分别触发 `mouseDown`、`mouseMove`、`mouseUp`、`click`；
-4. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则结束 Widget
-   传播，否则沿 `parent` 继续向上传递；
-5. ViewManager 事件、未命中路径、`preventDefault()` 与自动聚焦属于后续焦点路由扩展，
+5. target 确定后先由统一状态阶段完成 Hover、Active 和默认焦点候选处理，再开始事件传播；
+   传播阶段不检查 `visibility` 或 `pointerEvents`；
+6. 当前 Widget 的全部事件监听器返回后检查 `event.isStopped()`；已停止则直接结束 Widget
+   传播，否则沿 `parent` 继续向上传递；状态阶段已经完成，不需要在停止后继续遍历；
+7. ViewManager 事件、未命中路径、`preventDefault()` 与自动聚焦属于后续焦点路由扩展，
    统一以 `docs/engineering/feng-std-tui-focus-key-routing-dev.md` 为准；
-6. 当前不定义捕获阶段、`currentTarget`、透明穿透、事件克隆或事件池化。
+8. 当前不定义捕获阶段、`currentTarget`、透明穿透、事件克隆或事件池化。
 
 ### 10.1 click 合成
 
@@ -694,12 +721,14 @@ ViewManager 使用内部 `ClickState.Idle/Pressed/Moved` 和一个
 6. 当前只支持 click，不区分 doubleClick 或 longPress，因此不读取时间，也不设置按压
    时长阈值；未来增加其他点击手势时再统一设计单调时间与阈值配置。
 
-release 处理在进入 mouseUp 回调前即恢复 `Idle`，保证 mouseUp 或 click 回调重入
-ViewManager 时不会观察或清除上一轮候选。`Idle` 状态下保存的位置没有语义，不要求清零。
+release 处理在进入 mouseUp 回调前即恢复 `Idle`；同步重入分发还会由 ViewManager 入口
+直接忽略。`Idle` 状态下保存的位置没有语义，不要求清零。
 
 Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保持
 `Action<MouseEvent<Widget>>` 单播，只负责把解析后的输入直接交给 ViewManager。
 两层职责不合并：InputManager 不维护订阅集合，ViewManager 不改变输入解析回调模型。
+`InputManager.onMouse` 保存的已绑定方法值仍可由外部调用，但 ViewManager 的处理标记保证
+这种调用不能在当前鼠标事件尚未完成时重入。
 
 `MouseEvent<Widget>.lock()` 由当前 `target` 请求锁定。首个目标取得锁定后，后续鼠标
 事件即使移出该 Widget 的 `clippedFrame`，仍从锁定目标开始分发并沿其当前 parent 链冒泡。
@@ -792,6 +821,11 @@ std/std/src/tui/widgets/
 20. [x] 锁定期间以锁定 target 路径统一驱动 Hover 和鼠标路由，不再维护实际坐标 Hover；
     任意 release 路由后自动解锁并恢复实际 Hover，同时保留显式 unlock。新增用例后
     std_test 600/600、fcts 816/816，沙箱外完整 `make test` 通过。
+21. [x] 将鼠标原始处理收敛为状态准备、事件传播和可取消默认行为三阶段，
+    复用持久路径缓冲统一差分 Hover/Active/Focus，不向共同祖先重复写状态或发事件；
+    新增同步鼠标重入保护，`dispatchMouse()` 按人工决策暂保持公开，`@friend`
+    收紧留给后续专项排查。std_test 601/601、fcts 816/816，沙箱外完整
+    `make test` 通过。
 
 ## 14 Review 关注点
 

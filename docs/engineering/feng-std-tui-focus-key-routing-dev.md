@@ -140,19 +140,31 @@ open type MouseEvent<T> {
 - 需要同时停止传播并阻止焦点切换时，监听器分别调用 `stop()` 和
   `preventDefault()`。
 
-鼠标事件处理顺序为：
+鼠标事件按输入事实状态、事件传播、可取消的默认行为三个固定阶段处理：
 
-1. 根据 lock 或 `clippedFrame` 命中确定 target；
-2. 从 target 开始沿 parent 向 root 分发，或在 `stop()` 后提前结束 Widget 传播；
-3. Widget 传播正常到达 root 时触发 ViewManager 对应事件；未命中时直接触发
+1. 若同一 ViewManager 已在处理鼠标事件，新调用在任何副作用前直接忽略；否则根据 lock
+   或 `clippedFrame` 命中确定 target；
+2. 在传播前的统一状态阶段，从 target 到 root 建立当前路径、同步 Hover/Active，并同时
+   记录最近的 `tabIndex >= 0` 自动焦点候选；候选只记录本次状态阶段的结果，不单独再次
+   遍历组件树；
+3. 从 target 开始沿 parent 向 root 分发，或在 `stop()` 后提前结束 Widget 传播；
+4. Widget 传播正常到达 root 时触发 ViewManager 对应事件；未命中时直接触发
    ViewManager 对应事件；
-4. 对鼠标按下事件，如果 `isPrevented()` 为 `false`，从 target 开始沿 parent 查找
-   最近的 `tabIndex >= 0` Widget；
-5. 找到后调用 `focus(widget)`；找不到时保持原焦点不变。
+5. 对非滚轮的鼠标按下事件，如果 `isPrevented()` 为 `false`，对状态阶段记录的候选调用
+   `focus(widget)`；`focus()` 至多一次验证当前焦点或建立并验证候选的焦点路径。
+   没有候选或候选此时已失效时保持原焦点不变，不重新搜索或回退到其他候选。
+
+常规原始事件的每个阶段至多一次完整的 target-to-root 遍历；受条件限制的阶段可以整体跳过，传播也可以在
+`stop()` 后提前结束。Hover、Active 和候选准备不得各自新增完整遍历；未来增加机制
+必须复用现有阶段，新增完整路径遍历或阶段需要人工决策。
+已经定义的两个条件路径不扩展上述阶段数：锁定 release 在原始传播后解锁，并对实际命中路径
+执行一次 Hover 恢复差分；合成 click 作为一个独立合成事件，只执行自身的一次传播。
 
 默认行为放在 ViewManager 事件之后，使 Widget 或 ViewManager 的鼠标监听器都可以调用
 `preventDefault()`。停止 Widget 传播但未阻止默认行为时，仍按 target 执行自动聚焦。
-滚轮、移动和释放事件不触发自动聚焦。
+滚轮、移动和释放事件不触发自动聚焦。Hover/Active 是传播前同步的输入状态，不属于可
+阻止的默认行为；`preventDefault()` 不回滚这些状态，只阻止尚未执行的自动焦点切换。
+监听器显式调用 `focus()` 属于应用行为，也不受当前事件的 `preventDefault()` 影响。
 
 ## 7 KeyEvent 与键盘焦点路由
 
@@ -214,9 +226,11 @@ let onBlur: Event<FocusEvent<Widget>>;
 
 1. ViewManager 分别维护旧焦点和新焦点从 target 到 root 的有序路径；
 2. 从 root 端比较两条路径，找到最近公共祖先；
-3. 先从旧 target 向上触发 `onBlur`，到最近公共祖先之前结束；
-4. 再从新 target 向上触发 `onFocus`，到最近公共祖先之前结束；
-5. 公共祖先及其上层不重复触发事件，焦点事件不可停止；
+3. 旧路径独有部分从旧 target 向上触发 `onBlur`，新路径独有部分从新 target 向上触发
+   `onFocus`，两条路径内部都保持 target-to-root 顺序；
+4. `onBlur` 与 `onFocus` 两组事件之间不定义全局先后顺序，调用方不得依赖
+   blur-before-focus 或 focus-before-blur；
+5. 公共祖先及其上层不修改路径状态，也不触发 `onBlur` 或 `onFocus`；差分事件不可停止；
 6. `FocusEvent.target` 在 blur 路径中始终是旧焦点，在 focus 路径中始终是新焦点；
 7. 从无焦点进入组件树时，focus 路径最终触发 `ViewManager.onFocus`；清除或失效焦点时，
    blur 路径最终触发 `ViewManager.onBlur`；两个有效焦点之间切换时 ViewManager 不重复触发；
@@ -300,6 +314,8 @@ Tab 切换是 `ViewManager.dispatchKey()` 的默认行为：先使用按键发�
 - 每次鼠标或键盘分发复用 InputManager 创建的同一事件，不克隆载荷；
 - ViewManager 构造时创建并复用两条有序焦点路径；焦点切换不创建 List、HashSet 或临时
   组件集合，并可在组件脱离树后使用旧路径完成 blur；
+- 焦点路径只执行一次共同祖先比较和一次统一差分循环；状态与事件在同一差分节点处理中
+  完成，增加路径机制不得再增加一次完整路径遍历；统一执行机制不创建临时上下文对象；
 - ViewManager 的多播 Event 在 ViewManager 构造时创建，不在每次分发时创建；
 - Tab 切换不排序、不从 root 枚举组件树，也不创建临时集合；先定位当前焦点的
   `sequenceIndex`，再顺序扫描候选，同时选择相邻项和循环项。顺序选择为 O(n)；候选
@@ -316,10 +332,13 @@ Tab 切换是 `ViewManager.dispatchKey()` 的默认行为：先使用按键发�
 - 鼠标点击 target、最近可聚焦祖先和无可聚焦祖先；
 - `preventDefault()` 的幂等性，以及它与 `stop()` 的独立语义；
 - Widget 鼠标事件到 root、ViewManager 的顺序和停止规则；
+- 鼠标监听器同步重入 `dispatchMouse()` 时，内层事件不命中、不更新状态、
+  不参与 click 识别且不传播；外层完成后新事件可正常分发；
 - 未命中 Widget 时直接触发 ViewManager 鼠标事件；
 - KeyEvent target、逐级冒泡、停止传播、ViewManager.key 和无焦点路径；
 - KeyEvent 阻止默认行为的幂等性，以及它与停止传播的独立语义；
-- FocusEvent target、blur-before-focus 顺序、共同祖先不重复触发和 ViewManager 边界；
+- FocusEvent target、两条差分路径各自的 target-to-root 顺序、共同祖先不重复触发和
+  ViewManager 边界；
 - 不可聚焦 target、可聚焦祖先、重复 focus、clearFocus 和失效焦点的事件行为；
 - 焦点 Widget 脱离组件树后仍按缓存旧路径完整 blur，以及监听器内重入切换的串行行为；
 - Widget 停止键盘传播后，`TuiApp.key` 仍被触发；
@@ -335,8 +354,8 @@ Tab 切换是 `ViewManager.dispatchKey()` 的默认行为：先使用按键发�
 `tabIndex == 0` 的 Input：首个 Input 初始获得焦点，Tab 应按 `sequence` 自上而下循环，
 Shift+Tab 应按相反方向循环；每个 Input 保持独立编辑值、焦点样式和 submit 行为。
 
-测试只新增或按人工批准调整相关 TUI 用例。此前基础阶段已经执行 `make test` 全量回归；
-本轮仅变更 std 及 std_test，按人工确认构建 std 并完整回归 std_test。
+测试只新增或按人工批准调整相关 TUI 用例。本轮包含非文档变更，定向回归 std_test 后还必须
+在非 Codex 沙箱环境执行 `make test` 全量回归。
 
 ## 12 实施 TODO
 
@@ -368,6 +387,8 @@ Shift+Tab 应按相反方向循环；每个 Input 保持独立编辑值、焦点
 - [x] 12.26 补齐 Tab 解析、顺序、循环、过滤和默认行为 std_test 用例；
 - [x] 12.27 执行定向测试与全量回归，更新实施状态并等待人工 Review。
 - [x] 12.28 在 `tui_demo` 中加入三个连续 Input，并通过人工终端验证 Tab/Shift+Tab。
+- [x] 12.29 使用复用路径缓冲统一 Hover/Active/Focus 差分，固定鼠标三阶段并
+  增加同步重入保护；定向回归 std_test 601/601，沙箱外 `make test` 全量回归通过。
 
 ## 13 实施结论与后续 Review
 
@@ -384,3 +405,6 @@ Shift+Tab 应按相反方向循环；每个 Input 保持独立编辑值、焦点
   `make test` 通过；
 - Tab 顺序、循环和阻止规则已按第 9 节完成实施；新增用例后 std_test 594/594、
   fcts 816/816，沙箱外完整 `make test` 通过。
+- 鼠标状态、传播和默认行为已收敛到固定三阶段；Hover、Active 和 Focus 只处理差分路径，
+  不因统一机制创建临时集合；新增同步重入用例后 std_test 601/601、fcts 816/816，
+  沙箱外完整 `make test` 通过。
