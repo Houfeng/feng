@@ -8017,6 +8017,98 @@ static void test_callable_spec_lambda_self_capture_codegen(void) {
     feng_program_free(program);
 }
 
+/* Concrete finalizers use the same callable capture preparation as methods
+ * and constructors. Cover self, ordinary local, and nested-lambda capture in
+ * the concrete body, plus the already-shared generic finalizer path. */
+static void test_finalizer_lambda_capture_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.finalizer_capture;\n"
+        "spec Reader(): int;\n"
+        "spec ReaderFactory(): Reader;\n"
+        "spec GenericReader<T>(): T;\n"
+        "type Resource {\n"
+        "    var value: int;\n"
+        "    func ~Resource() {\n"
+        "        let offset = 1;\n"
+        "        let reader: Reader = () -> self.value + offset;\n"
+        "        let factory: ReaderFactory = () {\n"
+        "            let nested: Reader = () -> self.value + offset;\n"
+        "            return nested;\n"
+        "        };\n"
+        "        let nested: Reader = factory();\n"
+        "        reader();\n"
+        "        nested();\n"
+        "    }\n"
+        "}\n"
+        "type Box<T> {\n"
+        "    var value: T;\n"
+        "    func ~Box() {\n"
+        "        let copy: T = self.value;\n"
+        "        let fromSelf: GenericReader<T> = () -> self.value;\n"
+        "        let fromLocal: GenericReader<T> = () -> copy;\n"
+        "        fromSelf();\n"
+        "        fromLocal();\n"
+        "    }\n"
+        "}\n"
+        "func use_it() {\n"
+        "    let resource = Resource { value: 40 };\n"
+        "    let box = Box<int> { value: 41 };\n"
+        "    resource.value;\n"
+        "    box.value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "finalizer_capture.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+    bool semantic_ok;
+
+    semantic_ok = feng_semantic_analyze(programs,
+                                        1U,
+                                        FENG_COMPILE_TARGET_LIB,
+                                        &analysis,
+                                        &errors,
+                                        &error_count);
+    if (!semantic_ok) {
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr,
+                    "semantic error (finalizer lambda capture): %s: %s\n",
+                    errors[i].code != NULL ? errors[i].code : "(none)",
+                    errors[i].message != NULL ? errors[i].message : "(unknown)");
+        }
+    }
+    ASSERT(semantic_ok);
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (finalizer lambda capture): %s\n",
+                cgerr.message != NULL ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengCaptureCell__feng__codegen__finalizer_capture") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengLambda__feng__codegen__finalizer_capture") != NULL);
+    ASSERT(strstr(out.c_source, "__Resource__finalize(void *_self)") != NULL);
+    ASSERT(strstr(out.c_source, "FengGenericMethod__feng__codegen__finalizer_capture") != NULL);
+    ASSERT(strstr(out.c_source, "feng_cleanup_push(") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static const char *kCallableSpecLambdaArgumentSrc =
     "module feng.codegen.gs8;\n"
     "spec Mapper(x: int): int;\n"
@@ -12819,6 +12911,7 @@ int main(void) {
     test_lambda_tuple_body_uses_callable_return_target_codegen();
     test_generic_call_adopts_owned_aggregate_argument_codegen();
     test_callable_spec_lambda_self_capture_codegen();
+    test_finalizer_lambda_capture_codegen();
     test_callable_spec_lambda_argument_codegen();
     test_callable_spec_other_coercion_codegen();
     test_callable_spec_other_field_read_coercion_codegen();

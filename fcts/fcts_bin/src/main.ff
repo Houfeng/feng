@@ -16,6 +16,7 @@ func main(args: string[]) {
       test_extern();
       test_lambda();
       test_type();
+      test_finalizer_capture();
       test_enum();
       test_spec();
       test_intersection();

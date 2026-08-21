@@ -1,6 +1,6 @@
 # Feng 终结器 `self` 捕获与对象复活修复方案
 
-> **状态**：等待 Review，尚未实施。
+> **状态**：已完成；定向验证、FCTS 与沙箱外 `make test` 全部通过。
 >
 > **文档定位**：本文是独立 bugfix 工程方案，不是正式语言规范。Review 通过后，必须
 > 先修订相关正式规范，再修改 Runtime、Codegen 和测试。Review 通过前不得开始实现。
@@ -315,49 +315,101 @@ collecting scope 只影响循环检测器慢路径，不得给 acyclic ARC 快�
 
 ### 8.1 Review 与正式规范
 
-- [ ] 人工 Review 并批准本文方案
-- [ ] 修订 `docs/specifications/feng-lifetime.md`
-- [ ] 修订 `docs/specifications/feng-function.md`
-- [ ] 修订 `docs/specifications/feng-type.md`
-- [ ] 核对错误码规范无需新增或改义
+- [x] 人工 Review 并批准本文方案
+- [x] 修订 `docs/specifications/feng-lifetime.md`
+- [x] 修订 `docs/specifications/feng-function.md`
+- [x] 修订 `docs/specifications/feng-type.md`
+- [x] 核对错误码规范无需新增或改义
 
 ### 8.2 Runtime
 
-- [ ] 为 ARC 用户终结器路径实现 execution hold
-- [ ] 保证 execution hold 不参与复活判定
-- [ ] 处理终结器期间产生的 potentially-cyclic 候选状态
-- [ ] 防止 Phase 1 内嵌套收集当前 white 集合
-- [ ] 在 Phase 1.5 前移除所有 Runtime 私有执行持有
-- [ ] 补齐 Runtime 定向用例
+- [x] 为 ARC 用户终结器路径实现 execution hold
+- [x] 保证 execution hold 不参与复活判定
+- [x] 处理终结器期间产生的 potentially-cyclic 候选状态
+- [x] 防止 Phase 1 内嵌套收集当前 white 集合
+- [x] 在 Phase 1.5 前移除所有 Runtime 私有执行持有
+- [x] 补齐 Runtime 定向用例
 
 ### 8.3 Codegen
 
-- [ ] 抽取或复用统一 callable capture 准备能力
-- [ ] 为非泛型 finalizer 建立普通局部 capture cell
-- [ ] 为非泛型 finalizer 建立 `self` capture cell
-- [ ] 统一恢复 Codegen 捕获上下文和错误清理路径
-- [ ] 补齐非泛型、泛型及嵌套捕获 Codegen 用例
+- [x] 抽取或复用统一 callable capture 准备能力
+- [x] 为非泛型 finalizer 建立普通局部 capture cell
+- [x] 为非泛型 finalizer 建立 `self` capture cell
+- [x] 统一恢复 Codegen 捕获上下文和错误清理路径
+- [x] 补齐非泛型、泛型及嵌套捕获 Codegen 用例
 
 ### 8.4 行为与回归
 
-- [ ] 补齐 FCTS 非逃逸捕获用例
-- [ ] 补齐 FCTS 逃逸闭包复活与最终释放用例
-- [ ] 运行 Runtime、Semantic、Codegen 定向测试
-- [ ] 运行 FCTS 全量测试
-- [ ] 在沙箱外运行 `make test`
-- [ ] 运行 `git diff --check`
-- [ ] 补齐本文实施结果与问题记录
+- [x] 补齐 FCTS 非逃逸捕获用例
+- [x] 补齐 FCTS 逃逸闭包复活与最终释放用例
+- [x] 运行 Runtime、Semantic、Codegen 定向测试
+- [x] 运行 FCTS 全量测试
+- [x] 在沙箱外运行 `make test`
+- [x] 运行 `git diff --check`
+- [x] 补齐本文实施结果与问题记录
 
 ## 9. 实施过程问题记录
 
 实施过程中发现任何偏离本文方案、正式规范或预期测试结果的问题时，必须先在本节记录
 事实、影响和复现，再分析并处理；不得先加入特判或扩大范围。
 
-当前无实施问题。本文仍处于等待 Review 状态。
+### P01：终结器内带值 `return` 的块体 Lambda 被误判为终结器返回
 
-## 10. 完成标准
+- 状态：已解决（人工决定纳入本专项）
+- 发现阶段：新增“嵌套 Lambda 捕获 `self`”Codegen 组合用例并运行定向测试时
+- 复现形状：终结器内声明目标为 callable-form `spec` 的块体 Lambda，Lambda 自身使用
+  `return value;`
+- 实际结果：Semantic 报告 `AE0501: finalizer body must use 'return;' without a value`，
+  Codegen 尚未开始
+- 期望结果：该 `return` 属于 Lambda 自身，应按 Lambda 的返回类型检查；外层终结器的
+  “只能 `return;`”规则不适用
+- 根因一：`current_callable_member` 同时承担词法成员实现授权与当前 callable body 身份；
+  Lambda 必须继承前者，却不能继承后者，单一字段无法正确表达这两个上下文
+- 根因二：异常逃逸派生分析会再次解析 Lambda body，但原实现只重置异常标记，仍沿用
+  外层 callable signature、构造函数/终结器成员身份以及 loop/defer 等 body 状态；即使主解析
+  边界修正，二次解析仍会重复触发 `AE0501`
+- 与本专项关系：这是既有 Semantic callable-context Bug，不是本次 Runtime execution hold
+  或 finalizer capture lowering 引入；但它会阻断本文要求的嵌套块体 Lambda 覆盖
+- 人工决策：本次一并修复。正式规范先明确特殊成员与嵌套 Lambda 的 `return` 归属；
+  Semantic 将“词法成员实现上下文”与“当前 callable body 所属成员”分离，保证 Lambda
+  进入自身 callable body 后不继承构造函数/终结器返回限制，同时继续继承外层类型实现
+  上下文、`self` 捕获能力和既有 friend/spec-seal 授权
+- 处理结果：新增 `current_callable_body_member`，保留 `current_callable_member` 作为词法授权
+  身份；主解析与异常逃逸分析共用无分配的 Lambda callable-context 进入/恢复 helper。
+  异常逃逸作为派生分析只处理主语义解析尚无错误的 body，避免对非法 Lambda 重复产生
+  诊断
+- 验证：Semantic 覆盖构造函数/终结器嵌套块体 Lambda 的带值 `return`，以及构造函数
+  Lambda 不得继承 `self.<let>` 最终绑定权限；完整 Semantic 单元测试通过
 
-只有同时满足以下条件，P02 才能标记为已解决：
+### P02：FCTS 生命周期 helper 误读 `seal` 字段
+
+- 状态：已解决
+- 发现阶段：首次运行新增 FCTS 用例时
+- 实际结果：四个仅用于结束局部对象生命周期的 helper 在绑定对象后读取 `resource.value`；
+  其中三个字段为 `seal`，Semantic 正确报告 `AE0308`
+- 根因：该读取原本用于显式“使用”局部绑定，但 Feng 不要求以字段读取维持局部生命周期；
+  局部绑定本身已持有对象并在函数退出时释放
+- 处理结果：删除四个无语义作用的字段读取，不改变字段可见性，也不放宽语言规则
+- 验证：FCTS 全量 821 项通过，新增 4 项全部通过
+
+## 10. 实施结果
+
+- Runtime 为每次用户终结器调用建立并直接移除 execution hold，返回移除后的程序强引用
+  计数；普通 retain/release 快路径、托管对象 header 与公开 ABI 均未改变
+- 循环回收在当前收集轮次内抑制嵌套收集，保留 survivor 的新增候选状态，并在释放
+  free_set 前清除终结器期间产生的候选记录
+- concrete method、constructor 与 finalizer 共用接收者 capture-cell 绑定 helper；非泛型
+  finalizer 现已执行完整的 callable capture 需求收集、作用域清理与上下文恢复
+- Semantic 分离词法成员实现身份与当前 callable body 身份，并让主解析、异常逃逸派生分析
+  共用 Lambda callable-context 边界，完成 P01 修复且未改变 friend/spec-seal 授权
+- Runtime、Semantic、Codegen 定向测试通过；FCTS 全量 `821/821` 通过，其中新增四项覆盖
+  concrete/generic 非逃逸捕获、逃逸闭包复活、最终释放与直接 `self` 复活
+- 沙箱外 `make test` 通过：macOS UBSan 与 normal 两阶段的单元测试、smoke、CLI、std、
+  FCTS、性能约束、增量构建、发布及工具链脚本均通过；`git diff --check` 通过
+
+## 11. 完成标准
+
+只有同时满足以下条件，本专项才能标记为已解决：
 
 1. 正式规范明确包含终结器 `self` 及 Lambda 捕获语义；
 2. 非泛型和泛型终结器的普通局部与 `self` 捕获均可编译；

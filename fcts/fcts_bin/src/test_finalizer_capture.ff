@@ -1,0 +1,288 @@
+module fcts_bin;
+
+import std.test;
+
+/** Integer-producing closure used by finalizer capture scenarios. */
+spec FinalizerIntProducer(): int;
+
+/** Nested closure factory used to verify transitive finalizer captures. */
+spec FinalizerProducerFactory(): FinalizerIntProducer;
+
+/** Generic producer used by a shared generic finalizer body. */
+spec FinalizerValueProducer<T>(): T;
+
+/** Observable state for non-escaping and generic finalizer captures. */
+type FinalizerCaptureObservation {
+  seal static var nonEscapingCallsValue: int = 0;
+  seal static var nonEscapingObservedValue: int = 0;
+  seal static var genericCallsValue: int = 0;
+
+  /** Reset non-escaping capture observations. */
+  static func resetNonEscaping(): void {
+    FinalizerCaptureObservation.nonEscapingCallsValue = 0;
+    FinalizerCaptureObservation.nonEscapingObservedValue = 0;
+  }
+
+  /** Record one concrete finalizer result. */
+  static func recordNonEscaping(value: int): void {
+    FinalizerCaptureObservation.nonEscapingCallsValue += 1;
+    FinalizerCaptureObservation.nonEscapingObservedValue = value;
+  }
+
+  /** Return the concrete finalizer invocation count. */
+  static func nonEscapingCalls(): int {
+    return FinalizerCaptureObservation.nonEscapingCallsValue;
+  }
+
+  /** Return the concrete finalizer's closure result. */
+  static func nonEscapingObserved(): int {
+    return FinalizerCaptureObservation.nonEscapingObservedValue;
+  }
+
+  /** Reset generic finalizer observations. */
+  static func resetGeneric(): void {
+    FinalizerCaptureObservation.genericCallsValue = 0;
+  }
+
+  /** Record one generic finalizer invocation. */
+  static func recordGeneric(): void {
+    FinalizerCaptureObservation.genericCallsValue += 1;
+  }
+
+  /** Return the generic finalizer invocation count. */
+  static func genericCalls(): int {
+    return FinalizerCaptureObservation.genericCallsValue;
+  }
+}
+
+/** Concrete owner whose finalizer captures self, a local, and nested lambdas. */
+type FinalizerCaptureResource {
+  seal let value: int;
+
+  /** Construct one observable finalizer owner. */
+  func FinalizerCaptureResource(value: int) {
+    self.value = value;
+  }
+
+  /** Exercise balanced non-escaping captures during finalization. */
+  func ~FinalizerCaptureResource() {
+    let offset = 2;
+    let reader: FinalizerIntProducer = () -> self.value + offset;
+    let factory: FinalizerProducerFactory = () {
+      let nested: FinalizerIntProducer = () -> self.value + offset;
+      return nested;
+    };
+    let nested: FinalizerIntProducer = factory();
+    FinalizerCaptureObservation.recordNonEscaping(reader() + nested());
+  }
+}
+
+/** Generic owner whose shared finalizer captures both self and a T local. */
+type FinalizerGenericCaptureResource<T> {
+  seal let value: T;
+
+  /** Construct one generic finalizer owner. */
+  func FinalizerGenericCaptureResource(value: T) {
+    self.value = value;
+  }
+
+  /** Exercise the generic shared-body capture and cleanup path. */
+  func ~FinalizerGenericCaptureResource() {
+    let copy: T = self.value;
+    let fromSelf: FinalizerValueProducer<T> = () -> self.value;
+    let fromLocal: FinalizerValueProducer<T> = () -> copy;
+    fromSelf();
+    fromLocal();
+    FinalizerCaptureObservation.recordGeneric();
+  }
+}
+
+/** External closure storage used to make a captured self escape finalization. */
+type FinalizerEscapedClosureState {
+  seal static var finalizerCallsValue: int = 0;
+  seal static var resurrectionEnabledValue: bool = false;
+  seal static var producersValue: FinalizerIntProducer[] = [];
+
+  /** Reset all escaped-closure state before one test. */
+  static func reset(): void {
+    FinalizerEscapedClosureState.producersValue = [];
+    FinalizerEscapedClosureState.finalizerCallsValue = 0;
+    FinalizerEscapedClosureState.resurrectionEnabledValue = true;
+  }
+
+  /** Record the start of one finalizer invocation. */
+  static func recordFinalizer(): void {
+    FinalizerEscapedClosureState.finalizerCallsValue += 1;
+  }
+
+  /** Return whether this invocation should republish its closure. */
+  static func resurrectionEnabled(): bool {
+    return FinalizerEscapedClosureState.resurrectionEnabledValue;
+  }
+
+  /** Publish a self-capturing closure beyond the finalizer return boundary. */
+  static func publish(producer: FinalizerIntProducer): void {
+    FinalizerEscapedClosureState.producersValue = [producer];
+  }
+
+  /** Invoke the escaped closure after its creating finalizer returned. */
+  static func invoke(): int {
+    let producer = FinalizerEscapedClosureState.producersValue[0];
+    return producer();
+  }
+
+  /** Disable another resurrection and release the escaped closure. */
+  static func disableAndClear(): void {
+    FinalizerEscapedClosureState.resurrectionEnabledValue = false;
+    FinalizerEscapedClosureState.producersValue = [];
+  }
+
+  /** Return the number of observed finalizer invocations. */
+  static func finalizerCalls(): int {
+    return FinalizerEscapedClosureState.finalizerCallsValue;
+  }
+}
+
+/** Owner resurrected through a closure that captures finalizer self. */
+type FinalizerEscapingCaptureResource {
+  seal let value: int;
+
+  /** Construct one closure-resurrection owner. */
+  func FinalizerEscapingCaptureResource(value: int) {
+    self.value = value;
+  }
+
+  /** Publish a self-capturing closure only during the first finalization. */
+  func ~FinalizerEscapingCaptureResource() {
+    FinalizerEscapedClosureState.recordFinalizer();
+    if FinalizerEscapedClosureState.resurrectionEnabled() {
+      let producer: FinalizerIntProducer = () -> self.value;
+      FinalizerEscapedClosureState.publish(producer);
+    }
+  }
+}
+
+/** External object storage used to preserve direct self resurrection behavior. */
+type FinalizerDirectResurrectionState {
+  seal static var finalizerCallsValue: int = 0;
+  seal static var resurrectionEnabledValue: bool = false;
+  seal static var resourcesValue: FinalizerDirectResurrectionResource[] = [];
+
+  /** Reset all direct-resurrection state before one test. */
+  static func reset(): void {
+    FinalizerDirectResurrectionState.resourcesValue = [];
+    FinalizerDirectResurrectionState.finalizerCallsValue = 0;
+    FinalizerDirectResurrectionState.resurrectionEnabledValue = true;
+  }
+
+  /** Record the start of one direct-resurrection finalizer. */
+  static func recordFinalizer(): void {
+    FinalizerDirectResurrectionState.finalizerCallsValue += 1;
+  }
+
+  /** Return whether direct self publication remains enabled. */
+  static func resurrectionEnabled(): bool {
+    return FinalizerDirectResurrectionState.resurrectionEnabledValue;
+  }
+
+  /** Publish self beyond the finalizer return boundary. */
+  static func publish(resource: FinalizerDirectResurrectionResource): void {
+    FinalizerDirectResurrectionState.resourcesValue = [resource];
+  }
+
+  /** Read the directly resurrected object after finalization. */
+  static func value(): int {
+    return FinalizerDirectResurrectionState.resourcesValue[0].value;
+  }
+
+  /** Disable another resurrection and release the published object. */
+  static func disableAndClear(): void {
+    FinalizerDirectResurrectionState.resurrectionEnabledValue = false;
+    FinalizerDirectResurrectionState.resourcesValue = [];
+  }
+
+  /** Return the number of observed direct-resurrection finalizers. */
+  static func finalizerCalls(): int {
+    return FinalizerDirectResurrectionState.finalizerCallsValue;
+  }
+}
+
+/** Owner resurrected by publishing finalizer self directly. */
+type FinalizerDirectResurrectionResource {
+  open let value: int;
+
+  /** Construct one direct-resurrection owner. */
+  func FinalizerDirectResurrectionResource(value: int) {
+    self.value = value;
+  }
+
+  /** Publish self only during the first finalization. */
+  func ~FinalizerDirectResurrectionResource() {
+    FinalizerDirectResurrectionState.recordFinalizer();
+    if FinalizerDirectResurrectionState.resurrectionEnabled() {
+      FinalizerDirectResurrectionState.publish(self);
+    }
+  }
+}
+
+/** End the only local lifetime of a concrete capture owner. */
+func releaseFinalizerCaptureResource(): void {
+  let resource = FinalizerCaptureResource(40);
+}
+
+/** End the only local lifetime of a closed generic capture owner. */
+func releaseFinalizerGenericCaptureResource(): void {
+  let resource = FinalizerGenericCaptureResource<int>(41);
+}
+
+/** End the initial local lifetime of a closure-resurrection owner. */
+func releaseFinalizerEscapingCaptureResource(): void {
+  let resource = FinalizerEscapingCaptureResource(42);
+}
+
+/** End the initial local lifetime of a direct-resurrection owner. */
+func releaseFinalizerDirectResurrectionResource(): void {
+  let resource = FinalizerDirectResurrectionResource(43);
+}
+
+/** Verify finalizer capture execution, cleanup, and resurrection behavior. */
+open func test_finalizer_capture() {
+  describe("finalizer capture and resurrection", () {
+    test("non-escaping self and local captures finalize exactly once", () {
+      FinalizerCaptureObservation.resetNonEscaping();
+      releaseFinalizerCaptureResource();
+      assert(FinalizerCaptureObservation.nonEscapingCalls() == 1 &&
+             FinalizerCaptureObservation.nonEscapingObserved() == 84,
+             "balanced concrete captures do not re-enter or resurrect");
+    });
+
+    test("generic self and local captures finalize exactly once", () {
+      FinalizerCaptureObservation.resetGeneric();
+      releaseFinalizerGenericCaptureResource();
+      assert(FinalizerCaptureObservation.genericCalls() == 1,
+             "balanced generic captures do not re-enter or resurrect");
+    });
+
+    test("escaping self capture resurrects until closure release", () {
+      FinalizerEscapedClosureState.reset();
+      releaseFinalizerEscapingCaptureResource();
+      assert(FinalizerEscapedClosureState.finalizerCalls() == 1 &&
+             FinalizerEscapedClosureState.invoke() == 42,
+             "escaped closure remains callable after finalizer return");
+      FinalizerEscapedClosureState.disableAndClear();
+      assert(FinalizerEscapedClosureState.finalizerCalls() == 2,
+             "releasing escaped closure triggers one final finalization");
+    });
+
+    test("direct self resurrection behavior remains unchanged", () {
+      FinalizerDirectResurrectionState.reset();
+      releaseFinalizerDirectResurrectionResource();
+      assert(FinalizerDirectResurrectionState.finalizerCalls() == 1 &&
+             FinalizerDirectResurrectionState.value() == 43,
+             "directly published self survives finalizer return");
+      FinalizerDirectResurrectionState.disableAndClear();
+      assert(FinalizerDirectResurrectionState.finalizerCalls() == 2,
+             "releasing direct resurrection triggers final finalization");
+    });
+  });
+}

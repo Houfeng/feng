@@ -496,6 +496,36 @@ static void test_frame_marker_lifo_pop(void) {
 
 /* --- Finalizer resurrection (Phase 1B-1) ------------------------------- */
 
+/* Model a non-escaping self-capturing closure: the capture retains `self`
+ * while the finalizer body runs, then releases it before returning. */
+static int g_temporary_self_finalizer_calls = 0;
+
+static void temporary_self_finalizer(void *self) {
+    void *temporary;
+
+    ++g_temporary_self_finalizer_calls;
+    ASSERT(((FengManagedHeader *)self)->refcount >= 1U);
+    temporary = feng_retain(self);
+    feng_release(temporary);
+}
+
+static const FengTypeDescriptor temporary_self_descriptor = {
+    .name = "test.TemporarySelf",
+    .size = sizeof(TestObject),
+    .finalizer = temporary_self_finalizer,
+};
+
+/* A balanced temporary self reference must neither resurrect the object nor
+ * re-enter its finalizer before the original invocation returns. */
+static void test_finalizer_temporary_self_reference_does_not_reenter(void) {
+    TestObject *obj;
+
+    g_temporary_self_finalizer_calls = 0;
+    obj = (TestObject *)feng_object_new(&temporary_self_descriptor);
+    feng_release(obj);
+    ASSERT(g_temporary_self_finalizer_calls == 1);
+}
+
 /* Test fixture: a descriptor whose finalizer republishes `self` into a global
  * slot, simulating user code that accidentally (or intentionally) revives the
  * object from within its own finalizer. */
@@ -1237,6 +1267,28 @@ static const FengTypeDescriptor cyc_node_fin_descriptor = {
     .managed_fields = cyc_node_fields,
 };
 
+/* Cycle-path analogue of a temporary self capture. With threshold one, its
+ * nested release enqueues a candidate while Phase 1 is active; the current
+ * white set must remain owned by the outer collection round. */
+static int g_cyc_temporary_self_fin_count = 0;
+
+static void cyc_node_temporary_self_finalize(void *self) {
+    void *temporary;
+
+    ++g_cyc_temporary_self_fin_count;
+    temporary = feng_retain(self);
+    feng_release(temporary);
+}
+
+static const FengTypeDescriptor cyc_node_temporary_self_descriptor = {
+    .name = "test.CycNodeTemporarySelf",
+    .size = sizeof(CycNode),
+    .finalizer = cyc_node_temporary_self_finalize,
+    .is_potentially_cyclic = true,
+    .managed_field_count = sizeof(cyc_node_fields) / sizeof(cyc_node_fields[0]),
+    .managed_fields = cyc_node_fields,
+};
+
 /* Build a fresh CycNode with refcount = 1. */
 static CycNode *cyc_new(const FengTypeDescriptor *desc) {
     CycNode *n = (CycNode *)feng_object_new(desc);
@@ -1329,6 +1381,31 @@ static void test_cycle_collector_reclaims_cycle_with_finalizer(void) {
      * the shutdown drain below or by a subsequent test's allocator state.) */
     ASSERT(g_cyc_fin_count == 2);
 
+    feng_cycle_runtime_shutdown();
+}
+
+/* Phase 1 temporary self references may enqueue deferred candidates, but
+ * cannot recursively collect the current white set or leave stale entries
+ * after the free-set is reclaimed. */
+static void test_cycle_finalizer_temporary_self_reference_defers_collection(void) {
+    CycNode *a;
+    CycNode *b;
+
+    g_cyc_temporary_self_fin_count = 0;
+    a = cyc_new(&cyc_node_temporary_self_descriptor);
+    b = cyc_new(&cyc_node_temporary_self_descriptor);
+    cyc_link(&a->child_a, b);
+    cyc_link(&b->child_a, a);
+    feng_release(a);
+    feng_release(b);
+
+    feng_cycle_lock();
+    feng_cycle_set_threshold_for_test(1U);
+    feng_cycle_collect_locked();
+    feng_cycle_set_threshold_for_test(256U);
+    feng_cycle_unlock();
+
+    ASSERT(g_cyc_temporary_self_fin_count == 2);
     feng_cycle_runtime_shutdown();
 }
 
@@ -2832,6 +2909,7 @@ int main(void) {
     test_frame_marker_release_to_try_marker();
     test_frame_marker_release_to_try_preserves_outer_cleanup();
     test_frame_marker_lifo_pop();
+    test_finalizer_temporary_self_reference_does_not_reenter();
     test_finalizer_resurrection_then_release();
     test_finalizer_resurrection_reruns_on_next_release();
     test_finalizer_no_resurrection_releases();
@@ -2849,6 +2927,7 @@ int main(void) {
     test_cycle_collector_reclaims_two_node_cycle();
     test_cycle_collector_does_not_collect_externally_referenced();
     test_cycle_collector_reclaims_cycle_with_finalizer();
+    test_cycle_finalizer_temporary_self_reference_defers_collection();
     test_cycle_collector_finalizer_resurrects_self();
     test_array_storage_cycle_collector_uses_length();
     test_cycle_collector_partial_resurrection_frees_unsurvived();

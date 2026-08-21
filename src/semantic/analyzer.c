@@ -416,7 +416,13 @@ typedef struct ResolveContext {
      * members regardless of whether the target lives in the same package. */
     const FengDecl *current_fit_decl;
     const FengTypeRef *current_fit_target_type_ref;
+    /* Lexical member implementation context. Nested lambdas intentionally
+     * preserve this identity for friend/spec-seal/mixable authorization. */
     const FengTypeMember *current_callable_member;
+    /* Member whose own callable body is currently being resolved. Nested
+     * lambdas clear this field so their return and constructor-binding rules
+     * cannot inherit restrictions from the lexical member. */
+    const FengTypeMember *current_callable_body_member;
     const FengCallableSignature *current_callable_signature;
     InferredExprType current_callable_inferred_return_type;
     bool current_callable_saw_return;
@@ -10538,12 +10544,12 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
         return true;
     }
 
-    if (context->current_callable_member != NULL &&
-        (context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
-         context->current_callable_member->kind == FENG_TYPE_MEMBER_FINALIZER) &&
+    if (context->current_callable_body_member != NULL &&
+        (context->current_callable_body_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+         context->current_callable_body_member->kind == FENG_TYPE_MEMBER_FINALIZER) &&
         stmt->as.return_value != NULL) {
         const char *member_kind_name =
-            (context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR)
+            (context->current_callable_body_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR)
                 ? "constructor"
                 : "finalizer";
         return resolver_append_error(
@@ -12146,20 +12152,97 @@ static void note_callable_exception_escape(ResolveContext *context,
     note_current_callable_exception_escape(context);
 }
 
+/* Saved callable-body state while a lambda body is being analysed. The
+ * synthetic signature makes every lambda an explicit callable boundary even
+ * in secondary analyses that revisit its body. */
+typedef struct LambdaCallableContext {
+    const FengTypeMember *body_member;
+    const FengCallableSignature *signature;
+    InferredExprType inferred_return;
+    bool saw_return;
+    bool has_escaping_exception;
+    size_t exception_capture_depth;
+    size_t loop_depth;
+    size_t if_expr_depth;
+    size_t catch_expr_depth;
+    size_t defer_depth;
+    bool self_capturable;
+    FengCallableSignature synthetic_signature;
+} LambdaCallableContext;
+
+/* Enter the independent callable-body context of one lambda without changing
+ * its enclosing lexical member identity or allocating temporary storage. */
+static void lambda_enter_callable_context(ResolveContext *context,
+                                          const FengExpr *expr,
+                                          LambdaCallableContext *saved) {
+    saved->body_member = context->current_callable_body_member;
+    saved->signature = context->current_callable_signature;
+    saved->inferred_return = context->current_callable_inferred_return_type;
+    saved->saw_return = context->current_callable_saw_return;
+    saved->has_escaping_exception = context->current_callable_has_escaping_exception;
+    saved->exception_capture_depth = context->exception_capture_depth;
+    saved->loop_depth = context->loop_depth;
+    saved->if_expr_depth = context->if_expr_depth;
+    saved->catch_expr_depth = context->catch_expr_depth;
+    saved->defer_depth = context->defer_depth;
+    saved->self_capturable = context->self_capturable;
+
+    memset(&saved->synthetic_signature, 0, sizeof(saved->synthetic_signature));
+    saved->synthetic_signature.token = expr->token;
+    saved->synthetic_signature.params = expr->as.lambda.params;
+    saved->synthetic_signature.param_count = expr->as.lambda.param_count;
+    saved->synthetic_signature.return_type = NULL;
+    saved->synthetic_signature.body = expr->as.lambda.is_block_body
+                                          ? expr->as.lambda.body_block
+                                          : NULL;
+
+    context->current_callable_body_member = NULL;
+    context->current_callable_signature = &saved->synthetic_signature;
+    context->current_callable_inferred_return_type = inferred_expr_type_unknown();
+    context->current_callable_saw_return = false;
+    context->current_callable_has_escaping_exception = false;
+    context->exception_capture_depth = 0U;
+    context->loop_depth = 0U;
+    context->if_expr_depth = 0U;
+    context->catch_expr_depth = 0U;
+    context->defer_depth = 0U;
+}
+
+/* Restore the enclosing callable-body state after a lambda-body analysis. */
+static void lambda_leave_callable_context(ResolveContext *context,
+                                          const LambdaCallableContext *saved) {
+    context->current_callable_body_member = saved->body_member;
+    context->current_callable_signature = saved->signature;
+    context->current_callable_inferred_return_type = saved->inferred_return;
+    context->current_callable_saw_return = saved->saw_return;
+    context->current_callable_has_escaping_exception = saved->has_escaping_exception;
+    context->exception_capture_depth = saved->exception_capture_depth;
+    context->loop_depth = saved->loop_depth;
+    context->if_expr_depth = saved->if_expr_depth;
+    context->catch_expr_depth = saved->catch_expr_depth;
+    context->defer_depth = saved->defer_depth;
+    context->self_capturable = saved->self_capturable;
+}
+
 static bool lambda_expr_may_escape_exception(ResolveContext *context, const FengExpr *expr) {
-    const FengCallableSignature *previous_callable_signature;
-    bool previous_callable_has_escaping_exception;
+    LambdaCallableContext callable_context;
     bool escapes = false;
     size_t param_index;
     bool ok = true;
 
-    if (context == NULL || expr == NULL || expr->kind != FENG_EXPR_LAMBDA) {
+    /* Exception escape is a derived analysis of a body already accepted by
+     * primary resolution. Replaying an invalid body would only duplicate its
+     * diagnostics and cannot contribute a usable exception fact. */
+    if (context == NULL || expr == NULL || expr->kind != FENG_EXPR_LAMBDA ||
+        context->error_count == NULL || *context->error_count > 0U) {
         return false;
     }
 
     if (!resolver_push_scope(context)) {
         return false;
     }
+
+    lambda_enter_callable_context(context, expr, &callable_context);
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
         ok = resolver_add_local_typed_name(
@@ -12169,9 +12252,6 @@ static bool lambda_expr_may_escape_exception(ResolveContext *context, const Feng
             expr->as.lambda.params[param_index].mutability);
     }
 
-    previous_callable_signature = context->current_callable_signature;
-    previous_callable_has_escaping_exception = context->current_callable_has_escaping_exception;
-    context->current_callable_has_escaping_exception = false;
     if (ok) {
         if (expr->as.lambda.is_block_body) {
             ok = resolve_block_contents(context, expr->as.lambda.body_block, context->self_capturable);
@@ -12180,8 +12260,7 @@ static bool lambda_expr_may_escape_exception(ResolveContext *context, const Feng
         }
     }
     escapes = ok && context->current_callable_has_escaping_exception;
-    context->current_callable_signature = previous_callable_signature;
-    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
+    lambda_leave_callable_context(context, &callable_context);
 
     resolver_pop_scope(context);
     return escapes;
@@ -17805,8 +17884,8 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
         return true;
     }
 
-    if (context->current_callable_member == NULL ||
-        context->current_callable_member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
+    if (context->current_callable_body_member == NULL ||
+        context->current_callable_body_member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR) {
         return resolver_append_error(
             context,
             stmt->as.assign.target->token,
@@ -17831,8 +17910,8 @@ static bool validate_self_let_assignment(ResolveContext *context, const FengStmt
             "AE0102", format_message("constructor assignment repeats final binding of let member '%.*s' more than once in constructor '%.*s'",
                            (int)field_member->as.field.name.length,
                            field_member->as.field.name.data,
-                           (int)context->current_callable_member->as.callable.name.length,
-                           context->current_callable_member->as.callable.name.data));
+                           (int)context->current_callable_body_member->as.callable.name.length,
+                           context->current_callable_body_member->as.callable.name.data));
     }
 
     return resolver_current_constructor_add_bound_name(context, field_member->as.field.name);
@@ -26362,66 +26441,11 @@ static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *e
     return true;
 }
 
-/* Initialise transient context state for resolving the body of a lambda or
- * function-like value. Returns the saved previous state via out parameters so
- * the caller can restore it. */
-static void lambda_save_callable_context(ResolveContext *context,
-                                         const FengCallableSignature **out_prev_sig,
-                                         InferredExprType *out_prev_inferred_return,
-                                         bool *out_prev_saw_return,
-                                         bool *out_prev_escape,
-                                         size_t *out_prev_exception_capture,
-                                         size_t *out_prev_loop,
-                                         size_t *out_prev_if_expr_depth,
-                                         size_t *out_prev_catch_expr_depth,
-                                         size_t *out_prev_defer_depth) {
-    *out_prev_sig = context->current_callable_signature;
-    *out_prev_inferred_return = context->current_callable_inferred_return_type;
-    *out_prev_saw_return = context->current_callable_saw_return;
-    *out_prev_escape = context->current_callable_has_escaping_exception;
-    *out_prev_exception_capture = context->exception_capture_depth;
-    *out_prev_loop = context->loop_depth;
-    *out_prev_if_expr_depth = context->if_expr_depth;
-    *out_prev_catch_expr_depth = context->catch_expr_depth;
-    *out_prev_defer_depth = context->defer_depth;
-}
-
-static void lambda_restore_callable_context(ResolveContext *context,
-                                            const FengCallableSignature *prev_sig,
-                                            InferredExprType prev_inferred_return,
-                                            bool prev_saw_return,
-                                            bool prev_escape,
-                                            size_t prev_exception_capture,
-                                            size_t prev_loop,
-                                            size_t prev_if_expr_depth,
-                                            size_t prev_catch_expr_depth,
-                                            size_t prev_defer_depth) {
-    context->current_callable_signature = prev_sig;
-    context->current_callable_inferred_return_type = prev_inferred_return;
-    context->current_callable_saw_return = prev_saw_return;
-    context->current_callable_has_escaping_exception = prev_escape;
-    context->exception_capture_depth = prev_exception_capture;
-    context->loop_depth = prev_loop;
-    context->if_expr_depth = prev_if_expr_depth;
-    context->catch_expr_depth = prev_catch_expr_depth;
-    context->defer_depth = prev_defer_depth;
-}
-
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
-    const FengCallableSignature *prev_sig;
-    InferredExprType prev_inferred_return;
-    bool prev_saw_return;
-    bool prev_escape;
-    size_t prev_exception_capture;
-    size_t prev_loop;
-    size_t prev_if_expr_depth;
-    size_t prev_catch_expr_depth;
-    size_t prev_defer_depth;
-    bool prev_self_capturable;
     bool effective_allow_self;
     LambdaCaptureFrame frame;
-    FengCallableSignature synthetic_sig;
+    LambdaCallableContext callable_context;
     FengExpr *mutable_expr = (FengExpr *)expr;
     bool ok;
 
@@ -26450,45 +26474,15 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         return false;
     }
 
-    lambda_save_callable_context(context,
-                                 &prev_sig,
-                                 &prev_inferred_return,
-                                 &prev_saw_return,
-                                 &prev_escape,
-                                 &prev_exception_capture,
-                                 &prev_loop,
-                                 &prev_if_expr_depth,
-                                 &prev_catch_expr_depth,
-                                 &prev_defer_depth);
-    prev_self_capturable = context->self_capturable;
-
     /* Inside the lambda body, `self` is available iff the enclosing context
      * could provide it (i.e. self_capturable was true). Nested lambdas keep
      * the same capability so they can also capture self. */
     effective_allow_self = context->self_capturable;
 
-    context->current_callable_signature = NULL;
-    context->current_callable_inferred_return_type = inferred_expr_type_unknown();
-    context->current_callable_saw_return = false;
-    context->current_callable_has_escaping_exception = false;
-    context->exception_capture_depth = 0U;
-    context->loop_depth = 0U;
-    context->if_expr_depth = 0U;
-    context->catch_expr_depth = 0U;
-    context->defer_depth = 0U;
-    /* self_capturable stays the same: if the lambda body could see self, so
-     * can a lambda nested inside it. */
-    context->self_capturable = effective_allow_self;
-
-    if (expr->as.lambda.is_block_body) {
-        memset(&synthetic_sig, 0, sizeof(synthetic_sig));
-        synthetic_sig.token = expr->token;
-        synthetic_sig.params = expr->as.lambda.params;
-        synthetic_sig.param_count = expr->as.lambda.param_count;
-        synthetic_sig.return_type = NULL; /* inferred from the block's return statements */
-        synthetic_sig.body = expr->as.lambda.body_block;
-        context->current_callable_signature = &synthetic_sig;
-    }
+    /* A lambda is a new callable body. Keep the lexical member identity for
+     * type-implementation authorization, but do not inherit constructor or
+     * finalizer body-only return/binding rules. */
+    lambda_enter_callable_context(context, expr, &callable_context);
 
     ok = true;
     for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
@@ -26506,17 +26500,7 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         }
     }
 
-    lambda_restore_callable_context(context,
-                                    prev_sig,
-                                    prev_inferred_return,
-                                    prev_saw_return,
-                                    prev_escape,
-                                    prev_exception_capture,
-                                    prev_loop,
-                                    prev_if_expr_depth,
-                                    prev_catch_expr_depth,
-                                    prev_defer_depth);
-    context->self_capturable = prev_self_capturable;
+    lambda_leave_callable_context(context, &callable_context);
 
     resolver_pop_scope(context);
 
@@ -28020,8 +28004,9 @@ static bool resolve_callable(ResolveContext *context,
                              const FengCallableSignature *callable,
                              bool allow_self) {
     size_t param_index;
-    bool is_constructor = context->current_callable_member != NULL &&
-                          context->current_callable_member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR;
+    bool is_constructor = context->current_callable_body_member != NULL &&
+                          context->current_callable_body_member->kind ==
+                              FENG_TYPE_MEMBER_CONSTRUCTOR;
     const FengCallableSignature *previous_callable_signature =
         context->current_callable_signature;
     InferredExprType previous_callable_inferred_return_type =
@@ -31127,6 +31112,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 const FengDecl *previous_implementation_owner =
                     context->current_type_implementation_owner;
                 const FengTypeMember *previous_callable_member = context->current_callable_member;
+                const FengTypeMember *previous_callable_body_member =
+                    context->current_callable_body_member;
 
                 if (!validate_supported_member_annotations(context, member)) {
                     ok = false;
@@ -31270,8 +31257,11 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 context->current_type_decl = decl;
                 context->current_type_implementation_owner = decl;
                 context->current_callable_member = member;
+                context->current_callable_body_member = member;
                 if (!resolve_callable(context, &member->as.callable, !member->is_static)) {
                     context->current_callable_member = previous_callable_member;
+                    context->current_callable_body_member =
+                        previous_callable_body_member;
                     context->current_type_implementation_owner =
                         previous_implementation_owner;
                     context->current_type_decl = previous_type_decl;
@@ -31280,6 +31270,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 }
                 if (!validate_abi_callable_member(context, member)) {
                     context->current_callable_member = previous_callable_member;
+                    context->current_callable_body_member =
+                        previous_callable_body_member;
                     context->current_type_implementation_owner =
                         previous_implementation_owner;
                     context->current_type_decl = previous_type_decl;
@@ -31287,6 +31279,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     break;
                 }
                 context->current_callable_member = previous_callable_member;
+                context->current_callable_body_member =
+                    previous_callable_body_member;
                 context->current_type_implementation_owner =
                     previous_implementation_owner;
                 context->current_type_decl = previous_type_decl;
@@ -31428,14 +31422,19 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                         context->current_type_decl;
                     const FengTypeMember *previous_callable_member =
                         context->current_callable_member;
+                    const FengTypeMember *previous_callable_body_member =
+                        context->current_callable_body_member;
 
                     context->current_type_decl = decl;
                     context->current_callable_member = member;
+                    context->current_callable_body_member = member;
                     ok = resolve_callable(context,
                                           &member->as.callable,
                                           /*allow_self=*/false);
                     context->current_callable_member =
                         previous_callable_member;
+                    context->current_callable_body_member =
+                        previous_callable_body_member;
                     context->current_type_decl = previous_type_decl;
                 }
             }
@@ -31516,6 +31515,8 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                     context->current_fit_target_type_ref;
                 const FengTypeMember *previous_callable_member =
                     context->current_callable_member;
+                const FengTypeMember *previous_callable_body_member =
+                    context->current_callable_body_member;
                 bool member_ok;
 
                 if (!validate_supported_member_annotations(context, member)) {
@@ -31565,10 +31566,13 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                 context->current_fit_decl = decl;
                 context->current_fit_target_type_ref = decl->as.fit_decl.target;
                 context->current_callable_member = member;
+                context->current_callable_body_member = member;
 
                 member_ok = resolve_callable(context, &member->as.callable, !member->is_static);
 
                 context->current_callable_member = previous_callable_member;
+                context->current_callable_body_member =
+                    previous_callable_body_member;
                 context->current_fit_decl = previous_fit_decl;
                 context->current_fit_target_type_ref = previous_fit_target_type_ref;
                 context->current_type_decl = previous_type_decl;
@@ -31599,8 +31603,19 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (!validate_extern_function_annotations(context, decl)) {
                 return false;
             }
-            if (!resolve_callable(context, &decl->as.function_decl, false)) {
-                return false;
+            {
+                const FengTypeMember *previous_callable_body_member =
+                    context->current_callable_body_member;
+                bool callable_ok;
+
+                context->current_callable_body_member = NULL;
+                callable_ok = resolve_callable(
+                    context, &decl->as.function_decl, false);
+                context->current_callable_body_member =
+                    previous_callable_body_member;
+                if (!callable_ok) {
+                    return false;
+                }
             }
             if (!validate_extern_function_signature(context, decl)) {
                 return false;

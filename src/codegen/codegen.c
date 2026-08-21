@@ -55343,6 +55343,54 @@ static bool cg_emit_generic_type_method_wrapper(CG *cg, const UserType *t,
                                                     &cg->fn_defs);
 }
 
+/* Bind the implicit receiver shared by concrete instance methods,
+ * constructors, and finalizers. Capture requirements are computed once for
+ * the enclosing callable before this helper runs; a captured receiver uses
+ * the same capture-cell lowering as parameters and local bindings, while an
+ * uncaptured receiver remains a direct scope alias. */
+static bool cg_bind_concrete_callable_self(CG *cg,
+                                           Scope *scope,
+                                           const UserType *owner,
+                                           FengToken blame,
+                                           const char *source_expr) {
+    FengSlice self_name = {"self", 4U};
+    CGType *self_type = cgtype_new(CG_TYPE_OBJECT);
+
+    if (self_type == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    self_type->user = owner;
+
+    if (cg->current_callable_captures_self) {
+        bool ok = cg_scope_bind_capture_cell(
+            cg,
+            scope,
+            self_name,
+            self_type,
+            blame,
+            source_expr,
+            true,
+            false,
+            true,
+            FENG_CODEGEN_MAPING_VARIABLE_SELF);
+        cgtype_free(self_type);
+        return ok;
+    }
+
+    if (!scope_add(scope, "self", source_expr, self_type, true)) {
+        cgtype_free(self_type);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return cg_debug_add_variable_record_cstr_cgtype(
+        cg,
+        "self",
+        source_expr,
+        NULL,
+        self_type,
+        FENG_CODEGEN_MAPING_VARIABLE_SELF,
+        blame);
+}
+
 /* Emit a method body. Mirrors cg_emit_function but with a leading `self`
  * parameter. Managed object methods receive `struct T *`; tuple value methods
  * receive `struct T` by value. */
@@ -55364,7 +55412,6 @@ static bool cg_emit_user_method(CG *cg,
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     Scope *fn_scope = NULL;
     bool ok = false;
-    FengSlice self_name = {"self", 4U};
     bool is_static_method = m != NULL && m->member != NULL && m->member->is_static;
     bool has_param = false;
 
@@ -55488,55 +55535,17 @@ static bool cg_emit_user_method(CG *cg,
         buf_append_fmt(body, "    (void)%s;\n", pn);
     }
 
-    if (!is_static_method && cg->current_callable_captures_self) {
-        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
-        if (!self_t) {
-            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
-            goto cleanup;
-        }
-        self_t->user = t;
+    if (!is_static_method) {
         /* §9.15: value-semantics (tuple/@value) C parameter is struct X *self
-         * (pointer).  Bind the capture cell from (*self) so the cell stores
-         * the value (not the pointer), and member access through the cell
-         * uses `.`. */
-        const char *self_src = cg_user_type_is_value_semantics(t) ? "(*self)" : "self";
-        if (!cg_scope_bind_capture_cell(cg,
-                                        fn_scope,
-                                        self_name,
-                                        self_t,
-                                        m->member->token,
-                                        self_src,
-                                        true,
-                                        false,
-                                        true,
-                                        FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
-            cgtype_free(self_t);
-            goto cleanup;
-        }
-        cgtype_free(self_t);
-    } else if (!is_static_method) {
-        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
-        if (!self_t) {
-            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
-            goto cleanup;
-        }
-        self_t->user = t;
-        /* §9.15: value-semantics (tuple/@value) C parameter is struct X *self
-         * (pointer).  Bind the Feng name "self" to the C expression "(*self)"
-         * so that member access generates (*self).field ≡ self->field. */
-        const char *self_cname = cg_user_type_is_value_semantics(t) ? "(*self)" : "self";
-        if (!scope_add(fn_scope, "self", self_cname, self_t, true)) {
-            cgtype_free(self_t);
-            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
-            goto cleanup;
-        }
-        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
-                                                      "self",
-                                                      self_cname,
-                                                      NULL,
-                                                      self_t,
-                                                      FENG_CODEGEN_MAPING_VARIABLE_SELF,
-                                                      m->member->token)) {
+         * (pointer). Bind or capture from (*self) so the stored value and
+         * subsequent member access preserve value semantics. */
+        const char *self_source =
+            cg_user_type_is_value_semantics(t) ? "(*self)" : "self";
+        if (!cg_bind_concrete_callable_self(cg,
+                                            fn_scope,
+                                            t,
+                                            m->member->token,
+                                            self_source)) {
             goto cleanup;
         }
     }
@@ -56228,6 +56237,15 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
         return true;
     }
 
+    char **captured_names = NULL;
+    size_t captured_name_count = 0U;
+    char **saved_captured_names = cg->captured_binding_names;
+    size_t saved_captured_name_count = cg->captured_binding_name_count;
+    bool saved_captures_self = cg->current_callable_captures_self;
+    Scope *fn_scope = NULL;
+    CGType *void_type = NULL;
+    bool ok = false;
+
     buf_append_fmt(body, "static void %s(void *_self) {\n",
                    t->c_finalizer_name);
     buf_append_fmt(body, "    struct %s *self = (struct %s *)_self;\n",
@@ -56235,9 +56253,12 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     buf_append_cstr(body, "    (void)self;\n");
 
     cg->cur_body = body;
-    CGType *void_t = cgtype_new(CG_TYPE_VOID);
-    if (!void_t) return cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
-    cg->cur_return_type = void_t;
+    void_type = cgtype_new(CG_TYPE_VOID);
+    if (void_type == NULL) {
+        cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->cur_return_type = void_type;
     cg->cur_fn_is_main = false;
     cg->tmp_counter = 0;
     cg->local_counter = 0;
@@ -56248,10 +56269,7 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     cg->cur_function_has_frame_marker = false;
 
     if (!cg_emit_function_eh_prologue(cg, fm->token)) {
-        cgtype_free(void_t);
-        cg->cur_body = NULL;
-        cg->cur_return_type = NULL;
-        return false;
+        goto cleanup;
     }
     {
         Buf frame_name;
@@ -56265,63 +56283,64 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
                                         fm->token) ||
             !cg_debug_add_current_frame_module_binding_records(cg, fm->token)) {
             buf_free(&frame_name);
-            cgtype_free(void_t);
-            cg->cur_body = NULL;
-            cg->cur_return_type = NULL;
-            return false;
+            goto cleanup;
         }
         buf_free(&frame_name);
     }
 
-    Scope *fn_scope = scope_push(NULL);
-    if (!fn_scope) {
-        cgtype_free(void_t);
-        cg->cur_body = NULL; cg->cur_return_type = NULL;
-        return cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
+    fn_scope = scope_push(NULL);
+    if (fn_scope == NULL) {
+        cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
     }
     cg->cur_scope = fn_scope;
-    {
-        CGType *self_t = cgtype_new(CG_TYPE_OBJECT);
-        if (!self_t) {
-            cg->cur_scope = NULL; scope_pop_free(fn_scope);
-            cgtype_free(void_t);
-            cg->cur_body = NULL; cg->cur_return_type = NULL;
-            return false;
-        }
-        self_t->user = t;
-        scope_add(fn_scope, "self", "self", self_t, true);
-        if (!cg_debug_add_variable_record_cstr_cgtype(cg,
-                                                      "self",
-                                                      "self",
-                                                      NULL,
-                                                      self_t,
-                                                      FENG_CODEGEN_MAPING_VARIABLE_SELF,
-                                                      fm->token)) {
-            cg->cur_scope = NULL; scope_pop_free(fn_scope);
-            cgtype_free(void_t);
-            cg->cur_body = NULL; cg->cur_return_type = NULL;
-            cg->current_frame_backend_symbol = NULL;
-            return false;
-        }
+
+    if (!cg_compute_capture_requirements_in_block(
+            fm->as.callable.body,
+            &captured_names,
+            &captured_name_count,
+            &cg->current_callable_captures_self)) {
+        cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
     }
+    cg->captured_binding_names = captured_names;
+    cg->captured_binding_name_count = captured_name_count;
+
+    if (!cg_bind_concrete_callable_self(cg,
+                                        fn_scope,
+                                        t,
+                                        fm->token,
+                                        "self")) {
+        goto cleanup;
+    }
+
     if (!cg_emit_block(cg, fm->as.callable.body)) {
-        cg->cur_scope = NULL; scope_pop_free(fn_scope);
-        cgtype_free(void_t);
-        cg->cur_body = NULL; cg->cur_return_type = NULL;
-        cg->current_frame_backend_symbol = NULL;
-        return false;
+        goto cleanup;
     }
     cg_release_scope(cg, fn_scope);
     cg_emit_function_fallthrough_cleanup(cg);
     buf_append_cstr(body, "    return;\n}\n\n");
+    ok = true;
 
-    cg->cur_scope = NULL; scope_pop_free(fn_scope);
-    cgtype_free(void_t);
+cleanup:
+    cg->captured_binding_names = saved_captured_names;
+    cg->captured_binding_name_count = saved_captured_name_count;
+    cg->current_callable_captures_self = saved_captures_self;
+    for (size_t i = 0U; i < captured_name_count; ++i) {
+        free(captured_names[i]);
+    }
+    free(captured_names);
+    if (fn_scope != NULL) {
+        cg->cur_scope = NULL;
+        scope_pop_free(fn_scope);
+    }
+    cgtype_free(void_type);
     cg->cur_body = NULL;
     cg->cur_return_type = NULL;
+    cg->cur_fn_is_main = false;
     cg->current_frame_backend_symbol = NULL;
     cg->cur_function_has_frame_marker = false;
-    return true;
+    return ok;
 }
 
 static const FreeFn *cg_lookup_main(const CG *cg) {

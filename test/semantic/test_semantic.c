@@ -13489,6 +13489,78 @@ static void test_constructor_with_explicit_void_return_ok(void) {
     feng_program_free(program);
 }
 
+/* Constructor/finalizer return restrictions belong to their own callable
+ * bodies. A nested block lambda has an independent return context and may
+ * return a value matching its callable-form spec target. */
+static void test_special_member_block_lambda_value_return_uses_lambda_context(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Reader(): int;\n"
+        "type Resource {\n"
+        "    let value: int;\n"
+        "    func Resource(value: int) {\n"
+        "        self.value = value;\n"
+        "        let reader: Reader = () { return self.value; };\n"
+        "        reader();\n"
+        "    }\n"
+        "    func ~Resource() {\n"
+        "        let reader: Reader = () { return self.value; };\n"
+        "        reader();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "special_member_lambda_return_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    if (!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                               &analysis, &errors, &error_count)) {
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr,
+                    "semantic error (special member lambda return): %s: %s\n",
+                    errors[i].code != NULL ? errors[i].code : "(none)",
+                    errors[i].message != NULL ? errors[i].message : "(unknown)");
+        }
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A lambda nested in a constructor may capture self, but it is not itself a
+ * constructor body and therefore cannot perform final binding of a let field. */
+static void test_constructor_lambda_cannot_bind_self_let_field(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Action(): void;\n"
+        "type Resource {\n"
+        "    let value: int;\n"
+        "    func Resource() {\n"
+        "        let assign: Action = () { self.value = 1; };\n"
+        "        self.value = 2;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "constructor_lambda_let_binding_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count >= 1U);
+    ASSERT(strstr(errors[0].message,
+                  "cannot be directly assigned outside constructors") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* ===== New behaviour added with --target / lambda block-body / overload checks ===== */
 
 static void test_lambda_block_body_returns_value(void) {
@@ -13590,6 +13662,55 @@ static void test_lambda_in_method_records_self_capture(void) {
 
         ASSERT(lambda_expr->kind == FENG_EXPR_LAMBDA);
         ASSERT(lambda_expr->as.lambda.captures_self);
+    }
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A finalizer is an implicit-self callable context. Its lambda capture set
+ * must record both receiver and ordinary lexical bindings so Codegen can use
+ * the same capture preparation as methods and constructors. */
+static void test_lambda_in_finalizer_records_self_and_local_capture(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Reader(): int;\n"
+        "type Resource {\n"
+        "    var value: int;\n"
+        "    func ~Resource() {\n"
+        "        let offset = 1;\n"
+        "        let reader: Reader = () -> self.value + offset;\n"
+        "        reader();\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "lambda_finalizer_capture_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    {
+        const FengDecl *type_decl = program->declarations[1];
+        const FengTypeMember *finalizer = type_decl->as.type_decl.members[1];
+        const FengStmt *binding_stmt =
+            finalizer->as.callable.body->statements[1];
+        const FengExpr *lambda_expr = binding_stmt->as.binding.initializer;
+
+        ASSERT(finalizer->kind == FENG_TYPE_MEMBER_FINALIZER);
+        ASSERT(lambda_expr->kind == FENG_EXPR_LAMBDA);
+        ASSERT(lambda_expr->as.lambda.captures_self);
+        ASSERT(lambda_expr->as.lambda.capture_count == 1U);
+        ASSERT(lambda_expr->as.lambda.captures[0].kind ==
+               FENG_LAMBDA_CAPTURE_LOCAL);
+        ASSERT(lambda_expr->as.lambda.captures[0].name.length == 6U);
+        ASSERT(memcmp(lambda_expr->as.lambda.captures[0].name.data,
+                      "offset",
+                      6U) == 0);
     }
 
     feng_semantic_analysis_free(analysis);
@@ -25346,10 +25467,13 @@ int main(void) {
     test_finalizer_rejects_return_with_value();
     test_constructor_rejects_return_with_value();
     test_constructor_with_explicit_void_return_ok();
+    test_special_member_block_lambda_value_return_uses_lambda_context();
+    test_constructor_lambda_cannot_bind_self_let_field();
 
     test_lambda_block_body_returns_value();
     test_lambda_block_body_records_local_capture();
     test_lambda_in_method_records_self_capture();
+    test_lambda_in_finalizer_records_self_and_local_capture();
     test_field_init_lambda_captures_self_when_callable_spec();
     test_field_init_bare_self_is_invalid();
     test_duplicate_method_signature_is_rejected();

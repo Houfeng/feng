@@ -105,6 +105,10 @@ static FengManagedHeader **g_candidates = NULL;
 static size_t g_candidate_count = 0U;
 static size_t g_candidate_capacity = 0U;
 static size_t g_threshold = 0U;
+/* Non-zero while the current thread owns a collection round. Protected by
+ * g_cycle_mutex; candidate enqueues may proceed during Phase 1, but cannot
+ * recursively collect the white set whose finalizers are still running. */
+static size_t g_collection_depth = 0U;
 
 static void cycle_init_once(void) {
     pthread_mutexattr_t attr;
@@ -185,7 +189,7 @@ void feng_cycle_enqueue_candidate(FengManagedHeader *header) {
     g_candidates[g_candidate_count++] = header;
     header->cycle_state |= CYC_FLAG_BUFFERED;
 
-    if (g_candidate_count >= g_threshold) {
+    if (g_collection_depth == 0U && g_candidate_count >= g_threshold) {
         feng_cycle_collect_locked();
     }
 }
@@ -615,7 +619,7 @@ static void phase1_run_finalizers(WhiteList *wl) {
              * the user finalizer aborts deterministically instead of
              * unwinding across the collector and leaving g_cycle_lock
              * held. See docs/specifications/feng-lifetime.md §13.2. */
-            feng_finalizer_invoke(h->desc, (void *)h);
+            (void)feng_finalizer_invoke(h->desc, (void *)h);
         }
     }
 }
@@ -819,7 +823,10 @@ static void phase15_restore_survivor_state(WhiteList *wl) {
         FengManagedHeader *h = wl->buf[i];
         if (is_survivor(h)) {
             cyc_set_color(h, CYC_COLOR_BLACK);
-            h->cycle_state &= ~(CYC_FLAG_VISITED | CYC_FLAG_BUFFERED);
+            /* Preserve BUFFERED when Phase 1 temporarily released `self` and
+             * enqueued it. That candidate remains owned by g_candidates and
+             * must stay discoverable after this collection round. */
+            h->cycle_state &= ~CYC_FLAG_VISITED;
         }
     }
 }
@@ -839,6 +846,9 @@ static void phase2_free_unsurvived(WhiteList *wl) {
         if (!is_free_member(h)) {
             continue;
         }
+        /* Phase 1 temporary releases may have added the white to the next
+         * candidate buffer. Remove it before invalidating the allocation. */
+        feng_cycle_remove_candidate(h);
         switch (h->tag) {
             case FENG_TYPE_TAG_ARRAY: {
                 free(h);
@@ -895,7 +905,9 @@ static void clear_visited_on_whites(WhiteList *wl) {
     }
 }
 
-void feng_cycle_collect_locked(void) {
+/* Process exactly one snapshot. The public wrapper below owns the collecting
+ * scope so all early returns leave g_collection_depth balanced. */
+static void cycle_collect_one_locked(void) {
     if (g_candidate_count == 0U) {
         return;
     }
@@ -983,6 +995,21 @@ void feng_cycle_collect_locked(void) {
     phase2_free_unsurvived(&whites);
 
     free(whites.buf);
+}
+
+void feng_cycle_collect_locked(void) {
+    if (g_collection_depth != 0U) {
+        /* Phase 1 may reach the threshold through nested feng_release calls.
+         * The candidates remain buffered and are considered after the
+         * current white-set round completes. */
+        return;
+    }
+
+    g_collection_depth = 1U;
+    do {
+        cycle_collect_one_locked();
+    } while (g_candidate_count >= g_threshold);
+    g_collection_depth = 0U;
 }
 
 void feng_cycle_runtime_shutdown(void) {

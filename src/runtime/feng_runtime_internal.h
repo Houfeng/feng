@@ -78,16 +78,21 @@ void feng_aggregate_release_and_clear_internal(
     void *value,
     const FengAggregateDescriptor *desc);
 
-/* Invoke a user-declared finalizer behind a sentinel exception barrier. Per
- * docs/specifications/feng-lifetime.md §13.2 / docs/specifications/feng-type.md, a finalizer must not let
- * an exception propagate past its body; if one does, the runtime panics
- * immediately rather than unwinding across ARC/collector C frames (which
- * would skip all subsequent ARC bookkeeping and corrupt the candidate
- * buffer). Both the ARC release path and the cycle collector's Phase 1
- * route every user-finalizer call through this helper. Caller is responsible
- * for the NULL-check on `desc->finalizer` only as an optimisation; the
- * helper itself is a no-op when either `desc` or `desc->finalizer` is NULL. */
-void feng_finalizer_invoke(const FengTypeDescriptor *desc, void *self);
+/* Invoke a user-declared finalizer behind the §13.2 execution hold and
+ * sentinel exception barrier. The hold keeps `self` alive while temporary
+ * strong references are created and released by user code, but is removed
+ * directly before this helper returns so it cannot count as resurrection.
+ * The return value is the remaining program-visible strong-reference count.
+ *
+ * A finalizer must not let an exception propagate past its body; if one does,
+ * the runtime panics immediately rather than unwinding across ARC/collector C
+ * frames (which would skip subsequent ARC bookkeeping and corrupt the
+ * candidate buffer). Both the ARC release path and the cycle collector's
+ * Phase 1 route every user-finalizer call through this helper. Caller is
+ * responsible for the NULL-check on `desc->finalizer` only as an
+ * optimisation; the helper itself returns zero without invoking user code
+ * when `self`, `desc`, or `desc->finalizer` is NULL. */
+uint32_t feng_finalizer_invoke(const FengTypeDescriptor *desc, void *self);
 void feng_exception_enter_finalizer(void);
 void feng_exception_leave_finalizer(void);
 
