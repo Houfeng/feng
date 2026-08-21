@@ -14551,6 +14551,99 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     return result;
 }
 
+/* Resolve one target-typed instance method value from an object-form spec
+ * receiver. The traversal mirrors spec instance-call resolution: child-first
+ * closure order, declaring-spec projection, seal filtering and exact
+ * instantiated signatures. Equivalent inherited requirements are already one
+ * logical slot, so the first matching declaration remains authoritative. */
+static CallableValueResolution resolve_accessible_spec_method_value_overload(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    InferredExprType owner_type,
+    FengSlice name,
+    const FengTypeRef *expected_type_ref,
+    const FengDecl *function_type_decl) {
+    const FengDecl **closure = NULL;
+    size_t closure_count = 0U;
+    size_t closure_capacity = 0U;
+    CallableValueResolution result;
+
+    memset(&result, 0, sizeof(result));
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+        function_type_decl == NULL ||
+        !spec_collect_closure(context,
+                              spec_decl,
+                              &closure,
+                              &closure_count,
+                              &closure_capacity)) {
+        free(closure);
+        return result;
+    }
+
+    for (size_t closure_index = 0U;
+         closure_index < closure_count;
+         ++closure_index) {
+        const FengDecl *current = closure[closure_index];
+        InferredExprType current_owner = owner_type;
+
+        if (current == NULL ||
+            current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            continue;
+        }
+        if (current != spec_decl && owner_type.type_ref != NULL) {
+            const FengTypeRef *projected =
+                instantiate_parent_spec_ref_for_instance(
+                    context, spec_decl, owner_type.type_ref, current);
+
+            if (projected != NULL) {
+                current_owner = inferred_expr_type_from_type_ref(projected);
+            }
+        }
+
+        for (size_t member_index = 0U;
+             member_index < current->as.spec_decl.as.object.member_count;
+             ++member_index) {
+            const FengTypeMember *member =
+                current->as.spec_decl.as.object.members[member_index];
+
+            if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+                member->is_static ||
+                !slice_equals(member->as.callable.name, name) ||
+                !spec_member_is_accessible_from(context,
+                                                spec_decl,
+                                                current,
+                                                owner_type,
+                                                member) ||
+                !function_type_decl_matches_owner_callable_signature(
+                    context,
+                    expected_type_ref,
+                    function_type_decl,
+                    &member->as.callable,
+                    current,
+                    NULL,
+                    current_owner)) {
+                continue;
+            }
+
+            if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                result.callable = &member->as.callable;
+                result.callable_member = member;
+                result.callable_owner_type_decl = current;
+                continue;
+            }
+
+            /* All matching candidates have the exact target signature. Spec
+             * validation permits such duplicates only as one inherited or
+             * overridden logical requirement, for which child-first wins. */
+        }
+    }
+
+    free(closure);
+    return result;
+}
+
 static bool function_type_parameters_match_args(ResolveContext *context,
                                                 const FengDecl *type_decl,
                                                 FengExpr *const *args,
@@ -19694,16 +19787,31 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                                                       function_type_decl,
                                                                       NULL,
                                                                       0U);
+                } else if (owner_type_decl != NULL &&
+                           owner_type_decl->kind == FENG_DECL_SPEC &&
+                           owner_type_decl->as.spec_decl.form ==
+                               FENG_SPEC_FORM_OBJECT) {
+                    result = resolve_accessible_spec_method_value_overload(
+                        context,
+                        owner_type_decl,
+                        owner_type,
+                        expr->as.member.member,
+                        expected_type_ref,
+                        function_type_decl);
                 }
-                fit_result = resolve_accessible_fit_method_value_overload(
-                    context,
-                    owner_type_decl,
-                    owner_type,
-                    expr->as.member.member,
-                    expected_type_ref,
-                    function_type_decl,
-                    NULL,
-                    0U);
+                memset(&fit_result, 0, sizeof(fit_result));
+                if (owner_type_decl == NULL ||
+                    owner_type_decl->kind != FENG_DECL_SPEC) {
+                    fit_result = resolve_accessible_fit_method_value_overload(
+                        context,
+                        owner_type_decl,
+                        owner_type,
+                        expr->as.member.member,
+                        expected_type_ref,
+                        function_type_decl,
+                        NULL,
+                        0U);
+                }
                 if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                     result = fit_result;
                 } else if (fit_result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
@@ -20482,60 +20590,6 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
     }
 
     return inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref);
-}
-
-static bool expr_requires_explicit_function_type_context(ResolveContext *context,
-                                                         const FengExpr *expr) {
-    if (expr == NULL) {
-        return false;
-    }
-
-    switch (expr->kind) {
-        case FENG_EXPR_GENERIC_TARGET:
-            return true;
-
-        case FENG_EXPR_IDENTIFIER: {
-            const FunctionOverloadSetEntry *overload_set;
-
-            if (resolver_find_local_name_entry(context, expr->as.identifier) != NULL) {
-                return false;
-            }
-
-            overload_set = find_function_overload_set(context->function_sets,
-                                                      context->function_set_count,
-                                                      expr->as.identifier);
-            return overload_set != NULL && overload_set->decl_count > 1U;
-        }
-
-        case FENG_EXPR_MEMBER: {
-            const FengExpr *object = expr->as.member.object;
-
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
-
-                if (alias != NULL) {
-                    return count_module_public_function_overloads(alias->target_module,
-                                                                  expr->as.member.member) > 1U;
-                }
-            }
-
-            {
-                const FengDecl *owner_type_decl = NULL;
-                const FengSemanticModule *provider_module = NULL;
-                InferredExprType owner_type =
-                    resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
-
-                return count_accessible_method_overloads(context,
-                                                         owner_type_decl,
-                                                         provider_module,
-                                                         owner_type,
-                                                         expr->as.member.member) > 1U;
-            }
-        }
-
-        default:
-            return false;
-    }
 }
 
 static bool expr_is_lambda_value_without_target(ResolveContext *context, const FengExpr *expr) {
@@ -23682,14 +23736,18 @@ static bool validate_untyped_callable_value_expr(ResolveContext *context, const 
         return report_lambda_requires_callable_spec_target(context, expr, "an untyped value context");
     }
 
-    if (!expr_requires_explicit_function_type_context(context, expr)) {
+    /* Feng has no anonymous callable type. Already-bound callable values have
+     * a named callable-form spec type and are not classified as references by
+     * this helper; an unbound function or method reference therefore needs a
+     * contextual target even when its source name has only one candidate. */
+    if (!expr_is_callable_value_reference(context, expr)) {
         return true;
     }
 
     expr_name = format_expr_target_name(expr);
     if (!resolver_append_error(context,
                                expr != NULL ? expr->token : context->program->module_token,
-                               "AE0523", format_message("expression '%s' requires an explicit target function type to resolve overloads",
+                               "AE0523", format_message("expression '%s' requires an explicit target function type to form a callable value; target type must be a callable-form spec",
                                               expr_name != NULL ? expr_name : "<expression>"))) {
         free(expr_name);
         return false;

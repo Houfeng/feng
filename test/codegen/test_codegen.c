@@ -7297,6 +7297,70 @@ static void test_callable_spec_method_coercion_codegen(void) {
     feng_program_free(program);
 }
 
+/* An object-form spec method value captures the existing subject and witness
+ * in one callable closure. Binding and explicit conversion share the same
+ * generated support and dispatch directly through the selected witness slot. */
+static void test_object_spec_method_value_codegen_uses_bound_witness(void) {
+    const char *source =
+        "module feng.codegen.object_spec_method_value;\n"
+        "spec BaseReadable { func read(offset: int): int; }\n"
+        "spec ChildReadable: BaseReadable {}\n"
+        "spec Reader(offset: int): int;\n"
+        "func bind(value: ChildReadable): Reader {\n"
+        "    return value.read;\n"
+        "}\n"
+        "func bindCast(value: ChildReadable): Reader {\n"
+        "    return (Reader)value.read;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "object_spec_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* Both formation sites reuse one compile-time support record. At runtime
+     * each selected path performs exactly the one language-level callable
+     * closure allocation and no additional object-spec box allocation. */
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(&FengSpecMethodValueBind__") == 1U);
+    for (const char *line = output.c_source;
+         (line = strstr(line, "feng_object_new(&")) != NULL;
+         ++line) {
+        const char *line_end = strchr(line, '\n');
+
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        ASSERT(!span_contains(line, line_end, "__spec_box"));
+    }
+
+    /* The closure retains only the existing subject; the immutable witness is
+     * copied as a borrowed pointer and every call enters its resolved slot. */
+    ASSERT(strstr(output.c_source,
+                  "feng_assign(&_o->_self, _receiver->subject)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_o->_witness = _receiver->witness") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_bound->_witness->read(_bound->_self, _arg0)") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Closed and shared value-receiver method formation both allocate exactly one
  * callable closure and never route the receiver through a spec box. */
 static void test_value_method_capture_codegen_has_direct_closure_lowering(void) {
@@ -12903,6 +12967,7 @@ int main(void) {
     test_generic_object_spec_coercion_codegen();
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
+    test_object_spec_method_value_codegen_uses_bound_witness();
     test_value_method_capture_codegen_has_direct_closure_lowering();
     test_generic_callable_value_reification_codegen();
     test_unbound_callable_explicit_cast_codegen();

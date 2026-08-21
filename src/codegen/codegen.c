@@ -1618,6 +1618,19 @@ typedef struct CGCallableMethodValueSupport {
     char *c_closure_desc;
 } CGCallableMethodValueSupport;
 
+/* Generated support for one object-form spec method value. The extended
+ * closure keeps the ordinary callable prefix, plus the receiver's immutable
+ * witness pointer; `_self` retains the captured subject. */
+typedef struct CGCallableSpecMethodValueSupport {
+    const struct UserSpec *target_spec;
+    const struct UserSpec *receiver_spec;
+    const FengTypeMember *member;
+    char *c_bind_fn;
+    char *c_adapter_fn;
+    char *c_closure_struct;
+    char *c_closure_desc;
+} CGCallableSpecMethodValueSupport;
+
 /* Compile-time-only binding plan for a method-value adapter that enters a
  * generic provider shared body directly. Every expression is fully closed by
  * the consumer; generated code performs no runtime selection or lookup. */
@@ -1722,6 +1735,9 @@ typedef struct CG {
     CGCallableMethodValueSupport *callable_method_values;
     size_t callable_method_value_count;
     size_t callable_method_value_capacity;
+    CGCallableSpecMethodValueSupport *callable_spec_method_values;
+    size_t callable_spec_method_value_count;
+    size_t callable_spec_method_value_capacity;
     /* Fit registry (Step 4b-γ). Sibling of user_specs. Each entry models
      * one `fit T :: S { ... }` so witness emission for FIT_METHOD source
      * can look up the C symbol of the fit-body method to call. */
@@ -7402,6 +7418,300 @@ static const CGCallableMethodValueSupport *cg_callable_method_value_support(
                   "IE0002",
                   "codegen: callable method-value support was not retained");
     return NULL;
+}
+
+/* Emit and cache the one-allocation closure support for an object-form spec
+ * method value. The generated closure preserves the canonical callable prefix,
+ * retains only the subject, and borrows the immutable witness pointer that was
+ * selected at formation. No runtime member lookup or ABI extension is needed. */
+static bool cg_ensure_callable_spec_method_value(
+    CG *cg,
+    const UserSpec *target_spec,
+    const UserSpec *receiver_spec,
+    const UserSpecMember *method,
+    FengToken blame,
+    const char **out_bind_fn) {
+    char *adapter_name = NULL;
+    char *bind_name = NULL;
+    char *closure_struct = NULL;
+    char *closure_desc = NULL;
+    size_t support_index;
+
+    if (cg == NULL || target_spec == NULL || receiver_spec == NULL ||
+        method == NULL || method->member == NULL || out_bind_fn == NULL ||
+        target_spec->form != FENG_SPEC_FORM_CALLABLE ||
+        receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        method->kind != USM_KIND_METHOD || method->is_static ||
+        target_spec->callable_param_count != method->param_count) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0111",
+                       "codegen: invalid object-spec method-value request");
+    }
+
+    for (support_index = 0U;
+         support_index < cg->callable_spec_method_value_count;
+         ++support_index) {
+        const CGCallableSpecMethodValueSupport *support =
+            &cg->callable_spec_method_values[support_index];
+
+        if (support->target_spec == target_spec &&
+            support->receiver_spec == receiver_spec &&
+            support->member == method->member) {
+            *out_bind_fn = support->c_bind_fn;
+            return true;
+        }
+    }
+
+    if (cg->callable_spec_method_value_count + 1U >
+        cg->callable_spec_method_value_capacity) {
+        size_t capacity = cg->callable_spec_method_value_capacity != 0U
+                              ? cg->callable_spec_method_value_capacity * 2U
+                              : 4U;
+        void *grown = realloc(cg->callable_spec_method_values,
+                              capacity *
+                                  sizeof(*cg->callable_spec_method_values));
+
+        if (grown == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->callable_spec_method_values = grown;
+        cg->callable_spec_method_value_capacity = capacity;
+    }
+
+    support_index = cg->callable_spec_method_value_count;
+    {
+        Buf name;
+
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengSpecMethodValueInvoke__%s__%s__%s__%zu",
+                       target_spec->c_closure_struct_name,
+                       receiver_spec->c_witness_struct_name,
+                       method->c_field_name,
+                       support_index);
+        adapter_name = name.data;
+
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengSpecMethodValueBind__%s__%s__%s__%zu",
+                       target_spec->c_closure_struct_name,
+                       receiver_spec->c_witness_struct_name,
+                       method->c_field_name,
+                       support_index);
+        bind_name = name.data;
+
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__Closure", bind_name);
+        closure_struct = name.data;
+
+        buf_init(&name);
+        buf_append_fmt(&name, "%s__ClosureDesc", bind_name);
+        closure_desc = name.data;
+    }
+    if (adapter_name == NULL || bind_name == NULL || closure_struct == NULL ||
+        closure_desc == NULL) {
+        free(adapter_name);
+        free(bind_name);
+        free(closure_struct);
+        free(closure_desc);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    buf_append_fmt(&cg->type_defs,
+                   "struct %s {\n"
+                   "    FengManagedHeader _hdr;\n"
+                   "    void *_self;\n    ",
+                   closure_struct);
+    cg_emit_callable_abi_return_type(&cg->type_defs,
+                                     target_spec->callable_return_type,
+                                     target_spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->type_defs, " (*invoke)(void *_closure");
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->type_defs, ", ");
+        cg_emit_callable_abi_param_type(
+            &cg->type_defs,
+            target_spec->callable_param_types[index],
+            target_spec->callable_param_abi_kinds[index]);
+    }
+    cg_append_callable_abi_out_parameter(
+        &cg->type_defs, target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->type_defs,
+                   ");\n"
+                   "    const struct %s *_witness;\n"
+                   "};\n\n"
+                   "static void %s__release_children(void *_self) {\n"
+                   "    struct %s *_o = (struct %s *)_self;\n"
+                   "    feng_release(_o->_self);\n"
+                   "    _o->_self = NULL;\n"
+                   "}\n\n"
+                   "static const FengManagedFieldDescriptor "
+                   "%s__managed_fields[] = {\n"
+                   "    { offsetof(struct %s, _self), NULL, NULL },\n"
+                   "};\n\n"
+                   "static const FengTypeDescriptor %s = {\n"
+                   "    .name = \"%s\",\n"
+                   "    .size = sizeof(struct %s),\n"
+                   "    .default_zero_init = NULL,\n"
+                   "    .finalizer = NULL,\n"
+                   "    .release_children = %s__release_children,\n"
+                   "    .is_potentially_cyclic = true,\n"
+                   "    .managed_field_count = 1,\n"
+                   "    .managed_fields = %s__managed_fields,\n"
+                   "    .equal_fn = NULL,\n"
+                   "    .reified_generic_params_count = 0,\n"
+                   "};\n\n",
+                   receiver_spec->c_witness_struct_name,
+                   closure_desc,
+                   closure_struct,
+                   closure_struct,
+                   closure_desc,
+                   closure_struct,
+                   closure_desc,
+                   closure_struct,
+                   closure_struct,
+                   closure_desc,
+                   closure_desc);
+
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_callable_abi_return_type(&cg->headers,
+                                     target_spec->callable_return_type,
+                                     target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_callable_abi_param_type(
+            &cg->headers,
+            target_spec->callable_param_types[index],
+            target_spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->headers, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(
+        &cg->headers, target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->headers,
+                   ");\n"
+                   "static struct %s *%s(const struct %s *_receiver);\n",
+                   target_spec->c_closure_struct_name,
+                   bind_name,
+                   receiver_spec->c_value_struct_name);
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_callable_abi_return_type(&cg->witness_defs,
+                                     target_spec->callable_return_type,
+                                     target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs, " %s(void *_closure", adapter_name);
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_callable_abi_param_type(
+            &cg->witness_defs,
+            target_spec->callable_param_types[index],
+            target_spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(
+        &cg->witness_defs, target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs,
+                   ") {\n"
+                   "    struct %s *_bound = (struct %s *)_closure;\n"
+                   "    ",
+                   closure_struct,
+                   closure_struct);
+
+    if (target_spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS &&
+        method->value_abi_kind != CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "*(");
+        cg_emit_c_type(&cg->witness_defs,
+                       target_spec->callable_return_type);
+        buf_append_cstr(&cg->witness_defs, " *)_out = ");
+    } else if (target_spec->callable_return_abi_kind !=
+                   CG_CALLABLE_ABI_ADDRESS &&
+               method->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        cg_emit_c_type(&cg->witness_defs,
+                       target_spec->callable_return_type);
+        buf_append_cstr(&cg->witness_defs, " _result;\n    ");
+    } else if (target_spec->callable_return_type != NULL &&
+               target_spec->callable_return_type->kind != CG_TYPE_VOID &&
+               target_spec->callable_return_abi_kind !=
+                   CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "return ");
+    }
+
+    buf_append_fmt(&cg->witness_defs,
+                   "_bound->_witness->%s(_bound->_self",
+                   method->c_field_name);
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        char argument_name[32];
+
+        (void)snprintf(argument_name,
+                       sizeof(argument_name),
+                       "_arg%zu",
+                       index);
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_append_callable_abi_bridge_argument(
+            &cg->witness_defs,
+            method->param_types[index],
+            target_spec->callable_param_abi_kinds[index],
+            method->param_abi_kinds[index],
+            argument_name);
+    }
+    if (method->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(
+            &cg->witness_defs,
+            target_spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS
+                ? ", _out"
+                : ", &_result");
+    }
+    buf_append_cstr(&cg->witness_defs, ");\n");
+    if (target_spec->callable_return_abi_kind != CG_CALLABLE_ABI_ADDRESS &&
+        method->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(&cg->witness_defs, "    return _result;\n");
+    }
+    buf_append_cstr(&cg->witness_defs, "}\n\n");
+
+    buf_append_fmt(&cg->witness_defs,
+                   "static struct %s *%s(const struct %s *_receiver) {\n"
+                   "    struct %s *_o = "
+                   "(struct %s *)feng_object_new(&%s);\n"
+                   "    _o->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
+                   "    _o->_self = NULL;\n"
+                   "    feng_assign(&_o->_self, _receiver->subject);\n"
+                   "    _o->invoke = %s;\n"
+                   "    _o->_witness = _receiver->witness;\n"
+                   "    return (struct %s *)_o;\n"
+                   "}\n\n",
+                   target_spec->c_closure_struct_name,
+                   bind_name,
+                   receiver_spec->c_value_struct_name,
+                   closure_struct,
+                   closure_struct,
+                   closure_desc,
+                   adapter_name,
+                   target_spec->c_closure_struct_name);
+
+    {
+        CGCallableSpecMethodValueSupport *support =
+            &cg->callable_spec_method_values[
+                cg->callable_spec_method_value_count++];
+
+        memset(support, 0, sizeof(*support));
+        support->target_spec = target_spec;
+        support->receiver_spec = receiver_spec;
+        support->member = method->member;
+        support->c_bind_fn = bind_name;
+        support->c_adapter_fn = adapter_name;
+        support->c_closure_struct = closure_struct;
+        support->c_closure_desc = closure_desc;
+    }
+    *out_bind_fn = bind_name;
+    return true;
 }
 
 /* ---- Generic registry helpers (G6) ---- */
@@ -13618,6 +13928,23 @@ static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
         if (strlen(s->members[i].feng_name) == len &&
             memcmp(s->members[i].feng_name, name, len) == 0) {
             return &s->members[i];
+        }
+    }
+    return NULL;
+}
+
+/* Find the exact requirement selected by Semantic instead of repeating
+ * overload selection from a source-level name. Inherited slots preserve the
+ * original FengTypeMember identity when copied into a child spec surface. */
+static const UserSpecMember *cg_user_spec_member_by_decl(
+    const UserSpec *spec,
+    const FengTypeMember *member) {
+    if (spec == NULL || member == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        if (spec->members[index].member == member) {
+            return &spec->members[index];
         }
     }
     return NULL;
@@ -20359,6 +20686,74 @@ static bool cg_emit_callable_method_coercion(CG *cg,
     }
     if (!cg_emit_expr(cg, source_expr->as.member.object, &recv)) {
         return false;
+    }
+    if (recv.type != NULL && recv.type->kind == CG_TYPE_SPEC &&
+        recv.type->user_spec != NULL) {
+        const UserSpec *receiver_spec = recv.type->user_spec;
+        const UserSpecMember *spec_method;
+
+        if (receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+            !cg_ensure_user_spec_members_registered(
+                cg, (UserSpec *)receiver_spec)) {
+            er_free(&recv);
+            return cg_fail(cg,
+                           e->token,
+                           "CE0112",
+                           "codegen: callable method coercion source must be an object-form spec value");
+        }
+        spec_method = cg_user_spec_member_by_decl(receiver_spec,
+                                                  cs->callable_member);
+        if (spec_method == NULL || spec_method->kind != USM_KIND_METHOD ||
+            spec_method->is_static || cs->callable_type_arg_count != 0U) {
+            er_free(&recv);
+            return cg_fail(cg,
+                           e->token,
+                           "CE0114",
+                           "codegen: resolved object-spec method-value requirement was not registered");
+        }
+        if (cg_materialize_to_local(cg,
+                                    &recv,
+                                    "_spec_method_receiver") == NULL) {
+            er_free(&recv);
+            return cg_fail(cg,
+                           e->token,
+                           "IE0001",
+                           "codegen: failed to materialize object-spec method receiver");
+        }
+        receiver_argument = cg_aggregate_result_address_dup(&recv);
+        if (receiver_argument == NULL ||
+            !cg_ensure_callable_spec_method_value(cg,
+                                                  target_spec,
+                                                  receiver_spec,
+                                                  spec_method,
+                                                  e->token,
+                                                  &bind_fn)) {
+            free(receiver_argument);
+            er_free(&recv);
+            return false;
+        }
+        {
+            Buf expression;
+
+            buf_init(&expression);
+            buf_append_fmt(&expression,
+                           "%s(%s)",
+                           bind_fn,
+                           receiver_argument);
+            out->c_expr = expression.data;
+        }
+        out->type = cgtype_new(CG_TYPE_CALLABLE);
+        if (out->c_expr == NULL || out->type == NULL) {
+            free(receiver_argument);
+            er_free(&recv);
+            er_free(out);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        out->type->user_spec = target_spec;
+        out->owns_ref = true;
+        free(receiver_argument);
+        er_free(&recv);
+        return true;
     }
     if (recv.type == NULL || recv.type->kind != CG_TYPE_OBJECT) {
         er_free(&recv);
@@ -56584,6 +56979,15 @@ static void cg_dispose(CG *cg) {
         free(cg->callable_method_values[i].c_closure_desc);
     }
     free(cg->callable_method_values);
+    for (size_t i = 0U;
+         i < cg->callable_spec_method_value_count;
+         ++i) {
+        free(cg->callable_spec_method_values[i].c_bind_fn);
+        free(cg->callable_spec_method_values[i].c_adapter_fn);
+        free(cg->callable_spec_method_values[i].c_closure_struct);
+        free(cg->callable_spec_method_values[i].c_closure_desc);
+    }
+    free(cg->callable_spec_method_values);
     /* G6: generic function registry cleanup. */
     for (size_t i = 0; i < cg->generic_fn_count; i++) {
         free(cg->generic_fns[i].feng_name);

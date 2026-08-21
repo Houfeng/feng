@@ -329,8 +329,9 @@ spec/witness 和 fit 规则均继续执行。字段的 `is_mixable` 事实单独
   friend/seal 候选不能遮蔽同名 open 候选。
 - object-form spec 成员的 friend 访问只发生在 spec 视角并继续通过既有 witness；
   不要求 friend type 实现该 spec，也不扩大具体实现成员的可见性或修改满足规则。
-- 已经支持的具体 type/fit 方法值在形成点执行同一 friend 检查；object-form spec
-  方法值是否可形成由其独立规范和开发项决定，`@friend` 不新增该能力。
+- 具体 type/fit 与 object-form spec 方法值都在形成点执行同一 friend 检查；对于
+  object-form spec，必须先从候选中移除当前上下文不可访问的 `seal` requirement，再按
+  目标 callable 形状执行重载选择。形成后的 callable 作为普通值使用，不重复检查权限。
 - `@friend` 不写入 package-public `.ft`，不改变成员本身的既有 Symbol 选择规则，
   也不增加运行时访问检查或 ABI。
 

@@ -210,6 +210,10 @@ type Stream: ReadWrite {}
 - 公开 requirement 与 `spec seal` requirement 均属于完整契约，均参与
   满足检查、父 spec 闭包和 witness 构造；`seal` 只把该 requirement 从
   普通 spec 访问面中排除。
+- object-form `spec` 参数或局部值的实例方法引用可以在明确 callable-form `spec` 目标
+  下形成方法值。来源 requirement 必须从该 spec 实例的父闭包中按直接调用相同的访问
+  与签名规则唯一选出；形成点保存当前 subject 与 witness 视角，原 spec 绑定后续重新
+  赋值不改变已经形成的方法值。
 - requirement 与实现成员的可见性兼容规则如下；省略修饰的 `type` 成员按
   其既有公开语义处理：
 
@@ -256,6 +260,9 @@ type Stream: ReadWrite {}
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；其实现不得捕获、绑定或读取任何变量，调用时也不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
 - callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的非泛型顶层函数、非泛型方法值、已通过显式泛型 target 完成闭合的函数或方法以及 lambda，进入 callable-form `spec` 位置时按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”做结构匹配；来源函数或方法自身声明泛参时，必须先显式提供完整类型实参，目标 `spec` 不参与推导来源泛参。一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
+- 未绑定到 callable-form `spec` 的顶层函数或实例方法引用只有在明确 callable-form
+  `spec` 目标中才能形成值；候选唯一也不产生匿名 callable 类型。已经绑定的 callable-form
+  `spec` 值仍按上一条的声明身份规则流动，或按下一条执行显式结构转换。
 - 不同 callable-form `spec` 即使签名完全一致也不得隐式互相匹配; 仅当两个 callable-form `spec` 在实例化后的参数类型与返回类型完全一致时,才允许显式转换。
 - callable-form `spec` 的显式转换目标可以直接承接尚未绑定到 callable-form `spec` 的顶层函数或实例方法引用，并按目标完成普通结构匹配和 callable value 形成。泛型函数或方法来源必须先显式提供完整类型实参；转换目标不得反向推导来源泛参。
 - callable-form `spec` 的显式转换资格必须在编译期确定; 运行时不得重新比较签名、搜索候选或决定转换是否成立。
@@ -341,9 +348,14 @@ type Stream: ReadWrite {}
   显式 `seal` 时允许使用 `@friend`；授权继续通过 spec witness，且不得改变
   requirement 满足与具体实现成员可见性。完整规则统一见
   [Feng 语言可见性规范](./feng-visibility.md#103-friend-seal-成员)。
+- [必须] object-form `spec` 参数或局部值的实例方法引用在具有明确 callable-form
+  `spec` 目标时可以形成方法值；编译器必须绑定形成点的 subject、当前 witness 视角与
+  唯一 requirement，且不得因原 spec 绑定后续重新赋值而重绑定。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
+- [必须] 未绑定的顶层函数或实例方法引用形成值时必须具有明确 callable-form `spec`
+  目标；不得因来源只有一个候选而推导匿名 callable 类型。
 - [必须] 泛型函数或方法作为值时，必须显式提供完整类型实参并先完成实参数量、约束和签名替换检查；callable-form `spec` 目标不得隐式推导来源泛参。
 - [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
 - [必须] 不同 callable-form `spec` 之间的显式转换仅在实例化后的签名完全一致时允许,且资格必须在编译期确定。
@@ -379,6 +391,9 @@ type Stream: ReadWrite {}
   requirement/实现成员可见性兼容判断。
 - 编译器必须在 spec 字段读取与写入、方法调用、方法值、静态约束成员访问
   和重载候选选择时检查 `spec seal` 访问域；不可访问候选不得参与重载。
+- 编译器必须让 object-form `spec` 实例方法值与对应直接调用共用父闭包投影、原声明
+  requirement、访问过滤、实例化签名和重载消歧结果；形成方法值后，代码生成不得重新
+  按 spec 名称或方法名称查找 requirement。
 - 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
@@ -409,6 +424,8 @@ type Stream: ReadWrite {}
 - 每次对 `spec` 类型执行默认初始化时,都会创建该 `spec` 默认 witness 的新实例,不复用共享单例。
 - object-form 与 intersection-form `spec` 值上的 `==` / `!=` 比较其 subject 引用身份，不执行深度比较；callable-form `spec` 值上的 `==` / `!=` 比较 callable/closure 引用身份，不比较捕获内容、绑定对象或调用签名。union-form `spec` 未收窄前仍不允许直接使用 `==` / `!=`。
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
+- object-form `spec` 实例方法值调用只使用形成点保存的 subject、witness 视角与
+  requirement 槽，不执行运行时成员搜索、签名比较、重载选择或接收者重绑定。
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。
 - 对象形状 `spec` 的上下文向上 coercion 与显式 cast 不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。
 - union-form 统一映射为既有 `aggregate-with-managed-slots` 顶层值模型,首版值布局为 `tag + _fwd + payload`; `tag` 表达 active member identity,`_fwd` 只表达当前 payload 生命周期路径,不得把 union-form 实现为新的 runtime top-level value kind。

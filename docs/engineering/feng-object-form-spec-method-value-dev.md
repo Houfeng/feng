@@ -1,6 +1,6 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：待 Review，尚未实施。
+> **状态**：MV01 已完成，可独立交付；其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -117,24 +117,25 @@ receiver 与选中 requirement 绑定为 callable value 的能力。
 
 #### 修复任务
 
-- [ ] 更新函数、spec、可见性和诊断主规范，定义 object-form spec 实例方法值。
-- [ ] 让目标类型驱动的方法值解析复用 object-form spec 实例方法直接调用的成员闭包、
+- [x] 更新函数、spec、可见性和诊断主规范，定义 object-form spec 实例方法值。
+- [x] 让目标类型驱动的方法值解析复用 object-form spec 实例方法直接调用的成员闭包、
       原声明 requirement、访问过滤和重载匹配结果。
-- [ ] 记录 Codegen 所需的稳定已解析事实，不在 Codegen 按名称重新选择成员。
-- [ ] 实现 receiver 一次绑定、动态分派和正确生命周期；具体内部表示由实现分析决定。
-- [ ] 若实现需要第二个 receiver box、通用 lambda capture cell、新 runtime ABI 或额外
+- [x] 记录 Codegen 所需的稳定已解析事实，不在 Codegen 按名称重新选择成员。
+- [x] 实现 receiver 一次绑定、动态分派和正确生命周期；具体内部表示由实现分析决定。
+- [x] 若实现需要第二个 receiver box、通用 lambda capture cell、新 runtime ABI 或额外
       每次调用查找，停止并提交人工决策。
 
 #### 验证与交付
 
-- [ ] Semantic：绑定、参数、返回和显式 callable 转换四种目标位置均通过。
-- [ ] Semantic：无 callable 目标、签名不匹配、歧义和非法 seal 访问分别稳定拒绝。
-- [ ] FCTS：两个实际 type 通过同一 spec 形成方法值，分别进入各自实现。
-- [ ] FCTS：receiver 只求值一次、局部重新赋值不重绑定、方法值逃逸后仍有效。
-- [ ] FCTS：子到父 requirement、默认 spec 值、本地与 imported spec 均有代表用例。
-- [ ] Codegen：没有二次装箱、每次调用不重新查找 witness/member。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV01 可独立交付。
+- [x] Semantic：绑定、参数、返回和显式 callable 转换四种目标位置均通过。
+- [x] Semantic：无 callable 目标、签名不匹配和非法 seal 访问分别稳定拒绝；相同签名的
+      继承 requirement 继续按现有直接调用规则去重，不产生虚假歧义。
+- [x] FCTS：两个实际 type 通过同一 spec 形成方法值，分别进入各自实现。
+- [x] FCTS：receiver 只求值一次、局部重新赋值不重绑定、方法值逃逸后仍有效。
+- [x] FCTS：子到父 requirement、默认 spec 值、本地与 imported spec 均有代表用例。
+- [x] Codegen：没有二次装箱、每次调用不重新查找 witness/member。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV01 可独立交付。
 
 ### 4.2 MV02：`T: ObjectSpec` 泛型值的实例方法值
 
@@ -523,6 +524,121 @@ func bind<T: CombinedFactory>(): Creator {
 ## 6 实施过程问题记录
 
 实施过程中发现问题时，先按下列模板增加记录，再继续分析或修改代码：
+
+### ISSUE-001：MV01 无法构造独立的合法方法值歧义用例
+
+- **关联分项**：MV01
+- **状态**：已解决
+- **最小复现**：object-form `spec` 中同名但参数或返回类型不同的 requirement，在明确
+  callable-form `spec` 目标下最多只有一个签名能够完全匹配；继承路径中实例化后签名
+  完全相同的 requirement 则按现有直接调用规则表示同一逻辑 requirement。
+- **实际结果**：MV01 的目标类型匹配是“参数个数、参数类型、参数顺序和返回类型完全
+  一致”。两个不同的合法签名不能同时匹配同一个 callable 目标；完全相同的继承或覆盖
+  签名由直接调用解析去重。因此不存在既保持现有直接调用语义、又能稳定产生 `AE0521`
+  的 MV01 专属合法来源。
+- **期望结果**：第 4.1 节当前要求“无 callable 目标、签名不匹配、歧义和非法 seal
+  访问分别稳定拒绝”，其中“歧义”需要一个可构造且不改变既有语义的代表用例。
+- **根因**：该验收项沿用了通用重载方法值诊断矩阵，但 MV01 的来源只包含 object-form
+  `spec` requirement；object-form spec 方法不允许方法级泛参，且 callable 目标执行精确
+  结构匹配，所以没有能够同时匹配同一目标的两个非等价候选。
+- **通用修复方案**：建议将 MV01 的该项改为“无 callable 目标、签名不匹配和非法
+  seal 访问分别稳定拒绝；等价继承 requirement 不产生虚假歧义”，并继续由现有可实际
+  构成多候选的方法值来源覆盖 `AE0521`。不建议把等价 requirement 强制判为歧义，因为
+  这会偏离现有直接调用的逻辑槽去重语义。
+- **运行时性能影响**：无；只涉及验收边界和 Semantic 测试定义。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：已完成。人工确认相同签名的继承 requirement 应当合法；未绑定
+  callable 按结构匹配贴合目标 callable-form spec，已经绑定的 callable-form spec 只可在
+  结构匹配时显式转换，结构不匹配必须报错且显式转换也不得绕过检查。
+- **专项验证结果**：Semantic 与 FCTS 均验证等价继承 requirement 不产生虚假歧义，
+  并通过同一逻辑 witness 槽调用实现。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-002：单一 object-form spec 方法引用缺少 callable 目标时被接受
+
+- **关联分项**：MV01
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec Readable {
+    func read(offset: int): string;
+  }
+
+  func run(value: Readable) {
+    let reader = value.read;
+  }
+  ```
+
+- **实际结果**：Semantic 分析成功，没有诊断。
+- **期望结果**：方法值必须由明确的 callable-form `spec` 目标驱动；该表达式应以
+  `AE0523` 拒绝。
+- **根因**：通用无类型绑定校验只在来源存在多个重载时要求 callable 目标。单一顶层函数、
+  具体 type 方法和 object-form spec 方法都会被 Semantic 接受，但它们没有匿名 callable
+  类型，随后分别在 Codegen 进入错误的普通值/字段路径并失败；具体 type 与 spec 最小探针
+  分别产生 `CE0176` 和 `CE0173`。
+- **通用修复方案**：让无类型绑定校验对任何尚未绑定的顶层函数或实例方法引用统一要求
+  callable-form `spec` 目标；局部变量、参数和 callable 类型字段等已经绑定的 callable 值
+  保持原行为。同步把 `AE0523` 文案从“消解重载”收敛为“形成 callable value”。
+- **运行时性能影响**：无。修复只增加 Semantic 编译期分类，不改变任何可生成程序的
+  运行时代码。
+- **runtime ABI / `.ft` / 兼容性影响**：无。当前被接受的最小程序均在 Codegen 失败，
+  不存在可执行产物或既有 ABI；修复只把失败提前到稳定的 Semantic 诊断。
+- **是否需要人工决策**：已完成。通用修复会让既有编译器用例
+  `test_unary_address_of_rejects_bound_method_pointer_target` 在原有两个下游地址诊断之前新增
+  `AE0523`，使其精确错误数从 2 变为 3。推荐把该用例的前置绑定修正为
+  `let method: BoundCmp = box.cmp`，使其先合法形成真正的 bound method，再继续验证
+  `&method` 不能形成 `Cmp*`；缺少目标的行为由新增独立用例验证。该方案需要修改一个
+  既有用例，但能保持其原测试目的。若只修改错误数预期，用例会同时混入两个独立错误；
+  若只对 object-form spec 增加特判，则会让 type/spec 方法值规则分裂并违反通用实现原则，
+  两者均不建议。
+- **人工决策结果**：批准采用通用修复，并批准把该既有用例的前置绑定改为显式
+  `BoundCmp`，使其继续只验证已绑定方法值不能形成 ABI 函数指针。
+- **专项验证结果**：新增单一顶层函数、具体 type 方法和 object-form spec 方法无目标
+  用例，均稳定产生 `AE0523`；修正后的 ABI 地址用例继续稳定产生 `AE0231`；
+  `build/bin/test_semantic` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-003：FCTS 使用了当前尚不支持的 callable 返回值立即调用形式
+
+- **关联分项**：MV01
+- **状态**：已解决
+- **最小复现**：`makeEscapedSpecMethod(30)(3)`。
+- **实际结果**：Codegen 报 `CE0166: only direct or method calls supported in this iteration`。
+- **期望结果**：MV01 用例需要验证返回的方法值逃逸后仍可调用，不要求新增调用结果链式语法。
+- **根因**：新增用例把“返回 callable”和“调用 callable”写在同一表达式中，进入当前尚未
+  支持的 callable-result 直接调用路径；方法值本身已经成功形成和返回。
+- **通用修复方案**：先把返回值绑定到显式 `SpecMethodReader` 局部，再通过局部调用。
+  该写法与逃逸生命周期验证等价，不扩大 MV01 范围。
+- **运行时性能影响**：无；只修改新增测试表达式，编译器实现不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；不修复或绕过编译器能力，只纠正新增测试夹具。
+- **专项验证结果**：修正后的逃逸用例通过，`make fcts-tests` 最终结果为
+  `827 passed, 0 failed, 0 skipped`。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### MV01 独立交付记录
+
+- **变更范围**：补齐 object-form `spec` 参数/局部值的实例方法值解析与代码生成；
+  同步收敛无匿名 callable 类型时的单一未绑定函数/方法引用诊断。
+- **实现结果**：Semantic 复用 spec 父闭包投影、访问过滤、实例化签名和逻辑 requirement
+  去重，并把精确 requirement 身份记录到既有 callable coercion sidecar；Codegen 只消费
+  该稳定事实，在形成点保留 subject、借用静态 witness 指针，并由 adapter 直接调用已选
+  witness 槽。
+- **运行时成本**：既有可编译路径没有新增运行时分支、分配或查找。新支持的方法值形成
+  只产生一个保存 receiver 的 callable closure，不产生第二个 spec box；后续调用不执行
+  witness/member 搜索或重载选择。
+- **ABI 与格式**：没有修改 runtime、runtime 私有 ABI、公开 ABI、`.ft` 格式或符号恢复
+  边界。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen` 均通过；生成 C 编译
+  通过，并验证一个 closure 分配、零二次装箱和直接 witness 槽调用。
+- **FCTS**：本地与跨包动态分派、绑定/参数/返回/显式转换、一次求值、稳定绑定、逃逸、
+  父 requirement、默认值、合法 seal、等价继承 requirement 和闭合泛型 spec 实例均通过；
+  最终结果为 `827 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过，包含 UBSan、普通 `-O2 -Werror`、smoke、
+  CLI、stdlib、FCTS、性能约束、增量构建与发布脚本测试。
+- **未解决问题**：MV01 无未解决问题；MV02 及后续分项仍按第 3、4 节保持未实施。
+- **建议 commit message**：`feat: support object-form spec instance method values`
 
 ### ISSUE-待编号：待填写
 

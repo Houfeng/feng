@@ -1,0 +1,199 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_spec_method_value;
+
+/** Local object-form contract used by the MV01 runtime matrix. */
+spec SpecMethodReadable {
+  func read(offset: int): int;
+}
+
+/** Child view used to verify parent-requirement method-value selection. */
+spec SpecMethodChildReadable: SpecMethodReadable {}
+
+/** Primary callable target for read-like method values. */
+spec SpecMethodReader(offset: int): int;
+
+/** Structurally equal callable target used for explicit bound-value conversion. */
+spec SpecMethodReaderAlias(offset: int): int;
+
+/** Generic object-form contract used to verify receiver-instance substitution. */
+spec SpecMethodGenericReadable<T> {
+  func map(value: T): T;
+}
+
+/** First concrete dynamic implementation. */
+type SpecMethodFirst: SpecMethodChildReadable {
+  let base: int;
+
+  /** Return the first implementation's value. */
+  func read(offset: int): int {
+    return self.base + offset;
+  }
+}
+
+/** Second concrete dynamic implementation. */
+type SpecMethodSecond: SpecMethodReadable {
+  let base: int;
+
+  /** Return the second implementation's value. */
+  func read(offset: int): int {
+    return self.base + offset;
+  }
+}
+
+/** Concrete implementation of the closed generic object-form contract. */
+type SpecMethodGenericInt: SpecMethodGenericReadable<int> {
+  let base: int;
+
+  /** Map one closed generic argument through the implementation. */
+  func map(value: int): int {
+    return self.base + value;
+  }
+}
+
+/** Counts evaluations of a receiver expression returning a spec value. */
+type SpecMethodFactory {
+  var calls: int;
+
+  /** Produce one spec receiver and record exactly one evaluation. */
+  func make(base: int): SpecMethodReadable {
+    self.calls += 1;
+    return SpecMethodFirst { base: base };
+  }
+}
+
+/** First identical parent requirement used by the logical-slot test. */
+spec SpecMethodLeft {
+  func same(offset: int): int;
+}
+
+/** Second identical parent requirement used by the logical-slot test. */
+spec SpecMethodRight {
+  func same(offset: int): int;
+}
+
+/** Inherits two structurally identical requirements. */
+spec SpecMethodCombined: SpecMethodLeft, SpecMethodRight {}
+
+/** Implements the one logical requirement inherited through both parents. */
+type SpecMethodCombinedValue: SpecMethodCombined {
+  let base: int;
+
+  /** Return the combined implementation's value. */
+  func same(offset: int): int {
+    return self.base + offset;
+  }
+}
+
+/** Seal-only contract used to verify an authorized formation point. */
+spec SpecMethodSealed {
+  seal func secret(offset: int): int;
+}
+
+/** Authorized implementation domain for the seal requirement. */
+type SpecMethodSealOwner: SpecMethodSealed {
+  let base: int;
+
+  /** Implement the seal requirement. */
+  seal func secret(offset: int): int {
+    return self.base + offset;
+  }
+
+  /** Form a seal requirement method value inside its authorized type. */
+  func bindSecret(value: SpecMethodSealed): SpecMethodReader {
+    return value.secret;
+  }
+}
+
+/** Bind one object-form spec receiver to its read requirement. */
+func bindSpecMethod(value: SpecMethodReadable): SpecMethodReader {
+  return value.read;
+}
+
+/** Invoke a method value supplied in parameter position. */
+func applySpecMethod(reader: SpecMethodReader, offset: int): int {
+  return reader(offset);
+}
+
+/** Return a method value whose only receiver binding is local to this call. */
+func makeEscapedSpecMethod(base: int): SpecMethodReader {
+  let local: SpecMethodReadable = SpecMethodFirst { base: base };
+  return local.read;
+}
+
+/** MV01 object-form spec method-value conformance coverage. */
+open func test_spec_method_value(): void {
+  describe("object-form spec method values", () {
+    test("dispatches through the witness captured at formation", () {
+      let firstView: SpecMethodReadable = SpecMethodFirst { base: 10 };
+      let secondView: SpecMethodReadable = SpecMethodSecond { base: 100 };
+      let firstReader: SpecMethodReader = bindSpecMethod(firstView);
+      let secondReader: SpecMethodReader = bindSpecMethod(secondView);
+      assert(firstReader(2) == 12, "first concrete witness");
+      assert(secondReader(2) == 102, "second concrete witness");
+    });
+
+    test("supports binding parameter return and explicit conversion targets", () {
+      let view: SpecMethodReadable = SpecMethodFirst { base: 20 };
+      let bound: SpecMethodReader = view.read;
+      let casted = (SpecMethodReader)view.read;
+      let alias = (SpecMethodReaderAlias)bound;
+      let escaped: SpecMethodReader = makeEscapedSpecMethod(30);
+      assert(bound(1) == 21, "binding target");
+      assert(applySpecMethod(view.read, 2) == 22, "parameter target");
+      assert(escaped(3) == 33, "return target and escape");
+      assert(casted(4) == 24, "explicit unbound conversion target");
+      assert(alias(5) == 25, "explicit bound callable conversion");
+    });
+
+    test("evaluates the receiver once and does not rebind after assignment", () {
+      let factory = SpecMethodFactory { calls: 0 };
+      let once: SpecMethodReader = factory.make(40).read;
+      assert(factory.calls == 1, "receiver expression evaluated once");
+      assert(once(1) == 41, "single evaluation receiver remains bound");
+
+      var source: SpecMethodReadable = SpecMethodFirst { base: 50 };
+      let stable: SpecMethodReader = source.read;
+      source = SpecMethodSecond { base: 500 };
+      assert(stable(2) == 52, "formed method value keeps original receiver");
+      assert(source.read(2) == 502, "reassigned spec binding uses new receiver");
+    });
+
+    test("uses parent default seal and equivalent inherited requirements", () {
+      let child: SpecMethodChildReadable = SpecMethodFirst { base: 60 };
+      let inherited: SpecMethodReader = child.read;
+      assert(inherited(3) == 63, "child view selects parent requirement");
+
+      let defaultValue: SpecMethodReadable;
+      let defaultReader: SpecMethodReader = defaultValue.read;
+      assert(defaultReader(9) == 0, "default witness method value");
+
+      let combined: SpecMethodCombined = SpecMethodCombinedValue { base: 70 };
+      let same: SpecMethodReader = combined.same;
+      assert(same(4) == 74, "equivalent parent requirements are one logical slot");
+
+      let sealOwner = SpecMethodSealOwner { base: 80 };
+      let sealed: SpecMethodSealed = sealOwner;
+      let secret = sealOwner.bindSecret(sealed);
+      assert(secret(5) == 85, "authorized seal requirement formation");
+    });
+
+    test("substitutes the closed generic spec receiver signature", () {
+      let genericView: SpecMethodGenericReadable<int> =
+        SpecMethodGenericInt { base: 90 };
+      let mapped: SpecMethodReader = genericView.map;
+      assert(mapped(6) == 96, "closed generic spec method value");
+    });
+
+    test("forms local and provider method values from an imported spec", () {
+      let imported = makeLibSpecMethodReadable(700);
+      let localTarget: SpecMethodReader = imported.read;
+      let providerTarget = bindLibSpecMethodReader(imported);
+      let converted = (SpecMethodReader)providerTarget;
+      assert(localTarget(6) == 706, "consumer target over imported spec");
+      assert(providerTarget(7) == 707, "provider target escapes package");
+      assert(converted(8) == 708, "imported bound callable explicit conversion");
+    });
+  });
+}

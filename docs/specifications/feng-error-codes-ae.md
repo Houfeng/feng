@@ -137,8 +137,8 @@
 | AE0520 | lambda 目标类型与边界 | AE0101 | lambda expression in %s requires an explicit callable-form spec target type |
 | AE0521 | 目标可调用类型重载消歧约束 | AE0105 | expression '%s' has multiple overloads matching expected ABI function pointer type '%s' |
 | AE0521 | 目标可调用类型重载消歧约束 | AE0106 | expression '%s' has multiple overloads matching expected function type '%s' |
-| AE0522 | 目标函数类型匹配约束 | AE0107 | expression '%s' does not match expected function type '%s' |
-| AE0523 | 目标函数类型显式标注约束 | AE0135 | expression '%s' requires an explicit target function type to resolve overloads |
+| AE0522 | 目标函数类型匹配约束（包括方法值来源） | AE0107 | expression '%s' does not match expected function type '%s' |
+| AE0523 | 目标函数类型显式标注约束 | AE0135 | expression '%s' requires an explicit target function type to form a callable value; target type must be a callable-form spec |
 | AE0524 | 预打包变参数组转发约束 | AE0524 | prepacked variadic forwarding requires a variadic call target、prepacked variadic forwarding must begin at the first variadic argument position、prepacked variadic argument must match the target readonly variadic array type |
 | AE0525 | 泛型调用类型实参推导完整性 | （新增） | cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type |
 

@@ -5362,6 +5362,50 @@ static void test_method_value_requires_explicit_type_when_overloaded(void) {
     feng_program_free(program);
 }
 
+/* Feng has no anonymous callable type: even a single unbound top-level
+ * function or concrete instance method needs a named callable-form spec target
+ * before it can become a value. */
+static void test_untyped_single_callable_references_require_named_target(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } cases[] = {
+        {
+            "single_function_value_requires_target.ff",
+            "module demo.callable.single_function;\n"
+            "func read(offset: int): string { return \"value\"; }\n"
+            "func run() { let callable = read; }\n"
+        },
+        {
+            "single_method_value_requires_target.ff",
+            "module demo.callable.single_method;\n"
+            "type Reader {\n"
+            "    func read(offset: int): string { return \"value\"; }\n"
+            "}\n"
+            "func run(value: Reader) { let callable = value.read; }\n"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(cases[case_index].path,
+                                                    cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, "AE0523") == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* Value-receiver method values obey the same target-typed signature and
  * overload rules as reference receivers before codegen selects value capture. */
 static void test_value_method_value_signature_and_overload_rules(void) {
@@ -7527,13 +7571,14 @@ static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
         "module demo.main;\n"
         "@abi\n"
         "spec Cmp(a: int, b: int): int;\n"
+        "spec BoundCmp(a: int, b: int): int;\n"
         "type Box {\n"
         "    func cmp(a: int, b: int): int {\n"
         "        return a - b;\n"
         "    }\n"
         "}\n"
         "func run(box: Box) {\n"
-        "    let method = box.cmp;\n"
+        "    let method: BoundCmp = box.cmp;\n"
         "    let cb: Cmp* = &method;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("unary_address_of_bound_method_error.f", source);
@@ -7544,10 +7589,10 @@ static void test_unary_address_of_rejects_bound_method_pointer_target(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
-    ASSERT(error_count == 2U);
-    ASSERT(strcmp(errors[1].path, "unary_address_of_bound_method_error.f") == 0);
-    ASSERT(errors[1].token.line == 11U);
-    ASSERT(strstr(errors[1].message,
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "unary_address_of_bound_method_error.f") == 0);
+    ASSERT(errors[0].token.line == 12U);
+    ASSERT(strstr(errors[0].message,
                   "cannot form expected ABI function pointer type 'Cmp*'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
@@ -23666,6 +23711,210 @@ static void test_explicit_generic_callable_values_and_unbound_casts(void) {
     feng_program_free(program);
 }
 
+/* Object-form spec method values use the same target-driven member selection
+ * as concrete method values while retaining the exact declaring requirement
+ * and receiver spec instance in the callable-coercion sidecar. */
+static void test_object_spec_method_values_record_exact_target_context(void) {
+    const char *source =
+        "module demo.spec_method_value.target_context;\n"
+        "spec Readable { func read(offset: int): string; }\n"
+        "spec ChildReadable: Readable {}\n"
+        "spec LeftReadable { func read(offset: int): string; }\n"
+        "spec RightReadable { func read(offset: int): string; }\n"
+        "spec CombinedReadable: LeftReadable, RightReadable {}\n"
+        "spec Reader(offset: int): string;\n"
+        "func accept(reader: Reader): Reader { return reader; }\n"
+        "func make(value: Readable): Reader { return value.read; }\n"
+        "func exercise(value: ChildReadable): Reader {\n"
+        "    let bound: Reader = value.read;\n"
+        "    let casted = (Reader)value.read;\n"
+        "    return accept(value.read);\n"
+        "}\n"
+        "func bindCombined(value: CombinedReadable): Reader {\n"
+        "    return value.read;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_method_value_target_context.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *readable;
+    const FengDecl *left_readable;
+    const FengDecl *reader;
+    const FengDecl *make;
+    const FengDecl *exercise;
+    const FengDecl *bind_combined;
+    const FengTypeMember *read_member = NULL;
+    const FengTypeMember *left_read_member = NULL;
+    const FengExpr *sites[5];
+    const FengSpecCoercionSite *site;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    readable = find_spec_decl_by_name(analysis, "Readable");
+    left_readable = find_spec_decl_by_name(analysis, "LeftReadable");
+    reader = find_spec_decl_by_name(analysis, "Reader");
+    make = find_function_decl_in_program(program, "make");
+    exercise = find_function_decl_in_program(program, "exercise");
+    bind_combined = find_function_decl_in_program(program, "bindCombined");
+    ASSERT(readable != NULL && left_readable != NULL && reader != NULL);
+    ASSERT(make != NULL && exercise != NULL && bind_combined != NULL);
+    for (size_t index = 0U;
+         index < readable->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            readable->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("read") &&
+            memcmp(member->as.callable.name.data, "read", strlen("read")) == 0) {
+            read_member = member;
+            break;
+        }
+    }
+    for (size_t index = 0U;
+         index < left_readable->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            left_readable->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("read") &&
+            memcmp(member->as.callable.name.data, "read", strlen("read")) == 0) {
+            left_read_member = member;
+            break;
+        }
+    }
+    ASSERT(read_member != NULL && left_read_member != NULL);
+
+    sites[0] = nth_let_initializer(&exercise->as.function_decl, 0U);
+    sites[1] = nth_let_initializer(&exercise->as.function_decl, 1U);
+    ASSERT(sites[0] != NULL && sites[1] != NULL);
+    ASSERT(sites[1]->kind == FENG_EXPR_CAST);
+    sites[1] = sites[1]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 3U);
+    ASSERT(exercise->as.function_decl.body->statements[2]->kind ==
+           FENG_STMT_RETURN);
+    sites[2] = exercise->as.function_decl.body->statements[2]
+                   ->as.return_value;
+    ASSERT(sites[2] != NULL && sites[2]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[2]->as.call.arg_count == 1U);
+    sites[2] = sites[2]->as.call.args[0];
+    ASSERT(make->as.function_decl.body->statement_count == 1U);
+    ASSERT(make->as.function_decl.body->statements[0]->kind == FENG_STMT_RETURN);
+    sites[3] = make->as.function_decl.body->statements[0]->as.return_value;
+    ASSERT(bind_combined->as.function_decl.body->statement_count == 1U);
+    ASSERT(bind_combined->as.function_decl.body->statements[0]->kind ==
+           FENG_STMT_RETURN);
+    sites[4] = bind_combined->as.function_decl.body->statements[0]
+                   ->as.return_value;
+
+    for (size_t index = 0U; index < 4U; ++index) {
+        site = feng_semantic_lookup_spec_coercion_site(analysis, sites[index]);
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == reader);
+        ASSERT(site->callable_member == read_member);
+        ASSERT(site->callable_owner_type_decl == readable);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref,
+            index < 3U ? "ChildReadable" : "Readable"));
+    }
+
+    /* Identical requirements inherited from two parents remain one logical
+     * callable source, matching the existing direct-call behavior. */
+    site = feng_semantic_lookup_spec_coercion_site(analysis, sites[4]);
+    ASSERT(site != NULL);
+    ASSERT(site->callable_source ==
+           FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+    ASSERT(site->target_spec_decl == reader);
+    ASSERT(site->callable_member == left_read_member);
+    ASSERT(site->callable_owner_type_decl == left_readable);
+    ASSERT(spec_upcast_type_ref_leaf_is(site->callable_receiver_type_ref,
+                                        "CombinedReadable"));
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Object-form spec method values retain the existing callable diagnostics:
+ * missing target, structural mismatch, mismatching explicit cast and an
+ * inaccessible seal requirement are all rejected before code generation. */
+static void test_object_spec_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "object_spec_method_value_without_target.ff",
+            "module demo.spec_method_value.no_target;\n"
+            "spec Readable { func read(offset: int): string; }\n"
+            "func run(value: Readable) { let reader = value.read; }\n",
+            "AE0523"
+        },
+        {
+            "object_spec_method_value_signature_mismatch.ff",
+            "module demo.spec_method_value.mismatch;\n"
+            "spec Readable { func read(offset: int): string; }\n"
+            "spec WrongReader(flag: bool): string;\n"
+            "func run(value: Readable) { let reader: WrongReader = value.read; }\n",
+            "AE0522"
+        },
+        {
+            "object_spec_method_value_cast_mismatch.ff",
+            "module demo.spec_method_value.cast_mismatch;\n"
+            "spec Readable { func read(offset: int): string; }\n"
+            "spec WrongReader(flag: bool): string;\n"
+            "func run(value: Readable) { let reader = (WrongReader)value.read; }\n",
+            "AE0051"
+        },
+        {
+            "object_spec_method_value_seal_access.ff",
+            "module demo.spec_method_value.seal_access;\n"
+            "spec HiddenReadable { seal func read(offset: int): string; }\n"
+            "spec Reader(offset: int): string;\n"
+            "func run(value: HiddenReadable): Reader { return value.read; }\n",
+            "AE0708"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(cases[case_index].path,
+                                                    cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_expected = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code,
+                       cases[case_index].expected_code) == 0) {
+                found_expected = true;
+                break;
+            }
+        }
+        ASSERT(found_expected);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* Explicit generic callable targets reject every unresolved or incompatible
  * source at the semantic boundary; casts do not infer source type arguments. */
 static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
@@ -24939,6 +25188,8 @@ int main(void) {
     test_generic_callable_spec_instance_rejects_lambda_return_mismatch();
     test_multi_parameter_generic_callable_rejects_each_mismatch();
     test_explicit_generic_callable_values_and_unbound_casts();
+    test_object_spec_method_values_record_exact_target_context();
+    test_object_spec_method_values_reject_invalid_sources();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();
     test_callable_spec_value_rejects_different_spec_implicit_match();
@@ -25167,6 +25418,7 @@ int main(void) {
     test_method_value_selects_overload_by_parameter_context();
     test_method_value_selects_overload_by_return_type_context();
     test_method_value_requires_explicit_type_when_overloaded();
+    test_untyped_single_callable_references_require_named_target();
     test_value_method_value_signature_and_overload_rules();
     test_imported_value_method_value_respects_visibility();
     test_alias_function_value_argument_rejects_non_matching_target_type();

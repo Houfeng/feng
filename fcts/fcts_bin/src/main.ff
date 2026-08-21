@@ -19,6 +19,7 @@ func main(args: string[]) {
       test_finalizer_capture();
       test_enum();
       test_spec();
+      test_spec_method_value();
       test_intersection();
       test_intersection_generic();
       test_fit();

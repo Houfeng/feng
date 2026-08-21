@@ -1,0 +1,31 @@
+open module fcts_lib.test.lib_spec_method_value;
+
+/** Imported object-form contract used by the MV01 cross-package matrix. */
+open spec LibSpecMethodReadable {
+  func read(offset: int): int;
+}
+
+/** Imported callable target returned by the provider-side binding path. */
+open spec LibSpecMethodReader(offset: int): int;
+
+/** Provider-owned implementation whose witness must remain callable outside the package. */
+open type LibSpecMethodValue: LibSpecMethodReadable {
+  open let base: int;
+
+  /** Read through the provider-owned implementation. */
+  open func read(offset: int): int {
+    return self.base + offset;
+  }
+}
+
+/** Return an imported object-form spec value to the consumer. */
+open func makeLibSpecMethodReadable(base: int): LibSpecMethodReadable {
+  return LibSpecMethodValue { base: base };
+}
+
+/** Form and return the imported spec method value inside the provider. */
+open func bindLibSpecMethodReader(
+  value: LibSpecMethodReadable
+): LibSpecMethodReader {
+  return value.read;
+}
