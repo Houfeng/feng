@@ -452,23 +452,8 @@ Review 通过后严格按以下顺序实施。任务完成并验证后将对应�
 
 ### P02：终结器中的 lambda 捕获 `self` 未完成 codegen lowering
 
-- 状态：已延期（人工决定）
-- 发现阶段：Semantic/FCTS 正向测试设计验证
-- 现象：终结器中声明 `() -> self.retained.read()` 的 lambda 已通过 Semantic，但直接
-  编译在 codegen 阶段产生 `CE0103: lambda self capture was not lowered to a capture cell`。
-- 影响：阻止“终结器中的嵌套 lambda 继承词法 owner”进入可执行 FCTS 覆盖；普通终结器
-  friend 访问和不捕获 `self` 的 lambda 是否受影响仍待隔离验证。
-- 事实与复现：当前最小诊断源稳定在终结器 lambda 的 `()` 位置报告 CE0103，错误发生
-  在 friend Semantic 检查之后，不是 seal/friend 访问诊断。
-- 原因分析：已使用不含 `@friend` 的独立最小复现确认：普通 type 的终结器只要通过
-  lambda 捕获 `self`，就会产生同一 CE0103。该问题是既有 finalizer lambda capture
-  codegen lowering 缺陷，与本次 friend Semantic 修改无关。
-- 决策：人工确认该独立终结器问题不影响 friend 优化，本次不扩大范围修复。
-- 解决：friend 用例避免终结器 lambda 捕获 `self`；终结器通过直接访问覆盖实例 friend
-  成员，并通过不捕获 `self` 的 lambda 覆盖嵌套词法 owner 授权。CE0103 留待后续专项。
-- 验证：friend Semantic 定向测试通过；沙箱外 `make fcts-tests` 为
-  `Total: 817, Passed: 817, Failed: 0, Skipped: 0`，不捕获 `self` 的终结器 lambda、
-  终结器直接访问和实例方法值均成功执行。
+详见独立专项
+[`feng-finalizer-self-capture-resurrection-bugfix.md`](./feng-finalizer-self-capture-resurrection-bugfix.md)。
 
 ### P03：CLI 定向测试在既有进程管理用例提前失败
 
