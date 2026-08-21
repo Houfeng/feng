@@ -214,6 +214,9 @@ type Stream: ReadWrite {}
   下形成方法值。来源 requirement 必须从该 spec 实例的父闭包中按直接调用相同的访问
   与签名规则唯一选出；形成点保存当前 subject 与 witness 视角，原 spec 绑定后续重新
   赋值不改变已经形成的方法值。
+- object-form `spec` 作为泛型约束时，`value: T` 的实例方法引用使用同一 requirement
+  选择规则，但形成点绑定的是保持 `T` 值模型的 receiver，而不是 object-form `spec`
+  值。闭合 `T` 的引用和值语义分别按语言既有的引用保留和值复制规则处理。
 - requirement 与实现成员的可见性兼容规则如下；省略修饰的 `type` 成员按
   其既有公开语义处理：
 
@@ -351,6 +354,9 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 参数或局部值的实例方法引用在具有明确 callable-form
   `spec` 目标时可以形成方法值；编译器必须绑定形成点的 subject、当前 witness 视角与
   唯一 requirement，且不得因原 spec 绑定后续重新赋值而重绑定。
+- [必须] object-form `spec` 约束下的泛型值实例方法引用必须复用该约束实例的成员闭包、
+  访问过滤、签名替换和 requirement 槽；receiver 必须保持完整 `T` 值语义，不得先形成
+  object-form `spec` 值。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
@@ -394,6 +400,9 @@ type Stream: ReadWrite {}
 - 编译器必须让 object-form `spec` 实例方法值与对应直接调用共用父闭包投影、原声明
   requirement、访问过滤、实例化签名和重载消歧结果；形成方法值后，代码生成不得重新
   按 spec 名称或方法名称查找 requirement。
+- 对受 object-form `spec` 约束的泛型 receiver，编译器还必须把约束 witness 与完整
+  receiver 类型事实分别保留到最终闭合点；不得通过 spec box 或运行时满足关系查询恢复
+  任一事实。
 - 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
@@ -426,6 +435,9 @@ type Stream: ReadWrite {}
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
 - object-form `spec` 实例方法值调用只使用形成点保存的 subject、witness 视角与
   requirement 槽，不执行运行时成员搜索、签名比较、重载选择或接收者重绑定。
+- 受 object-form `spec` 约束的泛型 receiver 所形成的方法值只保存按闭合 `T` 复制或保留
+  的 receiver，并使用已闭合的 witness 槽；不得增加 spec box、第二个 receiver 分配或
+  每次调用查找。
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。
 - 对象形状 `spec` 的上下文向上 coercion 与显式 cast 不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。
 - union-form 统一映射为既有 `aggregate-with-managed-slots` 顶层值模型,首版值布局为 `tag + _fwd + payload`; `tag` 表达 active member identity,`_fwd` 只表达当前 payload 生命周期路径,不得把 union-form 实现为新的 runtime top-level value kind。

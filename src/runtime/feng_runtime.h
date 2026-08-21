@@ -436,9 +436,10 @@ typedef struct FengCallableValueDescriptor {
     const FengTypeDescriptor *closure_desc;
     /* Typed invoke adapter matching the selected callable-form spec ABI. */
     void (*invoke)(void);
-    /* Descriptor for an aggregate capture copied into the closure, if any. */
+    /* Descriptor for an inline aggregate receiver capture, if any. */
     const FengAggregateDescriptor *aggregate_capture_desc;
-    /* Byte offset of the aggregate capture within the closed closure. */
+    /* Byte offset of an inline trivial or aggregate receiver capture within
+     * the closed closure. Managed-pointer receivers continue to use _self. */
     size_t aggregate_capture_offset;
 } FengCallableValueDescriptor;
 

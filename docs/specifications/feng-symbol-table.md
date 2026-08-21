@@ -206,6 +206,12 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 - 已收录 `type` 的全部字段类型,不区分字段可见性、静态与否及字段类型是否泛型。
 - 已收录 `type`、函数和 `fit` 的 reifiable 依赖。
 
+公开共享泛型声明中的 target-typed callable value 形成也属于 reifiable callable
+依赖。`T: ObjectSpec` 的实例方法值必须在既有 callable dependency 记录中保留原声明
+requirement 的符号身份、caller 视角的 receiver `T` 和目标 callable-form `spec` 类型；
+consumer 必须原样恢复这些编译期事实，不得把来源降格为普通 type/fit 方法或按名称重新
+查找 requirement。该语义复用现有记录布局，不新增 section、字段或格式版本。
+
 闭包按以下规则递归:
 
 - 泛型实参、数组元素和指针目标继续参与遍历。
@@ -454,7 +460,7 @@ Header
 | `FT_SEC_RELS` | `0x0005` | 必需 | 全部 | 关系记录 |
 | `FT_SEC_DOCS` | `0x0006` | 可选 | 全部 | 文档注释 |
 | `FT_SEC_ATTRS` | `0x0007` | 可选 | 全部 | 扩展属性 |
-| `FT_SEC_CALLABLE_DEPS` | `0x0008` | 条件必需 | 全部 | 直接泛型 callable 依赖 |
+| `FT_SEC_CALLABLE_DEPS` | `0x0008` | 条件必需 | 全部 | 共享泛型 callable 的直接调用与方法值依赖 |
 | `FT_SEC_SPNS` | `0x0010` | 可选 | workspace-cache | 源码位置 |
 | `FT_SEC_USES` | `0x0011` | 可选 | workspace-cache | 依赖模块与指纹 |
 | `FT_SEC_META` | `0x0012` | 可选 | workspace-cache | 缓存失效信息 |

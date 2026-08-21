@@ -2182,6 +2182,17 @@ static void restore_imported_reifiable_deps(
                                            ? &owner_synthetic->decl
                                            : NULL;
             resolved.member = target_member;
+        } else if (dependency->kind ==
+                   FENG_RESOLVED_CALLABLE_SPEC_METHOD) {
+            if (target_decl->kind != FENG_DECL_SPEC ||
+                target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+                target_member == NULL ||
+                target_member->kind != FENG_TYPE_MEMBER_METHOD ||
+                target_member->is_static) {
+                continue;
+            }
+            resolved.owner_type_decl = target_decl;
+            resolved.member = target_member;
         } else {
             continue;
         }

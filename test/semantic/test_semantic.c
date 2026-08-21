@@ -23844,6 +23844,124 @@ static void test_object_spec_method_values_record_exact_target_context(void) {
     feng_program_free(program);
 }
 
+/* A method value formed from T: ObjectSpec keeps T as the receiver type while
+ * selecting the exact constraint requirement and callable target at compile
+ * time. All target-bearing expression positions share one reifiable callable
+ * dependency in the generic body. */
+static void test_constrained_generic_spec_method_values_preserve_receiver(void) {
+    const char *source =
+        "module demo.spec_method_value.generic_receiver;\n"
+        "spec Readable { func read(offset: int): string; }\n"
+        "spec Reader(offset: int): string;\n"
+        "func accept(reader: Reader): Reader { return reader; }\n"
+        "func exercise<T: Readable>(value: T): Reader {\n"
+        "    let bound: Reader = value.read;\n"
+        "    let casted = (Reader)value.read;\n"
+        "    return accept(value.read);\n"
+        "}\n"
+        "func returned<T: Readable>(value: T): Reader {\n"
+        "    return value.read;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "constrained_generic_spec_method_value.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *readable;
+    const FengDecl *reader;
+    const FengDecl *exercise;
+    const FengDecl *returned;
+    const FengTypeMember *read_member = NULL;
+    const FengExpr *sites[4];
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    readable = find_spec_decl_by_name(analysis, "Readable");
+    reader = find_spec_decl_by_name(analysis, "Reader");
+    exercise = find_function_decl_in_program(program, "exercise");
+    returned = find_function_decl_in_program(program, "returned");
+    ASSERT(readable != NULL && reader != NULL);
+    ASSERT(exercise != NULL && returned != NULL);
+    for (size_t index = 0U;
+         index < readable->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            readable->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("read") &&
+            memcmp(member->as.callable.name.data,
+                   "read",
+                   strlen("read")) == 0) {
+            read_member = member;
+            break;
+        }
+    }
+    ASSERT(read_member != NULL);
+
+    sites[0] = nth_let_initializer(&exercise->as.function_decl, 0U);
+    sites[1] = nth_let_initializer(&exercise->as.function_decl, 1U);
+    ASSERT(sites[0] != NULL && sites[1] != NULL);
+    ASSERT(sites[1]->kind == FENG_EXPR_CAST);
+    sites[1] = sites[1]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 3U);
+    ASSERT(exercise->as.function_decl.body->statements[2]->kind ==
+           FENG_STMT_RETURN);
+    sites[2] = exercise->as.function_decl.body->statements[2]
+                   ->as.return_value;
+    ASSERT(sites[2] != NULL && sites[2]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[2]->as.call.arg_count == 1U);
+    sites[2] = sites[2]->as.call.args[0];
+    ASSERT(returned->as.function_decl.body->statement_count == 1U);
+    ASSERT(returned->as.function_decl.body->statements[0]->kind ==
+           FENG_STMT_RETURN);
+    sites[3] = returned->as.function_decl.body->statements[0]
+                   ->as.return_value;
+
+    for (size_t index = 0U; index < 4U; ++index) {
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(analysis, sites[index]);
+
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == reader);
+        ASSERT(site->callable_member == read_member);
+        ASSERT(site->callable_owner_type_decl == readable);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+    }
+
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, exercise);
+        const FengReifiableCallableDep *dependency;
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 1U);
+        dependency = &dep_set->callable_deps[0];
+        ASSERT(dependency->purpose ==
+               FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+        ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD);
+        ASSERT(dependency->owner_type_decl == readable);
+        ASSERT(dependency->member == read_member);
+        ASSERT(dependency->fit_decl == NULL);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->owner_instance_type_ref, "T"));
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->target_callable_type_ref, "Reader"));
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Object-form spec method values retain the existing callable diagnostics:
  * missing target, structural mismatch, mismatching explicit cast and an
  * inaccessible seal requirement are all rejected before code generation. */
@@ -25189,6 +25307,7 @@ int main(void) {
     test_multi_parameter_generic_callable_rejects_each_mismatch();
     test_explicit_generic_callable_values_and_unbound_casts();
     test_object_spec_method_values_record_exact_target_context();
+    test_constrained_generic_spec_method_values_preserve_receiver();
     test_object_spec_method_values_reject_invalid_sources();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();

@@ -1,6 +1,6 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01 已完成，可独立交付；其余分项尚未实施。
+> **状态**：MV01、MV02 已完成，可分别独立交付；其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -45,9 +45,10 @@
 - 涉及跨包依赖恢复时的 [Feng 符号表规范](../specifications/feng-symbol-table.md)；
 - 对应 AE/CE 诊断规范。
 
-## 2 当前基线
+## 2 专项实施前基线
 
-本表只核对按既有成员访问规范本来合法的来源。当前最小探针与现有回归确认如下：
+本表只记录专项启动时，按既有成员访问规范本来合法的来源。启动时最小探针与回归确认
+如下；各分项完成后的结果以第 4、6 节为准：
 
 | 来源 | 直接调用现状 | 方法值现状 | 本专项定位 |
 | --- | --- | --- | --- |
@@ -59,8 +60,8 @@
 | `T: IntersectionSpec` 的泛型值实例方法 | 已支持 | `AE0522` | `SPEC_INSTANCE`，receiver 保持 `T` 的值语义并使用 merged witness |
 | `T: IntersectionSpec` 的类型参数静态方法 | `AE0512` | 尚未进入方法值解析 | 直接调用存在独立缺口；对应方法值依赖其先修复 |
 
-前六行当前缺失的是“把已经可以直接调用的合法成员引用形成 callable value”。最后一行
-首先是直接调用缺口，不能把它直接归因于方法值解析。
+专项启动时，前六行缺失的是“把已经可以直接调用的合法成员引用形成 callable value”。
+最后一行首先是直接调用缺口，不能把它直接归因于方法值解析。
 
 ## 3 分项与依赖
 
@@ -169,22 +170,23 @@ func bind<T: Readable>(value: T): Reader {
 
 #### 修复任务
 
-- [ ] 更新函数、spec、泛型和诊断主规范，明确受约束泛型 receiver 的方法值语义。
-- [ ] 复用 MV01 的 requirement 选择和访问过滤，但保留 receiver 的完整 `T` 类型事实。
-- [ ] 复用既有 generic value capture、descriptor、cleanup 和共享体具体化基础设施。
-- [ ] 证明普通闭合代码、共享泛型体和跨包 consumer 使用同一语义计划。
-- [ ] 若必须增加 spec box、第二次 receiver 分配或既有泛型路径开销，停止并提交人工决策。
+- [x] 更新函数、spec、泛型和符号表主规范，明确受约束泛型 receiver 的方法值及跨包恢复
+      语义；核对现有诊断规范，本分项不新增或变更诊断。
+- [x] 复用 MV01 的 requirement 选择和访问过滤，但保留 receiver 的完整 `T` 类型事实。
+- [x] 复用既有 generic value capture、descriptor、cleanup 和共享体具体化基础设施。
+- [x] 证明普通闭合代码、共享泛型体和跨包 consumer 使用同一语义计划。
+- [x] 确认没有增加 spec box、第二次 receiver 分配或任何此前合法路径的运行时开销。
 
 #### 验证与交付
 
-- [ ] Semantic：object-form 约束泛型值在绑定、参数、返回和显式转换位置均通过。
-- [ ] FCTS：`T` 分别闭合为托管引用、trivial 值和 descriptor-sized 值语义类型。
-- [ ] FCTS：引用 receiver 绑定同一实例；值 receiver 捕获独立值且连续调用保持其状态。
-- [ ] Codegen：三类 `T` 均不生成 spec box，不保存会逃逸的栈地址。
-- [ ] 跨包：provider 共享泛型体由 consumer-only 具体类型闭合并正确调用。
-- [ ] 生命周期：托管叶子在复制、覆盖、正常退出和异常展开时正确清理。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV02 可独立交付。
+- [x] Semantic：object-form 约束泛型值在绑定、参数、返回和显式转换位置均通过。
+- [x] FCTS：`T` 分别闭合为托管引用、trivial 值和 descriptor-sized 值语义类型。
+- [x] FCTS：引用 receiver 绑定同一实例；值 receiver 捕获独立值且连续调用保持其状态。
+- [x] Codegen：三类 `T` 均不生成 spec box，不保存会逃逸的栈地址。
+- [x] 跨包：provider 共享泛型体由 consumer-only 具体类型闭合并正确调用。
+- [x] 生命周期：托管叶子在复制、覆盖、正常退出和异常展开时正确清理。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV02 可独立交付。
 
 ### 4.3 MV03：具体 `type` / 可见 `fit` 的静态方法值
 
@@ -637,8 +639,66 @@ func bind<T: CombinedFactory>(): Creator {
   最终结果为 `827 passed, 0 failed, 0 skipped`。
 - **全量回归**：沙箱外完整 `make test` 通过，包含 UBSan、普通 `-O2 -Werror`、smoke、
   CLI、stdlib、FCTS、性能约束、增量构建与发布脚本测试。
-- **未解决问题**：MV01 无未解决问题；MV02 及后续分项仍按第 3、4 节保持未实施。
+- **未解决问题**：MV01 无未解决问题；后续分项状态以第 3、4 节及各自交付记录为准。
 - **建议 commit message**：`feat: support object-form spec instance method values`
+
+### ISSUE-004：跨包读取拒绝 constrained-generic spec 方法值依赖
+
+- **关联分项**：MV02
+- **状态**：已解决
+- **最小复现**：provider 导出
+  `bind<T: ObjectSpec>(value: T): CallableSpec { return value.method; }`，consumer-only
+  具体类型满足该约束并闭合调用；provider 包可以生成，但 consumer 加载 provider 的 `.fb`
+  时读取对应 `.ft` 失败。
+- **实际结果**：`make fcts-tests` 在加载
+  `mod/fcts_lib/test/lib_spec_method_value.ft` 时失败，报告
+  `invalid callable dependency record 0`。
+- **期望结果**：既有 callable dependency 表示能够恢复 MV02 编译期依赖，consumer 使用自身具体
+  类型生成闭合 descriptor、witness 与 adapter；不得为此变更 `.ft` 格式或 ABI。
+- **根因**：`.ft` 写端已经把既有枚举
+  `FENG_RESOLVED_CALLABLE_SPEC_METHOD` 写入 callable dependency 记录的现有 `kind: u16`
+  字段；读端合法性校验却仍把上界固定在更早的
+  `FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD`，因此先拒绝记录。导入恢复逻辑也只覆盖 function、
+  type method 和 fit method，未把已经能够映射到 synthesized object-spec member 的目标恢复为
+  `SPEC_METHOD` dependency。
+- **通用修复方案**：在 `.ft` 读端以明确的合法 kind 集合接受既有
+  `SPEC_METHOD` 枚举；在统一 callable dependency 恢复分支中校验目标确为 object-form spec
+  实例方法，并恢复 owner/member。新增独立 symbol `.ft` 往返用例，验证 kind、目标 requirement
+  identity、receiver `T` 与 callable 目标均原样保留。
+- **运行时性能影响**：无；只改变编译期 `.ft` 校验与 sidecar 恢复。
+- **runtime ABI / `.ft` / 兼容性影响**：无。没有新增或修改记录字段、尺寸、枚举值、版本号或
+  runtime 定义；只让读端接受写端已经按现有格式产生的既有枚举值。
+- **是否需要人工决策**：否；修复不触发本专项的 ABI、`.ft` 格式或运行时开销停止条件。
+- **专项验证结果**：新增独立 symbol `.ft` 往返用例并通过；修复后的跨包 FCTS 由 provider
+  共享泛型体接受 consumer-only 具体类型，正确生成并调用 consumer witness。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### MV02 独立交付记录
+
+- **变更范围**：补齐 `T: ObjectSpec` 泛型值实例方法值的函数/spec/泛型/符号表规范、
+  Semantic、共享泛型依赖、闭合代码生成与跨包恢复；没有扩大实例/静态成员访问边界，也
+  没有变更现有诊断行为。
+- **实现结果**：Semantic 复用 MV01 的 requirement 选择、访问过滤和结构匹配，同时把 receiver
+  保持为开放 `T`；共享体通过既有 callable dependency 槽获得已闭合 descriptor。consumer
+  为具体 receiver 生成静态 witness adapter：托管引用保留同一实例，trivial 与 aggregate
+  receiver 直接存入最终 callable closure，其中 aggregate 沿用既有 descriptor cleanup。
+- **运行时成本**：此前所有合法路径没有新增运行时指令、分支、分配或查找。新支持路径在
+  方法值形成时只分配一个最终 callable closure，并复用共享泛型值捕获既有的 value-kind
+  分派；不产生 spec box、第二次 receiver 分配、运行时成员搜索或每次调用动态查找。
+- **ABI 与格式**：没有修改 runtime/private/public ABI、结构布局、字段、枚举值、`.ft` 记录
+  尺寸或版本。`FengCallableValueDescriptor` 只修正注释以覆盖同一既有 offset 字段承载的
+  inline trivial/aggregate receiver；ISSUE-004 只让读端恢复写端已经写入现有字段的既有
+  `SPEC_METHOD` 枚举。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen`、`build/bin/test_symbol`
+  均通过；生成 C 编译通过，并验证三类 receiver 只有一个形成点 closure 分配、零 spec box、
+  静态 witness 槽调用和 aggregate cleanup metadata。
+- **FCTS**：引用、trivial、含托管叶子的 descriptor-sized receiver，独立连续状态、原绑定
+  重赋值、跨包 consumer-only 类型，以及复制、覆盖、正常退出和异常展开均通过；最终结果为
+  `830 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过，包含 UBSan、普通 `-O2 -Werror`、smoke、CLI、
+  stdlib、FCTS、性能约束、增量构建与发布脚本测试。
+- **未解决问题**：MV02 无未解决问题；MV03 及后续未完成分项继续按第 3、4 节实施。
+- **建议 commit message**：`feat: support constrained generic spec method values`
 
 ### ISSUE-待编号：待填写
 

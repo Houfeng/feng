@@ -7361,6 +7361,114 @@ static void test_object_spec_method_value_codegen_uses_bound_witness(void) {
     feng_program_free(program);
 }
 
+/* A shared T: ObjectSpec binder consumes one statically slotted closed
+ * descriptor. Concrete reference, trivial and descriptor-sized receivers all
+ * use one closure allocation, with no object-spec box or escaping stack
+ * address. */
+static void test_constrained_generic_spec_method_value_codegen(void) {
+    const char *source =
+        "module feng.codegen.constrained_generic_spec_method_value;\n"
+        "spec Stateful { func step(delta: i32): i32; }\n"
+        "spec Stepper(delta: i32): i32;\n"
+        "type ReferenceCounter: Stateful {\n"
+        "    var value: i32;\n"
+        "    func step(delta: i32): i32 {\n"
+        "        self.value += delta;\n"
+        "        return self.value;\n"
+        "    }\n"
+        "}\n"
+        "fit i32: Stateful {\n"
+        "    func step(delta: i32): i32 { return self + delta; }\n"
+        "}\n"
+        "@value type ValueCounter: Stateful {\n"
+        "    let label: string;\n"
+        "    var value: i32;\n"
+        "    func step(delta: i32): i32 {\n"
+        "        self.value += delta;\n"
+        "        return self.value;\n"
+        "    }\n"
+        "}\n"
+        "func bind<T: Stateful>(value: T): Stepper {\n"
+        "    return value.step;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "    let reference = ReferenceCounter { value: 10 };\n"
+        "    let referenceStep = bind<ReferenceCounter>(reference);\n"
+        "    let trivialStep = bind<i32>(40);\n"
+        "    let aggregate = ValueCounter { label: \"value\", value: 50 };\n"
+        "    let aggregateStep = bind<ValueCounter>(aggregate);\n"
+        "    return referenceStep(1) + trivialStep(2) + aggregateStep(3);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "constrained_generic_spec_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* The shared binder contains one formation site and one representation
+     * dispatch. It allocates only the final callable closure. */
+    ASSERT(count_substr(output.c_source,
+                        "const FengCallableValueDescriptor *_callable_value_desc") ==
+           1U);
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(_callable_value_desc") == 1U);
+    ASSERT(count_substr(output.c_source, "switch (_T->kind)") == 1U);
+    ASSERT(strstr(output.c_source, "case FENG_VALUE_TRIVIAL:") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "case FENG_VALUE_MANAGED_POINTER:") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:") != NULL);
+
+    /* Closing the same source dependency for all three receiver value kinds
+     * produces compile-time descriptors and direct witness-slot adapters. */
+    ASSERT(strstr(output.c_source,
+                  ".kind = FENG_VALUE_MANAGED_POINTER") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".kind = FENG_VALUE_TRIVIAL") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS") != NULL);
+    ASSERT(count_substr(output.c_source,
+                        ".aggregate_capture_offset = offsetof(") == 2U);
+    ASSERT(count_substr(output.c_source,
+                        ".aggregate_capture_desc =") == 1U);
+    ASSERT(strstr(output.c_source,
+                  "_witness->step(_bound->_self") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_witness->step(&_bound->_receiver") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_aggregate_release(&_o->_receiver") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_self = (void *)_p_value") == NULL);
+
+    for (const char *line = output.c_source;
+         (line = strstr(line, "feng_object_new(&")) != NULL;
+         ++line) {
+        const char *line_end = strchr(line, '\n');
+
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        ASSERT(!span_contains(line, line_end, "__spec_box"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Closed and shared value-receiver method formation both allocate exactly one
  * callable closure and never route the receiver through a spec box. */
 static void test_value_method_capture_codegen_has_direct_closure_lowering(void) {
@@ -12968,6 +13076,7 @@ int main(void) {
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
     test_object_spec_method_value_codegen_uses_bound_witness();
+    test_constrained_generic_spec_method_value_codegen();
     test_value_method_capture_codegen_has_direct_closure_lowering();
     test_generic_callable_value_reification_codegen();
     test_unbound_callable_explicit_cast_codegen();

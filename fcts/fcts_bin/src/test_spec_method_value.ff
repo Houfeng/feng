@@ -1,6 +1,7 @@
 module fcts_bin;
 
 import std.test;
+import fcts_lib.test;
 import fcts_lib.test.lib_spec_method_value;
 
 /** Local object-form contract used by the MV01 runtime matrix. */
@@ -16,6 +17,14 @@ spec SpecMethodReader(offset: int): int;
 
 /** Structurally equal callable target used for explicit bound-value conversion. */
 spec SpecMethodReaderAlias(offset: int): int;
+
+/** Object-form constraint used by the MV02 generic receiver matrix. */
+spec GenericSpecMethodStateful {
+  func step(delta: i32): i32;
+}
+
+/** Callable target for MV02 constrained-generic method values. */
+spec GenericSpecMethodStepper(delta: i32): i32;
 
 /** Generic object-form contract used to verify receiver-instance substitution. */
 spec SpecMethodGenericReadable<T> {
@@ -49,6 +58,62 @@ type SpecMethodGenericInt: SpecMethodGenericReadable<int> {
   /** Map one closed generic argument through the implementation. */
   func map(value: int): int {
     return self.base + value;
+  }
+}
+
+/** Managed reference receiver used to close the local MV02 binder. */
+type GenericSpecMethodReferenceCounter: GenericSpecMethodStateful {
+  var value: i32;
+
+  /** Mutate the shared reference instance. */
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+}
+
+/** Supply the object-form constraint for one trivial receiver kind. */
+fit i32: GenericSpecMethodStateful {
+  /** Return a value derived from the captured scalar. */
+  func step(delta: i32): i32 {
+    return self + delta;
+  }
+}
+
+/** Descriptor-sized receiver with a managed field and mutable value state. */
+@value
+type GenericSpecMethodValueCounter: GenericSpecMethodStateful {
+  let label: string;
+  var value: i32;
+
+  /** Mutate only the value copy stored in the method closure. */
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+}
+
+/** Descriptor-sized receiver used for observable cleanup checks. */
+@value
+type GenericSpecMethodLifetimeCounter: GenericSpecMethodStateful {
+  let leaf: LibAdvancedLifetimeLeaf;
+  var value: i32;
+
+  /** Mutate the receiver while retaining its observable managed leaf. */
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+}
+
+/** Consumer-only reference implementation of the provider's constraint. */
+type GenericSpecMethodConsumerCounter: LibGenericSpecMethodStateful {
+  var value: i32;
+
+  /** Mutate the consumer-owned instance through the provider witness slot. */
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
   }
 }
 
@@ -120,6 +185,90 @@ func applySpecMethod(reader: SpecMethodReader, offset: int): int {
 func makeEscapedSpecMethod(base: int): SpecMethodReader {
   let local: SpecMethodReadable = SpecMethodFirst { base: base };
   return local.read;
+}
+
+/** Form an MV02 method value while preserving the complete receiver T. */
+func bindGenericSpecMethod<T: GenericSpecMethodStateful>(
+  value: T
+): GenericSpecMethodStepper {
+  return value.step;
+}
+
+/** Return an escaping aggregate-receiver method value with one managed leaf. */
+func makeGenericSpecMethodLifetimeStepper(
+  label: string
+): GenericSpecMethodStepper {
+  let value = GenericSpecMethodLifetimeCounter {
+    leaf: LibAdvancedLifetimeLeaf(label),
+    value: 0
+  };
+  return bindGenericSpecMethod<GenericSpecMethodLifetimeCounter>(value);
+}
+
+/** Verify normal exit releases the captured aggregate receiver once. */
+func verifyGenericSpecMethodNormalLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var valid = false;
+  {
+    let stepper = makeGenericSpecMethodLifetimeStepper("mv02-normal");
+    valid = stepper(1) == 1 && stepper(2) == 3;
+  }
+  return valid && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Verify overwriting a callable releases its old aggregate receiver. */
+func verifyGenericSpecMethodOverwriteLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var releasedOld = false;
+  {
+    var stepper = makeGenericSpecMethodLifetimeStepper("mv02-first");
+    stepper = makeGenericSpecMethodLifetimeStepper("mv02-second");
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  stepper(4) == 4;
+  }
+  return releasedOld && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Verify copied callable references retain the captured receiver. */
+func verifyGenericSpecMethodCopyLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var retainedOld = false;
+  var releasedOld = false;
+  {
+    var current = makeGenericSpecMethodLifetimeStepper("mv02-copy-first");
+    {
+      let retained = current;
+      current = makeGenericSpecMethodLifetimeStepper("mv02-copy-second");
+      retainedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 0 &&
+                    retained(5) == 5;
+    }
+    releasedOld = LibAdvancedLifetimeLeaf.finalizedCount() == 1 &&
+                  current(6) == 6;
+  }
+  return retainedOld && releasedOld &&
+         LibAdvancedLifetimeLeaf.createdCount() == 2 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 2;
+}
+
+/** Throw while one constrained-generic aggregate method value is live. */
+func throwWithGenericSpecMethodLifetime(): void {
+  let stepper = makeGenericSpecMethodLifetimeStepper("mv02-exception");
+  assert(stepper(7) == 7,
+         "constrained-generic method value is callable before unwind");
+  throw "mv02-method-value";
+}
+
+/** Verify exceptional cleanup releases the captured receiver once. */
+func verifyGenericSpecMethodExceptionLifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var caught = false;
+  try throwWithGenericSpecMethodLifetime() catch error: string {
+    caught = error == "mv02-method-value";
+  };
+  return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }
 
 /** MV01 object-form spec method-value conformance coverage. */
@@ -194,6 +343,54 @@ open func test_spec_method_value(): void {
       assert(localTarget(6) == 706, "consumer target over imported spec");
       assert(providerTarget(7) == 707, "provider target escapes package");
       assert(converted(8) == 708, "imported bound callable explicit conversion");
+    });
+
+    test("preserves reference trivial and aggregate receiver semantics", () {
+      var reference = GenericSpecMethodReferenceCounter { value: 10 };
+      let referenceStepper =
+        bindGenericSpecMethod<GenericSpecMethodReferenceCounter>(reference);
+      assert(referenceStepper(2) == 12 && reference.value == 12,
+             "reference receiver keeps the same instance");
+      reference = GenericSpecMethodReferenceCounter { value: 100 };
+      assert(referenceStepper(3) == 15 && reference.value == 100,
+             "reference variable reassignment does not rebind the callable");
+
+      var scalar: i32 = 20;
+      let scalarStepper = bindGenericSpecMethod<i32>(scalar);
+      scalar = 200;
+      assert(scalarStepper(4) == 24 && scalar == 200,
+             "trivial receiver is copied at formation");
+
+      var aggregate = GenericSpecMethodValueCounter {
+        label: "mv02-value",
+        value: 30
+      };
+      let aggregateStepper =
+        bindGenericSpecMethod<GenericSpecMethodValueCounter>(aggregate);
+      aggregate.value = 300;
+      assert(aggregateStepper(5) == 35 && aggregateStepper(6) == 41 &&
+             aggregate.value == 300 && aggregate.label == "mv02-value",
+             "aggregate receiver keeps independent continuous state");
+    });
+
+    test("closes an imported shared binder for a consumer-only type", () {
+      let counter = GenericSpecMethodConsumerCounter { value: 50 };
+      let stepper = bindLibGenericSpecMethod<
+        GenericSpecMethodConsumerCounter
+      >(counter);
+      assert(stepper(7) == 57 && stepper(8) == 65 && counter.value == 65,
+             "provider generic body uses the consumer witness and instance");
+    });
+
+    test("cleans managed aggregate receivers on every exit path", () {
+      assert(verifyGenericSpecMethodNormalLifetime(),
+             "normal exit cleanup");
+      assert(verifyGenericSpecMethodOverwriteLifetime(),
+             "overwrite cleanup");
+      assert(verifyGenericSpecMethodCopyLifetime(),
+             "callable copy cleanup");
+      assert(verifyGenericSpecMethodExceptionLifetime(),
+             "exception cleanup");
     });
   });
 }

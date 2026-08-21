@@ -19769,6 +19769,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
 
             {
                 const FengDecl *owner_type_decl = NULL;
+                const FengDecl *generic_constraint_decl = NULL;
+                const FengTypeRef *generic_constraint_ref = NULL;
                 const FengSemanticModule *provider_module = NULL;
                 InferredExprType owner_type;
                 CallableValueResolution fit_result;
@@ -19798,10 +19800,35 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                         expr->as.member.member,
                         expected_type_ref,
                         function_type_decl);
+                } else if (owner_type_decl == NULL &&
+                           resolve_generic_param_spec_constraint(
+                               context,
+                               owner_type,
+                               &generic_constraint_decl,
+                               &generic_constraint_ref) &&
+                           generic_constraint_decl->as.spec_decl.form ==
+                               FENG_SPEC_FORM_OBJECT) {
+                    result = resolve_accessible_spec_method_value_overload(
+                        context,
+                        generic_constraint_decl,
+                        inferred_expr_type_from_type_ref(
+                            generic_constraint_ref),
+                        expr->as.member.member,
+                        expected_type_ref,
+                        function_type_decl);
+                    if (result.kind ==
+                        FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
+                        /* Keep the complete constraint surface alongside the
+                         * selected requirement. The coercion sidecar records
+                         * the receiver expression separately as T. */
+                        result.callable_owner_type_decl =
+                            generic_constraint_decl;
+                    }
                 }
                 memset(&fit_result, 0, sizeof(fit_result));
-                if (owner_type_decl == NULL ||
-                    owner_type_decl->kind != FENG_DECL_SPEC) {
+                if (generic_constraint_decl == NULL &&
+                    (owner_type_decl == NULL ||
+                     owner_type_decl->kind != FENG_DECL_SPEC)) {
                     fit_result = resolve_accessible_fit_method_value_overload(
                         context,
                         owner_type_decl,

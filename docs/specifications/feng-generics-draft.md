@@ -402,6 +402,10 @@ spec Reader<T: Bar> { ... }
 - 若省略显式类型实参后仍不能唯一确定全部类型参数，则该调用在编译期报错。
 - 上述调用点泛型推导只推导被调用函数或方法自身声明的类型参数，不推导类型构造目标所属 `type` 的类型参数。类型构造目标未显式携带类型实参时，其 arity 固定为 0；因此 `type View` 与 `type View<T>` 共存时，`View()` 必须精确解析为非泛型 `View`，且结果不得受声明顺序影响。若仅存在 `View<T>`，则 `View()` 不得从构造参数或上下文推导 `T`，必须显式写为 `View<ConcreteType>(...)`。
 - 若泛型约束是 object-form `spec`，则该类型参数在泛型声明体内可按该 `spec` 已声明的字段与行为签名使用。
+- 若泛型约束是 object-form `spec`，`value: T` 的实例方法引用还可以在明确
+  callable-form `spec` 目标下形成方法值。requirement 按约束实例选择，receiver 始终
+  保持 `T`：闭合为引用类型时保留同一实例，闭合为值类型时复制形成点的独立值存储。
+  该能力不把 `T` 转换或装箱为 object-form `spec` 值。
 - 若泛型约束是 callable-form `spec`，则该类型参数在泛型声明体内可按该可调用签名直接调用。
 - 若泛型约束是 union-form `spec`，则该类型参数在泛型声明体内遵循 union-form 的既有规则；是否允许成员访问、比较或其他操作，仍取决于 union-form 自身是否要求先收窄。
 - 若泛型约束是 intersection-form `spec`，则该类型参数在泛型声明体内按
@@ -477,6 +481,11 @@ spec Reader<T: Bar> { ... }
 - [必须] 终结器若出现于泛型 `type` 中，仍必须遵守 [Feng 语言类型规范](./feng-type.md) 的既有规则：无参数、无返回值（省略或 `: void`）、每个 `type` 至多一个，且不得声明类型参数。
 - [禁止] 继续使用旧的 `:<...>` 显式泛型语法；无论在调用位置还是非调用位置，`:<...>` 都必须报错。
 - [必须] 顶层函数或实例方法的显式泛型 target 可以在明确 callable-form `spec` 目标下形成函数值；必须先检查类型实参数量和约束，再用闭合来源签名执行普通 callable 结构匹配。
+- [必须] object-form `spec` 约束下的泛型值实例方法引用可以在明确 callable-form
+  `spec` 目标下形成值；编译器必须保留完整 `T` 类型事实，并按闭合 `T` 的既有复制、
+  保留和清理规则绑定 receiver。
+- [禁止] 为形成上述泛型实例方法值，把 `T` 转换或装箱为 object-form `spec` 值，或以
+  单态化共享泛型函数体作为语义成立的前提。
 - [必须] callable-form `spec` 显式转换属于明确 callable 目标；其泛型函数或方法操作数必须写为显式泛型 target，先闭合来源泛参，再执行结构匹配。转换目标不得用于推导来源泛参。
 - [禁止] 把显式泛型 target 留作没有目标类型的独立值；若 `<...>` 已被 Parser 识别为显式泛型 target，但后续未形成合法调用、对象构造、数组创建、目标明确的 callable value 或其他已定义消费形式，语义阶段必须报错。
 - [禁止] 由 callable-form `spec` 目标隐式推导泛型函数或方法来源自身声明的类型参数。
@@ -567,6 +576,9 @@ spec Reader<T: Bar> { ... }
 - 若泛型约束是 object-form `spec`，在泛型声明体内按该 `spec` 视角提供可见成员集；若是
   callable-form `spec`，则提供可调用签名；若是 union-form `spec`，则继续复用 union-form
   的既有访问/收窄规则；若是 intersection-form `spec`，则使用合并后的成员表面与 witness。
+- object-form `spec` 约束下的泛型值实例方法值必须复用直接调用的 requirement 与
+  witness 选择，同时保留 receiver 的开放 `T` 类型表达式；最终闭合点负责确定 receiver
+  布局和生命周期，共享泛型体不得执行运行时成员搜索、满足关系查询或 receiver 装箱。
 - 在分析 `spec Child: Parent<int>` 或 `spec Child<T>: Parent<T>` 时，把 `Parent<...>` 视为父 `spec` 的实例化使用，并沿用 `spec` 既有继承/满足链规则。
 - 若子 `spec` 向父泛型 `spec` 传递自己的类型参数，则在当前声明处验证该传递是否满足父 `spec` 的对应约束；不得等到某个后续具体实例化点再补做。
 - 若当前类型参数自身已经带有更强泛型约束，则在需要满足父 `spec` 约束时，进一步基于该泛型约束已声明的满足关系完成证明。

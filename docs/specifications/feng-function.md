@@ -241,6 +241,10 @@ type Bad: Widget {
   形状唯一确定；形成后重新赋值原 spec 绑定不得改变已经保存的 subject、witness 或
   requirement。后续调用直接使用形成点保存的 witness 槽，不重新求值接收者，也不重新
   搜索成员或执行重载选择。
+- `value: T` 的约束为 object-form `spec` 时，`value.method` 可以在明确 callable-form
+  `spec` 目标下形成方法值。来源 requirement 仍按 `T` 的约束实例选择，但 receiver
+  保持 `T`：闭合 `T` 为引用类型时复制并保留同一引用，闭合 `T` 为值类型时复制形成点
+  的值。形成方法值不得先把 receiver 转换或装箱为 object-form `spec` 值。
 - 对重载函数值或重载方法值,可用于消歧的上下文包括参数位置的目标可调用形状、显式绑定类型与已声明返回类型。
 - 声明了函数级或方法级泛参的顶层函数或实例方法作为值时，必须使用 `function<TypeArgs...>` 或 `object.method<TypeArgs...>` 显式提供完整类型实参；目标 callable-form `spec` 不隐式推导来源泛参。显式类型实参数量和约束检查通过后，编译器先闭合来源签名，再按普通未绑定 callable 的规则与目标 callable-form `spec` 做结构匹配。
 - 显式闭合的泛型函数值或方法值仍必须出现在具有明确 callable-form `spec` 目标的绑定、实参或返回位置；`let reader = read<int>;` 不推导匿名 callable 类型。形成后的值是普通闭合 callable，调用形式为 `reader()`，不能再写 `reader<int>()`。
@@ -521,6 +525,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - [必须] object-form `spec` 值的实例方法引用在具有明确 callable-form `spec` 目标时，
   必须按当前 spec 实例完成 requirement 签名替换、访问过滤和重载消歧，并在形成点绑定
   当前 subject 与 witness 视角；原 spec 绑定后续重新赋值不得使已形成的方法值重绑定。
+- [必须] object-form `spec` 约束下的泛型值实例方法引用，在具有明确 callable-form
+  `spec` 目标时必须复用该约束实例的 requirement 选择，并按闭合 `T` 的值模型绑定
+  receiver；不得为形成方法值把 `T` coercion 或装箱为 object-form `spec` 值。
 - [必须] callable-form `spec` 的显式转换可以直接以尚未绑定到 spec 的顶层函数或实例方法引用作为操作数；编译器必须以转换目标完成来源选择、结构匹配和 callable value 形成。泛型来源必须先通过显式泛型 target 提供完整类型实参。
 - [禁止] 通过 callable-form `spec` 目标的参数或返回类型隐式推导并消除来源函数或方法自身声明的泛参。
 - [禁止] 通过 `import` 导入的同名函数与当前文件内声明的顶层函数或同一文件内其他导入来源共同组成新的重载集合。
@@ -567,6 +574,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 编译器解析 object-form `spec` 实例方法值时，必须复用对应实例方法直接调用的成员
   闭包、原声明 requirement、访问权限与签名替换结果，并把唯一选中的 requirement 和
   接收者 witness 视角稳定传递给代码生成；代码生成不得按名称重新选择成员。
+- 编译器解析 object-form `spec` 约束下的泛型值实例方法值时，还必须保留 receiver 的
+  完整 `T` 类型事实；共享泛型体与最终闭合代码必须消费同一已解析 requirement，不得
+  依赖运行时成员搜索或把 receiver 改写为 spec 值。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
 ## 7 运行时
@@ -582,6 +592,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 方法值在形成时即绑定当前接收者：值类型按值捕获，引用类型复制引用；后续调用不会重新选择接收者，也不会因调用方法再次复制接收者。
 - object-form `spec` 实例方法值在形成后直接通过已保存的 subject、witness 视角和
   requirement 槽调用，不执行运行时成员搜索、重载选择或接收者重绑定。
+- object-form `spec` 约束下的泛型 receiver 在方法值形成时按闭合 `T` 复制或保留；形成
+  结果只拥有一个 callable closure，不增加 spec box、第二个 receiver 分配或每次调用
+  的动态候选查找。
 - 顶层函数、成员方法与闭包在运行时都表现为可调用值,但其可见性、是否重载以及是否绑定 `self` 由编译期规则先行确定。
 
 ## 8 关联

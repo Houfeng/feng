@@ -1351,6 +1351,27 @@ static bool parse_spans(ReadContext *ctx, const char *path, FengSymbolError *out
     return true;
 }
 
+/* Return whether one callable dependency kind has a complete FT restoration
+ * path in the current reader. Keep this explicit so newly added callable
+ * categories cannot be accepted without matching import reconstruction. */
+static bool callable_dependency_kind_is_supported(uint16_t kind) {
+    switch ((FengResolvedCallableKind)kind) {
+        case FENG_RESOLVED_CALLABLE_FUNCTION:
+        case FENG_RESOLVED_CALLABLE_TYPE_METHOD:
+        case FENG_RESOLVED_CALLABLE_FIT_METHOD:
+        case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
+        case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_METHOD:
+            return true;
+
+        case FENG_RESOLVED_CALLABLE_NONE:
+        case FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD:
+        case FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR:
+        default:
+            return false;
+    }
+}
+
 /* Restore direct callable dependencies and their caller-view type arguments. */
 static bool parse_callable_dependencies(ReadContext *ctx,
                                         const char *path,
@@ -1414,8 +1435,7 @@ static bool parse_callable_dependencies(ReadContext *ctx,
 
         if (caller == NULL || target_module_str == 0U ||
             target_module_name == NULL || target_symbol_id == 0U ||
-            kind < FENG_RESOLVED_CALLABLE_FUNCTION ||
-            kind > FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
+            !callable_dependency_kind_is_supported(kind) ||
             purpose > FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE ||
             callable_arg_start > tseq_total ||
             callable_arg_count > tseq_total - callable_arg_start) {

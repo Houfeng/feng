@@ -8,6 +8,14 @@ open spec LibSpecMethodReadable {
 /** Imported callable target returned by the provider-side binding path. */
 open spec LibSpecMethodReader(offset: int): int;
 
+/** Imported object-form constraint used by the MV02 shared generic binder. */
+open spec LibGenericSpecMethodStateful {
+  func step(delta: i32): i32;
+}
+
+/** Imported callable target produced by the MV02 shared generic binder. */
+open spec LibGenericSpecMethodStepper(delta: i32): i32;
+
 /** Provider-owned implementation whose witness must remain callable outside the package. */
 open type LibSpecMethodValue: LibSpecMethodReadable {
   open let base: int;
@@ -28,4 +36,11 @@ open func bindLibSpecMethodReader(
   value: LibSpecMethodReadable
 ): LibSpecMethodReader {
   return value.read;
+}
+
+/** Bind T without converting the receiver into an object-form spec value. */
+open func bindLibGenericSpecMethod<T: LibGenericSpecMethodStateful>(
+  value: T
+): LibGenericSpecMethodStepper {
+  return value.step;
 }

@@ -2795,6 +2795,91 @@ static void test_callable_value_dependency_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* A T: ObjectSpec method-value dependency uses the existing callable-dep FT
+ * record unchanged and round-trips its requirement identity, receiver T and
+ * target callable surface. */
+static void test_constrained_generic_spec_method_value_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.generic_spec_method_value;\n"
+        "open spec Stateful { func step(delta: i32): i32; }\n"
+        "open spec Stepper(delta: i32): i32;\n"
+        "open func bind<T: Stateful>(value: T): Stepper {\n"
+        "    return value.step;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        "generic_spec_method_value.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module;
+    FengSlice segments[4];
+    const FengSymbolDeclView *stateful;
+    const FengSymbolDeclView *step;
+    const FengSymbolDeclView *bind;
+    const FengSymbolCallableDepView *dependency;
+    const FengSymbolTypeView *type;
+    size_t segment_count;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("generic_spec_method_value");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    stateful = feng_symbol_module_find_public_spec(
+        module, slice_from_cstr("Stateful"));
+    ASSERT(stateful != NULL);
+    step = feng_symbol_decl_find_public_member(
+        stateful, slice_from_cstr("step"));
+    ASSERT(step != NULL);
+    bind = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("bind"));
+    ASSERT(bind != NULL);
+    ASSERT(bind->reifiable_callable_dep_count == 1U);
+    dependency = &bind->reifiable_callable_deps[0];
+    ASSERT(dependency->purpose == FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+    ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD);
+    ASSERT(dependency->target_symbol_id == step->ft_symbol_id);
+    ASSERT(dependency->callable_type_arg_count == 0U);
+
+    type = dependency->owner_instance_type;
+    ASSERT(feng_symbol_type_kind(type) ==
+           FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_type_param_ref_name(type), "T"));
+    type = dependency->target_callable_type;
+    ASSERT(feng_symbol_type_kind(type) == FENG_SYMBOL_TYPE_KIND_NAMED);
+    segment_count = feng_symbol_type_segment_count(type);
+    ASSERT(segment_count > 0U);
+    ASSERT(slice_equals_cstr(
+        feng_symbol_type_segment_at(type, segment_count - 1U), "Stepper"));
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 static void test_generic_type_ft_roundtrip(void) {
     /* open type Box<T> { open let value: T; }
      * After roundtrip: type decl should have type_param_count == 1,
@@ -3822,6 +3907,7 @@ int main(void) {
     test_imported_module_cache_keeps_multi_file_bundle_fit_modules_alive();
     test_generic_function_ft_roundtrip();
     test_callable_value_dependency_ft_roundtrip();
+    test_constrained_generic_spec_method_value_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_inferred_generic_field_ft_roundtrip();
     test_generic_spec_relation_ft_roundtrip();
