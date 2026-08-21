@@ -4765,6 +4765,102 @@ func view_manager_mouse_target_lock_and_bubble() {
   check(stopped.isStopped(), "tui/view/stop-state-shared");
   check(childAfterStop == 1, "tui/view/stop-keeps-current-widget-listeners");
   check(parentDown == 0, "tui/view/stop-prevents-parent-bubble");
+  stopped.unlock();
+  check(!stopped.isLocked(), "tui/view/original-owner-explicit-unlock");
+}
+
+/** 验证锁定目标同时驱动 Hover，release 总是自动解锁并恢复实际 Hover。 */
+func view_manager_lock_hover_and_auto_unlock() {
+  let manager = ViewManager(Screen(40, 20));
+  let root = Container();
+  let parent = Container();
+  let child = View();
+  let other = View();
+  root.addChild(parent);
+  root.addChild(other);
+  parent.addChild(child);
+  parent.useStateStyle(Pseudo.Hover).cursor = Cursor.Crosshair;
+  child.useStateStyle(Pseudo.Hover).cursor = Cursor.Pointer;
+  other.useStateStyle(Pseudo.Hover).cursor = Cursor.Text;
+  manager.root = root;
+  manager.doStyling();
+  manager.trace(root, makeWidgetFrame(0, 0, 40, 20));
+  manager.trace(parent, makeWidgetFrame(0, 0, 12, 12));
+  manager.trace(child, makeWidgetFrame(2, 2, 4, 4));
+  manager.trace(other, makeWidgetFrame(20, 2, 4, 4));
+
+  var releaseSawLock = false;
+  var unlockOnMove = false;
+  var otherMoves = 0;
+  child.mouseDown.on((event: MouseEvent<Widget>) {
+    check(event.lock(), "tui/view/lock-hover-acquire");
+  });
+  child.mouseMove.on((event: MouseEvent<Widget>) {
+    if unlockOnMove {
+      event.unlock();
+    }
+  });
+  child.mouseUp.on((event: MouseEvent<Widget>) {
+    releaseSawLock = event.isLocked();
+    event.stop();
+    event.preventDefault();
+  });
+  other.mouseMove.on((event: MouseEvent<Widget>) {
+    otherMoves += 1;
+  });
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  manager.doStyling();
+  check(Inspector.getRtStyle(child).cursor == Cursor.Pointer &&
+    Inspector.getRtStyle(parent).cursor == Cursor.Crosshair &&
+    Inspector.getRtStyle(other).cursor == Cursor.Auto,
+    "tui/view/locked-hover-target-path");
+
+  let lockedMove = MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 21, 3, 0);
+  manager.dispatchMouse(lockedMove);
+  manager.doStyling();
+  check(lockedMove.target == (Widget)child && otherMoves == 0,
+    "tui/view/locked-move-only-routes-lock-path");
+  check(Inspector.getRtStyle(child).cursor == Cursor.Pointer &&
+    Inspector.getRtStyle(parent).cursor == Cursor.Crosshair &&
+    Inspector.getRtStyle(other).cursor == Cursor.Auto,
+    "tui/view/locked-move-keeps-lock-hover");
+
+  let release = MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 21, 3, 0);
+  manager.dispatchMouse(release);
+  manager.doStyling();
+  check(releaseSawLock && release.target == (Widget)child,
+    "tui/view/release-routes-before-auto-unlock");
+  check(release.isStopped() && release.isPrevented() && !release.isLocked(),
+    "tui/view/release-always-auto-unlocks");
+  check(Inspector.getRtStyle(child).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(parent).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(other).cursor == Cursor.Text &&
+    manager.resolveCursor() == Cursor.Text,
+    "tui/view/auto-unlock-restores-actual-hover");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 21, 3, 0));
+  check(otherMoves == 1, "tui/view/auto-unlock-restores-hit-routing");
+
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Press,
+    MouseButton.Left, 3, 3, 0));
+  unlockOnMove = true;
+  let explicitMove = MouseEvent<Widget>(MouseAction.Move,
+    MouseButton.None, 21, 3, 0);
+  manager.dispatchMouse(explicitMove);
+  manager.doStyling();
+  check(!explicitMove.isLocked() && explicitMove.target == (Widget)child,
+    "tui/view/explicit-unlock-keeps-current-route");
+  check(Inspector.getRtStyle(child).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(parent).cursor == Cursor.Auto &&
+    Inspector.getRtStyle(other).cursor == Cursor.Text,
+    "tui/view/explicit-unlock-restores-actual-hover");
+  manager.dispatchMouse(MouseEvent<Widget>(MouseAction.Release,
+    MouseButton.Left, 21, 3, 0));
 }
 
 // ─── Phase 5: InputManager 测试 ──────────────────────────────────────────
@@ -5384,6 +5480,7 @@ open func run_tui_tests() {
     test("view_manager_tab_sequence_navigation()", () { view_manager_tab_sequence_navigation(); });
     test("view_manager_tab_candidates_and_default_behavior()", () { view_manager_tab_candidates_and_default_behavior(); });
     test("view_manager_mouse_target_lock_and_bubble()", () { view_manager_mouse_target_lock_and_bubble(); });
+    test("view_manager_lock_hover_and_auto_unlock()", () { view_manager_lock_hover_and_auto_unlock(); });
     // ─── Phase 5: InputManager ───
     test("input_printable_ascii()", () { input_printable_ascii(); });
     test("input_enter_key()", () { input_enter_key(); });

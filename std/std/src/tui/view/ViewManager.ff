@@ -42,7 +42,7 @@ open type ViewManager {
   /** 下一焦点路径的复用缓冲；与 _focusPath 在切换完成时交换。 */
   seal var _nextFocusPath: List<Widget>;
 
-  /** 当前实际鼠标命中目标到 root 的 Hover 路径。 */
+  /** 当前 Hover target 到 root 的路径；锁定期间 target 为锁定目标。 */
   seal var _hoverPath: List<Widget>;
 
   /** 下一 Hover 路径的复用缓冲；与 _hoverPath 在更新完成时交换。 */
@@ -589,9 +589,10 @@ open type ViewManager {
   }
 
   /**
-   * 根据实际坐标命中路径更新 Hover 状态。
+   * 根据当前 Hover target 路径更新 Hover 状态。
    * 路径按 target 到 root 保存，通过共同祖先差分只更新真正离开或进入的部分。
-   * @param target 当前实际坐标命中的最上层 Widget；未命中时为 none
+   * 未锁定时 target 来自实际坐标命中，锁定时来自锁定目标。
+   * @param target 当前 Hover target；没有目标时为 none
    */
   seal func updateHover(target: Option<Widget>): void {
     self._nextHoverPath.clear();
@@ -637,7 +638,7 @@ open type ViewManager {
    * 根据鼠标按下和释放维护 Active 路径。
    * 按下后移动及鼠标锁定不会改变路径；滚轮不属于激活操作。
    * @param event 当前鼠标事件
-   * @param target 当前实际坐标命中的最上层 Widget
+   * @param target 当前鼠标事件的路由目标
    */
   seal func updateActive(
     event: MouseEvent<Widget>,
@@ -882,25 +883,34 @@ open type ViewManager {
 
   /**
    * 从锁定目标或本帧最上层命中组件开始分发鼠标事件，并沿 parent 自下向上冒泡。
-   * 锁定目标优先于坐标命中；选定目标会写入 event.target，并在本次冒泡期间保持不变。
+   * 锁定目标优先于坐标命中，并同时作为当前 Hover target；选定目标会写入
+   * event.target，并在本次冒泡期间保持不变。
    * 当前组件的全部监听器返回后检查 event.isStopped()；停止后不再触发父组件或
    * ViewManager 事件。正常到达 root 后触发 ViewManager 对应事件，随后执行默认聚焦。
    * 未命中任何组件时直接触发 ViewManager 对应事件。
+   * Release 完成原始路由和默认行为后总是自动解除锁定，并恢复实际坐标 Hover；click
+   * 仍使用 release 的实际命中目标。
    * @param event InputManager 解析得到的鼠标事件
    */
   open func dispatchMouse(event: MouseEvent<Widget>): void {
-    let hovered = self.hitTest(event.x, event.y);
-    self.updateHover(hovered);
-    let shouldClick = self.updateClickState(event);
-    self.updateActive(event, hovered);
-
-    var selected: Option<Widget> = none;
     let locked = MouseEvent<Widget>.hasLockedTarget();
+    var selected: Option<Widget> = none;
+    var actual: Option<Widget> = none;
     if locked {
       selected = MouseEvent<Widget>.lockedTarget();
+      // Release 路由仍指向锁定目标；实际命中只供解锁后的 Hover 和 click 复用。
+      if event.action == MouseAction.Release {
+        actual = self.hitTest(event.x, event.y);
+      }
     } else {
-      selected = hovered;
+      actual = self.hitTest(event.x, event.y);
+      selected = actual;
     }
+
+    self.updateHover(selected);
+    let shouldClick = self.updateClickState(event);
+    self.updateActive(event, selected);
+
     self.routeMouse(event, selected, locked);
     if selected match let target: Widget {
       self.applyMouseDefault(target, event);
@@ -910,10 +920,24 @@ open type ViewManager {
     event.button == MouseButton.Left && event.isPrevented() {
       self._clickState = ClickState.Idle;
     }
+
+    let explicitlyUnlocked = locked &&
+      !MouseEvent<Widget>.hasLockedTarget();
+    if event.action == MouseAction.Release {
+      event.unlock();
+    }
+    if locked &&
+    (event.action == MouseAction.Release || explicitlyUnlocked) {
+      if event.action != MouseAction.Release {
+        actual = self.hitTest(event.x, event.y);
+      }
+      self.updateHover(actual);
+    }
+
     if shouldClick && !event.isPrevented() {
       let clickEvent = MouseEvent<Widget>(MouseAction.Click,
         event.button, event.x, event.y, event.mods);
-      self.routeMouse(clickEvent, hovered, false);
+      self.routeMouse(clickEvent, actual, false);
     }
   }
 
@@ -989,7 +1013,7 @@ open type ViewManager {
   }
 
   /**
-   * 从当前实际 Hover target 向 root 解析鼠标指针形状。
+   * 从当前 Hover target 向 root 解析鼠标指针形状。
    * 最近的非 Auto 值优先；整条路径均未指定时返回 Auto。
    * @return 当前应提交给 Screen 的鼠标指针形状
    */

@@ -311,7 +311,8 @@ open type MouseEvent<T> {
 ViewManager 通过锁定路由记录当前事件的 target 代表锁定目标，因此同一锁定目标可重复调用，
 普通命中目标不能抢占。`unlock()` 只有取得锁定的事件，或由锁定路由绑定到该目标的
 后续事件才能释放；其他来源的事件调用时静默不处理。`isLocked()` 表示当前闭合
-`MouseEvent<T>` 是否存在锁定目标。锁定不记录鼠标按钮，也不根据 release 自动解除。
+`MouseEvent<T>` 是否存在锁定目标。锁定不记录鼠标按钮；ViewManager 的 release 自动解锁、
+Hover 恢复和 click 时序统一由 `docs/engineering/feng-std-tui-view-dev.md` 定义。
 
 ## 3 InputManager — VT100/xterm 状态机（InputManager.ff）
 

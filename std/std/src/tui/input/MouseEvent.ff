@@ -233,6 +233,7 @@ open type MouseEvent<T> {
   /**
    * 释放当前目标拥有的锁定。
    * 未绑定 target 或锁定属于其他目标时静默不处理。
+   * ViewManager 在 release 路由完成后也会调用该幂等操作自动解除锁定。
    */
   func unlock(): void {
     if self._hasTarget && self._targetOwnsLock && MouseEvent<T>._locked {

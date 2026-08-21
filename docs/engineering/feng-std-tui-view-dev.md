@@ -205,14 +205,16 @@ overrideStyle。状态样式的覆盖优先级由首次定义顺序决定，后�
 
 Widget 提供 `addState(mask)` 和 `removeState(mask)`，内部只执行整数位的添加和移除，不把
 state 限定为 Pseudo；`useStateStyle(pseudo)` 是 `stateStyles.use(pseudo)` 的便捷入口。
-ViewManager 当前自动维护 Hover：每次鼠标事件先按实际坐标执行
-hitTest，命中 Widget 及其到 root 的祖先路径获得 `Pseudo.Hover`，离开旧路径的部分移除
-Hover。鼠标锁定只改变事件路由 target，不改变实际坐标对应的 Hover 路径；未命中时清空
-旧 Hover 路径。
+ViewManager 当前自动维护 Hover。未锁定时按实际坐标执行 hitTest，命中 Widget 及其到 root
+的祖先路径获得 `Pseudo.Hover`，离开旧路径的部分移除 Hover，未命中时清空旧 Hover 路径。
+锁定时不再维护另一条实际坐标 Hover 路径，锁定 target 及其到 root 的祖先路径同时作为
+Hover 路径和事件路由路径；鼠标移动到其他组件上不会改变其 Hover。锁定被显式解除，或
+release 完成自动解锁后，ViewManager 再按当前事件坐标命中并恢复实际 Hover 路径。
 
-ViewManager 同时自动维护 Active：非滚轮鼠标按钮按下时，实际命中 Widget 及其到 root 的
-祖先路径获得 `Pseudo.Active`；移动和鼠标锁定不改变该路径，按钮释放时整体清除。状态在
-对应鼠标事件监听器执行前更新。该路径语义与 CSS `:active` 对激活元素及祖先的匹配一致。
+ViewManager 同时自动维护 Active：非滚轮鼠标按钮按下时，当前路由 target 及其到 root 的
+祖先路径获得 `Pseudo.Active`；未锁定时 target 即实际命中 Widget，锁定时 target 为锁定
+目标。移动和鼠标锁定不改变已建立的路径，按钮释放时整体清除。状态在对应鼠标事件监听器
+执行前更新。该路径语义与 CSS `:active` 对激活元素及祖先的匹配一致。
 
 ViewManager 自动维护 Focus：焦点从旧 Widget 切换到新 Widget 时，在触发 `onBlur` 和
 `onFocus` 前从旧焦点目标移除 `Pseudo.Focus`，并向新焦点目标添加
@@ -431,8 +433,9 @@ open type View: Widget {
 
 ViewManager 复用两条 target-to-root List 对 Hover 路径做共同祖先差分，不在每次鼠标事件中
 分配临时集合。Hover 状态在鼠标事件监听器执行前更新；下一轮 styling 根据最终 state 合并
-状态样式。Hover 路径使用本帧 `sequence` 和 `clippedFrame` 命中，因此自动继承可见性、
-PointerEvents、裁剪和绘制层级规则。Active 使用独立的复用路径，按下时建立、释放时清除，
+状态样式。未锁定 Hover 路径使用本帧 `sequence` 和 `clippedFrame` 命中，因此自动继承
+可见性、PointerEvents、裁剪和绘制层级规则；锁定期间直接使用锁定 target 路径，不再为
+实际坐标执行独立命中和 Hover 更新。Active 使用独立的复用路径，按下时建立、释放时清除，
 同样不产生逐事件集合分配。
 
 ## 6 ContainerWidget 与 Container
@@ -650,8 +653,9 @@ ViewManager 对应事件。键盘事件冒泡只跳过不可见 Widget，不受 
 
 鼠标事件按以下规则分发：
 
-1. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不执行坐标命中；否则从
-   `sequence` 末尾向前查找第一个 `clippedFrame` 包含事件坐标的 Widget；
+1. 若 `MouseEvent<Widget>` 已有锁定目标，直接选择该目标，不为当前 Hover 和事件路由执行
+   坐标命中，并把同一条 target-to-root 路径用于二者；否则从 `sequence` 末尾向前查找
+   第一个 `clippedFrame` 包含事件坐标的 Widget；
 2. 普通命中使用 `bindTarget()`，锁定路由使用 `bindLockedTarget()`，将选中的 Widget
    写入同一事件实例的 `target`，并由后者记录当前事件属于锁定目标。Widget 回调中
    `hasTarget()` 必为 true；事件冒泡期间 `target` 保持不变，
@@ -682,9 +686,11 @@ ViewManager 使用内部 `ClickState.Idle/Pressed/Moved` 和一个
    阻止该状态清理；
 4. 原始 mouseUp 完成路由后，只有候选满足且 mouseDown、mouseUp 均未调用
    `preventDefault()` 时才合成 click；`stop()` 只停止对应原始事件的冒泡，不取消候选；
-5. click 使用 release 坐标的实际命中结果作为 target，不受鼠标锁定目标影响；命中 Widget
-   时从该目标向 root 冒泡并在未停止时到达 ViewManager，未命中时只触发 ViewManager
-   click；click 使用新的 MouseEvent 实例，不继承 mouseUp 的停止或阻止状态；
+5. click 使用 release 坐标的实际命中结果作为 target，不受鼠标锁定目标影响；锁定中的
+   release 先向锁定目标路由 mouseUp，自动解锁后把同一次实际命中结果用于恢复 Hover 和
+   合成 click；命中 Widget 时从该目标向 root 冒泡并在未停止时到达 ViewManager，未命中
+   时只触发 ViewManager click；click 使用新的 MouseEvent 实例，不继承 mouseUp 的停止或
+   阻止状态；
 6. 当前只支持 click，不区分 doubleClick 或 longPress，因此不读取时间，也不设置按压
    时长阈值；未来增加其他点击手势时再统一设计单调时间与阈值配置。
 
@@ -700,8 +706,11 @@ Widget 层事件使用 `Event<T>` 多播；`InputManager<Widget>.onMouse` 仍保
 同一目标重复 lock 成功，其他目标不能抢占；`unlock()` 仅允许取得锁定的事件，或由
 锁定路由绑定到该目标的后续事件释放。
 锁定状态保存在闭合事件类型 `MouseEvent<Widget>` 的静态字段中，不放入 ViewManager，
-不记录鼠标按钮，也不在 release 时自动解除。调用方必须显式 unlock；这允许拖动等交互
-按自身状态决定结束时机。
+不记录鼠标按钮。调用方可以随时显式 `unlock()`；若未显式解除，ViewManager 在任意
+`MouseAction.Release` 完成原始 mouseUp 路由后总是自动解除，`stop()` 和
+`preventDefault()` 均不能阻止该清理。mouseUp 回调仍可观察到本次锁定；自动解锁发生在
+回调和默认行为之后、click 合成之前。锁定解除后，ViewManager 按当前事件坐标恢复实际
+Hover 路径；显式解锁重复执行保持幂等。
 
 ## 11 与 TuiApp/InputManager 的集成
 
@@ -780,6 +789,9 @@ std/std/src/tui/widgets/
 19. [x] 为 Widget/ViewManager 增加 click 多播事件，使用三态和起始位置在 ViewManager
     合成、路由 click；新增用例后 std_test 599/599、fcts 816/816，沙箱外完整
     `make test` 通过。
+20. [x] 锁定期间以锁定 target 路径统一驱动 Hover 和鼠标路由，不再维护实际坐标 Hover；
+    任意 release 路由后自动解锁并恢复实际 Hover，同时保留显式 unlock。新增用例后
+    std_test 600/600、fcts 816/816，沙箱外完整 `make test` 通过。
 
 ## 14 Review 关注点
 
