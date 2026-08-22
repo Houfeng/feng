@@ -419,7 +419,9 @@ static bool rd_append_callable_value_dep_resolved(
                   resolved->fit_decl->kind == FENG_DECL_FIT &&
                   (resolved->owner_type_decl == NULL ||
                    resolved->owner_type_decl->kind == FENG_DECL_TYPE)) ||
-                 (resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
+                 ((resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+                   resolved->kind ==
+                       FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
                   resolved->owner_type_decl != NULL &&
                   resolved->owner_type_decl->kind == FENG_DECL_SPEC));
     if (!is_function && !is_method) {
@@ -535,7 +537,9 @@ static bool rd_append_callable_value_dep(
         resolved.kind = site->callable_owner_type_decl != NULL &&
                                 site->callable_owner_type_decl->kind ==
                                     FENG_DECL_SPEC
-                            ? FENG_RESOLVED_CALLABLE_SPEC_METHOD
+                            ? (site->callable_member->is_static
+                                   ? FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD
+                                   : FENG_RESOLVED_CALLABLE_SPEC_METHOD)
                             : (site->callable_fit_decl != NULL
                                    ? (site->callable_member->is_static
                                           ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD

@@ -7237,6 +7237,203 @@ static bool cg_ensure_callable_static_method_value(
     return true;
 }
 
+/* Forward declaration for the shared spec-requirement ABI bridge emitted by
+ * both receiver-bound and receiver-free method-value adapters. */
+static void cg_emit_callable_spec_requirement_invoke(
+    Buf *out,
+    const UserSpec *target_spec,
+    const UserSpecMember *method,
+    const char *witness_expr,
+    const char *subject_expr);
+
+/* Emit or reuse the adapter and immortal closure for one closed static spec
+ * requirement. The adapter binds a compile-time concrete type descriptor and
+ * calls the exact witness slot selected by Semantic; formation performs no
+ * allocation, member search, or runtime target selection. */
+static bool cg_ensure_callable_spec_static_method_value(
+    CG *cg,
+    const UserSpec *target_spec,
+    const UserSpec *receiver_spec,
+    const UserSpecMember *method,
+    const char *owner_descriptor_expr,
+    const char *descriptor_c_name,
+    FengToken blame,
+    const char **out_var,
+    const char **out_adapter) {
+    char *adapter_name = NULL;
+    char *var_name = NULL;
+
+    if (cg == NULL || target_spec == NULL || receiver_spec == NULL ||
+        method == NULL || method->member == NULL ||
+        owner_descriptor_expr == NULL || descriptor_c_name == NULL ||
+        out_var == NULL || out_adapter == NULL ||
+        target_spec->form != FENG_SPEC_FORM_CALLABLE ||
+        receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        method->kind != USM_KIND_METHOD || !method->is_static ||
+        target_spec->callable_param_count != method->param_count) {
+        return cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: invalid constrained-generic static method-value request");
+    }
+    *out_var = NULL;
+    *out_adapter = NULL;
+    for (size_t index = 0U;
+         index < cg->callable_static_method_value_count;
+         ++index) {
+        const CGCallableStaticMethodValueSupport *support =
+            &cg->callable_static_method_values[index];
+
+        if (support->spec == target_spec &&
+            support->member == method->member &&
+            support->fit_decl == NULL &&
+            strcmp(support->descriptor_c_name,
+                   descriptor_c_name) == 0) {
+            *out_var = support->c_var;
+            *out_adapter = support->c_adapter_fn;
+            return true;
+        }
+    }
+
+    {
+        char *descriptor_san = cg_sanitize(
+            descriptor_c_name, strlen(descriptor_c_name));
+        Buf name;
+
+        if (descriptor_san == NULL) {
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengCallableSpecStaticInvoke__%s__%s",
+                       target_spec->c_closure_struct_name,
+                       descriptor_san);
+        adapter_name = name.data;
+        buf_init(&name);
+        buf_append_fmt(&name,
+                       "FengCallableSpecStaticValue__%s__%s",
+                       target_spec->c_closure_struct_name,
+                       descriptor_san);
+        var_name = name.data;
+        free(descriptor_san);
+    }
+    if (adapter_name == NULL || var_name == NULL) {
+        free(adapter_name);
+        free(var_name);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    buf_append_cstr(&cg->headers, "static ");
+    cg_emit_callable_abi_return_type(&cg->headers,
+                                     target_spec->callable_return_type,
+                                     target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->headers, " %s(void *_closure", adapter_name);
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->headers, ", ");
+        cg_emit_callable_abi_param_type(
+            &cg->headers,
+            target_spec->callable_param_types[index],
+            target_spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->headers, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(
+        &cg->headers, target_spec->callable_return_abi_kind);
+    buf_append_cstr(&cg->headers, ");\n");
+
+    buf_append_cstr(&cg->witness_defs, "static ");
+    cg_emit_callable_abi_return_type(&cg->witness_defs,
+                                     target_spec->callable_return_type,
+                                     target_spec->callable_return_abi_kind);
+    buf_append_fmt(&cg->witness_defs,
+                   " %s(void *_closure",
+                   adapter_name);
+    for (size_t index = 0U;
+         index < target_spec->callable_param_count;
+         ++index) {
+        buf_append_cstr(&cg->witness_defs, ", ");
+        cg_emit_callable_abi_param_type(
+            &cg->witness_defs,
+            target_spec->callable_param_types[index],
+            target_spec->callable_param_abi_kinds[index]);
+        buf_append_fmt(&cg->witness_defs, " _arg%zu", index);
+    }
+    cg_append_callable_abi_out_parameter(
+        &cg->witness_defs, target_spec->callable_return_abi_kind);
+    buf_append_fmt(
+        &cg->witness_defs,
+        ") {\n"
+        "    (void)_closure;\n"
+        "    const struct %s *_witness = "
+        "(const struct %s *)(%s)->witness;\n"
+        "    ",
+        receiver_spec->c_witness_struct_name,
+        receiver_spec->c_witness_struct_name,
+        owner_descriptor_expr);
+    cg_emit_callable_spec_requirement_invoke(&cg->witness_defs,
+                                             target_spec,
+                                             method,
+                                             "_witness",
+                                             NULL);
+    buf_append_cstr(&cg->witness_defs, "}\n\n");
+
+    buf_append_fmt(&cg->statics,
+                   "static struct %s %s = {\n"
+                   "    ._hdr = { .desc = &%s, .tag = FENG_TYPE_TAG_CLOSURE, "
+                   ".refcount = FENG_REFCOUNT_IMMORTAL },\n"
+                   "    ._self = NULL,\n"
+                   "    .invoke = %s\n"
+                   "};\n",
+                   target_spec->c_closure_struct_name,
+                   var_name,
+                   target_spec->c_closure_desc_name,
+                   adapter_name);
+
+    if (cg->callable_static_method_value_count ==
+        cg->callable_static_method_value_capacity) {
+        size_t new_capacity =
+            cg->callable_static_method_value_capacity == 0U
+                ? 4U
+                : cg->callable_static_method_value_capacity * 2U;
+        CGCallableStaticMethodValueSupport *grown =
+            (CGCallableStaticMethodValueSupport *)realloc(
+                cg->callable_static_method_values,
+                new_capacity * sizeof(*grown));
+
+        if (grown == NULL) {
+            free(adapter_name);
+            free(var_name);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->callable_static_method_values = grown;
+        cg->callable_static_method_value_capacity = new_capacity;
+    }
+    {
+        CGCallableStaticMethodValueSupport *support =
+            &cg->callable_static_method_values[
+                cg->callable_static_method_value_count];
+
+        memset(support, 0, sizeof(*support));
+        support->spec = target_spec;
+        support->member = method->member;
+        support->descriptor_c_name = strdup(descriptor_c_name);
+        support->c_adapter_fn = adapter_name;
+        support->c_var = var_name;
+        if (support->descriptor_c_name == NULL) {
+            free(adapter_name);
+            free(var_name);
+            memset(support, 0, sizeof(*support));
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        cg->callable_static_method_value_count++;
+        *out_var = support->c_var;
+        *out_adapter = support->c_adapter_fn;
+    }
+    return true;
+}
+
 /* Emit the callable adapter, one-allocation closure layout, and binder for a
  * fixed-layout value receiver. The receiver is copied into the closure's
  * inline payload; `_self` remains NULL solely to preserve the callable-form
@@ -7767,7 +7964,8 @@ static const CGCallableMethodValueSupport *cg_callable_method_value_support(
 }
 
 /* Emit one already-selected spec requirement call while bridging the source
- * witness ABI to the target callable-form ABI. */
+ * witness ABI to the target callable-form ABI. Instance requirements prepend
+ * their subject; static requirements intentionally leave it absent. */
 static void cg_emit_callable_spec_requirement_invoke(
     Buf *out,
     const UserSpec *target_spec,
@@ -7791,11 +7989,16 @@ static void cg_emit_callable_spec_requirement_invoke(
         buf_append_cstr(out, "return ");
     }
 
+    bool has_argument = false;
+
     buf_append_fmt(out,
-                   "%s->%s(%s",
+                   "%s->%s(",
                    witness_expr,
-                   method->c_field_name,
-                   subject_expr);
+                   method->c_field_name);
+    if (!method->is_static) {
+        buf_append_cstr(out, subject_expr);
+        has_argument = true;
+    }
     for (size_t index = 0U;
          index < target_spec->callable_param_count;
          ++index) {
@@ -7805,20 +8008,26 @@ static void cg_emit_callable_spec_requirement_invoke(
                        sizeof(argument_name),
                        "_arg%zu",
                        index);
-        buf_append_cstr(out, ", ");
+        if (has_argument) {
+            buf_append_cstr(out, ", ");
+        }
         cg_append_callable_abi_bridge_argument(
             out,
             method->param_types[index],
             target_spec->callable_param_abi_kinds[index],
             method->param_abi_kinds[index],
             argument_name);
+        has_argument = true;
     }
     if (method->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (has_argument) {
+            buf_append_cstr(out, ", ");
+        }
         buf_append_cstr(
             out,
             target_spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS
-                ? ", _out"
-                : ", &_result");
+                ? "_out"
+                : "&_result");
     }
     buf_append_cstr(out, ");\n");
     if (target_spec->callable_return_abi_kind != CG_CALLABLE_ABI_ADDRESS &&
@@ -8896,6 +9105,7 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
         if (ref == NULL) return NULL;
         ref->token = token;
         ref->kind = FENG_TYPE_REF_ARRAY;
+        ref->array_element_writable = type->array_element_writable;
         ref->as.inner = cg_type_ref_from_cgtype(cg, type->element, token);
         if (ref->as.inner == NULL) {
             free(ref);
@@ -21344,9 +21554,13 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         }
         memset(&dependency, 0, sizeof(dependency));
         dependency.purpose = FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE;
-        dependency.kind = cs->callable_fit_decl != NULL
-                              ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
-                              : FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD;
+        dependency.kind = cs->callable_owner_type_decl != NULL &&
+                                  cs->callable_owner_type_decl->kind ==
+                                      FENG_DECL_SPEC
+                              ? FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD
+                              : (cs->callable_fit_decl != NULL
+                                     ? FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD
+                                     : FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD);
         dependency.owner_type_decl = cs->callable_owner_type_decl;
         dependency.member = cs->callable_member;
         dependency.fit_decl = cs->callable_fit_decl;
@@ -41401,7 +41615,8 @@ static char *cg_callable_dep_identity_name(
             }
         }
     }
-    if (dep->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
+    if ((dep->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+         dep->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
         dep->member != NULL) {
         const FengDecl *declaring_spec = NULL;
         const FengProgram *owner_program;
@@ -42840,21 +43055,26 @@ cleanup:
 }
 
 /* Resolve the exact object-form constraint instance carried by a callable
- * dependency whose receiver is one direct caller type parameter. */
-static const UserSpec *cg_closed_spec_method_receiver_constraint(
+ * dependency whose owner is one direct caller type parameter. */
+static const UserSpec *cg_closed_spec_method_constraint(
     CG *cg,
     const FengReifiableCallableDep *callable_dep,
     const FengTypeParam *caller_type_params,
     size_t caller_type_param_count,
     FengTypeRef *const *caller_type_args,
+    const FengProgram *caller_reference_program,
     FengToken blame) {
     size_t param_index = 0U;
     const FengTypeRef *constraint_ref;
     FengTypeRef *closed_constraint_ref = NULL;
+    CGType *constraint_type = NULL;
+    bool constraint_handled = false;
     UserSpec *constraint_spec = NULL;
 
     if (callable_dep == NULL ||
-        callable_dep->kind != FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+        (callable_dep->kind != FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
+         callable_dep->kind !=
+             FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) ||
         callable_dep->owner_type_decl == NULL ||
         callable_dep->owner_type_decl->kind != FENG_DECL_SPEC ||
         !cg_type_ref_is_direct_type_param(
@@ -42866,7 +43086,7 @@ static const UserSpec *cg_closed_spec_method_receiver_constraint(
         (void)cg_fail(cg,
                       blame,
                       "IE0002",
-                      "codegen: constrained-generic method-value receiver is not a direct caller type parameter");
+                      "codegen: constrained-generic method-value owner is not a direct caller type parameter");
         return NULL;
     }
     constraint_ref = caller_type_params[param_index].constraint;
@@ -42874,7 +43094,7 @@ static const UserSpec *cg_closed_spec_method_receiver_constraint(
         (void)cg_fail(cg,
                       blame,
                       "IE0002",
-                      "codegen: constrained-generic method-value receiver has no spec constraint");
+                      "codegen: constrained-generic method-value owner has no spec constraint");
         return NULL;
     }
     closed_constraint_ref = cg_type_ref_substitute(
@@ -42887,25 +43107,33 @@ static const UserSpec *cg_closed_spec_method_receiver_constraint(
         return NULL;
     }
 
-    if (callable_dep->owner_type_decl->as.spec_decl.type_param_count == 0U) {
-        constraint_spec = (UserSpec *)cg_find_user_spec_by_decl(
-            cg, callable_dep->owner_type_decl);
-    } else if (closed_constraint_ref->kind == FENG_TYPE_REF_NAMED &&
-               closed_constraint_ref->as.named.type_arg_count ==
-                   callable_dep->owner_type_decl->as.spec_decl
-                       .type_param_count) {
-        constraint_spec = cg_find_generic_instance_user_spec_with_context(
+    if (!cg_try_resolve_declared_generic_type_ref(
             cg,
-            callable_dep->owner_type_decl,
-            closed_constraint_ref->as.named.type_args,
-            closed_constraint_ref->as.named.type_arg_count,
-            NULL,
-            0U);
+            constraint_ref,
+            closed_constraint_ref,
+            caller_reference_program,
+            &blame,
+            &constraint_type,
+            &constraint_handled) ||
+        (!constraint_handled &&
+         !cg_resolve_type_from_program(cg,
+                                       closed_constraint_ref,
+                                       caller_reference_program,
+                                       &blame,
+                                       &constraint_type))) {
+        cg_type_ref_free(closed_constraint_ref);
+        return NULL;
+    }
+    if (constraint_type != NULL &&
+        constraint_type->kind == CG_TYPE_SPEC &&
+        constraint_type->user_spec != NULL) {
+        constraint_spec = (UserSpec *)constraint_type->user_spec;
     }
     cg_type_ref_free(closed_constraint_ref);
     if (constraint_spec == NULL ||
         constraint_spec->form != FENG_SPEC_FORM_OBJECT ||
         !cg_ensure_user_spec_members_registered(cg, constraint_spec)) {
+        cgtype_free(constraint_type);
         if (!cg->failed) {
             (void)cg_fail(cg,
                           blame,
@@ -42914,6 +43142,7 @@ static const UserSpec *cg_closed_spec_method_receiver_constraint(
         }
         return NULL;
     }
+    cgtype_free(constraint_type);
     return constraint_spec;
 }
 
@@ -43014,12 +43243,13 @@ static bool cg_emit_closed_callable_spec_method_value_dep_expr(
                       "codegen: closed constrained-generic method-value dependency has an invalid receiver or target");
         goto cleanup;
     }
-    receiver_spec = cg_closed_spec_method_receiver_constraint(
+    receiver_spec = cg_closed_spec_method_constraint(
         cg,
         callable_dep,
         caller_type_params,
         caller_type_param_count,
         caller_type_args,
+        caller_reference_program,
         blame);
     if (receiver_spec == NULL) {
         goto cleanup;
@@ -43156,6 +43386,228 @@ cleanup:
     free(closure_desc_expr);
     free(aggregate_desc_expr);
     free(capture_offset_expr);
+    return ok;
+}
+
+/* Close one T:ObjectSpec static method value. The closed owner descriptor and
+ * exact requirement slot are embedded in an immortal callable singleton;
+ * the provider shared body later obtains it through one existing callable-
+ * dependency slot read and never allocates a receiver closure. */
+static bool cg_emit_closed_callable_spec_static_method_value_dep_expr(
+    CG *cg,
+    const FengReifiableCallableDep *callable_dep,
+    const FengTypeParam *caller_type_params,
+    size_t caller_type_param_count,
+    FengTypeRef *const *caller_type_args,
+    const FengProgram *caller_reference_program,
+    FengToken blame,
+    char **out_expr) {
+    FengTypeRef *closed_owner_ref = NULL;
+    FengTypeRef *closed_target_ref = NULL;
+    CGType *owner_type = NULL;
+    CGType *target_type = NULL;
+    bool owner_handled = false;
+    bool target_handled = false;
+    const UserSpec *receiver_spec = NULL;
+    const UserSpecMember *method = NULL;
+    char *owner_descriptor_expr = NULL;
+    char *surface_key = NULL;
+    char *identity = NULL;
+    char *display = NULL;
+    char *descriptor_c_name = NULL;
+    char *static_value_expr = NULL;
+    const char *static_value = NULL;
+    const char *adapter = NULL;
+    CGClosedCallableValueInit value_init;
+    bool ok = false;
+
+    if (cg == NULL || callable_dep == NULL || out_expr == NULL ||
+        callable_dep->kind !=
+            FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD ||
+        callable_dep->member == NULL ||
+        !callable_dep->member->is_static ||
+        callable_dep->owner_instance_type_ref == NULL ||
+        callable_dep->target_callable_type_ref == NULL) {
+        return cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: invalid constrained-generic static method-value dependency");
+    }
+    *out_expr = NULL;
+    closed_owner_ref = cg_type_ref_substitute(
+        callable_dep->owner_instance_type_ref,
+        caller_type_params,
+        caller_type_param_count,
+        caller_type_args);
+    closed_target_ref = cg_type_ref_substitute(
+        callable_dep->target_callable_type_ref,
+        caller_type_params,
+        caller_type_param_count,
+        caller_type_args);
+    if (closed_owner_ref == NULL || closed_target_ref == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (!cg_try_resolve_declared_generic_type_ref(
+            cg,
+            callable_dep->owner_instance_type_ref,
+            closed_owner_ref,
+            caller_reference_program,
+            &blame,
+            &owner_type,
+            &owner_handled) ||
+        (!owner_handled &&
+         !cg_resolve_type_from_program(cg,
+                                       closed_owner_ref,
+                                       caller_reference_program,
+                                       &blame,
+                                       &owner_type)) ||
+        !cg_try_resolve_declared_generic_type_ref(
+            cg,
+            callable_dep->target_callable_type_ref,
+            closed_target_ref,
+            caller_reference_program,
+            &blame,
+            &target_type,
+            &target_handled) ||
+        (!target_handled &&
+         !cg_resolve_type_from_program(cg,
+                                       closed_target_ref,
+                                       caller_reference_program,
+                                       &blame,
+                                       &target_type))) {
+        goto cleanup;
+    }
+    if (owner_type == NULL ||
+        owner_type->kind == CG_TYPE_GENERIC_PARAM ||
+        target_type == NULL || target_type->kind != CG_TYPE_CALLABLE ||
+        target_type->user_spec == NULL) {
+        (void)cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: closed constrained-generic static method-value dependency has an invalid owner or target");
+        goto cleanup;
+    }
+    receiver_spec = cg_closed_spec_method_constraint(
+        cg,
+        callable_dep,
+        caller_type_params,
+        caller_type_param_count,
+        caller_type_args,
+        caller_reference_program,
+        blame);
+    if (receiver_spec == NULL) {
+        goto cleanup;
+    }
+    method = cg_user_spec_member_by_decl(receiver_spec,
+                                         callable_dep->member);
+    if (method == NULL || method->kind != USM_KIND_METHOD ||
+        !method->is_static) {
+        (void)cg_fail(
+            cg,
+            blame,
+            "IE0002",
+            "codegen: constrained-generic static method-value requirement was not registered");
+        goto cleanup;
+    }
+    if (!cg_generic_descriptor_expr(cg,
+                                    owner_type,
+                                    receiver_spec,
+                                    &blame,
+                                    &owner_descriptor_expr)) {
+        goto cleanup;
+    }
+
+    {
+        char *target_key = cg_reifiable_sort_key(
+            closed_target_ref, NULL, 0U, true);
+        char *owner_key = cg_reifiable_sort_key(
+            closed_owner_ref, NULL, 0U, true);
+        Buf key;
+
+        if (target_key == NULL || owner_key == NULL) {
+            free(target_key);
+            free(owner_key);
+            (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        buf_init(&key);
+        buf_append_fmt(&key,
+                       "%s|owner=%s|witness=%s",
+                       target_key,
+                       owner_key,
+                       receiver_spec->c_witness_struct_name);
+        surface_key = key.data;
+        free(target_key);
+        free(owner_key);
+    }
+    identity = cg_callable_dep_identity_name(cg, callable_dep);
+    display = strndup(callable_dep->member->as.callable.name.data,
+                      callable_dep->member->as.callable.name.length);
+    memset(&value_init, 0, sizeof(value_init));
+    value_init.surface_key = surface_key;
+    descriptor_c_name = cg_closed_callable_descriptor_c_name_for(
+        cg,
+        0U,
+        NULL,
+        identity,
+        display,
+        &value_init);
+    if (surface_key == NULL || identity == NULL || display == NULL ||
+        descriptor_c_name == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (!cg_ensure_callable_spec_static_method_value(
+            cg,
+            target_type->user_spec,
+            receiver_spec,
+            method,
+            owner_descriptor_expr,
+            descriptor_c_name,
+            blame,
+            &static_value,
+            &adapter)) {
+        goto cleanup;
+    }
+    (void)adapter;
+    {
+        Buf expression;
+
+        buf_init(&expression);
+        buf_append_fmt(&expression, "&%s", static_value);
+        static_value_expr = expression.data;
+    }
+    if (static_value_expr == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    value_init.static_value_expr = static_value_expr;
+    ok = cg_emit_closed_callable_fdesc(cg,
+                                       NULL,
+                                       NULL,
+                                       0U,
+                                       NULL,
+                                       caller_reference_program,
+                                       blame,
+                                       identity,
+                                       display,
+                                       &value_init,
+                                       out_expr);
+
+cleanup:
+    cg_type_ref_free(closed_owner_ref);
+    cg_type_ref_free(closed_target_ref);
+    cgtype_free(owner_type);
+    cgtype_free(target_type);
+    free(owner_descriptor_expr);
+    free(surface_key);
+    free(identity);
+    free(display);
+    free(descriptor_c_name);
+    free(static_value_expr);
     return ok;
 }
 
@@ -43618,6 +44070,18 @@ static bool cg_emit_closed_callable_dep_expr(
         }
         if (callable_dep->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD) {
             return cg_emit_closed_callable_spec_method_value_dep_expr(
+                cg,
+                callable_dep,
+                caller_type_params,
+                caller_type_param_count,
+                caller_type_args,
+                caller_reference_program,
+                blame,
+                out_expr);
+        }
+        if (callable_dep->kind ==
+            FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) {
+            return cg_emit_closed_callable_spec_static_method_value_dep_expr(
                 cg,
                 callable_dep,
                 caller_type_params,
@@ -44742,6 +45206,45 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 buf_free(&b);
                 return false;
             }
+            Buf wb; buf_init(&wb);
+            buf_append_fmt(&wb, "&%s", witness_var);
+            owned_witness_expr = wb.data;
+            witness_expr = owned_witness_expr;
+        } else if (t && t->kind == CG_TYPE_ARRAY) {
+            FengTypeRef *array_type_ref =
+                cg_type_ref_from_cgtype(cg, t, *tok);
+            FengSemanticSubjectKey lookup_key;
+            const FengSpecWitness *semantic_witness;
+            const char *witness_var = NULL;
+
+            if (array_type_ref == NULL ||
+                !feng_semantic_subject_key_init_array_from_type_ref(
+                    &lookup_key, array_type_ref)) {
+                cg_type_ref_free(array_type_ref);
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "IE0002", "codegen: failed to reconstruct constrained array subject identity");
+            }
+            semantic_witness = feng_semantic_lookup_spec_witness(
+                cg->analysis, &lookup_key, constraint_spec->decl);
+            if (semantic_witness == NULL) {
+                cg_type_ref_free(array_type_ref);
+                buf_free(&b);
+                return cg_fail(cg, *tok,
+                    "CE0329", "codegen: missing semantic witness for constrained array type argument");
+            }
+            if (!cg_ensure_witness_instance(
+                    cg,
+                    &semantic_witness->subject_key,
+                    constraint_spec,
+                    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
+                    *tok,
+                    &witness_var)) {
+                cg_type_ref_free(array_type_ref);
+                buf_free(&b);
+                return false;
+            }
+            cg_type_ref_free(array_type_ref);
             Buf wb; buf_init(&wb);
             buf_append_fmt(&wb, "&%s", witness_var);
             owned_witness_expr = wb.data;
@@ -47144,6 +47647,18 @@ typedef struct CGWitnessBinding {
     const TypeStaticBinding *static_binding;
 } CGWitnessBinding;
 
+/* Emit the receiver-free thunk shared by every supported static method
+ * implementation source. Builtin fits keep their existing leading function
+ * descriptor; type and user-fit wrappers use their ordinary static ABI. */
+static bool cg_emit_static_spec_method_thunk(
+    CG *cg,
+    const UserSpec *spec,
+    const UserSpecMember *spec_member,
+    const UserMethod *method,
+    const BuiltinFit *builtin_fit,
+    const char *prefix,
+    FengToken blame);
+
 static bool cg_type_ref_matches_open_context_parameter(
     const FengTypeRef *actual,
     const FengTypeRef *pattern,
@@ -48320,7 +48835,9 @@ static bool cg_ensure_witness_instance(
                         for (size_t mi = 0U; mi < candidate->method_count; ++mi) {
                             const UserMethod *candidate_method = &candidate->methods[mi];
 
-                            if (strcmp(candidate_method->feng_name, sm->feng_name) != 0 ||
+                            if (candidate_method->member == NULL ||
+                                candidate_method->member->is_static != sm->is_static ||
+                                strcmp(candidate_method->feng_name, sm->feng_name) != 0 ||
                                 !cg_user_method_matches_spec_member(cg,
                                                                     candidate_method,
                                                                     s,
@@ -48366,6 +48883,21 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return cg_fail(cg, blame,
                         "CE0325", "codegen: fit method '%s' was not registered", sm->feng_name);
+                }
+
+                if (sm->is_static) {
+                    if (!cg_emit_static_spec_method_thunk(cg,
+                                                          s,
+                                                          sm,
+                                                          fm,
+                                                          bf,
+                                                          prefix.data,
+                                                          blame)) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return false;
+                    }
+                    continue;
                 }
 
             if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
@@ -48715,6 +49247,21 @@ static bool cg_ensure_witness_instance(
          * method symbol used by direct-call (fm->c_name). Do not synthesize
          * a separate box-only method implementation symbol. */
 
+        if (sm->is_static) {
+            if (!cg_emit_static_spec_method_thunk(cg,
+                                                  s,
+                                                  sm,
+                                                  fm,
+                                                  bf,
+                                                  prefix.data,
+                                                  blame)) {
+                buf_free(&prefix);
+                free(s_san);
+                return false;
+            }
+            continue;
+        }
+
             if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
             Buf *fp = &cg->fn_protos;
             buf_append_fmt(fp, "static void %s__%s(void *_subject",
@@ -48994,6 +49541,190 @@ static bool cg_ensure_witness_instance_for_subject_key(
                                       out_var);
 }
 
+/* Append a call to one already-selected static implementation. Builtin-fit
+ * entries retain their existing descriptor-first ABI; all other static
+ * wrappers receive only their declared parameters. */
+static bool cg_append_static_spec_method_invoke(
+    CG *cg,
+    Buf *out,
+    const UserSpecMember *spec_member,
+    const UserMethod *method,
+    const BuiltinFit *builtin_fit,
+    FengToken blame) {
+    bool has_argument = false;
+
+    if (cg == NULL || out == NULL || spec_member == NULL || method == NULL ||
+        method->member == NULL || !method->member->is_static ||
+        method->param_count != spec_member->param_count) {
+        return false;
+    }
+    buf_append_fmt(out, "%s(", method->c_name);
+    if (builtin_fit != NULL) {
+        buf_append_fmt(
+            out,
+            "&(const FengFunctionDescriptor){.name = \"%s\"}",
+            method->feng_name);
+        has_argument = true;
+    }
+    for (size_t index = 0U; index < spec_member->param_count; ++index) {
+        char parameter_name[32];
+
+        snprintf(parameter_name, sizeof parameter_name, "p%zu", index);
+        if (has_argument) {
+            buf_append_cstr(out, ", ");
+        }
+        if (!cg_append_witness_forward_arg(
+                cg,
+                out,
+                spec_member->param_types[index],
+                method->param_types[index],
+                spec_member->param_abi_kinds[index],
+                parameter_name,
+                blame)) {
+            return false;
+        }
+        has_argument = true;
+    }
+    buf_append_cstr(out, ")");
+    return true;
+}
+
+/* Emit one receiver-free static-method witness thunk. Type methods, user-fit
+ * methods and non-generic builtin-fit methods share the same stable spec slot
+ * ABI; only the compile-time-selected callee ABI differs. */
+static bool cg_emit_static_spec_method_thunk(
+    CG *cg,
+    const UserSpec *spec,
+    const UserSpecMember *spec_member,
+    const UserMethod *method,
+    const BuiltinFit *builtin_fit,
+    const char *prefix,
+    FengToken blame) {
+    if (cg == NULL || spec == NULL || spec_member == NULL || method == NULL ||
+        method->member == NULL || !method->member->is_static ||
+        prefix == NULL || spec_member->kind != USM_KIND_METHOD ||
+        !spec_member->is_static ||
+        method->param_count != spec_member->param_count) {
+        return false;
+    }
+    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
+        return cg_fail(
+            cg,
+            blame,
+            "CE0144",
+            "codegen: generic builtin static fit methods are not supported yet");
+    }
+
+    if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        Buf *prototype = &cg->fn_protos;
+        Buf *definition = &cg->witness_defs;
+
+        buf_append_fmt(prototype, "static void %s__%s(",
+                       prefix, spec_member->c_field_name);
+        for (size_t index = 0U;
+             index < spec_member->param_count;
+             ++index) {
+            if (index > 0U) buf_append_cstr(prototype, ", ");
+            cg_emit_callable_abi_param_type(
+                prototype,
+                spec_member->param_types[index],
+                spec_member->param_abi_kinds[index]);
+            buf_append_fmt(prototype, " p%zu", index);
+        }
+        if (spec_member->param_count > 0U) {
+            buf_append_cstr(prototype, ", ");
+        }
+        buf_append_cstr(prototype, "void *_out);\n");
+
+        buf_append_fmt(definition, "static void %s__%s(",
+                       prefix, spec_member->c_field_name);
+        for (size_t index = 0U;
+             index < spec_member->param_count;
+             ++index) {
+            if (index > 0U) buf_append_cstr(definition, ", ");
+            cg_emit_callable_abi_param_type(
+                definition,
+                spec_member->param_types[index],
+                spec_member->param_abi_kinds[index]);
+            buf_append_fmt(definition, " p%zu", index);
+        }
+        if (spec_member->param_count > 0U) {
+            buf_append_cstr(definition, ", ");
+        }
+        buf_append_cstr(definition, "void *_out) {\n    ");
+        cg_emit_c_type(definition, method->return_type);
+        buf_append_cstr(definition, " _ret = ");
+        if (!cg_append_static_spec_method_invoke(cg,
+                                                 definition,
+                                                 spec_member,
+                                                 method,
+                                                 builtin_fit,
+                                                 blame)) {
+            return false;
+        }
+        buf_append_cstr(
+            definition,
+            ";\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
+        return true;
+    }
+
+    {
+        Buf *prototype = &cg->fn_protos;
+        Buf *definition = &cg->witness_defs;
+
+        buf_append_cstr(prototype, "static ");
+        cg_emit_c_type(prototype, spec_member->type);
+        buf_append_fmt(prototype, " %s__%s(",
+                       prefix, spec_member->c_field_name);
+        for (size_t index = 0U;
+             index < spec_member->param_count;
+             ++index) {
+            if (index > 0U) buf_append_cstr(prototype, ", ");
+            cg_emit_callable_abi_param_type(
+                prototype,
+                spec_member->param_types[index],
+                spec_member->param_abi_kinds[index]);
+            buf_append_fmt(prototype, " p%zu", index);
+        }
+        if (spec_member->param_count == 0U) {
+            buf_append_cstr(prototype, "void");
+        }
+        buf_append_cstr(prototype, ");\n");
+
+        buf_append_cstr(definition, "static ");
+        cg_emit_c_type(definition, spec_member->type);
+        buf_append_fmt(definition, " %s__%s(",
+                       prefix, spec_member->c_field_name);
+        for (size_t index = 0U;
+             index < spec_member->param_count;
+             ++index) {
+            if (index > 0U) buf_append_cstr(definition, ", ");
+            cg_emit_callable_abi_param_type(
+                definition,
+                spec_member->param_types[index],
+                spec_member->param_abi_kinds[index]);
+            buf_append_fmt(definition, " p%zu", index);
+        }
+        if (spec_member->param_count == 0U) {
+            buf_append_cstr(definition, "void");
+        }
+        buf_append_cstr(definition, ") {\n    ");
+        if (spec_member->type->kind != CG_TYPE_VOID) {
+            buf_append_cstr(definition, "return ");
+        }
+        if (!cg_append_static_spec_method_invoke(cg,
+                                                 definition,
+                                                 spec_member,
+                                                 method,
+                                                 builtin_fit,
+                                                 blame)) {
+            return false;
+        }
+        buf_append_cstr(definition, ";\n}\n\n");
+        return true;
+    }
+}
+
 /* Emit one subject-independent witness thunk for a static spec member.
  * Reference types and boxed value types share this path because static slots
  * neither consume nor inspect the object-form spec subject. */
@@ -49018,138 +49749,13 @@ static bool cg_emit_static_user_spec_member_thunk(
                 "CE0342", "codegen: internal: type '%s' has no static method '%s' to satisfy spec '%s'",
                 type->feng_name, spec_member->feng_name, spec->feng_name);
         }
-        if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
-            Buf *prototype = &cg->fn_protos;
-            Buf *definition = &cg->witness_defs;
-
-            buf_append_fmt(prototype, "static void %s__%s(",
-                           prefix, spec_member->c_field_name);
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                if (index > 0U) buf_append_cstr(prototype, ", ");
-                cg_emit_callable_abi_param_type(
-                    prototype,
-                    spec_member->param_types[index],
-                    spec_member->param_abi_kinds[index]);
-                buf_append_fmt(prototype, " p%zu", index);
-            }
-            if (spec_member->param_count > 0U) {
-                buf_append_cstr(prototype, ", ");
-            }
-            buf_append_cstr(prototype, "void *_out);\n");
-
-            buf_append_fmt(definition, "static void %s__%s(",
-                           prefix, spec_member->c_field_name);
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                if (index > 0U) buf_append_cstr(definition, ", ");
-                cg_emit_callable_abi_param_type(
-                    definition,
-                    spec_member->param_types[index],
-                    spec_member->param_abi_kinds[index]);
-                buf_append_fmt(definition, " p%zu", index);
-            }
-            if (spec_member->param_count > 0U) {
-                buf_append_cstr(definition, ", ");
-            }
-            buf_append_cstr(definition, "void *_out) {\n    ");
-            cg_emit_c_type(definition, method->return_type);
-            buf_append_fmt(definition, " _ret = %s(", method->c_name);
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                char parameter_name[32];
-
-                snprintf(parameter_name, sizeof parameter_name,
-                         "p%zu", index);
-                if (index > 0U) buf_append_cstr(definition, ", ");
-                if (!cg_append_witness_forward_arg(
-                        cg,
-                        definition,
-                        spec_member->param_types[index],
-                        method->param_types[index],
-                        spec_member->param_abi_kinds[index],
-                        parameter_name,
-                        blame)) {
-                    return false;
-                }
-            }
-            buf_append_cstr(
-                definition,
-                ");\n    memcpy(_out, &_ret, sizeof _ret);\n}\n\n");
-            return true;
-        }
-
-        {
-            Buf *prototype = &cg->fn_protos;
-            Buf *definition = &cg->witness_defs;
-
-            buf_append_cstr(prototype, "static ");
-            cg_emit_c_type(prototype, spec_member->type);
-            buf_append_fmt(prototype, " %s__%s(",
-                           prefix, spec_member->c_field_name);
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                if (index > 0U) buf_append_cstr(prototype, ", ");
-                cg_emit_callable_abi_param_type(
-                    prototype,
-                    spec_member->param_types[index],
-                    spec_member->param_abi_kinds[index]);
-                buf_append_fmt(prototype, " p%zu", index);
-            }
-            if (spec_member->param_count == 0U) {
-                buf_append_cstr(prototype, "void");
-            }
-            buf_append_cstr(prototype, ");\n");
-
-            buf_append_cstr(definition, "static ");
-            cg_emit_c_type(definition, spec_member->type);
-            buf_append_fmt(definition, " %s__%s(",
-                           prefix, spec_member->c_field_name);
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                if (index > 0U) buf_append_cstr(definition, ", ");
-                cg_emit_callable_abi_param_type(
-                    definition,
-                    spec_member->param_types[index],
-                    spec_member->param_abi_kinds[index]);
-                buf_append_fmt(definition, " p%zu", index);
-            }
-            if (spec_member->param_count == 0U) {
-                buf_append_cstr(definition, "void");
-            }
-            buf_append_cstr(definition, ") {\n");
-            if (spec_member->type->kind == CG_TYPE_VOID) {
-                buf_append_fmt(definition, "    %s(", method->c_name);
-            } else {
-                buf_append_fmt(definition, "    return %s(", method->c_name);
-            }
-            for (size_t index = 0U;
-                 index < spec_member->param_count;
-                 ++index) {
-                char parameter_name[32];
-
-                snprintf(parameter_name, sizeof parameter_name,
-                         "p%zu", index);
-                if (index > 0U) buf_append_cstr(definition, ", ");
-                if (!cg_append_witness_forward_arg(
-                        cg,
-                        definition,
-                        spec_member->param_types[index],
-                        method->param_types[index],
-                        spec_member->param_abi_kinds[index],
-                        parameter_name,
-                        blame)) {
-                    return false;
-                }
-            }
-            buf_append_cstr(definition, ");\n}\n\n");
-            return true;
-        }
+        return cg_emit_static_spec_method_thunk(cg,
+                                                spec,
+                                                spec_member,
+                                                method,
+                                                NULL,
+                                                prefix,
+                                                blame);
     }
 
     if (spec_member->kind == USM_KIND_FIELD) {

@@ -23962,6 +23962,428 @@ static void test_constrained_generic_spec_method_values_preserve_receiver(void) 
     feng_program_free(program);
 }
 
+/* A T: ObjectSpec static method value keeps T as the owner while selecting
+ * the exact static requirement and callable target at compile time. Binding,
+ * cast, argument and return targets share one callable-value dependency;
+ * direct T.method() dispatch remains independent of that dependency path. */
+static void test_constrained_generic_spec_static_method_values(void) {
+    const char *source =
+        "module demo.spec_static_method_value.generic_owner;\n"
+        "spec Factory { static func create(seed: int): int; }\n"
+        "spec Creator(seed: int): int;\n"
+        "func accept(creator: Creator): Creator { return creator; }\n"
+        "func exercise<T: Factory>(): Creator {\n"
+        "    let bound: Creator = T.create;\n"
+        "    let casted = (Creator)T.create;\n"
+        "    return accept(T.create);\n"
+        "}\n"
+        "func returned<T: Factory>(): Creator { return T.create; }\n"
+        "func direct<T: Factory>(seed: int): int { return T.create(seed); }\n"
+        "spec GenericFactory<T> { static func map(value: T): T; }\n"
+        "spec MappedFactory<Unused, Value>: GenericFactory<Value> {}\n"
+        "spec IntMapper(value: int): int;\n"
+        "func inherited<T: MappedFactory<string, int>>(): IntMapper {\n"
+        "    return T.map;\n"
+        "}\n"
+        "spec SecretFactory {\n"
+        "    @friend(Reader) seal static func secret(seed: int): int;\n"
+        "}\n"
+        "type Reader {\n"
+        "    static func bindSecret<T: SecretFactory>(): Creator {\n"
+        "        return T.secret;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "constrained_generic_spec_static_method_value.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *factory;
+    const FengDecl *creator;
+    const FengDecl *generic_factory;
+    const FengDecl *int_mapper;
+    const FengDecl *secret_factory;
+    const FengDecl *exercise;
+    const FengDecl *returned;
+    const FengDecl *direct;
+    const FengDecl *inherited;
+    const FengDecl *reader;
+    const FengTypeMember *create_member = NULL;
+    const FengTypeMember *map_member = NULL;
+    const FengTypeMember *secret_member = NULL;
+    const FengTypeMember *bind_secret_member = NULL;
+    const FengExpr *sites[4];
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    factory = find_spec_decl_by_name(analysis, "Factory");
+    creator = find_spec_decl_by_name(analysis, "Creator");
+    generic_factory = find_spec_decl_by_name(analysis, "GenericFactory");
+    int_mapper = find_spec_decl_by_name(analysis, "IntMapper");
+    secret_factory = find_spec_decl_by_name(analysis, "SecretFactory");
+    exercise = find_function_decl_in_program(program, "exercise");
+    returned = find_function_decl_in_program(program, "returned");
+    direct = find_function_decl_in_program(program, "direct");
+    inherited = find_function_decl_in_program(program, "inherited");
+    reader = find_type_decl_by_name(analysis, "Reader");
+    ASSERT(factory != NULL && creator != NULL && generic_factory != NULL);
+    ASSERT(int_mapper != NULL && secret_factory != NULL);
+    ASSERT(exercise != NULL && returned != NULL && direct != NULL);
+    ASSERT(inherited != NULL && reader != NULL);
+
+    for (size_t index = 0U;
+         index < factory->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            factory->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("create") &&
+            memcmp(member->as.callable.name.data,
+                   "create",
+                   strlen("create")) == 0) {
+            create_member = member;
+            break;
+        }
+    }
+    for (size_t index = 0U;
+         index < generic_factory->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            generic_factory->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("map") &&
+            memcmp(member->as.callable.name.data,
+                   "map",
+                   strlen("map")) == 0) {
+            map_member = member;
+            break;
+        }
+    }
+    for (size_t index = 0U;
+         index < secret_factory->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            secret_factory->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("secret") &&
+            memcmp(member->as.callable.name.data,
+                   "secret",
+                   strlen("secret")) == 0) {
+            secret_member = member;
+            break;
+        }
+    }
+    for (size_t index = 0U;
+         index < reader->as.type_decl.member_count;
+         ++index) {
+        const FengTypeMember *member = reader->as.type_decl.members[index];
+
+        if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == strlen("bindSecret") &&
+            memcmp(member->as.callable.name.data,
+                   "bindSecret",
+                   strlen("bindSecret")) == 0) {
+            bind_secret_member = member;
+            break;
+        }
+    }
+    ASSERT(create_member != NULL && create_member->is_static);
+    ASSERT(map_member != NULL && map_member->is_static);
+    ASSERT(secret_member != NULL && secret_member->is_static);
+    ASSERT(bind_secret_member != NULL);
+
+    sites[0] = nth_let_initializer(&exercise->as.function_decl, 0U);
+    sites[1] = nth_let_initializer(&exercise->as.function_decl, 1U);
+    ASSERT(sites[0] != NULL && sites[1] != NULL);
+    ASSERT(sites[1]->kind == FENG_EXPR_CAST);
+    sites[1] = sites[1]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 3U);
+    sites[2] = exercise->as.function_decl.body->statements[2]
+                   ->as.return_value;
+    ASSERT(sites[2] != NULL && sites[2]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[2]->as.call.arg_count == 1U);
+    sites[2] = sites[2]->as.call.args[0];
+    ASSERT(returned->as.function_decl.body->statement_count == 1U);
+    sites[3] = returned->as.function_decl.body->statements[0]
+                   ->as.return_value;
+
+    for (size_t index = 0U; index < 4U; ++index) {
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(analysis, sites[index]);
+
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == creator);
+        ASSERT(site->callable_member == create_member);
+        ASSERT(site->callable_owner_type_decl == factory);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+    }
+
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, exercise);
+        const FengReifiableCallableDep *dependency;
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 1U);
+        dependency = &dep_set->callable_deps[0];
+        ASSERT(dependency->purpose ==
+               FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+        ASSERT(dependency->kind ==
+               FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD);
+        ASSERT(dependency->owner_type_decl == factory);
+        ASSERT(dependency->member == create_member);
+        ASSERT(dependency->fit_decl == NULL);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->owner_instance_type_ref, "T"));
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            dependency->target_callable_type_ref, "Creator"));
+    }
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, direct);
+
+        ASSERT(dep_set == NULL || dep_set->callable_dep_count == 0U);
+    }
+    {
+        const FengExpr *site_expr =
+            inherited->as.function_decl.body->statements[0]
+                ->as.return_value;
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(analysis, site_expr);
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, inherited);
+
+        ASSERT(site != NULL);
+        ASSERT(site->target_spec_decl == int_mapper);
+        ASSERT(site->callable_owner_type_decl == generic_factory);
+        ASSERT(site->callable_member == map_member);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+        ASSERT(dep_set != NULL && dep_set->callable_dep_count == 1U);
+        ASSERT(dep_set->callable_deps[0].kind ==
+               FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD);
+        ASSERT(dep_set->callable_deps[0].owner_type_decl == generic_factory);
+        ASSERT(dep_set->callable_deps[0].member == map_member);
+    }
+    {
+        const FengExpr *site_expr =
+            bind_secret_member->as.callable.body->statements[0]
+                ->as.return_value;
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(analysis, site_expr);
+
+        ASSERT(site != NULL);
+        ASSERT(site->target_spec_decl == creator);
+        ASSERT(site->callable_owner_type_decl == secret_factory);
+        ASSERT(site->callable_member == secret_member);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A builtin fit can satisfy a static object-spec requirement. Closing either
+ * a direct T.method() call or the corresponding method value must cache the
+ * fit's static member in the same semantic witness slot. */
+static void test_builtin_fit_static_spec_witness(void) {
+    const char *source =
+        "module demo.spec_static_method_value.builtin_fit_witness;\n"
+        "spec Factory { static func create(seed: i32): i32; }\n"
+        "spec Creator(seed: i32): i32;\n"
+        "fit i32: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 1; }\n"
+        "}\n"
+        "func bind<T: Factory>(): Creator { return T.create; }\n"
+        "func direct<T: Factory>(seed: i32): i32 { return T.create(seed); }\n"
+        "func run(): i32 {\n"
+        "    let creator = bind<i32>();\n"
+        "    return creator(1) + direct<i32>(2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "builtin_fit_static_spec_witness.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *factory;
+    const FengDecl *fit;
+    const FengTypeMember *requirement;
+    const FengTypeMember *implementation;
+    FengSemanticSubjectKey subject_key =
+        feng_semantic_subject_key_for_builtin("i32");
+    const FengSpecWitness *witness;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    factory = find_spec_decl_by_name(analysis, "Factory");
+    fit = program->declarations[2];
+    ASSERT(factory != NULL);
+    ASSERT(fit != NULL && fit->kind == FENG_DECL_FIT);
+    ASSERT(factory->as.spec_decl.as.object.member_count == 1U);
+    ASSERT(fit->as.fit_decl.member_count == 1U);
+    requirement = factory->as.spec_decl.as.object.members[0];
+    implementation = fit->as.fit_decl.members[0];
+    ASSERT(requirement != NULL && requirement->is_static);
+    ASSERT(implementation != NULL && implementation->is_static);
+
+    witness = feng_semantic_lookup_spec_witness(
+        analysis, &subject_key, factory);
+    ASSERT(witness != NULL);
+    ASSERT(witness->member_count == 1U);
+    ASSERT(witness->members[0].spec_member == requirement);
+    ASSERT(witness->members[0].impl_member == implementation);
+    ASSERT(witness->members[0].source_kind ==
+           FENG_SPEC_WITNESS_SOURCE_FIT_METHOD);
+    ASSERT(witness->members[0].via_fit_decl == fit);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A concrete array fit uses the structured array subject key when a generic
+ * object-spec constraint is closed. Direct calls and static method values
+ * must observe the same materialized witness. */
+static void test_array_fit_static_spec_witness(void) {
+    const char *source =
+        "module demo.spec_static_method_value.array_fit_witness;\n"
+        "spec Factory { static func create(seed: i32): i32; }\n"
+        "spec Creator(seed: i32): i32;\n"
+        "fit i32[]: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 1; }\n"
+        "}\n"
+        "func bind<T: Factory>(): Creator { return T.create; }\n"
+        "func direct<T: Factory>(seed: i32): i32 { return T.create(seed); }\n"
+        "func run(): i32 {\n"
+        "    let creator = bind<i32[]>();\n"
+        "    return creator(1) + direct<i32[]>(2);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "array_fit_static_spec_witness.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *factory;
+    const FengDecl *fit;
+    const FengTypeMember *requirement;
+    const FengTypeMember *implementation;
+    FengSemanticSubjectKey subject_key;
+    const FengSpecWitness *witness;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    factory = find_spec_decl_by_name(analysis, "Factory");
+    fit = program->declarations[2];
+    ASSERT(factory != NULL);
+    ASSERT(fit != NULL && fit->kind == FENG_DECL_FIT);
+    ASSERT(fit->as.fit_decl.target != NULL);
+    ASSERT(fit->as.fit_decl.target->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(
+        &subject_key, fit->as.fit_decl.target));
+    ASSERT(factory->as.spec_decl.as.object.member_count == 1U);
+    ASSERT(fit->as.fit_decl.member_count == 1U);
+    requirement = factory->as.spec_decl.as.object.members[0];
+    implementation = fit->as.fit_decl.members[0];
+
+    witness = feng_semantic_lookup_spec_witness(
+        analysis, &subject_key, factory);
+    ASSERT(witness != NULL);
+    ASSERT(witness->subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
+    ASSERT(witness->member_count == 1U);
+    ASSERT(witness->members[0].spec_member == requirement);
+    ASSERT(witness->members[0].impl_member == implementation);
+    ASSERT(witness->members[0].source_kind ==
+           FENG_SPEC_WITNESS_SOURCE_FIT_METHOD);
+    ASSERT(witness->members[0].via_fit_decl == fit);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Constrained static method values retain the callable-value diagnostics for
+ * an absent target and an incompatible target. Unauthorized seal access is
+ * still rejected by the existing spec-member visibility diagnostics. */
+static void test_constrained_generic_spec_static_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "constrained_spec_static_method_value_without_target.ff",
+            "module demo.spec_static_method_value.no_target;\n"
+            "spec Factory { static func create(seed: int): int; }\n"
+            "func bad<T: Factory>(): void { let creator = T.create; }\n",
+            "AE0523"
+        },
+        {
+            "constrained_spec_static_method_value_mismatch.ff",
+            "module demo.spec_static_method_value.mismatch;\n"
+            "spec Factory { static func create(seed: int): int; }\n"
+            "spec Wrong(flag: bool): int;\n"
+            "func bad<T: Factory>(): Wrong { return T.create; }\n",
+            "AE0522"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(cases[case_index].path,
+                                                    cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_expected = false;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            if (strcmp(errors[error_index].code,
+                       cases[case_index].expected_code) == 0) {
+                found_expected = true;
+                break;
+            }
+        }
+        ASSERT(found_expected);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+
+    assert_single_source_semantic_error_contains(
+        "constrained_spec_static_method_value_seal_access.ff",
+        "module demo.spec_static_method_value.seal_access;\n"
+        "spec Factory {\n"
+        "  @friend(Reader) seal static func create(seed: int): int;\n"
+        "}\n"
+        "spec Creator(seed: int): int;\n"
+        "type Reader {}\n"
+        "func bad<T: Factory>(): Creator { return T.create; }\n",
+        "accessible");
+}
+
 /* Concrete static method values retain the exact type/fit source selected by
  * the target callable, including closed owner arguments and explicit
  * method-local arguments. Shared generic bodies record the same source as a
@@ -25641,6 +26063,10 @@ int main(void) {
     test_explicit_generic_callable_values_and_unbound_casts();
     test_object_spec_method_values_record_exact_target_context();
     test_constrained_generic_spec_method_values_preserve_receiver();
+    test_constrained_generic_spec_static_method_values();
+    test_builtin_fit_static_spec_witness();
+    test_array_fit_static_spec_witness();
+    test_constrained_generic_spec_static_method_values_reject_invalid_sources();
     test_concrete_static_method_values_record_exact_source();
     test_concrete_static_method_values_reject_invalid_sources();
     test_friend_static_method_values_in_type_contexts();

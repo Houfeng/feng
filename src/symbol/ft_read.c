@@ -1362,10 +1362,10 @@ static bool callable_dependency_kind_is_supported(uint16_t kind) {
         case FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_SPEC_METHOD:
+        case FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD:
             return true;
 
         case FENG_RESOLVED_CALLABLE_NONE:
-        case FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD:
         case FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR:
         default:
             return false;

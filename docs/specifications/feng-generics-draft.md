@@ -491,6 +491,9 @@ spec Reader<T: Bar> { ... }
 - [必须] object-form `spec` 约束下的泛型值实例方法引用可以在明确 callable-form
   `spec` 目标下形成值；编译器必须保留完整 `T` 类型事实，并按闭合 `T` 的既有复制、
   保留和清理规则绑定 receiver。
+- [必须] object-form `spec` 约束下的类型参数静态方法引用 `T.method` 可以在明确
+  callable-form `spec` 目标下形成值；编译器必须保留直接调用已选定的 requirement、
+  caller 视角的 `T` 和目标 callable 类型，并在闭合点绑定 `T` descriptor 的 witness 槽。
 - [禁止] 为形成上述泛型实例方法值，把 `T` 转换或装箱为 object-form `spec` 值，或以
   单态化共享泛型函数体作为语义成立的前提。
 - [必须] callable-form `spec` 显式转换属于明确 callable 目标；其泛型函数或方法操作数必须写为显式泛型 target，先闭合来源泛参，再执行结构匹配。转换目标不得用于推导来源泛参。
@@ -586,6 +589,10 @@ spec Reader<T: Bar> { ... }
 - object-form `spec` 约束下的泛型值实例方法值必须复用直接调用的 requirement 与
   witness 选择，同时保留 receiver 的开放 `T` 类型表达式；最终闭合点负责确定 receiver
   布局和生命周期，共享泛型体不得执行运行时成员搜索、满足关系查询或 receiver 装箱。
+- object-form `spec` 约束下的类型参数静态方法值必须复用直接调用的 requirement 与
+  witness 选择，同时保留开放 `T` 和目标 callable 类型；最终闭合点生成绑定闭合 `T`
+  witness 槽的 immortal callable singleton，共享泛型体只读取既有 callable dependency
+  槽，不得分配 closure、搜索成员或查询满足关系。
 - 具体泛型 owner 或泛型静态方法的方法值必须保留静态直接调用已经解析的 owner、fit、
   方法与全部显式类型实参；最终闭合点生成静态 callable 描述信息，共享泛型体不得执行
   运行时成员搜索、fit 查找或目标选择。

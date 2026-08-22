@@ -21,6 +21,7 @@ func main(args: string[]) {
       test_spec();
       test_spec_method_value();
       test_static_method_value();
+      test_spec_static_method_value();
       test_intersection();
       test_intersection_generic();
       test_fit();

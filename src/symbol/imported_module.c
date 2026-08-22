@@ -2183,12 +2183,18 @@ static void restore_imported_reifiable_deps(
                                            : NULL;
             resolved.member = target_member;
         } else if (dependency->kind ==
-                   FENG_RESOLVED_CALLABLE_SPEC_METHOD) {
+                       FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+                   dependency->kind ==
+                       FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) {
+            bool requires_static =
+                dependency->kind ==
+                FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD;
+
             if (target_decl->kind != FENG_DECL_SPEC ||
                 target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
                 target_member == NULL ||
                 target_member->kind != FENG_TYPE_MEMBER_METHOD ||
-                target_member->is_static) {
+                target_member->is_static != requires_static) {
                 continue;
             }
             resolved.owner_type_decl = target_decl;

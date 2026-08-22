@@ -1,0 +1,36 @@
+open module fcts_lib.test.lib_spec_static_method_value;
+
+/** Imported static factory contract used by MV04 package-boundary coverage. */
+open spec LibSpecStaticFactory {
+  /** Create one observable integer through the concrete type witness. */
+  static func create(seed: int): int;
+}
+
+/** Imported callable target for one static factory method value. */
+open spec LibSpecStaticCreator(seed: int): int;
+
+/** Form a constrained static method value inside an imported shared body. */
+open func bindLibSpecStaticCreator<T: LibSpecStaticFactory>():
+  LibSpecStaticCreator {
+  return T.create;
+}
+
+/** Generic parent contract used to verify inherited requirement identity. */
+open spec LibGenericStaticFactory<T> {
+  /** Map one value through the concrete type witness. */
+  static func map(value: T): T;
+}
+
+/** Child constraint whose generic shape differs from its parent requirement. */
+open spec LibMappedStaticFactory<Unused, Value>:
+  LibGenericStaticFactory<Value> {}
+
+/** Imported callable target for the mapped integer requirement. */
+open spec LibSpecStaticIntMapper(value: int): int;
+
+/** Form an inherited static requirement inside an imported shared body. */
+open func bindLibMappedStaticCreator<
+  T: LibMappedStaticFactory<string, int>
+>(): LibSpecStaticIntMapper {
+  return T.map;
+}

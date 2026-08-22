@@ -7469,6 +7469,220 @@ static void test_constrained_generic_spec_method_value_codegen(void) {
     feng_program_free(program);
 }
 
+/* A shared T: ObjectSpec static method binder closes to one receiver-free
+ * immortal callable per concrete owner/target pair. Its adapter enters the
+ * exact witness slot without a subject; scalar and aggregate returns use the
+ * existing callable ABI, including a requirement inherited from a generic
+ * parent spec. */
+static void test_constrained_generic_spec_static_method_value_codegen(void) {
+    const char *source =
+        "module feng.codegen.constrained_generic_spec_static_method_value;\n"
+        "@value type Pair {\n"
+        "    let first: string;\n"
+        "    let second: string;\n"
+        "    let value: i32;\n"
+        "}\n"
+        "spec Factory {\n"
+        "    static func create(seed: i32): i32;\n"
+        "    static func pair(): Pair;\n"
+        "}\n"
+        "spec Creator(seed: i32): i32;\n"
+        "spec PairCreator(): Pair;\n"
+        "type First: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 1; }\n"
+        "    static func pair(): Pair {\n"
+        "        return Pair { first: \"first\", second: \"one\", value: 11 };\n"
+        "    }\n"
+        "}\n"
+        "type Second: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 2; }\n"
+        "    static func pair(): Pair {\n"
+        "        return Pair { first: \"second\", second: \"two\", value: 12 };\n"
+        "    }\n"
+        "}\n"
+        "func bind<T: Factory>(): Creator { return T.create; }\n"
+        "func bindPair<T: Factory>(): PairCreator { return T.pair; }\n"
+        "func direct<T: Factory>(seed: i32): i32 { return T.create(seed); }\n"
+        "spec GenericFactory<T> { static func map(value: T): T; }\n"
+        "spec MappedFactory<Unused, Value>: GenericFactory<Value> {}\n"
+        "spec IntMapper(value: i32): i32;\n"
+        "type Inherited: MappedFactory<string, i32> {\n"
+        "    static func map(value: i32): i32 { return value + 3; }\n"
+        "}\n"
+        "func bindInherited<T: MappedFactory<string, i32>>(): IntMapper {\n"
+        "    return T.map;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "    let first = bind<First>();\n"
+        "    let second = bind<Second>();\n"
+        "    let firstPair = bindPair<First>();\n"
+        "    let secondPair = bindPair<Second>();\n"
+        "    let inherited = bindInherited<Inherited>();\n"
+        "    return first(10) + second(10) + firstPair().value +\n"
+        "        secondPair().value + inherited(10) + direct<First>(1);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source,
+        "constrained_generic_spec_static_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    if (!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                               &analysis, &errors, &error_count)) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "MV04 semantic error %s: %s\n",
+                    errors[index].code,
+                    errors[index].message != NULL
+                        ? errors[index].message
+                        : "(unknown)");
+        }
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* Five closed source/target pairs use static callable storage: two
+     * scalar factories, two aggregate factories and one inherited generic
+     * requirement. The shared formation sites only read descriptor slots. */
+    ASSERT(count_substr(
+               output.c_source,
+               ".callable_value = {.static_value = &FengCallableSpecStaticValue__") ==
+           5U);
+    ASSERT(count_substr(output.c_source,
+                        ".refcount = FENG_REFCOUNT_IMMORTAL") >= 5U);
+    ASSERT(strstr(output.c_source,
+                  "->callable_value.static_value") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_object_new(_callable_value_desc") == NULL);
+    ASSERT(strstr(output.c_source, "switch (_T->kind)") == NULL);
+
+    /* Static adapters do not synthesize a subject. Pair is a fixed nominal
+     * return type, so its existing callable ABI returns it directly. */
+    ASSERT(strstr(output.c_source,
+                  "_witness->create(_arg0)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "return _witness->pair()") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_witness->map((const void *)&_arg0, &_result)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "return _result;") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".reified_callable_deps_count = 1") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A builtin-fit static requirement uses the same receiver-free witness for
+ * direct constrained calls and MV04 method values. The thunk calls the
+ * registered builtin-fit entry with its existing descriptor-first ABI. */
+static void test_builtin_fit_static_spec_witness_codegen(void) {
+    const char *source =
+        "module feng.codegen.builtin_fit_static_spec_witness;\n"
+        "spec Factory { static func create(seed: i32): i32; }\n"
+        "spec Creator(seed: i32): i32;\n"
+        "fit i32: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 1; }\n"
+        "}\n"
+        "func bind<T: Factory>(): Creator { return T.create; }\n"
+        "func direct<T: Factory>(seed: i32): i32 { return T.create(seed); }\n"
+        "func run(): i32 {\n"
+        "    let creator = bind<i32>();\n"
+        "    return creator(10) + direct<i32>(20);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "builtin_fit_static_spec_witness_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "FengFitBuiltin_") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "&(const FengFunctionDescriptor){.name = \"create\"}, p0);") !=
+           NULL);
+    ASSERT(strstr(output.c_source, "__create(void *_subject") == NULL);
+    ASSERT(strstr(output.c_source, "_witness->create(_arg0)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".static_value = &FengCallableSpecStaticValue__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_object_new(_callable_value_desc") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A constrained generic closed with an array type uses the existing array
+ * descriptor and structured witness key for both direct static calls and
+ * MV04 method values. The generated adapter remains receiver-free. */
+static void test_array_fit_static_spec_witness_codegen(void) {
+    const char *source =
+        "module feng.codegen.array_fit_static_spec_witness;\n"
+        "spec Factory { static func create(seed: i32): i32; }\n"
+        "spec Creator(seed: i32): i32;\n"
+        "fit i32[]: Factory {\n"
+        "    static func create(seed: i32): i32 { return seed + 1; }\n"
+        "}\n"
+        "func bind<T: Factory>(): Creator { return T.create; }\n"
+        "func direct<T: Factory>(seed: i32): i32 { return T.create(seed); }\n"
+        "func run(): i32 {\n"
+        "    let creator = bind<i32[]>();\n"
+        "    return creator(10) + direct<i32[]>(20);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "array_fit_static_spec_witness_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "FengFitBuiltin_") != NULL);
+    ASSERT(strstr(output.c_source, "__create(void *_subject") == NULL);
+    ASSERT(strstr(output.c_source, "_witness->create(_arg0)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".static_value = &FengCallableSpecStaticValue__") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_object_new(_callable_value_desc") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A concrete static method value is a receiver-free immortal singleton. Type,
  * fit, generic-owner and generic-method sources all call their already closed
  * thin wrapper directly; shared generic bodies consume the same descriptor
@@ -13172,6 +13386,9 @@ int main(void) {
     test_callable_spec_method_coercion_codegen();
     test_object_spec_method_value_codegen_uses_bound_witness();
     test_constrained_generic_spec_method_value_codegen();
+    test_constrained_generic_spec_static_method_value_codegen();
+    test_builtin_fit_static_spec_witness_codegen();
+    test_array_fit_static_spec_witness_codegen();
     test_concrete_static_method_value_codegen_uses_singletons();
     test_value_method_capture_codegen_has_direct_closure_lowering();
     test_generic_callable_value_reification_codegen();

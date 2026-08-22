@@ -1,6 +1,6 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02、MV03 已完成，可分别独立交付；其余分项尚未实施。
+> **状态**：MV01、MV02、MV03、MV04 已完成，可分别独立交付；其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -280,22 +280,22 @@ func bind<T: Factory>(): Creator {
 
 #### 修复任务
 
-- [ ] 更新函数、spec、泛型、可见性和诊断主规范，定义受约束类型参数静态方法值。
-- [ ] 复用 `T.create()` 直接调用已经解析的 requirement、原声明 spec、访问权限和闭合签名。
-- [ ] 在实现前比较无捕获静态 callable 与动态绑定表示，选择满足语义且成本最低的通用方案。
-- [ ] 如果正确实现需要每次形成时新增动态分配或修改 runtime ABI，停止并提交人工决策。
-- [ ] 验证共享泛型体和跨包恢复是否需要扩展 `.ft` 值域或兼容边界；不得预设结论。
+- [x] 更新函数、spec、泛型、可见性和诊断主规范，定义受约束类型参数静态方法值。
+- [x] 复用 `T.create()` 直接调用已经解析的 requirement、原声明 spec、访问权限和闭合签名。
+- [x] 在实现前比较无捕获静态 callable 与动态绑定表示，选择满足语义且成本最低的通用方案。
+- [x] 如果正确实现需要每次形成时新增动态分配或修改 runtime ABI，停止并提交人工决策。
+- [x] 验证共享泛型体和跨包恢复是否需要扩展 `.ft` 值域或兼容边界；不得预设结论。
 
 #### 验证与交付
 
-- [ ] Semantic：公开与合法 seal 静态 requirement 方法值均通过。
-- [ ] Semantic：非法访问、无目标、签名不匹配和歧义稳定拒绝。
-- [ ] FCTS：不同闭合 `T` 形成的方法值分别进入各自 type/fit 静态实现。
-- [ ] 共享泛型与跨包：provider/consumer 使用同一闭合 requirement 身份。
-- [ ] 性能：记录形成、复制、调用和释放的实际成本，并确认没有未审批的增量开销。
-- [ ] `.ft`：若扩展合法值域或兼容规则，先更新符号表规范并取得 Review。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录表示决策、实施问题和最终结果，标记 MV04 可独立交付。
+- [x] Semantic：公开与合法 seal 静态 requirement 方法值均通过。
+- [x] Semantic：非法访问、无目标、签名不匹配和歧义稳定拒绝。
+- [x] FCTS：不同闭合 `T` 形成的方法值分别进入各自 type/fit 静态实现。
+- [x] 共享泛型与跨包：provider/consumer 使用同一闭合 requirement 身份。
+- [x] 性能：记录形成、复制、调用和释放的实际成本，并确认没有未审批的增量开销。
+- [x] `.ft`：若扩展合法值域或兼容规则，先更新符号表规范并取得 Review。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录表示决策、实施问题和最终结果，标记 MV04 可独立交付。
 
 ### 4.5 MV05：intersection-form `spec` 参数/局部值的实例方法值
 
@@ -866,6 +866,288 @@ func bind<T: CombinedFactory>(): Creator {
 - **实施问题**：ISSUE-005、ISSUE-006、ISSUE-007、ISSUE-008 均已按先记录、后分析、
   再修复的流程解决并完成专项及全量验证；MV03 无未解决问题。
 - **建议 commit message**：`feat: support concrete static method values`
+
+### ISSUE-009：MV04 跨包恢复需要启用既有 `SPEC_STATIC_METHOD` 依赖 kind
+
+- **关联分项**：MV04
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  // provider
+  open spec Factory {
+    static func create(seed: int): string;
+  }
+
+  open spec Creator(seed: int): string;
+
+  open func bind<T: Factory>(): Creator {
+    return T.create;
+  }
+
+  // consumer
+  type LocalFactory: Factory {
+    static func create(seed: int): string {
+      return "local";
+    }
+  }
+
+  let creator: Creator = bind<LocalFactory>();
+  ```
+
+- **实际结果**：MV04 尚未写入产品实现。现有 AST/semantic 枚举已经包含
+  `FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD`，既有 `FT_SEC_CALLABLE_DEPS` 记录也已有
+  可承载来源 kind、requirement 符号、caller 视角 owner `T` 和目标 callable 类型的全部
+  字段；但 `.ft` reader 的合法 kind 集合明确拒绝 `SPEC_STATIC_METHOD`，import 恢复也只
+  重建 `SPEC_METHOD` 实例 requirement。因此一旦 Semantic 为公开共享泛型 `bind` 产出
+  MV04 依赖，provider 可以按现有记录布局写出该 kind，consumer 会在读取 `.ft` 时拒绝。
+- **期望结果**：provider/consumer 保留同一个静态 requirement 身份；consumer 为每个闭合
+  `T` 生成一个绑定该具体 descriptor/witness 槽的 immortal callable singleton，provider
+  共享体形成值时只读取既有 reified callable dependency 槽，不分配 closure、不做运行时
+  成员搜索或重载选择。
+- **根因**：`SPEC_STATIC_METHOD` 已作为编译器内部枚举存在，但从未进入 `.ft` callable
+  dependency 的完整读入和 import 重建路径；MV04 首次需要跨包传递这一类别。它不需要新增
+  二进制记录能力，却会把 reader 当前拒绝的 kind 变为合法输入，因此属于 `.ft` 合法值域/
+  兼容边界扩展，而不仅是同一编译中的 Codegen 补齐。
+- **通用修复方案（建议）**：保持 `FT_SEC_CALLABLE_DEPS` 布局、字段、枚举数值、section、
+  格式版本全部不变；让 reader 接受既有 `SPEC_STATIC_METHOD` 数值，并在统一 import 恢复分支
+  校验目标为 object-form spec 的静态方法 requirement，原样恢复 owner `T`、目标 callable
+  与 requirement 身份。Semantic、依赖收集和 Codegen 均按独立的 spec-static 类别消费，
+  不伪装为 type/fit static 或 spec instance method。
+- **备选方案及结论**：
+  1. 不启用该 kind：只能放弃公开共享泛型跨包场景，无法满足 MV04 的独立交付标准。
+  2. 在共享体运行时捕获当前 type descriptor：需要动态 closure 分配；违反无增量运行时
+     开销规则。
+  3. 把静态 callable 缓存加入 type/runtime descriptor：需要 ABI/runtime 变更；违反强制
+     规则。
+  因此不存在同时保持当前 `.ft` 合法值域、零新增运行时分配和完整跨包交付的通用方案。
+- **运行时性能影响**：建议方案不改变任何既有合法路径。MV04 新形成路径不分配、不查找、
+  不分支；共享体只读取一个既有 callable dependency 槽并取得其中的静态 singleton，调用
+  直接进入编译期固定的 witness 槽。
+- **runtime ABI / `.ft` / 兼容性影响**：runtime ABI、公开 ABI、`.ft` 记录布局、字段、枚举
+  数值和格式版本均不变；但 `.ft` callable dependency 的合法 kind 集合会新增接受既有
+  `SPEC_STATIC_METHOD`。新编译器继续读取旧产物；旧编译器不能读取实际含该 MV04 依赖的
+  新产物，未使用 MV04 的产物不受影响。
+- **人工决策**：已批准启用既有 `SPEC_STATIC_METHOD` callable dependency kind。批准范围
+  仅包括上述合法值域/兼容边界扩展；不得修改 `.ft` 布局、字段、枚举数值、格式版本、
+  runtime ABI 或公开 ABI，也不得为 MV04 增加运行时分配、查找或分支。
+- **专项验证结果**：Symbol `.ft` 往返与 provider/consumer FCTS 均通过；恢复后的依赖保留
+  `SPEC_STATIC_METHOD`、原 requirement、owner `T` 和目标 callable 身份。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV04 独立交付记录。
+
+### ISSUE-010：MV04 闭合时不能把子约束实参直接解释为 requirement 声明实参
+
+- **关联分项**：MV04
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec Factory<T> {
+    static func create(value: T): T;
+  }
+
+  spec MappedFactory<Unused, Value>: Factory<Value> {}
+  spec IntCreator(value: int): int;
+
+  func bind<T: MappedFactory<string, int>>(): IntCreator {
+    return T.create;
+  }
+  ```
+
+- **实际结果**：Semantic 能按既有父成员闭包选择 `Factory<int>.create`，但 MV04 初版
+  Codegen 闭合辅助函数以 requirement 原声明 `Factory<T>` 为目标，直接读取完整约束
+  `MappedFactory<string, int>` 的顶层实参；两者泛型形状不同，因而无法取得已注册 witness
+  surface。
+- **期望结果**：闭合阶段先解析 `T` 声明的完整约束实例
+  `MappedFactory<string, int>`，再从该约束已经
+  注册的继承成员面按 Semantic 提供的 requirement 原声明身份取得静态槽；不得重新按名称
+  选择成员。
+- **根因**：闭合辅助函数混淆了“泛型参数持有的完整约束 surface”和“选中 requirement
+  的原声明 spec”。前者决定 descriptor 中 witness 的实际结构，后者只决定稳定成员身份。
+- **通用修复方案**：对代入后的完整约束类型引用复用通用类型解析，取得其 `UserSpec`；
+  继续使用 `cg_user_spec_member_by_decl` 在该 surface 中定位已注册的原 requirement。实例与
+  静态受约束方法值共用这一辅助函数，不新增父 spec 或方法名特判。
+- **运行时性能影响**：仅调整编译期闭合和生成选择；生成代码不增加分配、查找、分支或
+  调用层。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：不需要；修复复用既有完整约束解析和稳定成员身份，未触及强制
+  停止边界。
+- **专项验证结果**：Semantic、Codegen 与本地/跨包 FCTS 的映射父约束场景均通过；闭合后
+  使用完整 `MappedFactory<string, int>` witness surface 和原 `Factory<int>.create` 身份。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV04 独立交付记录。
+
+### ISSUE-011：静态 spec requirement 的 builtin fit 实现在闭合 descriptor 时缺失
+
+- **关联分项**：MV04；可能同时影响既有静态 requirement 直接调用
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec Factory {
+    static func create(seed: int): int;
+  }
+
+  fit int: Factory {
+    static func create(seed: int): int {
+      return seed + 1;
+    }
+  }
+
+  spec Creator(seed: int): int;
+
+  func bind<T: Factory>(): Creator {
+    return T.create;
+  }
+
+  let creator = bind<int>();
+  ```
+
+- **实际结果**：Semantic 接受该 fit 与方法值；FCTS consumer 闭合 `bind<int>()` 时 Codegen
+  报 `CE0319: missing implementation for spec member 'create'`。独立探针把方法值改成
+  `direct<T: Factory>(seed) { return T.create(seed); }` 后，`direct<int>(1)` 得到同一
+  `CE0319`，确认问题早于 MV04，属于既有直接调用 descriptor/witness 基线缺口。用户 type
+  的可见 fit 静态实现走另一条既有 witness 路径，不受该缺口影响。
+- **期望结果**：builtin fit 既然已被 Semantic 接受为静态 spec requirement 的实现，直接
+  调用和方法值应复用同一个已闭合 witness；static requirement 的 witness ABI 不含 subject。
+- **根因**：`compute_spec_witness_if_absent` 为 builtin/array 等非 type subject 收集 fit 方法
+  时，把 `require_static` 固定传为 `false`，导致静态实现没有写入 semantic witness；即使补齐
+  该选择，现有 non-type witness Codegen 仍按实例方法固定生成 `_subject` 并向 fit wrapper
+  传 self，尚未实现静态 requirement 已有的无 subject ABI。
+- **通用修复方案**：在独立 bugfix 中让 non-type witness 收集按 `sm->is_static` 选择候选，
+  并把 subject-independent 静态 witness thunk 抽取为 type/user-fit/builtin-fit 可复用路径；
+  静态槽直接调用已经注册的 fit 静态 wrapper，不在 MV04 callable 形成处搜索 fit 或伪造
+  witness。实例槽维持现状。
+- **运行时性能影响**：不会增加任何现有合法路径的运行时开销；新合法静态路径与 type
+  静态 requirement 一样使用编译期固定 witness 槽和直接 wrapper 调用，不分配、不查找。
+- **runtime ABI / `.ft` / 兼容性影响**：无；复用既有 static requirement witness ABI、fit
+  wrapper ABI 和 descriptor 布局。
+- **人工决策**：已批准本次一并修复该既有直接调用 Bug。修复必须位于通用 semantic
+  witness / Codegen static thunk 路径；不得以 callable 专用特判绕过，不得修改 ABI 或增加
+  运行时分配、查找和分支。
+- **专项验证结果**：独立 Semantic 与 Codegen 用例验证 builtin fit 的直接调用和 MV04
+  方法值共用 receiver-free 静态 witness；完整 FCTS 为 840/840。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV04 独立交付记录。
+
+### ISSUE-012：受约束泛型闭合遗漏数组类型实参的 structured subject key
+
+- **关联分项**：MV04 的数组 subject 补充验证；属于既有受约束泛型闭合缺口。
+- **状态**：已解决。
+- **最小复现**：
+
+  ```feng
+  spec Factory {
+    static func create(seed: int): int;
+  }
+
+  spec Creator(seed: int): int;
+
+  fit int[]: Factory {
+    static func create(seed: int): int { return seed + 1; }
+  }
+
+  func bind<T: Factory>(): Creator {
+    return T.create;
+  }
+
+  let creator = bind<int[]>();
+  ```
+
+- **实际结果**：Semantic 已接受 `int[]` 满足 `Factory`，但 Codegen 初始在闭合受约束泛型
+  实参时报告 `CE0294: constrained generic type argument currently requires ... concrete builtin
+  type`。补齐 Codegen structured key 后，路径继续前进并报告 `CE0329: missing semantic witness
+  for constrained array type argument`，确认 Semantic 的闭合 witness 物化也遗漏了数组 subject。
+- **期望结果**：数组是普通合法类型实参；受 object-form spec 约束时，应以既有
+  `FENG_SEMANTIC_SUBJECT_KEY_ARRAY` 查找并生成 witness，然后继续复用现有数组 type descriptor。
+- **根因**：第一层，`cg_generic_descriptor_expr` 的约束 witness 选择已分别覆盖 user type、
+  enum、spec value 和 canonical builtin，却把其余类型统一交给
+  `cg_builtin_canonical_name_for_kind`。数组本来具有独立 structured subject key，不能转换为
+  canonical builtin 名称，因而在后续已经支持数组 descriptor 的分支之前被 `CE0294` 提前拒绝。
+  第二层，闭合泛型调用的 Semantic witness demand 尚未把数组类型实参转换为同一 structured
+  subject key，所以 Analysis 中不存在可供 Codegen 消费的 `(int[], Factory)` witness。
+- **通用修复方案**：在约束 witness 选择层把 `CG_TYPE_ARRAY` 转回完整数组 type ref，通过
+  `feng_semantic_subject_key_init_array_from_type_ref` 构造既有 structured key，再调用统一的
+  `cg_ensure_witness_instance`；不得按元素类型、fit 名称或本用例特判。数组 descriptor、witness
+  ABI 和 non-type thunk 均继续复用现有实现。
+- **运行时性能影响**：不改变任何既有合法路径；新合法数组闭合路径只生成并传递既有静态
+  descriptor/witness 地址，不增加运行时分配、查找、分支或调用层。
+- **runtime ABI / `.ft` / 兼容性影响**：无；不修改结构、字段、枚举、格式或版本。
+- **人工决策**：已批准本次一并修复；修复必须位于受约束泛型 descriptor 的统一 array
+  subject-key 路径，不得为 MV04 callable、具体元素类型或测试声明增加特判。
+- **专项验证结果**：独立 Semantic 与 Codegen 用例确认数组 structured subject key、witness
+  物化、直接调用和 MV04 方法值均通过；完整 FCTS 为 840/840。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV04 独立交付记录。
+
+### ISSUE-013：MV04 固定聚合返回值的新增 Codegen 断言错误
+
+- **关联分项**：MV04 聚合返回值专项验证。
+- **状态**：已解决。
+- **最小复现**：运行新增的 `test_constrained_generic_spec_static_method_value_codegen`。
+- **实际结果**：Semantic 与生成阶段成功；测试未在生成 C 中找到预期的
+  `_witness->pair(_out)` 调用文本。
+- **期望结果**：静态 callable adapter 应遵循既有声明槽 ABI 调用 requirement witness，不引入
+  subject、分配或额外运行时分派。
+- **根因**：新增断言把“聚合返回”误等同于 address ABI。既有
+  `cg_callable_decl_slot_abi_kind` 只让开放的泛型依赖声明槽使用 address ABI；`Pair` 是不含类型
+  参数的固定 nominal type，正确形式是按值 `return _witness->pair();`。
+- **通用修复方案**：保持产品实现不变，把本次新增测试的错误文本断言改为固定类型的既有直接
+  返回形式；生成 C 编译验证继续负责 ABI 一致性。
+- **运行时性能影响**：无产品变更，无增量运行时开销。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **人工决策**：不需要；仅修正本次新增且尚未交付的错误测试断言，不修改任何既有用例。
+- **专项验证结果**：修正后的 Codegen 专项与生成 C 严格编译通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### ISSUE-014：MV04 泛型父 requirement 的新增 Codegen 断言错误
+
+- **关联分项**：MV04 映射父约束专项验证。
+- **状态**：已解决。
+- **最小复现**：运行新增的 `test_constrained_generic_spec_static_method_value_codegen`。
+- **实际结果**：生成阶段成功；测试未在生成 C 中找到预期的 `_witness->map(_arg0)` 文本。
+- **期望结果**：从 `MappedFactory<string, i32>` 继承的 `GenericFactory<i32>.map` 应通过已闭合的
+  requirement witness 路径调用，无 subject、运行时查找或额外分派。
+- **根因**：新增断言误把闭合后的 callable 参数 ABI 当成 requirement 声明槽 ABI。
+  `MappedFactory<Unused, Value>` 的 `map` 槽依赖泛型参数，既有 witness ABI 必须保持 address
+  形式；闭合为 `i32` 后，adapter 正确生成
+  `_witness->map((const void *)&_arg0, &_result)` 并返回 `_result`。
+- **通用修复方案**：保持产品实现和 witness 布局不变，把本次新增测试改为验证既有 direct-to-address
+  ABI bridge 及其结果返回。
+- **运行时性能影响**：无产品变更，无增量运行时开销。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **人工决策**：不需要；仅修正本次新增且尚未交付的错误测试断言，不修改任何既有用例。
+- **专项验证结果**：修正后的 Codegen direct-to-address bridge 探针与生成 C 严格编译通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
+
+### MV04 独立交付记录
+
+- **变更范围**：补齐 `T: ObjectSpec` 类型参数静态方法值的函数、spec、泛型、可见性、诊断
+  和符号表规范，以及 Semantic、共享泛型依赖、跨包恢复与 Codegen；没有扩大实例/静态成员
+  访问边界，也没有改变实例访问静态成员或类型访问实例成员的既有禁止规则。
+- **实现结果**：Semantic 复用静态直接调用的约束闭包、父 spec 投影、访问过滤、闭合签名和
+  requirement 身份，并把 caller 视角 owner 保持为 `T`。闭合点从具体 type descriptor 取得
+  既有 witness 槽，生成 receiver-free immortal callable singleton；共享泛型体只读取既有
+  reified callable dependency 槽，不按名称重选成员。
+- **一并修复**：经人工批准，ISSUE-011 让 builtin/array 等 non-type subject 的静态 fit
+  requirement 复用统一 receiver-free witness thunk；ISSUE-012 让数组类型实参通过既有
+  structured subject key 完成 Semantic witness 物化和 Codegen descriptor 闭合。
+- **运行时成本**：此前所有合法路径没有新增运行时指令、分支、分配或查找。新支持路径的
+  callable 在编译期静态生成，形成时只取得 singleton 地址；不捕获 receiver/subject、
+  不分配或释放动态 closure，调用直接进入编译期固定的 witness 槽。
+- **ABI 与格式**：没有修改 runtime/private/public ABI、结构布局、字段、枚举数值、`.ft`
+  记录尺寸或格式版本。ISSUE-009 按人工批准仅让 reader/import 接受并恢复既有枚举值
+  `SPEC_STATIC_METHOD`；旧 reader 仍可读取未使用该依赖的新产物，但可拒绝实际包含该依赖的
+  新产物。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen`、`build/bin/test_symbol`
+  均通过；覆盖公开/seal requirement、非法访问、目标缺失、签名不匹配、父约束映射、固定与
+  泛型依赖 ABI、type/fit/builtin-fit/array subject、`.ft` 往返及生成 C 严格编译。
+- **FCTS**：覆盖保存、传参、返回、显式转换、直接调用、本地 type/builtin fit/array fit、
+  friend seal、含托管叶子的聚合返回，以及 provider shared body 闭合 consumer type 与映射
+  父 requirement；最终结果为 `840 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过；UBSan 与普通 `-O2 -Werror` 两阶段均完成，
+  两轮 91/91 smoke、两轮 FCTS 840/840，以及 CLI、stdlib、性能约束、增量构建、发布脚本、
+  bundled packages 和 toolchain 测试全部通过。
+- **实施问题**：ISSUE-009 至 ISSUE-014 均已按先记录、后分析、再修复的流程解决；MV04 无
+  未解决问题。
+- **建议 commit message**：`feat: support constrained spec static method values`
 
 ### ISSUE-待编号：待填写
 

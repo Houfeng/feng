@@ -14559,18 +14559,21 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     return result;
 }
 
-/* Resolve one target-typed instance method value from an object-form spec
- * receiver. The traversal mirrors spec instance-call resolution: child-first
- * closure order, declaring-spec projection, seal filtering and exact
- * instantiated signatures. Equivalent inherited requirements are already one
- * logical slot, so the first matching declaration remains authoritative. */
+/* Resolve one target-typed method value from an object-form spec surface.
+ * The traversal mirrors direct spec-call resolution: child-first closure
+ * order, declaring-spec projection, seal filtering and exact instantiated
+ * signatures. `require_static` selects either the receiver-bound instance
+ * surface or the receiver-free type-parameter static surface. Equivalent
+ * inherited requirements are one logical slot, so the first match remains
+ * authoritative. */
 static CallableValueResolution resolve_accessible_spec_method_value_overload(
     ResolveContext *context,
     const FengDecl *spec_decl,
     InferredExprType owner_type,
     FengSlice name,
     const FengTypeRef *expected_type_ref,
-    const FengDecl *function_type_decl) {
+    const FengDecl *function_type_decl,
+    bool require_static) {
     const FengDecl **closure = NULL;
     size_t closure_count = 0U;
     size_t closure_capacity = 0U;
@@ -14616,7 +14619,7 @@ static CallableValueResolution resolve_accessible_spec_method_value_overload(
                 current->as.spec_decl.as.object.members[member_index];
 
             if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
-                member->is_static ||
+                member->is_static != require_static ||
                 !slice_equals(member->as.callable.name, name) ||
                 !spec_member_is_accessible_from(context,
                                                 spec_decl,
@@ -19887,6 +19890,26 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                         NULL,
                         0U);
                 }
+                if (static_target.is_generic_type_param &&
+                    static_target.constraint_spec_decl != NULL &&
+                    static_target.constraint_spec_decl->as.spec_decl.form ==
+                        FENG_SPEC_FORM_OBJECT) {
+                    InferredExprType constraint_owner =
+                        static_target.constraint_spec_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  static_target.constraint_spec_type_ref)
+                            : inferred_expr_type_from_decl(
+                                  static_target.constraint_spec_decl);
+
+                    return resolve_accessible_spec_method_value_overload(
+                        context,
+                        static_target.constraint_spec_decl,
+                        constraint_owner,
+                        expr->as.member.member,
+                        expected_type_ref,
+                        function_type_decl,
+                        true);
+                }
             }
 
             {
@@ -19922,7 +19945,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                         owner_type,
                         expr->as.member.member,
                         expected_type_ref,
-                        function_type_decl);
+                        function_type_decl,
+                        false);
                 } else if (owner_type_decl == NULL &&
                            resolve_generic_param_spec_constraint(
                                context,
@@ -19938,7 +19962,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                             generic_constraint_ref),
                         expr->as.member.member,
                         expected_type_ref,
-                        function_type_decl);
+                        function_type_decl,
+                        false);
                     if (result.kind ==
                         FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
                         /* Keep the complete constraint surface alongside the
@@ -20844,6 +20869,29 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
                                owner_type,
                                expr->as.member.member) != NULL;
                 }
+                if (static_target.is_generic_type_param &&
+                    static_target.constraint_spec_decl != NULL &&
+                    static_target.constraint_spec_decl->as.spec_decl.form ==
+                        FENG_SPEC_FORM_OBJECT) {
+                    InferredExprType constraint_owner =
+                        static_target.constraint_spec_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  static_target.constraint_spec_type_ref)
+                            : inferred_expr_type_from_decl(
+                                  static_target.constraint_spec_decl);
+                    const FengTypeMember *member =
+                        find_accessible_spec_object_member(
+                            context,
+                            static_target.constraint_spec_decl,
+                            constraint_owner,
+                            expr->as.member.member,
+                            /*include_static=*/true,
+                            NULL);
+
+                    return member != NULL &&
+                           member->kind == FENG_TYPE_MEMBER_METHOD &&
+                           member->is_static;
+                }
             }
 
             {
@@ -21345,6 +21393,48 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
     return result;
 }
 
+/* Materialize one object-spec witness for a subject without a declaration
+ * identity. Builtins and arrays both enter through their authoritative
+ * semantic subject key; exact generic spec instances additionally retain the
+ * supplied spec type reference during satisfaction checking. */
+static void materialize_non_decl_object_spec_witness_if_satisfied(
+    ResolveContext *context,
+    InferredExprType actual_type,
+    const FengTypeRef *actual_type_ref,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    FengToken err_token) {
+    FengSemanticSubjectKey subject_key;
+    bool satisfies;
+
+    if (context == NULL || actual_type_ref == NULL || spec_decl == NULL ||
+        spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+        !init_spec_witness_subject_key(NULL,
+                                       actual_type_ref,
+                                       context->pointer_size,
+                                       &subject_key)) {
+        return;
+    }
+    satisfies = spec_type_ref != NULL
+        ? type_ref_satisfies_spec_type_ref(context,
+                                           actual_type_ref,
+                                           spec_type_ref)
+        : subject_key_satisfies_spec_decl(context,
+                                          &subject_key,
+                                          spec_decl);
+    if (!satisfies) {
+        return;
+    }
+    compute_spec_witness_if_absent(context,
+                                   NULL,
+                                   actual_type,
+                                   actual_type_ref,
+                                   spec_decl,
+                                   spec_type_ref,
+                                   err_token);
+}
+
 /* 9.9: recursively traverse intersection-form constraint members with type-arg
  * substitution, materialising a per-member witness for each leaf object-form
  * member spec. For generic intersection constraints (e.g. ` Comparable<T>:
@@ -21423,27 +21513,14 @@ static void materialize_intersection_constraint_member_witnesses(
                                                    substituted_member_ref,
                                                    err_token);
                 }
-            } else if (actual_type_ref != NULL &&
-                       actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
-                       actual_type_ref->as.named.segment_count == 1U &&
-                       is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
-                const char *builtin_name =
-                    canonical_builtin_type_name(actual_type_ref->as.named.segments[0],
-                                                context->pointer_size);
-                if (builtin_name != NULL) {
-                    FengSemanticSubjectKey subject_key =
-                        feng_semantic_subject_key_for_builtin(builtin_name);
-                    if (subject_key_satisfies_spec_decl(context, &subject_key,
-                                                        member_decl)) {
-                        compute_spec_witness_if_absent(context,
-                                                       NULL,
-                                                       actual_type,
-                                                       actual_type_ref,
-                                                       member_decl,
-                                                       substituted_member_ref,
-                                                       err_token);
-                    }
-                }
+            } else {
+                materialize_non_decl_object_spec_witness_if_satisfied(
+                    context,
+                    actual_type,
+                    actual_type_ref,
+                    member_decl,
+                    substituted_member_ref,
+                    err_token);
             }
         }
         (void)tracked;
@@ -21534,27 +21611,14 @@ static void materialize_object_spec_constraint_witness_if_applicable(
                                                member_decl,
                                                NULL,
                                                err_token);
-            } else if (actual_type_ref != NULL &&
-                       actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
-                       actual_type_ref->as.named.segment_count == 1U &&
-                       is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
-                const char *builtin_name =
-                    canonical_builtin_type_name(actual_type_ref->as.named.segments[0],
-                                                context->pointer_size);
-                if (builtin_name != NULL) {
-                    FengSemanticSubjectKey subject_key =
-                        feng_semantic_subject_key_for_builtin(builtin_name);
-                    if (subject_key_satisfies_spec_decl(context, &subject_key,
-                                                        member_decl)) {
-                        compute_spec_witness_if_absent(context,
-                                                       NULL,
-                                                       inferred_expr_type_from_type_ref(actual_type_ref),
-                                                       actual_type_ref,
-                                                       member_decl,
-                                                       NULL,
-                                                       err_token);
-                    }
-                }
+            } else {
+                materialize_non_decl_object_spec_witness_if_satisfied(
+                    context,
+                    inferred_expr_type_from_type_ref(actual_type_ref),
+                    actual_type_ref,
+                    member_decl,
+                    NULL,
+                    err_token);
             }
         }
         return;
@@ -21581,27 +21645,13 @@ static void materialize_object_spec_constraint_witness_if_applicable(
         return;
     }
 
-    if (actual_type_ref != NULL &&
-        actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
-        actual_type_ref->as.named.segment_count == 1U &&
-        is_builtin_type_name(actual_type_ref->as.named.segments[0])) {
-        const char *builtin_name =
-            canonical_builtin_type_name(actual_type_ref->as.named.segments[0], context->pointer_size);
-        if (builtin_name != NULL) {
-            FengSemanticSubjectKey subject_key =
-                feng_semantic_subject_key_for_builtin(builtin_name);
-            if (subject_key_satisfies_spec_decl(context, &subject_key,
-                                                constraint_decl)) {
-                compute_spec_witness_if_absent(context,
-                                               NULL,
-                                               inferred_expr_type_from_type_ref(actual_type_ref),
-                                               actual_type_ref,
-                                               constraint_decl,
-                                               instantiated_constraint,
-                                               err_token);
-            }
-        }
-    }
+    materialize_non_decl_object_spec_witness_if_satisfied(
+        context,
+        inferred_expr_type_from_type_ref(actual_type_ref),
+        actual_type_ref,
+        constraint_decl,
+        instantiated_constraint,
+        err_token);
 }
 
 static void materialize_named_type_param_constraint_witnesses(
@@ -21821,26 +21871,52 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
     if (source == FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE &&
         source_expr != NULL && source_expr->kind == FENG_EXPR_MEMBER &&
         source_expr->as.member.object != NULL) {
-        InferredExprType receiver_type;
+        InferredExprType receiver_type = inferred_expr_type_unknown();
 
         if (resolution.callable_member != NULL &&
             resolution.callable_member->is_static) {
             ResolvedTypeTarget static_target = resolve_type_target_expr(
                 context, source_expr->as.member.object, false);
 
-            receiver_type = resolved_type_target_owner_type(&static_target);
+            if (static_target.is_generic_type_param &&
+                source_expr->as.member.object->kind ==
+                    FENG_EXPR_IDENTIFIER) {
+                FengSlice *segments =
+                    (FengSlice *)malloc(sizeof(*segments));
+
+                if (segments != NULL) {
+                    segments[0] =
+                        source_expr->as.member.object->as.identifier;
+                    synthetic_receiver_type_ref =
+                        create_named_type_ref_for_inference(
+                            source_expr->as.member.object->token,
+                            segments,
+                            1U);
+                    if (synthetic_receiver_type_ref == NULL) {
+                        free(segments);
+                    } else {
+                        receiver_type_ref = synthetic_receiver_type_ref;
+                    }
+                }
+            } else {
+                receiver_type =
+                    resolved_type_target_owner_type(&static_target);
+            }
         } else {
             receiver_type =
                 infer_expr_type(context, source_expr->as.member.object);
         }
 
-        if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        if (receiver_type_ref == NULL &&
+            receiver_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
             receiver_type_ref = receiver_type.type_ref;
-        } else if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
+        } else if (receiver_type_ref == NULL &&
+                   receiver_type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN) {
             synthetic_receiver_type_ref =
                 create_type_ref_from_inferred_type(&receiver_type, expr->token);
             receiver_type_ref = synthetic_receiver_type_ref;
-        } else if (receiver_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
+        } else if (receiver_type_ref == NULL &&
+                   receiver_type.kind == FENG_INFERRED_EXPR_TYPE_DECL &&
                    receiver_type.type_decl != NULL &&
                    receiver_type.type_decl->kind == FENG_DECL_TYPE) {
             const FengDecl *receiver_decl = receiver_type.type_decl;
@@ -22498,7 +22574,21 @@ static bool record_selected_friend_callable_value_access(
         ResolvedTypeTarget static_target = resolve_type_target_expr(
             context, source_expr->as.member.object, false);
 
-        owner_type = resolved_type_target_owner_type(&static_target);
+        if (static_target.is_generic_type_param &&
+            static_target.constraint_spec_type_ref != NULL) {
+            const FengTypeRef *declaring_instance =
+                constraint_member_declaring_spec_instance(
+                    context,
+                    &static_target,
+                    resolution->callable_owner_type_decl);
+
+            owner_type = inferred_expr_type_from_type_ref(
+                declaring_instance != NULL
+                    ? declaring_instance
+                    : static_target.constraint_spec_type_ref);
+        } else {
+            owner_type = resolved_type_target_owner_type(&static_target);
+        }
     } else {
         owner_type = infer_expr_type(context,
                                      source_expr->as.member.object);
@@ -29964,7 +30054,7 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
                         source_type,
                         name,
                         true,
-                        false,
+                        sm->is_static,
                         witness_fit_collect_visitor,
                         &fit_st);
                 }

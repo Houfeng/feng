@@ -1,0 +1,214 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_spec_static_method_value;
+
+/** Local static factory contract used by MV04 behavior coverage. */
+spec LocalSpecStaticFactory {
+  /** Create one observable integer through the concrete type witness. */
+  static func create(seed: int): int;
+}
+
+/** Local callable target for one static factory method value. */
+spec LocalSpecStaticCreator(seed: int): int;
+
+/** First local static factory implementation. */
+type LocalSpecStaticFirst: LocalSpecStaticFactory {
+  /** Return the first implementation's distinct result. */
+  static func create(seed: int): int {
+    return seed + 1;
+  }
+}
+
+/** Second local static factory implementation. */
+type LocalSpecStaticSecond: LocalSpecStaticFactory {
+  /** Return the second implementation's distinct result. */
+  static func create(seed: int): int {
+    return seed + 2;
+  }
+}
+
+/** Builtin fit proving MV04 dispatch is not restricted to type-owned fits. */
+fit int: LocalSpecStaticFactory {
+  /** Return the fit implementation's distinct result. */
+  static func create(seed: int): int {
+    return seed + 3;
+  }
+}
+
+/** Concrete array fit covering the structured non-type witness path. */
+fit int[]: LocalSpecStaticFactory {
+  /** Return the array fit implementation's distinct result. */
+  static func create(seed: int): int {
+    return seed + 5;
+  }
+}
+
+/** Form a local constrained static method value in return position. */
+func bindLocalSpecStaticCreator<T: LocalSpecStaticFactory>():
+  LocalSpecStaticCreator {
+  return T.create;
+}
+
+/** Invoke one static method value supplied in parameter position. */
+func applyLocalSpecStaticCreator(
+  creator: LocalSpecStaticCreator,
+  seed: int
+): int {
+  return creator(seed);
+}
+
+/** Form a constrained static method value directly in parameter position. */
+func applyLocalSpecStaticFactory<T: LocalSpecStaticFactory>(seed: int): int {
+  return applyLocalSpecStaticCreator(T.create, seed);
+}
+
+/** Form a constrained static method value through an explicit conversion. */
+func castLocalSpecStaticCreator<T: LocalSpecStaticFactory>():
+  LocalSpecStaticCreator {
+  return (LocalSpecStaticCreator)T.create;
+}
+
+/** Preserve the pre-existing direct static requirement call path. */
+func callLocalSpecStaticFactory<T: LocalSpecStaticFactory>(seed: int): int {
+  return T.create(seed);
+}
+
+/** Friend-only contract used to verify formation-point authorization. */
+spec LocalSecretStaticFactory {
+  /** Create a value only when accessed from the designated reader. */
+  @friend(LocalSecretStaticReader)
+  seal static func create(seed: int): int;
+}
+
+/** Concrete implementation of the friend-only static contract. */
+type LocalSecretStaticValue: LocalSecretStaticFactory {
+  /** Return the authorized implementation's result. */
+  static func create(seed: int): int {
+    return seed + 4;
+  }
+}
+
+/** Designated friend allowed to form the seal static requirement value. */
+type LocalSecretStaticReader {
+  /** Form the friend-only constrained static method value. */
+  static func bind<T: LocalSecretStaticFactory>(): LocalSpecStaticCreator {
+    return T.create;
+  }
+}
+
+/** Descriptor-sized result used to verify aggregate return forwarding. */
+@value
+type LocalSpecStaticPair {
+  /** First managed payload. */
+  let first: string;
+
+  /** Second managed payload. */
+  let second: string;
+
+  /** Scalar payload identifying the implementation. */
+  let value: int;
+}
+
+/** Static contract returning a descriptor-sized value. */
+spec LocalSpecStaticPairFactory {
+  /** Create one descriptor-sized value through the static witness. */
+  static func create(): LocalSpecStaticPair;
+}
+
+/** Callable target returning a descriptor-sized value. */
+spec LocalSpecStaticPairCreator(): LocalSpecStaticPair;
+
+/** Concrete descriptor-sized static factory implementation. */
+type LocalSpecStaticPairValue: LocalSpecStaticPairFactory {
+  /** Return a complete aggregate with managed leaves. */
+  static func create(): LocalSpecStaticPair {
+    return LocalSpecStaticPair {
+      first: "static-first",
+      second: "static-second",
+      value: 5
+    };
+  }
+}
+
+/** Form an aggregate-returning constrained static method value. */
+func bindLocalSpecStaticPairCreator<T: LocalSpecStaticPairFactory>():
+  LocalSpecStaticPairCreator {
+  return T.create;
+}
+
+/** First consumer-owned implementation of the imported static contract. */
+type LibSpecStaticFirst: LibSpecStaticFactory {
+  /** Return the first cross-package implementation's result. */
+  static func create(seed: int): int {
+    return seed + 10;
+  }
+}
+
+/** Second consumer-owned implementation of the imported static contract. */
+type LibSpecStaticSecond: LibSpecStaticFactory {
+  /** Return the second cross-package implementation's result. */
+  static func create(seed: int): int {
+    return seed + 20;
+  }
+}
+
+/** Consumer-owned implementation of an imported inherited requirement. */
+type LibMappedStaticValue: LibMappedStaticFactory<string, int> {
+  /** Return the mapped parent requirement's distinct result. */
+  static func map(value: int): int {
+    return value + 30;
+  }
+}
+
+/** Execute local and cross-package constrained static method values. */
+open func test_spec_static_method_value(): void {
+  describe("constrained spec static method values", () {
+    test("closed types and fits select their own static implementations", () {
+      let first = bindLocalSpecStaticCreator<LocalSpecStaticFirst>();
+      let second = bindLocalSpecStaticCreator<LocalSpecStaticSecond>();
+      let fitted = bindLocalSpecStaticCreator<int>();
+      let fittedArray = bindLocalSpecStaticCreator<int[]>();
+      assert(first(10) == 11 && second(10) == 12 && fitted(10) == 13 &&
+             fittedArray(10) == 15,
+             "each closed owner binds its own static witness slot");
+    });
+
+    test("all target positions and direct calls keep the same semantics", () {
+      let converted = castLocalSpecStaticCreator<LocalSpecStaticFirst>();
+      assert(applyLocalSpecStaticFactory<LocalSpecStaticSecond>(20) == 22,
+             "parameter target forms the constrained static method value");
+      assert(converted(20) == 21,
+             "explicit callable conversion forms the same static value");
+      assert(callLocalSpecStaticFactory<LocalSpecStaticFirst>(20) == 21,
+             "direct constrained static calls remain unchanged");
+      assert(callLocalSpecStaticFactory<int>(20) == 23,
+             "builtin fits use the same receiver-free static witness");
+      assert(callLocalSpecStaticFactory<int[]>(20) == 25,
+             "array fits use the same receiver-free static witness");
+    });
+
+    test("friend access and aggregate returns preserve their full values", () {
+      let secret =
+        LocalSecretStaticReader.bind<LocalSecretStaticValue>();
+      let pairCreator =
+        bindLocalSpecStaticPairCreator<LocalSpecStaticPairValue>();
+      let pair = pairCreator();
+      assert(secret(10) == 14,
+             "friend context forms the seal static requirement value");
+      assert(pair.first == "static-first" &&
+             pair.second == "static-second" && pair.value == 5,
+             "aggregate static method value forwards every managed leaf");
+    });
+
+    test("provider shared bodies close consumer-owned implementations", () {
+      let first = bindLibSpecStaticCreator<LibSpecStaticFirst>();
+      let second = bindLibSpecStaticCreator<LibSpecStaticSecond>();
+      let mapped = bindLibMappedStaticCreator<LibMappedStaticValue>();
+      assert(first(10) == 20 && second(10) == 30,
+             "imported binder restores each consumer static witness");
+      assert(mapped(10) == 40,
+             "imported inherited requirement keeps its declaring identity");
+    });
+  });
+}
