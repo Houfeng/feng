@@ -20,6 +20,7 @@ func main(args: string[]) {
       test_enum();
       test_spec();
       test_spec_method_value();
+      test_intersection_spec_method_value();
       test_static_method_value();
       test_spec_static_method_value();
       test_intersection();

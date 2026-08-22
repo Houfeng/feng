@@ -357,6 +357,10 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 参数或局部值的实例方法引用在具有明确 callable-form
   `spec` 目标时可以形成方法值；编译器必须绑定形成点的 subject、当前 witness 视角与
   唯一 requirement，且不得因原 spec 绑定后续重新赋值而重绑定。
+- [必须] intersection-form `spec` 参数或局部值的实例方法引用在具有明确 callable-form
+  `spec` 目标时可以形成方法值；来源必须是该 intersection 已展平、去重的成员面中按
+  对应直接调用规则唯一选出的 requirement。形成点必须绑定当前 subject 与 merged witness，
+  并保留 requirement 的原声明 object-form `spec`。
 - [必须] object-form `spec` 约束下的泛型值实例方法引用必须复用该约束实例的成员闭包、
   访问过滤、签名替换和 requirement 槽；receiver 必须保持完整 `T` 值语义，不得先形成
   object-form `spec` 值。
@@ -429,6 +433,9 @@ type Stream: ReadWrite {}
 - 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union 直接成员类型标签与 `else`，拒绝字面量标签和区间标签；穷尽性检查只验证直接成员是否被覆盖。
 - 编译器必须在 intersection-form 使用位置检查源类型是否名义满足展平后的全部 object-form member,并使用合并 witness 支持成员访问与泛型约束。
 - 编译器必须合并 intersection-form 全部成员及其父 `spec` 闭包的方法集,对完全相同的签名去重,保留合法重载并诊断返回类型冲突。
+- 编译器必须让 intersection-form `spec` 实例方法值与对应直接调用共用上述合并成员集、
+  去重结果、原声明 requirement、访问过滤、签名替换和 merged witness 槽；不得为方法值
+  重新构造 object-form 视角或在代码生成阶段重新选择成员。
 - 编译器必须按 [Feng 语言 ABI 互操作规范](./feng-interop.md) 校验可调用形状的 `@abi spec` 的参数类型与返回类型是否满足 ABI 函数签名兼容规则。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
@@ -444,6 +451,9 @@ type Stream: ReadWrite {}
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
 - object-form `spec` 实例方法值调用只使用形成点保存的 subject、witness 视角与
   requirement 槽，不执行运行时成员搜索、签名比较、重载选择或接收者重绑定。
+- intersection-form `spec` 实例方法值调用只使用形成点保存的 subject、merged witness
+  视角与 requirement 槽，不拆分接收者，也不执行运行时成员搜索、签名比较、重载选择或
+  接收者重绑定。
 - 受 object-form `spec` 约束的泛型 receiver 所形成的方法值只保存按闭合 `T` 复制或保留
   的 receiver，并使用已闭合的 witness 槽；不得增加 spec box、第二个 receiver 分配或
   每次调用查找。

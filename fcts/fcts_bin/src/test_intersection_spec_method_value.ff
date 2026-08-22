@@ -1,0 +1,230 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_intersection_spec_method_value;
+
+/** Parent requirement reached through one intersection member. */
+spec IntersectionMethodBase {
+  func inherited(offset: int): int;
+}
+
+/** First direct component with one overloaded method name. */
+spec IntersectionMethodReadable: IntersectionMethodBase {
+  func read(offset: int): int;
+  func select(offset: int): int;
+}
+
+/** Second direct component with the other overload. */
+spec IntersectionMethodTraceable {
+  func trace(offset: int): int;
+  func select(label: string): string;
+}
+
+/** First intersection layer. */
+spec IntersectionMethodPair:
+  IntersectionMethodReadable & IntersectionMethodTraceable;
+
+/** Component added through a nested intersection. */
+spec IntersectionMethodExtra {
+  func extra(offset: int): int;
+}
+
+/** Complete nested receiver surface used by MV05. */
+spec IntersectionMethodNested:
+  IntersectionMethodPair & IntersectionMethodExtra;
+
+/** Integer callable target for the selected requirements. */
+spec IntersectionMethodMapper(offset: int): int;
+
+/** String callable target used to select the second overload. */
+spec IntersectionMethodStringMapper(label: string): string;
+
+/** First subject implementation used for dynamic dispatch and stable binding. */
+type IntersectionMethodValue:
+  IntersectionMethodReadable,
+  IntersectionMethodTraceable,
+  IntersectionMethodExtra {
+  let base: int;
+
+  func inherited(offset: int): int {
+    return self.base + offset + 1000;
+  }
+
+  func read(offset: int): int {
+    return self.base + offset;
+  }
+
+  func trace(offset: int): int {
+    return self.base - offset;
+  }
+
+  func extra(offset: int): int {
+    return self.base * 2 + offset;
+  }
+
+  func select(offset: int): int {
+    return self.base + offset + 100;
+  }
+
+  func select(label: string): string {
+    return label + ":value";
+  }
+}
+
+/** Second subject implementation used after reassigning the spec binding. */
+type IntersectionMethodOther:
+  IntersectionMethodReadable,
+  IntersectionMethodTraceable,
+  IntersectionMethodExtra {
+  let base: int;
+
+  func inherited(offset: int): int {
+    return self.base + offset + 2000;
+  }
+
+  func read(offset: int): int {
+    return self.base + offset;
+  }
+
+  func trace(offset: int): int {
+    return self.base - offset;
+  }
+
+  func extra(offset: int): int {
+    return self.base * 3 + offset;
+  }
+
+  func select(offset: int): int {
+    return self.base + offset + 200;
+  }
+
+  func select(label: string): string {
+    return label + ":other";
+  }
+}
+
+/** Counts receiver-expression evaluation before method-value binding. */
+type IntersectionMethodFactory {
+  var calls: int;
+
+  func make(base: int): IntersectionMethodNested {
+    self.calls += 1;
+    return IntersectionMethodValue { base: base };
+  }
+}
+
+/** Two components with one logically deduplicated requirement. */
+spec IntersectionMethodSameLeft {
+  func same(offset: int): int;
+}
+
+spec IntersectionMethodSameRight {
+  func same(offset: int): int;
+}
+
+spec IntersectionMethodSame:
+  IntersectionMethodSameLeft & IntersectionMethodSameRight;
+
+/** A single implementation satisfies both equivalent requirement slots. */
+type IntersectionMethodSameValue:
+  IntersectionMethodSameLeft, IntersectionMethodSameRight {
+  let base: int;
+
+  func same(offset: int): int {
+    return self.base + offset;
+  }
+}
+
+/** Accept a method value in parameter position. */
+func applyIntersectionMethod(
+  mapper: IntersectionMethodMapper,
+  offset: int
+): int {
+  return mapper(offset);
+}
+
+/** Return a method value whose intersection binding is local to this call. */
+func makeEscapedIntersectionMethod(
+  base: int
+): IntersectionMethodMapper {
+  let local: IntersectionMethodNested =
+    IntersectionMethodValue { base: base };
+  return local.read;
+}
+
+/** MV05 intersection-form spec method-value conformance coverage. */
+open func test_intersection_spec_method_value(): void {
+  describe("intersection-form spec method values", () {
+    test("selects direct parent nested and overloaded merged members", () {
+      let view: IntersectionMethodNested =
+        IntersectionMethodValue { base: 20 };
+      let read: IntersectionMethodMapper = view.read;
+      let inherited: IntersectionMethodMapper = view.inherited;
+      let trace: IntersectionMethodMapper = view.trace;
+      let extra = (IntersectionMethodMapper)view.extra;
+      let selectedInt: IntersectionMethodMapper = view.select;
+      let selectedString: IntersectionMethodStringMapper = view.select;
+
+      assert(read(2) == 22, "first direct member requirement");
+      assert(inherited(3) == 1023, "object parent requirement");
+      assert(trace(4) == 16, "second direct member requirement");
+      assert(extra(5) == 45, "nested intersection member requirement");
+      assert(selectedInt(6) == 126, "target selects integer overload");
+      assert(selectedString("picked") == "picked:value",
+             "target selects string overload");
+      assert(view.select(8) == 128,
+             "direct call selects integer merged overload slot");
+      assert(view.select("direct") == "direct:value",
+             "direct call selects string merged overload slot");
+      assert(applyIntersectionMethod(view.read, 7) == 27,
+             "parameter target uses merged witness");
+    });
+
+    test("evaluates once remains bound and escapes its local view", () {
+      let factory = IntersectionMethodFactory { calls: 0 };
+      let once: IntersectionMethodMapper = factory.make(30).read;
+      assert(factory.calls == 1, "receiver expression evaluated once");
+      assert(once(1) == 31, "single evaluation receiver stays bound");
+
+      var source: IntersectionMethodNested =
+        IntersectionMethodValue { base: 40 };
+      let stable: IntersectionMethodMapper = source.read;
+      source = IntersectionMethodOther { base: 400 };
+      assert(stable(2) == 42,
+             "formed callable retains the original subject and witness");
+      assert(source.read(2) == 402,
+             "reassigned binding uses the replacement merged witness");
+
+      let escaped = makeEscapedIntersectionMethod(50);
+      assert(escaped(3) == 53,
+             "escaped callable retains the intersection subject lifetime");
+    });
+
+    test("deduplicates equivalent requirements before formation", () {
+      let view: IntersectionMethodSame =
+        IntersectionMethodSameValue { base: 60 };
+      let same: IntersectionMethodMapper = view.same;
+      assert(same(4) == 64,
+             "equivalent member requirements form one callable source");
+    });
+
+    test("restores imported intersections in provider and consumer", () {
+      let imported = makeLibIntersectionMethodValue(700);
+      let consumerBound: LibIntersectionMethodMapper = imported.trace;
+      let providerBound = bindLibIntersectionMethodRead(imported);
+      let consumerOverload: LibIntersectionMethodStringMapper =
+        imported.select;
+      let providerOverload = bindLibIntersectionMethodString(imported);
+      assert(consumerBound(6) == 694,
+             "consumer forms from the imported merged witness");
+      assert(providerBound(7) == 707,
+             "provider returns an imported intersection method value");
+      assert(consumerOverload("consumer") == "consumer:lib",
+             "consumer selects the imported second overload slot");
+      assert(providerOverload("provider") == "provider:lib",
+             "provider selects the imported second overload slot");
+      assert(imported.select("direct") == "direct:lib",
+             "imported direct call uses the exact overload slot");
+    });
+  });
+}

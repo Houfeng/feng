@@ -7361,6 +7361,165 @@ static void test_object_spec_method_value_codegen_uses_bound_witness(void) {
     feng_program_free(program);
 }
 
+/* An intersection-form receiver reuses the object-spec method-value closure
+ * shape while binding its existing merged witness. Different member slots are
+ * selected at compile time and no component spec view is materialized. */
+static void test_intersection_spec_method_value_codegen_uses_merged_witness(void) {
+    const char *source =
+        "module feng.codegen.intersection_spec_method_value;\n"
+        "spec Readable<T> { func read(offset: T): T; }\n"
+        "spec Traceable { func trace(offset: int): int; }\n"
+        "spec Both<T>: Readable<T> & Traceable;\n"
+        "spec Mapper(value: int): int;\n"
+        "type Value: Readable<int>, Traceable {\n"
+        "  let base: int;\n"
+        "  func read(offset: int): int { return self.base + offset; }\n"
+        "  func trace(offset: int): int { return self.base - offset; }\n"
+        "}\n"
+        "func bindRead(value: Both<int>): Mapper { return value.read; }\n"
+        "func bindTrace(value: Both<int>): Mapper { return value.trace; }\n"
+        "func run(): int {\n"
+        "  let value: Both<int> = Value { base: 10 };\n"
+        "  let read = bindRead(value);\n"
+        "  let trace = bindTrace(value);\n"
+        "  return read(2) + trace(3);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "intersection_spec_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    /* One support closure is emitted for each selected merged slot. Each binds
+     * only the subject plus the already-built intersection witness. */
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(&FengSpecMethodValueBind__") == 2U);
+    ASSERT(count_substr(output.c_source,
+                        "feng_assign(&_o->_self, _receiver->subject)") == 2U);
+    ASSERT(count_substr(output.c_source,
+                        "_o->_witness = _receiver->witness") == 2U);
+    ASSERT(strstr(output.c_source,
+                  "_bound->_witness->read(_bound->_self, (const void *)&_arg0, &_result)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_bound->_witness->trace(_bound->_self, _arg0)") != NULL);
+    ASSERT(strstr(output.c_source, "__spec_box") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Legal same-name intersection overloads keep the historical first-name
+ * witness prefix and append one deterministic slot per distinct signature.
+ * Direct calls and method values both consume Semantic's exact declaration
+ * identity, while the merged constant aliases the original leaf witnesses. */
+static void test_intersection_spec_overload_codegen_preserves_exact_slots(void) {
+    const char *source =
+        "module feng.codegen.intersection_spec_overload;\n"
+        "spec Numeric {\n"
+        "  func select(value: int): int;\n"
+        "  func stable(): int;\n"
+        "}\n"
+        "spec Textual { func select(value: string): string; }\n"
+        "spec Both: Numeric & Textual;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec StringMapper(value: string): string;\n"
+        "type Value: Numeric, Textual {\n"
+        "  func select(value: int): int { return value + 1; }\n"
+        "  func select(value: string): string { return value; }\n"
+        "  func stable(): int { return 7; }\n"
+        "}\n"
+        "func bindInt(value: Both): IntMapper { return value.select; }\n"
+        "func bindString(value: Both): StringMapper { return value.select; }\n"
+        "func directString(value: Both): string {\n"
+        "  return value.select(\"direct\");\n"
+        "}\n"
+        "func run(): string {\n"
+        "  let value: Both = Value {};\n"
+        "  let selected = bindString(value);\n"
+        "  return selected(directString(value));\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "intersection_spec_overload_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *witness_start;
+    const char *witness_end;
+    const char *primary_slot;
+    const char *stable_slot;
+    const char *overload_slot;
+    const char *overload_init;
+    const char *overload_init_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    witness_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__intersection_spec_overload__Both {\n");
+    ASSERT(witness_start != NULL);
+    witness_end = strstr(witness_start, "};\n");
+    ASSERT(witness_end != NULL);
+    primary_slot = strstr(witness_start, "(*select)(");
+    stable_slot = strstr(witness_start, "(*stable)(");
+    overload_slot = strstr(witness_start,
+                           "(*select__feng_overload_2)(");
+    ASSERT(primary_slot != NULL && primary_slot < witness_end);
+    ASSERT(stable_slot != NULL && stable_slot < witness_end);
+    ASSERT(overload_slot != NULL && overload_slot < witness_end);
+    ASSERT(primary_slot < stable_slot && stable_slot < overload_slot);
+
+    overload_init = output.c_source;
+    do {
+        overload_init = strstr(overload_init,
+                               ".select__feng_overload_2 = ");
+        ASSERT(overload_init != NULL);
+        overload_init_end = strchr(overload_init, '\n');
+        ASSERT(overload_init_end != NULL);
+        if (span_contains(overload_init,
+                          overload_init_end,
+                          "__Textual.select")) {
+            break;
+        }
+        overload_init = overload_init_end;
+    } while (true);
+    ASSERT(span_contains(overload_init,
+                         overload_init_end,
+                         "__Textual.select"));
+    ASSERT(strstr(output.c_source,
+                  "_bound->_witness->select__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness->select__feng_overload_2(") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A shared T: ObjectSpec binder consumes one statically slotted closed
  * descriptor. Concrete reference, trivial and descriptor-sized receivers all
  * use one closure allocation, with no object-spec box or escaping stack
@@ -13385,6 +13544,8 @@ int main(void) {
     test_generic_callable_spec_coercion_codegen();
     test_callable_spec_method_coercion_codegen();
     test_object_spec_method_value_codegen_uses_bound_witness();
+    test_intersection_spec_method_value_codegen_uses_merged_witness();
+    test_intersection_spec_overload_codegen_preserves_exact_slots();
     test_constrained_generic_spec_method_value_codegen();
     test_constrained_generic_spec_static_method_value_codegen();
     test_builtin_fit_static_spec_witness_codegen();

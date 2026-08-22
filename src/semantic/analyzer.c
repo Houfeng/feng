@@ -281,6 +281,10 @@ typedef struct CallableValueResolution {
     const FengDecl *callable_decl;
     const FengTypeMember *callable_member;
     const FengDecl *callable_owner_type_decl;
+    /* Exact declaring-spec instance selected while traversing an object or
+     * intersection surface. This is compiler-only access context; the callable
+     * coercion sidecar separately preserves the complete receiver expression. */
+    const FengTypeRef *callable_owner_instance_type_ref;
     const FengDecl *callable_fit_decl;
     /* Explicit callable-local type arguments from `function<T>` or
      * `object.method<T>`. Borrowed from the source AST; NULL for ordinary
@@ -14559,13 +14563,142 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     return result;
 }
 
-/* Resolve one target-typed method value from an object-form spec surface.
- * The traversal mirrors direct spec-call resolution: child-first closure
- * order, declaring-spec projection, seal filtering and exact instantiated
- * signatures. `require_static` selects either the receiver-bound instance
- * surface or the receiver-free type-parameter static surface. Equivalent
- * inherited requirements are one logical slot, so the first match remains
- * authoritative. */
+/* Visit one exact spec instance while resolving a target-typed method value.
+ * Object parents and intersection members are both traversed through their
+ * substituted type-ref edges. Semantic validation has already deduplicated
+ * identical requirements, so the first exact target-signature match is the
+ * authoritative merged slot. */
+static void resolve_accessible_spec_method_value_surface(
+    ResolveContext *context,
+    const FengDecl *access_spec_decl,
+    InferredExprType access_owner_type,
+    const FengDecl *current_spec_decl,
+    const FengTypeRef *current_spec_type_ref,
+    InferredExprType current_owner_type,
+    FengSlice name,
+    const FengTypeRef *expected_type_ref,
+    const FengDecl *function_type_decl,
+    bool require_static,
+    CallableValueResolution *result) {
+    if (context == NULL || access_spec_decl == NULL ||
+        current_spec_decl == NULL || current_spec_decl->kind != FENG_DECL_SPEC ||
+        function_type_decl == NULL || result == NULL ||
+        result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+        return;
+    }
+
+    if (current_spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        for (size_t member_index = 0U;
+             member_index <
+                 current_spec_decl->as.spec_decl.as.intersection_form.member_count;
+             ++member_index) {
+            const FengTypeRef *member_type_ref =
+                substitute_spec_member_type_ref_for_instance(
+                    context,
+                    current_spec_decl,
+                    current_spec_type_ref,
+                    current_spec_decl->as.spec_decl.as.intersection_form
+                        .members[member_index]);
+            const FengDecl *member_decl =
+                resolve_type_ref_decl(context, member_type_ref);
+
+            if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
+                continue;
+            }
+            resolve_accessible_spec_method_value_surface(
+                context,
+                access_spec_decl,
+                access_owner_type,
+                member_decl,
+                member_type_ref,
+                inferred_expr_type_from_type_ref(member_type_ref),
+                name,
+                expected_type_ref,
+                function_type_decl,
+                require_static,
+                result);
+            if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+                return;
+            }
+        }
+        return;
+    }
+
+    if (current_spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return;
+    }
+    for (size_t member_index = 0U;
+         member_index < current_spec_decl->as.spec_decl.as.object.member_count;
+         ++member_index) {
+        const FengTypeMember *member =
+            current_spec_decl->as.spec_decl.as.object.members[member_index];
+
+        if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
+            member->is_static != require_static ||
+            !slice_equals(member->as.callable.name, name) ||
+            !spec_member_is_accessible_from(context,
+                                            access_spec_decl,
+                                            current_spec_decl,
+                                            access_owner_type,
+                                            member) ||
+            !function_type_decl_matches_owner_callable_signature(
+                context,
+                expected_type_ref,
+                function_type_decl,
+                &member->as.callable,
+                current_spec_decl,
+                NULL,
+                current_owner_type)) {
+            continue;
+        }
+
+        result->kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+        result->callable = &member->as.callable;
+        result->callable_member = member;
+        result->callable_owner_type_decl = current_spec_decl;
+        result->callable_owner_instance_type_ref = current_spec_type_ref;
+        return;
+    }
+
+    for (size_t parent_index = 0U;
+         parent_index < current_spec_decl->as.spec_decl.parent_spec_count;
+         ++parent_index) {
+        const FengTypeRef *parent_type_ref =
+            substitute_spec_member_type_ref_for_instance(
+                context,
+                current_spec_decl,
+                current_spec_type_ref,
+                current_spec_decl->as.spec_decl.parent_specs[parent_index]);
+        const FengDecl *parent_decl =
+            resolve_type_ref_decl(context, parent_type_ref);
+
+        if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC) {
+            continue;
+        }
+        resolve_accessible_spec_method_value_surface(
+            context,
+            access_spec_decl,
+            access_owner_type,
+            parent_decl,
+            parent_type_ref,
+            inferred_expr_type_from_type_ref(parent_type_ref),
+            name,
+            expected_type_ref,
+            function_type_decl,
+            require_static,
+            result);
+        if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+            return;
+        }
+    }
+}
+
+/* Resolve one target-typed method value from an object-form or
+ * intersection-form spec surface. The traversal mirrors direct spec calls:
+ * child/member-first projection, original requirement identity, seal filtering
+ * and exact instantiated signatures. `require_static` selects either the
+ * receiver-bound instance surface or the receiver-free constrained static
+ * surface. */
 static CallableValueResolution resolve_accessible_spec_method_value_overload(
     ResolveContext *context,
     const FengDecl *spec_decl,
@@ -14574,84 +14707,29 @@ static CallableValueResolution resolve_accessible_spec_method_value_overload(
     const FengTypeRef *expected_type_ref,
     const FengDecl *function_type_decl,
     bool require_static) {
-    const FengDecl **closure = NULL;
-    size_t closure_count = 0U;
-    size_t closure_capacity = 0U;
     CallableValueResolution result;
 
     memset(&result, 0, sizeof(result));
     if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
-        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-        function_type_decl == NULL ||
-        !spec_collect_closure(context,
-                              spec_decl,
-                              &closure,
-                              &closure_count,
-                              &closure_capacity)) {
-        free(closure);
+        (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         spec_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) ||
+        function_type_decl == NULL) {
         return result;
     }
-
-    for (size_t closure_index = 0U;
-         closure_index < closure_count;
-         ++closure_index) {
-        const FengDecl *current = closure[closure_index];
-        InferredExprType current_owner = owner_type;
-
-        if (current == NULL ||
-            current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
-            continue;
-        }
-        if (current != spec_decl && owner_type.type_ref != NULL) {
-            const FengTypeRef *projected =
-                instantiate_parent_spec_ref_for_instance(
-                    context, spec_decl, owner_type.type_ref, current);
-
-            if (projected != NULL) {
-                current_owner = inferred_expr_type_from_type_ref(projected);
-            }
-        }
-
-        for (size_t member_index = 0U;
-             member_index < current->as.spec_decl.as.object.member_count;
-             ++member_index) {
-            const FengTypeMember *member =
-                current->as.spec_decl.as.object.members[member_index];
-
-            if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
-                member->is_static != require_static ||
-                !slice_equals(member->as.callable.name, name) ||
-                !spec_member_is_accessible_from(context,
-                                                spec_decl,
-                                                current,
-                                                owner_type,
-                                                member) ||
-                !function_type_decl_matches_owner_callable_signature(
-                    context,
-                    expected_type_ref,
-                    function_type_decl,
-                    &member->as.callable,
-                    current,
-                    NULL,
-                    current_owner)) {
-                continue;
-            }
-
-            if (result.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
-                result.callable = &member->as.callable;
-                result.callable_member = member;
-                result.callable_owner_type_decl = current;
-                continue;
-            }
-
-            /* All matching candidates have the exact target signature. Spec
-             * validation permits such duplicates only as one inherited or
-             * overridden logical requirement, for which child-first wins. */
-        }
-    }
-
-    free(closure);
+    resolve_accessible_spec_method_value_surface(
+        context,
+        spec_decl,
+        owner_type,
+        spec_decl,
+        owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+            ? owner_type.type_ref
+            : NULL,
+        owner_type,
+        name,
+        expected_type_ref,
+        function_type_decl,
+        require_static,
+        &result);
     return result;
 }
 
@@ -15625,6 +15703,54 @@ static size_t count_accessible_method_overloads(ResolveContext *context,
         size_t i;
         size_t j;
 
+        if (type_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            const FengIntersectionSpecInfo *info =
+                feng_semantic_lookup_intersection_spec_info(context->analysis,
+                                                            type_decl);
+
+            if (info == NULL) {
+                return 0U;
+            }
+            for (i = 0U; i < info->flattened_member_count; ++i) {
+                const FengDecl *member_decl = info->flattened_members[i];
+
+                closure = NULL;
+                closure_count = 0U;
+                closure_capacity = 0U;
+                if (!spec_collect_closure(context,
+                                          member_decl,
+                                          &closure,
+                                          &closure_count,
+                                          &closure_capacity)) {
+                    free(closure);
+                    continue;
+                }
+                for (j = 0U; j < closure_count; ++j) {
+                    const FengDecl *current = closure[j];
+
+                    if (current == NULL ||
+                        current->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                        continue;
+                    }
+                    for (size_t member_index = 0U;
+                         member_index <
+                             current->as.spec_decl.as.object.member_count;
+                         ++member_index) {
+                        const FengTypeMember *member =
+                            current->as.spec_decl.as.object
+                                .members[member_index];
+
+                        if (member != NULL && !member->is_static &&
+                            member->kind == FENG_TYPE_MEMBER_METHOD &&
+                            slice_equals(member->as.callable.name, name)) {
+                            ++count;
+                        }
+                    }
+                }
+                free(closure);
+            }
+            return count;
+        }
         if (type_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
             return 0U;
         }
@@ -19937,8 +20063,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                                                       false);
                 } else if (owner_type_decl != NULL &&
                            owner_type_decl->kind == FENG_DECL_SPEC &&
-                           owner_type_decl->as.spec_decl.form ==
-                               FENG_SPEC_FORM_OBJECT) {
+                           (owner_type_decl->as.spec_decl.form ==
+                                FENG_SPEC_FORM_OBJECT ||
+                            owner_type_decl->as.spec_decl.form ==
+                                FENG_SPEC_FORM_INTERSECTION)) {
                     result = resolve_accessible_spec_method_value_overload(
                         context,
                         owner_type_decl,
@@ -22590,8 +22718,11 @@ static bool record_selected_friend_callable_value_access(
             owner_type = resolved_type_target_owner_type(&static_target);
         }
     } else {
-        owner_type = infer_expr_type(context,
-                                     source_expr->as.member.object);
+        owner_type = resolution->callable_owner_instance_type_ref != NULL
+                         ? inferred_expr_type_from_type_ref(
+                               resolution->callable_owner_instance_type_ref)
+                         : infer_expr_type(context,
+                                           source_expr->as.member.object);
     }
     return record_selected_friend_fit_access(
         context,

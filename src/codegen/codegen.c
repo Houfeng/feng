@@ -870,6 +870,18 @@ typedef struct UserSpecMember {
     char   **param_names;       /* informational, mirrors signature */
     size_t   param_count;
     const FengTypeMember *member;
+    /* INTERSECTION-form only: declarations that Semantic normalized to this
+     * same requirement slot. The primary `member` remains the first-seen
+     * declaration used to source the merged witness function pointer; aliases
+     * let direct calls and method values recover that slot from any equivalent
+     * declaration identity without repeating signature selection. The array is
+     * compiler-owned; pointed-to members remain AST-owned. */
+    const FengTypeMember **member_aliases;
+    size_t member_alias_count;
+    /* INTERSECTION-form only: C field name in the leaf member-spec witness
+     * supplying this merged slot. It remains independent from c_field_name,
+     * which may be renamed for a legal overload in the merged witness. */
+    char *source_c_field_name;
     /* INTERSECTION-form only: pointer to the flattened member spec decl this
      * slot was cloned from. Used by cg_ensure_witness_instance_for_type to
      * locate the subject's per-member-spec witness when assembling the merged
@@ -1630,9 +1642,9 @@ typedef struct CGCallableStaticMethodValueSupport {
     char *c_var;
 } CGCallableStaticMethodValueSupport;
 
-/* Generated support for one object-form spec method value. The extended
- * closure keeps the ordinary callable prefix, plus the receiver's immutable
- * witness pointer; `_self` retains the captured subject. */
+/* Generated support for one object/intersection spec method value. The
+ * extended closure keeps the ordinary callable prefix, plus the receiver's
+ * immutable witness pointer; `_self` retains the captured subject. */
 typedef struct CGCallableSpecMethodValueSupport {
     const struct UserSpec *target_spec;
     const struct UserSpec *receiver_spec;
@@ -8036,10 +8048,11 @@ static void cg_emit_callable_spec_requirement_invoke(
     }
 }
 
-/* Emit and cache the one-allocation closure support for an object-form spec
- * method value. The generated closure preserves the canonical callable prefix,
- * retains only the subject, and borrows the immutable witness pointer that was
- * selected at formation. No runtime member lookup or ABI extension is needed. */
+/* Emit and cache the one-allocation closure support for an object-form or
+ * intersection-form spec method value. The generated closure preserves the
+ * canonical callable prefix, retains only the subject, and borrows the
+ * immutable witness pointer selected at formation. No runtime member lookup or
+ * ABI extension is needed. */
 static bool cg_ensure_callable_spec_method_value(
     CG *cg,
     const UserSpec *target_spec,
@@ -8056,13 +8069,14 @@ static bool cg_ensure_callable_spec_method_value(
     if (cg == NULL || target_spec == NULL || receiver_spec == NULL ||
         method == NULL || method->member == NULL || out_bind_fn == NULL ||
         target_spec->form != FENG_SPEC_FORM_CALLABLE ||
-        receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        (receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
+         receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
         method->kind != USM_KIND_METHOD || method->is_static ||
         target_spec->callable_param_count != method->param_count) {
         return cg_fail(cg,
                        blame,
                        "CE0111",
-                       "codegen: invalid object-spec method-value request");
+                       "codegen: invalid spec method-value request");
     }
 
     for (support_index = 0U;
@@ -13269,6 +13283,143 @@ static bool cg_user_spec_has_member_name(const UserSpec *s,
     return false;
 }
 
+/* Compare the exact lowered identities used by intersection requirement
+ * signatures. Unlike the broad assignment-oriented cg_types_equal helper,
+ * this comparison preserves generic-parameter indices, nominal enum/spec/type
+ * identity, pointer/array nesting, and array writability. */
+static bool cg_spec_slot_type_identity_equal(const CGType *left,
+                                             const CGType *right) {
+    if (left == right) return true;
+    if (left == NULL || right == NULL || left->kind != right->kind) {
+        return false;
+    }
+    switch (left->kind) {
+        case CG_TYPE_GENERIC_PARAM:
+            return left->generic_param_index == right->generic_param_index;
+        case CG_TYPE_OBJECT:
+            return left->user == right->user;
+        case CG_TYPE_SPEC:
+        case CG_TYPE_CALLABLE:
+            return left->user_spec == right->user_spec;
+        case CG_TYPE_POINTER:
+            return cg_spec_slot_type_identity_equal(left->element,
+                                                    right->element);
+        case CG_TYPE_ARRAY:
+            return left->array_element_writable ==
+                       right->array_element_writable &&
+                   cg_spec_slot_type_identity_equal(left->element,
+                                                    right->element);
+        default:
+            return left->enum_decl == right->enum_decl;
+    }
+}
+
+/* Return whether one method parameter is the variadic tail recorded on its
+ * AST-owned requirement declaration. Spec methods cannot declare callable
+ * type parameters, so the cloned member signature remains index-aligned. */
+static bool cg_user_spec_member_param_is_variadic(
+    const UserSpecMember *member,
+    size_t param_index) {
+    return member != NULL && member->member != NULL &&
+           member->member->kind == FENG_TYPE_MEMBER_METHOD &&
+           param_index < member->member->as.callable.param_count &&
+           member->member->as.callable.params[param_index].is_variadic;
+}
+
+/* Return whether two flattened requirements occupy one Semantic-equivalent
+ * intersection slot. Same-name methods with a different parameter signature
+ * remain legal overloads and therefore return false. ABI classifications are
+ * intentionally excluded: the first merged slot owns one stable ABI and its
+ * compile-time adapters bridge any equivalent declaring surface. */
+static bool cg_user_spec_members_semantically_equivalent(
+    const UserSpecMember *left,
+    const UserSpecMember *right) {
+    if (left == NULL || right == NULL || left->kind != right->kind ||
+        left->is_static != right->is_static || left->feng_name == NULL ||
+        right->feng_name == NULL ||
+        strcmp(left->feng_name, right->feng_name) != 0) {
+        return false;
+    }
+    if (left->kind == USM_KIND_FIELD) {
+        return left->is_var == right->is_var &&
+               cg_spec_slot_type_identity_equal(left->type, right->type);
+    }
+    if (left->param_count != right->param_count ||
+        !cg_spec_slot_type_identity_equal(left->type, right->type)) {
+        return false;
+    }
+    for (size_t index = 0U; index < left->param_count; ++index) {
+        if (!cg_spec_slot_type_identity_equal(left->param_types[index],
+                                              right->param_types[index]) ||
+            cg_user_spec_member_param_is_variadic(left, index) !=
+                cg_user_spec_member_param_is_variadic(right, index)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Return whether one merged slot represents the exact Semantic requirement
+ * declaration, either as its first-seen source or as an equivalent alias. */
+static bool cg_user_spec_member_has_decl(const UserSpecMember *slot,
+                                         const FengTypeMember *member) {
+    if (slot == NULL || member == NULL) return false;
+    if (slot->member == member) return true;
+    for (size_t index = 0U; index < slot->member_alias_count; ++index) {
+        if (slot->member_aliases[index] == member) return true;
+    }
+    return false;
+}
+
+/* Add one AST-owned equivalent declaration identity to a merged slot. */
+static bool cg_user_spec_member_append_alias(UserSpecMember *slot,
+                                             const FengTypeMember *member) {
+    const FengTypeMember **grown;
+
+    if (slot == NULL || member == NULL ||
+        cg_user_spec_member_has_decl(slot, member)) {
+        return true;
+    }
+    grown = realloc(slot->member_aliases,
+                    (slot->member_alias_count + 1U) * sizeof *grown);
+    if (grown == NULL) return false;
+    slot->member_aliases = grown;
+    slot->member_aliases[slot->member_alias_count++] = member;
+    return true;
+}
+
+/* Copy every declaration identity represented by `source` into `target` as
+ * aliases. The target's primary declaration and witness source stay intact. */
+static bool cg_user_spec_member_append_aliases(
+    UserSpecMember *target,
+    const UserSpecMember *source) {
+    if (target == NULL || source == NULL ||
+        !cg_user_spec_member_append_alias(target, source->member)) {
+        return false;
+    }
+    for (size_t index = 0U; index < source->member_alias_count; ++index) {
+        if (!cg_user_spec_member_append_alias(
+                target, source->member_aliases[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Find the already-recorded slot equivalent to one flattened requirement. */
+static UserSpecMember *cg_user_spec_equivalent_member(
+    UserSpec *spec,
+    const UserSpecMember *candidate) {
+    if (spec == NULL || candidate == NULL) return NULL;
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        if (cg_user_spec_members_semantically_equivalent(
+                &spec->members[index], candidate)) {
+            return &spec->members[index];
+        }
+    }
+    return NULL;
+}
+
 static const FengTypeMember *cg_find_own_spec_member_by_name(const FengDecl *decl,
                                                              const char *name,
                                                              size_t len) {
@@ -13303,6 +13454,40 @@ static bool cg_user_spec_append_member_slot(UserSpec *s, UserSpecMember **out_sl
     memset(*out_slot, 0, sizeof **out_slot);
     s->member_count = count + 1U;
     return true;
+}
+
+/* Release all compiler-owned storage held by one registered spec member. */
+static void cg_user_spec_member_free(UserSpecMember *member) {
+    if (member == NULL) return;
+    free(member->feng_name);
+    free(member->c_field_name);
+    cgtype_free(member->type);
+    for (size_t index = 0U; index < member->param_count; ++index) {
+        if (member->param_types != NULL) {
+            cgtype_free(member->param_types[index]);
+        }
+        if (member->param_names != NULL) {
+            free(member->param_names[index]);
+        }
+    }
+    free(member->param_types);
+    free(member->param_abi_kinds);
+    free(member->param_names);
+    free(member->member_aliases);
+    free(member->source_c_field_name);
+    cg_type_ref_free(member->source_member_type_ref);
+    memset(member, 0, sizeof *member);
+}
+
+/* Release a temporary or final spec member array. */
+static void cg_user_spec_members_free(UserSpec *spec) {
+    if (spec == NULL) return;
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        cg_user_spec_member_free(&spec->members[index]);
+    }
+    free(spec->members);
+    spec->members = NULL;
+    spec->member_count = 0U;
 }
 
 static bool cg_user_spec_clone_inherited_member(UserSpec *s,
@@ -13349,10 +13534,10 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
  * but additionally records `source_member_decl` — the AST decl of the member
  * spec this slot was cloned from — so cg_ensure_witness_instance_for_type can
  * later locate the subject's per-member-spec witness when assembling the
- * merged witness constant. Dedup is the caller's responsibility (first-seen
- * wins; 9.4's detect_cross_spec_method_conflicts already validated
- * same-name/same-signature slots and rejected same-name/different-return-type
- * conflicts at semantic time).
+ * merged witness constant. `c_field_name` is the destination merged-witness
+ * field: first-seen names preserve their existing ABI, while legal overloads
+ * receive a deterministic appended-slot name. Dedup is the caller's
+ * responsibility.
  *
  * 9.9: `source_member_type_ref` is the substituted member type ref for
  * generic intersection instances (e.g. Eq<IntBox> for Comparable<IntBox>);
@@ -13360,7 +13545,8 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
 static bool cg_user_spec_clone_intersection_member(UserSpec *s,
                                                    const UserSpecMember *src,
                                                    const FengDecl *source_member_decl,
-                                                   FengTypeRef *source_member_type_ref) {
+                                                   FengTypeRef *source_member_type_ref,
+                                                   const char *c_field_name) {
     UserSpecMember *dst = NULL;
     if (src == NULL || src->feng_name == NULL) {
         cg_type_ref_free(source_member_type_ref);
@@ -13380,9 +13566,17 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
     dst->source_member_decl = source_member_decl;
     dst->source_member_type_ref = source_member_type_ref;
     dst->feng_name = strdup(src->feng_name);
-    dst->c_field_name = strdup(src->c_field_name);
+    dst->c_field_name = c_field_name != NULL ? strdup(c_field_name) : NULL;
+    dst->source_c_field_name = strdup(
+        src->source_c_field_name != NULL
+            ? src->source_c_field_name
+            : src->c_field_name);
     if (src->type != NULL && dst->type == NULL) return false;
-    if (dst->feng_name == NULL || dst->c_field_name == NULL) return false;
+    if (dst->feng_name == NULL || dst->c_field_name == NULL ||
+        dst->source_c_field_name == NULL ||
+        !cg_user_spec_member_append_aliases(dst, src)) {
+        return false;
+    }
     if (src->param_count > 0U) {
         dst->param_types = calloc(src->param_count, sizeof *dst->param_types);
         dst->param_abi_kinds = calloc(src->param_count,
@@ -13400,6 +13594,171 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
             }
         }
     }
+    return true;
+}
+
+/* Return the first slot carrying one Feng member name. */
+static const UserSpecMember *cg_user_spec_named_member(
+    const UserSpec *spec,
+    const char *name) {
+    if (spec == NULL || name == NULL) return NULL;
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        if (cg_user_spec_member_name_equals(&spec->members[index],
+                                            name,
+                                            strlen(name))) {
+            return &spec->members[index];
+        }
+    }
+    return NULL;
+}
+
+/* Record one flattened intersection requirement. First-seen names enter the
+ * historical primary member order. Equivalent declarations become aliases of
+ * that slot. Same-name methods with distinct signatures are staged separately
+ * and appended only after all primary slots, preserving every pre-fix field
+ * name and offset. Takes ownership of `source_member_type_ref`. */
+static bool cg_user_spec_record_intersection_member(
+    CG *cg,
+    UserSpec *spec,
+    UserSpec *pending_overloads,
+    const UserSpecMember *source,
+    const FengDecl *source_member_decl,
+    FengTypeRef *source_member_type_ref,
+    FengToken blame) {
+    UserSpecMember *equivalent;
+    const UserSpecMember *named;
+
+    if (source == NULL || source->feng_name == NULL) {
+        cg_type_ref_free(source_member_type_ref);
+        return true;
+    }
+    equivalent = cg_user_spec_equivalent_member(spec, source);
+    if (equivalent == NULL) {
+        equivalent = cg_user_spec_equivalent_member(pending_overloads, source);
+    }
+    if (equivalent != NULL) {
+        bool ok = cg_user_spec_member_append_aliases(equivalent, source);
+
+        cg_type_ref_free(source_member_type_ref);
+        return ok;
+    }
+
+    named = cg_user_spec_named_member(spec, source->feng_name);
+    if (named == NULL) {
+        named = cg_user_spec_named_member(pending_overloads,
+                                         source->feng_name);
+    }
+    if (named == NULL) {
+        return cg_user_spec_clone_intersection_member(
+            spec,
+            source,
+            source_member_decl,
+            source_member_type_ref,
+            source->c_field_name);
+    }
+    if (named->kind != USM_KIND_METHOD ||
+        source->kind != USM_KIND_METHOD) {
+        cg_type_ref_free(source_member_type_ref);
+        return cg_fail(cg,
+                       blame,
+                       "IE0002",
+                       "codegen: non-method intersection requirements with the same name were not normalized");
+    }
+    return cg_user_spec_clone_intersection_member(
+        pending_overloads,
+        source,
+        source_member_decl,
+        source_member_type_ref,
+        named->c_field_name);
+}
+
+/* Return whether one generated C field name already belongs to a slot. */
+static bool cg_user_spec_has_c_field_name(const UserSpec *spec,
+                                          const char *name,
+                                          size_t limit) {
+    if (spec == NULL || name == NULL) return false;
+    if (limit > spec->member_count) limit = spec->member_count;
+    for (size_t index = 0U; index < limit; ++index) {
+        if (spec->members[index].c_field_name != NULL &&
+            strcmp(spec->members[index].c_field_name, name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Build the deterministic field name for one appended legal overload. The
+ * search also avoids collisions with user-authored names after sanitization. */
+static char *cg_intersection_overload_c_field_name(
+    const UserSpec *primary,
+    const UserSpec *pending_overloads,
+    size_t pending_index,
+    const char *base_name) {
+    size_t ordinal = 2U;
+
+    if (base_name == NULL) return NULL;
+    while (true) {
+        Buf candidate;
+
+        buf_init(&candidate);
+        buf_append_fmt(&candidate,
+                       "%s__feng_overload_%zu",
+                       base_name,
+                       ordinal);
+        if (candidate.data == NULL) return NULL;
+        if (!cg_user_spec_has_c_field_name(primary,
+                                           candidate.data,
+                                           primary->member_count) &&
+            !cg_user_spec_has_c_field_name(pending_overloads,
+                                           candidate.data,
+                                           pending_index)) {
+            return candidate.data;
+        }
+        buf_free(&candidate);
+        if (ordinal == SIZE_MAX) return NULL;
+        ++ordinal;
+    }
+}
+
+/* Append staged overloads after every historical first-name slot. Ownership
+ * of the staged elements moves into `spec`; the temporary array is cleared. */
+static bool cg_user_spec_commit_intersection_overloads(
+    UserSpec *spec,
+    UserSpec *pending_overloads) {
+    UserSpecMember *grown;
+    size_t combined_count;
+
+    if (spec == NULL || pending_overloads == NULL ||
+        pending_overloads->member_count == 0U) {
+        return true;
+    }
+    for (size_t index = 0U;
+         index < pending_overloads->member_count;
+         ++index) {
+        char *field_name = cg_intersection_overload_c_field_name(
+            spec,
+            pending_overloads,
+            index,
+            pending_overloads->members[index].c_field_name);
+
+        if (field_name == NULL) return false;
+        free(pending_overloads->members[index].c_field_name);
+        pending_overloads->members[index].c_field_name = field_name;
+    }
+    if (pending_overloads->member_count > SIZE_MAX - spec->member_count) {
+        return false;
+    }
+    combined_count = spec->member_count + pending_overloads->member_count;
+    grown = realloc(spec->members, combined_count * sizeof *grown);
+    if (grown == NULL) return false;
+    spec->members = grown;
+    memcpy(&spec->members[spec->member_count],
+           pending_overloads->members,
+           pending_overloads->member_count * sizeof *pending_overloads->members);
+    spec->member_count = combined_count;
+    free(pending_overloads->members);
+    pending_overloads->members = NULL;
+    pending_overloads->member_count = 0U;
     return true;
 }
 
@@ -14472,16 +14831,19 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         return true;
     }
     if (s->form == FENG_SPEC_FORM_INTERSECTION) {
+        UserSpec pending_overloads;
+
+        memset(&pending_overloads, 0, sizeof pending_overloads);
         /* Intersection members are derived from the flattened member spec
          * list computed by 9.3/9.4 (resolve_intersection_spec_form). Each
          * flattened member is an object-form spec decl; we clone its
          * members[] into the intersection's members[] with source_member_decl
          * set, so cg_ensure_witness_instance_for_type can later locate the
          * subject's per-member-spec witness when assembling the merged
-         * witness constant. Dedup is first-seen-wins — 9.4's
-         * detect_cross_spec_method_conflicts already validated at semantic
-         * time that same-name/same-signature slots are compatible and
-         * rejected same-name/different-return-type conflicts.
+         * witness constant. Semantic-equivalent requirements share the
+         * first-seen slot; same-name methods with distinct parameter
+         * signatures are staged and appended as legal overload slots after
+         * every historical first-name field.
          *
          * 9.9: for generic intersection instances (e.g. `Comparable<IntBox>`
          * from `spec Comparable<T>: Eq<T> & Ord<T>`), flattened_members only
@@ -14534,6 +14896,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                     decl->as.spec_decl.type_param_count,
                     s->generic_type_args);
                 if (sub == NULL) {
+                    cg_user_spec_members_free(&pending_overloads);
                     if (s->generic_context_type_param_count > 0U) {
                         cg->in_generic_fn = saved_in_generic_fn;
                         cg->generic_fn_type_param_count = saved_tp_count;
@@ -14547,6 +14910,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 CGType *member_type = NULL;
                 if (!cg_resolve_type(cg, sub, &decl->token, &member_type)) {
                     cg_type_ref_free(sub);
+                    cg_user_spec_members_free(&pending_overloads);
                     if (s->generic_context_type_param_count > 0U) {
                         cg->in_generic_fn = saved_in_generic_fn;
                         cg->generic_fn_type_param_count = saved_tp_count;
@@ -14564,6 +14928,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 if (member_spec == NULL) {
                     cgtype_free(member_type);
                     cg_type_ref_free(sub);
+                    cg_user_spec_members_free(&pending_overloads);
                     if (s->generic_context_type_param_count > 0U) {
                         cg->in_generic_fn = saved_in_generic_fn;
                         cg->generic_fn_type_param_count = saved_tp_count;
@@ -14577,6 +14942,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
                     cgtype_free(member_type);
                     cg_type_ref_free(sub);
+                    cg_user_spec_members_free(&pending_overloads);
                     if (s->generic_context_type_param_count > 0U) {
                         cg->in_generic_fn = saved_in_generic_fn;
                         cg->generic_fn_type_param_count = saved_tp_count;
@@ -14591,10 +14957,6 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                      ++member_index) {
                     const UserSpecMember *src_member =
                         &member_spec->members[member_index];
-                    if (cg_user_spec_has_member_name(s, src_member->feng_name,
-                                                     strlen(src_member->feng_name))) {
-                        continue;
-                    }
                     const FengDecl *decl_for_clone;
                     FengTypeRef *type_ref_for_clone;
 
@@ -14610,10 +14972,10 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                         decl_for_clone = member_spec->decl;
                         type_ref_for_clone = cg_type_ref_clone(sub);
                     }
-                    if (type_ref_for_clone == NULL &&
-                        src_member->source_member_type_ref != NULL) {
+                    if (type_ref_for_clone == NULL) {
                         cgtype_free(member_type);
                         cg_type_ref_free(sub);
+                        cg_user_spec_members_free(&pending_overloads);
                         if (s->generic_context_type_param_count > 0U) {
                             cg->in_generic_fn = saved_in_generic_fn;
                             cg->generic_fn_type_param_count = saved_tp_count;
@@ -14624,11 +14986,17 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                         return cg_fail(cg, decl->token, "IE0001",
                             "codegen: out of memory");
                     }
-                    if (!cg_user_spec_clone_intersection_member(s, src_member,
-                                                                 decl_for_clone,
-                                                                 type_ref_for_clone)) {
+                    if (!cg_user_spec_record_intersection_member(
+                            cg,
+                            s,
+                            &pending_overloads,
+                            src_member,
+                            decl_for_clone,
+                            type_ref_for_clone,
+                            decl->token)) {
                         cgtype_free(member_type);
                         cg_type_ref_free(sub);
+                        cg_user_spec_members_free(&pending_overloads);
                         if (s->generic_context_type_param_count > 0U) {
                             cg->in_generic_fn = saved_in_generic_fn;
                             cg->generic_fn_type_param_count = saved_tp_count;
@@ -14655,23 +15023,37 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 const FengDecl *member_decl = info->flattened_members[mi];
                 const UserSpec *member_spec = cg_find_user_spec_by_decl(cg, member_decl);
                 if (member_spec == NULL) {
+                    cg_user_spec_members_free(&pending_overloads);
                     return cg_fail(cg, decl->token,
                         "CE0356", "codegen: intersection-form spec member spec not registered");
                 }
                 if (!cg_ensure_user_spec_members_registered(cg, (UserSpec *)member_spec)) {
+                    cg_user_spec_members_free(&pending_overloads);
                     return false;
                 }
                 for (size_t member_index = 0U; member_index < member_spec->member_count; ++member_index) {
                     const UserSpecMember *src_member = &member_spec->members[member_index];
-                    if (cg_user_spec_has_member_name(s, src_member->feng_name,
-                                                     strlen(src_member->feng_name))) {
-                        continue;
-                    }
-                    if (!cg_user_spec_clone_intersection_member(s, src_member, member_decl, NULL)) {
+                    if (!cg_user_spec_record_intersection_member(
+                            cg,
+                            s,
+                            &pending_overloads,
+                            src_member,
+                            member_decl,
+                            NULL,
+                            decl->token)) {
+                        cg_user_spec_members_free(&pending_overloads);
                         return false;
                     }
                 }
             }
+        }
+        if (!cg_user_spec_commit_intersection_overloads(
+                s, &pending_overloads)) {
+            cg_user_spec_members_free(&pending_overloads);
+            return cg_fail(cg,
+                           decl->token,
+                           "IE0001",
+                           "codegen: out of memory while registering intersection overload slots");
         }
         return true;
     }
@@ -14802,7 +15184,7 @@ static const UserSpecMember *cg_user_spec_member_by_decl(
         return NULL;
     }
     for (size_t index = 0U; index < spec->member_count; ++index) {
-        if (spec->members[index].member == member) {
+        if (cg_user_spec_member_has_decl(&spec->members[index], member)) {
             return &spec->members[index];
         }
     }
@@ -21806,14 +22188,15 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         const UserSpec *receiver_spec = recv.type->user_spec;
         const UserSpecMember *spec_method;
 
-        if (receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        if ((receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
+             receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
             !cg_ensure_user_spec_members_registered(
                 cg, (UserSpec *)receiver_spec)) {
             er_free(&recv);
             return cg_fail(cg,
                            e->token,
                            "CE0112",
-                           "codegen: callable method coercion source must be an object-form spec value");
+                           "codegen: callable method coercion source must be an object-form or intersection-form spec value");
         }
         spec_method = cg_user_spec_member_by_decl(receiver_spec,
                                                   cs->callable_member);
@@ -21823,7 +22206,7 @@ static bool cg_emit_callable_method_coercion(CG *cg,
             return cg_fail(cg,
                            e->token,
                            "CE0114",
-                           "codegen: resolved object-spec method-value requirement was not registered");
+                           "codegen: resolved spec method-value requirement was not registered");
         }
         if (cg_materialize_to_local(cg,
                                     &recv,
@@ -26670,8 +27053,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, e->token,
                     "CE0155", "codegen: generic method call requires an object-form spec constraint");
             }
-            const UserSpecMember *sm = cg_user_spec_member(us,
-                ma->as.member.member.data, ma->as.member.member.length);
+            const UserSpecMember *sm = rc->member != NULL
+                ? cg_user_spec_member_by_decl(us, rc->member)
+                : NULL;
+            if (sm == NULL) {
+                sm = cg_user_spec_member(us,
+                    ma->as.member.member.data, ma->as.member.member.length);
+            }
             if (!sm || sm->kind != USM_KIND_METHOD) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
@@ -26912,8 +27300,13 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
         if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
             /* Step 4b — spec method dispatch via witness table. */
             const UserSpec *us = recv.type->user_spec;
-            const UserSpecMember *sm = cg_user_spec_member(us,
-                ma->as.member.member.data, ma->as.member.member.length);
+            const UserSpecMember *sm = rc->member != NULL
+                ? cg_user_spec_member_by_decl(us, rc->member)
+                : NULL;
+            if (sm == NULL) {
+                sm = cg_user_spec_member(us,
+                    ma->as.member.member.data, ma->as.member.member.length);
+            }
             if (!sm || sm->kind != USM_KIND_METHOD) {
                 er_free(&recv);
                 return cg_fail(cg, e->token,
@@ -50521,7 +50914,9 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
         }
         for (size_t i = 0U; i < s->member_count; ++i) {
             const UserSpecMember *sm = &s->members[i];
-            if (sm->source_member_decl == NULL && sm->source_member_type_ref == NULL) {
+            if ((sm->source_member_decl == NULL &&
+                 sm->source_member_type_ref == NULL) ||
+                sm->source_c_field_name == NULL) {
                 free((void *)member_witness_vars);
                 buf_free(&var);
                 if (s->generic_context_type_param_count > 0U) {
@@ -50532,7 +50927,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     cg->generic_fn_type_param_descs = saved_tp_descs;
                 }
                 return cg_fail(cg, blame,
-                    "CE0357", "codegen: intersection-form spec member '%s' is missing source_member_decl",
+                    "CE0357", "codegen: intersection-form spec member '%s' is missing source witness metadata",
                     sm->feng_name);
             }
             /* 9.9: for generic intersection instances, source_member_type_ref
@@ -50616,19 +51011,21 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                     buf_append_fmt(wd,
                                    "    .borrow_%s = %s.borrow_%s,\n",
                                    sm->c_field_name, member_witness_var,
-                                   sm->c_field_name);
+                                   sm->source_c_field_name);
                 } else {
                     buf_append_fmt(wd, "    .get_%s = %s.get_%s,\n",
                                    sm->c_field_name, member_witness_var,
-                                   sm->c_field_name);
+                                   sm->source_c_field_name);
                 }
                 if (sm->is_var) {
                     buf_append_fmt(wd, "    .set_%s = %s.set_%s,\n",
-                                   sm->c_field_name, member_witness_var, sm->c_field_name);
+                                   sm->c_field_name, member_witness_var,
+                                   sm->source_c_field_name);
                 }
             } else {
                 buf_append_fmt(wd, "    .%s = %s.%s,\n",
-                               sm->c_field_name, member_witness_var, sm->c_field_name);
+                               sm->c_field_name, member_witness_var,
+                               sm->source_c_field_name);
             }
         }
         buf_append_cstr(wd, "};\n\n");
@@ -59363,20 +59760,7 @@ static void cg_dispose(CG *cg) {
             cgtype_free(us->union_member_types[j]);
         }
         free(us->union_member_types);
-        for (size_t j = 0; j < us->member_count; j++) {
-            UserSpecMember *sm = &us->members[j];
-            free(sm->feng_name);
-            free(sm->c_field_name);
-            cgtype_free(sm->type);
-            for (size_t k = 0; k < sm->param_count; k++) {
-                cgtype_free(sm->param_types[k]);
-                free(sm->param_names[k]);
-            }
-            free(sm->param_types);
-            free(sm->param_abi_kinds);
-            free(sm->param_names);
-        }
-        free(us->members);
+        cg_user_spec_members_free(us);
     }
     free(cg->user_specs);
     for (size_t i = 0; i < cg->callable_fn_value_count; ++i) {

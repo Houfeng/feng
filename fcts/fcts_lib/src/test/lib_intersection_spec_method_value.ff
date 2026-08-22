@@ -1,0 +1,70 @@
+open module fcts_lib.test.lib_intersection_spec_method_value;
+
+/** Imported readable component used by the MV05 cross-package matrix. */
+open spec LibIntersectionMethodReadable {
+  func read(offset: int): int;
+  func select(offset: int): int;
+}
+
+/** Imported trace component used to build the merged witness. */
+open spec LibIntersectionMethodTraceable {
+  func trace(offset: int): int;
+  func select(label: string): string;
+}
+
+/** Imported intersection receiver exposed to the consumer. */
+open spec LibIntersectionMethodBoth:
+  LibIntersectionMethodReadable & LibIntersectionMethodTraceable;
+
+/** Imported callable target returned by provider-side binding. */
+open spec LibIntersectionMethodMapper(offset: int): int;
+
+/** Imported string target selecting the second same-name merged slot. */
+open spec LibIntersectionMethodStringMapper(label: string): string;
+
+/** Provider-owned implementation behind the imported merged witness. */
+open type LibIntersectionMethodValue:
+  LibIntersectionMethodReadable, LibIntersectionMethodTraceable {
+  open let base: int;
+
+  /** Read through the provider-owned subject. */
+  open func read(offset: int): int {
+    return self.base + offset;
+  }
+
+  /** Trace through the second provider-owned requirement. */
+  open func trace(offset: int): int {
+    return self.base - offset;
+  }
+
+  /** Integer overload supplied through the first member spec. */
+  open func select(offset: int): int {
+    return self.base + offset + 100;
+  }
+
+  /** String overload supplied through the second member spec. */
+  open func select(label: string): string {
+    return label + ":lib";
+  }
+}
+
+/** Return an imported intersection value to a consumer. */
+open func makeLibIntersectionMethodValue(
+  base: int
+): LibIntersectionMethodBoth {
+  return LibIntersectionMethodValue { base: base };
+}
+
+/** Form an imported intersection method value inside the provider. */
+open func bindLibIntersectionMethodRead(
+  value: LibIntersectionMethodBoth
+): LibIntersectionMethodMapper {
+  return value.read;
+}
+
+/** Form the imported intersection's second legal overload in the provider. */
+open func bindLibIntersectionMethodString(
+  value: LibIntersectionMethodBoth
+): LibIntersectionMethodStringMapper {
+  return value.select;
+}

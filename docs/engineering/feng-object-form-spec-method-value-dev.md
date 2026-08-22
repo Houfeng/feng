@@ -1,6 +1,6 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02、MV03、MV04 已完成，可分别独立交付；其余分项尚未实施。
+> **状态**：MV01、MV02、MV03、MV04、MV05 已完成，可分别独立交付；其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -334,23 +334,23 @@ intersection-form 参数/局部值已经可以通过 merged member/witness 视�
 
 #### 修复任务
 
-- [ ] 更新函数、spec、可见性和诊断主规范，定义显式 intersection spec 实例方法值。
-- [ ] 在 MV01 基础上复用 intersection 直接调用已经展平、去重的成员面和稳定槽映射。
-- [ ] 保留 requirement 原声明 spec，以正确处理父成员、seal 和重载。
-- [ ] 复用 intersection 值既有 subject 生命周期，不做第二次视角构造或装箱。
-- [ ] 若直接调用没有提供方法值所需的稳定解析事实，完善通用 intersection 成员解析，
+- [x] 更新函数、spec、可见性和诊断主规范，定义显式 intersection spec 实例方法值。
+- [x] 在 MV01 基础上复用 intersection 直接调用已经展平、去重的成员面和稳定槽映射。
+- [x] 保留 requirement 原声明 spec，以正确处理父成员、seal 和重载。
+- [x] 复用 intersection 值既有 subject 生命周期，不做第二次视角构造或装箱。
+- [x] 若直接调用没有提供方法值所需的稳定解析事实，完善通用 intersection 成员解析，
       不在方法值路径增加补偿特判。
 
 #### 验证与交付
 
-- [ ] Semantic：来自不同成员 spec、父 spec 和嵌套 intersection 的方法值均通过。
-- [ ] Semantic：重复签名去重、合法重载、返回类型冲突和 seal 访问保持既有规则。
-- [ ] FCTS：同一 subject 通过 merged witness 形成方法值并进入正确实现。
-- [ ] FCTS：局部重新赋值不重绑定，方法值逃逸后 subject 生命周期正确。
-- [ ] 跨包：imported intersection 及其成员 spec 方法值正确恢复。
-- [ ] Codegen：不拆分为多个 spec 值，不增加运行时 member 搜索。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV05 可独立交付。
+- [x] Semantic：来自不同成员 spec、父 spec 和嵌套 intersection 的方法值均通过。
+- [x] Semantic：重复签名去重、合法重载、返回类型冲突和 seal 访问保持既有规则。
+- [x] FCTS：同一 subject 通过 merged witness 形成方法值并进入正确实现。
+- [x] FCTS：局部重新赋值不重绑定，方法值逃逸后 subject 生命周期正确。
+- [x] 跨包：imported intersection 及其成员 spec 方法值正确恢复。
+- [x] Codegen：不拆分为多个 spec 值，不增加运行时 member 搜索。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV05 可独立交付。
 
 ### 4.6 MV06：`T: IntersectionSpec` 泛型值的实例方法值
 
@@ -1148,6 +1148,218 @@ func bind<T: CombinedFactory>(): Creator {
 - **实施问题**：ISSUE-009 至 ISSUE-014 均已按先记录、后分析、再修复的流程解决；MV04 无
   未解决问题。
 - **建议 commit message**：`feat: support constrained spec static method values`
+
+### ISSUE-015：intersection 方法引用缺少 callable 目标时未进入通用诊断
+
+- **关联分项**：MV05
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec Readable { func read(offset: int): string; }
+  spec Traceable { func trace(): string; }
+  spec Both: Readable & Traceable;
+
+  func run(value: Both) {
+    let reader = value.read;
+  }
+  ```
+
+- **实际结果**：Semantic 接受该绑定，没有产生诊断。
+- **期望结果**：Feng 不推导匿名 callable 类型；`value.read` 缺少明确 callable-form
+  `spec` 目标，必须稳定产生 `AE0523`。
+- **根因**：通用未绑定 callable 引用分类最终通过
+  `count_accessible_method_overloads` 判断成员表达式是否指向方法；该查询只遍历 object-form
+  spec 的父闭包，对 intersection-form 直接返回零。于是后续无目标校验把表达式误判为普通
+  成员值。
+- **通用修复方案**：让同一成员引用分类查询复用 intersection 已有的 flattened member
+  metadata，遍历各 object-form member 的父闭包并识别可访问实例方法；不在 `AE0523`
+  报告点增加方法名或 intersection 名称特判。
+- **运行时性能影响**：无；只补齐 Semantic 编译期来源分类，生成程序和运行时路径不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；该修复直接落实已批准的“无匿名 callable 类型”和 MV05
+  诊断边界，不触及强制停止条件。
+- **专项验证结果**：新增 Semantic 反例稳定产生 `AE0523`；完整 Semantic 专项测试通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### ISSUE-016：新增 Codegen 用例对 merged witness 调用文本的断言不匹配
+
+- **关联分项**：MV05
+- **状态**：已解决
+- **最小复现**：新增泛型 intersection receiver `Both<int>` 分别形成 `value.read` 与
+  `value.trace` 方法值，并检查生成 C 中的直接 witness 槽调用。
+- **实际结果**：Semantic 与 Codegen 均成功，生成 C 也已产出；新增测试对
+  `_bound->_witness->read(_bound->_self, _arg0)` 的完整文本断言失败。
+- **期望结果**：确认生成代码仍直接调用已选 merged witness 槽，并让新增测试只断言该
+  稳定语义事实，不错误绑定到允许变化的 ABI bridge 表达式文本。
+- **根因**：`Readable<T>.read(T): T` 的 witness 槽必须保持开放泛型 requirement 已有的
+  address ABI；即使 receiver 闭合为 `Both<int>`，callable 目标的直接 `int` ABI 仍由
+  adapter 静态桥接为 `(const void *)&_arg0` 和 `&_result`。新增断言误把它写成了非泛型
+  requirement 的直接参数/返回文本。
+- **通用修复方案**：只修正本次新增断言，使其验证 merged witness 的 `read` 槽被直接
+  调用且沿用既有静态 ABI bridge；产品实现不需要变更。`trace` 的非泛型槽继续验证直接
+  参数调用。
+- **运行时性能影响**：无；没有修改生成代码，静态 ABI bridge 也是该泛型 requirement
+  直接调用既有的参数/返回适配。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；只纠正新增测试对既有 ABI 的错误假设，没有修改既有用例。
+- **专项验证结果**：修正新增断言后，完整 Codegen 专项测试通过，生成 C 严格编译通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### ISSUE-017：intersection 合法重载的第二个 requirement 未保留到 Codegen 成员表
+
+- **关联分项**：MV05
+- **状态**：已解决
+- **最小复现**：
+
+  ```feng
+  spec Left { func select(offset: int): int; }
+  spec Right { func select(label: string): string; }
+  spec Both: Left & Right;
+  spec StringMapper(label: string): string;
+
+  func bind(value: Both): StringMapper {
+    return value.select;
+  }
+  ```
+
+- **实际结果**：Semantic 按 callable 目标正确选择 `Right.select(string)`；Codegen 随后
+  报 `CE0114: resolved spec method-value requirement was not registered`。
+- **期望结果**：intersection 的 merged member/witness 表同时保留两个参数签名不同的合法
+  重载槽；方法值按 Semantic 保存的 requirement 声明身份直接取得 `Right.select` 槽。
+- **根因**：Semantic 的 intersection 成员面以 requirement 声明和闭合签名为身份，允许
+  同名但参数签名不同的合法重载；Codegen 注册 merged witness 时却调用
+  `cg_user_spec_has_member_name` 按 Feng 成员名去重，`UserSpecMember.c_field_name` 也只由成员名
+  生成。于是 `Left.select(int)` 先占据唯一的 `select` 槽，`Right.select(string)` 在成员表和
+  witness 结构中均被丢弃。该缺口早于方法值存在：intersection 直接调用虽由 Semantic 保存
+  精确 requirement，当前普通 spec 调用 Codegen 仍按名称取第一个槽；MV05 的按声明身份查询
+  只是首次把缺失稳定暴露为 `CE0114`。
+- **通用修复方案**：统一修正 intersection merged member/witness 建模，而不在方法值路径增加
+  补偿逻辑：按 Semantic 已确定的 requirement 等价类去重，仅合并同一闭合参数/返回签名的
+  等价 requirement；参数签名不同的合法重载各自保留一个成员槽，并生成确定、无冲突的 C
+  槽名。直接调用与方法值均使用 Semantic 保存的 requirement 声明身份取得同一稳定槽。merged
+  witness 仍在编译期静态组装，并直接复制对应 member-spec witness 的函数指针，不增加运行时
+  查找、动态分派、分支、分配或额外 spec 视角。
+- **运行时性能影响**：建议方案不增加任何执行路径上的指令、分支、查找或分配；合法重载的
+  merged witness 常量会静态多保存必要的函数指针槽。试图在不增加槽的前提下修复只能改为
+  运行时按来源 witness 查找、额外捕获或分派，均违反本专项的零增量运行时开销规则。
+- **runtime ABI / `.ft` / 兼容性影响**：`.ft` 语义事实、记录布局和格式版本无需变化；runtime
+  及 runtime 私有 ABI 也无需变化。但正确修复会改变已被 Semantic 接受的 intersection 合法
+  重载类型的编译器生成 witness 结构布局：原来错误地只有首个同名槽，修复后会追加其余合法
+  重载槽并使用唯一字段名。即使保留首槽的名称和偏移，这仍会改变 witness 结构尺寸以及新旧
+  编译产物之间的 Feng 私有链接契约，属于第 1 节强制规则禁止自行实施的现有 ABI 变更。
+- **是否需要人工决策**：已由人工批准限定修复。无法同时满足“合法重载完整可调用”和“现有 merged witness
+  ABI 完全不变”；也没有既不变更 ABI、又不增加运行时开销的通用实现。建议批准仅针对
+  intersection 合法重载缺失槽的 ABI 完整性修复，并要求保持既有首槽偏移、`.ft` 格式和
+  runtime ABI 不变。本次批准范围即为上述 merged witness ABI 完整性修复，并包含让直接调用
+  与方法值共用 Semantic 保存的精确 requirement；不得扩大到其他 ABI 或运行时机制。
+- **专项验证结果**：新增 Codegen 用例确认首槽及既有后续槽顺序不变、合法重载槽追加、
+  merged witness 直接引用 leaf witness，且方法值和直接调用均使用精确槽；完整 Codegen、
+  Semantic、Symbol 专项测试及 FCTS `844/844` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### ISSUE-018：intersection 成员的 owned type ref 未在 Codegen 销毁时释放
+
+- **关联分项**：MV05 / ISSUE-017 编译期成员登记。
+- **状态**：已解决。
+- **最小复现**：编译任一泛型 intersection 实例，使
+  `cg_user_spec_clone_intersection_member` 为成员保存 `source_member_type_ref`，随后销毁 Codegen
+  上下文。
+- **实际结果**：`UserSpecMember.source_member_type_ref` 的字段注释和克隆函数均明确由成员取得
+  所有权；`cg_free` 释放成员时却没有调用 `cg_type_ref_free`。
+- **期望结果**：Codegen 上下文销毁时释放每个成员拥有的 substituted type ref；ISSUE-017
+  新增的合法重载槽不能扩大该编译期泄漏。
+- **根因**：intersection 泛型成员信息加入 `UserSpecMember` 后，成员销毁路径没有同步补齐该
+  owned 字段；运行期对象和生成程序不涉及此内存。
+- **通用修复方案**：在统一的 `UserSpecMember` 销毁循环中释放
+  `source_member_type_ref`；ISSUE-017 新增的 requirement 声明别名数组也在同一位置释放。二者
+  都只保存编译期元数据，不改变生成代码。
+- **运行时性能影响**：无；只减少编译器上下文销毁时遗留的堆内存，不改变生成程序。
+- **runtime ABI / `.ft` / 兼容性影响**：无；不修改任何运行时、生成结构、符号表记录或格式。
+- **是否需要人工决策**：否；这是 owned 编译期字段与既有销毁契约不一致的资源释放修复，
+  不触发本专项停止条件。
+- **专项验证结果**：统一成员销毁函数已覆盖 owned substituted type-ref 与声明别名数组；
+  编译器以 `-Werror -pedantic` 构建，Semantic、Codegen、Symbol 专项测试通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### ISSUE-019：新增重载 Codegen 探针的来源槽断言不匹配
+
+- **关联分项**：MV05 / ISSUE-017 专项验证。
+- **状态**：已解决。
+- **最小复现**：运行新增的
+  `test_intersection_spec_overload_codegen_preserves_exact_slots`，查找生成 C 中首个
+  `.select__feng_overload_2 =` 初始化行并要求其包含 `__Textual.select`。
+- **实际结果**：Semantic、Codegen 和此前 FCTS 执行成功；witness 结构的首槽、既有后续槽和
+  追加重载槽顺序断言均通过，但上述来源文本断言失败。
+- **期望结果**：确定该行实际属于哪个生成结构，并确认 merged witness 的追加槽直接引用
+  `Textual.select`；若只是全局首个文本定位不精确，只修正本次新增探针。
+- **根因**：生成 C 中同名 designated initializer 不只出现在具体 subject 的 merged witness
+  常量中；交叉 spec 的默认 witness 初始化更早生成同名行。新增探针从整个文件取第一次文本
+  命中，实际抓到的是
+  `FengSpecDefaultWitness__...__Both__select__feng_overload_2`，不是待验证的 leaf witness 引用。
+- **通用修复方案**：保持产品实现不变，让本次新增探针逐行查找同名 initializer，直到同一行
+  同时包含 `__Textual.select`；witness 结构顺序、方法值槽和直接调用槽仍分别独立断言。
+- **运行时性能影响**：无产品变更，无增量运行时开销。
+- **runtime ABI / `.ft` / 兼容性影响**：无；只修正本次新增测试的定位条件。
+- **是否需要人工决策**：否；不修改既有用例，不改变产品代码、ABI 或格式。
+- **专项验证结果**：修正新增探针后，完整 Codegen 专项测试通过，生成 C 严格编译通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### ISSUE-020：泛型 intersection 直接成员 type-ref 克隆失败未被识别
+
+- **关联分项**：MV05 / ISSUE-017 泛型 merged member 登记。
+- **状态**：已解决。
+- **最小复现**：编译泛型 intersection 实例，在登记直接 member-spec 的 merged member 时，
+  `cg_type_ref_clone(sub)` 因内存不足返回 `NULL`。
+- **实际结果**：现有失败判断只覆盖嵌套 intersection 已带
+  `source_member_type_ref` 的分支；直接 member-spec 分支会把克隆失败得到的 `NULL` 继续传入，
+  后续错误地退化为仅按声明查找来源 spec。
+- **期望结果**：由于被克隆的 `sub` 必定非空，任一分支返回 `NULL` 都应立即稳定报告
+  `IE0001`，不能以缺失的泛型来源事实继续生成代码。
+- **根因**：原判断把“是否来自嵌套 intersection”误当成“克隆结果是否必须非空”的条件，
+  漏掉了直接 member-spec 对同一 owned type-ref 的克隆失败。
+- **通用修复方案**：统一要求 `type_ref_for_clone != NULL`；失败时走既有 Codegen OOM 清理与
+  `IE0001` 路径，不按成员来源增加分支特判。
+- **运行时性能影响**：无；仅修正编译器内存不足路径，生成程序不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；该修复不改变正常语义、运行时路径或 ABI，也不修改既有用例。
+- **专项验证结果**：登记循环已统一检查两类来源的 type-ref 克隆结果；编译器构建及完整
+  Codegen 专项测试通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV05 独立交付记录。
+
+### MV05 独立交付记录
+
+- **变更范围**：补齐显式 intersection-form `spec` 参数/局部值的实例方法值；Semantic、
+  Codegen、诊断、可见性和权威语言规范保持同一边界。`T: IntersectionSpec` 的泛型值方法值
+  仍属于 MV06，本次没有提前开放。
+- **实现结果**：方法值复用 intersection 直接调用的 flattened requirement 面和 merged
+  witness，按 Semantic 保存的精确 requirement 声明选择槽位；直接成员、object 父 spec、
+  嵌套 intersection、等价 requirement 去重及合法重载均走同一机制。receiver 在形成点只求值
+  一次并绑定既有 subject 与 witness，不构造额外 object-spec 视角或运行时成员索引。
+- **一并修复**：ISSUE-015 补齐无 callable 目标的 `AE0523`；ISSUE-017 按人工批准补全合法
+  重载 merged witness 槽，并让直接调用与方法值共用精确槽；ISSUE-018 补齐编译期 owned
+  metadata 销毁；ISSUE-020 修正泛型来源 type-ref 克隆失败路径。ISSUE-016、ISSUE-019 仅
+  修正本次新增测试对生成文本的错误定位。
+- **运行时成本**：相对于 object-form spec 方法值没有新增机制；仍只进行形成 callable 所必需
+  的一次 closure 分配，捕获既有 subject 并借用既有 witness，调用直接进入编译期固定槽。
+  没有新增运行时查找、分支、装箱、第二份 spec 视角或额外分配。合法重载仅静态追加人工批准
+  的必要 witness 函数指针槽，不增加执行路径指令。
+- **ABI 与格式**：`.ft` 记录、格式版本、runtime 及 runtime 私有 ABI 均未改变。唯一 ABI
+  变化是人工批准的 intersection 合法重载 merged witness 完整性修复：保留所有既有槽名、
+  顺序和偏移，只在末尾追加此前被错误丢弃的合法重载槽，并为其生成确定的唯一 C 字段名。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen`、`build/bin/test_symbol` 均
+  通过；新增用例覆盖直接/父级/嵌套来源、等价签名去重、合法重载的精确方法值与直接调用、
+  缺少目标、签名不匹配、seal 访问、merged witness 布局及生成 C 严格编译。没有修改既有
+  测试用例，只增加专项用例与注册入口。
+- **FCTS**：覆盖形成、传参、显式转换、receiver 单次求值、重新赋值后稳定绑定、逃逸生命
+  周期、等价 requirement、两类合法重载，以及 imported provider/consumer 的方法值和直接
+  调用；结果为 `844 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过；UBSan 与普通 `-O2 -Werror -pedantic` 两阶段
+  均完成，两轮 smoke `91/91`、两轮 std `601/601`、两轮 FCTS `844/844`，以及 CLI、性能
+  约束、增量构建、发布/安装脚本、bundled packages 和 toolchain 测试全部通过。
+- **实施问题**：ISSUE-015 至 ISSUE-020 均已按先记录、后分析、再修复的流程解决；MV05 无
+  未解决问题。
+- **建议 commit message**：`feat: support intersection spec method values`
 
 ### ISSUE-待编号：待填写
 

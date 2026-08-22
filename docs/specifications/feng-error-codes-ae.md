@@ -142,11 +142,11 @@
 | AE0524 | 预打包变参数组转发约束 | AE0524 | prepacked variadic forwarding requires a variadic call target、prepacked variadic forwarding must begin at the first variadic argument position、prepacked variadic argument must match the target readonly variadic array type |
 | AE0525 | 泛型调用类型实参推导完整性 | （新增） | cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type |
 
-`AE0521`、`AE0522` 与 `AE0523` 同样适用于 `Type.method` 具体静态方法引用和
-`T: ObjectSpec` 的 `T.method` 静态 requirement 引用：分别表示目标 callable 下仍存在
-多个匹配来源、来源签名不匹配，以及缺少形成 callable value 所需的明确 callable-form
-`spec` 目标。泛型静态方法缺失显式方法类型实参继续使用既有显式泛型 target 诊断，不由
-目标 callable 反向推导。
+`AE0521`、`AE0522` 与 `AE0523` 同样适用于 object-form/intersection-form `spec` 实例
+方法引用、`Type.method` 具体静态方法引用和 `T: ObjectSpec` 的 `T.method` 静态
+requirement 引用：分别表示目标 callable 下仍存在多个匹配来源、来源签名不匹配，以及
+缺少形成 callable value 所需的明确 callable-form `spec` 目标。泛型静态方法缺失显式
+方法类型实参继续使用既有显式泛型 target 诊断，不由目标 callable 反向推导。
 
 ## 06/07 Spec段
 

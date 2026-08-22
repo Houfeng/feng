@@ -23844,6 +23844,121 @@ static void test_object_spec_method_values_record_exact_target_context(void) {
     feng_program_free(program);
 }
 
+/* Intersection-form spec method values consume the same projected requirement
+ * surface as direct calls. The sidecar keeps the complete intersection receiver
+ * while naming the original object-form requirement selected from a direct,
+ * inherited, nested, overloaded, or deduplicated member path. */
+static void test_intersection_spec_method_values_record_merged_surface(void) {
+    const char *source =
+        "module demo.intersection_method_value.merged_surface;\n"
+        "spec Root<T> { func inherited(value: T): T; }\n"
+        "spec Left<T>: Root<T> { func select(value: T): T; }\n"
+        "spec Right {\n"
+        "  func select(value: string): string;\n"
+        "  func right(value: int): int;\n"
+        "}\n"
+        "spec Pair<T>: Left<T> & Right;\n"
+        "spec Extra { func extra(value: int): int; }\n"
+        "spec Nested<T>: Pair<T> & Extra;\n"
+        "spec SameLeft { func same(value: int): int; }\n"
+        "spec SameRight { func same(value: int): int; }\n"
+        "spec SameIntersection: SameLeft & SameRight;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec StringMapper(value: string): string;\n"
+        "func accept(mapper: IntMapper): IntMapper { return mapper; }\n"
+        "func exercise(value: Nested<int>): IntMapper {\n"
+        "  let selected: IntMapper = value.select;\n"
+        "  let inherited: IntMapper = value.inherited;\n"
+        "  let extra = (IntMapper)value.extra;\n"
+        "  return accept(value.right);\n"
+        "}\n"
+        "func selectString(value: Nested<int>): StringMapper {\n"
+        "  return value.select;\n"
+        "}\n"
+        "func bindSame(value: SameIntersection): IntMapper {\n"
+        "  return value.same;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "intersection_spec_method_value_merged_surface.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *exercise;
+    const FengDecl *select_string;
+    const FengDecl *bind_same;
+    const FengDecl *expected_owners[6];
+    const FengDecl *expected_targets[6];
+    const char *expected_receivers[6] = {
+        "Nested", "Nested", "Nested", "Nested", "Nested",
+        "SameIntersection"
+    };
+    const FengExpr *sites[6];
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    exercise = find_function_decl_in_program(program, "exercise");
+    select_string = find_function_decl_in_program(program, "selectString");
+    bind_same = find_function_decl_in_program(program, "bindSame");
+    ASSERT(exercise != NULL && select_string != NULL && bind_same != NULL);
+
+    expected_owners[0] = find_spec_decl_by_name(analysis, "Left");
+    expected_owners[1] = find_spec_decl_by_name(analysis, "Root");
+    expected_owners[2] = find_spec_decl_by_name(analysis, "Extra");
+    expected_owners[3] = find_spec_decl_by_name(analysis, "Right");
+    expected_owners[4] = find_spec_decl_by_name(analysis, "Right");
+    expected_owners[5] = find_spec_decl_by_name(analysis, "SameLeft");
+    for (size_t index = 0U; index < 6U; ++index) {
+        ASSERT(expected_owners[index] != NULL);
+        expected_targets[index] = find_spec_decl_by_name(
+            analysis, index == 4U ? "StringMapper" : "IntMapper");
+        ASSERT(expected_targets[index] != NULL);
+    }
+
+    sites[0] = nth_let_initializer(&exercise->as.function_decl, 0U);
+    sites[1] = nth_let_initializer(&exercise->as.function_decl, 1U);
+    sites[2] = nth_let_initializer(&exercise->as.function_decl, 2U);
+    ASSERT(sites[0] != NULL && sites[1] != NULL && sites[2] != NULL);
+    ASSERT(sites[2]->kind == FENG_EXPR_CAST);
+    sites[2] = sites[2]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 4U);
+    ASSERT(exercise->as.function_decl.body->statements[3]->kind ==
+           FENG_STMT_RETURN);
+    sites[3] = exercise->as.function_decl.body->statements[3]
+                   ->as.return_value;
+    ASSERT(sites[3] != NULL && sites[3]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[3]->as.call.arg_count == 1U);
+    sites[3] = sites[3]->as.call.args[0];
+    ASSERT(select_string->as.function_decl.body->statement_count == 1U);
+    sites[4] = select_string->as.function_decl.body->statements[0]
+                   ->as.return_value;
+    ASSERT(bind_same->as.function_decl.body->statement_count == 1U);
+    sites[5] = bind_same->as.function_decl.body->statements[0]
+                   ->as.return_value;
+
+    for (size_t index = 0U; index < 6U; ++index) {
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(analysis, sites[index]);
+
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == expected_targets[index]);
+        ASSERT(site->callable_member != NULL);
+        ASSERT(site->callable_owner_type_decl == expected_owners[index]);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, expected_receivers[index]));
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* A method value formed from T: ObjectSpec keeps T as the receiver type while
  * selecting the exact constraint requirement and callable target at compile
  * time. All target-bearing expression positions share one reifiable callable
@@ -24782,6 +24897,66 @@ static void test_object_spec_method_values_reject_invalid_sources(void) {
             }
         }
         ASSERT(found_expected);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Intersection-form sources retain the existing target, signature, and seal
+ * diagnostics; no permissive fallback is introduced by merged-member lookup. */
+static void test_intersection_spec_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "intersection_spec_method_value_without_target.ff",
+            "module demo.intersection_method_value.no_target;\n"
+            "spec Readable { func read(offset: int): string; }\n"
+            "spec Traceable { func trace(): string; }\n"
+            "spec Both: Readable & Traceable;\n"
+            "func run(value: Both) { let reader = value.read; }\n",
+            "AE0523"
+        },
+        {
+            "intersection_spec_method_value_signature_mismatch.ff",
+            "module demo.intersection_method_value.mismatch;\n"
+            "spec Readable { func read(offset: int): string; }\n"
+            "spec Traceable { func trace(): string; }\n"
+            "spec Both: Readable & Traceable;\n"
+            "spec WrongReader(flag: bool): string;\n"
+            "func run(value: Both): WrongReader { return value.read; }\n",
+            "AE0522"
+        },
+        {
+            "intersection_spec_method_value_seal_access.ff",
+            "module demo.intersection_method_value.seal_access;\n"
+            "spec Hidden { seal func secret(offset: int): string; }\n"
+            "spec Public { func visible(): string; }\n"
+            "spec Both: Hidden & Public;\n"
+            "spec Reader(offset: int): string;\n"
+            "func run(value: Both): Reader { return value.secret; }\n",
+            "AE0708"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(cases[case_index].path,
+                                                    cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(semantic_error_code_count(errors,
+                                         error_count,
+                                         cases[case_index].expected_code) > 0U);
         feng_semantic_errors_free(errors, error_count);
         feng_semantic_analysis_free(analysis);
         feng_program_free(program);
@@ -26062,6 +26237,7 @@ int main(void) {
     test_multi_parameter_generic_callable_rejects_each_mismatch();
     test_explicit_generic_callable_values_and_unbound_casts();
     test_object_spec_method_values_record_exact_target_context();
+    test_intersection_spec_method_values_record_merged_surface();
     test_constrained_generic_spec_method_values_preserve_receiver();
     test_constrained_generic_spec_static_method_values();
     test_builtin_fit_static_spec_witness();
@@ -26071,6 +26247,7 @@ int main(void) {
     test_concrete_static_method_values_reject_invalid_sources();
     test_friend_static_method_values_in_type_contexts();
     test_object_spec_method_values_reject_invalid_sources();
+    test_intersection_spec_method_values_reject_invalid_sources();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();
     test_callable_spec_value_rejects_different_spec_implicit_match();

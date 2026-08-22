@@ -567,6 +567,10 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - [必须] object-form `spec` 值的实例方法引用在具有明确 callable-form `spec` 目标时，
   必须按当前 spec 实例完成 requirement 签名替换、访问过滤和重载消歧，并在形成点绑定
   当前 subject 与 witness 视角；原 spec 绑定后续重新赋值不得使已形成的方法值重绑定。
+- [必须] intersection-form `spec` 值的实例方法引用在具有明确 callable-form `spec`
+  目标时，必须复用对应直接调用已经展平、去重的 merged member/witness 视角，并保留唯一
+  requirement 的原声明 object-form `spec`；形成点绑定当前 subject 与 merged witness，
+  不得拆分或重建多个 object-form `spec` 视角。
 - [必须] object-form `spec` 约束下的泛型值实例方法引用，在具有明确 callable-form
   `spec` 目标时必须复用该约束实例的 requirement 选择，并按闭合 `T` 的值模型绑定
   receiver；不得为形成方法值把 `T` coercion 或装箱为 object-form `spec` 值。
@@ -625,6 +629,10 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 编译器解析 object-form `spec` 实例方法值时，必须复用对应实例方法直接调用的成员
   闭包、原声明 requirement、访问权限与签名替换结果，并把唯一选中的 requirement 和
   接收者 witness 视角稳定传递给代码生成；代码生成不得按名称重新选择成员。
+- 编译器解析 intersection-form `spec` 实例方法值时，必须复用对应实例方法直接调用的
+  flattened member 集合、去重结果、访问过滤、签名替换和 merged witness 槽映射；代码
+  生成必须消费已选 requirement 在接收者 intersection 视角中的既有槽，不得重新遍历
+  intersection member 或按名称选择来源。
 - 编译器解析 object-form `spec` 约束下的泛型值实例方法值时，还必须保留 receiver 的
   完整 `T` 类型事实；共享泛型体与最终闭合代码必须消费同一已解析 requirement，不得
   依赖运行时成员搜索或把 receiver 改写为 spec 值。
@@ -649,6 +657,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 方法值在形成时即绑定当前接收者：值类型按值捕获，引用类型复制引用；后续调用不会重新选择接收者，也不会因调用方法再次复制接收者。
 - object-form `spec` 实例方法值在形成后直接通过已保存的 subject、witness 视角和
   requirement 槽调用，不执行运行时成员搜索、重载选择或接收者重绑定。
+- intersection-form `spec` 实例方法值在形成后直接通过已保存的 subject、merged witness
+  视角和 requirement 槽调用；不得形成多个 object-form `spec` 值，也不得增加运行时
+  member 搜索、签名比较、重载选择或接收者重绑定。
 - object-form `spec` 约束下的泛型 receiver 在方法值形成时按闭合 `T` 复制或保留；形成
   结果只拥有一个 callable closure，不增加 spec box、第二个 receiver 分配或每次调用
   的动态候选查找。
