@@ -396,7 +396,6 @@
 | **CE0163** | 代码生成 | codegen: method call on non-object value |
 | **CE0164** | 代码生成 | codegen: type '%s' has no method '%.*s' |
 | **CE0165** | 代码生成 | codegen: too few arguments for variadic method '%s' (need at least %zu, got %zu) |
-| **CE0166** | 代码生成 | codegen: only direct or method calls supported in this iteration |
 | **CE0167** | 泛型实例化 | codegen: generic type constructor instance for '%.*s' was not registered |
 | **CE0168** | 构造器/初始化 | codegen: unknown type '%.*s' in constructor call |
 | **CE0169** | 构造器/初始化 | codegen: resolved constructor for type '%s' was not registered |

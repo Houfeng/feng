@@ -1,0 +1,176 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import std.collections;
+import fcts_lib.test;
+
+/** Callable used by immediate-result invocation coverage. */
+spec ImmediateReader(value: int): int;
+
+/** Callable that returns another callable value. */
+spec ImmediateReaderFactory(base: int): ImmediateReader;
+
+/** Generic callable used after its type argument has been instantiated. */
+spec ImmediateIdentity<T>(value: T): T;
+
+/** Variadic callable used by immediate-result invocation coverage. */
+spec ImmediateVariadicReader(prefix: int, values: int...): int;
+
+/** Produce one reader that closes over its base value. */
+func makeImmediateReader(base: int): ImmediateReader {
+  return (value: int) -> base + value;
+}
+
+/** Produce an array whose first element is a closed reader. */
+func makeImmediateReaders(base: int): ImmediateReader[] {
+  return [makeImmediateReader(base)];
+}
+
+/** Produce a callable that creates readers. */
+func makeImmediateReaderFactory(): ImmediateReaderFactory {
+  return (base: int) -> makeImmediateReader(base);
+}
+
+/** Produce one concretely instantiated generic callable value. */
+func makeImmediateIdentity<T>(): ImmediateIdentity<T> {
+  return (value: T) -> value;
+}
+
+/** Return a variadic reader that records its packed suffix length. */
+func makeImmediateVariadicReader(base: int): ImmediateVariadicReader {
+  return (prefix: int, values: int...) {
+    return base + prefix + values.length();
+  };
+}
+
+/** Forward a callable while preserving its constrained generic value type. */
+func forwardImmediateReader<T: ImmediateReader>(reader: T): T {
+  return reader;
+}
+
+/** Immediately invoke a callable returned with constrained generic type T. */
+func invokeForwardedImmediateReader<T: ImmediateReader>(
+  reader: T,
+  value: int
+): int {
+  return forwardImmediateReader<T>(reader)(value);
+}
+
+/** Concrete owner whose instance and static methods return callables. */
+type ImmediateReaderOwner {
+  let base: int;
+
+  /** Return a reader through an instance-method result. */
+  func reader(offset: int): ImmediateReader {
+    return makeImmediateReader(self.base + offset);
+  }
+
+  /** Return a reader through a static-method result. */
+  static func staticReader(base: int): ImmediateReader {
+    return makeImmediateReader(base);
+  }
+}
+
+/** Produce an owner for a multi-level method-call chain. */
+func makeImmediateReaderOwner(base: int): ImmediateReaderOwner {
+  return ImmediateReaderOwner { base: base };
+}
+
+/** Mutable probe used to observe callee evaluation count and ordering. */
+type ImmediateInvocationProbe {
+  var selections: int;
+
+  /** Increment the selection count and return the selected reader. */
+  func select(base: int): ImmediateReader {
+    self.selections += 1;
+    return makeImmediateReader(base + self.selections);
+  }
+
+  /** Observe the selection count while evaluating an outer argument. */
+  func argument(): int {
+    return self.selections;
+  }
+}
+
+/** Replace one writable callable array element during argument evaluation. */
+func replaceImmediateReader(
+  readers: ImmediateReader[!],
+  replacement: ImmediateReader
+): int {
+  readers[0] = replacement;
+  return 1;
+}
+
+/** Produce a plain array for the existing call-result indexing baseline. */
+func makeImmediateNumbers(): int[] {
+  return [7];
+}
+
+/** Execute callable-result immediate-invocation conformance coverage. */
+open func test_callable_result_immediate_invocation(): void {
+  describe("callable result immediate invocation", () {
+    test("function, method, static, and nested callable results", () {
+      assert(makeImmediateReader(30)(3) == 33,
+             "top-level function result invokes immediately");
+      assert(makeImmediateReaderOwner(10).reader(20)(3) == 33,
+             "instance method result invokes immediately");
+      assert(ImmediateReaderOwner.staticReader(40)(2) == 42,
+             "static method result invokes immediately");
+      assert(makeImmediateReaderFactory()(50)(4) == 54,
+             "callable result can return and invoke another callable");
+    });
+
+    test("array element and temporary array results", () {
+      let reader: ImmediateReader = makeImmediateReader(60);
+      let readers: ImmediateReader[] = [reader];
+      assert(readers[0](1) == 61,
+             "callable array element invokes directly");
+      assert(makeImmediateReaders(70)[0](2) == 72,
+             "temporary returned array element invokes directly");
+      assert(makeImmediateNumbers()[0] == 7,
+             "ordinary returned-array indexing remains supported");
+    });
+
+    test("callee is fixed once before arguments", () {
+      let probe = ImmediateInvocationProbe { selections: 0 };
+      let result = probe.select(80)(probe.argument());
+      assert(result == 82 && probe.selections == 1,
+             "callee evaluates once before its argument");
+    });
+
+    test("indexed callee survives replacement by an argument", () {
+      let original: ImmediateReader = makeImmediateReader(90);
+      let replacement: ImmediateReader = makeImmediateReader(900);
+      let readers: ImmediateReader[!] = [original];
+      let selectedResult = readers[0](
+        replaceImmediateReader(readers, replacement)
+      );
+      assert(selectedResult == 91,
+             "current call keeps the callable selected before replacement");
+      assert(readers[0](1) == 901,
+             "later calls observe the replacement callable");
+    });
+
+    test("generic and variadic callable results", () {
+      let reader: ImmediateReader = makeImmediateReader(100);
+      assert(makeImmediateIdentity<int>()(102) == 102,
+             "instantiated generic callable result invokes immediately");
+      assert(invokeForwardedImmediateReader<ImmediateReader>(reader, 3) == 103,
+             "constrained generic result invokes immediately");
+      assert(makeImmediateVariadicReader(110)(4, 1, 2, 3) == 117,
+             "variadic callable result uses ordinary packing");
+    });
+
+    test("imported callable and imported array results", () {
+      assert(libMakeImmediateReader(120)(5) == 125,
+             "imported function callable result invokes immediately");
+      assert(libMakeImmediateReaders(130)[0](6) == 136,
+             "imported callable array result invokes immediately");
+      assert(LibImmediateReaderOwner(140).reader(1)(7) == 148,
+             "imported instance method result invokes immediately");
+      assert(LibImmediateReaderOwner.staticReader(150)(8) == 158,
+             "imported static method result invokes immediately");
+    });
+  });
+}

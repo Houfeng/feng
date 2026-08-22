@@ -6949,6 +6949,107 @@ static void test_generic_callable_constraint_codegen(void) {
     feng_program_free(program);
 }
 
+/* Computed callables from calls, indexes, methods, constrained generic
+ * results, and variadic results all bridge into the existing invoke ABI. The
+ * writable-array case additionally requires a retained callee snapshot before
+ * an argument can replace the original element. */
+static void test_computed_callable_result_call_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.computed_callable_result;\n"
+        "spec Reader(value: int): int;\n"
+        "spec ReaderFactory(base: int): Reader;\n"
+        "spec Identity<T>(value: T): T;\n"
+        "spec VariadicReader(prefix: int, values: int...): int;\n"
+        "func makeReader(base: int): Reader {\n"
+        "  return (value: int) -> base + value;\n"
+        "}\n"
+        "func makeReaders(base: int): Reader[] {\n"
+        "  return [makeReader(base)];\n"
+        "}\n"
+        "func makeReaderFactory(): ReaderFactory {\n"
+        "  return (base: int) -> makeReader(base);\n"
+        "}\n"
+        "func makeIdentity<T>(): Identity<T> {\n"
+        "  return (value: T) -> value;\n"
+        "}\n"
+        "func forward<T: Reader>(reader: T): T { return reader; }\n"
+        "func invokeForward<T: Reader>(reader: T, value: int): int {\n"
+        "  return forward<T>(reader)(value);\n"
+        "}\n"
+        "func makeVariadic(base: int): VariadicReader {\n"
+        "  return (prefix: int, values: int...) { return base + prefix; };\n"
+        "}\n"
+        "type Factory {\n"
+        "  let base: int;\n"
+        "  func reader(offset: int): Reader {\n"
+        "    return makeReader(self.base + offset);\n"
+        "  }\n"
+        "  static func staticReader(base: int): Reader {\n"
+        "    return makeReader(base);\n"
+        "  }\n"
+        "}\n"
+        "func factory(): Factory { return Factory { base: 10 }; }\n"
+        "func replace(readers: Reader[!], next: Reader): int {\n"
+        "  readers[0] = next;\n"
+        "  return 1;\n"
+        "}\n"
+        "func returned(): int { return makeReader(20)(1); }\n"
+        "func indexed(): int { return makeReaders(30)[0](2); }\n"
+        "func method(): int { return factory().reader(40)(3); }\n"
+        "func staticMethod(): int { return Factory.staticReader(50)(4); }\n"
+        "func nested(): int { return makeReaderFactory()(60)(5); }\n"
+        "func genericSpec(): int { return makeIdentity<int>()(9); }\n"
+        "func variadic(): int { return makeVariadic(70)(6, 7, 8); }\n"
+        "func indexedMutation(): int {\n"
+        "  let original: Reader = makeReader(80);\n"
+        "  let replacement: Reader = makeReader(800);\n"
+        "  let readers: Reader[!] = [original];\n"
+        "  return readers[0](replace(readers, replacement));\n"
+        "}\n"
+        "func bound(reader: Reader, value: int): int {\n"
+        "  return reader(value);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "computed_callable_result_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &out,
+                                   &cgerr)) {
+        fprintf(stderr,
+                "codegen error (computed callable result): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "only direct or method calls") == NULL);
+    ASSERT(strstr(out.c_source, "feng_retain(_callee") != NULL);
+    ASSERT(strstr(out.c_source, "feng_array_check_index") != NULL);
+    ASSERT(strstr(out.c_source, "->invoke(") != NULL);
+    ASSERT(strstr(out.c_source, "FENG_VALUE_MANAGED_POINTER") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericObjectSpecInstanceSrc =
     "module feng.codegen.gs1;\n"
     "spec Box<T> {\n"
@@ -14012,6 +14113,7 @@ int main(void) {
     test_callable_spec_top_level_fn_codegen();
     test_callable_spec_reference_identity_equality_codegen();
     test_generic_callable_constraint_codegen();
+    test_computed_callable_result_call_codegen();
     test_generic_object_spec_instance_codegen();
     test_generic_callable_spec_instance_codegen();
     test_generic_object_spec_callable_field_call_codegen();

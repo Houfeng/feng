@@ -1952,6 +1952,53 @@ static void test_generic_type_brackets_without_colon_parses_as_index(void) {
     feng_program_free(program);
 }
 
+/* Calls, indexes, and member calls remain ordinary left-associated postfix
+ * nodes when their results are immediately called again. */
+static void test_callable_results_form_nested_postfix_ast(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let returned = makeReader(1)(2);\n"
+        "    let indexed = readers[0](3);\n"
+        "    let chained = factory().makeReader(4)(5);\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengExpr *outer;
+    const FengExpr *inner;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "callable_result_postfix_ast.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body != NULL && body->statement_count == 3U);
+
+    outer = body->statements[0]->as.binding.initializer;
+    ASSERT(outer != NULL && outer->kind == FENG_EXPR_CALL);
+    ASSERT(outer->as.call.callee != NULL &&
+           outer->as.call.callee->kind == FENG_EXPR_CALL);
+
+    outer = body->statements[1]->as.binding.initializer;
+    ASSERT(outer != NULL && outer->kind == FENG_EXPR_CALL);
+    ASSERT(outer->as.call.callee != NULL &&
+           outer->as.call.callee->kind == FENG_EXPR_INDEX);
+
+    outer = body->statements[2]->as.binding.initializer;
+    ASSERT(outer != NULL && outer->kind == FENG_EXPR_CALL);
+    inner = outer->as.call.callee;
+    ASSERT(inner != NULL && inner->kind == FENG_EXPR_CALL);
+    ASSERT(inner->as.call.callee != NULL &&
+           inner->as.call.callee->kind == FENG_EXPR_MEMBER);
+    ASSERT(inner->as.call.callee->as.member.object != NULL &&
+           inner->as.call.callee->as.member.object->kind == FENG_EXPR_CALL);
+
+    feng_program_free(program);
+}
+
 /* G3-9: Parser tests for generic declarations and type references. */
 
 static void test_generic_type_declaration(void) {
@@ -3685,6 +3732,7 @@ int main(void) {
     test_index_expression_is_unambiguous_and_remains_value_brackets();
     test_non_generic_type_brackets_without_colon_parses_as_index();
     test_generic_type_brackets_without_colon_parses_as_index();
+    test_callable_results_form_nested_postfix_ast();
     test_member_annotations_and_constructors();
     test_static_members_parse();
     test_spec_static_members_parse();

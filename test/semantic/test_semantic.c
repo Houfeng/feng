@@ -19195,6 +19195,139 @@ static void test_prepacked_variadic_rejects_explicit_generic_type_mismatch(void)
     feng_program_free(program);
 }
 
+/* Every statically callable computed-result family is accepted before
+ * Codegen, including constrained generic and variadic results. */
+static void test_computed_callable_result_calls_are_semantically_valid(void) {
+    const char *source =
+        "module demo.computed_callable.semantic;\n"
+        "spec Reader(value: int): int;\n"
+        "spec Identity<T>(value: T): T;\n"
+        "spec VariadicReader(prefix: int, values: int...): int;\n"
+        "func makeReader(base: int): Reader {\n"
+        "  return (value: int) -> base + value;\n"
+        "}\n"
+        "func makeReaders(base: int): Reader[] {\n"
+        "  return [makeReader(base)];\n"
+        "}\n"
+        "func makeIdentity<T>(): Identity<T> {\n"
+        "  return (value: T) -> value;\n"
+        "}\n"
+        "func forward<T: Reader>(reader: T): T { return reader; }\n"
+        "func invokeForward<T: Reader>(reader: T, value: int): int {\n"
+        "  return forward<T>(reader)(value);\n"
+        "}\n"
+        "func makeVariadic(base: int): VariadicReader {\n"
+        "  return (prefix: int, values: int...) { return base + prefix; };\n"
+        "}\n"
+        "type Factory {\n"
+        "  let base: int;\n"
+        "  func reader(offset: int): Reader {\n"
+        "    return makeReader(self.base + offset);\n"
+        "  }\n"
+        "  static func staticReader(base: int): Reader {\n"
+        "    return makeReader(base);\n"
+        "  }\n"
+        "}\n"
+        "func factory(): Factory { return Factory { base: 10 }; }\n"
+        "func run(reader: Reader): int {\n"
+        "  let returned = makeReader(20)(1);\n"
+        "  let indexed = makeReaders(30)[0](2);\n"
+        "  let method = factory().reader(40)(3);\n"
+        "  let staticMethod = Factory.staticReader(50)(4);\n"
+        "  let genericSpec = makeIdentity<int>()(7);\n"
+        "  let generic = invokeForward<Reader>(reader, 5);\n"
+        "  let variadic = makeVariadic(60)(6, 7, 8);\n"
+        "  return returned + indexed + method + staticMethod + genericSpec +\n"
+        "    generic + variadic;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "computed_callable_result_ok.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Computed-result calls retain the ordinary non-callable, signature, and
+ * variadic-forwarding diagnostics instead of reaching Codegen. */
+static void test_invalid_computed_callable_result_calls_are_rejected(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "computed_non_callable_result.ff",
+            "module demo.computed_callable.non_callable;\n"
+            "func number(): int { return 1; }\n"
+            "func bad(): int { return number()(); }\n",
+            "AE0507"
+        },
+        {
+            "computed_callable_argument_type.ff",
+            "module demo.computed_callable.argument_type;\n"
+            "spec Reader(value: int): int;\n"
+            "func makeReader(): Reader { return (value: int) -> value; }\n"
+            "func bad(): int { return makeReader()(\"bad\"); }\n",
+            "AE0506"
+        },
+        {
+            "computed_callable_argument_count.ff",
+            "module demo.computed_callable.argument_count;\n"
+            "spec Reader(value: int): int;\n"
+            "func makeReader(): Reader { return (value: int) -> value; }\n"
+            "func bad(): int { return makeReader()(1, 2); }\n",
+            "AE0506"
+        },
+        {
+            "computed_variadic_forwarding.ff",
+            "module demo.computed_callable.variadic_forwarding;\n"
+            "spec Reader(values: int...): int;\n"
+            "func makeReader(): Reader {\n"
+            "  return (values: int...) { return 0; };\n"
+            "}\n"
+            "func bad(): int { return makeReader()(...1); }\n",
+            "AE0524"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path,
+                                                    cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* T6: variadic callable-form specs accept variadic lambdas and remain callable through the spec value. */
 static void test_variadic_callable_spec_lambda_call_ok(void) {
     const char *source =
@@ -28026,6 +28159,8 @@ int main(void) {
     test_prepacked_variadic_rejects_array_element_mismatch();
     test_prepacked_variadic_rejects_writable_array();
     test_prepacked_variadic_rejects_explicit_generic_type_mismatch();
+    test_computed_callable_result_calls_are_semantically_valid();
+    test_invalid_computed_callable_result_calls_are_rejected();
     test_variadic_callable_spec_lambda_call_ok();
     test_variadic_overload_conflict_rejected();
     test_variadic_single_fixed_and_variadic_overload_conflict_rejected();

@@ -1,0 +1,34 @@
+open module fcts_lib.test;
+
+/** Exported callable returned and invoked directly by a consumer package. */
+open spec LibImmediateReader(value: int): int;
+
+/** Produce one exported reader with a captured base. */
+open func libMakeImmediateReader(base: int): LibImmediateReader {
+  return (value: int) -> base + value;
+}
+
+/** Produce an exported array containing one callable element. */
+open func libMakeImmediateReaders(base: int): LibImmediateReader[] {
+  return [libMakeImmediateReader(base)];
+}
+
+/** Exported owner whose methods return callable values. */
+open type LibImmediateReaderOwner {
+  open let base: int;
+
+  /** Initialize the exported owner. */
+  func LibImmediateReaderOwner(base: int) {
+    self.base = base;
+  }
+
+  /** Return a callable from an imported instance method. */
+  open func reader(offset: int): LibImmediateReader {
+    return libMakeImmediateReader(self.base + offset);
+  }
+
+  /** Return a callable from an imported static method. */
+  open static func staticReader(base: int): LibImmediateReader {
+    return libMakeImmediateReader(base);
+  }
+}

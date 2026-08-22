@@ -13,6 +13,7 @@ func main(args: string[]) {
       test_string();
       test_flow();
       test_function();
+      test_callable_result_immediate_invocation();
       test_extern();
       test_lambda();
       test_type();

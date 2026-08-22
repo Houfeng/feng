@@ -1,6 +1,6 @@
 # Feng callable 表达式结果立即调用修复方案
 
-> **状态**：待 Review，尚未开始实施。
+> **状态**：已完成。
 >
 > **性质**：独立编译器 bugfix 工程方案，不是语言权威规范。调用表达式与求值顺序的
 > 正式语义由 [`feng-expression.md`](../specifications/feng-expression.md) 定义；
@@ -340,63 +340,82 @@ selected(41);
 
 ### 7.1 规范
 
-- [ ] Review 本方案并确认范围、语义和强制边界。
-- [ ] 在 `feng-expression.md` 的唯一权威位置明确 callable 结果立即调用及求值顺序。
-- [ ] 核对 `feng-function.md`、`feng-spec.md`，避免重复定义。
-- [ ] 同步当前错误码总表中 `CE0166` 的消解结果。
+- [x] Review 本方案并确认范围、语义和强制边界。
+- [x] 在 `feng-expression.md` 的唯一权威位置明确 callable 结果立即调用及求值顺序。
+- [x] 核对 `feng-function.md`、`feng-spec.md`，避免重复定义。
+- [x] 同步当前错误码总表中 `CE0166` 的消解结果。
 
 ### 7.2 实现
 
-- [ ] 保持 Parser AST，不新增语法或 AST kind。
-- [ ] 用 Semantic 定向探针确认各合法与非法场景的类型事实和诊断阶段。
-- [ ] 若 Semantic 存在事实缺口，先记录问题，再采用通用方案补齐。
-- [ ] 为 computed callable callee 增加统一 Codegen 发射入口。
-- [ ] 复用具体 callable 与受约束泛型 callable 的既有调用 helper。
-- [ ] 删除 `CE0166` 的现有限制触发点，不增加替代用户级 CE。
-- [ ] 核对 callee 单次求值、参数顺序、返回槽和所有权清理。
-- [ ] 核对普通直接函数、构造函数、直接成员方法与已绑定 callable 调用生成结果不变。
+- [x] 保持 Parser AST，不新增语法或 AST kind。
+- [x] 用 Semantic 定向探针确认各合法与非法场景的类型事实和诊断阶段。
+- [x] 确认 Semantic 不存在事实缺口，无需修改 Semantic 实现。
+- [x] 为 computed callable callee 增加统一 Codegen 发射入口。
+- [x] 复用具体 callable 与受约束泛型 callable 的既有调用 helper。
+- [x] 删除 `CE0166` 的现有限制触发点，不增加替代用户级 CE。
+- [x] 核对 callee 单次求值、参数顺序、返回槽和所有权清理。
+- [x] 核对普通直接函数、构造函数、直接成员方法与已绑定 callable 调用的既有分流不变。
 
 ### 7.3 编译器测试 `test/`
 
-- [ ] Parser 新增 `foo()()`、`arr[0]()` 与多级后缀组合的嵌套 AST 结构覆盖。
-- [ ] Semantic 新增调用结果与数组索引结果立即调用的正向覆盖。
-- [ ] Semantic 新增非 callable 结果、实参数量/类型不匹配及变参非法转发的负向覆盖。
-- [ ] Semantic 覆盖具体 callable-form `spec`、泛型实例和受 callable 约束类型参数。
-- [ ] Codegen 覆盖顶层函数、实例/静态方法、callable value、数组索引及 imported 来源。
-- [ ] Codegen 验证内层 callee 只发射一次，并复用既有 callable invoke/cleanup 路径。
-- [ ] Codegen 正确消费索引产生的借用 callable，必要时按显式绑定等价物化，并复用临时
+- [x] Parser 新增 `foo()()`、`arr[0]()` 与多级后缀组合的嵌套 AST 结构覆盖。
+- [x] Semantic 新增调用结果与数组索引结果立即调用的正向覆盖。
+- [x] Semantic 新增非 callable 结果、实参数量/类型不匹配及变参非法转发的负向覆盖。
+- [x] Semantic 覆盖具体 callable-form `spec`、泛型实例和受 callable 约束类型参数。
+- [x] Codegen 单元测试覆盖顶层函数、实例/静态方法、callable value、数组索引、泛型实例、
+      受约束泛型和变参；imported 来源由跨包 FCTS consumer 覆盖。
+- [x] Codegen 与 FCTS 共同验证内层 callee 只发射一次，并复用既有 callable
+      invoke/cleanup 路径。
+- [x] Codegen 正确消费索引产生的借用 callable，必要时按显式绑定等价物化，并复用临时
       数组 receiver 的既有生命周期与清理规则。
-- [ ] Codegen 验证外层实参替换原数组元素时，仍调用实参求值前固定的 callable。
-- [ ] Codegen 保持 `foo()[0]` 及普通数组索引生成结果不变。
-- [ ] 不修改或删除任何既有测试场景；只新增用例与入口注册。
+- [x] Codegen 与 FCTS 验证外层实参替换原数组元素时，仍调用实参求值前固定的 callable。
+- [x] FCTS 保持 `foo()[0]` 及普通数组索引行为不变。
+- [x] 不修改或删除任何既有测试场景；只新增用例与入口注册。
 
 ### 7.4 Feng 兼容性测试 `fcts/`
 
-- [ ] 新增 `makeReader(30)(3) == 33` 的真实执行用例。
-- [ ] 新增 `readers[0](41) == 42` 与 `makeReaders()[0](41) == 42` 的真实执行用例。
-- [ ] 新增实例/静态方法返回 callable 后立即调用的代表用例。
-- [ ] 新增泛型 callable 返回、受约束泛型 callable 结果和变参结果的代表用例。
-- [ ] 新增多级后缀组合与 imported consumer 的代表用例。
-- [ ] 保留 `foo()[0]` 已支持行为，并验证本次没有引入索引路径回归。
-- [ ] 验证 callee 单次求值、callee-before-arguments 顺序及闭包捕获生命周期。
-- [ ] 不做来源、泛型和包形态的笛卡尔积；每个非等价语义或 ABI 路径至少一个代表用例。
+- [x] 新增 `makeReader(30)(3) == 33` 的真实执行用例。
+- [x] 新增 `readers[0](41) == 42` 与 `makeReaders()[0](41) == 42` 的真实执行用例。
+- [x] 新增实例/静态方法返回 callable 后立即调用的代表用例。
+- [x] 新增泛型 callable 返回、受约束泛型 callable 结果和变参结果的代表用例。
+- [x] 新增多级后缀组合与 imported consumer 的代表用例。
+- [x] 保留 `foo()[0]` 已支持行为，并验证本次没有引入索引路径回归。
+- [x] 验证 callee 单次求值、callee-before-arguments 顺序及闭包捕获生命周期。
+- [x] 不做来源、泛型和包形态的笛卡尔积；每个非等价语义或 ABI 路径至少一个代表用例。
 
 ### 7.5 回归与交付
 
-- [ ] 运行 Parser、Semantic、Codegen、Symbol 和 FCTS 定向测试。
-- [ ] 在沙箱外运行完整 `make test`。
-- [ ] 审计 runtime、ABI、`.ft`、现有合法路径运行时成本和既有测试边界。
-- [ ] 补齐第 8 节实施问题及解决结果。
-- [ ] 补齐第 9 节交付记录并更新本文状态。
+- [x] 运行 Parser、Semantic、Codegen、Symbol 和 FCTS 定向测试。
+- [x] 在沙箱外运行完整 `make test`。
+- [x] 审计 runtime、ABI、`.ft`、现有合法路径运行时成本和既有测试边界。
+- [x] 补齐第 8 节实施问题及解决结果。
+- [x] 补齐第 9 节交付记录并更新本文状态。
 
 ## 8. 实施过程问题记录
 
-> 当前为空，实施尚未开始。
+### ISSUE-001：新增变参 FCTS 缺少数组 fit 导入
+
+- **关联任务**：7.4 泛型与变参 callable 结果真实执行覆盖。
+- **状态**：已解决。
+- **最小复现**：测试文件只导入 `std`，在变参 lambda 中调用 `values.length()`。
+- **实际结果**：Semantic 报告 `AE0306: type 'i64[]' has no member 'length'`，并产生后续
+  表达式类型与 callable 目标不匹配诊断。
+- **期望结果**：测试夹具显式导入提供数组 `length()` fit 的 `std.collections`。
+- **根因**：新增 FCTS 的模块依赖声明不完整；不是 callable 立即调用的 Semantic 或
+  Codegen 缺口。
+- **通用修复方案**：按标准库现有使用方式补充 `import std.collections;`，不修改编译器。
+- **运行时性能影响**：无。
+- **runtime ABI / 公开 ABI / `.ft` 影响**：无。
+- **既有测试影响**：无，只修正新增测试夹具。
+- **是否需要人工决策**：否。
+- **专项验证结果**：补充导入后 `make fcts-tests` 通过，结果为
+  `869 passed, 0 failed, 0 skipped`。
+- **全量回归结果**：沙箱外完整 `make test` 通过。
 
 实施过程中发现任何偏离既有规范、本文方案或预期测试结果的问题，必须先在本节记录，
 再分析和解决。不确定或触及第 5.3 节强制停止条件时，不得继续修改实现，交由人工决策。
 
-记录模板：
+后续问题记录模板：
 
 ```markdown
 ### ISSUE-XXX：问题标题
@@ -418,14 +437,29 @@ selected(41);
 
 ## 9. 交付记录
 
-> 实施完成后填写。
-
-- **规范变更**：
-- **实现结果**：
-- **新增测试**：
-- **运行时成本**：
-- **ABI 与 `.ft`**：
-- **定向验证**：
-- **全量回归**：
-- **未解决问题**：
-- **建议 commit message**：
+- **规范变更**：在 `feng-expression.md` 的调用表达式权威位置明确：任意完成泛型代入后
+  静态类型为 callable-form `spec`，或为受 callable-form `spec` 约束类型参数的表达式，
+  均可作为 callee；callee 只求值一次且先于全部实参。同步从当前错误码总表移除已消解的
+  `CE0166`。
+- **实现结果**：Codegen 为非 identifier、非 member 的 computed callee 增加统一表达式
+  发射入口。该入口先递归求值并固定 callee，再分别复用具体 callable 与受约束泛型
+  callable 的既有 invoke helper；Semantic 已接受却缺少 callable 类型事实时改报内部
+  `IE0002`，不再保留用户级形态限制。Parser 与 Semantic 实现均无需修改。
+- **新增测试**：Parser 覆盖嵌套调用、索引调用和多级后缀 AST；Semantic 覆盖具体 spec、
+  泛型 spec 实例、受约束类型参数、变参及 `AE0507`、`AE0506`、`AE0524` 负向诊断；
+  Codegen 覆盖调用、索引、实例/静态方法、嵌套 callable、泛型、变参及数组元素替换；
+  FCTS 覆盖同包与跨包真实执行、临时数组、一次求值、求值顺序、固定调用目标和普通
+  `foo()[0]` 非回归。
+- **运行时成本**：直接函数、构造函数、直接成员方法和已绑定 callable 的既有合法路径
+  未进入新增分支，运行时成本不变。新支持路径中，owned callee 复用既有局部物化；借用的
+  数组元素仅执行与显式 `let selected = readers[0]` 等价的一次 retain 和配对作用域
+  release；受约束泛型复用既有 descriptor 物化。相对于等价显式绑定写法，没有增加
+  closure、wrapper、invoke 层级、retain/release 或动态查找。
+- **ABI 与 `.ft`**：未修改 Runtime、Runtime 私有 ABI、公开 ABI、生成程序 ABI 或 `.ft`。
+- **定向验证**：`build/bin/test_parser`、`build/bin/test_semantic`、
+  `build/bin/test_codegen`、`build/bin/test_symbol` 均通过；生成 C 通过编译；
+  `make fcts-tests` 为 `869 passed, 0 failed, 0 skipped`；`git diff --check` 通过。
+- **全量回归**：沙箱外完整 `make test` 通过，包含 UBSan、普通 `-O2 -Werror`、91 项
+  smoke、CLI、标准库、FCTS、性能约束、增量构建和发布脚本测试。
+- **未解决问题**：无。
+- **建议 commit message**：`fix(codegen): support immediate invocation of callable expression results`

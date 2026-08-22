@@ -2215,6 +2215,10 @@ static bool cg_emit_expr_for_expected_type(CG *cg,
                                            const CGType *expected_type,
                                            ExprResult *out);
 static void er_free(ExprResult *r);
+static bool cg_register_local_for_cleanup(CG *cg,
+                                          const char *cname,
+                                          const CGType *type,
+                                          FengToken token);
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out);
 static bool cg_emit_spec_field_borrow(CG *cg,
@@ -24682,6 +24686,130 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     return ok;
 }
 
+/* Fix one computed callable value before its enclosing call evaluates any
+ * arguments. Owned results are adopted by the ordinary local materializer;
+ * borrowed concrete callables receive the same retain and scoped cleanup as
+ * an explicit Feng local binding. Generic values reuse descriptor-selected
+ * materialization so the concrete runtime representation remains unchanged. */
+static bool cg_stabilize_computed_callable_callee(CG *cg,
+                                                  ExprResult *callee,
+                                                  FengToken blame) {
+    if (callee == NULL || callee->type == NULL || callee->c_expr == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "IE0002",
+                       "codegen: computed callable has no emitted value");
+    }
+    if (callee->type->kind == CG_TYPE_GENERIC_PARAM || callee->owns_ref) {
+        if (cg_materialize_to_local(cg, callee, "_callee") == NULL) {
+            if (!cg->failed) {
+                cg_fail(cg,
+                        blame,
+                        "IE0001",
+                        "codegen: failed to materialize computed callable");
+            }
+            return false;
+        }
+        return true;
+    }
+    if (callee->type->kind != CG_TYPE_CALLABLE ||
+        !cgtype_is_managed(callee->type)) {
+        return cg_fail(cg,
+                       blame,
+                       "IE0002",
+                       "codegen: computed call target is not a callable value");
+    }
+
+    char *temporary = cg_fresh_temp(cg, "_callee");
+    char *ctype = cg_ctype_dup(callee->type);
+
+    if (temporary == NULL || ctype == NULL) {
+        free(temporary);
+        free(ctype);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    %s %s = %s; feng_retain(%s);\n",
+                   ctype,
+                   temporary,
+                   callee->c_expr,
+                   temporary);
+    free(ctype);
+    if (!cg_register_local_for_cleanup(cg,
+                                       temporary,
+                                       callee->type,
+                                       blame)) {
+        free(temporary);
+        return false;
+    }
+
+    free(callee->c_expr);
+    callee->c_expr = strdup(temporary);
+    callee->owns_ref = false;
+    callee->is_addressable = true;
+    callee->is_storage_address = false;
+    free(temporary);
+    if (callee->c_expr == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return true;
+}
+
+/* Emit a call whose target is an arbitrary computed expression already
+ * accepted as callable by Semantic. This path only bridges the emitted value
+ * into the existing concrete or constrained-generic callable invoke helpers. */
+static bool cg_emit_computed_callable_call(CG *cg,
+                                           const FengExpr *call,
+                                           ExprResult *out) {
+    ExprResult callee;
+
+    er_init(&callee);
+    if (!cg_emit_expr(cg, call->as.call.callee, &callee)) {
+        return false;
+    }
+    if (callee.type != NULL && callee.type->kind == CG_TYPE_CALLABLE &&
+        callee.type->user_spec != NULL &&
+        callee.type->user_spec->form == FENG_SPEC_FORM_CALLABLE) {
+        const UserSpec *spec = callee.type->user_spec;
+
+        if (!cg_stabilize_computed_callable_callee(cg,
+                                                   &callee,
+                                                   call->token)) {
+            er_free(&callee);
+            return false;
+        }
+        return cg_emit_callable_value_call(cg, call, &callee, spec, out);
+    }
+    if (callee.type != NULL &&
+        callee.type->kind == CG_TYPE_GENERIC_PARAM) {
+        size_t generic_param_index = callee.type->generic_param_index;
+        const UserSpec *constraint =
+            cg_generic_param_constraint_spec(cg, generic_param_index);
+
+        if (constraint != NULL &&
+            constraint->form == FENG_SPEC_FORM_CALLABLE) {
+            if (!cg_stabilize_computed_callable_callee(cg,
+                                                       &callee,
+                                                       call->token)) {
+                er_free(&callee);
+                return false;
+            }
+            return cg_emit_generic_callable_value_call(cg,
+                                                       call,
+                                                       &callee,
+                                                       generic_param_index,
+                                                       out);
+        }
+    }
+
+    er_free(&callee);
+    return cg_fail(cg,
+                   call->token,
+                   "IE0002",
+                   "codegen: Semantic accepted a non-callable computed call target");
+}
+
 static bool cg_build_method_type_param_constraints(CG *cg,
                                                    const UserType *owner,
                                                    const FengCallableSignature *sig,
@@ -28505,8 +28633,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     }
 
     if (e->as.call.callee->kind != FENG_EXPR_IDENTIFIER) {
-        return cg_fail(cg, e->token,
-            "CE0166", "codegen: only direct or method calls supported in this iteration");
+        return cg_emit_computed_callable_call(cg, e, out);
     }
     const FengSlice name = e->as.call.callee->as.identifier;
 

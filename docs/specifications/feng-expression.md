@@ -184,6 +184,10 @@ Feng 为可预测性采用从左到右的求值顺序。
 
 - 二元运算从左操作数开始求值,再求值右操作数。
 - 函数调用先求值被调用目标,再按从左到右顺序求值每个参数。
+- 任意表达式在完成泛型代入后的静态类型为 callable-form `spec`,或为受 callable-form
+  `spec` 约束的类型参数时,均可作为调用目标。调用、索引及其他后缀表达式产生上述类型
+  后可立即继续调用；调用目标只求值一次,并且必须在全部外层实参之前完成求值和固定。
+  该规则不产生匿名 callable 类型,也不允许延迟闭合泛型函数或方法值。
 - 成员访问、下标访问和调用属于后缀运算,按从左到右连续展开。
 - `string` 与数组的长度能力由标准库基于 `fit` 提供的 `length()` 方法承载,属于方法调用语义；当前版本不支持 `.length` / `.len` 属性访问。
 - `&&` 和 `||` 使用短路求值。
@@ -194,6 +198,24 @@ let value = get_user().scores[index + 1];
 ```
 
 在上例中,先求值 `get_user()`、再求值 `index + 1`,最后执行下标访问。
+
+callable 返回值和 callable 数组元素可以继续作为下一调用的目标：
+
+```feng
+spec IntReader(value: int): int;
+
+func makeReader(base: int): IntReader {
+  return (value: int) -> base + value;
+}
+
+let readers: IntReader[] = [makeReader(1)];
+let first = makeReader(30)(3); // 先固定 makeReader(30) 的结果,再求值 3
+let second = readers[0](41);   // 先固定 readers[0] 的 callable,再求值 41
+```
+
+调用目标不是 callable 时由语义分析拒绝；callable 的参数数量、参数类型及变参转发继续
+遵循 [Feng 语言函数规范](./feng-function.md),callable-form `spec` 的类型与约束继续遵循
+[Feng 语言 `spec` 规范](./feng-spec.md)。
 
 ## 5 运算符优先级
 
