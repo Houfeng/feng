@@ -5,11 +5,25 @@ import {
   I18nPlugin,
   InputPathToUrlTransformPlugin,
 } from "@11ty/eleventy";
+import Shiki from "@shikijs/markdown-it";
 
 const WEBSITE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const MANUAL_DIRECTORY = path.resolve(WEBSITE_DIRECTORY, "../docs/manual");
 const DOCS_OUTPUT_DIRECTORY = path.join(WEBSITE_DIRECTORY, "docs");
+const FENG_GRAMMAR_PATH = path.resolve(
+  WEBSITE_DIRECTORY,
+  "../editors/feng-vscode/syntaxes/feng.tmLanguage.json",
+);
 const SUPPORTED_LANGUAGES = ["en", "zh-CN"];
+
+const FENG_GRAMMAR = {
+  ...JSON.parse(await readFile(FENG_GRAMMAR_PATH, "utf8")),
+  name: "feng",
+};
+const SYNTAX_HIGHLIGHT = await Shiki({
+  langs: [FENG_GRAMMAR, "bash", "json"],
+  theme: "github-dark-default",
+});
 
 const NAVIGATION = [
   {
@@ -316,6 +330,10 @@ export default function configureEleventy(eleventyConfig) {
   eleventyConfig.addPassthroughCopy({ "docs-src/assets": "docs/assets" });
   eleventyConfig.addPassthroughCopy({ "docs-src/docs-index.html": "docs/index.html" });
   eleventyConfig.addWatchTarget("docs-src");
+  eleventyConfig.addWatchTarget(FENG_GRAMMAR_PATH);
+  eleventyConfig.amendLibrary("md", (markdownLibrary) => {
+    markdownLibrary.use(SYNTAX_HIGHLIGHT);
+  });
 
   eleventyConfig.on("eleventy.before", async () => {
     await rm(DOCS_OUTPUT_DIRECTORY, { recursive: true, force: true });

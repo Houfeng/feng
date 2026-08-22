@@ -7,6 +7,7 @@
     "docs:serve": "eleventy --config=eleventy.config.js --serve"
   },
   "devDependencies": {
-    "@11ty/eleventy": "3.1.6"
+    "@11ty/eleventy": "3.1.6",
+    "@shikijs/markdown-it": "4.4.3"
   }
 }

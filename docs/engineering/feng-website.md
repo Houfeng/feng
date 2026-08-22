@@ -101,6 +101,7 @@
 - 官网静态资源命名应清晰稳定，便于后续继续扩展多页结构。
 - 网站构建工具及其依赖配置统一放在 `website/`；`website/package.json` 与锁文件需要提交，`website/node_modules/` 不得提交。
 - 用户手册使用 Eleventy 生成。生成内容写入 `website/docs/`，该目录不得提交；每次正式构建前必须清理旧的生成内容，避免已删除页面残留。
+- 用户手册的围栏代码块由 Shiki 在 Eleventy 构建阶段生成静态高亮 HTML，生成页面不得依赖客户端 JavaScript 执行语法高亮。Feng 代码高亮必须复用 `editors/feng-vscode/syntaxes/feng.tmLanguage.json`，不得在网站构建配置中另行维护 Feng 语法定义。
 - 本地预览以 `website/` 为站点根目录，同时提供首页与已生成的用户手册；手册内容或模板变化后需要重新生成并刷新预览。
 - GitHub Pages 部署物必须通过临时 staging 生成。CI 在复制 `website/` 到 staging 前生成 `website/docs/`；除生成的用户手册外，staging 仅按 `docs/engineering/feng-release-and-install.md` §7.2 注入在线安装脚本。
 - 自定义域名由仓库 GitHub Pages 设置管理，Actions 部署物不维护 `CNAME` 文件。
@@ -120,6 +121,7 @@
 - 关闭 JavaScript 后，导航、全部代码示例、安装说明、文档、插件、开源与语言菜单仍然可读，主题跟随系统偏好。
 - 键盘操作、交互反馈与跨设备内容一致性符合本规范。
 - `website/docs/` 的页面均来自 `docs/manual/` 中对应 Markdown 文件，生成结果不存在未转换的本地 `.md` 链接。
+- 手册中的 Feng 围栏代码块生成静态语法高亮标记；关闭 JavaScript 后高亮仍然存在，并与代码复制功能兼容。
 - 英文与简体中文手册的对应页面可以相互切换，页面语言属性与当前内容一致。
 - 手册章节导航、页内锚点及前后章节入口指向有效页面，不跨语言串联。
 - 从首页和手册切换主题时使用同一份持久化状态。
