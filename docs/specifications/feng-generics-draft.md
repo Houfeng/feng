@@ -415,6 +415,10 @@ spec Reader<T: Bar> { ... }
 - 若泛型约束是 intersection-form `spec`，则该类型参数在泛型声明体内按
   intersection-form 合并后的成员表面与 witness 使用；冲突与缺项继续遵循
   intersection-form 的既有规则。
+- 若泛型约束是 intersection-form `spec`，`value: T` 的实例方法引用还可以在明确
+  callable-form `spec` 目标下形成方法值。requirement 从约束展平、去重后的成员面选择，
+  receiver 继续保持闭合 `T` 的引用或值语义，并直接使用该闭合类型的 merged witness；
+  不得先把 `T` 转换、装箱或拆分为任一 spec 值。
 - 约束语法不引入新的结构匹配或鸭子类型语义；它只表示“该类型参数在当前泛型声明体内可按泛型约束已有语义使用”。
 - 在 `spec Child: Parent<int>`、`spec Child<T>: Parent<T>` 这类父 `spec` 列表中，`Parent<int>`、`Parent<T>` 都属于对泛型 `spec` 的使用，而不是新的类型参数定义。
 - 因此，父 `spec` 列表允许写具体类型实参，也允许把当前 `spec` 自己的类型参数继续传递给父泛型 `spec`。
@@ -491,11 +495,14 @@ spec Reader<T: Bar> { ... }
 - [必须] object-form `spec` 约束下的泛型值实例方法引用可以在明确 callable-form
   `spec` 目标下形成值；编译器必须保留完整 `T` 类型事实，并按闭合 `T` 的既有复制、
   保留和清理规则绑定 receiver。
+- [必须] intersection-form `spec` 约束下的泛型值实例方法引用可以在明确 callable-form
+  `spec` 目标下形成值；编译器必须同时保留完整 `T` 类型事实、约束的 merged witness
+  和唯一 requirement 原声明，并按闭合 `T` 的既有复制、保留和清理规则绑定 receiver。
 - [必须] object-form `spec` 约束下的类型参数静态方法引用 `T.method` 可以在明确
   callable-form `spec` 目标下形成值；编译器必须保留直接调用已选定的 requirement、
   caller 视角的 `T` 和目标 callable 类型，并在闭合点绑定 `T` descriptor 的 witness 槽。
-- [禁止] 为形成上述泛型实例方法值，把 `T` 转换或装箱为 object-form `spec` 值，或以
-  单态化共享泛型函数体作为语义成立的前提。
+- [禁止] 为形成上述泛型实例方法值，把 `T` 转换、装箱或拆分为 object-form/intersection-form
+  `spec` 值，或以单态化共享泛型函数体作为语义成立的前提。
 - [必须] callable-form `spec` 显式转换属于明确 callable 目标；其泛型函数或方法操作数必须写为显式泛型 target，先闭合来源泛参，再执行结构匹配。转换目标不得用于推导来源泛参。
 - [禁止] 把显式泛型 target 留作没有目标类型的独立值；若 `<...>` 已被 Parser 识别为显式泛型 target，但后续未形成合法调用、对象构造、数组创建、目标明确的 callable value 或其他已定义消费形式，语义阶段必须报错。
 - [禁止] 由 callable-form `spec` 目标隐式推导泛型函数或方法来源自身声明的类型参数。
@@ -589,6 +596,11 @@ spec Reader<T: Bar> { ... }
 - object-form `spec` 约束下的泛型值实例方法值必须复用直接调用的 requirement 与
   witness 选择，同时保留 receiver 的开放 `T` 类型表达式；最终闭合点负责确定 receiver
   布局和生命周期，共享泛型体不得执行运行时成员搜索、满足关系查询或 receiver 装箱。
+- intersection-form `spec` 约束下的泛型值实例方法值必须复用直接调用的 merged
+  requirement/witness 选择，同时保留 receiver 的开放 `T` 类型表达式和 requirement
+  原声明；最终闭合点使用同一 callable dependency 记录确定 receiver 布局、生命周期和
+  精确 merged witness 槽，共享泛型体不得执行运行时成员搜索、满足关系查询或 receiver
+  装箱。
 - object-form `spec` 约束下的类型参数静态方法值必须复用直接调用的 requirement 与
   witness 选择，同时保留开放 `T` 和目标 callable 类型；最终闭合点生成绑定闭合 `T`
   witness 槽的 immortal callable singleton，共享泛型体只读取既有 callable dependency

@@ -270,6 +270,10 @@ type Bad: Widget {
   `spec` 目标下形成方法值。来源 requirement 仍按 `T` 的约束实例选择，但 receiver
   保持 `T`：闭合 `T` 为引用类型时复制并保留同一引用，闭合 `T` 为值类型时复制形成点
   的值。形成方法值不得先把 receiver 转换或装箱为 object-form `spec` 值。
+- `value: T` 的约束为 intersection-form `spec` 时，`value.method` 采用相同的 receiver
+  绑定规则，并从约束展平、去重后的合并成员面唯一选择 requirement。形成点保留完整
+  `T` 值、requirement 原声明 object-form `spec` 和闭合 `T` 对应的 merged witness；
+  不得把 receiver 转换或装箱为 intersection-form/object-form `spec` 值。
 - 具体类型的自有静态方法和当前位置可见的 `fit` 静态方法，可以通过 `Type.method`
   在明确 callable-form `spec` 目标下形成静态方法值。候选面、可见性过滤、owner/fit
   泛型代入和重载选择与同一 `Type.method(args)` 直接调用一致；形成点固定唯一的 owner、
@@ -574,6 +578,10 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - [必须] object-form `spec` 约束下的泛型值实例方法引用，在具有明确 callable-form
   `spec` 目标时必须复用该约束实例的 requirement 选择，并按闭合 `T` 的值模型绑定
   receiver；不得为形成方法值把 `T` coercion 或装箱为 object-form `spec` 值。
+- [必须] intersection-form `spec` 约束下的泛型值实例方法引用，在具有明确 callable-form
+  `spec` 目标时必须复用约束已展平、去重的 requirement 选择和 merged witness 槽，
+  同时按闭合 `T` 的值模型绑定 receiver；不得拆分约束视角或把 `T` coercion/装箱为
+  intersection-form 或 object-form `spec` 值。
 - [必须] 具体类型自有或当前位置可见 `fit` 的静态方法引用，在具有明确 callable-form
   `spec` 目标时，必须复用对应静态直接调用的候选面、访问过滤、泛型代入与重载规则，
   并固定唯一来源；不得伪造 receiver、subject 或 witness。
@@ -636,6 +644,10 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 编译器解析 object-form `spec` 约束下的泛型值实例方法值时，还必须保留 receiver 的
   完整 `T` 类型事实；共享泛型体与最终闭合代码必须消费同一已解析 requirement，不得
   依赖运行时成员搜索或把 receiver 改写为 spec 值。
+- 编译器解析 intersection-form `spec` 约束下的泛型值实例方法值时，必须复用上述完整
+  `T` receiver 事实与 intersection-form 已确定的合并成员结果；最终闭合点直接绑定
+  merged witness 的精确 requirement 槽，不得增加 intersection 专用 callable dependency、
+  descriptor 或运行时成员选择。
 - 编译器解析具体静态方法值时，必须稳定保留已经选中的 owner、fit、方法声明、owner
   实例类型、显式方法类型实参和目标 callable-form `spec`；本地与 imported 来源、普通
   代码与共享泛型体必须消费同一编译期来源身份，不得在代码生成或运行时按名称重选。
@@ -663,6 +675,9 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - object-form `spec` 约束下的泛型 receiver 在方法值形成时按闭合 `T` 复制或保留；形成
   结果只拥有一个 callable closure，不增加 spec box、第二个 receiver 分配或每次调用
   的动态候选查找。
+- intersection-form `spec` 约束下的泛型 receiver 使用同一份闭合 `T` 捕获和 callable
+  closure，只把分派槽解释为编译期已选定的 merged witness 槽；不得增加额外分配、
+  receiver 副本、运行时查找、签名比较或候选回退。
 - 完全闭合且无捕获的具体静态方法值使用编译期固定的静态 callable 表示；形成时不分配
   动态 closure，不执行成员搜索或运行时目标选择，调用时直接进入形成点选定的方法实现。
 - 受 object-form `spec` 约束的类型参数静态方法值在闭合 `T` 时使用编译期固定的 immortal

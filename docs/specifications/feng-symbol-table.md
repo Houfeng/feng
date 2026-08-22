@@ -207,10 +207,12 @@ package-public `.ft` 在公开声明集合上计算最小私有表示依赖闭�
 - 已收录 `type`、函数和 `fit` 的 reifiable 依赖。
 
 公开共享泛型声明中的 target-typed callable value 形成也属于 reifiable callable
-依赖。`T: ObjectSpec` 的实例方法值必须在既有 callable dependency 记录中保留原声明
-requirement 的符号身份、caller 视角的 receiver `T` 和目标 callable-form `spec` 类型；
-consumer 必须原样恢复这些编译期事实，不得把来源降格为普通 type/fit 方法或按名称重新
-查找 requirement。该语义复用现有记录布局，不新增 section、字段或格式版本。
+依赖。`T: ObjectSpec` 或 `T: IntersectionSpec` 的实例方法值必须在既有 callable
+dependency 记录中保留原声明 requirement 的符号身份、caller 视角的 receiver `T` 和
+目标 callable-form `spec` 类型；intersection 约束继续由该 owner 约束身份恢复 merged
+witness。consumer 必须原样恢复这些编译期事实，不得把来源降格为普通 type/fit 方法、
+按名称重新查找 requirement 或拆分 intersection 成员视角。该语义复用现有记录布局，
+不新增 section、字段或格式版本。
 
 公开共享泛型声明中的具体静态方法值同样使用既有 callable dependency 记录：依赖必须
 保留 type/fit 静态来源 kind、owner、可选 fit、方法声明、owner 实例类型、显式方法类型

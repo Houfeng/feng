@@ -14568,7 +14568,7 @@ static CallableValueResolution resolve_accessible_method_value_overload(
  * substituted type-ref edges. Semantic validation has already deduplicated
  * identical requirements, so the first exact target-signature match is the
  * authoritative merged slot. */
-static void resolve_accessible_spec_method_value_surface(
+static void resolve_spec_method_value_surface(
     ResolveContext *context,
     const FengDecl *access_spec_decl,
     InferredExprType access_owner_type,
@@ -14579,6 +14579,7 @@ static void resolve_accessible_spec_method_value_surface(
     const FengTypeRef *expected_type_ref,
     const FengDecl *function_type_decl,
     bool require_static,
+    bool require_accessible,
     CallableValueResolution *result) {
     if (context == NULL || access_spec_decl == NULL ||
         current_spec_decl == NULL || current_spec_decl->kind != FENG_DECL_SPEC ||
@@ -14605,7 +14606,7 @@ static void resolve_accessible_spec_method_value_surface(
             if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
                 continue;
             }
-            resolve_accessible_spec_method_value_surface(
+            resolve_spec_method_value_surface(
                 context,
                 access_spec_decl,
                 access_owner_type,
@@ -14616,6 +14617,7 @@ static void resolve_accessible_spec_method_value_surface(
                 expected_type_ref,
                 function_type_decl,
                 require_static,
+                require_accessible,
                 result);
             if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                 return;
@@ -14636,11 +14638,12 @@ static void resolve_accessible_spec_method_value_surface(
         if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
             member->is_static != require_static ||
             !slice_equals(member->as.callable.name, name) ||
-            !spec_member_is_accessible_from(context,
-                                            access_spec_decl,
-                                            current_spec_decl,
-                                            access_owner_type,
-                                            member) ||
+            (require_accessible &&
+             !spec_member_is_accessible_from(context,
+                                             access_spec_decl,
+                                             current_spec_decl,
+                                             access_owner_type,
+                                             member)) ||
             !function_type_decl_matches_owner_callable_signature(
                 context,
                 expected_type_ref,
@@ -14675,7 +14678,7 @@ static void resolve_accessible_spec_method_value_surface(
         if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC) {
             continue;
         }
-        resolve_accessible_spec_method_value_surface(
+        resolve_spec_method_value_surface(
             context,
             access_spec_decl,
             access_owner_type,
@@ -14686,6 +14689,7 @@ static void resolve_accessible_spec_method_value_surface(
             expected_type_ref,
             function_type_decl,
             require_static,
+            require_accessible,
             result);
         if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
             return;
@@ -14695,18 +14699,19 @@ static void resolve_accessible_spec_method_value_surface(
 
 /* Resolve one target-typed method value from an object-form or
  * intersection-form spec surface. The traversal mirrors direct spec calls:
- * child/member-first projection, original requirement identity, seal filtering
- * and exact instantiated signatures. `require_static` selects either the
- * receiver-bound instance surface or the receiver-free constrained static
- * surface. */
-static CallableValueResolution resolve_accessible_spec_method_value_overload(
+ * child/member-first projection, original requirement identity and exact
+ * instantiated signatures. `require_static` selects the instance/static
+ * surface; `require_accessible` applies the ordinary access filter or leaves
+ * it disabled for a diagnostic-only fallback. */
+static CallableValueResolution resolve_spec_method_value_overload(
     ResolveContext *context,
     const FengDecl *spec_decl,
     InferredExprType owner_type,
     FengSlice name,
     const FengTypeRef *expected_type_ref,
     const FengDecl *function_type_decl,
-    bool require_static) {
+    bool require_static,
+    bool require_accessible) {
     CallableValueResolution result;
 
     memset(&result, 0, sizeof(result));
@@ -14716,7 +14721,7 @@ static CallableValueResolution resolve_accessible_spec_method_value_overload(
         function_type_decl == NULL) {
         return result;
     }
-    resolve_accessible_spec_method_value_surface(
+    resolve_spec_method_value_surface(
         context,
         spec_decl,
         owner_type,
@@ -14729,6 +14734,7 @@ static CallableValueResolution resolve_accessible_spec_method_value_overload(
         expected_type_ref,
         function_type_decl,
         require_static,
+        require_accessible,
         &result);
     return result;
 }
@@ -20027,13 +20033,14 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                             : inferred_expr_type_from_decl(
                                   static_target.constraint_spec_decl);
 
-                    return resolve_accessible_spec_method_value_overload(
+                    return resolve_spec_method_value_overload(
                         context,
                         static_target.constraint_spec_decl,
                         constraint_owner,
                         expr->as.member.member,
                         expected_type_ref,
                         function_type_decl,
+                        true,
                         true);
                 }
             }
@@ -20067,23 +20074,26 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                 FENG_SPEC_FORM_OBJECT ||
                             owner_type_decl->as.spec_decl.form ==
                                 FENG_SPEC_FORM_INTERSECTION)) {
-                    result = resolve_accessible_spec_method_value_overload(
+                    result = resolve_spec_method_value_overload(
                         context,
                         owner_type_decl,
                         owner_type,
                         expr->as.member.member,
                         expected_type_ref,
                         function_type_decl,
-                        false);
+                        false,
+                        true);
                 } else if (owner_type_decl == NULL &&
                            resolve_generic_param_spec_constraint(
                                context,
                                owner_type,
                                &generic_constraint_decl,
                                &generic_constraint_ref) &&
-                           generic_constraint_decl->as.spec_decl.form ==
-                               FENG_SPEC_FORM_OBJECT) {
-                    result = resolve_accessible_spec_method_value_overload(
+                           (generic_constraint_decl->as.spec_decl.form ==
+                                FENG_SPEC_FORM_OBJECT ||
+                            generic_constraint_decl->as.spec_decl.form ==
+                                FENG_SPEC_FORM_INTERSECTION)) {
+                    result = resolve_spec_method_value_overload(
                         context,
                         generic_constraint_decl,
                         inferred_expr_type_from_type_ref(
@@ -20091,7 +20101,8 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                         expr->as.member.member,
                         expected_type_ref,
                         function_type_decl,
-                        false);
+                        false,
+                        true);
                     if (result.kind ==
                         FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
                         /* Keep the complete constraint surface alongside the
@@ -21027,6 +21038,23 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
                 const FengSemanticModule *provider_module = NULL;
                 InferredExprType owner_type =
                     resolve_expr_owner_type(context, object, &owner_type_decl, &provider_module);
+
+                if (owner_type_decl == NULL) {
+                    SpecMemberSurface surface;
+
+                    memset(&surface, 0, sizeof(surface));
+                    if (find_generic_param_spec_member_surface(
+                            context,
+                            owner_type,
+                            expr->as.member.member,
+                            /*include_static=*/false,
+                            &surface) &&
+                        surface.member != NULL &&
+                        surface.member->kind == FENG_TYPE_MEMBER_METHOD &&
+                        !surface.member->is_static) {
+                        return true;
+                    }
+                }
 
                 return count_accessible_method_overloads(context,
                                                          owner_type_decl,
@@ -22731,6 +22759,85 @@ static bool record_selected_friend_callable_value_access(
         resolution->callable_member);
 }
 
+/* Report the existing spec-seal diagnostic when a constrained generic
+ * receiver has an exact target-signature match that normal method-value
+ * resolution excluded only for accessibility. The normal filtered query has
+ * already returned NONE; this fallback never contributes a callable source. */
+static bool report_inaccessible_constrained_generic_method_value(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref,
+    bool *out_reported) {
+    const FengExpr *source_expr = expr;
+    const FengDecl *constraint_decl = NULL;
+    const FengTypeRef *constraint_ref = NULL;
+    const FengDecl *function_type_decl;
+    InferredExprType receiver_type;
+    InferredExprType constraint_owner;
+    CallableValueResolution inaccessible;
+
+    if (out_reported == NULL) {
+        return false;
+    }
+    *out_reported = false;
+    if (source_expr != NULL &&
+        source_expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        source_expr = source_expr->as.generic_target.target;
+    }
+    if (context == NULL || source_expr == NULL ||
+        source_expr->kind != FENG_EXPR_MEMBER ||
+        source_expr->as.member.object == NULL) {
+        return true;
+    }
+    receiver_type = infer_expr_type(
+        context, source_expr->as.member.object);
+    if (!resolve_generic_param_spec_constraint(context,
+                                               receiver_type,
+                                               &constraint_decl,
+                                               &constraint_ref) ||
+        constraint_decl == NULL ||
+        (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         constraint_decl->as.spec_decl.form !=
+             FENG_SPEC_FORM_INTERSECTION)) {
+        return true;
+    }
+    function_type_decl = resolve_function_type_decl(
+        context, expected_type_ref);
+    if (function_type_decl == NULL) {
+        return true;
+    }
+    constraint_owner = inferred_expr_type_from_type_ref(constraint_ref);
+    inaccessible = resolve_spec_method_value_overload(
+        context,
+        constraint_decl,
+        constraint_owner,
+        source_expr->as.member.member,
+        expected_type_ref,
+        function_type_decl,
+        false,
+        false);
+    if (inaccessible.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE ||
+        inaccessible.callable_member == NULL ||
+        inaccessible.callable_owner_type_decl == NULL ||
+        inaccessible.callable_member->visibility !=
+            FENG_VISIBILITY_PRIVATE ||
+        spec_member_is_accessible_from(
+            context,
+            constraint_decl,
+            inaccessible.callable_owner_type_decl,
+            constraint_owner,
+            inaccessible.callable_member)) {
+        return true;
+    }
+
+    *out_reported = true;
+    return report_inaccessible_spec_member(
+        context,
+        source_expr->token,
+        inaccessible.callable_owner_type_decl,
+        inaccessible.callable_member);
+}
+
 static bool validate_function_typed_expr(ResolveContext *context,
                                          const FengExpr *expr,
                                          const FengTypeRef *expected_type_ref) {
@@ -22751,6 +22858,21 @@ static bool validate_function_typed_expr(ResolveContext *context,
         }
         record_callable_spec_coercion_site(context, expr, expected_type_ref);
         return true;
+    }
+
+    if (resolution.kind == FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
+        bool reported = false;
+
+        if (!report_inaccessible_constrained_generic_method_value(
+                context,
+                expr,
+                expected_type_ref,
+                &reported)) {
+            return false;
+        }
+        if (reported) {
+            return true;
+        }
     }
 
     expr_name = format_expr_target_name(expr);
@@ -30013,6 +30135,21 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
         spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
         return;
     }
+    if (subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+        const FengSpecRelation *relation =
+            feng_semantic_lookup_spec_relation(context->analysis,
+                                               &subject_key,
+                                               spec_decl);
+
+        /* Array keys created from generic-call type arguments may borrow a
+         * resolver-owned element ref. The authoritative relation key comes
+         * from the fit declaration AST and therefore remains valid for the
+         * complete analysis/codegen lifetime. */
+        if (relation == NULL) {
+            return;
+        }
+        subject_key = relation->subject_key;
+    }
     if (feng_semantic_lookup_spec_witness(context->analysis,
                                           &subject_key, spec_decl) != NULL) {
         return;
@@ -31972,6 +32109,19 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (fit_target_collect_array_local_type_param(context,
                                                           decl->as.fit_decl.target,
                                                           &fit_local_type_param)) {
+                /* Preserve Semantic's visible-symbol decision for later
+                 * compiler passes. The fit declaration is a stable sidecar
+                 * key and the target element TypeRef is AST-owned. */
+                if (!feng_semantic_record_type_fact(
+                        context->analysis,
+                        decl,
+                        FENG_SEMANTIC_TYPE_FACT_TYPE_REF,
+                        (FengSlice){0},
+                        decl->as.fit_decl.target->as.inner,
+                        NULL)) {
+                    resolver_pop_type_params(context, prev_tp, prev_tp_count);
+                    return false;
+                }
                 if (!resolver_push_type_params(context,
                                                &fit_local_type_param,
                                                1U,

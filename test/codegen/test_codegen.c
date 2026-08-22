@@ -7628,6 +7628,199 @@ static void test_constrained_generic_spec_method_value_codegen(void) {
     feng_program_free(program);
 }
 
+/* A shared T: IntersectionSpec binder uses the same receiver-value closure as
+ * MV02 and closes its adapter against the existing merged witness from MV05.
+ * Reference, trivial and descriptor-sized values require no spec box, second
+ * receiver allocation or runtime member lookup. */
+static void test_constrained_generic_intersection_method_value_codegen(void) {
+    const char *source =
+        "module feng.codegen.constrained_generic_intersection_method_value;\n"
+        "spec Stateful {\n"
+        "  func step(delta: i32): i32;\n"
+        "  func select(delta: i32): i32;\n"
+        "}\n"
+        "spec Named {\n"
+        "  func name(): string;\n"
+        "  func select(label: string): string;\n"
+        "}\n"
+        "spec Both: Stateful & Named;\n"
+        "spec Stepper(delta: i32): i32;\n"
+        "spec StringMapper(label: string): string;\n"
+        "type ReferenceCounter: Stateful, Named {\n"
+        "  var value: i32;\n"
+        "  func step(delta: i32): i32 {\n"
+        "    self.value += delta;\n"
+        "    return self.value;\n"
+        "  }\n"
+        "  func select(delta: i32): i32 { return self.value + delta; }\n"
+        "  func name(): string { return \"reference\"; }\n"
+        "  func select(label: string): string { return label; }\n"
+        "}\n"
+        "fit i32: Stateful, Named {\n"
+        "  func step(delta: i32): i32 { return self + delta; }\n"
+        "  func select(delta: i32): i32 { return self + delta; }\n"
+        "  func name(): string { return \"trivial\"; }\n"
+        "  func select(label: string): string { return label; }\n"
+        "}\n"
+        "fit i32[]: Stateful, Named {\n"
+        "  func step(delta: i32): i32 { return self[0] + delta; }\n"
+        "  func select(delta: i32): i32 { return self[0] + delta; }\n"
+        "  func name(): string { return \"array\"; }\n"
+        "  func select(label: string): string { return label; }\n"
+        "}\n"
+        "@value type ValueCounter: Stateful, Named {\n"
+        "  let label: string;\n"
+        "  var value: i32;\n"
+        "  func step(delta: i32): i32 {\n"
+        "    self.value += delta;\n"
+        "    return self.value;\n"
+        "  }\n"
+        "  func select(delta: i32): i32 { return self.value + delta; }\n"
+        "  func name(): string { return self.label; }\n"
+        "  func select(label: string): string { return label; }\n"
+        "}\n"
+        "func bind<T: Both>(value: T): Stepper { return value.step; }\n"
+        "func bindText<T: Both>(value: T): StringMapper {\n"
+        "  return value.select;\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "  let reference = ReferenceCounter { value: 10 };\n"
+        "  let referenceStep = bind<ReferenceCounter>(reference);\n"
+        "  let trivialStep = bind<i32>(40);\n"
+        "  let arrayStep = bind<i32[]>([45]);\n"
+        "  let aggregate = ValueCounter { label: \"value\", value: 50 };\n"
+        "  let aggregateStep = bind<ValueCounter>(aggregate);\n"
+        "  return referenceStep(1) + trivialStep(2) + arrayStep(3) + "
+        "aggregateStep(4);\n"
+        "}\n"
+        "func runText(): string {\n"
+        "  let value = ReferenceCounter { value: 60 };\n"
+        "  let selected = bindText<ReferenceCounter>(value);\n"
+        "  return selected(\"picked\");\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source,
+        "constrained_generic_intersection_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "MV06 intersection method-value codegen error: %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+
+    /* Each shared formation site performs one representation switch and one
+     * language-level callable allocation. All closed types reuse that code. */
+    ASSERT(count_substr(output.c_source,
+                        "const FengCallableValueDescriptor *_callable_value_desc") ==
+           2U);
+    ASSERT(count_substr(output.c_source,
+                        "feng_object_new(_callable_value_desc") == 2U);
+    ASSERT(count_substr(output.c_source, "switch (_T->kind)") == 2U);
+    ASSERT(strstr(output.c_source, "case FENG_VALUE_TRIVIAL:") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "case FENG_VALUE_MANAGED_POINTER:") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:") != NULL);
+
+    /* Closed adapters enter the compile-time selected merged slots directly;
+     * the legal string overload uses the deterministic appended slot. */
+    ASSERT(strstr(output.c_source,
+                  "_witness->step(_bound->_self") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_witness->step(&_bound->_receiver") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_witness->select__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_aggregate_release(&_o->_receiver") != NULL);
+    for (const char *line = output.c_source;
+         (line = strstr(line, "feng_object_new(&")) != NULL;
+         ++line) {
+        const char *line_end = strchr(line, '\n');
+
+        if (line_end == NULL) {
+            line_end = line + strlen(line);
+        }
+        ASSERT(!span_contains(line, line_end, "__spec_box"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* A concrete enum element in an array fit retains its nominal trivial
+ * representation. Codegen must not synthesize a fit-local descriptor or
+ * lower self[index] through the generic void-pointer element path. */
+static void test_concrete_enum_array_fit_codegen(void) {
+    const char *source =
+        "module feng.codegen.concrete_enum_array_fit;\n"
+        "enum Element { First }\n"
+        "spec Readable { func read(): i32; }\n"
+        "fit Element[!]: Readable {\n"
+        "  func read(): i32 {\n"
+        "    return if self[0] == Element.First { 1 } else { 0 };\n"
+        "  }\n"
+        "}\n"
+        "func run(value: Element[!]): i32 { return value.read(); }\n";
+    FengProgram *program = parse_or_die(
+        source, "concrete_enum_array_fit_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "concrete enum array-fit codegen error: %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "const FengGenericParamDescriptor *_Element") == NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengEnumDesc__feng__codegen__concrete_enum_array_fit__Element") !=
+           NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A shared T: ObjectSpec static method binder closes to one receiver-free
  * immortal callable per concrete owner/target pair. Its adapter enters the
  * exact witness slot without a subject; scalar and aggregate returns use the
@@ -13547,6 +13740,8 @@ int main(void) {
     test_intersection_spec_method_value_codegen_uses_merged_witness();
     test_intersection_spec_overload_codegen_preserves_exact_slots();
     test_constrained_generic_spec_method_value_codegen();
+    test_constrained_generic_intersection_method_value_codegen();
+    test_concrete_enum_array_fit_codegen();
     test_constrained_generic_spec_static_method_value_codegen();
     test_builtin_fit_static_spec_witness_codegen();
     test_array_fit_static_spec_witness_codegen();

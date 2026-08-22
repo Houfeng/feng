@@ -364,6 +364,9 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 约束下的泛型值实例方法引用必须复用该约束实例的成员闭包、
   访问过滤、签名替换和 requirement 槽；receiver 必须保持完整 `T` 值语义，不得先形成
   object-form `spec` 值。
+- [必须] intersection-form `spec` 约束下的泛型值实例方法引用必须复用该约束展平、去重
+  后的合并成员面、访问过滤、签名替换和 merged witness 槽；receiver 必须保持完整 `T`
+  值语义，并保留 requirement 的原声明 object-form `spec`，不得先形成或拆分 spec 值。
 - [必须] object-form `spec` 约束下的类型参数静态方法引用必须复用对应静态直接调用的
   成员闭包、访问过滤、签名替换和 requirement 槽；形成值时不得引入 receiver、subject
   或运行时成员选择。
@@ -413,6 +416,9 @@ type Stream: ReadWrite {}
 - 对受 object-form `spec` 约束的泛型 receiver，编译器还必须把约束 witness 与完整
   receiver 类型事实分别保留到最终闭合点；不得通过 spec box 或运行时满足关系查询恢复
   任一事实。
+- 对受 intersection-form `spec` 约束的泛型 receiver，编译器还必须把 merged witness、
+  原声明 requirement 与完整 receiver 类型事实分别保留到最终闭合点；不得重新构造
+  object-form 视角、按名称查询成员或通过运行时满足关系查询恢复任一事实。
 - 对受 object-form `spec` 约束的类型参数静态方法值，编译器必须把原声明 requirement、
   caller 视角的 `T` 和目标 callable-form `spec` 保留到最终闭合点；不得把来源降格为
   type/fit 静态成员或按名称重新查询。
@@ -457,6 +463,9 @@ type Stream: ReadWrite {}
 - 受 object-form `spec` 约束的泛型 receiver 所形成的方法值只保存按闭合 `T` 复制或保留
   的 receiver，并使用已闭合的 witness 槽；不得增加 spec box、第二个 receiver 分配或
   每次调用查找。
+- 受 intersection-form `spec` 约束的泛型 receiver 所形成的方法值只保存按闭合 `T` 复制
+  或保留的 receiver，并使用已闭合 merged witness 的精确 requirement 槽；不得增加
+  spec box、第二个 receiver 分配、成员面拆分或每次调用查找。
 - 受 object-form `spec` 约束的类型参数静态方法值按闭合 `T` 使用编译期固定的 callable
   singleton；形成与调用均不得增加 closure 分配、运行时成员查找或候选回退。
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。

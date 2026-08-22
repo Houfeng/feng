@@ -1,6 +1,7 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02、MV03、MV04、MV05 已完成，可分别独立交付；其余分项尚未实施。
+> **状态**：MV01、MV02、MV03、MV04、MV05、MV06 已完成，可分别独立交付；
+> 其余分项尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -389,22 +390,23 @@ witness”两个已经分别验证的维度。
 
 #### 修复任务
 
-- [ ] 更新函数、spec、泛型和诊断主规范，明确 intersection 约束泛型 receiver 方法值。
-- [ ] 组合复用 MV02 的泛型 receiver 捕获计划与 MV05 的 merged requirement 解析结果。
-- [ ] 保留完整 `T` 类型事实、requirement 原声明和 intersection 约束实例。
-- [ ] 不新增只针对 intersection 泛型方法值的 closure、descriptor 或 `.ft` 特判。
-- [ ] 若组合时发现两项基础抽象不能复用，先在第 6 节记录根因并提交通用方案 Review。
+- [x] 更新函数、spec、泛型、符号表和诊断主规范，明确 intersection 约束泛型 receiver
+      方法值及跨包恢复边界。
+- [x] 组合复用 MV02 的泛型 receiver 捕获计划与 MV05 的 merged requirement 解析结果。
+- [x] 保留完整 `T` 类型事实、requirement 原声明和 intersection 约束实例。
+- [x] 不新增只针对 intersection 泛型方法值的 closure、descriptor 或 `.ft` 特判。
+- [x] 若组合时发现两项基础抽象不能复用，先在第 6 节记录根因并提交通用方案 Review。
 
 #### 验证与交付
 
-- [ ] Semantic：object 成员、父成员、重载和合法 seal 方法值均通过。
-- [ ] FCTS：`T` 分别闭合为托管引用、trivial 值和 descriptor-sized 值语义类型。
-- [ ] FCTS：不同实际 type 通过各自 merged witness 调用正确实现。
-- [ ] Codegen：不生成 spec box，不重复读取成员映射，不保存栈地址。
-- [ ] 共享泛型与跨包：consumer-only 类型闭合路径通过。
-- [ ] 生命周期：内联值中的托管叶子正确复制和清理。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV06 可独立交付。
+- [x] Semantic：object 成员、父成员、重载和合法 seal 方法值均通过。
+- [x] FCTS：`T` 分别闭合为托管引用、trivial 值和 descriptor-sized 值语义类型。
+- [x] FCTS：不同实际 type 通过各自 merged witness 调用正确实现。
+- [x] Codegen：不生成 spec box，不重复读取成员映射，不保存栈地址。
+- [x] 共享泛型与跨包：consumer-only 类型闭合路径通过。
+- [x] 生命周期：内联值中的托管叶子正确复制和清理。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV06 可独立交付。
 
 ### 4.7 IC01：`T: IntersectionSpec` 静态方法直接调用
 
@@ -1360,6 +1362,425 @@ func bind<T: CombinedFactory>(): Creator {
 - **实施问题**：ISSUE-015 至 ISSUE-020 均已按先记录、后分析、再修复的流程解决；MV05 无
   未解决问题。
 - **建议 commit message**：`feat: support intersection spec method values`
+
+### ISSUE-021：无目标的约束泛型实例方法引用漏过 Semantic
+
+- **关联分项**：MV06；同时覆盖 MV02 的同类诊断路径。
+- **状态**：已解决。
+- **最小复现**：
+
+  ```feng
+  spec Left {
+    func select(value: int): int;
+  }
+
+  spec Right {
+    func trace(): int;
+  }
+
+  spec Both: Left & Right;
+
+  func bind<T: Both>(value: T): void {
+    let selected = value.select;
+  }
+  ```
+
+- **实际结果**：Semantic 未报告诊断，表达式进入 Codegen 后才以
+  `CE0173: spec 'Both' has no field 'select'` 失败。
+- **期望结果**：`value.select` 是尚未绑定的实例方法引用；Feng 不推导匿名 callable
+  类型，因此必须在 Semantic 稳定报告 `AE0523`，不得进入 Codegen。
+- **根因**：无目标 callable 引用分类在处理普通 receiver 后只按 `owner type decl` 统计
+  方法重载；泛型参数 receiver 没有具体 owner decl，该路径没有复用既有
+  `find_generic_param_spec_member_surface` 约束成员查询。目标明确的方法值解析则已经单独
+  读取 object-form 约束，二者因此出现不一致。
+- **通用修复方案**：在无目标实例成员引用分类中，当 receiver 是受 spec 约束的泛型参数
+  时，复用直接调用和字段访问已使用的 `find_generic_param_spec_member_surface`；只要约束
+  合并成员面中的可访问成员是实例方法，就把表达式分类为 callable value reference。
+  该方案同时覆盖 object-form、intersection-form、父成员和嵌套 intersection，不按名称
+  或 spec form 增加特判。
+- **运行时性能影响**：无；只补齐 Semantic 编译期诊断查询，不改变合法程序生成代码。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；修复使无目标诊断复用既有约束成员面，不触及强制规则。
+- **专项验证结果**：新增 Semantic 用例确认 object-form 与 intersection-form 约束泛型的无目标
+  实例方法引用均稳定报告 `AE0523`；`build/bin/test_semantic` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-022：MV06 非法访问夹具误用保留字作为 module 段
+
+- **关联分项**：MV06 专项 Semantic 诊断验证。
+- **状态**：已解决。
+- **最小复现**：新增用例声明
+  `module demo.generic_intersection_method_value.seal;`。
+- **实际结果**：Parser 在 `seal` 处按规范报告“qualified name 的 `.` 后需要标识符”，
+  专项测试在进入预期的 `AE0708` Semantic 检查前终止。
+- **期望结果**：夹具本身应使用合法 module 名，使测试只验证 intersection 约束泛型方法值
+  的非法 seal requirement 访问。
+- **根因**：新增测试把 Feng 保留字 `seal` 误作 module 名段；与 MV06 实现无关。
+- **通用修复方案**：仅把该新增夹具的 module 末段改为合法标识符 `seal_access`，不修改
+  测试语义、断言或任何既有用例。
+- **运行时性能影响**：无。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；只修正新增夹具的非法语法。
+- **专项验证结果**：新增夹具已使用合法 module 名并进入预期 Semantic 访问检查；
+  `build/bin/test_semantic` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-023：约束泛型方法值的非法 seal 访问被降格为签名不匹配
+
+- **关联分项**：MV06；约束泛型实例方法值的访问诊断一致性。
+- **状态**：已解决。
+- **最小复现**：
+
+  ```feng
+  spec Hidden {
+    seal func secret(value: int): int;
+  }
+
+  spec Visible {
+    func visible(): int;
+  }
+
+  spec Both: Hidden & Visible;
+  spec Mapper(value: int): int;
+
+  func bad<T: Both>(value: T): Mapper {
+    return value.secret;
+  }
+  ```
+
+- **实际结果**：Semantic 报告 `AE0522`，表示来源不匹配目标 callable。
+- **期望结果**：成员名与签名均匹配，唯一失败原因是访问点无权使用 `Hidden.secret`；应与
+  显式 intersection receiver 和直接成员访问一致，报告既有 `AE0708`。
+- **根因**：目标明确的方法值候选解析会先过滤不可访问 requirement。显式 spec receiver
+  随后还会由普通成员表达式验证找到同名的不可访问成员并报告 `AE0708`；泛型参数 receiver
+  在普通成员验证中只被视为“由后续约束分派处理”并直接通过，因此方法值解析只看到“无
+  匹配候选”，最终错误降格为 `AE0522`。
+- **通用修复方案**：让现有 spec 方法值 surface resolver 支持“应用访问过滤”和“保留其余
+  签名规则但暂不应用访问过滤”两种编译期查询。正常候选选择继续使用前者；只有正常结果
+  为 NONE 时，约束泛型 receiver 才用后者确认是否存在签名完全匹配但不可访问的唯一
+  requirement，并调用既有 `report_inaccessible_spec_member`。该回落复用同一成员展平、
+  owner 代入、目标签名和 requirement 原声明，不硬编码错误码或方法名，也不让不可访问
+  候选参与正常重载选择。
+- **运行时性能影响**：无；只在编译期失败路径增加一次受限查询，合法程序生成代码不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；修复恢复既有访问诊断边界，不触及强制规则。
+- **专项验证结果**：新增 Semantic 用例确认签名匹配但不可访问的 seal requirement 报告
+  `AE0708`，而真正的签名不匹配仍报告 `AE0522`；`build/bin/test_semantic` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-024：MV06 三类 receiver Codegen 专项在生成阶段失败
+
+- **关联分项**：MV06 Codegen 与 receiver 表示验证。
+- **状态**：已解决。
+- **最小复现**：新增 Codegen 专项以 `T: Stateful & Named` 的具名 intersection 约束形成
+  `value.step` 与合法重载 `value.select` 方法值，并分别闭合为托管引用、`i32` 和含
+  `string` 的 `@value` receiver。
+- **实际结果**：Semantic 无诊断通过；`feng_codegen_emit_program` 报告 `CE0329`：
+  `missing semantic witness for object-form spec coercion`。托管引用 receiver 尚未进入方法值
+  闭包生成，首个基础类型 receiver 在为具名 intersection 约束取得 descriptor 时失败。
+- **期望结果**：复用 MV02 的三类 receiver closure 与 MV05 merged witness 槽，生成 C
+  成功并通过严格 C 编译。
+- **根因**：Semantic 按 intersection satisfaction 规则为具体 subject 保存各叶级 object-form
+  witness，不创建外层 intersection 的伪 witness。Codegen 已能为具体用户类型把这些叶级
+  witness 的槽编译期合并为静态 merged witness；但基础类型和数组仍直接查找
+  `(subject, intersection)` 的单一 Semantic witness，因此必然查找失败并报告 `CE0329`。
+- **通用修复方案**：把现有用户类型专用的 intersection merged-witness 组装抽象为适用于
+  任意 Semantic subject key 的编译期路径。按 merged member 保存的原始叶级 spec 与原始槽名，
+  对同一个 subject 取得或生成叶级 witness，再生成并缓存相同布局的静态 merged witness。
+  用户类型、基础类型和数组共同复用该逻辑；不新增 subject/spec/方法名特判，不新增运行时
+  查找、box、descriptor 字段或闭包层。
+- **运行时性能影响**：无；仅把编译期已经存在的静态 witness 槽引用组装能力覆盖到基础类型
+  和数组，方法调用仍是现有 witness 槽的一次间接调用。
+- **runtime ABI / `.ft` / 兼容性影响**：无；复用现有 witness struct 与 callable dependency
+  表示，不修改 runtime、`.ft` 布局或公开 ABI。
+- **是否需要人工决策**：否；修复补齐同一 intersection 规则在不同 subject 表示上的实现，
+  未触及强制停止条件。
+- **专项验证结果**：新增 Codegen 用例覆盖托管引用、trivial enum、descriptor-sized
+  `@value` 与数组 receiver 的 merged witness 形成及严格 C 编译；`build/bin/test_codegen`
+  通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-025：MV06 Codegen 专项的无 spec-box 断言失败
+
+- **关联分项**：MV06 Codegen 与零增量运行时表示验证。
+- **状态**：已解决。
+- **最小复现**：ISSUE-024 修复后重新运行新增的三类 receiver Codegen 专项。
+- **实际结果**：Semantic 与 Codegen 生成均成功。命中内容是 `@value ValueCounter` 注册时
+  已有的 `ValueCounter__spec_box` 类型与 descriptor 前置声明，不是方法值形成产生的
+  `feng_object_new` 分配。
+- **期望结果**：方法值形成沿用 receiver 原有捕获表示，不因 intersection 约束新增
+  object-spec box。
+- **根因**：新增测试把“生成 C 中出现 spec-box 支持声明”误等同于“方法值形成分配了
+  spec box”。value type 的既有 metadata 会独立生成该名称，因此全文件子串断言范围过宽。
+- **通用修复方案**：与既有同类 Codegen 用例保持一致，只遍历实际
+  `feng_object_new(&...)` 分配语句并断言其中不引用 `__spec_box`。同时保留 callable 分配
+  次数、三类 receiver 分支和直接 merged-witness 槽调用断言，验证强度不降低。
+- **运行时性能影响**：无；仅修正新增测试的观察边界，生成代码不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；不变更语言或实现语义，也不触及强制停止条件。
+- **专项验证结果**：Codegen 专项只检查实际 `feng_object_new` 分配，确认各 receiver 的
+  方法值形成没有分配 spec box，并确认 callable 分配次数与 merged-witness 槽调用；
+  `build/bin/test_codegen` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-026：MV06 FCTS 的基础类型 fit 与既有 FCTS 发生包级实现冲突
+
+- **关联分项**：MV06 FCTS 与 trivial receiver 覆盖。
+- **状态**：已解决。
+- **最小复现**：在 `fcts_bin` 新增为 `i32` 实现 MV06 两个叶级 spec 的 fit 后运行完整
+  `make fcts-tests`。
+- **实际结果**：新增 `bindMV06Step<i32>` 与既有
+  `bindGenericSpecMethod<i32>` 均报告 `AE0804`，指出各自要求的 `step` 存在多个可见实现。
+- **期望结果**：新增 MV06 用例独立覆盖 trivial receiver，不改变既有 FCTS 的实现候选集合与
+  结果。
+- **根因**：`fcts_bin/src` 的测试文件共同属于 `fcts_bin` 模块；新增 `fit i32` 与既有
+  `fit i32: GenericSpecMethodStateful` 都提供结构相同的 `step(i32): i32`，扩大了整个模块
+  对同一基础 subject 的可见实现集合。这是新增 FCTS 数据互相污染，不是 MV06 语言规则缺口。
+- **通用修复方案**：新增用例改用本文件独立声明的 nominal enum 作为 trivial receiver，并只
+  为该 enum 定义 MV06 叶级 fit。enum 仍走 `FENG_VALUE_TRIVIAL` receiver 表示，同时隔离
+  subject identity；不修改既有用例，也不调整编译器候选规则。
+- **运行时性能影响**：无；仅隔离新增测试数据。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；不改变实现或规范，仅修正新增用例的模块级隔离。
+- **专项验证结果**：新增 FCTS 使用独立 nominal enum 覆盖 trivial receiver，完整 FCTS
+  `850 passed, 0 failed, 0 skipped`。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-027：MV06 enum 闭合仍丢失 nominal witness subject
+
+- **关联分项**：MV06 Codegen 与 trivial enum receiver。
+- **状态**：已解决。
+- **最小复现**：将新增 FCTS 的 trivial receiver 隔离为 nominal enum
+  `MV06TrivialCounter`，为该 enum 实现全部 MV06 叶级 spec，再调用
+  `bindMV06Step<MV06TrivialCounter>`。
+- **实际结果**：Semantic 通过，Codegen 在闭合调用点报告 `CE0329`：
+  `missing semantic witness for object-form spec coercion`。
+- **期望结果**：闭合路径保留 enum declaration subject identity，生成 enum 各叶级 witness 与静态
+  merged witness，并按 trivial receiver 值捕获。
+- **根因**：闭合点首次从显式类型参数生成 generic descriptor 时，`CGType` 正确保留
+  `enum_decl`；随后为 reifiable callable dependency 把同一个 `CGType` 重建为 `FengTypeRef`
+  时，`cg_type_ref_from_cgtype` 先按其底层 `CG_TYPE_I32` 命中 builtin 分支，生成 `i32`
+  引用并丢失 nominal enum identity。第二次 descriptor 闭合因而错误查找
+  `(i32, MV06Stateful)` witness。
+- **通用修复方案**：在通用 `CGType -> FengTypeRef` 重建中，若 `enum_decl` 存在则优先生成
+  该 enum declaration 的 nominal named ref，再处理普通 builtin kind。所有需要重建 enum
+  类型参数的 generic/reifiable 路径共同受益；不特判 enum 名称、spec 或调用点。
+- **运行时性能影响**：无；仅修正编译期类型引用重建，生成的 receiver 捕获与调用路径不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无；不修改数据布局、runtime 接口或符号文件记录。
+- **是否需要人工决策**：否；修复恢复已有 nominal enum 类型语义，未触及强制停止条件。
+- **专项验证结果**：新增 Codegen 与 FCTS 用例确认 enum nominal identity 在泛型 callable
+  dependency 闭合中保留，trivial receiver 使用自身叶级及 merged witness；
+  `build/bin/test_codegen` 与完整 FCTS 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-028：constrained array 在 merged-witness 入口前强制查找外层伪 witness
+
+- **关联分项**：MV06 Codegen 与 array fit receiver。
+- **状态**：已解决。
+- **最小复现**：代码审计 `cg_generic_descriptor_expr` 的 constrained array 分支；为数组
+  subject 闭合 `T: IntersectionSpec` 时，该分支先查找
+  `(array, IntersectionSpec)` Semantic witness。
+- **实际结果**：Semantic 按规则只保存各叶级 object-form witness，因此该预查找必然为空并在
+  通用 merged-witness helper 运行前报告 `CE0329`。此外，数组 lookup key 的 element type ref
+  为临时重建值，不能直接浅拷贝进长期 Codegen witness cache。加入 array 专项后确认：首版
+  直接用该重建 key 查找首个叶级 witness 仍为空，因此还需以 Semantic 已解析的闭合调用信息
+  确认实际数组 subject key，不能假定两者完全等价。
+- **期望结果**：数组与 enum、builtin、用户类型一样，由同一 subject 的叶级 witness 编译期
+  组装静态 merged witness；缓存使用 Semantic witness 持有的稳定 subject key。
+- **根因**：数组分支沿用 object-form 单一 witness 的入口前置条件，尚未按 intersection
+  satisfaction 改为叶级 witness；新通用 helper 也需要在缓存数组 subject 前取得稳定 key。
+- **通用修复方案**：object-form 数组继续复用现有直接 witness；intersection-form 数组跳过
+  外层伪 witness 要求，进入通用 helper。Semantic 先按 ISSUE-029 保证叶级 witness 持有
+  稳定 subject key；helper 解析首个叶级 source spec 后取得该 witness 的 key，并让所有叶级
+  生成与 merged cache 共用该 key。不新增数组/spec/成员名称特判。
+- **运行时性能影响**：无；仅增加编译期 key 选择，生成的静态 witness 与方法调用路径不变。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；补齐既定抽象覆盖，不触及强制停止条件。
+- **专项验证结果**：新增 Semantic、Codegen 与 FCTS 数组用例确认 intersection-form 数组
+  跳过外层伪 witness，并由同一稳定 subject key 的叶级 witness 组装 merged witness；三项
+  专项均通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-029：array SpecWitness subject key 借用解析期临时 type ref
+
+- **关联分项**：MV06 Semantic witness 生命周期与 ISSUE-028。
+- **状态**：已解决。
+- **最小复现**：generic call 以数组闭合 intersection 约束并按叶级 spec 物化 witness；Semantic
+  结束 resolver scope 后，Codegen 再按等价数组 key 查找该 witness。
+- **实际结果**：叶级 witness 已生成，但其 `subject_key.as.array.element_type_ref` 可能指向已由
+  generic call 清理的临时 type ref；后续线性查找会漏配，读取该悬空 key 可触发非法内存访问。
+- **期望结果**：`FengSpecWitness` 声明的 analysis 生命周期内，其完整 subject key 始终有效且
+  可由结构等价 key 稳定查找。
+- **根因**：`compute_spec_witness_if_absent` 从调用期 `actual_type_ref` 构造 array key，
+  `feng_semantic_reserve_spec_witness` 再浅拷贝该 key；当前实现没有把 element type ref 的生命
+  周期提升到 analysis。
+- **通用修复方案**：object-form satisfaction 已有同一 `(subject, spec)` 的权威
+  `FengSpecRelation`，其 array key 源自 fit 声明 AST，生命周期覆盖 analysis。reserve array
+  witness 前，用现有结构等价查询取得该 relation，并复制 relation 持有的稳定 subject key；
+  不新增 ownership 字段、不深拷贝、不改变公开结构布局。
+- **运行时性能影响**：无；仅在原有编译期 witness 物化中复用已经执行的 relation 查询结果，
+  不改变生成代码。
+- **runtime ABI / `.ft` / 兼容性影响**：无；不修改结构布局、符号格式或 runtime。
+- **是否需要人工决策**：否；方案消除悬空借用且不触及强制停止条件。
+- **专项验证结果**：新增 Semantic 用例验证数组叶级 witness 的 subject key 在 analysis
+  生命周期内稳定且可按结构等价 key 查找；`build/bin/test_semantic` 通过，Codegen 数组专项
+  同时通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-030：Codegen 全套在 imported-codegen 生成 C 编译阶段失败
+
+- **关联分项**：MV06 专项 Codegen 回归。
+- **状态**：已解决。
+- **最小复现**：与新增 Semantic、Symbol 专项并行执行 `build/bin/test_codegen`。
+- **实际结果**：`temp/feng_codegen_imported_YTkT0w/generated.c` 编译失败，测试在
+  `test/codegen/test_codegen.c:296` 中止；测试辅助函数当前隐藏了底层 C 编译器诊断。
+- **期望结果**：Codegen 全套通过，或保留并展示足以定位失败根因的底层编译诊断。
+- **根因**：`test_symbol` 与 `test_codegen` 的 `main` 都会在启动时执行 `rm -rf temp`；二者并行
+  运行时，前者删除了后者已经写入、尚未交给 C 编译器的文件。该失败是测试进程之间共享
+  临时根目录造成的执行方式冲突，与 MV06 生成结果无关。
+- **通用修复方案**：遵循现有测试入口的串行执行约束，不并行运行会重建共享 `temp` 根目录的
+  测试二进制；本专项不修改已有测试基础设施。
+- **运行时性能影响**：无；没有产品代码变更。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；不触及强制停止条件。
+- **专项验证结果**：单独执行 `build/bin/test_codegen` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 串行执行并通过，详见 MV06 独立交付记录。
+
+### ISSUE-031：MV06 FCTS 对只读数组执行元素赋值
+
+- **关联分项**：MV06 array receiver 行为验证。
+- **状态**：已解决。
+- **最小复现**：运行新增 MV06 FCTS，其中对声明为只读数组形态的局部值执行
+  `array[0] = MV06TrivialCounter.ThreeHundred`。
+- **实际结果**：Semantic 报 `AE0104: assignment target '<expression>' is not writable`。
+- **期望结果**：测试使用语言已支持的可写数组声明验证方法值保留原数组 identity 与可观察变更。
+- **根因**：新增 fit 与局部值都声明为 `MV06TrivialCounter[]`；该类型按数组规范只提供读取
+  能力，而测试随后对其元素执行赋值。错误完全位于本次新增夹具。
+- **通用修复方案**：把本次新增 array fit、局部值和泛型闭合实参统一声明为
+  `MV06TrivialCounter[!]`，继续用元素变更验证已形成的方法值持有同一托管数组 identity。
+- **运行时性能影响**：无；仅修正新增测试输入。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；不涉及产品行为或强制停止条件。
+- **专项验证结果**：新增 FCTS 已改用可写数组并验证方法值形成后元素变更可由同一 receiver
+  观察；完整 FCTS `850 passed, 0 failed, 0 skipped`。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-032：具体 nominal 元素数组 fit 被 Codegen 当作泛型数组 fit
+
+- **关联分项**：MV06 array receiver FCTS；可能属于既有 array-fit Codegen 缺口。
+- **状态**：已解决。
+- **最小复现**：不需要 intersection 或方法值即可触发：
+
+  ```feng
+  enum Element { First }
+
+  spec Readable {
+    func read(): i32;
+  }
+
+  fit Element[!]: Readable {
+    func read(): i32 {
+      return if self[0] == Element.First { 1 } else { 0 };
+    }
+  }
+
+  func run(value: Element[!]): i32 {
+    return value.read();
+  }
+  ```
+
+  该独立夹具通过 Semantic 后在 Codegen 报
+  `CE0083: cannot apply numeric op to non-numeric operands`；MV06 FCTS 继续生成 C 时还会暴露
+  descriptor 参数不一致。
+- **实际结果**：生成的 fit 方法错误增加
+  `const FengGenericParamDescriptor *_MV06TrivialCounter` 参数；数组下标按未知泛型元素生成为
+  `void *`，并且生成的 witness wrapper 未传该额外 descriptor，最终原生 C 编译报参数不足及
+  `void *` 到 `i32` 不兼容。
+- **期望结果**：`MV06TrivialCounter` 绑定当前模块已有的具体 enum；数组 fit 方法不携带元素类型
+  descriptor，数组下标按 enum 的 trivial 表示生成，witness wrapper 与实现签名一致。
+- **根因**：Semantic 的 `fit_target_collect_array_local_type_param` 会先解析可见类型，因此正确把
+  `Element` 识别为具体 enum；Codegen 的
+  `cg_builtin_fit_target_local_type_param` 只排除了 builtin、user type、spec 与 generic 声明，
+  没有排除可见 enum，于是重新把同一名称合成为 fit 局部类型参数。与此同时，
+  `reifiable_deps.c` 的 `extract_fit_target_implicit_type_param` 仅按单段名称形状判断，也没有复用
+  Semantic 已确定的“具体类型 / 隐式参数”结论。这是既有 array-fit 分类在编译阶段不一致，
+  不是 MV06 merged witness 的错误。
+- **通用修复方案**：Semantic 在现有 type-fact sidecar 中仅为真正由数组 fit 引入的局部元素
+  类型参数记录声明事实；reifiable dependency 收集与 Codegen 优先读取该结论，导入包声明继续
+  使用结构化 `.ft` 类型节点回退。Codegen 的回退解析同时完整排除可见 enum。新增独立
+  direct-call Semantic/Codegen 回归后，再验证 MV06 merged witness；不得用更换测试 subject
+  的方式掩盖缺陷。
+- **运行时性能影响**：无；修复仅改变编译期分类，正确代码不增加运行时指令、查找或分配。
+- **runtime ABI / `.ft` / 兼容性影响**：无格式或 runtime ABI 变更；原先无法正确生成的程序
+  使用具体 enum 数组 fit 的既定 ABI，`.ft` roundtrip 已验证。
+- **是否需要人工决策**：是；开发者已批准一并修复。
+- **专项验证结果**：新增独立 Semantic 与 Codegen direct-call 用例确认具体 enum 数组 fit
+  不携带伪元素 descriptor、数组下标保持 enum trivial 表示；新增 Symbol 用例确认 `.ft`
+  concrete enum 与真正局部类型参数的节点分类；三项专项及完整 FCTS 均通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### ISSUE-033：具体 enum 数组 fit 的 `.ft` 元素节点不是 nominal named
+
+- **关联分项**：ISSUE-032 的 `.ft` 不变性验证。
+- **状态**：已解决。
+- **最小复现**：导出并重新读取公开声明
+  `open fit Element[!]: Readable`，其中 `Element` 是同模块公开 enum；检查 fit target 的数组
+  element 类型节点。
+- **实际结果**：array target 与可写位均正确，但 element 节点 kind 不是预期的
+  `FENG_SYMBOL_TYPE_KIND_NAMED`，新增 Symbol 专项断言失败。
+- **期望结果**：具体 enum 保留 nominal `Element` identity；只有真正的 `fit T[]` 局部元素
+  类型参数才导出为 `TYPE_PARAM_REF`。
+- **根因**：Symbol export 的 `find_local_type_like_decl` 只把 type 与 spec 视为本模块已声明
+  类型，漏掉 enum；`infer_fit_array_target_type_param_name` 因而把单段 `Element` 误判为 fit
+  局部类型参数并写成 `TYPE_PARAM_REF`。这与 ISSUE-032 是同一类编译期分类遗漏。
+- **通用修复方案**：让 Symbol 的本地 type-like 声明查询同时覆盖 enum；数组 fit 的既有推断
+  流程由此把 `Element` 保留为普通 nominal named 节点，真正的 `fit T[]` 仍使用
+  `TYPE_PARAM_REF`。
+- **运行时性能影响**：无；仅修正编译期符号导出分类。
+- **runtime ABI / `.ft` / 兼容性影响**：不新增节点 kind、字段或格式版本，也不修改 runtime
+  ABI；只是把此前错误写成 `TYPE_PARAM_REF` 的具体 enum 恢复为格式早已支持的 `NAMED` 节点。
+- **是否需要人工决策**：否；属于已批准 ISSUE-032 的同类遗漏，不触及格式或 ABI 变更条件。
+- **专项验证结果**：新增具体 enum 数组 fit `.ft` roundtrip 通过；既有 `fit T[!]` 的
+  `TYPE_PARAM_REF` roundtrip 同时通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过，详见 MV06 独立交付记录。
+
+### MV06 独立交付记录
+
+- **变更范围**：补齐 `T: IntersectionSpec` 泛型值的实例方法值，使其组合复用 MV02 的泛型
+  receiver 值语义与 MV05 的 flattened requirement / merged witness 分派；同时按人工批准一并
+  修复具体 nominal enum 元素数组 fit 的编译期分类缺口。IC01 与 MV07 的 intersection 约束
+  静态成员能力没有在本次提前开放。
+- **实现结果**：Semantic 对 object-form 与 intersection-form 约束使用同一方法值成员面和重载
+  解析，保留完整 `T`、精确 requirement 原声明及访问事实；Codegen 沿用现有共享泛型 callable
+  捕获计划，并把静态 merged-witness 物化扩展到用户类型、enum、builtin 与数组 subject。
+  intersection 数组从同一稳定 subject key 的叶级 witness 组装 merged witness，不要求不存在的
+  外层伪 witness。无目标引用稳定报告 `AE0523`，不可访问 seal requirement 稳定报告 `AE0708`。
+- **一并修复**：ISSUE-021 至 ISSUE-033 均已解决。其中 ISSUE-032 经人工批准，Semantic 通过
+  既有 type-fact sidecar 记录真正的数组 fit 局部元素类型参数，reifiable dependency 与 Codegen
+  复用该编译期事实；Symbol export 将具体 enum 保留为既有 `NAMED` 节点，真正的 `fit T[!]`
+  仍导出为 `TYPE_PARAM_REF`。其余问题均是 MV06 通用抽象覆盖、编译期生命周期、诊断一致性或
+  本次新增夹具问题。
+- **运行时成本**：没有增量运行时开销。方法值仍只进行形成 callable 本身所必需的一次既有
+  closure 分配；receiver 使用原有引用、trivial 或 descriptor-sized 捕获表示，调用仍通过
+  编译期固定的 witness 槽。没有新增 spec box、第二份 receiver、运行时成员查找、额外分配、
+  descriptor 字段或动态分支；merged witness 只在编译期生成静态数据。
+- **ABI 与格式**：runtime、runtime 私有 ABI、生成程序既有数据布局以及 `.ft` schema / 版本均
+  未改变；没有新增或修改公开结构字段及依赖 kind。ISSUE-033 仅把此前错误分类的具体 enum
+  数组元素写为格式既有的 `NAMED` 节点，真正的局部类型参数表示保持不变。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen`、`build/bin/test_symbol` 均
+  通过；新增用例覆盖 object/父级/嵌套成员、合法重载、seal 与无目标诊断、托管引用、trivial
+  enum、descriptor-sized `@value`、可写数组、稳定 witness key、无 spec box、严格 C 编译、
+  callable dependency 与 `.ft` roundtrip。没有修改既有测试用例，只新增专项用例及注册入口。
+- **FCTS**：覆盖直接/父级/嵌套 requirement、重载、三类值表示、可写 nominal-enum 数组、
+  receiver 稳定绑定、生命周期、合法 seal，以及 imported provider / consumer-only 闭合；结果为
+  `850 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过；UBSan 与普通
+  `-O2 -Werror -pedantic` 两阶段均完成，两轮 smoke `91/91`、两轮 std `601/601`、两轮 FCTS
+  `850/850`，以及 archive、lexer、parser、Semantic、runtime、Codegen、debug、CLI、symbol、
+  性能约束、增量构建、发布/安装脚本、bundled packages 和 toolchain 测试全部通过。
+- **实施问题**：ISSUE-021 至 ISSUE-033 均已按先记录、后分析、再修复的流程收口；MV06 无
+  未解决问题。
+- **建议 commit message**：`feat: support intersection-constrained generic method values`
 
 ### ISSUE-待编号：待填写
 

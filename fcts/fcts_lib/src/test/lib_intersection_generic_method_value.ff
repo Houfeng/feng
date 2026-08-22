@@ -1,0 +1,43 @@
+open module fcts_lib.test.lib_intersection_generic_method_value;
+
+/** First imported member surface used by the MV06 shared binder. */
+open spec LibMV06Stateful {
+  func step(delta: i32): i32;
+}
+
+/** Second imported member surface completing the intersection constraint. */
+open spec LibMV06Named {
+  func name(): string;
+}
+
+/** Imported intersection constraint restored by a consumer package. */
+open spec LibMV06StatefulNamed: LibMV06Stateful & LibMV06Named;
+
+/** Imported callable target produced by the shared generic binder. */
+open spec LibMV06Stepper(delta: i32): i32;
+
+/** Provider-owned implementation used beside a consumer-only implementation. */
+open type LibMV06Counter: LibMV06Stateful, LibMV06Named {
+  open var value: i32;
+
+  /** Mutate the provider-owned reference receiver. */
+  open func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+
+  /** Identify the provider implementation. */
+  open func name(): string {
+    return "provider";
+  }
+}
+
+/**
+ * Form an intersection-constrained method value in an imported shared body.
+ * The consumer may close T with a type that does not exist in this package.
+ */
+open func bindLibMV06Step<T: LibMV06StatefulNamed>(
+  value: T
+): LibMV06Stepper {
+  return value.step;
+}

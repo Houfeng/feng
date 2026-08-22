@@ -9,7 +9,8 @@ static bool type_ref_contains_type_param(const FengTypeRef *type_ref,
                                          const FengTypeParam *type_params,
                                          size_t type_param_count);
 static bool extract_fit_target_implicit_type_param(
-    const FengTypeRef *target_ref,
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl,
     FengTypeParam *out_param);
 
 /* ===================================================================
@@ -283,6 +284,7 @@ static bool rd_type_ref_equals(const FengTypeRef *left,
 /* 判断已解析 callable 是否使用共享 ABI。构造器继续使用 type descriptor
  * 路径，不属于 callable descriptor graph。 */
 static bool rd_resolved_callable_uses_shared_abi(
+    const FengSemanticAnalysis *analysis,
     const FengResolvedCallable *resolved) {
     if (resolved == NULL) {
         return false;
@@ -311,20 +313,23 @@ static bool rd_resolved_callable_uses_shared_abi(
                  resolved->fit_decl != NULL &&
                  resolved->fit_decl->kind == FENG_DECL_FIT &&
                  extract_fit_target_implicit_type_param(
-                     resolved->fit_decl->as.fit_decl.target,
+                     analysis,
+                     resolved->fit_decl,
                      &implicit_fit_param)));
     }
     return false;
 }
 
 /* 将 direct generic callee 追加到当前 callable dependency set。 */
-static bool rd_append_callable_dep(FengReifiableDepSet *dep_set,
-                                   const FengResolvedCallable *resolved) {
+static bool rd_append_callable_dep(
+    const FengSemanticAnalysis *analysis,
+    FengReifiableDepSet *dep_set,
+    const FengResolvedCallable *resolved) {
     FengReifiableCallableDep *slot;
     size_t index;
 
     if (dep_set == NULL ||
-        !rd_resolved_callable_uses_shared_abi(resolved)) {
+        !rd_resolved_callable_uses_shared_abi(analysis, resolved)) {
         return true;
     }
     for (index = 0U; index < dep_set->callable_dep_count; ++index) {
@@ -563,7 +568,7 @@ static bool rd_append_callable_value_dep(
 bool feng_semantic_reifiable_dep_set_append_callable(
     FengReifiableDepSet *dep_set,
     const FengResolvedCallable *resolved) {
-    return rd_append_callable_dep(dep_set, resolved);
+    return rd_append_callable_dep(NULL, dep_set, resolved);
 }
 
 bool feng_semantic_reifiable_dep_set_append_callable_value(
@@ -821,7 +826,7 @@ static void rd_collect_synthesized_method_call(
     resolved.member = member;
     resolved.fit_decl = fit_decl;
     resolved.owner_instance_type_ref = owner_instance_type_ref;
-    (void)rd_append_callable_dep(ctx->dep_set, &resolved);
+    (void)rd_append_callable_dep(ctx->analysis, ctx->dep_set, &resolved);
 }
 
 /* ---- 确定 dep kind ---------------------------------------------------- */
@@ -1506,7 +1511,9 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
                     expr->as.call.resolved_callable.owner_instance_type_ref);
             }
             (void)rd_append_callable_dep(
-                ctx->dep_set, &expr->as.call.resolved_callable);
+                ctx->analysis,
+                ctx->dep_set,
+                &expr->as.call.resolved_callable);
             rd_try_collect_call_return_type_dep(ctx, expr);
             return;
 
@@ -1905,18 +1912,59 @@ static const FengDecl *find_fit_target_type_decl(
     return NULL;
 }
 
-/* 从 fit target TypeRef 中提取隐含的 fit 级类型参数。
- * 例如 `fit T[]` → 提取 T；`fit T[!]` → 提取 T。
- * 仅处理数组形式（ARRAY / POINTER+ARRAY），inner 为单 segment NAMED ref 时
- * 视为隐含类型参数。成功时写入 out_param 并返回 true。 */
-static bool extract_fit_target_implicit_type_param(
-    const FengTypeRef *target_ref,
-    FengTypeParam *out_param) {
-    const FengTypeRef *element_ref;
+/* Locate the module origin that owns one declaration pointer. */
+static bool rd_find_decl_module_origin(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *decl,
+    FengSemanticModuleOrigin *out_origin) {
+    size_t module_index;
 
-    if (target_ref == NULL || out_param == NULL) {
+    if (analysis == NULL || decl == NULL || out_origin == NULL) {
         return false;
     }
+    for (module_index = 0U;
+         module_index < analysis->module_count;
+         ++module_index) {
+        const FengSemanticModule *module =
+            &analysis->modules[module_index];
+        size_t program_index;
+
+        for (program_index = 0U;
+             program_index < module->program_count;
+             ++program_index) {
+            const FengProgram *program = module->programs[program_index];
+            size_t decl_index;
+
+            for (decl_index = 0U;
+                 decl_index < program->declaration_count;
+                 ++decl_index) {
+                if (program->declarations[decl_index] == decl) {
+                    *out_origin = module->origin;
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+
+/* Extract the fit-local element type parameter introduced by `fit T[]` or
+ * `fit T[!]`. Local declarations use Semantic's recorded resolution fact;
+ * imported declarations fall back to their structured .ft type shape. */
+static bool extract_fit_target_implicit_type_param(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl,
+    FengTypeParam *out_param) {
+    const FengTypeRef *target_ref;
+    const FengTypeRef *element_ref;
+    const FengSemanticTypeFact *fact;
+    FengSemanticModuleOrigin origin;
+
+    if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT ||
+        out_param == NULL) {
+        return false;
+    }
+    target_ref = fit_decl->as.fit_decl.target;
 
     /* fit T[!] 解析为 POINTER → ARRAY → inner，取 ARRAY 层的 inner。 */
     if (target_ref->kind == FENG_TYPE_REF_POINTER &&
@@ -1933,6 +1981,25 @@ static bool extract_fit_target_implicit_type_param(
         element_ref->kind != FENG_TYPE_REF_NAMED ||
         element_ref->as.named.segment_count != 1U ||
         element_ref->as.named.type_arg_count != 0U) {
+        return false;
+    }
+
+    fact = feng_semantic_lookup_type_fact(analysis, fit_decl);
+    if (fact != NULL &&
+        fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+        fact->type_ref == element_ref) {
+        memset(out_param, 0, sizeof(*out_param));
+        out_param->token = element_ref->token;
+        out_param->name = element_ref->as.named.segments[0];
+        out_param->constraint = NULL;
+        return true;
+    }
+    if (rd_find_decl_module_origin(analysis, fit_decl, &origin) &&
+        origin == FENG_SEMANTIC_MODULE_ORIGIN_LOCAL) {
+        return false;
+    }
+    if (feng_semantic_is_builtin_type_name(
+            element_ref->as.named.segments[0])) {
         return false;
     }
 
@@ -1966,7 +2033,7 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
      * 中提取隐含的类型参数。 */
     if (type_level_param_count == 0U &&
         extract_fit_target_implicit_type_param(
-            decl->as.fit_decl.target, &implicit_type_param)) {
+            analysis, decl, &implicit_type_param)) {
         type_level_params = &implicit_type_param;
         type_level_param_count = 1U;
     }

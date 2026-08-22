@@ -24077,6 +24077,377 @@ static void test_constrained_generic_spec_method_values_preserve_receiver(void) 
     feng_program_free(program);
 }
 
+/* Find one instance method declared directly on an object-form spec. */
+static const FengTypeMember *find_object_spec_method_named(
+    const FengDecl *spec_decl,
+    const char *name) {
+    size_t name_length = strlen(name);
+
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return NULL;
+    }
+    for (size_t index = 0U;
+         index < spec_decl->as.spec_decl.as.object.member_count;
+         ++index) {
+        const FengTypeMember *member =
+            spec_decl->as.spec_decl.as.object.members[index];
+
+        if (member != NULL && !member->is_static &&
+            member->kind == FENG_TYPE_MEMBER_METHOD &&
+            member->as.callable.name.length == name_length &&
+            memcmp(member->as.callable.name.data,
+                   name,
+                   name_length) == 0) {
+            return member;
+        }
+    }
+    return NULL;
+}
+
+/* A T: IntersectionSpec method value keeps T as the receiver while retaining
+ * the complete merged constraint surface and exact leaf requirement. Direct,
+ * parent, nested, overloaded, cast, argument and return targets all use the
+ * same callable sidecar and dependency mechanism as MV02/MV05. */
+static void test_constrained_generic_intersection_method_values_record_surface(void) {
+    const char *source =
+        "module demo.intersection_method_value.generic_receiver;\n"
+        "spec Base { func inherited(value: int): int; }\n"
+        "spec Left: Base {\n"
+        "  func read(value: int): int;\n"
+        "  func select(value: int): int;\n"
+        "}\n"
+        "spec Right {\n"
+        "  func trace(value: int): int;\n"
+        "  func select(value: string): string;\n"
+        "}\n"
+        "spec Pair: Left & Right;\n"
+        "spec Extra { func extra(value: int): int; }\n"
+        "spec Nested: Pair & Extra;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec StringMapper(value: string): string;\n"
+        "func accept(mapper: IntMapper): IntMapper { return mapper; }\n"
+        "func exercise<T: Nested>(value: T): IntMapper {\n"
+        "  let read: IntMapper = value.read;\n"
+        "  let inherited: IntMapper = value.inherited;\n"
+        "  let extra = (IntMapper)value.extra;\n"
+        "  let integer: IntMapper = value.select;\n"
+        "  let text: StringMapper = value.select;\n"
+        "  return accept(value.trace);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "constrained_generic_intersection_method_value.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *base;
+    const FengDecl *left;
+    const FengDecl *right;
+    const FengDecl *extra;
+    const FengDecl *nested;
+    const FengDecl *int_mapper;
+    const FengDecl *string_mapper;
+    const FengDecl *exercise;
+    const FengTypeMember *expected_members[6];
+    const FengDecl *expected_targets[6];
+    const FengExpr *sites[6];
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    base = find_spec_decl_by_name(analysis, "Base");
+    left = find_spec_decl_by_name(analysis, "Left");
+    right = find_spec_decl_by_name(analysis, "Right");
+    extra = find_spec_decl_by_name(analysis, "Extra");
+    nested = find_spec_decl_by_name(analysis, "Nested");
+    int_mapper = find_spec_decl_by_name(analysis, "IntMapper");
+    string_mapper = find_spec_decl_by_name(analysis, "StringMapper");
+    exercise = find_function_decl_in_program(program, "exercise");
+    ASSERT(base != NULL && left != NULL && right != NULL && extra != NULL);
+    ASSERT(nested != NULL && int_mapper != NULL && string_mapper != NULL);
+    ASSERT(exercise != NULL);
+
+    expected_members[0] = find_object_spec_method_named(left, "read");
+    expected_members[1] = find_object_spec_method_named(base, "inherited");
+    expected_members[2] = find_object_spec_method_named(extra, "extra");
+    expected_members[3] = find_object_spec_method_named(left, "select");
+    expected_members[4] = find_object_spec_method_named(right, "select");
+    expected_members[5] = find_object_spec_method_named(right, "trace");
+    for (size_t index = 0U; index < 6U; ++index) {
+        ASSERT(expected_members[index] != NULL);
+        expected_targets[index] = index == 4U
+                                      ? string_mapper
+                                      : int_mapper;
+    }
+
+    for (size_t index = 0U; index < 5U; ++index) {
+        sites[index] = nth_let_initializer(
+            &exercise->as.function_decl, index);
+        ASSERT(sites[index] != NULL);
+    }
+    ASSERT(sites[2]->kind == FENG_EXPR_CAST);
+    sites[2] = sites[2]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 6U);
+    ASSERT(exercise->as.function_decl.body->statements[5]->kind ==
+           FENG_STMT_RETURN);
+    sites[5] = exercise->as.function_decl.body->statements[5]
+                   ->as.return_value;
+    ASSERT(sites[5] != NULL && sites[5]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[5]->as.call.arg_count == 1U);
+    sites[5] = sites[5]->as.call.args[0];
+
+    for (size_t index = 0U; index < 6U; ++index) {
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(
+                analysis, sites[index]);
+
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == expected_targets[index]);
+        ASSERT(site->callable_member == expected_members[index]);
+        ASSERT(site->callable_owner_type_decl == nested);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+    }
+
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, exercise);
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 6U);
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            const FengReifiableCallableDep *dependency =
+                &dep_set->callable_deps[index];
+
+            ASSERT(dependency->purpose ==
+                   FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+            ASSERT(dependency->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD);
+            ASSERT(dependency->owner_type_decl == nested);
+            ASSERT(dependency->fit_decl == NULL);
+            ASSERT(spec_upcast_type_ref_leaf_is(
+                dependency->owner_instance_type_ref, "T"));
+        }
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* The declaring object spec still governs seal access when its requirement is
+ * selected through an intersection-constrained generic receiver. */
+static void test_constrained_generic_intersection_method_values_allow_authorized_seal(void) {
+    const char *source =
+        "module demo.intersection_method_value.authorized_seal;\n"
+        "spec Hidden { seal func secret(value: int): int; }\n"
+        "spec Visible { func visible(): int; }\n"
+        "spec Both: Hidden & Visible;\n"
+        "spec Mapper(value: int): int;\n"
+        "type Owner: Hidden, Visible {\n"
+        "  seal func secret(value: int): int { return value; }\n"
+        "  func visible(): int { return 1; }\n"
+        "  func bind<T: Both>(value: T): Mapper { return value.secret; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "constrained_generic_intersection_authorized_seal.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Intersection-constrained generic method values retain the callable target
+ * and seal diagnostics. The no-target matrix also locks ISSUE-021 for both
+ * object-form and intersection-form constraints. */
+static void test_constrained_generic_intersection_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "constrained_generic_object_method_value_without_target.ff",
+            "module demo.generic_object_method_value.no_target;\n"
+            "spec Readable { func read(value: int): int; }\n"
+            "func bad<T: Readable>(value: T): void {\n"
+            "  let reader = value.read;\n"
+            "}\n",
+            "AE0523"
+        },
+        {
+            "constrained_generic_intersection_method_value_without_target.ff",
+            "module demo.generic_intersection_method_value.no_target;\n"
+            "spec Left { func read(value: int): int; }\n"
+            "spec Right { func trace(): int; }\n"
+            "spec Both: Left & Right;\n"
+            "func bad<T: Both>(value: T): void {\n"
+            "  let reader = value.read;\n"
+            "}\n",
+            "AE0523"
+        },
+        {
+            "constrained_generic_intersection_method_value_mismatch.ff",
+            "module demo.generic_intersection_method_value.mismatch;\n"
+            "spec Left { func read(value: int): int; }\n"
+            "spec Right { func trace(): int; }\n"
+            "spec Both: Left & Right;\n"
+            "spec Wrong(flag: bool): int;\n"
+            "func bad<T: Both>(value: T): Wrong { return value.read; }\n",
+            "AE0522"
+        },
+        {
+            "constrained_generic_intersection_method_value_seal.ff",
+            "module demo.generic_intersection_method_value.seal_access;\n"
+            "spec Hidden { seal func secret(value: int): int; }\n"
+            "spec Visible { func visible(): int; }\n"
+            "spec Both: Hidden & Visible;\n"
+            "spec Mapper(value: int): int;\n"
+            "func bad<T: Both>(value: T): Mapper { return value.secret; }\n",
+            "AE0708"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(
+            cases[case_index].path, cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(
+                   errors,
+                   error_count,
+                   cases[case_index].expected_code) > 0U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Closing an intersection-constrained method value over an array must retain
+ * the fit-owned array subject key in every leaf witness. This keeps witness
+ * lookup valid after the generic-call resolver releases its temporary types. */
+static void test_constrained_generic_intersection_array_witness_key_is_stable(void) {
+    const char *source =
+        "module demo.intersection_method_value.array_witness_key;\n"
+        "spec Stateful { func step(delta: i32): i32; }\n"
+        "spec Named { func name(): string; }\n"
+        "spec Both: Stateful & Named;\n"
+        "spec Mapper(delta: i32): i32;\n"
+        "fit i32[]: Stateful, Named {\n"
+        "  func step(delta: i32): i32 { return self[0] + delta; }\n"
+        "  func name(): string { return \"array\"; }\n"
+        "}\n"
+        "func bind<T: Both>(value: T): Mapper { return value.step; }\n"
+        "func run(value: i32[]): Mapper { return bind<i32[]>(value); }\n";
+    FengProgram *program = parse_program_or_die(
+        "constrained_generic_intersection_array_witness_key.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *stateful;
+    const FengDecl *named;
+    const FengDecl *fit;
+    FengSemanticSubjectKey subject_key;
+    const FengSpecWitness *stateful_witness;
+    const FengSpecWitness *named_witness;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    stateful = find_spec_decl_by_name(analysis, "Stateful");
+    named = find_spec_decl_by_name(analysis, "Named");
+    fit = program->declarations[4];
+    ASSERT(stateful != NULL && named != NULL);
+    ASSERT(fit != NULL && fit->kind == FENG_DECL_FIT);
+    ASSERT(fit->as.fit_decl.target != NULL);
+    ASSERT(fit->as.fit_decl.target->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(
+        &subject_key, fit->as.fit_decl.target));
+
+    stateful_witness = feng_semantic_lookup_spec_witness(
+        analysis, &subject_key, stateful);
+    named_witness = feng_semantic_lookup_spec_witness(
+        analysis, &subject_key, named);
+    ASSERT(stateful_witness != NULL && named_witness != NULL);
+    ASSERT(stateful_witness->subject_key.kind ==
+           FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
+    ASSERT(named_witness->subject_key.kind ==
+           FENG_SEMANTIC_SUBJECT_KEY_ARRAY);
+    ASSERT(stateful_witness->subject_key.as.array.element_type_ref ==
+           fit->as.fit_decl.target->as.inner);
+    ASSERT(named_witness->subject_key.as.array.element_type_ref ==
+           fit->as.fit_decl.target->as.inner);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A concrete nominal element in an array fit is not a fit-local type
+ * parameter. Its non-generic method therefore must not acquire a member-level
+ * reifiable dependency set merely because the target has array shape. */
+static void test_concrete_enum_array_fit_is_not_reifiable_generic(void) {
+    const char *source =
+        "module demo.fit_enum_array.reifiable_classification;\n"
+        "enum Element { First }\n"
+        "spec Readable { func read(): i32; }\n"
+        "fit Element[!]: Readable {\n"
+        "  func read(): i32 {\n"
+        "    return if self[0] == Element.First { 1 } else { 0 };\n"
+        "  }\n"
+        "}\n"
+        "func run(value: Element[!]): i32 { return value.read(); }\n";
+    FengProgram *program = parse_program_or_die(
+        "concrete_enum_array_fit_reifiable_classification.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *fit;
+    const FengTypeMember *read;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    fit = program->declarations[2];
+    ASSERT(fit != NULL && fit->kind == FENG_DECL_FIT);
+    ASSERT(fit->as.fit_decl.member_count == 1U);
+    read = fit->as.fit_decl.members[0];
+    ASSERT(read != NULL && read->kind == FENG_TYPE_MEMBER_METHOD);
+    ASSERT(feng_semantic_lookup_member_reifiable_dep_set(
+               analysis, fit, read) == NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* A T: ObjectSpec static method value keeps T as the owner while selecting
  * the exact static requirement and callable target at compile time. Binding,
  * cast, argument and return targets share one callable-value dependency;
@@ -26239,6 +26610,11 @@ int main(void) {
     test_object_spec_method_values_record_exact_target_context();
     test_intersection_spec_method_values_record_merged_surface();
     test_constrained_generic_spec_method_values_preserve_receiver();
+    test_constrained_generic_intersection_method_values_record_surface();
+    test_constrained_generic_intersection_method_values_allow_authorized_seal();
+    test_constrained_generic_intersection_method_values_reject_invalid_sources();
+    test_constrained_generic_intersection_array_witness_key_is_stable();
+    test_concrete_enum_array_fit_is_not_reifiable_generic();
     test_constrained_generic_spec_static_method_values();
     test_builtin_fit_static_spec_witness();
     test_array_fit_static_spec_witness();

@@ -8299,9 +8299,10 @@ static bool cg_ensure_callable_spec_method_value(
 }
 
 /* Emit or reuse the closed adapter and closure layout for one method value
- * whose source receiver remains an erased constrained generic parameter in
- * the shared body. The concrete descriptor fixes the witness and layout, so
- * the shared body only performs the ordinary receiver copy into one closure. */
+ * whose source receiver remains an erased object/intersection-constrained
+ * generic parameter in the shared body. The concrete descriptor fixes the
+ * witness and layout, so the shared body only performs the ordinary receiver
+ * copy into one closure. */
 static const CGCallableGenericSpecMethodValueSupport *
 cg_ensure_callable_generic_spec_method_value(
     CG *cg,
@@ -8325,7 +8326,8 @@ cg_ensure_callable_generic_spec_method_value(
         method == NULL || method->member == NULL || receiver_type == NULL ||
         receiver_descriptor_expr == NULL || descriptor_c_name == NULL ||
         target_spec->form != FENG_SPEC_FORM_CALLABLE ||
-        receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        (receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
+         receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
         method->kind != USM_KIND_METHOD || method->is_static ||
         target_spec->callable_param_count != method->param_count) {
         (void)cg_fail(cg,
@@ -9075,6 +9077,25 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
         }
         ref->as.named.segments[0].data = type_param_name;
         ref->as.named.segments[0].length = strlen(type_param_name);
+        return ref;
+    }
+
+    /* Enum CGTypes use the i32 storage kind but retain a nominal declaration.
+     * Preserve that identity before considering ordinary builtin kinds so
+     * reified generic dependencies select the enum's own witness/descriptor. */
+    if (type->enum_decl != NULL &&
+        type->enum_decl->kind == FENG_DECL_ENUM) {
+        ref = calloc(1U, sizeof *ref);
+        if (ref == NULL) return NULL;
+        ref->token = token;
+        ref->kind = FENG_TYPE_REF_NAMED;
+        ref->as.named.segment_count = 1U;
+        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
+        if (ref->as.named.segments == NULL) {
+            free(ref);
+            return NULL;
+        }
+        ref->as.named.segments[0] = type->enum_decl->as.enum_decl.name;
         return ref;
     }
 
@@ -15385,7 +15406,7 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
 }
 
 static bool cg_builtin_fit_target_local_type_param(CG *cg,
-                                                   const FengTypeRef *target_ref,
+                                                   const FengDecl *fit_decl,
                                                    FengTypeParam *out_type_param);
 
 static bool cg_fit_target_is_builtin_form(const FengTypeRef *target_ref) {
@@ -15500,7 +15521,7 @@ static bool cg_register_builtin_fit_shell(CG *cg,
         cg->builtin_fit_capacity = cap;
     }
 
-    if (cg_builtin_fit_target_local_type_param(cg, target_ref, &local_type_param)) {
+    if (cg_builtin_fit_target_local_type_param(cg, decl, &local_type_param)) {
         open_scope.first = &local_type_param;
         open_scope.first_count = 1U;
     }
@@ -15593,14 +15614,21 @@ static bool cg_is_builtin_named_fit_target(FengSlice name) {
 }
 
 static bool cg_builtin_fit_target_local_type_param(CG *cg,
-                                                   const FengTypeRef *target_ref,
+                                                   const FengDecl *fit_decl,
                                                    FengTypeParam *out_type_param) {
+    const FengTypeRef *target_ref;
     const FengTypeRef *element_ref;
+    const FengSemanticTypeFact *fact;
     FengSlice element_name;
     FengSlice probe_segments[1];
     FengTypeRef probe_ref;
 
-    if (out_type_param == NULL || target_ref == NULL ||
+    if (out_type_param == NULL || fit_decl == NULL ||
+        fit_decl->kind != FENG_DECL_FIT) {
+        return false;
+    }
+    target_ref = fit_decl->as.fit_decl.target;
+    if (target_ref == NULL ||
         target_ref->kind != FENG_TYPE_REF_ARRAY) {
         return false;
     }
@@ -15613,9 +15641,20 @@ static bool cg_builtin_fit_target_local_type_param(CG *cg,
     }
 
     element_name = element_ref->as.named.segments[0];
+    fact = feng_semantic_lookup_type_fact(cg->analysis, fit_decl);
+    if (fact != NULL &&
+        fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+        fact->type_ref == element_ref) {
+        memset(out_type_param, 0, sizeof(*out_type_param));
+        out_type_param->token = element_ref->token;
+        out_type_param->name = element_name;
+        out_type_param->constraint = NULL;
+        return true;
+    }
     if (cg_is_builtin_named_fit_target(element_name) ||
         cg_find_user_type(cg, element_name.data, element_name.length) != NULL ||
-        cg_find_user_spec(cg, element_name.data, element_name.length) != NULL) {
+        cg_find_user_spec(cg, element_name.data, element_name.length) != NULL ||
+        cg_find_enum_decl_by_ref(cg, element_ref) != NULL) {
         return false;
     }
 
@@ -22012,7 +22051,8 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         char *closure_name = NULL;
 
         if (receiver_spec == NULL ||
-            receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+            (receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
+             receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
             receiver_descriptor == NULL ||
             cg_user_spec_member_by_decl(receiver_spec,
                                         cs->callable_member) == NULL) {
@@ -43447,8 +43487,9 @@ cleanup:
     return ok;
 }
 
-/* Resolve the exact object-form constraint instance carried by a callable
- * dependency whose owner is one direct caller type parameter. */
+/* Resolve the exact object-form constraint, or the intersection-form
+ * constraint of an instance method value, carried by a callable dependency
+ * whose owner is one direct caller type parameter. */
 static const UserSpec *cg_closed_spec_method_constraint(
     CG *cg,
     const FengReifiableCallableDep *callable_dep,
@@ -43524,7 +43565,9 @@ static const UserSpec *cg_closed_spec_method_constraint(
     }
     cg_type_ref_free(closed_constraint_ref);
     if (constraint_spec == NULL ||
-        constraint_spec->form != FENG_SPEC_FORM_OBJECT ||
+        (constraint_spec->form != FENG_SPEC_FORM_OBJECT &&
+         (callable_dep->kind != FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
+          constraint_spec->form != FENG_SPEC_FORM_INTERSECTION)) ||
         !cg_ensure_user_spec_members_registered(cg, constraint_spec)) {
         cgtype_free(constraint_type);
         if (!cg->failed) {
@@ -43539,10 +43582,11 @@ static const UserSpec *cg_closed_spec_method_constraint(
     return constraint_spec;
 }
 
-/* Materialize the closed callable descriptor for one T:ObjectSpec instance
- * method value. The adapter's witness and receiver layout are fixed here;
- * the provider shared body later performs only one descriptor-slot read and
- * one receiver copy into the callable closure. */
+/* Materialize the closed callable descriptor for one object/intersection-
+ * constrained generic instance method value. The adapter's witness and
+ * receiver layout are fixed here; the provider shared body later performs
+ * only one descriptor-slot read and one receiver copy into the callable
+ * closure. */
 static bool cg_emit_closed_callable_spec_method_value_dep_expr(
     CG *cg,
     const FengReifiableCallableDep *callable_dep,
@@ -45608,6 +45652,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                 cg_type_ref_from_cgtype(cg, t, *tok);
             FengSemanticSubjectKey lookup_key;
             const FengSpecWitness *semantic_witness;
+            const FengSemanticSubjectKey *witness_subject_key;
             const char *witness_var = NULL;
 
             if (array_type_ref == NULL ||
@@ -45620,15 +45665,19 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
             }
             semantic_witness = feng_semantic_lookup_spec_witness(
                 cg->analysis, &lookup_key, constraint_spec->decl);
-            if (semantic_witness == NULL) {
+            if (semantic_witness == NULL &&
+                constraint_spec->form != FENG_SPEC_FORM_INTERSECTION) {
                 cg_type_ref_free(array_type_ref);
                 buf_free(&b);
                 return cg_fail(cg, *tok,
                     "CE0329", "codegen: missing semantic witness for constrained array type argument");
             }
+            witness_subject_key = semantic_witness != NULL
+                ? &semantic_witness->subject_key
+                : &lookup_key;
             if (!cg_ensure_witness_instance(
                     cg,
-                    &semantic_witness->subject_key,
+                    witness_subject_key,
                     constraint_spec,
                     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
                     *tok,
@@ -49081,6 +49130,296 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
     return true;
 }
 
+/* Materialize one intersection-form witness by aliasing every merged slot to
+ * the corresponding leaf object-form witness slot. Exactly one subject
+ * representation is supplied: user_type for registered user types, otherwise
+ * subject_key for enum/builtin/array subjects. The emitted witness is a static
+ * compiler artifact; it adds no runtime lookup, thunk, or descriptor field. */
+static bool cg_ensure_intersection_witness_instance(
+    CG *cg,
+    const UserType *user_type,
+    const FengSemanticSubjectKey *subject_key,
+    const UserSpec *intersection_spec,
+    FengSpecObjectSubjectStorageKind scalar_subject_storage,
+    FengToken blame,
+    const char **out_var) {
+    const char *spec_unique_name;
+    char *spec_sanitized = NULL;
+    Buf var;
+    const char **member_witness_vars = NULL;
+    bool saved_in_generic_fn;
+    size_t saved_type_param_count;
+    char **saved_type_param_names;
+    const UserSpec **saved_type_param_constraints;
+    const char **saved_type_param_descriptors;
+    const FengSemanticSubjectKey *effective_subject_key = subject_key;
+    bool ok = true;
+
+    if (cg == NULL || intersection_spec == NULL || out_var == NULL ||
+        intersection_spec->form != FENG_SPEC_FORM_INTERSECTION ||
+        ((user_type == NULL) == (subject_key == NULL))) {
+        return false;
+    }
+
+    spec_unique_name =
+        intersection_spec->generic_context_type_param_count > 0U &&
+                intersection_spec->c_aggregate_desc_name != NULL
+            ? intersection_spec->c_aggregate_desc_name
+            : intersection_spec->feng_name;
+    spec_sanitized = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
+    if (spec_sanitized == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    buf_init(&var);
+    if (user_type != NULL) {
+        char *type_sanitized =
+            cg_sanitize(user_type->feng_name, strlen(user_type->feng_name));
+
+        if (type_sanitized == NULL) {
+            free(spec_sanitized);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(&var,
+                       "FengSpecWitness__%s__%s__as__%s__%s",
+                       cg->module_mangle,
+                       type_sanitized,
+                       cg->module_mangle,
+                       spec_sanitized);
+        free(type_sanitized);
+    } else {
+        const size_t witness_id = cg->subject_witness_counter++;
+
+        buf_append_fmt(&var,
+                       "FengWitness__%s__subject_%zu__as__%s__%s",
+                       cg->module_mangle,
+                       witness_id,
+                       cg->module_mangle,
+                       spec_sanitized);
+    }
+    free(spec_sanitized);
+    if (var.data == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    /* Declare the merged constant before recursively materializing leaves so
+     * descriptors may refer to it independent of emission order. */
+    buf_append_fmt(&cg->headers,
+                   "static const struct %s %s;\n",
+                   intersection_spec->c_witness_struct_name,
+                   var.data);
+
+    if (intersection_spec->member_count > 0U) {
+        member_witness_vars = (const char **)calloc(
+            intersection_spec->member_count,
+            sizeof(*member_witness_vars));
+        if (member_witness_vars == NULL) {
+            buf_free(&var);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+
+    /* Open generic intersection instances carry substituted leaf refs. Make
+     * their own type-parameter names active while resolving those refs, then
+     * restore the caller context before emitting or returning. */
+    saved_in_generic_fn = cg->in_generic_fn;
+    saved_type_param_count = cg->generic_fn_type_param_count;
+    saved_type_param_names = cg->generic_fn_type_param_names;
+    saved_type_param_constraints = cg->generic_fn_type_param_constraints;
+    saved_type_param_descriptors = cg->generic_fn_type_param_descs;
+    if (intersection_spec->generic_context_type_param_count > 0U) {
+        cg->in_generic_fn = true;
+        cg->generic_fn_type_param_count =
+            intersection_spec->generic_context_type_param_count;
+        cg->generic_fn_type_param_names =
+            intersection_spec->generic_context_type_param_names;
+        cg->generic_fn_type_param_constraints = NULL;
+        cg->generic_fn_type_param_descs = NULL;
+    }
+
+    for (size_t index = 0U;
+         index < intersection_spec->member_count;
+         ++index) {
+        const UserSpecMember *member = &intersection_spec->members[index];
+        const UserSpec *leaf_spec = NULL;
+        const char *leaf_witness_var = NULL;
+
+        if ((member->source_member_decl == NULL &&
+             member->source_member_type_ref == NULL) ||
+            member->source_c_field_name == NULL) {
+            ok = cg_fail(
+                cg,
+                blame,
+                "CE0357",
+                "codegen: intersection-form spec member '%s' is missing source witness metadata",
+                member->feng_name);
+            break;
+        }
+
+        if (member->source_member_type_ref != NULL) {
+            CGType *leaf_type = NULL;
+
+            if (!cg_resolve_type(cg,
+                                 member->source_member_type_ref,
+                                 NULL,
+                                 &leaf_type)) {
+                ok = false;
+                break;
+            }
+            if (leaf_type != NULL &&
+                (leaf_type->kind == CG_TYPE_SPEC ||
+                 leaf_type->kind == CG_TYPE_CALLABLE)) {
+                leaf_spec = leaf_type->user_spec;
+            }
+            cgtype_free(leaf_type);
+        } else {
+            leaf_spec =
+                cg_find_user_spec_by_decl(cg, member->source_member_decl);
+        }
+        if (leaf_spec == NULL) {
+            ok = cg_fail(
+                cg,
+                blame,
+                "CE0358",
+                "codegen: intersection-form spec member source spec not registered");
+            break;
+        }
+
+        /* Reconstructed array keys own a temporary element type ref. Replace
+         * that key with the analysis-owned identity from any leaf witness
+         * before recursive emission or cache insertion. */
+        if (user_type == NULL &&
+            effective_subject_key == subject_key &&
+            subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+            const FengSpecWitness *leaf_witness =
+                feng_semantic_lookup_spec_witness(cg->analysis,
+                                                  subject_key,
+                                                  leaf_spec->decl);
+
+            if (leaf_witness == NULL) {
+                ok = cg_fail(
+                    cg,
+                    blame,
+                    "CE0329",
+                    "codegen: missing semantic leaf witness for intersection-constrained array type argument");
+                break;
+            }
+            effective_subject_key = &leaf_witness->subject_key;
+        }
+
+        if (user_type != NULL) {
+            ok = cg_ensure_witness_instance_for_type(cg,
+                                                     user_type,
+                                                     leaf_spec,
+                                                     blame,
+                                                     &leaf_witness_var);
+        } else {
+            ok = cg_ensure_witness_instance(cg,
+                                            effective_subject_key,
+                                            leaf_spec,
+                                            scalar_subject_storage,
+                                            blame,
+                                            &leaf_witness_var);
+        }
+        if (!ok) {
+            break;
+        }
+        member_witness_vars[index] = leaf_witness_var;
+    }
+
+    if (intersection_spec->generic_context_type_param_count > 0U) {
+        cg->in_generic_fn = saved_in_generic_fn;
+        cg->generic_fn_type_param_count = saved_type_param_count;
+        cg->generic_fn_type_param_names = saved_type_param_names;
+        cg->generic_fn_type_param_constraints = saved_type_param_constraints;
+        cg->generic_fn_type_param_descs = saved_type_param_descriptors;
+    }
+    if (!ok) {
+        free((void *)member_witness_vars);
+        buf_free(&var);
+        return false;
+    }
+
+    /* All source witness variables are cache-owned and stable. The merged
+     * initializer therefore aliases their existing slots without new thunks. */
+    buf_append_fmt(&cg->witness_defs,
+                   "static const struct %s %s = {\n",
+                   intersection_spec->c_witness_struct_name,
+                   var.data);
+    for (size_t index = 0U;
+         index < intersection_spec->member_count;
+         ++index) {
+        const UserSpecMember *member = &intersection_spec->members[index];
+        const char *leaf_witness_var = member_witness_vars[index];
+
+        if (member->kind == USM_KIND_FIELD) {
+            if (cg_spec_field_uses_storage_borrow(member)) {
+                buf_append_fmt(&cg->witness_defs,
+                               "    .borrow_%s = %s.borrow_%s,\n",
+                               member->c_field_name,
+                               leaf_witness_var,
+                               member->source_c_field_name);
+            } else {
+                buf_append_fmt(&cg->witness_defs,
+                               "    .get_%s = %s.get_%s,\n",
+                               member->c_field_name,
+                               leaf_witness_var,
+                               member->source_c_field_name);
+            }
+            if (member->is_var) {
+                buf_append_fmt(&cg->witness_defs,
+                               "    .set_%s = %s.set_%s,\n",
+                               member->c_field_name,
+                               leaf_witness_var,
+                               member->source_c_field_name);
+            }
+        } else {
+            buf_append_fmt(&cg->witness_defs,
+                           "    .%s = %s.%s,\n",
+                           member->c_field_name,
+                           leaf_witness_var,
+                           member->source_c_field_name);
+        }
+    }
+    buf_append_cstr(&cg->witness_defs, "};\n\n");
+    free((void *)member_witness_vars);
+
+    if (user_type != NULL) {
+        if (cg->witness_table_count == cg->witness_table_capacity) {
+            const size_t new_capacity =
+                cg->witness_table_capacity == 0U
+                    ? 4U
+                    : cg->witness_table_capacity * 2U;
+            void *grown = realloc(cg->witness_tables,
+                                  new_capacity * sizeof(*cg->witness_tables));
+
+            if (grown == NULL) {
+                buf_free(&var);
+                return cg_fail(cg,
+                               blame,
+                               "IE0001",
+                               "codegen: out of memory");
+            }
+            cg->witness_tables = grown;
+            cg->witness_table_capacity = new_capacity;
+        }
+        cg->witness_tables[cg->witness_table_count].t = user_type;
+        cg->witness_tables[cg->witness_table_count].s = intersection_spec;
+        cg->witness_tables[cg->witness_table_count].c_var = var.data;
+        cg->witness_table_count++;
+    } else if (!cg_subject_witness_table_add(cg,
+                                              effective_subject_key,
+                                              scalar_subject_storage,
+                                              intersection_spec,
+                                              var.data)) {
+        buf_free(&var);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    *out_var = var.data;
+    return true;
+}
+
 static bool cg_ensure_witness_instance(
     CG *cg,
     const FengSemanticSubjectKey *subject_key,
@@ -49101,6 +49440,18 @@ static bool cg_ensure_witness_instance(
             *out_var = cached;
             return true;
         }
+    }
+    if (s->form == FENG_SPEC_FORM_INTERSECTION &&
+        (subject_key->kind != FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL ||
+         subject_key->as.type_decl == NULL ||
+         subject_key->as.type_decl->kind == FENG_DECL_ENUM)) {
+        return cg_ensure_intersection_witness_instance(cg,
+                                                       NULL,
+                                                       subject_key,
+                                                       s,
+                                                       scalar_subject_storage,
+                                                       blame,
+                                                       out_var);
     }
     if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL) {
         if (subject_key->as.type_decl != NULL &&
@@ -50840,217 +51191,15 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
     const char *cached = cg_witness_table_lookup(cg, t, s);
     if (cached) { *out_var = cached; return true; }
 
-    /* Intersection-form: no single FengSpecWitness exists for (X, Intersection)
-     * because satisfaction is per member spec (9.5). Assemble a merged witness
-     * constant by aliasing slots from X's per-member-spec witnesses — the slot
-     * signatures are identical because intersection.members[] are cloned from
-     * the member specs' members[], so direct `.slot = X_witness_for_M.slot`
-     * works with zero runtime overhead (no thunks). See docs/engineering/feng-intersection-
-     * type-draft.md §4.2. */
     if (s->form == FENG_SPEC_FORM_INTERSECTION) {
-        char *t_san = cg_sanitize(t->feng_name, strlen(t->feng_name));
-        /* Match the non-INTERSECTION path's spec-unique-name rule: generic
-         * context uses c_witness_struct_name (encodes type args); otherwise
-         * use the bare feng name so the mangling matches object-form's
-         * FengSpecWitness__<mod>__<T>__as__<mod>__<S> convention. */
-        const char *spec_unique_name = s->generic_context_type_param_count > 0U && s->c_aggregate_desc_name
-            ? s->c_aggregate_desc_name
-            : s->feng_name;
-        char *s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
-        if (!t_san || !s_san) { free(t_san); free(s_san); return false; }
-
-        Buf var; buf_init(&var);
-        buf_append_fmt(&var, "FengSpecWitness__%s__%s__as__%s__%s",
-                       cg->module_mangle, t_san,
-                       cg->module_mangle, s_san);
-        free(t_san);
-        free(s_san);
-        if (var.data == NULL) {
-            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-        }
-
-        /* Forward-declare the merged witness as a tentative definition in
-         * headers so any reference (e.g. type descriptors that embed an
-         * intersection spec value) resolves even before the full definition
-         * is emitted in witness_defs. */
-        buf_append_fmt(&cg->headers, "static const struct %s %s;\n",
-                       s->c_witness_struct_name, var.data);
-
-        /* Two-phase emission: phase 1 ensures all per-member witnesses exist
-         * (recursively emitting their thunks + constants to witness_defs),
-         * collecting each member's witness var name. Phase 2 then emits the
-         * merged witness body referencing those vars. Doing it in this order
-         * keeps the merged witness body contiguous instead of interleaving
-         * the per-member emissions inside it. */
-        const char **member_witness_vars = NULL;
-        if (s->member_count > 0U) {
-            member_witness_vars = (const char **)calloc(s->member_count,
-                                                       sizeof(*member_witness_vars));
-            if (member_witness_vars == NULL) {
-                buf_free(&var);
-                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-            }
-        }
-        /* 9.9: when the intersection is an open generic instance (e.g.
-         * `Comparable<T>` registered as a generic context from
-         * `func do_compare<T: Comparable<T>>`), each member's
-         * source_member_type_ref carries an open type-param ref (e.g. `Eq<T>`).
-         * Resolving such a ref requires the active generic-fn context so
-         * cg_find_generic_instance_user_spec_for_ref can match the
-         * generic-context UserSpec for the member spec. Temporarily install
-         * the intersection instance's own context names while resolving
-         * members, mirroring cg_register_user_spec_members. */
-        bool saved_in_generic_fn = cg->in_generic_fn;
-        size_t saved_tp_count = cg->generic_fn_type_param_count;
-        char **saved_tp_names = cg->generic_fn_type_param_names;
-        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
-        const char **saved_tp_descs = cg->generic_fn_type_param_descs;
-        if (s->generic_context_type_param_count > 0U) {
-            cg->in_generic_fn = true;
-            cg->generic_fn_type_param_count = s->generic_context_type_param_count;
-            cg->generic_fn_type_param_names = s->generic_context_type_param_names;
-            cg->generic_fn_type_param_constraints = NULL;
-            cg->generic_fn_type_param_descs = NULL;
-        }
-        for (size_t i = 0U; i < s->member_count; ++i) {
-            const UserSpecMember *sm = &s->members[i];
-            if ((sm->source_member_decl == NULL &&
-                 sm->source_member_type_ref == NULL) ||
-                sm->source_c_field_name == NULL) {
-                free((void *)member_witness_vars);
-                buf_free(&var);
-                if (s->generic_context_type_param_count > 0U) {
-                    cg->in_generic_fn = saved_in_generic_fn;
-                    cg->generic_fn_type_param_count = saved_tp_count;
-                    cg->generic_fn_type_param_names = saved_tp_names;
-                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
-                    cg->generic_fn_type_param_descs = saved_tp_descs;
-                }
-                return cg_fail(cg, blame,
-                    "CE0357", "codegen: intersection-form spec member '%s' is missing source witness metadata",
-                    sm->feng_name);
-            }
-            /* 9.9: for generic intersection instances, source_member_type_ref
-             * holds the substituted member ref (e.g. Eq<IntBox>) and is used
-             * to locate the correct generic-instance UserSpec (not the
-             * generic context). For non-generic intersections,
-             * source_member_type_ref is NULL and we fall back to
-             * source_member_decl. */
-            const UserSpec *member_spec = NULL;
-            if (sm->source_member_type_ref != NULL) {
-                CGType *member_type = NULL;
-                if (!cg_resolve_type(cg, sm->source_member_type_ref, NULL, &member_type)) {
-                    free((void *)member_witness_vars);
-                    buf_free(&var);
-                    if (s->generic_context_type_param_count > 0U) {
-                        cg->in_generic_fn = saved_in_generic_fn;
-                        cg->generic_fn_type_param_count = saved_tp_count;
-                        cg->generic_fn_type_param_names = saved_tp_names;
-                        cg->generic_fn_type_param_constraints = saved_tp_constraints;
-                        cg->generic_fn_type_param_descs = saved_tp_descs;
-                    }
-                    return false;
-                }
-                if (member_type != NULL &&
-                    (member_type->kind == CG_TYPE_SPEC ||
-                     member_type->kind == CG_TYPE_CALLABLE)) {
-                    member_spec = member_type->user_spec;
-                }
-                cgtype_free(member_type);
-            } else {
-                member_spec = cg_find_user_spec_by_decl(cg, sm->source_member_decl);
-            }
-            if (member_spec == NULL) {
-                free((void *)member_witness_vars);
-                buf_free(&var);
-                if (s->generic_context_type_param_count > 0U) {
-                    cg->in_generic_fn = saved_in_generic_fn;
-                    cg->generic_fn_type_param_count = saved_tp_count;
-                    cg->generic_fn_type_param_names = saved_tp_names;
-                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
-                    cg->generic_fn_type_param_descs = saved_tp_descs;
-                }
-                return cg_fail(cg, blame,
-                    "CE0358", "codegen: intersection-form spec member source spec not registered");
-            }
-            const char *member_witness_var = NULL;
-            if (!cg_ensure_witness_instance_for_type(cg, t, member_spec, blame,
-                                                     &member_witness_var)) {
-                free((void *)member_witness_vars);
-                buf_free(&var);
-                if (s->generic_context_type_param_count > 0U) {
-                    cg->in_generic_fn = saved_in_generic_fn;
-                    cg->generic_fn_type_param_count = saved_tp_count;
-                    cg->generic_fn_type_param_names = saved_tp_names;
-                    cg->generic_fn_type_param_constraints = saved_tp_constraints;
-                    cg->generic_fn_type_param_descs = saved_tp_descs;
-                }
-                return false;
-            }
-            member_witness_vars[i] = member_witness_var;
-        }
-        if (s->generic_context_type_param_count > 0U) {
-            cg->in_generic_fn = saved_in_generic_fn;
-            cg->generic_fn_type_param_count = saved_tp_count;
-            cg->generic_fn_type_param_names = saved_tp_names;
-            cg->generic_fn_type_param_constraints = saved_tp_constraints;
-            cg->generic_fn_type_param_descs = saved_tp_descs;
-        }
-
-        /* Phase 2: emit the merged witness body. The per-member witness var
-         * names are stable (cached in cg->witness_tables, live until cg
-         * free), so we can safely reference them by pointer. */
-        Buf *wd = &cg->witness_defs;
-        buf_append_fmt(wd, "static const struct %s %s = {\n",
-                       s->c_witness_struct_name, var.data);
-        for (size_t i = 0U; i < s->member_count; ++i) {
-            const UserSpecMember *sm = &s->members[i];
-            const char *member_witness_var = member_witness_vars[i];
-            if (sm->kind == USM_KIND_FIELD) {
-                if (cg_spec_field_uses_storage_borrow(sm)) {
-                    buf_append_fmt(wd,
-                                   "    .borrow_%s = %s.borrow_%s,\n",
-                                   sm->c_field_name, member_witness_var,
-                                   sm->source_c_field_name);
-                } else {
-                    buf_append_fmt(wd, "    .get_%s = %s.get_%s,\n",
-                                   sm->c_field_name, member_witness_var,
-                                   sm->source_c_field_name);
-                }
-                if (sm->is_var) {
-                    buf_append_fmt(wd, "    .set_%s = %s.set_%s,\n",
-                                   sm->c_field_name, member_witness_var,
-                                   sm->source_c_field_name);
-                }
-            } else {
-                buf_append_fmt(wd, "    .%s = %s.%s,\n",
-                               sm->c_field_name, member_witness_var,
-                               sm->source_c_field_name);
-            }
-        }
-        buf_append_cstr(wd, "};\n\n");
-        free((void *)member_witness_vars);
-
-        /* Cache in witness_tables so subsequent coercion sites for the same
-         * (X, Intersection) pair reuse this merged witness constant. */
-        if (cg->witness_table_count + 1 > cg->witness_table_capacity) {
-            size_t cap = cg->witness_table_capacity
-                             ? cg->witness_table_capacity * 2 : 4;
-            void *p = realloc(cg->witness_tables,
-                              cap * sizeof *cg->witness_tables);
-            if (p == NULL) {
-                buf_free(&var);
-                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-            }
-            cg->witness_tables = p;
-            cg->witness_table_capacity = cap;
-        }
-        cg->witness_tables[cg->witness_table_count].t = t;
-        cg->witness_tables[cg->witness_table_count].s = s;
-        cg->witness_tables[cg->witness_table_count].c_var = var.data;
-        *out_var = var.data;
-        cg->witness_table_count++;
-        return true;
+        return cg_ensure_intersection_witness_instance(
+            cg,
+            t,
+            NULL,
+            s,
+            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL,
+            blame,
+            out_var);
     }
 
     FengSemanticSubjectKey subject_key =
@@ -52486,9 +52635,8 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                     if (target_decl != NULL && target_decl->kind == FENG_DECL_TYPE) {
                         scope.first = target_decl->as.type_decl.type_params;
                         scope.first_count = target_decl->as.type_decl.type_param_count;
-                    } else if (cg_builtin_fit_target_local_type_param(cg,
-                                                                      decl->as.fit_decl.target,
-                                                                      &local_type_param)) {
+                    } else if (cg_builtin_fit_target_local_type_param(
+                                   cg, decl, &local_type_param)) {
                         scope.first = &local_type_param;
                         scope.first_count = 1U;
                     }

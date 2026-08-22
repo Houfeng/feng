@@ -2315,7 +2315,9 @@ static FengSymbolDeclView *find_local_type_like_decl(const BuildContext *ctx,
     for (index = 0U; index < ctx->graph->root_decl.member_count; ++index) {
         FengSymbolDeclView *decl = ctx->graph->root_decl.members[index];
 
-        if ((decl->kind == FENG_SYMBOL_DECL_KIND_TYPE || decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
+        if ((decl->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+             decl->kind == FENG_SYMBOL_DECL_KIND_ENUM ||
+             decl->kind == FENG_SYMBOL_DECL_KIND_SPEC) &&
             cstr_equals_slice(decl->name, name)) {
             return decl;
         }

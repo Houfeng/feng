@@ -1,0 +1,373 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+import fcts_lib.test.lib_intersection_generic_method_value;
+
+/** Parent requirement reached through the first intersection component. */
+spec MV06Base {
+  func inherited(delta: i32): i32;
+}
+
+/** First component with the integer overload. */
+spec MV06Stateful: MV06Base {
+  func step(delta: i32): i32;
+  func select(delta: i32): i32;
+}
+
+/** Second component with the string overload. */
+spec MV06Named {
+  func name(): string;
+  func select(label: string): string;
+}
+
+/** First intersection layer. */
+spec MV06StatefulNamed: MV06Stateful & MV06Named;
+
+/** Component reached through a nested intersection. */
+spec MV06Extra {
+  func extra(delta: i32): i32;
+}
+
+/** Complete MV06 constraint surface. */
+spec MV06Nested: MV06StatefulNamed & MV06Extra;
+
+/** Integer callable target used by most MV06 bindings. */
+spec MV06Mapper(delta: i32): i32;
+
+/** String callable target selecting the second overload. */
+spec MV06StringMapper(label: string): string;
+
+/** Managed reference receiver for shared mutation and witness dispatch. */
+type MV06ReferenceCounter: MV06Stateful, MV06Named, MV06Extra {
+  var value: i32;
+
+  func inherited(delta: i32): i32 {
+    return self.value + delta + 1000;
+  }
+
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+
+  func select(delta: i32): i32 {
+    return self.value + delta + 100;
+  }
+
+  func name(): string {
+    return "reference";
+  }
+
+  func select(label: string): string {
+    return label + ":reference";
+  }
+
+  func extra(delta: i32): i32 {
+    return self.value * 2 + delta;
+  }
+}
+
+/** Second reference implementation proving the merged witness is per T. */
+type MV06OtherCounter: MV06Stateful, MV06Named, MV06Extra {
+  let value: i32;
+
+  func inherited(delta: i32): i32 {
+    return self.value + delta + 2000;
+  }
+
+  func step(delta: i32): i32 {
+    return self.value * 2 + delta;
+  }
+
+  func select(delta: i32): i32 {
+    return self.value + delta + 200;
+  }
+
+  func name(): string {
+    return "other";
+  }
+
+  func select(label: string): string {
+    return label + ":other";
+  }
+
+  func extra(delta: i32): i32 {
+    return self.value * 3 + delta;
+  }
+}
+
+/** Nominal trivial receiver isolated from other package-level builtin fits. */
+enum MV06TrivialCounter {
+  Thirty,
+  ThreeHundred
+}
+
+/** Convert the nominal trivial receiver to its observable integer payload. */
+func mv06TrivialValue(value: MV06TrivialCounter): i32 {
+  return if value == MV06TrivialCounter.Thirty { 30 } else { 300 };
+}
+
+/** Supply every leaf requirement for one nominal trivial receiver. */
+fit MV06TrivialCounter: MV06Stateful, MV06Named, MV06Extra {
+  func inherited(delta: i32): i32 {
+    return mv06TrivialValue(self) + delta + 1000;
+  }
+
+  func step(delta: i32): i32 {
+    return mv06TrivialValue(self) + delta;
+  }
+
+  func select(delta: i32): i32 {
+    return mv06TrivialValue(self) + delta + 100;
+  }
+
+  func name(): string {
+    return "trivial";
+  }
+
+  func select(label: string): string {
+    return label + ":trivial";
+  }
+
+  func extra(delta: i32): i32 {
+    return mv06TrivialValue(self) * 2 + delta;
+  }
+}
+
+/** Supply the same leaves for a managed writable-array fit receiver. */
+fit MV06TrivialCounter[!]: MV06Stateful, MV06Named, MV06Extra {
+  func inherited(delta: i32): i32 {
+    return mv06TrivialValue(self[0]) + delta + 1000;
+  }
+
+  func step(delta: i32): i32 {
+    return mv06TrivialValue(self[0]) + delta;
+  }
+
+  func select(delta: i32): i32 {
+    return mv06TrivialValue(self[0]) + delta + 100;
+  }
+
+  func name(): string {
+    return "array";
+  }
+
+  func select(label: string): string {
+    return label + ":array";
+  }
+
+  func extra(delta: i32): i32 {
+    return mv06TrivialValue(self[0]) * 2 + delta;
+  }
+}
+
+/** Descriptor-sized receiver with one observable managed leaf. */
+@value
+type MV06ValueCounter: MV06Stateful, MV06Named, MV06Extra {
+  let leaf: LibAdvancedLifetimeLeaf;
+  var value: i32;
+
+  func inherited(delta: i32): i32 {
+    return self.value + delta + 1000;
+  }
+
+  func step(delta: i32): i32 {
+    self.value += delta;
+    return self.value;
+  }
+
+  func select(delta: i32): i32 {
+    return self.value + delta + 100;
+  }
+
+  func name(): string {
+    return self.leaf.value;
+  }
+
+  func select(label: string): string {
+    return label + ":value";
+  }
+
+  func extra(delta: i32): i32 {
+    return self.value * 2 + delta;
+  }
+}
+
+/** Bind a direct member through the intersection-constrained receiver. */
+func bindMV06Step<T: MV06Nested>(value: T): MV06Mapper {
+  return value.step;
+}
+
+/** Bind an object parent member through the same merged surface. */
+func bindMV06Inherited<T: MV06Nested>(value: T): MV06Mapper {
+  return value.inherited;
+}
+
+/** Bind a member reached through the nested intersection component. */
+func bindMV06Extra<T: MV06Nested>(value: T): MV06Mapper {
+  return value.extra;
+}
+
+/** Select the integer overload from the merged requirement set. */
+func bindMV06IntegerSelect<T: MV06Nested>(value: T): MV06Mapper {
+  return value.select;
+}
+
+/** Select the appended string overload from the merged requirement set. */
+func bindMV06StringSelect<T: MV06Nested>(value: T): MV06StringMapper {
+  return value.select;
+}
+
+/** Return an escaping aggregate-receiver method value. */
+func makeMV06LifetimeStepper(label: string): MV06Mapper {
+  let value = MV06ValueCounter {
+    leaf: LibAdvancedLifetimeLeaf(label),
+    value: 0
+  };
+  return bindMV06Step<MV06ValueCounter>(value);
+}
+
+/** Verify that the inline managed leaf is retained and released exactly once. */
+func verifyMV06Lifetime(): bool {
+  LibAdvancedLifetimeLeaf.resetCounts();
+  var valid = false;
+  {
+    let stepper = makeMV06LifetimeStepper("mv06-lifetime");
+    valid = stepper(1) == 1 && stepper(2) == 3;
+  }
+  return valid && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
+         LibAdvancedLifetimeLeaf.finalizedCount() == 1;
+}
+
+/** Seal-only requirement used by the authorized generic formation path. */
+spec MV06Hidden {
+  seal func secret(delta: i32): i32;
+}
+
+/** Public component completing the seal intersection constraint. */
+spec MV06Visible {
+  func visible(): i32;
+}
+
+/** Intersection containing one seal requirement. */
+spec MV06HiddenVisible: MV06Hidden & MV06Visible;
+
+/** Implementation context authorized to form the seal requirement value. */
+type MV06SecretOwner: MV06Hidden, MV06Visible {
+  let base: i32;
+
+  seal func secret(delta: i32): i32 {
+    return self.base + delta;
+  }
+
+  func visible(): i32 {
+    return self.base;
+  }
+
+  /** Form the value while the declaring spec authorizes this type context. */
+  func bindSecret<T: MV06HiddenVisible>(value: T): MV06Mapper {
+    return value.secret;
+  }
+}
+
+/** Consumer-only implementation closing an imported shared binder. */
+type MV06ConsumerCounter: LibMV06Stateful, LibMV06Named {
+  var value: i32;
+
+  func step(delta: i32): i32 {
+    self.value += delta * 2;
+    return self.value;
+  }
+
+  func name(): string {
+    return "consumer";
+  }
+}
+
+/** MV06 intersection-constrained generic method-value conformance coverage. */
+open func test_intersection_generic_method_value(): void {
+  describe("intersection-constrained generic method values", () {
+    test("binds direct parent nested and overloaded merged requirements", () {
+      let value = MV06ReferenceCounter { value: 10 };
+      let step = bindMV06Step<MV06ReferenceCounter>(value);
+      let inherited = bindMV06Inherited<MV06ReferenceCounter>(value);
+      let extra = bindMV06Extra<MV06ReferenceCounter>(value);
+      let integerSelect = bindMV06IntegerSelect<MV06ReferenceCounter>(value);
+      let stringSelect = bindMV06StringSelect<MV06ReferenceCounter>(value);
+
+      assert(step(2) == 12, "direct merged requirement");
+      assert(inherited(3) == 1015, "object parent requirement");
+      assert(extra(4) == 28, "nested intersection requirement");
+      assert(integerSelect(5) == 117, "integer overload requirement");
+      assert(stringSelect("picked") == "picked:reference",
+             "string overload requirement");
+    });
+
+    test("preserves reference trivial and descriptor-sized receiver semantics", () {
+      var reference = MV06ReferenceCounter { value: 20 };
+      let referenceStep = bindMV06Step<MV06ReferenceCounter>(reference);
+      assert(referenceStep(2) == 22 && reference.value == 22,
+             "reference receiver keeps the same instance");
+      reference = MV06ReferenceCounter { value: 200 };
+      assert(referenceStep(3) == 25 && reference.value == 200,
+             "reference binding reassignment does not rebind the callable");
+
+      var scalar = MV06TrivialCounter.Thirty;
+      let scalarStep = bindMV06Step<MV06TrivialCounter>(scalar);
+      scalar = MV06TrivialCounter.ThreeHundred;
+      assert(scalarStep(4) == 34 &&
+             scalar == MV06TrivialCounter.ThreeHundred,
+             "trivial receiver is copied at formation");
+
+      let array: MV06TrivialCounter[!] = [MV06TrivialCounter.Thirty];
+      let arrayStep = bindMV06Step<MV06TrivialCounter[!]>(array);
+      array[0] = MV06TrivialCounter.ThreeHundred;
+      assert(arrayStep(4) == 304,
+             "array fit receiver keeps the managed array identity");
+
+      var aggregate = MV06ValueCounter {
+        leaf: LibAdvancedLifetimeLeaf("mv06-value"),
+        value: 40
+      };
+      let aggregateStep = bindMV06Step<MV06ValueCounter>(aggregate);
+      aggregate.value = 400;
+      assert(aggregateStep(5) == 45 && aggregate.value == 400,
+             "descriptor-sized receiver owns an independent value copy");
+    });
+
+    test("dispatches the same binder through different merged witnesses", () {
+      let first = bindMV06Step<MV06ReferenceCounter>(
+        MV06ReferenceCounter { value: 50 }
+      );
+      let second = bindMV06Step<MV06OtherCounter>(
+        MV06OtherCounter { value: 50 }
+      );
+      assert(first(1) == 51, "first closed witness");
+      assert(second(1) == 101, "second closed witness");
+    });
+
+    test("retains and releases an escaping aggregate receiver", () {
+      assert(verifyMV06Lifetime(),
+             "inline managed leaf follows callable receiver lifetime");
+    });
+
+    test("allows seal formation in the declaring spec implementation context", () {
+      let owner = MV06SecretOwner { base: 60 };
+      let secret = owner.bindSecret<MV06SecretOwner>(owner);
+      assert(secret(2) == 62, "authorized seal requirement method value");
+    });
+
+    test("restores an imported binder for provider and consumer-only types", () {
+      let provider = LibMV06Counter { value: 70 };
+      let providerStep = bindLibMV06Step<LibMV06Counter>(provider);
+      let consumer = MV06ConsumerCounter { value: 80 };
+      let consumerStep = bindLibMV06Step<MV06ConsumerCounter>(consumer);
+
+      assert(providerStep(3) == 73 && provider.value == 73,
+             "provider type closes the imported merged witness");
+      assert(consumerStep(4) == 88 && consumer.value == 88,
+             "consumer-only type closes the imported callable dependency");
+    });
+  });
+}
