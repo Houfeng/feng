@@ -593,6 +593,11 @@ spec Reader<T: Bar> { ... }
 - 若泛型约束是 object-form `spec`，在泛型声明体内按该 `spec` 视角提供可见成员集；若是
   callable-form `spec`，则提供可调用签名；若是 union-form `spec`，则继续复用 union-form
   的既有访问/收窄规则；若是 intersection-form `spec`，则使用合并后的成员表面与 witness。
+- 类型参数通过 object-form 或 intersection-form `spec` 约束发起静态方法直接调用时，
+  必须从完整约束实例解析静态 requirement。intersection-form 的嵌套 member 与每个
+  object-form member 的父链均按声明类型边完成泛参替换；访问过滤、等价 requirement 去重、
+  重载选择和原声明身份保留与 object-form 使用同一编译期流程。闭合点只通过已有普通或
+  merged witness 槽分派，不增加运行时成员选择、满足查询或 descriptor 字段。
 - object-form `spec` 约束下的泛型值实例方法值必须复用直接调用的 requirement 与
   witness 选择，同时保留 receiver 的开放 `T` 类型表达式；最终闭合点负责确定 receiver
   布局和生命周期，共享泛型体不得执行运行时成员搜索、满足关系查询或 receiver 装箱。

@@ -13645,12 +13645,17 @@ static bool callable_parameters_exactly_match_args_for_owner_instance(
     return true;
 }
 
-static bool callable_signatures_equal_for_owner_instance(
+/* Compare two callable signatures after independently closing each declaring
+ * owner instance. This is required when equivalent intersection requirements
+ * originate from different object-form member specs. */
+static bool callable_signatures_equal_for_owner_instances(
     ResolveContext *context,
     const FengCallableSignature *left,
+    const FengDecl *left_owner_type_decl,
+    InferredExprType left_owner_type,
     const FengCallableSignature *right,
-    const FengDecl *owner_type_decl,
-    InferredExprType owner_type) {
+    const FengDecl *right_owner_type_decl,
+    InferredExprType right_owner_type) {
     size_t param_index;
     const FengTypeRef *left_return;
     const FengTypeRef *right_return;
@@ -13664,15 +13669,19 @@ static bool callable_signatures_equal_for_owner_instance(
     }
 
     for (param_index = 0U; param_index < left->param_count; ++param_index) {
+        if (left->params[param_index].is_variadic !=
+            right->params[param_index].is_variadic) {
+            return false;
+        }
         const FengTypeRef *left_param = substitute_type_ref_for_owner_instance(
             context,
-            owner_type_decl,
-            owner_type,
+            left_owner_type_decl,
+            left_owner_type,
             left->params[param_index].type);
         const FengTypeRef *right_param = substitute_type_ref_for_owner_instance(
             context,
-            owner_type_decl,
-            owner_type,
+            right_owner_type_decl,
+            right_owner_type,
             right->params[param_index].type);
 
         if (!type_refs_semantically_equal(context, left_param, right_param)) {
@@ -13685,14 +13694,32 @@ static bool callable_signatures_equal_for_owner_instance(
     }
 
     left_return = substitute_type_ref_for_owner_instance(context,
-                                                         owner_type_decl,
-                                                         owner_type,
+                                                         left_owner_type_decl,
+                                                         left_owner_type,
                                                          left->return_type);
     right_return = substitute_type_ref_for_owner_instance(context,
-                                                          owner_type_decl,
-                                                          owner_type,
+                                                          right_owner_type_decl,
+                                                          right_owner_type,
                                                           right->return_type);
     return type_refs_semantically_equal(context, left_return, right_return);
+}
+
+/* Same-owner convenience wrapper retained for ordinary inherited overload
+ * deduplication. */
+static bool callable_signatures_equal_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *left,
+    const FengCallableSignature *right,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type) {
+    return callable_signatures_equal_for_owner_instances(
+        context,
+        left,
+        owner_type_decl,
+        owner_type,
+        right,
+        owner_type_decl,
+        owner_type);
 }
 
 static bool validate_loop_control_stmt(ResolveContext *context,
@@ -14563,29 +14590,29 @@ static CallableValueResolution resolve_accessible_method_value_overload(
     return result;
 }
 
-/* Visit one exact spec instance while resolving a target-typed method value.
- * Object parents and intersection members are both traversed through their
- * substituted type-ref edges. Semantic validation has already deduplicated
- * identical requirements, so the first exact target-signature match is the
- * authoritative merged slot. */
-static void resolve_spec_method_value_surface(
+/* A visitor over one exact object-form spec requirement. Returning false
+ * stops traversal after the current requirement. */
+typedef bool (*SpecMethodSurfaceVisitor)(
     ResolveContext *context,
-    const FengDecl *access_spec_decl,
-    InferredExprType access_owner_type,
+    const SpecMemberSurface *surface,
+    void *userdata);
+
+/* Visit the exact method surface of one object- or intersection-form spec
+ * instance. Intersection members and object parents are both type-ref edges;
+ * following them through the same substitution path preserves the original
+ * requirement declaration and its fully projected owner instance without
+ * building a flattened scratch snapshot. */
+static bool visit_spec_method_surfaces(
+    ResolveContext *context,
     const FengDecl *current_spec_decl,
     const FengTypeRef *current_spec_type_ref,
-    InferredExprType current_owner_type,
     FengSlice name,
-    const FengTypeRef *expected_type_ref,
-    const FengDecl *function_type_decl,
     bool require_static,
-    bool require_accessible,
-    CallableValueResolution *result) {
-    if (context == NULL || access_spec_decl == NULL ||
-        current_spec_decl == NULL || current_spec_decl->kind != FENG_DECL_SPEC ||
-        function_type_decl == NULL || result == NULL ||
-        result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-        return;
+    SpecMethodSurfaceVisitor visitor,
+    void *userdata) {
+    if (context == NULL || current_spec_decl == NULL ||
+        current_spec_decl->kind != FENG_DECL_SPEC || visitor == NULL) {
+        return true;
     }
 
     if (current_spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
@@ -14603,64 +14630,41 @@ static void resolve_spec_method_value_surface(
             const FengDecl *member_decl =
                 resolve_type_ref_decl(context, member_type_ref);
 
-            if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
-                continue;
-            }
-            resolve_spec_method_value_surface(
-                context,
-                access_spec_decl,
-                access_owner_type,
-                member_decl,
-                member_type_ref,
-                inferred_expr_type_from_type_ref(member_type_ref),
-                name,
-                expected_type_ref,
-                function_type_decl,
-                require_static,
-                require_accessible,
-                result);
-            if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                return;
+            if (member_decl != NULL && member_decl->kind == FENG_DECL_SPEC &&
+                !visit_spec_method_surfaces(context,
+                                            member_decl,
+                                            member_type_ref,
+                                            name,
+                                            require_static,
+                                            visitor,
+                                            userdata)) {
+                return false;
             }
         }
-        return;
+        return true;
     }
 
     if (current_spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
-        return;
+        return true;
     }
     for (size_t member_index = 0U;
          member_index < current_spec_decl->as.spec_decl.as.object.member_count;
          ++member_index) {
         const FengTypeMember *member =
             current_spec_decl->as.spec_decl.as.object.members[member_index];
+        SpecMemberSurface surface;
 
         if (member == NULL || member->kind != FENG_TYPE_MEMBER_METHOD ||
             member->is_static != require_static ||
-            !slice_equals(member->as.callable.name, name) ||
-            (require_accessible &&
-             !spec_member_is_accessible_from(context,
-                                             access_spec_decl,
-                                             current_spec_decl,
-                                             access_owner_type,
-                                             member)) ||
-            !function_type_decl_matches_owner_callable_signature(
-                context,
-                expected_type_ref,
-                function_type_decl,
-                &member->as.callable,
-                current_spec_decl,
-                NULL,
-                current_owner_type)) {
+            !slice_equals(member->as.callable.name, name)) {
             continue;
         }
-
-        result->kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
-        result->callable = &member->as.callable;
-        result->callable_member = member;
-        result->callable_owner_type_decl = current_spec_decl;
-        result->callable_owner_instance_type_ref = current_spec_type_ref;
-        return;
+        surface.member = member;
+        surface.declaring_spec = current_spec_decl;
+        surface.declaring_spec_type_ref = current_spec_type_ref;
+        if (!visitor(context, &surface, userdata)) {
+            return false;
+        }
     }
 
     for (size_t parent_index = 0U;
@@ -14675,26 +14679,143 @@ static void resolve_spec_method_value_surface(
         const FengDecl *parent_decl =
             resolve_type_ref_decl(context, parent_type_ref);
 
-        if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC) {
-            continue;
-        }
-        resolve_spec_method_value_surface(
-            context,
-            access_spec_decl,
-            access_owner_type,
-            parent_decl,
-            parent_type_ref,
-            inferred_expr_type_from_type_ref(parent_type_ref),
-            name,
-            expected_type_ref,
-            function_type_decl,
-            require_static,
-            require_accessible,
-            result);
-        if (result->kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-            return;
+        if (parent_decl != NULL && parent_decl->kind == FENG_DECL_SPEC &&
+            !visit_spec_method_surfaces(context,
+                                        parent_decl,
+                                        parent_type_ref,
+                                        name,
+                                        require_static,
+                                        visitor,
+                                        userdata)) {
+            return false;
         }
     }
+    return true;
+}
+
+/* Access-only view of a same-name spec method surface. It is used while the
+ * member expression itself is resolved, before an enclosing call performs
+ * argument-based overload selection. */
+typedef struct SpecMethodAccessProbe {
+    const FengDecl *access_spec_decl;
+    InferredExprType access_owner_type;
+    bool has_accessible_method;
+    const FengDecl *inaccessible_declaring_spec;
+    const FengTypeMember *inaccessible_member;
+} SpecMethodAccessProbe;
+
+/* Find any accessible requirement and retain the first inaccessible one only
+ * for a stable source-level access diagnostic. */
+static bool spec_method_access_probe_visitor(
+    ResolveContext *context,
+    const SpecMemberSurface *surface,
+    void *userdata) {
+    SpecMethodAccessProbe *probe = (SpecMethodAccessProbe *)userdata;
+
+    if (probe == NULL || surface == NULL || surface->member == NULL ||
+        surface->declaring_spec == NULL) {
+        return true;
+    }
+    if (spec_member_is_accessible_from(context,
+                                       probe->access_spec_decl,
+                                       surface->declaring_spec,
+                                       probe->access_owner_type,
+                                       surface->member)) {
+        probe->has_accessible_method = true;
+        return false;
+    }
+    if (probe->inaccessible_member == NULL) {
+        probe->inaccessible_declaring_spec = surface->declaring_spec;
+        probe->inaccessible_member = surface->member;
+    }
+    return true;
+}
+
+/* Probe static or instance method accessibility across the exact spec
+ * surface without performing signature selection. */
+static SpecMethodAccessProbe probe_spec_method_access(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    InferredExprType owner_type,
+    FengSlice name,
+    bool require_static) {
+    SpecMethodAccessProbe probe;
+
+    memset(&probe, 0, sizeof(probe));
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         spec_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION)) {
+        return probe;
+    }
+    probe.access_spec_decl = spec_decl;
+    probe.access_owner_type = owner_type;
+    (void)visit_spec_method_surfaces(
+        context,
+        spec_decl,
+        owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+            ? owner_type.type_ref
+            : NULL,
+        name,
+        require_static,
+        spec_method_access_probe_visitor,
+        &probe);
+    return probe;
+}
+
+/* Immutable inputs and mutable result carried by one target-typed spec
+ * method-value surface traversal. */
+typedef struct SpecMethodValueResolveState {
+    const FengDecl *access_spec_decl;
+    InferredExprType access_owner_type;
+    const FengTypeRef *expected_type_ref;
+    const FengDecl *function_type_decl;
+    bool require_accessible;
+    CallableValueResolution *result;
+} SpecMethodValueResolveState;
+
+/* Select the first exact target-signature match from a spec method surface.
+ * Intersection validation has already merged equivalent requirements, so the
+ * first matching declaration is the authoritative merged slot identity. */
+static bool spec_method_value_surface_visitor(
+    ResolveContext *context,
+    const SpecMemberSurface *surface,
+    void *userdata) {
+    SpecMethodValueResolveState *state =
+        (SpecMethodValueResolveState *)userdata;
+    InferredExprType owner_type;
+
+    if (state == NULL || state->result == NULL || surface == NULL ||
+        surface->member == NULL || surface->declaring_spec == NULL) {
+        return true;
+    }
+    owner_type = surface->declaring_spec_type_ref != NULL
+                     ? inferred_expr_type_from_type_ref(
+                           surface->declaring_spec_type_ref)
+                     : inferred_expr_type_from_decl(surface->declaring_spec);
+    if ((state->require_accessible &&
+         !spec_member_is_accessible_from(context,
+                                         state->access_spec_decl,
+                                         surface->declaring_spec,
+                                         state->access_owner_type,
+                                         surface->member)) ||
+        !function_type_decl_matches_owner_callable_signature(
+            context,
+            state->expected_type_ref,
+            state->function_type_decl,
+            &surface->member->as.callable,
+            surface->declaring_spec,
+            NULL,
+            owner_type)) {
+        return true;
+    }
+
+    state->result->kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+    state->result->callable = &surface->member->as.callable;
+    state->result->callable_member = surface->member;
+    state->result->callable_owner_type_decl = surface->declaring_spec;
+    state->result->callable_owner_instance_type_ref =
+        surface->declaring_spec_type_ref;
+    return false;
 }
 
 /* Resolve one target-typed method value from an object-form or
@@ -14713,6 +14834,7 @@ static CallableValueResolution resolve_spec_method_value_overload(
     bool require_static,
     bool require_accessible) {
     CallableValueResolution result;
+    SpecMethodValueResolveState state;
 
     memset(&result, 0, sizeof(result));
     if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
@@ -14721,21 +14843,221 @@ static CallableValueResolution resolve_spec_method_value_overload(
         function_type_decl == NULL) {
         return result;
     }
-    resolve_spec_method_value_surface(
+    state.access_spec_decl = spec_decl;
+    state.access_owner_type = owner_type;
+    state.expected_type_ref = expected_type_ref;
+    state.function_type_decl = function_type_decl;
+    state.require_accessible = require_accessible;
+    state.result = &result;
+    (void)visit_spec_method_surfaces(
         context,
-        spec_decl,
-        owner_type,
         spec_decl,
         owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
             ? owner_type.type_ref
             : NULL,
-        owner_type,
         name,
-        expected_type_ref,
-        function_type_decl,
         require_static,
-        require_accessible,
-        &result);
+        spec_method_value_surface_visitor,
+        &state);
+    return result;
+}
+
+/* Complete compile-time result for one constrained type-parameter static
+ * method call. The ordinary overload result is accompanied only by facts
+ * needed to select the stable access/missing-overload diagnostic. */
+typedef struct SpecStaticMethodCallResolution {
+    FunctionCallResolution call;
+    bool has_accessible_named_method;
+    bool has_matching_inaccessible_method;
+    const FengDecl *inaccessible_declaring_spec;
+    const FengTypeMember *inaccessible_member;
+} SpecStaticMethodCallResolution;
+
+/* Compile-time candidate-selection state shared by all requirements visited
+ * for one constrained static method call. */
+typedef struct SpecStaticMethodCallResolveState {
+    const FengDecl *access_spec_decl;
+    InferredExprType access_owner_type;
+    FengExpr *const *args;
+    size_t arg_count;
+    bool has_explicit_type_args;
+    const FengTypeRef *const *explicit_type_args;
+    size_t explicit_type_arg_count;
+    SpecStaticMethodCallResolution *result;
+    SpecMemberSurface primary_surface;
+    bool has_primary_surface;
+} SpecStaticMethodCallResolveState;
+
+/* Evaluate one exact static requirement as an overload candidate. Access is
+ * filtered before overload selection, while a matching inaccessible
+ * requirement is retained solely for the final AE0708 diagnostic. */
+static bool spec_static_method_call_surface_visitor(
+    ResolveContext *context,
+    const SpecMemberSurface *surface,
+    void *userdata) {
+    SpecStaticMethodCallResolveState *state =
+        (SpecStaticMethodCallResolveState *)userdata;
+    FunctionCallResolution *call;
+    InferredExprType owner_type;
+    bool accessible;
+    bool rejected_existing_array_for_variadic = false;
+    PrepackedVariadicRejection spread_rejection =
+        FENG_PREPACKED_VARIADIC_REJECTION_NONE;
+    int priority;
+
+    if (state == NULL || state->result == NULL || surface == NULL ||
+        surface->member == NULL || surface->declaring_spec == NULL) {
+        return true;
+    }
+    call = &state->result->call;
+    owner_type = surface->declaring_spec_type_ref != NULL
+                     ? inferred_expr_type_from_type_ref(
+                           surface->declaring_spec_type_ref)
+                     : inferred_expr_type_from_decl(surface->declaring_spec);
+    accessible = spec_member_is_accessible_from(
+        context,
+        state->access_spec_decl,
+        surface->declaring_spec,
+        state->access_owner_type,
+        surface->member);
+    if (accessible) {
+        state->result->has_accessible_named_method = true;
+    }
+    if (!callable_parameters_match_args_for_owner_instance(
+            context,
+            &surface->member->as.callable,
+            surface->declaring_spec,
+            NULL,
+            owner_type,
+            state->args,
+            state->arg_count,
+            state->explicit_type_args,
+            state->explicit_type_arg_count,
+            false,
+            &rejected_existing_array_for_variadic,
+            &spread_rejection)) {
+        if (accessible) {
+            if (rejected_existing_array_for_variadic) {
+                call->rejected_existing_array_for_variadic = true;
+            }
+            merge_prepacked_variadic_rejection(
+                &call->prepacked_variadic_rejection,
+                spread_rejection);
+        }
+        return true;
+    }
+    if (!accessible) {
+        if (!state->result->has_matching_inaccessible_method) {
+            state->result->has_matching_inaccessible_method = true;
+            state->result->inaccessible_declaring_spec =
+                surface->declaring_spec;
+            state->result->inaccessible_member = surface->member;
+        }
+        return true;
+    }
+
+    priority = compute_overload_match_priority(
+        state->has_explicit_type_args,
+        state->explicit_type_arg_count,
+        surface->member->as.callable.type_param_count,
+        callable_parameters_exactly_match_args_for_owner_instance(
+            context,
+            &surface->member->as.callable,
+            surface->declaring_spec,
+            NULL,
+            owner_type,
+            state->args,
+            state->arg_count));
+    if (call->kind == FENG_FUNCTION_CALL_RESOLUTION_NONE ||
+        priority < call->match_priority) {
+        call->kind = FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
+        call->match_priority = priority;
+        call->decl = NULL;
+        call->callable = &surface->member->as.callable;
+        call->member = surface->member;
+        call->owner_type_decl = surface->declaring_spec;
+        call->fit_decl = NULL;
+        call->owner_instance_type_ref = surface->declaring_spec_type_ref;
+        state->primary_surface = *surface;
+        state->has_primary_surface = true;
+        return true;
+    }
+    if (priority > call->match_priority) {
+        return true;
+    }
+
+    if (state->has_primary_surface) {
+        InferredExprType primary_owner =
+            state->primary_surface.declaring_spec_type_ref != NULL
+                ? inferred_expr_type_from_type_ref(
+                      state->primary_surface.declaring_spec_type_ref)
+                : inferred_expr_type_from_decl(
+                      state->primary_surface.declaring_spec);
+
+        if (callable_signatures_equal_for_owner_instances(
+                context,
+                &state->primary_surface.member->as.callable,
+                state->primary_surface.declaring_spec,
+                primary_owner,
+                &surface->member->as.callable,
+                surface->declaring_spec,
+                owner_type)) {
+            return true;
+        }
+    }
+
+    call->kind = FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS;
+    call->decl = NULL;
+    call->callable = NULL;
+    call->member = NULL;
+    call->owner_type_decl = NULL;
+    call->fit_decl = NULL;
+    call->owner_instance_type_ref = NULL;
+    return true;
+}
+
+/* Resolve a direct static method call through the exact requirement surface
+ * of an object- or intersection-form constraint. This is the single resolver
+ * used by both forms; only their surface composition and witness view differ. */
+static SpecStaticMethodCallResolution
+resolve_spec_static_method_call_overload(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    InferredExprType owner_type,
+    FengSlice name,
+    FengExpr *const *args,
+    size_t arg_count,
+    bool has_explicit_type_args,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count) {
+    SpecStaticMethodCallResolution result;
+    SpecStaticMethodCallResolveState state;
+
+    memset(&result, 0, sizeof(result));
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         spec_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION)) {
+        return result;
+    }
+    memset(&state, 0, sizeof(state));
+    state.access_spec_decl = spec_decl;
+    state.access_owner_type = owner_type;
+    state.args = args;
+    state.arg_count = arg_count;
+    state.has_explicit_type_args = has_explicit_type_args;
+    state.explicit_type_args = explicit_type_args;
+    state.explicit_type_arg_count = explicit_type_arg_count;
+    state.result = &result;
+    (void)visit_spec_method_surfaces(
+        context,
+        spec_decl,
+        owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+            ? owner_type.type_ref
+            : NULL,
+        name,
+        true,
+        spec_static_method_call_surface_visitor,
+        &state);
     return result;
 }
 
@@ -17103,30 +17425,49 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                 }
             } else if (static_target.is_generic_type_param &&
                        static_target.constraint_spec_decl != NULL) {
-                /* G4: generic type parameter static method dispatch —
-                 * `T.method(args)` where T: S and S declares `static func
-                 * method(...)`. Close the selected member through the exact
-                 * constraint instance, including a declaring-parent
-                 * projection when the method is inherited. */
-                const FengDecl *declaring_spec = NULL;
-                const FengTypeMember *member =
-                    find_spec_object_member_with_owner(
+                /* G4 / IC01: close the return type through the same exact
+                 * requirement selected by call validation. Before that
+                 * sidecar exists, use the same overload resolver as a pure
+                 * inference probe rather than falling back to the first
+                 * same-name object-spec member. */
+                const FengResolvedCallable *recorded =
+                    &expr->as.call.resolved_callable;
+                SpecStaticMethodCallResolution spec_result =
+                    resolve_spec_static_method_call_overload(
                         context,
                         static_target.constraint_spec_decl,
+                        static_target.constraint_spec_type_ref != NULL
+                            ? inferred_expr_type_from_type_ref(
+                                  static_target.constraint_spec_type_ref)
+                            : inferred_expr_type_from_decl(
+                                  static_target.constraint_spec_decl),
                         callee->as.member.member,
-                        /*include_static=*/true,
-                        &declaring_spec);
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        expr->as.call.has_explicit_type_args,
+                        (const FengTypeRef *const *)
+                            expr->as.call.explicit_type_args,
+                        expr->as.call.explicit_type_arg_count);
+                const FengCallableSignature *spec_sig =
+                    spec_result.call.callable;
+                const FengDecl *declaring_spec =
+                    spec_result.call.owner_type_decl;
+                const FengTypeRef *declaring_spec_instance =
+                    spec_result.call.owner_instance_type_ref;
 
-                if (member != NULL && member->kind == FENG_TYPE_MEMBER_METHOD) {
-                    const FengCallableSignature *spec_sig = &member->as.callable;
+                if (recorded->kind ==
+                        FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD &&
+                    recorded->member != NULL &&
+                    recorded->owner_type_decl != NULL) {
+                    spec_sig = &recorded->member->as.callable;
+                    declaring_spec = recorded->owner_type_decl;
+                    declaring_spec_instance =
+                        recorded->owner_instance_type_ref;
+                }
+                if (spec_sig != NULL && declaring_spec != NULL) {
                     InferredExprType return_type = inferred_expr_type_unknown();
 
                     if (spec_sig->return_type != NULL) {
-                        const FengTypeRef *declaring_spec_instance =
-                            constraint_member_declaring_spec_instance(
-                                context,
-                                &static_target,
-                                declaring_spec);
                         InferredExprType declaring_owner =
                             declaring_spec_instance != NULL
                                 ? inferred_expr_type_from_type_ref(
@@ -17563,6 +17904,12 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                           type_target.constraint_spec_type_ref)
                     : inferred_expr_type_from_decl(
                           type_target.constraint_spec_decl);
+            SpecMethodAccessProbe method_probe = probe_spec_method_access(
+                context,
+                type_target.constraint_spec_decl,
+                constraint_owner,
+                expr->as.member.member,
+                true);
             const FengTypeMember *accessible_member =
                 find_accessible_spec_object_member(
                     context,
@@ -17572,9 +17919,12 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                     /*include_static=*/true,
                     &declaring_spec);
 
-            if (accessible_member != NULL) {
-                if (accessible_member->kind == FENG_TYPE_MEMBER_FIELD &&
-                    !record_selected_friend_fit_access(
+            if (method_probe.has_accessible_method) {
+                return true;
+            }
+            if (accessible_member != NULL && accessible_member->is_static &&
+                accessible_member->kind == FENG_TYPE_MEMBER_FIELD) {
+                if (!record_selected_friend_fit_access(
                         context,
                         type_target.constraint_spec_decl,
                         constraint_owner,
@@ -17582,6 +17932,13 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                     return false;
                 }
                 return true;
+            }
+            if (method_probe.inaccessible_member != NULL) {
+                return report_inaccessible_spec_member(
+                    context,
+                    expr->token,
+                    method_probe.inaccessible_declaring_spec,
+                    method_probe.inaccessible_member);
             }
             {
                 const FengTypeMember *existing_member =
@@ -17593,6 +17950,8 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                         &declaring_spec);
 
                 if (existing_member != NULL &&
+                    existing_member->is_static &&
+                    existing_member->kind == FENG_TYPE_MEMBER_FIELD &&
                     existing_member->visibility == FENG_VISIBILITY_PRIVATE) {
                     return report_inaccessible_spec_member(context,
                                                            expr->token,
@@ -25166,80 +25525,44 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                          expr->as.call.arg_count);
             }
 
-            /* G4: T.method() dispatch via the generic type parameter's
-             * constraint spec. Resolution uses the spec's static method
-             * member; argument count is checked, and on success the call
-             * is recorded so codegen can emit a witness-table dispatch. */
+            /* G4 / IC01: T.method() dispatch via the generic type parameter's
+             * complete object- or intersection-form constraint surface. The
+             * resolver retains the exact declaring requirement so codegen can
+             * select the ordinary or merged witness slot by identity. */
             if (static_target.is_generic_type_param &&
                 static_target.constraint_spec_decl != NULL) {
-                const FengDecl *declaring_spec = NULL;
                 InferredExprType constraint_owner =
                     static_target.constraint_spec_type_ref != NULL
                         ? inferred_expr_type_from_type_ref(
                               static_target.constraint_spec_type_ref)
                         : inferred_expr_type_from_decl(
                               static_target.constraint_spec_decl);
-                const FengTypeMember *spec_member =
-                    find_accessible_spec_object_member(
+                SpecStaticMethodCallResolution spec_result =
+                    resolve_spec_static_method_call_overload(
                         context,
                         static_target.constraint_spec_decl,
                         constraint_owner,
                         callee->as.member.member,
-                        /*include_static=*/true,
-                        &declaring_spec);
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        expr->as.call.has_explicit_type_args,
+                        (const FengTypeRef *const *)
+                            expr->as.call.explicit_type_args,
+                        expr->as.call.explicit_type_arg_count);
 
-                if (spec_member != NULL &&
-                    spec_member->kind == FENG_TYPE_MEMBER_METHOD &&
-                    spec_member->is_static) {
-                    const FengCallableSignature *spec_sig = &spec_member->as.callable;
+                resolution = spec_result.call;
+                if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE) {
+                    const FengCallableSignature *spec_sig = resolution.callable;
+                    const FengDecl *declaring_spec =
+                        resolution.owner_type_decl;
                     const FengTypeRef *declaring_spec_instance =
-                        constraint_member_declaring_spec_instance(
-                            context,
-                            &static_target,
-                            declaring_spec);
+                        resolution.owner_instance_type_ref;
                     InferredExprType declaring_owner =
                         declaring_spec_instance != NULL
                             ? inferred_expr_type_from_type_ref(
                                   declaring_spec_instance)
                             : inferred_expr_type_from_decl(declaring_spec);
-                    bool rejected_existing_array_for_variadic = false;
-                    PrepackedVariadicRejection spread_rejection =
-                        FENG_PREPACKED_VARIADIC_REJECTION_NONE;
-                    FunctionCallResolution spec_resolution;
 
-                    if (!callable_parameters_match_args_for_owner_instance(
-                            context,
-                            spec_sig,
-                            declaring_spec,
-                            NULL,
-                            declaring_owner,
-                            expr->as.call.args,
-                            expr->as.call.arg_count,
-                            (const FengTypeRef *const *)
-                                expr->as.call.explicit_type_args,
-                            expr->as.call.explicit_type_arg_count,
-                            false,
-                            &rejected_existing_array_for_variadic,
-                            &spread_rejection)) {
-                        if (spread_rejection !=
-                            FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
-                            return report_prepacked_variadic_rejection(
-                                context, callee, spread_rejection);
-                        }
-                        if (rejected_existing_array_for_variadic) {
-                            return report_existing_array_rejected_for_variadic_call(
-                                context, callee);
-                        }
-                        return resolver_append_error(
-                            context,
-                            callee->token,
-                            "AE0512", format_message("static method '%.*s.%.*s' has no overload accepting %zu argument(s)",
-                                                       (int)object->as.identifier.length,
-                                                       object->as.identifier.data,
-                                                       (int)callee->as.member.member.length,
-                                                       callee->as.member.member.data,
-                            expr->as.call.arg_count));
-                    }
                     if (!validate_borrowed_data_pointer_call_arguments(
                             context,
                             callee,
@@ -25250,14 +25573,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             false)) {
                         return false;
                     }
-                    memset(&spec_resolution, 0, sizeof(spec_resolution));
-                    spec_resolution.kind =
-                        FENG_FUNCTION_CALL_RESOLUTION_UNIQUE;
-                    spec_resolution.callable = spec_sig;
-                    spec_resolution.member = spec_member;
-                    spec_resolution.owner_type_decl = declaring_spec;
-                    spec_resolution.owner_instance_type_ref =
-                        declaring_spec_instance;
                     note_callable_exception_escape(context, spec_sig);
                     materialize_callable_type_param_constraint_witnesses(
                         context,
@@ -25269,7 +25584,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     if (!record_resolved_callable_from_resolution(
                             context,
                             expr,
-                            &spec_resolution,
+                            &resolution,
                             declaring_spec_instance)) {
                         return false;
                     }
@@ -25288,6 +25603,55 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                         NULL,
                         declaring_owner);
                     return true;
+                }
+                if (resolution.kind ==
+                    FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+                    return resolver_append_error(
+                        context,
+                        callee->token,
+                        "AE0511", format_message("static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                                       (int)object->as.identifier.length,
+                                       object->as.identifier.data,
+                                       (int)callee->as.member.member.length,
+                                       callee->as.member.member.data,
+                                       expr->as.call.arg_count));
+                }
+                if (resolution.prepacked_variadic_rejection !=
+                    FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+                    return report_prepacked_variadic_rejection(
+                        context,
+                        callee,
+                        resolution.prepacked_variadic_rejection);
+                }
+                if (resolution.rejected_existing_array_for_variadic) {
+                    return report_existing_array_rejected_for_variadic_call(
+                        context, callee);
+                }
+                if (spec_result.has_matching_inaccessible_method) {
+                    /* The callee member-expression pass already reports the
+                     * sole inaccessible surface. A second report is needed
+                     * only when an accessible same-name overload caused that
+                     * pass to continue, but the matching candidate itself is
+                     * inaccessible. */
+                    if (!spec_result.has_accessible_named_method) {
+                        return true;
+                    }
+                    return report_inaccessible_spec_member(
+                        context,
+                        callee->token,
+                        spec_result.inaccessible_declaring_spec,
+                        spec_result.inaccessible_member);
+                }
+                if (spec_result.has_accessible_named_method) {
+                    return resolver_append_error(
+                        context,
+                        callee->token,
+                        "AE0512", format_message("static method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+                                       (int)object->as.identifier.length,
+                                       object->as.identifier.data,
+                                       (int)callee->as.member.member.length,
+                                       callee->as.member.member.data,
+                                       expr->as.call.arg_count));
                 }
                 return resolver_append_error(
                     context,
@@ -29281,7 +29645,7 @@ static const FengTypeMember *type_find_matching_method(
         for (i = 0U; i < type_decl->as.type_decl.member_count; ++i) {
             const FengTypeMember *m = type_decl->as.type_decl.members[i];
 
-            if (!m->is_static &&
+            if (m->is_static == spec_member->is_static &&
                 m->kind == FENG_TYPE_MEMBER_METHOD &&
                 slice_eq(m->as.callable.name, spec_sig->name) &&
                 spec_requirement_accepts_implementation(spec_member, m) &&
@@ -29293,7 +29657,7 @@ static const FengTypeMember *type_find_matching_method(
     for (i = 0U; i < extra_count; ++i) {
         const FengTypeMember *m = extra_methods[i];
 
-        if (!m->is_static &&
+        if (m->is_static == spec_member->is_static &&
             m->kind == FENG_TYPE_MEMBER_METHOD &&
             slice_eq(m->as.callable.name, spec_sig->name) &&
             spec_requirement_accepts_implementation(spec_member, m) &&
@@ -31062,8 +31426,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 
                 if (declared_spec == NULL || declared_spec == closure[i] ||
                     declared_spec_ref == NULL ||
-                    declared_spec_ref->kind != FENG_TYPE_REF_NAMED ||
-                    declared_spec_ref->as.named.type_arg_count == 0U) {
+                    declared_spec_ref->kind != FENG_TYPE_REF_NAMED) {
                     continue;
                 }
                 instantiated_spec_ref = instantiate_parent_spec_ref_for_instance(
@@ -31310,8 +31673,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
                 if (fit_spec == NULL || fit_spec == closure[i] ||
                     fit_spec_ref == NULL ||
-                    fit_spec_ref->kind != FENG_TYPE_REF_NAMED ||
-                    fit_spec_ref->as.named.type_arg_count == 0U) {
+                    fit_spec_ref->kind != FENG_TYPE_REF_NAMED) {
                     continue;
                 }
                 instantiated_spec_ref = instantiate_parent_spec_ref_for_instance(

@@ -7768,6 +7768,129 @@ static void test_constrained_generic_intersection_method_value_codegen(void) {
     feng_program_free(program);
 }
 
+/* IC01: an intersection-constrained static call consumes the exact Semantic
+ * requirement identity from the existing merged witness. Nested surfaces,
+ * parent requirements, legal overload slots, and different closed T values
+ * all remain receiver/subject-free. */
+static void test_intersection_constrained_static_method_call_codegen(void) {
+    const char *source =
+        "module feng.codegen.intersection_static_call;\n"
+        "spec RootFactory<T> {\n"
+        "  static func inherited(value: T): T;\n"
+        "}\n"
+        "spec NumberFactory: RootFactory<i32> {\n"
+        "  static func create(seed: i32): i32;\n"
+        "  static func select(value: i32): i32;\n"
+        "}\n"
+        "spec TextFactory {\n"
+        "  static func label(): string;\n"
+        "  static func select(value: string): string;\n"
+        "}\n"
+        "spec Combined: NumberFactory & TextFactory;\n"
+        "spec Tagged { static func tag(): string; }\n"
+        "spec Nested: Combined & Tagged;\n"
+        "type First: NumberFactory, TextFactory, Tagged {\n"
+        "  static func inherited(value: i32): i32 { return value + 10; }\n"
+        "  static func create(seed: i32): i32 { return seed + 1; }\n"
+        "  static func select(value: i32): i32 { return value + 2; }\n"
+        "  static func label(): string { return \"first\"; }\n"
+        "  static func select(value: string): string { return value; }\n"
+        "  static func tag(): string { return \"one\"; }\n"
+        "}\n"
+        "type Second: NumberFactory, TextFactory, Tagged {\n"
+        "  static func inherited(value: i32): i32 { return value + 20; }\n"
+        "  static func create(seed: i32): i32 { return seed + 3; }\n"
+        "  static func select(value: i32): i32 { return value + 4; }\n"
+        "  static func label(): string { return \"second\"; }\n"
+        "  static func select(value: string): string { return value; }\n"
+        "  static func tag(): string { return \"two\"; }\n"
+        "}\n"
+        "func create<T: Nested>(seed: i32): i32 { return T.create(seed); }\n"
+        "func inherited<T: Nested>(value: i32): i32 {\n"
+        "  return T.inherited(value);\n"
+        "}\n"
+        "func selectNumber<T: Nested>(value: i32): i32 {\n"
+        "  return T.select(value);\n"
+        "}\n"
+        "func label<T: Nested>(): string { return T.label(); }\n"
+        "func selectText<T: Nested>(value: string): string {\n"
+        "  return T.select(value);\n"
+        "}\n"
+        "func run(): i32 {\n"
+        "  return create<First>(1) + create<Second>(2) +\n"
+        "         inherited<First>(3) + inherited<Second>(4) +\n"
+        "         selectNumber<First>(5) + selectNumber<Second>(6);\n"
+        "}\n"
+        "func runText(): string {\n"
+        "  return label<First>() + selectText<Second>(\"!\");\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "intersection_constrained_static_method_call_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *required_calls[] = {
+        "->witness)->create(",
+        "->witness)->inherited(",
+        "->witness)->select(",
+        "->witness)->label(",
+        "->witness)->select__feng_overload_2("
+    };
+
+    if (!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                               &analysis, &errors, &error_count)) {
+        fprintf(stderr,
+                "IC01 intersection static-call semantic error: %s\n",
+                error_count > 0U && errors[0].message != NULL
+                    ? errors[0].message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "IC01 intersection static-call codegen error: %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    for (size_t index = 0U;
+         index < sizeof(required_calls) / sizeof(required_calls[0]);
+         ++index) {
+        const char *call = strstr(output.c_source, required_calls[index]);
+        const char *line_start;
+        const char *line_end;
+
+        ASSERT(call != NULL);
+        line_start = call;
+        while (line_start > output.c_source && line_start[-1] != '\n') {
+            --line_start;
+        }
+        line_end = strchr(call, '\n');
+        if (line_end == NULL) {
+            line_end = output.c_source + strlen(output.c_source);
+        }
+        ASSERT(!span_contains(line_start, line_end, "_subject"));
+        ASSERT(!span_contains(line_start, line_end, "feng_object_new"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A concrete enum element in an array fit retains its nominal trivial
  * representation. Codegen must not synthesize a fit-local descriptor or
  * lower self[index] through the generic void-pointer element path. */
@@ -13741,6 +13864,7 @@ int main(void) {
     test_intersection_spec_overload_codegen_preserves_exact_slots();
     test_constrained_generic_spec_method_value_codegen();
     test_constrained_generic_intersection_method_value_codegen();
+    test_intersection_constrained_static_method_call_codegen();
     test_concrete_enum_array_fit_codegen();
     test_constrained_generic_spec_static_method_value_codegen();
     test_builtin_fit_static_spec_witness_codegen();

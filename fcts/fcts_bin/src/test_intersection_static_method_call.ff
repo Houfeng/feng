@@ -1,0 +1,205 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_intersection_static_method_call;
+
+/** Local generic parent requirement reached through an object parent. */
+spec IC01RootFactory<T> {
+  static func inherited(value: T): T;
+}
+
+/** Local numeric surface with one half of a legal overload set. */
+spec IC01NumberFactory: IC01RootFactory<i32> {
+  static func create(seed: i32): i32;
+  static func select(value: i32): i32;
+}
+
+/** Local text surface with the other half of a legal overload set. */
+spec IC01TextFactory {
+  static func label(): string;
+  static func select(value: string): string;
+}
+
+/** First local intersection layer. */
+spec IC01CombinedFactory: IC01NumberFactory & IC01TextFactory;
+
+/** Local requirement reached through the outer intersection layer. */
+spec IC01ExtraFactory {
+  static func extra(value: i32): i32;
+}
+
+/** Complete local IC01 constraint surface. */
+spec IC01NestedFactory: IC01CombinedFactory & IC01ExtraFactory;
+
+/** First local implementation with distinct static results. */
+type IC01FirstFactory: IC01NumberFactory, IC01TextFactory, IC01ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 100;
+  }
+
+  /** Implement the direct numeric factory requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 1;
+  }
+
+  /** Implement the numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 10;
+  }
+
+  /** Implement the text label requirement. */
+  static func label(): string {
+    return "first";
+  }
+
+  /** Implement the text overload. */
+  static func select(value: string): string {
+    return value + ":first";
+  }
+
+  /** Implement the outer nested requirement. */
+  static func extra(value: i32): i32 {
+    return value + 1000;
+  }
+}
+
+/** Second local implementation proving dispatch is closed per T. */
+type IC01SecondFactory: IC01NumberFactory, IC01TextFactory, IC01ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 200;
+  }
+
+  /** Implement the direct numeric factory requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 2;
+  }
+
+  /** Implement the numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 20;
+  }
+
+  /** Implement the text label requirement. */
+  static func label(): string {
+    return "second";
+  }
+
+  /** Implement the text overload. */
+  static func select(value: string): string {
+    return value + ":second";
+  }
+
+  /** Implement the outer nested requirement. */
+  static func extra(value: i32): i32 {
+    return value + 2000;
+  }
+}
+
+/** Call the direct requirement from one local shared generic body. */
+func callIC01Create<T: IC01NestedFactory>(seed: i32): i32 {
+  return T.create(seed);
+}
+
+/** Call the fixed generic parent requirement from local shared code. */
+func callIC01Inherited<T: IC01NestedFactory>(value: i32): i32 {
+  return T.inherited(value);
+}
+
+/** Call the numeric overload from local shared code. */
+func callIC01NumberSelect<T: IC01NestedFactory>(value: i32): i32 {
+  return T.select(value);
+}
+
+/** Call the text overload from local shared code. */
+func callIC01TextSelect<T: IC01NestedFactory>(value: string): string {
+  return T.select(value);
+}
+
+/** Call the nested outer requirement from local shared code. */
+func callIC01Extra<T: IC01NestedFactory>(value: i32): i32 {
+  return T.extra(value);
+}
+
+/** Consumer-owned implementation closing imported provider generic bodies. */
+type LibIC01ConsumerFactory:
+  LibIC01NumberFactory, LibIC01TextFactory, LibIC01ExtraFactory {
+  /** Implement the imported fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 2000;
+  }
+
+  /** Implement the imported direct numeric requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 200;
+  }
+
+  /** Implement the imported numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 210;
+  }
+
+  /** Implement the imported text label requirement. */
+  static func label(): string {
+    return "consumer";
+  }
+
+  /** Implement the imported text overload. */
+  static func select(value: string): string {
+    return value + ":consumer";
+  }
+
+  /** Implement the imported nested outer requirement. */
+  static func extra(value: i32): i32 {
+    return value + 220;
+  }
+}
+
+/** IC01 intersection-constrained static direct-call conformance coverage. */
+open func test_intersection_static_method_call(): void {
+  describe("intersection-constrained static method calls", () {
+    test("dispatches each shared body through the closed merged witness", () {
+      assert(callIC01Create<IC01FirstFactory>(10) == 11 &&
+             callIC01Create<IC01SecondFactory>(10) == 12,
+             "direct static requirement dispatches per closed T");
+      assert(callIC01Inherited<IC01FirstFactory>(1) == 101 &&
+             callIC01Inherited<IC01SecondFactory>(1) == 201,
+             "fixed generic parent keeps its declaring witness slot");
+      assert(callIC01Extra<IC01FirstFactory>(1) == 1001 &&
+             callIC01Extra<IC01SecondFactory>(1) == 2001,
+             "nested intersection requirement dispatches per closed T");
+    });
+
+    test("selects legal overloads from different member specs", () {
+      assert(callIC01NumberSelect<IC01FirstFactory>(1) == 11 &&
+             callIC01NumberSelect<IC01SecondFactory>(1) == 21,
+             "numeric overload uses the numeric leaf slot");
+      assert(callIC01TextSelect<IC01FirstFactory>("value") ==
+               "value:first" &&
+             callIC01TextSelect<IC01SecondFactory>("value") ==
+               "value:second",
+             "text overload uses the appended merged slot");
+    });
+
+    test("restores imported shared bodies for provider and consumer types", () {
+      assert(callLibIC01Create<LibIC01ProviderFactory>(10) == 110 &&
+             callLibIC01Create<LibIC01ConsumerFactory>(10) == 210,
+             "imported direct requirement dispatches per closed T");
+      assert(callLibIC01Inherited<LibIC01ProviderFactory>(1) == 1001 &&
+             callLibIC01Inherited<LibIC01ConsumerFactory>(1) == 2001,
+             "imported parent requirement keeps its source identity");
+      assert(callLibIC01NumberSelect<LibIC01ProviderFactory>(1) == 111 &&
+             callLibIC01NumberSelect<LibIC01ConsumerFactory>(1) == 211,
+             "imported numeric overload uses the correct leaf slot");
+      assert(callLibIC01TextSelect<LibIC01ProviderFactory>("value") ==
+               "value:provider" &&
+             callLibIC01TextSelect<LibIC01ConsumerFactory>("value") ==
+               "value:consumer",
+             "imported text overload uses the appended merged slot");
+      assert(callLibIC01Extra<LibIC01ProviderFactory>(1) == 121 &&
+             callLibIC01Extra<LibIC01ConsumerFactory>(1) == 221,
+             "imported nested requirement uses the exact leaf slot");
+    });
+  });
+}

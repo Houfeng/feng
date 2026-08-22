@@ -22,6 +22,7 @@ func main(args: string[]) {
       test_spec_method_value();
       test_intersection_spec_method_value();
       test_intersection_generic_method_value();
+      test_intersection_static_method_call();
       test_static_method_value();
       test_spec_static_method_value();
       test_intersection();

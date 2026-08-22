@@ -299,7 +299,11 @@ type Stream: ReadWrite {}
   类型 + 参数顺序 + 变长参数形态 + 返回值类型完全一致”规则。
 - 泛型 spec 中的类型参数在满足检查时按 `type Widget: Factory<Widget>` 中的实参替换后精确匹配,复用与 spec 实例方法相同的机制。
 - 通过具体类型名访问静态成员（如 `Widget.make()`、`Widget.tag`）为直接调用或直接访问,运行时不引入额外开销。
-- 通过泛型约束中的类型参数访问静态成员（如 `T.make()`、`T.field`,其中 `T: SomeSpec`）通过编译期 witness 表完成静态分派,不开销与现有泛型实例方法分派一致。
+- 通过泛型约束中的类型参数访问静态成员（如 `T.make()`、`T.field`,其中 `T: SomeSpec`）
+  通过编译期 witness 表完成静态分派。object-form 约束使用其成员闭包；intersection-form
+  约束使用递归展平、去重后的合并成员面。两种 form 都必须在编译期完成 owner 泛参替换、
+  requirement 原声明访问过滤和重载选择，并保留唯一 requirement 身份；运行时只进入闭合
+  `T` 的普通或 merged witness 槽，开销不得高于现有泛型实例方法分派。
 - 不允许通过实例访问静态成员（与 `type` 规则一致）; 不允许通过 spec 值访问静态成员（spec 值是实例级概念）。
 
 ## 5 规则
@@ -370,6 +374,11 @@ type Stream: ReadWrite {}
 - [必须] object-form `spec` 约束下的类型参数静态方法引用必须复用对应静态直接调用的
   成员闭包、访问过滤、签名替换和 requirement 槽；形成值时不得引入 receiver、subject
   或运行时成员选择。
+- [必须] intersection-form `spec` 约束下的类型参数静态方法直接调用必须从约束实例出发，
+  递归经过 intersection member 与 object parent 类型边，使用每条边替换后的精确
+  requirement 签名执行访问过滤与重载选择；语义等价 requirement 必须去重，非等价同名
+  requirement 按既有重载规则处理。调用结果必须保留原声明 object-form `spec` 和唯一
+  requirement 身份，并进入闭合 `T` 的 merged witness 槽。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
 - [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
@@ -410,6 +419,9 @@ type Stream: ReadWrite {}
   requirement/实现成员可见性兼容判断。
 - 编译器必须在 spec 字段读取与写入、方法调用、方法值、静态约束成员访问
   和重载候选选择时检查 `spec seal` 访问域；不可访问候选不得参与重载。
+- 编译器必须让 object-form 与 intersection-form `spec` 约束下的类型参数静态方法直接
+  调用共用同一 requirement surface 解析、访问过滤、owner 泛参替换和重载基础设施；
+  intersection-form 只改变合并成员面与 witness 视角，不得在调用点按名称重新搜索成员。
 - 编译器必须让 object-form `spec` 实例方法值与对应直接调用共用父闭包投影、原声明
   requirement、访问过滤、实例化签名和重载消歧结果；形成方法值后，代码生成不得重新
   按 spec 名称或方法名称查找 requirement。
@@ -468,6 +480,9 @@ type Stream: ReadWrite {}
   spec box、第二个 receiver 分配、成员面拆分或每次调用查找。
 - 受 object-form `spec` 约束的类型参数静态方法值按闭合 `T` 使用编译期固定的 callable
   singleton；形成与调用均不得增加 closure 分配、运行时成员查找或候选回退。
+- 受 intersection-form `spec` 约束的类型参数静态方法直接调用只进入闭合 `T` 的既有
+  merged witness 槽；不得传递 receiver/subject，也不得增加运行时成员查找、满足关系
+  查询、签名比较、候选回退、分配或额外 descriptor 字段。
 - callable-form `spec` 的显式转换不引入运行时签名比较、候选搜索、wrapper/closure 分配或额外调用转发; 对实例化后签名完全一致的 callable-form `spec`,转换前后经该值发起的调用开销必须保持同级。
 - 对象形状 `spec` 的上下文向上 coercion 与显式 cast 不引入运行时满足关系搜索、候选比较或回退; 运行时只执行编译期已选定的 `spec` 视角构造与成员分发。
 - union-form 统一映射为既有 `aggregate-with-managed-slots` 顶层值模型,首版值布局为 `tag + _fwd + payload`; `tag` 表达 active member identity,`_fwd` 只表达当前 payload 生命周期路径,不得把 union-form 实现为新的 runtime top-level value kind。

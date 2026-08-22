@@ -1,7 +1,7 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02、MV03、MV04、MV05、MV06 已完成，可分别独立交付；
-> 其余分项尚未实施。
+> **状态**：MV01、MV02、MV03、MV04、MV05、MV06、IC01 已完成，可分别独立交付；
+> MV07 尚未实施。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -410,6 +410,9 @@ witness”两个已经分别验证的维度。
 
 ### 4.7 IC01：`T: IntersectionSpec` 静态方法直接调用
 
+独立修复方案与实施记录见
+[`feng-intersection-constrained-static-method-call-bugfix.md`](./feng-intersection-constrained-static-method-call-bugfix.md)。
+
 #### 问题与最小示例
 
 ```feng
@@ -424,12 +427,12 @@ open spec TaggedFactory {
 open spec CombinedFactory: Factory & TaggedFactory;
 
 func direct<T: CombinedFactory>(seed: int): string {
-  return T.create(seed); // 当前 AE0512
+  return T.create(seed); // IC01 修复前 AE0512；当前合法
 }
 ```
 
-这是独立的直接调用基线缺口，不是方法值失败。当前 object-form 约束下的
-`T.create(seed)` 已支持；intersection 约束下尚未取得同一静态 requirement。
+这是独立的直接调用基线缺口，不是方法值失败。object-form 约束下的
+`T.create(seed)` 原本已支持；IC01 已让 intersection 约束取得同一静态 requirement。
 
 #### 期望行为
 
@@ -440,22 +443,22 @@ func direct<T: CombinedFactory>(seed: int): string {
 
 #### 修复任务
 
-- [ ] 建立独立 IC01 bugfix 文档，更新 spec、泛型、可见性和诊断主规范。
-- [ ] 找到 `AE0512` 的直接调用解析根因，并让通用静态 constraint member resolver 支持
+- [x] 建立独立 IC01 bugfix 文档，更新 spec、泛型、可见性和诊断主规范。
+- [x] 找到 `AE0512` 的直接调用解析根因，并让通用静态 constraint member resolver 支持
       intersection 展平成员面。
-- [ ] 复用既有 merged surface 的去重、冲突和原声明身份，不在调用点按名称临时搜索。
-- [ ] Codegen 消费 Semantic 已解析的静态 requirement，不重新推断来源成员。
-- [ ] 若现有 intersection witness/符号事实不足，先记录并 Review 通用扩展方案。
+- [x] 复用既有 merged surface 的去重、冲突和原声明身份，不在调用点按名称临时搜索。
+- [x] Codegen 消费 Semantic 已解析的静态 requirement，不重新推断来源成员。
+- [x] 若现有 intersection witness/符号事实不足，先记录并 Review 通用扩展方案。
 
 #### 验证与交付
 
-- [ ] Semantic：直接成员、嵌套 intersection、父 spec 静态方法和合法重载均通过。
-- [ ] Semantic：返回类型冲突、非法 seal 访问和不存在成员保持稳定诊断。
-- [ ] FCTS：不同闭合 `T` 通过各自 merged witness 静态实现返回正确结果。
-- [ ] 本地、共享泛型体和跨包 provider/consumer 均有覆盖。
-- [ ] 回归：object-form 约束静态调用与 intersection 实例调用行为和成本不变。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 IC01 可独立交付。
+- [x] Semantic：直接成员、嵌套 intersection、父 spec 静态方法和合法重载均通过。
+- [x] Semantic：返回类型冲突、非法 seal 访问和不存在成员保持稳定诊断。
+- [x] FCTS：不同闭合 `T` 通过各自 merged witness 静态实现返回正确结果。
+- [x] 本地、共享泛型体和跨包 provider/consumer 均有覆盖。
+- [x] 回归：object-form 约束静态调用与 intersection 实例调用行为和成本不变。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 IC01 可独立交付。
 
 ### 4.8 MV07：`T: IntersectionSpec` 类型参数的静态方法值
 
@@ -1781,6 +1784,37 @@ func bind<T: CombinedFactory>(): Creator {
 - **实施问题**：ISSUE-021 至 ISSUE-033 均已按先记录、后分析、再修复的流程收口；MV06 无
   未解决问题。
 - **建议 commit message**：`feat: support intersection-constrained generic method values`
+
+### IC01 独立交付记录
+
+- **变更范围**：补齐 `T: IntersectionSpec` 的静态方法直接调用；object-form 与
+  intersection-form 约束共用精确 spec 方法 surface 遍历、访问过滤和静态 requirement
+  重载解析，后续阶段消费同一已解析 callable 身份。
+- **实现结果**：Semantic 递归经过 intersection member 与 object parent 边并逐层替换
+  owner 类型实参，保留 requirement 原声明、原声明 object-form spec 和精确 owner
+  instance；等价 requirement 去重，合法重载保留，返回类型不再按名称重新选择。Codegen
+  继续使用既有 merged witness 和静态槽，只补齐编译期叶 witness 实现选择。
+- **一并修复**：独立 bugfix 文档记录的 ISSUE-001 至 ISSUE-007 均已解决，包括
+  object-form 非首个静态重载、重复 `AE0708`、已解析返回类型来源、非泛型 child 固定泛型
+  parent 的 type/fit 满足检查，以及静态叶 witness 选择。所有修复均复用通用抽象，无名称、
+  包或测试模型特判。
+- **运行时成本**：没有增量运行时开销。新支持调用直接进入闭合 descriptor 中已有的静态
+  witness 槽；没有新增 receiver/subject、运行时查找、分支、分配、descriptor 字段或间接
+  层级，既有合法调用路径成本不变。
+- **ABI 与格式**：未修改 runtime、runtime 私有 ABI、生成程序 ABI、公开结构、`.ft`
+  schema、版本或兼容边界。
+- **专项测试**：`build/bin/test_semantic` 与 `build/bin/test_codegen` 通过；覆盖直接、父级、
+  嵌套、泛型映射、重载、等价 requirement、歧义与访问诊断、固定泛型父 spec、叶 witness
+  身份、无 receiver/subject/分配的生成代码和严格 C 编译。没有修改任何既有测试用例。
+- **FCTS**：本地两个闭合 `T`、共享泛型体、父级/嵌套 requirement、分布式重载，以及跨包
+  provider/consumer-only 类型均通过；结果为 `853 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过；UBSan 与普通
+  `-O2 -Werror -pedantic` 两阶段均完成，两轮 smoke `91/91`、两轮 std `601/601`、两轮
+  FCTS `853/853`，以及全部 compiler、runtime、CLI、Symbol、性能、增量构建与发布链路
+  测试通过。
+- **实施问题**：IC01 独立 bugfix 文档中的 ISSUE-001 至 ISSUE-007 均已按先记录、后分析、
+  再修复的流程收口；无未解决问题。MV07 仍是独立后续分项。
+- **建议 commit message**：`fix: support intersection-constrained static method calls`
 
 ### ISSUE-待编号：待填写
 

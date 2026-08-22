@@ -128,6 +128,7 @@
 | AE0512 | 调用重载缺失匹配约束 | AE0145 | function '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0146 | static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0147 | static method '%.*s.%.*s' has no overload accepting %zu argument(s) |
+| AE0512 | 静态约束 requirement 缺失 | （新增） | constraint spec has no static method '%.*s' accessible on type parameter '%.*s' |
 | AE0513 | 字段-方法同名冲突约束 | AE0513 | field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance) |
 | AE0511 | 调用重载二义性约束 | AE0148 | method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0149 | method '%.*s.%.*s' has no overload accepting %zu argument(s) |
@@ -148,6 +149,10 @@
 多个匹配来源、来源签名不匹配，以及缺少形成 callable value 所需的明确 callable-form
 `spec` 目标。泛型静态方法缺失显式方法类型实参继续使用既有显式泛型 target 诊断，不由
 目标 callable 反向推导。
+
+`T: ObjectSpec` 与 `T: IntersectionSpec` 的静态方法直接调用共用 `AE0511` / `AE0512`
+重载诊断。intersection-form 约束先按 requirement 原声明执行访问过滤；只有本来匹配但
+不可访问的 `seal` requirement 时使用 `AE0708`，不可访问候选不得被误报为重载缺失。
 
 ## 06/07 Spec段
 

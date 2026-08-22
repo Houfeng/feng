@@ -327,6 +327,10 @@ spec/witness 和 fit 规则均继续执行。字段的 `is_mixable` 事实单独
   既有规则全部通过后，替代最后一层成员 seal 检查。
 - 重载选择必须先移除对当前上下文不可访问的候选，再执行签名匹配；不可访问的
   friend/seal 候选不能遮蔽同名 open 候选。
+- 受 object-form 或 intersection-form spec 约束的类型参数静态方法直接调用也使用上述
+  顺序。intersection-form 必须按每个 requirement 的原声明 object-form spec 判断授权；
+  若只有签名本来匹配但不可访问的 `seal` requirement，报告 spec seal 访问诊断，不得
+  降级为成员不存在或参数不匹配。
 - object-form spec 成员的 friend 访问只发生在 spec 视角并继续通过既有 witness；
   不要求 friend type 实现该 spec，也不扩大具体实现成员的可见性或修改满足规则。
 - 具体 type/fit 的实例或静态方法值、object-form/intersection-form spec 实例方法值以及

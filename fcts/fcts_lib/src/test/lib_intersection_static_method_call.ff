@@ -1,0 +1,90 @@
+open module fcts_lib.test.lib_intersection_static_method_call;
+
+/** Imported generic parent requirement reached through an object parent. */
+open spec LibIC01RootFactory<T> {
+  static func inherited(value: T): T;
+}
+
+/** Imported numeric surface with one half of a legal overload set. */
+open spec LibIC01NumberFactory: LibIC01RootFactory<i32> {
+  static func create(seed: i32): i32;
+  static func select(value: i32): i32;
+}
+
+/** Imported text surface with the other half of a legal overload set. */
+open spec LibIC01TextFactory {
+  static func label(): string;
+  static func select(value: string): string;
+}
+
+/** First imported intersection layer. */
+open spec LibIC01CombinedFactory:
+  LibIC01NumberFactory & LibIC01TextFactory;
+
+/** Imported surface reached through the outer intersection layer. */
+open spec LibIC01ExtraFactory {
+  static func extra(value: i32): i32;
+}
+
+/** Complete imported IC01 constraint surface. */
+open spec LibIC01NestedFactory:
+  LibIC01CombinedFactory & LibIC01ExtraFactory;
+
+/** Provider-owned implementation used beside a consumer-owned implementation. */
+open type LibIC01ProviderFactory:
+  LibIC01NumberFactory, LibIC01TextFactory, LibIC01ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  open static func inherited(value: i32): i32 {
+    return value + 1000;
+  }
+
+  /** Implement the direct numeric factory requirement. */
+  open static func create(seed: i32): i32 {
+    return seed + 100;
+  }
+
+  /** Implement the numeric overload. */
+  open static func select(value: i32): i32 {
+    return value + 110;
+  }
+
+  /** Implement the text label requirement. */
+  open static func label(): string {
+    return "provider";
+  }
+
+  /** Implement the text overload. */
+  open static func select(value: string): string {
+    return value + ":provider";
+  }
+
+  /** Implement the outer nested requirement. */
+  open static func extra(value: i32): i32 {
+    return value + 120;
+  }
+}
+
+/** Call the direct requirement from an imported shared generic body. */
+open func callLibIC01Create<T: LibIC01NestedFactory>(seed: i32): i32 {
+  return T.create(seed);
+}
+
+/** Call the fixed generic parent requirement from imported shared code. */
+open func callLibIC01Inherited<T: LibIC01NestedFactory>(value: i32): i32 {
+  return T.inherited(value);
+}
+
+/** Call the numeric overload from imported shared code. */
+open func callLibIC01NumberSelect<T: LibIC01NestedFactory>(value: i32): i32 {
+  return T.select(value);
+}
+
+/** Call the text overload from imported shared code. */
+open func callLibIC01TextSelect<T: LibIC01NestedFactory>(value: string): string {
+  return T.select(value);
+}
+
+/** Call the nested outer requirement from imported shared code. */
+open func callLibIC01Extra<T: LibIC01NestedFactory>(value: i32): i32 {
+  return T.extra(value);
+}
