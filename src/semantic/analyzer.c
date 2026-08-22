@@ -6811,6 +6811,15 @@ static bool function_type_decl_return_matches_inferred_type(const ResolveContext
     return inferred_expr_type_matches_type_ref(context, return_type, expected_return_type);
 }
 
+/* Compare callable-shape modifiers that remain distinct after parameter type
+ * normalization. `T...` is stored as `T[]`, so the variadic marker must be
+ * checked alongside the substituted parameter type at every signature site. */
+static bool callable_parameter_forms_match(const FengParameter *left,
+                                           const FengParameter *right) {
+    return left != NULL && right != NULL &&
+           left->is_variadic == right->is_variadic;
+}
+
 /* Callable-form signature equality helper. Callers decide whether an exact
  * signature match enables implicit coercion or only explicit casts. */
 static bool function_type_refs_have_equal_signature(const ResolveContext *context,
@@ -6833,18 +6842,23 @@ static bool function_type_refs_have_equal_signature(const ResolveContext *contex
         return false;
     }
     for (i = 0U; i < src_decl->as.spec_decl.as.callable.param_count; ++i) {
+        const FengParameter *src_decl_param =
+            &src_decl->as.spec_decl.as.callable.params[i];
+        const FengParameter *dst_decl_param =
+            &dst_decl->as.spec_decl.as.callable.params[i];
         const FengTypeRef *src_param = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
             src_decl,
             src_ref,
-            src_decl->as.spec_decl.as.callable.params[i].type);
+            src_decl_param->type);
         const FengTypeRef *dst_param = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
             dst_decl,
             dst_ref,
-            dst_decl->as.spec_decl.as.callable.params[i].type);
+            dst_decl_param->type);
 
-        if (!type_refs_semantically_equal(context, src_param, dst_param)) {
+        if (!callable_parameter_forms_match(src_decl_param, dst_decl_param) ||
+            !type_refs_semantically_equal(context, src_param, dst_param)) {
             return false;
         }
     }
@@ -6882,15 +6896,20 @@ static bool function_type_decl_matches_callable_signature(const ResolveContext *
     for (param_index = 0U;
          param_index < function_type_decl->as.spec_decl.as.callable.param_count;
          ++param_index) {
+        const FengParameter *expected_decl_param =
+            &function_type_decl->as.spec_decl.as.callable.params[param_index];
+        const FengParameter *actual_decl_param = &callable->params[param_index];
         const FengTypeRef *expected_param = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
             function_type_decl,
             function_type_ref,
-            function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+            expected_decl_param->type);
 
-        if (!type_refs_semantically_equal(context,
+        if (!callable_parameter_forms_match(expected_decl_param,
+                                            actual_decl_param) ||
+            !type_refs_semantically_equal(context,
                                           expected_param,
-                                          callable->params[param_index].type)) {
+                                          actual_decl_param->type)) {
             return false;
         }
     }
@@ -6923,15 +6942,20 @@ static bool function_type_decl_matches_callable_signature_or_is_pending(
     for (param_index = 0U;
          param_index < function_type_decl->as.spec_decl.as.callable.param_count;
          ++param_index) {
+        const FengParameter *expected_decl_param =
+            &function_type_decl->as.spec_decl.as.callable.params[param_index];
+        const FengParameter *actual_decl_param = &callable->params[param_index];
         const FengTypeRef *expected_param = substitute_spec_member_type_ref_for_instance(
             context,
             function_type_decl,
             function_type_ref,
-            function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+            expected_decl_param->type);
 
-        if (!type_refs_semantically_equal(context,
+        if (!callable_parameter_forms_match(expected_decl_param,
+                                            actual_decl_param) ||
+            !type_refs_semantically_equal(context,
                                           expected_param,
-                                          callable->params[param_index].type)) {
+                                          actual_decl_param->type)) {
             return false;
         }
     }
@@ -14269,18 +14293,21 @@ static bool function_type_decl_matches_explicit_callable_signature(
     }
 
     for (param_index = 0U; param_index < callable->param_count; ++param_index) {
+        const FengParameter *expected_decl_param =
+            &function_type_decl->as.spec_decl.as.callable.params[param_index];
+        const FengParameter *actual_decl_param = &callable->params[param_index];
         const FengTypeRef *expected_param =
             substitute_spec_member_type_ref_for_instance(
                 context,
                 function_type_decl,
                 function_type_ref,
-                function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+                expected_decl_param->type);
         const FengTypeRef *actual_param =
             substitute_type_ref_for_owner_instance(
                 context,
                 owner_type_decl,
                 owner_type,
-                callable->params[param_index].type);
+                actual_decl_param->type);
 
         actual_param = substitute_type_ref_for_fit_instance(
             context, fit_decl, owner_type, actual_param);
@@ -14290,7 +14317,9 @@ static bool function_type_decl_matches_explicit_callable_signature(
             explicit_type_args,
             explicit_type_arg_count,
             actual_param);
-        if (!type_refs_semantically_equal(context,
+        if (!callable_parameter_forms_match(expected_decl_param,
+                                            actual_decl_param) ||
+            !type_refs_semantically_equal(context,
                                           expected_param,
                                           actual_param)) {
             return false;
@@ -15533,23 +15562,28 @@ static bool function_type_decl_matches_owner_callable_signature(
         return false;
     }
     for (param_index = 0U; param_index < callable->param_count; ++param_index) {
+        const FengParameter *expected_decl_param =
+            &function_type_decl->as.spec_decl.as.callable.params[param_index];
+        const FengParameter *actual_decl_param = &callable->params[param_index];
         const FengTypeRef *expected_param =
             substitute_spec_member_type_ref_for_instance(
                 context,
                 function_type_decl,
                 function_type_ref,
-                function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+                expected_decl_param->type);
         const FengTypeRef *actual_param = substitute_type_ref_for_owner_instance(
             context,
             owner_type_decl,
             owner_type,
-            callable->params[param_index].type);
+            actual_decl_param->type);
 
         actual_param = substitute_type_ref_for_fit_instance(context,
                                                             fit_decl,
                                                             owner_type,
                                                             actual_param);
-        if (!type_refs_semantically_equal(context, expected_param, actual_param)) {
+        if (!callable_parameter_forms_match(expected_decl_param,
+                                            actual_decl_param) ||
+            !type_refs_semantically_equal(context, expected_param, actual_param)) {
             return false;
         }
     }
@@ -20058,14 +20092,20 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
     }
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
+        const FengParameter *expected_decl_param =
+            &function_type_decl->as.spec_decl.as.callable.params[param_index];
+        const FengParameter *actual_decl_param =
+            &expr->as.lambda.params[param_index];
         const FengTypeRef *expected_param = substitute_spec_member_type_ref_for_instance(
             context,
             function_type_decl,
             function_type_ref,
-            function_type_decl->as.spec_decl.as.callable.params[param_index].type);
+            expected_decl_param->type);
 
-        if (!type_refs_semantically_equal(context,
-                                          expr->as.lambda.params[param_index].type,
+        if (!callable_parameter_forms_match(expected_decl_param,
+                                            actual_decl_param) ||
+            !type_refs_semantically_equal(context,
+                                          actual_decl_param->type,
                                           expected_param)) {
             return false;
         }
@@ -20125,9 +20165,13 @@ static bool lambda_expr_signature_matches_lambda_expr(ResolveContext *context,
     }
 
     for (param_index = 0U; param_index < left->as.lambda.param_count; ++param_index) {
-        if (!type_refs_semantically_equal(context,
-                                          left->as.lambda.params[param_index].type,
-                                          right->as.lambda.params[param_index].type)) {
+        const FengParameter *left_param = &left->as.lambda.params[param_index];
+        const FengParameter *right_param = &right->as.lambda.params[param_index];
+
+        if (!callable_parameter_forms_match(left_param, right_param) ||
+            !type_refs_semantically_equal(context,
+                                          left_param->type,
+                                          right_param->type)) {
             return false;
         }
     }

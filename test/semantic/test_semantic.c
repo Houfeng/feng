@@ -26091,6 +26091,200 @@ static void test_unbound_callable_explicit_casts_with_open_targets(void) {
     feng_program_free(program);
 }
 
+/* `T...` and normalized `T[]` retain different callable shapes. Every
+ * target-driven callable source must reject that mismatch in Semantic, and an
+ * explicit cast must not defer the rejection to Codegen. */
+static void test_callable_variadic_shape_mismatches_are_rejected(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "variadic_shape_top_level_array_to_variadic.ff",
+            "module demo.callable_shape.top_array_to_variadic;\n"
+            "spec Target(args: int...): int;\n"
+            "func source(args: int[]): int { args; return 0; }\n"
+            "func bad(): Target { return source; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_top_level_variadic_to_array.ff",
+            "module demo.callable_shape.top_variadic_to_array;\n"
+            "spec Target(args: int[]): int;\n"
+            "func source(args: int...): int { args; return 0; }\n"
+            "func bad(): Target { return source; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_lambda_array_to_variadic.ff",
+            "module demo.callable_shape.lambda_array_to_variadic;\n"
+            "spec Target(args: int...): int;\n"
+            "func bad(): Target {\n"
+            "  return (args: int[]) { args; return 0; };\n"
+            "}\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_concrete_instance.ff",
+            "module demo.callable_shape.concrete_instance;\n"
+            "spec Target(args: int...): int;\n"
+            "type Source {\n"
+            "  func collect(args: int[]): int { args; return 0; }\n"
+            "}\n"
+            "func bad(value: Source): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_concrete_static.ff",
+            "module demo.callable_shape.concrete_static;\n"
+            "spec Target(args: int[]): int;\n"
+            "type Source {\n"
+            "  static func collect(args: int...): int { args; return 0; }\n"
+            "}\n"
+            "func bad(): Target { return Source.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_fit_instance.ff",
+            "module demo.callable_shape.fit_instance;\n"
+            "spec Target(args: int...): int;\n"
+            "type Source {}\n"
+            "fit Source {\n"
+            "  func collect(args: int[]): int { args; return 0; }\n"
+            "}\n"
+            "func bad(value: Source): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_object_spec_instance.ff",
+            "module demo.callable_shape.object_spec_instance;\n"
+            "spec Source { func collect(args: int[]): int; }\n"
+            "spec Target(args: int...): int;\n"
+            "func bad(value: Source): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_object_constraint_instance.ff",
+            "module demo.callable_shape.object_constraint_instance;\n"
+            "spec Source { func collect(args: int[]): int; }\n"
+            "spec Target(args: int...): int;\n"
+            "func bad<T: Source>(value: T): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_object_constraint_static.ff",
+            "module demo.callable_shape.object_constraint_static;\n"
+            "spec Source { static func collect(args: int[]): int; }\n"
+            "spec Target(args: int...): int;\n"
+            "func bad<T: Source>(): Target { return T.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_intersection_spec_instance.ff",
+            "module demo.callable_shape.intersection_spec_instance;\n"
+            "spec Source { func collect(args: int[]): int; }\n"
+            "spec Marker { func marker(): int; }\n"
+            "spec Both: Source & Marker;\n"
+            "spec Target(args: int...): int;\n"
+            "func bad(value: Both): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_intersection_constraint_instance.ff",
+            "module demo.callable_shape.intersection_constraint_instance;\n"
+            "spec Source { func collect(args: int[]): int; }\n"
+            "spec Marker { func marker(): int; }\n"
+            "spec Both: Source & Marker;\n"
+            "spec Target(args: int...): int;\n"
+            "func bad<T: Both>(value: T): Target { return value.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_intersection_constraint_static.ff",
+            "module demo.callable_shape.intersection_constraint_static;\n"
+            "spec Source { static func collect(args: int[]): int; }\n"
+            "spec Marker { static func marker(): int; }\n"
+            "spec Both: Source & Marker;\n"
+            "spec Target(args: int...): int;\n"
+            "func bad<T: Both>(): Target { return T.collect; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_explicit_generic_method.ff",
+            "module demo.callable_shape.explicit_generic_method;\n"
+            "spec Target(args: int...): int;\n"
+            "type Source {\n"
+            "  func collect<T>(args: T[]): int { args; return 0; }\n"
+            "}\n"
+            "func bad(value: Source): Target { return value.collect<int>; }\n",
+            "AE0522"
+        },
+        {
+            "variadic_shape_unbound_method_cast.ff",
+            "module demo.callable_shape.unbound_method_cast;\n"
+            "spec Target(args: int...): int;\n"
+            "type Source {\n"
+            "  func collect(args: int[]): int { args; return 0; }\n"
+            "}\n"
+            "func bad(value: Source): void {\n"
+            "  let converted = (Target)value.collect;\n"
+            "  converted;\n"
+            "}\n",
+            "AE0051"
+        },
+        {
+            "variadic_shape_bound_array_to_variadic_cast.ff",
+            "module demo.callable_shape.bound_array_to_variadic;\n"
+            "spec Fixed(args: int[]): int;\n"
+            "spec Variadic(args: int...): int;\n"
+            "func source(args: int[]): int { args; return 0; }\n"
+            "func bad(): void {\n"
+            "  let value: Fixed = source;\n"
+            "  let converted = (Variadic)value;\n"
+            "  converted;\n"
+            "}\n",
+            "AE0051"
+        },
+        {
+            "variadic_shape_bound_variadic_to_array_cast.ff",
+            "module demo.callable_shape.bound_variadic_to_array;\n"
+            "spec Fixed(args: int[]): int;\n"
+            "spec Variadic(args: int...): int;\n"
+            "func source(args: int...): int { args; return 0; }\n"
+            "func bad(): void {\n"
+            "  let value: Variadic = source;\n"
+            "  let converted = (Fixed)value;\n"
+            "  converted;\n"
+            "}\n",
+            "AE0051"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path,
+                                                    cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].expected_code) == 0);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* Assert the common identity and path invariants of one recorded upcast. */
 static const FengSpecCoercionSite *assert_object_spec_upcast_site(
     const FengSemanticAnalysis *analysis,
@@ -27204,6 +27398,7 @@ int main(void) {
     test_intersection_spec_method_values_reject_invalid_sources();
     test_explicit_generic_callable_values_reject_invalid_sources();
     test_unbound_callable_explicit_casts_with_open_targets();
+    test_callable_variadic_shape_mismatches_are_rejected();
     test_callable_spec_value_rejects_different_spec_implicit_match();
     test_callable_spec_value_explicit_cast_accepts_equal_signature();
     test_callable_spec_top_level_fn_still_matches_multiple_specs();

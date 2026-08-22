@@ -267,11 +267,11 @@ type Stream: ReadWrite {}
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；其实现不得捕获、绑定或读取任何变量，调用时也不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
-- callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的非泛型顶层函数、非泛型方法值、已通过显式泛型 target 完成闭合的函数或方法以及 lambda，进入 callable-form `spec` 位置时按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”做结构匹配；来源函数或方法自身声明泛参时，必须先显式提供完整类型实参，目标 `spec` 不参与推导来源泛参。一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
+- callable-form `spec` 的隐式匹配采用两段规则: 未绑定到 `spec` 的非泛型顶层函数、非泛型方法值、已通过显式泛型 target 完成闭合的函数或方法以及 lambda，进入 callable-form `spec` 位置时按“参数个数 + 参数类型 + 参数顺序 + 变长参数形态 + 返回值类型完全一致”做结构匹配；来源函数或方法自身声明泛参时，必须先显式提供完整类型实参，目标 `spec` 不参与推导来源泛参。一旦值的静态类型已经是某个 callable-form `spec`,后续赋值、参数传递与返回匹配只允许同一 callable-form `spec` 声明。
 - 未绑定到 callable-form `spec` 的顶层函数或实例方法引用只有在明确 callable-form
   `spec` 目标中才能形成值；候选唯一也不产生匿名 callable 类型。已经绑定的 callable-form
   `spec` 值仍按上一条的声明身份规则流动，或按下一条执行显式结构转换。
-- 不同 callable-form `spec` 即使签名完全一致也不得隐式互相匹配; 仅当两个 callable-form `spec` 在实例化后的参数类型与返回类型完全一致时,才允许显式转换。
+- 不同 callable-form `spec` 即使签名完全一致也不得隐式互相匹配; 仅当两个 callable-form `spec` 在实例化后的参数类型、参数顺序、变长参数形态与返回类型完全一致时,才允许显式转换。
 - callable-form `spec` 的显式转换目标可以直接承接尚未绑定到 callable-form `spec` 的顶层函数或实例方法引用，并按目标完成普通结构匹配和 callable value 形成。泛型函数或方法来源必须先显式提供完整类型实参；转换目标不得反向推导来源泛参。
 - callable-form `spec` 的显式转换资格必须在编译期确定; 运行时不得重新比较签名、搜索候选或决定转换是否成立。
 - callable-form `spec` 的显式转换一旦合法,编译器必须直接按目标 callable-form `spec` 视角发码; 对实例化后签名完全一致的 callable-form `spec`,该发码只允许切换静态视角,不得构造新的 wrapper/closure、不得插入额外转发层,且转换后通过该值发起的每次调用开销必须小于等于转换前; 运行时不得再做动态适配或回退。
@@ -384,12 +384,12 @@ type Stream: ReadWrite {}
   requirement 身份，并进入闭合 `T` 的 merged witness 槽。
 - [必须] object-form `spec` 的静态字段满足来源只能是 `type` 自身; spec 静态方法满足来源可以是 `type` 自身或可见 `fit` 中的静态方法。
 - [禁止] 对象形状的 `spec` 不得标记 `@abi` 或任何调用方式注解; `@abi` 仅适用于 callable-form 的 `spec`。
-- [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 返回值类型完全一致”进行结构匹配。
+- [必须] 未绑定到 callable-form `spec` 的非泛型顶层函数、非泛型方法值、已显式闭合的泛型函数或方法以及 lambda 在进入 callable-form `spec` 位置时,必须按“参数个数 + 参数类型 + 参数顺序 + 变长参数形态 + 返回值类型完全一致”进行结构匹配。
 - [必须] 未绑定的顶层函数或实例方法引用形成值时必须具有明确 callable-form `spec`
   目标；不得因来源只有一个候选而推导匿名 callable 类型。
 - [必须] 泛型函数或方法作为值时，必须显式提供完整类型实参并先完成实参数量、约束和签名替换检查；callable-form `spec` 目标不得隐式推导来源泛参。
 - [必须] 静态类型已经是 callable-form `spec` 的值在进入另一 callable-form `spec` 位置时,只允许同一 callable-form `spec` 声明隐式匹配。
-- [必须] 不同 callable-form `spec` 之间的显式转换仅在实例化后的签名完全一致时允许,且资格必须在编译期确定。
+- [必须] 不同 callable-form `spec` 之间的显式转换仅在实例化后的完整签名（包括变长参数形态）完全一致时允许,且资格必须在编译期确定。
 - [必须] callable-form `spec` 的显式转换操作数可以是尚未绑定到 spec 的顶层函数或实例方法引用；泛型来源必须写出完整显式类型实参，且闭合后的签名必须与转换目标完全一致。
 - [必须] 当 callable-form `spec` 的显式转换因实例化后签名完全一致而成立时,编译器必须将其 lower 为不增加每次调用开销的目标视角切换; 不得为此分配新的 wrapper/closure,也不得增加额外 invoke 转发层。
 - [禁止] 不同 callable-form `spec` 仅因签名结构相同而发生隐式匹配。

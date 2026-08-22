@@ -1,0 +1,240 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+
+/** Primary callable target for matching variadic method values. */
+spec VariadicMethodValueCounter(items: int...): int;
+
+/** Structurally equal target used for an already-bound callable conversion. */
+spec VariadicMethodValueCounterAlias(items: int...): int;
+
+/** Concrete owner used by instance and static method-value paths. */
+type VariadicMethodValueSource {
+  let base: int;
+
+  /** Count a variadic group relative to this receiver. */
+  func count(items: int...): int {
+    return self.base + items.length();
+  }
+
+  /** Count a variadic group without a receiver. */
+  static func staticCount(items: int...): int {
+    return 100 + items.length();
+  }
+}
+
+/** Owner whose callable methods are supplied by a visible fit. */
+type VariadicMethodValueFitSource {
+  let base: int;
+}
+
+fit VariadicMethodValueFitSource {
+  /** Count through an instance fit method value. */
+  func count(items: int...): int {
+    return self.base + items.length();
+  }
+
+  /** Count through a static fit method value. */
+  static func staticCount(items: int...): int {
+    return 200 + items.length();
+  }
+}
+
+/** Object-form requirement carrying a variadic instance method. */
+spec VariadicMethodValueReadable {
+  func count(items: int...): int;
+}
+
+/** Secondary requirement used to form an intersection receiver. */
+spec VariadicMethodValueMarked {
+  func marker(): int;
+}
+
+/** Intersection-form receiver used by direct and generic method values. */
+spec VariadicMethodValueBoth:
+  VariadicMethodValueReadable & VariadicMethodValueMarked;
+
+/** Concrete implementation of the object-form requirement. */
+type VariadicMethodValueReadableSource: VariadicMethodValueReadable {
+  let base: int;
+
+  /** Implement the variadic readable requirement. */
+  func count(items: int...): int {
+    return self.base + items.length();
+  }
+}
+
+/** Concrete subject satisfying every leaf of the intersection. */
+type VariadicMethodValueBothSource:
+  VariadicMethodValueReadable, VariadicMethodValueMarked {
+  let base: int;
+
+  /** Implement the variadic readable leaf. */
+  func count(items: int...): int {
+    return self.base + items.length();
+  }
+
+  /** Implement the marker leaf. */
+  func marker(): int {
+    return self.base;
+  }
+}
+
+/** Object-form static requirement carrying a variadic method. */
+spec VariadicMethodValueFactory {
+  static func count(items: int...): int;
+}
+
+/** Secondary static requirement used by an intersection constraint. */
+spec VariadicMethodValueStaticMarked {
+  static func marker(): int;
+}
+
+/** Intersection constraint containing the variadic static requirement. */
+spec VariadicMethodValueStaticBoth:
+  VariadicMethodValueFactory & VariadicMethodValueStaticMarked;
+
+/** Concrete static implementation used to close both constraint forms. */
+type VariadicMethodValueFactorySource:
+  VariadicMethodValueFactory, VariadicMethodValueStaticMarked {
+  /** Implement the variadic static factory requirement. */
+  static func count(items: int...): int {
+    return 400 + items.length();
+  }
+
+  /** Implement the secondary static requirement. */
+  static func marker(): int {
+    return 1;
+  }
+}
+
+/** Generic-method owner used to verify explicit callable-local closure. */
+type VariadicMethodValueGenericSource {
+  let base: int;
+
+  /** Count values after explicitly closing the element type. */
+  func count<T>(items: T...): int {
+    return self.base + items.length();
+  }
+
+  /** Count values through an explicitly closed static method. */
+  static func staticCount<T>(items: T...): int {
+    return 500 + items.length();
+  }
+}
+
+/** Invoke a variadic callable received through a parameter target. */
+func applyVariadicMethodValue(counter: VariadicMethodValueCounter): int {
+  return counter(1, 2, 3, 4);
+}
+
+/** Return a concrete instance method through a return target. */
+func makeVariadicMethodValue(base: int): VariadicMethodValueCounter {
+  let source = VariadicMethodValueSource { base: base };
+  return source.count;
+}
+
+/** Bind an object-constrained generic receiver method value. */
+func bindVariadicObjectMethodValue<T: VariadicMethodValueReadable>(
+  value: T
+): VariadicMethodValueCounter {
+  return value.count;
+}
+
+/** Bind an intersection-constrained generic receiver method value. */
+func bindVariadicIntersectionMethodValue<T: VariadicMethodValueBoth>(
+  value: T
+): VariadicMethodValueCounter {
+  return value.count;
+}
+
+/** Bind an object-constrained type parameter static method value. */
+func bindVariadicStaticMethodValue<T: VariadicMethodValueFactory>():
+  VariadicMethodValueCounter {
+  return T.count;
+}
+
+/** Bind an intersection-constrained type parameter static method value. */
+func bindVariadicIntersectionStaticMethodValue<
+  T: VariadicMethodValueStaticBoth
+>(): VariadicMethodValueCounter {
+  return T.count;
+}
+
+/** Verify matching variadic forms across every method-value source family. */
+open func test_variadic_method_value_shape(): void {
+  describe("variadic method-value signature shape", () {
+    test("concrete type targets and bound conversion", () {
+      let source = VariadicMethodValueSource { base: 10 };
+      let bound: VariadicMethodValueCounter = source.count;
+      let casted = (VariadicMethodValueCounter)source.count;
+      let alias = (VariadicMethodValueCounterAlias)bound;
+      let escaped = makeVariadicMethodValue(20);
+      assert(bound(1, 2, 3) == 13, "instance method target");
+      assert(casted(1, 2) == 12, "unbound explicit conversion target");
+      assert(alias(1) == 11, "bound callable explicit conversion");
+      assert(applyVariadicMethodValue(source.count) == 14,
+             "parameter target");
+      assert(escaped(1, 2) == 22, "return target");
+    });
+
+    test("concrete and fit static or instance sources", () {
+      let concrete: VariadicMethodValueCounter =
+        VariadicMethodValueSource.staticCount;
+      let fitSource = VariadicMethodValueFitSource { base: 30 };
+      let fitted: VariadicMethodValueCounter = fitSource.count;
+      let fittedStatic: VariadicMethodValueCounter =
+        VariadicMethodValueFitSource.staticCount;
+      assert(concrete(1, 2) == 102, "concrete static method value");
+      assert(fitted(1, 2, 3) == 33, "fit instance method value");
+      assert(fittedStatic(1) == 201, "fit static method value");
+    });
+
+    test("object-form direct and generic receivers", () {
+      let view: VariadicMethodValueReadable =
+        VariadicMethodValueReadableSource { base: 40 };
+      let direct: VariadicMethodValueCounter = view.count;
+      let generic = bindVariadicObjectMethodValue<
+        VariadicMethodValueReadableSource
+      >(VariadicMethodValueReadableSource { base: 50 });
+      assert(direct(1, 2) == 42, "object-form receiver");
+      assert(generic(1, 2, 3) == 53, "object-constrained receiver");
+    });
+
+    test("intersection direct and generic receivers", () {
+      let view: VariadicMethodValueBoth =
+        VariadicMethodValueBothSource { base: 60 };
+      let direct: VariadicMethodValueCounter = view.count;
+      let generic = bindVariadicIntersectionMethodValue<
+        VariadicMethodValueBothSource
+      >(VariadicMethodValueBothSource { base: 70 });
+      assert(direct(1) == 61, "intersection-form receiver");
+      assert(generic(1, 2) == 72,
+             "intersection-constrained receiver");
+    });
+
+    test("object and intersection static constraints", () {
+      let objectBound = bindVariadicStaticMethodValue<
+        VariadicMethodValueFactorySource
+      >();
+      let intersectionBound = bindVariadicIntersectionStaticMethodValue<
+        VariadicMethodValueFactorySource
+      >();
+      assert(objectBound(1, 2, 3) == 403,
+             "object-constrained static method value");
+      assert(intersectionBound(1, 2) == 402,
+             "intersection-constrained static method value");
+    });
+
+    test("explicit generic instance and static methods", () {
+      let source = VariadicMethodValueGenericSource { base: 80 };
+      let instance: VariadicMethodValueCounter = source.count<int>;
+      let staticValue: VariadicMethodValueCounter =
+        VariadicMethodValueGenericSource.staticCount<int>;
+      assert(instance(1, 2) == 82, "explicit generic instance method");
+      assert(staticValue(1, 2, 3) == 503,
+             "explicit generic static method");
+    });
+  });
+}
