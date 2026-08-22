@@ -278,11 +278,13 @@ type Bad: Widget {
   在明确 callable-form `spec` 目标下形成静态方法值。候选面、可见性过滤、owner/fit
   泛型代入和重载选择与同一 `Type.method(args)` 直接调用一致；形成点固定唯一的 owner、
   fit 与方法声明，不求值或保存 receiver、subject、witness，也不引入 `self`。
-- `T` 受 object-form `spec` 约束时，`T.method` 可以在明确 callable-form `spec` 目标下
-  形成静态方法值。来源 requirement 必须按同一 `T.method(args)` 直接调用使用的约束实例、
-  父闭包投影、访问过滤和签名规则唯一确定；形成点绑定闭合 `T` 的 type descriptor 中该
-  requirement 对应的 witness 槽，但不绑定 receiver 或 subject。后续调用不得重新搜索成员、
-  判断满足关系或执行重载选择。
+- `T` 受 object-form 或 intersection-form `spec` 约束时，`T.method` 可以在明确
+  callable-form `spec` 目标下形成静态方法值。来源 requirement 必须按同一
+  `T.method(args)` 直接调用使用的完整约束实例、访问过滤、签名替换和重载规则唯一确定；
+  intersection-form 约束继续使用其展平、去重后的成员面，并保留 requirement 的原声明
+  object-form `spec`。形成点绑定闭合 `T` 的 type descriptor 中该 requirement 对应的普通
+  或 merged witness 槽，但不绑定 receiver 或 subject。后续调用不得重新搜索成员、判断
+  满足关系或执行重载选择。
 - 对重载函数值或重载方法值,可用于消歧的上下文包括参数位置的目标可调用形状、显式绑定类型与已声明返回类型。
 - 声明了函数级或方法级泛参的顶层函数、实例方法或具体静态方法作为值时，必须使用
   `function<TypeArgs...>`、`object.method<TypeArgs...>` 或 `Type.method<TypeArgs...>`
@@ -585,11 +587,13 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - [必须] 具体类型自有或当前位置可见 `fit` 的静态方法引用，在具有明确 callable-form
   `spec` 目标时，必须复用对应静态直接调用的候选面、访问过滤、泛型代入与重载规则，
   并固定唯一来源；不得伪造 receiver、subject 或 witness。
-- [必须] 受 object-form `spec` 约束的类型参数静态方法引用，在具有明确 callable-form
-  `spec` 目标时，必须复用对应 `T.method(args)` 直接调用的 requirement 选择，并绑定闭合
-  `T` 的 descriptor/witness 槽；不得形成 receiver、subject 或运行时成员查询。
+- [必须] 受 object-form 或 intersection-form `spec` 约束的类型参数静态方法引用，在具有
+  明确 callable-form `spec` 目标时，必须复用对应 `T.method(args)` 直接调用的完整约束实例、
+  requirement 选择和普通或 merged witness 槽，并绑定闭合 `T` 的 descriptor；不得形成
+  receiver、subject 或运行时成员查询。
 - [必须] callable-form `spec` 的显式转换可以直接以尚未绑定到 spec 的顶层函数、实例
-  方法、具体静态方法或受 object-form `spec` 约束的类型参数静态方法引用作为操作数；
+  方法、具体静态方法或受 object-form/intersection-form `spec` 约束的类型参数静态方法
+  引用作为操作数；
   编译器必须以转换目标完成来源选择、结构匹配和 callable value 形成。泛型来源必须先
   通过显式泛型 target 提供完整类型实参。
 - [禁止] 通过 callable-form `spec` 目标的参数或返回类型隐式推导并消除来源函数或方法自身声明的泛参。
@@ -651,9 +655,11 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
 - 编译器解析具体静态方法值时，必须稳定保留已经选中的 owner、fit、方法声明、owner
   实例类型、显式方法类型实参和目标 callable-form `spec`；本地与 imported 来源、普通
   代码与共享泛型体必须消费同一编译期来源身份，不得在代码生成或运行时按名称重选。
-- 编译器解析受 object-form `spec` 约束的类型参数静态方法值时，必须稳定保留原声明
-  requirement、caller 视角的 `T` 和目标 callable-form `spec`；最终闭合点必须使用该
-  requirement 在闭合 `T` descriptor 中已有的 witness 槽，不得由名称重新选择成员。
+- 编译器解析受 object-form 或 intersection-form `spec` 约束的类型参数静态方法值时，
+  必须稳定保留直接调用已经选定的原声明 requirement、精确 owner 约束实例、caller 视角
+  的 `T` 和目标 callable-form `spec`；最终闭合点必须使用该 requirement 在闭合 `T`
+  descriptor 中已有的普通或 merged witness 槽，不得由名称重新选择成员或重新遍历
+  intersection 成员。
 - 编译器必须在语义分析阶段对以上违规报错并阻止通过。
 
 ## 7 运行时
@@ -680,9 +686,10 @@ mixable 的泛型、reification 和 wrapper 调用链，不新增运行时动态
   receiver 副本、运行时查找、签名比较或候选回退。
 - 完全闭合且无捕获的具体静态方法值使用编译期固定的静态 callable 表示；形成时不分配
   动态 closure，不执行成员搜索或运行时目标选择，调用时直接进入形成点选定的方法实现。
-- 受 object-form `spec` 约束的类型参数静态方法值在闭合 `T` 时使用编译期固定的 immortal
-  callable singleton；共享泛型体形成值时只读取既有 reified callable dependency 槽，
-  不分配 closure、不查找成员，调用时直接进入已绑定的 witness 槽。
+- 受 object-form 或 intersection-form `spec` 约束的类型参数静态方法值在闭合 `T` 时使用
+  编译期固定的 immortal callable singleton；共享泛型体形成值时只读取既有 reified
+  callable dependency 槽，不分配 closure、不查找成员，调用时直接进入已绑定的普通或
+  merged witness 槽。
 - 顶层函数、成员方法与闭包在运行时都表现为可调用值,但其可见性、是否重载以及是否绑定 `self` 由编译期规则先行确定。
 
 ## 8 关联

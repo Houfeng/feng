@@ -1,7 +1,7 @@
 # Feng 成员方法值缺口与分项交付计划
 
-> **状态**：MV01、MV02、MV03、MV04、MV05、MV06、IC01 已完成，可分别独立交付；
-> MV07 尚未实施。
+> **状态**：MV01、MV02、MV03、MV04、MV05、MV06、IC01、MV07 均已完成，可分别独立
+> 交付；本专项已完成。
 >
 > **性质**：engineering 任务文档，不是语言权威规范。
 >
@@ -477,7 +477,7 @@ open spec CombinedFactory: Factory & TaggedFactory;
 open spec Creator(seed: int): string;
 
 func bind<T: CombinedFactory>(): Creator {
-  return T.create; // 当前先受 IC01 阻塞，尚未进入方法值解析
+  return T.create; // MV07 修复前 AE0522；当前合法
 }
 ```
 
@@ -494,21 +494,22 @@ func bind<T: CombinedFactory>(): Creator {
 
 #### 修复任务
 
-- [ ] 在 IC01 与 MV04 均完成后，更新函数、spec、泛型、可见性和诊断主规范。
-- [ ] 让方法值解析直接消费 IC01 的静态 requirement 解析结果。
-- [ ] 复用 MV04 的静态 callable 形成与共享泛型具体化能力。
-- [ ] 不增加 intersection 专用 binding kind、closure 或 `.ft` 记录形态。
-- [ ] 若 IC01 或 MV04 的稳定事实不足，回到对应基础分项完善通用抽象，不在 MV07 补特判。
+- [x] 在 IC01 与 MV04 均完成后，更新函数、spec、泛型、可见性、符号表和诊断主规范。
+- [x] 让方法值解析直接消费 IC01 的静态 requirement 解析结果。
+- [x] 复用 MV04 的静态 callable 形成与共享泛型具体化能力。
+- [x] 不增加 intersection 专用 binding kind、closure 或 `.ft` 记录形态。
+- [x] 若 IC01 或 MV04 的稳定事实不足，回到对应基础分项完善通用抽象，不在 MV07 补特判。
 
 #### 验证与交付
 
-- [ ] Semantic：直接成员、父成员、嵌套 intersection、公开与合法 seal 静态方法值通过。
-- [ ] Semantic：无目标、签名不匹配、歧义和非法访问稳定拒绝。
-- [ ] FCTS：不同闭合 `T` 的方法值分别进入各自静态实现。
-- [ ] 本地、共享泛型体和跨包 provider/consumer 均有覆盖。
-- [ ] 性能：与 MV04 相同的静态来源不增加额外分配、查找或调用层。
-- [ ] 专项测试通过，并在沙箱外执行完整 `make test`。
-- [ ] 在第 6 节记录实施问题与最终结果，标记 MV07 可独立交付。
+- [x] Semantic：直接成员、父成员、嵌套 intersection、公开与合法 seal 静态方法值通过。
+- [x] Semantic：无目标、签名不匹配和非法访问稳定拒绝；等价 requirement 去重且不产生
+      虚假歧义（沿用 ISSUE-001 已批准边界）。
+- [x] FCTS：不同闭合 `T` 的方法值分别进入各自静态实现。
+- [x] 本地、共享泛型体和跨包 provider/consumer 均有覆盖。
+- [x] 性能：与 MV04 相同的静态来源不增加额外分配、查找或调用层。
+- [x] 专项测试通过，并在沙箱外执行完整 `make test`。
+- [x] 在第 6 节记录实施问题与最终结果，标记 MV07 可独立交付。
 
 ## 5 通用验证与交付规则
 
@@ -1813,8 +1814,132 @@ func bind<T: CombinedFactory>(): Creator {
   FCTS `853/853`，以及全部 compiler、runtime、CLI、Symbol、性能、增量构建与发布链路
   测试通过。
 - **实施问题**：IC01 独立 bugfix 文档中的 ISSUE-001 至 ISSUE-007 均已按先记录、后分析、
-  再修复的流程收口；无未解决问题。MV07 仍是独立后续分项。
+  再修复的流程收口；无未解决问题。其后续 MV07 也已作为独立分项完成。
 - **建议 commit message**：`fix: support intersection-constrained static method calls`
+
+### ISSUE-034：MV07 非法来源矩阵存在未被拒绝的用例
+
+- **关联分项**：MV07；intersection 约束类型参数静态方法值诊断。
+- **状态**：已解决。
+- **最小复现**：`T: Factory & Tagged` 下分别使用无 callable 目标的 `let creator =
+  T.create`、不匹配目标的 `return T.create` 和未授权的 `return T.secret`；另以两个参数
+  spec 的 `select` requirement 探查可构造的目标形状二义性。
+- **实际结果**：无目标引用未在 Semantic 报错，进入 Codegen 后才报告无关的 `CE0173`；
+  不匹配目标正确报告 `AE0522`；非法 `seal` 同时报告正确的 `AE0708` 和多余的 `AE0522`；
+  当前二义性探针的两个来源均不贴合目标，实际稳定报告 `AE0522`，不能作为有效二义性
+  用例。
+- **期望结果**：无目标、签名不匹配和非法访问分别稳定报告 `AE0523`、`AE0522` 和单一
+  `AE0708`；等价 requirement 沿用已批准规则去重，不产生虚假 `AE0521`。
+- **根因**：无目标 callable 引用分类中的类型参数静态分支仍只接受 object-form，并调用
+  object-form 专用首成员查询；目标明确的非法访问回落则始终按实例 requirement 查询，
+  未识别 `T.method` 静态来源，所以普通成员阶段报告 `AE0708` 后又落入通用 `AE0522`。
+  二义性探针不成立是既有精确结构匹配规则的结果：非等价签名不能同时贴合同一 callable
+  目标，等价 requirement 必须按合并槽去重，与 ISSUE-001 已批准结论相同。
+- **通用修复方案**：无目标分类让 object/intersection 类型参数静态来源共用现有
+  `probe_spec_method_access` 精确 surface 与访问过滤；非法访问回落识别静态类型参数来源，
+  按同一静态 requirement surface 确认签名匹配，并抑制后续 `AE0522`，不重复发出普通
+  成员阶段已经产生的 `AE0708`。验收项按 ISSUE-001 的已批准边界改为验证等价 requirement
+  不产生虚假歧义，不制造不可构造的 `AE0521` 用例。
+- **运行时性能影响**：无；变更只发生在编译期成员引用分类和失败诊断路径，合法生成代码
+  不增加运行时分支、查找或分配。
+- **runtime ABI / `.ft` / 兼容性影响**：无；未修改 runtime、ABI、sidecar 或 `.ft`。
+- **是否需要人工决策**：否；诊断修复恢复现有规则，二义性边界沿用 ISSUE-001 已完成的
+  人工决策。
+- **专项验证结果**：新增 Semantic 用例确认 `AE0523`、`AE0522`、单一 `AE0708` 以及等价
+  requirement 去重；`build/bin/test_semantic` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过；UBSan 与普通构建两阶段的 Semantic、
+  Codegen、Symbol 及全部回归均通过。
+
+### ISSUE-035：MV07 生成 C 未通过严格编译
+
+- **关联分项**：MV07；intersection 约束类型参数静态方法值 Codegen。
+- **状态**：已解决。
+- **最小复现**：新增 Codegen 专项通过 `T: NestedFactory` 分别形成直接、泛型父级、嵌套、
+  合法重载和等价 requirement 的静态方法值，并以两个闭合类型生成 receiver-free callable。
+- **实际结果**：Semantic 与 Codegen 均成功，immortal static callable、merged witness 槽、
+  无 subject/动态 closure 分配等结构断言通过，但 `compile_generated_c_or_die` 报生成 C 编译
+  失败。
+- **期望结果**：生成 C 在 `-Werror` 下严格编译通过，所有 adapter 继续使用既有 merged
+  witness 与 receiver-free callable ABI。
+- **根因**：等价 requirement 探针同时包含泛型父 requirement 与固定该泛参的具体子
+  requirement。默认父 witness 投影按语义名称从子 spec 取得具体 thunk，并直接写入泛型父
+  槽；两者语义签名相同，但父槽使用 address-form ABI、具体 thunk 使用 direct ABI，因而
+  C 函数指针类型不兼容。真实 type witness 已能为这种投影生成正确 thunk，缺口只存在于
+  通用默认父 witness 投影，不是 MV07 的 requirement 选择错误。
+- **通用修复方案**：默认父 witness 投影继续按现有语义兼容规则选择同一逻辑 requirement；
+  当且仅当源、目标方法槽的 lowered ABI 不同时，生成一个静态、无捕获、无分配的 ABI
+  bridge，以目标父槽 ABI 转发到现有 root 默认 thunk。ABI 相同路径继续直接复用原 thunk；
+  witness 布局、槽位身份和投影缓存均保持不变，不增加名称或测试模型特判。
+- **运行时性能影响**：既有可编译路径无变化。bridge 只出现在此前因函数指针类型不兼容而
+  无法生成合法 C 的路径；不增加动态分配、运行时查找或分支。新合法路径每次调用经过一层
+  必需的静态 ABI 适配，与已有真实 type witness 的 ABI thunk 原理相同。
+- **runtime ABI / `.ft` / 兼容性影响**：无；未修改 runtime、witness 结构或槽位、生成程序
+  ABI、`.ft` schema、版本和兼容边界。
+- **是否需要人工决策**：否；修复恢复既有语义 requirement 在现有两种 lowered ABI 间的
+  通用投影，未触及强制停线条件。
+- **专项验证结果**：新增 Codegen 用例的结构断言全部通过，生成 C 通过
+  `-Werror -pedantic` 严格编译；完整 `build/bin/test_codegen` 通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过；默认父 witness 的既有投影、严格生成 C、
+  两轮 FCTS 与性能约束均通过。
+
+### ISSUE-036：非法访问回退无意收紧既有实例路径前置条件
+
+- **关联分项**：MV07；共享的受约束泛型方法值非法访问诊断。
+- **状态**：已解决。
+- **最小复现**：审计 `report_inaccessible_constrained_generic_method_value` 的 MV07 diff；
+  静态 `T.method` 支持加入后，object/intersection 泛型值实例方法的既有回退路径也新增了
+  `constraint_ref != NULL` 前置要求。
+- **实际结果**：新增 MV07 与既有定向测试均通过，但该条件比变更前只要求
+  `constraint_decl != NULL` 更严格，存在无关诊断路径被提前跳过的风险。
+- **期望结果**：MV07 只增加静态类型参数来源识别；既有实例来源的进入条件和诊断行为保持
+  不变。约束实例 type-ref 可用时继续用于签名替换，不应成为原有回退的新增必要条件。
+- **根因**：为静态和实例来源合并控制流时，把静态 target 的防御性空值考虑带入了共同
+  条件。核对确认 `resolve_generic_param_spec_constraint` 与 `resolve_type_target_expr` 都在
+  返回非空约束声明时同步保留原约束 type-ref，因此当前没有可构造的行为差异；新增条件
+  只是偏离基线控制流的冗余收紧。
+- **通用修复方案**：恢复只以约束声明和 form 判断是否进入回退的原有条件；静态与实例
+  来源继续共享同一约束 type-ref 不变量和签名替换路径，不增加分支或特判。
+- **运行时性能影响**：无；该函数只在编译期失败诊断路径运行。
+- **runtime ABI / `.ft` / 兼容性影响**：无。
+- **是否需要人工决策**：否；这是消除无关条件、保持既有控制流，不改变语言行为。
+- **专项验证结果**：Semantic 专项与完整 Semantic 测试通过。
+- **全量回归结果**：沙箱外完整 `make test` 通过；既有泛型实例方法值诊断与新增静态路径
+  均无回归。
+
+### MV07 独立交付记录
+
+- **变更范围**：补齐 `T: IntersectionSpec` 类型参数静态方法值。Semantic 让目标驱动、
+  无目标分类和非法访问诊断共同接受 IC01 已解析的 intersection 静态 requirement surface；
+  Codegen 让 MV04 的 receiver-free 静态 callable 与闭合约束恢复共同接受 object-form 和
+  intersection-form 约束。
+- **实现结果**：方法值稳定保留 requirement 原声明、精确 owner 约束实例、caller 视角
+  `T` 和目标 callable-form `spec`；闭合时直接使用现有 merged witness 槽与 immortal
+  callable dependency。无 receiver、subject、运行时名称查询、满足关系查询或重载选择。
+- **一并修复**：ISSUE-034 至 ISSUE-036 均已按先记录、后分析、再修复的流程收口；包括
+  无目标分类与非法访问重复诊断、默认父 witness 在语义等价但 lowered ABI 不同槽位上的
+  通用静态桥接，以及审计消除无关诊断条件收紧。所有方案均基于通用 surface、ABI kind
+  和既有投影抽象，不含类型名、spec 名、方法名、包名或测试模型特判。
+- **运行时成本**：MV07 与 MV04 使用同一静态 singleton 和 descriptor callable dependency；
+  形成时不分配 closure、不搜索或拆分 intersection，调用不增加动态分支或查询。既有可
+  编译路径成本不变；默认父 witness bridge 只修复此前无法生成合法 C 的 ABI 不同路径，
+  是静态、无捕获、无分配适配，ABI 相同路径仍直接复用原 thunk。
+- **ABI 与格式**：未修改 runtime、runtime 私有 ABI、witness 布局或槽位、生成程序 ABI、
+  `.ft` schema、版本和兼容边界；Symbol 往返继续使用既有
+  `FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD` 记录。
+- **专项测试**：`build/bin/test_semantic`、`build/bin/test_codegen` 和
+  `build/bin/test_symbol` 通过。覆盖直接、泛型父级、嵌套、跨 leaf 重载、等价 requirement、
+  公开与合法 seal、绑定/参数/返回/显式转换目标、`AE0523`、`AE0522`、单一 `AE0708`、
+  receiver-free 生成结构、严格 C 编译和 `.ft` 导出/导入。只增加用例，未修改或删除任何
+  既有测试用例。
+- **FCTS**：新增本地与跨包 provider/consumer 覆盖；两个闭合 `T`、父级与嵌套 requirement、
+  重载、等价去重、friend seal、直接调用对照和 imported 共享泛型体全部通过，结果为
+  `857 passed, 0 failed, 0 skipped`。
+- **全量回归**：沙箱外完整 `make test` 通过；UBSan 与普通
+  `-O2 -Werror -pedantic` 两阶段均完成，两轮 smoke `91/91`、两轮 std `601/601`、两轮
+  FCTS `857/857`，以及 Archive、Lexer、Parser、Semantic、Runtime、Codegen、Debug、CLI、
+  Symbol、性能约束、增量构建、release、bundled packages 和 toolchain 测试全部通过。
+- **未解决问题**：无。
+- **建议 commit message**：`feat: support intersection-constrained static method values`
 
 ### ISSUE-待编号：待填写
 
@@ -1835,10 +1960,10 @@ func bind<T: CombinedFactory>(): Creator {
 
 只有满足以下条件，整个专项才可标记完成：
 
-- [ ] MV01、MV02、MV03、MV04、MV05、MV06、IC01、MV07 均已经单独完成并具有交付记录。
-- [ ] 每个分项的正式语义均已收敛到对应权威规范，本文没有成为第二份语言规范。
-- [ ] 所有原本合法的直接调用保持原行为，实例/静态访问边界没有扩大。
-- [ ] object-form、intersection-form、具体 type/fit、普通泛型和共享泛型路径均有有效证据。
-- [ ] 没有类型名、spec 名、方法名、包名、测试模型或参数位置特判。
-- [ ] 第 1 节第 8 项强制规则已经满足，且不存在尚未完成人工决策的例外。
-- [ ] 最后一个分项完成后的沙箱外完整 `make test` 通过。
+- [x] MV01、MV02、MV03、MV04、MV05、MV06、IC01、MV07 均已经单独完成并具有交付记录。
+- [x] 每个分项的正式语义均已收敛到对应权威规范，本文没有成为第二份语言规范。
+- [x] 所有原本合法的直接调用保持原行为，实例/静态访问边界没有扩大。
+- [x] object-form、intersection-form、具体 type/fit、普通泛型和共享泛型路径均有有效证据。
+- [x] 没有类型名、spec 名、方法名、包名、测试模型或参数位置特判。
+- [x] 第 1 节第 8 项强制规则已经满足，且不存在尚未完成人工决策的例外。
+- [x] 最后一个分项完成后的沙箱外完整 `make test` 通过。

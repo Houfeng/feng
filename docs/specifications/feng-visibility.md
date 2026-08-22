@@ -334,8 +334,9 @@ spec/witness 和 fit 规则均继续执行。字段的 `is_mixable` 事实单独
 - object-form spec 成员的 friend 访问只发生在 spec 视角并继续通过既有 witness；
   不要求 friend type 实现该 spec，也不扩大具体实现成员的可见性或修改满足规则。
 - 具体 type/fit 的实例或静态方法值、object-form/intersection-form spec 实例方法值以及
-  受 object-form spec 约束的类型参数静态方法值，都在形成点执行同一 friend 检查；对于
-  具体静态方法值，检查所选 type/fit 静态候选；对于 spec 来源，必须先从候选中移除当前
+  受 object-form/intersection-form spec 约束的类型参数静态方法值，都在形成点执行同一
+  friend 检查；对于具体静态方法值，检查所选 type/fit 静态候选；对于 spec 来源，必须
+  先从候选中移除当前
   上下文不可访问的 `seal` requirement，再按目标 callable 形状执行重载选择。
   intersection-form 来源仍按 requirement 的原声明 object-form spec 判断授权。形成后的
   callable 作为普通值使用，不重复检查权限。

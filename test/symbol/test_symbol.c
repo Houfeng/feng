@@ -3055,6 +3055,131 @@ static void test_constrained_generic_spec_static_method_value_ft_roundtrip(void)
     free(tmp_dir);
 }
 
+/* T: IntersectionSpec static method-value dependencies reuse the object-form
+ * static callable-dependency record. Direct, generic-parent and nested leaf
+ * requirements retain their exact declarations, caller-view T and callable
+ * targets across an FT export/import roundtrip. */
+static void
+test_intersection_constrained_static_method_value_ft_roundtrip(void) {
+    static const char *kSource =
+        "open module feng.test.symbol.intersection_static_method_value;\n"
+        "open spec RootFactory<T> {\n"
+        "  static func inherited(value: T): T;\n"
+        "}\n"
+        "open spec NumberFactory: RootFactory<i32> {\n"
+        "  static func create(seed: i32): i32;\n"
+        "}\n"
+        "open spec TextFactory {\n"
+        "  static func label(value: string): string;\n"
+        "}\n"
+        "open spec CombinedFactory: NumberFactory & TextFactory;\n"
+        "open spec ExtraFactory {\n"
+        "  static func extra(value: i32): i32;\n"
+        "}\n"
+        "open spec NestedFactory: CombinedFactory & ExtraFactory;\n"
+        "open spec IntMapper(value: i32): i32;\n"
+        "open spec TextMapper(value: string): string;\n"
+        "open func bindCreate<T: NestedFactory>(): IntMapper {\n"
+        "  return T.create;\n"
+        "}\n"
+        "open func bindInherited<T: NestedFactory>(): IntMapper {\n"
+        "  return T.inherited;\n"
+        "}\n"
+        "open func bindLabel<T: NestedFactory>(): TextMapper {\n"
+        "  return T.label;\n"
+        "}\n"
+        "open func bindExtra<T: NestedFactory>(): IntMapper {\n"
+        "  return T.extra;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        "intersection_static_method_value.ff", kSource);
+    FengSemanticAnalysis *analysis = analyze_or_die(program);
+    FengSymbolError error = {0};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    const FengSymbolImportedModule *module;
+    FengSlice segments[4];
+    const FengSymbolDeclView *owners[4];
+    const FengSymbolDeclView *members[4];
+    const FengSymbolDeclView *binds[4];
+    const char *owner_names[4] = {
+        "NumberFactory", "RootFactory", "TextFactory", "ExtraFactory"};
+    const char *member_names[4] = {
+        "create", "inherited", "label", "extra"};
+    const char *bind_names[4] = {
+        "bindCreate", "bindInherited", "bindLabel", "bindExtra"};
+    const char *target_names[4] = {
+        "IntMapper", "IntMapper", "TextMapper", "IntMapper"};
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    {
+        FengSymbolExportOptions options = {0};
+
+        options.public_root = public_root;
+        ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    }
+    feng_symbol_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                             public_root,
+                                             FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                             &error));
+    feng_symbol_error_free(&error);
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("intersection_static_method_value");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+
+    for (size_t index = 0U; index < 4U; ++index) {
+        const FengSymbolCallableDepView *dependency;
+        const FengSymbolTypeView *type;
+        size_t segment_count;
+
+        owners[index] = feng_symbol_module_find_public_spec(
+            module, slice_from_cstr(owner_names[index]));
+        ASSERT(owners[index] != NULL);
+        members[index] = feng_symbol_decl_find_public_member(
+            owners[index], slice_from_cstr(member_names[index]));
+        ASSERT(members[index] != NULL);
+        binds[index] = feng_symbol_module_find_public_value(
+            module, slice_from_cstr(bind_names[index]));
+        ASSERT(binds[index] != NULL);
+        ASSERT(binds[index]->reifiable_callable_dep_count == 1U);
+        dependency = &binds[index]->reifiable_callable_deps[0];
+        ASSERT(dependency->purpose ==
+               FENG_SYMBOL_CALLABLE_DEP_CALLABLE_VALUE);
+        ASSERT(dependency->kind ==
+               FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD);
+        ASSERT(dependency->target_symbol_id ==
+               members[index]->ft_symbol_id);
+        ASSERT(dependency->callable_type_arg_count == 0U);
+
+        type = dependency->owner_instance_type;
+        ASSERT(feng_symbol_type_kind(type) ==
+               FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF);
+        ASSERT(slice_equals_cstr(
+            feng_symbol_type_type_param_ref_name(type), "T"));
+        type = dependency->target_callable_type;
+        ASSERT(feng_symbol_type_kind(type) == FENG_SYMBOL_TYPE_KIND_NAMED);
+        segment_count = feng_symbol_type_segment_count(type);
+        ASSERT(segment_count > 0U);
+        ASSERT(slice_equals_cstr(
+            feng_symbol_type_segment_at(type, segment_count - 1U),
+            target_names[index]));
+    }
+
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* Concrete type/fit static method-value dependencies reuse the existing FT
  * callable-dependency record. The roundtrip preserves the exact source
  * symbol, owner instance, method-local arguments and target callable without
@@ -4294,6 +4419,7 @@ int main(void) {
     test_constrained_generic_spec_method_value_ft_roundtrip();
     test_constrained_generic_intersection_method_value_ft_roundtrip();
     test_constrained_generic_spec_static_method_value_ft_roundtrip();
+    test_intersection_constrained_static_method_value_ft_roundtrip();
     test_static_method_value_dependency_ft_roundtrip();
     test_generic_type_ft_roundtrip();
     test_inferred_generic_field_ft_roundtrip();

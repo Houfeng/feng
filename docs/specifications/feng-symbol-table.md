@@ -219,10 +219,11 @@ witness。consumer 必须原样恢复这些编译期事实，不得把来源降�
 实参和目标 callable-form `spec`。consumer 在闭合点直接恢复该编译期身份，不按名称重新
 查找静态成员；该要求不新增 section、字段、枚举值、记录尺寸或格式版本。
 
-公开共享泛型声明中的 `T: ObjectSpec` 类型参数静态方法值也使用同一记录：依赖的 kind
-必须为既有 `FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD`，并保留原声明 requirement 的
-符号身份、caller 视角 owner `T` 和目标 callable-form `spec`。reader 与 import 恢复必须
-接受并严格校验该既有 kind；不得伪装为 spec 实例方法或 type/fit 静态方法。该扩展不改变
+公开共享泛型声明中的 `T: ObjectSpec` 或 `T: IntersectionSpec` 类型参数静态方法值也
+使用同一记录：依赖的 kind 必须为既有 `FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD`，并
+保留原声明 requirement 的符号身份、caller 视角 owner `T` 和目标 callable-form `spec`；
+intersection 约束继续由其约束身份恢复 merged witness。reader 与 import 恢复必须接受并
+严格校验该既有 kind；不得伪装为 spec 实例方法或 type/fit 静态方法。该扩展不改变
 section、记录布局、字段、枚举数值和格式版本；旧 reader 可以继续读取未包含该依赖的
 新产物，但允许拒绝实际包含该 kind 的产物。
 

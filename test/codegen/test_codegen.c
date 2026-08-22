@@ -8059,6 +8059,166 @@ static void test_constrained_generic_spec_static_method_value_codegen(void) {
     feng_program_free(program);
 }
 
+/* MV07 closes an intersection-constrained static method value through the
+ * existing merged witness and MV04's immortal receiver-free callable. Exact
+ * direct, parent, nested, overloaded and equivalent requirements must use
+ * their stable merged slots without a subject or runtime member selection. */
+static void test_intersection_constrained_static_method_value_codegen(void) {
+    const char *source =
+        "module feng.codegen.intersection_static_method_value;\n"
+        "spec RootFactory<T> {\n"
+        "  static func inherited(value: T): T;\n"
+        "  static func duplicate(value: T): T;\n"
+        "}\n"
+        "spec NumberFactory: RootFactory<i32> {\n"
+        "  static func create(seed: i32): i32;\n"
+        "  static func select(value: i32): i32;\n"
+        "  static func duplicate(value: i32): i32;\n"
+        "}\n"
+        "spec TextFactory {\n"
+        "  static func label(): string;\n"
+        "  static func select(value: string): string;\n"
+        "  static func duplicate(value: i32): i32;\n"
+        "}\n"
+        "spec CombinedFactory: NumberFactory & TextFactory;\n"
+        "spec ExtraFactory { static func extra(value: i32): i32; }\n"
+        "spec NestedFactory: CombinedFactory & ExtraFactory;\n"
+        "spec IntMapper(value: i32): i32;\n"
+        "spec StringMapper(value: string): string;\n"
+        "spec StringSupplier(): string;\n"
+        "type First: NumberFactory, TextFactory, ExtraFactory {\n"
+        "  static func inherited(value: i32): i32 { return value + 10; }\n"
+        "  static func create(seed: i32): i32 { return seed + 1; }\n"
+        "  static func select(value: i32): i32 { return value + 2; }\n"
+        "  static func label(): string { return \"first\"; }\n"
+        "  static func select(value: string): string { return value; }\n"
+        "  static func duplicate(value: i32): i32 { return value + 3; }\n"
+        "  static func extra(value: i32): i32 { return value + 4; }\n"
+        "}\n"
+        "type Second: NumberFactory, TextFactory, ExtraFactory {\n"
+        "  static func inherited(value: i32): i32 { return value + 20; }\n"
+        "  static func create(seed: i32): i32 { return seed + 5; }\n"
+        "  static func select(value: i32): i32 { return value + 6; }\n"
+        "  static func label(): string { return \"second\"; }\n"
+        "  static func select(value: string): string { return value; }\n"
+        "  static func duplicate(value: i32): i32 { return value + 7; }\n"
+        "  static func extra(value: i32): i32 { return value + 8; }\n"
+        "}\n"
+        "func bindCreate<T: NestedFactory>(): IntMapper { return T.create; }\n"
+        "func bindInherited<T: NestedFactory>(): IntMapper {\n"
+        "  return T.inherited;\n"
+        "}\n"
+        "func bindNumber<T: NestedFactory>(): IntMapper { return T.select; }\n"
+        "func bindText<T: NestedFactory>(): StringMapper { return T.select; }\n"
+        "func bindLabel<T: NestedFactory>(): StringSupplier { return T.label; }\n"
+        "func bindDuplicate<T: NestedFactory>(): IntMapper {\n"
+        "  return T.duplicate;\n"
+        "}\n"
+        "func bindExtra<T: NestedFactory>(): IntMapper { return T.extra; }\n"
+        "func run(): i32 {\n"
+        "  let firstCreate = bindCreate<First>();\n"
+        "  let secondCreate = bindCreate<Second>();\n"
+        "  let inherited = bindInherited<First>();\n"
+        "  let number = bindNumber<Second>();\n"
+        "  let duplicate = bindDuplicate<First>();\n"
+        "  let extra = bindExtra<Second>();\n"
+        "  return firstCreate(1) + secondCreate(2) + inherited(3) +\n"
+        "    number(4) + duplicate(5) + extra(6);\n"
+        "}\n"
+        "func runText(): string {\n"
+        "  let text = bindText<First>();\n"
+        "  let label = bindLabel<Second>();\n"
+        "  return text(\"value\") + label();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source,
+        "intersection_constrained_static_method_value_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *required_calls[] = {
+        "_witness->create(_arg0)",
+        "_witness->inherited(",
+        "_witness->select(_arg0)",
+        "_witness->select__feng_overload_2(_arg0)",
+        "_witness->duplicate(_arg0)",
+        "_witness->extra(_arg0)",
+        "return _witness->label()"
+    };
+
+    if (!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                               &analysis, &errors, &error_count)) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "MV07 semantic error %s: %s\n",
+                    errors[index].code,
+                    errors[index].message != NULL
+                        ? errors[index].message
+                        : "(unknown)");
+        }
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   NULL,
+                                   &output,
+                                   &codegen_error)) {
+        fprintf(stderr,
+                "MV07 codegen error: %s\n",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(output.c_source != NULL);
+    ASSERT(count_substr(
+               output.c_source,
+               ".callable_value = {.static_value = &FengCallableSpecStaticValue__") ==
+           8U);
+    ASSERT(count_substr(output.c_source,
+                        ".refcount = FENG_REFCOUNT_IMMORTAL") >= 8U);
+    ASSERT(strstr(output.c_source,
+                  "->callable_value.static_value") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_object_new(_callable_value_desc") == NULL);
+    ASSERT(strstr(output.c_source, "switch (_T->kind)") == NULL);
+    for (size_t index = 0U;
+         index < sizeof(required_calls) / sizeof(required_calls[0]);
+         ++index) {
+        const char *call = strstr(output.c_source, required_calls[index]);
+        const char *line_start;
+        const char *line_end;
+
+        if (call == NULL) {
+            fprintf(stderr,
+                    "MV07 missing generated call: %s\n",
+                    required_calls[index]);
+        }
+        ASSERT(call != NULL);
+        line_start = call;
+        while (line_start > output.c_source && line_start[-1] != '\n') {
+            --line_start;
+        }
+        line_end = strchr(call, '\n');
+        if (line_end == NULL) {
+            line_end = output.c_source + strlen(output.c_source);
+        }
+        ASSERT(!span_contains(line_start, line_end, "_subject"));
+        ASSERT(!span_contains(line_start, line_end, "feng_object_new"));
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A builtin-fit static requirement uses the same receiver-free witness for
  * direct constrained calls and MV04 method values. The thunk calls the
  * registered builtin-fit entry with its existing descriptor-first ABI. */
@@ -13867,6 +14027,7 @@ int main(void) {
     test_intersection_constrained_static_method_call_codegen();
     test_concrete_enum_array_fit_codegen();
     test_constrained_generic_spec_static_method_value_codegen();
+    test_intersection_constrained_static_method_value_codegen();
     test_builtin_fit_static_spec_witness_codegen();
     test_array_fit_static_spec_witness_codegen();
     test_concrete_static_method_value_codegen_uses_singletons();

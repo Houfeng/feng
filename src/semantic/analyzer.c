@@ -20383,8 +20383,10 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                 }
                 if (static_target.is_generic_type_param &&
                     static_target.constraint_spec_decl != NULL &&
-                    static_target.constraint_spec_decl->as.spec_decl.form ==
-                        FENG_SPEC_FORM_OBJECT) {
+                    (static_target.constraint_spec_decl->as.spec_decl.form ==
+                         FENG_SPEC_FORM_OBJECT ||
+                     static_target.constraint_spec_decl->as.spec_decl.form ==
+                         FENG_SPEC_FORM_INTERSECTION)) {
                     InferredExprType constraint_owner =
                         static_target.constraint_spec_type_ref != NULL
                             ? inferred_expr_type_from_type_ref(
@@ -21369,26 +21371,25 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
                 }
                 if (static_target.is_generic_type_param &&
                     static_target.constraint_spec_decl != NULL &&
-                    static_target.constraint_spec_decl->as.spec_decl.form ==
-                        FENG_SPEC_FORM_OBJECT) {
+                    (static_target.constraint_spec_decl->as.spec_decl.form ==
+                         FENG_SPEC_FORM_OBJECT ||
+                     static_target.constraint_spec_decl->as.spec_decl.form ==
+                         FENG_SPEC_FORM_INTERSECTION)) {
                     InferredExprType constraint_owner =
                         static_target.constraint_spec_type_ref != NULL
                             ? inferred_expr_type_from_type_ref(
                                   static_target.constraint_spec_type_ref)
                             : inferred_expr_type_from_decl(
                                   static_target.constraint_spec_decl);
-                    const FengTypeMember *member =
-                        find_accessible_spec_object_member(
+                    SpecMethodAccessProbe method_probe =
+                        probe_spec_method_access(
                             context,
                             static_target.constraint_spec_decl,
                             constraint_owner,
                             expr->as.member.member,
-                            /*include_static=*/true,
-                            NULL);
+                            /*require_static=*/true);
 
-                    return member != NULL &&
-                           member->kind == FENG_TYPE_MEMBER_METHOD &&
-                           member->is_static;
+                    return method_probe.has_accessible_method;
                 }
             }
 
@@ -23134,6 +23135,7 @@ static bool report_inaccessible_constrained_generic_method_value(
     InferredExprType receiver_type;
     InferredExprType constraint_owner;
     CallableValueResolution inaccessible;
+    bool is_static_type_param_source = false;
 
     if (out_reported == NULL) {
         return false;
@@ -23148,13 +23150,31 @@ static bool report_inaccessible_constrained_generic_method_value(
         source_expr->as.member.object == NULL) {
         return true;
     }
-    receiver_type = infer_expr_type(
-        context, source_expr->as.member.object);
-    if (!resolve_generic_param_spec_constraint(context,
-                                               receiver_type,
-                                               &constraint_decl,
-                                               &constraint_ref) ||
-        constraint_decl == NULL ||
+    {
+        ResolvedTypeTarget static_target = resolve_type_target_expr(
+            context, source_expr->as.member.object, false);
+
+        if (static_target.is_generic_type_param &&
+            static_target.constraint_spec_decl != NULL &&
+            (static_target.constraint_spec_decl->as.spec_decl.form ==
+                 FENG_SPEC_FORM_OBJECT ||
+             static_target.constraint_spec_decl->as.spec_decl.form ==
+                 FENG_SPEC_FORM_INTERSECTION)) {
+            constraint_decl = static_target.constraint_spec_decl;
+            constraint_ref = static_target.constraint_spec_type_ref;
+            is_static_type_param_source = true;
+        } else {
+            receiver_type = infer_expr_type(
+                context, source_expr->as.member.object);
+            if (!resolve_generic_param_spec_constraint(context,
+                                                       receiver_type,
+                                                       &constraint_decl,
+                                                       &constraint_ref)) {
+                return true;
+            }
+        }
+    }
+    if (constraint_decl == NULL ||
         (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
          constraint_decl->as.spec_decl.form !=
              FENG_SPEC_FORM_INTERSECTION)) {
@@ -23173,7 +23193,7 @@ static bool report_inaccessible_constrained_generic_method_value(
         source_expr->as.member.member,
         expected_type_ref,
         function_type_decl,
-        false,
+        is_static_type_param_source,
         false);
     if (inaccessible.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE ||
         inaccessible.callable_member == NULL ||
@@ -23190,6 +23210,12 @@ static bool report_inaccessible_constrained_generic_method_value(
     }
 
     *out_reported = true;
+    /* A static T.method member expression is validated independently before
+     * its target callable context and has already emitted AE0708. Instance
+     * generic receivers need this fallback to emit that diagnostic itself. */
+    if (is_static_type_param_source) {
+        return true;
+    }
     return report_inaccessible_spec_member(
         context,
         source_expr->token,

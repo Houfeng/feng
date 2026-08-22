@@ -1,0 +1,342 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_intersection_static_method_value;
+
+/** Local generic parent reached through an object-form intersection leaf. */
+spec MV07RootFactory<T> {
+  /** Transform one value through the fixed generic parent slot. */
+  static func inherited(value: T): T;
+
+  /** Declare one requirement repeated equivalently by two child leaves. */
+  static func duplicate(value: T): T;
+}
+
+/** Local numeric leaf with direct, overloaded and equivalent requirements. */
+spec MV07NumberFactory: MV07RootFactory<i32> {
+  /** Create one implementation-specific integer. */
+  static func create(seed: i32): i32;
+
+  /** Select the numeric overload. */
+  static func select(value: i32): i32;
+
+  /** Repeat the fixed parent requirement with its closed signature. */
+  static func duplicate(value: i32): i32;
+}
+
+/** Local text leaf contributing the second overload. */
+spec MV07TextFactory {
+  /** Return one implementation-specific label. */
+  static func label(): string;
+
+  /** Select the text overload. */
+  static func select(value: string): string;
+
+  /** Repeat the same logical integer requirement on another leaf. */
+  static func duplicate(value: i32): i32;
+}
+
+/** First local intersection layer. */
+spec MV07CombinedFactory: MV07NumberFactory & MV07TextFactory;
+
+/** Local leaf reached through the outer intersection layer. */
+spec MV07ExtraFactory {
+  /** Transform one value through the nested leaf slot. */
+  static func extra(value: i32): i32;
+}
+
+/** Complete local MV07 constraint surface. */
+spec MV07NestedFactory: MV07CombinedFactory & MV07ExtraFactory;
+
+/** Local integer callable target. */
+spec MV07IntMapper(value: i32): i32;
+
+/** Local string callable target. */
+spec MV07StringMapper(value: string): string;
+
+/** Local zero-argument string callable target. */
+spec MV07StringSupplier(): string;
+
+/** First local implementation with distinct static results. */
+type MV07FirstFactory: MV07NumberFactory, MV07TextFactory, MV07ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 100;
+  }
+
+  /** Implement the direct numeric requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 1;
+  }
+
+  /** Implement the numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 10;
+  }
+
+  /** Implement the text label requirement. */
+  static func label(): string {
+    return "first";
+  }
+
+  /** Implement the text overload. */
+  static func select(value: string): string {
+    return value + ":first";
+  }
+
+  /** Implement the logically deduplicated requirement. */
+  static func duplicate(value: i32): i32 {
+    return value + 20;
+  }
+
+  /** Implement the outer nested requirement. */
+  static func extra(value: i32): i32 {
+    return value + 1000;
+  }
+}
+
+/** Second local implementation proving the callable is closed per T. */
+type MV07SecondFactory: MV07NumberFactory, MV07TextFactory, MV07ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 200;
+  }
+
+  /** Implement the direct numeric requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 2;
+  }
+
+  /** Implement the numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 20;
+  }
+
+  /** Implement the text label requirement. */
+  static func label(): string {
+    return "second";
+  }
+
+  /** Implement the text overload. */
+  static func select(value: string): string {
+    return value + ":second";
+  }
+
+  /** Implement the logically deduplicated requirement. */
+  static func duplicate(value: i32): i32 {
+    return value + 40;
+  }
+
+  /** Implement the outer nested requirement. */
+  static func extra(value: i32): i32 {
+    return value + 2000;
+  }
+}
+
+/** Form the direct requirement in a local shared generic body. */
+func bindMV07Create<T: MV07NestedFactory>(): MV07IntMapper {
+  return T.create;
+}
+
+/** Form the fixed generic parent requirement in local shared code. */
+func bindMV07Inherited<T: MV07NestedFactory>(): MV07IntMapper {
+  return T.inherited;
+}
+
+/** Form the numeric overload in local shared code. */
+func bindMV07NumberSelect<T: MV07NestedFactory>(): MV07IntMapper {
+  return T.select;
+}
+
+/** Form the text overload in local shared code. */
+func bindMV07TextSelect<T: MV07NestedFactory>(): MV07StringMapper {
+  return T.select;
+}
+
+/** Form the label requirement in local shared code. */
+func bindMV07Label<T: MV07NestedFactory>(): MV07StringSupplier {
+  return T.label;
+}
+
+/** Form the equivalent merged requirement in local shared code. */
+func bindMV07Duplicate<T: MV07NestedFactory>(): MV07IntMapper {
+  return T.duplicate;
+}
+
+/** Form the nested outer requirement through an explicit conversion. */
+func castMV07Extra<T: MV07NestedFactory>(): MV07IntMapper {
+  return (MV07IntMapper)T.extra;
+}
+
+/** Invoke one integer method value supplied in parameter position. */
+func applyMV07Mapper(mapper: MV07IntMapper, value: i32): i32 {
+  return mapper(value);
+}
+
+/** Form the direct requirement directly in parameter position. */
+func applyMV07Create<T: MV07NestedFactory>(value: i32): i32 {
+  return applyMV07Mapper(T.create, value);
+}
+
+/** Preserve the IC01 direct-call path beside its method-value counterpart. */
+func callMV07Create<T: MV07NestedFactory>(value: i32): i32 {
+  return T.create(value);
+}
+
+/** Friend-only leaf used to verify authorization at the formation point. */
+spec MV07HiddenFactory {
+  /** Expose a static requirement only to the designated reader. */
+  @friend(MV07SecretReader)
+  seal static func secret(value: i32): i32;
+}
+
+/** Public companion leaf used to form an intersection constraint. */
+spec MV07VisibleFactory {
+  /** Return one visible marker. */
+  static func visible(): i32;
+}
+
+/** Intersection containing the friend-only leaf. */
+spec MV07SecretCombined: MV07HiddenFactory & MV07VisibleFactory;
+
+/** Concrete implementation of both secret intersection leaves. */
+type MV07SecretValue: MV07HiddenFactory, MV07VisibleFactory {
+  /** Implement the friend-only static requirement. */
+  static func secret(value: i32): i32 {
+    return value + 7;
+  }
+
+  /** Implement the visible companion requirement. */
+  static func visible(): i32 {
+    return 1;
+  }
+}
+
+/** Designated friend allowed to form the seal static method value. */
+type MV07SecretReader {
+  /** Form the authorized requirement through an intersection constraint. */
+  static func bind<T: MV07SecretCombined>(): MV07IntMapper {
+    return T.secret;
+  }
+}
+
+/** Consumer-owned implementation closing imported provider generic bodies. */
+type LibMV07ConsumerFactory:
+  LibMV07NumberFactory, LibMV07TextFactory, LibMV07ExtraFactory {
+  /** Implement the imported fixed generic parent requirement. */
+  static func inherited(value: i32): i32 {
+    return value + 2000;
+  }
+
+  /** Implement the imported direct numeric requirement. */
+  static func create(seed: i32): i32 {
+    return seed + 200;
+  }
+
+  /** Implement the imported numeric overload. */
+  static func select(value: i32): i32 {
+    return value + 210;
+  }
+
+  /** Implement the imported text label requirement. */
+  static func label(): string {
+    return "consumer";
+  }
+
+  /** Implement the imported text overload. */
+  static func select(value: string): string {
+    return value + ":consumer";
+  }
+
+  /** Implement the imported equivalent requirement. */
+  static func duplicate(value: i32): i32 {
+    return value + 220;
+  }
+
+  /** Implement the imported nested outer requirement. */
+  static func extra(value: i32): i32 {
+    return value + 230;
+  }
+}
+
+/** MV07 intersection-constrained static method-value conformance coverage. */
+open func test_intersection_static_method_value(): void {
+  describe("intersection-constrained static method values", () {
+    test("binds direct parent and nested requirements per closed T", () {
+      let firstCreate = bindMV07Create<MV07FirstFactory>();
+      let secondCreate = bindMV07Create<MV07SecondFactory>();
+      let firstInherited = bindMV07Inherited<MV07FirstFactory>();
+      let secondInherited = bindMV07Inherited<MV07SecondFactory>();
+      let firstExtra = castMV07Extra<MV07FirstFactory>();
+      let secondExtra = castMV07Extra<MV07SecondFactory>();
+
+      assert(firstCreate(10) == 11 && secondCreate(10) == 12,
+             "direct requirement binds each closed static witness");
+      assert(firstInherited(1) == 101 && secondInherited(1) == 201,
+             "fixed generic parent retains its declaring slot");
+      assert(firstExtra(1) == 1001 && secondExtra(1) == 2001,
+             "nested requirement binds the outer merged slot");
+    });
+
+    test("selects overloads and deduplicates equivalent requirements", () {
+      let firstNumber = bindMV07NumberSelect<MV07FirstFactory>();
+      let secondNumber = bindMV07NumberSelect<MV07SecondFactory>();
+      let firstText = bindMV07TextSelect<MV07FirstFactory>();
+      let secondText = bindMV07TextSelect<MV07SecondFactory>();
+      let firstLabel = bindMV07Label<MV07FirstFactory>();
+      let secondLabel = bindMV07Label<MV07SecondFactory>();
+      let firstDuplicate = bindMV07Duplicate<MV07FirstFactory>();
+      let secondDuplicate = bindMV07Duplicate<MV07SecondFactory>();
+
+      assert(firstNumber(1) == 11 && secondNumber(1) == 21,
+             "callable target selects the numeric overload");
+      assert(firstText("value") == "value:first" &&
+             secondText("value") == "value:second",
+             "callable target selects the text overload");
+      assert(firstLabel() == "first" && secondLabel() == "second",
+             "zero-argument static method values retain their slots");
+      assert(firstDuplicate(1) == 21 && secondDuplicate(1) == 41,
+             "equivalent requirements converge on one logical method");
+    });
+
+    test("supports target positions authorization and unchanged direct calls", () {
+      let secret = MV07SecretReader.bind<MV07SecretValue>();
+      assert(applyMV07Create<MV07FirstFactory>(30) == 31,
+             "parameter position supplies the callable target");
+      assert(callMV07Create<MV07SecondFactory>(30) == 32,
+             "direct constrained call behavior remains unchanged");
+      assert(secret(30) == 37,
+             "friend context authorizes the seal requirement formation");
+    });
+
+    test("restores provider bodies for provider and consumer-owned types", () {
+      let providerCreate =
+        bindLibMV07Create<LibMV07ProviderFactory>();
+      let consumerCreate =
+        bindLibMV07Create<LibMV07ConsumerFactory>();
+      let providerInherited =
+        bindLibMV07Inherited<LibMV07ProviderFactory>();
+      let consumerInherited =
+        bindLibMV07Inherited<LibMV07ConsumerFactory>();
+      let providerNumber =
+        bindLibMV07NumberSelect<LibMV07ProviderFactory>();
+      let consumerText =
+        bindLibMV07TextSelect<LibMV07ConsumerFactory>();
+      let providerDuplicate =
+        bindLibMV07Duplicate<LibMV07ProviderFactory>();
+      let consumerExtra =
+        bindLibMV07Extra<LibMV07ConsumerFactory>();
+
+      assert(providerCreate(10) == 110 && consumerCreate(10) == 210,
+             "imported direct requirement closes per consumer T");
+      assert(providerInherited(1) == 1001 &&
+             consumerInherited(1) == 2001,
+             "imported generic parent retains its exact source identity");
+      assert(providerNumber(1) == 111 &&
+             consumerText("value") == "value:consumer",
+             "imported overloads retain their separate merged slots");
+      assert(providerDuplicate(1) == 121 && consumerExtra(1) == 231,
+             "imported equivalent and nested requirements remain stable");
+    });
+  });
+}

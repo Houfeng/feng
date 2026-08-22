@@ -217,9 +217,11 @@ type Stream: ReadWrite {}
 - object-form `spec` 作为泛型约束时，`value: T` 的实例方法引用使用同一 requirement
   选择规则，但形成点绑定的是保持 `T` 值模型的 receiver，而不是 object-form `spec`
   值。闭合 `T` 的引用和值语义分别按语言既有的引用保留和值复制规则处理。
-- object-form `spec` 作为泛型约束时，类型参数静态方法引用 `T.method` 使用同一
-  `T.method(args)` 直接调用的 requirement 选择规则。形成点不绑定 receiver 或 subject；
-  最终闭合点把该 requirement 固定到闭合 `T` descriptor 的既有 witness 槽。
+- object-form 或 intersection-form `spec` 作为泛型约束时，类型参数静态方法引用
+  `T.method` 使用同一 `T.method(args)` 直接调用的 requirement 选择规则。intersection-form
+  约束从展平、去重后的成员面保留 requirement 的原声明 object-form `spec`。形成点不绑定
+  receiver 或 subject；最终闭合点把该 requirement 固定到闭合 `T` descriptor 的既有普通
+  或 merged witness 槽。
 - requirement 与实现成员的可见性兼容规则如下；省略修饰的 `type` 成员按
   其既有公开语义处理：
 
@@ -371,9 +373,10 @@ type Stream: ReadWrite {}
 - [必须] intersection-form `spec` 约束下的泛型值实例方法引用必须复用该约束展平、去重
   后的合并成员面、访问过滤、签名替换和 merged witness 槽；receiver 必须保持完整 `T`
   值语义，并保留 requirement 的原声明 object-form `spec`，不得先形成或拆分 spec 值。
-- [必须] object-form `spec` 约束下的类型参数静态方法引用必须复用对应静态直接调用的
-  成员闭包、访问过滤、签名替换和 requirement 槽；形成值时不得引入 receiver、subject
-  或运行时成员选择。
+- [必须] object-form 或 intersection-form `spec` 约束下的类型参数静态方法引用必须复用
+  对应静态直接调用的完整 requirement surface、访问过滤、签名替换和普通或 merged
+  witness 槽；intersection-form 必须保留 requirement 原声明及精确 owner 约束实例，形成
+  值时不得引入 receiver、subject 或运行时成员选择。
 - [必须] intersection-form `spec` 约束下的类型参数静态方法直接调用必须从约束实例出发，
   递归经过 intersection member 与 object parent 类型边，使用每条边替换后的精确
   requirement 签名执行访问过滤与重载选择；语义等价 requirement 必须去重，非等价同名
@@ -431,9 +434,10 @@ type Stream: ReadWrite {}
 - 对受 intersection-form `spec` 约束的泛型 receiver，编译器还必须把 merged witness、
   原声明 requirement 与完整 receiver 类型事实分别保留到最终闭合点；不得重新构造
   object-form 视角、按名称查询成员或通过运行时满足关系查询恢复任一事实。
-- 对受 object-form `spec` 约束的类型参数静态方法值，编译器必须把原声明 requirement、
-  caller 视角的 `T` 和目标 callable-form `spec` 保留到最终闭合点；不得把来源降格为
-  type/fit 静态成员或按名称重新查询。
+- 对受 object-form 或 intersection-form `spec` 约束的类型参数静态方法值，编译器必须把
+  静态直接调用已经选定的原声明 requirement、精确 owner 约束实例、caller 视角的 `T`
+  和目标 callable-form `spec` 保留到最终闭合点；不得把来源降格为 type/fit 静态成员、
+  按名称重新查询或重新遍历 intersection 成员。
 - 编译器必须在 Parser 阶段接受 object-form `spec` 体内的 `static let` / `static var` / `static func` 声明,并在语义阶段以与 `type` 静态成员一致的规则对签名、可见性、`~` 前缀做检查。
 - 编译器必须检查并拒绝 `spec` 循环声明满足关系。
 - 编译器必须检查并拒绝“同名同参数顺序但返回值不一致”的多 `spec` 方法冲突。
@@ -478,8 +482,9 @@ type Stream: ReadWrite {}
 - 受 intersection-form `spec` 约束的泛型 receiver 所形成的方法值只保存按闭合 `T` 复制
   或保留的 receiver，并使用已闭合 merged witness 的精确 requirement 槽；不得增加
   spec box、第二个 receiver 分配、成员面拆分或每次调用查找。
-- 受 object-form `spec` 约束的类型参数静态方法值按闭合 `T` 使用编译期固定的 callable
-  singleton；形成与调用均不得增加 closure 分配、运行时成员查找或候选回退。
+- 受 object-form 或 intersection-form `spec` 约束的类型参数静态方法值按闭合 `T` 使用
+  编译期固定的 callable singleton；形成与调用均不得增加 closure 分配、运行时成员查找、
+  intersection 拆分或候选回退。
 - 受 intersection-form `spec` 约束的类型参数静态方法直接调用只进入闭合 `T` 的既有
   merged witness 槽；不得传递 receiver/subject，也不得增加运行时成员查找、满足关系
   查询、签名比较、候选回退、分配或额外 descriptor 字段。

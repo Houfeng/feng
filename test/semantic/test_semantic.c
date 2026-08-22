@@ -25019,6 +25019,240 @@ static void test_constrained_generic_spec_static_method_values(void) {
     feng_program_free(program);
 }
 
+/* MV07: a T: IntersectionSpec static method value consumes the same exact
+ * flattened requirement surface as IC01 while preserving MV04's receiver-free
+ * callable dependency. Direct, parent, nested and overloaded requirements all
+ * retain their declaring object spec and the caller-view owner T. */
+static void test_intersection_constrained_static_method_values_record_surface(void) {
+    const char *source =
+        "module demo.intersection_static_method_value.surface;\n"
+        "spec RootFactory<X> {\n"
+        "  static func inherited(value: X): X;\n"
+        "  static func duplicate(value: X): X;\n"
+        "}\n"
+        "spec NumberFactory: RootFactory<int> {\n"
+        "  static func create(seed: int): int;\n"
+        "  static func select(value: int): int;\n"
+        "  static func duplicate(value: int): int;\n"
+        "}\n"
+        "spec TextFactory {\n"
+        "  static func label(): string;\n"
+        "  static func select(value: string): string;\n"
+        "  static func duplicate(value: int): int;\n"
+        "}\n"
+        "spec CombinedFactory: NumberFactory & TextFactory;\n"
+        "spec ExtraFactory { static func extra(value: int): int; }\n"
+        "spec NestedFactory: CombinedFactory & ExtraFactory;\n"
+        "spec IntMapper(value: int): int;\n"
+        "spec StringMapper(value: string): string;\n"
+        "spec StringSupplier(): string;\n"
+        "func accept(supplier: StringSupplier): StringSupplier {\n"
+        "  return supplier;\n"
+        "}\n"
+        "func exercise<T: NestedFactory>(): StringSupplier {\n"
+        "  let create: IntMapper = T.create;\n"
+        "  let inherited: IntMapper = T.inherited;\n"
+        "  let extra = (IntMapper)T.extra;\n"
+        "  let number: IntMapper = T.select;\n"
+        "  let text: StringMapper = T.select;\n"
+        "  let duplicate: IntMapper = T.duplicate;\n"
+        "  return accept(T.label);\n"
+        "}\n";
+    static const struct {
+        const char *owner_name;
+        const char *member_name;
+        size_t member_ordinal;
+        const char *target_name;
+    } cases[] = {
+        {"NumberFactory", "create", 0U, "IntMapper"},
+        {"RootFactory", "inherited", 0U, "IntMapper"},
+        {"ExtraFactory", "extra", 0U, "IntMapper"},
+        {"NumberFactory", "select", 0U, "IntMapper"},
+        {"TextFactory", "select", 0U, "StringMapper"},
+        {"NumberFactory", "duplicate", 0U, "IntMapper"},
+        {"TextFactory", "label", 0U, "StringSupplier"}
+    };
+    FengProgram *program = parse_program_or_die(
+        "intersection_constrained_static_method_value_surface.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *exercise;
+    const FengExpr *sites[7];
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    exercise = find_function_decl_in_program(program, "exercise");
+    ASSERT(exercise != NULL);
+    for (size_t index = 0U; index < 6U; ++index) {
+        sites[index] = nth_let_initializer(
+            &exercise->as.function_decl, index);
+        ASSERT(sites[index] != NULL);
+    }
+    ASSERT(sites[2]->kind == FENG_EXPR_CAST);
+    sites[2] = sites[2]->as.cast.value;
+    ASSERT(exercise->as.function_decl.body->statement_count == 7U);
+    ASSERT(exercise->as.function_decl.body->statements[6]->kind ==
+           FENG_STMT_RETURN);
+    sites[6] = exercise->as.function_decl.body->statements[6]
+                   ->as.return_value;
+    ASSERT(sites[6] != NULL && sites[6]->kind == FENG_EXPR_CALL);
+    ASSERT(sites[6]->as.call.arg_count == 1U);
+    sites[6] = sites[6]->as.call.args[0];
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        const FengDecl *owner = find_spec_decl_by_name(
+            analysis, cases[index].owner_name);
+        const FengDecl *target = find_spec_decl_by_name(
+            analysis, cases[index].target_name);
+        const FengTypeMember *member =
+            find_object_spec_static_method_named_at(
+                owner,
+                cases[index].member_name,
+                cases[index].member_ordinal);
+        const FengSpecCoercionSite *site =
+            feng_semantic_lookup_spec_coercion_site(
+                analysis, sites[index]);
+
+        ASSERT(owner != NULL && target != NULL && member != NULL);
+        ASSERT(site != NULL);
+        ASSERT(site->form == FENG_SPEC_COERCION_FORM_CALLABLE);
+        ASSERT(site->callable_source ==
+               FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE);
+        ASSERT(site->target_spec_decl == target);
+        ASSERT(site->callable_member == member);
+        ASSERT(site->callable_owner_type_decl == owner);
+        ASSERT(site->callable_fit_decl == NULL);
+        ASSERT(site->callable_type_arg_count == 0U);
+        ASSERT(spec_upcast_type_ref_leaf_is(
+            site->callable_receiver_type_ref, "T"));
+    }
+
+    {
+        const FengReifiableDepSet *dep_set =
+            feng_semantic_lookup_reifiable_dep_set(analysis, exercise);
+
+        ASSERT(dep_set != NULL);
+        ASSERT(dep_set->callable_dep_count == 7U);
+        for (size_t index = 0U;
+             index < dep_set->callable_dep_count;
+             ++index) {
+            const FengReifiableCallableDep *dependency =
+                &dep_set->callable_deps[index];
+
+            ASSERT(dependency->purpose ==
+                   FENG_REIFIABLE_CALLABLE_DEP_CALLABLE_VALUE);
+            ASSERT(dependency->kind ==
+                   FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD);
+            ASSERT(dependency->owner_type_decl != NULL);
+            ASSERT(dependency->owner_type_decl->kind == FENG_DECL_SPEC);
+            ASSERT(dependency->member != NULL);
+            ASSERT(dependency->member->is_static);
+            ASSERT(dependency->fit_decl == NULL);
+            ASSERT(spec_upcast_type_ref_leaf_is(
+                dependency->owner_instance_type_ref, "T"));
+        }
+    }
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* MV07 applies the declaring object spec's seal authorization after traversing
+ * an intersection constraint, exactly as IC01 and MV04 do. */
+static void test_intersection_constrained_static_method_values_allow_authorized_seal(void) {
+    const char *source =
+        "module demo.intersection_static_method_value.authorized;\n"
+        "spec HiddenFactory {\n"
+        "  @friend(Reader) seal static func secret(value: int): int;\n"
+        "}\n"
+        "spec VisibleFactory { static func visible(): int; }\n"
+        "spec BothFactory: HiddenFactory & VisibleFactory;\n"
+        "spec Mapper(value: int): int;\n"
+        "type Reader {\n"
+        "  static func bind<T: BothFactory>(): Mapper {\n"
+        "    return T.secret;\n"
+        "  }\n"
+        "}\n";
+
+    assert_single_source_semantic_ok(
+        "intersection_static_method_value_authorized_seal.ff", source);
+}
+
+/* MV07 keeps the common callable-value diagnostics after the intersection
+ * surface is enabled: missing target, signature mismatch and unauthorized
+ * seal access all fail before code generation. Equivalent requirements are
+ * covered by the positive surface test and must not create false ambiguity. */
+static void test_intersection_constrained_static_method_values_reject_invalid_sources(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+    } cases[] = {
+        {
+            "intersection_static_method_value_without_target.ff",
+            "module demo.intersection_static_method_value.no_target;\n"
+            "spec Factory { static func create(seed: int): int; }\n"
+            "spec Tagged { static func tag(): string; }\n"
+            "spec Both: Factory & Tagged;\n"
+            "func bad<T: Both>(): void { let creator = T.create; }\n",
+            "AE0523"
+        },
+        {
+            "intersection_static_method_value_mismatch.ff",
+            "module demo.intersection_static_method_value.mismatch;\n"
+            "spec Factory { static func create(seed: int): int; }\n"
+            "spec Tagged { static func tag(): string; }\n"
+            "spec Both: Factory & Tagged;\n"
+            "spec Wrong(flag: bool): int;\n"
+            "func bad<T: Both>(): Wrong { return T.create; }\n",
+            "AE0522"
+        },
+        {
+            "intersection_static_method_value_seal_access.ff",
+            "module demo.intersection_static_method_value.seal_access;\n"
+            "spec HiddenFactory {\n"
+            "  @friend(Reader) seal static func secret(value: int): int;\n"
+            "}\n"
+            "spec VisibleFactory { static func visible(): int; }\n"
+            "spec BothFactory: HiddenFactory & VisibleFactory;\n"
+            "spec Mapper(value: int): int;\n"
+            "type Reader {}\n"
+            "func bad<T: BothFactory>(): Mapper { return T.secret; }\n",
+            "AE0708"
+        }
+    };
+
+    for (size_t case_index = 0U;
+         case_index < sizeof(cases) / sizeof(cases[0]);
+         ++case_index) {
+        FengProgram *program = parse_program_or_die(
+            cases[case_index].path, cases[case_index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(
+                   errors,
+                   error_count,
+                   cases[case_index].expected_code) == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* A builtin fit can satisfy a static object-spec requirement. Closing either
  * a direct T.method() call or the corresponding method value must cache the
  * fit's static member in the same semantic witness slot. */
@@ -26957,6 +27191,9 @@ int main(void) {
     test_intersection_static_constraint_materializes_leaf_witnesses();
     test_concrete_enum_array_fit_is_not_reifiable_generic();
     test_constrained_generic_spec_static_method_values();
+    test_intersection_constrained_static_method_values_record_surface();
+    test_intersection_constrained_static_method_values_allow_authorized_seal();
+    test_intersection_constrained_static_method_values_reject_invalid_sources();
     test_builtin_fit_static_spec_witness();
     test_array_fit_static_spec_witness();
     test_constrained_generic_spec_static_method_values_reject_invalid_sources();

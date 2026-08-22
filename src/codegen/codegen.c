@@ -7280,7 +7280,8 @@ static bool cg_ensure_callable_spec_static_method_value(
         owner_descriptor_expr == NULL || descriptor_c_name == NULL ||
         out_var == NULL || out_adapter == NULL ||
         target_spec->form != FENG_SPEC_FORM_CALLABLE ||
-        receiver_spec->form != FENG_SPEC_FORM_OBJECT ||
+        (receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
+         receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
         method->kind != USM_KIND_METHOD || !method->is_static ||
         target_spec->callable_param_count != method->param_count) {
         return cg_fail(
@@ -16455,9 +16456,6 @@ static bool cg_emit_default_spec_method_thunk(CG *cg,
                                            spec->decl->token);
 }
 
-/* Emit W(DefaultSubject(root), target). Parent views reuse root's default
- * member thunks so every projection keeps the same hidden subject storage.
- * The (root,target) cache makes a diamond converge on one ancestor witness. */
 /* Compare the exact default-witness identity of two registered spec views.
  * Generic object specs share one canonical witness struct ABI across closed
  * instances, so the struct name alone is intentionally insufficient here. */
@@ -16473,6 +16471,184 @@ static bool cg_spec_default_witness_identity_equal(const UserSpec *left,
                   right->c_default_witness_name) == 0;
 }
 
+/* Return whether two semantically compatible method slots use the same
+ * lowered function-pointer ABI. A closed child requirement may be direct
+ * while its generic parent slot remains address-form. */
+static bool cg_spec_method_slot_abi_equal(
+    const UserSpecMember *left,
+    const UserSpecMember *right) {
+    if (left == NULL || right == NULL || left->kind != USM_KIND_METHOD ||
+        right->kind != USM_KIND_METHOD ||
+        left->is_static != right->is_static ||
+        left->param_count != right->param_count ||
+        left->value_abi_kind != right->value_abi_kind) {
+        return false;
+    }
+    for (size_t index = 0U; index < left->param_count; ++index) {
+        if (left->param_abi_kinds[index] !=
+            right->param_abi_kinds[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Emit one allocation-free bridge from a parent projection's target slot ABI
+ * to the root default witness thunk. The bridge is needed only when generic
+ * erasure makes two semantically equal requirements use different lowered
+ * ABIs; it preserves the existing witness layout and slot identity. */
+static bool cg_emit_default_parent_method_bridge(
+    CG *cg,
+    Buf *out,
+    const UserSpec *root,
+    const UserSpecMember *root_member,
+    const UserSpecMember *target_member,
+    const char *bridge_prefix,
+    FengToken blame) {
+    bool has_signature_parameter = false;
+    bool has_call_argument = false;
+    bool target_returns_value;
+
+    if (cg == NULL || out == NULL || root == NULL || root_member == NULL ||
+        target_member == NULL || bridge_prefix == NULL ||
+        root_member->kind != USM_KIND_METHOD ||
+        target_member->kind != USM_KIND_METHOD ||
+        root_member->is_static != target_member->is_static ||
+        root_member->param_count != target_member->param_count) {
+        return false;
+    }
+    target_returns_value = target_member->type != NULL &&
+                           target_member->type->kind != CG_TYPE_VOID;
+
+    buf_append_cstr(out, "static ");
+    cg_emit_callable_abi_return_type(out,
+                                     target_member->type,
+                                     target_member->value_abi_kind);
+    buf_append_fmt(out,
+                   " %s__%s(",
+                   bridge_prefix,
+                   target_member->c_field_name);
+    if (!target_member->is_static) {
+        buf_append_cstr(out, "void *_subject");
+        has_signature_parameter = true;
+    }
+    for (size_t index = 0U;
+         index < target_member->param_count;
+         ++index) {
+        if (has_signature_parameter) {
+            buf_append_cstr(out, ", ");
+        }
+        cg_emit_callable_abi_param_type(out,
+                                        target_member->param_types[index],
+                                        target_member->param_abi_kinds[index]);
+        buf_append_fmt(out, " _p%zu", index);
+        has_signature_parameter = true;
+    }
+    if (target_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (has_signature_parameter) {
+            buf_append_cstr(out, ", ");
+        }
+        buf_append_cstr(out, "void *_out");
+        has_signature_parameter = true;
+    }
+    if (!has_signature_parameter) {
+        buf_append_cstr(out, "void");
+    }
+    buf_append_cstr(out, ") {\n");
+
+    if (target_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS &&
+        root_member->value_abi_kind != CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(out, "    *(");
+        cg_emit_c_type(out, target_member->type);
+        buf_append_cstr(out, " *)_out = ");
+        if (root_member->value_abi_kind ==
+            CG_CALLABLE_ABI_ERASED_POINTER) {
+            buf_append_cstr(out, "(");
+            cg_emit_c_type(out, target_member->type);
+            buf_append_cstr(out, ")");
+        }
+    } else if (target_member->value_abi_kind !=
+                   CG_CALLABLE_ABI_ADDRESS &&
+               root_member->value_abi_kind ==
+                   CG_CALLABLE_ABI_ADDRESS) {
+        buf_append_cstr(out, "    ");
+        cg_emit_c_type(out, target_member->type);
+        buf_append_cstr(out, " _result;\n    ");
+    } else if (target_returns_value) {
+        buf_append_cstr(out, "    return ");
+        if (target_member->value_abi_kind ==
+                CG_CALLABLE_ABI_ERASED_POINTER &&
+            root_member->value_abi_kind !=
+                CG_CALLABLE_ABI_ERASED_POINTER) {
+            buf_append_cstr(out, "(void *)");
+        } else if (target_member->value_abi_kind !=
+                       CG_CALLABLE_ABI_ERASED_POINTER &&
+                   root_member->value_abi_kind ==
+                       CG_CALLABLE_ABI_ERASED_POINTER) {
+            buf_append_cstr(out, "(");
+            cg_emit_c_type(out, target_member->type);
+            buf_append_cstr(out, ")");
+        }
+    } else {
+        buf_append_cstr(out, "    ");
+    }
+
+    buf_append_fmt(out,
+                   "%s__%s(",
+                   root->c_default_witness_name,
+                   root_member->c_field_name);
+    if (!root_member->is_static) {
+        buf_append_cstr(out, "_subject");
+        has_call_argument = true;
+    }
+    for (size_t index = 0U;
+         index < root_member->param_count;
+         ++index) {
+        char argument_name[32];
+
+        (void)snprintf(argument_name,
+                       sizeof argument_name,
+                       "_p%zu",
+                       index);
+        if (has_call_argument) {
+            buf_append_cstr(out, ", ");
+        }
+        cg_append_callable_abi_bridge_argument(
+            out,
+            root_member->param_types[index],
+            target_member->param_abi_kinds[index],
+            root_member->param_abi_kinds[index],
+            argument_name);
+        has_call_argument = true;
+    }
+    if (root_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (has_call_argument) {
+            buf_append_cstr(out, ", ");
+        }
+        buf_append_cstr(
+            out,
+            target_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS
+                ? "_out"
+                : "&_result");
+    }
+    buf_append_cstr(out, ");\n");
+    if (target_member->value_abi_kind != CG_CALLABLE_ABI_ADDRESS &&
+        root_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
+        if (target_member->value_abi_kind ==
+            CG_CALLABLE_ABI_ERASED_POINTER) {
+            buf_append_cstr(out, "    return (void *)_result;\n");
+        } else {
+            buf_append_cstr(out, "    return _result;\n");
+        }
+    }
+    buf_append_cstr(out, "}\n\n");
+    (void)blame;
+    return true;
+}
+
+/* Emit W(DefaultSubject(root), target). Parent views reuse root's default
+ * member thunks so every projection keeps the same hidden subject storage.
+ * The (root,target) cache makes a diamond converge on one ancestor witness. */
 static bool cg_ensure_default_parent_witness(CG *cg,
                                              const UserSpec *root,
                                              const UserSpec *target,
@@ -16536,10 +16712,6 @@ static bool cg_ensure_default_parent_witness(CG *cg,
         free(parent_witness_vars);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
-    buf_append_fmt(&cg->type_defs,
-                   "static const struct %s %s = {\n",
-                   target->c_witness_struct_name,
-                   var.data);
     for (size_t member_index = 0U;
          member_index < target->member_count;
          ++member_index) {
@@ -16553,9 +16725,44 @@ static bool cg_ensure_default_parent_witness(CG *cg,
             !cg_user_spec_member_compatible(root_member, target_member)) {
             free(parent_witness_vars);
             buf_free(&var);
-            return cg_fail(cg, blame,
-                           "CE0048", "codegen: default subject parent witness member mismatch");
+            return cg_fail(cg,
+                           blame,
+                           "CE0048",
+                           "codegen: default subject parent witness member mismatch");
         }
+        if (target_member->kind == USM_KIND_METHOD &&
+            !cg_spec_method_slot_abi_equal(root_member, target_member) &&
+            !cg_emit_default_parent_method_bridge(cg,
+                                                  &cg->type_defs,
+                                                  root,
+                                                  root_member,
+                                                  target_member,
+                                                  var.data,
+                                                  blame)) {
+            free(parent_witness_vars);
+            buf_free(&var);
+            if (!cg->failed) {
+                (void)cg_fail(cg,
+                              blame,
+                              "IE0002",
+                              "codegen: failed to bridge default parent method witness ABI");
+            }
+            return false;
+        }
+    }
+    buf_append_fmt(&cg->type_defs,
+                   "static const struct %s %s = {\n",
+                   target->c_witness_struct_name,
+                   var.data);
+    for (size_t member_index = 0U;
+         member_index < target->member_count;
+         ++member_index) {
+        const UserSpecMember *target_member = &target->members[member_index];
+        const UserSpecMember *root_member = cg_user_spec_member(
+            root,
+            target_member->feng_name,
+            strlen(target_member->feng_name));
+
         if (target_member->kind == USM_KIND_FIELD) {
             if (cg_spec_field_uses_storage_borrow(target_member)) {
                 buf_append_fmt(&cg->type_defs,
@@ -16578,11 +16785,20 @@ static bool cg_ensure_default_parent_witness(CG *cg,
                                root_member->c_field_name);
             }
         } else {
-            buf_append_fmt(&cg->type_defs,
-                           "    .%s = &%s__%s,\n",
-                           target_member->c_field_name,
-                           root->c_default_witness_name,
-                           root_member->c_field_name);
+            if (cg_spec_method_slot_abi_equal(root_member,
+                                              target_member)) {
+                buf_append_fmt(&cg->type_defs,
+                               "    .%s = &%s__%s,\n",
+                               target_member->c_field_name,
+                               root->c_default_witness_name,
+                               root_member->c_field_name);
+            } else {
+                buf_append_fmt(&cg->type_defs,
+                               "    .%s = &%s__%s,\n",
+                               target_member->c_field_name,
+                               var.data,
+                               target_member->c_field_name);
+            }
         }
     }
     for (size_t parent_index = 0U;
@@ -43487,9 +43703,9 @@ cleanup:
     return ok;
 }
 
-/* Resolve the exact object-form constraint, or the intersection-form
- * constraint of an instance method value, carried by a callable dependency
- * whose owner is one direct caller type parameter. */
+/* Resolve the exact object-form or intersection-form constraint carried by
+ * an instance or static callable dependency whose owner is one direct caller
+ * type parameter. */
 static const UserSpec *cg_closed_spec_method_constraint(
     CG *cg,
     const FengReifiableCallableDep *callable_dep,
@@ -43566,8 +43782,7 @@ static const UserSpec *cg_closed_spec_method_constraint(
     cg_type_ref_free(closed_constraint_ref);
     if (constraint_spec == NULL ||
         (constraint_spec->form != FENG_SPEC_FORM_OBJECT &&
-         (callable_dep->kind != FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
-          constraint_spec->form != FENG_SPEC_FORM_INTERSECTION)) ||
+         constraint_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
         !cg_ensure_user_spec_members_registered(cg, constraint_spec)) {
         cgtype_free(constraint_type);
         if (!cg->failed) {

@@ -1,0 +1,138 @@
+open module fcts_lib.test.lib_intersection_static_method_value;
+
+/** Imported generic parent reached through an object-form intersection leaf. */
+open spec LibMV07RootFactory<T> {
+  /** Transform one value through the fixed generic parent slot. */
+  static func inherited(value: T): T;
+
+  /** Declare one requirement repeated equivalently by two child leaves. */
+  static func duplicate(value: T): T;
+}
+
+/** Imported numeric leaf with direct, overloaded and equivalent requirements. */
+open spec LibMV07NumberFactory: LibMV07RootFactory<i32> {
+  /** Create one implementation-specific integer. */
+  static func create(seed: i32): i32;
+
+  /** Select the numeric overload. */
+  static func select(value: i32): i32;
+
+  /** Repeat the fixed parent requirement with its closed signature. */
+  static func duplicate(value: i32): i32;
+}
+
+/** Imported text leaf contributing the second overload. */
+open spec LibMV07TextFactory {
+  /** Return one implementation-specific label. */
+  static func label(): string;
+
+  /** Select the text overload. */
+  static func select(value: string): string;
+
+  /** Repeat the same logical integer requirement on another leaf. */
+  static func duplicate(value: i32): i32;
+}
+
+/** First imported intersection layer. */
+open spec LibMV07CombinedFactory:
+  LibMV07NumberFactory & LibMV07TextFactory;
+
+/** Imported leaf reached through the outer intersection layer. */
+open spec LibMV07ExtraFactory {
+  /** Transform one value through the nested leaf slot. */
+  static func extra(value: i32): i32;
+}
+
+/** Complete imported MV07 constraint surface. */
+open spec LibMV07NestedFactory:
+  LibMV07CombinedFactory & LibMV07ExtraFactory;
+
+/** Imported integer callable target. */
+open spec LibMV07IntMapper(value: i32): i32;
+
+/** Imported string callable target. */
+open spec LibMV07StringMapper(value: string): string;
+
+/** Imported zero-argument string callable target. */
+open spec LibMV07StringSupplier(): string;
+
+/** Provider-owned implementation used beside a consumer-owned implementation. */
+open type LibMV07ProviderFactory:
+  LibMV07NumberFactory, LibMV07TextFactory, LibMV07ExtraFactory {
+  /** Implement the fixed generic parent requirement. */
+  open static func inherited(value: i32): i32 {
+    return value + 1000;
+  }
+
+  /** Implement the direct numeric requirement. */
+  open static func create(seed: i32): i32 {
+    return seed + 100;
+  }
+
+  /** Implement the numeric overload. */
+  open static func select(value: i32): i32 {
+    return value + 110;
+  }
+
+  /** Implement the text label requirement. */
+  open static func label(): string {
+    return "provider";
+  }
+
+  /** Implement the text overload. */
+  open static func select(value: string): string {
+    return value + ":provider";
+  }
+
+  /** Implement the logically deduplicated requirement. */
+  open static func duplicate(value: i32): i32 {
+    return value + 120;
+  }
+
+  /** Implement the outer nested requirement. */
+  open static func extra(value: i32): i32 {
+    return value + 130;
+  }
+}
+
+/** Form the direct requirement in an imported shared generic body. */
+open func bindLibMV07Create<T: LibMV07NestedFactory>():
+  LibMV07IntMapper {
+  return T.create;
+}
+
+/** Form the fixed generic parent requirement in imported shared code. */
+open func bindLibMV07Inherited<T: LibMV07NestedFactory>():
+  LibMV07IntMapper {
+  return T.inherited;
+}
+
+/** Form the numeric overload in imported shared code. */
+open func bindLibMV07NumberSelect<T: LibMV07NestedFactory>():
+  LibMV07IntMapper {
+  return T.select;
+}
+
+/** Form the text overload in imported shared code. */
+open func bindLibMV07TextSelect<T: LibMV07NestedFactory>():
+  LibMV07StringMapper {
+  return T.select;
+}
+
+/** Form the provider label requirement in imported shared code. */
+open func bindLibMV07Label<T: LibMV07NestedFactory>():
+  LibMV07StringSupplier {
+  return T.label;
+}
+
+/** Form the equivalent merged requirement in imported shared code. */
+open func bindLibMV07Duplicate<T: LibMV07NestedFactory>():
+  LibMV07IntMapper {
+  return T.duplicate;
+}
+
+/** Form the nested outer requirement in imported shared code. */
+open func bindLibMV07Extra<T: LibMV07NestedFactory>():
+  LibMV07IntMapper {
+  return T.extra;
+}

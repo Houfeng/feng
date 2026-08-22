@@ -145,8 +145,9 @@
 
 `AE0521`、`AE0522` 与 `AE0523` 同样适用于 object-form/intersection-form `spec` 实例
 方法引用、受这两种 `spec` 约束的泛型值实例方法引用、`Type.method` 具体静态方法引用和
-`T: ObjectSpec` 的 `T.method` 静态 requirement 引用：分别表示目标 callable 下仍存在
-多个匹配来源、来源签名不匹配，以及缺少形成 callable value 所需的明确 callable-form
+`T: ObjectSpec` 或 `T: IntersectionSpec` 的 `T.method` 静态 requirement 引用：分别表示
+目标 callable 下仍存在多个匹配来源、来源签名不匹配，以及缺少形成 callable value
+所需的明确 callable-form
 `spec` 目标。泛型静态方法缺失显式方法类型实参继续使用既有显式泛型 target 诊断，不由
 目标 callable 反向推导。
 
