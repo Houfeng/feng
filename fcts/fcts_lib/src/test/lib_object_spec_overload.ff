@@ -1,0 +1,86 @@
+open module fcts_lib.test.lib_object_spec_overload;
+
+/** Generic parent contract used to verify closed parent requirements. */
+open spec LibObjectOverloadBase<T> {
+  func select(value: T): T;
+  static func create(value: T): T;
+}
+
+/** Child contract with equivalent integer requirements and string overloads. */
+open spec LibObjectOverloadChild: LibObjectOverloadBase<int> {
+  func select(value: int): int;
+  func select(value: string): string;
+  static func create(value: int): int;
+  static func create(value: string): string;
+}
+
+/** Second parent closes the same generic base with bool. */
+open spec LibObjectOverloadExtra: LibObjectOverloadBase<bool> {
+  func select(value: bool): bool;
+  static func create(value: bool): bool;
+}
+
+/** Imported multi-parent object-form overload surface. */
+open spec LibObjectOverloadCombined:
+  LibObjectOverloadChild, LibObjectOverloadExtra {}
+
+/** Imported integer callable target. */
+open spec LibObjectOverloadIntMapper(value: int): int;
+
+/** Imported string callable target. */
+open spec LibObjectOverloadStringMapper(value: string): string;
+
+/** Provider-owned implementation of every imported overload. */
+open type LibObjectOverloadValue: LibObjectOverloadCombined {
+  open let base: int;
+
+  open func select(value: int): int {
+    return self.base + value;
+  }
+
+  open func select(value: string): string {
+    return value + ":lib";
+  }
+
+  open func select(value: bool): bool {
+    return value;
+  }
+
+  open static func create(value: int): int {
+    return value + 10;
+  }
+
+  open static func create(value: string): string {
+    return value + ":lib-static";
+  }
+
+  open static func create(value: bool): bool {
+    return value;
+  }
+}
+
+/** Return the provider-owned implementation through the complete spec view. */
+open func makeLibObjectOverloadValue(base: int):
+  LibObjectOverloadCombined {
+  return LibObjectOverloadValue { base: base };
+}
+
+/** Form the imported string instance-method overload in the provider. */
+open func bindLibObjectOverloadText(
+  value: LibObjectOverloadCombined
+): LibObjectOverloadStringMapper {
+  return value.select;
+}
+
+/** Form an imported constrained static overload in the provider body. */
+open func bindLibObjectOverloadStaticText<T: LibObjectOverloadCombined>():
+  LibObjectOverloadStringMapper {
+  return T.create;
+}
+
+/** Call the imported constrained boolean static overload in the provider. */
+open func callLibObjectOverloadStaticBool<T: LibObjectOverloadCombined>(
+  value: bool
+): bool {
+  return T.create(value);
+}

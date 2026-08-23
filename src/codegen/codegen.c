@@ -904,6 +904,9 @@ typedef struct UserSpecMember {
     FengTypeRef *source_member_type_ref;
 } UserSpecMember;
 
+static bool cg_user_spec_member_compatible(const UserSpecMember *src,
+                                           const UserSpecMember *dst);
+
 /* Return whether one instance-field witness slot must preserve the identity
  * of the implementing field's storage. Fixed value-semantics aggregates need
  * this for mutating method receivers; ADDRESS is the stable declaration-side
@@ -13297,18 +13300,6 @@ static bool cg_user_spec_member_name_equals(const UserSpecMember *sm,
            memcmp(sm->feng_name, name, len) == 0;
 }
 
-static bool cg_user_spec_has_member_name(const UserSpec *s,
-                                         const char *name,
-                                         size_t len) {
-    if (s == NULL || name == NULL) return false;
-    for (size_t i = 0; i < s->member_count; ++i) {
-        if (cg_user_spec_member_name_equals(&s->members[i], name, len)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /* Compare the exact lowered identities used by intersection requirement
  * signatures. Unlike the broad assignment-oriented cg_types_equal helper,
  * this comparison preserves generic-parameter indices, nominal enum/spec/type
@@ -13446,31 +13437,6 @@ static UserSpecMember *cg_user_spec_equivalent_member(
     return NULL;
 }
 
-static const FengTypeMember *cg_find_own_spec_member_by_name(const FengDecl *decl,
-                                                             const char *name,
-                                                             size_t len) {
-    if (decl == NULL || decl->kind != FENG_DECL_SPEC ||
-        decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT || name == NULL) {
-        return NULL;
-    }
-    for (size_t i = 0; i < decl->as.spec_decl.as.object.member_count; ++i) {
-        const FengTypeMember *member = decl->as.spec_decl.as.object.members[i];
-
-        if (member == NULL) continue;
-        if (member->kind == FENG_TYPE_MEMBER_FIELD &&
-            member->as.field.name.length == len &&
-            memcmp(member->as.field.name.data, name, len) == 0) {
-            return member;
-        }
-        if (member->kind == FENG_TYPE_MEMBER_METHOD &&
-            member->as.callable.name.length == len &&
-            memcmp(member->as.callable.name.data, name, len) == 0) {
-            return member;
-        }
-    }
-    return NULL;
-}
-
 static bool cg_user_spec_append_member_slot(UserSpec *s, UserSpecMember **out_slot) {
     size_t count = s->member_count;
     UserSpecMember *grown = realloc(s->members, (count + 1U) * sizeof *s->members);
@@ -13520,9 +13486,6 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
                                                 const UserSpecMember *src) {
     UserSpecMember *dst = NULL;
     if (src == NULL || src->feng_name == NULL) return true;
-    if (cg_user_spec_has_member_name(s, src->feng_name, strlen(src->feng_name))) {
-        return true;
-    }
     if (!cg_user_spec_append_member_slot(s, &dst)) return false;
     dst->kind = src->kind;
     dst->type = cgtype_clone(src->type);
@@ -13552,7 +13515,7 @@ static bool cg_user_spec_clone_inherited_member(UserSpec *s,
             }
         }
     }
-    return true;
+    return cg_user_spec_member_append_aliases(dst, src);
 }
 
 /* Clone a member slot from an intersection's flattened member spec into the
@@ -13624,8 +13587,8 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
 }
 
 /* Return the first slot carrying one Feng member name. */
-static const UserSpecMember *cg_user_spec_named_member(
-    const UserSpec *spec,
+static UserSpecMember *cg_user_spec_named_member(
+    UserSpec *spec,
     const char *name) {
     if (spec == NULL || name == NULL) return NULL;
     for (size_t index = 0U; index < spec->member_count; ++index) {
@@ -13698,6 +13661,150 @@ static bool cg_user_spec_record_intersection_member(
         named->c_field_name);
 }
 
+/* Replace one equivalent parent slot with the exact child requirement while
+ * retaining the historical field name, slot position and every declaration
+ * alias. The child owns the slot ABI, matching the pre-existing object-spec
+ * replacement rule for a generic parent closed to a concrete child shape. */
+static bool cg_user_spec_replace_equivalent_member(
+    UserSpecMember *target,
+    const UserSpecMember *source) {
+    UserSpec temporary;
+    UserSpecMember replacement;
+    char *field_name;
+
+    if (target == NULL || source == NULL || source->member == NULL ||
+        target->c_field_name == NULL) {
+        return false;
+    }
+    memset(&temporary, 0, sizeof(temporary));
+    if (!cg_user_spec_clone_inherited_member(&temporary, source) ||
+        temporary.member_count != 1U) {
+        cg_user_spec_members_free(&temporary);
+        return false;
+    }
+    replacement = temporary.members[0];
+    free(temporary.members);
+    field_name = strdup(target->c_field_name);
+    if (field_name == NULL) {
+        cg_user_spec_member_free(&replacement);
+        return false;
+    }
+    free(replacement.c_field_name);
+    replacement.c_field_name = field_name;
+    if (!cg_user_spec_member_append_aliases(&replacement, target)) {
+        cg_user_spec_member_free(&replacement);
+        return false;
+    }
+    cg_user_spec_member_free(target);
+    *target = replacement;
+    return true;
+}
+
+/* Preserve the historical name-based replacement behavior for non-method
+ * member collisions that are outside the method-overload surface repaired by
+ * this change. The destination slot position and C field name remain stable. */
+static bool cg_user_spec_replace_non_method_slot(
+    UserSpecMember *target,
+    const UserSpecMember *source) {
+    UserSpec temporary;
+    UserSpecMember replacement;
+    char *field_name;
+
+    if (target == NULL || source == NULL || target->c_field_name == NULL) {
+        return false;
+    }
+    memset(&temporary, 0, sizeof(temporary));
+    if (!cg_user_spec_clone_inherited_member(&temporary, source) ||
+        temporary.member_count != 1U) {
+        cg_user_spec_members_free(&temporary);
+        return false;
+    }
+    replacement = temporary.members[0];
+    free(temporary.members);
+    field_name = strdup(target->c_field_name);
+    if (field_name == NULL) {
+        cg_user_spec_member_free(&replacement);
+        return false;
+    }
+    free(replacement.c_field_name);
+    replacement.c_field_name = field_name;
+    cg_user_spec_member_free(target);
+    *target = replacement;
+    return true;
+}
+
+/* Stage one legal object-spec method overload from the historical primary
+ * slot's base C field name. Parent slots may already carry an overload suffix;
+ * that suffix is local to the parent layout and must not be nested in the
+ * child layout's deterministic numbering. */
+static bool cg_user_spec_clone_object_overload(
+    UserSpec *pending_overloads,
+    const UserSpecMember *source,
+    const char *base_c_field_name) {
+    UserSpecMember *cloned;
+    char *field_name;
+
+    if (pending_overloads == NULL || source == NULL ||
+        base_c_field_name == NULL ||
+        !cg_user_spec_clone_inherited_member(pending_overloads, source)) {
+        return false;
+    }
+    cloned = &pending_overloads
+                  ->members[pending_overloads->member_count - 1U];
+    field_name = strdup(base_c_field_name);
+    if (field_name == NULL) {
+        return false;
+    }
+    free(cloned->c_field_name);
+    cloned->c_field_name = field_name;
+    return true;
+}
+
+/* Record one object-form requirement using exact lowered identity. Existing
+ * first-name slots keep their layout; distinct method overloads are staged
+ * for deterministic append, and equivalent child declarations become the
+ * primary identity without changing the slot. */
+static bool cg_user_spec_record_object_member(
+    UserSpec *spec,
+    UserSpec *pending_overloads,
+    const UserSpecMember *source,
+    bool prefer_source_identity) {
+    UserSpecMember *equivalent;
+    UserSpecMember *named;
+
+    if (source == NULL || source->feng_name == NULL) {
+        return true;
+    }
+    equivalent = cg_user_spec_equivalent_member(spec, source);
+    if (equivalent == NULL) {
+        equivalent = cg_user_spec_equivalent_member(
+            pending_overloads, source);
+    }
+    if (equivalent != NULL) {
+        return prefer_source_identity
+                   ? cg_user_spec_replace_equivalent_member(equivalent, source)
+                   : cg_user_spec_member_append_aliases(equivalent, source);
+    }
+
+    named = cg_user_spec_named_member(spec, source->feng_name);
+    if (named == NULL) {
+        named = cg_user_spec_named_member(
+            pending_overloads, source->feng_name);
+    }
+    if (named == NULL) {
+        return cg_user_spec_clone_inherited_member(spec, source);
+    }
+    if (named->kind == USM_KIND_METHOD &&
+        source->kind == USM_KIND_METHOD) {
+        return cg_user_spec_clone_object_overload(
+            pending_overloads, source, named->c_field_name);
+    }
+    if (prefer_source_identity) {
+        return cg_user_spec_replace_non_method_slot(named, source);
+    }
+    return true;
+}
+
 /* Return whether one generated C field name already belongs to a slot. */
 static bool cg_user_spec_has_c_field_name(const UserSpec *spec,
                                           const char *name,
@@ -13715,7 +13822,7 @@ static bool cg_user_spec_has_c_field_name(const UserSpec *spec,
 
 /* Build the deterministic field name for one appended legal overload. The
  * search also avoids collisions with user-authored names after sanitization. */
-static char *cg_intersection_overload_c_field_name(
+static char *cg_spec_overload_c_field_name(
     const UserSpec *primary,
     const UserSpec *pending_overloads,
     size_t pending_index,
@@ -13748,7 +13855,7 @@ static char *cg_intersection_overload_c_field_name(
 
 /* Append staged overloads after every historical first-name slot. Ownership
  * of the staged elements moves into `spec`; the temporary array is cleared. */
-static bool cg_user_spec_commit_intersection_overloads(
+static bool cg_user_spec_commit_overloads(
     UserSpec *spec,
     UserSpec *pending_overloads) {
     UserSpecMember *grown;
@@ -13761,7 +13868,7 @@ static bool cg_user_spec_commit_intersection_overloads(
     for (size_t index = 0U;
          index < pending_overloads->member_count;
          ++index) {
-        char *field_name = cg_intersection_overload_c_field_name(
+        char *field_name = cg_spec_overload_c_field_name(
             spec,
             pending_overloads,
             index,
@@ -15073,7 +15180,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                 }
             }
         }
-        if (!cg_user_spec_commit_intersection_overloads(
+        if (!cg_user_spec_commit_overloads(
                 s, &pending_overloads)) {
             cg_user_spec_members_free(&pending_overloads);
             return cg_fail(cg,
@@ -15083,12 +15190,18 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
         }
         return true;
     }
+    UserSpec pending_overloads;
+    UserSpec own_members;
+
+    memset(&pending_overloads, 0, sizeof(pending_overloads));
+    memset(&own_members, 0, sizeof(own_members));
     s->direct_parent_spec_count = decl->as.spec_decl.parent_spec_count;
     if (s->direct_parent_spec_count > 0U) {
         s->direct_parent_spec_indices = (size_t *)calloc(
             s->direct_parent_spec_count,
             sizeof(*s->direct_parent_spec_indices));
         if (s->direct_parent_spec_indices == NULL) {
+            cg_user_spec_members_free(&pending_overloads);
             return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
         }
     }
@@ -15101,68 +15214,76 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                                                   decl->as.spec_decl.parent_specs[parent_index],
                                                   &decl->token,
                                                   &parent_type)) {
+            cg_user_spec_members_free(&pending_overloads);
             return false;
         }
         if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC || parent_type->user_spec == NULL) {
             cgtype_free(parent_type);
+            cg_user_spec_members_free(&pending_overloads);
             return cg_fail(cg, decl->token,
                 "CE0046", "codegen: spec parent did not resolve to an object-form spec");
         }
         parent_spec = (UserSpec *)parent_type->user_spec;
         if (!cg_user_spec_index(cg, parent_spec, &parent_spec_index)) {
             cgtype_free(parent_type);
+            cg_user_spec_members_free(&pending_overloads);
             return cg_fail(cg, decl->token,
                 "CE0046", "codegen: resolved spec parent is not registered");
         }
         s->direct_parent_spec_indices[parent_index] = parent_spec_index;
         if (!cg_ensure_user_spec_members_registered(cg, parent_spec)) {
             cgtype_free(parent_type);
+            cg_user_spec_members_free(&pending_overloads);
             return false;
         }
         for (size_t member_index = 0; member_index < parent_spec->member_count; ++member_index) {
             const UserSpecMember *parent_member = &parent_spec->members[member_index];
-            const FengTypeMember *override_member = cg_find_own_spec_member_by_name(
-                decl,
-                parent_member->feng_name,
-                strlen(parent_member->feng_name));
 
-            if (cg_user_spec_has_member_name(s,
-                                             parent_member->feng_name,
-                                             strlen(parent_member->feng_name))) {
-                continue;
-            }
-            if (override_member != NULL) {
-                if (!cg_user_spec_append_decl_member(cg, s, override_member)) {
-                    cgtype_free(parent_type);
-                    return false;
-                }
-                continue;
-            }
-            if (!cg_user_spec_clone_inherited_member(s, parent_member)) {
+            if (!cg_user_spec_record_object_member(
+                    s,
+                    &pending_overloads,
+                    parent_member,
+                    false)) {
                 cgtype_free(parent_type);
+                cg_user_spec_members_free(&pending_overloads);
                 return false;
             }
         }
         cgtype_free(parent_type);
     }
+    own_members = *s;
+    own_members.members = NULL;
+    own_members.member_count = 0U;
     for (size_t i = 0; i < decl->as.spec_decl.as.object.member_count; i++) {
         const FengTypeMember *m = decl->as.spec_decl.as.object.members[i];
-        const char *name_data = NULL;
-        size_t name_len = 0U;
 
-        if (m->kind == FENG_TYPE_MEMBER_FIELD) {
-            name_data = m->as.field.name.data;
-            name_len = m->as.field.name.length;
-        } else if (m->kind == FENG_TYPE_MEMBER_METHOD) {
-            name_data = m->as.callable.name.data;
-            name_len = m->as.callable.name.length;
-        }
-        if (name_data != NULL && cg_user_spec_has_member_name(s, name_data, name_len)) {
-            continue;
-        }
-        if (!cg_user_spec_append_decl_member(cg, s, m)) {
+        if (!cg_user_spec_append_decl_member(cg, &own_members, m)) {
+            cg_user_spec_members_free(&own_members);
+            cg_user_spec_members_free(&pending_overloads);
             return false;
         }
+    }
+    for (size_t member_index = 0U;
+         member_index < own_members.member_count;
+         ++member_index) {
+        if (!cg_user_spec_record_object_member(
+                s,
+                &pending_overloads,
+                &own_members.members[member_index],
+                true)) {
+            cg_user_spec_members_free(&own_members);
+            cg_user_spec_members_free(&pending_overloads);
+            return false;
+        }
+    }
+    cg_user_spec_members_free(&own_members);
+    if (!cg_user_spec_commit_overloads(s, &pending_overloads)) {
+        cg_user_spec_members_free(&pending_overloads);
+        return cg_fail(
+            cg,
+            decl->token,
+            "IE0001",
+            "codegen: out of memory while registering object-form spec overload slots");
     }
     return true;
 }
@@ -15215,6 +15336,196 @@ static const UserSpecMember *cg_user_spec_member_by_decl(
         }
     }
     return NULL;
+}
+
+/* Find a declaration identity only when it denotes one slot in this closed
+ * surface. A repeated generic AST member needs additional closed-owner or
+ * callable-target information and must not silently fall back to the first
+ * slot. */
+static const UserSpecMember *cg_user_spec_member_by_unique_decl(
+    const UserSpec *spec,
+    const FengTypeMember *member) {
+    const UserSpecMember *result = NULL;
+
+    if (spec == NULL || member == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        if (!cg_user_spec_member_has_decl(&spec->members[index], member)) {
+            continue;
+        }
+        if (result != NULL) {
+            return NULL;
+        }
+        result = &spec->members[index];
+    }
+    return result;
+}
+
+/* Find one closed requirement slot within a larger spec surface. Generic
+ * parent instances may share the same AST member declaration, so declaration
+ * identity narrows the candidates while the already-lowered signature selects
+ * the exact closed slot. This lookup is compiler-only and does not affect the
+ * emitted witness layout. */
+static const UserSpecMember *cg_user_spec_member_matching_slot(
+    const UserSpec *spec,
+    const UserSpecMember *required_slot) {
+    if (spec == NULL || required_slot == NULL ||
+        required_slot->member == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        const UserSpecMember *candidate = &spec->members[index];
+
+        if (cg_user_spec_member_has_decl(candidate, required_slot->member) &&
+            cg_user_spec_member_compatible(candidate, required_slot)) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
+/* Resolve the exact slot selected for one Semantic spec call. The selected
+ * declaring owner instance identifies the closed generic requirement; that
+ * small declaring surface is then projected into the receiver's full surface.
+ * No source-level overload resolution is repeated here. */
+static const UserSpecMember *cg_user_spec_member_for_resolved_call(
+    CG *cg,
+    const UserSpec *receiver_spec,
+    const FengResolvedCallable *resolved) {
+    const UserSpec *declaring_spec = NULL;
+    const UserSpecMember *declaring_slot = NULL;
+
+    if (cg == NULL || receiver_spec == NULL || resolved == NULL ||
+        resolved->member == NULL) {
+        return NULL;
+    }
+    if (resolved->owner_instance_type_ref != NULL &&
+        resolved->owner_instance_type_ref->kind == FENG_TYPE_REF_NAMED) {
+        if (resolved->owner_instance_type_ref->as.named.type_arg_count > 0U) {
+            declaring_spec = cg_find_generic_instance_user_spec_for_ref(
+                cg, resolved->owner_instance_type_ref);
+        } else {
+            declaring_spec = cg_find_user_spec_by_ref(
+                cg, resolved->owner_instance_type_ref);
+        }
+    }
+    if (declaring_spec == NULL && resolved->owner_type_decl != NULL &&
+        resolved->owner_type_decl->kind == FENG_DECL_SPEC) {
+        declaring_spec = cg_find_user_spec_by_decl(
+            cg, resolved->owner_type_decl);
+    }
+    if (declaring_spec != NULL &&
+        cg_ensure_user_spec_members_registered(
+            cg, (UserSpec *)declaring_spec)) {
+        declaring_slot = cg_user_spec_member_by_decl(
+            declaring_spec, resolved->member);
+        if (declaring_slot != NULL) {
+            const UserSpecMember *projected =
+                cg_user_spec_member_matching_slot(
+                    receiver_spec, declaring_slot);
+
+            if (projected != NULL) {
+                return projected;
+            }
+        }
+    }
+    return cg_user_spec_member_by_unique_decl(
+        receiver_spec, resolved->member);
+}
+
+/* Return whether one closed requirement has the structural callable surface
+ * selected as a method-value target. ABI classifications may differ and are
+ * bridged by the existing adapter, so only language-level parameter/return
+ * types and variadic shape participate. */
+static bool cg_user_spec_method_matches_callable_target(
+    const UserSpecMember *method,
+    const UserSpec *target_spec) {
+    if (method == NULL || target_spec == NULL ||
+        method->kind != USM_KIND_METHOD ||
+        target_spec->form != FENG_SPEC_FORM_CALLABLE ||
+        method->param_count != target_spec->callable_param_count ||
+        !cg_types_equal(method->type,
+                        target_spec->callable_return_type)) {
+        return false;
+    }
+    for (size_t index = 0U; index < method->param_count; ++index) {
+        if (!cg_types_equal(method->param_types[index],
+                            target_spec->callable_param_types[index])) {
+            return false;
+        }
+    }
+    return method->param_count == 0U ||
+           cg_user_spec_member_param_is_variadic(
+               method, method->param_count - 1U) ==
+               target_spec->callable_is_variadic;
+}
+
+/* Select a method-value slot from Semantic's declaration identity plus the
+ * explicit callable target. The target is required by the language and
+ * distinguishes different closures of one generic AST member without any
+ * runtime lookup. */
+static const UserSpecMember *cg_user_spec_member_for_method_value(
+    const UserSpec *receiver_spec,
+    const FengTypeMember *member,
+    const UserSpec *target_spec,
+    bool require_static) {
+    const UserSpecMember *result = NULL;
+
+    if (receiver_spec == NULL || member == NULL || target_spec == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < receiver_spec->member_count; ++index) {
+        const UserSpecMember *candidate = &receiver_spec->members[index];
+
+        if (!cg_user_spec_member_has_decl(candidate, member) ||
+            candidate->is_static != require_static ||
+            !cg_user_spec_method_matches_callable_target(
+                candidate, target_spec)) {
+            continue;
+        }
+        if (result != NULL) {
+            return NULL;
+        }
+        result = candidate;
+    }
+    return result;
+}
+
+/* Locate the Semantic witness entry represented by one Codegen slot when its
+ * AST declaration identity is unique. Logical requirement order is
+ * intentionally irrelevant: parent and child declarations may be aliases of
+ * the same slot, while different closures of one generic declaration can
+ * produce multiple matching entries. The latter is reported through
+ * out_ambiguous and resolved from the closed signature by the caller. This is
+ * a compiler-time lookup only. */
+static const FengSpecWitnessMember *cg_spec_witness_member_for_slot(
+    const FengSpecWitness *witness,
+    const UserSpecMember *slot,
+    bool *out_ambiguous) {
+    const FengSpecWitnessMember *result = NULL;
+
+    if (out_ambiguous != NULL) {
+        *out_ambiguous = false;
+    }
+    if (witness == NULL || slot == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < witness->member_count; ++index) {
+        const FengSpecWitnessMember *candidate = &witness->members[index];
+
+        if (!cg_user_spec_member_has_decl(slot, candidate->spec_member)) {
+            continue;
+        }
+        if (result != NULL) {
+            if (out_ambiguous != NULL) {
+                *out_ambiguous = true;
+            }
+            return NULL;
+        }
+        result = candidate;
+    }
+    return result;
 }
 
 /* ------------- Fit registration (Step 4b-γ) ------------- */
@@ -15803,8 +16114,63 @@ static bool cg_resolve_type_for_user_fit_member(CG *cg,
     return ok;
 }
 
+/* Return whether a completed fit-method C name is already used in methods. */
+static bool cg_fit_method_c_name_is_used(const UserMethod *methods,
+                                         size_t method_count,
+                                         const char *c_name) {
+    if (methods == NULL || c_name == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < method_count; ++index) {
+        if (methods[index].c_name != NULL &&
+            strcmp(methods[index].c_name, c_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Preserve every historical non-conflicting fit symbol. When the old complete
+ * symbol loses the instance/static domain and therefore collides, append that
+ * domain only to the later method and keep checking for a deterministic unique
+ * compiler symbol. The input name is consumed on both success and failure. */
+static char *cg_disambiguate_fit_method_c_name(UserMethod *methods,
+                                               size_t method_count,
+                                               char *c_name,
+                                               bool is_static) {
+    const char *domain = is_static ? "static" : "instance";
+    size_t discriminator = 1U;
+
+    if (c_name == NULL ||
+        !cg_fit_method_c_name_is_used(methods, method_count, c_name)) {
+        return c_name;
+    }
+    for (;;) {
+        Buf candidate;
+
+        buf_init(&candidate);
+        if (discriminator == 1U) {
+            buf_append_fmt(&candidate, "%s__%s", c_name, domain);
+        } else {
+            buf_append_fmt(&candidate, "%s__%s_%zu",
+                           c_name, domain, discriminator);
+        }
+        if (candidate.data == NULL) {
+            free(c_name);
+            return NULL;
+        }
+        if (!cg_fit_method_c_name_is_used(
+                methods, method_count, candidate.data)) {
+            free(c_name);
+            return candidate.data;
+        }
+        buf_free(&candidate);
+        discriminator++;
+    }
+}
+
 /* Populate the fit's UserMethod array. Field members are not legal in a fit
- * body (semantic enforces this; we double-check). Each method's c_name
+ * body (semantic enforces this; we double-check). Each method's base c_name
  * is `<fit_prefix>__<member>` so two fits for the same T cannot collide,
  * and so a fit method does not shadow a same-named method on T itself. */
 static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
@@ -15855,6 +16221,8 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
                                             um->param_types, um->param_count,
                                             um->is_variadic,
                                             sig->type_param_count > 0U);
+        um->c_name = cg_disambiguate_fit_method_c_name(
+            uf->methods, mi - 1U, um->c_name, m->is_static);
         if (!um->c_name) return false;
     }
     uf->method_count = mi;
@@ -15930,6 +16298,8 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
                                             um->param_count,
                                             um->is_variadic,
                                             false);
+        um->c_name = cg_disambiguate_fit_method_c_name(
+            bf->methods, mi - 1U, um->c_name, m->is_static);
         if (um->c_name == NULL) {
             return false;
         }
@@ -16718,12 +17088,18 @@ static bool cg_ensure_default_parent_witness(CG *cg,
     }
     for (size_t member_index = 0U;
          member_index < target->member_count;
-         ++member_index) {
+        ++member_index) {
         const UserSpecMember *target_member = &target->members[member_index];
-        const UserSpecMember *root_member = cg_user_spec_member(
-            root,
-            target_member->feng_name,
-            strlen(target_member->feng_name));
+        const UserSpecMember *root_member = cg_user_spec_member_matching_slot(
+            root, target_member);
+
+        if (root_member == NULL &&
+            target_member->kind != USM_KIND_METHOD) {
+            root_member = cg_user_spec_member(
+                root,
+                target_member->feng_name,
+                strlen(target_member->feng_name));
+        }
 
         if (root_member == NULL ||
             !cg_user_spec_member_compatible(root_member, target_member)) {
@@ -16760,12 +17136,18 @@ static bool cg_ensure_default_parent_witness(CG *cg,
                    var.data);
     for (size_t member_index = 0U;
          member_index < target->member_count;
-         ++member_index) {
+        ++member_index) {
         const UserSpecMember *target_member = &target->members[member_index];
-        const UserSpecMember *root_member = cg_user_spec_member(
-            root,
-            target_member->feng_name,
-            strlen(target_member->feng_name));
+        const UserSpecMember *root_member = cg_user_spec_member_matching_slot(
+            root, target_member);
+
+        if (root_member == NULL &&
+            target_member->kind != USM_KIND_METHOD) {
+            root_member = cg_user_spec_member(
+                root,
+                target_member->feng_name,
+                strlen(target_member->feng_name));
+        }
 
         if (target_member->kind == USM_KIND_FIELD) {
             if (cg_spec_field_uses_storage_borrow(target_member)) {
@@ -22274,8 +22656,11 @@ static bool cg_emit_callable_method_coercion(CG *cg,
             (receiver_spec->form != FENG_SPEC_FORM_OBJECT &&
              receiver_spec->form != FENG_SPEC_FORM_INTERSECTION) ||
             receiver_descriptor == NULL ||
-            cg_user_spec_member_by_decl(receiver_spec,
-                                        cs->callable_member) == NULL) {
+            cg_user_spec_member_for_method_value(
+                receiver_spec,
+                cs->callable_member,
+                target_spec,
+                false) == NULL) {
             er_free(&recv);
             return cg_fail(
                 cg,
@@ -22458,8 +22843,11 @@ static bool cg_emit_callable_method_coercion(CG *cg,
                            "CE0112",
                            "codegen: callable method coercion source must be an object-form or intersection-form spec value");
         }
-        spec_method = cg_user_spec_member_by_decl(receiver_spec,
-                                                  cs->callable_member);
+        spec_method = cg_user_spec_member_for_method_value(
+            receiver_spec,
+            cs->callable_member,
+            target_spec,
+            false);
         if (spec_method == NULL || spec_method->kind != USM_KIND_METHOD ||
             spec_method->is_static || cs->callable_type_arg_count != 0U) {
             er_free(&recv);
@@ -27438,9 +27826,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     "CE0155", "codegen: generic method call requires an object-form spec constraint");
             }
             const UserSpecMember *sm = rc->member != NULL
-                ? cg_user_spec_member_by_decl(us, rc->member)
+                ? cg_user_spec_member_for_resolved_call(cg, us, rc)
                 : NULL;
-            if (sm == NULL) {
+            if (sm == NULL && rc->member == NULL) {
                 sm = cg_user_spec_member(us,
                     ma->as.member.member.data, ma->as.member.member.length);
             }
@@ -27685,9 +28073,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             /* Step 4b — spec method dispatch via witness table. */
             const UserSpec *us = recv.type->user_spec;
             const UserSpecMember *sm = rc->member != NULL
-                ? cg_user_spec_member_by_decl(us, rc->member)
+                ? cg_user_spec_member_for_resolved_call(cg, us, rc)
                 : NULL;
-            if (sm == NULL) {
+            if (sm == NULL && rc->member == NULL) {
                 sm = cg_user_spec_member(us,
                     ma->as.member.member.data, ma->as.member.member.length);
             }
@@ -44033,8 +44421,11 @@ static bool cg_emit_closed_callable_spec_method_value_dep_expr(
     if (receiver_spec == NULL) {
         goto cleanup;
     }
-    method = cg_user_spec_member_by_decl(receiver_spec,
-                                         callable_dep->member);
+    method = cg_user_spec_member_for_method_value(
+        receiver_spec,
+        callable_dep->member,
+        target_type->user_spec,
+        false);
     if (method == NULL || method->kind != USM_KIND_METHOD ||
         method->is_static) {
         (void)cg_fail(cg,
@@ -44280,8 +44671,11 @@ static bool cg_emit_closed_callable_spec_static_method_value_dep_expr(
     if (receiver_spec == NULL) {
         goto cleanup;
     }
-    method = cg_user_spec_member_by_decl(receiver_spec,
-                                         callable_dep->member);
+    method = cg_user_spec_member_for_method_value(
+        receiver_spec,
+        callable_dep->member,
+        target_type->user_spec,
+        true);
     if (method == NULL || method->kind != USM_KIND_METHOD ||
         !method->is_static) {
         (void)cg_fail(
@@ -48660,6 +49054,60 @@ static bool cg_user_method_matches_spec_member(const CG *cg,
     return true;
 }
 
+/* Match the complete callable shape of one implementation against one exact
+ * closed requirement slot. Staticness and variadic shape are part of the
+ * method identity even though the shared type-substitution helper above only
+ * compares parameter and return types. */
+static bool cg_user_method_matches_exact_spec_slot(
+    const CG *cg,
+    const UserMethod *method,
+    const UserSpec *spec,
+    const UserSpecMember *slot) {
+    bool slot_is_variadic;
+
+    if (method == NULL || method->member == NULL || slot == NULL ||
+        slot->kind != USM_KIND_METHOD ||
+        method->member->is_static != slot->is_static) {
+        return false;
+    }
+    slot_is_variadic = slot->param_count > 0U &&
+        cg_user_spec_member_param_is_variadic(
+            slot, slot->param_count - 1U);
+    return method->is_variadic == slot_is_variadic &&
+           cg_user_method_matches_spec_member(cg, method, spec, slot);
+}
+
+/* Verify that a Semantic witness implementation still denotes the current
+ * closed Codegen slot. Semantic witness caching is declaration-based, so a
+ * generic spec declaration can be observed through multiple closed instances;
+ * this compiler-time guard prevents a cached implementation for one closure
+ * from being emitted into another closure's witness. */
+static bool cg_witness_binding_matches_exact_spec_slot(
+    const CG *cg,
+    const CGWitnessBinding *binding,
+    const UserSpec *spec,
+    const UserSpecMember *slot) {
+    const CGType *field_type;
+
+    if (binding == NULL || spec == NULL || slot == NULL) {
+        return false;
+    }
+    if (slot->kind == USM_KIND_METHOD) {
+        return cg_user_method_matches_exact_spec_slot(
+            cg, binding->method, spec, slot);
+    }
+    field_type = slot->is_static
+        ? (binding->static_binding != NULL
+               ? binding->static_binding->type
+               : NULL)
+        : (binding->field != NULL ? binding->field->type : NULL);
+    return field_type != NULL &&
+           cg_field_type_matches_spec_member(cg,
+                                             field_type,
+                                             spec,
+                                             slot);
+}
+
 static bool cg_append_witness_forward_arg(CG *cg,
                                           Buf *out,
                                           const CGType *spec_type,
@@ -48896,6 +49344,67 @@ static bool cg_builtin_fit_matches_subject(const BuiltinFit *fit,
     return fit->target_type->enum_decl == NULL;
 }
 
+/* Resolve one non-user subject implementation from the exact closed spec
+ * slot. This is used when multiple closed requirements share one generic AST
+ * declaration and Semantic's declaration identity alone is therefore not a
+ * unique key. The scan is compiler-only; emitted witnesses retain direct
+ * function pointers and perform no runtime lookup. */
+static size_t cg_find_builtin_fit_method_for_spec_slot(
+    const CG *cg,
+    CGTypeKind subject_kind,
+    const FengDecl *enum_decl,
+    const UserSpec *spec,
+    const UserSpecMember *slot,
+    const BuiltinFit **out_fit,
+    const UserMethod **out_method) {
+    size_t match_count = 0U;
+
+    if (out_fit != NULL) {
+        *out_fit = NULL;
+    }
+    if (out_method != NULL) {
+        *out_method = NULL;
+    }
+    if (cg == NULL || spec == NULL || slot == NULL) {
+        return 0U;
+    }
+    for (size_t fit_index = 0U;
+         fit_index < cg->builtin_fit_count;
+         ++fit_index) {
+        const BuiltinFit *candidate_fit = &cg->builtin_fits[fit_index];
+
+        if (!cg_builtin_fit_matches_subject(candidate_fit,
+                                            subject_kind,
+                                            enum_decl) ||
+            !cg_builtin_fit_targets_spec(cg, candidate_fit, spec)) {
+            continue;
+        }
+        for (size_t method_index = 0U;
+             method_index < candidate_fit->method_count;
+             ++method_index) {
+            const UserMethod *candidate_method =
+                &candidate_fit->methods[method_index];
+
+            if (candidate_method->member == NULL ||
+                strcmp(candidate_method->feng_name, slot->feng_name) != 0 ||
+                !cg_user_method_matches_exact_spec_slot(cg,
+                                                        candidate_method,
+                                                        spec,
+                                                        slot)) {
+                continue;
+            }
+            if (out_fit != NULL) {
+                *out_fit = candidate_fit;
+            }
+            if (out_method != NULL) {
+                *out_method = candidate_method;
+            }
+            ++match_count;
+        }
+    }
+    return match_count;
+}
+
 static bool cg_subject_key_to_target_kind(const FengSemanticSubjectKey *subject_key,
                                           CGTypeKind *out_kind) {
     if (subject_key == NULL || out_kind == NULL) {
@@ -48985,7 +49494,8 @@ static bool cg_emit_ref_subject_load(CG *cg,
 
 static bool cg_user_spec_member_compatible(const UserSpecMember *src,
                                            const UserSpecMember *dst) {
-    if (src == NULL || dst == NULL || src->kind != dst->kind) {
+    if (src == NULL || dst == NULL || src->kind != dst->kind ||
+        src->is_static != dst->is_static) {
         return false;
     }
     if (src->kind == USM_KIND_FIELD) {
@@ -49135,9 +49645,16 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
     } else {
         for (size_t i = 0; i < dst->member_count; ++i) {
             const UserSpecMember *dst_member = &dst->members[i];
-            const UserSpecMember *src_member = cg_user_spec_member(src,
-                                                                   dst_member->feng_name,
-                                                                   strlen(dst_member->feng_name));
+            const UserSpecMember *src_member = cg_user_spec_member_matching_slot(
+                src, dst_member);
+
+            if (src_member == NULL &&
+                dst_member->kind != USM_KIND_METHOD) {
+                src_member = cg_user_spec_member(
+                    src,
+                    dst_member->feng_name,
+                    strlen(dst_member->feng_name));
+            }
 
             if (src_member == NULL ||
                 !cg_user_spec_member_compatible(src_member, dst_member)) {
@@ -49834,21 +50351,26 @@ static bool cg_ensure_witness_instance(
                 const BuiltinFit *bf = NULL;
                 const UserMethod *fm = NULL;
                 size_t fallback_match_count = 0U;
+                bool witness_mapping_ambiguous = false;
+                bool use_semantic_witness = witness != NULL;
 
                 if (witness != NULL) {
-                    if (i >= witness->member_count) {
+                    wm = cg_spec_witness_member_for_slot(
+                        witness, sm, &witness_mapping_ambiguous);
+                    if (witness_mapping_ambiguous) {
+                        use_semantic_witness = false;
+                    } else if (wm == NULL) {
                         buf_free(&prefix);
                         free(s_san);
                         return cg_fail(cg, blame,
-                            "CE0318", "codegen: internal: witness slot count mismatch for non-type subject '%.*s' as spec '%s' (expected at least %zu, got %zu)",
+                            "CE0318", "codegen: internal: witness requirement mapping is missing for non-type subject '%.*s' as spec '%s' member '%s'",
                             (int)subject_key->as.type_decl->as.enum_decl.name.length,
                             subject_key->as.type_decl->as.enum_decl.name.data,
                             s->feng_name,
-                            s->member_count,
-                            witness->member_count);
+                            sm->feng_name);
                     }
-
-                    wm = &witness->members[i];
+                }
+                if (use_semantic_witness) {
                     if (wm->impl_member == NULL) {
                         buf_free(&prefix);
                         free(s_san);
@@ -49877,7 +50399,7 @@ static bool cg_ensure_witness_instance(
                         }
                     }
                 }
-                if (bf == NULL && witness != NULL) {
+                if (bf == NULL && use_semantic_witness) {
                     for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
                         const BuiltinFit *candidate = &cg->builtin_fits[bi];
                         const UserMethod *candidate_method = NULL;
@@ -49900,7 +50422,9 @@ static bool cg_ensure_witness_instance(
                         }
                     }
                 }
-                if (witness == NULL) {
+                if (!use_semantic_witness ||
+                    !cg_user_method_matches_exact_spec_slot(
+                        cg, fm, s, sm)) {
                     if (sm->kind != USM_KIND_METHOD) {
                         buf_free(&prefix);
                         free(s_san);
@@ -49911,30 +50435,15 @@ static bool cg_ensure_witness_instance(
                             sm->feng_name);
                     }
 
-                    for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
-                        const BuiltinFit *candidate = &cg->builtin_fits[bi];
-
-                        if (!cg_builtin_fit_matches_subject(candidate, CG_TYPE_I32, enum_decl) ||
-                            !cg_builtin_fit_targets_spec(cg, candidate, s)) {
-                            continue;
-                        }
-                        for (size_t mi = 0U; mi < candidate->method_count; ++mi) {
-                            const UserMethod *candidate_method = &candidate->methods[mi];
-
-                            if (candidate_method->member == NULL ||
-                                candidate_method->member->is_static != sm->is_static ||
-                                strcmp(candidate_method->feng_name, sm->feng_name) != 0 ||
-                                !cg_user_method_matches_spec_member(cg,
-                                                                    candidate_method,
-                                                                    s,
-                                                                    sm)) {
-                                continue;
-                            }
-                            bf = candidate;
-                            fm = candidate_method;
-                            ++fallback_match_count;
-                        }
-                    }
+                    fallback_match_count =
+                        cg_find_builtin_fit_method_for_spec_slot(
+                            cg,
+                            CG_TYPE_I32,
+                            enum_decl,
+                            s,
+                            sm,
+                            &bf,
+                            &fm);
 
                     if (fallback_match_count == 0U) {
                         buf_free(&prefix);
@@ -50254,19 +50763,22 @@ static bool cg_ensure_witness_instance(
 
     for (size_t i = 0U; i < s->member_count; ++i) {
         const UserSpecMember *sm = &s->members[i];
+        bool witness_mapping_ambiguous = false;
+        const FengSpecWitnessMember *wm =
+            cg_spec_witness_member_for_slot(
+                witness, sm, &witness_mapping_ambiguous);
+        const BuiltinFit *bf = NULL;
+        const UserMethod *fm = NULL;
 
-        if (i >= witness->member_count) {
+        if (wm == NULL && !witness_mapping_ambiguous) {
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
-                "CE0318", "codegen: internal: witness slot count mismatch for non-type subject as spec '%s' (expected at least %zu, got %zu)",
+                "CE0318", "codegen: internal: witness requirement mapping is missing for non-type subject as spec '%s' member '%s'",
                 s->feng_name,
-                s->member_count,
-                witness->member_count);
+                sm->feng_name);
         }
-
-        const FengSpecWitnessMember *wm = &witness->members[i];
-        if (wm->impl_member == NULL) {
+        if (!witness_mapping_ambiguous && wm->impl_member == NULL) {
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
@@ -50274,45 +50786,108 @@ static bool cg_ensure_witness_instance(
                 sm->feng_name);
         }
         if (sm->kind != USM_KIND_METHOD ||
-            wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
-            wm->via_fit_decl == NULL) {
+            (!witness_mapping_ambiguous &&
+             (wm->source_kind != FENG_SPEC_WITNESS_SOURCE_FIT_METHOD ||
+              wm->via_fit_decl == NULL))) {
             buf_free(&prefix);
             free(s_san);
             return cg_fail(cg, blame,
                 "CE0320", "codegen: non-type subject key currently supports fit-method spec members only");
         }
 
-        const BuiltinFit *bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
-        const UserMethod *fm = NULL;
-        if (bf != NULL && !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
-            bf = NULL;
-        }
-        if (bf != NULL) {
-            fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
-            if (fm == NULL) {
-                fm = cg_builtin_fit_method(bf, sm->feng_name,
-                                           strlen(sm->feng_name));
+        if (witness_mapping_ambiguous) {
+            size_t match_count =
+                cg_find_builtin_fit_method_for_spec_slot(
+                    cg,
+                    subject_kind,
+                    NULL,
+                    s,
+                    sm,
+                    &bf,
+                    &fm);
+
+            if (match_count == 0U) {
+                buf_free(&prefix);
+                free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0318", "codegen: internal: closed witness requirement mapping is missing for non-type subject as spec '%s' member '%s'",
+                    s->feng_name,
+                    sm->feng_name);
+            }
+            if (match_count > 1U) {
+                buf_free(&prefix);
+                free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0323", "codegen: non-type subject has multiple visible implementations of method '%s' required by spec '%s'",
+                    sm->feng_name,
+                    s->feng_name);
+            }
+        } else {
+            bf = cg_find_builtin_fit_by_decl(cg, wm->via_fit_decl);
+            if (bf != NULL &&
+                !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
+                bf = NULL;
+            }
+            if (bf != NULL) {
+                fm = cg_builtin_fit_method_by_member(bf, wm->impl_member);
+                if (fm == NULL) {
+                    fm = cg_builtin_fit_method(bf, sm->feng_name,
+                                               strlen(sm->feng_name));
+                }
+            }
+            if (bf == NULL) {
+                for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
+                    const BuiltinFit *candidate = &cg->builtin_fits[bi];
+                    if (!cg_builtin_fit_matches_subject(candidate,
+                                                        subject_kind,
+                                                        NULL) ||
+                        !cg_builtin_fit_targets_spec(cg, candidate, s)) {
+                        continue;
+                    }
+                    const UserMethod *candidate_method =
+                        cg_builtin_fit_method_by_member(candidate,
+                                                        wm->impl_member);
+                    if (candidate_method == NULL) {
+                        candidate_method = cg_builtin_fit_method(
+                            candidate,
+                            sm->feng_name,
+                            strlen(sm->feng_name));
+                    }
+                    if (candidate_method != NULL) {
+                        bf = candidate;
+                        fm = candidate_method;
+                        break;
+                    }
+                }
             }
         }
-        if (bf == NULL) {
-            for (size_t bi = 0U; bi < cg->builtin_fit_count; ++bi) {
-                const BuiltinFit *candidate = &cg->builtin_fits[bi];
-                if (!cg_builtin_fit_matches_subject(candidate, subject_kind, NULL) ||
-                    !cg_builtin_fit_targets_spec(cg, candidate, s)) {
-                    continue;
-                }
-                const UserMethod *candidate_method =
-                    cg_builtin_fit_method_by_member(candidate, wm->impl_member);
-                if (candidate_method == NULL) {
-                    candidate_method = cg_builtin_fit_method(candidate,
-                                                            sm->feng_name,
-                                                            strlen(sm->feng_name));
-                }
-                if (candidate_method != NULL) {
-                    bf = candidate;
-                    fm = candidate_method;
-                    break;
-                }
+        if (!witness_mapping_ambiguous &&
+            !cg_user_method_matches_exact_spec_slot(cg, fm, s, sm)) {
+            size_t match_count =
+                cg_find_builtin_fit_method_for_spec_slot(
+                    cg,
+                    subject_kind,
+                    NULL,
+                    s,
+                    sm,
+                    &bf,
+                    &fm);
+
+            if (match_count == 0U) {
+                buf_free(&prefix);
+                free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0318", "codegen: internal: closed witness requirement mapping is missing for non-type subject as spec '%s' member '%s'",
+                    s->feng_name,
+                    sm->feng_name);
+            }
+            if (match_count > 1U) {
+                buf_free(&prefix);
+                free(s_san);
+                return cg_fail(cg, blame,
+                    "CE0323", "codegen: non-type subject has multiple visible implementations of method '%s' required by spec '%s'",
+                    sm->feng_name,
+                    s->feng_name);
             }
         }
         if (bf == NULL || !cg_builtin_fit_targets_spec(cg, bf, s) ||
@@ -51023,18 +51598,20 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
     for (size_t i = 0U; i < s->member_count; ++i) {
         const UserSpecMember *sm = &s->members[i];
         CGWitnessBinding binding;
+        bool witness_mapping_ambiguous = false;
+        const FengSpecWitnessMember *wm = witness != NULL
+            ? cg_spec_witness_member_for_slot(
+                  witness, sm, &witness_mapping_ambiguous)
+            : NULL;
 
         memset(&binding, 0, sizeof binding);
-        if (witness != NULL) {
-            const FengSpecWitnessMember *wm;
-
-            if (i >= witness->member_count) {
+        if (witness != NULL && !witness_mapping_ambiguous) {
+            if (wm == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0330", "codegen: internal: witness slot count mismatch for value box (%s, %s)",
-                    t->feng_name, s->feng_name);
+                    "CE0330", "codegen: internal: witness requirement mapping is missing for value box (%s, %s) member '%s'",
+                    t->feng_name, s->feng_name, sm->feng_name);
             }
-            wm = &witness->members[i];
             if (wm->impl_member == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
@@ -51115,6 +51692,14 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
                     t->feng_name, sm->feng_name);
             }
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return false;
+        }
+        if (witness != NULL && !witness_mapping_ambiguous &&
+            !cg_witness_binding_matches_exact_spec_slot(
+                cg, &binding, s, sm) &&
+            !cg_resolve_witness_binding_fallback(
+                cg, t, s, sm, blame, &binding)) {
             buf_free(&prefix); free(t_san); free(s_san);
             return false;
         }
@@ -51565,24 +52150,26 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
     buf_append_fmt(&prefix, "FengSpecThunk__%s__%s__as__%s__%s",
                    cg->module_mangle, t_san, cg->module_mangle, s_san);
 
-    /* Iterate spec members in declared order — matches witness->members[] order
-     * from feng_semantic_spec_witness_append_member. Methods get a single
-     * thunk; fields get a getter and (for `var`) a setter. */
+    /* Iterate stable Codegen slots and recover each logical Semantic
+     * requirement by exact declaration identity. Methods get one thunk;
+     * fields get a getter and (for `var`) a setter. */
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         CGWitnessBinding binding;
+        bool witness_mapping_ambiguous = false;
+        const FengSpecWitnessMember *wm = witness != NULL
+            ? cg_spec_witness_member_for_slot(
+                  witness, sm, &witness_mapping_ambiguous)
+            : NULL;
 
         memset(&binding, 0, sizeof binding);
-        if (witness != NULL) {
-            const FengSpecWitnessMember *wm;
-
-            if (i >= witness->member_count) {
+        if (witness != NULL && !witness_mapping_ambiguous) {
+            if (wm == NULL) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
-                    "CE0339", "codegen: internal: witness slot count mismatch for (%s, %s)",
-                    t->feng_name, s->feng_name);
+                    "CE0339", "codegen: internal: witness requirement mapping is missing for (%s, %s) member '%s'",
+                    t->feng_name, s->feng_name, sm->feng_name);
             }
-            wm = &witness->members[i];
             if (!wm->impl_member) {
                 buf_free(&prefix); free(t_san); free(s_san);
                 return cg_fail(cg, blame,
@@ -51653,6 +52240,14 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
                 }
             }
         } else if (!cg_resolve_witness_binding_fallback(cg, t, s, sm, blame, &binding)) {
+            buf_free(&prefix); free(t_san); free(s_san);
+            return false;
+        }
+        if (witness != NULL && !witness_mapping_ambiguous &&
+            !cg_witness_binding_matches_exact_spec_slot(
+                cg, &binding, s, sm) &&
+            !cg_resolve_witness_binding_fallback(
+                cg, t, s, sm, blame, &binding)) {
             buf_free(&prefix); free(t_san); free(s_san);
             return false;
         }

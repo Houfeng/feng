@@ -27391,7 +27391,382 @@ static void test_friend_unselected_fit_candidates_do_not_consume_authorization(v
     feng_program_free(fit);
 }
 
+/* Object-form spec declarations use the ordinary type-method diagnostics for
+ * duplicate, return-only, variadic and nominally overlapping overloads. */
+static void test_object_spec_declared_method_overload_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "object_spec_duplicate_instance.ff",
+            "module test.object_spec_duplicate_instance;\n"
+            "spec Invalid {\n"
+            "  func select(value: int): int;\n"
+            "  func select(value: int): int;\n"
+            "}\n",
+            "AE0508",
+        },
+        {
+            "object_spec_duplicate_static.ff",
+            "module test.object_spec_duplicate_static;\n"
+            "spec Invalid {\n"
+            "  static func create(value: int): int;\n"
+            "  static func create(value: int): int;\n"
+            "}\n",
+            "AE0508",
+        },
+        {
+            "object_spec_return_instance.ff",
+            "module test.object_spec_return_instance;\n"
+            "spec Invalid {\n"
+            "  func select(value: int): int;\n"
+            "  func select(value: int): string;\n"
+            "}\n",
+            "AE0509",
+        },
+        {
+            "object_spec_return_static.ff",
+            "module test.object_spec_return_static;\n"
+            "spec Invalid {\n"
+            "  static func create(value: int): int;\n"
+            "  static func create(value: int): string;\n"
+            "}\n",
+            "AE0509",
+        },
+        {
+            "object_spec_variadic_instance.ff",
+            "module test.object_spec_variadic_instance;\n"
+            "spec Invalid {\n"
+            "  func select(value: int): int;\n"
+            "  func select(values: int...): int;\n"
+            "}\n",
+            "AE0510",
+        },
+        {
+            "object_spec_variadic_static.ff",
+            "module test.object_spec_variadic_static;\n"
+            "spec Invalid {\n"
+            "  static func create(value: int): int;\n"
+            "  static func create(values: int...): int;\n"
+            "}\n",
+            "AE0510",
+        },
+        {
+            "object_spec_nominal_overlap.ff",
+            "module test.object_spec_nominal_overlap;\n"
+            "spec Parent {}\n"
+            "spec Child: Parent {}\n"
+            "type Concrete: Child {}\n"
+            "spec Invalid {\n"
+            "  func select(value: Parent): int;\n"
+            "  func select(value: Child): int;\n"
+            "}\n",
+            "AE0706",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(
+            cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(
+                   errors, error_count, cases[index].code) == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Parent contract accumulation closes generic owner arguments before applying
+ * return-only, variadic and static/instance overload rules. */
+static void test_object_spec_accumulated_method_overload_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "object_spec_parent_return.ff",
+            "module test.object_spec_parent_return;\n"
+            "spec Parent { func select(value: int): int; }\n"
+            "spec Invalid: Parent { func select(value: int): string; }\n",
+            "AE0509",
+        },
+        {
+            "object_spec_generic_parent_return.ff",
+            "module test.object_spec_generic_parent_return;\n"
+            "spec Parent<T> { func select(value: T): int; }\n"
+            "spec Invalid: Parent<int> {\n"
+            "  func select(value: int): string;\n"
+            "}\n",
+            "AE0509",
+        },
+        {
+            "object_spec_distinct_generic_parent_return.ff",
+            "module test.object_spec_distinct_generic_parent_return;\n"
+            "spec Surface<T> { func select(value: int): T; }\n"
+            "spec NumberSurface: Surface<int> {}\n"
+            "spec TextSurface: Surface<string> {}\n"
+            "spec Invalid: NumberSurface, TextSurface {}\n",
+            "AE0509",
+        },
+        {
+            "object_spec_parent_static_return.ff",
+            "module test.object_spec_parent_static_return;\n"
+            "spec Parent { static func create(value: int): int; }\n"
+            "spec Invalid: Parent {\n"
+            "  static func create(value: int): string;\n"
+            "}\n",
+            "AE0509",
+        },
+        {
+            "object_spec_parent_variadic.ff",
+            "module test.object_spec_parent_variadic;\n"
+            "spec Parent { func select(value: int): int; }\n"
+            "spec Invalid: Parent {\n"
+            "  func select(values: int...): int;\n"
+            "}\n",
+            "AE0510",
+        },
+        {
+            "object_spec_generic_parent_overlap.ff",
+            "module test.object_spec_generic_parent_overlap;\n"
+            "spec Root {}\n"
+            "spec Leaf: Root {}\n"
+            "type Concrete: Leaf {}\n"
+            "spec Parent<T> { func select(value: T): int; }\n"
+            "spec Invalid: Parent<Root> {\n"
+            "  func select(value: Leaf): int;\n"
+            "}\n",
+            "AE0706",
+        },
+        {
+            "object_spec_distinct_generic_parent_overlap.ff",
+            "module test.object_spec_distinct_generic_parent_overlap;\n"
+            "spec Root {}\n"
+            "spec Leaf: Root {}\n"
+            "type Concrete: Leaf {}\n"
+            "spec Surface<T> { func select(value: T): int; }\n"
+            "spec RootSurface: Surface<Root> {}\n"
+            "spec LeafSurface: Surface<Leaf> {}\n"
+            "spec Invalid: RootSurface, LeafSurface {}\n",
+            "AE0706",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(
+            cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(semantic_error_code_count(
+                   errors, error_count, cases[index].code) == 1U);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Parent/child spec parameter overloads remain legal without a visible
+ * concrete type satisfying both, exactly matching ordinary type methods. */
+static void test_object_spec_parent_parameter_overload_without_concrete_overlap(void) {
+    const char *source =
+        "module test.object_spec_parent_parameter_overload;\n"
+        "spec Parent {}\n"
+        "spec Child: Parent {}\n"
+        "spec Surface {\n"
+        "  func select(value: Parent): int;\n"
+        "  func select(value: Child): int;\n"
+        "}\n"
+        "type Handler {\n"
+        "  func select(value: Parent): int { return 1; }\n"
+        "  func select(value: Child): int { return 2; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_parent_parameter_overload.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Legal own, parent, multi-parent and static/instance overloads materialize
+ * one witness entry per exact logical requirement. Equivalent parent/child
+ * declarations collapse to the child identity. */
+static void test_object_spec_overload_witness_keeps_exact_requirements(void) {
+    const char *source =
+        "module test.object_spec_overload_witness;\n"
+        "spec NumberCall(value: int): int;\n"
+        "spec TextCall(value: string): string;\n"
+        "spec Root { func select(value: bool): bool; }\n"
+        "spec Number: Root { func select(value: int): int; }\n"
+        "spec Text { func select(value: string): string; }\n"
+        "spec Selector: Number, Text { func select(value: f64): f64; }\n"
+        "spec Factory {\n"
+        "  static func create(value: int): int;\n"
+        "  static func create(value: string): string;\n"
+        "}\n"
+        "spec Surface { func value(): int; static func value(): string; }\n"
+        "spec SameParent { func same(value: int): int; }\n"
+        "spec SameChild: SameParent { func same(value: int): int; }\n"
+        "type Choice: Selector, Factory, Surface, SameChild {\n"
+        "  func select(value: bool): bool { return value; }\n"
+        "  func select(value: int): int { return value + 1; }\n"
+        "  func select(value: string): string { return value; }\n"
+        "  func select(value: f64): f64 { return value + 1.0; }\n"
+        "  static func create(value: int): int { return value + 1; }\n"
+        "  static func create(value: string): string { return value; }\n"
+        "  func value(): int { return 1; }\n"
+        "  static func value(): string { return \"ok\"; }\n"
+        "  func same(value: int): int { return value; }\n"
+        "}\n"
+        "func make<T: Factory>(): string { return T.create(\"ok\"); }\n"
+        "func staticValue<T: Surface>(): string { return T.value(); }\n"
+        "func use(value: Choice): string {\n"
+        "  let selector: Selector = value;\n"
+        "  let surface: Surface = value;\n"
+        "  let same: SameChild = value;\n"
+        "  let number: NumberCall = selector.select;\n"
+        "  let text: TextCall = selector.select;\n"
+        "  if (number(1) == 2 && text(\"ok\") == \"ok\" &&\n"
+        "      selector.select(true) && selector.select(1.0) == 2.0 &&\n"
+        "      surface.value() == 1 && staticValue<Choice>() == \"ok\" &&\n"
+        "      same.same(1) == 1) {\n"
+        "    return make<Choice>();\n"
+        "  }\n"
+        "  return \"failed\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_overload_witness.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *choice;
+    const FengDecl *selector;
+    const FengDecl *factory;
+    const FengDecl *surface;
+    const FengDecl *same_child;
+    FengSemanticSubjectKey key;
+    const FengSpecWitness *witness;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    choice = find_type_decl_by_name(analysis, "Choice");
+    selector = find_spec_decl_by_name(analysis, "Selector");
+    factory = find_spec_decl_by_name(analysis, "Factory");
+    surface = find_spec_decl_by_name(analysis, "Surface");
+    same_child = find_spec_decl_by_name(analysis, "SameChild");
+    ASSERT(choice != NULL && selector != NULL && factory != NULL &&
+           surface != NULL && same_child != NULL);
+    key = feng_semantic_subject_key_for_type_decl(choice);
+
+    witness = feng_semantic_lookup_spec_witness(analysis, &key, selector);
+    ASSERT(witness != NULL && witness->member_count == 4U);
+    for (size_t index = 0U; index < witness->member_count; ++index) {
+        ASSERT(witness->members[index].spec_member != NULL);
+        ASSERT(witness->members[index].impl_member != NULL);
+    }
+    witness = feng_semantic_lookup_spec_witness(analysis, &key, factory);
+    ASSERT(witness != NULL && witness->member_count == 2U);
+    ASSERT(witness->members[0].spec_member->is_static);
+    ASSERT(witness->members[1].spec_member->is_static);
+    witness = feng_semantic_lookup_spec_witness(analysis, &key, surface);
+    ASSERT(witness != NULL && witness->member_count == 2U);
+    ASSERT(witness->members[0].spec_member->is_static !=
+           witness->members[1].spec_member->is_static);
+    witness = feng_semantic_lookup_spec_witness(analysis, &key, same_child);
+    ASSERT(witness != NULL && witness->member_count == 1U);
+    ASSERT(witness->members[0].spec_member ==
+           same_child->as.spec_decl.as.object.members[0]);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A value whose concrete type is a constrained generic parameter resolves an
+ * object-form instance overload from the call arguments, not from declaration
+ * name order. Both selected return types must therefore remain exact. */
+static void test_object_spec_generic_receiver_call_selects_exact_overload(void) {
+    const char *source =
+        "module test.object_spec_generic_receiver_overload;\n"
+        "spec Surface {\n"
+        "  func select(value: int): int;\n"
+        "  func select(value: string): string;\n"
+        "  func select(value: bool): bool;\n"
+        "}\n"
+        "func call<T: Surface>(value: T): string {\n"
+        "  let selected: bool = value.select(true);\n"
+        "  if (selected) { return value.select(\"generic\"); }\n"
+        "  return \"failed\";\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_generic_receiver_overload.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
+    test_object_spec_declared_method_overload_diagnostics();
+    test_object_spec_accumulated_method_overload_diagnostics();
+    test_object_spec_parent_parameter_overload_without_concrete_overlap();
+    test_object_spec_overload_witness_keeps_exact_requirements();
+    test_object_spec_generic_receiver_call_selects_exact_overload();
     test_friend_type_member_access_and_normalization();
     test_friend_type_implementation_contexts_are_authorized();
     test_friend_type_implementation_contexts_cross_module();

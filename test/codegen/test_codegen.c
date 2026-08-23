@@ -7621,6 +7621,302 @@ static void test_intersection_spec_overload_codegen_preserves_exact_slots(void) 
     feng_program_free(program);
 }
 
+/* Object-form parent accumulation preserves each legal overload by exact
+ * requirement identity. Equivalent generic parent/child declarations share
+ * the historical primary slot with the child's concrete ABI, while instance
+ * and static same-name requirements remain separate compile-time slots. */
+static void test_object_spec_overload_codegen_preserves_exact_slots(void) {
+    const char *source =
+        "module feng.codegen.object_spec_overload;\n"
+        "spec Base<T> {\n"
+        "  func choose(value: T): T;\n"
+        "  static func create(value: T): T;\n"
+        "}\n"
+        "spec Child: Base<i32> {\n"
+        "  func choose(value: i32): i32;\n"
+        "  func choose(value: string): string;\n"
+        "  static func create(value: i32): i32;\n"
+        "  static func create(value: string): string;\n"
+        "}\n"
+        "spec Extra: Base<bool> {\n"
+        "  func choose(value: bool): bool;\n"
+        "  static func create(value: bool): bool;\n"
+        "}\n"
+        "spec Combined: Child, Extra {}\n"
+        "spec Dual { func marker(): i32; static func marker(): string; }\n"
+        "spec StringMapper(value: string): string;\n"
+        "type Choice: Combined, Dual {\n"
+        "  func choose(value: i32): i32 { return value + 1; }\n"
+        "  func choose(value: string): string { return value; }\n"
+        "  func choose(value: bool): bool { return value; }\n"
+        "  static func create(value: i32): i32 { return value + 1; }\n"
+        "  static func create(value: string): string { return value; }\n"
+        "  static func create(value: bool): bool { return value; }\n"
+        "  func marker(): i32 { return 7; }\n"
+        "  static func marker(): string { return \"static\"; }\n"
+        "}\n"
+        "func bindText(value: Combined): StringMapper { return value.choose; }\n"
+        "func bindStaticText<T: Combined>(): StringMapper { return T.create; }\n"
+        "func direct(value: Combined): string {\n"
+        "  if (value.choose(1) == 2 && value.choose(true)) {\n"
+        "    return value.choose(\"direct\");\n"
+        "  }\n"
+        "  return \"failed\";\n"
+        "}\n"
+        "func staticText<T: Combined>(): string { return T.create(\"text\"); }\n"
+        "func staticBool<T: Combined>(): bool { return T.create(true); }\n"
+        "func instanceMarker(value: Dual): i32 { return value.marker(); }\n"
+        "func staticMarker<T: Dual>(): string { return T.marker(); }\n";
+    FengProgram *program = parse_or_die(
+        source, "object_spec_overload_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *child_start;
+    const char *child_end;
+    const char *combined_start;
+    const char *combined_end;
+    const char *dual_start;
+    const char *dual_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    child_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__object_spec_overload__Child {\n");
+    ASSERT(child_start != NULL);
+    child_end = strstr(child_start, "};\n");
+    ASSERT(child_end != NULL);
+    ASSERT(count_substr_in_span(child_start, child_end, "(*choose)(") == 1U);
+    ASSERT(count_substr_in_span(child_start, child_end,
+                                "(*choose__feng_overload_2)(") == 1U);
+    ASSERT(count_substr_in_span(child_start, child_end, "(*create)(") == 1U);
+    ASSERT(count_substr_in_span(child_start, child_end,
+                                "(*create__feng_overload_2)(") == 1U);
+    ASSERT(span_contains(child_start, child_end,
+                         "int32_t (*choose)(void *_subject, int32_t);"));
+    ASSERT(span_contains(child_start, child_end,
+                         "int32_t (*create)(int32_t);"));
+
+    combined_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__object_spec_overload__Combined {\n");
+    ASSERT(combined_start != NULL);
+    combined_end = strstr(combined_start, "};\n");
+    ASSERT(combined_end != NULL);
+    ASSERT(count_substr_in_span(combined_start, combined_end, "(*choose)(") == 1U);
+    ASSERT(count_substr_in_span(combined_start, combined_end,
+                                "(*choose__feng_overload_2)(") == 1U);
+    ASSERT(count_substr_in_span(combined_start, combined_end,
+                                "(*choose__feng_overload_3)(") == 1U);
+    ASSERT(count_substr_in_span(combined_start, combined_end, "(*create)(") == 1U);
+    ASSERT(count_substr_in_span(combined_start, combined_end,
+                                "(*create__feng_overload_2)(") == 1U);
+    ASSERT(count_substr_in_span(combined_start, combined_end,
+                                "(*create__feng_overload_3)(") == 1U);
+
+    dual_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__object_spec_overload__Dual {\n");
+    ASSERT(dual_start != NULL);
+    dual_end = strstr(dual_start, "};\n");
+    ASSERT(dual_end != NULL);
+    ASSERT(count_substr_in_span(dual_start, dual_end, "(*marker)(") == 1U);
+    ASSERT(count_substr_in_span(dual_start, dual_end,
+                                "(*marker__feng_overload_2)(") == 1U);
+
+    ASSERT(strstr(output.c_source,
+                  ".witness->choose__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness->choose__feng_overload_3(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "_bound->_witness->choose__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->create__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->create__feng_overload_3(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->marker__feng_overload_2()") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Different closures of one generic parent declaration must also keep their
+ * exact implementation when the parent witness is materialized independently
+ * of the combined child surface. Cover both type-owned and fit-owned methods;
+ * a wrong declaration-only lookup still produces valid C but forwards bool
+ * storage through the i32 implementation ABI. */
+static void test_object_spec_closed_parent_witness_uses_exact_implementation(void) {
+    const char *source =
+        "module feng.codegen.object_spec_closed_parent_witness;\n"
+        "spec Base<T> {\n"
+        "  func choose(value: T): T;\n"
+        "  static func build(value: T): T;\n"
+        "}\n"
+        "spec Number: Base<i32> {}\n"
+        "spec Flag: Base<bool> {}\n"
+        "spec Combined: Number, Flag {}\n"
+        "type Choice: Combined {\n"
+        "  func choose(value: i32): i32 { return value + 1; }\n"
+        "  func choose(value: bool): bool { return !value; }\n"
+        "  static func build(value: i32): i32 { return value + 2; }\n"
+        "  static func build(value: bool): bool { return !value; }\n"
+        "}\n"
+        "type FitChoice {}\n"
+        "fit FitChoice: Combined {\n"
+        "  func choose(value: i32): i32 { return value + 3; }\n"
+        "  func choose(value: bool): bool { return value; }\n"
+        "  static func build(value: i32): i32 { return value + 4; }\n"
+        "  static func build(value: bool): bool { return value; }\n"
+        "}\n"
+        "func staticBool<T: Base<bool>>(value: bool): bool {\n"
+        "  return T.build(value);\n"
+        "}\n"
+        "func runChoice(): bool {\n"
+        "  let value: Base<bool> = Choice {};\n"
+        "  return value.choose(true) || staticBool<Choice>(true);\n"
+        "}\n"
+        "func runFit(): bool {\n"
+        "  let value: Base<bool> = FitChoice {};\n"
+        "  return value.choose(true) || staticBool<FitChoice>(true);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "object_spec_closed_parent_witness_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *choice_instance;
+    const char *choice_static;
+    const char *fit_instance;
+    const char *fit_static;
+    const char *function_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    choice_instance = strstr(
+        output.c_source,
+        "__Choice__as__feng__codegen__object_spec_closed_parent_witness__Base_bool___choose(void *_subject, const void * p0, void *_out) {\n");
+    ASSERT(choice_instance != NULL);
+    function_end = strstr(choice_instance, "\n}\n");
+    ASSERT(function_end != NULL);
+    ASSERT(span_contains(choice_instance, function_end, "bool _ret ="));
+    ASSERT(span_contains(choice_instance, function_end, "__choose__from__b("));
+    ASSERT(!span_contains(choice_instance, function_end, "int32_t _ret ="));
+
+    choice_static = strstr(
+        output.c_source,
+        "__Choice__as__feng__codegen__object_spec_closed_parent_witness__Base_bool___build(const void * p0, void *_out) {\n");
+    ASSERT(choice_static != NULL);
+    function_end = strstr(choice_static, "\n}\n");
+    ASSERT(function_end != NULL);
+    ASSERT(span_contains(choice_static, function_end, "bool _ret ="));
+    ASSERT(span_contains(choice_static, function_end,
+                         "__static__build__from__b("));
+
+    fit_instance = strstr(
+        output.c_source,
+        "__FitChoice__as__feng__codegen__object_spec_closed_parent_witness__Base_bool___choose(void *_subject, const void * p0, void *_out) {\n");
+    ASSERT(fit_instance != NULL);
+    function_end = strstr(fit_instance, "\n}\n");
+    ASSERT(function_end != NULL);
+    ASSERT(span_contains(fit_instance, function_end, "bool _ret ="));
+    ASSERT(span_contains(fit_instance, function_end, "__choose__from__b("));
+    ASSERT(!span_contains(fit_instance, function_end, "int32_t _ret ="));
+
+    fit_static = strstr(
+        output.c_source,
+        "__FitChoice__as__feng__codegen__object_spec_closed_parent_witness__Base_bool___build(const void * p0, void *_out) {\n");
+    ASSERT(fit_static != NULL);
+    function_end = strstr(fit_static, "\n}\n");
+    ASSERT(function_end != NULL);
+    ASSERT(span_contains(fit_static, function_end, "bool _ret ="));
+    ASSERT(span_contains(fit_static, function_end, "__build__from__b"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* User and builtin fits may implement same-name instance and static
+ * requirements. Their implementation symbols must remain distinct while the
+ * generated witness calls retain the existing direct-call runtime shape. */
+static void test_fit_instance_static_same_name_codegen_symbols_are_distinct(void) {
+    const char *source =
+        "module feng.codegen.fit_method_domain;\n"
+        "spec Dual { func marker(): i32; static func marker(): string; }\n"
+        "type Value {}\n"
+        "fit Value: Dual {\n"
+        "  func marker(): i32 { return 7; }\n"
+        "  static func marker(): string { return \"user-static\"; }\n"
+        "}\n"
+        "fit i32: Dual {\n"
+        "  func marker(): i32 { return self; }\n"
+        "  static func marker(): string { return \"builtin-static\"; }\n"
+        "}\n"
+        "func instanceMarker(value: Dual): i32 { return value.marker(); }\n"
+        "func staticMarker<T: Dual>(): string { return T.marker(); }\n"
+        "func userRun(): string {\n"
+        "  let value: Dual = Value {};\n"
+        "  if (instanceMarker(value) == 7) { return staticMarker<Value>(); }\n"
+        "  return \"failed\";\n"
+        "}\n"
+        "func builtinRun(): string {\n"
+        "  let number: i32 = 9;\n"
+        "  let value: Dual = number;\n"
+        "  if (instanceMarker(value) == 9) { return staticMarker<i32>(); }\n"
+        "  return \"failed\";\n"
+        "}\n";
+    FengProgram *program = parse_or_die(source, "fit_method_domain_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "__marker__from__void__static(void)") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "__marker__from__void__static(const FengFunctionDescriptor *_desc") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A shared T: ObjectSpec binder consumes one statically slotted closed
  * descriptor. Concrete reference, trivial and descriptor-sized receivers all
  * use one closure allocation, with no object-spec box or escaping stack
@@ -14124,6 +14420,9 @@ int main(void) {
     test_object_spec_method_value_codegen_uses_bound_witness();
     test_intersection_spec_method_value_codegen_uses_merged_witness();
     test_intersection_spec_overload_codegen_preserves_exact_slots();
+    test_object_spec_overload_codegen_preserves_exact_slots();
+    test_object_spec_closed_parent_witness_uses_exact_implementation();
+    test_fit_instance_static_same_name_codegen_symbols_are_distinct();
     test_constrained_generic_spec_method_value_codegen();
     test_constrained_generic_intersection_method_value_codegen();
     test_intersection_constrained_static_method_call_codegen();

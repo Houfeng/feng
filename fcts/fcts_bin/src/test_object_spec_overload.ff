@@ -1,0 +1,396 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_object_spec_overload;
+
+/** Generic parent contract closed by the local child contract. */
+spec ObjectOverloadBase<T> {
+  func select(value: T): T;
+  static func create(value: T): T;
+}
+
+/** Local child contract retaining an equivalent integer requirement. */
+spec ObjectOverloadChild: ObjectOverloadBase<int> {
+  func select(value: int): int;
+  func select(value: string): string;
+  static func create(value: int): int;
+  static func create(value: string): string;
+}
+
+/** Local second parent closes the same generic base with bool. */
+spec ObjectOverloadExtra: ObjectOverloadBase<bool> {
+  func select(value: bool): bool;
+  static func create(value: bool): bool;
+}
+
+/** Complete local multi-parent overload surface. */
+spec ObjectOverloadCombined: ObjectOverloadChild, ObjectOverloadExtra {}
+
+/** Generic parent used through two closed paths without child redeclaration. */
+spec ObjectClosedOverloadBase<T> {
+  func choose(value: T): T;
+  static func build(value: T): T;
+}
+
+/** Integer closure of the shared generic parent. */
+spec ObjectClosedOverloadNumber: ObjectClosedOverloadBase<int> {}
+
+/** Boolean closure of the shared generic parent. */
+spec ObjectClosedOverloadFlag: ObjectClosedOverloadBase<bool> {}
+
+/** Surface retaining both closed instances of the same AST requirements. */
+spec ObjectClosedOverloadCombined:
+  ObjectClosedOverloadNumber, ObjectClosedOverloadFlag {}
+
+/** Instance and static requirements intentionally sharing one name. */
+spec ObjectOverloadDual {
+  func marker(): int;
+  static func marker(): string;
+}
+
+/** Local integer callable target. */
+spec ObjectOverloadIntMapper(value: int): int;
+
+/** Local string callable target. */
+spec ObjectOverloadStringMapper(value: string): string;
+
+/** Local boolean callable target. */
+spec ObjectOverloadBoolMapper(value: bool): bool;
+
+/** Implements two closed instances inherited from one generic parent. */
+type ObjectClosedOverloadType: ObjectClosedOverloadCombined {
+  func choose(value: int): int {
+    return value + 300;
+  }
+
+  func choose(value: bool): bool {
+    return !value;
+  }
+
+  static func build(value: int): int {
+    return value + 400;
+  }
+
+  static func build(value: bool): bool {
+    return !value;
+  }
+}
+
+/** Fit-owned implementation of the same two closed parent requirements. */
+type ObjectClosedOverloadFitValue {}
+
+fit ObjectClosedOverloadFitValue: ObjectClosedOverloadCombined {
+  func choose(value: int): int {
+    return value + 500;
+  }
+
+  func choose(value: bool): bool {
+    return value;
+  }
+
+  static func build(value: int): int {
+    return value + 600;
+  }
+
+  static func build(value: bool): bool {
+    return value;
+  }
+}
+
+/** Type-owned implementation of the complete local overload surface. */
+type ObjectOverloadType: ObjectOverloadCombined, ObjectOverloadDual {
+  let base: int;
+
+  func select(value: int): int {
+    return self.base + value;
+  }
+
+  func select(value: string): string {
+    return value + ":type";
+  }
+
+  func select(value: bool): bool {
+    return value;
+  }
+
+  static func create(value: int): int {
+    return value + 100;
+  }
+
+  static func create(value: string): string {
+    return value + ":type-static";
+  }
+
+  static func create(value: bool): bool {
+    return value;
+  }
+
+  func marker(): int {
+    return self.base;
+  }
+
+  static func marker(): string {
+    return "type-marker";
+  }
+}
+
+/** Concrete target whose complete implementation is supplied by one fit. */
+type ObjectOverloadFitValue {
+  let base: int;
+}
+
+fit ObjectOverloadFitValue: ObjectOverloadCombined, ObjectOverloadDual {
+  func select(value: int): int {
+    return self.base + value + 1000;
+  }
+
+  func select(value: string): string {
+    return value + ":fit";
+  }
+
+  func select(value: bool): bool {
+    return value;
+  }
+
+  static func create(value: int): int {
+    return value + 200;
+  }
+
+  static func create(value: string): string {
+    return value + ":fit-static";
+  }
+
+  static func create(value: bool): bool {
+    return value;
+  }
+
+  func marker(): int {
+    return self.base + 1000;
+  }
+
+  static func marker(): string {
+    return "fit-marker";
+  }
+}
+
+/** Select instance overloads through a constrained generic receiver. */
+func callObjectOverloadGeneric<T: ObjectOverloadCombined>(value: T): string {
+  if (value.select(2) > 0 && value.select(true)) {
+    return value.select("generic");
+  }
+  return "failed";
+}
+
+/** Form an instance overload from a constrained generic receiver. */
+func bindObjectOverloadGeneric<T: ObjectOverloadCombined>(
+  value: T
+): ObjectOverloadStringMapper {
+  return value.select;
+}
+
+/** Call a selected static overload through a type-parameter constraint. */
+func callObjectOverloadStaticText<T: ObjectOverloadCombined>(): string {
+  return T.create("local");
+}
+
+/** Form a selected static overload through a type-parameter constraint. */
+func bindObjectOverloadStaticText<T: ObjectOverloadCombined>():
+  ObjectOverloadStringMapper {
+  return T.create;
+}
+
+/** Form the boolean instance slot inherited from a closed generic parent. */
+func bindObjectClosedOverloadBool(
+  value: ObjectClosedOverloadCombined
+): ObjectOverloadBoolMapper {
+  return value.choose;
+}
+
+/** Call the boolean static slot inherited from a closed generic parent. */
+func callObjectClosedOverloadStaticBool<
+  T: ObjectClosedOverloadCombined
+>(value: bool): bool {
+  return T.build(value);
+}
+
+/** Call the closed generic parent witness independently of Combined's slots. */
+func callObjectClosedOverloadParentStaticBool<
+  T: ObjectClosedOverloadBase<bool>
+>(value: bool): bool {
+  return T.build(value);
+}
+
+/** Select the static half of an instance/static same-name requirement. */
+func callObjectOverloadStaticMarker<T: ObjectOverloadDual>(): string {
+  return T.marker();
+}
+
+/** Consumer-owned implementation of the imported overload contract. */
+type ConsumerLibObjectOverloadValue: LibObjectOverloadCombined {
+  let base: int;
+
+  func select(value: int): int {
+    return self.base + value;
+  }
+
+  func select(value: string): string {
+    return value + ":consumer";
+  }
+
+  func select(value: bool): bool {
+    return value;
+  }
+
+  static func create(value: int): int {
+    return value + 20;
+  }
+
+  static func create(value: string): string {
+    return value + ":consumer-static";
+  }
+
+  static func create(value: bool): bool {
+    return value;
+  }
+}
+
+/** Call an imported static requirement from a consumer-owned generic body. */
+func callImportedObjectOverloadStaticText<T: LibObjectOverloadCombined>():
+  string {
+  return T.create("consumer-call");
+}
+
+/** Object-form spec overload behavior coverage. */
+open func test_object_spec_overload(): void {
+  describe("object-form spec overloads", () {
+    test("dispatches own parent multi-parent and method-value overloads", () {
+      let view: ObjectOverloadCombined = ObjectOverloadType { base: 10 };
+      let integer: ObjectOverloadIntMapper = view.select;
+      let text: ObjectOverloadStringMapper = view.select;
+      let generic = bindObjectOverloadGeneric(
+        ObjectOverloadType { base: 20 }
+      );
+
+      assert(view.select(2) == 12, "equivalent generic parent slot");
+      assert(view.select("direct") == "direct:type",
+             "child string overload");
+      assert(view.select(true), "second parent boolean overload");
+      assert(integer(3) == 13, "integer instance method value");
+      assert(text("bound") == "bound:type",
+             "string instance method value");
+      assert(callObjectOverloadGeneric(
+               ObjectOverloadType { base: 30 }
+             ) == "generic:type",
+             "constrained generic instance calls");
+      assert(generic("generic-value") == "generic-value:type",
+             "constrained generic instance method value");
+    });
+
+    test("dispatches static overloads and instance-static same-name slots", () {
+      let staticText =
+        bindObjectOverloadStaticText<ObjectOverloadType>();
+      let dual: ObjectOverloadDual = ObjectOverloadType { base: 40 };
+
+      assert(callObjectOverloadStaticText<ObjectOverloadType>() ==
+               "local:type-static",
+             "constrained static string overload");
+      assert(staticText("bound") == "bound:type-static",
+             "constrained static method value overload");
+      assert(dual.marker() == 40, "instance same-name slot");
+      assert(callObjectOverloadStaticMarker<ObjectOverloadType>() ==
+               "type-marker",
+             "static same-name slot");
+    });
+
+    test("keeps distinct closures of one generic parent declaration", () {
+      let view: ObjectClosedOverloadCombined = ObjectClosedOverloadType {};
+      let toggle = bindObjectClosedOverloadBool(view);
+      let parent: ObjectClosedOverloadBase<bool> =
+        ObjectClosedOverloadType {};
+      let parentToggle: ObjectOverloadBoolMapper = parent.choose;
+      let fittedView: ObjectClosedOverloadCombined =
+        ObjectClosedOverloadFitValue {};
+      let fittedParent: ObjectClosedOverloadBase<bool> =
+        ObjectClosedOverloadFitValue {};
+
+      assert(view.choose(2) == 302,
+             "closed integer parent requirement");
+      assert(!view.choose(true),
+             "closed boolean parent requirement");
+      assert(toggle(false),
+             "closed boolean parent method value");
+      assert(!callObjectClosedOverloadStaticBool<
+               ObjectClosedOverloadType
+             >(true),
+             "closed boolean parent static requirement");
+      assert(!parent.choose(true),
+             "independent closed boolean parent witness");
+      assert(parentToggle(false),
+             "independent closed boolean parent method value");
+      assert(!callObjectClosedOverloadParentStaticBool<
+               ObjectClosedOverloadType
+             >(true),
+             "independent closed boolean parent static witness");
+      assert(fittedView.choose(2) == 502,
+             "fit closed integer parent requirement");
+      assert(fittedParent.choose(true),
+             "fit independent closed boolean parent witness");
+      assert(callObjectClosedOverloadParentStaticBool<
+               ObjectClosedOverloadFitValue
+             >(true),
+             "fit independent closed boolean parent static witness");
+    });
+
+    test("builds the same exact witness surface from fit implementations", () {
+      let fitted = ObjectOverloadFitValue { base: 50 };
+      let view: ObjectOverloadCombined = fitted;
+      let text: ObjectOverloadStringMapper = view.select;
+      let dual: ObjectOverloadDual = fitted;
+      let staticText =
+        bindObjectOverloadStaticText<ObjectOverloadFitValue>();
+
+      assert(view.select(2) == 1052, "fit integer overload");
+      assert(view.select("direct") == "direct:fit",
+             "fit string overload");
+      assert(view.select(true), "fit boolean overload");
+      assert(text("bound") == "bound:fit", "fit method value overload");
+      assert(staticText("bound") == "bound:fit-static",
+             "fit static method value overload");
+      assert(dual.marker() == 1050, "fit instance same-name slot");
+      assert(callObjectOverloadStaticMarker<ObjectOverloadFitValue>() ==
+               "fit-marker",
+             "fit static same-name slot");
+    });
+
+    test("restores imported overload surfaces and exact slots", () {
+      let imported = makeLibObjectOverloadValue(60);
+      let consumerBound: LibObjectOverloadStringMapper = imported.select;
+      let providerBound = bindLibObjectOverloadText(imported);
+      let consumerValue = ConsumerLibObjectOverloadValue { base: 70 };
+      let consumerView: LibObjectOverloadCombined = consumerValue;
+      let providerStatic =
+        bindLibObjectOverloadStaticText<ConsumerLibObjectOverloadValue>();
+
+      assert(imported.select(2) == 62, "imported integer overload");
+      assert(imported.select("direct") == "direct:lib",
+             "imported string overload");
+      assert(imported.select(true), "imported boolean overload");
+      assert(consumerBound("consumer") == "consumer:lib",
+             "consumer-bound imported overload");
+      assert(providerBound("provider") == "provider:lib",
+             "provider-bound imported overload");
+      assert(consumerView.select(3) == 73,
+             "consumer-owned imported witness");
+      assert(callImportedObjectOverloadStaticText<
+               ConsumerLibObjectOverloadValue
+             >() == "consumer-call:consumer-static",
+             "consumer generic body uses imported static slot");
+      assert(providerStatic("provider") == "provider:consumer-static",
+             "provider generic body restores consumer static slot");
+      assert(callLibObjectOverloadStaticBool<
+               ConsumerLibObjectOverloadValue
+             >(true),
+             "provider generic direct call restores boolean slot");
+    });
+  });
+}

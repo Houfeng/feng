@@ -122,8 +122,11 @@
 | AE0506 | 可调用签名缺失约束 | AE0079 | call target '%s' has no function type overload accepting %zu argument(s) |
 | AE0507 | 表达式可调用性约束 | AE0080 | expression '%s' is not callable |
 | AE0508 | 方法签名重复声明约束 | AE0110 | duplicate method signature '%.*s' in type '%.*s' |
+| AE0508 | object-form spec 方法签名重复声明约束 | （新增模板） | duplicate method signature '%.*s' in object-form spec '%.*s' |
 | AE0509 | 仅返回类型差异的重载禁用 | AE0111 | method overloads in type '%.*s' cannot differ only by return type: '%.*s' |
+| AE0509 | object-form spec 仅返回类型差异的重载禁用 | （新增模板） | method overloads in object-form spec '%.*s' cannot differ only by return type: '%.*s' |
 | AE0510 | 变参方法重载冲突约束 | AE0112 | variadic method overload conflicts with existing method '%.*s' in type '%.*s' |
+| AE0510 | object-form spec 变参方法重载冲突约束 | （新增模板） | variadic method overload conflicts with existing method '%.*s' in object-form spec '%.*s' |
 | AE0511 | 调用重载二义性约束 | AE0144 | function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0145 | function '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0146 | static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
@@ -190,6 +193,7 @@
 | AE0706 | 可见关系下重载二义性 | AE0195 | type '%.*s' satisfies specs '%.*s' and '%.*s' which both declare method '%.*s' with the same parameters but different return types |
 | AE0706 | 可见关系下重载二义性 | AE0196 | method overloads in type '%.*s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0706 | 可见关系下重载二义性 | AE0198 | function overloads may both match the same arguments under visible contract relations: '%.*s' |
+| AE0706 | object-form spec 可见关系下重载二义性 | （新增模板） | method overloads in object-form spec '%.*s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0707 | spec 实现成员可见性兼容约束 | (新增) | type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s' |
 | AE0708 | spec seal 成员访问域约束 | (新增) | seal member '%.*s' of spec '%.*s' is only accessible from a type or fit implementation that satisfies that spec |
 | AE0709 | 类型参数约束形态 | AE0212 | type parameter '%.*s': constraint must be a spec, not a type |
