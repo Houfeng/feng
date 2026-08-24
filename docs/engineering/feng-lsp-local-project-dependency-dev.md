@@ -459,8 +459,15 @@ bundle path 失效时才调度。相同或更新 generation 已经 pending/runni
 多成功分析缓存下，需要把 pending storage 改成一个小型数组/队列：
 
 ```c
+typedef enum FengLspPendingAnalysisTargetKind {
+    FENG_LSP_PENDING_DOCUMENT,
+    FENG_LSP_PENDING_PROJECT
+} FengLspPendingAnalysisTargetKind;
+
 typedef struct FengLspPendingAnalysis {
+    FengLspPendingAnalysisTargetKind target_kind;
     char *uri;
+    char *manifest_path;
     size_t generation;
     bool diagnostics_requested;
     bool refresh_workspace_index;
@@ -468,8 +475,22 @@ typedef struct FengLspPendingAnalysis {
 } FengLspPendingAnalysis;
 ```
 
-同一项目/URI 的连续任务只保留最新 generation；不同项目的任务不得互相覆盖。analyzer 仍串行处理，
-不增加线程，也不改变 frontend。
+两个 target field 必须互斥：document 任务只拥有 `uri`，project 预热任务只拥有 canonical
+`manifest_path`。document 任务继续从 overlay 文档调用现有 `build_analysis_session()`；project 任务用于
+尚未打开任何文件的本地依赖，由 analyzer 直接按 manifest 调用 LSP 私有的 project-session 构建路径，并
+从不可变 document snapshot 收集属于该 manifest 的已打开 overlay，不向 DocumentStore 注入伪文档。
+
+为此只在 `service.c` 内把 `analysis_task_clone()` 扩展为同时携带 document snapshot 和上述 target，并把
+`build_project_session()` 的 primary document 改为可选输入；project-open/resolve/frontend 主体保持不变。
+project 任务的 project error 以 manifest path 定位，不发布 document diagnostics。
+
+同一 canonical manifest 的连续 document/project 任务合并为最新 generation；manifest 尚未在后台解析的
+document 任务暂按 URI 合并，解析后再与同 manifest 队列项合并。不同 manifest 的任务不得互相覆盖。
+analyzer 仍串行处理，不增加线程，也不改变 frontend。
+
+`module_index_scan_project()` 当前已经把递归访问到的 canonical manifest 保存在 visited list。module-index
+job 在释放该 list 前，把其中尚未缓存、尚未 pending/running 的本地依赖 manifest 作为 project target
+加入队列；根项目本身不重复入队。由此预热不依赖目标项目文件已经在 IDE 中打开。
 
 ### 6.1 避免重复本地依赖 resolve
 
@@ -669,12 +690,14 @@ char *workspace_index_manifest_path;
 
 ### Phase 3：多项目后台调度
 
-- [ ] 将单一 `pending_analysis_uri` 改为可同时保存不同项目任务的小型动态队列。
+- [ ] 将单一 `pending_analysis_uri` 改为可同时保存 document URI/project manifest 两类目标的小型动态队列。
 - [ ] 记录 pending/running identity 和 generation；同一项目只保留最新任务，不同项目不得互相覆盖。
+- [ ] 扩展 analysis task/project-session 私有 helper，使未打开文件的 project manifest 任务可消费当前
+      document snapshot overlays，且不向 DocumentStore 注入伪文档。
 - [ ] 实现 §5.5 的缓存状态判断：精确命中不重建，stale/miss 才按需调度。
 - [ ] 相同或更新 generation 已 pending/running 时不重复入队。
 - [ ] 保留既有 debounce、取消、diagnostics 请求和单 analyzer worker 行为。
-- [ ] 在既有本地依赖 module-index 遍历中预热尚未缓存且未排队的依赖项目 session。
+- [ ] 在既有本地依赖 module-index visited manifest 遍历中预热尚未缓存且未排队的依赖项目 session。
 - [ ] 同一 manifest 普通源码编辑时复用有效 resolved bundle paths，仅在 §6.1 条件满足时重新 resolve。
 
 ### Phase 4：既有单项目请求迁移
@@ -752,6 +775,7 @@ char *workspace_index_manifest_path;
 - [ ] object spec 和 spec member 的 Implementation 跨 session 返回正确结果。
 - [ ] 不相关项目具有同 module/name 时不串线。
 - [ ] 快速编辑不同项目时 pending task 不互相覆盖。
+- [ ] 本地依赖项目没有任何 IDE open document 时，manifest 预热任务仍能成功发布且不创建伪文档。
 - [ ] 某项目 candidate 失败不清除其他项目或自身旧成功 session。
 - [ ] 普通源码编辑后不重复触发本地依赖物化。
 - [ ] LSP 请求不修改已有 `.ft`、`.fb`、C 或 `.fd` 产物。
