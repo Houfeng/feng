@@ -99,10 +99,10 @@
 | 子交付 | 范围 | 实施文档 | 状态 |
 | --- | --- | --- | --- |
 | D1A | 表达式求值顺序 | [Feng 表达式求值顺序 FCTS 补齐实施文档](./feng-test-expression-evaluation-order-implementation-pending.md) | 已完成 |
-| D1B | 函数返回类型推导 | 待起草 | 未开始 |
+| D1B | 函数返回类型推导 | [Feng 函数返回类型推导 FCTS 补齐实施文档](./feng-test-function-return-inference-implementation-pending.md) | 待 Review |
 
-D1A 的用例实施细节、Todo、问题和交付记录仅在其实施文档中维护；本文的用例表只保留范围索引与
-交付顺序。
+D1A、D1B 的用例实施细节、Todo、问题和交付记录仅在各自实施文档中维护；本文的用例表只保留范围
+索引与交付顺序。
 
 #### 目标
 
@@ -121,7 +121,7 @@ D1A 的用例实施细节、Todo、问题和交付记录仅在其实施文档中
 | EVAL05 | `if` 表达式只执行选中分支 | 未选分支计数为 0，选中分支为 1 |
 | EVAL06 | 成员、下标、调用的后缀链 | base、index、argument、invoke 的观察顺序与各自次数正确；callee 固定复用已有直接证据 |
 | FUNC01 | 省略返回类型的顶层函数，多条返回路径类型一致 | 调用方取得推导后的正确值 |
-| FUNC02 | 省略返回类型的方法及跨模块公开函数 | 同包与跨模块调用均取得正确推导结果 |
+| FUNC02 | 省略返回类型的实例方法及跨包公开函数 | 实例方法调用与 `fcts_lib -> fcts_bin` 调用均取得正确推导结果 |
 | FUNC03 | 仅含无值 `return;` 的函数推导为 `void` | 可正常调用且副作用发生一次 |
 | FUNC04 | 块 Lambda 的 `return` 只属于 Lambda | 外层函数与 Lambda 分别返回预期值 |
 
