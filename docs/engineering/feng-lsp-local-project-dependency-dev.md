@@ -164,6 +164,37 @@ source path、AST、Semantic Analysis 和 Symbol metadata，不读取生成 C �
 parse diagnostics。少数绝对冷启动查询允许等待一个既有的有界发布窗口，但请求线程不执行完整项目分析。
 因此本方案不是引入新的请求策略，而是把现有单成功缓存策略等价扩展到多个项目。
 
+### 2.8 当前项目归属与项目切换
+
+当前 `FengLspService` 没有 `current_project`、workspace root → project 或 document → manifest 的持久字段。
+项目归属只在后台任务构建 candidate 时按本次 primary document 确定：
+
+```text
+didOpen / didChange / didSave 的 document URI
+→ `FengLspDocument.path` 物理路径
+→ `feng_cli_project_find_manifest_in_ancestors()`
+→ 从文件所在目录逐级向上查找最近的 `feng.fm`
+→ `feng_cli_project_open()` 得到该项目 source paths、依赖与 package path
+```
+
+`build_overlays()` 对每个已打开 document 再执行同样的最近 manifest 判断，只把与 candidate manifest
+相同的 overlay 交给本次 frontend。`build_symbol_index_candidate()` 和
+`build_module_index_candidate()` 也从各自 primary document 向上查找 manifest。
+
+当前在不同本地项目间切换时实际发生的是：
+
+1. 第一次打开项目 A 文件，`didOpen` 调度 A candidate；成功的 analysis、symbol index 和 module index
+   分别发布到各自唯一槽位；
+2. 随后打开或编辑项目 B 文件，相应通知调度 B analysis candidate；需要刷新 index 时也构建 B index。
+   各 candidate 成功后按各自的全局 generation 替换对应的 A 单槽缓存；
+3. IDE 只切换两个已经打开的编辑器标签时，标准 LSP 不发送“当前项目切换”通知，服务不会因此重建；
+4. 此时请求只用请求文件 physical path 在唯一成功 session 中查找；找不到或 text 不匹配时，进入
+   current parse/单份派生 index fallback，而不会在请求线程重新向上查 manifest。
+
+因此当前不是“切换时主动定位项目”，而是“最近一次成功后台任务隐式决定单缓存属于哪个项目”。本方案
+取消这个隐式当前项目：请求按 physical path 从多成功数组选择 origin session；只有缓存缺失后进入后台
+candidate 时，才继续复用现有最近 `feng.fm` 定位逻辑。
+
 ---
 
 ## 3. 变更边界
@@ -180,6 +211,7 @@ parse diagnostics。少数绝对冷启动查询允许等待一个既有的有界
 - 禁止修改 lexer、parser、semantic、symbol、codegen、runtime 和 DAP；
 - 禁止修改核心编译器符号查询接口；
 - 禁止修改 `.ft` / `.fb` 格式或读写实现；
+- 禁止过滤、替换或改变非本地 package 的 resolved bundle/provider/imported-module 查询链路；
 - 禁止修改 IR 和 `#line`；
 - 禁止把多个项目源码合并成一次编译器 Semantic Analysis；
 - 禁止为特定包名、模块名或目录增加特判。
@@ -560,6 +592,39 @@ for_each_last_successful_analysis(...)
 Hover、Completion、Signature Help、Document Symbol 等单文件/单项目请求只选择包含请求文件的
 session，继续执行现有逻辑。References、Rename、Definition 和 Implementation 使用全局遍历。
 
+### 8.1 非本地 package 依赖零回归
+
+非本地 package 依赖不是本次跨 session 映射对象，其既有查询链路必须原样保留：
+
+```text
+feng_cli_deps_resolve_for_manifest()
+→ 全部 resolved.package_paths（本地与非本地均保留）
+→ frontend package_paths / imported_module_cache
+→ symbol provider add_bundle()
+→ Hover、Completion、Signature Help、Definition 等既有请求逻辑
+```
+
+本次只在 imported target 的 bundle provenance 能与某个本地成功 session 的 `package_path` 精确匹配时，
+增加“定位本地 physical source 并跨 session 聚合”的分支。不能匹配本地 session 是非本地 package 的正常
+状态，必须继续执行 origin session 的既有 imported-symbol/provider 查询，不能把它当作错误、不能返回新增
+的 `null`/空候选，也不能触发针对远程 package 的源码分析。
+
+必须保持以下不变量：
+
+- `build_project_session()` 继续把 resolver 返回的全部 package bundle 交给 frontend，不按
+  `dependency->is_local_path` 过滤；
+- `build_symbol_index_candidate()` 继续把全部 `resolved.package_paths` 加入 provider；
+- 每个已发布 session 继续持有自己的 `bundle_paths` 和 `imported_module_cache`，多项目交换不得缩短其生命周期；
+- Hover、Completion、Completion Resolve、Signature Help 和 Definition 对非本地 package 的协议结果不得
+  因本地 workspace 映射失败而改变；
+- References/Implementation 不猜测非本地源码位置，Rename 不为 `.fb` 或非本地 package 生成 edit；
+- 不修改非本地 package 的 `.ft` / `.fb` 查找、格式、读写和缓存目录。
+
+本地增强必须是 origin session 既有查询之后的附加映射层，而不是替换 imported-symbol/provider 查询层。
+若请求不涉及本地 workspace session，执行路径和当前实现保持一致。
+
+### 8.2 派生索引的项目隔离
+
 现有 `symbol_index` 和 `module_index` 是 current-text fallback/冷启动派生索引，不属于
 `last_successful_analysis[]`。它们继续只保留当前活动查询上下文的一份，但增加一个规范化 manifest
 身份：
@@ -617,6 +682,8 @@ char *workspace_index_manifest_path;
 - [ ] 将所有直接读取 `service->last_successful_analysis` 的位置迁移到按 source path 选择 session 的 helper。
 - [ ] 保持 Hover、Completion 等 current-text 快路径及既有有界冷启动等待顺序不变。
 - [ ] 为单份派生 symbol/module index 增加 `workspace_index_manifest_path`，禁止跨项目错误借用。
+- [ ] 保持全部 resolved package bundles、imported-module cache 和 symbol-provider 构建逻辑不变，确保
+      非本地 package Hover、Completion、Completion Resolve、Signature Help 和 Definition 零回归。
 - [ ] 确认同项目 Hover、Completion、Signature Help、Document Symbol、Definition、References 和 Rename
       行为不变。
 
@@ -688,6 +755,9 @@ char *workspace_index_manifest_path;
 - [ ] 某项目 candidate 失败不清除其他项目或自身旧成功 session。
 - [ ] 普通源码编辑后不重复触发本地依赖物化。
 - [ ] LSP 请求不修改已有 `.ft`、`.fb`、C 或 `.fd` 产物。
+- [ ] 仅使用非本地 package 依赖的项目在优化前后获得一致的 Hover 和 Signature Help。
+- [ ] 仅使用非本地 package 依赖的项目在冷启动、热缓存和编辑后获得一致的 Completion/Completion Resolve。
+- [ ] 在本地项目 A/B 间切换后，各项目自身的非本地 package Hover、Completion 和 Definition 不串线、不丢失。
 - [ ] 既有同项目 Hover、Completion、Definition、References 和 Rename 全部保持通过。
 - [ ] 多项目缓存及全局查询继续满足 §10 全部既有性能门槛。
 - [ ] 同一 manifest 连续成功重建后数组 count 不增长，只替换对应元素。
@@ -721,5 +791,6 @@ char *workspace_index_manifest_path;
 - 普通编辑不重复物化未变化的本地依赖；
 - 全部既有 LSP 性能标准保持不变；
 - 不修改 parser、semantic、symbol、FT/FB、IR、Codegen、DAP 或核心查询接口；
+- 非本地 package 的 bundle/provider/imported-module 查询链路及既有 LSP 能力保持不变；
 - 生产变更仅位于 `src/cli/lsp/`，实际最小实现集中在 `service.c`；
 - 新增定向用例及全量回归通过。
