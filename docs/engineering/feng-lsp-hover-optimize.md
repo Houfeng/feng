@@ -510,7 +510,8 @@ typedef struct FengLspHoverPresentation {
 - `make test-sanitize`；
 - VS Code 插件测试。
 
-专项性能测试必须确认新增类别格式化不触发同步分析或磁盘 I/O，并继续满足 LSP 性能主规范中的 Hover P95 与交互请求 P99 门槛。
+专项性能测试必须确认新增类别格式化不触发同步分析或磁盘 I/O，并继续满足 LSP 性能主规范中的
+Hover `Max ≤ 16ms` 与交互请求 P99 门槛。
 
 ---
 

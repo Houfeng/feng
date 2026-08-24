@@ -1,6 +1,6 @@
 # Feng LSP 性能优化方案
 
-> 状态：LSP 性能优化实现与专项自动化验收完成。仓库全量回归已执行；既有 DAP 子进程和 VS Code 图标基线失败仍未通过，真实 VS Code 无 loading 体验需在重启 LSP 后由开发者最终确认。
+> 状态：LSP 性能优化主体实现完成。2026-08-24 统一确认的 Hover `Max ≤ 16ms` 自动化硬门槛待补齐；仓库全量回归已执行，既有 DAP 子进程和 VS Code 图标基线失败仍未通过，真实 VS Code 无 loading 体验需在重启 LSP 后由开发者最终确认。
 >
 > 关联文档：
 > - [Feng LSP 已交付方案](feng-lsp-delivered.md)：定义已交付 LSP 能力与语义行为基线。
@@ -111,8 +111,7 @@ LSP 统一使用以下职责命名：
 
 | 指标 | 目标 |
 | --- | ---: |
-| 内建类型、字面量、关键字、注解 Hover P95 | ≤ 5ms |
-| 缓存命中的普通 Hover P95 | ≤ 15ms |
+| 所有 Hover 请求延迟 Max | ≤ 16ms |
 | 普通 Completion P95 | ≤ 20ms |
 | 所有交互请求 P99 | ≤ 50ms |
 | 已排队过期请求的取消处理 | ≤ 5ms |
@@ -120,6 +119,10 @@ LSP 统一使用以下职责命名：
 | 交互请求同步整项目分析 | 0 次 |
 | 编辑、失败或取消导致最后成功缓存变空 | 0 次 |
 | 返回使用错误文档版本的精确语义结果 | 0 次 |
+
+Hover 使用统一硬门槛，不再按内建类型、字面量、关键字、注解、普通查询、冷启动或缓存命中状态设置
+不同的 P95 验收值。P50、P95 和 P99 仍需采集并报告，但只作为性能分布观测；任一 Hover 实测样本
+超过 16ms 即判定性能回归。
 
 正式性能基准至少覆盖：
 
@@ -667,7 +670,7 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - [x] Completion 候选计数与实际 JSON 项一致。
 - [x] 临时不完整输入恢复后，Hover / Completion 与冷启动相同状态结果一致。
 - [x] 请求取消、generation 合并和过期结果丢弃有效。
-- [x] §3 的全部性能门槛通过自动化基准。
+- [ ] §3 的全部性能门槛通过自动化基准。
 - [ ] 全量回归测试通过。
 
 ### 16.1 2026-07-16 实施记录
@@ -681,7 +684,8 @@ VS Code 标准 Language Client 会根据 initialize capability 自动选择 Full
 - Completion 移除同步完整分析和全局请求 URI，使用当前 parse、已发布分析、源码模块索引和依赖 symbol provider；
 - 支持 UTF-16 position 的 Incremental text synchronization；
 - `didSave` 只同步执行当前文件 parse，完整 semantic / project diagnostics 消费后台 candidate 结果；
-- 新增 `scripts/test/run_lsp_performance.py`，从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、Completion P95 和交互 P99 门槛。
+- 新增 `scripts/test/run_lsp_performance.py`，当时从真实 `feng lsp --stdio` 协议采样并检查 Hover P95、
+  Completion P95 和交互 P99；该历史 Hover 验收口径现已由 §3 的统一 Max 门槛取代。
 
 在本机普通优化构建、`std/std_test/src/z_main.ff`、Hover 与 Completion 各 200 次采样下：
 
@@ -850,6 +854,17 @@ receiver、补全恢复、缓存保留和调度器协议测试通过。普通优
 Completion P95 为 `0.041 ms`；1 万 / 10 万 / 100 万行矩阵交互 P99 为 `0.197 ms`，Max 为
 `0.234 ms`。普通与 UBSan 全量回归仍只在既有 DAP 子进程断言 `test/cli/test_cli.c:431` 停止，
 未出现 sanitizer 报告。
+
+### 16.9 2026-08-24 Hover 性能门槛统一
+
+经人工确认，所有 Hover 请求统一执行 §3 的 `Max ≤ 16ms` 硬门槛，原先按查询类别设置的 Hover P95
+门槛不再作为验收规范。本文此前记录的 P50、P95、P99 和 Max 实测值均作为历史性能观测保留，不改变
+其事实含义。
+
+当前 `scripts/test/run_lsp_performance.py` 与 `scripts/test/run_lsp_performance_matrix.py` 会输出 Hover
+Max，但仍只按旧 P95 口径强制失败。因此，§16 的自动化性能验收重新标记为待完成；脚本调整、推导返回
+类型 Hover 专项与完整回归由
+[推导 callable 返回类型提示修复方案](feng-lsp-inferred-callable-return-type-bugfix-pending.md) 分步交付。
 
 ---
 
