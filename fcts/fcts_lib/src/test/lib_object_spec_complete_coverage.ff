@@ -1,0 +1,20 @@
+open module fcts_lib.test.lib_object_spec_complete_coverage;
+
+/** Exported mutable contract used to restore default-subject behavior. */
+open spec LibObjectSpecDefaultSurface {
+  var value: int;
+}
+
+/** Exported contract whose methods deliberately equal the spec name. */
+open spec LibObjectSpecNamedResource {
+  func LibObjectSpecNamedResource(): int;
+  static func LibObjectSpecNamedResource(): string;
+}
+
+/** Provider implementation of both imported same-name requirements. */
+open type LibObjectSpecNamedResourceValue: LibObjectSpecNamedResource {
+  open func LibObjectSpecNamedResource(): int { return 73; }
+  open static func LibObjectSpecNamedResource(): string {
+    return "imported-resource";
+  }
+}

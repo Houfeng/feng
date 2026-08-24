@@ -1,0 +1,261 @@
+module fcts_bin;
+
+import std.test;
+
+/** Base view used to verify parent projection ownership. */
+spec ObjectSpecLifecycleParent {
+  func id(): int;
+}
+
+/** Concrete resource view used by every lifecycle path. */
+spec ObjectSpecLifecycleView: ObjectSpecLifecycleParent {}
+
+/** Reference subject with observable construction and finalization counts. */
+type ObjectSpecLifecycleResource: ObjectSpecLifecycleView {
+  open static var created: int = 0;
+  open static var finalized: int = 0;
+  let value: int;
+
+  /** Construct one independently counted subject. */
+  func ObjectSpecLifecycleResource(value: int) {
+    self.value = value;
+    ObjectSpecLifecycleResource.created += 1;
+  }
+
+  /** Return the stable identity payload used by the tests. */
+  func id(): int {
+    return self.value;
+  }
+
+  /** Count each subject finalization exactly once. */
+  func ~ObjectSpecLifecycleResource() {
+    ObjectSpecLifecycleResource.finalized += 1;
+  }
+
+  /** Reset counters after the previous scenario has fully cleaned up. */
+  open static func resetCounts(): void {
+    ObjectSpecLifecycleResource.created = 0;
+    ObjectSpecLifecycleResource.finalized = 0;
+  }
+}
+
+/** Reference holder used to cover object-form field replacement. */
+type ObjectSpecLifecycleHolder {
+  var view: ObjectSpecLifecycleView;
+}
+
+/** Keep a copied view alive after its original binding leaves scope. */
+func exerciseObjectSpecLifecycleCopy(): bool {
+  var valid = false;
+  {
+    var retained: ObjectSpecLifecycleView;
+    {
+      let original: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(1);
+      retained = original;
+    }
+    valid = ObjectSpecLifecycleResource.finalized == 0 && retained.id() == 1;
+  }
+  return valid;
+}
+
+/** Replace a local view and observe immediate release of the old subject. */
+func exerciseObjectSpecLifecycleOverwrite(): bool {
+  var valid = false;
+  {
+    var view: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(1);
+    view = ObjectSpecLifecycleResource(2);
+    valid = ObjectSpecLifecycleResource.created == 2 &&
+            ObjectSpecLifecycleResource.finalized == 1 && view.id() == 2;
+  }
+  return valid;
+}
+
+/** Replace a holder field and observe release at replacement and holder exit. */
+func exerciseObjectSpecLifecycleFieldOverwrite(): bool {
+  var valid = false;
+  {
+    let holder = ObjectSpecLifecycleHolder {
+      view: ObjectSpecLifecycleResource(1)
+    };
+    holder.view = ObjectSpecLifecycleResource(2);
+    valid = ObjectSpecLifecycleResource.created == 2 &&
+            ObjectSpecLifecycleResource.finalized == 1 &&
+            holder.view.id() == 2;
+  }
+  return valid;
+}
+
+/** Replace an array element and observe release at replacement and array exit. */
+func exerciseObjectSpecLifecycleArrayOverwrite(): bool {
+  var valid = false;
+  {
+    let values: ObjectSpecLifecycleView[!] = ObjectSpecLifecycleView[:1];
+    values[0] = ObjectSpecLifecycleResource(1);
+    values[0] = ObjectSpecLifecycleResource(2);
+    valid = ObjectSpecLifecycleResource.created == 2 &&
+            ObjectSpecLifecycleResource.finalized == 1 && values[0].id() == 2;
+  }
+  return valid;
+}
+
+/** Return the same fat value through one parameter boundary. */
+func forwardObjectSpecLifecycleOnce(
+  value: ObjectSpecLifecycleView
+): ObjectSpecLifecycleView {
+  return value;
+}
+
+/** Return the same fat value through a second parameter boundary. */
+func forwardObjectSpecLifecycleTwice(
+  value: ObjectSpecLifecycleView
+): ObjectSpecLifecycleView {
+  return forwardObjectSpecLifecycleOnce(value);
+}
+
+/** Verify parameter and return forwarding preserve one subject. */
+func exerciseObjectSpecLifecycleForwarding(): bool {
+  var valid = false;
+  {
+    let source: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(3);
+    let result = forwardObjectSpecLifecycleTwice(source);
+    valid = source == result && result.id() == 3 &&
+            ObjectSpecLifecycleResource.finalized == 0;
+  }
+  return valid;
+}
+
+/** Leave a live view through an early return edge. */
+func exerciseObjectSpecLifecycleEarlyReturn(): int {
+  let view: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(4);
+  if view.id() == 4 {
+    return ObjectSpecLifecycleResource.finalized;
+  }
+  return -1;
+}
+
+/** Leave iteration-local views through continue and break edges. */
+func exerciseObjectSpecLifecycleLoopEdges(): bool {
+  var valid = true;
+  for var index = 0; index < 3; index += 1 {
+    let view: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(index);
+    valid = valid && view.id() == index;
+    if index == 0 {
+      continue;
+    }
+    if index == 1 {
+      break;
+    }
+    valid = false;
+  }
+  return valid && ObjectSpecLifecycleResource.created == 2 &&
+         ObjectSpecLifecycleResource.finalized == 2;
+}
+
+/** Throw while one ordinary object-form view is live. */
+func throwWithObjectSpecLifecycleView(): void {
+  let view: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(5);
+  assert(view.id() == 5, "view remains usable before throwing");
+  throw "object-spec-lifecycle";
+}
+
+/** Catch the lifecycle probe after exceptional cleanup completes. */
+func exerciseObjectSpecLifecycleException(): bool {
+  var caught = false;
+  try throwWithObjectSpecLifecycleView() catch error: string {
+    caught = error == "object-spec-lifecycle";
+  };
+  return caught;
+}
+
+/** Hold child and parent views of one subject until their shared scope exits. */
+func exerciseObjectSpecLifecycleViews(): bool {
+  var valid = false;
+  {
+    let child: ObjectSpecLifecycleView = ObjectSpecLifecycleResource(6);
+    let childCopy = child;
+    let parent: ObjectSpecLifecycleParent = child;
+    let parentCopy: ObjectSpecLifecycleParent = childCopy;
+    valid = parent == parentCopy && parent.id() == 6 && childCopy.id() == 6 &&
+            ObjectSpecLifecycleResource.finalized == 0;
+  }
+  return valid;
+}
+
+/** Ordinary object-form fat-value lifecycle tests. */
+open func test_object_spec_lifecycle(): void {
+  describe("object-form spec fat-value lifecycle", () {
+    test("local copies retain one subject until the last view exits", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleCopy(), "copy remains live after original scope");
+      assert(ObjectSpecLifecycleResource.created == 1 &&
+             ObjectSpecLifecycleResource.finalized == 1,
+             "one copied subject is finalized once");
+    });
+
+    test("local overwrite releases old and new subjects exactly once", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleOverwrite(), "old local releases at overwrite");
+      assert(ObjectSpecLifecycleResource.created == 2 &&
+             ObjectSpecLifecycleResource.finalized == 2,
+             "both local subjects are finalized once");
+    });
+
+    test("field overwrite releases old and new subjects exactly once", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleFieldOverwrite(), "old field releases at overwrite");
+      assert(ObjectSpecLifecycleResource.created == 2 &&
+             ObjectSpecLifecycleResource.finalized == 2,
+             "both field subjects are finalized once");
+    });
+
+    test("array overwrite releases old and new subjects exactly once", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleArrayOverwrite(),
+             "old array element releases at overwrite");
+      assert(ObjectSpecLifecycleResource.created == 2 &&
+             ObjectSpecLifecycleResource.finalized == 2,
+             "both array subjects are finalized once");
+    });
+
+    test("parameter and return forwarding preserve one subject", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleForwarding(), "forwarded view stays identical");
+      assert(ObjectSpecLifecycleResource.created == 1 &&
+             ObjectSpecLifecycleResource.finalized == 1,
+             "forwarded subject is finalized once");
+    });
+
+    test("early return cleans one live subject", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleEarlyReturn() == 0,
+             "subject is live while return value is evaluated");
+      assert(ObjectSpecLifecycleResource.created == 1 &&
+             ObjectSpecLifecycleResource.finalized == 1,
+             "early return finalizes the subject once");
+    });
+
+    test("continue and break clean each iteration subject", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleLoopEdges(), "loop edges clean their views");
+      assert(ObjectSpecLifecycleResource.created == 2 &&
+             ObjectSpecLifecycleResource.finalized == 2,
+             "two loop subjects are finalized once each");
+    });
+
+    test("throw and catch clean one live subject", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleException(), "exception reaches its catch");
+      assert(ObjectSpecLifecycleResource.created == 1 &&
+             ObjectSpecLifecycleResource.finalized == 1,
+             "exception cleanup finalizes the subject once");
+    });
+
+    test("child and parent views share one subject lifetime", () {
+      ObjectSpecLifecycleResource.resetCounts();
+      assert(exerciseObjectSpecLifecycleViews(), "all views share one identity");
+      assert(ObjectSpecLifecycleResource.created == 1 &&
+             ObjectSpecLifecycleResource.finalized == 1,
+             "all projected views finalize one subject once");
+    });
+  });
+}

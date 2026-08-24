@@ -2484,6 +2484,34 @@ static void test_object_form_spec_rejects_abi_annotation(void) {
     feng_program_free(program);
 }
 
+/* Object-form calling conventions are rejected independently of @abi. */
+static void test_object_form_spec_rejects_calling_convention_annotation(void) {
+    const char *source =
+        "module demo.main;\n"
+        "@cdecl(\"native\")\n"
+        "spec InvalidConvention {\n"
+        "    func run(): void;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_calling_convention_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].code, "AE1305") == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_unknown_member_annotation_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -11233,6 +11261,44 @@ static void test_object_form_spec_allows_method_same_name_as_spec(void) {
     feng_program_free(program);
 }
 
+/* Instance and static methods named after their spec remain ordinary methods. */
+static void test_object_form_spec_same_name_instance_and_static_methods(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec ResourceSurface {\n"
+        "    func ResourceSurface(): int;\n"
+        "    static func ResourceSurface(): string;\n"
+        "}\n"
+        "type Resource: ResourceSurface {\n"
+        "    func ResourceSurface(): int { return 42; }\n"
+        "    static func ResourceSurface(): string { return \"resource\"; }\n"
+        "}\n"
+        "func readInstance(value: ResourceSurface): int {\n"
+        "    return value.ResourceSurface();\n"
+        "}\n"
+        "func readStatic<T: ResourceSurface>(): string {\n"
+        "    return T.ResourceSurface();\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_same_name_instance_static_methods.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_object_form_spec_rejects_finalizer_member(void) {
     const char *source =
         "module demo.main;\n"
@@ -11720,6 +11786,412 @@ static void test_type_declared_specs_field_mutability_mismatch_rejected(void) {
     ASSERT(error_count == 1U);
     ASSERT(strstr(errors[0].message, "mutability does not match") != NULL);
     feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Object-form spec fields require exact mutability and type matches on both
+ * the instance and static member surfaces. */
+static void test_object_spec_field_exact_satisfaction_matrix(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+    } cases[] = {
+        {
+            "object_spec_instance_var_requires_var.ff",
+            "module demo.instance_var_requires_var;\n"
+            "spec Writable {\n"
+            "    var value: int;\n"
+            "}\n"
+            "type ReadonlyValue: Writable {\n"
+            "    let value: int;\n"
+            "}\n",
+            "AE0702"
+        },
+        {
+            "object_spec_instance_field_type_mismatch.ff",
+            "module demo.instance_field_type_mismatch;\n"
+            "spec Numbered {\n"
+            "    let value: int;\n"
+            "}\n"
+            "type TextValue: Numbered {\n"
+            "    let value: string;\n"
+            "}\n",
+            "AE0703"
+        },
+        {
+            "object_spec_static_let_requires_let.ff",
+            "module demo.static_let_requires_let;\n"
+            "spec StaticReadonly {\n"
+            "    static let value: int;\n"
+            "}\n"
+            "type StaticWritable: StaticReadonly {\n"
+            "    static var value: int = 0;\n"
+            "}\n",
+            "AE0702"
+        },
+        {
+            "object_spec_static_var_requires_var.ff",
+            "module demo.static_var_requires_var;\n"
+            "spec StaticWritable {\n"
+            "    static var value: int;\n"
+            "}\n"
+            "type StaticReadonly: StaticWritable {\n"
+            "    static let value: int = 0;\n"
+            "}\n",
+            "AE0702"
+        },
+        {
+            "object_spec_static_field_type_mismatch.ff",
+            "module demo.static_field_type_mismatch;\n"
+            "spec StaticNumbered {\n"
+            "    static let value: int;\n"
+            "}\n"
+            "type StaticTextValue: StaticNumbered {\n"
+            "    static let value: string = \"value\";\n"
+            "}\n",
+            "AE0703"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(analysis == NULL);
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, cases[index].path) == 0);
+        ASSERT(errors[0].code != NULL);
+        ASSERT(strcmp(errors[0].code, cases[index].code) == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Implementation parameter bindings are local method details and do not
+ * participate in object-form spec requirement signatures. */
+static void test_object_spec_method_parameter_binding_satisfaction_matrix(void) {
+    const char *source =
+        "module demo.object_spec_parameter_bindings;\n"
+        "spec Transformer {\n"
+        "    func plain(value: int): int;\n"
+        "    func fixed(value: int): int;\n"
+        "    func changing(value: int): int;\n"
+        "    static func plainStatic(value: int): int;\n"
+        "    static func fixedStatic(value: int): int;\n"
+        "    static func changingStatic(value: int): int;\n"
+        "}\n"
+        "type DirectTransformer: Transformer {\n"
+        "    func plain(value: int): int { return value; }\n"
+        "    func fixed(let value: int): int { return value; }\n"
+        "    func changing(var value: int): int { value += 1; return value; }\n"
+        "    static func plainStatic(value: int): int { return value; }\n"
+        "    static func fixedStatic(let value: int): int { return value; }\n"
+        "    static func changingStatic(var value: int): int { value += 1; return value; }\n"
+        "}\n"
+        "type AdaptedTransformer {}\n"
+        "fit AdaptedTransformer: Transformer {\n"
+        "    func plain(value: int): int { return value; }\n"
+        "    func fixed(let value: int): int { return value; }\n"
+        "    func changing(var value: int): int { value += 1; return value; }\n"
+        "    static func plainStatic(value: int): int { return value; }\n"
+        "    static func fixedStatic(let value: int): int { return value; }\n"
+        "    static func changingStatic(var value: int): int { value += 1; return value; }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_method_parameter_bindings.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Fields are unique within one declaration's instance/static surface for
+ * both concrete types and object-form specs, regardless of type or binding. */
+static void test_type_and_object_spec_duplicate_field_surfaces_rejected(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } cases[] = {
+        {
+            "type_duplicate_instance_field_exact.ff",
+            "module demo.type_duplicate_instance_exact;\n"
+            "type Duplicate {\n"
+            "    let value: int = 0;\n"
+            "    let value: int = 1;\n"
+            "}\n"
+        },
+        {
+            "type_duplicate_instance_field_type.ff",
+            "module demo.type_duplicate_instance_type;\n"
+            "type Duplicate {\n"
+            "    let value: int = 0;\n"
+            "    let value: string = \"value\";\n"
+            "}\n"
+        },
+        {
+            "type_duplicate_static_field_binding.ff",
+            "module demo.type_duplicate_static_binding;\n"
+            "type Duplicate {\n"
+            "    static let value: int = 0;\n"
+            "    static var value: int = 1;\n"
+            "}\n"
+        },
+        {
+            "object_spec_duplicate_instance_field_exact.ff",
+            "module demo.spec_duplicate_instance_exact;\n"
+            "spec Duplicate {\n"
+            "    let value: int;\n"
+            "    let value: int;\n"
+            "}\n"
+        },
+        {
+            "object_spec_duplicate_instance_field_type.ff",
+            "module demo.spec_duplicate_instance_type;\n"
+            "spec Duplicate {\n"
+            "    let value: int;\n"
+            "    let value: string;\n"
+            "}\n"
+        },
+        {
+            "object_spec_duplicate_static_field_binding.ff",
+            "module demo.spec_duplicate_static_binding;\n"
+            "spec Duplicate {\n"
+            "    static let value: int;\n"
+            "    static var value: int;\n"
+            "}\n"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(
+            cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(analysis == NULL);
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, cases[index].path) == 0);
+        ASSERT(errors[0].code != NULL);
+        ASSERT(strcmp(errors[0].code, "AE0514") == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Callable-, union- and intersection-form specs cannot be object-form
+ * parents; each source is isolated so AE0613 cannot be masked. */
+static void test_object_spec_rejects_non_object_parent_forms(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } cases[] = {
+        {
+            "object_spec_callable_parent_rejected.ff",
+            "module demo.callable_parent;\n"
+            "spec Callback(): void;\n"
+            "spec Invalid: Callback {}\n"
+        },
+        {
+            "object_spec_union_parent_rejected.ff",
+            "module demo.union_parent;\n"
+            "spec Choice: int | string;\n"
+            "spec Invalid: Choice {}\n"
+        },
+        {
+            "object_spec_intersection_parent_rejected.ff",
+            "module demo.intersection_parent;\n"
+            "spec Left {}\n"
+            "spec Right {}\n"
+            "spec Both: Left & Right;\n"
+            "spec Invalid: Both {}\n"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(
+            cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(analysis == NULL);
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, cases[index].path) == 0);
+        ASSERT(errors[0].code != NULL);
+        ASSERT(strcmp(errors[0].code, "AE0613") == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Parent fields are accumulated as direct requirements. Distinct declaring
+ * owners cannot contribute one name to the same instance/static surface. */
+static void test_object_spec_accumulated_field_conflicts_rejected(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } cases[] = {
+        {
+            "object_spec_child_parent_field_exact.ff",
+            "module demo.child_parent_exact;\n"
+            "spec Parent { let value: int; }\n"
+            "spec Child: Parent { let value: int; }\n"
+        },
+        {
+            "object_spec_child_parent_static_field.ff",
+            "module demo.child_parent_static;\n"
+            "spec Parent { static let value: int; }\n"
+            "spec Child: Parent { static let value: string; }\n"
+        },
+        {
+            "object_spec_transitive_parent_field.ff",
+            "module demo.transitive_parent_field;\n"
+            "spec Grandparent { let value: int; }\n"
+            "spec Parent: Grandparent {}\n"
+            "spec Child: Parent { var value: int; }\n"
+        },
+        {
+            "object_spec_multi_parent_field_exact.ff",
+            "module demo.multi_parent_exact;\n"
+            "spec Left { let value: int; }\n"
+            "spec Right { let value: int; }\n"
+            "spec Combined: Left, Right {}\n"
+        },
+        {
+            "object_spec_multi_parent_field_type.ff",
+            "module demo.multi_parent_type;\n"
+            "spec Left { let value: int; }\n"
+            "spec Right { let value: string; }\n"
+            "spec Combined: Left, Right {}\n"
+        },
+        {
+            "object_spec_multi_parent_field_binding.ff",
+            "module demo.multi_parent_binding;\n"
+            "spec Left { let value: int; }\n"
+            "spec Right { var value: int; }\n"
+            "spec Combined: Left, Right {}\n"
+        },
+        {
+            "object_spec_generic_parent_field_closure.ff",
+            "module demo.generic_parent_field;\n"
+            "spec Field<T> { let value: T; }\n"
+            "spec IntField: Field<int> {}\n"
+            "spec TextField: Field<string> {}\n"
+            "spec Combined: IntField, TextField {}\n"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(
+            cases[index].path, cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(analysis == NULL);
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, cases[index].path) == 0);
+        ASSERT(errors[0].code != NULL);
+        ASSERT(strcmp(errors[0].code, "AE0514") == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Instance and static fields have distinct owners and remain independently
+ * addressable even when their Feng names are equal, directly or via a parent. */
+static void test_type_and_object_spec_cross_surface_fields_allowed(void) {
+    const char *source =
+        "module demo.cross_surface_fields;\n"
+        "type Plain {\n"
+        "    let value: int = 1;\n"
+        "    static let value: int = 2;\n"
+        "}\n"
+        "spec DirectSurface {\n"
+        "    let value: int;\n"
+        "    static let value: int;\n"
+        "}\n"
+        "type DirectImpl: DirectSurface {\n"
+        "    let value: int = 3;\n"
+        "    static let value: int = 4;\n"
+        "}\n"
+        "spec InstanceParent { let shared: int; }\n"
+        "spec SplitSurface: InstanceParent { static let shared: int; }\n"
+        "type SplitImpl: SplitSurface {\n"
+        "    let shared: int = 5;\n"
+        "    static let shared: int = 6;\n"
+        "}\n"
+        "func readDirect<T: DirectSurface>(value: T): int {\n"
+        "    return value.value + T.value;\n"
+        "}\n"
+        "func readSplit<T: SplitSurface>(value: T): int {\n"
+        "    return value.shared + T.shared;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "type_and_object_spec_cross_surface_fields.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -13961,6 +14433,119 @@ static void test_main_entry_valid_signature_passes_for_bin(void) {
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_BIN, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Field/method conflicts are owner-surface based for types and complete
+ * object-form spec member closures, independent of declaration order. */
+static void test_object_spec_field_method_conflict_surface_matrix(void) {
+    const char *paths[] = {
+        "object_spec_instance_field_method_conflict.f",
+        "object_spec_instance_method_field_conflict.f",
+        "object_spec_static_field_method_conflict.f",
+        "object_spec_static_method_field_conflict.f",
+        "object_spec_parent_field_child_method_conflict.f",
+        "object_spec_parent_method_child_field_conflict.f",
+        "object_spec_generic_parent_field_method_conflict.f",
+        "type_method_field_reverse_conflict.f",
+    };
+    const char *sources[] = {
+        "module demo.main;\n"
+        "spec Surface {\n"
+        "    let value: int;\n"
+        "    func value(): int;\n"
+        "}\n",
+        "module demo.main;\n"
+        "spec Surface {\n"
+        "    func value(): int;\n"
+        "    let value: int;\n"
+        "}\n",
+        "module demo.main;\n"
+        "spec Surface {\n"
+        "    static let value: int;\n"
+        "    static func value(): int;\n"
+        "}\n",
+        "module demo.main;\n"
+        "spec Surface {\n"
+        "    static func value(): int;\n"
+        "    static let value: int;\n"
+        "}\n",
+        "module demo.main;\n"
+        "spec Parent { let value: int; }\n"
+        "spec Child: Parent { func value(): int; }\n",
+        "module demo.main;\n"
+        "spec Parent { func value(): int; }\n"
+        "spec Child: Parent { let value: int; }\n",
+        "module demo.main;\n"
+        "spec Parent<T> { static let value: T; }\n"
+        "spec Child: Parent<int> { static func value(): int; }\n",
+        "module demo.main;\n"
+        "type Surface {\n"
+        "    open func value(): int { return 1; }\n"
+        "    seal let value: int;\n"
+        "}\n",
+    };
+    const size_t case_count = sizeof(sources) / sizeof(sources[0]);
+
+    ASSERT(case_count == sizeof(paths) / sizeof(paths[0]));
+    for (size_t index = 0U; index < case_count; ++index) {
+        FengProgram *program = parse_program_or_die(paths[index], sources[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].code, "AE0513") == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
+/* Instance and static owners remain independent for fields and methods. */
+static void test_object_spec_cross_surface_field_method_names_are_allowed(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Surface {\n"
+        "    let instanceOwned: int;\n"
+        "    static func instanceOwned(): int;\n"
+        "    static let staticOwned: int;\n"
+        "    func staticOwned(): int;\n"
+        "    let shared: int;\n"
+        "    static let shared: int;\n"
+        "}\n"
+        "type Impl: Surface {\n"
+        "    let instanceOwned: int;\n"
+        "    static func instanceOwned(): int { return 11; }\n"
+        "    static let staticOwned: int = 12;\n"
+        "    func staticOwned(): int { return 13; }\n"
+        "    let shared: int;\n"
+        "    static let shared: int = 14;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "object_spec_cross_surface_field_method_names.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
@@ -28018,6 +28603,7 @@ int main(void) {
     test_abi_function_type_rejects_direct_lambda_value();
     test_abi_function_type_rejects_captured_lambda_binding();
     test_object_form_spec_rejects_abi_annotation();
+    test_object_form_spec_rejects_calling_convention_annotation();
     test_unknown_member_annotation_is_rejected();
     test_abi_callable_spec_accepts_abi_type_parameter();
     test_abi_callable_spec_accepts_fieldless_abi_type_pointer_signature();
@@ -28334,6 +28920,7 @@ int main(void) {
     test_object_literal_rejects_private_field_outside_owner_in_same_module();
     test_spec_type_satisfaction_succeeds();
     test_object_form_spec_allows_method_same_name_as_spec();
+    test_object_form_spec_same_name_instance_and_static_methods();
     test_object_form_spec_rejects_finalizer_member();
     test_type_satisfies_spec_static_members();
     test_fit_satisfies_spec_static_method();
@@ -28375,6 +28962,12 @@ int main(void) {
     test_type_declared_specs_rejects_duplicate();
     test_type_declared_specs_missing_field_rejected();
     test_type_declared_specs_field_mutability_mismatch_rejected();
+    test_object_spec_field_exact_satisfaction_matrix();
+    test_object_spec_method_parameter_binding_satisfaction_matrix();
+    test_type_and_object_spec_duplicate_field_surfaces_rejected();
+    test_object_spec_rejects_non_object_parent_forms();
+    test_object_spec_accumulated_field_conflicts_rejected();
+    test_type_and_object_spec_cross_surface_fields_allowed();
     test_type_declared_specs_method_signature_mismatch_rejected();
     test_type_declared_specs_transitive_satisfaction_required();
     test_type_declared_specs_cross_spec_method_conflict();
@@ -28449,6 +29042,8 @@ int main(void) {
     test_type_static_field_static_method_same_name_is_rejected();
     test_type_field_static_method_same_name_allowed();
     test_type_static_field_instance_method_same_name_allowed();
+    test_object_spec_field_method_conflict_surface_matrix();
+    test_object_spec_cross_surface_field_method_names_are_allowed();
     test_main_entry_required_for_bin_target();
     test_main_entry_valid_signature_passes_for_bin();
     test_main_entry_bad_signature_is_rejected_for_bin();

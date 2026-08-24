@@ -1,0 +1,72 @@
+module fcts_bin;
+
+import std.test;
+
+/** Contract with one field name on two independent owners. */
+spec ObjectSpecFieldOwnerSurface {
+  var value: int;
+  static var value: int;
+}
+
+/** Direct implementation of both owner-specific field requirements. */
+type ObjectSpecFieldOwnerValue: ObjectSpecFieldOwnerSurface {
+  var value: int = 1;
+  static var value: int = 10;
+}
+
+/** Updates and reads both field owners through one generic constraint. */
+func updateObjectSpecFieldOwners<T: ObjectSpecFieldOwnerSurface>(value: T): int {
+  value.value += 2;
+  T.value += 3;
+  return value.value + T.value;
+}
+
+/** Parent contract contributes the instance owner. */
+spec ObjectSpecParentFieldOwner {
+  var shared: int;
+}
+
+/** Child contract contributes the independent static owner. */
+spec ObjectSpecChildFieldOwner: ObjectSpecParentFieldOwner {
+  static var shared: int;
+}
+
+/** Implementation of the accumulated cross-owner field surface. */
+type ObjectSpecChildFieldValue: ObjectSpecChildFieldOwner {
+  var shared: int = 4;
+  static var shared: int = 20;
+}
+
+/** Updates inherited instance and child static requirements independently. */
+func updateObjectSpecInheritedFieldOwners<T: ObjectSpecChildFieldOwner>(value: T): int {
+  value.shared += 1;
+  T.shared += 2;
+  return value.shared + T.shared;
+}
+
+/** Object-form spec field-owner separation tests. */
+open func test_object_spec_field_surfaces() {
+  describe("object-form spec field owner surfaces", () {
+    test("direct instance and static fields with one name stay independent", () {
+      ObjectSpecFieldOwnerValue.value = 10;
+      let concrete = ObjectSpecFieldOwnerValue();
+      let result = updateObjectSpecFieldOwners<ObjectSpecFieldOwnerValue>(concrete);
+      let view: ObjectSpecFieldOwnerSurface = concrete;
+
+      assert(result == 16, "direct owner-specific field result");
+      assert(view.value == 3, "instance field uses subject owner");
+      assert(ObjectSpecFieldOwnerValue.value == 13, "static field uses type owner");
+    });
+
+    test("parent instance and child static fields with one name stay independent", () {
+      ObjectSpecChildFieldValue.shared = 20;
+      let concrete = ObjectSpecChildFieldValue();
+      let result = updateObjectSpecInheritedFieldOwners<ObjectSpecChildFieldValue>(concrete);
+      let view: ObjectSpecChildFieldOwner = concrete;
+
+      assert(result == 27, "inherited owner-specific field result");
+      assert(view.shared == 5, "inherited instance field uses subject owner");
+      assert(ObjectSpecChildFieldValue.shared == 22, "child static field uses type owner");
+    });
+  });
+}

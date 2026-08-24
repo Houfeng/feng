@@ -374,7 +374,9 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 - 字段在对象内按 fat 值大小占位（`sizeof(struct FengSpecValue__M__S)`）。
 - 字段读取：`obj->field` 是 lvalue，可直接传给 spec 形参（借用）。
-- 字段写入：`feng_aggregate_assign(&obj->field, &src, &FengSpecAgg__M__S);`。
+- 字段写入：借用源调用
+  `feng_aggregate_assign(&obj->field, &src, &FengSpecAgg__M__S)`；拥有式表达式
+  结果调用同描述符的 `feng_aggregate_take`，直接把 `+1` 搬入字段。
 - 对象释放：`release_children` 中对 spec 字段调用 `feng_aggregate_release(&obj->field, &desc);`。
 - 对象 `managed_fields` 按 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §7.2 展平：spec 字段的 subject 槽位以 `字段偏移 + 0` 作为一条 `FengManagedFieldDescriptor`（`static_desc = NULL`，多态）。
 
@@ -382,7 +384,9 @@ feng_aggregate_default_init(&s, &FengSpecAgg__M__S);
 
 - 数组创建按 [feng-value-model-delivered.md](./feng-value-model-delivered.md) §7.3 传入元素分类 `aggregate` 与 `&FengSpecAgg__M__S`。
 - 元素读：返回 `struct FengSpecValue__M__S` 按值（借用），或在需要拥有时由调用方 retain。
-- 元素写：`feng_aggregate_assign(&arr->elements[i], &src, &desc);`
+- 元素写：借用源调用
+  `feng_aggregate_assign(&arr->elements[i], &src, &desc)`；拥有式表达式结果调用
+  `feng_aggregate_take(&arr->elements[i], &src, &desc)`。
 - 数组销毁：逐元素 `feng_aggregate_release`。
 
 ## 10 semantic → codegen 数据契约

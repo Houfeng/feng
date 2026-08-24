@@ -20,6 +20,12 @@ func main(args: string[]) {
       test_finalizer_capture();
       test_enum();
       test_spec();
+      test_object_spec_contract_surface();
+      test_object_spec_field_surfaces();
+      test_object_spec_default_subject();
+      test_object_spec_lifecycle();
+      test_object_spec_special_surface();
+      test_object_spec_package_coverage();
       test_object_spec_overload();
       test_spec_method_value();
       test_intersection_spec_method_value();

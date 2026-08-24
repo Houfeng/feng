@@ -1,0 +1,113 @@
+module fcts_bin;
+
+import std.test;
+
+/** Contract whose implementation parameters exercise every binding form. */
+spec ObjectSpecContractSurface {
+  func plain(value: int): int;
+  func fixed(value: int): int;
+  func changing(value: int): int;
+  static func plainStatic(value: int): int;
+  static func fixedStatic(value: int): int;
+  static func changingStatic(value: int): int;
+}
+
+/** Type-owned implementations of every parameter binding form. */
+type ObjectSpecContractType: ObjectSpecContractSurface {
+  func plain(value: int): int {
+    return value + 1;
+  }
+
+  func fixed(let value: int): int {
+    return value + 2;
+  }
+
+  func changing(var value: int): int {
+    value += 3;
+    return value;
+  }
+
+  static func plainStatic(value: int): int {
+    return value + 4;
+  }
+
+  static func fixedStatic(let value: int): int {
+    return value + 5;
+  }
+
+  static func changingStatic(var value: int): int {
+    value += 6;
+    return value;
+  }
+}
+
+/** Concrete target whose implementations are supplied by a fit. */
+type ObjectSpecContractFitValue {}
+
+fit ObjectSpecContractFitValue: ObjectSpecContractSurface {
+  func plain(value: int): int {
+    return value + 10;
+  }
+
+  func fixed(let value: int): int {
+    return value + 20;
+  }
+
+  func changing(var value: int): int {
+    value += 30;
+    return value;
+  }
+
+  static func plainStatic(value: int): int {
+    return value + 40;
+  }
+
+  static func fixedStatic(let value: int): int {
+    return value + 50;
+  }
+
+  static func changingStatic(var value: int): int {
+    value += 60;
+    return value;
+  }
+}
+
+/** Calls every static requirement through the constrained witness. */
+func callObjectSpecContractStatics<T: ObjectSpecContractSurface>(value: int): int {
+  return T.plainStatic(value) +
+    T.fixedStatic(value) +
+    T.changingStatic(value);
+}
+
+/** Object-form spec implementation parameter binding tests. */
+open func test_object_spec_contract_surface() {
+  describe("object-form spec implementation parameter bindings", () {
+    test("type instance methods accept default let and var bindings", () {
+      let value: ObjectSpecContractSurface = ObjectSpecContractType();
+      assert(value.plain(10) == 11, "type default parameter binding");
+      assert(value.fixed(10) == 12, "type let parameter binding");
+      assert(value.changing(10) == 13, "type var parameter binding");
+    });
+
+    test("type static methods accept default let and var bindings", () {
+      assert(
+        callObjectSpecContractStatics<ObjectSpecContractType>(10) == 45,
+        "type static parameter bindings"
+      );
+    });
+
+    test("fit instance methods accept default let and var bindings", () {
+      let value: ObjectSpecContractSurface = ObjectSpecContractFitValue();
+      assert(value.plain(10) == 20, "fit default parameter binding");
+      assert(value.fixed(10) == 30, "fit let parameter binding");
+      assert(value.changing(10) == 40, "fit var parameter binding");
+    });
+
+    test("fit static methods accept default let and var bindings", () {
+      assert(
+        callObjectSpecContractStatics<ObjectSpecContractFitValue>(10) == 180,
+        "fit static parameter bindings"
+      );
+    });
+  });
+}

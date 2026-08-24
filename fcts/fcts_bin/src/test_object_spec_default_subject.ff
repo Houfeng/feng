@@ -1,0 +1,72 @@
+module fcts_bin;
+
+import std.test;
+
+/** Mutable object-form contract used to verify fresh default subjects. */
+spec ObjectSpecDefaultCounter {
+  var value: int;
+}
+
+/** Aggregate returned by a default witness method. */
+@value
+type ObjectSpecDefaultPair {
+  var left: int;
+  var right: int;
+}
+
+/** Nested object-form value returned by a default witness method. */
+spec ObjectSpecNestedDefault {
+  var value: int;
+}
+
+/** Default witness methods covering the principal Feng value models. */
+spec ObjectSpecDefaultResults {
+  func number(): int;
+  func text(): string;
+  func pair(): ObjectSpecDefaultPair;
+  func nested(): ObjectSpecNestedDefault;
+}
+
+/** Object-form spec default-subject and default-result tests. */
+open func test_object_spec_default_subject() {
+  describe("object-form spec default subjects", () {
+    test("separate local defaults have independent state and identity", () {
+      let first: ObjectSpecDefaultCounter;
+      let second: ObjectSpecDefaultCounter;
+
+      first.value = 1;
+
+      assert(first.value == 1, "first local keeps its mutation");
+      assert(second.value == 0, "second local keeps its default state");
+      assert(first != second, "separate locals have distinct subjects");
+    });
+
+    test("default array elements have independent state and identity", () {
+      let values: ObjectSpecDefaultCounter[!] = ObjectSpecDefaultCounter[:2];
+
+      values[0].value = 1;
+
+      assert(values[0].value == 1, "first array element keeps its mutation");
+      assert(values[1].value == 0, "second array element keeps its default state");
+      assert(values[0] != values[1], "array elements have distinct subjects");
+    });
+
+    test("default methods return each principal value model", () {
+      let defaults: ObjectSpecDefaultResults;
+      let pair = defaults.pair();
+      let firstNested = defaults.nested();
+      let secondNested = defaults.nested();
+
+      firstNested.value = 1;
+
+      assert(defaults.number() == 0, "scalar return is its default value");
+      assert(defaults.text() == "", "managed return is its default value");
+      assert(pair.left == 0 && pair.right == 0,
+             "aggregate return is its default value");
+      assert(firstNested.value == 1, "first nested return keeps its mutation");
+      assert(secondNested.value == 0, "second nested return stays default");
+      assert(firstNested != secondNested,
+             "separate nested returns have distinct subjects");
+    });
+  });
+}

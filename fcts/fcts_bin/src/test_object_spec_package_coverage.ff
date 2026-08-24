@@ -1,0 +1,36 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.lib_object_spec_complete_coverage;
+
+/** Invoke an imported same-name static requirement from consumer code. */
+func readImportedObjectSpecNamedStatic<T: LibObjectSpecNamedResource>(): string {
+  return T.LibObjectSpecNamedResource();
+}
+
+/** Cross-package restoration tests for non-equivalent object-form paths. */
+open func test_object_spec_package_coverage(): void {
+  describe("object-form spec package coverage", () {
+    test("imported default values keep independent subjects", () {
+      let first: LibObjectSpecDefaultSurface;
+      let second: LibObjectSpecDefaultSurface;
+
+      first.value = 1;
+
+      assert(first.value == 1, "first imported default keeps its mutation");
+      assert(second.value == 0, "second imported default remains unchanged");
+      assert(first != second, "imported defaults use distinct subjects");
+    });
+
+    test("imported methods named after spec keep instance and static slots", () {
+      let view: LibObjectSpecNamedResource =
+        LibObjectSpecNamedResourceValue();
+
+      assert(view.LibObjectSpecNamedResource() == 73,
+             "imported same-name instance method dispatches normally");
+      assert(readImportedObjectSpecNamedStatic<
+               LibObjectSpecNamedResourceValue>() == "imported-resource",
+             "imported same-name static method dispatches normally");
+    });
+  });
+}

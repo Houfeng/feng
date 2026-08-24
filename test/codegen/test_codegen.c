@@ -1805,6 +1805,562 @@ static void test_spec_static_member_witness_codegen(void) {
     feng_program_free(program);
 }
 
+/* Implementation-side parameter bindings do not alter requirement slots or
+ * introduce callable adapters; ordinary witness thunks forward the same ABI. */
+static void test_object_spec_method_parameter_bindings_keep_witness_abi(void) {
+    static const char *kSource =
+        "module feng.codegen.specparambinding;\n"
+        "spec Transformer {\n"
+        "    func plain(value: int): int;\n"
+        "    func fixed(value: int): int;\n"
+        "    func changing(value: int): int;\n"
+        "    static func plainStatic(value: int): int;\n"
+        "    static func fixedStatic(value: int): int;\n"
+        "    static func changingStatic(value: int): int;\n"
+        "}\n"
+        "type DirectTransformer: Transformer {\n"
+        "    func plain(value: int): int { return value; }\n"
+        "    func fixed(let value: int): int { return value; }\n"
+        "    func changing(var value: int): int { value += 1; return value; }\n"
+        "    static func plainStatic(value: int): int { return value; }\n"
+        "    static func fixedStatic(let value: int): int { return value; }\n"
+        "    static func changingStatic(var value: int): int { value += 1; return value; }\n"
+        "}\n"
+        "type AdaptedTransformer {}\n"
+        "fit AdaptedTransformer: Transformer {\n"
+        "    func plain(value: int): int { return value; }\n"
+        "    func fixed(let value: int): int { return value; }\n"
+        "    func changing(var value: int): int { value += 1; return value; }\n"
+        "    static func plainStatic(value: int): int { return value; }\n"
+        "    static func fixedStatic(let value: int): int { return value; }\n"
+        "    static func changingStatic(var value: int): int { value += 1; return value; }\n"
+        "}\n"
+        "func directView(): Transformer { return DirectTransformer(); }\n"
+        "func adaptedView(): Transformer { return AdaptedTransformer(); }\n"
+        "func callStatic<T: Transformer>(value: int): int {\n"
+        "    return T.changingStatic(value);\n"
+        "}\n"
+        "func useAll(): int {\n"
+        "    return directView().changing(1) + adaptedView().changing(2) +\n"
+        "        callStatic<DirectTransformer>(3) + callStatic<AdaptedTransformer>(4);\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "object_spec_method_parameter_bindings_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *witness_start;
+    const char *witness_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    witness_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__specparambinding__Transformer {\n");
+    ASSERT(witness_start != NULL);
+    witness_end = strstr(witness_start, "};\n");
+    ASSERT(witness_end != NULL);
+    ASSERT(count_substr_in_span(witness_start, witness_end, "(*") == 6U);
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*plain)(void *_subject, int64_t);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*fixed)(void *_subject, int64_t);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*changing)(void *_subject, int64_t);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*plainStatic)(int64_t);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*fixedStatic)(int64_t);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*changingStatic)(int64_t);"));
+    ASSERT(!span_contains(witness_start, witness_end, "let"));
+    ASSERT(!span_contains(witness_start, witness_end, "var"));
+    ASSERT(strstr(output.c_source, "FengCallableInvoke__") == NULL);
+    ASSERT(strstr(output.c_source, "FengCallableStaticInvoke__") == NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengSpecThunk__feng__codegen__specparambinding") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Instance and static fields with one Feng name occupy independent witness
+ * slots; only the instance field contributes storage to the default subject. */
+static void test_object_spec_cross_surface_fields_keep_distinct_slots(void) {
+    static const char *kSource =
+        "module feng.codegen.specfieldowners;\n"
+        "spec Surface {\n"
+        "    var value: int;\n"
+        "    static var value: int;\n"
+        "}\n"
+        "type Impl: Surface {\n"
+        "    var value: int = 1;\n"
+        "    static var value: int = 2;\n"
+        "}\n"
+        "func updateInstance(value: Surface): int {\n"
+        "    value.value += 1;\n"
+        "    return value.value;\n"
+        "}\n"
+        "func updateStatic<T: Surface>(): int {\n"
+        "    T.value += 1;\n"
+        "    return T.value;\n"
+        "}\n"
+        "func useAll(): int {\n"
+        "    let value: Surface = Impl();\n"
+        "    return updateInstance(value) + updateStatic<Impl>();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "object_spec_cross_surface_fields_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *witness_start;
+    const char *witness_end;
+    const char *subject_start;
+    const char *subject_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    witness_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__specfieldowners__Surface {\n");
+    ASSERT(witness_start != NULL);
+    witness_end = strstr(witness_start, "};\n");
+    ASSERT(witness_end != NULL);
+    ASSERT(count_substr_in_span(witness_start, witness_end, "(*") == 4U);
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*get_value)(void *_subject);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "void (*set_value)(void *_subject, int64_t value);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "int64_t (*get_value__feng_overload_2)(void);"));
+    ASSERT(span_contains(witness_start,
+                         witness_end,
+                         "void (*set_value__feng_overload_2)(int64_t value);"));
+
+    subject_start = strstr(
+        output.c_source,
+        "struct FengSpecDefault__feng__codegen__specfieldowners__Surface__Subject {\n");
+    ASSERT(subject_start != NULL);
+    subject_end = strstr(subject_start, "};\n");
+    ASSERT(subject_end != NULL);
+    ASSERT(count_substr_in_span(subject_start, subject_end, "int64_t value;") == 1U);
+    ASSERT(!span_contains(subject_start,
+                          subject_end,
+                          "value__feng_overload_2"));
+    ASSERT(strstr(output.c_source, "witness->get_value(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "witness)->get_value__feng_overload_2()") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Cross-owner field/method names and methods named after their spec keep
+ * using the existing compile-time-selected field, instance and static slots. */
+static void test_object_spec_special_names_keep_distinct_witness_slots(void) {
+    static const char *kSource =
+        "module feng.codegen.specspecialsurface;\n"
+        "spec Surface {\n"
+        "    var instanceOwned: int;\n"
+        "    static func instanceOwned(): int;\n"
+        "    static var staticOwned: int;\n"
+        "    func staticOwned(): int;\n"
+        "}\n"
+        "type Impl: Surface {\n"
+        "    var instanceOwned: int = 1;\n"
+        "    static func instanceOwned(): int { return 2; }\n"
+        "    static var staticOwned: int = 3;\n"
+        "    func staticOwned(): int { return 4; }\n"
+        "}\n"
+        "func readInstance(value: Surface): int {\n"
+        "    value.instanceOwned += 1;\n"
+        "    return value.instanceOwned + value.staticOwned();\n"
+        "}\n"
+        "func readStatic<T: Surface>(): int {\n"
+        "    T.staticOwned += 1;\n"
+        "    return T.instanceOwned() + T.staticOwned;\n"
+        "}\n"
+        "spec NamedResource {\n"
+        "    func NamedResource(): int;\n"
+        "    static func NamedResource(): string;\n"
+        "}\n"
+        "type NamedImpl: NamedResource {\n"
+        "    func NamedResource(): int { return 5; }\n"
+        "    static func NamedResource(): string { return \"named\"; }\n"
+        "}\n"
+        "func readNamed(value: NamedResource): int {\n"
+        "    return value.NamedResource();\n"
+        "}\n"
+        "func readNamedStatic<T: NamedResource>(): string {\n"
+        "    return T.NamedResource();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "object_spec_special_names_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *surface_start;
+    const char *surface_end;
+    const char *named_start;
+    const char *named_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    surface_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__specspecialsurface__Surface {\n");
+    ASSERT(surface_start != NULL);
+    surface_end = strstr(surface_start, "};\n");
+    ASSERT(surface_end != NULL);
+    ASSERT(count_substr_in_span(surface_start, surface_end, "(*") == 6U);
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "int64_t (*get_instanceOwned)(void *_subject);"));
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "void (*set_instanceOwned)(void *_subject, int64_t value);"));
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "int64_t (*instanceOwned__feng_overload_2)();"));
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "int64_t (*get_staticOwned)(void);"));
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "void (*set_staticOwned)(int64_t value);"));
+    ASSERT(span_contains(surface_start,
+                         surface_end,
+                         "int64_t (*staticOwned__feng_overload_2)(void *_subject);"));
+
+    named_start = strstr(
+        output.c_source,
+        "struct FengSpecWitness__feng__codegen__specspecialsurface__NamedResource {\n");
+    ASSERT(named_start != NULL);
+    named_end = strstr(named_start, "};\n");
+    ASSERT(named_end != NULL);
+    ASSERT(count_substr_in_span(named_start, named_end, "(*") == 2U);
+    ASSERT(span_contains(named_start,
+                         named_end,
+                         "int64_t (*NamedResource)(void *_subject);"));
+    ASSERT(count_substr_in_span(named_start,
+                                named_end,
+                                "(*NamedResource__feng_overload_2)(") == 1U);
+
+    ASSERT(strstr(output.c_source,
+                  ".witness->get_instanceOwned(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness->staticOwned__feng_overload_2(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->instanceOwned__feng_overload_2()") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->get_staticOwned()") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".witness->NamedResource(") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ")->NamedResource__feng_overload_2()") != NULL);
+    ASSERT(strstr(output.c_source, "FengCallableInvoke__") == NULL);
+    ASSERT(strstr(output.c_source, "FengCallableStaticInvoke__") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Every object-form default initialization reaches a fresh-subject factory;
+ * aggregate arrays carry the same init descriptor for per-element creation. */
+static void test_object_spec_default_initialization_uses_fresh_subjects(void) {
+    static const char *kSource =
+        "module feng.codegen.specdefaultfresh;\n"
+        "spec Counter {\n"
+        "    var value: int;\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let first: Counter;\n"
+        "    let second: Counter;\n"
+        "    let values: Counter[!] = Counter[:2];\n"
+        "    first.value = 1;\n"
+        "    values[0].value = 2;\n"
+        "    return first.value + second.value + values[0].value + values[1].value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "object_spec_default_fresh_subjects_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *factory_start;
+    const char *factory_end;
+    const char *init_start;
+    const char *init_end;
+    const char *run_start;
+    const char *run_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    factory_start = strstr(
+        output.c_source,
+        "static struct FengSpecDefault__feng__codegen__specdefaultfresh__Counter__Subject *"
+        "FengSpecDefault__feng__codegen__specdefaultfresh__Counter__new_subject(void) {\n");
+    ASSERT(factory_start != NULL);
+    factory_end = strstr(factory_start, "\n}\n");
+    ASSERT(factory_end != NULL);
+    ASSERT(span_contains(
+        factory_start,
+        factory_end,
+        "feng_object_new(&FengSpecDefault__feng__codegen__specdefaultfresh__"
+        "Counter__Subject_desc)"));
+
+    init_start = strstr(
+        output.c_source,
+        "static void FengSpecAggInit__feng__codegen__specdefaultfresh__Counter("
+        "void *_value_out) {\n");
+    ASSERT(init_start != NULL);
+    init_end = strstr(init_start, "\n}\n");
+    ASSERT(init_end != NULL);
+    ASSERT(count_substr_in_span(
+               init_start,
+               init_end,
+               "FengSpecDefault__feng__codegen__specdefaultfresh__Counter__"
+               "new_subject()") == 1U);
+    ASSERT(span_contains(
+        init_start,
+        init_end,
+        "_v->witness = &FengSpecDefaultWitness__feng__codegen__"
+        "specdefaultfresh__Counter;"));
+
+    run_start = strstr(
+        output.c_source,
+        "static int64_t feng__feng__codegen__specdefaultfresh__run__from__void("
+        "void) {\n");
+    ASSERT(run_start != NULL);
+    run_end = strstr(run_start, "\n}\n");
+    ASSERT(run_end != NULL);
+    ASSERT(count_substr_in_span(
+               run_start,
+               run_end,
+               "feng_aggregate_default_init(") == 2U);
+    ASSERT(span_contains(
+        run_start,
+        run_end,
+        "feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, "
+        "&FengSpecAgg__feng__codegen__specdefaultfresh__Counter, NULL, "
+        "sizeof(struct FengSpecValue__feng__codegen__specdefaultfresh__Counter),"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Owned object-to-spec conversions move into persistent aggregate slots;
+ * borrowed spec values keep the ordinary copying assignment path. */
+static void test_object_spec_owned_subjects_move_into_persistent_slots(void) {
+    static const char *kSource =
+        "module feng.codegen.specownership;\n"
+        "spec View { func id(): int; }\n"
+        "type Resource: View {\n"
+        "    let value: int;\n"
+        "    func Resource(value: int) { self.value = value; }\n"
+        "    func id(): int { return self.value; }\n"
+        "}\n"
+        "type Holder { var view: View; }\n"
+        "func overwriteLocal(): int {\n"
+        "    var view: View = Resource(1);\n"
+        "    view = Resource(2);\n"
+        "    return view.id();\n"
+        "}\n"
+        "func overwriteField(): int {\n"
+        "    let holder = Holder { view: Resource(1) };\n"
+        "    holder.view = Resource(2);\n"
+        "    return holder.view.id();\n"
+        "}\n"
+        "func overwriteArray(): int {\n"
+        "    let values: View[!] = View[:1];\n"
+        "    values[0] = Resource(1);\n"
+        "    values[0] = Resource(2);\n"
+        "    return values[0].id();\n"
+        "}\n"
+        "func copyBorrowed(source: View): int {\n"
+        "    var result: View;\n"
+        "    result = source;\n"
+        "    return result.id();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "object_spec_owned_subject_store_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *local_start;
+    const char *local_end;
+    const char *field_start;
+    const char *field_end;
+    const char *array_start;
+    const char *array_end;
+    const char *borrowed_start;
+    const char *borrowed_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    local_start = strstr(
+        output.c_source,
+        "static int64_t feng__feng__codegen__specownership__"
+        "overwriteLocal__from__void(void) {\n");
+    ASSERT(local_start != NULL);
+    local_end = strstr(local_start, "\n}\n");
+    ASSERT(local_end != NULL);
+    ASSERT(count_substr_in_span(
+               local_start, local_end, "feng_aggregate_take(") == 1U);
+    ASSERT(count_substr_in_span(
+               local_start, local_end, "feng_cleanup_push(&_cu__t") == 0U);
+
+    field_start = strstr(
+        output.c_source,
+        "static int64_t feng__feng__codegen__specownership__"
+        "overwriteField__from__void(void) {\n");
+    ASSERT(field_start != NULL);
+    field_end = strstr(field_start, "\n}\n");
+    ASSERT(field_end != NULL);
+    ASSERT(count_substr_in_span(
+               field_start, field_end, "feng_aggregate_take(") == 2U);
+    ASSERT(count_substr_in_span(
+               field_start, field_end, "feng_cleanup_push(&_cu__t") == 0U);
+
+    array_start = strstr(
+        output.c_source,
+        "static int64_t feng__feng__codegen__specownership__"
+        "overwriteArray__from__void(void) {\n");
+    ASSERT(array_start != NULL);
+    array_end = strstr(array_start, "\n}\n");
+    ASSERT(array_end != NULL);
+    ASSERT(count_substr_in_span(
+               array_start, array_end, "feng_aggregate_take(") == 2U);
+    ASSERT(count_substr_in_span(
+               array_start, array_end, "feng_cleanup_push(&_cu__t") == 0U);
+
+    borrowed_start = strstr(
+        output.c_source,
+        "static int64_t feng__feng__codegen__specownership__"
+        "copyBorrowed__from__S_FengSpecValue__feng__codegen__specownership__"
+        "View(struct FengSpecValue__feng__codegen__specownership__View source) {\n");
+    ASSERT(borrowed_start != NULL);
+    borrowed_end = strstr(borrowed_start, "\n}\n");
+    ASSERT(borrowed_end != NULL);
+    ASSERT(count_substr_in_span(
+               borrowed_start, borrowed_end, "feng_aggregate_assign(") == 1U);
+    ASSERT(count_substr_in_span(
+               borrowed_start, borrowed_end, "feng_aggregate_take(") == 0U);
+    ASSERT(strstr(output.c_source, "feng_scalar_box_new_") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Every spec-owned C tag must have file scope before any witness signature,
  * regardless of member staticness, parameter position, spec form, or source
  * declaration order. */
@@ -14332,6 +14888,11 @@ int main(void) {
     test_generic_type_inferred_field_codegen();
     test_generic_type_inferred_field_concrete_call_codegen();
     test_spec_static_member_witness_codegen();
+    test_object_spec_method_parameter_bindings_keep_witness_abi();
+    test_object_spec_cross_surface_fields_keep_distinct_slots();
+    test_object_spec_special_names_keep_distinct_witness_slots();
+    test_object_spec_default_initialization_uses_fresh_subjects();
+    test_object_spec_owned_subjects_move_into_persistent_slots();
     test_spec_c_tags_precede_all_witness_signatures_codegen();
     test_spec_static_var_witness_codegen();
     test_generic_param_static_method_codegen();

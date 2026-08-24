@@ -2594,6 +2594,9 @@ static bool cg_emit_field_managed_descriptors(CG *cg, Buf *td,
                                               FengToken blame);
 static bool cg_emit_field_release(CG *cg, Buf *td, const char *field_name,
                                   const CGType *t, FengToken blame);
+static bool cg_materialize_ownership_alias(CG *cg,
+                                           ExprResult *result,
+                                           const char *prefix);
 static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix);
 static bool cg_materialize_shared_callable_value_argument(
     CG *cg,
@@ -2602,6 +2605,10 @@ static bool cg_materialize_shared_callable_value_argument(
 static bool cg_prepare_aggregate_assign_source(CG *cg,
                                                ExprResult *source,
                                                const char *prefix);
+static bool cg_prepare_aggregate_store_source(CG *cg,
+                                              ExprResult *source,
+                                              const char *prefix,
+                                              bool *out_take_source);
 static bool cg_emit_constructor_invoke(CG *cg,
                                        FengExpr *const *args,
                                        size_t arg_count,
@@ -13586,8 +13593,27 @@ static bool cg_user_spec_clone_intersection_member(UserSpec *s,
     return true;
 }
 
-/* Return the first slot carrying one Feng member name. */
-static UserSpecMember *cg_user_spec_named_member(
+/* Return the first slot carrying one Feng member name in an exact
+ * instance/static surface. */
+static UserSpecMember *cg_user_spec_named_member_in_surface(
+    UserSpec *spec,
+    const char *name,
+    bool is_static) {
+    if (spec == NULL || name == NULL) return NULL;
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        if (spec->members[index].is_static == is_static &&
+            cg_user_spec_member_name_equals(&spec->members[index],
+                                            name,
+                                            strlen(name))) {
+            return &spec->members[index];
+        }
+    }
+    return NULL;
+}
+
+/* Return the first same-name slot from either owner surface. This is used
+ * only to keep generated C field names unique across one witness struct. */
+static UserSpecMember *cg_user_spec_named_member_any_surface(
     UserSpec *spec,
     const char *name) {
     if (spec == NULL || name == NULL) return NULL;
@@ -13603,9 +13629,9 @@ static UserSpecMember *cg_user_spec_named_member(
 
 /* Record one flattened intersection requirement. First-seen names enter the
  * historical primary member order. Equivalent declarations become aliases of
- * that slot. Same-name methods with distinct signatures are staged separately
- * and appended only after all primary slots, preserving every pre-fix field
- * name and offset. Takes ownership of `source_member_type_ref`. */
+ * that slot. Additional legal slots, including another owner surface or a
+ * method overload, are staged after all primary slots. Takes ownership of
+ * `source_member_type_ref`. */
 static bool cg_user_spec_record_intersection_member(
     CG *cg,
     UserSpec *spec,
@@ -13616,6 +13642,7 @@ static bool cg_user_spec_record_intersection_member(
     FengToken blame) {
     UserSpecMember *equivalent;
     const UserSpecMember *named;
+    const UserSpecMember *any_named;
 
     if (source == NULL || source->feng_name == NULL) {
         cg_type_ref_free(source_member_type_ref);
@@ -13632,12 +13659,27 @@ static bool cg_user_spec_record_intersection_member(
         return ok;
     }
 
-    named = cg_user_spec_named_member(spec, source->feng_name);
+    named = cg_user_spec_named_member_in_surface(
+        spec, source->feng_name, source->is_static);
     if (named == NULL) {
-        named = cg_user_spec_named_member(pending_overloads,
-                                         source->feng_name);
+        named = cg_user_spec_named_member_in_surface(
+            pending_overloads, source->feng_name, source->is_static);
     }
     if (named == NULL) {
+        any_named = cg_user_spec_named_member_any_surface(
+            spec, source->feng_name);
+        if (any_named == NULL) {
+            any_named = cg_user_spec_named_member_any_surface(
+                pending_overloads, source->feng_name);
+        }
+        if (any_named != NULL) {
+            return cg_user_spec_clone_intersection_member(
+                pending_overloads,
+                source,
+                source_member_decl,
+                source_member_type_ref,
+                any_named->c_field_name);
+        }
         return cg_user_spec_clone_intersection_member(
             spec,
             source,
@@ -13761,9 +13803,9 @@ static bool cg_user_spec_clone_object_overload(
 }
 
 /* Record one object-form requirement using exact lowered identity. Existing
- * first-name slots keep their layout; distinct method overloads are staged
- * for deterministic append, and equivalent child declarations become the
- * primary identity without changing the slot. */
+ * first-name slots keep their layout; distinct method overloads and members
+ * from the other owner surface are staged for deterministic append, while an
+ * equivalent child declaration becomes the primary slot identity. */
 static bool cg_user_spec_record_object_member(
     UserSpec *spec,
     UserSpec *pending_overloads,
@@ -13771,6 +13813,7 @@ static bool cg_user_spec_record_object_member(
     bool prefer_source_identity) {
     UserSpecMember *equivalent;
     UserSpecMember *named;
+    UserSpecMember *any_named;
 
     if (source == NULL || source->feng_name == NULL) {
         return true;
@@ -13786,12 +13829,23 @@ static bool cg_user_spec_record_object_member(
                    : cg_user_spec_member_append_aliases(equivalent, source);
     }
 
-    named = cg_user_spec_named_member(spec, source->feng_name);
+    named = cg_user_spec_named_member_in_surface(
+        spec, source->feng_name, source->is_static);
     if (named == NULL) {
-        named = cg_user_spec_named_member(
-            pending_overloads, source->feng_name);
+        named = cg_user_spec_named_member_in_surface(
+            pending_overloads, source->feng_name, source->is_static);
     }
     if (named == NULL) {
+        any_named = cg_user_spec_named_member_any_surface(
+            spec, source->feng_name);
+        if (any_named == NULL) {
+            any_named = cg_user_spec_named_member_any_surface(
+                pending_overloads, source->feng_name);
+        }
+        if (any_named != NULL) {
+            return cg_user_spec_clone_object_overload(
+                pending_overloads, source, any_named->c_field_name);
+        }
         return cg_user_spec_clone_inherited_member(spec, source);
     }
     if (named->kind == USM_KIND_METHOD &&
@@ -15321,6 +15375,25 @@ static const UserSpecMember *cg_user_spec_member(const UserSpec *s,
     return NULL;
 }
 
+/* Find a field in one exact instance/static witness member surface. */
+static const UserSpecMember *cg_user_spec_field_member(
+    const UserSpec *spec,
+    const char *name,
+    size_t length,
+    bool require_static) {
+    if (spec == NULL || name == NULL) return NULL;
+    for (size_t index = 0U; index < spec->member_count; ++index) {
+        const UserSpecMember *candidate = &spec->members[index];
+
+        if (candidate->kind == USM_KIND_FIELD &&
+            candidate->is_static == require_static &&
+            cg_user_spec_member_name_equals(candidate, name, length)) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
 /* Find the exact requirement selected by Semantic instead of repeating
  * overload selection from a source-level name. Inherited slots preserve the
  * original FengTypeMember identity when copied into a child spec surface. */
@@ -15360,6 +15433,39 @@ static const UserSpecMember *cg_user_spec_member_by_unique_decl(
         result = &spec->members[index];
     }
     return result;
+}
+
+/* Resolve the exact Semantic-selected field for a member expression. The
+ * surface fallback is retained for imported or legacy sites without a
+ * SpecMemberAccess sidecar. */
+static const UserSpecMember *cg_user_spec_field_member_for_access(
+    const CG *cg,
+    const UserSpec *spec,
+    const FengExpr *member_expr,
+    bool fallback_static) {
+    const FengSpecMemberAccess *access =
+        cg != NULL && cg->analysis != NULL && member_expr != NULL
+            ? feng_semantic_lookup_spec_member_access(cg->analysis,
+                                                      member_expr)
+            : NULL;
+
+    if (access != NULL && access->member != NULL &&
+        access->member->kind == FENG_TYPE_MEMBER_FIELD) {
+        const UserSpecMember *selected =
+            cg_user_spec_member_by_unique_decl(spec, access->member);
+
+        if (selected != NULL && selected->kind == USM_KIND_FIELD) {
+            return selected;
+        }
+        fallback_static = access->member->is_static;
+    }
+    return member_expr != NULL
+               ? cg_user_spec_field_member(
+                     spec,
+                     member_expr->as.member.member.data,
+                     member_expr->as.member.member.length,
+                     fallback_static)
+               : NULL;
 }
 
 /* Find one closed requirement slot within a larger spec surface. Generic
@@ -17095,10 +17201,11 @@ static bool cg_ensure_default_parent_witness(CG *cg,
 
         if (root_member == NULL &&
             target_member->kind != USM_KIND_METHOD) {
-            root_member = cg_user_spec_member(
+            root_member = cg_user_spec_field_member(
                 root,
                 target_member->feng_name,
-                strlen(target_member->feng_name));
+                strlen(target_member->feng_name),
+                target_member->is_static);
         }
 
         if (root_member == NULL ||
@@ -17143,10 +17250,11 @@ static bool cg_ensure_default_parent_witness(CG *cg,
 
         if (root_member == NULL &&
             target_member->kind != USM_KIND_METHOD) {
-            root_member = cg_user_spec_member(
+            root_member = cg_user_spec_field_member(
                 root,
                 target_member->feng_name,
-                strlen(target_member->feng_name));
+                strlen(target_member->feng_name),
+                target_member->is_static);
         }
 
         if (target_member->kind == USM_KIND_FIELD) {
@@ -17591,7 +17699,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n");
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_FIELD) continue;
+        if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
         buf_append_cstr(td, "    ");
         cg_emit_c_type(td, sm->type);
         buf_append_fmt(td, " %s;\n", sm->c_field_name);
@@ -17604,6 +17712,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind == USM_KIND_FIELD &&
+            !sm->is_static &&
             cgtype_value_kind(sm->type) != CG_VK_TRIVIAL) {
             subject_any_managed = true;
             break;
@@ -17621,7 +17730,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                        s->c_default_subject_struct_name);
         for (size_t i = 0; i < s->member_count; i++) {
             const UserSpecMember *sm = &s->members[i];
-            if (sm->kind != USM_KIND_FIELD) continue;
+            if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
             if (!cg_emit_field_release(cg, td, sm->c_field_name, sm->type,
                                        s->decl->token)) {
                 free(subject_release_name);
@@ -17635,7 +17744,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     size_t subject_managed_count = 0U;
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_FIELD) continue;
+        if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
         subject_managed_count += cg_field_managed_descriptor_count(
             cg, sm->type, s->decl->token);
     }
@@ -17645,7 +17754,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             s->c_default_subject_struct_name);
         for (size_t i = 0; i < s->member_count; i++) {
             const UserSpecMember *sm = &s->members[i];
-            if (sm->kind != USM_KIND_FIELD) continue;
+            if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
             if (!cg_emit_field_managed_descriptors(cg, td,
                     s->c_default_subject_struct_name,
                     sm->c_field_name, sm->type, s->decl->token)) {
@@ -17694,7 +17803,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_default_subject_desc_name);
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
-        if (sm->kind != USM_KIND_FIELD) continue;
+        if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
         /* Trivial: feng_object_new already zeroed. */
         if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL) continue;
         if (cgtype_is_aggregate(sm->type)) {
@@ -19358,6 +19467,42 @@ static char *cg_aggregate_result_address_dup(const ExprResult *result) {
     return address.data;
 }
 
+/* Evaluate one fixed-layout C value exactly once without changing its Feng
+ * ownership. No cleanup is registered: the caller must immediately transfer
+ * an owned result or otherwise attach it to ordinary cleanup storage. */
+static bool cg_materialize_ownership_alias(CG *cg,
+                                           ExprResult *result,
+                                           const char *prefix) {
+    char *temporary;
+    char *ctype;
+
+    if (cg == NULL || result == NULL || result->type == NULL ||
+        result->c_expr == NULL || result->is_storage_address ||
+        result->uses_erased_generic_storage ||
+        result->uses_reified_storage ||
+        result->type->kind == CG_TYPE_GENERIC_PARAM) {
+        return false;
+    }
+    temporary = cg_fresh_temp(cg, prefix);
+    ctype = cg_ctype_dup(result->type);
+    if (temporary == NULL || ctype == NULL) {
+        free(temporary);
+        free(ctype);
+        return false;
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    %s %s = %s;\n",
+                   ctype,
+                   temporary,
+                   result->c_expr);
+    free(ctype);
+    free(result->c_expr);
+    result->c_expr = temporary;
+    result->is_addressable = true;
+    return true;
+}
+
 /* Materialise an ExprResult into a fresh C local so its lifetime spans the
  * current statement. For managed +1 results this also schedules a release at
  * the end of the local scope by registering the local in the scope. For
@@ -19824,6 +19969,37 @@ static bool cg_prepare_aggregate_assign_source(CG *cg,
     source->c_expr = tmp;
     source->is_addressable = true;
     return true;
+}
+
+/* Prepare an aggregate for replacement of persistent storage. An owned
+ * fixed-layout result remains owned and is exposed through a shallow C alias
+ * for `feng_aggregate_take`; a borrowed result follows the ordinary
+ * `feng_aggregate_assign` preparation path. */
+static bool cg_prepare_aggregate_store_source(CG *cg,
+                                              ExprResult *source,
+                                              const char *prefix,
+                                              bool *out_take_source) {
+    bool take_source;
+
+    if (cg == NULL || source == NULL || source->type == NULL ||
+        !cgtype_is_aggregate(source->type) || out_take_source == NULL) {
+        return false;
+    }
+    take_source = source->owns_ref;
+    *out_take_source = take_source;
+    if (!take_source) {
+        return cg_prepare_aggregate_assign_source(cg, source, prefix);
+    }
+    if (source->is_storage_address || source->is_addressable) {
+        return true;
+    }
+    if (cg_type_uses_reified_storage(cg, source->type)) {
+        /* Reified storage needs its descriptor-sized materialization. Keep
+         * the pre-materialization ownership decision so the caller still
+         * moves from the registered, subsequently zeroed source slot. */
+        return cg_materialize_to_local(cg, source, prefix) != NULL;
+    }
+    return cg_materialize_ownership_alias(cg, source, prefix);
 }
 
 /* C symbol for the source package's ordinary implicit-construction entry.
@@ -27788,10 +27964,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 field_spec = recv.type->user_spec;
             }
             if (field_spec != NULL) {
-                field = cg_user_spec_member(
+                field = cg_user_spec_field_member_for_access(
+                    cg,
                     field_spec,
-                    ma->as.member.member.data,
-                    ma->as.member.member.length);
+                    ma,
+                    /*fallback_static=*/false);
             }
             if (field != NULL && field->kind == USM_KIND_FIELD &&
                 field->type != NULL &&
@@ -29950,8 +30127,8 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token,
                 "CE0172", "codegen: generic member access requires an object-form spec constraint");
         }
-        const UserSpecMember *sm = cg_user_spec_member(us,
-            e->as.member.member.data, e->as.member.member.length);
+        const UserSpecMember *sm = cg_user_spec_field_member_for_access(
+            cg, us, e, /*fallback_static=*/false);
         if (!sm || sm->kind != USM_KIND_FIELD) {
             er_free(&recv);
             return cg_fail(cg, e->token,
@@ -29970,8 +30147,8 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
     if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
         /* Step 4b-β — spec field access via witness getter. */
         const UserSpec *us = recv.type->user_spec;
-        const UserSpecMember *sm = cg_user_spec_member(us,
-            e->as.member.member.data, e->as.member.member.length);
+        const UserSpecMember *sm = cg_user_spec_field_member_for_access(
+            cg, us, e, /*fallback_static=*/false);
         if (!sm || sm->kind != USM_KIND_FIELD) {
             er_free(&recv);
             return cg_fail(cg, e->token,
@@ -33315,8 +33492,7 @@ static bool cg_emit_object_spec_upcast(CG *cg,
     ExprResult source;
     const UserSpec *current_spec;
     CGType *target_type = NULL;
-    char *source_cty = NULL;
-    char *source_tmp = NULL;
+    const char *source_tmp;
     Buf witness_expr;
     Buf result_expr;
     bool source_owns_ref;
@@ -33339,21 +33515,11 @@ static bool cg_emit_object_spec_upcast(CG *cg,
     }
     current_spec = source.type->user_spec;
     source_owns_ref = source.owns_ref;
-    source_cty = cg_ctype_dup(source.type);
-    source_tmp = cg_fresh_temp(cg, "_spec_view");
-    if (source_cty == NULL || source_tmp == NULL) {
-        free(source_cty);
-        free(source_tmp);
+    if (!cg_materialize_ownership_alias(cg, &source, "_spec_view")) {
         er_free(&source);
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
-    cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body,
-                   "    %s %s = %s;\n",
-                   source_cty,
-                   source_tmp,
-                   source.c_expr);
-    free(source_cty);
+    source_tmp = source.c_expr;
 
     buf_init(&witness_expr);
     buf_append_fmt(&witness_expr, "%s.witness", source_tmp);
@@ -33367,7 +33533,6 @@ static bool cg_emit_object_spec_upcast(CG *cg,
 
         if (parent_spec == NULL) {
             buf_free(&witness_expr);
-            free(source_tmp);
             er_free(&source);
             return cg_fail(cg, e->token,
                            "CE0198", "codegen: semantic object-spec upcast path contains an invalid direct-parent index");
@@ -33381,7 +33546,6 @@ static bool cg_emit_object_spec_upcast(CG *cg,
                          &e->token,
                          &target_type)) {
         buf_free(&witness_expr);
-        free(source_tmp);
         er_free(&source);
         return false;
     }
@@ -33389,7 +33553,6 @@ static bool cg_emit_object_spec_upcast(CG *cg,
         target_type->user_spec == NULL || target_type->user_spec != current_spec) {
         cgtype_free(target_type);
         buf_free(&witness_expr);
-        free(source_tmp);
         er_free(&source);
         return cg_fail(cg, e->token,
                        "CE0199", "codegen: object-spec upcast path does not end at its semantic target");
@@ -33402,7 +33565,6 @@ static bool cg_emit_object_spec_upcast(CG *cg,
                    source_tmp,
                    witness_expr.data);
     buf_free(&witness_expr);
-    free(source_tmp);
     er_free(&source);
     if (result_expr.data == NULL) {
         cgtype_free(target_type);
@@ -33500,11 +33662,14 @@ static bool cg_emit_expr_with_spec_coercion(
                                                              &witness_var)) {
                         return false;
                     }
-                    /* Materialise the source so the subject expression evaluates exactly
-                     * once; object-form spec borrows that managed reference. */
-                    cg_materialize_to_local(cg, out, "_t");
+                    /* Evaluate exactly once while preserving a constructor
+                     * result's +1 for the resulting fat value. */
+                    subject_owned = out->owns_ref;
+                    if (!cg_materialize_ownership_alias(cg, out, "_t")) {
+                        return cg_fail(cg, e->token,
+                                       "IE0001", "codegen: out of memory");
+                    }
                     subject_expr = strdup(out->c_expr);
-                    subject_owned = false;
                 }
             } else {
                 if (!cg_ensure_witness_instance(cg,
@@ -33515,11 +33680,14 @@ static bool cg_emit_expr_with_spec_coercion(
                                                 &witness_var)) {
                     return false;
                 }
-                /* Materialise the source so the subject expression evaluates exactly
-                 * once; object-form spec borrows that managed reference. */
-                cg_materialize_to_local(cg, out, "_t");
+                /* Evaluate exactly once while preserving a managed source's
+                 * ownership for the resulting fat value. */
+                subject_owned = out->owns_ref;
+                if (!cg_materialize_ownership_alias(cg, out, "_t")) {
+                    return cg_fail(cg, e->token,
+                                   "IE0001", "codegen: out of memory");
+                }
                 subject_expr = strdup(out->c_expr);
-                subject_owned = false;
             }
         } else {
             if (!cg_ensure_witness_instance_for_subject_key(cg,
@@ -33558,9 +33726,12 @@ static bool cg_emit_expr_with_spec_coercion(
                 subject_expr = box_tmp;
                 subject_owned = true;
             } else if (out->type->kind == CG_TYPE_STRING || out->type->kind == CG_TYPE_ARRAY) {
-                cg_materialize_to_local(cg, out, "_t");
+                subject_owned = out->owns_ref;
+                if (!cg_materialize_ownership_alias(cg, out, "_t")) {
+                    return cg_fail(cg, e->token,
+                                   "IE0001", "codegen: out of memory");
+                }
                 subject_expr = strdup(out->c_expr);
-                subject_owned = false;
             } else {
                 return cg_fail(cg, e->token,
                     "CE0220", "codegen: object-form spec coercion source kind is invalid");
@@ -33580,8 +33751,8 @@ static bool cg_emit_expr_with_spec_coercion(
         out->type = cgtype_new(CG_TYPE_SPEC);
         if (!out->type) return false;
         out->type->user_spec = tgt_s;
-        /* Borrowed subjects stay tied to the materialised local; scalar-like
-         * subjects own only when the selected storage mode boxes them. */
+        /* Managed constructor results transfer their +1 into the fat value;
+         * borrowed subjects remain borrowed. Boxed subjects are always +1. */
         out->owns_ref = subject_owned;
         out->is_addressable = false;
     }
@@ -34652,6 +34823,7 @@ static bool cg_emit_user_field_value_store_with_offsets(
         const char *agg_desc = cg_aggregate_desc_name(uf->type);
         size_t rad_index;
         char *source_address;
+        bool take_source;
 
         if (agg_desc == NULL) {
             buf_free(&field_expr);
@@ -34660,7 +34832,8 @@ static bool cg_emit_user_field_value_store_with_offsets(
                            "CE0232", "codegen: missing aggregate descriptor for field '%s'",
                            uf->feng_name);
         }
-        if (!cg_prepare_aggregate_assign_source(cg, value, "_t")) {
+        if (!cg_prepare_aggregate_store_source(
+                cg, value, "_t", &take_source)) {
             buf_free(&field_expr);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
@@ -34678,12 +34851,14 @@ static bool cg_emit_user_field_value_store_with_offsets(
                                          : "_td";
 
             buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&%s, %s, "
+                "    %s(&%s, %s, "
                 "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
                 field_expr.data, source_address, rad_source, rad_index);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&%s, %s, &%s);\n",
+                "    %s(&%s, %s, &%s);\n",
+                take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
                 field_expr.data, source_address, agg_desc);
         }
         free(source_address);
@@ -36487,38 +36662,48 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     elem_cty, recv.c_expr, idx_tmp, v.c_expr);
             }
         } else if (cgtype_is_aggregate(recv.type->element)) {
-            /* Step 4b-γ §9.6 — aggregate slot write goes through
-             * feng_aggregate_assign so the slot's old subject is released
-             * and the new subject's managed slots get the right retain.
-             * For owns_ref temps we still let aggregate cleanup at scope
-             * exit drain the source's +1, mirroring local-binding semantics. */
+            /* Persistent aggregate slots copy borrowed values and move owned
+             * expression results. Both helpers release the old slot first. */
             const char *agg_desc = cg_aggregate_desc_name(recv.type->element);
+            char *source_address;
+            bool take_source;
             if (agg_desc == NULL) {
                 free(elem_cty); free(idx_tmp);
                 er_free(&v); er_free(&ix); er_free(&recv);
                 return cg_fail(cg, stmt->token,
                     "CE0243", "codegen: missing aggregate descriptor for spec array element write");
             }
-            if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+            if (!cg_prepare_aggregate_store_source(
+                    cg, &v, "_t", &take_source)) {
                 free(elem_cty); free(idx_tmp);
                 er_free(&v); er_free(&ix); er_free(&recv);
                 return cg_fail(cg, stmt->token,
                     "IE0001", "codegen: out of memory");
             }
+            source_address = cg_aggregate_result_address_dup(&v);
+            if (source_address == NULL) {
+                free(elem_cty); free(idx_tmp);
+                er_free(&v); er_free(&ix); er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                    "CE0243", "codegen: aggregate array source has no address");
+            }
             size_t rad_idx;
             if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
                 const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
                 buf_append_fmt(cg->cur_body,
-                    "    feng_aggregate_assign("
+                    "    %s("
                     "(void *)((char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size), "
-                    "&%s, %s->reified_agg_deps[%zu]);\n",
+                    "%s, %s->reified_agg_deps[%zu]);\n",
+                    take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
                     recv.c_expr, idx_tmp, rad_src, rad_idx,
-                    v.c_expr, rad_src, rad_idx);
+                    source_address, rad_src, rad_idx);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    feng_aggregate_assign(&((%s *)feng_array_data(%s))[%s], &%s, &%s);\n",
-                    elem_cty, recv.c_expr, idx_tmp, v.c_expr, agg_desc);
+                    "    %s(&((%s *)feng_array_data(%s))[%s], %s, &%s);\n",
+                    take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
+                    elem_cty, recv.c_expr, idx_tmp, source_address, agg_desc);
             }
+            free(source_address);
         } else {
             buf_append_fmt(cg->cur_body,
                 "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
@@ -36902,9 +37087,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                     "CE0252", "codegen: generic member assignment requires an object-form spec constraint");
             }
-            const UserSpecMember *sm = cg_user_spec_member(us,
-                target->as.member.member.data,
-                target->as.member.member.length);
+            const UserSpecMember *sm = cg_user_spec_field_member_for_access(
+                cg, us, target, /*fallback_static=*/false);
             if (!sm || sm->kind != USM_KIND_FIELD) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
@@ -37119,9 +37303,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         if (recv.type->kind == CG_TYPE_SPEC && recv.type->user_spec) {
             /* Step 4b-β — spec field write via witness setter. */
             const UserSpec *us = recv.type->user_spec;
-            const UserSpecMember *sm = cg_user_spec_member(us,
-                target->as.member.member.data,
-                target->as.member.member.length);
+            const UserSpecMember *sm = cg_user_spec_field_member_for_access(
+                cg, us, target, /*fallback_static=*/false);
             if (!sm || sm->kind != USM_KIND_FIELD) {
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
@@ -37432,20 +37615,32 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
         } else if (cgtype_is_aggregate(uf->type)) {
             const char *desc = cg_aggregate_desc_name(uf->type);
+            char *source_address;
+            bool take_source;
             if (desc == NULL) {
                 er_free(&v);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token,
                                "CE0257", "codegen: missing aggregate descriptor for member assignment");
             }
-            if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+            if (!cg_prepare_aggregate_store_source(
+                    cg, &v, "_t", &take_source)) {
                 er_free(&v);
                 er_free(&recv);
                 return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             }
+            source_address = cg_aggregate_result_address_dup(&v);
+            if (source_address == NULL) {
+                er_free(&v);
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                               "CE0257", "codegen: aggregate member source has no address");
+            }
             buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_assign(&(%s)%s%s, &%s, &%s);\n",
-                recv.c_expr, acc, uf->c_name, v.c_expr, desc);
+                "    %s(&(%s)%s%s, %s, &%s);\n",
+                take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
+                recv.c_expr, acc, uf->c_name, source_address, desc);
+            free(source_address);
         } else {
             char *cty = cg_ctype_dup(uf->type);
             if (cgtype_is_by_value_struct(uf->type)) {
@@ -37704,6 +37899,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         }
     } else if (cgtype_is_aggregate(l->type)) {
         const char *desc = cg_aggregate_desc_name(l->type);
+        bool take_source;
         if (desc == NULL) {
             er_free(&v);
             return cg_fail(cg, stmt->token,
@@ -37719,7 +37915,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             er_free(&v);
             return true;
         }
-        if (!cg_prepare_aggregate_assign_source(cg, &v, "_t")) {
+        if (!cg_prepare_aggregate_store_source(
+                cg, &v, "_t", &take_source)) {
             er_free(&v);
             return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
@@ -37732,13 +37929,19 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
             if (l->uses_reified_storage) {
                 buf_append_fmt(cg->cur_body,
-                               "    feng_aggregate_assign(%s, %s, %s);\n",
+                               "    %s(%s, %s, %s);\n",
+                               take_source
+                                   ? "feng_aggregate_take"
+                                   : "feng_aggregate_assign",
                                l->c_name,
                                source_address,
                                l->reified_descriptor_c_name);
             } else {
                 buf_append_fmt(cg->cur_body,
-                               "    feng_aggregate_assign(&%s, %s, &%s);\n",
+                               "    %s(&%s, %s, &%s);\n",
+                               take_source
+                                   ? "feng_aggregate_take"
+                                   : "feng_aggregate_assign",
                                l->c_name,
                                source_address,
                                desc);
@@ -49650,10 +49853,11 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
 
             if (src_member == NULL &&
                 dst_member->kind != USM_KIND_METHOD) {
-                src_member = cg_user_spec_member(
+                src_member = cg_user_spec_field_member(
                     src,
                     dst_member->feng_name,
-                    strlen(dst_member->feng_name));
+                    strlen(dst_member->feng_name),
+                    dst_member->is_static);
             }
 
             if (src_member == NULL ||

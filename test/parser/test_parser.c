@@ -534,6 +534,97 @@ static void test_spec_static_member_parse_errors(void) {
     }
 }
 
+/* Object-form spec instance members and method signatures reject every
+ * declaration shape that cannot describe a requirement. */
+static void test_spec_instance_and_signature_parse_errors(void) {
+    static const struct {
+        const char *source;
+        const char *code;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.bad_instance_field;\n"
+            "spec InvalidField {\n"
+            "    let value: int = 1;\n"
+            "}\n",
+            "SE0603",
+            "spec field declarations cannot have an initializer"
+        },
+        {
+            "module demo.bad_instance_body;\n"
+            "spec InvalidBody {\n"
+            "    func read(): int { return 1; }\n"
+            "}\n",
+            "SE0605",
+            "spec method signatures must end with ';' and cannot have a body"
+        },
+        {
+            "module demo.bad_instance_return;\n"
+            "spec InvalidReturn {\n"
+            "    func run();\n"
+            "}\n",
+            "SE0604",
+            "spec method signatures must declare a return type"
+        },
+        {
+            "module demo.bad_static_return;\n"
+            "spec InvalidReturn {\n"
+            "    static func run();\n"
+            "}\n",
+            "SE0604",
+            "spec method signatures must declare a return type"
+        },
+        {
+            "module demo.bad_instance_let_parameter;\n"
+            "spec InvalidParameter {\n"
+            "    func update(let value: int): int;\n"
+            "}\n",
+            "SE0606",
+            "spec method parameters cannot use 'let' or 'var' modifiers"
+        },
+        {
+            "module demo.bad_instance_var_parameter;\n"
+            "spec InvalidParameter {\n"
+            "    func update(var value: int): int;\n"
+            "}\n",
+            "SE0606",
+            "spec method parameters cannot use 'let' or 'var' modifiers"
+        },
+        {
+            "module demo.bad_static_let_parameter;\n"
+            "spec InvalidParameter {\n"
+            "    static func inspect(let value: int): int;\n"
+            "}\n",
+            "SE0606",
+            "spec method parameters cannot use 'let' or 'var' modifiers"
+        },
+        {
+            "module demo.bad_static_var_parameter;\n"
+            "spec InvalidParameter {\n"
+            "    static func inspect(var value: int): int;\n"
+            "}\n",
+            "SE0606",
+            "spec method parameters cannot use 'let' or 'var' modifiers"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[index].source,
+                                  strlen(cases[index].source),
+                                  "spec_instance_and_signature_error.ff",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.code != NULL);
+        ASSERT(strcmp(error.code, cases[index].code) == 0);
+        ASSERT(error.message != NULL);
+        ASSERT(strstr(error.message, cases[index].message) != NULL);
+    }
+}
+
 static void test_static_member_parse_errors(void) {
     static const struct {
         const char *source;
@@ -3738,6 +3829,7 @@ int main(void) {
     test_spec_static_members_parse();
     test_spec_seal_members_parse();
     test_spec_static_member_parse_errors();
+    test_spec_instance_and_signature_parse_errors();
     test_static_member_parse_errors();
     test_ast_source_tokens();
     test_type_field_inferred_initializers();

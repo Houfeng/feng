@@ -10993,6 +10993,59 @@ static const FengTypeMember *find_spec_object_member(const ResolveContext *conte
                                               NULL);
 }
 
+/* Find one field in an exact instance/static object-spec member surface. */
+static const FengTypeMember *find_spec_object_field_with_owner(
+    const ResolveContext *context,
+    const FengDecl *spec_decl,
+    FengSlice name,
+    bool require_static,
+    const FengDecl **out_declaring_spec) {
+    const FengDecl **closure = NULL;
+    size_t closure_count = 0U;
+    size_t closure_capacity = 0U;
+    const FengTypeMember *result = NULL;
+
+    if (out_declaring_spec != NULL) {
+        *out_declaring_spec = NULL;
+    }
+    if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+        !spec_collect_closure(context,
+                              spec_decl,
+                              &closure,
+                              &closure_count,
+                              &closure_capacity)) {
+        free(closure);
+        return NULL;
+    }
+    for (size_t closure_index = 0U;
+         closure_index < closure_count && result == NULL;
+         ++closure_index) {
+        const FengDecl *current = closure[closure_index];
+
+        for (size_t member_index = 0U;
+             member_index < current->as.spec_decl.as.object.member_count;
+             ++member_index) {
+            const FengTypeMember *candidate =
+                current->as.spec_decl.as.object.members[member_index];
+
+            if (candidate == NULL ||
+                candidate->kind != FENG_TYPE_MEMBER_FIELD ||
+                candidate->is_static != require_static ||
+                !slice_equals(candidate->as.field.name, name)) {
+                continue;
+            }
+            result = candidate;
+            if (out_declaring_spec != NULL) {
+                *out_declaring_spec = current;
+            }
+            break;
+        }
+    }
+    free(closure);
+    return result;
+}
+
 /* Exact instantiated surface for one member selected through a spec value or
  * generic constraint. `declaring_spec_type_ref` carries the owner arguments
  * after object-parent or intersection-member projection; member signature
@@ -11453,6 +11506,39 @@ static bool spec_member_is_accessible_from(
                                                  access_spec,
                                                  owner_instance,
                                                  member);
+}
+
+/* Find one accessible field in an exact instance/static object-spec surface. */
+static const FengTypeMember *find_accessible_spec_object_field(
+    ResolveContext *context,
+    const FengDecl *spec_decl,
+    InferredExprType owner_instance,
+    FengSlice name,
+    bool require_static,
+    const FengDecl **out_declaring_spec) {
+    const FengDecl *declaring_spec = NULL;
+    const FengTypeMember *member = find_spec_object_field_with_owner(
+        context,
+        spec_decl,
+        name,
+        require_static,
+        &declaring_spec);
+
+    if (out_declaring_spec != NULL) {
+        *out_declaring_spec = NULL;
+    }
+    if (member == NULL ||
+        !spec_member_is_accessible_from(context,
+                                        spec_decl,
+                                        declaring_spec,
+                                        owner_instance,
+                                        member)) {
+        return NULL;
+    }
+    if (out_declaring_spec != NULL) {
+        *out_declaring_spec = declaring_spec;
+    }
+    return member;
 }
 
 /* Find the first same-name member accessible at the current source point.
@@ -17736,27 +17822,30 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                 constraint_owner,
                 expr->as.member.member,
                 true);
-            const FengTypeMember *accessible_member =
-                find_accessible_spec_object_member(
+            const FengTypeMember *accessible_field =
+                find_accessible_spec_object_field(
                     context,
                     type_target.constraint_spec_decl,
                     constraint_owner,
                     expr->as.member.member,
-                    /*include_static=*/true,
+                    /*require_static=*/true,
                     &declaring_spec);
 
             if (method_probe.has_accessible_method) {
                 return true;
             }
-            if (accessible_member != NULL && accessible_member->is_static &&
-                accessible_member->kind == FENG_TYPE_MEMBER_FIELD) {
+            if (accessible_field != NULL) {
                 if (!record_selected_friend_fit_access(
                         context,
                         type_target.constraint_spec_decl,
                         constraint_owner,
-                        accessible_member)) {
+                        accessible_field)) {
                     return false;
                 }
+                record_spec_member_access(context,
+                                          expr,
+                                          type_target.constraint_spec_decl,
+                                          accessible_field);
                 return true;
             }
             if (method_probe.inaccessible_member != NULL) {
@@ -17767,22 +17856,20 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                     method_probe.inaccessible_member);
             }
             {
-                const FengTypeMember *existing_member =
-                    find_spec_object_member_with_owner(
+                const FengTypeMember *existing_field =
+                    find_spec_object_field_with_owner(
                         context,
                         type_target.constraint_spec_decl,
                         expr->as.member.member,
-                        /*include_static=*/true,
+                        /*require_static=*/true,
                         &declaring_spec);
 
-                if (existing_member != NULL &&
-                    existing_member->is_static &&
-                    existing_member->kind == FENG_TYPE_MEMBER_FIELD &&
-                    existing_member->visibility == FENG_VISIBILITY_PRIVATE) {
+                if (existing_field != NULL &&
+                    existing_field->visibility == FENG_VISIBILITY_PRIVATE) {
                     return report_inaccessible_spec_member(context,
                                                            expr->token,
                                                            declaring_spec,
-                                                           existing_member);
+                                                           existing_field);
                 }
             }
         }
@@ -18675,12 +18762,14 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
             if (static_target.is_generic_type_param &&
                 static_target.constraint_spec_decl != NULL) {
                 const FengTypeMember *spec_member =
-                    find_spec_object_member(context,
-                                            static_target.constraint_spec_decl,
-                                            target->as.member.member,
-                                            /*include_static=*/true);
+                    find_spec_object_field_with_owner(
+                        context,
+                        static_target.constraint_spec_decl,
+                        target->as.member.member,
+                        /*require_static=*/true,
+                        NULL);
 
-                if (spec_member != NULL && spec_member->kind == FENG_TYPE_MEMBER_FIELD) {
+                if (spec_member != NULL) {
                     if (spec_member->as.field.mutability == FENG_MUTABILITY_VAR) {
                         return true;
                     }
@@ -19220,14 +19309,14 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         type_target.constraint_spec_decl != NULL) {
         const FengDecl *declaring_spec = NULL;
         const FengTypeMember *member =
-            find_spec_object_member_with_owner(
+            find_spec_object_field_with_owner(
                 context,
                 type_target.constraint_spec_decl,
                 expr->as.member.member,
-                /*include_static=*/true,
+                /*require_static=*/true,
                 &declaring_spec);
 
-        if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+        if (member != NULL) {
             const FengTypeRef *declaring_spec_instance =
                 constraint_member_declaring_spec_instance(
                     context,
@@ -23713,19 +23802,19 @@ static FengToken mixin_conflict_primary_token(const FengTypeMember *left,
     return fallback;
 }
 
-/* One declaration-local method collection governed by the ordinary type
- * overload rules. Object-form specs deliberately reuse this view instead of
- * maintaining a second signature-conflict algorithm. */
-typedef struct DeclaredMethodSet {
+/* One declaration-local member collection shared by ordinary types and
+ * object-form specs. The validators below project fields or methods from the
+ * same view so declaration-local conflict rules cannot drift by owner kind. */
+typedef struct DeclaredMemberSet {
     FengTypeMember *const *members;
     size_t member_count;
     FengSlice owner_name;
     const char *owner_label;
-} DeclaredMethodSet;
+} DeclaredMemberSet;
 
-/* Project a type or object-form spec declaration to its local method set. */
-static bool declared_method_set_init(const FengDecl *decl,
-                                     DeclaredMethodSet *out_set) {
+/* Project a type or object-form spec declaration to its local member set. */
+static bool declared_member_set_init(const FengDecl *decl,
+                                     DeclaredMemberSet *out_set) {
     if (decl == NULL || out_set == NULL) {
         return false;
     }
@@ -23752,12 +23841,12 @@ static bool declared_method_set_init(const FengDecl *decl,
  * Static and instance methods remain independent overload sets. */
 static bool validate_declared_method_overloads(ResolveContext *context,
                                                const FengDecl *decl) {
-    DeclaredMethodSet set;
+    DeclaredMemberSet set;
     size_t i;
     size_t j;
     bool ok = true;
 
-    if (context == NULL || !declared_method_set_init(decl, &set)) {
+    if (context == NULL || !declared_member_set_init(decl, &set)) {
         return true;
     }
 
@@ -23838,60 +23927,122 @@ static bool validate_declared_method_overloads(ResolveContext *context,
     return ok;
 }
 
-/**
- * 检查同一 type 内同一冲突面（静态或实例）中字段与方法是否同名。
- * 静态成员通过 TypeName.member 访问,实例成员通过 self.member 访问,
- * 两者访问路径不同不构成冲突面; 仅在同一 is_static 分量内检查。
- * 字段与方法同名一律报错,不区分泛型与非泛型方法。
- */
-static bool validate_type_member_field_method_name_conflict(ResolveContext *context, const FengDecl *decl) {
-    size_t i;
-    size_t j;
+/* Reject same-name fields within one declaration's instance or static member
+ * surface. The two surfaces have different owners and remain independent. */
+static bool validate_declared_field_name_conflicts(ResolveContext *context,
+                                                   const FengDecl *decl) {
+    DeclaredMemberSet set;
     bool ok = true;
 
-    if (context == NULL || decl == NULL || decl->kind != FENG_DECL_TYPE) {
+    if (context == NULL || !declared_member_set_init(decl, &set)) {
+        return true;
+    }
+    for (size_t index = 0U; index < set.member_count; ++index) {
+        const FengTypeMember *field = set.members[index];
+
+        if (field == NULL || field->kind != FENG_TYPE_MEMBER_FIELD) {
+            continue;
+        }
+        for (size_t previous_index = 0U;
+             previous_index < index;
+             ++previous_index) {
+            const FengTypeMember *previous = set.members[previous_index];
+            bool error_ok;
+
+            if (previous == NULL ||
+                previous->kind != FENG_TYPE_MEMBER_FIELD ||
+                previous->is_static != field->is_static ||
+                !slice_equals(previous->as.field.name,
+                              field->as.field.name)) {
+                continue;
+            }
+            error_ok = resolver_append_error(
+                context,
+                mixin_conflict_primary_token(
+                    field, previous, field->token),
+                "AE0514",
+                format_message(
+                    "duplicate field '%.*s' in %s '%.*s' within the %s member surface",
+                    (int)field->as.field.name.length,
+                    field->as.field.name.data,
+                    set.owner_label,
+                    (int)set.owner_name.length,
+                    set.owner_name.data,
+                    field->is_static ? "static" : "instance"));
+            if (error_ok) {
+                error_ok = append_mixin_conflict_related_locations(
+                    context, field, previous);
+            }
+            ok = error_ok && ok;
+        }
+    }
+    return ok;
+}
+
+/* Reject a field and a method with the same name in one declaration's
+ * instance or static surface. Declaration order does not affect the check. */
+static bool validate_declared_field_method_name_conflicts(
+    ResolveContext *context,
+    const FengDecl *decl) {
+    DeclaredMemberSet set;
+    bool ok = true;
+
+    if (context == NULL || !declared_member_set_init(decl, &set)) {
         return true;
     }
 
-    for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
-        const FengTypeMember *mi = decl->as.type_decl.members[i];
-        const FengCallableSignature *si;
+    for (size_t index = 0U; index < set.member_count; ++index) {
+        const FengTypeMember *current = set.members[index];
 
-        if (mi == NULL || mi->kind != FENG_TYPE_MEMBER_METHOD) {
+        if (current == NULL) {
             continue;
         }
-        si = &mi->as.callable;
+        for (size_t previous_index = 0U;
+             previous_index < index;
+             ++previous_index) {
+            const FengTypeMember *previous = set.members[previous_index];
+            const FengTypeMember *field;
+            const FengTypeMember *method;
+            bool error_ok;
 
-        for (j = 0U; j < i; ++j) {
-            const FengTypeMember *mj = decl->as.type_decl.members[j];
-
-            if (mj == NULL || mj->kind != FENG_TYPE_MEMBER_FIELD) {
+            if (previous == NULL || current->is_static != previous->is_static) {
                 continue;
             }
-            /* 静态/实例不在同一冲突面 */
-            if (mi->is_static != mj->is_static) {
+            if (current->kind == FENG_TYPE_MEMBER_FIELD &&
+                previous->kind == FENG_TYPE_MEMBER_METHOD) {
+                field = current;
+                method = previous;
+            } else if (current->kind == FENG_TYPE_MEMBER_METHOD &&
+                       previous->kind == FENG_TYPE_MEMBER_FIELD) {
+                field = previous;
+                method = current;
+            } else {
                 continue;
             }
-            if (!slice_equals(si->name, mj->as.field.name)) {
+            if (!slice_equals(field->as.field.name,
+                              method->as.callable.name)) {
                 continue;
             }
-            {
-                bool error_ok = resolver_append_error(
-                    context,
-                    mixin_conflict_primary_token(mi, mj, si->token),
-                    "AE0513", format_message(
-                        "field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance)",
-                        (int)mj->as.field.name.length, mj->as.field.name.data,
-                        (int)si->name.length, si->name.data,
-                        (int)decl->as.type_decl.name.length,
-                        decl->as.type_decl.name.data));
-
-                if (error_ok) {
-                    error_ok = append_mixin_conflict_related_locations(
-                        context, mi, mj);
-                }
-                ok = error_ok && ok;
+            error_ok = resolver_append_error(
+                context,
+                mixin_conflict_primary_token(
+                    current, previous, current->token),
+                "AE0513",
+                format_message(
+                    "field '%.*s' and method '%.*s' in %s '%.*s' cannot share the same name within the %s member surface",
+                    (int)field->as.field.name.length,
+                    field->as.field.name.data,
+                    (int)method->as.callable.name.length,
+                    method->as.callable.name.data,
+                    set.owner_label,
+                    (int)set.owner_name.length,
+                    set.owner_name.data,
+                    current->is_static ? "static" : "instance"));
+            if (error_ok) {
+                error_ok = append_mixin_conflict_related_locations(
+                    context, current, previous);
             }
+            ok = error_ok && ok;
         }
     }
 
@@ -30348,12 +30499,14 @@ static bool object_spec_requirement_set_add(
                 context, &set->items[index], &candidate)) {
             return true;
         }
-        /* This repair only expands method overload surfaces. Preserve the
-         * historical one-slot-per-name behavior whenever either requirement
-         * is not a method; child-first traversal retains the child member. */
+        /* Invalid same-surface field collisions are rejected during spec
+         * declaration validation. Before that validation has run, preserve
+         * the historical child-first fallback only within the same surface;
+         * instance and static owners must never be collapsed into one slot. */
         if (existing != NULL &&
             (existing->kind != FENG_TYPE_MEMBER_METHOD ||
-             candidate.member->kind != FENG_TYPE_MEMBER_METHOD)) {
+             candidate.member->kind != FENG_TYPE_MEMBER_METHOD) &&
+            existing->is_static == candidate.member->is_static) {
             FengSlice existing_name =
                 existing->kind == FENG_TYPE_MEMBER_FIELD
                     ? existing->as.field.name
@@ -31214,12 +31367,12 @@ static bool signatures_potentially_overlap(const ResolveContext *ctx,
 static bool validate_declared_method_overload_overlap(
     ResolveContext *context,
     const FengDecl *decl) {
-    DeclaredMethodSet set;
+    DeclaredMemberSet set;
     size_t i;
     size_t j;
     bool ok = true;
 
-    if (context == NULL || !declared_method_set_init(decl, &set)) {
+    if (context == NULL || !declared_member_set_init(decl, &set)) {
         return true;
     }
 
@@ -31444,6 +31597,238 @@ static bool object_spec_requirements_share_closed_owner(
         context,
         left->declaring_spec_type_ref,
         right->declaring_spec_type_ref);
+}
+
+/* One closed object-spec owner visited while validating accumulated members. */
+typedef struct ObjectSpecMemberOwnerSurface {
+    const FengDecl *spec_decl;
+    const FengTypeRef *spec_type_ref;
+} ObjectSpecMemberOwnerSurface;
+
+/* Compiler-only state for one complete object-spec member-surface check. */
+typedef struct ObjectSpecMemberConflictState {
+    ObjectSpecRequirementSurface *members;
+    size_t member_count;
+    size_t member_capacity;
+    ObjectSpecMemberOwnerSurface *owners;
+    size_t owner_count;
+    size_t owner_capacity;
+} ObjectSpecMemberConflictState;
+
+/* Return whether two traversed owners denote the same closed spec surface. */
+static bool object_spec_member_owner_surfaces_equal(
+    ResolveContext *context,
+    ObjectSpecMemberOwnerSurface left,
+    ObjectSpecMemberOwnerSurface right) {
+    if (left.spec_decl != right.spec_decl) {
+        return false;
+    }
+    if (left.spec_type_ref == NULL || right.spec_type_ref == NULL) {
+        return left.spec_type_ref == NULL && right.spec_type_ref == NULL;
+    }
+    return type_refs_semantically_equal(context,
+                                        left.spec_type_ref,
+                                        right.spec_type_ref);
+}
+
+/* Append one closed owner unless the same diamond path was already visited. */
+static bool object_spec_member_conflict_add_owner(
+    ResolveContext *context,
+    ObjectSpecMemberConflictState *state,
+    ObjectSpecMemberOwnerSurface owner,
+    bool *out_added) {
+    if (state == NULL || out_added == NULL) {
+        return false;
+    }
+    *out_added = false;
+    for (size_t index = 0U; index < state->owner_count; ++index) {
+        if (object_spec_member_owner_surfaces_equal(
+                context, state->owners[index], owner)) {
+            return true;
+        }
+    }
+    if (!append_raw((void **)&state->owners,
+                    &state->owner_count,
+                    &state->owner_capacity,
+                    sizeof(*state->owners),
+                    &owner)) {
+        return false;
+    }
+    *out_added = true;
+    return true;
+}
+
+/* Append one member surface after all prior conflict comparisons succeed. */
+static bool object_spec_member_conflict_add_member(
+    ObjectSpecMemberConflictState *state,
+    ObjectSpecRequirementSurface member) {
+    return state != NULL &&
+           append_raw((void **)&state->members,
+                      &state->member_count,
+                      &state->member_capacity,
+                      sizeof(*state->members),
+                      &member);
+}
+
+/* Walk one closed owner and reject field/field or field/method conflicts
+ * contributed by distinct owners to the same instance or static surface.
+ * Identical diamond paths are visited once; closed generic owners remain
+ * distinct. Method/method conflicts are handled by the overload validator. */
+static bool validate_object_spec_accumulated_members_recursive(
+    ResolveContext *context,
+    const FengDecl *root_spec_decl,
+    const FengDecl *spec_decl,
+    const FengTypeRef *spec_type_ref,
+    ObjectSpecMemberConflictState *state) {
+    ObjectSpecMemberOwnerSurface owner;
+    bool owner_added;
+
+    if (context == NULL || root_spec_decl == NULL || spec_decl == NULL ||
+        state == NULL || spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return false;
+    }
+    owner = (ObjectSpecMemberOwnerSurface){
+        .spec_decl = spec_decl,
+        .spec_type_ref = spec_type_ref,
+    };
+    if (!object_spec_member_conflict_add_owner(
+            context, state, owner, &owner_added)) {
+        return false;
+    }
+    if (!owner_added) {
+        return true;
+    }
+
+    for (size_t member_index = 0U;
+         member_index < spec_decl->as.spec_decl.as.object.member_count;
+         ++member_index) {
+        const FengTypeMember *member =
+            spec_decl->as.spec_decl.as.object.members[member_index];
+        ObjectSpecRequirementSurface candidate;
+
+        if (member == NULL ||
+            (member->kind != FENG_TYPE_MEMBER_FIELD &&
+             member->kind != FENG_TYPE_MEMBER_METHOD)) {
+            continue;
+        }
+        candidate = (ObjectSpecRequirementSurface){
+            .member = member,
+            .declaring_spec = spec_decl,
+            .declaring_spec_type_ref = spec_type_ref,
+        };
+        for (size_t previous_index = 0U;
+             previous_index < state->member_count;
+             ++previous_index) {
+            const ObjectSpecRequirementSurface *previous =
+                &state->members[previous_index];
+            ObjectSpecMemberOwnerSurface previous_owner = {
+                .spec_decl = previous->declaring_spec,
+                .spec_type_ref = previous->declaring_spec_type_ref,
+            };
+            FengSlice member_name;
+            FengSlice previous_name;
+            FengToken error_token;
+
+            if (object_spec_member_owner_surfaces_equal(
+                    context, previous_owner, owner) ||
+                previous->member->is_static != member->is_static ||
+                (previous->member->kind == FENG_TYPE_MEMBER_METHOD &&
+                 member->kind == FENG_TYPE_MEMBER_METHOD)) {
+                continue;
+            }
+            previous_name =
+                previous->member->kind == FENG_TYPE_MEMBER_FIELD
+                    ? previous->member->as.field.name
+                    : previous->member->as.callable.name;
+            member_name = member->kind == FENG_TYPE_MEMBER_FIELD
+                              ? member->as.field.name
+                              : member->as.callable.name;
+            if (!slice_equals(previous_name, member_name)) {
+                continue;
+            }
+            error_token = previous->declaring_spec == root_spec_decl
+                              ? previous->member->token
+                              : member->token;
+            if (previous->member->kind == FENG_TYPE_MEMBER_FIELD &&
+                member->kind == FENG_TYPE_MEMBER_FIELD) {
+                return resolver_append_error(
+                           context,
+                           error_token,
+                           "AE0514",
+                           format_message(
+                               "duplicate field '%.*s' in object-form spec '%.*s' within the %s member surface",
+                               (int)member_name.length,
+                               member_name.data,
+                               (int)root_spec_decl->as.spec_decl.name.length,
+                               root_spec_decl->as.spec_decl.name.data,
+                               member->is_static ? "static" : "instance")) &&
+                       false;
+            }
+            return resolver_append_error(
+                       context,
+                       error_token,
+                       "AE0513",
+                       format_message(
+                           "field and method '%.*s' in object-form spec '%.*s' cannot share the same name within the %s member surface",
+                           (int)member_name.length,
+                           member_name.data,
+                           (int)root_spec_decl->as.spec_decl.name.length,
+                           root_spec_decl->as.spec_decl.name.data,
+                           member->is_static ? "static" : "instance")) &&
+                   false;
+        }
+        if (!object_spec_member_conflict_add_member(state, candidate)) {
+            return false;
+        }
+    }
+
+    for (size_t parent_index = 0U;
+         parent_index < spec_decl->as.spec_decl.parent_spec_count;
+         ++parent_index) {
+        const FengTypeRef *parent_ref =
+            substitute_spec_member_type_ref_for_instance(
+                context,
+                spec_decl,
+                spec_type_ref,
+                spec_decl->as.spec_decl.parent_specs[parent_index]);
+        const FengDecl *parent_decl = resolve_type_ref_decl(context, parent_ref);
+
+        if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC ||
+            parent_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            continue;
+        }
+        if (!validate_object_spec_accumulated_members_recursive(
+                context,
+                root_spec_decl,
+                parent_decl,
+                parent_ref,
+                state)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Validate the complete inherited object-spec member surface at declaration
+ * time. All storage is compiler-only and released before resolution returns. */
+static bool validate_object_spec_accumulated_member_conflicts(
+    ResolveContext *context,
+    const FengDecl *spec_decl) {
+    ObjectSpecMemberConflictState state;
+    bool ok;
+
+    if (context == NULL || spec_decl == NULL ||
+        spec_decl->kind != FENG_DECL_SPEC ||
+        spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return true;
+    }
+    memset(&state, 0, sizeof(state));
+    ok = validate_object_spec_accumulated_members_recursive(
+        context, spec_decl, spec_decl, NULL, &state);
+    free(state.members);
+    free(state.owners);
+    return ok;
 }
 
 /* Validate conflicts introduced by accumulating parent object-spec
@@ -32658,11 +33043,16 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (ok && !validate_declared_method_overloads(context, decl)) {
                 ok = false;
             }
+            if (ok && !validate_declared_field_name_conflicts(context, decl)) {
+                ok = false;
+            }
             if (ok &&
                 !validate_declared_method_overload_overlap(context, decl)) {
                 ok = false;
             }
-            if (ok && !validate_type_member_field_method_name_conflict(context, decl)) {
+            if (ok &&
+                !validate_declared_field_method_name_conflicts(
+                    context, decl)) {
                 ok = false;
             }
             if (ok && !validate_type_finalizer_constraints(context, decl)) {
@@ -32811,8 +33201,21 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             if (ok && !validate_declared_method_overloads(context, decl)) {
                 ok = false;
             }
+            if (ok && !validate_declared_field_name_conflicts(context, decl)) {
+                ok = false;
+            }
+            if (ok &&
+                !validate_declared_field_method_name_conflicts(
+                    context, decl)) {
+                ok = false;
+            }
             if (ok &&
                 !validate_declared_method_overload_overlap(context, decl)) {
+                ok = false;
+            }
+            if (ok &&
+                !validate_object_spec_accumulated_member_conflicts(
+                    context, decl)) {
                 ok = false;
             }
             if (ok &&

@@ -1,0 +1,83 @@
+module fcts_bin;
+
+import std.test;
+
+/** Contract whose cross-owner field and method names remain independent. */
+spec ObjectSpecSpecialSurface {
+  var instanceOwned: int;
+  static func instanceOwned(): int;
+  static var staticOwned: int;
+  func staticOwned(): int;
+}
+
+/** Direct implementation of each independent owner surface. */
+type ObjectSpecSpecialValue: ObjectSpecSpecialSurface {
+  var instanceOwned: int = 11;
+  static func instanceOwned(): int { return 12; }
+  static var staticOwned: int = 13;
+  func staticOwned(): int { return 14; }
+}
+
+/** Read both static requirements through their generic witness slots. */
+func readObjectSpecSpecialStatics<T: ObjectSpecSpecialSurface>(): int {
+  return T.instanceOwned() + T.staticOwned;
+}
+
+/** Contract whose instance and static methods equal the spec name. */
+spec ObjectSpecNamedResource {
+  func ObjectSpecNamedResource(): int;
+  static func ObjectSpecNamedResource(): string;
+}
+
+/** Direct implementation of both same-name ordinary method requirements. */
+type ObjectSpecNamedResourceValue: ObjectSpecNamedResource {
+  func ObjectSpecNamedResource(): int { return 42; }
+  static func ObjectSpecNamedResource(): string { return "resource"; }
+}
+
+/** Invoke the same-name static requirement through a generic witness. */
+func readObjectSpecNamedResourceStatic<T: ObjectSpecNamedResource>(): string {
+  return T.ObjectSpecNamedResource();
+}
+
+/** Object-form special-name and independent-owner behavior tests. */
+open func test_object_spec_special_surface(): void {
+  describe("object-form spec special surfaces", () {
+    test("instance field and static method with one name stay independent", () {
+      let concrete = ObjectSpecSpecialValue();
+      let view: ObjectSpecSpecialSurface = concrete;
+
+      view.instanceOwned += 1;
+
+      assert(view.instanceOwned == 12,
+             "instance field uses the subject-owned slot");
+      assert(ObjectSpecSpecialValue.instanceOwned() == 12,
+             "static method uses the type-owned slot");
+    });
+
+    test("static field and instance method with one name stay independent", () {
+      ObjectSpecSpecialValue.staticOwned = 13;
+      let view: ObjectSpecSpecialSurface = ObjectSpecSpecialValue();
+
+      ObjectSpecSpecialValue.staticOwned += 1;
+
+      assert(view.staticOwned() == 14,
+             "instance method uses the subject witness slot");
+      assert(readObjectSpecSpecialStatics<ObjectSpecSpecialValue>() == 26,
+             "generic static field and method use separate slots");
+    });
+
+    test("instance method named after spec remains an ordinary method", () {
+      let view: ObjectSpecNamedResource = ObjectSpecNamedResourceValue();
+
+      assert(view.ObjectSpecNamedResource() == 42,
+             "same-name instance requirement dispatches normally");
+    });
+
+    test("static method named after spec remains an ordinary method", () {
+      assert(readObjectSpecNamedResourceStatic<ObjectSpecNamedResourceValue>() ==
+               "resource",
+             "same-name static requirement dispatches normally");
+    });
+  });
+}
