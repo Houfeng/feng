@@ -94,6 +94,16 @@
 
 ### Step 1：表达式求值与函数推导 FCTS
 
+#### 子交付文档
+
+| 子交付 | 范围 | 实施文档 | 状态 |
+| --- | --- | --- | --- |
+| D1A | 表达式求值顺序 | [Feng 表达式求值顺序 FCTS 补齐实施文档](./feng-test-expression-evaluation-order-implementation-pending.md) | 待 Review |
+| D1B | 函数返回类型推导 | 待起草 | 未开始 |
+
+D1A 的用例实施细节、Todo、问题和交付记录仅在其实施文档中维护；本文的用例表只保留范围索引与
+交付顺序。
+
 #### 目标
 
 把 [表达式规范 §4](../specifications/feng-expression.md) 和
@@ -105,11 +115,11 @@
 | 编号 | FCTS 行为 | 直接断言 |
 | --- | --- | --- |
 | EVAL01 | 二元运算左右操作数求值顺序 | 两侧分别追加不同标记，结果与标记顺序同时正确 |
-| EVAL02 | 普通函数调用的 target 与多个参数求值顺序 | target 先固定，参数严格从左到右且各执行一次 |
+| EVAL02 | 普通函数的多个参数求值顺序 | 参数严格从左到右且各执行一次；target 规则复用已有直接证据 |
 | EVAL03 | `false && rhs`、`true || rhs` | RHS 副作用计数保持 0 |
 | EVAL04 | `true && rhs`、`false || rhs` | RHS 副作用计数恰为 1 |
 | EVAL05 | `if` 表达式只执行选中分支 | 未选分支计数为 0，选中分支为 1 |
-| EVAL06 | 成员、下标、调用的后缀链 | base、index、callee、argument 的观察顺序与各自次数正确 |
+| EVAL06 | 成员、下标、调用的后缀链 | base、index、argument、invoke 的观察顺序与各自次数正确；callee 固定复用已有直接证据 |
 | FUNC01 | 省略返回类型的顶层函数，多条返回路径类型一致 | 调用方取得推导后的正确值 |
 | FUNC02 | 省略返回类型的方法及跨模块公开函数 | 同包与跨模块调用均取得正确推导结果 |
 | FUNC03 | 仅含无值 `return;` 的函数推导为 `void` | 可正常调用且副作用发生一次 |
