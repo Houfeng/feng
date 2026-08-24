@@ -373,8 +373,14 @@ def main() -> int:
                 f"  {result.name}_ms p50={p50:.3f} p95={p95:.3f} "
                 f"p99={p99:.3f} max={maximum:.3f}"
             )
-            if result.name.endswith("hover") and p95 > 5.0:
-                failures.append(f"{line_count} {result.name} P95 {p95:.3f}ms > 5ms")
+            if (
+                result.name
+                in {"cold_hover", "hot_hover", "syntax_error", "semantic_error"}
+                and maximum > 16.0
+            ):
+                failures.append(
+                    f"{line_count} {result.name} Max {maximum:.3f}ms > 16ms"
+                )
             if "completion" in result.name and p95 > 20.0:
                 failures.append(f"{line_count} {result.name} P95 {p95:.3f}ms > 20ms")
 

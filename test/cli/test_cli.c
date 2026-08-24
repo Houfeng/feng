@@ -9609,6 +9609,47 @@ static char *capture_lsp_position_response_at_path(const char *source_path,
     return output;
 }
 
+/* Builds one position-based LSP request for a named source occurrence. */
+static char *build_lsp_test_position_request(const char *method,
+                                             unsigned int id,
+                                             const char *uri,
+                                             const char *source,
+                                             const char *needle,
+                                             size_t char_offset) {
+    unsigned int line;
+    unsigned int character;
+
+    find_line_character(source, needle, char_offset, &line, &character);
+    return dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"%s\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        id,
+        method,
+        uri,
+        line,
+        character);
+}
+
+/* Asserts one framed LSP response contains text before the next response. */
+static void assert_lsp_test_response_contains(const char *output,
+                                              unsigned int id,
+                                              const char *expected) {
+    char *id_marker = dup_printf("\"id\":%u,", id);
+    const char *response;
+    const char *next_response;
+    const char *match;
+
+    ASSERT(id_marker != NULL);
+    response = strstr(output, id_marker);
+    ASSERT(response != NULL);
+    next_response = strstr(response, "Content-Length:");
+    match = strstr(response, expected);
+    ASSERT(match != NULL);
+    ASSERT(next_response == NULL || match < next_response);
+    free(id_marker);
+}
+
 /* Wait until asynchronous semantic analysis exposes one expected completion
  * item, then return a final completion response from the same source. */
 static char *capture_lsp_completion_response_after_ready(
@@ -17173,6 +17214,513 @@ static void test_lsp_hover_uses_inferred_top_level_binding_type(void) {
     free(output);
 }
 
+/* Hover reads effective return facts for every named callable category and
+ * each accepted omitted-return form at declaration and call sites. */
+static void test_lsp_hover_uses_inferred_callable_return_types(void) {
+    static const char *kSource =
+        "module test.lsp.inferred_callable_hover;\n"
+        "func topNatural() {}\n"
+        "func topEmpty() { return; }\n"
+        "func topSelect(flag: bool) {\n"
+        "  if flag { return \"left\"; }\n"
+        "  return \"right\";\n"
+        "}\n"
+        "type Owner {\n"
+        "  func instanceNatural() {}\n"
+        "  func instanceEmpty() { return; }\n"
+        "  func instanceSelect(flag: bool) {\n"
+        "    if flag { return \"left\"; }\n"
+        "    return \"right\";\n"
+        "  }\n"
+        "  static func staticNatural() {}\n"
+        "  static func staticEmpty() { return; }\n"
+        "  static func staticSelect(flag: bool) {\n"
+        "    if flag { return \"left\"; }\n"
+        "    return \"right\";\n"
+        "  }\n"
+        "}\n"
+        "type FitTarget {}\n"
+        "fit FitTarget {\n"
+        "  func fitInstanceNatural() {}\n"
+        "  func fitInstanceEmpty() { return; }\n"
+        "  func fitInstanceSelect(flag: bool) {\n"
+        "    if flag { return \"left\"; }\n"
+        "    return \"right\";\n"
+        "  }\n"
+        "  static func fitStaticNatural() {}\n"
+        "  static func fitStaticEmpty() { return; }\n"
+        "  static func fitStaticSelect(flag: bool) {\n"
+        "    if flag { return \"left\"; }\n"
+        "    return \"right\";\n"
+        "  }\n"
+        "}\n"
+        "func use(owner: Owner, target: FitTarget) {\n"
+        "  let topValue = topSelect(true);\n"
+        "  topNatural();\n"
+        "  topEmpty();\n"
+        "  topSelect(false);\n"
+        "  owner.instanceSelect(true);\n"
+        "  Owner.staticSelect(true);\n"
+        "  target.fitInstanceSelect(true);\n"
+        "  FitTarget.fitStaticSelect(true);\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    /* One declaration or call-site Hover expectation. */
+    struct HoverCase {
+        const char *needle;
+        size_t char_offset;
+        const char *signature;
+    };
+    static const struct HoverCase kCases[] = {
+        {"func topNatural()", strlen("func "), "func topNatural(): void"},
+        {"func topEmpty()", strlen("func "), "func topEmpty(): void"},
+        {"func topSelect(flag: bool)", strlen("func "),
+         "func topSelect(flag: bool): string"},
+        {"func instanceNatural()", strlen("func "),
+         "func instanceNatural(): void"},
+        {"func instanceEmpty()", strlen("func "), "func instanceEmpty(): void"},
+        {"func instanceSelect(flag: bool)", strlen("func "),
+         "func instanceSelect(flag: bool): string"},
+        {"static func staticNatural()", strlen("static func "),
+         "func staticNatural(): void"},
+        {"static func staticEmpty()", strlen("static func "),
+         "func staticEmpty(): void"},
+        {"static func staticSelect(flag: bool)", strlen("static func "),
+         "func staticSelect(flag: bool): string"},
+        {"func fitInstanceNatural()", strlen("func "),
+         "func fitInstanceNatural(): void"},
+        {"func fitInstanceEmpty()", strlen("func "),
+         "func fitInstanceEmpty(): void"},
+        {"func fitInstanceSelect(flag: bool)", strlen("func "),
+         "func fitInstanceSelect(flag: bool): string"},
+        {"static func fitStaticNatural()", strlen("static func "),
+         "func fitStaticNatural(): void"},
+        {"static func fitStaticEmpty()", strlen("static func "),
+         "func fitStaticEmpty(): void"},
+        {"static func fitStaticSelect(flag: bool)", strlen("static func "),
+         "func fitStaticSelect(flag: bool): string"},
+        {"topSelect(false)", 1U, "func topSelect(flag: bool): string"},
+        {"owner.instanceSelect(true)", strlen("owner."),
+         "func instanceSelect(flag: bool): string"},
+        {"Owner.staticSelect(true)", strlen("Owner."),
+         "func staticSelect(flag: bool): string"},
+        {"target.fitInstanceSelect(true)", strlen("target."),
+         "func fitInstanceSelect(flag: bool): string"},
+        {"FitTarget.fitStaticSelect(true)", strlen("FitTarget."),
+         "func fitStaticSelect(flag: bool): string"},
+    };
+    char template_path[] = "temp/feng_lsp_inferred_callable_hover_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *shutdown;
+    char *owned_requests[sizeof(kCases) / sizeof(kCases[0])];
+    const char *requests[sizeof(kCases) / sizeof(kCases[0]) + 2U];
+    char *output;
+    char *remove_error = NULL;
+    unsigned int readiness_line;
+    unsigned int readiness_character;
+    size_t index;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}");
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        owned_requests[index] = build_lsp_test_position_request(
+            "textDocument/hover",
+            10U + (unsigned int)index,
+            uri,
+            kSource,
+            kCases[index].needle,
+            kCases[index].char_offset);
+        ASSERT(owned_requests[index] != NULL);
+        requests[index] = owned_requests[index];
+    }
+    requests[index] = shutdown;
+    requests[index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(kSource,
+                        "let topValue = topSelect(true);",
+                        strlen("let "),
+                        &readiness_line,
+                        &readiness_character);
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        uri,
+        readiness_line,
+        readiness_character,
+        "let topValue: string",
+        requests,
+        sizeof(kCases) / sizeof(kCases[0]) + 2U,
+        NULL);
+
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        assert_lsp_test_response_contains(output,
+                                          10U + (unsigned int)index,
+                                          kCases[index].signature);
+        free(owned_requests[index]);
+    }
+
+    free(output);
+    free(shutdown);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Hover omits an unproven inferred return suffix when Semantic analysis has
+ * failed instead of presenting the AST's missing declaration as void. */
+static void test_lsp_hover_inferred_callable_without_fact_fails_closed(void) {
+    static const char *kSource =
+        "module test.lsp.inferred_callable_no_fact;\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "func forceFailure(value: MissingType): void {}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *output = capture_lsp_hover_response(kSource,
+                                              kInitialize,
+                                              "func inferredText()",
+                                              strlen("func "));
+
+    ASSERT(strstr(output, "func inferredText()") != NULL);
+    ASSERT(strstr(output, "func inferredText(): void") == NULL);
+    ASSERT(strstr(output, "func inferredText(): string") == NULL);
+    free(output);
+}
+
+/* Completion follows inferred top-level, instance, and TypeRef-preserving
+ * call results when the request AST belongs to the matching analysis. */
+static void test_lsp_completion_uses_inferred_callable_return_types(void) {
+    static const char *kSource =
+        "module test.lsp.inferred_callable_completion;\n"
+        "type ResultBox {\n"
+        "  let value: string;\n"
+        "  func label(): string { return self.value; }\n"
+        "}\n"
+        "type Factory {\n"
+        "  func makeBox() { return ResultBox { value: \"instance\" }; }\n"
+        "  func explicitBox(): ResultBox { return ResultBox { value: \"explicit\" }; }\n"
+        "}\n"
+        "func makeBox() { return ResultBox { value: \"top\" }; }\n"
+        "func forwardBox(factory: Factory) { return factory.explicitBox(); }\n"
+        "func use(factory: Factory) {\n"
+        "  let topValue = makeBox().value;\n"
+        "  let instanceValue = factory.makeBox().value;\n"
+        "  let forwardedValue = forwardBox(factory).value;\n"
+        "  let explicitValue = factory.explicitBox().value;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    /* One call-result member Completion position. */
+    struct CompletionCase {
+        const char *needle;
+        size_t char_offset;
+    };
+    static const struct CompletionCase kCases[] = {
+        {"let topValue = makeBox().value;", strlen("let topValue = makeBox().")},
+        {"let instanceValue = factory.makeBox().value;",
+         strlen("let instanceValue = factory.makeBox().")},
+        {"let forwardedValue = forwardBox(factory).value;",
+         strlen("let forwardedValue = forwardBox(factory).")},
+        {"let explicitValue = factory.explicitBox().value;",
+         strlen("let explicitValue = factory.explicitBox().")},
+    };
+    char template_path[] = "temp/feng_lsp_inferred_callable_completion_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *shutdown;
+    char *owned_requests[sizeof(kCases) / sizeof(kCases[0])];
+    const char *requests[sizeof(kCases) / sizeof(kCases[0]) + 2U];
+    char *output;
+    char *remove_error = NULL;
+    unsigned int readiness_line;
+    unsigned int readiness_character;
+    size_t index;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}");
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        owned_requests[index] = build_lsp_test_position_request(
+            "textDocument/completion",
+            40U + (unsigned int)index,
+            uri,
+            kSource,
+            kCases[index].needle,
+            kCases[index].char_offset);
+        ASSERT(owned_requests[index] != NULL);
+        requests[index] = owned_requests[index];
+    }
+    requests[index] = shutdown;
+    requests[index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(kSource,
+                        kCases[0].needle,
+                        kCases[0].char_offset,
+                        &readiness_line,
+                        &readiness_character);
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/completion",
+        uri,
+        readiness_line,
+        readiness_character,
+        "\"label\":\"value\"",
+        requests,
+        sizeof(kCases) / sizeof(kCases[0]) + 2U,
+        NULL);
+
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        assert_lsp_test_response_contains(output,
+                                          40U + (unsigned int)index,
+                                          "\"label\":\"value\"");
+        assert_lsp_test_response_contains(output,
+                                          40U + (unsigned int)index,
+                                          "\"label\":\"label\"");
+        free(owned_requests[index]);
+    }
+
+    free(output);
+    free(shutdown);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Completion returns no guessed member candidates when an incomplete call
+ * result has no AST that belongs to a successful matching analysis. */
+static void test_lsp_completion_inferred_callable_without_fact_fails_closed(void) {
+    static const char *kSource =
+        "module test.lsp.inferred_callable_completion_no_fact;\n"
+        "type ResultBox { let value: string; }\n"
+        "func makeBox() { return ResultBox { value: \"top\" }; }\n"
+        "func forceFailure(value: MissingType) {\n"
+        "  makeBox().;\n"
+        "}\n";
+    char *output = capture_lsp_completion_response(kSource,
+                                                   "makeBox().;",
+                                                   strlen("makeBox()."));
+
+    ASSERT(strstr(output, "\"id\":2,\"result\":[]") != NULL);
+    ASSERT(strstr(output, "\"label\":\"value\"") == NULL);
+    free(output);
+}
+
+/* Hover preserves inferred callable return types across source modules, local
+ * project dependencies, and an external package backed only by .ft metadata. */
+static void test_lsp_hover_inferred_callable_across_dependency_boundaries(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    static const char *kSourceProvider =
+        "open module test.lsp.inferred_source_provider;\n"
+        "open type SourceBox { open let value: string; }\n"
+        "open func makeSourceBox() { return SourceBox { value: \"source\" }; }\n";
+    static const char *kSourceConsumer =
+        "module test.lsp.inferred_source_consumer;\n"
+        "import test.lsp.inferred_source_provider;\n"
+        "func useSource() { let value = makeSourceBox().value; }\n";
+    static const char *kLocalProvider =
+        "open module test.lsp.inferred_local_provider;\n"
+        "open type LocalBox { open let value: string; }\n"
+        "open func makeLocalBox() { return LocalBox { value: \"local\" }; }\n";
+    static const char *kLocalConsumer =
+        "module test.lsp.inferred_local_consumer;\n"
+        "import test.lsp.inferred_local_provider;\n"
+        "func useLocal() { let value = makeLocalBox().value; }\n";
+    static const char *kExternalProvider =
+        "open module test.lsp.inferred_external_provider;\n"
+        "open type ExternalBox { open let value: string; }\n"
+        "open func makeExternalBox() { return ExternalBox { value: \"external\" }; }\n";
+    static const char *kExternalConsumer =
+        "module test.lsp.inferred_external_consumer;\n"
+        "import test.lsp.inferred_external_provider;\n"
+        "func useExternal() { let value = makeExternalBox().value; }\n";
+    char template_path[] = "temp/feng_lsp_inferred_callable_deps_XXXXXX";
+    char *workspace_dir;
+    char *source_project_dir;
+    char *source_manifest;
+    char *source_src_dir;
+    char *source_provider_path;
+    char *source_consumer_path;
+    char *local_dep_dir;
+    char *local_dep_manifest;
+    char *local_dep_src_dir;
+    char *local_dep_source_path;
+    char *local_consumer_dir;
+    char *local_consumer_manifest;
+    char *local_consumer_src_dir;
+    char *local_consumer_source_path;
+    char *external_bundle;
+    char *external_provider_path;
+    char *external_consumer_dir;
+    char *external_consumer_manifest;
+    char *external_consumer_src_dir;
+    char *external_consumer_source_path;
+    char *output;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+
+    source_project_dir = path_join(workspace_dir, "source_project");
+    source_manifest = path_join(source_project_dir, "feng.fm");
+    source_src_dir = path_join(source_project_dir, "src");
+    source_provider_path = path_join(source_src_dir, "provider.ff");
+    source_consumer_path = path_join(source_src_dir, "consumer.ff");
+    mkdir_p(source_src_dir);
+    write_text_file(source_manifest,
+                    "[package]\n"
+                    "name: \"lsp_inferred_source\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_provider_path, kSourceProvider);
+    write_text_file(source_consumer_path, kSourceConsumer);
+    output = capture_lsp_position_response_at_path(
+        source_consumer_path,
+        kSourceConsumer,
+        kInitialize,
+        "textDocument/hover",
+        "makeSourceBox().value",
+        1U,
+        "func makeSourceBox(): SourceBox");
+    ASSERT(strstr(output, "func makeSourceBox(): SourceBox") != NULL);
+    ASSERT(strstr(output, "func makeSourceBox(): void") == NULL);
+    free(output);
+
+    local_dep_dir = path_join(workspace_dir, "local_dep");
+    local_dep_manifest = path_join(local_dep_dir, "feng.fm");
+    local_dep_src_dir = path_join(local_dep_dir, "src");
+    local_dep_source_path = path_join(local_dep_src_dir, "provider.ff");
+    local_consumer_dir = path_join(workspace_dir, "local_consumer");
+    local_consumer_manifest = path_join(local_consumer_dir, "feng.fm");
+    local_consumer_src_dir = path_join(local_consumer_dir, "src");
+    local_consumer_source_path = path_join(local_consumer_src_dir, "main.ff");
+    mkdir_p(local_dep_src_dir);
+    mkdir_p(local_consumer_src_dir);
+    write_text_file(local_dep_manifest,
+                    "[package]\n"
+                    "name: \"lsp_inferred_local_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(local_dep_source_path, kLocalProvider);
+    write_text_file(local_consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_inferred_local_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_inferred_local_dep: \"../local_dep\"\n");
+    write_text_file(local_consumer_source_path, kLocalConsumer);
+    output = capture_lsp_position_response_at_path(
+        local_consumer_source_path,
+        kLocalConsumer,
+        kInitialize,
+        "textDocument/hover",
+        "makeLocalBox().value",
+        1U,
+        "func makeLocalBox(): LocalBox");
+    ASSERT(strstr(output, "func makeLocalBox(): LocalBox") != NULL);
+    ASSERT(strstr(output, "func makeLocalBox(): void") == NULL);
+    free(output);
+
+    external_bundle = build_single_source_package_bundle(workspace_dir,
+                                                         "lsp_inferred_external",
+                                                         kExternalProvider);
+    external_provider_path = path_join(workspace_dir, "dep/src/dep.ff");
+    ASSERT(unlink(external_provider_path) == 0);
+    external_consumer_dir = path_join(workspace_dir, "external_consumer");
+    external_consumer_manifest = path_join(external_consumer_dir, "feng.fm");
+    external_consumer_src_dir = path_join(external_consumer_dir, "src");
+    external_consumer_source_path = path_join(external_consumer_src_dir, "main.ff");
+    mkdir_p(external_consumer_src_dir);
+    write_text_file(external_consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_inferred_external_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_inferred_external: \"../lsp_inferred_external.fb\"\n");
+    write_text_file(external_consumer_source_path, kExternalConsumer);
+    output = capture_lsp_position_response_at_path(
+        external_consumer_source_path,
+        kExternalConsumer,
+        kInitialize,
+        "textDocument/hover",
+        "makeExternalBox().value",
+        1U,
+        "func makeExternalBox(): ExternalBox");
+    ASSERT(strstr(output, "func makeExternalBox(): ExternalBox") != NULL);
+    ASSERT(strstr(output, "func makeExternalBox(): void") == NULL);
+    free(output);
+
+    free(external_consumer_source_path);
+    free(external_consumer_src_dir);
+    free(external_consumer_manifest);
+    free(external_consumer_dir);
+    free(external_provider_path);
+    free(external_bundle);
+    free(local_consumer_source_path);
+    free(local_consumer_src_dir);
+    free(local_consumer_manifest);
+    free(local_consumer_dir);
+    free(local_dep_source_path);
+    free(local_dep_src_dir);
+    free(local_dep_manifest);
+    free(local_dep_dir);
+    free(source_consumer_path);
+    free(source_provider_path);
+    free(source_src_dir);
+    free(source_manifest);
+    free(source_project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Tests that typing `use foo.bar.` in a project file triggers module-path
  * segment completion, offering the next path component of known source files.
  * Before the fix, the cursor-after-dot in a `use` statement was misidentified
@@ -19679,6 +20227,11 @@ int main(void) {
     test_lsp_hover_type_param_extended();
     test_lsp_hover_type_param_in_spec_member();
     test_lsp_hover_uses_inferred_top_level_binding_type();
+    test_lsp_hover_uses_inferred_callable_return_types();
+    test_lsp_hover_inferred_callable_without_fact_fails_closed();
+    test_lsp_completion_uses_inferred_callable_return_types();
+    test_lsp_completion_inferred_callable_without_fact_fails_closed();
+    test_lsp_hover_inferred_callable_across_dependency_boundaries();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();

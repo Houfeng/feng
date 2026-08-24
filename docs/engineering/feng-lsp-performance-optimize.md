@@ -867,10 +867,16 @@ Completion P95 为 `0.041 ms`；1 万 / 10 万 / 100 万行矩阵交互 P99 为 
 P99 和 Max 实测值均作为历史性能观测保留，不改变其事实含义；其中 §16.1 的 Completion Max
 `45.110ms` 是旧口径下的历史结果，不是当前门槛的通过证据。
 
-当前 `scripts/test/run_lsp_performance.py` 与 `scripts/test/run_lsp_performance_matrix.py` 会输出 Hover 和
-Completion Max，但仍只按旧 P95 口径强制失败。因此，§16 的自动化性能验收重新标记为待完成；脚本
-调整、推导返回类型 Hover / Completion 专项与完整回归由
-[推导 callable 返回类型提示修复方案](feng-lsp-inferred-callable-return-type-bugfix-pending.md) 分步交付。
+推导 callable 返回类型修复交付后，`scripts/test/run_lsp_performance.py` 与
+`scripts/test/run_lsp_performance_matrix.py` 的所有既有 Hover 场景已经改为强制 `Max ≤ 16ms`；场景
+输入、候选预期和固定等待未修改。新增
+`scripts/test/run_lsp_inferred_callable_performance.py`，对五类 callable Hover、相关调用结果
+Completion、错误/恢复状态及外部 symbol Hover 强制同一 Max 门槛，每个热场景至少 200 个样本。
+
+一次交付复测中，新增专项全部样本总 Max 为 `1.822ms`，1 万 / 10 万 / 100 万行既有矩阵总 Max 为
+`0.256ms`，沙箱外 `make test` exit 0。普通 Completion 的两个既有脚本仍保留旧 P95 断言，因此
+“所有 Completion 场景统一 Max”的全局自动化补齐仍待后续独立交付；本次事实和范围详见
+[推导 callable 返回类型提示修复方案](feng-lsp-inferred-callable-return-type-bugfix-pending.md)。
 
 ---
 

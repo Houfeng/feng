@@ -193,6 +193,7 @@ def main() -> int:
 
         hover_p95 = percentile(hover_samples, 0.95)
         hover_p99 = percentile(hover_samples, 0.99)
+        hover_max = max(hover_samples)
         completion_p95 = percentile(completion_samples, 0.95)
         completion_p99 = percentile(completion_samples, 0.99)
         all_p99 = percentile(hover_samples + completion_samples, 0.99)
@@ -201,7 +202,7 @@ def main() -> int:
             f"p50={statistics.median(hover_samples):.3f} "
             f"p95={hover_p95:.3f} "
             f"p99={hover_p99:.3f} "
-            f"max={max(hover_samples):.3f}"
+            f"max={hover_max:.3f}"
         )
         print(
             "completion_ms "
@@ -213,8 +214,8 @@ def main() -> int:
         print(f"interactive_ms p99={all_p99:.3f}")
         if not args.no_enforce:
             failures: list[str] = []
-            if hover_p95 > 5.0:
-                failures.append(f"Hover P95 {hover_p95:.3f}ms > 5ms")
+            if hover_max > 16.0:
+                failures.append(f"Hover Max {hover_max:.3f}ms > 16ms")
             if completion_p95 > 20.0:
                 failures.append(f"Completion P95 {completion_p95:.3f}ms > 20ms")
             if all_p99 > 50.0:

@@ -7422,6 +7422,44 @@ static void ast_receiver_state_set_type(const FengLspAnalysisSession *session,
     }
 }
 
+/* Replaces an AST receiver state with one callable's effective return type. */
+static bool ast_receiver_state_set_callable_return(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengCallableSignature *callable,
+    FengLspAstReceiverState *state) {
+    const FengSemanticTypeFact *fact;
+
+    if (callable != NULL && callable->return_type != NULL) {
+        ast_receiver_state_set_type(session, program, callable->return_type, state);
+        return state->owner_decl != NULL || state->type_ref != NULL ||
+               state->builtin_name.length > 0U;
+    }
+    memset(state, 0, sizeof(*state));
+    if (callable == NULL || session == NULL || session->analysis == NULL) {
+        return false;
+    }
+    fact = feng_semantic_lookup_type_fact(session->analysis, callable);
+    if (fact == NULL) {
+        return false;
+    }
+    switch (fact->kind) {
+        case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
+            ast_receiver_state_set_type(session, program, fact->type_ref, state);
+            break;
+        case FENG_SEMANTIC_TYPE_FACT_DECL:
+            state->owner_decl = fact->type_decl;
+            break;
+        case FENG_SEMANTIC_TYPE_FACT_BUILTIN:
+            state->builtin_name = fact->builtin_name;
+            break;
+        case FENG_SEMANTIC_TYPE_FACT_UNKNOWN:
+            return false;
+    }
+    return state->owner_decl != NULL || state->type_ref != NULL ||
+           state->builtin_name.length > 0U;
+}
+
 /* Resolves the root value of an AST-backed receiver chain. */
 static bool ast_receiver_state_from_root(const FengLspAnalysisSession *session,
                                          const FengProgram *program,
@@ -7565,15 +7603,18 @@ static const FengDecl *resolve_owner_decl_from_receiver_text(
                 state.pending_call = FENG_LSP_RECEIVER_PENDING_NONE;
             } else if (state.pending_call == FENG_LSP_RECEIVER_PENDING_FUNCTION &&
                        state.pending_function != NULL) {
-                const FengTypeRef *return_type =
-                    state.pending_function->as.function_decl.return_type;
-
-                ast_receiver_state_set_type(session, program, return_type, &state);
+                valid = ast_receiver_state_set_callable_return(
+                    session,
+                    program,
+                    &state.pending_function->as.function_decl,
+                    &state);
             } else if (state.pending_call == FENG_LSP_RECEIVER_PENDING_MEMBER &&
                        state.pending_member != NULL) {
-                const FengTypeRef *return_type = state.pending_member->as.callable.return_type;
-
-                ast_receiver_state_set_type(session, program, return_type, &state);
+                valid = ast_receiver_state_set_callable_return(
+                    session,
+                    program,
+                    &state.pending_member->as.callable,
+                    &state);
             } else {
                 valid = false;
             }
@@ -10666,10 +10707,19 @@ static bool decl_signature_to_string_with_session_and_style(
                     return false;
                 }
             }
-            return string_append_cstr(buffer, "): ") &&
-                   type_ref_to_string_with_style(buffer,
-                                                 decl->as.function_decl.return_type,
-                                                 style);
+            if (session == NULL) {
+                return string_append_cstr(buffer, "): ") &&
+                       type_ref_to_string_with_style(buffer,
+                                                     decl->as.function_decl.return_type,
+                                                     style);
+            }
+            return string_append_cstr(buffer, ")") &&
+                   append_optional_static_type_annotation_with_style(
+                       buffer,
+                       session,
+                       &decl->as.function_decl,
+                       decl->as.function_decl.return_type,
+                       style);
     }
     return false;
 }
@@ -10734,10 +10784,19 @@ static bool member_signature_to_string_with_session_and_style(
             return false;
         }
     }
-    return string_append_cstr(buffer, "): ") &&
-           type_ref_to_string_with_style(buffer,
-                                         member->as.callable.return_type,
-                                         style);
+    if (session == NULL || member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+        member->kind == FENG_TYPE_MEMBER_FINALIZER) {
+        return string_append_cstr(buffer, "): ") &&
+               type_ref_to_string_with_style(buffer,
+                                             member->as.callable.return_type,
+                                             style);
+    }
+    return string_append_cstr(buffer, ")") &&
+           append_optional_static_type_annotation_with_style(buffer,
+                                                             session,
+                                                             &member->as.callable,
+                                                             member->as.callable.return_type,
+                                                             style);
 }
 
 static bool member_signature_to_string_with_session(
