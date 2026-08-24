@@ -1,0 +1,131 @@
+module fcts_bin;
+
+import std.test;
+
+/** Callable used by the postfix evaluation-order probe. */
+spec EvaluationOrderReader(value: int): int;
+
+/** Holder whose callable array participates in a postfix chain. */
+type EvaluationOrderHolder {
+  let readers: EvaluationOrderReader[];
+}
+
+/** Mutable probe that records evaluation order and execution count. */
+type EvaluationOrderProbe {
+  var trace: int;
+  var calls: int;
+
+  /** Append one marker to the observable execution trace. */
+  func record(marker: int): void {
+    self.trace = self.trace * 10 + marker;
+    self.calls += 1;
+  }
+
+  /** Record one step and return the supplied integer value. */
+  func markInt(value: int, marker: int): int {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record one step and return the supplied boolean value. */
+  func markBool(value: bool, marker: int): bool {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record base evaluation and create the postfix-chain holder. */
+  func makeHolder(): EvaluationOrderHolder {
+    self.record(1);
+    let reader: EvaluationOrderReader = (value: int) {
+      self.record(4);
+      return value + 1;
+    };
+    return EvaluationOrderHolder { readers: [reader] };
+  }
+
+  /** Record index evaluation and select the first callable. */
+  func index(): int {
+    self.record(2);
+    return 0;
+  }
+
+  /** Record argument evaluation and return its value. */
+  func argument(): int {
+    self.record(3);
+    return 41;
+  }
+}
+
+/** Preserve three argument positions in a directly observable result. */
+func combineEvaluationOrderArguments(
+  first: int,
+  second: int,
+  third: int
+): int {
+  return first * 100 + second * 10 + third;
+}
+
+/** Execute expression evaluation-order conformance coverage. */
+open func test_evaluation_order(): void {
+  describe("expression evaluation order", () {
+    test("binary operands evaluate from left to right once", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let result = probe.markInt(20, 1) - probe.markInt(3, 2);
+      assert(result == 17 && probe.trace == 12 && probe.calls == 2,
+             "binary operands preserve result, order, and count");
+    });
+
+    test("ordinary call arguments evaluate from left to right once", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let result = combineEvaluationOrderArguments(
+        probe.markInt(1, 1),
+        probe.markInt(2, 2),
+        probe.markInt(3, 3)
+      );
+      assert(result == 123 && probe.trace == 123 && probe.calls == 3,
+             "ordinary arguments preserve positions, order, and count");
+    });
+
+    test("short-circuit operators suppress their right operands", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let suppressedAnd = false && probe.markBool(true, 1);
+      let suppressedOr = true || probe.markBool(false, 2);
+      assert(!suppressedAnd && suppressedOr &&
+             probe.trace == 0 && probe.calls == 0,
+             "short-circuit operators do not evaluate suppressed operands");
+    });
+
+    test("non-short-circuit paths evaluate their right operands once", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let executedAnd = true && probe.markBool(true, 1);
+      let executedOr = false || probe.markBool(true, 2);
+      assert(executedAnd && executedOr &&
+             probe.trace == 12 && probe.calls == 2,
+             "logical right operands execute once in statement order");
+    });
+
+    test("if expressions evaluate only their selected branches", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let first = if true {
+        probe.markInt(10, 1)
+      } else {
+        probe.markInt(90, 9)
+      };
+      let second = if false {
+        probe.markInt(90, 9)
+      } else {
+        probe.markInt(20, 2)
+      };
+      assert(first == 10 && second == 20 &&
+             probe.trace == 12 && probe.calls == 2,
+             "if expressions suppress both unselected branches");
+    });
+
+    test("postfix chains evaluate base index argument and invoke in order", () {
+      let probe = EvaluationOrderProbe { trace: 0, calls: 0 };
+      let result = probe.makeHolder().readers[probe.index()](probe.argument());
+      assert(result == 42 && probe.trace == 1234 && probe.calls == 4,
+             "postfix chain preserves every observable evaluation step");
+    });
+  });
+}

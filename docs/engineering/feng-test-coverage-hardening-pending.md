@@ -98,7 +98,7 @@
 
 | 子交付 | 范围 | 实施文档 | 状态 |
 | --- | --- | --- | --- |
-| D1A | 表达式求值顺序 | [Feng 表达式求值顺序 FCTS 补齐实施文档](./feng-test-expression-evaluation-order-implementation-pending.md) | 待 Review |
+| D1A | 表达式求值顺序 | [Feng 表达式求值顺序 FCTS 补齐实施文档](./feng-test-expression-evaluation-order-implementation-pending.md) | 已完成 |
 | D1B | 函数返回类型推导 | 待起草 | 未开始 |
 
 D1A 的用例实施细节、Todo、问题和交付记录仅在其实施文档中维护；本文的用例表只保留范围索引与

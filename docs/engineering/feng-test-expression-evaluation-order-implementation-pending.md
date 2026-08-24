@@ -1,6 +1,6 @@
 # Feng 表达式求值顺序 FCTS 补齐实施文档
 
-> 状态：待 Review，尚未实施
+> 状态：已完成
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -185,39 +185,39 @@ Todo 使用标准 Markdown 复选框：`- [ ]` 表示未完成，`- [x]` 表示�
 - [x] 核对表达式和流程控制主规范中的求值顺序规则。
 - [x] 盘点现有 `test_expression.ff`、`test_flow.ff` 和 callable 立即调用 FCTS 的直接证据。
 - [x] 起草 EVAL01～EVAL06 的非重复用例与断言。
-- [ ] 人工 Review 并批准本文的范围、用例设计和停止条件。
-- [ ] 人工批准仅向 `fcts/fcts_bin/src/main.ff` 新增 D1A 入口登记。
+- [x] 人工 Review 并批准本文的范围、用例设计和停止条件。
+- [x] 人工批准仅向 `fcts/fcts_bin/src/main.ff` 新增 D1A 入口登记。
 
 ### 7.2 FCTS 实施
 
-- [ ] 新增 `test_evaluation_order.ff`，实现带注释的最小探针和 helper。
-- [ ] 实施 EVAL01：二元操作数顺序与次数。
-- [ ] 实施 EVAL02：三个普通实参的顺序、次数和位置映射。
-- [ ] 实施 EVAL03：`false && rhs`、`true || rhs` 抑制 RHS。
-- [ ] 实施 EVAL04：`true && rhs`、`false || rhs` 各执行 RHS 一次。
-- [ ] 实施 EVAL05：true/false `if` 表达式只执行选中分支。
-- [ ] 实施 EVAL06：base、index、argument、invoke 的后缀链顺序。
-- [ ] 在获批范围内向 `main.ff` 登记一次 `test_evaluation_order()`。
-- [ ] 静态复核新增文件没有重复既有用例、额外输出、跨用例共享状态或无关组合。
+- [x] 新增 `test_evaluation_order.ff`，实现带注释的最小探针和 helper。
+- [x] 实施 EVAL01：二元操作数顺序与次数。
+- [x] 实施 EVAL02：三个普通实参的顺序、次数和位置映射。
+- [x] 实施 EVAL03：`false && rhs`、`true || rhs` 抑制 RHS。
+- [x] 实施 EVAL04：`true && rhs`、`false || rhs` 各执行 RHS 一次。
+- [x] 实施 EVAL05：true/false `if` 表达式只执行选中分支。
+- [x] 实施 EVAL06：base、index、argument、invoke 的后缀链顺序。
+- [x] 在获批范围内向 `main.ff` 登记一次 `test_evaluation_order()`。
+- [x] 静态复核新增文件没有重复既有用例、额外输出、跨用例共享状态或无关组合。
 
 ### 7.3 验证
 
-- [ ] 在工程目录执行 `make fcts-tests`，记录总数及通过、失败、跳过数量。
-- [ ] 确认新增 6 个 `test(...)` 全部真实执行，不仅成功编译。
-- [ ] 检查新增失败是否均已记录到第 8 节；存在未决问题时停止，不执行交付收口。
-- [ ] 在 Codex 沙箱外执行完整 `make test` 并记录结果。
-- [ ] 执行 `git diff --check`。
+- [x] 在工程目录执行 `make fcts-tests`，记录总数及通过、失败、跳过数量。
+- [x] 确认新增 6 个 `test(...)` 全部真实执行，不仅成功编译。
+- [x] 检查新增失败是否均已记录到第 8 节；存在未决问题时停止，不执行交付收口。
+- [x] 在 Codex 沙箱外执行完整 `make test` 并记录结果。
+- [x] 执行 `git diff --check`。
 
 ### 7.4 交付收口
 
-- [ ] 补齐第 8 节所有实施过程问题的最终状态或人工处置结论。
-- [ ] 补齐第 9 节实际变更、测试结果、影响与未解决问题。
-- [ ] 在总计划中只同步 D1A 状态，不复制本文实施细节。
-- [ ] 将本文状态更新为“已完成”。
+- [x] 补齐第 8 节所有实施过程问题的最终状态或人工处置结论。
+- [x] 补齐第 9 节实际变更、测试结果、影响与未解决问题。
+- [x] 在总计划中只同步 D1A 状态，不复制本文实施细节。
+- [x] 将本文状态更新为“已完成”。
 
 ## 8 实施过程问题记录
 
-当前记录：无。实施尚未开始。
+当前记录：无。FCTS 专项与沙箱外完整回归均通过，实施过程未发现偏离规范、方案或预期结果的问题。
 
 实施过程中发现任何偏离主规范、本文方案或预期测试结果的问题时，必须先在本节记录事实，再继续分析。
 若问题需要修改既有测试、改变语言语义、增加特判、扩大 runtime 私有 ABI 或增加运行时开销，状态必须
@@ -247,18 +247,19 @@ Todo 使用标准 Markdown 复选框：`- [ ]` 表示未完成，`- [x]` 表示�
 
 ## 9 交付记录
 
-本节在实施后填写，当前保留以下占位：
-
-- **最终状态**：待实施。
-- **实际文件变更**：待记录。
-- **新增 FCTS 数量**：计划 6 个，实际待记录。
-- **专项验证**：待记录。
-- **沙箱外全量回归**：待记录。
-- **产品代码变更**：预期无；实际待记录。
-- **运行时性能影响**：预期无；实际待记录。
-- **runtime ABI / 公开 ABI / `.ft` 影响**：预期无；实际待记录。
-- **未解决问题**：待记录。
-- **建议 commit message**：实施完成后填写。
+- **最终状态**：已完成。
+- **实际文件变更**：新增 `fcts/fcts_bin/src/test_evaluation_order.ff`，并仅在
+  `fcts/fcts_bin/src/main.ff` 登记 `test_evaluation_order()`；同步本文和总计划状态。
+- **新增 FCTS 数量**：6 个，覆盖 EVAL01～EVAL06。
+- **专项验证**：`make fcts-tests` 通过，`904 passed, 0 failed, 0 skipped`；新增 6 项均真实执行。
+- **沙箱外全量回归**：完整 `make test` 通过。macOS UBSan 与普通 `-O2 -Werror` 两阶段均通过；
+  两阶段均包含 91 项 smoke、601 项标准库、904 项 FCTS，以及 CLI、性能约束、增量构建、发布、
+  bundled packages 和 toolchain prebuilt fetch 检查。
+- **产品代码变更**：无。
+- **运行时性能影响**：无；只新增 FCTS 源码和入口登记。
+- **runtime ABI / 公开 ABI / `.ft` 影响**：无。
+- **未解决问题**：无。
+- **建议 commit message**：`test(fcts): cover expression evaluation order`
 
 ## 10 完成标准
 
