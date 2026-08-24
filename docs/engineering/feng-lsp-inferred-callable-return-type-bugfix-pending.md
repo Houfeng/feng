@@ -118,8 +118,9 @@ symbol-backed 格式化也会使用恢复后的返回类型。
   LSP 协议回归用例直接锁定该结论；
 - 本地路径依赖或同工程跨模块如果以源码 AST 进入最后一次成功分析，Hover 仍优先使用 AST-backed
   路径，因此仍会错误显示 `void`；
-- Completion 和 Signature Help 在不同 readiness 状态下可能分别选择 AST 或持久符号路径，当前没有
-  测试保证两者最终一致。
+- Completion 同时存在 AST-backed 与持久符号路径，当前没有测试保证两条路径最终一致；
+- Signature Help 当前只通过 `FengLspCacheQueryContext` 和 `FengSymbolDeclView` 构造签名，不存在
+  AST callable 返回类型格式化分支，因此本交付只需验证，不应预设修改其生产实现。
 
 ### 3.3 AST-backed LSP 路径错误解释了空指针
 
@@ -129,23 +130,26 @@ symbol-backed 格式化也会使用恢复后的返回类型。
 - 普通方法、静态方法和 `fit` 方法格式化直接读取 `member->as.callable.return_type`；
 - `type_ref_to_string_with_style()` 把空 type ref 固定格式化为 `void`；
 - AST Completion Detail 使用不带 analysis session 的签名格式化入口；
-- 部分调用结果 receiver 解析也直接读取 AST 的显式返回类型，可能使推导返回对象后的链式 Hover 或
-  Completion 无法继续解析。
+- 完整 AST 表达式的 receiver 解析已经优先读取表达式自身的 Semantic type fact；但文本恢复使用的
+  `FengLspAstReceiverState` 在执行 function/member call 时仍直接读取 callable 的显式 `return_type`，
+  因而无法继续解析省略返回声明的 `makeBox().member` 链。
 
-同一文件中的绑定签名已经具备可复用的正确模式：显式类型优先；省略类型时从匹配的成功 Semantic
-analysis 查询 type fact；没有可靠事实时不伪造类型。
+同一文件中的 `append_optional_static_type_annotation_with_style()` 和
+`semantic_type_fact_to_string_with_style()` 已经具备可复用的正确模式：显式类型优先；省略类型时从
+匹配的成功 Semantic analysis 查询 type fact；没有可靠事实时不伪造类型。现有
+`FengLspAstReceiverState` 也已经能够表达 `FengTypeRef`、声明类型和内建类型，不需要新增返回类型 View。
 
 ### 3.4 根因
 
-根因不是 Semantic 缺少推导，也不是 `.ft` 丢失返回类型，而是 LSP 内存在两套没有收敛的 callable
-返回类型视图：
+根因不是 Semantic 缺少推导，也不是 `.ft` 丢失返回类型，而是 LSP 内存在两条没有收敛的 callable
+返回类型消费路径：
 
 - symbol-backed 路径读取已经规范化的 `FengSymbolDeclView.return_type`；
 - AST-backed 路径只读取可空的显式 `FengTypeRef *return_type`，没有读取同一 callable site 的 Semantic
   type fact。
 
-修复必须统一“有效 callable 返回类型”的读取抽象，不得分别为函数名、方法种类、返回类型或包来源增加
-特判。
+修复必须让 AST-backed 调用方复用现有 type fact 格式化和 receiver state，不得新增另一套返回类型
+View、缓存或公开数据结构，也不得分别为函数名、方法种类、返回类型或包来源增加特判。
 
 ## 4 期望行为
 
@@ -242,41 +246,61 @@ AST-backed 或 symbol-backed 数据源而分别显示 `void` 和实际推导类�
 
 ## 6 通用实现方案
 
-### 6.1 统一 AST callable 返回类型视图
+### 6.1 复用现有 AST 类型注解读取路径
 
-在 LSP 内新增一个只读的内部 helper family，统一返回以下四种状态之一：
+不新增 AST callable 返回类型 View。签名格式化直接复用现有
+`append_optional_static_type_annotation_with_style()`：
 
-- 显式 `FengTypeRef`；
-- Semantic `FengSemanticTypeFact`；
-- 语言固定 `void`；
-- 当前状态不可确定。
+1. 显式 `FengTypeRef` 非空时，沿用现有 `type_ref_to_string_with_style()`；
+2. 显式类型为空且存在匹配 analysis 时，按 callable site 调用现有
+   `feng_semantic_lookup_type_fact()`，再复用 `semantic_type_fact_to_string_with_style()`；
+3. 没有匹配 analysis 或没有 type fact 时，不追加返回类型后缀；
+4. 构造函数和终结器按既有结构种类保留语言固定的 `void` 展示，不依赖猜测或名称特判。
 
-helper 接收 analysis session、callable site、显式返回类型和特殊 callable 属性。顶层函数使用
-`&decl->as.function_decl` 作为 site，方法使用 `&member->as.callable` 作为 site；必须与 Semantic 记录 type
-fact 时使用的地址身份完全一致。
-
-该抽象不得修改 AST、不得临时合成会逃逸的 `FengTypeRef`，也不得把 type fact 复制到第二套持久缓存。
-格式化和 receiver 类型解析共同消费该只读视图，避免再次形成两套规则。
+顶层函数的 callable site 必须是 `&decl->as.function_decl`，方法的 callable site 必须是
+`&member->as.callable`；这两个地址与 Semantic 在 `resolve_callable()` 中记录 type fact 的 site 完全一致。
+不得误传外层 `FengDecl *` 或 `FengTypeMember *`。
 
 ### 6.2 收敛签名格式化
 
-1. 顶层函数和成员签名格式化改为消费统一返回类型视图；
-2. 复用既有 `semantic_type_fact_to_string_with_style()`，不新增按 fact kind 重复格式化的分支；
-3. AST Completion item 构造显式传入对应 analysis session，不再通过无 session wrapper 丢失 type fact；
-4. Hover、Completion 和其他签名调用者统一处理“当前不可确定”，不得回退为伪造的 `void`；
-5. symbol-backed 格式化继续以 `FengSymbolDeclView.return_type` 为权威，不反向查询源码 AST。
+1. `decl_signature_to_string_with_session_and_style()` 的函数分支在参数列表后先输出 `)`，再把
+   `&decl->as.function_decl` 和显式 `return_type` 交给现有可选类型注解 helper；
+2. `member_signature_to_string_with_session_and_style()` 对普通方法和静态方法执行同样处理，site 使用
+   `&member->as.callable`；构造函数和终结器继续明确输出 `: void`；
+3. `decl_hover_signature_to_string()` 已经把匹配 session 传入上述函数，不新增 Hover 专用格式化分支；
+4. AST Completion 的 `build_completion_json()` 已经持有 session，但
+   `append_decl_completion_item()`、`append_member_completion_item()` 及其中间调用当前丢弃了该参数；只在
+   AST 确实属于该 session 时继续传递 session，并调用已有 session-aware formatter；
+5. 当前解析或独立 source-module index 的 AST 与成功 analysis 不共享 site 身份时，必须继续使用无
+   analysis 路径并省略未知返回后缀，不得把不匹配 session 强行传入；
+6. callable-form `spec` 的显式签名格式化保持不变；
+7. symbol-backed Hover 与 Completion Detail 继续以 `FengSymbolDeclView.return_type` 为权威，不反向查询
+   源码 AST。
 
 ### 6.3 收敛调用结果 receiver 解析
 
-审计所有直接读取函数或方法 AST `return_type` 的 LSP 类型查询点。凡用于解析调用结果静态类型的路径，
-都必须读取统一有效返回类型视图，使以下形式能够继续解析：
+完整 AST 表达式的 `resolve_owner_decl_from_object_expr()` 与
+`resolve_owner_type_ref_from_object_expr()` 已经优先读取表达式 type fact，不为本修复重写。需要补齐的
+实际缺口是 `resolve_owner_decl_from_receiver_text()` 执行文本恢复链时的两个 call transition：当前分别
+直接读取顶层函数和成员的显式 `return_type`。
+
+补齐后以下形式能够继续解析：
 
 ```feng
 makeBox().value
 owner.makeBox().value
-Owner.makeBox().value
-fitOwner.makeBox().value
 ```
+
+当前文本恢复链的 `find_member_by_name()` 只查普通类型或 object-form `spec` 的直接成员，且类型名根会先
+进入 constructor pending 状态；该路径当前不支持 `Owner.staticMethod().member` 或
+`owner.fitMethod().member`。这是既有 receiver 能力边界，不是推导返回类型读取错误。本修复不增加静态
+成员识别或 `fit` 选择；静态方法与 `fit` 方法的完整 AST 表达式继续由表达式 type fact 覆盖。若要扩展
+文本恢复链，必须另行 Review。
+
+实现复用现有 `FengLspAstReceiverState`。如需要避免重复 fact-kind 分支，只允许增加一个小型私有适配
+helper：显式返回类型非空时调用现有 `ast_receiver_state_set_type()`；否则按正确 callable site 查询一次
+type fact，并把 `TYPE_REF`、`DECL` 或 `BUILTIN` 写入 receiver state 已有字段。该 helper 不形成新的返回
+类型 View，也不持有或复制 type fact。
 
 这里只消费 Semantic 已确定的类型，不扩大成员可见性、重载、泛型代入或 `fit` 选择规则。无法确定时按
 既有 fail-closed 规则返回无结果，不得猜测 owner。
@@ -284,15 +308,27 @@ fitOwner.makeBox().value
 ### 6.4 保持性能与缓存边界
 
 - 只读取当前请求已有的匹配成功 analysis 或持久 symbol provider；
-- AST-backed 查询只允许执行有界的指针与状态判断，以及按 callable site 读取既有 Semantic type fact；
-- symbol-backed 查询继续直接读取既有 `FengSymbolDeclView.return_type`，不得反查源码或扫描符号集合；
-- 不得扫描 callable body、`return` 语句、项目文件、依赖包或全量 symbol；
+- `feng_semantic_lookup_type_fact()` 当前会线性扫描 analysis 的 type fact 数组；本文不得把它描述成 O(1)
+  查询，也不得在同一次签名格式化或单个 receiver call transition 中重复调用；
+- 只有显式返回类型为空时才允许查询 callable site type fact，每次签名格式化或 receiver call transition
+  最多查询一次；
+- symbol-backed 返回类型继续直接读取既有 `FengSymbolDeclView.return_type`；不得为读取返回类型新增源码
+  反查或额外 symbol 扫描，Signature Help 既有候选查找流程不在本修复中改写；
+- 不得为确定返回类型新增 callable body、`return` 语句、项目文件、依赖包或全量 symbol 扫描；
 - 不得为本修复增加第二套持久缓存、每次请求重建索引或为查找推导类型引入额外堆分配；响应字符串沿用
   既有格式化路径；
 - 不改变后台 analysis 发布、generation、fingerprint 或 position mapping 规则；
 - 不延长 readiness 轮询，不增加固定等待；
 - 不在 Hover、Completion 或 Signature Help 请求中构建项目、打开依赖或读取 `.ft`；
 - 外部 `.ft` 必须由既有 workspace symbol index 预先加载后再查询。
+
+如果现有线性 type fact 查询使任一 Hover 样本超过 16ms，必须先记录问题并停止；是否改变 Semantic type
+fact 的索引结构属于人工决策，不得在本 LSP bugfix 中自行增加缓存或修改 Semantic。
+
+AST Completion 会批量格式化候选。向 Completion 传递 session 后，多个省略返回声明的 callable 可能各自
+触发一次线性 type fact 查询；实施前后必须比较相同候选规模下的 Completion 数据，并继续满足性能主
+规范的普通 Completion P95 `≤ 20ms`。若超过门槛，同样先记录并停止，不得私自增加请求级索引或修改
+Semantic 数据结构。
 
 实现完成后必须在相同机器、相同构建配置、相同 fixture 和相同样本数下比较修改前后数据。任何相关
 Hover 样本超过 16ms，均视为修复未通过，不得以功能正确替代性能验收。
@@ -311,19 +347,23 @@ Hover 样本超过 16ms，均视为修复未通过，不得以功能正确替代
 
 1. 顶层函数推导内建返回类型，声明处和调用处 Hover 均显示规范化类型且不含 `: void`；
 2. 普通实例方法、普通静态方法、`fit` 实例方法、`fit` 静态方法均在声明处和调用处显示推导类型；
-3. 无 `return` 与只有 `return;` 的 callable 均显示 `: void`；
+3. 顶层函数和四类方法的无 `return` 与只有 `return;` 场景均显示 `: void`；
 4. 顶层函数和四类方法的 Completion Detail 使用推导类型；
-5. 索引就绪后的 Signature Help 使用推导类型；
-6. 推导返回对象或容器后的链式 Hover、Completion 能解析其成员；
+5. 文本恢复 receiver 链中的顶层函数和普通实例方法调用，能把推导返回对象或容器继续传播到后续成员
+   Completion；
+6. 顶层函数和四类方法的完整 AST 表达式沿用既有表达式 type fact 路径，链式 Hover 与 Completion 保持
+   正确；
 7. 同工程跨模块和本地路径依赖中的源码 callable 与当前文件结果一致；
-8. 显式返回类型、构造函数和终结器展示保持不变。
+8. parsed-only 无可靠 fact 时省略未知返回后缀；
+9. 显式返回类型、callable-form `spec`、构造函数和终结器展示保持不变。
 
 异步分析测试必须使用既有 readiness probe / barrier 等状态条件，禁止通过固定 sleep 猜测分析完成。
 
 ### 7.3 外部 `.ft` / `.fb` 用例
 
-新增最小 provider 包，公开一个省略返回类型的顶层函数，并公开包含普通方法、静态方法或 `fit` 方法的
-最小类型。打包后 consumer 只通过 `.fb` 依赖访问 provider，不把 provider 源码加入 consumer analysis。
+新增最小 provider 包，公开省略返回类型的顶层函数、普通实例方法、普通静态方法、`fit` 实例方法和
+`fit` 静态方法。打包后 consumer 只通过 `.fb` 依赖访问 provider，不把 provider 源码加入 consumer
+analysis。
 
 直接断言：
 
@@ -332,9 +372,14 @@ Hover 样本超过 16ms，均视为修复未通过，不得以功能正确替代
 - 推导返回对象后的成员 Completion 可以继续解析；
 - 结果不依赖 provider 源码文件仍存在于 consumer workspace。
 
-同时在 `test/symbol/test_symbol.c` 新增公开推导 callable 的 `.ft` round-trip case，直接断言 reader 恢复的
-`feng_symbol_decl_return_type()` 类型种类、规范化内建名称和必要类型参数，避免 LSP 集成失败时无法区分
-“符号未写入”和“LSP 未消费”两个层次。
+Signature Help 当前只消费 `FengSymbolDeclView`，因此还应在当前 workspace symbol index 就绪后直接断言
+顶层函数和四类方法的签名；测试通过时不修改 Signature Help 生产代码，只有出现与
+`feng_symbol_decl_return_type()` 不一致的实测结果时才记录问题并重新分析。
+
+同时在 `test/symbol/test_symbol.c` 新增五类公开推导 callable 的 `.ft` round-trip case，直接断言 reader
+恢复的 `feng_symbol_decl_return_type()` 类型种类、规范化内建名称和必要类型参数，避免 LSP 集成失败时
+无法区分“符号未写入”和“LSP 未消费”两个层次。现有 Symbol 用例已覆盖显式 callable 返回类型，但
+没有覆盖省略声明后的推导返回类型，不能用现有显式用例替代该证据。
 
 ### 7.4 未就绪与失败分析
 
@@ -381,44 +426,63 @@ Max <= 16ms
 ### 8.1 Review 与基线
 
 - [x] 人工确认所有 Hover 统一使用 `Max ≤ 16ms`，不再保留其他 Hover P95 验收门槛。
+- [x] 基于现有实现确认不新增 AST callable 返回类型 View、缓存或公开数据结构。
 - [ ] 人工 Review 并批准第 4 节的返回类型来源优先级。
 - [ ] 人工确认 parsed-only 无可靠事实时省略返回后缀，不再显示伪造的 `: void`。
-- [ ] 人工确认修复范围包括 Hover、Completion Detail、Signature Help 和调用结果 receiver 查询。
+- [ ] 人工确认生产代码修复范围为 AST Hover、AST Completion Detail，以及顶层函数和普通实例方法的
+      文本 receiver；Signature Help 仅验证现有 symbol-backed 路径，静态方法与 `fit` 方法的文本恢复链
+      不在本交付扩展。
 - [ ] 人工批准扩展既有 LSP 性能脚本的场景与 Max 断言，并以 readiness 条件替换相关固定等待。
 - [ ] 运行现有 LSP 专项并记录实施前基线。
 - [ ] 使用相同 fixture 和至少 200 个样本记录相关 Hover 的实施前 P50、P95、P99 与 Max。
+- [ ] 使用包含多项省略返回声明 callable 的相同 fixture，记录 AST Completion 的实施前候选数、P50、
+      P95、P99 与 Max。
 - [ ] 固化顶层函数和实例方法错误显示 `void` 的最小协议复现。
 - [ ] 核对外部 `.ft` symbol-backed 路径的实施前实际结果。
 
 ### 8.2 实现
 
-- [ ] 新增统一 AST callable 有效返回类型只读视图。
-- [ ] 收敛顶层函数 Hover 签名格式化。
-- [ ] 收敛普通方法、静态方法和 `fit` 方法 Hover 签名格式化。
-- [ ] 让 AST Completion Detail 保留并使用匹配的 analysis session。
-- [ ] 复核并收敛 Signature Help 的返回类型数据源。
-- [ ] 收敛调用结果 receiver 的类型解析。
-- [ ] 保持 symbol-backed `.ft` 返回类型读取路径不变。
-- [ ] 静态复核只进行既有 callable site/type fact 或 symbol return type 查询，不扫描函数体或符号集合。
-- [ ] 静态复核没有新增持久缓存、请求级索引、同步 analysis、磁盘 I/O、固定等待、额外查找分配或按名称
-      特判。
+- [ ] 顶层函数签名格式化复用 `append_optional_static_type_annotation_with_style()`，site 使用
+      `&decl->as.function_decl`，不再把空显式返回类型直接交给 `type_ref_to_string_with_style()`。
+- [ ] 普通实例、普通静态、`fit` 实例和 `fit` 静态方法复用同一注解 helper，site 使用
+      `&member->as.callable`。
+- [ ] 保持 callable-form `spec` 的显式返回格式化，以及构造函数、终结器固定 `void` 展示不变。
+- [ ] 保持 `append_optional_static_type_annotation_with_style()` 的既有 binding 与 field 调用行为不变，
+      callable 只复用该入口，不修改其已有优先级。
+- [ ] 从 `build_completion_json()` 向 AST declaration/member Completion item 构造链传递匹配的 analysis
+      session，并改用已有 session-aware signature formatter。
+- [ ] 对 current parse 和独立 source-module index 保持无 analysis 路径，确认未知返回类型省略后缀，不把
+      不共享 site 身份的 analysis 传入 formatter。
+- [ ] 文本 receiver 已支持的顶层 function 和普通实例 member call transition，在显式返回类型为空时按
+      正确 callable site 查询一次 type fact，并写入现有 `FengLspAstReceiverState`。
+- [ ] 保持完整 AST 表达式优先读取表达式 type fact 的 receiver 路径不变。
+- [ ] 保持 Signature Help、symbol-backed Hover、symbol-backed Completion 和 `.ft` 返回类型读取路径
+      不变；仅在新增测试证明实际不一致后记录问题，不预设修改。
+- [ ] 静态复核显式返回类型非空时不查询 type fact；同一次签名格式化或单个 receiver call transition
+      最多执行一次现有线性 type fact 查询。
+- [ ] 静态复核没有新增 View、持久缓存、请求级索引、同步 analysis、磁盘 I/O、固定等待、额外查找分配
+      或按名称特判，也没有为确定返回类型新增函数体、`return`、项目文件、依赖包或符号扫描。
 
 ### 8.3 测试
 
-- [ ] 新增源码内顶层函数 Hover 协议用例。
-- [ ] 新增普通实例、普通静态、`fit` 实例和 `fit` 静态方法 Hover 协议用例。
-- [ ] 新增推导 `void` 与显式返回类型非回归用例。
-- [ ] 新增 Completion Detail 与 Signature Help 用例。
-- [ ] 新增推导返回对象后的链式成员查询用例。
+- [ ] 新增源码内顶层函数声明与调用位置的 Hover 协议用例。
+- [ ] 新增普通实例、普通静态、`fit` 实例和 `fit` 静态方法声明与调用位置的 Hover 协议用例。
+- [ ] 新增五类 callable 的无 `return`、只有 `return;` 推导 `void` 用例，以及显式返回类型非回归用例。
+- [ ] 新增 callable-form `spec`、构造函数、终结器格式化非回归用例。
+- [ ] 新增五类 callable 的 AST Completion Detail 用例，并区分匹配 analysis 与 parsed-only 两种路径。
+- [ ] 新增五类 callable 的现有 symbol-backed Signature Help 用例；通过时不修改生产实现。
+- [ ] 新增顶层函数和普通实例方法文本 receiver 推导返回对象或容器后的链式 Completion 用例，并为
+      五类 callable 保留完整 AST expression fact 路径的非回归断言。
 - [ ] 新增同工程跨模块和本地路径依赖用例。
-- [ ] 新增外部 `.ft` / `.fb` 包 LSP 用例。
-- [ ] 新增推导 callable 返回类型 `.ft` round-trip symbol 用例。
+- [ ] 新增外部 `.ft` / `.fb` 包五类 callable 的 Hover、Completion Detail 与 Signature Help 用例。
+- [ ] 新增五类推导 callable 返回类型 `.ft` round-trip Symbol 用例。
 - [ ] 新增未就绪、失败分析与恢复用例。
 - [ ] 新增源码 AST-backed 五类 callable 的协议级 Hover 性能场景。
 - [ ] 新增外部 `.ft` symbol-backed、链式成员、fail-closed 和最后成功分析复用的 Hover 性能场景。
 - [ ] 每个热请求场景连续采集至少 200 个样本，并强制断言 Max ≤ 16ms。
 - [ ] 为冷启动、编辑后、语法错误和语义错误 Hover 强制断言 Max ≤ 16ms。
 - [ ] 为既有大项目性能矩阵的每个 Hover 场景增加 Max ≤ 16ms 断言。
+- [ ] 对包含多项省略返回声明 callable 的 AST Completion 连续采样，确认候选数不变且 P95 ≤ 20ms。
 
 ### 8.4 验证与交付
 
@@ -473,7 +537,9 @@ Max <= 16ms
 - 需要在交互请求中同步分析、同步磁盘 I/O、固定等待或扩大缓存生命周期；
 - 需要扫描 callable body、`return`、项目文件、依赖包或全量符号，或增加第二套持久缓存；
 - 任一相关 Hover 实测样本超过 16ms；
-- 无法通过通用 callable site 抽象实现，必须按函数名、方法种类、包名或返回类型加特判；
+- AST Completion 候选数发生非预期变化，或普通 Completion P95 超过 20ms；
+- 无法通过复用现有类型注解 helper、callable site fact 和 receiver state 实现，必须新增返回类型 View，
+  或按函数名、方法种类、包名、返回类型加特判；
 - 修复使既有显式返回类型、构造函数、终结器、Completion、Hover 或 Signature Help 行为发生非预期变化。
 
 ## 11 完成标准
@@ -481,7 +547,8 @@ Max <= 16ms
 只有同时满足以下条件，本文才能标记为已完成：
 
 1. 五类具名 callable 的推导返回类型均可在源码 Hover 中正确显示；
-2. Hover、Completion Detail、Signature Help 和调用结果 receiver 查询使用同一有效返回类型；
+2. AST Hover、AST Completion Detail、symbol-backed Signature Help 和调用结果 receiver 展示同一
+   Semantic 已确定的有效返回类型；
 3. 推导 `void`、内建类型、声明类型和带结构的 `FengTypeRef` 均有直接证据；
 4. 当前文件、跨源码模块、本地依赖和外部 `.ft` / `.fb` 包结果一致；
 5. parsed-only 或失败分析状态不再把未知结果伪装为 `void`；
@@ -490,16 +557,19 @@ Max <= 16ms
 8. 没有新增同步分析、同步磁盘 I/O、固定等待或来源特判；
 9. 相关 Hover 的真实 stdio 性能专项中，每个热请求场景至少 200 个样本且 Max ≤ 16ms；
 10. 冷启动、编辑后、错误状态和大项目矩阵中的每个 Hover 实测样本均不超过 16ms；
-11. LSP CLI 专项、Symbol 专项、D1B FCTS、LSP 性能专项、沙箱外完整 `make test` 和
+11. AST Completion 候选数保持不变，普通 Completion P95 不超过 20ms；
+12. LSP CLI 专项、Symbol 专项、D1B FCTS、LSP 性能专项、沙箱外完整 `make test` 和
     `git diff --check` 全部通过；
-12. 所有实施问题均已解决或取得明确人工处置结论。
+13. 所有实施问题均已解决或取得明确人工处置结论。
 
 ## 12 Review 重点
 
 Hover `Max ≤ 16ms` 已由人工明确为统一硬约束，不属于可放宽的 Review 选项。请重点确认以下五项：
 
 1. 无可靠 Semantic 事实时，是否接受“省略返回后缀”而不是继续显示 `: void`；
-2. 本修复是否同时覆盖 Hover、Completion Detail、Signature Help 和调用结果 receiver 查询；
+2. 是否确认生产代码只修复 AST Hover、AST Completion Detail，以及顶层函数和普通实例方法的文本
+   receiver；Signature Help 仅验证现有 symbol-backed 路径，静态方法与 `fit` 方法的文本恢复链不在本
+   交付扩展；
 3. 是否批准增加外部 `.fb` LSP 集成测试与独立 `.ft` round-trip Symbol 测试，以分别锁定消费层和持久层；
 4. 第 7.5 节的协议级场景和每个热场景至少 200 个样本，是否足以证明源码、持久符号、未就绪及错误
    状态均满足性能硬约束；
