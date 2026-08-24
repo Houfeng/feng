@@ -1,0 +1,271 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Callable target for inferred block Lambda bodies without a value result. */
+spec FunctionInferenceAction(): void;
+
+/** Callable target for an inferred block Lambda with two string return paths. */
+spec FunctionInferenceStringSelector(flag: bool): string;
+
+/** Callable target used to separate a Lambda return context from its outer function. */
+spec FunctionInferenceStringProducer(): string;
+
+/** Mutable probe used to observe inferred void calls and nested Lambda results. */
+type FunctionInferenceProbe {
+  var calls: int;
+  var text: string;
+
+  /** Record exactly one observable inferred void call. */
+  func record(): void {
+    self.calls += 1;
+  }
+}
+
+/** Complete an inferred top-level function without a return statement. */
+func functionInferenceTopLevelNatural(probe: FunctionInferenceProbe) {
+  probe.record();
+}
+
+/** Complete an inferred top-level function with an empty return statement. */
+func functionInferenceTopLevelEmpty(probe: FunctionInferenceProbe) {
+  probe.record();
+  return;
+}
+
+/** Select between two integer paths through an inferred top-level return type. */
+func functionInferenceTopLevelSelect(flag: bool) {
+  if flag {
+    return 101;
+  }
+  return 102;
+}
+
+/** Concrete owner carrying ordinary instance and static inference coverage. */
+type FunctionInferenceOwner {
+  /** Complete an inferred instance method without a return statement. */
+  func instanceNatural(probe: FunctionInferenceProbe) {
+    probe.record();
+  }
+
+  /** Complete an inferred instance method with an empty return statement. */
+  func instanceEmpty(probe: FunctionInferenceProbe) {
+    probe.record();
+    return;
+  }
+
+  /** Select between two integer paths through an inferred instance-method return type. */
+  func instanceSelect(flag: bool) {
+    if flag {
+      return 201;
+    }
+    return 202;
+  }
+
+  /** Complete an inferred static method without a return statement. */
+  static func staticNatural(probe: FunctionInferenceProbe) {
+    probe.record();
+  }
+
+  /** Complete an inferred static method with an empty return statement. */
+  static func staticEmpty(probe: FunctionInferenceProbe) {
+    probe.record();
+    return;
+  }
+
+  /** Select between two integer paths through an inferred static-method return type. */
+  static func staticSelect(flag: bool) {
+    if flag {
+      return 301;
+    }
+    return 302;
+  }
+}
+
+/** Empty subject whose visible fit supplies instance and static inference coverage. */
+type FunctionInferenceFitTarget {}
+
+fit FunctionInferenceFitTarget {
+  /** Complete an inferred fit instance method without a return statement. */
+  func fitInstanceNatural(probe: FunctionInferenceProbe) {
+    probe.record();
+  }
+
+  /** Complete an inferred fit instance method with an empty return statement. */
+  func fitInstanceEmpty(probe: FunctionInferenceProbe) {
+    probe.record();
+    return;
+  }
+
+  /** Select between two integer paths through an inferred fit instance return type. */
+  func fitInstanceSelect(flag: bool) {
+    if flag {
+      return 401;
+    }
+    return 402;
+  }
+
+  /** Complete an inferred fit static method without a return statement. */
+  static func fitStaticNatural(probe: FunctionInferenceProbe) {
+    probe.record();
+  }
+
+  /** Complete an inferred fit static method with an empty return statement. */
+  static func fitStaticEmpty(probe: FunctionInferenceProbe) {
+    probe.record();
+    return;
+  }
+
+  /** Select between two integer paths through an inferred fit static return type. */
+  static func fitStaticSelect(flag: bool) {
+    if flag {
+      return 501;
+    }
+    return 502;
+  }
+}
+
+/** Observe an inner string Lambda result while independently inferring an integer result. */
+func functionInferenceOuterContext(probe: FunctionInferenceProbe) {
+  let producer: FunctionInferenceStringProducer = () {
+    return "lambda";
+  };
+  probe.text = producer();
+  return 808;
+}
+
+/** Execute callable return-type inference conformance coverage. */
+open func test_function_inference(): void {
+  describe("function return inference", () {
+    test("FUNC01-A top-level function without return", () {
+      let probe = FunctionInferenceProbe();
+      functionInferenceTopLevelNatural(probe);
+      assert(probe.calls == 1, "top-level natural completion executes once");
+    });
+
+    test("FUNC01-B top-level function with empty return", () {
+      let probe = FunctionInferenceProbe();
+      functionInferenceTopLevelEmpty(probe);
+      assert(probe.calls == 1, "top-level empty return executes once");
+    });
+
+    test("FUNC01-C top-level function with consistent returns", () {
+      assert(functionInferenceTopLevelSelect(true) == 101 &&
+             functionInferenceTopLevelSelect(false) == 102,
+             "top-level consistent return paths preserve both values");
+    });
+
+    test("FUNC02-A instance method without return", () {
+      let probe = FunctionInferenceProbe();
+      let owner = FunctionInferenceOwner();
+      owner.instanceNatural(probe);
+      assert(probe.calls == 1, "instance natural completion executes once");
+    });
+
+    test("FUNC02-B instance method with empty return", () {
+      let probe = FunctionInferenceProbe();
+      let owner = FunctionInferenceOwner();
+      owner.instanceEmpty(probe);
+      assert(probe.calls == 1, "instance empty return executes once");
+    });
+
+    test("FUNC02-C instance method with consistent returns", () {
+      let owner = FunctionInferenceOwner();
+      assert(owner.instanceSelect(true) == 201 &&
+             owner.instanceSelect(false) == 202,
+             "instance consistent return paths preserve both values");
+    });
+
+    test("FUNC03-A static method without return", () {
+      let probe = FunctionInferenceProbe();
+      FunctionInferenceOwner.staticNatural(probe);
+      assert(probe.calls == 1, "static natural completion executes once");
+    });
+
+    test("FUNC03-B static method with empty return", () {
+      let probe = FunctionInferenceProbe();
+      FunctionInferenceOwner.staticEmpty(probe);
+      assert(probe.calls == 1, "static empty return executes once");
+    });
+
+    test("FUNC03-C static method with consistent returns", () {
+      assert(FunctionInferenceOwner.staticSelect(true) == 301 &&
+             FunctionInferenceOwner.staticSelect(false) == 302,
+             "static consistent return paths preserve both values");
+    });
+
+    test("FUNC04-A fit instance method without return", () {
+      let probe = FunctionInferenceProbe();
+      let target = FunctionInferenceFitTarget();
+      target.fitInstanceNatural(probe);
+      assert(probe.calls == 1, "fit instance natural completion executes once");
+    });
+
+    test("FUNC04-B fit instance method with empty return", () {
+      let probe = FunctionInferenceProbe();
+      let target = FunctionInferenceFitTarget();
+      target.fitInstanceEmpty(probe);
+      assert(probe.calls == 1, "fit instance empty return executes once");
+    });
+
+    test("FUNC04-C fit instance method with consistent returns", () {
+      let target = FunctionInferenceFitTarget();
+      assert(target.fitInstanceSelect(true) == 401 &&
+             target.fitInstanceSelect(false) == 402,
+             "fit instance consistent return paths preserve both values");
+    });
+
+    test("FUNC05-A fit static method without return", () {
+      let probe = FunctionInferenceProbe();
+      FunctionInferenceFitTarget.fitStaticNatural(probe);
+      assert(probe.calls == 1, "fit static natural completion executes once");
+    });
+
+    test("FUNC05-B fit static method with empty return", () {
+      let probe = FunctionInferenceProbe();
+      FunctionInferenceFitTarget.fitStaticEmpty(probe);
+      assert(probe.calls == 1, "fit static empty return executes once");
+    });
+
+    test("FUNC05-C fit static method with consistent returns", () {
+      assert(FunctionInferenceFitTarget.fitStaticSelect(true) == 501 &&
+             FunctionInferenceFitTarget.fitStaticSelect(false) == 502,
+             "fit static consistent return paths preserve both values");
+    });
+
+    test("FUNC06-B block Lambda with empty return", () {
+      let probe = FunctionInferenceProbe();
+      let action: FunctionInferenceAction = () {
+        probe.record();
+        return;
+      };
+      action();
+      assert(probe.calls == 1, "block Lambda empty return executes once");
+    });
+
+    test("FUNC06-C block Lambda with consistent returns", () {
+      let selector: FunctionInferenceStringSelector = (flag: bool) {
+        if flag {
+          return "left";
+        }
+        return "right";
+      };
+      assert(selector(true) == "left" && selector(false) == "right",
+             "block Lambda consistent return paths preserve both values");
+    });
+
+    test("FUNC07 imported function preserves inferred return type", () {
+      assert(libFunctionInferenceSelect(true) == 701 &&
+             libFunctionInferenceSelect(false) == 702,
+             "imported inferred return paths preserve both values");
+    });
+
+    test("FUNC08 block Lambda return context is isolated", () {
+      let probe = FunctionInferenceProbe();
+      let outer = functionInferenceOuterContext(probe);
+      assert(probe.text == "lambda" && outer == 808,
+             "Lambda and outer function preserve independent return types");
+    });
+  });
+}

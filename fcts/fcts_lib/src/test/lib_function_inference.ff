@@ -1,0 +1,9 @@
+open module fcts_lib.test;
+
+/** Select one integer through an inferred return type across a package boundary. */
+open func libFunctionInferenceSelect(flag: bool) {
+  if flag {
+    return 701;
+  }
+  return 702;
+}

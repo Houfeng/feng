@@ -6044,6 +6044,129 @@ static const FengDecl *cg_find_enum_decl_by_ref(const CG *cg,
     return visible;
 }
 
+/* Resolve the type-fact forms that do not require a declaration-specific
+ * type-parameter substitution context. TYPE_REF facts are deliberately left
+ * to the caller so free functions, type methods, and fit methods can apply
+ * their own owner/callable scopes through the existing resolvers. */
+static bool cg_try_resolve_non_reference_type_fact(
+    CG *cg,
+    const FengSemanticTypeFact *fact,
+    FengToken blame,
+    CGType **out_type,
+    bool *out_handled) {
+    if (out_type == NULL || out_handled == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    *out_handled = false;
+    if (fact == NULL ||
+        fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF ||
+        fact->kind == FENG_SEMANTIC_TYPE_FACT_UNKNOWN) {
+        return true;
+    }
+
+    *out_handled = true;
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN) {
+        for (size_t index = 0U;
+             index < sizeof k_builtin_types / sizeof k_builtin_types[0];
+             ++index) {
+            const BuiltinTypeMap *builtin = &k_builtin_types[index];
+
+            if (strlen(builtin->name) == fact->builtin_name.length &&
+                memcmp(builtin->name,
+                       fact->builtin_name.data,
+                       fact->builtin_name.length) == 0) {
+                *out_type = cgtype_new(builtin->kind);
+                return *out_type != NULL;
+            }
+        }
+        return cg_fail(cg, blame,
+                       "CE0019", "codegen: unsupported builtin inferred callable return type");
+    }
+
+    if (fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+        const UserType *user_type;
+        const UserSpec *user_spec;
+        CGType *resolved;
+
+        if (fact->type_decl == NULL) {
+            return cg_fail(cg, blame,
+                           "CE0020", "codegen: inferred callable return type is missing its declaration");
+        }
+        if (fact->type_decl->kind == FENG_DECL_ENUM) {
+            *out_type = cgtype_new_enum(fact->type_decl);
+            return *out_type != NULL;
+        }
+        user_type = cg_find_user_type_by_decl(cg, fact->type_decl);
+        if (user_type != NULL) {
+            resolved = cgtype_new(CG_TYPE_OBJECT);
+            if (resolved == NULL) {
+                return false;
+            }
+            resolved->user = user_type;
+            *out_type = resolved;
+            return true;
+        }
+        user_spec = cg_find_user_spec_by_decl(cg, fact->type_decl);
+        if (user_spec != NULL) {
+            resolved = cgtype_new(user_spec->form == FENG_SPEC_FORM_CALLABLE
+                                      ? CG_TYPE_CALLABLE
+                                      : CG_TYPE_SPEC);
+            if (resolved == NULL) {
+                return false;
+            }
+            resolved->user_spec = user_spec;
+            *out_type = resolved;
+            return true;
+        }
+        return cg_fail(cg, blame,
+                       "CE0021", "codegen: unsupported declared inferred callable return type");
+    }
+
+    *out_handled = false;
+    return true;
+}
+
+/* Resolve one callable's effective return type. An explicit annotation is
+ * authoritative; otherwise Semantic's callable type fact supplies the same
+ * inferred type used by calls and symbol export. A missing fact denotes the
+ * legacy void fallback for body-less/special callables. */
+static bool cg_resolve_callable_return_type(
+    CG *cg,
+    const FengCallableSignature *callable,
+    FengToken blame,
+    CGType **out_type) {
+    const FengSemanticTypeFact *fact = NULL;
+    bool handled = false;
+
+    if (out_type == NULL || callable == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    if (callable->return_type != NULL) {
+        return cg_resolve_type(cg,
+                               callable->return_type,
+                               &blame,
+                               out_type);
+    }
+    if (cg != NULL && cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, callable);
+    }
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return cg_resolve_type(cg, fact->type_ref, &blame, out_type);
+    }
+    if (!cg_try_resolve_non_reference_type_fact(
+            cg, fact, blame, out_type, &handled)) {
+        return false;
+    }
+    if (handled) {
+        return true;
+    }
+
+    *out_type = cgtype_new(CG_TYPE_VOID);
+    return *out_type != NULL;
+}
+
 static bool cg_resolve_global_binding_type(CG *cg,
                                            const FengDecl *decl,
                                            CGType **out_type) {
@@ -13016,6 +13139,46 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
     return ok;
 }
 
+/* Resolve a type-owned callable return with the same owner/method generic
+ * substitution used by explicit member signatures. */
+static bool cg_resolve_user_method_return_type(
+    CG *cg,
+    const UserType *owner,
+    const FengCallableSignature *callable,
+    const FengToken *fallback,
+    CGType **out_type) {
+    const FengSemanticTypeFact *fact = NULL;
+    bool handled = false;
+    FengToken blame;
+
+    if (out_type == NULL || callable == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    blame = fallback != NULL ? *fallback : callable->token;
+    if (callable->return_type != NULL) {
+        return cg_resolve_type_for_user_method_member(
+            cg, owner, callable, callable->return_type, fallback, out_type);
+    }
+    if (cg != NULL && cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, callable);
+    }
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return cg_resolve_type_for_user_method_member(
+            cg, owner, callable, fact->type_ref, fallback, out_type);
+    }
+    if (!cg_try_resolve_non_reference_type_fact(
+            cg, fact, blame, out_type, &handled)) {
+        return false;
+    }
+    if (handled) {
+        return true;
+    }
+
+    *out_type = cgtype_new(CG_TYPE_VOID);
+    return *out_type != NULL;
+}
+
 /* Resolve one generic method parameter exactly as the shared body resolves
  * its original declaration slot.  The resulting physical-layout fact is the
  * ABI authority; a substituted instance type must not redefine that ABI. */
@@ -14274,54 +14437,105 @@ static bool cg_emit_registered_extern_decl(CG *cg, const ExternFn *ef) {
     return true;
 }
 
+/* Register one free function only after all owned metadata has been built.
+ * Failed registrations leave no partially committed entry for cg_dispose. */
 static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
+    const FengCallableSignature *sig = &decl->as.function_decl;
+    FreeFn *f;
+    char *surface_name = NULL;
+    bool ok = false;
+
     if (cg->free_fn_count + 1 > cg->free_fn_capacity) {
         size_t cap = cg->free_fn_capacity ? cg->free_fn_capacity * 2 : 4;
         void *p = realloc(cg->free_fns, cap * sizeof *cg->free_fns);
-        if (!p) return false;
+        if (!p) {
+            return cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        }
         cg->free_fns = p;
         cg->free_fn_capacity = cap;
     }
-    const FengCallableSignature *sig = &decl->as.function_decl;
-    FreeFn *f = &cg->free_fns[cg->free_fn_count++];
+    f = &cg->free_fns[cg->free_fn_count];
+    memset(f, 0, sizeof(*f));
     f->feng_name = strndup(sig->name.data, sig->name.length);
+    if (f->feng_name == NULL) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
     f->is_abi = cg_annotations_contain_kind(decl->annotations,
                                             decl->annotation_count,
                                             FENG_ANNOTATION_ABI);
     f->is_variadic = sig->param_count > 0U && sig->params[sig->param_count - 1U].is_variadic;
-    char *surface_name = cg_fn_mangle(cg->module_mangle, &sig->name);
+    surface_name = cg_fn_mangle(cg->module_mangle, &sig->name);
+    if (surface_name == NULL) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
     f->param_count = sig->param_count;
     f->param_types = sig->param_count ? calloc(sig->param_count, sizeof(CGType*)) : NULL;
     f->param_names = sig->param_count ? calloc(sig->param_count, sizeof(char*)) : NULL;
+    if (sig->param_count > 0U &&
+        (f->param_types == NULL || f->param_names == NULL)) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
     for (size_t i = 0; i < sig->param_count; i++) {
         if (!cg_resolve_type(cg, sig->params[i].type, &sig->params[i].token,
                              &f->param_types[i])) {
-            return false;
+            goto cleanup;
         }
         f->param_names[i] = strndup(sig->params[i].name.data, sig->params[i].name.length);
+        if (f->param_names[i] == NULL) {
+            cg_fail(cg, sig->params[i].token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
     }
-    if (!cg_resolve_type(cg, sig->return_type, &sig->token, &f->return_type)) {
-        return false;
+    if (!cg_resolve_callable_return_type(cg, sig, sig->token, &f->return_type)) {
+        goto cleanup;
     }
     /* Append param-type suffix for overload-aware mangling. Applied
      * unconditionally so the symbol shape is the same regardless of whether
      * the function is part of an overload set today. */
     surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic, false);
-    if (!surface_name) return false;
+    if (!surface_name) {
+        cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
     if (f->is_abi) {
         Buf impl; buf_init(&impl);
         buf_append_cstr(&impl, surface_name);
         buf_append_cstr(&impl, "__impl");
+        if (impl.data == NULL) {
+            cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
         f->c_name = impl.data;
         f->c_abi_name = surface_name;
-        if (!f->c_name) return false;
+        surface_name = NULL;
     } else {
         f->c_name = surface_name;
-        f->c_abi_name = NULL;
+        surface_name = NULL;
     }
     f->decl = decl;
     f->owner_program = cg->cur_program;
-    return true;
+    cg->free_fn_count++;
+    ok = true;
+
+cleanup:
+    free(surface_name);
+    if (!ok) {
+        free(f->feng_name);
+        free(f->c_name);
+        free(f->c_abi_name);
+        for (size_t i = 0U; i < f->param_count; ++i) {
+            cgtype_free(f->param_types != NULL ? f->param_types[i] : NULL);
+            free(f->param_names != NULL ? f->param_names[i] : NULL);
+        }
+        free(f->param_types);
+        free(f->param_names);
+        cgtype_free(f->return_type);
+        memset(f, 0, sizeof(*f));
+    }
+    return ok;
 }
 
 static const FreeFn *cg_find_free_fn(const CG *cg, const char *name, size_t len) {
@@ -14638,8 +14852,8 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
                 um->param_names[pi] = strndup(sig->params[pi].name.data,
                                               sig->params[pi].name.length);
             }
-            if (!cg_resolve_type_for_user_method_member(cg, t, sig, sig->return_type,
-                                                        &sig->token, &um->return_type)) {
+            if (!cg_resolve_user_method_return_type(cg, t, sig,
+                                                    &sig->token, &um->return_type)) {
                 return false;
             }
             um->c_name = cg_append_param_suffix(um->c_name,
@@ -16220,6 +16434,86 @@ static bool cg_resolve_type_for_user_fit_member(CG *cg,
     return ok;
 }
 
+/* Resolve a user-fit callable return through the fit target and method
+ * substitution context, including Semantic's inferred callable fact. */
+static bool cg_resolve_user_fit_return_type(
+    CG *cg,
+    const UserFit *fit,
+    const FengCallableSignature *callable,
+    const FengToken *fallback,
+    CGType **out_type) {
+    const FengSemanticTypeFact *fact = NULL;
+    bool handled = false;
+    FengToken blame;
+
+    if (out_type == NULL || callable == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    blame = fallback != NULL ? *fallback : callable->token;
+    if (callable->return_type != NULL) {
+        return cg_resolve_type_for_user_fit_member(
+            cg, fit, callable, callable->return_type, fallback, out_type);
+    }
+    if (cg != NULL && cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, callable);
+    }
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return cg_resolve_type_for_user_fit_member(
+            cg, fit, callable, fact->type_ref, fallback, out_type);
+    }
+    if (!cg_try_resolve_non_reference_type_fact(
+            cg, fact, blame, out_type, &handled)) {
+        return false;
+    }
+    if (handled) {
+        return true;
+    }
+
+    *out_type = cgtype_new(CG_TYPE_VOID);
+    return *out_type != NULL;
+}
+
+/* Resolve a builtin-fit callable return while preserving the fit-target and
+ * method type-parameter scope already used for explicit signatures. */
+static bool cg_resolve_builtin_fit_return_type(
+    CG *cg,
+    const FengCallableSignature *callable,
+    const CGTypeParamScope *open_scope,
+    const FengToken *fallback,
+    CGType **out_type) {
+    const FengSemanticTypeFact *fact = NULL;
+    bool handled = false;
+    FengToken blame;
+
+    if (out_type == NULL || callable == NULL) {
+        return false;
+    }
+    *out_type = NULL;
+    blame = fallback != NULL ? *fallback : callable->token;
+    if (callable->return_type != NULL) {
+        return cg_resolve_type_with_open_scope(
+            cg, callable->return_type, fallback, open_scope, out_type);
+    }
+    if (cg != NULL && cg->analysis != NULL) {
+        fact = feng_semantic_lookup_type_fact(cg->analysis, callable);
+    }
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return cg_resolve_type_with_open_scope(
+            cg, fact->type_ref, fallback, open_scope, out_type);
+    }
+    if (!cg_try_resolve_non_reference_type_fact(
+            cg, fact, blame, out_type, &handled)) {
+        return false;
+    }
+    if (handled) {
+        return true;
+    }
+
+    *out_type = cgtype_new(CG_TYPE_VOID);
+    return *out_type != NULL;
+}
+
 /* Return whether a completed fit-method C name is already used in methods. */
 static bool cg_fit_method_c_name_is_used(const UserMethod *methods,
                                          size_t method_count,
@@ -16321,8 +16615,8 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
             um->param_names[pi] = strndup(sig->params[pi].name.data,
                                           sig->params[pi].name.length);
         }
-        if (!cg_resolve_type_for_user_fit_member(cg, uf, sig, sig->return_type, &sig->token,
-                                                 &um->return_type)) return false;
+        if (!cg_resolve_user_fit_return_type(cg, uf, sig, &sig->token,
+                                             &um->return_type)) return false;
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types, um->param_count,
                                             um->is_variadic,
@@ -16392,11 +16686,11 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
             um->param_names[pi] = strndup(sig->params[pi].name.data,
                                           sig->params[pi].name.length);
         }
-        if (!cg_resolve_type_with_open_scope(cg,
-                                            sig->return_type,
-                                            &m->token,
-                                            &open_scope,
-                                            &um->return_type)) {
+        if (!cg_resolve_builtin_fit_return_type(cg,
+                                                sig,
+                                                &open_scope,
+                                                &m->token,
+                                                &um->return_type)) {
             return false;
         }
         um->c_name = cg_append_param_suffix(um->c_name,
@@ -42614,16 +42908,9 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
         cg->generic_fn_type_param_constraints = NULL;
         cg->generic_fn_type_param_descs = desc_names;
 
-        if (sig->return_type != NULL) {
-            if (!cg_resolve_type(cg, sig->return_type, &decl->token, &return_type)) {
-                goto cleanup;
-            }
-        } else {
-            return_type = cgtype_new(CG_TYPE_VOID);
-            if (return_type == NULL) {
-                cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
-                goto cleanup;
-            }
+        if (!cg_resolve_callable_return_type(
+                cg, sig, decl->token, &return_type)) {
+            goto cleanup;
         }
 
         param_types = sig->param_count ? calloc(sig->param_count, sizeof *param_types) : NULL;
@@ -47086,13 +47373,9 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
     /* Resolve return type (CG_TYPE_GENERIC_PARAM when it's T/U/…). */
     CGType *return_type = NULL;
-    if (sig->return_type) {
-        if (!cg_resolve_type(cg, sig->return_type, &decl->token, &return_type)) {
-            goto cleanup;
-        }
-    } else {
-        return_type = cgtype_new(CG_TYPE_VOID);
-        if (!return_type) { cg_fail(cg, decl->token, "IE0001", "codegen: out of memory"); goto cleanup; }
+    if (!cg_resolve_callable_return_type(
+            cg, sig, decl->token, &return_type)) {
+        goto cleanup;
     }
     cg->cur_return_type = return_type;
     bool has_out_param = (return_type->kind != CG_TYPE_VOID);
@@ -58932,7 +59215,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         free(active_param_names);
     }
 
-    if (!cg_resolve_type(cg, sig->return_type, &member->token, &return_type)) goto cleanup;
+    if (!cg_resolve_callable_return_type(
+            cg, sig, member->token, &return_type)) goto cleanup;
     cg->cur_return_type = return_type;
     bool has_out_param = (return_type->kind != CG_TYPE_VOID);
 

@@ -4194,10 +4194,170 @@ static void test_top_level_function_rejects_conflicting_inferred_return_types(vo
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "auto_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* FUNC02-D: an ordinary instance method must reject conflicting inferred returns. */
+static void test_instance_method_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Picker {\n"
+        "    func pick(flag: bool) {\n"
+        "        if flag {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("instance_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "instance_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* FUNC03-D: an ordinary static method must reject conflicting inferred returns. */
+static void test_static_method_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Picker {\n"
+        "    static func pick(flag: bool) {\n"
+        "        if flag {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("static_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "static_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* FUNC04-D: a fit instance method must reject conflicting inferred returns. */
+static void test_fit_instance_method_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Picker {}\n"
+        "fit Picker {\n"
+        "    func pick(flag: bool) {\n"
+        "        if flag {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_instance_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fit_instance_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* FUNC05-D: a fit static method must reject conflicting inferred returns. */
+static void test_fit_static_method_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Picker {}\n"
+        "fit Picker {\n"
+        "    static func pick(flag: bool) {\n"
+        "        if flag {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        return true;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("fit_static_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "fit_static_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* FUNC06-D: a target-typed block Lambda must reject conflicting inferred returns. */
+static void test_block_lambda_rejects_conflicting_inferred_return_types(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Selector(flag: bool): int;\n"
+        "func run() {\n"
+        "    let selector: Selector = (flag: bool) {\n"
+        "        if flag {\n"
+        "            return 1;\n"
+        "        }\n"
+        "        return true;\n"
+        "    };\n"
+        "    selector(false);\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("block_lambda_return_conflict_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "block_lambda_return_conflict_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(errors[0].token.line == 8U);
+    ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -28670,6 +28830,11 @@ int main(void) {
     test_catch_anonymous_must_be_last_clause();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
+    test_instance_method_rejects_conflicting_inferred_return_types();
+    test_static_method_rejects_conflicting_inferred_return_types();
+    test_fit_instance_method_rejects_conflicting_inferred_return_types();
+    test_fit_static_method_rejects_conflicting_inferred_return_types();
+    test_block_lambda_rejects_conflicting_inferred_return_types();
     test_method_auto_infers_return_type_for_forward_call();
     test_imported_function_auto_infers_return_type_across_modules();
     test_omitted_return_function_rejects_lambda_signature_inference();

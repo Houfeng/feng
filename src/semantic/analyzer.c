@@ -10783,13 +10783,24 @@ static bool record_type_fact_for_site(ResolveContext *context,
     }
 
     switch (expr_type.kind) {
-        case FENG_INFERRED_EXPR_TYPE_BUILTIN:
+        case FENG_INFERRED_EXPR_TYPE_BUILTIN: {
+            const char *canonical_name = canonical_builtin_type_name(
+                expr_type.builtin_name, context->pointer_size);
+            FengSlice recorded_name = canonical_name != NULL
+                                          ? slice_from_cstr(canonical_name)
+                                          : expr_type.builtin_name;
+
+            /* Type facts are consumed after expression inference by symbol
+             * export and Codegen. Store the same width-explicit identity used
+             * by normal type resolution so aliases such as `int` cannot leak
+             * into those later compiler phases. */
             return feng_semantic_record_type_fact(context->analysis,
                                                   site,
                                                   FENG_SEMANTIC_TYPE_FACT_BUILTIN,
-                                                  expr_type.builtin_name,
+                                                  recorded_name,
                                                   NULL,
                                                   NULL);
+        }
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF: {
             /* The type_ref carried by InferredExprType may be a synthetic
