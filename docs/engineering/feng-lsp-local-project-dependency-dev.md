@@ -574,25 +574,73 @@ char *workspace_index_manifest_path;
 
 ---
 
-## 9. 最小代码变更清单
+## 9. 分步开发 TODO
 
-生产实现预计只修改 `src/cli/lsp/service.c`：
+状态规则：`[ ]` 表示尚未完成，`[x]` 表示已经完成且具有代码、测试或检查依据。各项必须按以下顺序
+实施；完成一项后直接更新本文档状态。生产实现预计只修改 `src/cli/lsp/service.c`，不新增生产 `.c`
+文件，不修改 `service.h` 的 opaque service 接口，不修改 Makefile，不修改 LSP 之外的生产代码。
 
-1. 增加 `FengLspWorkspaceAnalysis` 和成功分析动态数组；
-2. 增加按 source path、manifest identity 和 standalone identity 查找 helper；
-3. 修改 analyzer 发布逻辑，使 candidate 只替换对应数组元素；
-4. 修改 shutdown，逐元素释放 session；
-5. 将单一 pending URI 改为可合并不同项目任务的小队列；
-6. 在既有本地依赖 module-index 遍历中预热尚未缓存的依赖 session；
-7. 将现有请求从单 session 读取改为按文件查数组；
-8. 增加 request-local 跨 session 稳定符号身份；
-9. 全局聚合 Definition、References 和 Rename；
-10. 增加 Implementation capability/handler；
-11. 为单份派生 symbol/module index 记录活动 manifest，避免切换项目后错误借用；
-12. 对同一 manifest 复用旧 session 的 resolved bundle paths，避免普通编辑重复 resolve。
+### Phase 0：方案确认
 
-不新增生产 `.c` 文件，不修改 `service.h` 的 opaque service 接口，不修改 Makefile，不修改 LSP 之外
-的生产代码。
+- [x] 核对当前单 `last_successful_analysis`、后台 candidate、成功后交换和失败保留旧缓存的代码事实。
+- [x] 在本文档固定多项目数组、稳定身份、缓存优先、无缝替换、变更边界及既有性能门槛。
+- [ ] 完成人工 Review，并在实现前确认本文档方案冻结。
+
+### Phase 1：多项目成功缓存容器
+
+- [ ] 增加 `FengLspWorkspaceAnalysis` 和 `last_successful_analyses[]` 动态数组字段，移除单成功槽位。
+- [ ] 为 `FengLspAnalysisSession` 增加 LSP 私有 `package_path`，并补齐复制、所有权和释放逻辑。
+- [ ] 增加按 source physical path、canonical manifest 和 standalone path 查找数组元素的 helper。
+- [ ] 将 generation 判断改为同一数组元素内比较，禁止跨项目 generation 互相阻止发布。
+- [ ] 修改 service shutdown，逐元素执行 `session_dispose()` 后释放数组。
+
+### Phase 2：无空窗 candidate 发布
+
+- [ ] 保持 candidate 独立构建，重建开始和重建期间不修改已发布数组元素。
+- [ ] 仅在 §5.3 全部成功条件满足后，才在 `analysis_mutex` 内交换目标 session 和 generation。
+- [ ] candidate 失败、取消或过期时只释放 candidate，旧 session 和 generation 保持不变。
+- [ ] 交换完成并解锁后再释放旧 session，禁止请求观察到空或半初始化状态。
+- [ ] 调整 successful-prefix 发布，使其只关联本次实际发布的项目 session/generation。
+
+### Phase 3：多项目后台调度
+
+- [ ] 将单一 `pending_analysis_uri` 改为可同时保存不同项目任务的小型动态队列。
+- [ ] 记录 pending/running identity 和 generation；同一项目只保留最新任务，不同项目不得互相覆盖。
+- [ ] 实现 §5.5 的缓存状态判断：精确命中不重建，stale/miss 才按需调度。
+- [ ] 相同或更新 generation 已 pending/running 时不重复入队。
+- [ ] 保留既有 debounce、取消、diagnostics 请求和单 analyzer worker 行为。
+- [ ] 在既有本地依赖 module-index 遍历中预热尚未缓存且未排队的依赖项目 session。
+- [ ] 同一 manifest 普通源码编辑时复用有效 resolved bundle paths，仅在 §6.1 条件满足时重新 resolve。
+
+### Phase 4：既有单项目请求迁移
+
+- [ ] 将所有直接读取 `service->last_successful_analysis` 的位置迁移到按 source path 选择 session 的 helper。
+- [ ] 保持 Hover、Completion 等 current-text 快路径及既有有界冷启动等待顺序不变。
+- [ ] 为单份派生 symbol/module index 增加 `workspace_index_manifest_path`，禁止跨项目错误借用。
+- [ ] 确认同项目 Hover、Completion、Signature Help、Document Symbol、Definition、References 和 Rename
+      行为不变。
+
+### Phase 5：跨 session 符号查询
+
+- [ ] 实现 §7.2 的 request-local 稳定符号身份，不跨 session 使用 AST 指针身份。
+- [ ] Definition 从 imported target 定位本地依赖源码，并返回 physical file URI/range。
+- [ ] References 遍历全部成功 session，聚合并按 physical path/range 去重。
+- [ ] Rename 在所有相关 session 完整且无歧义时生成单个 WorkspaceEdit，否则返回 `null`。
+- [ ] 增加 `textDocument/implementation` capability、dispatch 和 handler，并按精确 spec relation 聚合结果。
+
+### Phase 6：新增测试
+
+- [ ] 仅在 `test/` 增加所需 fixture/helper，不修改任何已有测试用例或 expected 文件。
+- [ ] 实现 §11 的全部新增功能、缓存生命周期、并发发布、调度和防串线用例。
+- [ ] 为精确命中不重建、任务合并和 candidate 无缝替换增加可观测断言。
+
+### Phase 7：验收与交付
+
+- [ ] 执行新增定向用例并记录结果。
+- [ ] 执行 §10 既有性能矩阵，确认所有门槛保持不变。
+- [ ] 在非 Codex 沙箱环境执行全量 `make test` 并记录结果。
+- [ ] 检查生产 diff 仅位于 `src/cli/lsp/`，测试 diff 仅新增 `test/` 文件。
+- [ ] 对照 §12 逐项确认完成标准，并完成人工代码 Review。
 
 ---
 
@@ -625,31 +673,31 @@ char *workspace_index_manifest_path;
 
 测试允许在 `test/` 增加 fixture、helper 和 test function；禁止改变已有用例的行为或预期。
 
-至少覆盖：
+至少覆盖并逐项标记：
 
-1. 依次打开 A、B、C 项目后，成功分析数组同时保留三份 session；
-2. 在 A/B/C 之间切换和 `didClose` 后，旧成功 session 仍可命中；
-3. 热请求从成功数组按 source path 命中，不依赖再次查找 manifest；
-4. B 依赖 A 时，从 B use Definition 到 A 的物理 `.ff`；
-5. 从 A 声明或 B use 发起 References，得到数组中所有合法引用；
-6. Rename 返回覆盖多个 physical file URI 的单个 WorkspaceEdit；
-7. Rename 任一参与 session stale/失败时不返回部分 edit；
-8. object spec 和 spec member 的 Implementation 跨 session 返回正确结果；
-9. 不相关项目具有同 module/name 时不串线；
-10. 快速编辑不同项目时 pending task 不互相覆盖；
-11. 某项目 candidate 失败不清除其他项目或自身旧成功 session；
-12. 普通源码编辑后不重复触发本地依赖物化；
-13. LSP 请求不修改已有 `.ft`、`.fb`、C 或 `.fd` 产物；
-14. 既有同项目 Hover、Completion、Definition、References 和 Rename 全部保持通过；
-15. 多项目缓存及全局查询继续满足 §10 全部既有性能门槛；
-16. 同一 manifest 连续成功重建后数组 count 不增长，只替换对应元素；
-17. 精确缓存命中的请求立即返回，不进入冷启动等待，也不新增后台任务；
-18. stale/miss 请求最多合并出一个最新 generation 后台任务，不在请求线程执行分析；
-19. 相同或更新 generation 已 pending/running 时重复请求不重复入队；
-20. candidate 构建期间持续请求同一项目，始终可读取旧成功 session，不出现缓存空窗；
-21. candidate 失败、取消或过期后，旧成功 session 及 generation 均保持不变；
-22. candidate 成功发布时，请求只能观察到完整旧 session 或完整新 session，不能观察到空/半初始化状态；
-23. 最终执行全量 `make test`。
+- [ ] 依次打开 A、B、C 项目后，成功分析数组同时保留三份 session。
+- [ ] 在 A/B/C 之间切换和 `didClose` 后，旧成功 session 仍可命中。
+- [ ] 热请求从成功数组按 source path 命中，不依赖再次查找 manifest。
+- [ ] B 依赖 A 时，从 B use Definition 到 A 的物理 `.ff`。
+- [ ] 从 A 声明或 B use 发起 References，得到数组中所有合法引用。
+- [ ] Rename 返回覆盖多个 physical file URI 的单个 WorkspaceEdit。
+- [ ] Rename 任一参与 session stale/失败时不返回部分 edit。
+- [ ] object spec 和 spec member 的 Implementation 跨 session 返回正确结果。
+- [ ] 不相关项目具有同 module/name 时不串线。
+- [ ] 快速编辑不同项目时 pending task 不互相覆盖。
+- [ ] 某项目 candidate 失败不清除其他项目或自身旧成功 session。
+- [ ] 普通源码编辑后不重复触发本地依赖物化。
+- [ ] LSP 请求不修改已有 `.ft`、`.fb`、C 或 `.fd` 产物。
+- [ ] 既有同项目 Hover、Completion、Definition、References 和 Rename 全部保持通过。
+- [ ] 多项目缓存及全局查询继续满足 §10 全部既有性能门槛。
+- [ ] 同一 manifest 连续成功重建后数组 count 不增长，只替换对应元素。
+- [ ] 精确缓存命中的请求立即返回，不进入冷启动等待，也不新增后台任务。
+- [ ] stale/miss 请求最多合并出一个最新 generation 后台任务，不在请求线程执行分析。
+- [ ] 相同或更新 generation 已 pending/running 时重复请求不重复入队。
+- [ ] candidate 构建期间持续请求同一项目，始终可读取旧成功 session，不出现缓存空窗。
+- [ ] candidate 失败、取消或过期后，旧成功 session 及 generation 均保持不变。
+- [ ] candidate 成功发布时，请求只能观察到完整旧 session 或完整新 session，不能观察到空/半初始化状态。
+- [ ] 最终执行全量 `make test`。
 
 文档变更阶段不运行测试。代码实施完成后必须先运行定向用例，再按仓库规则在非 Codex 沙箱环境运行
 全量 `make test`，测试产物不得放入 `/tmp` 或 `/private/tmp` 后执行。
