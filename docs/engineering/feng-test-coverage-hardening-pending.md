@@ -92,14 +92,14 @@
 
 每一步都是独立交付单元。前一步专项测试及沙箱外 `make test` 全部通过后，才进入下一步。
 
-### Step 1：表达式求值与函数推导 FCTS
+### Step 1：表达式求值与函数推导测试
 
 #### 子交付文档
 
 | 子交付 | 范围 | 实施文档 | 状态 |
 | --- | --- | --- | --- |
 | D1A | 表达式求值顺序 | [Feng 表达式求值顺序 FCTS 补齐实施文档](./feng-test-expression-evaluation-order-implementation-pending.md) | 已完成 |
-| D1B | 函数返回类型推导 | [Feng 函数返回类型推导 FCTS 补齐实施文档](./feng-test-function-return-inference-implementation-pending.md) | 待 Review |
+| D1B | 函数返回类型推导 | [Feng 函数返回类型推导测试补齐实施文档](./feng-test-function-return-inference-implementation-pending.md) | 待 Review |
 
 D1A、D1B 的用例实施细节、Todo、问题和交付记录仅在各自实施文档中维护；本文的用例表只保留范围
 索引与交付顺序。
@@ -108,11 +108,11 @@ D1A、D1B 的用例实施细节、Todo、问题和交付记录仅在各自实施
 
 把 [表达式规范 §4](../specifications/feng-expression.md) 和
 [函数规范](../specifications/feng-function.md) 中已经生效、但当前主要由静态分析或无副作用结果间接证明的规则，
-补成直接可观察的 FCTS 行为。
+补成直接测试证据；合法行为优先进入 FCTS，非法返回类型冲突进入 Semantic。
 
 #### 新增用例
 
-| 编号 | FCTS 行为 | 直接断言 |
+| 编号 | 测试归属与行为 | 直接断言 |
 | --- | --- | --- |
 | EVAL01 | 二元运算左右操作数求值顺序 | 两侧分别追加不同标记，结果与标记顺序同时正确 |
 | EVAL02 | 普通函数的多个参数求值顺序 | 参数严格从左到右且各执行一次；target 规则复用已有直接证据 |
@@ -120,16 +120,21 @@ D1A、D1B 的用例实施细节、Todo、问题和交付记录仅在各自实施
 | EVAL04 | `true && rhs`、`false || rhs` | RHS 副作用计数恰为 1 |
 | EVAL05 | `if` 表达式只执行选中分支 | 未选分支计数为 0，选中分支为 1 |
 | EVAL06 | 成员、下标、调用的后缀链 | base、index、argument、invoke 的观察顺序与各自次数正确；callee 固定复用已有直接证据 |
-| FUNC01 | 省略返回类型的顶层函数，多条返回路径类型一致 | 调用方取得推导后的正确值 |
-| FUNC02 | 省略返回类型的实例方法及跨包公开函数 | 实例方法调用与 `fcts_lib -> fcts_bin` 调用均取得正确推导结果 |
-| FUNC03 | 仅含无值 `return;` 的函数推导为 `void` | 可正常调用且副作用发生一次 |
-| FUNC04 | 块 Lambda 的 `return` 只属于 Lambda | 外层函数与 Lambda 分别返回预期值 |
+| FUNC01-A～D | 顶层函数：无 `return`、仅 `return;`、多个一致、多个冲突 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC02-A～D | 普通实例方法：同一四形态矩阵 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC03-A～D | 普通静态方法：同一四形态矩阵 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC04-A～D | `fit` 实例方法：同一四形态矩阵 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC05-A～D | `fit` 静态方法：同一四形态矩阵 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC06-A～D | 块 Lambda：同一四形态矩阵 | A～C 运行结果正确；D 编译拒绝 |
+| FUNC07 | 跨包公开函数使用多个一致返回 | `fcts_lib -> fcts_bin` 恢复推导签名并执行两条路径 |
+| FUNC08 | 块 Lambda 返回上下文与外层函数推导隔离 | Lambda 与外层函数分别返回预期类型和值 |
 
 #### 文件建议
 
 - 新增 `fcts/fcts_bin/src/test_evaluation_order.ff`；
 - 新增 `fcts/fcts_bin/src/test_function_inference.ff`；
-- 需要跨模块公开函数时，在 `fcts_lib` 新增最小 provider 文件；
+- 在 `fcts_lib` 新增 FUNC07 所需的最小 provider 文件；
+- 在 `test/semantic/test_semantic.c` 新增五个冲突 case；FUNC01-D 复用既有用例，不修改其内容与断言；
 - 仅在 `fcts/fcts_bin/src/main.ff` 登记两个新入口，不改已有入口或断言。
 
 #### 不重复项
@@ -137,6 +142,7 @@ D1A、D1B 的用例实施细节、Todo、问题和交付记录仅在各自实施
 - callable 返回值立即调用、callee 先于参数固定，已有
   `test_callable_result_immediate_invocation.ff`，本步只补普通表达式与多参数顺序；
 - 泛型控制流与 descriptor-sized 值已有组合 hardening，不再重复泛型排列；
+- 单个有值 `return` 已有基础证据，不作为交叉列；多个一致返回覆盖同一有值推导并额外验证类型统一；
 - 数值字面量适配已有 Semantic/Codegen 矩阵，本步不复制相同位置矩阵。
 
 ### Step 2：模块绑定与导入行为 FCTS
