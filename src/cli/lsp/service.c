@@ -112,7 +112,26 @@ typedef struct FengLspAnalysisTask {
     size_t document_count;
     size_t primary_index;
     size_t generation;
+    char *manifest_path;
+    bool diagnostics_requested;
 } FengLspAnalysisTask;
+
+typedef enum FengLspPendingAnalysisTargetKind {
+    FENG_LSP_PENDING_DOCUMENT = 0,
+    FENG_LSP_PENDING_PROJECT
+} FengLspPendingAnalysisTargetKind;
+
+/* One coalesced background-analysis target. URI and manifest_path are
+ * mutually exclusive according to target_kind. */
+typedef struct FengLspPendingAnalysis {
+    FengLspPendingAnalysisTargetKind target_kind;
+    char *uri;
+    char *manifest_path;
+    size_t generation;
+    bool diagnostics_requested;
+    bool refresh_workspace_index;
+    struct timespec due_time;
+} FengLspPendingAnalysis;
 
 /* Parsed source module retained by the published workspace index. */
 typedef struct FengLspIndexedModule {
@@ -170,6 +189,13 @@ typedef struct FengLspAnalysisSession {
     char **owned_source_paths;
     size_t owned_source_path_count;
     char *manifest_path;
+    time_t manifest_modified_time;
+    long manifest_modified_nanoseconds;
+    long long manifest_size;
+    bool has_manifest_fingerprint;
+    /* Canonical output bundle path for this project, used only to correlate
+     * imported symbols with another retained workspace source session. */
+    char *package_path;
     bool is_project;
     int exit_code;
     /* Keeps the imported-module cache alive for the entire session lifetime so
@@ -181,6 +207,13 @@ typedef struct FengLspAnalysisSession {
      * not require a complete semantic analysis. */
     const FengLspModuleIndex *source_module_index;
 } FengLspAnalysisSession;
+
+/* One project's latest successful semantic analysis retained for the LSP
+ * service lifetime. Rebuild candidates replace only the matching identity. */
+typedef struct FengLspWorkspaceAnalysis {
+    FengLspAnalysisSession last_successful_analysis;
+    size_t last_successful_generation;
+} FengLspWorkspaceAnalysis;
 
 static bool publish_diagnostics(FILE *output,
                                 const FengLspDiagnosticCollector *collector,
@@ -348,14 +381,20 @@ struct FengLspService {
     int exit_code;
     FengLspMarkupKind hover_markup_kind;
     FILE *errors; /* diagnostics log; set at the start of each handle_payload call */
-    /* The only long-lived semantic cache. A candidate replaces it only after
-     * a complete successful analysis; edits and failed analyses never clear it. */
-    FengLspAnalysisSession last_successful_analysis;
-    size_t last_successful_generation;
+    /* Latest successful semantic cache per canonical manifest/standalone
+     * source. Candidates never clear an existing entry before successful
+     * publication. */
+    FengLspWorkspaceAnalysis *last_successful_analyses;
+    size_t last_successful_analysis_count;
+    size_t last_successful_analysis_capacity;
     FengSymbolProvider *symbol_index;
     size_t symbol_index_generation;
+    char *symbol_index_manifest_path;
+    char *symbol_index_primary_path;
     FengLspModuleIndex module_index;
     size_t module_index_generation;
+    char *module_index_manifest_path;
+    char *module_index_primary_path;
     pthread_t analyzer_thread;
     pthread_t request_thread;
     pthread_mutex_t documents_mutex;
@@ -367,16 +406,45 @@ struct FengLspService {
     bool analysis_thread_started;
     bool request_thread_started;
     bool analysis_stop_requested;
-    bool analysis_task_pending;
-    bool workspace_index_refresh_requested;
+    FengLspPendingAnalysis *pending_analyses;
+    size_t pending_analysis_count;
+    size_t pending_analysis_capacity;
+    FengLspPendingAnalysisTargetKind running_analysis_target_kind;
+    char *running_analysis_identity;
+    size_t running_analysis_generation;
+    bool running_analysis_diagnostics_requested;
+    bool running_analysis_refresh_workspace_index;
     size_t latest_scheduled_generation;
-    size_t diagnostics_requested_generation;
-    struct timespec analysis_due_time;
-    char *pending_analysis_uri;
     FengLspRequestScheduler request_scheduler;
     FengLspTrace trace;
     bool exit_received;
 };
+
+/* Workspace-analysis helpers require the complete service definition but are
+ * implemented beside source lookup to keep path matching in one place. */
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_by_source_path(
+    const FengLspService *service,
+    const char *path);
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_for_document(
+    const FengLspService *service,
+    const FengLspDocument *document);
+static FengLspWorkspaceAnalysis *find_workspace_analysis_by_session_identity(
+    FengLspService *service,
+    const FengLspAnalysisSession *session);
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_by_identity(
+    const FengLspService *service,
+    const char *identity);
+static bool workspace_has_successful_analysis(const FengLspService *service);
+static const char *analysis_session_identity(
+    const FengLspAnalysisSession *session);
+static const FengCliLoadedSource *find_source(const FengLspAnalysisSession *session,
+                                              const char *path);
+static bool analysis_matches_open_documents(
+    const FengLspService *service,
+    const FengLspAnalysisSession *session);
+static void schedule_project_analysis(FengLspService *service,
+                                      const char *manifest_path,
+                                      size_t generation);
 
 static bool append_raw(void **items,
                        size_t *count,
@@ -1852,7 +1920,9 @@ static bool upsert_document(FengLspService *service,
 
 /* Mark live documents that exactly match a newly published successful task. */
 static void mark_successful_document_prefixes(FengLspService *service,
-                                              const FengLspAnalysisTask *task) {
+                                              const FengLspAnalysisTask *task,
+                                              size_t workspace_index) {
+    const FengLspWorkspaceAnalysis *workspace;
     size_t document_index;
 
     if (service == NULL || task == NULL) {
@@ -1860,16 +1930,23 @@ static void mark_successful_document_prefixes(FengLspService *service,
     }
     pthread_mutex_lock(&service->documents_mutex);
     pthread_mutex_lock(&service->analysis_mutex);
-    if (service->last_successful_generation != task->generation) {
+    if (workspace_index >= service->last_successful_analysis_count ||
+        service->last_successful_analyses[workspace_index].last_successful_generation !=
+            task->generation) {
         pthread_mutex_unlock(&service->analysis_mutex);
         pthread_mutex_unlock(&service->documents_mutex);
         return;
     }
+    workspace = &service->last_successful_analyses[workspace_index];
     for (document_index = 0U;
          document_index < service->document_count;
          ++document_index) {
         FengLspDocument *document = &service->documents[document_index];
         size_t snapshot_index;
+
+        if (find_source(&workspace->last_successful_analysis, document->path) == NULL) {
+            continue;
+        }
 
         for (snapshot_index = 0U; snapshot_index < task->document_count; ++snapshot_index) {
             const FengLspDocument *snapshot = &task->documents[snapshot_index];
@@ -2016,6 +2093,7 @@ static void session_dispose(FengLspAnalysisSession *session) {
         free(session->owned_source_paths);
     }
     free(session->manifest_path);
+    free(session->package_path);
     feng_symbol_imported_module_cache_free(session->imported_module_cache);
     memset(session, 0, sizeof(*session));
 }
@@ -2297,40 +2375,141 @@ static bool build_standalone_session(const FengLspService *service,
     return true;
 }
 
+/* Clones a matching successful session's dependency bundle list. Validation
+ * of bundle existence happens after releasing analysis_mutex so requests are
+ * never blocked on filesystem I/O. */
+static bool clone_reusable_bundle_paths(
+    FengLspService *live_service,
+    const char *manifest_path,
+    time_t manifest_modified_time,
+    long manifest_modified_nanoseconds,
+    long long manifest_size,
+    char ***out_paths,
+    size_t *out_count) {
+    const FengLspWorkspaceAnalysis *workspace;
+    const FengLspAnalysisSession *session;
+    char **paths = NULL;
+    size_t count = 0U;
+    size_t index;
+
+    *out_paths = NULL;
+    *out_count = 0U;
+    if (live_service == NULL || manifest_path == NULL) {
+        return false;
+    }
+    pthread_mutex_lock(&live_service->analysis_mutex);
+    workspace = find_workspace_analysis_by_identity(live_service,
+                                                     manifest_path);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+    if (session == NULL || !session->has_manifest_fingerprint ||
+        session->manifest_modified_time != manifest_modified_time ||
+        session->manifest_modified_nanoseconds !=
+            manifest_modified_nanoseconds ||
+        session->manifest_size != manifest_size) {
+        pthread_mutex_unlock(&live_service->analysis_mutex);
+        return false;
+    }
+    count = session->bundle_count;
+    if (count > 0U) {
+        paths = (char **)calloc(count, sizeof(paths[0]));
+        if (paths == NULL) {
+            pthread_mutex_unlock(&live_service->analysis_mutex);
+            return false;
+        }
+        for (index = 0U; index < count; ++index) {
+            paths[index] = dup_cstr(session->bundle_paths[index]);
+            if (paths[index] == NULL) {
+                pthread_mutex_unlock(&live_service->analysis_mutex);
+                feng_cli_frontend_bundle_paths_dispose(paths, count);
+                return false;
+            }
+        }
+    }
+    pthread_mutex_unlock(&live_service->analysis_mutex);
+    for (index = 0U; index < count; ++index) {
+        if (!file_exists(paths[index])) {
+            feng_cli_frontend_bundle_paths_dispose(paths, count);
+            return false;
+        }
+    }
+    *out_paths = paths;
+    *out_count = count;
+    return true;
+}
+
+/* Returns the POSIX nanosecond component of a manifest mtime. */
+static long manifest_modified_nanoseconds(const struct stat *status) {
+#if defined(__APPLE__)
+    return status->st_mtimespec.tv_nsec;
+#else
+    return status->st_mtim.tv_nsec;
+#endif
+}
+
 static bool build_project_session(const FengLspService *service,
+                                  FengLspService *live_service,
                                   const FengLspDocument *document,
                                   const char *manifest_path,
                                   FengLspAnalysisSession *session) {
+    FengLspDocument manifest_document = {0};
+    const FengLspDocument *diagnostic_document = document;
     FengCliProjectContext context = {0};
     FengCliProjectError error = {0};
     FengCliDepsResolved resolved = {0};
+    char **reused_bundle_paths = NULL;
+    size_t reused_bundle_count = 0U;
     FengCliFrontendSourceOverlay *overlays = NULL;
     size_t overlay_count = 0U;
     FengCliFrontendInput input = {0};
     FengCliFrontendCallbacks callbacks = {0};
     FengCliFrontendOutputs outputs = {0};
+    struct stat manifest_status;
+    bool reused_bundles = false;
 
+    if (diagnostic_document == NULL) {
+        manifest_document.path = (char *)manifest_path;
+        diagnostic_document = &manifest_document;
+    }
     if (!feng_cli_project_open(manifest_path, &context, &error)) {
         (void)append_project_error(session,
-                                   document,
+                                   diagnostic_document,
                                    error.message != NULL ? error.message : "project open failed",
                                    error.line > 0U ? error.line : 1U);
         feng_cli_project_error_dispose(&error);
         return true;
     }
-    if (!source_path_list_contains(context.source_paths, context.source_count, document->path)) {
+    if (stat(manifest_path, &manifest_status) == 0) {
+        session->manifest_modified_time = manifest_status.st_mtime;
+        session->manifest_modified_nanoseconds =
+            manifest_modified_nanoseconds(&manifest_status);
+        session->manifest_size = (long long)manifest_status.st_size;
+        session->has_manifest_fingerprint = true;
+        reused_bundles = clone_reusable_bundle_paths(
+            live_service,
+            manifest_path,
+            session->manifest_modified_time,
+            session->manifest_modified_nanoseconds,
+            session->manifest_size,
+            &reused_bundle_paths,
+            &reused_bundle_count);
+    }
+    if (document != NULL &&
+        !source_path_list_contains(context.source_paths, context.source_count, document->path)) {
+        feng_cli_frontend_bundle_paths_dispose(reused_bundle_paths,
+                                               reused_bundle_count);
         feng_cli_project_context_dispose(&context);
         feng_cli_project_error_dispose(&error);
         return build_standalone_session(service, document, session);
     }
-    if (!feng_cli_deps_resolve_for_manifest("feng",
+    if (!reused_bundles &&
+        !feng_cli_deps_resolve_for_manifest("feng",
                                             context.manifest_path,
                                             false,
                                             false,
                                             &resolved,
                                             &error)) {
         (void)append_project_error(session,
-                                   document,
+                                   diagnostic_document,
                                    error.message != NULL ? error.message : "dependency resolve failed",
                                    error.line > 0U ? error.line : 1U);
         feng_cli_deps_resolved_dispose(&resolved);
@@ -2339,6 +2518,8 @@ static bool build_project_session(const FengLspService *service,
         return true;
     }
     if (!build_overlays(service, manifest_path, document, &overlays, &overlay_count)) {
+        feng_cli_frontend_bundle_paths_dispose(reused_bundle_paths,
+                                               reused_bundle_count);
         feng_cli_deps_resolved_dispose(&resolved);
         feng_cli_project_context_dispose(&context);
         feng_cli_project_error_dispose(&error);
@@ -2348,8 +2529,12 @@ static bool build_project_session(const FengLspService *service,
     input.path_count = (int)context.source_count;
     input.paths = context.source_paths;
     input.target = context.manifest.target;
-    input.package_path_count = (int)resolved.package_count;
-    input.package_paths = (const char **)resolved.package_paths;
+    input.package_path_count = (int)(reused_bundles
+        ? reused_bundle_count
+        : resolved.package_count);
+    input.package_paths = (const char **)(reused_bundles
+        ? reused_bundle_paths
+        : resolved.package_paths);
 
     callbacks.on_parse_error = on_parse_error_collect;
     callbacks.on_semantic_error = on_semantic_error_collect;
@@ -2364,13 +2549,28 @@ static bool build_project_session(const FengLspService *service,
     outputs.out_imported_module_cache = &session->imported_module_cache;
 
     session->manifest_path = dup_cstr(manifest_path);
+    session->package_path = realpath(context.package_path, NULL);
+    if (session->package_path == NULL) {
+        session->package_path = dup_cstr(context.package_path);
+    }
     session->is_project = true;
+    if (session->manifest_path == NULL || session->package_path == NULL) {
+        free(overlays);
+        feng_cli_frontend_bundle_paths_dispose(reused_bundle_paths,
+                                               reused_bundle_count);
+        feng_cli_deps_resolved_dispose(&resolved);
+        feng_cli_project_context_dispose(&context);
+        feng_cli_project_error_dispose(&error);
+        return false;
+    }
     session->exit_code = feng_cli_frontend_run_with_overlays(&input,
                                                              overlays,
                                                              overlay_count,
                                                              &callbacks,
                                                              &outputs);
     free(overlays);
+    feng_cli_frontend_bundle_paths_dispose(reused_bundle_paths,
+                                           reused_bundle_count);
     feng_cli_deps_resolved_dispose(&resolved);
     /* Transfer project paths to the session before disposing the context. */
     session->owned_source_paths = context.source_paths;
@@ -2389,6 +2589,7 @@ static bool build_project_session(const FengLspService *service,
 }
 
 static bool build_analysis_session(const FengLspService *service,
+                                   FengLspService *live_service,
                                    const FengLspDocument *document,
                                    FengLspAnalysisSession *session) {
     char *manifest_path = NULL;
@@ -2397,7 +2598,11 @@ static bool build_analysis_session(const FengLspService *service,
     memset(session, 0, sizeof(*session));
     if (document->is_file && file_exists(document->path) &&
         feng_cli_project_find_manifest_in_ancestors(document->path, &manifest_path, &error)) {
-        bool ok = build_project_session(service, document, manifest_path, session);
+        bool ok = build_project_session(service,
+                                        live_service,
+                                        document,
+                                        manifest_path,
+                                        session);
 
         free(manifest_path);
         feng_cli_project_error_dispose(&error);
@@ -2406,6 +2611,24 @@ static bool build_analysis_session(const FengLspService *service,
     free(manifest_path);
     feng_cli_project_error_dispose(&error);
     return build_standalone_session(service, document, session);
+}
+
+/* Builds one project session directly from a canonical manifest for local
+ * dependency prewarming. Open-document overlays are read from `service`; no
+ * synthetic document is inserted into the live document store. */
+static bool build_project_analysis_session(const FengLspService *service,
+                                           FengLspService *live_service,
+                                           const char *manifest_path,
+                                           FengLspAnalysisSession *session) {
+    if (service == NULL || manifest_path == NULL || session == NULL) {
+        return false;
+    }
+    memset(session, 0, sizeof(*session));
+    return build_project_session(service,
+                                 live_service,
+                                 NULL,
+                                 manifest_path,
+                                 session);
 }
 
 static const FengProgram *find_program(const FengLspAnalysisSession *session,
@@ -2424,26 +2647,42 @@ static void analysis_task_dispose(FengLspAnalysisTask *task) {
         free(task->documents[index].text);
     }
     free(task->documents);
+    free(task->manifest_path);
     memset(task, 0, sizeof(*task));
 }
 
 /* Copies the current document set into an immutable candidate task. */
 static bool analysis_task_clone(const FengLspService *service,
                                 const FengLspDocument *primary,
+                                const char *manifest_path,
+                                size_t generation,
+                                bool diagnostics_requested,
                                 FengLspAnalysisTask *task) {
     size_t index;
 
     memset(task, 0, sizeof(*task));
-    if (service == NULL || primary == NULL || service->document_count == 0U) {
+    if (service == NULL || (primary == NULL && manifest_path == NULL)) {
         return false;
+    }
+    task->primary_index = service->document_count;
+    task->document_count = service->document_count;
+    task->generation = generation;
+    task->diagnostics_requested = diagnostics_requested;
+    if (manifest_path != NULL) {
+        task->manifest_path = dup_cstr(manifest_path);
+        if (task->manifest_path == NULL) {
+            return false;
+        }
+    }
+    if (service->document_count == 0U) {
+        return manifest_path != NULL;
     }
     task->documents = (FengLspDocument *)calloc(service->document_count,
                                                 sizeof(task->documents[0]));
     if (task->documents == NULL) {
+        analysis_task_dispose(task);
         return false;
     }
-    task->document_count = service->document_count;
-    task->generation = service->document_revision;
     for (index = 0U; index < service->document_count; ++index) {
         const FengLspDocument *source = &service->documents[index];
         FengLspDocument *copy = &task->documents[index];
@@ -2453,6 +2692,7 @@ static bool analysis_task_clone(const FengLspService *service,
         copy->text = dup_cstr(source->text);
         copy->is_file = source->is_file;
         copy->dirty = source->dirty;
+        copy->version = source->version;
         if (copy->uri == NULL || copy->path == NULL || copy->text == NULL) {
             analysis_task_dispose(task);
             return false;
@@ -2461,11 +2701,17 @@ static bool analysis_task_clone(const FengLspService *service,
             task->primary_index = index;
         }
     }
+    if (primary != NULL && task->primary_index >= task->document_count) {
+        analysis_task_dispose(task);
+        return false;
+    }
     return true;
 }
 
 /* Builds an immutable workspace/dependency symbol index outside request paths. */
-static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *document) {
+static FengSymbolProvider *build_symbol_index_candidate(
+    const FengLspDocument *document,
+    char **out_manifest_path) {
     FengSymbolProvider *provider = NULL;
     FengSymbolError symbol_error = {0};
     FengCliProjectError project_error = {0};
@@ -2477,11 +2723,17 @@ static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *d
     char *symbols_root = NULL;
     size_t index;
 
+    *out_manifest_path = NULL;
     if (document == NULL || !feng_symbol_provider_create(&provider, &symbol_error)) {
         feng_symbol_error_free(&symbol_error);
         return NULL;
     }
     if (!document->is_file || !file_exists(document->path)) {
+        *out_manifest_path = dup_cstr(document->path);
+        if (*out_manifest_path == NULL) {
+            feng_symbol_provider_free(provider);
+            provider = NULL;
+        }
         feng_cli_project_error_dispose(&project_error);
         free(manifest_path);
         return provider;
@@ -2489,6 +2741,13 @@ static FengSymbolProvider *build_symbol_index_candidate(const FengLspDocument *d
     if (!feng_cli_project_find_manifest_in_ancestors(document->path,
                                                      &manifest_path,
                                                      &project_error)) {
+        feng_symbol_provider_free(provider);
+        feng_cli_project_error_dispose(&project_error);
+        free(manifest_path);
+        return NULL;
+    }
+    *out_manifest_path = dup_cstr(manifest_path);
+    if (*out_manifest_path == NULL) {
         feng_symbol_provider_free(provider);
         feng_cli_project_error_dispose(&project_error);
         free(manifest_path);
@@ -2540,6 +2799,10 @@ cleanup:
     feng_cli_project_context_dispose(&project);
     feng_cli_project_error_dispose(&project_error);
     feng_symbol_error_free(&symbol_error);
+    if (provider == NULL) {
+        free(*out_manifest_path);
+        *out_manifest_path = NULL;
+    }
     return provider;
 }
 
@@ -2553,20 +2816,44 @@ typedef struct FengLspSymbolIndexJob {
 /* Builds the dependency symbol provider concurrently with source indexing. */
 static void *symbol_index_worker_main(void *user) {
     FengLspSymbolIndexJob *job = (FengLspSymbolIndexJob *)user;
-    FengSymbolProvider *candidate = build_symbol_index_candidate(job->document);
+    char *candidate_manifest_path = NULL;
+    char *candidate_primary_path = NULL;
+    char *previous_manifest_path = NULL;
+    char *previous_primary_path = NULL;
+    FengSymbolProvider *candidate = build_symbol_index_candidate(
+        job->document, &candidate_manifest_path);
     FengSymbolProvider *previous = NULL;
 
+    if (candidate != NULL) {
+        candidate_primary_path = dup_cstr(job->document->path);
+        if (candidate_primary_path == NULL) {
+            feng_symbol_provider_free(candidate);
+            candidate = NULL;
+        }
+    }
     if (candidate != NULL) {
         pthread_mutex_lock(&job->service->analysis_mutex);
         if (job->generation > job->service->symbol_index_generation) {
             previous = job->service->symbol_index;
+            previous_manifest_path =
+                job->service->symbol_index_manifest_path;
+            previous_primary_path = job->service->symbol_index_primary_path;
             job->service->symbol_index = candidate;
             candidate = NULL;
+            job->service->symbol_index_manifest_path =
+                candidate_manifest_path;
+            candidate_manifest_path = NULL;
+            job->service->symbol_index_primary_path = candidate_primary_path;
+            candidate_primary_path = NULL;
             job->service->symbol_index_generation = job->generation;
         }
         pthread_cond_broadcast(&job->service->analysis_condition);
         pthread_mutex_unlock(&job->service->analysis_mutex);
     }
+    free(previous_primary_path);
+    free(previous_manifest_path);
+    free(candidate_primary_path);
+    free(candidate_manifest_path);
     feng_symbol_provider_free(previous);
     feng_symbol_provider_free(candidate);
     return NULL;
@@ -2741,17 +3028,23 @@ cleanup:
 
 /* Builds workspace module paths in the background from current project files. */
 static bool build_module_index_candidate(const FengLspDocument *document,
-                                         FengLspModuleIndex *index) {
+                                         FengLspModuleIndex *index,
+                                         FengLspVisitedProjects *visited,
+                                         char **out_manifest_path) {
     char *manifest_path = NULL;
     FengCliProjectError project_error = {0};
-    FengLspVisitedProjects visited = {0};
     bool ok;
 
     memset(index, 0, sizeof(*index));
+    memset(visited, 0, sizeof(*visited));
+    *out_manifest_path = NULL;
     if (document == NULL || !document->is_file || !file_exists(document->path)) {
+        if (document != NULL) {
+            *out_manifest_path = dup_cstr(document->path);
+        }
         feng_cli_project_error_dispose(&project_error);
         free(manifest_path);
-        return true;
+        return document == NULL || *out_manifest_path != NULL;
     }
     if (!feng_cli_project_find_manifest_in_ancestors(document->path,
                                                      &manifest_path,
@@ -2760,12 +3053,19 @@ static bool build_module_index_candidate(const FengLspDocument *document,
         free(manifest_path);
         return false;
     }
-    ok = module_index_scan_project(manifest_path, index, &visited);
+    *out_manifest_path = dup_cstr(manifest_path);
+    if (*out_manifest_path == NULL) {
+        feng_cli_project_error_dispose(&project_error);
+        free(manifest_path);
+        return false;
+    }
+    ok = module_index_scan_project(manifest_path, index, visited);
     free(manifest_path);
     feng_cli_project_error_dispose(&project_error);
-    visited_projects_dispose(&visited);
     if (!ok) {
         module_index_dispose(index);
+        free(*out_manifest_path);
+        *out_manifest_path = NULL;
     }
     return ok;
 }
@@ -2782,18 +3082,65 @@ static void *module_index_worker_main(void *user) {
     FengLspModuleIndexJob *job = (FengLspModuleIndexJob *)user;
     FengLspModuleIndex candidate = {0};
     FengLspModuleIndex previous = {0};
+    FengLspVisitedProjects visited = {0};
+    char *candidate_manifest_path = NULL;
+    char *candidate_primary_path = NULL;
+    char *previous_manifest_path = NULL;
+    char *previous_primary_path = NULL;
+    bool built;
 
-    if (build_module_index_candidate(job->document, &candidate)) {
+    built = build_module_index_candidate(job->document,
+                                         &candidate,
+                                         &visited,
+                                         &candidate_manifest_path);
+    if (built) {
+        candidate_primary_path = dup_cstr(job->document->path);
+        built = candidate_primary_path != NULL;
+    }
+    if (built) {
         pthread_mutex_lock(&job->service->analysis_mutex);
         if (job->generation > job->service->module_index_generation) {
             previous = job->service->module_index;
+            previous_manifest_path =
+                job->service->module_index_manifest_path;
+            previous_primary_path = job->service->module_index_primary_path;
             job->service->module_index = candidate;
             memset(&candidate, 0, sizeof(candidate));
+            job->service->module_index_manifest_path =
+                candidate_manifest_path;
+            candidate_manifest_path = NULL;
+            job->service->module_index_primary_path = candidate_primary_path;
+            candidate_primary_path = NULL;
             job->service->module_index_generation = job->generation;
         }
         pthread_cond_broadcast(&job->service->analysis_condition);
         pthread_mutex_unlock(&job->service->analysis_mutex);
     }
+    if (built) {
+        size_t project_index;
+
+        /* Index zero is the root project; every later entry was reached
+         * through an explicit local-path dependency edge. */
+        for (project_index = 1U; project_index < visited.count; ++project_index) {
+            bool cached;
+
+            pthread_mutex_lock(&job->service->analysis_mutex);
+            cached = find_workspace_analysis_by_identity(
+                job->service,
+                visited.manifest_paths[project_index]) != NULL;
+            pthread_mutex_unlock(&job->service->analysis_mutex);
+            if (!cached) {
+                schedule_project_analysis(job->service,
+                                          visited.manifest_paths[project_index],
+                                          job->generation);
+            }
+        }
+    }
+    visited_projects_dispose(&visited);
+    free(previous_primary_path);
+    free(previous_manifest_path);
+    free(candidate_primary_path);
+    free(candidate_manifest_path);
     module_index_dispose(&previous);
     module_index_dispose(&candidate);
     return NULL;
@@ -2822,12 +3169,149 @@ static bool analysis_deadline_is_future(const struct timespec *deadline) {
            (now.tv_sec == deadline->tv_sec && now.tv_nsec < deadline->tv_nsec);
 }
 
+/* Releases one queued background target. */
+static void pending_analysis_dispose(FengLspPendingAnalysis *pending) {
+    if (pending == NULL) {
+        return;
+    }
+    free(pending->uri);
+    free(pending->manifest_path);
+    memset(pending, 0, sizeof(*pending));
+}
+
+/* Returns the identity string selected by one pending target kind. */
+static const char *pending_analysis_identity(const FengLspPendingAnalysis *pending) {
+    if (pending == NULL) {
+        return NULL;
+    }
+    return pending->target_kind == FENG_LSP_PENDING_PROJECT
+        ? pending->manifest_path
+        : pending->uri;
+}
+
+/* Compares absolute realtime deadlines. */
+static int analysis_deadline_compare(const struct timespec *lhs,
+                                     const struct timespec *rhs) {
+    if (lhs->tv_sec != rhs->tv_sec) {
+        return lhs->tv_sec < rhs->tv_sec ? -1 : 1;
+    }
+    if (lhs->tv_nsec != rhs->tv_nsec) {
+        return lhs->tv_nsec < rhs->tv_nsec ? -1 : 1;
+    }
+    return 0;
+}
+
+/* Finds the queued target whose debounce deadline expires first. The caller
+ * holds analysis_mutex. */
+static bool earliest_pending_analysis(const FengLspService *service,
+                                      size_t *out_index,
+                                      struct timespec *out_deadline) {
+    size_t best = 0U;
+    size_t index;
+
+    if (service == NULL || service->pending_analysis_count == 0U) {
+        return false;
+    }
+    for (index = 1U; index < service->pending_analysis_count; ++index) {
+        if (analysis_deadline_compare(&service->pending_analyses[index].due_time,
+                                      &service->pending_analyses[best].due_time) < 0) {
+            best = index;
+        }
+    }
+    *out_index = best;
+    *out_deadline = service->pending_analyses[best].due_time;
+    return true;
+}
+
+/* Removes and transfers ownership of one queued target. The caller holds
+ * analysis_mutex. */
+static FengLspPendingAnalysis take_pending_analysis(FengLspService *service,
+                                                    size_t index) {
+    FengLspPendingAnalysis pending = service->pending_analyses[index];
+
+    if (index + 1U < service->pending_analysis_count) {
+        memmove(&service->pending_analyses[index],
+                &service->pending_analyses[index + 1U],
+                (service->pending_analysis_count - index - 1U) *
+                    sizeof(service->pending_analyses[0]));
+    }
+    --service->pending_analysis_count;
+    return pending;
+}
+
+/* Removes older same-project tasks already covered by one immutable snapshot.
+ * Newer generations and stronger diagnostics/index requests remain queued. */
+static void coalesce_pending_for_built_session(
+    FengLspService *service,
+    const FengLspAnalysisTask *task,
+    const FengLspAnalysisSession *session,
+    bool refreshed_workspace_index) {
+    size_t index = 0U;
+
+    if (service == NULL || task == NULL || session == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&service->documents_mutex);
+    pthread_mutex_lock(&service->analysis_mutex);
+    while (index < service->pending_analysis_count) {
+        FengLspPendingAnalysis *pending =
+            &service->pending_analyses[index];
+        bool same_project = false;
+
+        if (pending->generation > task->generation ||
+            pending->diagnostics_requested ||
+            (pending->refresh_workspace_index &&
+             !refreshed_workspace_index)) {
+            ++index;
+            continue;
+        }
+        if (pending->target_kind == FENG_LSP_PENDING_PROJECT) {
+            same_project = session->manifest_path != NULL &&
+                           pending->manifest_path != NULL &&
+                           strcmp(session->manifest_path,
+                                  pending->manifest_path) == 0;
+        } else {
+            FengLspDocument *document = find_document(service, pending->uri);
+
+            same_project = document != NULL &&
+                           find_source(session, document->path) != NULL;
+        }
+        if (!same_project) {
+            ++index;
+            continue;
+        }
+        pending_analysis_dispose(pending);
+        if (index + 1U < service->pending_analysis_count) {
+            memmove(&service->pending_analyses[index],
+                    &service->pending_analyses[index + 1U],
+                    (service->pending_analysis_count - index - 1U) *
+                        sizeof(service->pending_analyses[0]));
+        }
+        --service->pending_analysis_count;
+    }
+    pthread_mutex_unlock(&service->analysis_mutex);
+    pthread_mutex_unlock(&service->documents_mutex);
+}
+
+/* Clears the identity of the candidate that just finished. */
+static void clear_running_analysis(FengLspService *service) {
+    pthread_mutex_lock(&service->analysis_mutex);
+    free(service->running_analysis_identity);
+    service->running_analysis_identity = NULL;
+    service->running_analysis_generation = 0U;
+    service->running_analysis_diagnostics_requested = false;
+    service->running_analysis_refresh_workspace_index = false;
+    pthread_cond_broadcast(&service->analysis_condition);
+    pthread_mutex_unlock(&service->analysis_mutex);
+}
+
 /* Runs full candidates serially and atomically publishes only successful ones. */
 static void *background_analyzer_main(void *user) {
     FengLspService *service = (FengLspService *)user;
 
     for (;;) {
         FengLspAnalysisTask task = {0};
+        FengLspPendingAnalysis pending = {0};
         FengLspAnalysisSession candidate = {0};
         FengLspAnalysisSession previous = {0};
         FengLspDiagnosticCollector analysis_diagnostics = {0};
@@ -2840,20 +3324,28 @@ static void *background_analyzer_main(void *user) {
         bool publish = false;
         bool refresh_workspace_index = false;
         bool task_ready = false;
+        size_t published_workspace_index = 0U;
 
         while (!task_ready) {
-            int wait_status = 0;
+            bool took_pending = false;
+            size_t pending_index = 0U;
+            struct timespec pending_deadline = {0};
 
             pthread_mutex_lock(&service->analysis_mutex);
-            while (!service->analysis_stop_requested && !service->analysis_task_pending) {
-                pthread_cond_wait(&service->analysis_condition, &service->analysis_mutex);
-            }
-            while (!service->analysis_stop_requested &&
-                   service->analysis_task_pending &&
-                   wait_status != ETIMEDOUT) {
-                wait_status = pthread_cond_timedwait(&service->analysis_condition,
-                                                     &service->analysis_mutex,
-                                                     &service->analysis_due_time);
+            while (!service->analysis_stop_requested) {
+                if (!earliest_pending_analysis(service,
+                                               &pending_index,
+                                               &pending_deadline)) {
+                    pthread_cond_wait(&service->analysis_condition,
+                                      &service->analysis_mutex);
+                    continue;
+                }
+                if (!analysis_deadline_is_future(&pending_deadline)) {
+                    break;
+                }
+                (void)pthread_cond_timedwait(&service->analysis_condition,
+                                             &service->analysis_mutex,
+                                             &pending_deadline);
             }
             if (service->analysis_stop_requested) {
                 pthread_mutex_unlock(&service->analysis_mutex);
@@ -2863,23 +3355,48 @@ static void *background_analyzer_main(void *user) {
 
             pthread_mutex_lock(&service->documents_mutex);
             pthread_mutex_lock(&service->analysis_mutex);
-            if (service->analysis_task_pending &&
-                !analysis_deadline_is_future(&service->analysis_due_time)) {
-                FengLspDocument *primary = find_document(service,
-                                                         service->pending_analysis_uri);
+            if (earliest_pending_analysis(service,
+                                          &pending_index,
+                                          &pending_deadline) &&
+                !analysis_deadline_is_future(&pending_deadline)) {
+                const char *identity;
+                FengLspDocument *primary = NULL;
 
-                task_ready = primary != NULL &&
-                             analysis_task_clone(service, primary, &task);
-                free(service->pending_analysis_uri);
-                service->pending_analysis_uri = NULL;
-                service->analysis_task_pending = false;
-                refresh_workspace_index = service->workspace_index_refresh_requested ||
+                pending = take_pending_analysis(service, pending_index);
+                took_pending = true;
+                identity = pending_analysis_identity(&pending);
+                if (pending.target_kind == FENG_LSP_PENDING_DOCUMENT) {
+                    primary = find_document(service, pending.uri);
+                }
+                free(service->running_analysis_identity);
+                service->running_analysis_identity =
+                    identity != NULL ? dup_cstr(identity) : NULL;
+                service->running_analysis_target_kind = pending.target_kind;
+                service->running_analysis_generation = pending.generation;
+                service->running_analysis_diagnostics_requested =
+                    pending.diagnostics_requested;
+                service->running_analysis_refresh_workspace_index =
+                    pending.refresh_workspace_index;
+                task_ready =
+                    (pending.target_kind == FENG_LSP_PENDING_PROJECT || primary != NULL) &&
+                    analysis_task_clone(service,
+                                        primary,
+                                        pending.manifest_path,
+                                        pending.generation,
+                                        pending.diagnostics_requested,
+                                        &task);
+                refresh_workspace_index = pending.refresh_workspace_index ||
                                           service->symbol_index == NULL ||
                                           service->module_index_generation == 0U;
-                service->workspace_index_refresh_requested = false;
             }
             pthread_mutex_unlock(&service->analysis_mutex);
             pthread_mutex_unlock(&service->documents_mutex);
+            if (took_pending) {
+                pending_analysis_dispose(&pending);
+                if (!task_ready) {
+                    clear_running_analysis(service);
+                }
+            }
         }
         if (service->analysis_stop_requested) {
             break;
@@ -2906,43 +3423,95 @@ static void *background_analyzer_main(void *user) {
         }
         /* Source-module parsing owns independent source snapshots and may run
          * concurrently with the semantic candidate. */
-        if (task.primary_index < task.document_count) {
+        if (task.manifest_path != NULL) {
+            analysis_built = build_project_analysis_session(&snapshot_service,
+                                                            service,
+                                                            task.manifest_path,
+                                                            &candidate);
+        } else if (task.primary_index < task.document_count) {
             analysis_built = build_analysis_session(&snapshot_service,
+                                                    service,
                                                     &task.documents[task.primary_index],
                                                     &candidate);
         }
         if (analysis_built) {
             analysis_diagnostics = candidate.diagnostics;
             memset(&candidate.diagnostics, 0, sizeof(candidate.diagnostics));
+            coalesce_pending_for_built_session(service,
+                                               &task,
+                                               &candidate,
+                                               refresh_workspace_index);
         }
         if (analysis_built && candidate.exit_code == 0 && candidate.analysis != NULL) {
+            FengLspWorkspaceAnalysis *workspace;
+
             pthread_mutex_lock(&service->analysis_mutex);
-            if (task.generation > service->last_successful_generation) {
-                previous = service->last_successful_analysis;
-                service->last_successful_analysis = candidate;
+            workspace = find_workspace_analysis_by_session_identity(service, &candidate);
+            if (workspace != NULL &&
+                task.generation > workspace->last_successful_generation) {
+                published_workspace_index = (size_t)(workspace -
+                    service->last_successful_analyses);
+                previous = workspace->last_successful_analysis;
+                workspace->last_successful_analysis = candidate;
+                workspace->last_successful_generation = task.generation;
                 memset(&candidate, 0, sizeof(candidate));
-                service->last_successful_generation = task.generation;
                 publish = true;
+            } else if (workspace == NULL) {
+                FengLspWorkspaceAnalysis added = {
+                    .last_successful_analysis = candidate,
+                    .last_successful_generation = task.generation
+                };
+
+                if (append_raw((void **)&service->last_successful_analyses,
+                               &service->last_successful_analysis_count,
+                               &service->last_successful_analysis_capacity,
+                               sizeof(added),
+                               &added)) {
+                    published_workspace_index =
+                        service->last_successful_analysis_count - 1U;
+                    memset(&candidate, 0, sizeof(candidate));
+                    publish = true;
+                }
             }
             pthread_cond_broadcast(&service->analysis_condition);
             pthread_mutex_unlock(&service->analysis_mutex);
         }
         if (publish) {
-            mark_successful_document_prefixes(service, &task);
+            mark_successful_document_prefixes(service,
+                                              &task,
+                                              published_workspace_index);
             session_dispose(&previous);
         }
         if (analysis_built) {
             bool diagnostics_are_current;
+            const FengLspAnalysisSession *diagnostic_session = &candidate;
 
             pthread_mutex_lock(&service->protocol_output_mutex);
+            pthread_mutex_lock(&service->documents_mutex);
             pthread_mutex_lock(&service->analysis_mutex);
-            diagnostics_are_current =
-                task.generation == service->latest_scheduled_generation &&
-                task.generation == service->diagnostics_requested_generation;
-            if (diagnostics_are_current) {
-                service->diagnostics_requested_generation = 0U;
+            if (publish &&
+                published_workspace_index <
+                    service->last_successful_analysis_count) {
+                diagnostic_session =
+                    &service->last_successful_analyses[
+                         published_workspace_index]
+                         .last_successful_analysis;
+            }
+            diagnostics_are_current = false;
+            if (task.diagnostics_requested &&
+                task.primary_index < task.document_count) {
+                const FengLspDocument *snapshot = &task.documents[task.primary_index];
+                FengLspDocument *live = find_document(service, snapshot->uri);
+
+                if (live != NULL && live->version == snapshot->version &&
+                    strcmp(live->text, snapshot->text) == 0 &&
+                    analysis_matches_open_documents(service,
+                                                    diagnostic_session)) {
+                    diagnostics_are_current = true;
+                }
             }
             pthread_mutex_unlock(&service->analysis_mutex);
+            pthread_mutex_unlock(&service->documents_mutex);
             if (diagnostics_are_current &&
                 diagnostics_has_analysis_result(&analysis_diagnostics) &&
                 service->protocol_output != NULL &&
@@ -2963,51 +3532,134 @@ static void *background_analyzer_main(void *user) {
 
         session_dispose(&candidate);
         analysis_task_dispose(&task);
+        clear_running_analysis(service);
     }
     return NULL;
 }
 
-/* Replaces any not-yet-started candidate with the newest document generation. */
+/* Sets one pending target's absolute debounce deadline. */
+static void pending_analysis_set_deadline(FengLspPendingAnalysis *pending,
+                                          bool debounce) {
+    if (pending == NULL || !debounce ||
+        clock_gettime(CLOCK_REALTIME, &pending->due_time) != 0) {
+        if (pending != NULL) {
+            pending->due_time.tv_sec = 0;
+            pending->due_time.tv_nsec = 0;
+        }
+        return;
+    }
+    pending->due_time.tv_nsec += 75L * 1000L * 1000L;
+    if (pending->due_time.tv_nsec >= 1000L * 1000L * 1000L) {
+        ++pending->due_time.tv_sec;
+        pending->due_time.tv_nsec -= 1000L * 1000L * 1000L;
+    }
+}
+
+/* Coalesces one document/project target into the background queue. */
+static void schedule_analysis_target(FengLspService *service,
+                                     FengLspPendingAnalysisTargetKind target_kind,
+                                     const char *identity,
+                                     size_t generation,
+                                     bool diagnostics_requested,
+                                     bool refresh_workspace_index,
+                                     bool debounce) {
+    FengLspPendingAnalysis added = {0};
+    size_t index;
+
+    if (service == NULL || identity == NULL || !service->analysis_thread_started) {
+        return;
+    }
+    pthread_mutex_lock(&service->analysis_mutex);
+    if (service->running_analysis_identity != NULL &&
+        service->running_analysis_target_kind == target_kind &&
+        strcmp(service->running_analysis_identity, identity) == 0 &&
+        service->running_analysis_generation >= generation &&
+        (!diagnostics_requested || service->running_analysis_diagnostics_requested) &&
+        (!refresh_workspace_index || service->running_analysis_refresh_workspace_index)) {
+        pthread_mutex_unlock(&service->analysis_mutex);
+        return;
+    }
+    for (index = 0U; index < service->pending_analysis_count; ++index) {
+        FengLspPendingAnalysis *pending = &service->pending_analyses[index];
+        const char *pending_identity = pending_analysis_identity(pending);
+
+        if (pending->target_kind != target_kind || pending_identity == NULL ||
+            strcmp(pending_identity, identity) != 0) {
+            continue;
+        }
+        if (generation > pending->generation) {
+            pending->generation = generation;
+        }
+        pending->diagnostics_requested =
+            pending->diagnostics_requested || diagnostics_requested;
+        pending->refresh_workspace_index =
+            pending->refresh_workspace_index || refresh_workspace_index;
+        pending_analysis_set_deadline(pending, debounce);
+        if (generation > service->latest_scheduled_generation) {
+            service->latest_scheduled_generation = generation;
+        }
+        pthread_cond_signal(&service->analysis_condition);
+        pthread_mutex_unlock(&service->analysis_mutex);
+        return;
+    }
+    added.target_kind = target_kind;
+    if (target_kind == FENG_LSP_PENDING_PROJECT) {
+        added.manifest_path = dup_cstr(identity);
+    } else {
+        added.uri = dup_cstr(identity);
+    }
+    added.generation = generation;
+    added.diagnostics_requested = diagnostics_requested;
+    added.refresh_workspace_index = refresh_workspace_index;
+    pending_analysis_set_deadline(&added, debounce);
+    if ((target_kind == FENG_LSP_PENDING_PROJECT && added.manifest_path == NULL) ||
+        (target_kind == FENG_LSP_PENDING_DOCUMENT && added.uri == NULL) ||
+        !append_raw((void **)&service->pending_analyses,
+                    &service->pending_analysis_count,
+                    &service->pending_analysis_capacity,
+                    sizeof(added),
+                    &added)) {
+        pending_analysis_dispose(&added);
+        pthread_mutex_unlock(&service->analysis_mutex);
+        return;
+    }
+    if (generation > service->latest_scheduled_generation) {
+        service->latest_scheduled_generation = generation;
+    }
+    pthread_cond_signal(&service->analysis_condition);
+    pthread_mutex_unlock(&service->analysis_mutex);
+}
+
+/* Queues the newest snapshot for one live document. */
 static void schedule_background_analysis(FengLspService *service,
                                          const FengLspDocument *primary,
                                          bool diagnostics_requested,
                                          bool refresh_workspace_index,
                                          bool debounce) {
-    char *candidate_uri;
-    char *previous_uri;
-    size_t generation;
+    if (service == NULL || primary == NULL) {
+        return;
+    }
+    schedule_analysis_target(service,
+                             FENG_LSP_PENDING_DOCUMENT,
+                             primary->uri,
+                             service->document_revision,
+                             diagnostics_requested,
+                             refresh_workspace_index,
+                             debounce);
+}
 
-    if (service == NULL || primary == NULL || !service->analysis_thread_started) {
-        return;
-    }
-    candidate_uri = dup_cstr(primary->uri);
-    if (candidate_uri == NULL) {
-        return;
-    }
-    generation = service->document_revision;
-    pthread_mutex_lock(&service->analysis_mutex);
-    previous_uri = service->pending_analysis_uri;
-    service->pending_analysis_uri = candidate_uri;
-    service->analysis_task_pending = true;
-    service->latest_scheduled_generation = generation;
-    if (clock_gettime(CLOCK_REALTIME, &service->analysis_due_time) == 0 && debounce) {
-        service->analysis_due_time.tv_nsec += 75L * 1000L * 1000L;
-        if (service->analysis_due_time.tv_nsec >= 1000L * 1000L * 1000L) {
-            ++service->analysis_due_time.tv_sec;
-            service->analysis_due_time.tv_nsec -= 1000L * 1000L * 1000L;
-        }
-    } else {
-        service->analysis_due_time.tv_sec = 0;
-        service->analysis_due_time.tv_nsec = 0;
-    }
-    service->workspace_index_refresh_requested =
-        service->workspace_index_refresh_requested || refresh_workspace_index;
-    if (diagnostics_requested) {
-        service->diagnostics_requested_generation = generation;
-    }
-    pthread_cond_signal(&service->analysis_condition);
-    pthread_mutex_unlock(&service->analysis_mutex);
-    free(previous_uri);
+/* Prewarms one canonical local-project manifest without creating a live
+ * editor document. */
+static void schedule_project_analysis(FengLspService *service,
+                                      const char *manifest_path,
+                                      size_t generation) {
+    schedule_analysis_target(service,
+                             FENG_LSP_PENDING_PROJECT,
+                             manifest_path,
+                             generation,
+                             false,
+                             false,
+                             false);
 }
 
 static void cache_query_context_dispose(FengLspCacheQueryContext *context) {
@@ -3023,6 +3675,98 @@ static void cache_query_context_dispose(FengLspCacheQueryContext *context) {
     memset(context, 0, sizeof(*context));
 }
 
+/* Validates one single-slot derived index against the request's project. The
+ * exact primary path keeps the existing cold/index-only fallback available
+ * before a semantic session can publish. */
+static bool workspace_index_identity_matches_path(
+    const FengLspService *service,
+    const char *path,
+    const char *index_manifest_path,
+    const char *index_primary_path) {
+    const FengLspWorkspaceAnalysis *workspace;
+    const char *expected_identity;
+
+    if (service == NULL || path == NULL || index_manifest_path == NULL) {
+        return false;
+    }
+    workspace = find_workspace_analysis_by_source_path(service, path);
+    if (workspace != NULL) {
+        expected_identity = analysis_session_identity(
+            &workspace->last_successful_analysis);
+        return expected_identity != NULL &&
+               strcmp(expected_identity, index_manifest_path) == 0;
+    }
+    return index_primary_path != NULL &&
+           strcmp(path, index_primary_path) == 0;
+}
+
+/* Returns whether the symbol fallback belongs to this request path. */
+static bool symbol_index_matches_path(const FengLspService *service,
+                                      const char *path) {
+    return service != NULL && service->symbol_index != NULL &&
+           workspace_index_identity_matches_path(
+               service,
+               path,
+               service->symbol_index_manifest_path,
+               service->symbol_index_primary_path);
+}
+
+/* Returns whether the source-module fallback belongs to this request path. */
+static bool module_index_matches_path(const FengLspService *service,
+                                      const char *path) {
+    return service != NULL && service->module_index_generation > 0U &&
+           workspace_index_identity_matches_path(
+               service,
+               path,
+               service->module_index_manifest_path,
+               service->module_index_primary_path);
+}
+
+/* Reports whether an edit can keep using both single-slot derived indexes.
+ * The caller holds analysis_mutex. */
+static bool workspace_indexes_match_path(const FengLspService *service,
+                                         const char *path) {
+    return symbol_index_matches_path(service, path) &&
+           module_index_matches_path(service, path);
+}
+
+/* Enqueues a stale/missing document analysis only after the current request
+ * has exhausted its in-memory result paths. Exact successful text never
+ * creates a task, and the queue coalesces an equal/newer target. */
+static void schedule_analysis_for_cache_miss(FengLspService *service,
+                                             FengLspDocument *document) {
+    const FengLspWorkspaceAnalysis *workspace;
+    const FengCliLoadedSource *source;
+    size_t document_length;
+    bool needs_analysis;
+    bool refresh_workspace_index;
+
+    if (service == NULL || document == NULL) {
+        return;
+    }
+    pthread_mutex_lock(&service->analysis_mutex);
+    workspace = find_workspace_analysis_for_document(service, document);
+    source = workspace != NULL
+        ? find_source(&workspace->last_successful_analysis, document->path)
+        : NULL;
+    document_length = strlen(document->text);
+    needs_analysis = source == NULL || source->source == NULL ||
+                     source->source_length != document_length ||
+                     memcmp(source->source,
+                            document->text,
+                            document_length) != 0;
+    refresh_workspace_index =
+        !workspace_indexes_match_path(service, document->path);
+    pthread_mutex_unlock(&service->analysis_mutex);
+    if (needs_analysis) {
+        schedule_background_analysis(service,
+                                     document,
+                                     false,
+                                     refresh_workspace_index,
+                                     false);
+    }
+}
+
 /* Builds a query context using only current memory state. The caller holds
  * analysis_mutex for the full lifetime of the returned borrowed provider. */
 static bool build_persistent_cache_query_context(FengLspService *service,
@@ -3033,7 +3777,7 @@ static bool build_persistent_cache_query_context(FengLspService *service,
 
     memset(context, 0, sizeof(*context));
     if (service == NULL || document == NULL || source_text == NULL ||
-        service->symbol_index == NULL ||
+        !symbol_index_matches_path(service, document->path) ||
         feng_symbol_provider_module_count(service->symbol_index) == 0U) {
         return false;
     }
@@ -3058,17 +3802,22 @@ static bool build_persistent_cache_query_context(FengLspService *service,
                                                                context->program->module_segments,
                                                                context->program->module_segment_count);
     context->source_text = source_text;
-    context->source_module_index = &service->module_index;
+    context->source_module_index = module_index_matches_path(service,
+                                                              document->path)
+        ? &service->module_index
+        : NULL;
     return true;
 }
 
 /* Gives the first cold in-memory query candidate one short frame-safe chance
  * to publish. Hot requests and current-text fast paths never enter this wait. */
-static void wait_for_initial_query_state(FengLspService *service) {
+static void wait_for_initial_query_state(FengLspService *service,
+                                         const char *path) {
     struct timespec deadline;
     int wait_status = 0;
 
-    if (service == NULL || clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
+    if (service == NULL || path == NULL ||
+        clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return;
     }
     deadline.tv_nsec += 16L * 1000L * 1000L;
@@ -3077,8 +3826,8 @@ static void wait_for_initial_query_state(FengLspService *service) {
         deadline.tv_nsec -= 1000L * 1000L * 1000L;
     }
     pthread_mutex_lock(&service->analysis_mutex);
-    while (service->symbol_index == NULL &&
-           service->last_successful_analysis.analysis == NULL &&
+    while (find_workspace_analysis_by_source_path(service, path) == NULL &&
+           !symbol_index_matches_path(service, path) &&
            service->latest_scheduled_generation > 0U &&
            wait_status != ETIMEDOUT) {
         wait_status = pthread_cond_timedwait(&service->analysis_condition,
@@ -3090,11 +3839,13 @@ static void wait_for_initial_query_state(FengLspService *service) {
 
 /* Gives the initial source-module candidate a bounded chance to publish for
  * an import-path Completion; every subsequent lookup is memory-only. */
-static void wait_for_initial_module_index(FengLspService *service) {
+static void wait_for_initial_module_index(FengLspService *service,
+                                          const char *path) {
     struct timespec deadline;
     int wait_status = 0;
 
-    if (service == NULL || clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
+    if (service == NULL || path == NULL ||
+        clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return;
     }
     deadline.tv_nsec += 8L * 1000L * 1000L;
@@ -3103,7 +3854,7 @@ static void wait_for_initial_module_index(FengLspService *service) {
         deadline.tv_nsec -= 1000L * 1000L * 1000L;
     }
     pthread_mutex_lock(&service->analysis_mutex);
-    while (service->module_index_generation == 0U &&
+    while (!module_index_matches_path(service, path) &&
            service->latest_scheduled_generation > 0U &&
            wait_status != ETIMEDOUT) {
         wait_status = pthread_cond_timedwait(&service->analysis_condition,
@@ -3115,11 +3866,13 @@ static void wait_for_initial_module_index(FengLspService *service) {
 
 /* Gives the initial dependency-symbol candidate a bounded publication window
  * when a source-module index could not answer an import query. */
-static void wait_for_initial_symbol_index(FengLspService *service) {
+static void wait_for_initial_symbol_index(FengLspService *service,
+                                          const char *path) {
     struct timespec deadline;
     int wait_status = 0;
 
-    if (service == NULL || clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
+    if (service == NULL || path == NULL ||
+        clock_gettime(CLOCK_REALTIME, &deadline) != 0) {
         return;
     }
     deadline.tv_nsec += 16L * 1000L * 1000L;
@@ -3128,7 +3881,7 @@ static void wait_for_initial_symbol_index(FengLspService *service) {
         deadline.tv_nsec -= 1000L * 1000L * 1000L;
     }
     pthread_mutex_lock(&service->analysis_mutex);
-    while ((service->symbol_index == NULL ||
+    while ((!symbol_index_matches_path(service, path) ||
             feng_symbol_provider_module_count(service->symbol_index) == 0U) &&
            service->latest_scheduled_generation > 0U &&
            wait_status != ETIMEDOUT) {
@@ -4240,6 +4993,124 @@ static const FengCliLoadedSource *find_source(const FengLspAnalysisSession *sess
         }
     }
     return source;
+}
+
+/* Returns the canonical identity owned by a successful project/standalone
+ * session. Project manifests and standalone source paths occupy one namespace
+ * only for equality comparisons; both are canonical physical paths. */
+static const char *analysis_session_identity(const FengLspAnalysisSession *session) {
+    if (session == NULL) {
+        return NULL;
+    }
+    if (session->manifest_path != NULL) {
+        return session->manifest_path;
+    }
+    return session->source_count > 0U && session->sources != NULL
+        ? session->sources[0].path
+        : NULL;
+}
+
+/* Finds a retained entry by canonical manifest/standalone identity. The
+ * caller holds analysis_mutex for the returned borrowed entry lifetime. */
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_by_identity(
+    const FengLspService *service,
+    const char *identity) {
+    size_t index;
+
+    if (service == NULL || identity == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < service->last_successful_analysis_count; ++index) {
+        const FengLspWorkspaceAnalysis *workspace =
+            &service->last_successful_analyses[index];
+        const char *candidate = analysis_session_identity(
+            &workspace->last_successful_analysis);
+
+        if (candidate != NULL && strcmp(candidate, identity) == 0) {
+            return workspace;
+        }
+    }
+    return NULL;
+}
+
+/* Finds the retained entry with the same canonical project/standalone
+ * identity as `session`. The caller holds analysis_mutex. */
+static FengLspWorkspaceAnalysis *find_workspace_analysis_by_session_identity(
+    FengLspService *service,
+    const FengLspAnalysisSession *session) {
+    const char *identity = analysis_session_identity(session);
+
+    if (service == NULL || identity == NULL) {
+        return NULL;
+    }
+    return (FengLspWorkspaceAnalysis *)find_workspace_analysis_by_identity(service,
+                                                                           identity);
+}
+
+/* Finds the newest retained session containing `path`. The caller holds
+ * analysis_mutex for the returned borrowed entry lifetime. */
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_by_source_path(
+    const FengLspService *service,
+    const char *path) {
+    const FengLspWorkspaceAnalysis *best = NULL;
+    size_t index;
+
+    if (service == NULL || path == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < service->last_successful_analysis_count; ++index) {
+        const FengLspWorkspaceAnalysis *workspace =
+            &service->last_successful_analyses[index];
+
+        if (find_source(&workspace->last_successful_analysis, path) != NULL &&
+            (best == NULL || workspace->last_successful_generation >
+                             best->last_successful_generation)) {
+            best = workspace;
+        }
+    }
+    return best;
+}
+
+/* Selects the newest retained session containing the document, preferring an
+ * exact current-text fingerprint over an older ownership match. The caller
+ * holds analysis_mutex for the returned borrowed entry lifetime. */
+static const FengLspWorkspaceAnalysis *find_workspace_analysis_for_document(
+    const FengLspService *service,
+    const FengLspDocument *document) {
+    const FengLspWorkspaceAnalysis *best_exact = NULL;
+    const FengLspWorkspaceAnalysis *best_path;
+    size_t document_length;
+    size_t index;
+
+    if (service == NULL || document == NULL || document->path == NULL ||
+        document->text == NULL) {
+        return NULL;
+    }
+    document_length = strlen(document->text);
+    best_path = find_workspace_analysis_by_source_path(service, document->path);
+    for (index = 0U; index < service->last_successful_analysis_count; ++index) {
+        const FengLspWorkspaceAnalysis *workspace = &service->last_successful_analyses[index];
+        const FengCliLoadedSource *source = find_source(
+            &workspace->last_successful_analysis,
+            document->path);
+
+        if (source == NULL) {
+            continue;
+        }
+        if (source->source != NULL && source->source_length == document_length &&
+            memcmp(source->source, document->text, document_length) == 0 &&
+            (best_exact == NULL || workspace->last_successful_generation >
+                                   best_exact->last_successful_generation)) {
+            best_exact = workspace;
+        }
+    }
+    return best_exact != NULL ? best_exact : best_path;
+}
+
+/* Reports whether any project/standalone session has published successfully.
+ * The caller holds analysis_mutex. */
+static bool workspace_has_successful_analysis(const FengLspService *service) {
+    return service != NULL && service->last_successful_analysis_count > 0U;
 }
 
 static const FengProgram *find_program(const FengLspAnalysisSession *session,
@@ -12860,6 +13731,1273 @@ static FengSlice member_name_slice(const FengTypeMember *member) {
         : member->as.callable.name;
 }
 
+/* Returns whether two source/synthetic programs declare the same module. */
+static bool stable_program_modules_equal(const FengProgram *lhs,
+                                         const FengProgram *rhs) {
+    size_t index;
+
+    if (lhs == NULL || rhs == NULL ||
+        lhs->module_segment_count != rhs->module_segment_count) {
+        return false;
+    }
+    for (index = 0U; index < lhs->module_segment_count; ++index) {
+        if (!slice_equals(lhs->module_segments[index],
+                          rhs->module_segments[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compares nominal declarations without borrowing their session-local AST
+ * address. Module, kind, name and generic arity form the nominal identity. */
+static bool stable_nominal_decls_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengDecl *lhs,
+    const FengLspAnalysisSession *rhs_session,
+    const FengDecl *rhs) {
+    const FengProgram *lhs_program = NULL;
+    const FengProgram *rhs_program = NULL;
+
+    if (lhs == NULL || rhs == NULL || lhs->kind != rhs->kind ||
+        !slice_equals(decl_name(lhs), decl_name(rhs)) ||
+        ast_decl_type_param_count(lhs) != ast_decl_type_param_count(rhs)) {
+        return false;
+    }
+    (void)find_decl_module(lhs_session, lhs, &lhs_program);
+    (void)find_decl_module(rhs_session, rhs, &rhs_program);
+    return stable_program_modules_equal(lhs_program, rhs_program);
+}
+
+/* Returns the canonical spelling of a builtin type name. */
+static const char *stable_builtin_name(FengSlice name) {
+    if (slice_equals_cstr(name, "void")) {
+        return "void";
+    }
+    return builtin_name_for_identifier(name);
+}
+
+/* Compares a builtin semantic fact to one explicit AST type reference. */
+static bool stable_builtin_matches_type_ref(FengSlice builtin,
+                                            const FengTypeRef *type_ref) {
+    const char *lhs = stable_builtin_name(builtin);
+    const char *rhs = builtin_name_for_single_segment_type_ref(type_ref);
+
+    return lhs != NULL && rhs != NULL && strcmp(lhs, rhs) == 0;
+}
+
+/* Compares complete type-reference structure after resolving aliases and
+ * short source names to nominal module identities in each semantic session. */
+static bool stable_type_refs_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengProgram *lhs_program,
+    const FengTypeRef *lhs,
+    const FengLspAnalysisSession *rhs_session,
+    const FengProgram *rhs_program,
+    const FengTypeRef *rhs) {
+    size_t index;
+
+    if (lhs == NULL || rhs == NULL || lhs->kind != rhs->kind) {
+        return lhs == rhs;
+    }
+    if (lhs->kind == FENG_TYPE_REF_POINTER) {
+        return stable_type_refs_equal(lhs_session,
+                                      lhs_program,
+                                      lhs->as.inner,
+                                      rhs_session,
+                                      rhs_program,
+                                      rhs->as.inner);
+    }
+    if (lhs->kind == FENG_TYPE_REF_ARRAY) {
+        return lhs->array_element_writable == rhs->array_element_writable &&
+               stable_type_refs_equal(lhs_session,
+                                      lhs_program,
+                                      lhs->as.inner,
+                                      rhs_session,
+                                      rhs_program,
+                                      rhs->as.inner);
+    }
+    if (lhs->as.named.type_arg_count != rhs->as.named.type_arg_count) {
+        return false;
+    }
+    for (index = 0U; index < lhs->as.named.type_arg_count; ++index) {
+        if (!stable_type_refs_equal(lhs_session,
+                                    lhs_program,
+                                    lhs->as.named.type_args[index],
+                                    rhs_session,
+                                    rhs_program,
+                                    rhs->as.named.type_args[index])) {
+            return false;
+        }
+    }
+    {
+        const char *lhs_builtin =
+            builtin_name_for_single_segment_type_ref(lhs);
+        const char *rhs_builtin =
+            builtin_name_for_single_segment_type_ref(rhs);
+        const FengDecl *lhs_decl;
+        const FengDecl *rhs_decl;
+
+        if (lhs_builtin != NULL || rhs_builtin != NULL) {
+            return lhs_builtin != NULL && rhs_builtin != NULL &&
+                   strcmp(lhs_builtin, rhs_builtin) == 0;
+        }
+        lhs_decl = resolve_named_type_ref(lhs_session, lhs_program, lhs);
+        rhs_decl = resolve_named_type_ref(rhs_session, rhs_program, rhs);
+        if (lhs_decl != NULL || rhs_decl != NULL) {
+            return lhs_decl != NULL && rhs_decl != NULL &&
+                   stable_nominal_decls_equal(lhs_session,
+                                              lhs_decl,
+                                              rhs_session,
+                                              rhs_decl);
+        }
+    }
+    if (lhs->as.named.segment_count != rhs->as.named.segment_count) {
+        return false;
+    }
+    for (index = 0U; index < lhs->as.named.segment_count; ++index) {
+        if (!slice_equals(lhs->as.named.segments[index],
+                          rhs->as.named.segments[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Reads an inferred/explicit callable or binding type in one session. */
+static const FengSemanticTypeFact *stable_effective_type_fact(
+    const FengLspAnalysisSession *session,
+    const void *site,
+    const FengTypeRef *explicit_type) {
+    if (explicit_type != NULL || session == NULL ||
+        session->analysis == NULL || site == NULL) {
+        return NULL;
+    }
+    return feng_semantic_lookup_type_fact(session->analysis, site);
+}
+
+/* Compares explicit and inferred types without depending on whether FT
+ * synthesis materialized an originally inferred annotation. */
+static bool stable_effective_types_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengProgram *lhs_program,
+    const void *lhs_site,
+    const FengTypeRef *lhs_explicit,
+    const FengLspAnalysisSession *rhs_session,
+    const FengProgram *rhs_program,
+    const void *rhs_site,
+    const FengTypeRef *rhs_explicit) {
+    const FengSemanticTypeFact *lhs_fact = stable_effective_type_fact(
+        lhs_session, lhs_site, lhs_explicit);
+    const FengSemanticTypeFact *rhs_fact = stable_effective_type_fact(
+        rhs_session, rhs_site, rhs_explicit);
+    FengSemanticTypeFactKind lhs_kind = lhs_explicit != NULL
+        ? FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+        : lhs_fact != NULL
+        ? lhs_fact->kind
+        : FENG_SEMANTIC_TYPE_FACT_UNKNOWN;
+    FengSemanticTypeFactKind rhs_kind = rhs_explicit != NULL
+        ? FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+        : rhs_fact != NULL
+        ? rhs_fact->kind
+        : FENG_SEMANTIC_TYPE_FACT_UNKNOWN;
+    const FengTypeRef *lhs_type = lhs_explicit != NULL
+        ? lhs_explicit
+        : lhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+        ? lhs_fact->type_ref
+        : NULL;
+    const FengTypeRef *rhs_type = rhs_explicit != NULL
+        ? rhs_explicit
+        : rhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF
+        ? rhs_fact->type_ref
+        : NULL;
+
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_UNKNOWN ||
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_UNKNOWN) {
+        return lhs_kind == rhs_kind;
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return stable_type_refs_equal(lhs_session,
+                                      lhs_program,
+                                      lhs_type,
+                                      rhs_session,
+                                      rhs_program,
+                                      rhs_type);
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN) {
+        const char *lhs_builtin = stable_builtin_name(lhs_fact->builtin_name);
+        const char *rhs_builtin = stable_builtin_name(rhs_fact->builtin_name);
+
+        return lhs_builtin != NULL && rhs_builtin != NULL &&
+               strcmp(lhs_builtin, rhs_builtin) == 0;
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return stable_builtin_matches_type_ref(lhs_fact->builtin_name,
+                                               rhs_type);
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN) {
+        return stable_builtin_matches_type_ref(rhs_fact->builtin_name,
+                                               lhs_type);
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_DECL &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+        return stable_nominal_decls_equal(lhs_session,
+                                          lhs_fact->type_decl,
+                                          rhs_session,
+                                          rhs_fact->type_decl);
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_DECL &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        const FengDecl *rhs_decl = resolve_named_type_ref(rhs_session,
+                                                          rhs_program,
+                                                          rhs_type);
+
+        return rhs_decl != NULL &&
+               stable_nominal_decls_equal(lhs_session,
+                                          lhs_fact->type_decl,
+                                          rhs_session,
+                                          rhs_decl);
+    }
+    if (lhs_kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF &&
+        rhs_kind == FENG_SEMANTIC_TYPE_FACT_DECL) {
+        const FengDecl *lhs_decl = resolve_named_type_ref(lhs_session,
+                                                          lhs_program,
+                                                          lhs_type);
+
+        return lhs_decl != NULL &&
+               stable_nominal_decls_equal(lhs_session,
+                                          lhs_decl,
+                                          rhs_session,
+                                          rhs_fact->type_decl);
+    }
+    return false;
+}
+
+/* Compares generic parameter names and their complete constraints. */
+static bool stable_type_params_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengProgram *lhs_program,
+    const FengTypeParam *lhs,
+    size_t lhs_count,
+    const FengLspAnalysisSession *rhs_session,
+    const FengProgram *rhs_program,
+    const FengTypeParam *rhs,
+    size_t rhs_count) {
+    size_t index;
+
+    if (lhs_count != rhs_count ||
+        (lhs_count > 0U && (lhs == NULL || rhs == NULL))) {
+        return false;
+    }
+    for (index = 0U; index < lhs_count; ++index) {
+        if (!slice_equals(lhs[index].name, rhs[index].name) ||
+            !stable_type_refs_equal(lhs_session,
+                                    lhs_program,
+                                    lhs[index].constraint,
+                                    rhs_session,
+                                    rhs_program,
+                                    rhs[index].constraint)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compares complete parameter lists and variadic shape. Parameter mutability
+ * is intentionally excluded because package FT synthesis normalizes the
+ * parser's implicit parameter default without changing callable identity. */
+static bool stable_parameters_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengProgram *lhs_program,
+    const FengParameter *lhs,
+    size_t lhs_count,
+    const FengLspAnalysisSession *rhs_session,
+    const FengProgram *rhs_program,
+    const FengParameter *rhs,
+    size_t rhs_count) {
+    size_t index;
+
+    if (lhs_count != rhs_count ||
+        (lhs_count > 0U && (lhs == NULL || rhs == NULL))) {
+        return false;
+    }
+    for (index = 0U; index < lhs_count; ++index) {
+        if (lhs[index].is_variadic != rhs[index].is_variadic ||
+            !slice_equals(lhs[index].name, rhs[index].name) ||
+            !stable_type_refs_equal(lhs_session,
+                                    lhs_program,
+                                    lhs[index].type,
+                                    rhs_session,
+                                    rhs_program,
+                                    rhs[index].type)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compares ordered type-reference lists used by fits and structural specs. */
+static bool stable_type_ref_lists_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengProgram *lhs_program,
+    FengTypeRef *const *lhs,
+    size_t lhs_count,
+    const FengLspAnalysisSession *rhs_session,
+    const FengProgram *rhs_program,
+    FengTypeRef *const *rhs,
+    size_t rhs_count) {
+    size_t index;
+
+    if (lhs_count != rhs_count ||
+        (lhs_count > 0U && (lhs == NULL || rhs == NULL))) {
+        return false;
+    }
+    for (index = 0U; index < lhs_count; ++index) {
+        if (!stable_type_refs_equal(lhs_session,
+                                    lhs_program,
+                                    lhs[index],
+                                    rhs_session,
+                                    rhs_program,
+                                    rhs[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compares complete declaration identities in their semantic sessions. */
+static bool stable_decl_shapes_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengDecl *lhs,
+    const FengLspAnalysisSession *rhs_session,
+    const FengDecl *rhs) {
+    const FengProgram *lhs_program = NULL;
+    const FengProgram *rhs_program = NULL;
+
+    if (lhs == NULL || rhs == NULL || lhs->kind != rhs->kind ||
+        (lhs->kind != FENG_DECL_FIT &&
+         !slice_equals(decl_name(lhs), decl_name(rhs)))) {
+        return false;
+    }
+    (void)find_decl_module(lhs_session, lhs, &lhs_program);
+    (void)find_decl_module(rhs_session, rhs, &rhs_program);
+    if (!stable_program_modules_equal(lhs_program, rhs_program)) {
+        return false;
+    }
+    switch (lhs->kind) {
+        case FENG_DECL_GLOBAL_BINDING:
+            return lhs->as.binding.mutability == rhs->as.binding.mutability &&
+                   stable_effective_types_equal(
+                       lhs_session,
+                       lhs_program,
+                       &lhs->as.binding,
+                       lhs->as.binding.type,
+                       rhs_session,
+                       rhs_program,
+                       &rhs->as.binding,
+                       rhs->as.binding.type);
+        case FENG_DECL_ENUM:
+            return true;
+        case FENG_DECL_TYPE:
+            return lhs->as.type_decl.is_tuple == rhs->as.type_decl.is_tuple &&
+                   lhs->as.type_decl.is_value == rhs->as.type_decl.is_value &&
+                   stable_type_params_equal(
+                       lhs_session,
+                       lhs_program,
+                       lhs->as.type_decl.type_params,
+                       lhs->as.type_decl.type_param_count,
+                       rhs_session,
+                       rhs_program,
+                       rhs->as.type_decl.type_params,
+                       rhs->as.type_decl.type_param_count);
+        case FENG_DECL_SPEC:
+            if (lhs->as.spec_decl.form != rhs->as.spec_decl.form ||
+                !stable_type_params_equal(
+                    lhs_session,
+                    lhs_program,
+                    lhs->as.spec_decl.type_params,
+                    lhs->as.spec_decl.type_param_count,
+                    rhs_session,
+                    rhs_program,
+                    rhs->as.spec_decl.type_params,
+                    rhs->as.spec_decl.type_param_count)) {
+                return false;
+            }
+            if (lhs->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+                return stable_parameters_equal(
+                           lhs_session,
+                           lhs_program,
+                           lhs->as.spec_decl.as.callable.params,
+                           lhs->as.spec_decl.as.callable.param_count,
+                           rhs_session,
+                           rhs_program,
+                           rhs->as.spec_decl.as.callable.params,
+                           rhs->as.spec_decl.as.callable.param_count) &&
+                       stable_effective_types_equal(
+                           lhs_session,
+                           lhs_program,
+                           &lhs->as.spec_decl.as.callable,
+                           lhs->as.spec_decl.as.callable.return_type,
+                           rhs_session,
+                           rhs_program,
+                           &rhs->as.spec_decl.as.callable,
+                           rhs->as.spec_decl.as.callable.return_type);
+            }
+            if (lhs->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+                return stable_type_ref_lists_equal(
+                    lhs_session,
+                    lhs_program,
+                    lhs->as.spec_decl.as.union_form.members,
+                    lhs->as.spec_decl.as.union_form.member_count,
+                    rhs_session,
+                    rhs_program,
+                    rhs->as.spec_decl.as.union_form.members,
+                    rhs->as.spec_decl.as.union_form.member_count);
+            }
+            if (lhs->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+                return stable_type_ref_lists_equal(
+                    lhs_session,
+                    lhs_program,
+                    lhs->as.spec_decl.as.intersection_form.members,
+                    lhs->as.spec_decl.as.intersection_form.member_count,
+                    rhs_session,
+                    rhs_program,
+                    rhs->as.spec_decl.as.intersection_form.members,
+                    rhs->as.spec_decl.as.intersection_form.member_count);
+            }
+            return true;
+        case FENG_DECL_FIT:
+            return stable_type_refs_equal(lhs_session,
+                                          lhs_program,
+                                          lhs->as.fit_decl.target,
+                                          rhs_session,
+                                          rhs_program,
+                                          rhs->as.fit_decl.target) &&
+                   stable_type_ref_lists_equal(
+                       lhs_session,
+                       lhs_program,
+                       lhs->as.fit_decl.specs,
+                       lhs->as.fit_decl.spec_count,
+                       rhs_session,
+                       rhs_program,
+                       rhs->as.fit_decl.specs,
+                       rhs->as.fit_decl.spec_count);
+        case FENG_DECL_FUNCTION:
+            return stable_type_params_equal(
+                       lhs_session,
+                       lhs_program,
+                       lhs->as.function_decl.type_params,
+                       lhs->as.function_decl.type_param_count,
+                       rhs_session,
+                       rhs_program,
+                       rhs->as.function_decl.type_params,
+                       rhs->as.function_decl.type_param_count) &&
+                   stable_parameters_equal(
+                       lhs_session,
+                       lhs_program,
+                       lhs->as.function_decl.params,
+                       lhs->as.function_decl.param_count,
+                       rhs_session,
+                       rhs_program,
+                       rhs->as.function_decl.params,
+                       rhs->as.function_decl.param_count) &&
+                   stable_effective_types_equal(
+                       lhs_session,
+                       lhs_program,
+                       &lhs->as.function_decl,
+                       lhs->as.function_decl.return_type,
+                       rhs_session,
+                       rhs_program,
+                       &rhs->as.function_decl,
+                       rhs->as.function_decl.return_type);
+    }
+    return false;
+}
+
+/* Compares complete member identities, including generic/callable shape. */
+static bool stable_member_shapes_equal(
+    const FengLspAnalysisSession *lhs_session,
+    const FengTypeMember *lhs,
+    const FengLspAnalysisSession *rhs_session,
+    const FengTypeMember *rhs) {
+    const FengDecl *lhs_owner = NULL;
+    const FengDecl *rhs_owner = NULL;
+    const FengProgram *lhs_program = NULL;
+    const FengProgram *rhs_program = NULL;
+    bool type_params_equal;
+    bool parameters_equal;
+    bool return_types_equal;
+
+    if (lhs == NULL || rhs == NULL || lhs->kind != rhs->kind ||
+        lhs->is_static != rhs->is_static ||
+        !slice_equals(member_name_slice(lhs), member_name_slice(rhs))) {
+        return false;
+    }
+    (void)find_member_module(lhs_session, lhs, &lhs_owner, &lhs_program);
+    (void)find_member_module(rhs_session, rhs, &rhs_owner, &rhs_program);
+    if (lhs_owner == NULL || rhs_owner == NULL ||
+        !stable_program_modules_equal(lhs_program, rhs_program)) {
+        return false;
+    }
+    if (lhs->kind == FENG_TYPE_MEMBER_FIELD) {
+        return lhs->as.field.mutability == rhs->as.field.mutability &&
+               stable_effective_types_equal(lhs_session,
+                                            lhs_program,
+                                            lhs,
+                                            lhs->as.field.type,
+                                            rhs_session,
+                                            rhs_program,
+                                            rhs,
+                                            rhs->as.field.type);
+    }
+    type_params_equal = stable_type_params_equal(
+        lhs_session,
+        lhs_program,
+        lhs->as.callable.type_params,
+        lhs->as.callable.type_param_count,
+        rhs_session,
+        rhs_program,
+        rhs->as.callable.type_params,
+        rhs->as.callable.type_param_count);
+    parameters_equal = stable_parameters_equal(
+        lhs_session,
+        lhs_program,
+        lhs->as.callable.params,
+        lhs->as.callable.param_count,
+        rhs_session,
+        rhs_program,
+        rhs->as.callable.params,
+        rhs->as.callable.param_count);
+    return_types_equal = stable_effective_types_equal(
+        lhs_session,
+        lhs_program,
+        &lhs->as.callable,
+        lhs->as.callable.return_type,
+        rhs_session,
+        rhs_program,
+        &rhs->as.callable,
+        rhs->as.callable.return_type);
+    return type_params_equal && parameters_equal && return_types_equal;
+}
+
+/* Result of adapting one session-local AST target to workspace source. */
+typedef enum FengLspStableTargetStatus {
+    FENG_LSP_STABLE_TARGET_EXTERNAL = 0,
+    FENG_LSP_STABLE_TARGET_LOCAL,
+    FENG_LSP_STABLE_TARGET_AMBIGUOUS
+} FengLspStableTargetStatus;
+
+/* Request-local, source-backed identity used only while analysis_mutex is
+ * held. Physical source location is stronger than a declaration name or
+ * signature, while package_path prevents equal module/source metadata from
+ * an unrelated package from being accepted. */
+typedef struct FengLspStableTarget {
+    FengLspResolvedKind kind;
+    size_t defining_workspace_index;
+    const char *source_path;
+    FengToken owner_token;
+    FengToken target_token;
+    FengDeclKind owner_kind;
+    FengTypeMemberKind member_kind;
+    FengSlice name;
+    const char *module_name;
+    uint32_t symbol_id;
+    const FengProgram *source_program;
+    const FengDecl *source_decl;
+    const FengTypeMember *source_member;
+    const FengEnumItem *source_enum_item;
+} FengLspStableTarget;
+
+/* Compares the serialized source coordinates that survive FT round-trips. */
+static bool stable_tokens_equal(FengToken lhs, FengToken rhs) {
+    return lhs.line == rhs.line && lhs.column == rhs.column &&
+           lhs.length == rhs.length;
+}
+
+/* Returns whether a dotted imported-module name is the exact source module. */
+static bool module_name_matches_program(const char *module_name,
+                                        const FengProgram *program) {
+    const char *cursor = module_name;
+    size_t segment_index;
+
+    if (module_name == NULL || program == NULL ||
+        program->module_segment_count == 0U) {
+        return false;
+    }
+    for (segment_index = 0U;
+         segment_index < program->module_segment_count;
+         ++segment_index) {
+        const FengSlice segment = program->module_segments[segment_index];
+        const char *end = cursor;
+
+        while (*end != '\0' && *end != '.') {
+            ++end;
+        }
+        if ((size_t)(end - cursor) != segment.length ||
+            memcmp(cursor, segment.data, segment.length) != 0) {
+            return false;
+        }
+        if (segment_index + 1U < program->module_segment_count) {
+            if (*end != '.') {
+                return false;
+            }
+            cursor = end + 1U;
+        } else {
+            return *end == '\0';
+        }
+    }
+    return false;
+}
+
+/* Finds one declaration in the exact module whose complete semantic shape
+ * matches the imported AST declaration. Multiple candidates are ambiguous. */
+static const FengDecl *find_source_decl_by_shape(
+    const FengLspAnalysisSession *source_session,
+    const char *module_name,
+    const FengLspAnalysisSession *imported_session,
+    const FengDecl *imported_decl,
+    const FengProgram **out_program) {
+    const FengDecl *match = NULL;
+    const FengProgram *match_program = NULL;
+    size_t source_index;
+
+    if (out_program != NULL) {
+        *out_program = NULL;
+    }
+    if (source_session == NULL || module_name == NULL ||
+        imported_session == NULL || imported_decl == NULL) {
+        return NULL;
+    }
+    for (source_index = 0U;
+         source_index < source_session->source_count;
+         ++source_index) {
+        const FengProgram *program =
+            source_session->sources[source_index].program;
+        size_t decl_index;
+
+        if (!module_name_matches_program(module_name, program)) {
+            continue;
+        }
+        for (decl_index = 0U;
+             decl_index < program->declaration_count;
+             ++decl_index) {
+            const FengDecl *candidate = program->declarations[decl_index];
+
+            if (!stable_decl_shapes_equal(source_session,
+                                          candidate,
+                                          imported_session,
+                                          imported_decl)) {
+                continue;
+            }
+            if (match != NULL) {
+                return NULL;
+            }
+            match = candidate;
+            match_program = program;
+        }
+    }
+    if (out_program != NULL) {
+        *out_program = match_program;
+    }
+    return match;
+}
+
+/* Finds one direct source member with the complete imported member shape.
+ * Mixin-generated wrappers are never treated as declaration identities. */
+static const FengTypeMember *find_source_member_by_shape(
+    const FengLspAnalysisSession *source_session,
+    const FengDecl *source_owner,
+    const FengLspAnalysisSession *imported_session,
+    const FengTypeMember *imported_member) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+    const FengTypeMember *match = NULL;
+    size_t index;
+
+    if (source_session == NULL || source_owner == NULL ||
+        imported_session == NULL || imported_member == NULL) {
+        return NULL;
+    }
+    if (source_owner->kind == FENG_DECL_TYPE) {
+        members = source_owner->as.type_decl.members;
+        member_count = source_owner->as.type_decl.member_count;
+    } else if (source_owner->kind == FENG_DECL_SPEC &&
+               source_owner->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        members = source_owner->as.spec_decl.as.object.members;
+        member_count = source_owner->as.spec_decl.as.object.member_count;
+    } else if (source_owner->kind == FENG_DECL_FIT) {
+        members = source_owner->as.fit_decl.members;
+        member_count = source_owner->as.fit_decl.member_count;
+    }
+    for (index = 0U; index < member_count; ++index) {
+        const FengTypeMember *candidate = members[index];
+
+        if (candidate == NULL || candidate->mixin_origin != NULL ||
+            !stable_member_shapes_equal(source_session,
+                                        candidate,
+                                        imported_session,
+                                        imported_member)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Finds one exact source member inside its already-identified owner. */
+static const FengTypeMember *find_source_member_by_stable_location(
+    const FengDecl *owner,
+    FengToken token,
+    FengTypeMemberKind kind,
+    FengSlice name) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+    const FengTypeMember *match = NULL;
+    size_t index;
+
+    if (owner == NULL) {
+        return NULL;
+    }
+    if (owner->kind == FENG_DECL_TYPE) {
+        members = owner->as.type_decl.members;
+        member_count = owner->as.type_decl.member_count;
+    } else if (owner->kind == FENG_DECL_SPEC &&
+               owner->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        members = owner->as.spec_decl.as.object.members;
+        member_count = owner->as.spec_decl.as.object.member_count;
+    } else if (owner->kind == FENG_DECL_FIT) {
+        members = owner->as.fit_decl.members;
+        member_count = owner->as.fit_decl.member_count;
+    }
+    for (index = 0U; index < member_count; ++index) {
+        const FengTypeMember *candidate = members[index];
+
+        if (candidate == NULL || candidate->kind != kind ||
+            candidate->mixin_origin != NULL ||
+            !stable_tokens_equal(candidate->token, token) ||
+            !slice_equals(member_name_slice(candidate), name)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Imported bundle entries use `<bundle>.fb!<entry>` as their synthetic
+ * program path. Match only the exact bundle root and separator, never a path
+ * prefix that could belong to another package. */
+static bool imported_program_belongs_to_package(const char *program_path,
+                                                const char *package_path) {
+    size_t package_length;
+
+    if (program_path == NULL || package_path == NULL) {
+        return false;
+    }
+    if (strcmp(program_path, package_path) == 0) {
+        return true;
+    }
+    package_length = strlen(package_path);
+    return strncmp(program_path, package_path, package_length) == 0 &&
+           program_path[package_length] == '!';
+}
+
+/* Finds the single retained project that owns an imported bundle and source. */
+static const FengLspWorkspaceAnalysis *find_defining_workspace(
+    const FengLspService *service,
+    const char *imported_program_path,
+    const char *source_path,
+    size_t *out_index) {
+    const FengLspWorkspaceAnalysis *match = NULL;
+    size_t index;
+
+    if (service == NULL || imported_program_path == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < service->last_successful_analysis_count;
+         ++index) {
+        const FengLspWorkspaceAnalysis *candidate =
+            &service->last_successful_analyses[index];
+        const FengLspAnalysisSession *session =
+            &candidate->last_successful_analysis;
+
+        if (session->package_path == NULL ||
+            !imported_program_belongs_to_package(imported_program_path,
+                                                 session->package_path) ||
+            (source_path != NULL &&
+             find_source(session, source_path) == NULL)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+        if (out_index != NULL) {
+            *out_index = index;
+        }
+    }
+    return match;
+}
+
+/* Returns the imported FT identity that represents a resolved target. */
+static const FengImportedSymbolIdentity *imported_identity_for_target(
+    const FengLspAnalysisSession *session,
+    const FengLspResolvedTarget *target,
+    const FengDecl **out_owner,
+    const FengProgram **out_program) {
+    const FengTypeMember *member;
+
+    *out_owner = NULL;
+    *out_program = NULL;
+    if (session == NULL || session->analysis == NULL || target == NULL) {
+        return NULL;
+    }
+    switch (target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            *out_owner = target->decl;
+            (void)find_decl_module(session, target->decl, out_program);
+            return feng_semantic_lookup_imported_symbol_identity(
+                session->analysis, target->decl);
+        case FENG_LSP_RESOLVED_MEMBER:
+            member = mixin_definition_source_member(target->member);
+            (void)find_member_module(session, member, out_owner, out_program);
+            return feng_semantic_lookup_imported_symbol_identity(
+                session->analysis, member);
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            *out_owner = target->decl;
+            (void)find_decl_module(session, target->decl, out_program);
+            return feng_semantic_lookup_imported_symbol_identity(
+                session->analysis, target->decl);
+        default:
+            return NULL;
+    }
+}
+
+/* Converts a writable source target to its immutable workspace identity. */
+static bool build_source_stable_target(
+    const FengLspService *service,
+    size_t workspace_index,
+    const FengLspResolvedTarget *target,
+    FengLspStableTarget *stable) {
+    const FengLspAnalysisSession *session;
+    const FengDecl *owner = NULL;
+    const FengProgram *program = NULL;
+    const FengTypeMember *member = NULL;
+
+    if (service == NULL || target == NULL || stable == NULL ||
+        workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    session = &service->last_successful_analyses[workspace_index]
+                   .last_successful_analysis;
+    memset(stable, 0, sizeof(*stable));
+    stable->kind = target->kind;
+    stable->defining_workspace_index = workspace_index;
+    switch (target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            owner = target->decl;
+            (void)find_decl_module(session, owner, &program);
+            stable->target_token = owner != NULL ? owner->token : (FengToken){0};
+            stable->name = decl_name(owner);
+            break;
+        case FENG_LSP_RESOLVED_MEMBER:
+            member = mixin_definition_source_member(target->member);
+            (void)find_member_module(session, member, &owner, &program);
+            stable->target_token = member != NULL ? member->token : (FengToken){0};
+            stable->member_kind = member != NULL
+                ? member->kind
+                : FENG_TYPE_MEMBER_FIELD;
+            stable->name = member_name_slice(member);
+            break;
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            owner = target->decl;
+            (void)find_decl_module(session, owner, &program);
+            stable->target_token = target->enum_item != NULL
+                ? target->enum_item->token
+                : (FengToken){0};
+            stable->name = target->enum_item != NULL
+                ? target->enum_item->name
+                : (FengSlice){0};
+            break;
+        default:
+            return false;
+    }
+    if (owner == NULL || program == NULL ||
+        find_source(session, program->path) == NULL) {
+        return false;
+    }
+    stable->source_path = program->path;
+    stable->owner_token = owner->token;
+    stable->owner_kind = owner->kind;
+    stable->source_program = program;
+    stable->source_decl = owner;
+    stable->source_member = member;
+    stable->source_enum_item = target->enum_item;
+    return true;
+}
+
+/* Locates the source AST corresponding to one imported symbol identity. */
+static bool locate_imported_target_source(
+    const FengLspService *service,
+    const FengLspAnalysisSession *origin_session,
+    const FengLspResolvedTarget *origin_target,
+    FengLspStableTarget *stable) {
+    const FengImportedSymbolIdentity *identity;
+    const FengDecl *imported_owner = NULL;
+    const FengProgram *imported_program = NULL;
+    const FengLspWorkspaceAnalysis *defining_workspace;
+    const FengLspAnalysisSession *defining_session;
+    const FengDecl *source_owner;
+    const FengProgram *source_program = NULL;
+    FengLspResolvedTarget source_target = {0};
+    size_t defining_index = 0U;
+
+    identity = imported_identity_for_target(origin_session,
+                                            origin_target,
+                                            &imported_owner,
+                                            &imported_program);
+    if (identity == NULL || imported_owner == NULL || imported_program == NULL) {
+        return false;
+    }
+    defining_workspace = find_defining_workspace(service,
+                                                  imported_program->path,
+                                                  NULL,
+                                                  &defining_index);
+    if (defining_workspace == NULL) {
+        return false;
+    }
+    defining_session = &defining_workspace->last_successful_analysis;
+    source_owner = find_source_decl_by_shape(defining_session,
+                                             identity->module_name,
+                                             origin_session,
+                                             imported_owner,
+                                             &source_program);
+    if (source_owner == NULL || source_program == NULL) {
+        return false;
+    }
+    if (origin_target->kind == FENG_LSP_RESOLVED_DECL) {
+        source_target.kind = FENG_LSP_RESOLVED_DECL;
+        source_target.decl = source_owner;
+    } else {
+        if (origin_target->kind == FENG_LSP_RESOLVED_MEMBER) {
+            const FengTypeMember *source_member =
+                find_source_member_by_shape(
+                    defining_session,
+                    source_owner,
+                    origin_session,
+                    mixin_definition_source_member(origin_target->member));
+
+            if (source_member == NULL) {
+                return false;
+            }
+            source_target.kind = FENG_LSP_RESOLVED_MEMBER;
+            source_target.decl = source_owner;
+            source_target.member = source_member;
+        } else {
+            const FengEnumItem *source_item = find_enum_item_by_name(
+                source_owner, origin_target->enum_item->name);
+
+            if (source_item == NULL) {
+                return false;
+            }
+            source_target.kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+            source_target.decl = source_owner;
+            source_target.enum_item = source_item;
+        }
+    }
+    if (!build_source_stable_target(service,
+                                    defining_index,
+                                    &source_target,
+                                    stable)) {
+        return false;
+    }
+    stable->module_name = identity->module_name;
+    stable->symbol_id = identity->symbol_id;
+    return true;
+}
+
+/* Canonicalizes a session-local target without changing compiler semantics. */
+static FengLspStableTargetStatus build_stable_target(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    const FengLspResolvedTarget *origin_target,
+    FengLspStableTarget *stable) {
+    const FengLspAnalysisSession *origin_session;
+    const FengDecl *owner = NULL;
+    const FengProgram *owner_program = NULL;
+    const FengImportedSymbolIdentity *identity;
+
+    if (service == NULL || origin_target == NULL || stable == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return FENG_LSP_STABLE_TARGET_AMBIGUOUS;
+    }
+    origin_session = &service->last_successful_analyses[origin_workspace_index]
+                          .last_successful_analysis;
+    if (origin_target->kind == FENG_LSP_RESOLVED_DECL) {
+        owner = origin_target->decl;
+        (void)find_decl_module(origin_session, owner, &owner_program);
+    } else if (origin_target->kind == FENG_LSP_RESOLVED_MEMBER) {
+        (void)find_member_module(origin_session,
+                                 mixin_definition_source_member(
+                                     origin_target->member),
+                                 &owner,
+                                 &owner_program);
+    } else if (origin_target->kind == FENG_LSP_RESOLVED_ENUM_ITEM) {
+        owner = origin_target->decl;
+        (void)find_decl_module(origin_session, owner, &owner_program);
+    } else {
+        return FENG_LSP_STABLE_TARGET_EXTERNAL;
+    }
+    if (owner_program != NULL &&
+        find_source(origin_session, owner_program->path) != NULL) {
+        return build_source_stable_target(service,
+                                          origin_workspace_index,
+                                          origin_target,
+                                          stable)
+            ? FENG_LSP_STABLE_TARGET_LOCAL
+            : FENG_LSP_STABLE_TARGET_AMBIGUOUS;
+    }
+    if (owner_program == NULL || origin_session->analysis == NULL) {
+        return FENG_LSP_STABLE_TARGET_EXTERNAL;
+    }
+    identity = imported_identity_for_target(origin_session,
+                                            origin_target,
+                                            &owner,
+                                            &owner_program);
+    if (identity == NULL || owner_program == NULL) {
+        return FENG_LSP_STABLE_TARGET_EXTERNAL;
+    }
+    if (find_defining_workspace(service,
+                                owner_program->path,
+                                NULL,
+                                NULL) == NULL) {
+        return FENG_LSP_STABLE_TARGET_EXTERNAL;
+    }
+    return locate_imported_target_source(service,
+                                         origin_session,
+                                         origin_target,
+                                         stable)
+        ? FENG_LSP_STABLE_TARGET_LOCAL
+        : FENG_LSP_STABLE_TARGET_AMBIGUOUS;
+}
+
+/* Returns whether one imported node originates in the defining package. */
+static bool imported_target_has_provenance(
+    const FengLspAnalysisSession *session,
+    const void *source_node,
+    bool is_member,
+    const char *package_path,
+    const FengDecl **out_owner) {
+    const FengProgram *program = NULL;
+
+    *out_owner = NULL;
+    if (is_member) {
+        (void)find_member_module(session,
+                                 (const FengTypeMember *)source_node,
+                                 out_owner,
+                                 &program);
+    } else {
+        *out_owner = (const FengDecl *)source_node;
+        (void)find_decl_module(session,
+                               (const FengDecl *)source_node,
+                               &program);
+    }
+    return program != NULL && package_path != NULL &&
+           imported_program_belongs_to_package(program->path,
+                                               package_path);
+}
+
+/* Matches one imported FT identity to a physical source target. */
+static bool imported_identity_matches_stable(
+    const FengImportedSymbolIdentity *identity,
+    const FengLspStableTarget *stable,
+    const FengLspAnalysisSession *defining_session,
+    const FengLspAnalysisSession *imported_session,
+    bool owner_identity) {
+    if (identity == NULL || stable == NULL || defining_session == NULL ||
+        imported_session == NULL || stable->source_program == NULL ||
+        !module_name_matches_program(identity->module_name,
+                                     stable->source_program)) {
+        return false;
+    }
+    if (stable->module_name != NULL && stable->symbol_id != 0U &&
+        strcmp(stable->module_name, identity->module_name) == 0 &&
+        stable->symbol_id == identity->symbol_id) {
+        return true;
+    }
+    if (owner_identity || stable->kind == FENG_LSP_RESOLVED_DECL) {
+        return stable_decl_shapes_equal(
+            defining_session,
+            stable->source_decl,
+            imported_session,
+            (const FengDecl *)identity->source_node);
+    }
+    return stable_member_shapes_equal(
+        defining_session,
+        stable->source_member,
+        imported_session,
+        (const FengTypeMember *)identity->source_node);
+}
+
+/* Adapts a stable workspace identity back to one session's AST pointers. */
+static bool localize_stable_target(const FengLspService *service,
+                                   size_t workspace_index,
+                                   const FengLspStableTarget *stable,
+                                   FengLspResolvedTarget *target) {
+    const FengLspAnalysisSession *session;
+    const FengLspAnalysisSession *defining_session;
+    const char *package_path;
+    size_t match_count = 0U;
+    size_t index;
+
+    memset(target, 0, sizeof(*target));
+    if (service == NULL || stable == NULL ||
+        workspace_index >= service->last_successful_analysis_count ||
+        stable->defining_workspace_index >=
+            service->last_successful_analysis_count) {
+        return false;
+    }
+    session = &service->last_successful_analyses[workspace_index]
+                   .last_successful_analysis;
+    defining_session =
+        &service->last_successful_analyses[stable->defining_workspace_index]
+             .last_successful_analysis;
+    if (find_program(defining_session, stable->source_path) == NULL) {
+        return false;
+    }
+    if (workspace_index == stable->defining_workspace_index) {
+        const FengProgram *program = find_program(session, stable->source_path);
+        const FengDecl *owner = NULL;
+
+        if (program != NULL) {
+            for (index = 0U; index < program->declaration_count; ++index) {
+                const FengDecl *candidate = program->declarations[index];
+
+                if (candidate == NULL ||
+                    candidate->kind != stable->owner_kind ||
+                    !stable_tokens_equal(candidate->token,
+                                         stable->owner_token) ||
+                    (stable->kind == FENG_LSP_RESOLVED_DECL &&
+                     stable->owner_kind != FENG_DECL_FIT &&
+                     !slice_equals(decl_name(candidate), stable->name))) {
+                    continue;
+                }
+                if (owner != NULL) {
+                    return false;
+                }
+                owner = candidate;
+            }
+        }
+        if (owner == NULL) {
+            return false;
+        }
+        target->kind = stable->kind;
+        target->decl = owner;
+        if (stable->kind == FENG_LSP_RESOLVED_MEMBER) {
+            target->member = find_source_member_by_stable_location(
+                owner,
+                stable->target_token,
+                stable->member_kind,
+                stable->name);
+            return target->member != NULL;
+        }
+        if (stable->kind == FENG_LSP_RESOLVED_ENUM_ITEM) {
+            target->enum_item = find_enum_item_by_name(owner, stable->name);
+            return target->enum_item != NULL &&
+                   stable_tokens_equal(target->enum_item->token,
+                                       stable->target_token);
+        }
+        return true;
+    }
+    if (session->analysis == NULL || defining_session->package_path == NULL) {
+        return false;
+    }
+    package_path = defining_session->package_path;
+    for (index = 0U;
+         index < session->analysis->imported_symbol_identity_count;
+         ++index) {
+        const FengImportedSymbolIdentity *identity =
+            &session->analysis->imported_symbol_identities[index];
+        const FengDecl *owner = NULL;
+        FengLspResolvedTarget candidate = {0};
+
+        if (stable->kind == FENG_LSP_RESOLVED_DECL) {
+            if (!imported_identity_matches_stable(identity,
+                                                  stable,
+                                                  defining_session,
+                                                  session,
+                                                  false) ||
+                !imported_target_has_provenance(session,
+                                                identity->source_node,
+                                                false,
+                                                package_path,
+                                                &owner)) {
+                continue;
+            }
+            candidate.kind = FENG_LSP_RESOLVED_DECL;
+            candidate.decl = (const FengDecl *)identity->source_node;
+        } else if (stable->kind == FENG_LSP_RESOLVED_MEMBER) {
+            if (!imported_identity_matches_stable(identity,
+                                                  stable,
+                                                  defining_session,
+                                                  session,
+                                                  false) ||
+                !imported_target_has_provenance(session,
+                                                identity->source_node,
+                                                true,
+                                                package_path,
+                                                &owner) ||
+                !stable_decl_shapes_equal(defining_session,
+                                          stable->source_decl,
+                                          session,
+                                          owner)) {
+                continue;
+            }
+            candidate.kind = FENG_LSP_RESOLVED_MEMBER;
+            candidate.decl = owner;
+            candidate.member =
+                (const FengTypeMember *)identity->source_node;
+        } else {
+            if (!imported_identity_matches_stable(identity,
+                                                  stable,
+                                                  defining_session,
+                                                  session,
+                                                  true) ||
+                !imported_target_has_provenance(session,
+                                                identity->source_node,
+                                                false,
+                                                package_path,
+                                                &owner)) {
+                continue;
+            }
+            candidate.kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+            candidate.decl = (const FengDecl *)identity->source_node;
+            candidate.enum_item = find_enum_item_by_name(candidate.decl,
+                                                         stable->name);
+            if (candidate.enum_item == NULL) {
+                continue;
+            }
+        }
+        *target = candidate;
+        ++match_count;
+        if (match_count > 1U) {
+            memset(target, 0, sizeof(*target));
+            return false;
+        }
+    }
+    return match_count == 1U;
+}
+
 static FengSlice call_callee_name_slice(const FengExpr *callee) {
     if (callee == NULL) {
         return (FengSlice){0};
@@ -14807,6 +16945,322 @@ static bool collect_references(const FengLspAnalysisSession *session,
     return true;
 }
 
+/* Returns whether every open overlay owned by this session is still exact. */
+static bool analysis_matches_open_documents(const FengLspService *service,
+                                            const FengLspAnalysisSession *session) {
+    size_t index;
+
+    if (service == NULL || session == NULL) {
+        return false;
+    }
+    for (index = 0U; index < service->document_count; ++index) {
+        const FengLspDocument *document = &service->documents[index];
+        const FengCliLoadedSource *source = find_source(session,
+                                                        document->path);
+        size_t length;
+
+        if (source == NULL) {
+            continue;
+        }
+        length = strlen(document->text);
+        if (source->source == NULL || source->source_length != length ||
+            memcmp(source->source, document->text, length) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Collects a stable target in every retained session. Rename requests require
+ * complete, current participants; ordinary References may safely skip a stale
+ * participant instead of returning ranges for the wrong editor text. */
+static bool collect_workspace_references(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    bool include_declaration,
+    bool require_complete,
+    const FengLspResolvedTarget *origin_target,
+    FengLspReferenceList *references,
+    FengLspResolvedTarget *out_defining_target,
+    size_t *out_defining_workspace_index) {
+    FengLspStableTarget stable = {0};
+    FengLspStableTargetStatus status;
+    bool collected = false;
+    size_t index;
+
+    if (service == NULL || origin_target == NULL || references == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    status = build_stable_target(service,
+                                 origin_workspace_index,
+                                 origin_target,
+                                 &stable);
+    if (status == FENG_LSP_STABLE_TARGET_EXTERNAL) {
+        const FengLspAnalysisSession *origin_session =
+            &service->last_successful_analyses[origin_workspace_index]
+                 .last_successful_analysis;
+
+        if (out_defining_target != NULL) {
+            *out_defining_target = *origin_target;
+        }
+        if (out_defining_workspace_index != NULL) {
+            *out_defining_workspace_index = origin_workspace_index;
+        }
+        return collect_references(origin_session,
+                                  include_declaration,
+                                  origin_target,
+                                  references);
+    }
+    if (status != FENG_LSP_STABLE_TARGET_LOCAL) {
+        return false;
+    }
+    for (index = 0U;
+         index < service->last_successful_analysis_count;
+         ++index) {
+        const FengLspAnalysisSession *session =
+            &service->last_successful_analyses[index]
+                 .last_successful_analysis;
+        FengLspResolvedTarget localized = {0};
+
+        if (!localize_stable_target(service, index, &stable, &localized)) {
+            continue;
+        }
+        if (!analysis_matches_open_documents(service, session)) {
+            if (require_complete) {
+                return false;
+            }
+            continue;
+        }
+        if (!collect_references(session,
+                                include_declaration,
+                                &localized,
+                                references)) {
+            return false;
+        }
+        if (index == stable.defining_workspace_index &&
+            out_defining_target != NULL) {
+            *out_defining_target = localized;
+        }
+        if (index == stable.defining_workspace_index &&
+            out_defining_workspace_index != NULL) {
+            *out_defining_workspace_index = index;
+        }
+        collected = true;
+    }
+    return collected &&
+           (out_defining_target == NULL ||
+            out_defining_target->kind != FENG_LSP_RESOLVED_NONE);
+}
+
+/* Finds the newest retained source text for one physical result path. */
+static const FengCliLoadedSource *find_workspace_reference_source(
+    const FengLspService *service,
+    const char *path) {
+    const FengCliLoadedSource *best = NULL;
+    size_t best_generation = 0U;
+    size_t index;
+
+    if (service == NULL || path == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < service->last_successful_analysis_count;
+         ++index) {
+        const FengLspWorkspaceAnalysis *workspace =
+            &service->last_successful_analyses[index];
+        const FengCliLoadedSource *source = find_source(
+            &workspace->last_successful_analysis, path);
+
+        if (source != NULL &&
+            (best == NULL || workspace->last_successful_generation >
+                             best_generation)) {
+            best = source;
+            best_generation = workspace->last_successful_generation;
+        }
+    }
+    return best;
+}
+
+/* Adds one exact source token to a workspace location result. */
+static bool reference_list_push_token(FengLspReferenceList *locations,
+                                      const FengLspAnalysisSession *session,
+                                      const char *path,
+                                      FengToken token) {
+    const FengCliLoadedSource *source = find_source(session, path);
+    size_t end_offset = token.offset + token.length;
+
+    if (source == NULL || token.length == 0U ||
+        end_offset > source->source_length) {
+        return true;
+    }
+    return reference_list_push(locations,
+                               source->path,
+                               token.offset,
+                               end_offset);
+}
+
+/* Adds a source-backed declaration implementation location. */
+static bool append_decl_implementation_location(
+    FengLspReferenceList *locations,
+    const FengLspAnalysisSession *session,
+    const FengDecl *decl) {
+    const FengProgram *program = NULL;
+
+    (void)find_decl_module(session, decl, &program);
+    return program == NULL ||
+           reference_list_push_token(locations,
+                                     session,
+                                     program->path,
+                                     decl->token);
+}
+
+/* Adds a source-backed member implementation location. */
+static bool append_member_implementation_location(
+    FengLspReferenceList *locations,
+    const FengLspAnalysisSession *session,
+    const FengTypeMember *member) {
+    const FengDecl *owner = NULL;
+    const FengProgram *program = NULL;
+
+    (void)find_member_module(session, member, &owner, &program);
+    return program == NULL || owner == NULL ||
+           reference_list_push_token(locations,
+                                     session,
+                                     program->path,
+                                     member->token);
+}
+
+/* Collects compiler-proven object-spec implementations in one analysis. */
+static bool collect_session_implementations(
+    const FengLspAnalysisSession *session,
+    const FengLspResolvedTarget *target,
+    FengLspReferenceList *locations) {
+    size_t index;
+
+    if (session == NULL || session->analysis == NULL || target == NULL ||
+        locations == NULL || target->decl == NULL ||
+        target->decl->kind != FENG_DECL_SPEC ||
+        target->decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        return true;
+    }
+    if (target->kind == FENG_LSP_RESOLVED_MEMBER) {
+        for (index = 0U;
+             index < session->analysis->spec_implementation_selection_count;
+             ++index) {
+            const FengSpecImplementationSelection *selection =
+                &session->analysis->spec_implementation_selections[index];
+
+            if (selection->spec_decl == target->decl &&
+                selection->spec_member == target->member &&
+                !append_member_implementation_location(
+                    locations, session, selection->impl_member)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (target->kind != FENG_LSP_RESOLVED_DECL) {
+        return true;
+    }
+    for (index = 0U; index < session->analysis->spec_relation_count; ++index) {
+        const FengSpecRelation *relation =
+            &session->analysis->spec_relations[index];
+        size_t source_index;
+
+        if (relation->spec_decl != target->decl) {
+            continue;
+        }
+        if (relation->subject_key.kind ==
+                FENG_SEMANTIC_SUBJECT_KEY_TYPE_DECL &&
+            !append_decl_implementation_location(
+                locations,
+                session,
+                relation->subject_key.as.type_decl)) {
+            return false;
+        }
+        for (source_index = 0U;
+             source_index < relation->source_count;
+             ++source_index) {
+            const FengSpecRelationSource *source =
+                &relation->sources[source_index];
+
+            if (source->via_fit_decl != NULL &&
+                !append_decl_implementation_location(
+                    locations, session, source->via_fit_decl)) {
+                return false;
+            }
+        }
+    }
+    /* Selections also cover declaration-time relationships whose relation
+     * has no distinct source location beyond its owner. Dedupe is automatic. */
+    for (index = 0U;
+         index < session->analysis->spec_implementation_selection_count;
+         ++index) {
+        const FengSpecImplementationSelection *selection =
+            &session->analysis->spec_implementation_selections[index];
+
+        if (selection->spec_decl == target->decl &&
+            !append_decl_implementation_location(
+                locations, session, selection->relation_owner_decl)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Aggregates exact spec implementations across all retained sessions. */
+static bool collect_workspace_implementations(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    const FengLspResolvedTarget *origin_target,
+    FengLspReferenceList *locations) {
+    FengLspStableTarget stable = {0};
+    FengLspStableTargetStatus status;
+    size_t index;
+
+    if (service == NULL || origin_target == NULL || locations == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    status = build_stable_target(service,
+                                 origin_workspace_index,
+                                 origin_target,
+                                 &stable);
+    if (status == FENG_LSP_STABLE_TARGET_AMBIGUOUS) {
+        return false;
+    }
+    if (status == FENG_LSP_STABLE_TARGET_EXTERNAL) {
+        const FengLspAnalysisSession *origin_session =
+            &service->last_successful_analyses[origin_workspace_index]
+                 .last_successful_analysis;
+
+        return analysis_matches_open_documents(service, origin_session) &&
+               collect_session_implementations(origin_session,
+                                               origin_target,
+                                               locations);
+    }
+    for (index = 0U;
+         index < service->last_successful_analysis_count;
+         ++index) {
+        const FengLspAnalysisSession *session =
+            &service->last_successful_analyses[index]
+                 .last_successful_analysis;
+        FengLspResolvedTarget localized = {0};
+
+        if (!localize_stable_target(service, index, &stable, &localized)) {
+            continue;
+        }
+        if (analysis_matches_open_documents(service, session) &&
+            !collect_session_implementations(session,
+                                             &localized,
+                                             locations)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static const FengCliLoadedSource *find_reference_source(const FengLspAnalysisSession *session,
                                                         const FengLspReferenceEntry *entry) {
     return session != NULL && entry != NULL ? find_source(session, entry->path) : NULL;
@@ -14856,6 +17310,31 @@ static bool build_references_json(const FengLspAnalysisSession *session,
             continue;
         }
         if (!append_reference_location(json, &first, source, entry)) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "]");
+}
+
+/* Builds one References result whose entries may belong to many sessions. */
+static bool build_workspace_references_json(
+    const FengLspService *service,
+    const FengLspReferenceList *references,
+    FengLspString *json) {
+    bool first = true;
+    size_t index;
+
+    if (service == NULL || references == NULL || json == NULL ||
+        !string_append_cstr(json, "[")) {
+        return false;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+        const FengCliLoadedSource *source = find_workspace_reference_source(
+            service, entry->path);
+
+        if (source != NULL &&
+            !append_reference_location(json, &first, source, entry)) {
             return false;
         }
     }
@@ -14949,6 +17428,81 @@ static bool build_rename_json(const FengLspAnalysisSession *session,
                 !string_append_cstr(json, "}")) {
                 return false;
             }
+        }
+        if (!string_append_cstr(json, "]")) {
+            return false;
+        }
+    }
+    return string_append_cstr(json, "}}");
+}
+
+/* Builds one atomic WorkspaceEdit spanning all retained project sessions. */
+static bool build_workspace_rename_json(
+    const FengLspService *service,
+    const FengLspReferenceList *references,
+    const char *new_name,
+    FengLspString *json) {
+    bool first_path = true;
+    size_t index;
+
+    if (service == NULL || references == NULL || new_name == NULL ||
+        json == NULL || !string_append_cstr(json, "{\"changes\":{")) {
+        return false;
+    }
+    for (index = 0U; index < references->count; ++index) {
+        const FengLspReferenceEntry *entry = &references->items[index];
+        const FengCliLoadedSource *source;
+        char *uri;
+        bool first_edit = true;
+        size_t edit_index;
+        size_t seen_index;
+
+        for (seen_index = 0U; seen_index < index; ++seen_index) {
+            if (strcmp(references->items[seen_index].path,
+                       entry->path) == 0) {
+                break;
+            }
+        }
+        if (seen_index != index) {
+            continue;
+        }
+        source = find_workspace_reference_source(service, entry->path);
+        if (source == NULL) {
+            return false;
+        }
+        uri = path_to_file_uri(entry->path);
+        if (uri == NULL) {
+            return false;
+        }
+        if ((!first_path && !string_append_cstr(json, ",")) ||
+            !string_append_json_string(json, uri) ||
+            !string_append_cstr(json, ":[")) {
+            free(uri);
+            return false;
+        }
+        free(uri);
+        first_path = false;
+        for (edit_index = index;
+             edit_index < references->count;
+             ++edit_index) {
+            const FengLspReferenceEntry *edit =
+                &references->items[edit_index];
+
+            if (strcmp(edit->path, entry->path) != 0) {
+                continue;
+            }
+            if ((!first_edit && !string_append_cstr(json, ",")) ||
+                !string_append_cstr(json, "{\"range\":") ||
+                !range_json_offsets(json,
+                                    source->source,
+                                    edit->start_offset,
+                                    edit->end_offset) ||
+                !string_append_cstr(json, ",\"newText\":") ||
+                !string_append_json_string(json, new_name) ||
+                !string_append_cstr(json, "}")) {
+                return false;
+            }
+            first_edit = false;
         }
         if (!string_append_cstr(json, "]")) {
             return false;
@@ -16331,6 +18885,7 @@ static bool handle_hover_request(FengLspService *service,
     unsigned int line;
     unsigned int character;
     FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *session;
     FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
@@ -16400,16 +18955,18 @@ static bool handle_hover_request(FengLspService *service,
         return ok;
     }
     hover_presentation_dispose(&presentation);
-    wait_for_initial_query_state(service);
+    wait_for_initial_query_state(service, document->path);
     /* Read the immutable published analysis only when its source fingerprint
      * exactly matches the current document. */
     has_hover = false;
     pthread_mutex_lock(&service->analysis_mutex);
-    session = &service->last_successful_analysis;
-    if (analysis_matches_document(session, document) ||
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+    if (session != NULL &&
+        (analysis_matches_document(session, document) ||
         analysis_position_matches_document(document,
-                                           service->last_successful_generation,
-                                           offset)) {
+                                           workspace->last_successful_generation,
+                                           offset))) {
         program = find_program(session, document->path);
         if (program != NULL) {
             has_hover = hover_presentation_for_mixin(session,
@@ -16608,6 +19165,76 @@ static bool definition_location_from_cache(const FengLspCacheQueryContext *cache
     }
 }
 
+/* Maps a local imported target to its retained physical source before
+ * constructing a Definition location. External packages preserve the
+ * existing imported-symbol behavior unchanged. */
+static bool definition_location_from_workspace(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    const FengProgram *origin_program,
+    const FengLspResolvedTarget *origin_target,
+    FengLspString *result) {
+    FengLspStableTarget stable = {0};
+    FengLspStableTargetStatus status;
+    FengLspResolvedTarget source_target = {0};
+    const FengLspAnalysisSession *origin_session;
+    const FengLspAnalysisSession *source_session;
+    const FengProgram *source_program = NULL;
+
+    if (service == NULL || origin_target == NULL || result == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    origin_session = &service->last_successful_analyses[origin_workspace_index]
+                          .last_successful_analysis;
+    status = build_stable_target(service,
+                                 origin_workspace_index,
+                                 origin_target,
+                                 &stable);
+    if (status == FENG_LSP_STABLE_TARGET_EXTERNAL) {
+        return definition_location_from_analysis(origin_session,
+                                                 origin_program,
+                                                 origin_target,
+                                                 result);
+    }
+    if (status == FENG_LSP_STABLE_TARGET_LOCAL &&
+        stable.defining_workspace_index == origin_workspace_index) {
+        return definition_location_from_analysis(origin_session,
+                                                 origin_program,
+                                                 origin_target,
+                                                 result);
+    }
+    if (status != FENG_LSP_STABLE_TARGET_LOCAL ||
+        !localize_stable_target(service,
+                                stable.defining_workspace_index,
+                                &stable,
+                                &source_target)) {
+        return false;
+    }
+    source_session =
+        &service->last_successful_analyses[stable.defining_workspace_index]
+             .last_successful_analysis;
+    if (!analysis_matches_open_documents(service, source_session)) {
+        return false;
+    }
+    if (source_target.kind == FENG_LSP_RESOLVED_MEMBER) {
+        const FengDecl *owner = NULL;
+        (void)find_member_module(source_session,
+                                 source_target.member,
+                                 &owner,
+                                 &source_program);
+    } else {
+        (void)find_decl_module(source_session,
+                               source_target.decl,
+                               &source_program);
+    }
+    return source_program != NULL &&
+           definition_location_from_analysis(source_session,
+                                             source_program,
+                                             &source_target,
+                                             result);
+}
+
 /* Handles definition using only current memory state and published caches. */
 static bool handle_definition_request(FengLspService *service,
                                       FILE *output,
@@ -16622,6 +19249,8 @@ static bool handle_definition_request(FengLspService *service,
     unsigned int line;
     unsigned int character;
     FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
+    const FengLspAnalysisSession *session;
     FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
     FengLspResolvedTarget target = {0};
@@ -16631,6 +19260,7 @@ static bool handle_definition_request(FengLspService *service,
     FengLspString result = {0};
     bool found = false;
     bool ok = true;
+    bool exact_analysis_available = false;
     size_t offset;
 
     if (!json_object_get(params, "textDocument", &text_document) ||
@@ -16652,15 +19282,20 @@ static bool handle_definition_request(FengLspService *service,
     }
     offset = document_offset_from_position(document, line, character);
     pthread_mutex_lock(&service->analysis_mutex);
-    if (analysis_matches_document(&service->last_successful_analysis, document)) {
-        program = find_program(&service->last_successful_analysis, document->path);
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+    if (analysis_matches_document(session, document)) {
+        program = find_program(session, document->path);
+        exact_analysis_available = program != NULL;
         if (program != NULL &&
-            resolve_target_at(&service->last_successful_analysis, program, offset, &target)) {
+            resolve_target_at(session, program, offset, &target)) {
             found = true;
-            ok = definition_location_from_analysis(&service->last_successful_analysis,
-                                                   program,
-                                                   &target,
-                                                   &result);
+            ok = definition_location_from_workspace(
+                service,
+                (size_t)(workspace - service->last_successful_analyses),
+                program,
+                &target,
+                &result);
         }
     }
     pthread_mutex_unlock(&service->analysis_mutex);
@@ -16693,6 +19328,9 @@ static bool handle_definition_request(FengLspService *service,
     }
     cache_query_context_dispose(&cache);
     pthread_mutex_unlock(&service->analysis_mutex);
+    if (!exact_analysis_available) {
+        schedule_analysis_for_cache_miss(service, document);
+    }
     free(uri);
     if (!found || !ok) {
         string_dispose(&result);
@@ -18813,6 +21451,7 @@ static bool append_provider_use_path_completion_items(FengLspString *json,
 
 /* Builds import-path Completion exclusively from published in-memory indexes. */
 static bool build_persistent_use_path_completion_json(const FengLspService *service,
+                                                      const FengLspDocument *document,
                                                       const char *source_text,
                                                       size_t offset,
                                                       FengLspString *json) {
@@ -18823,8 +21462,10 @@ static bool build_persistent_use_path_completion_json(const FengLspService *serv
     size_t seen_count = 0U;
     size_t module_index;
     bool first = true;
+    bool use_module_index;
+    bool use_symbol_index;
 
-    if (service == NULL ||
+    if (service == NULL || document == NULL ||
         !extract_use_path_context(source_text,
                                   offset,
                                   prefix_segments,
@@ -18834,8 +21475,10 @@ static bool build_persistent_use_path_completion_json(const FengLspService *serv
         !string_append_cstr(json, "[")) {
         return false;
     }
+    use_module_index = module_index_matches_path(service, document->path);
+    use_symbol_index = symbol_index_matches_path(service, document->path);
     for (module_index = 0U;
-         module_index < service->module_index.module_count;
+         use_module_index && module_index < service->module_index.module_count;
          ++module_index) {
         const FengLspIndexedModule *module = &service->module_index.modules[module_index];
         FengSlice next_segment;
@@ -18870,7 +21513,9 @@ static bool build_persistent_use_path_completion_json(const FengLspService *serv
     }
     if (!append_provider_use_path_completion_items(json,
                                                    &first,
-                                                   service->symbol_index,
+                                                   use_symbol_index
+                                                       ? service->symbol_index
+                                                       : NULL,
                                                    prefix_segments,
                                                    prefix_count,
                                                    partial,
@@ -18897,6 +21542,9 @@ static bool append_module_index_imports(const FengLspService *service,
     if (service == NULL || program == NULL || json == NULL || json->data == NULL ||
         json->length < 2U || json->data[json->length - 1U] != ']') {
         return false;
+    }
+    if (!module_index_matches_path(service, program->path)) {
+        return true;
     }
     --json->length;
     json->data[json->length] = '\0';
@@ -18965,16 +21613,21 @@ static bool append_module_index_imports(const FengLspService *service,
 static bool published_indexes_cover_program_imports(const FengLspService *service,
                                                      const FengProgram *program) {
     size_t use_index;
+    bool use_module_index;
+    bool use_symbol_index;
 
     if (service == NULL || program == NULL || program->use_count == 0U) {
         return true;
     }
+    use_module_index = module_index_matches_path(service, program->path);
+    use_symbol_index = symbol_index_matches_path(service, program->path);
     for (use_index = 0U; use_index < program->use_count; ++use_index) {
         const FengUseDecl *use_decl = &program->uses[use_index];
         size_t module_index;
         bool found = false;
 
         for (module_index = 0U;
+             use_module_index &&
              module_index < service->module_index.module_count;
              ++module_index) {
             if (program_module_matches(service->module_index.modules[module_index].program,
@@ -18984,7 +21637,7 @@ static bool published_indexes_cover_program_imports(const FengLspService *servic
                 break;
             }
         }
-        if (!found && service->symbol_index != NULL &&
+        if (!found && use_symbol_index &&
             feng_symbol_provider_find_module(service->symbol_index,
                                              use_decl->segments,
                                              use_decl->segment_count) != NULL) {
@@ -20560,6 +23213,7 @@ static bool handle_completion_request(FengLspService *service,
     FengLspDocument *document;
     FengLspAnalysisSession current_parse = {0};
     FengCliLoadedSource current_source = {0};
+    const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *last_successful;
     FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
@@ -20633,8 +23287,10 @@ static bool handle_completion_request(FengLspService *service,
         bool published_query_ready;
 
         pthread_mutex_lock(&service->analysis_mutex);
-        published_query_ready = service->last_successful_analysis.analysis != NULL ||
-                                service->symbol_index != NULL;
+        published_query_ready =
+            find_workspace_analysis_by_source_path(service,
+                                                   document->path) != NULL ||
+            symbol_index_matches_path(service, document->path);
         pthread_mutex_unlock(&service->analysis_mutex);
         if (!published_query_ready) {
             FengSlice type_prefix = {0};
@@ -20654,19 +23310,21 @@ static bool handle_completion_request(FengLspService *service,
         }
     }
     if (is_use_path_completion) {
-        wait_for_initial_module_index(service);
+        wait_for_initial_module_index(service, document->path);
     }
     pthread_mutex_lock(&service->analysis_mutex);
     use_path_has_items = build_persistent_use_path_completion_json(service,
+                                                                   document,
                                                                    document->text,
                                                                    offset,
                                                                    &json);
     pthread_mutex_unlock(&service->analysis_mutex);
     if (!use_path_has_items && is_use_path_completion) {
         string_dispose(&json);
-        wait_for_initial_symbol_index(service);
+        wait_for_initial_symbol_index(service, document->path);
         pthread_mutex_lock(&service->analysis_mutex);
         use_path_has_items = build_persistent_use_path_completion_json(service,
+                                                                       document,
                                                                        document->text,
                                                                        offset,
                                                                        &json);
@@ -20680,7 +23338,8 @@ static bool handle_completion_request(FengLspService *service,
     }
     string_dispose(&json);
     pthread_mutex_lock(&service->analysis_mutex);
-    last_successful = &service->last_successful_analysis;
+    workspace = find_workspace_analysis_for_document(service, document);
+    last_successful = workspace != NULL ? &workspace->last_successful_analysis : NULL;
     if (analysis_matches_document(last_successful, document)) {
         program = find_program(last_successful, document->path);
         last_successful_has_items =
@@ -21837,7 +24496,7 @@ static bool handle_signature_help_request(FengLspService *service,
             string_dispose(&json);
             /* Provider-only fallback reads the immutable workspace index. */
             pthread_mutex_lock(&service->analysis_mutex);
-            if (service->symbol_index != NULL) {
+            if (symbol_index_matches_path(service, document->path)) {
                 FengLspCacheQueryContext minimal = {0};
 
                 minimal.provider = service->symbol_index;
@@ -21915,6 +24574,8 @@ static bool handle_completion_resolve_request(FengLspService *service,
     document = find_document(service, uri);
     if (document != NULL) {
         FengLspCacheQueryContext cache = {0};
+        const FengLspWorkspaceAnalysis *workspace;
+        const FengLspAnalysisSession *session;
 
         pthread_mutex_lock(&service->analysis_mutex);
         if (build_persistent_cache_query_context(service,
@@ -21924,19 +24585,20 @@ static bool handle_completion_resolve_request(FengLspService *service,
             doc = resolve_doc_from_cache(&cache, label, owner_name);
             cache_query_context_dispose(&cache);
         }
-        if (doc == NULL &&
-            analysis_matches_document(&service->last_successful_analysis, document)) {
-            const FengProgram *program = find_program(&service->last_successful_analysis,
-                                                      document->path);
+        workspace = find_workspace_analysis_for_document(service, document);
+        session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+        if (doc == NULL && analysis_matches_document(session, document)) {
+            const FengProgram *program = find_program(session, document->path);
 
             if (program != NULL) {
-                doc = resolve_doc_from_session(&service->last_successful_analysis,
+                doc = resolve_doc_from_session(session,
                                                program,
                                                label,
                                                owner_name);
             }
         }
-        if (doc == NULL && owner_name != NULL && service->symbol_index != NULL) {
+        if (doc == NULL && owner_name != NULL &&
+            symbol_index_matches_path(service, document->path)) {
             FengLspCacheQueryContext minimal_cache = {0};
 
             minimal_cache.provider = service->symbol_index;
@@ -21997,6 +24659,7 @@ static bool handle_references_request(FengLspService *service,
     unsigned int character;
     bool include_declaration = false;
     FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *session;
     const FengProgram *program;
     FengCliLoadedSource current_source = {0};
@@ -22006,6 +24669,7 @@ static bool handle_references_request(FengLspService *service,
     FengLspString json = {0};
     bool ok;
     bool query_ok = false;
+    bool exact_analysis_available = false;
     size_t offset;
 
     if (!json_object_get(params, "textDocument", &text_document) ||
@@ -22032,12 +24696,22 @@ static bool handle_references_request(FengLspService *service,
     }
     offset = document_offset_from_position(document, line, character);
     pthread_mutex_lock(&service->analysis_mutex);
-    session = &service->last_successful_analysis;
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
     program = analysis_matches_document(session, document)
         ? find_program(session, document->path)
         : NULL;
+    exact_analysis_available = program != NULL;
     if (program != NULL && resolve_target_at(session, program, offset, &target) &&
-        collect_references(session, include_declaration, &target, &references)) {
+        collect_workspace_references(
+            service,
+            (size_t)(workspace - service->last_successful_analyses),
+            include_declaration,
+            false,
+            &target,
+            &references,
+            NULL,
+            NULL)) {
         query_ok = true;
     }
     if (query_ok && request_is_cancelled(service, id)) {
@@ -22047,10 +24721,12 @@ static bool handle_references_request(FengLspService *service,
         return send_error_response(output, id, -32800, "Request cancelled");
     }
     if (query_ok) {
-        query_ok = build_references_json(session, &references, &json);
+        query_ok = build_workspace_references_json(service,
+                                                    &references,
+                                                    &json);
     }
     pthread_mutex_unlock(&service->analysis_mutex);
-    if (!query_ok) {
+    if (!query_ok && !exact_analysis_available) {
         reference_list_dispose(&references);
         string_dispose(&json);
         memset(&target, 0, sizeof(target));
@@ -22078,6 +24754,91 @@ static bool handle_references_request(FengLspService *service,
     }
     free(uri);
     reference_list_dispose(&references);
+    if (!exact_analysis_available) {
+        schedule_analysis_for_cache_miss(service, document);
+    }
+    if (!query_ok) {
+        string_dispose(&json);
+        return send_json_response(output, id, "[]");
+    }
+    ok = send_json_response(output, id, json.data);
+    string_dispose(&json);
+    return ok;
+}
+
+/* Handles compiler-proven object-spec implementations from retained analyses. */
+static bool handle_implementation_request(FengLspService *service,
+                                          FILE *output,
+                                          FengLspJsonValue id,
+                                          FengLspJsonValue params) {
+    FengLspJsonValue text_document = {0};
+    FengLspJsonValue uri_value = {0};
+    FengLspJsonValue position = {0};
+    FengLspJsonValue line_value = {0};
+    FengLspJsonValue char_value = {0};
+    char *uri;
+    unsigned int line;
+    unsigned int character;
+    FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
+    const FengLspAnalysisSession *session;
+    const FengProgram *program;
+    FengLspResolvedTarget target = {0};
+    FengLspReferenceList locations = {0};
+    FengLspString json = {0};
+    bool query_ok = false;
+    bool ok;
+    size_t offset;
+
+    if (!json_object_get(params, "textDocument", &text_document) ||
+        !json_object_get(text_document, "uri", &uri_value) ||
+        !json_object_get(params, "position", &position) ||
+        !json_object_get(position, "line", &line_value) ||
+        !json_object_get(position, "character", &char_value)) {
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    uri = json_string_dup(uri_value);
+    if (uri == NULL || !json_u32(line_value, &line) ||
+        !json_u32(char_value, &character)) {
+        free(uri);
+        return send_error_response(output, id, -32602, "Invalid params");
+    }
+    document = find_document(service, uri);
+    if (document == NULL) {
+        free(uri);
+        return send_json_response(output, id, "[]");
+    }
+    offset = document_offset_from_position(document, line, character);
+    pthread_mutex_lock(&service->analysis_mutex);
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+    program = analysis_matches_document(session, document)
+        ? find_program(session, document->path)
+        : NULL;
+    if (workspace != NULL && program != NULL &&
+        resolve_target_at(session, program, offset, &target) &&
+        collect_workspace_implementations(
+            service,
+            (size_t)(workspace - service->last_successful_analyses),
+            &target,
+            &locations)) {
+        query_ok = build_workspace_references_json(service,
+                                                    &locations,
+                                                    &json);
+    }
+    if (query_ok && request_is_cancelled(service, id)) {
+        pthread_mutex_unlock(&service->analysis_mutex);
+        free(uri);
+        reference_list_dispose(&locations);
+        string_dispose(&json);
+        return send_error_response(output, id, -32800, "Request cancelled");
+    }
+    pthread_mutex_unlock(&service->analysis_mutex);
+    free(uri);
+    reference_list_dispose(&locations);
+    if (program == NULL) {
+        schedule_analysis_for_cache_miss(service, document);
+    }
     if (!query_ok) {
         string_dispose(&json);
         return send_json_response(output, id, "[]");
@@ -22128,6 +24889,101 @@ static bool build_rename_from_session(const FengLspAnalysisSession *session,
            build_rename_json(session, references, new_name, json);
 }
 
+/* Builds prepare-rename from a complete, current workspace-wide reference
+ * set, including the writable declaration in a local dependency project. */
+static bool build_prepare_rename_from_workspace(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    const FengProgram *program,
+    const char *path,
+    size_t offset,
+    FengLspReferenceList *references,
+    FengLspString *json) {
+    const FengLspAnalysisSession *origin_session;
+    const FengLspAnalysisSession *defining_session;
+    FengLspResolvedTarget target = {0};
+    FengLspResolvedTarget defining_target = {0};
+    const FengLspReferenceEntry *entry;
+    const FengCliLoadedSource *source;
+    size_t defining_workspace_index = origin_workspace_index;
+
+    if (service == NULL || program == NULL || path == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    origin_session = &service->last_successful_analyses[origin_workspace_index]
+                          .last_successful_analysis;
+    if (!resolve_target_at(origin_session, program, offset, &target) ||
+        !collect_workspace_references(service,
+                                      origin_workspace_index,
+                                      true,
+                                      true,
+                                      &target,
+                                      references,
+                                      &defining_target,
+                                      &defining_workspace_index)) {
+        return false;
+    }
+    defining_session =
+        &service->last_successful_analyses[defining_workspace_index]
+             .last_successful_analysis;
+    if (!resolved_target_can_rename(defining_session, &defining_target)) {
+        return false;
+    }
+    entry = reference_list_find_offset(references, path, offset);
+    source = find_workspace_reference_source(service,
+                                             entry != NULL
+                                                 ? entry->path
+                                                 : NULL);
+    return entry != NULL && source != NULL &&
+           build_prepare_rename_json(source, entry, json);
+}
+
+/* Builds an all-or-nothing workspace Rename edit. */
+static bool build_rename_from_workspace(
+    const FengLspService *service,
+    size_t origin_workspace_index,
+    const FengProgram *program,
+    const char *path,
+    size_t offset,
+    const char *new_name,
+    FengLspReferenceList *references,
+    FengLspString *json) {
+    const FengLspAnalysisSession *origin_session;
+    const FengLspAnalysisSession *defining_session;
+    FengLspResolvedTarget target = {0};
+    FengLspResolvedTarget defining_target = {0};
+    size_t defining_workspace_index = origin_workspace_index;
+
+    if (service == NULL || program == NULL || path == NULL ||
+        new_name == NULL ||
+        origin_workspace_index >= service->last_successful_analysis_count) {
+        return false;
+    }
+    origin_session = &service->last_successful_analyses[origin_workspace_index]
+                          .last_successful_analysis;
+    if (!resolve_target_at(origin_session, program, offset, &target) ||
+        !collect_workspace_references(service,
+                                      origin_workspace_index,
+                                      true,
+                                      true,
+                                      &target,
+                                      references,
+                                      &defining_target,
+                                      &defining_workspace_index)) {
+        return false;
+    }
+    defining_session =
+        &service->last_successful_analyses[defining_workspace_index]
+             .last_successful_analysis;
+    return resolved_target_can_rename(defining_session, &defining_target) &&
+           reference_list_find_offset(references, path, offset) != NULL &&
+           build_workspace_rename_json(service,
+                                       references,
+                                       new_name,
+                                       json);
+}
+
 static bool handle_prepare_rename_request(FengLspService *service,
                                           FILE *output,
                                           FengLspJsonValue id,
@@ -22141,6 +24997,7 @@ static bool handle_prepare_rename_request(FengLspService *service,
     unsigned int line;
     unsigned int character;
     FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *session;
     const FengProgram *program;
     FengCliLoadedSource current_source = {0};
@@ -22149,6 +25006,7 @@ static bool handle_prepare_rename_request(FengLspService *service,
     FengLspString json = {0};
     bool ok;
     bool query_ok = false;
+    bool exact_analysis_available = false;
     size_t offset;
 
     if (!json_object_get(params, "textDocument", &text_document) ||
@@ -22170,16 +25028,21 @@ static bool handle_prepare_rename_request(FengLspService *service,
     }
     offset = document_offset_from_position(document, line, character);
     pthread_mutex_lock(&service->analysis_mutex);
-    session = &service->last_successful_analysis;
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
     program = analysis_matches_document(session, document)
         ? find_program(session, document->path)
         : NULL;
-    query_ok = build_prepare_rename_from_session(session,
-                                                 program,
-                                                 document->path,
-                                                 offset,
-                                                 &references,
-                                                 &json);
+    exact_analysis_available = program != NULL;
+    query_ok = workspace != NULL &&
+               build_prepare_rename_from_workspace(
+                   service,
+                   (size_t)(workspace - service->last_successful_analyses),
+                   program,
+                   document->path,
+                   offset,
+                   &references,
+                   &json);
     if (query_ok && request_is_cancelled(service, id)) {
         pthread_mutex_unlock(&service->analysis_mutex);
         free(uri);
@@ -22187,7 +25050,7 @@ static bool handle_prepare_rename_request(FengLspService *service,
         return send_error_response(output, id, -32800, "Request cancelled");
     }
     pthread_mutex_unlock(&service->analysis_mutex);
-    if (!query_ok) {
+    if (!query_ok && !exact_analysis_available) {
         reference_list_dispose(&references);
         string_dispose(&json);
         program = ensure_document_parse(document);
@@ -22214,6 +25077,9 @@ static bool handle_prepare_rename_request(FengLspService *service,
     }
     free(uri);
     reference_list_dispose(&references);
+    if (!exact_analysis_available) {
+        schedule_analysis_for_cache_miss(service, document);
+    }
     if (!query_ok) {
         string_dispose(&json);
         return send_json_response(output, id, "null");
@@ -22238,6 +25104,7 @@ static bool handle_rename_request(FengLspService *service,
     unsigned int line;
     unsigned int character;
     FengLspDocument *document;
+    const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *session;
     const FengProgram *program;
     FengCliLoadedSource current_source = {0};
@@ -22246,6 +25113,7 @@ static bool handle_rename_request(FengLspService *service,
     FengLspString json = {0};
     bool ok;
     bool query_ok = false;
+    bool exact_analysis_available = false;
     size_t offset;
 
     if (!json_object_get(params, "textDocument", &text_document) ||
@@ -22277,17 +25145,22 @@ static bool handle_rename_request(FengLspService *service,
     }
     offset = document_offset_from_position(document, line, character);
     pthread_mutex_lock(&service->analysis_mutex);
-    session = &service->last_successful_analysis;
+    workspace = find_workspace_analysis_for_document(service, document);
+    session = workspace != NULL ? &workspace->last_successful_analysis : NULL;
     program = analysis_matches_document(session, document)
         ? find_program(session, document->path)
         : NULL;
-    query_ok = build_rename_from_session(session,
-                                         program,
-                                         document->path,
-                                         offset,
-                                         new_name,
-                                         &references,
-                                         &json);
+    exact_analysis_available = program != NULL;
+    query_ok = workspace != NULL &&
+               build_rename_from_workspace(
+                   service,
+                   (size_t)(workspace - service->last_successful_analyses),
+                   program,
+                   document->path,
+                   offset,
+                   new_name,
+                   &references,
+                   &json);
     if (query_ok && request_is_cancelled(service, id)) {
         pthread_mutex_unlock(&service->analysis_mutex);
         free(new_name);
@@ -22296,7 +25169,7 @@ static bool handle_rename_request(FengLspService *service,
         return send_error_response(output, id, -32800, "Request cancelled");
     }
     pthread_mutex_unlock(&service->analysis_mutex);
-    if (!query_ok) {
+    if (!query_ok && !exact_analysis_available) {
         reference_list_dispose(&references);
         string_dispose(&json);
         program = ensure_document_parse(document);
@@ -22326,6 +25199,9 @@ static bool handle_rename_request(FengLspService *service,
     free(new_name);
     free(uri);
     reference_list_dispose(&references);
+    if (!exact_analysis_available) {
+        schedule_analysis_for_cache_miss(service, document);
+    }
     if (!query_ok) {
         string_dispose(&json);
         return send_json_response(output, id, "null");
@@ -22346,7 +25222,8 @@ static FengLspRequestPriority request_priority_for_method(const char *method) {
         return FENG_LSP_PRIORITY_HIGHEST;
     }
     if (strcmp(method, "textDocument/definition") == 0 ||
-        strcmp(method, "textDocument/prepareRename") == 0) {
+        strcmp(method, "textDocument/prepareRename") == 0 ||
+        strcmp(method, "textDocument/implementation") == 0) {
         return FENG_LSP_PRIORITY_HIGH;
     }
     if (strcmp(method, "textDocument/references") == 0 ||
@@ -22433,7 +25310,7 @@ static void *request_worker_main(void *user) {
                                                         request.request_id);
         pthread_mutex_lock(&service->analysis_mutex);
         generation = service->document_revision;
-        cache_hit = service->last_successful_analysis.analysis != NULL ||
+        cache_hit = workspace_has_successful_analysis(service) ||
                     service->symbol_index != NULL;
         pthread_mutex_unlock(&service->analysis_mutex);
         feng_lsp_trace_end(&service->trace,
@@ -22543,7 +25420,11 @@ void feng_lsp_service_free(FengLspService *service) {
         pthread_mutex_unlock(&service->analysis_mutex);
         pthread_join(service->analyzer_thread, NULL);
     }
-    free(service->pending_analysis_uri);
+    for (index = 0U; index < service->pending_analysis_count; ++index) {
+        pending_analysis_dispose(&service->pending_analyses[index]);
+    }
+    free(service->pending_analyses);
+    free(service->running_analysis_identity);
     for (index = 0U; index < service->document_count; ++index) {
         document_dispose_derived(&service->documents[index]);
         free(service->documents[index].uri);
@@ -22552,9 +25433,19 @@ void feng_lsp_service_free(FengLspService *service) {
         feng_lsp_line_index_dispose(&service->documents[index].lines);
     }
     free(service->documents);
-    session_dispose(&service->last_successful_analysis);
+    for (size_t workspace_index = 0U;
+         workspace_index < service->last_successful_analysis_count;
+         ++workspace_index) {
+        session_dispose(
+            &service->last_successful_analyses[workspace_index].last_successful_analysis);
+    }
+    free(service->last_successful_analyses);
     feng_symbol_provider_free(service->symbol_index);
+    free(service->symbol_index_manifest_path);
+    free(service->symbol_index_primary_path);
     module_index_dispose(&service->module_index);
+    free(service->module_index_manifest_path);
+    free(service->module_index_primary_path);
     feng_lsp_scheduler_dispose(&service->request_scheduler);
     pthread_cond_destroy(&service->analysis_condition);
     pthread_mutex_destroy(&service->protocol_output_mutex);
@@ -22572,7 +25463,7 @@ static bool handle_initialize(FengLspService *service,
     }
     return send_json_response(output,
                               id,
-                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"resolveProvider\":true,\"triggerCharacters\":[\".\",\"_\",\"@\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
+                              "{\"capabilities\":{\"textDocumentSync\":{\"openClose\":true,\"change\":2,\"save\":{\"includeText\":false}},\"hoverProvider\":true,\"definitionProvider\":true,\"implementationProvider\":true,\"referencesProvider\":true,\"renameProvider\":{\"prepareProvider\":true},\"completionProvider\":{\"resolveProvider\":true,\"triggerCharacters\":[\".\",\"_\",\"@\",\"a\",\"b\",\"c\",\"d\",\"e\",\"f\",\"g\",\"h\",\"i\",\"j\",\"k\",\"l\",\"m\",\"n\",\"o\",\"p\",\"q\",\"r\",\"s\",\"t\",\"u\",\"v\",\"w\",\"x\",\"y\",\"z\",\"A\",\"B\",\"C\",\"D\",\"E\",\"F\",\"G\",\"H\",\"I\",\"J\",\"K\",\"L\",\"M\",\"N\",\"O\",\"P\",\"Q\",\"R\",\"S\",\"T\",\"U\",\"V\",\"W\",\"X\",\"Y\",\"Z\"]},\"signatureHelpProvider\":{\"triggerCharacters\":[\"(\",\",\"]}},\"serverInfo\":{\"name\":\"feng\"}}");
 }
 
 static bool service_handle_payload_unlocked(FengLspService *service,
@@ -22645,10 +25536,19 @@ static bool service_handle_payload_unlocked(FengLspService *service,
                     /* upsert_document already logged the OOM; document not tracked but server continues */
                     fprintf(errors, "lsp: textDocument/didOpen: document not tracked: '%s'\n", uri);
                 } else {
+                    FengLspDocument *opened_document =
+                        find_document(service, uri);
+                    bool refresh_workspace_index;
+
+                    pthread_mutex_lock(&service->analysis_mutex);
+                    refresh_workspace_index =
+                        !workspace_indexes_match_path(service,
+                                                      opened_document->path);
+                    pthread_mutex_unlock(&service->analysis_mutex);
                     schedule_background_analysis(service,
-                                                 find_document(service, uri),
+                                                 opened_document,
                                                  false,
-                                                 true,
+                                                 refresh_workspace_index,
                                                  false);
                 }
                 pthread_mutex_unlock(&service->documents_mutex);
@@ -22754,10 +25654,19 @@ static bool service_handle_payload_unlocked(FengLspService *service,
                             "lsp: textDocument/didChange: failed to update tracked document '%s'\n",
                             uri);
                 } else {
+                    FengLspDocument *changed_document =
+                        find_document(service, uri);
+                    bool refresh_workspace_index;
+
+                    pthread_mutex_lock(&service->analysis_mutex);
+                    refresh_workspace_index =
+                        !workspace_indexes_match_path(service,
+                                                      changed_document->path);
+                    pthread_mutex_unlock(&service->analysis_mutex);
                     schedule_background_analysis(service,
-                                                 find_document(service, uri),
+                                                 changed_document,
                                                  false,
-                                                 false,
+                                                 refresh_workspace_index,
                                                  true);
                 }
                 pthread_mutex_unlock(&service->documents_mutex);
@@ -22784,9 +25693,20 @@ static bool service_handle_payload_unlocked(FengLspService *service,
                 pthread_mutex_lock(&service->documents_mutex);
                 saved_doc = find_document(service, uri);
                 if (saved_doc != NULL) {
+                    bool refresh_workspace_index;
+
                     saved_doc->dirty = false;
                     ok = publish_current_parse_diagnostics(output, saved_doc);
-                    schedule_background_analysis(service, saved_doc, true, true, true);
+                    pthread_mutex_lock(&service->analysis_mutex);
+                    refresh_workspace_index =
+                        !workspace_indexes_match_path(service,
+                                                      saved_doc->path);
+                    pthread_mutex_unlock(&service->analysis_mutex);
+                    schedule_background_analysis(service,
+                                                 saved_doc,
+                                                 true,
+                                                 refresh_workspace_index,
+                                                 true);
                 }
                 pthread_mutex_unlock(&service->documents_mutex);
             }
@@ -22826,6 +25746,9 @@ static bool service_handle_payload_unlocked(FengLspService *service,
                             : send_error_response(output, null_id, -32600, "Invalid Request");
     } else if (strcmp(message.method, "textDocument/definition") == 0) {
         ok = message.has_id ? handle_definition_request(service, output, message.id, message.params)
+                            : send_error_response(output, null_id, -32600, "Invalid Request");
+    } else if (strcmp(message.method, "textDocument/implementation") == 0) {
+        ok = message.has_id ? handle_implementation_request(service, output, message.id, message.params)
                             : send_error_response(output, null_id, -32600, "Invalid Request");
     } else if (strcmp(message.method, "textDocument/references") == 0) {
         ok = message.has_id ? handle_references_request(service, output, message.id, message.params)

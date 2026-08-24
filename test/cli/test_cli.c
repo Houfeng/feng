@@ -1608,11 +1608,11 @@ static char *run_lsp_server_capture(FILE *input) {
     return captured;
 }
 
-/* Runs one LSP session after a position request proves that its asynchronous
- * index dependency is observable through the protocol. Unsuccessful probes
- * wait briefly so the asynchronous index can progress under cold or loaded
- * test environments. */
-static char *run_lsp_server_capture_after_position_ready(
+typedef void (*LspTestReadyAction)(FILE *input, int output_fd, void *user);
+
+/* Extended readiness runner that can perform ordered protocol actions before
+ * the final request batch while the same LSP process remains alive. */
+static char *run_lsp_server_capture_after_position_ready_action(
     const char *initialize,
     const char *did_open,
     const char *after_open,
@@ -1621,6 +1621,8 @@ static char *run_lsp_server_capture_after_position_ready(
     unsigned int line,
     unsigned int character,
     const char *ready_text,
+    LspTestReadyAction action,
+    void *action_user,
     const char *const *requests,
     size_t request_count,
     char **out_ready_output) {
@@ -1719,6 +1721,10 @@ static char *run_lsp_server_capture_after_position_ready(
         }
     }
 
+    if (ready && action != NULL) {
+        action(input, output_pipe[0], action_user);
+    }
+
     for (request_index = 0U; request_index < request_count; ++request_index) {
         write_lsp_message(input, requests[request_index]);
     }
@@ -1737,6 +1743,38 @@ static char *run_lsp_server_capture_after_position_ready(
     ASSERT(WIFEXITED(status));
     ASSERT(WEXITSTATUS(status) == 0);
     return captured;
+}
+
+/* Runs one LSP session after a position request proves that its asynchronous
+ * index dependency is observable through the protocol. Unsuccessful probes
+ * wait briefly so the asynchronous index can progress under cold or loaded
+ * test environments. */
+static char *run_lsp_server_capture_after_position_ready(
+    const char *initialize,
+    const char *did_open,
+    const char *after_open,
+    const char *method,
+    const char *uri,
+    unsigned int line,
+    unsigned int character,
+    const char *ready_text,
+    const char *const *requests,
+    size_t request_count,
+    char **out_ready_output) {
+    return run_lsp_server_capture_after_position_ready_action(
+        initialize,
+        did_open,
+        after_open,
+        method,
+        uri,
+        line,
+        character,
+        ready_text,
+        NULL,
+        NULL,
+        requests,
+        request_count,
+        out_ready_output);
 }
 
 /* Runs one asserted position request after its matching readiness probe. */
@@ -9648,6 +9686,41 @@ static void assert_lsp_test_response_contains(const char *output,
     ASSERT(match != NULL);
     ASSERT(next_response == NULL || match < next_response);
     free(id_marker);
+}
+
+/* Asserts one framed LSP response does not contain text from another
+ * response or an unrelated retained project. */
+static void assert_lsp_test_response_not_contains(const char *output,
+                                                  unsigned int id,
+                                                  const char *unexpected) {
+    char *id_marker = dup_printf("\"id\":%u,", id);
+    const char *response;
+    const char *next_response;
+    const char *match;
+
+    ASSERT(id_marker != NULL);
+    response = strstr(output, id_marker);
+    ASSERT(response != NULL);
+    next_response = strstr(response, "Content-Length:");
+    match = strstr(response, unexpected);
+    ASSERT(match == NULL || (next_response != NULL && match > next_response));
+    free(id_marker);
+}
+
+/* Sends one request and reads through its framed response. */
+static char *send_lsp_test_request_and_wait(FILE *input,
+                                            int output_fd,
+                                            const char *request,
+                                            unsigned int id) {
+    char *response_marker = dup_printf("\"id\":%u,", id);
+    char *output;
+
+    ASSERT(response_marker != NULL);
+    write_lsp_message(input, request);
+    ASSERT(fflush(input) == 0);
+    output = read_fd_until_contains(output_fd, response_marker);
+    free(response_marker);
+    return output;
 }
 
 /* Wait until asynchronous semantic analysis exposes one expected completion
@@ -20133,6 +20206,718 @@ static void test_lsp_mixin_diagnostic_related_information(void) {
     free(source_path);
 }
 
+/* Verifies a local dependency prewarmed without an open editor document is
+ * retained as a physical-source analysis and participates in every global
+ * refactoring/navigation query. */
+static void test_lsp_local_project_dependency_workspace_queries(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    static const char *kDependencySource =
+        "open module test.lsp.workspace_dependency;\n"
+        "open spec WorkspaceRenderer {\n"
+        "    open func render(value: string): string;\n"
+        "}\n"
+        "open type WorkspaceDecoy {\n"
+        "    open func render(value: string): string { return value; }\n"
+        "}\n"
+        "open type WorkspaceBox { open let value: string; }\n"
+        "open func workspace_value(): int { return 7; }\n"
+        "open func workspace_value(value: string): string { return value; }\n"
+        "open func echo_workspace(value: WorkspaceBox): WorkspaceBox { return value; }\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.workspace_consumer;\n"
+        "import test.lsp.workspace_dependency;\n"
+        "open type ConsumerRenderer: WorkspaceRenderer {\n"
+        "    open func render(value: string): string { return value; }\n"
+        "}\n"
+        "open func invoke(renderer: WorkspaceRenderer): string {\n"
+        "    let number = workspace_value();\n"
+        "    return renderer.render(\"ok\");\n"
+        "}\n"
+        "open func echo(box: WorkspaceBox): WorkspaceBox {\n"
+        "    return echo_workspace(box);\n"
+        "}\n";
+    static const char *kShadowDependencySource =
+        "open module test.lsp.workspace_dependency;\n"
+        "open func workspace_value(): int { return 99; }\n";
+    static const char *kShadowConsumerSource =
+        "open module test.lsp.workspace_shadow_consumer;\n"
+        "import test.lsp.workspace_dependency;\n"
+        "open func shadow_invoke(): int { return workspace_value(); }\n";
+    char template_path[] = "temp/feng_lsp_workspace_dependency_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *dependency_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *shadow_dependency_dir;
+    char *shadow_dependency_manifest;
+    char *shadow_dependency_src_dir;
+    char *shadow_dependency_source_path;
+    char *shadow_consumer_dir;
+    char *shadow_consumer_manifest;
+    char *shadow_consumer_src_dir;
+    char *shadow_consumer_source_path;
+    char *dependency_uri;
+    char *consumer_uri;
+    char *shadow_dependency_uri;
+    char *shadow_consumer_uri;
+    char *escaped_dependency;
+    char *escaped_consumer;
+    char *escaped_shadow_consumer;
+    char *did_open;
+    char *did_open_shadow_consumer;
+    char *did_open_dependency;
+    char *did_close_dependency;
+    char *definition;
+    char *references;
+    char *rename;
+    char *implementation_spec;
+    char *implementation_member;
+    char *definition_qualified;
+    char *definition_shadow;
+    char *references_shadow;
+    char *references_from_dependency;
+    char *definition_after_close;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[14];
+    unsigned int value_line;
+    unsigned int value_character;
+    unsigned int spec_line;
+    unsigned int spec_character;
+    unsigned int member_line;
+    unsigned int member_character;
+    unsigned int qualified_line;
+    unsigned int qualified_character;
+    unsigned int shadow_value_line;
+    unsigned int shadow_value_character;
+    unsigned int dependency_value_line;
+    unsigned int dependency_value_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    dependency_source_path = path_join(dependency_src_dir, "lib.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    shadow_dependency_dir = path_join(workspace_dir, "shadow_dependency");
+    shadow_dependency_manifest = path_join(shadow_dependency_dir, "feng.fm");
+    shadow_dependency_src_dir = path_join(shadow_dependency_dir, "src");
+    shadow_dependency_source_path = path_join(shadow_dependency_src_dir,
+                                              "lib.ff");
+    shadow_consumer_dir = path_join(workspace_dir, "shadow_consumer");
+    shadow_consumer_manifest = path_join(shadow_consumer_dir, "feng.fm");
+    shadow_consumer_src_dir = path_join(shadow_consumer_dir, "src");
+    shadow_consumer_source_path = path_join(shadow_consumer_src_dir,
+                                            "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    mkdir_p(shadow_dependency_src_dir);
+    mkdir_p(shadow_consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_workspace_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dependency_source_path, kDependencySource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_workspace_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_workspace_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+    write_text_file(shadow_dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_workspace_shadow_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(shadow_dependency_source_path, kShadowDependencySource);
+    write_text_file(shadow_consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_workspace_shadow_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_workspace_shadow_dependency: \"../shadow_dependency\"\n");
+    write_text_file(shadow_consumer_source_path, kShadowConsumerSource);
+
+    dependency_uri = file_uri_from_path(dependency_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    shadow_dependency_uri = file_uri_from_path(shadow_dependency_source_path);
+    shadow_consumer_uri = file_uri_from_path(shadow_consumer_source_path);
+    escaped_dependency = json_escape_text(kDependencySource);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    escaped_shadow_consumer = json_escape_text(kShadowConsumerSource);
+    find_line_character(kConsumerSource,
+                        "workspace_value();",
+                        1U,
+                        &value_line,
+                        &value_character);
+    find_line_character(kConsumerSource,
+                        "ConsumerRenderer: WorkspaceRenderer",
+                        strlen("ConsumerRenderer: ") + 1U,
+                        &spec_line,
+                        &spec_character);
+    find_line_character(kConsumerSource,
+                        "renderer.render(\"ok\")",
+                        strlen("renderer.") + 1U,
+                        &member_line,
+                        &member_character);
+    find_line_character(kConsumerSource,
+                        "echo_workspace(box)",
+                        1U,
+                        &qualified_line,
+                        &qualified_character);
+    find_line_character(kShadowConsumerSource,
+                        "workspace_value();",
+                        1U,
+                        &shadow_value_line,
+                        &shadow_value_character);
+    find_line_character(kDependencySource,
+                        "workspace_value(): int",
+                        1U,
+                        &dependency_value_line,
+                        &dependency_value_character);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    did_open_shadow_consumer = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        shadow_consumer_uri,
+        escaped_shadow_consumer);
+    did_open_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        dependency_uri,
+        escaped_dependency);
+    did_close_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+        dependency_uri);
+    definition = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        value_line,
+        value_character);
+    references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+        consumer_uri,
+        value_line,
+        value_character);
+    rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"newName\":\"workspace_total\"}}",
+        consumer_uri,
+        value_line,
+        value_character);
+    implementation_spec = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/implementation\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        spec_line,
+        spec_character);
+    implementation_member = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"textDocument/implementation\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        member_line,
+        member_character);
+    definition_qualified = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        qualified_line,
+        qualified_character);
+    definition_shadow = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":8,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        shadow_consumer_uri,
+        shadow_value_line,
+        shadow_value_character);
+    references_shadow = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":10,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+        shadow_consumer_uri,
+        shadow_value_line,
+        shadow_value_character);
+    references_from_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+        dependency_uri,
+        dependency_value_line,
+        dependency_value_character);
+    definition_after_close = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":12,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        value_line,
+        value_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    requests[0] = definition;
+    requests[1] = references;
+    requests[2] = rename;
+    requests[3] = implementation_spec;
+    requests[4] = implementation_member;
+    requests[5] = definition_qualified;
+    requests[6] = definition_shadow;
+    requests[7] = references_shadow;
+    requests[8] = did_open_dependency;
+    requests[9] = references_from_dependency;
+    requests[10] = did_close_dependency;
+    requests[11] = definition_after_close;
+    requests[12] = shutdown;
+    requests[13] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        did_open_shadow_consumer,
+        "textDocument/definition",
+        shadow_consumer_uri,
+        shadow_value_line,
+        shadow_value_character,
+        shadow_dependency_uri,
+        requests,
+        14U,
+        NULL);
+    assert_lsp_test_response_contains(output, 2U, dependency_uri);
+    assert_lsp_test_response_contains(output, 3U, dependency_uri);
+    assert_lsp_test_response_contains(output, 3U, consumer_uri);
+    assert_lsp_test_response_contains(output, 4U, dependency_uri);
+    assert_lsp_test_response_contains(output, 4U, consumer_uri);
+    assert_lsp_test_response_contains(output,
+                                      4U,
+                                      "\"newText\":\"workspace_total\"");
+    assert_lsp_test_response_contains(output, 5U, consumer_uri);
+    assert_lsp_test_response_contains(output, 6U, consumer_uri);
+    assert_lsp_test_response_contains(output, 7U, dependency_uri);
+    assert_lsp_test_response_contains(output, 8U, shadow_dependency_uri);
+    assert_lsp_test_response_contains(output, 10U, shadow_dependency_uri);
+    assert_lsp_test_response_contains(output, 10U, shadow_consumer_uri);
+    assert_lsp_test_response_not_contains(output, 10U, dependency_uri);
+    assert_lsp_test_response_not_contains(output, 10U, consumer_uri);
+    assert_lsp_test_response_contains(output, 11U, dependency_uri);
+    assert_lsp_test_response_contains(output, 11U, consumer_uri);
+    assert_lsp_test_response_not_contains(output, 11U, shadow_dependency_uri);
+    assert_lsp_test_response_not_contains(output, 11U, shadow_consumer_uri);
+    assert_lsp_test_response_contains(output, 12U, dependency_uri);
+    assert_lsp_test_response_not_contains(output, 3U, shadow_dependency_uri);
+    assert_lsp_test_response_not_contains(output, 3U, shadow_consumer_uri);
+    assert_lsp_test_response_not_contains(output, 4U, shadow_dependency_uri);
+    assert_lsp_test_response_not_contains(output, 4U, shadow_consumer_uri);
+
+    free(output);
+    free(shutdown);
+    free(definition_after_close);
+    free(references_from_dependency);
+    free(references_shadow);
+    free(definition_shadow);
+    free(definition_qualified);
+    free(implementation_member);
+    free(implementation_spec);
+    free(rename);
+    free(references);
+    free(definition);
+    free(did_close_dependency);
+    free(did_open_dependency);
+    free(did_open_shadow_consumer);
+    free(did_open);
+    free(escaped_shadow_consumer);
+    free(escaped_consumer);
+    free(escaped_dependency);
+    free(shadow_consumer_uri);
+    free(shadow_dependency_uri);
+    free(consumer_uri);
+    free(dependency_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(shadow_consumer_source_path);
+    free(shadow_consumer_src_dir);
+    free(shadow_consumer_manifest);
+    free(shadow_consumer_dir);
+    free(shadow_dependency_source_path);
+    free(shadow_dependency_src_dir);
+    free(shadow_dependency_manifest);
+    free(shadow_dependency_dir);
+    free(dependency_source_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
+/* State used by the ordered cache-lifecycle protocol assertions. */
+typedef struct LspWorkspaceCacheLifecycleAction {
+    const char *dependency_uri;
+    const char *consumer_uri;
+    const char *dependency_package_path;
+    const char *did_open_dependency;
+    const char *did_change_broken;
+    const char *did_save_dependency;
+    const char *did_change_original;
+    const char *did_change_shifted;
+    const char *did_close_dependency;
+    unsigned int value_line;
+    unsigned int value_character;
+    unsigned int shifted_declaration_line;
+} LspWorkspaceCacheLifecycleAction;
+
+/* Exercises failed-candidate retention and successful replacement inside one
+ * live service after the initial dependency sessions are ready. */
+static void run_lsp_workspace_cache_lifecycle_action(FILE *input,
+                                                     int output_fd,
+                                                     void *user) {
+    enum {
+        MAX_DIAGNOSTIC_PROBES = 200,
+        MAX_REPLACEMENT_PROBES = 200,
+        PROBE_DELAY_US = 25U * 1000U
+    };
+    LspWorkspaceCacheLifecycleAction *action =
+        (LspWorkspaceCacheLifecycleAction *)user;
+    char *request;
+    char *output;
+    char *package_before;
+    size_t package_before_length = 0U;
+    bool observed_semantic_failure = false;
+    bool observed_replacement = false;
+    size_t probe_index;
+
+    package_before = feng_cli_read_entire_file(
+        action->dependency_package_path,
+        &package_before_length);
+    ASSERT(package_before != NULL);
+
+    write_lsp_message(input, action->did_open_dependency);
+    request = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        action->consumer_uri,
+        action->value_line,
+        action->value_character);
+    output = send_lsp_test_request_and_wait(input, output_fd, request, 20U);
+    assert_lsp_test_response_contains(output, 20U, action->dependency_uri);
+    free(output);
+    free(request);
+
+    write_lsp_message(input, action->did_change_broken);
+    write_lsp_message(input, action->did_save_dependency);
+    ASSERT(fflush(input) == 0);
+    for (probe_index = 0U;
+         probe_index < MAX_DIAGNOSTIC_PROBES;
+         ++probe_index) {
+        unsigned int barrier_id = 6000U + (unsigned int)probe_index;
+        char *barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"feng/testCacheLifecycleBarrier\",\"params\":null}",
+            barrier_id);
+
+        output = send_lsp_test_request_and_wait(input,
+                                                output_fd,
+                                                barrier,
+                                                barrier_id);
+        free(barrier);
+        observed_semantic_failure =
+            strstr(output, "\"source\":\"semantic\"") != NULL;
+        free(output);
+        if (observed_semantic_failure) {
+            break;
+        }
+        (void)usleep(PROBE_DELAY_US);
+    }
+    ASSERT(observed_semantic_failure);
+
+    request = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":21,\"method\":\"textDocument/rename\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"newName\":\"workspace_after_failure\"}}",
+        action->consumer_uri,
+        action->value_line,
+        action->value_character);
+    output = send_lsp_test_request_and_wait(input, output_fd, request, 21U);
+    assert_lsp_test_response_contains(output, 21U, "\"result\":null");
+    free(output);
+    free(request);
+    request = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        action->consumer_uri,
+        action->value_line,
+        action->value_character);
+    output = send_lsp_test_request_and_wait(input, output_fd, request, 22U);
+    assert_lsp_test_response_contains(output, 22U, "\"result\":null");
+    free(output);
+    free(request);
+
+    write_lsp_message(input, action->did_change_original);
+    request = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":23,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        action->consumer_uri,
+        action->value_line,
+        action->value_character);
+    output = send_lsp_test_request_and_wait(input, output_fd, request, 23U);
+    assert_lsp_test_response_contains(output, 23U, action->dependency_uri);
+    free(output);
+    free(request);
+
+    write_lsp_message(input, action->did_change_shifted);
+    write_lsp_message(input, action->did_save_dependency);
+    ASSERT(fflush(input) == 0);
+    for (probe_index = 0U;
+         probe_index < MAX_REPLACEMENT_PROBES;
+         ++probe_index) {
+        unsigned int request_id = 7000U + (unsigned int)probe_index;
+        char *line_marker = dup_printf(
+            "\"start\":{\"line\":%u,",
+            action->shifted_declaration_line);
+
+        request = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+            request_id,
+            action->consumer_uri,
+            action->value_line,
+            action->value_character);
+        output = send_lsp_test_request_and_wait(input,
+                                                output_fd,
+                                                request,
+                                                request_id);
+        free(request);
+        observed_replacement = strstr(output, action->dependency_uri) != NULL &&
+                               strstr(output, line_marker) != NULL;
+        free(line_marker);
+        free(output);
+        if (observed_replacement) {
+            break;
+        }
+        (void)usleep(PROBE_DELAY_US);
+    }
+    ASSERT(observed_replacement);
+
+    write_lsp_message(input, action->did_close_dependency);
+    request = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        action->consumer_uri,
+        action->value_line,
+        action->value_character);
+    output = send_lsp_test_request_and_wait(input, output_fd, request, 24U);
+    assert_lsp_test_response_contains(output, 24U, action->dependency_uri);
+    {
+        char *line_marker = dup_printf(
+            "\"start\":{\"line\":%u,",
+            action->shifted_declaration_line);
+
+        assert_lsp_test_response_contains(output, 24U, line_marker);
+        free(line_marker);
+    }
+    free(output);
+    free(request);
+    {
+        size_t package_after_length = 0U;
+        char *package_after = feng_cli_read_entire_file(
+            action->dependency_package_path,
+            &package_after_length);
+
+        ASSERT(package_after != NULL);
+        ASSERT(package_after_length == package_before_length);
+        ASSERT(memcmp(package_after,
+                      package_before,
+                      package_before_length) == 0);
+        free(package_after);
+    }
+    free(package_before);
+}
+
+/* Verifies failed candidates never clear a project's previous successful
+ * session and a later success atomically replaces that same cache element. */
+static void test_lsp_local_project_dependency_cache_lifecycle(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    static const char *kDependencySource =
+        "open module test.lsp.cache_dependency;\n"
+        "open func workspace_value(): int { return 7; }\n";
+    static const char *kBrokenDependencySource =
+        "open module test.lsp.cache_dependency;\n"
+        "open func workspace_value(): int { return missing_value; }\n";
+    static const char *kShiftedDependencySource =
+        "// shifted declaration\n"
+        "open module test.lsp.cache_dependency;\n"
+        "open func workspace_value(): int { return 8; }\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.cache_consumer;\n"
+        "import test.lsp.cache_dependency;\n"
+        "open func invoke(): int { return workspace_value(); }\n";
+    char template_path[] = "temp/feng_lsp_workspace_cache_lifecycle_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *dependency_source_path;
+    char *dependency_package_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *dependency_uri;
+    char *consumer_uri;
+    char *escaped_dependency;
+    char *escaped_broken_dependency;
+    char *escaped_shifted_dependency;
+    char *escaped_consumer;
+    char *did_open_consumer;
+    char *did_open_dependency;
+    char *did_change_broken;
+    char *did_change_original;
+    char *did_change_shifted;
+    char *did_save_dependency;
+    char *did_close_dependency;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[2];
+    unsigned int value_line;
+    unsigned int value_character;
+    LspWorkspaceCacheLifecycleAction action = {0};
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    dependency_source_path = path_join(dependency_src_dir, "lib.ff");
+    dependency_package_path = path_join(
+        dependency_dir,
+        "build/pkg/lsp_cache_dependency-0.1.0.fb");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_cache_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dependency_source_path, kDependencySource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_cache_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_cache_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+
+    dependency_uri = file_uri_from_path(dependency_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_dependency = json_escape_text(kDependencySource);
+    escaped_broken_dependency = json_escape_text(kBrokenDependencySource);
+    escaped_shifted_dependency = json_escape_text(kShiftedDependencySource);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    find_line_character(kConsumerSource,
+                        "workspace_value();",
+                        1U,
+                        &value_line,
+                        &value_character);
+    did_open_consumer = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    did_open_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        dependency_uri,
+        escaped_dependency);
+    did_change_broken = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},\"contentChanges\":[{\"text\":\"%s\"}]}}",
+        dependency_uri,
+        escaped_broken_dependency);
+    did_change_original = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":3},\"contentChanges\":[{\"text\":\"%s\"}]}}",
+        dependency_uri,
+        escaped_dependency);
+    did_change_shifted = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":4},\"contentChanges\":[{\"text\":\"%s\"}]}}",
+        dependency_uri,
+        escaped_shifted_dependency);
+    did_save_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+        dependency_uri);
+    did_close_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+        dependency_uri);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":90,\"method\":\"shutdown\",\"params\":null}");
+    requests[0] = shutdown;
+    requests[1] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    action.dependency_uri = dependency_uri;
+    action.consumer_uri = consumer_uri;
+    action.dependency_package_path = dependency_package_path;
+    action.did_open_dependency = did_open_dependency;
+    action.did_change_broken = did_change_broken;
+    action.did_save_dependency = did_save_dependency;
+    action.did_change_original = did_change_original;
+    action.did_change_shifted = did_change_shifted;
+    action.did_close_dependency = did_close_dependency;
+    action.value_line = value_line;
+    action.value_character = value_character;
+    action.shifted_declaration_line = 2U;
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize,
+        did_open_consumer,
+        NULL,
+        "textDocument/definition",
+        consumer_uri,
+        value_line,
+        value_character,
+        dependency_uri,
+        run_lsp_workspace_cache_lifecycle_action,
+        &action,
+        requests,
+        2U,
+        NULL);
+
+    free(output);
+    free(shutdown);
+    free(did_close_dependency);
+    free(did_save_dependency);
+    free(did_change_shifted);
+    free(did_change_original);
+    free(did_change_broken);
+    free(did_open_dependency);
+    free(did_open_consumer);
+    free(escaped_consumer);
+    free(escaped_shifted_dependency);
+    free(escaped_broken_dependency);
+    free(escaped_dependency);
+    free(consumer_uri);
+    free(dependency_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(dependency_source_path);
+    free(dependency_package_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -20232,6 +21017,8 @@ int main(void) {
     test_lsp_completion_uses_inferred_callable_return_types();
     test_lsp_completion_inferred_callable_without_fact_fails_closed();
     test_lsp_hover_inferred_callable_across_dependency_boundaries();
+    test_lsp_local_project_dependency_workspace_queries();
+    test_lsp_local_project_dependency_cache_lifecycle();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
