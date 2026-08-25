@@ -12246,6 +12246,266 @@ static void test_lsp_generic_type_reference_hover_and_definition(void) {
     free(manifest_path);
 }
 
+/* Generic type parameters must remain distinct lexical symbols for
+ * References and Rename, including tuple-field type references. */
+static void test_lsp_type_param_references_and_rename(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_type_param_references\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kSource =
+        "open module test.lsp.type_param_references;\n"
+        "open type Tuple<T1, T2>(T1, T2);\n"
+        "open type Separate<T1> {}\n"
+        "func readyText(): string { return \"ready\"; }\n"
+        "open func exercise(): void {\n"
+        "    let readiness = readyText();\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_lsp_type_param_refs_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *t1_references;
+    char *t1_prepare_rename;
+    char *t1_rename;
+    char *t2_references;
+    char *t2_prepare_rename;
+    char *t2_rename;
+    char *shutdown;
+    char *output;
+    char *t1_declaration_location;
+    char *t1_usage_location;
+    char *t2_declaration_location;
+    char *t2_usage_location;
+    char *separate_location;
+    const char *requests[8];
+    unsigned int readiness_line;
+    unsigned int readiness_character;
+    unsigned int tuple_line;
+    unsigned int t1_declaration_character;
+    unsigned int t1_usage_character;
+    unsigned int t2_declaration_character;
+    unsigned int t2_usage_character;
+    unsigned int separate_line;
+    unsigned int separate_character;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "generic.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(source_path, kSource);
+
+    find_line_character(kSource,
+                        "    let readiness = readyText();",
+                        strlen("    let "),
+                        &readiness_line,
+                        &readiness_character);
+    find_line_character(kSource,
+                        "open type Tuple<T1, T2>(T1, T2);",
+                        strlen("open type Tuple<"),
+                        &tuple_line,
+                        &t1_declaration_character);
+    find_line_character(kSource,
+                        "open type Tuple<T1, T2>(T1, T2);",
+                        strlen("open type Tuple<T1, T2>("),
+                        &tuple_line,
+                        &t1_usage_character);
+    find_line_character(kSource,
+                        "open type Tuple<T1, T2>(T1, T2);",
+                        strlen("open type Tuple<T1, "),
+                        &tuple_line,
+                        &t2_declaration_character);
+    find_line_character(kSource,
+                        "open type Tuple<T1, T2>(T1, T2);",
+                        strlen("open type Tuple<T1, T2>(T1, "),
+                        &tuple_line,
+                        &t2_usage_character);
+    find_line_character(kSource,
+                        "open type Separate<T1> {}",
+                        strlen("open type Separate<"),
+                        &separate_line,
+                        &separate_character);
+
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    t1_references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,"
+        "\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":true}}}",
+        uri,
+        tuple_line,
+        t1_declaration_character);
+    t1_prepare_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":3,"
+        "\"method\":\"textDocument/prepareRename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        tuple_line,
+        t1_declaration_character);
+    t1_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":4,"
+        "\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"Left\"}}",
+        uri,
+        tuple_line,
+        t1_declaration_character);
+    t2_references = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":5,"
+        "\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":true}}}",
+        uri,
+        tuple_line,
+        t2_declaration_character);
+    t2_prepare_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":6,"
+        "\"method\":\"textDocument/prepareRename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u}}}",
+        uri,
+        tuple_line,
+        t2_declaration_character);
+    t2_rename = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":7,"
+        "\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"Right\"}}",
+        uri,
+        tuple_line,
+        t2_declaration_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(did_open != NULL);
+    ASSERT(t1_references != NULL);
+    ASSERT(t1_prepare_rename != NULL);
+    ASSERT(t1_rename != NULL);
+    ASSERT(t2_references != NULL);
+    ASSERT(t2_prepare_rename != NULL);
+    ASSERT(t2_rename != NULL);
+    ASSERT(shutdown != NULL);
+    requests[0] = t1_references;
+    requests[1] = t1_prepare_rename;
+    requests[2] = t1_rename;
+    requests[3] = t2_references;
+    requests[4] = t2_prepare_rename;
+    requests[5] = t2_rename;
+    requests[6] = shutdown;
+    requests[7] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    t1_declaration_location = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        tuple_line,
+        t1_declaration_character);
+    t1_usage_location = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        tuple_line,
+        t1_usage_character);
+    t2_declaration_location = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        tuple_line,
+        t2_declaration_character);
+    t2_usage_location = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        tuple_line,
+        t2_usage_character);
+    separate_location = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        separate_line,
+        separate_character);
+    ASSERT(t1_declaration_location != NULL);
+    ASSERT(t1_usage_location != NULL);
+    ASSERT(t2_declaration_location != NULL);
+    ASSERT(t2_usage_location != NULL);
+    ASSERT(separate_location != NULL);
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        uri,
+        readiness_line,
+        readiness_character,
+        "let readiness: string",
+        requests,
+        8U,
+        NULL);
+
+    assert_lsp_test_response_contains(output, 2U, t1_declaration_location);
+    assert_lsp_test_response_contains(output, 2U, t1_usage_location);
+    assert_lsp_test_response_not_contains(output, 2U, separate_location);
+    assert_lsp_test_response_contains(output, 3U, "\"placeholder\":\"T1\"");
+    assert_lsp_test_response_contains(output, 4U, "\"newText\":\"Left\"");
+    assert_lsp_test_response_contains(output, 5U, t2_declaration_location);
+    assert_lsp_test_response_contains(output, 5U, t2_usage_location);
+    assert_lsp_test_response_not_contains(output, 5U, separate_location);
+    assert_lsp_test_response_contains(output, 6U, "\"placeholder\":\"T2\"");
+    assert_lsp_test_response_contains(output, 7U, "\"newText\":\"Right\"");
+    ASSERT(count_occurrences(output, "\"newText\":\"Left\"") == 2);
+    ASSERT(count_occurrences(output, "\"newText\":\"Right\"") == 2);
+
+    free(output);
+    free(separate_location);
+    free(t2_usage_location);
+    free(t2_declaration_location);
+    free(t1_usage_location);
+    free(t1_declaration_location);
+    free(shutdown);
+    free(t2_rename);
+    free(t2_prepare_rename);
+    free(t2_references);
+    free(t1_rename);
+    free(t1_prepare_rename);
+    free(t1_references);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 static void test_lsp_rename_accepts_identifier_end_position(void) {
     static const char *kSource =
         "module test.lsp.renameend;\n"
@@ -21197,6 +21457,7 @@ int main(void) {
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_type_references_cover_all_ast_positions();
     test_lsp_generic_type_reference_hover_and_definition();
+    test_lsp_type_param_references_and_rename();
     test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();

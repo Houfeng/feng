@@ -13619,6 +13619,99 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
     return false;
 }
 
+/* Returns whether one AST-owned type-parameter list contains target. */
+static bool type_param_list_contains(const FengTypeParam *type_params,
+                                     size_t type_param_count,
+                                     const FengTypeParam *target) {
+    size_t index;
+
+    if (type_params == NULL || target == NULL) {
+        return false;
+    }
+    for (index = 0U; index < type_param_count; ++index) {
+        if (&type_params[index] == target) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Returns whether a source callable member explicitly declares target. */
+static bool member_declares_type_param(const FengTypeMember *member,
+                                       const FengTypeParam *target) {
+    return member != NULL && member->kind != FENG_TYPE_MEMBER_FIELD &&
+           member->mixin_origin == NULL &&
+           type_param_list_contains(member->as.callable.type_params,
+                                    member->as.callable.type_param_count,
+                                    target);
+}
+
+/* Verifies that a resolved type parameter is persistent source AST owned by
+ * owner. Inferred fit parameters are temporary LSP views and are excluded. */
+static bool decl_owns_type_param(const FengDecl *owner,
+                                 const FengTypeParam *target) {
+    size_t index;
+
+    if (owner == NULL || target == NULL) {
+        return false;
+    }
+    switch (owner->kind) {
+        case FENG_DECL_FUNCTION:
+            return type_param_list_contains(
+                owner->as.function_decl.type_params,
+                owner->as.function_decl.type_param_count,
+                target);
+        case FENG_DECL_TYPE:
+            if (type_param_list_contains(owner->as.type_decl.type_params,
+                                         owner->as.type_decl.type_param_count,
+                                         target)) {
+                return true;
+            }
+            for (index = 0U;
+                 index < owner->as.type_decl.member_count;
+                 ++index) {
+                if (member_declares_type_param(
+                        owner->as.type_decl.members[index], target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_DECL_SPEC:
+            if (type_param_list_contains(owner->as.spec_decl.type_params,
+                                         owner->as.spec_decl.type_param_count,
+                                         target)) {
+                return true;
+            }
+            if (owner->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+                return false;
+            }
+            for (index = 0U;
+                 index < owner->as.spec_decl.as.object.member_count;
+                 ++index) {
+                if (member_declares_type_param(
+                        owner->as.spec_decl.as.object.members[index],
+                        target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_DECL_FIT:
+            for (index = 0U;
+                 index < owner->as.fit_decl.member_count;
+                 ++index) {
+                if (member_declares_type_param(
+                        owner->as.fit_decl.members[index], target)) {
+                    return true;
+                }
+            }
+            return false;
+        case FENG_DECL_GLOBAL_BINDING:
+        case FENG_DECL_ENUM:
+            return false;
+    }
+    return false;
+}
+
 static bool resolved_target_supports_references(const FengLspResolvedTarget *target) {
     if (target == NULL) {
         return false;
@@ -13638,9 +13731,11 @@ static bool resolved_target_supports_references(const FengLspResolvedTarget *tar
             return target->binding != NULL;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
             return false;
+        case FENG_LSP_RESOLVED_TYPE_PARAM:
+            return decl_owns_type_param(target->type_param_owner,
+                                        target->type_param);
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_SELF:
-        case FENG_LSP_RESOLVED_TYPE_PARAM:
             return false;
     }
     return false;
@@ -13701,11 +13796,13 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
         case FENG_LSP_RESOLVED_PARAM:
         case FENG_LSP_RESOLVED_BINDING:
             return true;
+        case FENG_LSP_RESOLVED_TYPE_PARAM:
+            return resolved_decl_has_writable_source(
+                session, target->type_param_owner);
         case FENG_LSP_RESOLVED_MATCH_BINDING:
             return false;
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_SELF:
-        case FENG_LSP_RESOLVED_TYPE_PARAM:
             return false;
     }
     return false;
@@ -15549,6 +15646,8 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
 static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
                                            const FengProgram *program,
                                            const FengCliLoadedSource *source,
+                                           const FengDecl *owner_decl,
+                                           const FengTypeMember *owner_member,
                                            const FengTypeRef *type_ref,
                                            const FengLspResolvedTarget *target,
                                            FengLspReferenceList *references);
@@ -15566,6 +15665,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
 static bool collect_references_in_parameters(const FengLspAnalysisSession *session,
                                              const FengProgram *program,
                                              const FengCliLoadedSource *source,
+                                             const FengDecl *owner_decl,
+                                             const FengTypeMember *owner_member,
                                              const FengParameter *params,
                                              size_t param_count,
                                              bool include_declaration,
@@ -15724,6 +15825,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                         session,
                         program,
                         source,
+                        owner_decl,
+                        owner_member,
                         expr->as.generic_target.type_args[index],
                         target,
                         references)) {
@@ -15735,6 +15838,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
             return collect_references_in_type_ref(session,
                                                   program,
                                                   source,
+                                                  owner_decl,
+                                                  owner_member,
                                                   expr->as.array_new.element_type,
                                                   target,
                                                   references) &&
@@ -15834,6 +15939,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                         session,
                         program,
                         source,
+                        owner_decl,
+                        owner_member,
                         expr->as.call.explicit_type_args[index],
                         target,
                         references)) {
@@ -15901,6 +16008,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
             if (!collect_references_in_parameters(session,
                                                   program,
                                                   source,
+                                                  owner_decl,
+                                                  owner_member,
                                                   expr->as.lambda.params,
                                                   expr->as.lambda.param_count,
                                                   false,
@@ -15931,6 +16040,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
             return collect_references_in_type_ref(session,
                                                   program,
                                                   source,
+                                                  owner_decl,
+                                                  owner_member,
                                                   expr->as.cast.type,
                                                   target,
                                                   references) &&
@@ -16037,6 +16148,8 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                 if (!collect_references_in_type_ref(session,
                                                      program,
                                                      source,
+                                                     owner_decl,
+                                                     owner_member,
                                                      clause->type,
                                                      target,
                                                      references) ||
@@ -16063,9 +16176,61 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
     return true;
 }
 
+/* Returns the declaration-level generic parameters visible inside owner. */
+static void decl_type_param_scope(const FengDecl *owner,
+                                  const FengTypeParam **type_params,
+                                  size_t *type_param_count) {
+    *type_params = NULL;
+    *type_param_count = 0U;
+    if (owner == NULL) {
+        return;
+    }
+    if (owner->kind == FENG_DECL_FUNCTION) {
+        *type_params = owner->as.function_decl.type_params;
+        *type_param_count = owner->as.function_decl.type_param_count;
+    } else if (owner->kind == FENG_DECL_TYPE) {
+        *type_params = owner->as.type_decl.type_params;
+        *type_param_count = owner->as.type_decl.type_param_count;
+    } else if (owner->kind == FENG_DECL_SPEC) {
+        *type_params = owner->as.spec_decl.type_params;
+        *type_param_count = owner->as.spec_decl.type_param_count;
+    }
+}
+
+/* Resolves one bare type name against the lexical generic-parameter scope. */
+static const FengTypeParam *find_scoped_type_param(
+    const FengDecl *owner_decl,
+    const FengTypeMember *owner_member,
+    FengSlice name) {
+    const FengTypeParam *type_params = NULL;
+    size_t type_param_count = 0U;
+    size_t index;
+
+    if (owner_member != NULL &&
+        owner_member->kind != FENG_TYPE_MEMBER_FIELD &&
+        owner_member->mixin_origin == NULL) {
+        type_params = owner_member->as.callable.type_params;
+        type_param_count = owner_member->as.callable.type_param_count;
+        for (index = 0U; index < type_param_count; ++index) {
+            if (slice_equals(type_params[index].name, name)) {
+                return &type_params[index];
+            }
+        }
+    }
+    decl_type_param_scope(owner_decl, &type_params, &type_param_count);
+    for (index = 0U; index < type_param_count; ++index) {
+        if (slice_equals(type_params[index].name, name)) {
+            return &type_params[index];
+        }
+    }
+    return NULL;
+}
+
 static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
                                            const FengProgram *program,
                                            const FengCliLoadedSource *source,
+                                           const FengDecl *owner_decl,
+                                           const FengTypeMember *owner_member,
                                            const FengTypeRef *type_ref,
                                            const FengLspResolvedTarget *target,
                                            FengLspReferenceList *references) {
@@ -16076,13 +16241,28 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
     }
     if (type_ref->kind == FENG_TYPE_REF_NAMED) {
         FengLspResolvedTarget candidate = {0};
+        const FengTypeParam *type_param = NULL;
+        FengSlice name = type_ref->as.named.segments[
+            type_ref->as.named.segment_count - 1U];
 
-        candidate.kind = FENG_LSP_RESOLVED_DECL;
-        candidate.decl = resolve_named_type_ref(session, program, type_ref);
-        if (candidate.decl != NULL &&
+        if (type_ref->as.named.segment_count == 1U &&
+            type_ref->as.named.type_arg_count == 0U) {
+            type_param = find_scoped_type_param(owner_decl,
+                                                owner_member,
+                                                name);
+        }
+        if (type_param != NULL) {
+            candidate.kind = FENG_LSP_RESOLVED_TYPE_PARAM;
+            candidate.type_param = type_param;
+            candidate.type_param_owner = owner_decl;
+        } else {
+            candidate.kind = FENG_LSP_RESOLVED_DECL;
+            candidate.decl = resolve_named_type_ref(session, program, type_ref);
+        }
+        if ((candidate.decl != NULL || candidate.type_param != NULL) &&
             !add_reference_if_match(references,
                                     source,
-                                    type_ref->as.named.segments[type_ref->as.named.segment_count - 1U],
+                                    name,
                                     target,
                                     &candidate)) {
             return false;
@@ -16091,6 +16271,8 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
             if (!collect_references_in_type_ref(session,
                                                 program,
                                                 source,
+                                                owner_decl,
+                                                owner_member,
                                                 type_ref->as.named.type_args[index],
                                                 target,
                                                 references)) {
@@ -16102,6 +16284,8 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
     return collect_references_in_type_ref(session,
                                           program,
                                           source,
+                                          owner_decl,
+                                          owner_member,
                                           type_ref->as.inner,
                                           target,
                                           references);
@@ -16111,6 +16295,8 @@ static bool collect_references_in_type_ref(const FengLspAnalysisSession *session
 static bool collect_references_in_parameters(const FengLspAnalysisSession *session,
                                              const FengProgram *program,
                                              const FengCliLoadedSource *source,
+                                             const FengDecl *owner_decl,
+                                             const FengTypeMember *owner_member,
                                              const FengParameter *params,
                                              size_t param_count,
                                              bool include_declaration,
@@ -16128,6 +16314,8 @@ static bool collect_references_in_parameters(const FengLspAnalysisSession *sessi
         if (!collect_references_in_type_ref(session,
                                             program,
                                             source,
+                                            owner_decl,
+                                            owner_member,
                                             params[index].type,
                                             target,
                                             references)) {
@@ -16137,20 +16325,33 @@ static bool collect_references_in_parameters(const FengLspAnalysisSession *sessi
     return true;
 }
 
-/* Collects constraint type references declared by generic parameters. */
+/* Collects generic-parameter declarations and their constraint references. */
 static bool collect_references_in_type_params(const FengLspAnalysisSession *session,
                                               const FengProgram *program,
                                               const FengCliLoadedSource *source,
+                                              const FengDecl *owner_decl,
+                                              const FengTypeMember *owner_member,
                                               const FengTypeParam *type_params,
                                               size_t type_param_count,
+                                              bool include_declaration,
                                               const FengLspResolvedTarget *target,
                                               FengLspReferenceList *references) {
     size_t index;
 
     for (index = 0U; index < type_param_count; ++index) {
+        if (include_declaration && target != NULL &&
+            target->kind == FENG_LSP_RESOLVED_TYPE_PARAM &&
+            target->type_param == &type_params[index] &&
+            !reference_list_push_slice(references,
+                                       source,
+                                       type_params[index].name)) {
+            return false;
+        }
         if (!collect_references_in_type_ref(session,
                                             program,
                                             source,
+                                            owner_decl,
+                                            owner_member,
                                             type_params[index].constraint,
                                             target,
                                             references)) {
@@ -16165,12 +16366,16 @@ static bool collect_references_in_match_type_label(
     const FengLspAnalysisSession *session,
     const FengProgram *program,
     const FengCliLoadedSource *source,
+    const FengDecl *lexical_owner_decl,
+    const FengTypeMember *lexical_owner_member,
     const FengTypeRef *type_ref,
     const FengLspResolvedTarget *target,
     FengLspReferenceList *references) {
     if (!collect_references_in_type_ref(session,
                                         program,
                                         source,
+                                        lexical_owner_decl,
+                                        lexical_owner_member,
                                         type_ref,
                                         target,
                                         references)) {
@@ -16265,6 +16470,8 @@ static bool collect_references_in_match_label(const FengLspAnalysisSession *sess
         return collect_references_in_match_type_label(session,
                                                       program,
                                                       source,
+                                                      owner_decl,
+                                                      owner_member,
                                                       label->type,
                                                       target,
                                                       references) &&
@@ -16280,6 +16487,8 @@ static bool collect_references_in_match_label(const FengLspAnalysisSession *sess
     if (!collect_references_in_match_type_label(session,
                                                 program,
                                                 source,
+                                                owner_decl,
+                                                owner_member,
                                                 label->type,
                                                 target,
                                                 references)) {
@@ -16289,6 +16498,8 @@ static bool collect_references_in_match_label(const FengLspAnalysisSession *sess
         if (!collect_references_in_match_type_label(session,
                                                     program,
                                                     source,
+                                                    owner_decl,
+                                                    owner_member,
                                                     label->type_chain[index],
                                                     target,
                                                     references)) {
@@ -16409,6 +16620,8 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
             return collect_references_in_type_ref(session,
                                                   program,
                                                   source,
+                                                  owner_decl,
+                                                  owner_member,
                                                   stmt->as.binding.type,
                                                   target,
                                                   references) &&
@@ -16538,6 +16751,8 @@ static bool collect_references_in_stmt(const FengLspAnalysisSession *session,
                 return collect_references_in_type_ref(session,
                                                       program,
                                                       source,
+                                                      owner_decl,
+                                                      owner_member,
                                                       stmt->as.for_stmt.iter_binding.type,
                                                       target,
                                                       references) &&
@@ -16640,6 +16855,8 @@ static bool collect_references_in_member(const FengLspAnalysisSession *session,
         return collect_references_in_type_ref(session,
                                               program,
                                               source,
+                                              owner_decl,
+                                              member,
                                               member->as.field.type,
                                               target,
                                               references) &&
@@ -16655,13 +16872,18 @@ static bool collect_references_in_member(const FengLspAnalysisSession *session,
     return collect_references_in_type_params(session,
                                              program,
                                              source,
+                                             owner_decl,
+                                             member,
                                              member->as.callable.type_params,
                                              member->as.callable.type_param_count,
+                                             include_declaration,
                                              target,
                                              references) &&
            collect_references_in_parameters(session,
                                             program,
                                             source,
+                                            owner_decl,
+                                            member,
                                             member->as.callable.params,
                                             member->as.callable.param_count,
                                             include_declaration,
@@ -16670,6 +16892,8 @@ static bool collect_references_in_member(const FengLspAnalysisSession *session,
            collect_references_in_type_ref(session,
                                           program,
                                           source,
+                                          owner_decl,
+                                          member,
                                           member->as.callable.return_type,
                                           target,
                                           references) &&
@@ -16708,6 +16932,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
             return collect_references_in_type_ref(session,
                                                   program,
                                                   source,
+                                                  decl,
+                                                  NULL,
                                                   decl->as.binding.type,
                                                   target,
                                                   references) &&
@@ -16738,14 +16964,19 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                        session,
                        program,
                        source,
+                       decl,
+                       NULL,
                        decl->as.function_decl.type_params,
                        decl->as.function_decl.type_param_count,
+                       include_declaration,
                        target,
                        references) &&
                    collect_references_in_parameters(
                        session,
                        program,
                        source,
+                       decl,
+                       NULL,
                        decl->as.function_decl.params,
                        decl->as.function_decl.param_count,
                        include_declaration,
@@ -16754,6 +16985,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                    collect_references_in_type_ref(session,
                                                   program,
                                                   source,
+                                                  decl,
+                                                  NULL,
                                                   decl->as.function_decl.return_type,
                                                   target,
                                                   references) &&
@@ -16770,8 +17003,11 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
             if (!collect_references_in_type_params(session,
                                                    program,
                                                    source,
+                                                   decl,
+                                                   NULL,
                                                    decl->as.type_decl.type_params,
                                                    decl->as.type_decl.type_param_count,
+                                                   include_declaration,
                                                    target,
                                                    references)) {
                 return false;
@@ -16782,6 +17018,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                 if (!collect_references_in_type_ref(session,
                                                     program,
                                                     source,
+                                                    decl,
+                                                    NULL,
                                                     mixin->source_type,
                                                     target,
                                                     references) ||
@@ -16800,6 +17038,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                 if (!collect_references_in_type_ref(session,
                                                     program,
                                                     source,
+                                                    decl,
+                                                    NULL,
                                                     decl->as.type_decl.declared_specs[index],
                                                     target,
                                                     references)) {
@@ -16823,8 +17063,11 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
             if (!collect_references_in_type_params(session,
                                                    program,
                                                    source,
+                                                   decl,
+                                                   NULL,
                                                    decl->as.spec_decl.type_params,
                                                    decl->as.spec_decl.type_param_count,
+                                                   include_declaration,
                                                    target,
                                                    references)) {
                 return false;
@@ -16833,6 +17076,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                 if (!collect_references_in_type_ref(session,
                                                     program,
                                                     source,
+                                                    decl,
+                                                    NULL,
                                                     decl->as.spec_decl.parent_specs[index],
                                                     target,
                                                     references)) {
@@ -16857,6 +17102,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                            session,
                            program,
                            source,
+                           decl,
+                           NULL,
                            decl->as.spec_decl.as.callable.params,
                            decl->as.spec_decl.as.callable.param_count,
                            include_declaration,
@@ -16866,6 +17113,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                            session,
                            program,
                            source,
+                           decl,
+                           NULL,
                            decl->as.spec_decl.as.callable.return_type,
                            target,
                            references);
@@ -16883,6 +17132,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                     if (!collect_references_in_type_ref(session,
                                                         program,
                                                         source,
+                                                        decl,
+                                                        NULL,
                                                         members[index],
                                                         target,
                                                         references)) {
@@ -16895,6 +17146,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
             if (!collect_references_in_type_ref(session,
                                                 program,
                                                 source,
+                                                decl,
+                                                NULL,
                                                 decl->as.fit_decl.target,
                                                 target,
                                                 references)) {
@@ -16904,6 +17157,8 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
                 if (!collect_references_in_type_ref(session,
                                                     program,
                                                     source,
+                                                    decl,
+                                                    NULL,
                                                     decl->as.fit_decl.specs[index],
                                                     target,
                                                     references)) {
