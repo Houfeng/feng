@@ -4259,6 +4259,16 @@ static size_t expr_end(const FengExpr *expr) {
                     end = callee_end;
                 }
             }
+            for (index = 0U;
+                 index < expr->as.call.explicit_type_arg_count;
+                 ++index) {
+                size_t type_end = type_ref_end(
+                    expr->as.call.explicit_type_args[index]);
+
+                if (type_end > end) {
+                    end = type_end;
+                }
+            }
             for (index = 0U; index < expr->as.call.arg_count; ++index) {
                 size_t arg_end = expr_end(expr->as.call.args[index]);
 
@@ -7041,76 +7051,45 @@ static const FengSemanticModule *find_alias_module(const FengLspAnalysisSession 
     return NULL;
 }
 
+/* Forward declaration for the single-segment named-TypeRef path. */
+static const FengDecl *resolve_type_name_with_arity(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    FengSlice name,
+    size_t type_param_count);
+
 static const FengDecl *resolve_named_type_ref(const FengLspAnalysisSession *session,
                                               const FengProgram *program,
                                               const FengTypeRef *type_ref) {
-    const FengSemanticModule *program_module;
     size_t index;
+    size_t arity;
     FengSlice name;
 
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED || type_ref->as.named.segment_count == 0U) {
         return NULL;
     }
     name = type_ref->as.named.segments[type_ref->as.named.segment_count - 1U];
+    arity = type_ref->as.named.type_arg_count;
     if (type_ref->as.named.segment_count == 1U) {
         if (feng_semantic_is_builtin_type_name(name)) {
             return NULL;
         }
-        program_module = find_program_module(session, program);
-        if (program_module != NULL) {
-            const FengDecl *decl = find_module_decl_by_name(program_module, name, false, true, false);
-
-            if (decl != NULL) {
-                return decl;
-            }
-        }
-        {
-            const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                                  program->module_segments,
-                                                                  program->module_segment_count,
-                                                                  name,
-                                                                  false,
-                                                                  true,
-                                                                  false);
-            if (decl != NULL) {
-                return decl;
-            }
-        }
-        for (index = 0U; index < program->use_count; ++index) {
-            const FengUseDecl *use_decl = &program->uses[index];
-            const FengSemanticModule *module;
-
-            if (use_decl->has_alias) {
-                continue;
-            }
-            module = find_module_by_segments(session->analysis, use_decl->segments, use_decl->segment_count);
-            if (module != NULL) {
-                const FengDecl *decl = find_module_decl_by_name(module, name, false, true, true);
-
-                if (decl != NULL) {
-                    return decl;
-                }
-            }
-            {
-                const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                                      use_decl->segments,
-                                                                      use_decl->segment_count,
-                                                                      name,
-                                                                      false,
-                                                                      true,
-                                                                      true);
-                if (decl != NULL) {
-                    return decl;
-                }
-            }
-        }
-        return NULL;
+        return resolve_type_name_with_arity(session, program, name, arity);
     }
     if (type_ref->as.named.segment_count == 2U) {
         const FengSemanticModule *alias_module = find_alias_module(session,
                                                                    program,
                                                                    type_ref->as.named.segments[0]);
         if (alias_module != NULL) {
+            const FengDecl *decl = find_module_type_decl_by_name_and_arity(
+                alias_module,
+                type_ref->as.named.segments[1],
+                arity,
+                true);
+
+            if (decl != NULL) {
+                return decl;
+            }
             return find_module_decl_by_name(alias_module,
                                             type_ref->as.named.segments[1],
                                             false,
@@ -7121,13 +7100,26 @@ static const FengDecl *resolve_named_type_ref(const FengLspAnalysisSession *sess
             const FengUseDecl *use_decl = &program->uses[index];
 
             if (use_decl->has_alias && slice_equals(use_decl->alias, type_ref->as.named.segments[0])) {
-                const FengDecl *decl = find_loaded_module_decl_by_name(session,
-                                                                      use_decl->segments,
-                                                                      use_decl->segment_count,
-                                                                      type_ref->as.named.segments[1],
-                                                                      false,
-                                                                      true,
-                                                                      true);
+                const FengDecl *decl =
+                    find_loaded_module_type_decl_by_name_and_arity(
+                        session,
+                        use_decl->segments,
+                        use_decl->segment_count,
+                        type_ref->as.named.segments[1],
+                        arity,
+                        true);
+
+                if (decl != NULL) {
+                    return decl;
+                }
+                decl = find_loaded_module_decl_by_name(
+                    session,
+                    use_decl->segments,
+                    use_decl->segment_count,
+                    type_ref->as.named.segments[1],
+                    false,
+                    true,
+                    true);
                 if (decl != NULL) {
                     return decl;
                 }
@@ -7135,24 +7127,46 @@ static const FengDecl *resolve_named_type_ref(const FengLspAnalysisSession *sess
         }
     }
     {
-        const FengDecl *decl = find_module_decl_by_name(find_module_by_segments(session->analysis,
-                                                                                type_ref->as.named.segments,
-                                                                                type_ref->as.named.segment_count - 1U),
-                                                        name,
-                                                        false,
-                                                        true,
-                                                        true);
+        const FengSemanticModule *module = find_module_by_segments(
+            session->analysis,
+            type_ref->as.named.segments,
+            type_ref->as.named.segment_count - 1U);
+        const FengDecl *decl = find_module_type_decl_by_name_and_arity(
+            module, name, arity, true);
+
+        if (decl != NULL) {
+            return decl;
+        }
+        decl = find_module_decl_by_name(module,
+                                        name,
+                                        false,
+                                        true,
+                                        true);
         if (decl != NULL) {
             return decl;
         }
     }
-    return find_loaded_module_decl_by_name(session,
-                                           type_ref->as.named.segments,
-                                           type_ref->as.named.segment_count - 1U,
-                                           name,
-                                           false,
-                                           true,
-                                           true);
+    {
+        const FengDecl *decl = find_loaded_module_type_decl_by_name_and_arity(
+            session,
+            type_ref->as.named.segments,
+            type_ref->as.named.segment_count - 1U,
+            name,
+            arity,
+            true);
+
+        if (decl != NULL) {
+            return decl;
+        }
+    }
+    return find_loaded_module_decl_by_name(
+        session,
+        type_ref->as.named.segments,
+        type_ref->as.named.segment_count - 1U,
+        name,
+        false,
+        true,
+        true);
 }
 
 static const FengTypeMember *find_member_by_name(const FengDecl *owner_decl, FengSlice name) {

@@ -12082,6 +12082,170 @@ static void test_lsp_type_references_cover_all_ast_positions(void) {
     free(manifest_path);
 }
 
+/* Exact generic arity must survive the semantic-session fast path, and
+ * explicit call type arguments must remain addressable LSP source ranges. */
+static void test_lsp_generic_type_reference_hover_and_definition(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_generic_type_reference\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kDeclarationSource =
+        "open module test.lsp.generic_type_reference;\n"
+        "open type Choice();\n"
+        "open type Choice<T1, T2>(T1, T2);\n";
+    static const char *kUsageSource =
+        "open module test.lsp.generic_type_reference;\n"
+        "spec Handler(): void;\n"
+        "type Box<T> {}\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "open func consume(value: Choice<int, string>): void {}\n"
+        "open func exercise(): void {\n"
+        "    let readiness = inferredText();\n"
+        "    let box = Box<Handler>();\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char template_path[] = "temp/feng_lsp_generic_type_reference_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *declaration_path;
+    char *usage_path;
+    char *declaration_uri;
+    char *usage_uri;
+    char *escaped_usage;
+    char *did_open;
+    char *definition;
+    char *hover;
+    char *shutdown;
+    const char *requests[4];
+    char *output;
+    char *expected_definition;
+    char *unexpected_definition;
+    char *remove_error = NULL;
+    unsigned int readiness_line;
+    unsigned int readiness_character;
+    unsigned int generic_line;
+    unsigned int generic_character;
+    unsigned int nongeneric_line;
+    unsigned int nongeneric_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    declaration_path = path_join(src_dir, "declaration.ff");
+    usage_path = path_join(src_dir, "usage.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(declaration_path, kDeclarationSource);
+    write_text_file(usage_path, kUsageSource);
+
+    declaration_uri = file_uri_from_path(declaration_path);
+    usage_uri = file_uri_from_path(usage_path);
+    escaped_usage = json_escape_text(kUsageSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        usage_uri,
+        escaped_usage);
+    definition = build_lsp_test_position_request(
+        "textDocument/definition",
+        2U,
+        usage_uri,
+        kUsageSource,
+        "open func consume(value: Choice<int, string>): void {}",
+        strlen("open func consume(value: ") + 1U);
+    hover = build_lsp_test_position_request(
+        "textDocument/hover",
+        3U,
+        usage_uri,
+        kUsageSource,
+        "    let box = Box<Handler>();",
+        strlen("    let box = Box<") + 1U);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(did_open != NULL);
+    ASSERT(definition != NULL);
+    ASSERT(hover != NULL);
+    ASSERT(shutdown != NULL);
+    requests[0] = definition;
+    requests[1] = hover;
+    requests[2] = shutdown;
+    requests[3] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    find_line_character(kUsageSource,
+                        "    let readiness = inferredText();",
+                        strlen("    let "),
+                        &readiness_line,
+                        &readiness_character);
+    find_line_character(kDeclarationSource,
+                        "open type Choice<T1, T2>(T1, T2);",
+                        strlen("open type "),
+                        &generic_line,
+                        &generic_character);
+    find_line_character(kDeclarationSource,
+                        "open type Choice();",
+                        strlen("open type "),
+                        &nongeneric_line,
+                        &nongeneric_character);
+    expected_definition = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        declaration_uri,
+        generic_line,
+        generic_character);
+    unexpected_definition = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        declaration_uri,
+        nongeneric_line,
+        nongeneric_character);
+    ASSERT(expected_definition != NULL);
+    ASSERT(unexpected_definition != NULL);
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        usage_uri,
+        readiness_line,
+        readiness_character,
+        "let readiness: string",
+        requests,
+        4U,
+        NULL);
+
+    assert_lsp_test_response_contains(output, 2U, expected_definition);
+    assert_lsp_test_response_not_contains(output, 2U, unexpected_definition);
+    assert_lsp_test_response_contains(output, 3U, "spec Handler(): void;");
+    assert_lsp_test_response_contains(output, 3U, "Callback Spec");
+
+    free(output);
+    free(unexpected_definition);
+    free(expected_definition);
+    free(shutdown);
+    free(hover);
+    free(definition);
+    free(did_open);
+    free(escaped_usage);
+    free(usage_uri);
+    free(declaration_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(usage_path);
+    free(declaration_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 static void test_lsp_rename_accepts_identifier_end_position(void) {
     static const char *kSource =
         "module test.lsp.renameend;\n"
@@ -21032,6 +21196,7 @@ int main(void) {
     test_lsp_member_references_and_rename_from_object_literal_field();
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_type_references_cover_all_ast_positions();
+    test_lsp_generic_type_reference_hover_and_definition();
     test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();
