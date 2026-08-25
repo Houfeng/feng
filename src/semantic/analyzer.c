@@ -7765,9 +7765,39 @@ static bool validate_block_yields_expression(ResolveContext *context,
         "AE1101", format_message("%s branch block must end with an expression statement", ctx_label));
 }
 
-/* Select the first numeric union member that can represent a pure numeric
- * literal. The returned type ref is borrowed from declaration or resolver
- * storage and is suitable for immediate matching or persistence. */
+/* Check a previously evaluated numeric constant against one concrete target.
+ * Keeping this predicate shared prevents scalar and union targets from
+ * acquiring different literal-adaptation rules. */
+static bool numeric_const_value_adapts_to_target(const ResolveContext *context,
+                                                 FengConstValue value,
+                                                 const FengTypeRef *target) {
+    const char *canonical_target;
+    bool target_is_float;
+
+    if (context == NULL || target == NULL) {
+        return false;
+    }
+    canonical_target =
+        type_ref_builtin_canonical_name(target, context->pointer_size);
+    if (canonical_target == NULL) {
+        return false;
+    }
+    target_is_float = strcmp(canonical_target, "f32") == 0 ||
+                      strcmp(canonical_target, "f64") == 0;
+    if (value.kind == FENG_CONST_INT) {
+        return target_is_float ||
+               integer_literal_fits_canonical_target(value.i,
+                                                     canonical_target);
+    }
+    if (value.kind == FENG_CONST_FLOAT) {
+        return target_is_float;
+    }
+    return false;
+}
+
+/* Select the first union member to which a pure numeric literal can adapt.
+ * The returned type ref is borrowed from declaration or resolver storage and
+ * is suitable for immediate matching or persistence. */
 static const FengTypeRef *select_literal_expr_union_member_target(
     ResolveContext *context,
     const FengExpr *literal_expr,
@@ -7789,15 +7819,9 @@ static const FengTypeRef *select_literal_expr_union_member_target(
         const FengTypeRef *declared_member_type_ref = info->members[index].type_ref;
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
             context, union_decl, union_type_ref, declared_member_type_ref);
-        const char *canonical = type_ref_builtin_canonical_name(member_type_ref, context->pointer_size);
-        bool member_is_float;
-
-        if (canonical == NULL) {
-            continue;
-        }
-        member_is_float = strcmp(canonical, "f32") == 0 || strcmp(canonical, "f64") == 0;
-        if (value.kind == FENG_CONST_INT && !member_is_float &&
-            !integer_literal_fits_canonical_target(value.i, canonical)) {
+        if (!numeric_const_value_adapts_to_target(context,
+                                                  value,
+                                                  member_type_ref)) {
             continue;
         }
         return member_type_ref;
@@ -20969,28 +20993,12 @@ static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengEx
 static bool numeric_literal_adapts_to_target(ResolveContext *context,
                                              const FengExpr *expr,
                                              const FengTypeRef *target) {
-    const char *canonical_target = type_ref_builtin_canonical_name(target, context->pointer_size);
     FengConstValue value;
-    bool target_is_float;
 
-    if (canonical_target == NULL) {
-        return false;
-    }
-    target_is_float = strcmp(canonical_target, "f32") == 0 ||
-                      strcmp(canonical_target, "f64") == 0;
     if (!evaluate_constant_expr(context, expr, &value)) {
         return false;
     }
-    if (value.kind == FENG_CONST_INT) {
-        if (target_is_float) {
-            return true;
-        }
-        return integer_literal_fits_canonical_target(value.i, canonical_target);
-    }
-    if (value.kind == FENG_CONST_FLOAT) {
-        return target_is_float;
-    }
-    return false;
+    return numeric_const_value_adapts_to_target(context, value, target);
 }
 
 /* Persist a literal's resolved type for codegen.  expected type refs can come
@@ -21465,7 +21473,16 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
     if (target_union_decl == NULL) {
         return;
     }
-    expr_type = infer_expr_type(context, expr);
+    /* Target-directed literal adaptation persists the selected leaf type on
+     * the complete pure constant expression. Prefer that authoritative type
+     * over default inference so unary/binary literal expressions record the
+     * same union member as scalar literal nodes. */
+    if (expr->type != NULL &&
+        expr_is_pure_numeric_literal_expr_for_target_adaptation(expr)) {
+        expr_type = inferred_expr_type_from_type_ref(expr->type);
+    } else {
+        expr_type = infer_expr_type(context, expr);
+    }
     if (!inferred_expr_type_is_known(expr_type) ||
         inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
         return;
@@ -25547,6 +25564,7 @@ static void commit_literal_arg_adaptations_for_resolved_call(
     for (i = 0U; i < arg_count; ++i) {
         const FengTypeRef *declared_param_type;
         const FengTypeRef *param_type;
+        const FengTypeRef *literal_target;
 
         if (args[i] == NULL) {
             continue;
@@ -25574,17 +25592,33 @@ static void commit_literal_arg_adaptations_for_resolved_call(
         param_type = substitute_type_ref_for_fit_instance(
             context, fit_decl, owner_type, param_type);
 
-        if (!numeric_literal_adapts_to_target(context, args[i], param_type)) {
-            continue;
+        literal_target = param_type;
+        if (!numeric_literal_adapts_to_target(context,
+                                              args[i],
+                                              literal_target)) {
+            const FengDecl *target_union_decl =
+                resolve_union_spec_type_ref_decl(context, param_type);
+
+            if (target_union_decl == NULL) {
+                continue;
+            }
+            literal_target = select_literal_expr_union_member_target(
+                context,
+                args[i],
+                target_union_decl,
+                param_type);
+            if (literal_target == NULL) {
+                continue;
+            }
         }
 
-        /* Adaptation succeeded.  Clone the substituted parameter type to the
-         * analysis lifetime so codegen can read it after ResolveContext
-         * teardown.  When substitution returned the original declaration
-         * type_ref unchanged (pointer equality), it already has AST lifetime
-         * and can be used directly. */
-        if (param_type != declared_param_type) {
-            InferredExprType adapted = inferred_expr_type_from_type_ref(param_type);
+        /* Adaptation succeeded. Clone the selected scalar target or union
+         * leaf type to the analysis lifetime so codegen can read it after
+         * ResolveContext teardown. A target identical to the declaration ref
+         * already has AST lifetime and can be used directly. */
+        if (literal_target != declared_param_type) {
+            InferredExprType adapted =
+                inferred_expr_type_from_type_ref(literal_target);
             FengTypeRef *synth = create_type_ref_from_inferred_type(&adapted,
                                                                      args[i]->token);
             if (synth != NULL) {
@@ -25598,7 +25632,7 @@ static void commit_literal_arg_adaptations_for_resolved_call(
                 }
             }
         } else {
-            ((FengExpr *)args[i])->type = param_type;
+            ((FengExpr *)args[i])->type = literal_target;
         }
     }
 }

@@ -303,6 +303,8 @@ spec B: A | UserType;
 3. **间接匹配**：源类型可通过某个嵌套 union-form 成员间接到达 → 递归查找，路径为外层成员 + 内层路径。
 4. **歧义检测**：若源类型可通过多条不同路径到达目标 union-form → 编译期报错，要求显式转换（`as`）。
 
+源表达式能否进入候选叶子 member，必须复用该表达式向叶子 member 类型的既有目标类型贴合规则，不得仅因 member 是内建类型就视为可进入。数值字面量及纯字面量数值常量表达式的候选资格统一由 [Feng 内建类型规范](./feng-builtin-type.md) §6 决定；不存在可贴合的叶子 member 时，整个 union-form 目标贴合失败。
+
 选定路径只确定 active member，不会省略该成员自身要求的转换。值写入叶子 payload 前，必须先按普通赋值语义转换为叶子成员类型，再逐层组装 union-form。因而 `ConcreteType -> Option<ObjectSpec>` 的语义是先构造完整的 `ObjectSpec` 值（包括 `subject` 与 `witness`），再把该值写入 `Option<ObjectSpec>` 的对应 payload；实现可以融合发码，但结果表示与分步写法必须一致。
 
 示例：

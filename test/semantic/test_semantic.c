@@ -20664,6 +20664,104 @@ static void test_union_entry_records_exact_member_site(void) {
     feng_program_free(program);
 }
 
+/* Float literal adaptation must select only a floating-point union member,
+ * regardless of whether an integer member appears before or after it. */
+static void test_union_entry_float_literal_selects_compatible_float_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec IntThenFloat: i32 | f32;\n"
+        "spec FloatThenInt: f32 | i32;\n"
+        "let first: IntThenFloat = 1.5;\n"
+        "let second: FloatThenInt = -2.5;\n"
+        "let folded: IntThenFloat = 1.0 + 2.0;\n";
+    FengProgram *program = parse_program_or_die(
+        "union_float_literal_member_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *expected_unions[3];
+    size_t expected_member_indices[3] = {1U, 0U, 1U};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 5U);
+
+    expected_unions[0] = program->declarations[0];
+    expected_unions[1] = program->declarations[1];
+    expected_unions[2] = program->declarations[0];
+    for (size_t index = 0U; index < 3U; ++index) {
+        const FengExpr *initializer =
+            program->declarations[index + 2U]->as.binding.initializer;
+        const FengUnionCoercionSite *site =
+            feng_semantic_lookup_union_coercion_site(analysis, initializer);
+
+        ASSERT(site != NULL);
+        ASSERT(site->target_union_decl == expected_unions[index]);
+        ASSERT(site->member_index == expected_member_indices[index]);
+        ASSERT(type_ref_named_single_is(site->member_type_ref, "f32"));
+        ASSERT(type_ref_named_single_is(initializer->type, "f32"));
+    }
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Integer and non-numeric members are never candidates for a floating-point
+ * literal or a pure constant expression whose evaluated value is floating. */
+static void test_union_entry_float_literal_rejects_incompatible_members_in_any_order(void) {
+    const char *sources[] = {
+        "module demo.int_first;\n"
+        "spec IntOrText: i32 | string;\n"
+        "let value: IntOrText = 1.5;\n",
+        "module demo.text_first;\n"
+        "spec TextOrInt: string | i32;\n"
+        "let value: TextOrInt = -1.5;\n",
+        "module demo.bool_first;\n"
+        "spec BoolOrInt: bool | i32;\n"
+        "let value: BoolOrInt = 1.0 + 2.0;\n"
+    };
+    const char *paths[] = {
+        "union_float_to_int_first_error.f",
+        "union_float_to_text_first_error.f",
+        "union_float_constant_to_bool_first_error.f"
+    };
+
+    for (size_t source_index = 0U;
+         source_index < sizeof(sources) / sizeof(sources[0]);
+         ++source_index) {
+        FengProgram *program = parse_program_or_die(paths[source_index],
+                                                    sources[source_index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, paths[source_index]) == 0);
+        ASSERT(strcmp(errors[0].code, "AE1003") == 0);
+        ASSERT(strstr(errors[0].message,
+                      "does not match expected type") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 /* A concrete value entering an object-spec union member requires two
  * independent semantic decisions on the same expression: select the union
  * member and construct the object-spec fat value stored in that member. */
@@ -22136,6 +22234,245 @@ static void test_branch_expr_results_fit_binding_assignment_and_argument_targets
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+/* Every contextual target path, including all three branching expressions,
+ * must use the same float-literal-to-union-member compatibility rule. */
+static void test_float_literal_union_targets_select_float_member_in_all_contexts(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec IntThenFloat: i32 | f32;\n"
+        "spec FloatThenInt: f32 | i32;\n"
+        "type Holder { let value: IntThenFloat; }\n"
+        "func consume(value: FloatThenInt) {}\n"
+        "func direct_return(): IntThenFloat { return 1.5; }\n"
+        "func run(cond: bool) {\n"
+        "    let direct: FloatThenInt = -2.5;\n"
+        "    var assigned: IntThenFloat = 3.5;\n"
+        "    assigned = 4.0 + 0.5;\n"
+        "    consume(5.5);\n"
+        "    let holder = Holder { value: 6.5 };\n"
+        "    let from_if: IntThenFloat = if cond { 7.5 } else { 8.5 };\n"
+        "    let from_match: FloatThenInt = match cond {\n"
+        "        true { 9.5; }\n"
+        "        else { 10.5; }\n"
+        "    };\n"
+        "    let from_try: IntThenFloat = try 11.5 catch ex: bool { 12.5 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "float_literal_union_contexts_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    size_t int_then_float_site_count = 0U;
+    size_t float_then_int_site_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 6U);
+
+    for (size_t site_index = 0U;
+         site_index < analysis->union_coercion_site_count;
+         ++site_index) {
+        const FengUnionCoercionSite *site =
+            &analysis->union_coercion_sites[site_index];
+
+        ASSERT(type_ref_named_single_is(site->member_type_ref, "f32"));
+        ASSERT(type_ref_named_single_is(site->expr->type, "f32"));
+        if (site->target_union_decl == program->declarations[0]) {
+            ASSERT(site->member_index == 1U);
+            ++int_then_float_site_count;
+        } else {
+            ASSERT(site->target_union_decl == program->declarations[1]);
+            ASSERT(site->member_index == 0U);
+            ++float_then_int_site_count;
+        }
+    }
+    ASSERT(int_then_float_site_count == 8U);
+    ASSERT(float_then_int_site_count == 4U);
+    ASSERT(analysis->union_coercion_site_count == 12U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* The contextual union target propagates through the complete 3x3 nesting
+ * matrix of if, match, and try expressions; every numeric leaf is validated
+ * directly against that target and selects its floating-point member. */
+static void test_float_literal_union_target_propagates_through_branch_nesting_matrix(void) {
+    const char *source =
+        "module demo.main;\n"
+        "spec Number: i32 | f32;\n"
+        "func run(left: bool, right: bool) {\n"
+        "    let if_if: Number = if left {\n"
+        "        if right { 1.5 } else { 2.5 }\n"
+        "    } else { 3.5 };\n"
+        "    let if_match: Number = if left {\n"
+        "        match right { true { 4.5 } else { 5.5 } }\n"
+        "    } else { 6.5 };\n"
+        "    let if_try: Number = if left {\n"
+        "        try 7.5 catch ex: bool { 8.5 }\n"
+        "    } else { 9.5 };\n"
+        "    let match_if: Number = match left {\n"
+        "        true { if right { 10.5 } else { 11.5 } }\n"
+        "        else { 12.5 }\n"
+        "    };\n"
+        "    let match_match: Number = match left {\n"
+        "        true { match right { true { 13.5 } else { 14.5 } } }\n"
+        "        else { 15.5 }\n"
+        "    };\n"
+        "    let match_try: Number = match left {\n"
+        "        true { try 16.5 catch ex: bool { 17.5 } }\n"
+        "        else { 18.5 }\n"
+        "    };\n"
+        "    let try_if: Number = try (if left { 19.5 } else { 20.5 })\n"
+        "        catch ex: bool { 21.5 };\n"
+        "    let try_match: Number = try (match left {\n"
+        "        true { 22.5 }\n"
+        "        else { 23.5 }\n"
+        "    }) catch ex: bool { 24.5 };\n"
+        "    let try_try: Number = try (try 25.5 catch inner: bool { 26.5 })\n"
+        "        catch outer: bool { 27.5 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "float_literal_union_branch_nesting_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(analysis->union_coercion_site_count == 27U);
+    for (size_t site_index = 0U;
+         site_index < analysis->union_coercion_site_count;
+         ++site_index) {
+        const FengUnionCoercionSite *site =
+            &analysis->union_coercion_sites[site_index];
+
+        ASSERT(site->target_union_decl == program->declarations[0]);
+        ASSERT(site->member_index == 1U);
+        ASSERT(type_ref_named_single_is(site->member_type_ref, "f32"));
+        ASSERT(type_ref_named_single_is(site->expr->type, "f32"));
+    }
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* A union without a floating-point member rejects a floating literal through
+ * binding, return, assignment, parameter, field, if, match, and try targets. */
+static void test_float_literal_union_targets_reject_incompatible_members_in_all_contexts(void) {
+    const char *sources[] = {
+        "module demo.binding;\n"
+        "spec IntOrText: i32 | string;\n"
+        "func run() { let value: IntOrText = 1.5; }\n",
+        "module demo.returning;\n"
+        "spec TextOrInt: string | i32;\n"
+        "func run(): TextOrInt { return -1.5; }\n",
+        "module demo.assignment;\n"
+        "spec IntOrText: i32 | string;\n"
+        "func run() {\n"
+        "    var value: IntOrText = \"ready\";\n"
+        "    value = 1.0 + 2.0;\n"
+        "}\n",
+        "module demo.argument;\n"
+        "spec TextOrInt: string | i32;\n"
+        "func consume(value: TextOrInt) {}\n"
+        "func run() { consume(1.5); }\n",
+        "module demo.field;\n"
+        "spec IntOrText: i32 | string;\n"
+        "type Holder { let value: IntOrText; }\n"
+        "func run() { let holder = Holder { value: 1.5 }; }\n",
+        "module demo.if_expr;\n"
+        "spec TextOrInt: string | i32;\n"
+        "func run(cond: bool) {\n"
+        "    let value: TextOrInt = if cond { 1.5 } else { 2.5 };\n"
+        "}\n",
+        "module demo.match_expr;\n"
+        "spec IntOrText: i32 | string;\n"
+        "func run(cond: bool) {\n"
+        "    let value: IntOrText = match cond {\n"
+        "        true { 1.5; }\n"
+        "        else { 2.5; }\n"
+        "    };\n"
+        "}\n",
+        "module demo.try_expr;\n"
+        "spec TextOrInt: string | i32;\n"
+        "func run() {\n"
+        "    let value: TextOrInt = try 1.5 catch ex: bool { 2.5 };\n"
+        "}\n"
+    };
+    const char *paths[] = {
+        "float_union_binding_error.f",
+        "float_union_return_error.f",
+        "float_union_assignment_error.f",
+        "float_union_argument_error.f",
+        "float_union_field_error.f",
+        "float_union_if_error.f",
+        "float_union_match_error.f",
+        "float_union_try_error.f"
+    };
+    const char *expected_codes[] = {
+        "AE1003",
+        "AE1003",
+        "AE1003",
+        "AE0512",
+        "AE1003",
+        "AE1003",
+        "AE1003",
+        "AE1003"
+    };
+
+    for (size_t source_index = 0U;
+         source_index < sizeof(sources) / sizeof(sources[0]);
+         ++source_index) {
+        FengProgram *program = parse_program_or_die(paths[source_index],
+                                                    sources[source_index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found_expected_code = false;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(errors != NULL);
+        ASSERT(error_count == 1U);
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            ASSERT(strcmp(errors[error_index].path, paths[source_index]) == 0);
+            if (strcmp(errors[error_index].code,
+                       expected_codes[source_index]) == 0) {
+                found_expected_code = true;
+            }
+        }
+        ASSERT(found_expected_code);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
 }
 
 static void test_try_expr_uses_first_non_literal_catch_target(void) {
@@ -29303,6 +29640,8 @@ int main(void) {
     test_union_form_spec_rejects_type_declared_spec_clause();
     test_union_form_spec_rejects_fit_spec_clause();
     test_union_entry_records_exact_member_site();
+    test_union_entry_float_literal_selects_compatible_float_member();
+    test_union_entry_float_literal_rejects_incompatible_members_in_any_order();
     test_union_entry_records_object_spec_leaf_coercion();
     test_union_entry_ambiguous_spec_member_requires_explicit_cast();
     test_union_entry_explicit_cast_selects_spec_member();
@@ -29539,6 +29878,9 @@ int main(void) {
     test_try_expr_catch_literal_return_value_adapts();
     test_match_expr_generic_union_target_accepts_exact_and_member_results();
     test_branch_expr_results_fit_binding_assignment_and_argument_targets();
+    test_float_literal_union_targets_select_float_member_in_all_contexts();
+    test_float_literal_union_target_propagates_through_branch_nesting_matrix();
+    test_float_literal_union_targets_reject_incompatible_members_in_all_contexts();
     test_try_expr_uses_first_non_literal_catch_target();
     test_try_expr_all_literal_results_keep_default_inference();
     test_all_literal_branch_results_keep_order_independent_inference();

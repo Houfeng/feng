@@ -6,6 +6,9 @@ import std.test;
 // union-form spec
 spec IntOrString: int | string;
 
+// 浮点字面量只能进入浮点 member，不得按前置整数 member 处理
+spec IntOrFloat: i32 | f32;
+
 // 用于 union 的自定义 type
 type UnionTag {
   let tag: string;
@@ -217,6 +220,46 @@ open func test_union() {
       };
       assert(selected_result == 7,
              "generic union match member fits contextual target");
+    });
+
+    test("branch float literals select the floating union member", () {
+      let from_if: IntOrFloat = if true { 1.5 } else { 2.5 };
+      let from_match: IntOrFloat = match true {
+        true { 3.5 }
+        else { 4.5 }
+      };
+      let from_try: IntOrFloat = try 5.5 catch ex: bool { 6.5 };
+
+      match from_if {
+        value: f32 {
+          assert(value == 1.5,
+                 "if float literal keeps the floating union member");
+        }
+        else {
+          assert(false,
+                 "if float literal must not select the integer union member");
+        }
+      }
+      match from_match {
+        value: f32 {
+          assert(value == 3.5,
+                 "match float literal keeps the floating union member");
+        }
+        else {
+          assert(false,
+                 "match float literal must not select the integer union member");
+        }
+      }
+      match from_try {
+        value: f32 {
+          assert(value == 5.5,
+                 "try float literal keeps the floating union member");
+        }
+        else {
+          assert(false,
+                 "try float literal must not select the integer union member");
+        }
+      }
     });
 
     test("simple union as generic constraint (int)", () {
