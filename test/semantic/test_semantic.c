@@ -22050,6 +22050,206 @@ static void test_try_expr_catch_literal_return_value_adapts(void) {
     feng_program_free(program);
 }
 
+static void test_match_expr_generic_union_target_accepts_exact_and_member_results(void) {
+    /* Regression for Option<T>: one branch already has the complete target
+     * type while another has a member type. Both are checked independently
+     * against Option<T>, rather than compared with each other first. */
+    const char *source =
+        "module demo.main;\n"
+        "type None {}\n"
+        "spec Option<T>: None | T;\n"
+        "let none: None = None {};\n"
+        "func wrap<T>(value: T): Option<T> {\n"
+        "    return value;\n"
+        "}\n"
+        "func choose<T>(cond: bool, value: T): Option<T> {\n"
+        "    return match cond {\n"
+        "        true { wrap(value); }\n"
+        "        else { none; }\n"
+        "    };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "match_generic_union_target_results_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_branch_expr_results_fit_binding_assignment_and_argument_targets(void) {
+    /* if/match/try share the same contextual fitting path. Exercise a complete
+     * union value plus one member through bindings, assignment, and call
+     * arguments, including the post-overload parameter target. */
+    const char *source =
+        "module demo.main;\n"
+        "spec Result: i32 | string;\n"
+        "func ready(): Result {\n"
+        "    return \"ready\";\n"
+        "}\n"
+        "func use(value: Result) {}\n"
+        "func run(cond: bool): Result {\n"
+        "    let a: Result = if cond { ready() } else { \"if\" };\n"
+        "    let b: Result = match cond {\n"
+        "        true { ready(); }\n"
+        "        else { \"match\"; }\n"
+        "    };\n"
+        "    let c: Result = try ready() catch ex: bool { \"try\" };\n"
+        "    var result: Result = ready();\n"
+        "    result = if cond { ready() } else { \"assign\" };\n"
+        "    use(if cond { ready() } else { \"arg-if\" });\n"
+        "    use(match cond {\n"
+        "        true { ready(); }\n"
+        "        else { \"arg-match\"; }\n"
+        "    });\n"
+        "    use(try ready() catch ex: bool { \"arg-try\" });\n"
+        "    return result;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "branch_expr_contextual_targets_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_uses_first_non_literal_catch_target(void) {
+    /* With no outer target, a literal body does not force its default type on
+     * later branches. The first non-literal result supplies i32, and both
+     * numeric literals adapt to it. */
+    const char *source =
+        "module demo.main;\n"
+        "func run(): i32 {\n"
+        "    let value: i32 = 7;\n"
+        "    let result = try 10 catch ex: bool { value };\n"
+        "    return result;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "try_first_non_literal_catch_target_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_try_expr_all_literal_results_keep_default_inference(void) {
+    /* With no target and no non-literal result, equal literal defaults remain
+     * valid instead of choosing either branch as a directional target. */
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    let value = try 10 catch ex: bool { 20 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "try_all_literal_results_ok.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+static void test_all_literal_branch_results_keep_order_independent_inference(void) {
+    /* With no target and no non-literal result, integer and floating literals
+     * retain their independent defaults. Reordering therefore cannot turn a
+     * mismatch into a successful directional adaptation. */
+    const char *sources[] = {
+        "module demo.if_float_first;\n"
+        "func run() { let value = if true { 1.5 } else { 2 }; }\n",
+        "module demo.if_int_first;\n"
+        "func run() { let value = if true { 2 } else { 1.5 }; }\n",
+        "module demo.match_float_first;\n"
+        "func run() { let value = match true { true { 1.5; } else { 2; } }; }\n",
+        "module demo.match_int_first;\n"
+        "func run() { let value = match true { true { 2; } else { 1.5; } }; }\n",
+        "module demo.try_float_first;\n"
+        "func run() { let value = try 1.5 catch ex: bool { 2 }; }\n",
+        "module demo.try_int_first;\n"
+        "func run() { let value = try 2 catch ex: bool { 1.5 }; }\n"
+    };
+    const char *paths[] = {
+        "if_all_literals_float_first_error.f",
+        "if_all_literals_int_first_error.f",
+        "match_all_literals_float_first_error.f",
+        "match_all_literals_int_first_error.f",
+        "try_all_literals_float_first_error.f",
+        "try_all_literals_int_first_error.f"
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(sources) / sizeof(sources[0]); ++index) {
+        FengProgram *program = parse_program_or_die(paths[index], sources[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(analysis == NULL);
+        ASSERT(errors != NULL);
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, paths[index]) == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
+}
+
 static void test_array_literal_adapts_first_non_literal(void) {
     /* No explicit target: the first non-literal element determines the target
      * type.  Subsequent literal elements adapt to it.  Without adaptation the
@@ -29337,6 +29537,11 @@ int main(void) {
     test_try_expr_catch_literal_out_of_range_rejected();
     test_try_expr_catch_literal_adapts_to_union_member();
     test_try_expr_catch_literal_return_value_adapts();
+    test_match_expr_generic_union_target_accepts_exact_and_member_results();
+    test_branch_expr_results_fit_binding_assignment_and_argument_targets();
+    test_try_expr_uses_first_non_literal_catch_target();
+    test_try_expr_all_literal_results_keep_default_inference();
+    test_all_literal_branch_results_keep_order_independent_inference();
 
     test_array_literal_adapts_first_non_literal();
     test_array_literal_adapts_first_element_literal();

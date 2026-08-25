@@ -461,9 +461,15 @@ typedef struct ResolveContext {
     size_t if_expr_depth;
     /* When non-NULL, the resolver is currently resolving an expression that
      * has an explicit target type (binding annotation, function argument,
-     * return value, member assignment).  Used by validate_if_expr to adapt
-     * branch literals to the target type (including union types). */
+     * return value, member assignment). Used by the shared if/match/try
+     * result fitter so every value-producing branch sees the same target. */
     const FengTypeRef *current_expr_expected_type_ref;
+    /* Number of call-argument resolution frames whose parameter target is not
+     * known until overload selection completes. Branch expressions resolve
+     * their contents immediately but defer a no-target mismatch diagnostic;
+     * the selected callable later validates them against its closed parameter
+     * type. */
+    size_t deferred_branch_result_validation_depth;
     /* When true, expr_matches_expected_type_ref must NOT set expr->type as a
      * side effect.  Set during overload-resolution candidate probing so that
      * rejected or non-winning candidates cannot corrupt the literal node's
@@ -4895,6 +4901,14 @@ static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
 static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
+static bool record_type_fact_for_site(ResolveContext *context,
+                                      const void *site,
+                                      InferredExprType expr_type);
+static InferredExprType branch_result_inferred_type(ResolveContext *context,
+                                                    const FengExpr *expr);
+static bool persist_branch_expression_type(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *type_ref);
 static bool inferred_expr_type_is_void(InferredExprType expr_type);
 static InferredExprType infer_lambda_body_type(ResolveContext *context, const FengExpr *expr);
 static FengSpecCoercionCallableSource classify_callable_source(
@@ -7751,27 +7765,25 @@ static bool validate_block_yields_expression(ResolveContext *context,
         "AE1101", format_message("%s branch block must end with an expression statement", ctx_label));
 }
 
-/* Try to adapt a pure numeric literal expression to a numeric member of the
- * given union type.  Iterates over union members; for each member whose type
- * ref resolves to a built-in numeric canonical name, checks whether the
- * literal fits.  On success, sets literal_expr->type to a type ref that
- * remains valid for the analysis lifetime and returns true.  Returns false
- * if no numeric member can accommodate the literal. */
-static bool adapt_literal_expr_to_union_member(ResolveContext *context,
-                                               FengExpr *literal_expr,
-                                               const FengDecl *union_decl,
-                                               const FengTypeRef *union_type_ref) {
+/* Select the first numeric union member that can represent a pure numeric
+ * literal. The returned type ref is borrowed from declaration or resolver
+ * storage and is suitable for immediate matching or persistence. */
+static const FengTypeRef *select_literal_expr_union_member_target(
+    ResolveContext *context,
+    const FengExpr *literal_expr,
+    const FengDecl *union_decl,
+    const FengTypeRef *union_type_ref) {
     const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
                                                                          union_decl);
     FengConstValue value;
     bool evaluated;
 
     if (info == NULL || literal_expr == NULL) {
-        return false;
+        return NULL;
     }
     evaluated = evaluate_constant_expr(context, literal_expr, &value);
     if (!evaluated || (value.kind != FENG_CONST_INT && value.kind != FENG_CONST_FLOAT)) {
-        return false;
+        return NULL;
     }
     for (size_t index = 0U; index < info->member_count; ++index) {
         const FengTypeRef *declared_member_type_ref = info->members[index].type_ref;
@@ -7788,23 +7800,112 @@ static bool adapt_literal_expr_to_union_member(ResolveContext *context,
             !integer_literal_fits_canonical_target(value.i, canonical)) {
             continue;
         }
-        /* Literal fits this numeric union member. */
-        if (member_type_ref != declared_member_type_ref) {
-            FengTypeRef *persistent_member_type_ref =
-                clone_type_ref_for_inference(member_type_ref);
+        return member_type_ref;
+    }
+    return NULL;
+}
 
-            if (persistent_member_type_ref == NULL ||
-                !analysis_track_synthetic_type_ref(context->analysis,
-                                                   persistent_member_type_ref)) {
-                free_synthetic_type_ref(persistent_member_type_ref);
-                return false;
-            }
-            member_type_ref = persistent_member_type_ref;
+/* Select the first non-literal branch with a known type as the implicit
+ * target.  A NULL result means that all value-producing branches are numeric
+ * literals (or otherwise have no known type), so each branch must retain its
+ * default inference and the caller must perform the ordinary equality check. */
+static bool select_implicit_branch_result_target(
+    ResolveContext *context,
+    const FengExpr *const *results,
+    size_t result_count,
+    const FengTypeRef **out_target) {
+    size_t index;
+
+    if (out_target != NULL) {
+        *out_target = NULL;
+    }
+    for (index = 0U; index < result_count; ++index) {
+        InferredExprType result_type;
+        FengTypeRef *target;
+
+        if (results[index] == NULL ||
+            expr_is_pure_numeric_literal_expr_for_target_adaptation(results[index])) {
+            continue;
         }
-        literal_expr->type = member_type_ref;
+        result_type = branch_result_inferred_type(context, results[index]);
+        if (!inferred_expr_type_is_known(result_type)) {
+            continue;
+        }
+        target = create_type_ref_from_inferred_type(&result_type,
+                                                    results[index]->token);
+        if (target == NULL) {
+            continue;
+        }
+        if (!resolver_track_synthetic_type_ref(context, target)) {
+            free_synthetic_type_ref(target);
+            return false;
+        }
+        if (out_target != NULL) {
+            *out_target = target;
+        }
         return true;
     }
-    return false;
+    return true;
+}
+
+/* Fit every value-producing branch to one explicit or implicitly selected
+ * target.  Matching is checked for the complete set before coercions are
+ * committed, so an invalid expression cannot leave partially recorded branch
+ * conversions.  When no implicit target exists (the all-literal case), the
+ * caller retains default inference and performs its existing equality check. */
+static bool fit_branch_results_to_target(ResolveContext *context,
+                                         const FengExpr *branching_expr,
+                                         const FengExpr *const *results,
+                                         size_t result_count,
+                                         const FengTypeRef *explicit_target,
+                                         bool *out_all_conform) {
+    const FengTypeRef *target = explicit_target;
+    size_t index;
+    bool previous_suppress_commit;
+
+    if (out_all_conform != NULL) {
+        *out_all_conform = false;
+    }
+    if (result_count == 0U) {
+        if (out_all_conform != NULL) {
+            *out_all_conform = true;
+        }
+        return true;
+    }
+    if (target == NULL &&
+        !select_implicit_branch_result_target(context,
+                                              results,
+                                              result_count,
+                                              &target)) {
+        return false;
+    }
+    if (target == NULL) {
+        return true;
+    }
+
+    previous_suppress_commit = context->suppress_literal_type_commit;
+    context->suppress_literal_type_commit = true;
+    for (index = 0U; index < result_count; ++index) {
+        if (results[index] != NULL &&
+            !expr_matches_expected_type_ref(context, results[index], target)) {
+            context->suppress_literal_type_commit = previous_suppress_commit;
+            return true;
+        }
+    }
+    context->suppress_literal_type_commit = previous_suppress_commit;
+    for (index = 0U; index < result_count; ++index) {
+        if (results[index] != NULL &&
+            !validate_expr_against_expected_type(context, results[index], target)) {
+            return false;
+        }
+    }
+    if (!persist_branch_expression_type(context, branching_expr, target)) {
+        return false;
+    }
+    if (out_all_conform != NULL) {
+        *out_all_conform = true;
+    }
+    return true;
 }
 
 static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
@@ -7839,86 +7940,34 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         return false;
     }
 
-    /* Branch literal adaptation: determine the target type and adapt literal
-     * branches to it.  Three cases:
-     *
-     * 1. Explicit target type (from binding annotation, return type, etc.):
-     *    - Numeric target: adapt literal branches to the target type
-     *    - Union target: adapt literal branches to a numeric union member;
-     *      non-literal branches must be a valid union member
-     *
-     * 2. No explicit target, one branch is a literal and the other is not:
-     *    adapt the literal to the non-literal branch's type.
-     *
-     * 3. Both branches are literals or both non-literals: no adaptation.
-     *
-     * The adapted type is hung on the literal node's type field; infer_expr_type
-     * for INTEGER/FLOAT checks expr->type and returns the adapted type, so the
-     * subsequent block_yield_inferred_type calls pick it up automatically.
-     *
-     * This must run before the throw-termination check below so that the
-     * surviving (non-throw) branch's literal is adapted to the target type. */
-    if (context->current_expr_expected_type_ref != NULL) {
-        const FengTypeRef *expected = context->current_expr_expected_type_ref;
-        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
-        const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
-        const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
+    {
+        const FengExpr *results[2];
+        size_t result_count = 0U;
+        bool all_results_conform = false;
 
-        if (union_decl != NULL) {
-            /* Union target: adapt literal branches to a numeric member;
-             * non-literal branches are checked by expr_matches_expected_type_ref
-             * later (they must be a valid union member). */
-            if (then_yield != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield)) {
-                (void)adapt_literal_expr_to_union_member(context,
-                                                          (FengExpr *)then_yield,
-                                                          union_decl,
-                                                          expected);
-            }
-            if (else_yield != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield)) {
-                (void)adapt_literal_expr_to_union_member(context,
-                                                          (FengExpr *)else_yield,
-                                                          union_decl,
-                                                          expected);
-            }
-        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
-            /* Numeric target: adapt literal branches directly. */
-            InferredExprType target = inferred_expr_type_from_type_ref(expected);
-
-            if (then_yield != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield) &&
-                numeric_literal_fits_inferred_target(context, then_yield, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)then_yield, &target);
-            }
-            if (else_yield != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield) &&
-                numeric_literal_fits_inferred_target(context, else_yield, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
-            }
+        if (!block_terminates_with_throw(expr->as.if_expr.then_block)) {
+            results[result_count++] =
+                block_yield_expression(expr->as.if_expr.then_block);
         }
-    } else {
-        const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
-        const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
-        bool then_is_literal =
-            expr_is_pure_numeric_literal_expr_for_target_adaptation(then_yield);
-        bool else_is_literal =
-            expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield);
-
-        if (then_is_literal && !else_is_literal && else_yield != NULL) {
-            InferredExprType target = infer_expr_type(context, else_yield);
-            if (inferred_expr_type_is_numeric(target) &&
-                numeric_literal_fits_inferred_target(context, then_yield, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)then_yield, &target);
-            }
-        } else if (!then_is_literal && else_is_literal && then_yield != NULL) {
-            InferredExprType target = infer_expr_type(context, then_yield);
-            if (inferred_expr_type_is_numeric(target) &&
-                numeric_literal_fits_inferred_target(context, else_yield, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
-            }
+        if (!block_terminates_with_throw(expr->as.if_expr.else_block)) {
+            results[result_count++] =
+                block_yield_expression(expr->as.if_expr.else_block);
         }
-        /* Both literals or both non-literals: no adaptation needed. */
+        if (!fit_branch_results_to_target(
+                context,
+                expr,
+                results,
+                result_count,
+                context->current_expr_expected_type_ref,
+                &all_results_conform)) {
+            return false;
+        }
+        if (all_results_conform) {
+            return true;
+        }
+    }
+    if (context->deferred_branch_result_validation_depth > 0U) {
+        return true;
     }
 
     {
@@ -7932,36 +7981,13 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         }
     }
 
-    then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
-    else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
+    then_type = branch_result_inferred_type(
+        context, block_yield_expression(expr->as.if_expr.then_block));
+    else_type = branch_result_inferred_type(
+        context, block_yield_expression(expr->as.if_expr.else_block));
 
     if (inferred_expr_types_equal(context, then_type, else_type)) {
         return true;
-    }
-
-    /* When the explicit target is a union type, branches may have different
-     * types as long as each is a valid union member.  Check this before
-     * reporting a branch-type-mismatch error. */
-    if (context->current_expr_expected_type_ref != NULL) {
-        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(
-            context, context->current_expr_expected_type_ref);
-
-        if (union_decl != NULL) {
-            UnionMemberSelection then_sel;
-            UnionMemberSelection else_sel;
-
-            then_sel = select_union_member_for_expr_type(context,
-                                                          then_type,
-                                                          union_decl,
-                                                          context->current_expr_expected_type_ref);
-            else_sel = select_union_member_for_expr_type(context,
-                                                          else_type,
-                                                          union_decl,
-                                                          context->current_expr_expected_type_ref);
-            if (then_sel.matched && else_sel.matched) {
-                return true;
-            }
-        }
     }
 
     {
@@ -7970,10 +7996,16 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         char *message = format_message("if expression branches must have the same type, got '%s' and '%s'",
                                        then_type_name != NULL ? then_type_name : "<unknown>",
                                        else_type_name != NULL ? else_type_name : "<unknown>");
+        bool result;
 
         free(then_type_name);
         free(else_type_name);
-        return resolver_append_error(context, expr->token, "AE0034", message);
+        result = resolver_append_error(context, expr->token, "AE0034", message);
+        if (result && context->current_expr_expected_type_ref != NULL) {
+            result = persist_branch_expression_type(
+                context, expr, context->current_expr_expected_type_ref);
+        }
+        return result;
     }
 }
 
@@ -7981,18 +8013,55 @@ static bool validate_try_expr(ResolveContext *context,
                               const FengExpr *expr,
                               bool result_required) {
     InferredExprType body_type;
+    const FengExpr **results;
+    size_t result_count = 0U;
+    bool all_results_conform = false;
 
     if (expr == NULL || expr->kind != FENG_EXPR_TRY ||
         expr->as.try_expr.clause_count == 0U || !result_required) {
         return true;
     }
 
-    body_type = infer_expr_type(context, expr->as.try_expr.body);
+    results = (const FengExpr **)calloc(expr->as.try_expr.clause_count + 1U,
+                                        sizeof(*results));
+    if (results == NULL) {
+        return false;
+    }
+    results[result_count++] = expr->as.try_expr.body;
+    for (size_t clause_index = 0U;
+         clause_index < expr->as.try_expr.clause_count;
+         ++clause_index) {
+        const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
+        const FengExpr *result_expr = block_yield_expression(clause->body);
 
-    /* Body literal adaptation is already applied by resolve_try_expr before
-     * catch clause validation, so the body type is already adapted here.
-     * Catch clause literal adaptation is also already applied by
-     * validate_try_catch_clause_result_type during resolve_try_expr. */
+        if (result_expr == NULL) {
+            result_expr = block_terminal_return_value(clause->body);
+        }
+        if (result_expr != NULL && !block_terminates_with_throw(clause->body)) {
+            results[result_count++] = result_expr;
+        }
+    }
+    if (!fit_branch_results_to_target(context,
+                                      expr,
+                                      results,
+                                      result_count,
+                                      context->current_expr_expected_type_ref,
+                                      &all_results_conform)) {
+        free(results);
+        return false;
+    }
+    free(results);
+    if (all_results_conform) {
+        return true;
+    }
+    if (context->deferred_branch_result_validation_depth > 0U) {
+        return true;
+    }
+
+    /* When fitting fails (or all results are literals without a target), keep
+     * the established try diagnostic while comparing independently inferred
+     * result types. */
+    body_type = branch_result_inferred_type(context, expr->as.try_expr.body);
 
     for (size_t clause_index = 0U;
          clause_index < expr->as.try_expr.clause_count;
@@ -8019,7 +8088,7 @@ static bool validate_try_expr(ResolveContext *context,
             return false;
         }
 
-        result_type = infer_expr_type(context, result_expr);
+        result_type = branch_result_inferred_type(context, result_expr);
         if (inferred_expr_type_is_known(body_type) &&
             inferred_expr_type_is_known(result_type) &&
             !inferred_expr_types_equal(context, body_type, result_type)) {
@@ -8040,13 +8109,15 @@ static bool validate_try_expr(ResolveContext *context,
     return true;
 }
 
-static bool validate_try_catch_clause_result_type(ResolveContext *context,
-                                                  const FengExpr *try_expr,
-                                                  const FengTryCatchClause *clause,
-                                                  InferredExprType body_type,
-                                                  bool result_required) {
+/* Validate that a value-producing try expression catch has a terminal result,
+ * return, or throw. Result type fitting is performed once for all branches. */
+static bool validate_try_catch_clause_result_presence(
+    ResolveContext *context,
+    const FengExpr *try_expr,
+    const FengTryCatchClause *clause,
+    InferredExprType body_type,
+    bool result_required) {
     const FengExpr *result_expr;
-    InferredExprType result_type;
 
     if (context == NULL || try_expr == NULL || clause == NULL || !result_required) {
         return true;
@@ -8070,62 +8141,6 @@ static bool validate_try_catch_clause_result_type(ResolveContext *context,
             "AE1401", format_message("catch clause must end with a result expression, 'return', or 'throw'"));
         return false;
     }
-
-    /* Catch clause literal adaptation: adapt pure numeric literal catch
-     * results to the target type.  Two cases:
-     *
-     * 1. Explicit target type (from binding annotation, return type, etc.):
-     *    - Union target: adapt literal to a numeric union member
-     *    - Numeric target: adapt literal directly
-     *
-     * 2. No explicit target: the body expression determines the target type
-     *    (try body is always the main path).  Adapt literal catch results to
-     *    the body's inferred type.
-     *
-     * The adapted type is hung on the literal node's type field; the
-     * subsequent infer_expr_type call picks it up automatically. */
-    if (context->current_expr_expected_type_ref != NULL &&
-        expr_is_pure_numeric_literal_expr_for_target_adaptation(result_expr)) {
-        const FengTypeRef *expected = context->current_expr_expected_type_ref;
-        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
-
-        if (union_decl != NULL) {
-            (void)adapt_literal_expr_to_union_member(context,
-                                                      (FengExpr *)result_expr,
-                                                      union_decl,
-                                                      expected);
-        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
-            InferredExprType target = inferred_expr_type_from_type_ref(expected);
-
-            if (numeric_literal_fits_inferred_target(context, result_expr, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)result_expr, &target);
-            }
-        }
-    } else if (expr_is_pure_numeric_literal_expr_for_target_adaptation(result_expr) &&
-               inferred_expr_type_is_known(body_type) &&
-               inferred_expr_type_is_numeric(body_type)) {
-        if (numeric_literal_fits_inferred_target(context, result_expr, body_type)) {
-            fill_expr_type_from_inferred(context, (FengExpr *)result_expr, &body_type);
-        }
-    }
-
-    result_type = infer_expr_type(context, result_expr);
-    if (inferred_expr_type_is_known(body_type) &&
-        inferred_expr_type_is_known(result_type) &&
-        !inferred_expr_types_equal(context, body_type, result_type)) {
-        char *body_type_name = format_inferred_expr_type_name(body_type, context->pointer_size);
-        char *result_type_name = format_inferred_expr_type_name(result_type, context->pointer_size);
-        char *message = format_message(
-            "catch clause result type '%s' does not match try expression type '%s'",
-            result_type_name != NULL ? result_type_name : "<unknown>",
-            body_type_name != NULL ? body_type_name : "<unknown>");
-
-        free(body_type_name);
-        free(result_type_name);
-        (void)resolver_append_error(context, clause->token, "AE0036", message);
-        return false;
-    }
-
     return true;
 }
 
@@ -8466,13 +8481,79 @@ static bool validate_match_label_records(ResolveContext *context,
     return true;
 }
 
+/* Return an expression's inferred type, falling back to a result fact captured
+ * while its lexical branch scope was active. */
+static InferredExprType branch_result_inferred_type(ResolveContext *context,
+                                                    const FengExpr *expr) {
+    InferredExprType inferred = infer_expr_type(context, expr);
+
+    if (!inferred_expr_type_is_known(inferred) && context != NULL &&
+        context->analysis != NULL && expr != NULL) {
+        inferred = inferred_expr_type_from_type_fact(
+            feng_semantic_lookup_type_fact(context->analysis, expr));
+    }
+    return inferred;
+}
+
+/* Persist the selected result type on a branching expression so later
+ * inference and code generation observe the same contextual result type. */
+static bool persist_branch_expression_type(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *type_ref) {
+    FengTypeRef *persistent_type_ref;
+
+    if (context == NULL || expr == NULL || type_ref == NULL) {
+        return true;
+    }
+    persistent_type_ref = clone_type_ref_for_inference(type_ref);
+    if (persistent_type_ref == NULL ||
+        !analysis_track_synthetic_type_ref(context->analysis,
+                                           persistent_type_ref)) {
+        free_synthetic_type_ref(persistent_type_ref);
+        return resolver_append_error(
+            context,
+            expr->token,
+            "IE0001",
+            format_message("out of memory while persisting branch expression type"));
+    }
+    ((FengExpr *)expr)->type = persistent_type_ref;
+    return true;
+}
+
+/* Resolve one expression-result block in its lexical scope and record the
+ * trailing expression type before the scope is popped. */
+static bool resolve_branch_result_block(ResolveContext *context,
+                                        const FengBlock *block,
+                                        bool allow_self) {
+    bool ok;
+
+    if (block == NULL) {
+        return true;
+    }
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+    ok = resolve_block_contents(context, block, allow_self);
+    if (ok && !block_terminates_with_throw(block)) {
+        const FengExpr *yield = block_yield_expression(block);
+
+        if (yield != NULL) {
+            InferredExprType yield_type = infer_expr_type(context, yield);
+
+            ok = record_type_fact_for_site(context, yield, yield_type);
+        }
+    }
+    resolver_pop_scope(context);
+    return ok;
+}
+
+/* Resolve one named match branch through the shared result-block path. */
 static bool resolve_match_branch_body(ResolveContext *context,
                                       const FengMatchBranch *branch,
                                       bool allow_self) {
-    if (branch == NULL || branch->body == NULL) {
-        return true;
-    }
-    return resolve_block(context, branch->body, allow_self);
+    return resolve_branch_result_block(context,
+                                       branch != NULL ? branch->body : NULL,
+                                       allow_self);
 }
 
 static const UnionNarrowingSet *resolver_create_union_narrowing(
@@ -8673,8 +8754,7 @@ static bool resolve_union_match_block_with_deepest_narrowing(
     const FengExpr *target_expr,
     const FengTypeRef *deepest_type_ref,
     FengSlice binding_name,
-    FengMutability binding_mutability,
-    InferredExprType *out_yield_type) {
+    FengMutability binding_mutability) {
     bool ok;
 
     if (block == NULL) {
@@ -8695,8 +8775,14 @@ static bool resolve_union_match_block_with_deepest_narrowing(
     if (ok) {
         ok = resolve_block_contents(context, (FengBlock *)block, allow_self);
     }
-    if (ok && out_yield_type != NULL) {
-        *out_yield_type = block_yield_inferred_type(context, block);
+    if (ok && !block_terminates_with_throw(block)) {
+        const FengExpr *yield = block_yield_expression(block);
+
+        if (yield != NULL) {
+            InferredExprType yield_type = infer_expr_type(context, yield);
+
+            ok = record_type_fact_for_site(context, yield, yield_type);
+        }
     }
     resolver_pop_scope(context);
     return ok;
@@ -8710,7 +8796,6 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                      const FengUnionSpecInfo *info,
                                                      const FengTypeRef *union_spec_type_ref,
                                                      const bool *active_members,
-                                                     InferredExprType *out_yield_type,
                                                      bool has_binding,
                                                      FengSlice binding_name,
                                                      FengMutability binding_mutability) {
@@ -8761,162 +8846,142 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
     if (ok) {
         ok = resolve_block_contents(context, block, allow_self);
     }
-    if (ok && out_yield_type != NULL) {
-        *out_yield_type = block_yield_inferred_type(context, block);
+    if (ok && !block_terminates_with_throw(block)) {
+        const FengExpr *yield = block_yield_expression(block);
+
+        if (yield != NULL) {
+            InferredExprType yield_type = infer_expr_type(context, yield);
+
+            ok = record_type_fact_for_site(context, yield, yield_type);
+        }
     }
     resolver_pop_scope(context);
     return ok;
 }
 
-/* Adapt literal branch yields in a match expression to the target type.
- * Follows the same principles as if-expression branch adaptation
- * (validate_if_expr): determine the target type and adapt pure numeric
- * literal yields to it.
- *
- * Three cases:
- *
- * 1. Explicit target type (from binding annotation, return type, etc.):
- *    - Union target: adapt literal yields to a numeric union member
- *    - Numeric target: adapt literal yields directly
- *
- * 2. No explicit target: find the first non-literal, non-throw branch yield;
- *    use its inferred type as the target; adapt literal yields to it.
- *
- * 3. All branches are literals (or throw): no adaptation, each defaults.
- *
- * Branches that terminate with throw are skipped (they do not participate
- * in type comparison).  Returns true if any adaptation was applied. */
-static bool adapt_match_literal_branch_yields(ResolveContext *context,
-                                              const FengMatchBranch *branches,
-                                              size_t branch_count,
-                                              const FengBlock *else_block) {
-    bool adapted = false;
+/* Collect match result expressions in source order (ordinary branches first,
+ * else last) and fit them through the shared branching-expression rules. */
+static bool fit_match_branch_results_to_target(
+    ResolveContext *context,
+    const FengExpr *match_expr,
+    const FengMatchBranch *branches,
+    size_t branch_count,
+    const FengBlock *else_block,
+    const FengTypeRef *explicit_target,
+    bool *out_all_conform) {
+    const FengExpr **results;
+    size_t result_count = 0U;
+    size_t index;
+    bool ok;
 
-    if (context->current_expr_expected_type_ref != NULL) {
-        const FengTypeRef *expected = context->current_expr_expected_type_ref;
-        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
+    if (out_all_conform != NULL) {
+        *out_all_conform = false;
+    }
+    results = (const FengExpr **)calloc(branch_count + 1U, sizeof(*results));
+    if (results == NULL) {
+        return false;
+    }
+    for (index = 0U; index < branch_count; ++index) {
+        if (!block_terminates_with_throw(branches[index].body)) {
+            const FengExpr *yield = block_yield_expression(branches[index].body);
 
-        if (union_decl != NULL) {
-            /* Union target: adapt literal branch yields to a numeric member. */
-            for (size_t i = 0U; i < branch_count; ++i) {
-                const FengExpr *yield = block_yield_expression(branches[i].body);
-
-                if (block_terminates_with_throw(branches[i].body) || yield == NULL ||
-                    !expr_is_pure_numeric_literal_expr_for_target_adaptation(yield)) {
-                    continue;
-                }
-                if (adapt_literal_expr_to_union_member(context,
-                                                        (FengExpr *)yield,
-                                                        union_decl,
-                                                        expected)) {
-                    adapted = true;
-                }
-            }
-            if (else_block != NULL && !block_terminates_with_throw(else_block)) {
-                const FengExpr *else_yield = block_yield_expression(else_block);
-
-                if (else_yield != NULL &&
-                    expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield)) {
-                    if (adapt_literal_expr_to_union_member(context,
-                                                            (FengExpr *)else_yield,
-                                                            union_decl,
-                                                            expected)) {
-                        adapted = true;
-                    }
-                }
-            }
-        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
-            /* Numeric target: adapt literal branch yields directly. */
-            InferredExprType target = inferred_expr_type_from_type_ref(expected);
-
-            for (size_t i = 0U; i < branch_count; ++i) {
-                const FengExpr *yield = block_yield_expression(branches[i].body);
-
-                if (block_terminates_with_throw(branches[i].body) || yield == NULL ||
-                    !expr_is_pure_numeric_literal_expr_for_target_adaptation(yield)) {
-                    continue;
-                }
-                if (numeric_literal_fits_inferred_target(context, yield, target)) {
-                    fill_expr_type_from_inferred(context, (FengExpr *)yield, &target);
-                    adapted = true;
-                }
-            }
-            if (else_block != NULL && !block_terminates_with_throw(else_block)) {
-                const FengExpr *else_yield = block_yield_expression(else_block);
-
-                if (else_yield != NULL &&
-                    expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield) &&
-                    numeric_literal_fits_inferred_target(context, else_yield, target)) {
-                    fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
-                    adapted = true;
-                }
-            }
-        }
-    } else {
-        /* No explicit target: find the first non-literal, non-throw branch
-         * yield and use its inferred type as the adaptation target. */
-        InferredExprType target;
-        bool found_target = false;
-
-        memset(&target, 0, sizeof(target));
-        for (size_t i = 0U; i < branch_count; ++i) {
-            const FengExpr *yield = block_yield_expression(branches[i].body);
-
-            if (block_terminates_with_throw(branches[i].body) || yield == NULL) {
-                continue;
-            }
-            if (!expr_is_pure_numeric_literal_expr_for_target_adaptation(yield)) {
-                target = infer_expr_type(context, yield);
-                if (inferred_expr_type_is_known(target) &&
-                    inferred_expr_type_is_numeric(target)) {
-                    found_target = true;
-                }
-                break;
-            }
-        }
-        if (!found_target && else_block != NULL &&
-            !block_terminates_with_throw(else_block)) {
-            const FengExpr *else_yield = block_yield_expression(else_block);
-
-            if (else_yield != NULL &&
-                !expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield)) {
-                target = infer_expr_type(context, else_yield);
-                if (inferred_expr_type_is_known(target) &&
-                    inferred_expr_type_is_numeric(target)) {
-                    found_target = true;
-                }
-            }
-        }
-        if (found_target) {
-            for (size_t i = 0U; i < branch_count; ++i) {
-                const FengExpr *yield = block_yield_expression(branches[i].body);
-
-                if (block_terminates_with_throw(branches[i].body) || yield == NULL ||
-                    !expr_is_pure_numeric_literal_expr_for_target_adaptation(yield)) {
-                    continue;
-                }
-                if (numeric_literal_fits_inferred_target(context, yield, target)) {
-                    fill_expr_type_from_inferred(context, (FengExpr *)yield, &target);
-                    adapted = true;
-                }
-            }
-            if (else_block != NULL && !block_terminates_with_throw(else_block)) {
-                const FengExpr *else_yield = block_yield_expression(else_block);
-
-                if (else_yield != NULL &&
-                    expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield) &&
-                    numeric_literal_fits_inferred_target(context, else_yield, target)) {
-                    fill_expr_type_from_inferred(context, (FengExpr *)else_yield, &target);
-                    adapted = true;
-                }
+            if (yield != NULL) {
+                results[result_count++] = yield;
             }
         }
     }
+    if (else_block != NULL && !block_terminates_with_throw(else_block)) {
+        const FengExpr *yield = block_yield_expression(else_block);
 
-    return adapted;
+        if (yield != NULL) {
+            results[result_count++] = yield;
+        }
+    }
+    ok = fit_branch_results_to_target(context,
+                                      match_expr,
+                                      results,
+                                      result_count,
+                                      explicit_target,
+                                      out_all_conform);
+    free(results);
+    return ok;
+}
+
+/* Validate independently inferred match results when no implicit target was
+ * selected (the all-literal case), or emit the established branch-mismatch
+ * diagnostic after target fitting failed. Else remains the comparison base to
+ * preserve the existing diagnostic anchor and wording. */
+static bool validate_match_default_result_types(
+    ResolveContext *context,
+    const FengExpr *match_expr,
+    const FengMatchBranch *branches,
+    size_t branch_count,
+    const FengBlock *else_block) {
+    InferredExprType expected = inferred_expr_type_unknown();
+    size_t index;
+
+    if (else_block != NULL && !block_terminates_with_throw(else_block)) {
+        expected = branch_result_inferred_type(
+            context, block_yield_expression(else_block));
+    }
+    if (!inferred_expr_type_is_known(expected)) {
+        for (index = 0U; index < branch_count; ++index) {
+            if (block_terminates_with_throw(branches[index].body)) {
+                continue;
+            }
+            expected = branch_result_inferred_type(
+                context, block_yield_expression(branches[index].body));
+            if (inferred_expr_type_is_known(expected)) {
+                break;
+            }
+        }
+    }
+    if (!inferred_expr_type_is_known(expected)) {
+        return true;
+    }
+
+    for (index = 0U; index < branch_count; ++index) {
+        InferredExprType branch_type;
+
+        if (block_terminates_with_throw(branches[index].body)) {
+            continue;
+        }
+        branch_type = branch_result_inferred_type(
+            context, block_yield_expression(branches[index].body));
+        if (!inferred_expr_type_is_known(branch_type) ||
+            inferred_expr_types_equal(context, expected, branch_type)) {
+            continue;
+        }
+        {
+            char *expected_name = format_inferred_expr_type_name(
+                expected, context->pointer_size);
+            char *branch_name = format_inferred_expr_type_name(
+                branch_type, context->pointer_size);
+            bool result = resolver_append_error(
+                context,
+                branches[index].token,
+                "AE1108",
+                format_message(
+                    "match expression branches must have the same type, got '%s' and '%s'",
+                    expected_name != NULL ? expected_name : "<unknown>",
+                    branch_name != NULL ? branch_name : "<unknown>"));
+
+            free(expected_name);
+            free(branch_name);
+            if (result && context->current_expr_expected_type_ref != NULL) {
+                result = persist_branch_expression_type(
+                    context,
+                    match_expr,
+                    context->current_expr_expected_type_ref);
+            }
+            return result;
+        }
+    }
+    return true;
 }
 
 static bool resolve_and_validate_union_match_common(ResolveContext *context,
+                                                    const FengExpr *match_expr,
                                                     const FengExpr *target,
                                                     InferredExprType target_type,
                                                     const FengDecl *union_decl,
@@ -8933,11 +8998,8 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     bool *active_members = NULL;
     bool *covered_members = NULL;
     bool *chain_covered_members = NULL;
-    InferredExprType *branch_yield_types = NULL;
-    InferredExprType else_yield_type;
     bool ok = true;
-
-    memset(&else_yield_type, 0, sizeof(else_yield_type));
+    bool all_results_conform = false;
 
     if (info == NULL || info->member_count == 0U) {
         return resolver_append_error(context,
@@ -8969,16 +9031,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
             memcpy(active_members,
                    target_local->union_narrowing->active_members,
                    info->member_count * sizeof(*active_members));
-        }
-    }
-
-    if (is_expression_form && branch_count > 0U) {
-        branch_yield_types = (InferredExprType *)calloc(branch_count, sizeof(*branch_yield_types));
-        if (branch_yield_types == NULL) {
-            free(active_members);
-            free(covered_members);
-            free(chain_covered_members);
-            return false;
         }
     }
 
@@ -9090,8 +9142,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                             target,
                             deepest_type_ref,
                             branches[branch_index].binding_name,
-                            branches[branch_index].binding_mutability,
-                            branch_yield_types != NULL ? &branch_yield_types[branch_index] : NULL);
+                            branches[branch_index].binding_mutability);
                     } else {
                         /* Chain branch without binding: narrow to first-level member. */
                         bool *narrow_members = (bool *)calloc(info->member_count, sizeof(*narrow_members));
@@ -9104,7 +9155,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                 context, branches[branch_index].body, allow_self,
                                 target, target_type, info, union_spec_type_ref,
                                 narrow_members,
-                                branch_yield_types != NULL ? &branch_yield_types[branch_index] : NULL,
                                 false, (FengSlice){NULL, 0U}, FENG_MUTABILITY_LET);
                             free(narrow_members);
                         }
@@ -9118,9 +9168,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                                   info,
                                                                   union_spec_type_ref,
                                                                   branch_members,
-                                                                  branch_yield_types != NULL
-                                                                      ? &branch_yield_types[branch_index]
-                                                                      : NULL,
                                                                   branches[branch_index].has_binding,
                                                                   branches[branch_index].binding_name,
                                                                   branches[branch_index].binding_mutability);
@@ -9166,9 +9213,6 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           info,
                                                           union_spec_type_ref,
                                                           else_members,
-                                                          is_expression_form
-                                                              ? &else_yield_type
-                                                              : NULL,
                                                           false,
                                                           (FengSlice){NULL, 0U},
                                                           FENG_MUTABILITY_LET);
@@ -9187,99 +9231,37 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     free(covered_members);
     free(chain_covered_members);
     if (!ok) {
-        free(branch_yield_types);
         return false;
     }
 
-    if (is_expression_form) {
-        /* Branch literal adaptation: adapt literal branch yields to the
-         * target type before the branch-type-consistency comparison.
-         * After adaptation, refresh the cached yield types for literal
-         * branches (the cached types were collected during block resolution
-         * before adaptation; only literal yields need refresh since
-         * non-literal yields require scope access which is no longer
-         * available). */
-        (void)adapt_match_literal_branch_yields(context, branches, branch_count, else_block);
-        for (size_t i = 0U; i < branch_count; ++i) {
-            const FengExpr *yield;
-
-            if (block_terminates_with_throw(branches[i].body)) {
-                continue;
-            }
-            yield = block_yield_expression(branches[i].body);
-            if (yield != NULL && yield->type != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(yield)) {
-                branch_yield_types[i] = inferred_expr_type_from_type_ref(yield->type);
-            }
-        }
-        if (else_block != NULL && !block_terminates_with_throw(else_block)) {
-            const FengExpr *else_yield = block_yield_expression(else_block);
-
-            if (else_yield != NULL && else_yield->type != NULL &&
-                expr_is_pure_numeric_literal_expr_for_target_adaptation(else_yield)) {
-                else_yield_type = inferred_expr_type_from_type_ref(else_yield->type);
-            }
-        }
-
-        InferredExprType expected = else_yield_type;
-        size_t index;
-
-        if (!inferred_expr_type_is_known(expected)) {
-            for (index = 0U; index < branch_count; ++index) {
-                expected = branch_yield_types[index];
-                if (inferred_expr_type_is_known(expected)) {
-                    break;
-                }
-            }
-        }
-        if (inferred_expr_type_is_known(expected)) {
-            for (index = 0U; index < branch_count; ++index) {
-                InferredExprType branch_type = branch_yield_types[index];
-
-                if (!inferred_expr_type_is_known(branch_type)) {
-                    continue;
-                }
-                if (!inferred_expr_types_equal(context, expected, branch_type)) {
-                    /* Union target: branches may differ if each is a valid member. */
-                    if (context->current_expr_expected_type_ref != NULL) {
-                        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(
-                            context, context->current_expr_expected_type_ref);
-
-                        if (union_decl != NULL) {
-                            UnionMemberSelection branch_sel = select_union_member_for_expr_type(
-                                context, branch_type, union_decl,
-                                context->current_expr_expected_type_ref);
-
-                            if (branch_sel.matched) {
-                                continue;
-                            }
-                        }
-                    }
-                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
-                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
-                    bool result = resolver_append_error(
-                        context,
-                        branches[index].token,
-                        "AE1108", format_message("match expression branches must have the same type, got '%s' and '%s'",
-                                       expected_name != NULL ? expected_name : "<unknown>",
-                                       branch_name != NULL ? branch_name : "<unknown>"));
-
-                    free(expected_name);
-                    free(branch_name);
-                    free(branch_yield_types);
-                    return result;
-                }
-            }
-        }
+    if (is_expression_form &&
+        !fit_match_branch_results_to_target(
+            context,
+            match_expr,
+            branches,
+            branch_count,
+            else_block,
+            context->current_expr_expected_type_ref,
+            &all_results_conform)) {
+        return false;
     }
 
-    free(branch_yield_types);
+    if (is_expression_form && !all_results_conform &&
+        context->deferred_branch_result_validation_depth == 0U) {
+        return validate_match_default_result_types(context,
+                                                   match_expr,
+                                                   branches,
+                                                   branch_count,
+                                                   else_block);
+    }
+
     return true;
 }
 
 static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_decl);
 
 static bool resolve_and_validate_enum_match_common(ResolveContext *context,
+                                                    const FengExpr *match_expr,
                                                     const FengExpr *target,
                                                     InferredExprType target_type,
                                                     const FengDecl *enum_decl,
@@ -9294,6 +9276,7 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
     size_t record_capacity = 0U;
     size_t branch_index;
     bool ok = true;
+    bool all_results_conform = false;
 
     (void)target;
 
@@ -9464,7 +9447,9 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
     }
 
     if (else_block != NULL) {
-        if (!resolve_block(context, else_block, allow_self)) {
+        if (!resolve_branch_result_block(context,
+                                         else_block,
+                                         allow_self)) {
             return false;
         }
         if (is_expression_form &&
@@ -9478,67 +9463,32 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
             "AE1108", format_message("match expressions require an else branch"));
     }
 
-    if (is_expression_form) {
-        /* Branch literal adaptation: adapt literal branch yields to the
-         * target type before the branch-type-consistency comparison. */
-        (void)adapt_match_literal_branch_yields(context, branches, branch_count, else_block);
+    if (is_expression_form &&
+        !fit_match_branch_results_to_target(
+            context,
+            match_expr,
+            branches,
+            branch_count,
+            else_block,
+            context->current_expr_expected_type_ref,
+            &all_results_conform)) {
+        return false;
+    }
 
-        InferredExprType expected = block_yield_inferred_type(context, else_block);
-        size_t i;
-
-        if (!inferred_expr_type_is_known(expected)) {
-            for (i = 0U; i < branch_count; ++i) {
-                expected = block_yield_inferred_type(context, branches[i].body);
-                if (inferred_expr_type_is_known(expected)) {
-                    break;
-                }
-            }
-        }
-        if (inferred_expr_type_is_known(expected)) {
-            for (i = 0U; i < branch_count; ++i) {
-                InferredExprType branch_type =
-                    block_yield_inferred_type(context, branches[i].body);
-
-                if (!inferred_expr_type_is_known(branch_type)) {
-                    continue;
-                }
-                if (!inferred_expr_types_equal(context, expected, branch_type)) {
-                    /* Union target: branches may differ if each is a valid member. */
-                    if (context->current_expr_expected_type_ref != NULL) {
-                        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(
-                            context, context->current_expr_expected_type_ref);
-
-                        if (union_decl != NULL) {
-                            UnionMemberSelection branch_sel = select_union_member_for_expr_type(
-                                context, branch_type, union_decl,
-                                context->current_expr_expected_type_ref);
-
-                            if (branch_sel.matched) {
-                                continue;
-                            }
-                        }
-                    }
-                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
-                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
-                    bool append_ok = resolver_append_error(
-                        context,
-                        branches[i].token,
-                        "AE1108", format_message("match expression branches must have the same type, got '%s' and '%s'",
-                                       expected_name != NULL ? expected_name : "<unknown>",
-                                       branch_name != NULL ? branch_name : "<unknown>"));
-                    free(expected_name);
-                    free(branch_name);
-                    ok = append_ok;
-                    break;
-                }
-            }
-        }
+    if (is_expression_form && !all_results_conform &&
+        context->deferred_branch_result_validation_depth == 0U) {
+        ok = validate_match_default_result_types(context,
+                                                 match_expr,
+                                                 branches,
+                                                 branch_count,
+                                                 else_block);
     }
 
     return ok;
 }
 
 static bool resolve_and_validate_enum_match_common(ResolveContext *context,
+                                                    const FengExpr *match_expr,
                                                     const FengExpr *target,
                                                     InferredExprType target_type,
                                                     const FengDecl *enum_decl,
@@ -9552,6 +9502,7 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
 static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_decl);
 
 static bool resolve_and_validate_match_common(ResolveContext *context,
+                                              const FengExpr *match_expr,
                                               const FengExpr *target,
                                               const FengMatchBranch *branches,
                                               size_t branch_count,
@@ -9565,6 +9516,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     size_t record_capacity = 0U;
     size_t branch_index;
     bool ok = true;
+    bool all_results_conform = false;
 
     if (!resolve_expr(context, (FengExpr *)target, allow_self)) {
         return false;
@@ -9615,6 +9567,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
             }
 
             return resolve_and_validate_union_match_common(context,
+                                                           match_expr,
                                                            target,
                                                            target_type,
                                                            union_decl,
@@ -9636,6 +9589,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
         }
         if (enum_decl != NULL && decl_is_enum_type(enum_decl)) {
             return resolve_and_validate_enum_match_common(context,
+                                                          match_expr,
                                                           target,
                                                           target_type,
                                                           enum_decl,
@@ -9668,7 +9622,9 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
             ok = false;
             break;
         }
-        if (!resolve_match_branch_body(context, &branches[branch_index], allow_self)) {
+        if (!resolve_match_branch_body(context,
+                                       &branches[branch_index],
+                                       allow_self)) {
             ok = false;
             break;
         }
@@ -9693,7 +9649,9 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     }
 
     if (else_block != NULL) {
-        if (!resolve_block(context, else_block, allow_self)) {
+        if (!resolve_branch_result_block(context,
+                                         else_block,
+                                         allow_self)) {
             return false;
         }
         if (is_expression_form &&
@@ -9707,61 +9665,25 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
             "AE1108", format_message("match expressions require an else branch"));
     }
 
-    if (is_expression_form) {
-        /* Branch literal adaptation: adapt literal branch yields to the
-         * target type before the branch-type-consistency comparison. */
-        (void)adapt_match_literal_branch_yields(context, branches, branch_count, else_block);
+    if (is_expression_form &&
+        !fit_match_branch_results_to_target(
+            context,
+            match_expr,
+            branches,
+            branch_count,
+            else_block,
+            context->current_expr_expected_type_ref,
+            &all_results_conform)) {
+        return false;
+    }
 
-        InferredExprType expected = block_yield_inferred_type(context, else_block);
-        size_t i;
-
-        if (!inferred_expr_type_is_known(expected)) {
-            for (i = 0U; i < branch_count; ++i) {
-                expected = block_yield_inferred_type(context, branches[i].body);
-                if (inferred_expr_type_is_known(expected)) {
-                    break;
-                }
-            }
-        }
-        if (inferred_expr_type_is_known(expected)) {
-            for (i = 0U; i < branch_count; ++i) {
-                InferredExprType branch_type =
-                    block_yield_inferred_type(context, branches[i].body);
-
-                if (!inferred_expr_type_is_known(branch_type)) {
-                    continue;
-                }
-                if (!inferred_expr_types_equal(context, expected, branch_type)) {
-                    /* When the explicit target is a union type, branches may
-                     * have different types as long as each is a valid union
-                     * member (same rule as validate_if_expr). */
-                    if (context->current_expr_expected_type_ref != NULL) {
-                        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(
-                            context, context->current_expr_expected_type_ref);
-
-                        if (union_decl != NULL) {
-                            UnionMemberSelection branch_sel = select_union_member_for_expr_type(
-                                context, branch_type, union_decl,
-                                context->current_expr_expected_type_ref);
-
-                            if (branch_sel.matched) {
-                                continue;
-                            }
-                        }
-                    }
-                    char *expected_name = format_inferred_expr_type_name(expected, context->pointer_size);
-                    char *branch_name = format_inferred_expr_type_name(branch_type, context->pointer_size);
-                    char *message = format_message(
-                        "match expression branches must have the same type, got '%s' and '%s'",
-                        expected_name != NULL ? expected_name : "<unknown>",
-                        branch_name != NULL ? branch_name : "<unknown>");
-
-                    free(expected_name);
-                    free(branch_name);
-                    return resolver_append_error(context, branches[i].token, "AE1108", message);
-                }
-            }
-        }
+    if (is_expression_form && !all_results_conform &&
+        context->deferred_branch_result_validation_depth == 0U) {
+        return validate_match_default_result_types(context,
+                                                   match_expr,
+                                                   branches,
+                                                   branch_count,
+                                                   else_block);
     }
 
     return true;
@@ -19892,6 +19814,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             InferredExprType then_type;
             InferredExprType else_type;
 
+            if (expr->type != NULL) {
+                return inferred_expr_type_from_type_ref(expr->type);
+            }
             if (!inferred_expr_type_is_bool(condition_type)) {
                 return inferred_expr_type_unknown();
             }
@@ -19909,6 +19834,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         }
 
         case FENG_EXPR_MATCH: {
+            if (expr->type != NULL) {
+                return inferred_expr_type_from_type_ref(expr->type);
+            }
             InferredExprType result_type =
                 block_yield_inferred_type(context, expr->as.match_expr.else_block);
 
@@ -19954,6 +19882,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
         }
 
         case FENG_EXPR_TRY: {
+            if (expr->type != NULL) {
+                return inferred_expr_type_from_type_ref(expr->type);
+            }
             return infer_expr_type(context, expr->as.try_expr.body);
         }
 
@@ -21091,11 +21022,115 @@ static bool persist_literal_type_ref(ResolveContext *context,
     return true;
 }
 
+/* Check every value-producing result of an if/match/try expression against a
+ * contextual target. This pure matching path is used during overload probing;
+ * it intentionally records no coercion sites of its own. */
+static bool branching_expr_results_match_expected_type(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref) {
+    size_t index;
+
+    if (expr == NULL || expected_type_ref == NULL) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IF: {
+            const FengBlock *blocks[2] = {
+                expr->as.if_expr.then_block,
+                expr->as.if_expr.else_block
+            };
+
+            for (index = 0U; index < 2U; ++index) {
+                const FengExpr *result;
+
+                if (block_terminates_with_throw(blocks[index])) {
+                    continue;
+                }
+                result = block_yield_expression(blocks[index]);
+                if (result == NULL ||
+                    !expr_matches_expected_type_ref(context,
+                                                    result,
+                                                    expected_type_ref)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        case FENG_EXPR_MATCH:
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                const FengBlock *block = expr->as.match_expr.branches[index].body;
+                const FengExpr *result;
+
+                if (block_terminates_with_throw(block)) {
+                    continue;
+                }
+                result = block_yield_expression(block);
+                if (result == NULL ||
+                    !expr_matches_expected_type_ref(context,
+                                                    result,
+                                                    expected_type_ref)) {
+                    return false;
+                }
+            }
+            if (!block_terminates_with_throw(expr->as.match_expr.else_block)) {
+                const FengExpr *result =
+                    block_yield_expression(expr->as.match_expr.else_block);
+
+                if (result == NULL ||
+                    !expr_matches_expected_type_ref(context,
+                                                    result,
+                                                    expected_type_ref)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_TRY:
+            if (!expr_matches_expected_type_ref(context,
+                                                expr->as.try_expr.body,
+                                                expected_type_ref)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
+                const FengBlock *block = expr->as.try_expr.clauses[index].body;
+                const FengExpr *result;
+
+                if (block_terminates_with_throw(block)) {
+                    continue;
+                }
+                result = block_yield_expression(block);
+                if (result == NULL) {
+                    result = block_terminal_return_value(block);
+                }
+                if (result == NULL ||
+                    !expr_matches_expected_type_ref(context,
+                                                    result,
+                                                    expected_type_ref)) {
+                    return false;
+                }
+            }
+            return true;
+
+        default:
+            return false;
+    }
+}
+
 static bool expr_matches_expected_type_ref(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref) {
     const FengDecl *function_type_decl = resolve_function_type_decl(context, expected_type_ref);
     InferredExprType expr_type;
+
+    if (expr != NULL &&
+        (expr->kind == FENG_EXPR_IF || expr->kind == FENG_EXPR_MATCH ||
+         expr->kind == FENG_EXPR_TRY)) {
+        return branching_expr_results_match_expected_type(context,
+                                                          expr,
+                                                          expected_type_ref);
+    }
 
     if (expr != NULL && expr->kind == FENG_EXPR_UNARY && expr->as.unary.op == FENG_TOKEN_AMP &&
         expected_type_ref != NULL && expected_type_ref->kind == FENG_TYPE_REF_POINTER) {
@@ -21169,7 +21204,7 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
         }
     }
 
-    expr_type = infer_expr_type(context, expr);
+    expr_type = branch_result_inferred_type(context, expr);
     if (!inferred_expr_type_is_known(expr_type)) {
         if (expr_type_inference_is_pending(context, expr)) {
             return true;
@@ -21185,6 +21220,24 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
 
         if (target_union_decl != NULL) {
             UnionMemberSelection selection;
+
+            if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr)) {
+                const FengTypeRef *literal_member =
+                    select_literal_expr_union_member_target(context,
+                                                            expr,
+                                                            target_union_decl,
+                                                            expected_type_ref);
+
+                if (literal_member != NULL) {
+                    if (!context->suppress_literal_type_commit &&
+                        !persist_literal_type_ref(context,
+                                                  expr,
+                                                  literal_member)) {
+                        return false;
+                    }
+                    return true;
+                }
+            }
 
             if (inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
                 return true;
@@ -21645,6 +21698,14 @@ static void record_object_arg_coercion_sites(ResolveContext *context,
                 ? params[i].type
                 : params[fixed_count].type->as.inner;
 
+        if (args[i]->kind == FENG_EXPR_IF ||
+            args[i]->kind == FENG_EXPR_MATCH ||
+            args[i]->kind == FENG_EXPR_TRY) {
+            (void)validate_expr_against_expected_type(context,
+                                                      args[i],
+                                                      param_type);
+            continue;
+        }
         if (resolve_function_type_decl(context, param_type) != NULL) {
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
@@ -21713,6 +21774,14 @@ static void record_object_arg_coercion_sites_for_resolved_call(
             resolved->callable_type_args,
             resolved->callable_type_arg_count,
             param_type);
+        if (args[i]->kind == FENG_EXPR_IF ||
+            args[i]->kind == FENG_EXPR_MATCH ||
+            args[i]->kind == FENG_EXPR_TRY) {
+            (void)validate_expr_against_expected_type(context,
+                                                      args[i],
+                                                      param_type);
+            continue;
+        }
         if (resolve_function_type_decl(context, param_type) != NULL) {
             record_callable_spec_coercion_site(context, args[i], param_type);
             continue;
@@ -23226,6 +23295,146 @@ static bool validate_function_typed_expr(ResolveContext *context,
     }
 }
 
+/* Validate one already-resolved branch result against a target, preserving a
+ * conformance flag separately from the resolver's diagnostic-success return
+ * convention. */
+static bool validate_branch_result_against_expected_type(
+    ResolveContext *context,
+    const FengExpr *result,
+    const FengTypeRef *expected_type_ref,
+    bool *out_conforms) {
+    bool conforms;
+
+    if (out_conforms != NULL) {
+        *out_conforms = true;
+    }
+    if (result == NULL) {
+        return true;
+    }
+    conforms = expr_matches_expected_type_ref(context,
+                                              result,
+                                              expected_type_ref);
+    if (out_conforms != NULL) {
+        *out_conforms = conforms;
+    }
+    return validate_expr_against_expected_type(context,
+                                               result,
+                                               expected_type_ref);
+}
+
+/* Commit target-directed validation for every result of a branching
+ * expression. The outer expression type is persisted only when all normal
+ * branches conform. */
+static bool validate_branching_expr_against_expected_type(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *expected_type_ref) {
+    bool all_conform = true;
+    size_t index;
+
+    switch (expr->kind) {
+        case FENG_EXPR_IF: {
+            const FengBlock *blocks[2] = {
+                expr->as.if_expr.then_block,
+                expr->as.if_expr.else_block
+            };
+
+            for (index = 0U; index < 2U; ++index) {
+                bool conforms = true;
+
+                if (block_terminates_with_throw(blocks[index])) {
+                    continue;
+                }
+                if (!validate_branch_result_against_expected_type(
+                        context,
+                        block_yield_expression(blocks[index]),
+                        expected_type_ref,
+                        &conforms)) {
+                    return false;
+                }
+                if (!conforms) {
+                    all_conform = false;
+                    break;
+                }
+            }
+            break;
+        }
+
+        case FENG_EXPR_MATCH:
+            for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
+                const FengBlock *block = expr->as.match_expr.branches[index].body;
+                bool conforms = true;
+
+                if (block_terminates_with_throw(block)) {
+                    continue;
+                }
+                if (!validate_branch_result_against_expected_type(
+                        context,
+                        block_yield_expression(block),
+                        expected_type_ref,
+                        &conforms)) {
+                    return false;
+                }
+                if (!conforms) {
+                    all_conform = false;
+                    break;
+                }
+            }
+            if (all_conform &&
+                !block_terminates_with_throw(expr->as.match_expr.else_block)) {
+                bool conforms = true;
+
+                if (!validate_branch_result_against_expected_type(
+                        context,
+                        block_yield_expression(expr->as.match_expr.else_block),
+                        expected_type_ref,
+                        &conforms)) {
+                    return false;
+                }
+                all_conform = conforms;
+            }
+            break;
+
+        case FENG_EXPR_TRY:
+            if (!validate_branch_result_against_expected_type(
+                    context,
+                    expr->as.try_expr.body,
+                    expected_type_ref,
+                    &all_conform)) {
+                return false;
+            }
+            for (index = 0U;
+                 all_conform && index < expr->as.try_expr.clause_count;
+                 ++index) {
+                const FengBlock *block = expr->as.try_expr.clauses[index].body;
+                const FengExpr *result;
+                bool conforms = true;
+
+                if (block_terminates_with_throw(block)) {
+                    continue;
+                }
+                result = block_yield_expression(block);
+                if (result == NULL) {
+                    result = block_terminal_return_value(block);
+                }
+                if (!validate_branch_result_against_expected_type(context,
+                                                                  result,
+                                                                  expected_type_ref,
+                                                                  &conforms)) {
+                    return false;
+                }
+                all_conform = conforms;
+            }
+            break;
+
+        default:
+            return true;
+    }
+
+    return !all_conform ||
+           persist_branch_expression_type(context, expr, expected_type_ref);
+}
+
 static bool validate_expr_against_expected_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengTypeRef *expected_type_ref) {
@@ -23235,6 +23444,18 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
 
     if (expr == NULL || expected_type_ref == NULL) {
         return true;
+    }
+    if (expr->kind == FENG_EXPR_IF || expr->kind == FENG_EXPR_MATCH ||
+        expr->kind == FENG_EXPR_TRY) {
+        if (expr->type != NULL &&
+            type_refs_semantically_equal(context,
+                                         expr->type,
+                                         expected_type_ref)) {
+            return true;
+        }
+        return validate_branching_expr_against_expected_type(context,
+                                                             expr,
+                                                             expected_type_ref);
     }
     if (expr->kind == FENG_EXPR_TUPLE_LITERAL) {
         return validate_tuple_literal_expr_against_type(context, expr, expected_type_ref);
@@ -23255,7 +23476,7 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
         if (target_union_decl != NULL) {
             UnionMemberSelection selection;
 
-            expr_type = infer_expr_type(context, expr);
+            expr_type = branch_result_inferred_type(context, expr);
             if (!inferred_expr_type_is_known(expr_type)) {
                 if (!expr_is_callable_value_reference(context, expr)) {
                     return true;
@@ -27733,8 +27954,14 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                                      target_expr_type,
                                                                      field_member->as.field.type)
                             : NULL;
+                    const FengTypeRef *previous_expected =
+                        context->current_expr_expected_type_ref;
+                    bool field_ok;
 
-                    if (!resolve_expr(context, field->value, allow_self)) {
+                    context->current_expr_expected_type_ref = field_type;
+                    field_ok = resolve_expr(context, field->value, allow_self);
+                    context->current_expr_expected_type_ref = previous_expected;
+                    if (!field_ok) {
                         return false;
                     }
                     if (field_type != NULL &&
@@ -27772,8 +27999,28 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
                 return false;
             }
-            for (index = 0U; index < expr->as.call.arg_count; ++index) {
-                if (!resolve_expr(context, expr->as.call.args[index], allow_self)) {
+            {
+                const FengTypeRef *previous_expected =
+                    context->current_expr_expected_type_ref;
+                bool args_ok = true;
+
+                /* A call's outer target describes its return value, not its
+                 * arguments. Parameter targets become known only after
+                 * overload selection, so branch-result mismatch checks are
+                 * deferred while each argument is resolved. */
+                context->current_expr_expected_type_ref = NULL;
+                context->deferred_branch_result_validation_depth += 1U;
+                for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                    if (!resolve_expr(context,
+                                      expr->as.call.args[index],
+                                      allow_self)) {
+                        args_ok = false;
+                        break;
+                    }
+                }
+                context->deferred_branch_result_validation_depth -= 1U;
+                context->current_expr_expected_type_ref = previous_expected;
+                if (!args_ok) {
                     return false;
                 }
             }
@@ -27972,8 +28219,12 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
              * may contain their own break/continue normally. */
             context->loop_depth = 0U;
             context->if_expr_depth += 1U;
-            ok = resolve_block(context, expr->as.if_expr.then_block, allow_self) &&
-                 resolve_block(context, expr->as.if_expr.else_block, allow_self);
+            ok = resolve_branch_result_block(context,
+                                             expr->as.if_expr.then_block,
+                                             allow_self) &&
+                 resolve_branch_result_block(context,
+                                             expr->as.if_expr.else_block,
+                                             allow_self);
             context->loop_depth = prev_loop_depth;
             context->if_expr_depth -= 1U;
             return ok && validate_if_expr(context, expr);
@@ -27981,6 +28232,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
 
         case FENG_EXPR_MATCH:
             return resolve_and_validate_match_common(context,
+                                                     expr,
                                                      expr->as.match_expr.target,
                                                      expr->as.match_expr.branches,
                                                      expr->as.match_expr.branch_count,
@@ -28308,28 +28560,10 @@ static bool resolve_try_expr(ResolveContext *context,
         return false;
     }
     body_type = infer_expr_type(context, expr->as.try_expr.body);
-
-    /* Body literal adaptation: when the body is a pure numeric literal and
-     * there is an explicit target type, adapt the body literal before catch
-     * clause validation so the adapted body type is used consistently. */
-    if (context->current_expr_expected_type_ref != NULL &&
-        expr_is_pure_numeric_literal_expr_for_target_adaptation(expr->as.try_expr.body)) {
-        const FengTypeRef *expected = context->current_expr_expected_type_ref;
-        const FengDecl *union_decl = resolve_union_spec_type_ref_decl(context, expected);
-
-        if (union_decl != NULL) {
-            (void)adapt_literal_expr_to_union_member(context,
-                                                      (FengExpr *)expr->as.try_expr.body,
-                                                      union_decl,
-                                                      expected);
-        } else if (type_ref_builtin_canonical_name(expected, context->pointer_size) != NULL) {
-            InferredExprType target = inferred_expr_type_from_type_ref(expected);
-
-            if (numeric_literal_fits_inferred_target(context, expr->as.try_expr.body, target)) {
-                fill_expr_type_from_inferred(context, (FengExpr *)expr->as.try_expr.body, &target);
-            }
-        }
-        body_type = infer_expr_type(context, expr->as.try_expr.body);
+    if (!record_type_fact_for_site(context,
+                                   expr->as.try_expr.body,
+                                   body_type)) {
+        return false;
     }
 
     for (size_t clause_index = 0U;
@@ -28377,8 +28611,10 @@ static bool resolve_try_expr(ResolveContext *context,
                 context->catch_expr_depth += 1U;
             }
             if (is_anonymous) {
-                ok = resolve_block(context, clause->body, allow_self) &&
-                     validate_try_catch_clause_result_type(context,
+                ok = resolve_branch_result_block(context,
+                                                 clause->body,
+                                                 allow_self) &&
+                     validate_try_catch_clause_result_presence(context,
                                        expr,
                                        clause,
                                        body_type,
@@ -28388,8 +28624,10 @@ static bool resolve_try_expr(ResolveContext *context,
                                    clause->name,
                                    catch_type,
                                    FENG_MUTABILITY_LET) &&
-                     resolve_block(context, clause->body, allow_self) &&
-                     validate_try_catch_clause_result_type(context,
+                     resolve_branch_result_block(context,
+                                                 clause->body,
+                                                 allow_self) &&
+                     validate_try_catch_clause_result_presence(context,
                                        expr,
                                        clause,
                                        body_type,
@@ -28478,14 +28716,38 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (!validate_assignment_target_writable(context, stmt->as.assign.target)) {
                 return false;
             }
-            if (!resolve_expr(context, stmt->as.assign.value, allow_self)) {
-                return false;
-            }
-            if (stmt->as.assign.op != FENG_TOKEN_ASSIGN) {
-                return validate_compound_assignment(context, stmt);
-            }
             {
                 InferredExprType target_type = infer_expr_type(context, stmt->as.assign.target);
+                FengTypeRef *expected_type_ref = NULL;
+                const FengTypeRef *previous_expected =
+                    context->current_expr_expected_type_ref;
+                bool value_ok;
+
+                if (stmt->as.assign.op == FENG_TOKEN_ASSIGN &&
+                    inferred_expr_type_is_known(target_type)) {
+                    expected_type_ref = create_type_ref_from_inferred_type(
+                        &target_type,
+                        stmt->as.assign.target != NULL
+                            ? stmt->as.assign.target->token
+                            : stmt->token);
+                    if (expected_type_ref != NULL &&
+                        !resolver_track_synthetic_type_ref(context,
+                                                           expected_type_ref)) {
+                        free_synthetic_type_ref(expected_type_ref);
+                        return false;
+                    }
+                }
+                context->current_expr_expected_type_ref = expected_type_ref;
+                value_ok = resolve_expr(context,
+                                        stmt->as.assign.value,
+                                        allow_self);
+                context->current_expr_expected_type_ref = previous_expected;
+                if (!value_ok) {
+                    return false;
+                }
+                if (stmt->as.assign.op != FENG_TOKEN_ASSIGN) {
+                    return validate_compound_assignment(context, stmt);
+                }
 
                 if (!validate_expr_against_expected_inferred_type(context,
                                                                   stmt->as.assign.value,
@@ -28593,6 +28855,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
 
         case FENG_STMT_MATCH:
             return resolve_and_validate_match_common(context,
+                                                     NULL,
                                                      stmt->as.match_stmt.target,
                                                      stmt->as.match_stmt.branches,
                                                      stmt->as.match_stmt.branch_count,

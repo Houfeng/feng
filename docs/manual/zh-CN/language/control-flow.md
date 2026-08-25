@@ -26,7 +26,7 @@ let status = if ready {
 };
 ```
 
-表达式形式必须包含 `else`，所有正常完成的分支必须产生相同类型的值。
+表达式形式必须包含 `else`，所有正常完成的分支必须产生结果；目标类型选择与贴合见 [Feng 语言流程控制规范](../../../specifications/feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)。
 
 ## while
 

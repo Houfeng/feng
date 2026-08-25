@@ -49,6 +49,19 @@ func print_display_union(value: DisplayUnion): string {
   };
 }
 
+/** Build a complete generic union value for branch-result fitting tests. */
+func make_union_result<T>(value: T): UnionResult<T> {
+  return value;
+}
+
+/** Join a complete generic union value and one member through match. */
+func select_union_result<T>(use_value: bool, value: T, error: UnionError): UnionResult<T> {
+  return match use_value {
+    true { make_union_result<T>(value) }
+    else { error }
+  };
+}
+
 // 测试用例 1: 联合类型（无嵌套）作为泛型约束
 spec SimpleUnion: int | string;
 
@@ -182,6 +195,28 @@ open func test_union() {
         else { "else" }
       };
       assert(err_result == "error-ok", "generic union (error branch)");
+    });
+
+    test("generic union match result fits contextual target", () {
+      let selected = select_union_result<int>(true, 42, UnionError { code: 7 });
+      let selected_result = match selected {
+        value: int { value }
+        UnionError { -1 }
+        else { -2 }
+      };
+      assert(selected_result == 42,
+             "generic union match result fits contextual target");
+    });
+
+    test("generic union match member fits contextual target", () {
+      let selected = select_union_result<int>(false, 42, UnionError { code: 7 });
+      let selected_result = match selected {
+        int { -1 }
+        error: UnionError { error.code }
+        else { -2 }
+      };
+      assert(selected_result == 7,
+             "generic union match member fits contextual target");
     });
 
     test("simple union as generic constraint (int)", () {

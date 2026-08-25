@@ -79,4 +79,4 @@ let category = match code {
 };
 ```
 
-表达式形式的各正常分支必须产生一致类型的结果；最后一个表达式就是该块的值。详见[流程控制](./control-flow.md)、[模式匹配](./pattern-matching.md)和[异常处理](./error-handling.md)。
+表达式形式的各正常分支必须产生结果，最后一个表达式就是该块的值；统一的目标类型选择与贴合见 [Feng 语言流程控制规范](../../../specifications/feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)。

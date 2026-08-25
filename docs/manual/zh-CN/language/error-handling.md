@@ -46,7 +46,7 @@ let port = try parse_port(text) catch error: string {
 };
 ```
 
-正常路径与每个正常结束的 `catch` 必须产生一致类型。省略 `catch` 表示只建立异常传播点，异常会继续向调用方传播。
+正常路径与每个正常结束的 `catch` 必须产生结果，其目标类型选择与贴合遵循[流程控制规范的统一分支规则](../../../specifications/feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)。省略 `catch` 表示只建立异常传播点，异常会继续向调用方传播。
 
 ## defer
 
