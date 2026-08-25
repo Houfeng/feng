@@ -337,6 +337,8 @@ LastSuccessfulAnalysis 只读发布。请求处理不能修改其中 AST、seman
 
 成员补全至少覆盖 `foo. → 退格删除点号 → 再次输入 foo.`。每次成功应用 `didChange` 后，当前文本、version、UTF-16 position 映射、当前 parse 状态和单次 repair 输入必须属于同一文档版本。失败 parse、失败 candidate、已消费的冷启动等待状态和中间 generation 都不得阻止后续版本重新查询已发布缓存与索引。
 
+当前文本能明确识别成员接收者、但其所在语句尚未完成时（例如 `if self.`、`if local.` 或 `for let item in values.`），Completion 必须保留并查询最后一次成功发布的符号数据。请求内 repair 必须按当前位置选择与语法匹配的可解析形态，覆盖仅补成员名、补普通语句结尾和补后续代码块等情况；解析成功后以当前文本重新确定接收者作用域，再查询 `SymbolIndex`。不得把旧 AST 的绝对 offset 直接套用到当前文本，也不得把需要后续代码块的条件或迭代表达式错误修复成普通分号表达式语句。该规则适用于所有可解析的成员接收者，不得按 `self`、局部变量名、类型名或文件路径添加特判。
+
 ---
 
 ## 7. Hover 优化路径

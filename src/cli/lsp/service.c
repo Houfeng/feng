@@ -23959,6 +23959,107 @@ static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
     }
 }
 
+/* Return whether the source following the cursor can continue or terminate
+ * the repaired expression without inserting another statement delimiter. */
+static bool completion_repair_has_following_expression_syntax(const char *text,
+                                                              size_t offset,
+                                                              char *out_syntax) {
+    size_t length;
+    size_t cursor;
+
+    if (out_syntax != NULL) {
+        *out_syntax = '\0';
+    }
+    if (text == NULL) {
+        return false;
+    }
+    length = strlen(text);
+    if (offset > length) {
+        return false;
+    }
+    cursor = offset;
+    while (cursor < length && isspace((unsigned char)text[cursor])) {
+        ++cursor;
+    }
+    if (cursor >= length) {
+        return false;
+    }
+    if (out_syntax != NULL) {
+        *out_syntax = text[cursor];
+    }
+    switch (text[cursor]) {
+        case ';':
+        case ',':
+        case ')':
+        case ']':
+        case '{':
+        case '(':
+        case '[':
+        case '.':
+        case '+':
+        case '-':
+        case '*':
+        case '/':
+        case '%':
+        case '&':
+        case '|':
+        case '^':
+        case '<':
+        case '>':
+        case '=':
+        case '!':
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* Detect an unfinished grammar head whose expression is followed by a block.
+ * Lexer tokens reset the decision at block and statement boundaries, so
+ * comments, literals, receiver names, and earlier statements cannot affect it. */
+static bool completion_repair_prefers_block_tail(const char *text,
+                                                 size_t offset) {
+    FengLexer lexer;
+    FengToken token;
+    bool saw_for = false;
+    bool needs_block = false;
+
+    if (text == NULL) {
+        return false;
+    }
+    feng_lexer_init(&lexer, text, offset, NULL);
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF || token.kind == FENG_TOKEN_ERROR) {
+            break;
+        }
+        switch (token.kind) {
+            case FENG_TOKEN_KW_IF:
+            case FENG_TOKEN_KW_MATCH:
+            case FENG_TOKEN_KW_WHILE:
+                needs_block = true;
+                break;
+            case FENG_TOKEN_KW_FOR:
+                saw_for = true;
+                break;
+            case FENG_TOKEN_KW_IN:
+                if (saw_for) {
+                    needs_block = true;
+                }
+                break;
+            case FENG_TOKEN_LBRACE:
+            case FENG_TOKEN_RBRACE:
+            case FENG_TOKEN_SEMICOLON:
+                saw_for = false;
+                needs_block = false;
+                break;
+            default:
+                break;
+        }
+    }
+    return needs_block;
+}
+
 /* Repair source for signatureHelp by closing unclosed parentheses at offset. */
 static char *dup_text_with_signature_repair(const char *text, size_t offset) {
     size_t text_length;
@@ -24001,10 +24102,17 @@ static char *dup_text_with_signature_repair(const char *text, size_t offset) {
 
 static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     static const char kPlaceholder[] = "__feng_completion_placeholder__";
+    static const char kBlockExpressionTail[] = " == true";
+    static const char kBlockTail[] = " == true {}";
     size_t text_length;
     size_t placeholder_length = 0U;
-    size_t semicolon_length = 0U;
+    const char *tail_text = NULL;
+    size_t tail_length = 0U;
     bool is_member_access;
+    bool is_member_dot;
+    bool has_following_syntax;
+    bool prefers_block_tail;
+    char following_syntax = '\0';
     char *out;
 
     if (text == NULL) {
@@ -24015,16 +24123,33 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
         return NULL;
     }
     is_member_access = completion_context_is_member_access(text, offset);
-    if (is_member_access && completion_context_is_member_dot(text, offset)) {
+    is_member_dot = is_member_access &&
+                    completion_context_is_member_dot(text, offset);
+    has_following_syntax = is_member_dot &&
+                           completion_repair_has_following_expression_syntax(
+                               text,
+                               offset,
+                               &following_syntax);
+    prefers_block_tail = is_member_dot &&
+                         completion_repair_prefers_block_tail(text, offset);
+    if (is_member_dot) {
         placeholder_length = strlen(kPlaceholder);
     }
-    if (completion_repair_needs_semicolon(text, offset)) {
-        semicolon_length = 1U;
+    if (prefers_block_tail &&
+        (!has_following_syntax || following_syntax == '{')) {
+        tail_text = following_syntax == '{'
+                        ? kBlockExpressionTail
+                        : kBlockTail;
+        tail_length = strlen(tail_text);
+    } else if ((!is_member_dot || !has_following_syntax) &&
+               completion_repair_needs_semicolon(text, offset)) {
+        tail_text = ";";
+        tail_length = 1U;
     }
-    if (!is_member_access && semicolon_length == 0U) {
+    if (placeholder_length == 0U && tail_length == 0U) {
         return NULL;
     }
-    out = (char *)malloc(text_length + placeholder_length + semicolon_length + 1U);
+    out = (char *)malloc(text_length + placeholder_length + tail_length + 1U);
     if (out == NULL) {
         return NULL;
     }
@@ -24032,10 +24157,10 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     if (placeholder_length > 0U) {
         memcpy(out + offset, kPlaceholder, placeholder_length);
     }
-    if (semicolon_length > 0U) {
-        out[offset + placeholder_length] = ';';
+    if (tail_length > 0U) {
+        memcpy(out + offset + placeholder_length, tail_text, tail_length);
     }
-    memcpy(out + offset + placeholder_length + semicolon_length,
+    memcpy(out + offset + placeholder_length + tail_length,
            text + offset,
            text_length - offset + 1U);
     return out;
@@ -24349,7 +24474,8 @@ static bool handle_completion_request(FengLspService *service,
     /* Repair only the current document and query the already-published symbol
      * index; neither parsing nor candidate construction performs project I/O. */
     if (can_repair_completion) {
-        char *repaired_text = dup_text_with_completion_repair(document->text, offset);
+        char *repaired_text = dup_text_with_completion_repair(document->text,
+                                                              offset);
 
         if (repaired_text != NULL) {
             FengLspCacheQueryContext repair_cache = {0};
@@ -24366,6 +24492,7 @@ static bool handle_completion_request(FengLspService *service,
             }
             session_dispose(&repair_parse);
 
+            cache_has_items = false;
             pthread_mutex_lock(&service->analysis_mutex);
             cache_has_items =
                 build_persistent_cache_query_context(service,
@@ -24392,7 +24519,11 @@ static bool handle_completion_request(FengLspService *service,
         }
     }
     if (can_repair_completion &&
-        build_repaired_completion_json(service, document, offset, &json, &request) &&
+        build_repaired_completion_json(service,
+                                       document,
+                                       offset,
+                                       &json,
+                                       &request) &&
         completion_json_has_items(&json)) {
         free(uri);
         ok = send_json_response(output, id, json.data);

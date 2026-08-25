@@ -11043,6 +11043,217 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
 }
 
+/* Ordered dirty-document edits and their completion responses in one LSP
+ * session whose initial source has already completed semantic analysis. */
+enum { LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT = 5 };
+
+typedef struct LspControlHeadCompletionAction {
+    char *did_changes[LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT];
+    char *completion_requests[LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT];
+    char *responses[LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT];
+} LspControlHeadCompletionAction;
+
+/* Apply each incomplete control-head edit and wait for its member-completion
+ * response before advancing to the next document version. */
+static void run_lsp_control_head_completion_action(FILE *input,
+                                                   int output_fd,
+                                                   void *user) {
+    LspControlHeadCompletionAction *action =
+        (LspControlHeadCompletionAction *)user;
+    size_t index;
+
+    ASSERT(action != NULL);
+    for (index = 0U;
+         index < LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT;
+         ++index) {
+        unsigned int barrier_id = 3000U + (unsigned int)index;
+        char *barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testCompletionBarrier\",\"params\":null}",
+            barrier_id);
+        char *barrier_response = dup_printf(
+            "\"id\":%u,\"error\":{\"code\":-32601,"
+            "\"message\":\"Method not found\"}}",
+            barrier_id);
+
+        ASSERT(barrier != NULL && barrier_response != NULL);
+        write_lsp_message(input, action->did_changes[index]);
+        write_lsp_message(input, action->completion_requests[index]);
+        write_lsp_message(input, barrier);
+        ASSERT(fflush(input) == 0);
+        action->responses[index] = read_fd_until_contains(output_fd,
+                                                          barrier_response);
+        free(barrier_response);
+        free(barrier);
+    }
+}
+
+/* Incomplete member access in block-requiring grammar heads must query the
+ * last successful symbol state just like a standalone `receiver.` access. */
+static void test_lsp_member_completion_repairs_control_flow_heads(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_control_head_completion\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kSourcePrefix =
+        "open module test.lsp.control_head_completion;\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "type Source {\n"
+        "    let count: int;\n"
+        "    func next(): int { return self.count; }\n"
+        "}\n"
+        "type Owner {\n"
+        "    let ownValue: int;\n"
+        "    func run(source: Source) {\n"
+        "        let ready = inferredText();\n";
+    static const char *kSourceSuffix =
+        "    }\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    const char *completion_lines[] = {
+        "        if self.",
+        "        if source.",
+        "        while source.",
+        "        match source.",
+        "        for let item in source."
+    };
+    char template_path[] = "temp/feng_lsp_control_head_completion_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *uri;
+    char *source;
+    char *dirty_sources[LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT];
+    char *escaped_source;
+    char *did_open;
+    char *shutdown;
+    const char *requests[2];
+    LspControlHeadCompletionAction action = {0};
+    char *output;
+    char *remove_error = NULL;
+    unsigned int ready_line;
+    unsigned int ready_character;
+    size_t index;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    mkdir_p(src_dir);
+    source = dup_printf("%s        source.count;\n%s",
+                        kSourcePrefix,
+                        kSourceSuffix);
+    ASSERT(source != NULL);
+    for (index = 0U;
+         index < LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT;
+         ++index) {
+        dirty_sources[index] = dup_printf("%s%s\n        source.count;\n%s",
+                                          kSourcePrefix,
+                                          completion_lines[index],
+                                          kSourceSuffix);
+        ASSERT(dirty_sources[index] != NULL);
+    }
+    write_text_file(manifest_path, kManifest);
+    write_text_file(source_path, source);
+
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    ASSERT(did_open != NULL);
+    for (index = 0U;
+         index < LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT;
+         ++index) {
+        char *escaped_dirty = json_escape_text(dirty_sources[index]);
+
+        action.did_changes[index] = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+            "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+            "\"version\":%u},\"contentChanges\":[{\"text\":\"%s\"}]}}",
+            uri,
+            2U + (unsigned int)index,
+            escaped_dirty);
+        action.completion_requests[index] = build_lsp_test_position_request(
+            "textDocument/completion",
+            2U + (unsigned int)index,
+            uri,
+            dirty_sources[index],
+            completion_lines[index],
+            strlen(completion_lines[index]));
+        ASSERT(action.did_changes[index] != NULL);
+        ASSERT(action.completion_requests[index] != NULL);
+        free(escaped_dirty);
+    }
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(shutdown != NULL);
+    requests[0] = shutdown;
+    requests[1] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(source,
+                        "        let ready = inferredText();",
+                        strlen("        let "),
+                        &ready_line,
+                        &ready_character);
+
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        uri,
+        ready_line,
+        ready_character,
+        "let ready: string",
+        run_lsp_control_head_completion_action,
+        &action,
+        requests,
+        2U,
+        NULL);
+
+    ASSERT(strstr(action.responses[0], "\"label\":\"ownValue\"") != NULL);
+    ASSERT(strstr(action.responses[0], "\"label\":\"run\"") != NULL);
+    for (index = 1U;
+         index < LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT;
+         ++index) {
+        ASSERT(strstr(action.responses[index], "\"label\":\"count\"") != NULL);
+        ASSERT(strstr(action.responses[index], "\"label\":\"next\"") != NULL);
+    }
+    for (index = 0U;
+         index < LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT;
+         ++index) {
+        ASSERT(strstr(action.responses[index], "\"label\":\"if\"") == NULL);
+        free(action.responses[index]);
+        free(action.completion_requests[index]);
+        free(action.did_changes[index]);
+        free(dirty_sources[index]);
+    }
+
+    free(output);
+    free(shutdown);
+    free(did_open);
+    free(escaped_source);
+    free(source);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 /* Completion exposes spec-seal members only in type/fit implementation
  * methods whose implementation type satisfies the receiver spec. */
 static void test_lsp_spec_seal_member_completion_respects_implementation_domain(void) {
@@ -22658,6 +22869,7 @@ int main(void) {
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
+    test_lsp_member_completion_repairs_control_flow_heads();
     test_lsp_spec_seal_member_completion_respects_implementation_domain();
     test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_friend_completion_parsed_only_fails_closed();
