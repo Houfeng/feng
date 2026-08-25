@@ -20985,6 +20985,215 @@ static void test_lsp_local_project_dependency_workspace_queries(void) {
     free(dependency_dir);
 }
 
+/* Verifies imported generic-fit members use their module-local symbol ids
+ * when equal-shaped fits share one module across multiple source files. */
+static void test_lsp_local_project_dependency_generic_fit_member_identity(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    static const char *kReadonlySource =
+        "open module test.lsp.generic_fit_dependency;\n"
+        "open fit T[] {\n"
+        "    open func length(): int { return (int)1; }\n"
+        "}\n";
+    static const char *kReadonlyDecoySource =
+        "open module test.lsp.generic_fit_dependency;\n"
+        "open fit T[] {\n"
+        "    open func marker(): int { return (int)2; }\n"
+        "}\n";
+    static const char *kWritableSource =
+        "open module test.lsp.generic_fit_dependency;\n"
+        "open fit T[!] {\n"
+        "    open func length(): int { return (int)3; }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.generic_fit_consumer;\n"
+        "import test.lsp.generic_fit_dependency;\n"
+        "open func readonly_length(): int {\n"
+        "    let values: int[] = [1, 2, 3];\n"
+        "    return values.length();\n"
+        "}\n"
+        "open func writable_length(): int {\n"
+        "    let values: int[!] = [1, 2, 3];\n"
+        "    return values.length();\n"
+        "}\n";
+    char template_path[] = "temp/feng_lsp_generic_fit_identity_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *readonly_source_path;
+    char *readonly_decoy_source_path;
+    char *writable_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *readonly_uri;
+    char *readonly_decoy_uri;
+    char *writable_uri;
+    char *consumer_uri;
+    char *escaped_consumer;
+    char *did_open;
+    char *definition_readonly;
+    char *references_readonly;
+    char *definition_writable;
+    char *references_writable;
+    char *shutdown;
+    char *readonly_call_marker;
+    char *writable_call_marker;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[6];
+    unsigned int readonly_line;
+    unsigned int readonly_character;
+    unsigned int writable_line;
+    unsigned int writable_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    readonly_source_path = path_join(dependency_src_dir, "readonly.ff");
+    readonly_decoy_source_path = path_join(dependency_src_dir, "decoy.ff");
+    writable_source_path = path_join(dependency_src_dir, "writable.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_generic_fit_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(readonly_source_path, kReadonlySource);
+    write_text_file(readonly_decoy_source_path, kReadonlyDecoySource);
+    write_text_file(writable_source_path, kWritableSource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_generic_fit_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_generic_fit_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+
+    readonly_uri = file_uri_from_path(readonly_source_path);
+    readonly_decoy_uri = file_uri_from_path(readonly_decoy_source_path);
+    writable_uri = file_uri_from_path(writable_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    find_line_character(kConsumerSource,
+                        "values.length();",
+                        strlen("values.") + 1U,
+                        &readonly_line,
+                        &readonly_character);
+    writable_line = readonly_line + 4U;
+    writable_character = readonly_character;
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    definition_readonly = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        readonly_line,
+        readonly_character);
+    references_readonly = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+        consumer_uri,
+        readonly_line,
+        readonly_character);
+    definition_writable = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":4,\"method\":\"textDocument/definition\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}}}",
+        consumer_uri,
+        writable_line,
+        writable_character);
+    references_writable = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"textDocument/references\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u},\"context\":{\"includeDeclaration\":true}}}",
+        consumer_uri,
+        writable_line,
+        writable_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}");
+    requests[0] = definition_readonly;
+    requests[1] = references_readonly;
+    requests[2] = definition_writable;
+    requests[3] = references_writable;
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/definition",
+        consumer_uri,
+        readonly_line,
+        readonly_character,
+        readonly_uri,
+        requests,
+        6U,
+        NULL);
+    readonly_call_marker = dup_printf(
+        "\"start\":{\"line\":%u,\"character\":%u}",
+        readonly_line,
+        readonly_character - 1U);
+    writable_call_marker = dup_printf(
+        "\"start\":{\"line\":%u,\"character\":%u}",
+        writable_line,
+        writable_character - 1U);
+    assert_lsp_test_response_contains(output, 2U, readonly_uri);
+    assert_lsp_test_response_not_contains(output, 2U, readonly_decoy_uri);
+    assert_lsp_test_response_not_contains(output, 2U, writable_uri);
+    assert_lsp_test_response_contains(output, 3U, readonly_uri);
+    assert_lsp_test_response_contains(output, 3U, consumer_uri);
+    assert_lsp_test_response_not_contains(output, 3U, readonly_decoy_uri);
+    assert_lsp_test_response_not_contains(output, 3U, writable_uri);
+    assert_lsp_test_response_not_contains(output, 3U, writable_call_marker);
+    assert_lsp_test_response_contains(output, 4U, writable_uri);
+    assert_lsp_test_response_not_contains(output, 4U, readonly_uri);
+    assert_lsp_test_response_not_contains(output, 4U, readonly_decoy_uri);
+    assert_lsp_test_response_contains(output, 5U, writable_uri);
+    assert_lsp_test_response_contains(output, 5U, consumer_uri);
+    assert_lsp_test_response_not_contains(output, 5U, readonly_uri);
+    assert_lsp_test_response_not_contains(output, 5U, readonly_decoy_uri);
+    assert_lsp_test_response_not_contains(output, 5U, readonly_call_marker);
+
+    free(writable_call_marker);
+    free(readonly_call_marker);
+    free(output);
+    free(shutdown);
+    free(references_writable);
+    free(definition_writable);
+    free(references_readonly);
+    free(definition_readonly);
+    free(did_open);
+    free(escaped_consumer);
+    free(consumer_uri);
+    free(writable_uri);
+    free(readonly_decoy_uri);
+    free(readonly_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(writable_source_path);
+    free(readonly_decoy_source_path);
+    free(readonly_source_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 /* State used by the ordered cache-lifecycle protocol assertions. */
 typedef struct LspWorkspaceCacheLifecycleAction {
     const char *dependency_uri;
@@ -21442,6 +21651,7 @@ int main(void) {
     test_lsp_completion_inferred_callable_without_fact_fails_closed();
     test_lsp_hover_inferred_callable_across_dependency_boundaries();
     test_lsp_local_project_dependency_workspace_queries();
+    test_lsp_local_project_dependency_generic_fit_member_identity();
     test_lsp_local_project_dependency_cache_lifecycle();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();

@@ -27,6 +27,7 @@
 #include "parser/parser.h"
 #include "platform/platform.h"
 #include "semantic/semantic.h"
+#include "symbol/export.h"
 #include "symbol/provider.h"
 #include "symbol/imported_module.h"
 
@@ -196,6 +197,9 @@ typedef struct FengLspAnalysisSession {
     /* Canonical output bundle path for this project, used only to correlate
      * imported symbols with another retained workspace source session. */
     char *package_path;
+    /* Workspace-profile source symbols retain the module-local FT ids needed
+     * to map imported identities back to exact physical declarations. */
+    FengSymbolProvider *source_symbol_identity_index;
     bool is_project;
     int exit_code;
     /* Keeps the imported-module cache alive for the entire session lifetime so
@@ -2084,6 +2088,7 @@ static void session_dispose(FengLspAnalysisSession *session) {
     size_t i;
     diagnostics_dispose(&session->diagnostics);
     feng_cli_frontend_bundle_paths_dispose(session->bundle_paths, session->bundle_count);
+    feng_symbol_provider_free(session->source_symbol_identity_index);
     feng_semantic_analysis_free(session->analysis);
     feng_cli_free_loaded_sources(session->sources, session->source_count);
     if (session->owned_source_paths != NULL) {
@@ -2096,6 +2101,37 @@ static void session_dispose(FengLspAnalysisSession *session) {
     free(session->package_path);
     feng_symbol_imported_module_cache_free(session->imported_module_cache);
     memset(session, 0, sizeof(*session));
+}
+
+/* Builds the source-backed symbol-id view used only by cross-session LSP
+ * identity mapping. Failure leaves the semantic session otherwise usable. */
+static bool session_build_source_symbol_identity_index(
+    FengLspAnalysisSession *session) {
+    FengSymbolGraph *graph = NULL;
+    FengSymbolProvider *provider = NULL;
+    FengSymbolError error = {0};
+    bool ok = false;
+
+    if (session == NULL || session->analysis == NULL) {
+        return false;
+    }
+    if (session->source_symbol_identity_index != NULL) {
+        return true;
+    }
+    if (!feng_symbol_build_graph(session->analysis, &graph, &error) ||
+        !feng_symbol_provider_create(&provider, &error) ||
+        !feng_symbol_provider_add_graph(provider, graph, &error)) {
+        goto cleanup;
+    }
+    session->source_symbol_identity_index = provider;
+    provider = NULL;
+    ok = true;
+
+cleanup:
+    feng_symbol_provider_free(provider);
+    feng_symbol_graph_free(graph);
+    feng_symbol_error_free(&error);
+    return ok;
 }
 
 static void on_parse_error_collect(void *user,
@@ -3444,6 +3480,10 @@ static void *background_analyzer_main(void *user) {
         }
         if (analysis_built && candidate.exit_code == 0 && candidate.analysis != NULL) {
             FengLspWorkspaceAnalysis *workspace;
+
+            if (candidate.is_project) {
+                (void)session_build_source_symbol_identity_index(&candidate);
+            }
 
             pthread_mutex_lock(&service->analysis_mutex);
             workspace = find_workspace_analysis_by_session_identity(service, &candidate);
@@ -14464,6 +14504,285 @@ static bool module_name_matches_program(const char *module_name,
     return false;
 }
 
+/* Returns whether a dotted imported identity names one exact source-symbol
+ * module without allocating segment strings on the request path. */
+static bool module_name_matches_symbol_module(
+    const char *module_name,
+    const FengSymbolImportedModule *module) {
+    const char *cursor = module_name;
+    size_t segment_count;
+    size_t segment_index;
+
+    if (module_name == NULL || module == NULL) {
+        return false;
+    }
+    segment_count = feng_symbol_module_segment_count(module);
+    if (segment_count == 0U) {
+        return false;
+    }
+    for (segment_index = 0U; segment_index < segment_count; ++segment_index) {
+        FengSlice segment = feng_symbol_module_segment_at(module,
+                                                          segment_index);
+        const char *end = cursor;
+
+        while (*end != '\0' && *end != '.') {
+            ++end;
+        }
+        if ((size_t)(end - cursor) != segment.length ||
+            memcmp(cursor, segment.data, segment.length) != 0) {
+            return false;
+        }
+        if (segment_index + 1U < segment_count) {
+            if (*end != '.') {
+                return false;
+            }
+            cursor = end + 1U;
+        } else {
+            return *end == '\0';
+        }
+    }
+    return false;
+}
+
+/* Finds one workspace symbol by the deterministic depth-first id assigned
+ * before FT profile filtering and reports its top-level owner. */
+static bool find_source_symbol_in_tree(
+    const FengSymbolDeclView *candidate,
+    const FengSymbolDeclView *top_level_owner,
+    uint32_t symbol_id,
+    uint64_t *next_id,
+    const FengSymbolDeclView **out_symbol,
+    const FengSymbolDeclView **out_owner) {
+    size_t member_index;
+    uint64_t current_id;
+
+    if (candidate == NULL || next_id == NULL || out_symbol == NULL ||
+        out_owner == NULL) {
+        return false;
+    }
+    current_id = *next_id;
+    ++*next_id;
+    if (current_id == (uint64_t)symbol_id) {
+        *out_symbol = candidate;
+        *out_owner = top_level_owner;
+        return true;
+    }
+    for (member_index = 0U;
+         member_index < feng_symbol_decl_member_count(candidate);
+         ++member_index) {
+        if (find_source_symbol_in_tree(
+                feng_symbol_decl_member_at(candidate, member_index),
+                top_level_owner,
+                symbol_id,
+                next_id,
+                out_symbol,
+                out_owner)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolves one imported (module, symbol id) against a successful session's
+ * workspace-profile source symbol graph. Module roots own id 1. */
+static bool find_source_symbol_by_identity(
+    const FengLspAnalysisSession *session,
+    const char *module_name,
+    uint32_t symbol_id,
+    const FengSymbolDeclView **out_symbol,
+    const FengSymbolDeclView **out_owner) {
+    size_t module_index;
+
+    if (out_symbol == NULL || out_owner == NULL) {
+        return false;
+    }
+    *out_symbol = NULL;
+    *out_owner = NULL;
+    if (session == NULL || session->source_symbol_identity_index == NULL ||
+        module_name == NULL || symbol_id <= 1U) {
+        return false;
+    }
+    for (module_index = 0U;
+         module_index < feng_symbol_provider_module_count(
+                            session->source_symbol_identity_index);
+         ++module_index) {
+        const FengSymbolImportedModule *module =
+            feng_symbol_provider_module_at(session->source_symbol_identity_index,
+                                           module_index);
+        uint64_t next_id = 2U;
+        size_t decl_index;
+
+        if (!module_name_matches_symbol_module(module_name, module)) {
+            continue;
+        }
+        for (decl_index = 0U;
+             decl_index < feng_symbol_module_decl_count(module);
+             ++decl_index) {
+            const FengSymbolDeclView *decl =
+                feng_symbol_module_decl_at(module, decl_index);
+
+            if (find_source_symbol_in_tree(decl,
+                                           decl,
+                                           symbol_id,
+                                           &next_id,
+                                           out_symbol,
+                                           out_owner)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    return false;
+}
+
+/* Returns whether one source AST declaration has the symbol view's exact
+ * top-level declaration kind. */
+static bool source_decl_matches_symbol_kind(
+    const FengDecl *decl,
+    FengSymbolDeclKind symbol_kind) {
+    if (decl == NULL) {
+        return false;
+    }
+    switch (symbol_kind) {
+        case FENG_SYMBOL_DECL_KIND_TYPE:
+            return decl->kind == FENG_DECL_TYPE;
+        case FENG_SYMBOL_DECL_KIND_ENUM:
+            return decl->kind == FENG_DECL_ENUM;
+        case FENG_SYMBOL_DECL_KIND_SPEC:
+            return decl->kind == FENG_DECL_SPEC;
+        case FENG_SYMBOL_DECL_KIND_FIT:
+            return decl->kind == FENG_DECL_FIT;
+        case FENG_SYMBOL_DECL_KIND_FUNCTION:
+            return decl->kind == FENG_DECL_FUNCTION;
+        case FENG_SYMBOL_DECL_KIND_BINDING:
+            return decl->kind == FENG_DECL_GLOBAL_BINDING;
+        default:
+            return false;
+    }
+}
+
+/* Locates one source AST owner using the physical path/token retained by the
+ * workspace-profile symbol graph. Multiple matches remain ambiguous. */
+static const FengDecl *find_source_decl_by_symbol_location(
+    const FengLspAnalysisSession *session,
+    const FengSymbolDeclView *symbol,
+    const FengProgram **out_program) {
+    const FengCliLoadedSource *source;
+    const FengDecl *match = NULL;
+    FengSlice path;
+    FengSlice name;
+    FengToken token;
+    size_t decl_index;
+
+    if (out_program == NULL) {
+        return NULL;
+    }
+    *out_program = NULL;
+    if (session == NULL || symbol == NULL) {
+        return NULL;
+    }
+    path = feng_symbol_decl_path(symbol);
+    if (path.data == NULL || path.length == 0U ||
+        path.data[path.length] != '\0') {
+        return NULL;
+    }
+    source = find_source(session, path.data);
+    if (source == NULL || source->program == NULL) {
+        return NULL;
+    }
+    name = feng_symbol_decl_name(symbol);
+    token = feng_symbol_decl_token(symbol);
+    for (decl_index = 0U;
+         decl_index < source->program->declaration_count;
+         ++decl_index) {
+        const FengDecl *candidate = source->program->declarations[decl_index];
+
+        if (!source_decl_matches_symbol_kind(
+                candidate, feng_symbol_decl_kind(symbol)) ||
+            !stable_tokens_equal(candidate->token, token) ||
+            (candidate->kind != FENG_DECL_FIT &&
+             !slice_equals(decl_name(candidate), name))) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    if (match != NULL) {
+        *out_program = source->program;
+    }
+    return match;
+}
+
+/* Returns whether one source AST member has the symbol view's exact member
+ * kind. */
+static bool source_member_matches_symbol_kind(
+    const FengTypeMember *member,
+    FengSymbolDeclKind symbol_kind) {
+    if (member == NULL) {
+        return false;
+    }
+    switch (symbol_kind) {
+        case FENG_SYMBOL_DECL_KIND_FIELD:
+            return member->kind == FENG_TYPE_MEMBER_FIELD;
+        case FENG_SYMBOL_DECL_KIND_METHOD:
+            return member->kind == FENG_TYPE_MEMBER_METHOD;
+        case FENG_SYMBOL_DECL_KIND_CONSTRUCTOR:
+            return member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR;
+        case FENG_SYMBOL_DECL_KIND_FINALIZER:
+            return member->kind == FENG_TYPE_MEMBER_FINALIZER;
+        default:
+            return false;
+    }
+}
+
+/* Locates one direct source member inside an owner already proven by symbol
+ * id and physical source location. */
+static const FengTypeMember *find_source_member_by_symbol_location(
+    const FengDecl *owner,
+    const FengSymbolDeclView *symbol) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+    const FengTypeMember *match = NULL;
+    FengSlice name;
+    FengToken token;
+    size_t member_index;
+
+    if (owner == NULL || symbol == NULL) {
+        return NULL;
+    }
+    if (owner->kind == FENG_DECL_TYPE) {
+        members = owner->as.type_decl.members;
+        member_count = owner->as.type_decl.member_count;
+    } else if (owner->kind == FENG_DECL_SPEC &&
+               owner->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        members = owner->as.spec_decl.as.object.members;
+        member_count = owner->as.spec_decl.as.object.member_count;
+    } else if (owner->kind == FENG_DECL_FIT) {
+        members = owner->as.fit_decl.members;
+        member_count = owner->as.fit_decl.member_count;
+    }
+    name = feng_symbol_decl_name(symbol);
+    token = feng_symbol_decl_token(symbol);
+    for (member_index = 0U; member_index < member_count; ++member_index) {
+        const FengTypeMember *candidate = members[member_index];
+
+        if (candidate == NULL || candidate->mixin_origin != NULL ||
+            !source_member_matches_symbol_kind(
+                candidate, feng_symbol_decl_kind(symbol)) ||
+            !stable_tokens_equal(candidate->token, token) ||
+            !slice_equals(member_name_slice(candidate), name)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
 /* Finds one declaration in the exact module whose complete semantic shape
  * matches the imported AST declaration. Multiple candidates are ambiguous. */
 static const FengDecl *find_source_decl_by_shape(
@@ -14757,6 +15076,108 @@ static bool build_source_stable_target(
     return true;
 }
 
+/* Maps one imported FT identity through the defining session's exact
+ * workspace-profile symbol id, then validates the selected source shape. */
+static bool build_source_stable_target_from_symbol_identity(
+    const FengLspService *service,
+    size_t defining_workspace_index,
+    const FengLspAnalysisSession *origin_session,
+    const FengImportedSymbolIdentity *identity,
+    const FengDecl *origin_owner,
+    const FengLspResolvedTarget *origin_target,
+    FengLspStableTarget *stable) {
+    const FengLspAnalysisSession *defining_session;
+    const FengSymbolDeclView *source_symbol = NULL;
+    const FengSymbolDeclView *source_owner_symbol = NULL;
+    const FengProgram *source_program = NULL;
+    const FengDecl *source_owner;
+    FengLspResolvedTarget source_target = {0};
+
+    if (service == NULL || origin_session == NULL || identity == NULL ||
+        origin_owner == NULL || origin_target == NULL || stable == NULL ||
+        defining_workspace_index >=
+            service->last_successful_analysis_count) {
+        return false;
+    }
+    defining_session =
+        &service->last_successful_analyses[defining_workspace_index]
+             .last_successful_analysis;
+    if (!find_source_symbol_by_identity(defining_session,
+                                        identity->module_name,
+                                        identity->symbol_id,
+                                        &source_symbol,
+                                        &source_owner_symbol)) {
+        return false;
+    }
+    source_owner = find_source_decl_by_symbol_location(defining_session,
+                                                       source_owner_symbol,
+                                                       &source_program);
+    if (source_owner == NULL || source_program == NULL ||
+        !stable_decl_shapes_equal(defining_session,
+                                  source_owner,
+                                  origin_session,
+                                  origin_owner)) {
+        return false;
+    }
+    switch (origin_target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            if (source_symbol != source_owner_symbol) {
+                return false;
+            }
+            source_target.kind = FENG_LSP_RESOLVED_DECL;
+            source_target.decl = source_owner;
+            break;
+        case FENG_LSP_RESOLVED_MEMBER: {
+            const FengTypeMember *imported_member =
+                mixin_definition_source_member(origin_target->member);
+            const FengTypeMember *source_member =
+                find_source_member_by_symbol_location(source_owner,
+                                                      source_symbol);
+
+            if (source_symbol == source_owner_symbol ||
+                source_member == NULL || imported_member == NULL ||
+                !stable_member_shapes_equal(defining_session,
+                                            source_member,
+                                            origin_session,
+                                            imported_member)) {
+                return false;
+            }
+            source_target.kind = FENG_LSP_RESOLVED_MEMBER;
+            source_target.decl = source_owner;
+            source_target.member = source_member;
+            break;
+        }
+        case FENG_LSP_RESOLVED_ENUM_ITEM: {
+            const FengEnumItem *source_item;
+
+            if (source_symbol != source_owner_symbol ||
+                origin_target->enum_item == NULL) {
+                return false;
+            }
+            source_item = find_enum_item_by_name(
+                source_owner, origin_target->enum_item->name);
+            if (source_item == NULL) {
+                return false;
+            }
+            source_target.kind = FENG_LSP_RESOLVED_ENUM_ITEM;
+            source_target.decl = source_owner;
+            source_target.enum_item = source_item;
+            break;
+        }
+        default:
+            return false;
+    }
+    if (!build_source_stable_target(service,
+                                    defining_workspace_index,
+                                    &source_target,
+                                    stable)) {
+        return false;
+    }
+    stable->module_name = identity->module_name;
+    stable->symbol_id = identity->symbol_id;
+    return true;
+}
+
 /* Locates the source AST corresponding to one imported symbol identity. */
 static bool locate_imported_target_source(
     const FengLspService *service,
@@ -14788,6 +15209,15 @@ static bool locate_imported_target_source(
         return false;
     }
     defining_session = &defining_workspace->last_successful_analysis;
+    if (build_source_stable_target_from_symbol_identity(service,
+                                                        defining_index,
+                                                        origin_session,
+                                                        identity,
+                                                        imported_owner,
+                                                        origin_target,
+                                                        stable)) {
+        return true;
+    }
     source_owner = find_source_decl_by_shape(defining_session,
                                              identity->module_name,
                                              origin_session,
@@ -15643,6 +16073,51 @@ static bool resolve_object_field_target_decl(const FengLspAnalysisSession *sessi
     return true;
 }
 
+/* Returns the exact source spelling required by every reference to one
+ * resolved target. An empty result disables textual prefiltering. */
+static FengSlice resolved_target_reference_name(
+    const FengLspResolvedTarget *target) {
+    if (target == NULL) {
+        return (FengSlice){0};
+    }
+    switch (target->kind) {
+        case FENG_LSP_RESOLVED_DECL:
+            return decl_name(target->decl);
+        case FENG_LSP_RESOLVED_MEMBER:
+            return member_name_slice(target->member);
+        case FENG_LSP_RESOLVED_ENUM_ITEM:
+            return target->enum_item != NULL
+                ? target->enum_item->name
+                : (FengSlice){0};
+        case FENG_LSP_RESOLVED_PARAM:
+            return target->parameter != NULL
+                ? target->parameter->name
+                : (FengSlice){0};
+        case FENG_LSP_RESOLVED_BINDING:
+            return target->binding != NULL
+                ? target->binding->name
+                : (FengSlice){0};
+        case FENG_LSP_RESOLVED_TYPE_PARAM:
+            return target->type_param != NULL
+                ? target->type_param->name
+                : (FengSlice){0};
+        case FENG_LSP_RESOLVED_NONE:
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+        case FENG_LSP_RESOLVED_SELF:
+            return (FengSlice){0};
+    }
+    return (FengSlice){0};
+}
+
+/* Returns whether one syntax name can denote the requested semantic target. */
+static bool reference_name_may_match(FengSlice candidate,
+                                     const FengLspResolvedTarget *target) {
+    FengSlice expected = resolved_target_reference_name(target);
+
+    return expected.data == NULL || expected.length == 0U ||
+           slice_equals(candidate, expected);
+}
+
 static bool collect_references_in_type_ref(const FengLspAnalysisSession *session,
                                            const FengProgram *program,
                                            const FengCliLoadedSource *source,
@@ -15754,17 +16229,17 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
         case FENG_EXPR_IDENTIFIER:
         case FENG_EXPR_MEMBER: {
             FengLspResolvedTarget candidate = {0};
+            FengSlice slice = expr->kind == FENG_EXPR_IDENTIFIER
+                ? expr->as.identifier
+                : expr->as.member.member;
 
-            if (resolve_expr_reference_target(session,
-                                             program,
-                                             owner_decl,
-                                             owner_member,
-                                             expr,
-                                             &candidate)) {
-                FengSlice slice = expr->kind == FENG_EXPR_IDENTIFIER
-                    ? expr->as.identifier
-                    : expr->as.member.member;
-
+            if (reference_name_may_match(slice, target) &&
+                resolve_expr_reference_target(session,
+                                              program,
+                                              owner_decl,
+                                              owner_member,
+                                              expr,
+                                              &candidate)) {
                 if (!add_reference_if_match(references, source, slice, target, &candidate)) {
                     return false;
                 }
@@ -15904,11 +16379,15 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
         }
         case FENG_EXPR_CALL: {
             FengLspResolvedTarget candidate = {0};
+            FengSlice callee_name = call_callee_name_slice(
+                expr->as.call.callee);
 
-            if (resolve_callable_target(&expr->as.call.resolved_callable, &candidate)) {
+            if (reference_name_may_match(callee_name, target) &&
+                resolve_callable_target(&expr->as.call.resolved_callable,
+                                        &candidate)) {
                 if (!add_reference_if_match(references,
                                             source,
-                                            call_callee_name_slice(expr->as.call.callee),
+                                            callee_name,
                                             target,
                                             &candidate)) {
                     return false;
@@ -17182,21 +17661,59 @@ static bool collect_references_in_decl(const FengLspAnalysisSession *session,
     return true;
 }
 
+/* Applies only a necessary textual condition before semantic AST traversal;
+ * actual reference acceptance remains pointer/identity based. */
+static bool source_snapshot_contains_reference_name(
+    const FengCliLoadedSource *source,
+    FengSlice name) {
+    const char *cursor;
+    size_t remaining;
+
+    if (name.data == NULL || name.length == 0U || source == NULL ||
+        source->source == NULL) {
+        return true;
+    }
+    if (source->source_length < name.length) {
+        return false;
+    }
+    cursor = source->source;
+    remaining = source->source_length;
+    while (remaining >= name.length) {
+        const char *candidate = (const char *)memchr(
+            cursor, (unsigned char)name.data[0], remaining - name.length + 1U);
+        size_t consumed;
+
+        if (candidate == NULL) {
+            return false;
+        }
+        if (memcmp(candidate, name.data, name.length) == 0) {
+            return true;
+        }
+        consumed = (size_t)(candidate - cursor) + 1U;
+        cursor += consumed;
+        remaining -= consumed;
+    }
+    return false;
+}
+
 static bool collect_references(const FengLspAnalysisSession *session,
                                bool include_declaration,
                                const FengLspResolvedTarget *target,
                                FengLspReferenceList *references) {
+    FengSlice target_name;
     size_t index;
 
     if (session == NULL || references == NULL || !resolved_target_supports_references(target)) {
         return false;
     }
+    target_name = resolved_target_reference_name(target);
     for (index = 0U; index < session->source_count; ++index) {
         const FengCliLoadedSource *source = &session->sources[index];
         const FengProgram *program = source->program;
         size_t decl_index;
 
-        if (program == NULL) {
+        if (program == NULL ||
+            !source_snapshot_contains_reference_name(source, target_name)) {
             continue;
         }
         for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {

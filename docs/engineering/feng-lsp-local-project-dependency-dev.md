@@ -247,10 +247,17 @@ size_t last_successful_analysis_capacity;
 
 ```c
 char *package_path;
+FengSymbolProvider *source_symbol_identity_index;
 ```
 
 该路径直接复制 `feng_cli_project_open()` 已经计算出的 `context.package_path`，用于把 imported synthetic
 program 的 bundle 来源映射回本地成功 session；它不改变项目、Symbol 或 `.fb` 接口。
+
+`source_symbol_identity_index` 在 analyzer 线程中由成功 session 已有的 `FengSemanticAnalysis` 调用现成的
+`feng_symbol_build_graph()` / `feng_symbol_provider_add_graph()` 构建，仅保留该项目物理源码的 workspace
+符号视图。它复用 Symbol 写入前已经分配的 module-local symbol id，不读取或修改 `.ft` / `.fb`，也不改变
+任何核心编译器查询接口；session 替换或释放时与 analysis 一同释放。该索引不参与普通 Hover、Completion
+或编译，只用于把 imported `(module_name, symbol_id)` 精确映射到物理 source path/token。
 
 ### 4.2 数组元素身份
 
@@ -540,12 +547,21 @@ request-local identity adapter。该适配按以下步骤闭环，不把不同 s
    `FengImportedSymbolIdentity.module_name`、`symbol_id` 及 target AST 的精确声明形状；
 4. bundle provenance 与成功 session 保存的 `package_path` 精确匹配，从而确定真正的本地 defining
    session，不能按 package name 猜测；
-5. 在 defining session 中按 module、kind、owner chain、完整 signature 和 source token 唯一定位源码
-   AST，得到规范化的 source identity；
+5. 在 defining session 的 LSP 私有 source symbol identity index 中按相同 module-local symbol id 取得物理
+   source path/token，再按 path、kind、owner/member token 唯一定位源码 AST，得到规范化的 source
+   identity；只有索引不可用或精确身份不能唯一验证时，才退回 module、kind、owner chain 与完整
+   signature 匹配；
 6. 遍历其他 session 时，仅接受 bundle provenance 指向同一 defining session，且 module、symbol id
    或完整声明形状一致的 imported AST；
 7. 定位成本 session target 后，继续使用现有 `resolved_targets_equal()` 和
    `collect_references()`。
+
+泛型 `fit` 成员也必须遵守同一套稳定身份规则。编译器为具体接收者选择或实例化
+`fit T[]`、`fit T[!]` 等成员后，LSP 必须将该调用目标规范化回唯一的源码 `fit` 成员；接收者来自
+字面量、局部变量、参数或其他可证明类型的表达式时，Definition 和 References 的目标必须一致。
+规范化不得退化为按成员名匹配，并且必须保留只读/可写数组等完整 `fit` target 结构的区别。
+同一模块允许存在多个完整形状相同的泛型 `fit`；此时必须由 symbol id 与物理 source path/token 消除歧义，
+不得因为形状重复而返回空结果，也不得按声明遍历顺序猜测目标。
 
 稳定身份是请求期间的只读值，不进入长期缓存。实现不得跨 session 保存 AST 指针，也不得依赖
 `FengImportedSymbolIdentity.symbol_decl` 的地址相等。禁止只比较名称或参数数量；重载必须比较完整
@@ -567,10 +583,12 @@ signature。零个或多个候选均视为无法唯一定位：References/Implem
 
 1. 遍历全部成功 session；
 2. 将全局身份定位成该 session 的本地 target；
-3. 调用现有 `collect_references()`；
-4. 合并每个 session 的结果；
-5. 按 `(physical path, start offset, end offset)` 去重；
-6. 统一处理 `includeDeclaration`。
+3. 以 target 的精确源码拼写对 immutable source snapshot 做必要条件预筛选；不含该字节序列的文件可直接
+   跳过，包含时仍必须进入原语义解析，不得把文本命中直接当作引用；
+4. 调用现有 `collect_references()`；
+5. 合并每个 session 的结果；
+6. 按 `(physical path, start offset, end offset)` 去重；
+7. 统一处理 `includeDeclaration`。
 
 ### 7.5 Rename
 
@@ -770,6 +788,8 @@ char *workspace_index_manifest_path;
 - [ ] 热请求从成功数组按 source path 命中，不依赖再次查找 manifest。
 - [ ] B 依赖 A 时，从 B use Definition 到 A 的物理 `.ff`。
 - [ ] 从 A 声明或 B use 发起 References，得到数组中所有合法引用。
+- [x] 本地依赖同一模块存在多个同形 `fit T[]` 及 `fit T[!]` 同名成员时，非字面量接收者的
+      Definition/References 精确命中目标物理声明，且不同 `fit` 之间不串线。
 - [ ] Rename 返回覆盖多个 physical file URI 的单个 WorkspaceEdit。
 - [ ] Rename 任一参与 session stale/失败时不返回部分 edit。
 - [ ] object spec 和 spec member 的 Implementation 跨 session 返回正确结果。
