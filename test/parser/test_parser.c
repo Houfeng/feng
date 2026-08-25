@@ -1935,6 +1935,39 @@ static void test_for_in_empty_blocks(void) {
     feng_program_free(program);
 }
 
+/* Empty while bodies must remain body blocks rather than being consumed as
+ * empty object literal suffixes on the final member expression. */
+static void test_while_empty_blocks(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(state: int) {\n"
+        "    while state == FutureState.Pending {}\n"
+        "    while state == FutureState.Pending {\n"
+        "        // comment-only body\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *function_body;
+    size_t index;
+
+    ASSERT(feng_parse_source(source, strlen(source), "while_empty_blocks.f", &program, &error));
+    ASSERT(program != NULL);
+    function_body = program->declarations[0]->as.function_decl.body;
+    ASSERT(function_body->statement_count == 2U);
+
+    for (index = 0U; index < function_body->statement_count; ++index) {
+        const FengStmt *loop = function_body->statements[index];
+
+        ASSERT(loop->kind == FENG_STMT_WHILE);
+        ASSERT(loop->as.while_stmt.condition->kind == FENG_EXPR_BINARY);
+        ASSERT(loop->as.while_stmt.condition->as.binary.right->kind == FENG_EXPR_MEMBER);
+        ASSERT(loop->as.while_stmt.body->statement_count == 0U);
+    }
+
+    feng_program_free(program);
+}
+
 static void test_block_yield_omits_trailing_semicolon(void) {
     /* Per docs/specifications/feng-flow.md: trailing ';' on the last expression statement
      * of a block may be omitted. */
@@ -3864,6 +3897,7 @@ int main(void) {
     test_match_chain_with_binding_parse();
     test_for_in_loop();
     test_for_in_empty_blocks();
+    test_while_empty_blocks();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();
     test_generic_array_new_uses_colon_dimension_syntax();

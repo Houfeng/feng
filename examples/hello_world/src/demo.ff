@@ -48,6 +48,9 @@ type Future<T, E> {
       // Notify waiters
       //feng_async_resume(ctx);
     }
+    while self._state == FutureState.Pending {
+      // Busy wait
+    }
   }
 
   func reject(error: E) {

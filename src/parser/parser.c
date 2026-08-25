@@ -20,8 +20,8 @@ typedef struct Parser {
     int pending_gt;
     /* When true, parse_postfix skips object literal suffix detection so
      * that a `{` following an identifier is not consumed as part of an
-     * object literal. Used by if-statement / if-expression condition
-     * parsing to preserve the `{` for the body block. */
+     * object literal. Used while parsing control-flow head expressions to
+     * preserve the unparenthesized `{` for the required body block. */
     bool suppress_object_literal_suffix;
 } Parser;
 
@@ -3522,14 +3522,24 @@ static void convert_trailing_yield_stmt_to_expr(Parser *parser, FengBlock *block
     }
 }
 
-static FengExpr *parse_match_expression(Parser *parser, FengToken match_token) {
-    FengExpr *target;
+/* Parse a control-flow head expression whose following unparenthesized `{`
+ * starts the required body block. Grouped subexpressions independently
+ * re-enable object literal suffix parsing when needed. */
+static FengExpr *parse_expression_before_block(Parser *parser) {
     FengExpr *expr;
     bool saved_suppress = parser->suppress_object_literal_suffix;
 
     parser->suppress_object_literal_suffix = true;
-    target = parse_expression(parser);
+    expr = parse_expression(parser);
     parser->suppress_object_literal_suffix = saved_suppress;
+    return expr;
+}
+
+static FengExpr *parse_match_expression(Parser *parser, FengToken match_token) {
+    FengExpr *target;
+    FengExpr *expr;
+
+    target = parse_expression_before_block(parser);
 
     if (target == NULL) {
         return NULL;
@@ -3571,11 +3581,8 @@ static FengExpr *parse_match_expression(Parser *parser, FengToken match_token) {
 static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
     FengExpr *condition;
     FengExpr *expr;
-    bool saved_suppress = parser->suppress_object_literal_suffix;
 
-    parser->suppress_object_literal_suffix = true;
-    condition = parse_expression(parser);
-    parser->suppress_object_literal_suffix = saved_suppress;
+    condition = parse_expression_before_block(parser);
 
     if (condition == NULL) {
         return NULL;
@@ -4317,13 +4324,8 @@ static FengStmt *parse_match_statement(Parser *parser) {
     FengToken match_token = parser_previous_token(parser);
     FengExpr *target;
     FengStmt *stmt;
-    bool saved_suppress = parser->suppress_object_literal_suffix;
 
-    /* Suppress object literal suffix detection so the `{` is preserved for
-     * the match body. */
-    parser->suppress_object_literal_suffix = true;
-    target = parse_expression(parser);
-    parser->suppress_object_literal_suffix = saved_suppress;
+    target = parse_expression_before_block(parser);
 
     if (target == NULL) {
         return NULL;
@@ -4354,13 +4356,8 @@ static FengStmt *parse_match_statement(Parser *parser) {
 static FengStmt *parse_if_statement(Parser *parser) {
     FengToken if_token = parser_previous_token(parser);
     FengExpr *first_condition;
-    bool saved_suppress = parser->suppress_object_literal_suffix;
 
-    /* Parse the boolean condition. Suppress object literal suffix detection
-     * so the `{` is preserved for the body. */
-    parser->suppress_object_literal_suffix = true;
-    first_condition = parse_expression(parser);
-    parser->suppress_object_literal_suffix = saved_suppress;
+    first_condition = parse_expression_before_block(parser);
 
     if (first_condition == NULL) {
         return NULL;
@@ -4477,7 +4474,7 @@ static FengStmt *parse_while_statement(Parser *parser) {
     if (stmt == NULL) {
         return NULL;
     }
-    stmt->as.while_stmt.condition = parse_expression(parser);
+    stmt->as.while_stmt.condition = parse_expression_before_block(parser);
     if (stmt->as.while_stmt.condition == NULL) {
         free_stmt(stmt);
         return NULL;
@@ -4535,16 +4532,7 @@ static FengStmt *parse_for_statement(Parser *parser) {
         stmt->as.for_stmt.iter_binding.type = NULL;
         stmt->as.for_stmt.iter_binding.initializer = NULL;
 
-        {
-            bool saved_suppress = parser->suppress_object_literal_suffix;
-
-            /* Preserve the first `{` after the unparenthesized iteration
-             * expression as the loop body delimiter. Parenthesized
-             * expressions re-enable object literal suffix parsing. */
-            parser->suppress_object_literal_suffix = true;
-            stmt->as.for_stmt.iter_expr = parse_expression(parser);
-            parser->suppress_object_literal_suffix = saved_suppress;
-        }
+        stmt->as.for_stmt.iter_expr = parse_expression_before_block(parser);
         if (stmt->as.for_stmt.iter_expr == NULL) {
             free_stmt(stmt);
             return NULL;
