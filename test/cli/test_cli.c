@@ -13167,6 +13167,142 @@ static void test_lsp_no_crash_on_library_file_without_main(void) {
     free(source_path);
 }
 
+/* A self expression must retain its enclosing fit declaration across repeated
+ * Hover and Definition requests, including when nested below a cast. */
+static void test_lsp_self_target_keeps_owner_for_hover_and_definition(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_self_target_owner\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kSource =
+        "open module test.lsp.self_target_owner;\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "open fit T[] {\n"
+        "    open func at(index: int): T {\n"
+        "        return ((T[])self)[index];\n"
+        "    }\n"
+        "}\n"
+        "open func readiness(): void {\n"
+        "    let ready = inferredText();\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kCastLine =
+        "        return ((T[])self)[index];";
+    static const char *kReadyLine =
+        "    let ready = inferredText();";
+    char template_path[] = "temp/feng_lsp_self_target_owner_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *owned_requests[4];
+    const char *requests[6];
+    char *shutdown;
+    char *output;
+    char *expected_definition;
+    char *remove_error = NULL;
+    unsigned int ready_line;
+    unsigned int ready_character;
+    unsigned int fit_line;
+    unsigned int fit_character;
+    size_t request_index;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(source_path, kSource);
+
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    ASSERT(did_open != NULL);
+    for (request_index = 0U; request_index < 4U; ++request_index) {
+        owned_requests[request_index] = build_lsp_test_position_request(
+            request_index % 2U == 0U
+                ? "textDocument/hover"
+                : "textDocument/definition",
+            2U + (unsigned int)request_index,
+            uri,
+            kSource,
+            kCastLine,
+            strlen("        return ((T[])") + 1U);
+        ASSERT(owned_requests[request_index] != NULL);
+        requests[request_index] = owned_requests[request_index];
+    }
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(shutdown != NULL);
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    find_line_character(kSource,
+                        kReadyLine,
+                        strlen("    let "),
+                        &ready_line,
+                        &ready_character);
+    find_line_character(kSource,
+                        "open fit T[] {",
+                        strlen("open fit "),
+                        &fit_line,
+                        &fit_character);
+    expected_definition = build_lsp_test_location_marker(uri,
+                                                         fit_line,
+                                                         fit_character);
+    ASSERT(expected_definition != NULL);
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        uri,
+        ready_line,
+        ready_character,
+        "let ready: string",
+        requests,
+        6U,
+        NULL);
+
+    assert_lsp_test_response_contains(output, 2U, "self: fit");
+    assert_lsp_test_response_contains(output, 3U, expected_definition);
+    assert_lsp_test_response_contains(output, 4U, "self: fit");
+    assert_lsp_test_response_contains(output, 5U, expected_definition);
+
+    free(output);
+    free(expected_definition);
+    free(shutdown);
+    for (request_index = 0U; request_index < 4U; ++request_index) {
+        free(owned_requests[request_index]);
+    }
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 static void test_lsp_didopen_handles_unicode_escape_in_source(void) {
     /* Regression test: json_string_dup used to return NULL when the JSON text
        field contained \\uXXXX escape sequences (e.g. produced by Python's
@@ -22538,6 +22674,7 @@ int main(void) {
     test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();
     test_lsp_no_crash_on_library_file_without_main();
+    test_lsp_self_target_keeps_owner_for_hover_and_definition();
     test_lsp_didopen_handles_unicode_escape_in_source();
     test_lsp_project_cache_hit_survives_broken_dependency_source();
     test_lsp_hover_and_definition_local_var_rhs();

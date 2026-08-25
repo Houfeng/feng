@@ -13389,8 +13389,18 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
         return NULL;
     }
     if (expr->kind == FENG_EXPR_SELF) {
+        const FengLspLocal *self_local =
+            find_local(locals, slice_from_cstr("self"));
+
+        /* A resolved self target must always carry the declaration that owns
+         * the callable body. Consumers use that owner for presentation and
+         * source locations. */
+        if (self_local == NULL || self_local->self_owner_decl == NULL) {
+            return NULL;
+        }
         target->kind = FENG_LSP_RESOLVED_SELF;
-        return NULL;
+        target->self_owner_decl = self_local->self_owner_decl;
+        return target->self_owner_decl;
     }
     if (expr->kind == FENG_EXPR_IDENTIFIER) {
         const FengLspLocal *local = find_local(locals, expr->as.identifier);
@@ -13410,9 +13420,11 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 }
                 return NULL;
             }
-            target->kind = FENG_LSP_RESOLVED_SELF;
-            target->self_owner_decl = local->self_owner_decl;
-            return NULL;
+            if (local->self_owner_decl != NULL) {
+                target->kind = FENG_LSP_RESOLVED_SELF;
+                target->self_owner_decl = local->self_owner_decl;
+            }
+            return target->self_owner_decl;
         }
         target->decl = resolve_value_name(session, program, expr->as.identifier);
         if (target->decl == NULL) {
@@ -19046,12 +19058,17 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
     if (expr->kind == FENG_EXPR_SELF) {
         const FengLspLocal *self_local = find_local(locals, slice_from_cstr("self"));
 
+        if (self_local == NULL || self_local->self_owner_decl == NULL) {
+            return NULL;
+        }
+        target->self_owner_decl = match_ast_decl_to_symbol(
+            context->current_module,
+            context->program,
+            self_local->self_owner_decl);
+        if (target->self_owner_decl == NULL) {
+            return NULL;
+        }
         target->kind = FENG_LSP_RESOLVED_SELF;
-        target->self_owner_decl = self_local != NULL
-                                      ? match_ast_decl_to_symbol(context->current_module,
-                                                                 context->program,
-                                                                 self_local->self_owner_decl)
-                                      : NULL;
         return target->self_owner_decl;
     }
     if (expr->kind == FENG_EXPR_IDENTIFIER) {
@@ -19068,10 +19085,17 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                 target->binding = local->binding;
                 return NULL;
             }
+            if (local->self_owner_decl == NULL) {
+                return NULL;
+            }
+            target->self_owner_decl = match_ast_decl_to_symbol(
+                context->current_module,
+                context->program,
+                local->self_owner_decl);
+            if (target->self_owner_decl == NULL) {
+                return NULL;
+            }
             target->kind = FENG_LSP_RESOLVED_SELF;
-            target->self_owner_decl = match_ast_decl_to_symbol(context->current_module,
-                                                               context->program,
-                                                               local->self_owner_decl);
             return target->self_owner_decl;
         }
         target->decl = resolve_symbol_value_name(context->provider,
