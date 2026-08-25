@@ -31953,6 +31953,26 @@ static bool cg_emit_branch_into_slot(CG *cg,
     return ok;
 }
 
+/* Emit a branch that is statically known to terminate with throw in its own
+ * compile-time scope. Managed locals still push runtime cleanup nodes, but no
+ * normal-exit cleanup is emitted because control can only leave through the
+ * unwinder. The landing pad or an outer frame releases those nodes. */
+static bool cg_emit_throwing_branch(CG *cg,
+                                    const FengBlock *block,
+                                    FengToken err_token) {
+    Scope *branch_scope = scope_push(cg->cur_scope);
+    bool ok;
+
+    if (branch_scope == NULL) {
+        return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
+    }
+    cg->cur_scope = branch_scope;
+    ok = cg_emit_block(cg, block);
+    cg->cur_scope = branch_scope->parent;
+    scope_pop_free(branch_scope);
+    return ok;
+}
+
 /* Probe an expression type by emitting it into a throwaway buffer and scope.
  * This may advance monotonic counters or populate shared caches, but it does
  * not splice code into the real output stream. Returns a heap-owned CGType
@@ -32044,10 +32064,10 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&cond);
 
         buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
-        ok = cg_emit_block(cg, then_b);
+        ok = cg_emit_throwing_branch(cg, then_b, e->token);
         buf_append_cstr(cg->cur_body, "    } else {\n");
         if (ok) {
-            ok = cg_emit_block(cg, else_b);
+            ok = cg_emit_throwing_branch(cg, else_b, e->token);
         }
         buf_append_cstr(cg->cur_body, "    }\n");
         free(cond_tmp);
@@ -32113,7 +32133,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
     bool ok = true;
     if (then_throws) {
-        ok = cg_emit_block(cg, then_b);
+        ok = cg_emit_throwing_branch(cg, then_b, e->token);
     } else {
         ok = cg_emit_branch_into_slot(cg, then_b, ifv, result_type,
                                       managed, aggregate, &join_slot, e->token);
@@ -32121,7 +32141,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     buf_append_cstr(cg->cur_body, "    } else {\n");
     if (ok) {
         if (else_throws) {
-            ok = cg_emit_block(cg, else_b);
+            ok = cg_emit_throwing_branch(cg, else_b, e->token);
         } else {
             ok = cg_emit_branch_into_slot(cg, else_b, ifv, result_type,
                                           managed, aggregate, &join_slot, e->token);
@@ -32378,10 +32398,9 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
                     buf_free(&payload_expr);
                 }
 
-                ok = cg_emit_block(cg, branch->body);
-                if (ok) {
-                    cg_release_scope(cg, branch_scope);
-                }
+                ok = cg_emit_throwing_branch(cg,
+                                              branch->body,
+                                              branch->token);
                 cg->cur_scope = branch_scope->parent;
                 scope_pop_free(branch_scope);
                 if (!ok) {
@@ -32396,7 +32415,9 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
             } else {
                 buf_append_cstr(cg->cur_body, "    } else {\n");
             }
-            ok = cg_emit_block(cg, e->as.match_expr.else_block);
+            ok = cg_emit_throwing_branch(cg,
+                                          e->as.match_expr.else_block,
+                                          e->token);
             buf_append_cstr(cg->cur_body, "    }\n");
         }
 
@@ -32450,7 +32471,7 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
             buf_append_fmt(cg->cur_body, "    } else if (%s) {\n", cond.data);
         }
         buf_free(&cond);
-        if (!cg_emit_block(cg, br->body)) {
+        if (!cg_emit_throwing_branch(cg, br->body, br->token)) {
             return false;
         }
     }
@@ -32459,7 +32480,9 @@ static bool cg_emit_match_expr_all_throw(CG *cg, const FengExpr *e,
     } else {
         buf_append_cstr(cg->cur_body, "    } else {\n");
     }
-    if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+    if (!cg_emit_throwing_branch(cg,
+                                 e->as.match_expr.else_block,
+                                 e->token)) {
         return false;
     }
     buf_append_cstr(cg->cur_body, "    }\n");
@@ -32754,8 +32777,12 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     }
                 }
 
-                if (cg_branch_terminates_with_throw(branch->body)) {
-                    if (!cg_emit_block(cg, branch->body)) {
+                bool branch_throws =
+                    cg_branch_terminates_with_throw(branch->body);
+                if (branch_throws) {
+                    if (!cg_emit_throwing_branch(cg,
+                                                 branch->body,
+                                                 branch->token)) {
                         ok = false;
                     }
                 } else if (!cg_emit_branch_into_slot(cg,
@@ -32768,7 +32795,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                                               e->token)) {
                     ok = false;
                 }
-                if (ok) {
+                if (ok && !branch_throws) {
                     cg_release_scope(cg, branch_scope);
                 }
                 cg->cur_scope = branch_scope->parent;
@@ -32795,8 +32822,10 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     cg->cur_scope = else_scope;
 
                     if (ok) {
-                        if (cg_branch_terminates_with_throw(e->as.match_expr.else_block)) {
-                            if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+                        if (else_throws) {
+                            if (!cg_emit_throwing_branch(cg,
+                                                        e->as.match_expr.else_block,
+                                                        e->token)) {
                                 ok = false;
                             }
                         } else if (!cg_emit_branch_into_slot(cg,
@@ -32810,7 +32839,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                             ok = false;
                         }
                     }
-                    if (ok) {
+                    if (ok && !else_throws) {
                         cg_release_scope(cg, else_scope);
                     }
                     cg->cur_scope = else_scope->parent;
@@ -32905,7 +32934,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             }
             buf_free(&cond);
             if (cg_branch_terminates_with_throw(br->body)) {
-                if (!cg_emit_block(cg, br->body)) {
+                if (!cg_emit_throwing_branch(cg, br->body, br->token)) {
                     free(ifv); free(tgt_tmp); cgtype_free(result_type);
                     return false;
                 }
@@ -32924,7 +32953,9 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             buf_append_cstr(cg->cur_body, "    } else {\n");
         }
         if (cg_branch_terminates_with_throw(e->as.match_expr.else_block)) {
-            if (!cg_emit_block(cg, e->as.match_expr.else_block)) {
+            if (!cg_emit_throwing_branch(cg,
+                                         e->as.match_expr.else_block,
+                                         e->token)) {
                 free(ifv); free(tgt_tmp); cgtype_free(result_type);
                 return false;
             }

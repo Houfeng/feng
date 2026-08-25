@@ -1,0 +1,192 @@
+module fcts_bin;
+
+import std.test;
+
+/** Reference resource with observable construction and finalization counts. */
+type TryBranchCleanupResource {
+  static var created: int = 0;
+  static var finalized: int = 0;
+  let value: int;
+
+  /** Construct one independently counted branch resource. */
+  func TryBranchCleanupResource(value: int) {
+    self.value = value;
+    TryBranchCleanupResource.created += 1;
+  }
+
+  /** Count finalization of every branch resource exactly once. */
+  func ~TryBranchCleanupResource() {
+    TryBranchCleanupResource.finalized += 1;
+  }
+
+  /** Reset counters after the preceding scenario has fully cleaned up. */
+  static func resetCounts(): void {
+    TryBranchCleanupResource.created = 0;
+    TryBranchCleanupResource.finalized = 0;
+  }
+
+  /** Return the number of resources constructed by the current scenario. */
+  static func createdCount(): int {
+    return TryBranchCleanupResource.created;
+  }
+
+  /** Return the number of resources finalized by the current scenario. */
+  static func finalizedCount(): int {
+    return TryBranchCleanupResource.finalized;
+  }
+}
+
+/** Throw through a statically value-producing call inside a branch. */
+func throwTryBranchCleanupResource(
+  message: string
+): TryBranchCleanupResource {
+  throw message;
+  return TryBranchCleanupResource(-1);
+}
+
+/** Verify a direct throw in an if-expression branch cleans its live resource. */
+func exerciseTryIfBranchExceptionCleanup(): bool {
+  TryBranchCleanupResource.resetCounts();
+  let result = try (
+    if true {
+      let branchLocal = TryBranchCleanupResource(1);
+      assert(branchLocal.value == 1, "the selected if resource remains live before throw");
+      throw "try-if-direct";
+    } else {
+      TryBranchCleanupResource(99)
+    }
+  ) catch error: string {
+    assert(error == "try-if-direct", "try catches the direct if-branch exception");
+    TryBranchCleanupResource(2)
+  };
+  return result.value == 2 &&
+         TryBranchCleanupResource.createdCount() == 2 &&
+         TryBranchCleanupResource.finalizedCount() == 1;
+}
+
+/** Verify a direct throw in a match-expression branch cleans its live resource. */
+func exerciseTryMatchBranchExceptionCleanup(): bool {
+  TryBranchCleanupResource.resetCounts();
+  let result = try (
+    match 1 {
+      1 {
+        let branchLocal = TryBranchCleanupResource(3);
+        assert(branchLocal.value == 3,
+               "the selected match resource remains live before throw");
+        throw "try-match-direct";
+      }
+      else {
+        TryBranchCleanupResource(99)
+      }
+    }
+  ) catch error: string {
+    assert(error == "try-match-direct", "try catches the direct match-branch exception");
+    TryBranchCleanupResource(4)
+  };
+  return result.value == 4 &&
+         TryBranchCleanupResource.createdCount() == 2 &&
+         TryBranchCleanupResource.finalizedCount() == 1;
+}
+
+/** Verify a throwing call in an if-to-match nesting cleans both branch scopes. */
+func exerciseTryIfMatchBranchExceptionCleanup(): bool {
+  TryBranchCleanupResource.resetCounts();
+  let result = try (
+    if true {
+      let outerLocal = TryBranchCleanupResource(5);
+      assert(outerLocal.value == 5, "the outer if resource remains live before throw");
+      match 1 {
+        1 {
+          let innerLocal = TryBranchCleanupResource(6);
+          assert(innerLocal.value == 6,
+                 "the inner match resource remains live before throw");
+          throwTryBranchCleanupResource("try-if-match-call")
+        }
+        else {
+          TryBranchCleanupResource(99)
+        }
+      }
+    } else {
+      TryBranchCleanupResource(98)
+    }
+  ) catch error: string {
+    assert(error == "try-if-match-call",
+           "try catches the nested if-to-match call exception");
+    TryBranchCleanupResource(7)
+  };
+  return result.value == 7 &&
+         TryBranchCleanupResource.createdCount() == 3 &&
+         TryBranchCleanupResource.finalizedCount() == 2;
+}
+
+/** Verify a throwing call in a match-to-if nesting cleans both branch scopes. */
+func exerciseTryMatchIfBranchExceptionCleanup(): bool {
+  TryBranchCleanupResource.resetCounts();
+  let result = try (
+    match 1 {
+      1 {
+        let outerLocal = TryBranchCleanupResource(8);
+        assert(outerLocal.value == 8, "the outer match resource remains live before throw");
+        if true {
+          let innerLocal = TryBranchCleanupResource(9);
+          assert(innerLocal.value == 9,
+                 "the inner if resource remains live before throw");
+          throwTryBranchCleanupResource("try-match-if-call")
+        } else {
+          TryBranchCleanupResource(99)
+        }
+      }
+      else {
+        TryBranchCleanupResource(98)
+      }
+    }
+  ) catch error: string {
+    assert(error == "try-match-if-call",
+           "try catches the nested match-to-if call exception");
+    TryBranchCleanupResource(10)
+  };
+  return result.value == 10 &&
+         TryBranchCleanupResource.createdCount() == 3 &&
+         TryBranchCleanupResource.finalizedCount() == 2;
+}
+
+/** Verify try-expression cleanup across direct and nested if/match branches. */
+open func test_try_branch_exception_cleanup(): void {
+  describe("try branch exception cleanup", () {
+    test("try if releases a direct-throw branch and its managed result", () {
+      let catchStateIsCorrect = exerciseTryIfBranchExceptionCleanup();
+      assert(catchStateIsCorrect,
+             "if branch resource is finalized before catch result leaves scope");
+      assert(TryBranchCleanupResource.createdCount() == 2 &&
+             TryBranchCleanupResource.finalizedCount() == 2,
+             "try-if finalizes the branch and catch resources exactly once");
+    });
+
+    test("try match releases a direct-throw branch and its managed result", () {
+      let catchStateIsCorrect = exerciseTryMatchBranchExceptionCleanup();
+      assert(catchStateIsCorrect,
+             "match branch resource is finalized before catch result leaves scope");
+      assert(TryBranchCleanupResource.createdCount() == 2 &&
+             TryBranchCleanupResource.finalizedCount() == 2,
+             "try-match finalizes the branch and catch resources exactly once");
+    });
+
+    test("try if-match releases both scopes after a throwing call", () {
+      let catchStateIsCorrect = exerciseTryIfMatchBranchExceptionCleanup();
+      assert(catchStateIsCorrect,
+             "if-match resources are finalized before catch result leaves scope");
+      assert(TryBranchCleanupResource.createdCount() == 3 &&
+             TryBranchCleanupResource.finalizedCount() == 3,
+             "try-if-match finalizes both branch resources and the catch result once");
+    });
+
+    test("try match-if releases both scopes after a throwing call", () {
+      let catchStateIsCorrect = exerciseTryMatchIfBranchExceptionCleanup();
+      assert(catchStateIsCorrect,
+             "match-if resources are finalized before catch result leaves scope");
+      assert(TryBranchCleanupResource.createdCount() == 3 &&
+             TryBranchCleanupResource.finalizedCount() == 3,
+             "try-match-if finalizes both branch resources and the catch result once");
+    });
+  });
+}
