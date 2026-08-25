@@ -1,0 +1,244 @@
+module fcts_bin;
+
+import std.test;
+
+/** 用于验证分支结果分别贴合完整 union-form 目标。 */
+spec BranchIntOrFloat: i32 | f32;
+
+/** 以静态 f32 返回类型抛出字符串异常，用于执行 try 的 catch 结果分支。 */
+func branch_fit_throw_f32(): f32 {
+  throw "branch-fit";
+  return 0.0;
+}
+
+/** 断言无外部目标时由非字面量分支确定的结果类型和值均为 f32。 */
+func assert_branch_fit_f32(value: f32, expected: f32, message: string) {
+  assert(value == expected, message);
+}
+
+/** 断言带完整目标类型的分支结果进入了 f32 union member。 */
+func assert_branch_fit_union_f32(
+  value: BranchIntOrFloat,
+  expected: f32,
+  message: string
+) {
+  match value {
+    actual: f32 {
+      assert(actual == expected, message);
+    }
+    else {
+      assert(false, message);
+    }
+  }
+}
+
+/** if、match、try 表达式结果类型选择与贴合的兼容性测试。 */
+open func test_branch_result_fitting() {
+  describe("branch result fitting", () {
+    test("all literal branches propagate the contextual target through 3x3 nesting", () {
+      let if_if: BranchIntOrFloat = if true {
+        if false { 1.5 } else { 2.5 }
+      } else {
+        3.5
+      };
+      let if_match: BranchIntOrFloat = if true {
+        match false {
+          true { 4.5 }
+          else { 5.5 }
+        }
+      } else {
+        6.5
+      };
+      let if_try: BranchIntOrFloat = if true {
+        try 7.5 catch ex: string { 8.5 }
+      } else {
+        9.5
+      };
+      let match_if: BranchIntOrFloat = match true {
+        true { if false { 10.5 } else { 11.5 } }
+        else { 12.5 }
+      };
+      let match_match: BranchIntOrFloat = match true {
+        true {
+          match false {
+            true { 13.5 }
+            else { 14.5 }
+          }
+        }
+        else { 15.5 }
+      };
+      let match_try: BranchIntOrFloat = match true {
+        true { try 16.5 catch ex: string { 17.5 } }
+        else { 18.5 }
+      };
+      let try_if: BranchIntOrFloat = try (
+        if false { 19.5 } else { 20.5 }
+      ) catch ex: string {
+        21.5
+      };
+      let try_match: BranchIntOrFloat = try (
+        match false {
+          true { 22.5 }
+          else { 23.5 }
+        }
+      ) catch ex: string {
+        24.5
+      };
+      let try_try: BranchIntOrFloat = try (
+        try 25.5 catch inner: string { 26.5 }
+      ) catch outer: string {
+        27.5
+      };
+
+      assert_branch_fit_union_f32(if_if, 2.5, "contextual all-literal if-if");
+      assert_branch_fit_union_f32(if_match, 5.5, "contextual all-literal if-match");
+      assert_branch_fit_union_f32(if_try, 7.5, "contextual all-literal if-try");
+      assert_branch_fit_union_f32(match_if, 11.5, "contextual all-literal match-if");
+      assert_branch_fit_union_f32(match_match, 14.5, "contextual all-literal match-match");
+      assert_branch_fit_union_f32(match_try, 16.5, "contextual all-literal match-try");
+      assert_branch_fit_union_f32(try_if, 20.5, "contextual all-literal try-if");
+      assert_branch_fit_union_f32(try_match, 23.5, "contextual all-literal try-match");
+      assert_branch_fit_union_f32(try_try, 25.5, "contextual all-literal try-try");
+    });
+
+    test("non-literal branches independently fit the contextual target through 3x3 nesting", () {
+      let target_member: f32 = 101.5;
+      let member_value: f32 = 102.5;
+      let target_value: BranchIntOrFloat = target_member;
+
+      let if_if: BranchIntOrFloat = if true {
+        if false { target_value } else { member_value }
+      } else {
+        103.5
+      };
+      let if_match: BranchIntOrFloat = if true {
+        match true {
+          true { target_value }
+          else { member_value }
+        }
+      } else {
+        103.5
+      };
+      let if_try: BranchIntOrFloat = if true {
+        try 103.5 catch ex: string { member_value }
+      } else {
+        target_value
+      };
+      let match_if: BranchIntOrFloat = match true {
+        true { if false { target_value } else { member_value } }
+        else { 103.5 }
+      };
+      let match_match: BranchIntOrFloat = match true {
+        true {
+          match true {
+            true { target_value }
+            else { member_value }
+          }
+        }
+        else { 103.5 }
+      };
+      let match_try: BranchIntOrFloat = match true {
+        true {
+          try branch_fit_throw_f32() catch ex: string { member_value }
+        }
+        else { target_value }
+      };
+      let try_if: BranchIntOrFloat = try (
+        if true { target_value } else { member_value }
+      ) catch ex: string {
+        103.5
+      };
+      let try_match: BranchIntOrFloat = try (
+        match true {
+          true { branch_fit_throw_f32() }
+          else { member_value }
+        }
+      ) catch ex: string {
+        target_value
+      };
+      let try_try: BranchIntOrFloat = try (
+        try branch_fit_throw_f32() catch inner: string { member_value }
+      ) catch outer: string {
+        103.5
+      };
+
+      assert_branch_fit_union_f32(if_if, 102.5, "contextual mixed if-if");
+      assert_branch_fit_union_f32(if_match, 101.5, "contextual mixed if-match");
+      assert_branch_fit_union_f32(if_try, 103.5, "contextual mixed if-try");
+      assert_branch_fit_union_f32(match_if, 102.5, "contextual mixed match-if");
+      assert_branch_fit_union_f32(match_match, 101.5, "contextual mixed match-match");
+      assert_branch_fit_union_f32(match_try, 102.5, "contextual mixed match-try");
+      assert_branch_fit_union_f32(try_if, 101.5, "contextual mixed try-if");
+      assert_branch_fit_union_f32(try_match, 101.5, "contextual mixed try-match");
+      assert_branch_fit_union_f32(try_try, 102.5, "contextual mixed try-try");
+    });
+
+    test("literal branches fit the first typed non-literal branch through 3x3 nesting", () {
+      let anchor: f32 = 201.5;
+
+      let if_if = if true {
+        if true { 202.5 } else { anchor }
+      } else {
+        203.5
+      };
+      let if_match = if true {
+        match true {
+          true { anchor }
+          else { 204.5 }
+        }
+      } else {
+        205.5
+      };
+      let if_try = if true {
+        try 206.5 catch ex: string { anchor }
+      } else {
+        207.5
+      };
+      let match_if = match true {
+        true { if false { anchor } else { 208.5 } }
+        else { 209.5 }
+      };
+      let match_match = match true {
+        true {
+          match false {
+            true { 210.5 }
+            else { anchor }
+          }
+        }
+        else { 211.5 }
+      };
+      let match_try = match true {
+        true { try anchor catch ex: string { 212.5 } }
+        else { 213.5 }
+      };
+      let try_if = try (
+        if true { 214.5 } else { anchor }
+      ) catch ex: string {
+        215.5
+      };
+      let try_match = try (
+        match true {
+          true { anchor }
+          else { 216.5 }
+        }
+      ) catch ex: string {
+        217.5
+      };
+      let try_try = try (
+        try 218.5 catch inner: string { anchor }
+      ) catch outer: string {
+        219.5
+      };
+
+      assert_branch_fit_f32(if_if, 202.5, "non-literal target if-if");
+      assert_branch_fit_f32(if_match, 201.5, "non-literal target if-match");
+      assert_branch_fit_f32(if_try, 206.5, "non-literal target if-try");
+      assert_branch_fit_f32(match_if, 208.5, "non-literal target match-if");
+      assert_branch_fit_f32(match_match, 201.5, "non-literal target match-match");
+      assert_branch_fit_f32(match_try, 201.5, "non-literal target match-try");
+      assert_branch_fit_f32(try_if, 214.5, "non-literal target try-if");
+      assert_branch_fit_f32(try_match, 201.5, "non-literal target try-match");
+      assert_branch_fit_f32(try_try, 218.5, "non-literal target try-try");
+    });
+  });
+}
