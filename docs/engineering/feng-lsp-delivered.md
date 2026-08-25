@@ -369,6 +369,7 @@ parser 只保留这种有效文档注释，并把它绑定到对应声明。
 - Hover 必须递归覆盖 Lambda 参数声明、参数类型与函数体表达式；参数名在声明位置与使用位置必须返回一致的参数签名。光标位于 Lambda 体内时，名称解析必须包含 Lambda 参数及其内部局部绑定，并保持词法遮蔽规则。
 - Hover 的表达式定位必须递归覆盖 `match` 等包装表达式，使其操作数中的标识符与成员访问仍可定位。
 - 显式泛型调用 `callee<T1, T2>(...)` 的 LSP 表达式范围必须覆盖全部显式类型实参；Hover、Definition、References 和 Rename 在任一类型实参上都必须按普通类型引用处理，包括 callable spec 等合法类型声明。
+- type、spec、fit 的成员字段初始化表达式必须与函数体、局部绑定初始化表达式采用相同的递归类型引用定位规则；`let value: Outer<Inner> = Factory<Outer<Inner>>()` 初始化侧任意层级的命名类型均须支持 Hover、Definition、References 和 Rename，且按名称与泛参数量解析准确声明。
 - type、spec、函数及其成员声明的泛型形参必须支持 References、Prepare Rename 和 Rename；结果必须包含声明及其词法作用域内的全部类型引用，不得按名称跨声明或成员作用域匹配。Rename 仅允许修改具有可写工作区源码的声明。
 - 本地依赖中的泛型 `fit` 成员必须按完整 `fit` target 与 callable 身份映射到物理源码；同一具体成员通过字面量、局部变量、参数或其他可证明类型的接收者调用时，Definition 和 References 必须返回一致结果，并保持 `T[]`、`T[!]` 等不同 target 严格分离。
 - Hover 必须按成员访问链逐级解析中间值类型，使 `a.b.c` 中任意一级成员都能定位到对应声明，不得针对具体类型或成员名添加特判。

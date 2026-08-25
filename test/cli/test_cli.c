@@ -12323,6 +12323,216 @@ static void test_lsp_generic_type_reference_hover_and_definition(void) {
     free(manifest_path);
 }
 
+/* Nested generic type references in a member field initializer must use the
+ * same Hover and Definition resolution as equivalent references in bodies. */
+static void test_lsp_member_field_initializer_type_reference_navigation(void) {
+    static const char *kManifest =
+        "[package]\n"
+        "name: \"lsp_field_initializer_type_reference\"\n"
+        "version: \"0.1.0\"\n"
+        "target: \"lib\"\n"
+        "src: \"src/\"\n"
+        "out: \"build/\"\n";
+    static const char *kDeclarationSource =
+        "open module test.lsp.field_initializer_type_reference;\n"
+        "open type FocusEvent {}\n"
+        "open type FocusEvent<T> {}\n"
+        "open spec Widget {}\n"
+        "open type Event<T> {}\n";
+    static const char *kUsageSource =
+        "open module test.lsp.field_initializer_type_reference;\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "open type View {\n"
+        "    open let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<Widget>>();\n"
+        "}\n"
+        "open func exercise(): void {\n"
+        "    let readiness = inferredText();\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kFieldInitializer =
+        "    open let onFocus: Event<FocusEvent<Widget>> = "
+        "Event<FocusEvent<Widget>>();";
+    char template_path[] = "temp/feng_lsp_field_initializer_type_ref_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *declaration_path;
+    char *usage_path;
+    char *declaration_uri;
+    char *usage_uri;
+    char *escaped_usage;
+    char *did_open;
+    char *focus_definition;
+    char *focus_hover;
+    char *widget_definition;
+    char *widget_hover;
+    char *shutdown;
+    const char *requests[6];
+    char *output;
+    char *expected_focus_definition;
+    char *unexpected_focus_definition;
+    char *expected_widget_definition;
+    char *remove_error = NULL;
+    unsigned int readiness_line;
+    unsigned int readiness_character;
+    unsigned int focus_line;
+    unsigned int focus_character;
+    unsigned int nongeneric_focus_line;
+    unsigned int nongeneric_focus_character;
+    unsigned int widget_line;
+    unsigned int widget_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    declaration_path = path_join(src_dir, "declaration.ff");
+    usage_path = path_join(src_dir, "usage.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path, kManifest);
+    write_text_file(declaration_path, kDeclarationSource);
+    write_text_file(usage_path, kUsageSource);
+
+    declaration_uri = file_uri_from_path(declaration_path);
+    usage_uri = file_uri_from_path(usage_path);
+    escaped_usage = json_escape_text(kUsageSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        usage_uri,
+        escaped_usage);
+    focus_definition = build_lsp_test_position_request(
+        "textDocument/definition",
+        2U,
+        usage_uri,
+        kUsageSource,
+        kFieldInitializer,
+        strlen("    open let onFocus: Event<FocusEvent<Widget>> = Event<") + 1U);
+    focus_hover = build_lsp_test_position_request(
+        "textDocument/hover",
+        3U,
+        usage_uri,
+        kUsageSource,
+        kFieldInitializer,
+        strlen("    open let onFocus: Event<FocusEvent<Widget>> = Event<") + 1U);
+    widget_definition = build_lsp_test_position_request(
+        "textDocument/definition",
+        4U,
+        usage_uri,
+        kUsageSource,
+        kFieldInitializer,
+        strlen("    open let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<") + 1U);
+    widget_hover = build_lsp_test_position_request(
+        "textDocument/hover",
+        5U,
+        usage_uri,
+        kUsageSource,
+        kFieldInitializer,
+        strlen("    open let onFocus: Event<FocusEvent<Widget>> = Event<FocusEvent<") + 1U);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(did_open != NULL);
+    ASSERT(focus_definition != NULL);
+    ASSERT(focus_hover != NULL);
+    ASSERT(widget_definition != NULL);
+    ASSERT(widget_hover != NULL);
+    ASSERT(shutdown != NULL);
+    requests[0] = focus_definition;
+    requests[1] = focus_hover;
+    requests[2] = widget_definition;
+    requests[3] = widget_hover;
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    find_line_character(kUsageSource,
+                        "    let readiness = inferredText();",
+                        strlen("    let "),
+                        &readiness_line,
+                        &readiness_character);
+    find_line_character(kDeclarationSource,
+                        "open type FocusEvent<T> {}",
+                        strlen("open type "),
+                        &focus_line,
+                        &focus_character);
+    find_line_character(kDeclarationSource,
+                        "open type FocusEvent {}",
+                        strlen("open type "),
+                        &nongeneric_focus_line,
+                        &nongeneric_focus_character);
+    find_line_character(kDeclarationSource,
+                        "open spec Widget {}",
+                        strlen("open spec "),
+                        &widget_line,
+                        &widget_character);
+    expected_focus_definition = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        declaration_uri,
+        focus_line,
+        focus_character);
+    unexpected_focus_definition = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        declaration_uri,
+        nongeneric_focus_line,
+        nongeneric_focus_character);
+    expected_widget_definition = dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        declaration_uri,
+        widget_line,
+        widget_character);
+    ASSERT(expected_focus_definition != NULL);
+    ASSERT(unexpected_focus_definition != NULL);
+    ASSERT(expected_widget_definition != NULL);
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        usage_uri,
+        readiness_line,
+        readiness_character,
+        "let readiness: string",
+        requests,
+        6U,
+        NULL);
+
+    assert_lsp_test_response_contains(output, 2U, expected_focus_definition);
+    assert_lsp_test_response_not_contains(output, 2U, unexpected_focus_definition);
+    assert_lsp_test_response_contains(output, 3U, "type FocusEvent<T> {}");
+    assert_lsp_test_response_contains(output, 3U, "Reference Type");
+    assert_lsp_test_response_contains(output, 4U, expected_widget_definition);
+    assert_lsp_test_response_contains(output, 5U, "spec Widget {}");
+    assert_lsp_test_response_contains(output, 5U, "Object Spec");
+
+    free(output);
+    free(expected_widget_definition);
+    free(unexpected_focus_definition);
+    free(expected_focus_definition);
+    free(shutdown);
+    free(widget_hover);
+    free(widget_definition);
+    free(focus_hover);
+    free(focus_definition);
+    free(did_open);
+    free(escaped_usage);
+    free(usage_uri);
+    free(declaration_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(usage_path);
+    free(declaration_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 /* Generic type parameters must remain distinct lexical symbols for
  * References and Rename, including tuple-field type references. */
 static void test_lsp_type_param_references_and_rename(void) {
@@ -22323,6 +22533,7 @@ int main(void) {
     test_lsp_function_decl_site_definition_references_and_rename();
     test_lsp_type_references_cover_all_ast_positions();
     test_lsp_generic_type_reference_hover_and_definition();
+    test_lsp_member_field_initializer_type_reference_navigation();
     test_lsp_type_param_references_and_rename();
     test_lsp_rename_accepts_identifier_end_position();
     test_lsp_definition_references_rename_with_broken_code();

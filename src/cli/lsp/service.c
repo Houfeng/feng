@@ -4209,13 +4209,26 @@ static size_t expr_start(const FengExpr *expr) {
     return expr->token.offset;
 }
 
+/* Returns the furthest source offset covered by a type reference, including
+ * every nested generic argument used by expression-range pruning. */
 static size_t type_ref_end(const FengTypeRef *type_ref) {
+    size_t end;
+    size_t index;
+
     if (type_ref == NULL) {
         return 0U;
     }
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
-            return named_type_ref_end(type_ref);
+            end = named_type_ref_end(type_ref);
+            for (index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+                size_t argument_end = type_ref_end(type_ref->as.named.type_args[index]);
+
+                if (argument_end > end) {
+                    end = argument_end;
+                }
+            }
+            return end;
         case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
             return type_ref->as.inner != NULL ? type_ref_end(type_ref->as.inner) : token_end_offset(type_ref->token);
@@ -9492,7 +9505,17 @@ static bool resolve_type_param_hit(const FengLspAnalysisSession *session,
     return false;
 }
 
-/* Forward declaration for mutual recursion with find_type_ref_in_expr. */
+/* Forward declarations for recursive expression and block traversal. */
+static bool find_type_ref_in_expr(const FengExpr *expr,
+                                  const FengProgram *program,
+                                  const FengLspAnalysisSession *session,
+                                  size_t offset,
+                                  FengLspResolvedTarget *target,
+                                  const FengDecl *owner_decl,
+                                  const FengTypeParam *member_type_params,
+                                  size_t member_type_param_count,
+                                  const FengTypeParam *owner_type_params,
+                                  size_t owner_type_param_count);
 static bool find_type_ref_in_block_exprs(const FengBlock *block,
                                          const FengProgram *program,
                                          const FengLspAnalysisSession *session,
@@ -9551,8 +9574,26 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
     }
 
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
-        return resolve_type_ref_at_offset(session, program, member->as.field.type, offset, target,
-                                          owner_decl, owner_type_params, owner_type_param_count);
+        if (resolve_type_ref_at_offset(session,
+                                       program,
+                                       member->as.field.type,
+                                       offset,
+                                       target,
+                                       owner_decl,
+                                       owner_type_params,
+                                       owner_type_param_count)) {
+            return true;
+        }
+        return find_type_ref_in_expr(member->as.field.initializer,
+                                     program,
+                                     session,
+                                     offset,
+                                     target,
+                                     owner_decl,
+                                     NULL,
+                                     0U,
+                                     owner_type_params,
+                                     owner_type_param_count);
     }
     if (resolve_type_param_hit(session,
                                program,
