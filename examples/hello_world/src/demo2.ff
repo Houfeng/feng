@@ -1,0 +1,10 @@
+module hell_world;
+
+import std.io;
+
+func test() {
+  let items = [1, 2, 3, 4, 5];
+  for let ctx in items {
+    // println("Notifying waiter");
+  }
+}

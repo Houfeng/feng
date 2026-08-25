@@ -4535,7 +4535,16 @@ static FengStmt *parse_for_statement(Parser *parser) {
         stmt->as.for_stmt.iter_binding.type = NULL;
         stmt->as.for_stmt.iter_binding.initializer = NULL;
 
-        stmt->as.for_stmt.iter_expr = parse_expression(parser);
+        {
+            bool saved_suppress = parser->suppress_object_literal_suffix;
+
+            /* Preserve the first `{` after the unparenthesized iteration
+             * expression as the loop body delimiter. Parenthesized
+             * expressions re-enable object literal suffix parsing. */
+            parser->suppress_object_literal_suffix = true;
+            stmt->as.for_stmt.iter_expr = parse_expression(parser);
+            parser->suppress_object_literal_suffix = saved_suppress;
+        }
         if (stmt->as.for_stmt.iter_expr == NULL) {
             free_stmt(stmt);
             return NULL;

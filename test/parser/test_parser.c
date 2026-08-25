@@ -1889,6 +1889,52 @@ static void test_for_in_loop(void) {
     feng_program_free(program);
 }
 
+/* Verify that a for/in body delimiter is not consumed as an empty object
+ * literal suffix, while an explicitly parenthesized object literal remains
+ * available as the iteration expression. */
+static void test_for_in_empty_blocks(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(items: int[]) {\n"
+        "    for let empty in items {}\n"
+        "    for let comments in items {\n"
+        "        // comment-only body\n"
+        "    }\n"
+        "    for let object in (Items {}) {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *function_body;
+    const FengStmt *empty_loop;
+    const FengStmt *comment_loop;
+    const FengStmt *object_loop;
+
+    ASSERT(feng_parse_source(source, strlen(source), "for_in_empty_blocks.f", &program, &error));
+    ASSERT(program != NULL);
+    function_body = program->declarations[0]->as.function_decl.body;
+    ASSERT(function_body->statement_count == 3U);
+
+    empty_loop = function_body->statements[0];
+    ASSERT(empty_loop->kind == FENG_STMT_FOR);
+    ASSERT(empty_loop->as.for_stmt.is_for_in);
+    ASSERT(empty_loop->as.for_stmt.iter_expr->kind == FENG_EXPR_IDENTIFIER);
+    ASSERT(empty_loop->as.for_stmt.body->statement_count == 0U);
+
+    comment_loop = function_body->statements[1];
+    ASSERT(comment_loop->kind == FENG_STMT_FOR);
+    ASSERT(comment_loop->as.for_stmt.is_for_in);
+    ASSERT(comment_loop->as.for_stmt.iter_expr->kind == FENG_EXPR_IDENTIFIER);
+    ASSERT(comment_loop->as.for_stmt.body->statement_count == 0U);
+
+    object_loop = function_body->statements[2];
+    ASSERT(object_loop->kind == FENG_STMT_FOR);
+    ASSERT(object_loop->as.for_stmt.is_for_in);
+    ASSERT(object_loop->as.for_stmt.iter_expr->kind == FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(object_loop->as.for_stmt.body->statement_count == 0U);
+
+    feng_program_free(program);
+}
+
 static void test_block_yield_omits_trailing_semicolon(void) {
     /* Per docs/specifications/feng-flow.md: trailing ';' on the last expression statement
      * of a block may be omitted. */
@@ -3817,6 +3863,7 @@ int main(void) {
     test_match_three_level_chain_parse();
     test_match_chain_with_binding_parse();
     test_for_in_loop();
+    test_for_in_empty_blocks();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();
     test_generic_array_new_uses_colon_dimension_syntax();

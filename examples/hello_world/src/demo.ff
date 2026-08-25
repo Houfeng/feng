@@ -1,7 +1,67 @@
 module hello_world;
 
 import std.io;
+import std;
+import std.collections;
 
 func test1() {
   println("Hello, World!");
 }
+
+// @abi
+// type AsyncTaskContext {}
+
+// enum FutureState {
+//   Pending = 0,
+//   Resolved = 1,
+//   Rejected = 2
+// }
+
+// type Future<T, E> {
+//   seal var _state = FutureState.Pending;
+//   seal var _value: Option<T> = none;
+//   seal var _error: Option<E> = none;
+
+//   open func state(): FutureState {
+//     return self._state;
+//   }
+
+//   seal let waiters: List < AsyncTaskContext * > = List<AsyncTaskContext *>();
+
+//   // @awaitable
+//   func pull(ctx: AsyncTaskContext*): Option<T> {
+//     return match self._state {
+//       FutureState.Resolved { self._value; }
+//       FutureState.Rejected { throw self._error; }
+//       FutureState.Pending { self.waiters.add(ctx); none; }
+//       else { none; }
+//     };
+//   }
+
+//   func resolve(value: T) {
+//     if (self._state != FutureState.Pending) {
+//       throw "Future already resolved or rejected";
+//     }
+//     self._value = value;
+//     self._state = FutureState.Resolved;
+//     for let ctx in self.waiters {
+//       // Notify waiters
+//       //feng_async_wake(ctx);
+//       println("Notifying waiter");
+//     }
+//   }
+
+//   func reject(error: E) {
+//     if (self._state != FutureState.Pending) {
+//       throw "Future already resolved or rejected";
+//     }
+//     self._error = error;
+//     self._state = FutureState.Rejected;
+//     for let ctx in self.waiters {
+//       // Notify waiters
+//       //feng_async_wake(ctx);
+//       println("Notifying waiter");
+//     }
+//   }
+
+// }
