@@ -576,7 +576,7 @@ func lexer_error_unterminated_string() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-unterm-string-caught");
   check(errCode == "LE0003", "lexer/err-unterm-string-code");
   writeLine("__LEXER_ERROR_UNTERMINATED_STRING__=ok");
@@ -589,7 +589,7 @@ func lexer_error_unterminated_block_comment() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-unterm-block-caught");
   check(errCode == "LE0006", "lexer/err-unterm-block-code");
   writeLine("__LEXER_ERROR_UNTERMINATED_BLOCK_COMMENT__=ok");
@@ -602,7 +602,7 @@ func lexer_error_invalid_escape() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-invalid-escape-caught");
   check(errCode == "LE0004", "lexer/err-invalid-escape-code");
   writeLine("__LEXER_ERROR_INVALID_ESCAPE__=ok");
@@ -615,7 +615,7 @@ func lexer_error_reserved_word() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-reserved-caught");
   check(errCode == "LE0001", "lexer/err-reserved-code");
   writeLine("__LEXER_ERROR_RESERVED_WORD__=ok");
@@ -628,7 +628,7 @@ func lexer_error_unexpected_character() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-unexpected-caught");
   check(errCode == "LE0007", "lexer/err-unexpected-code");
   writeLine("__LEXER_ERROR_UNEXPECTED_CHARACTER__=ok");
@@ -641,7 +641,7 @@ func lexer_error_invalid_number() {
   try lexer.next() catch err: FengCompileError {
     caught = true;
     errCode = err.code;
-  };
+  }
   check(caught, "lexer/err-invalid-num-caught");
   check(errCode == "LE0002", "lexer/err-invalid-num-code");
   writeLine("__LEXER_ERROR_INVALID_NUMBER__=ok");

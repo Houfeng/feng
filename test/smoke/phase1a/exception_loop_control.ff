@@ -11,7 +11,7 @@ func break_from_catch(): string {
     while true {
         try fail_void() catch ex: string {
             break;
-        };
+        }
     }
     return "after-break";
 }
@@ -25,7 +25,7 @@ func continue_from_catch(): string {
         try fail_void() catch ex: string {
             skipped += 1;
             continue;
-        };
+        }
         return "unreachable";
     }
 

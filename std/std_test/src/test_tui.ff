@@ -1388,7 +1388,7 @@ func tuiapp_render_empty_no_throw() {
   // 未 init 状态下 render()：resizeRequested=false，直接 buildPatchBytes + write
   // 空白 Screen 的 buildPatchBytes 返回空数组，不触发 write，不会抛异常
   var caught = false;
-  try app.render() catch ex: string { caught = true; };
+  try app.render() catch ex: string { caught = true; }
   check(caught == false, "tui/app/render-empty-no-throw");
 }
 
@@ -3300,14 +3300,14 @@ func input_widget_value_and_caret_contract() {
   var multilineError = false;
   try input.value("first\nsecond") catch error: string {
     multilineError = error == "tui/input/multiline-value";
-  };
+  }
   check(multilineError && input.value() == "Aé中" && input.caret() == 1,
     "tui/input-widget/reject-multiline-atomically");
 
   var caretError = false;
   try input.caret(4) catch error: string {
     caretError = error == "tui/input/caret-out-of-bounds";
-  };
+  }
   check(caretError && input.caret() == 1,
     "tui/input-widget/reject-caret-out-of-bounds");
 }
@@ -5315,14 +5315,14 @@ func input_unregistered_callback_drops_events() {
   // 不赋值 onKey/onMouse，feed 字节，零值回调执行空操作无异常
   let mgr = InputManager<i32>();  // 不注册回调
   var caught = false;
-  try mgr.feed((u8)0x41) catch ex: string { caught = true; };
+  try mgr.feed((u8)0x41) catch ex: string { caught = true; }
   check(caught == false, "tui/input/unregistered-key-no-throw");
   // 测试鼠标序列也不抛异常：ESC[<0;1;1M = 9 字节
   let seq: byte[!] = byte[:9];
   seq[0] = (byte)0x1B; seq[1] = (byte)0x5B; seq[2] = (byte)0x3C; seq[3] = (byte)0x30; seq[4] = (byte)0x3B;
   seq[5] = (byte)0x31; seq[6] = (byte)0x3B; seq[7] = (byte)0x31; seq[8] = (byte)0x4D;
   var caught2 = false;
-  try feedBytes(mgr, (byte[])seq) catch ex: string { caught2 = true; };
+  try feedBytes(mgr, (byte[])seq) catch ex: string { caught2 = true; }
   check(caught2 == false, "tui/input/unregistered-mouse-no-throw");
 }
 

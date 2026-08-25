@@ -160,7 +160,7 @@ open type File {
     self.closed = true;
     try c_close((i32)self.fd) catch {
       // 幂等：忽略 close 异常
-    };
+    }
   }
 
   /**
@@ -252,7 +252,7 @@ open func writeText(path: string, text: string): void {
   try file.writeText(text) catch ex: string {
     file.close();
     throw ex;
-  };
+  }
   file.close();
 }
 
@@ -283,7 +283,7 @@ open func writeBytes(path: string, bytes: byte[]): void {
   try writeAllBytes(file, bytes) catch ex: string {
     file.close();
     throw ex;
-  };
+  }
   file.close();
 }
 

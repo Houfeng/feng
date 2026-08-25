@@ -18,6 +18,6 @@ func main(args: string[]) {
     puts(&label);
 
     try fail_i32() catch ex: i32 {
-    };
+    }
     puts(&"statement-catch");
 }

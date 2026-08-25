@@ -3667,7 +3667,7 @@ static void test_try_stmt_trailing_if_in_catch_not_converted(void) {
         "func run(): i32 {\n"
         "    try parse() catch ex: i32 {\n"
         "        if true { return 10; } else { return 20; }\n"
-        "    };\n"
+        "    }\n"
         "    return 0;\n"
         "}\n";
     FengProgram *program = parse_program_or_die("try_stmt_trailing_if_ok.f", source);
@@ -3877,7 +3877,7 @@ static void test_catch_unknown_allows_rethrow_only(void) {
         "module demo.main;\n"
         "func parse(): int { return 1; }\n"
         "func run() {\n"
-        "    try parse() catch ex: unknown { throw ex; };\n"
+        "    try parse() catch ex: unknown { throw ex; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("catch_unknown_rethrow_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -3899,7 +3899,7 @@ static void test_catch_unknown_rejects_value_use(void) {
         "module demo.main;\n"
         "func parse(): int { return 1; }\n"
         "func run() {\n"
-        "    try parse() catch ex: unknown { ex.message; };\n"
+        "    try parse() catch ex: unknown { ex.message; }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("catch_unknown_value_use_error.f", source);
     const FengProgram *programs[] = {program};
@@ -3962,7 +3962,7 @@ static void test_try_catch_statement_allows_empty_catch(void) {
         "func parse(): i32 { throw 1; return 0; }\n"
         "func run() {\n"
         "    try parse() catch ex: i32 {\n"
-        "    };\n"
+        "    }\n"
         "}\n";
     FengProgram *program = parse_program_or_die("try_catch_statement_empty_ok.f", source);
     const FengProgram *programs[] = {program};
@@ -4077,9 +4077,9 @@ static void test_throw_allows_spec_values(void) {
 
 static void test_catch_rejects_non_exception_types(void) {
     static const char *const cases[] = {
-        "module demo.main;\nspec Named { var name: string; }\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Named { throw \"x\"; }; }\n",
-        "module demo.main;\nspec Callback(): void;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Callback { throw \"x\"; }; }\n",
-        "module demo.main;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: int* { throw \"x\"; }; }\n"
+        "module demo.main;\nspec Named { var name: string; }\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Named { throw \"x\"; } }\n",
+        "module demo.main;\nspec Callback(): void;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: Callback { throw \"x\"; } }\n",
+        "module demo.main;\nfunc parse(): int { return 1; }\nfunc run() { try parse() catch ex: int* { throw \"x\"; } }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4104,9 +4104,9 @@ static void test_catch_without_binding_accepts_anonymous_clause(void) {
     /* catch { } (anonymous) is valid as statement or expression catch-all */
     static const char *const cases[] = {
         /* statement: anonymous catch-all */
-        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch { }; }\n",
+        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch { } }\n",
         /* statement: anonymous catch-all after specific catch */
-        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch ex: i32 { } catch { }; }\n",
+        "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run() { try parse() catch ex: i32 { } catch { } }\n",
         /* expression: anonymous catch-all producing value */
         "module demo.main;\nfunc parse(): i32 { throw 1; return 0; }\nfunc run(): i32 { return try parse() catch { 0 }; }\n"
     };
@@ -4133,7 +4133,7 @@ static void test_catch_anonymous_must_be_last_clause(void) {
     const char *source =
         "module demo.main;\n"
         "func parse(): i32 { throw 1; return 0; }\n"
-        "func run() { try parse() catch { } catch ex: i32 { }; }\n";
+        "func run() { try parse() catch { } catch ex: i32 { } }\n";
     FengProgram *program = parse_program_or_die("catch_anon_not_last_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;

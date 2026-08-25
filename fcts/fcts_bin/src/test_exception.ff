@@ -49,7 +49,7 @@ func ex_break_from_catch(): string {
   while true {
     try throw_ex_void() catch ex: string {
       break;
-    };
+    }
   }
   return "after-break";
 }
@@ -63,7 +63,7 @@ func ex_continue_from_catch(): int {
     try throw_ex_void() catch ex: string {
       skipped += 1;
       continue;
-    };
+    }
   }
   return skipped;
 }
@@ -104,7 +104,7 @@ func test_lambda_basic_try_catch(): bool {
       if ex == "lambda-error" {
         caught = true;
       }
-    };
+    }
   });
   return caught;
 }
@@ -127,7 +127,7 @@ func test_lambda_multiple_catch(): bool {
       catch_type = "string";
     } catch ex: i32 {
       catch_type = "int";
-    };
+    }
   });
   return catch_type == "int";
 }
@@ -137,7 +137,7 @@ func test_lambda_anonymous_catch(): bool {
   run_action(() {
     try lambda_throw_error() catch {
       anon_caught = true;
-    };
+    }
   });
   return anon_caught;
 }
@@ -150,7 +150,7 @@ func test_lambda_auto_propagation(): bool {
     if ex == "lambda-error" {
       propagated = true;
     }
-  };
+  }
   return propagated;
 }
 
@@ -159,12 +159,12 @@ func test_lambda_rethrow_in_catch(): bool {
   try run_action(() {
     try lambda_throw_error() catch ex: string {
       throw "rethrown: " + ex;
-    };
+    }
   }) catch ex: string {
     if ex == "rethrown: lambda-error" {
       rethrown = true;
     }
-  };
+  }
   return rethrown;
 }
 
@@ -195,7 +195,7 @@ func test_basic_try_catch(): bool {
     if ex == "test error" {
       caught = true;
     }
-  };
+  }
   return caught;
 }
 
@@ -221,7 +221,7 @@ func test_multiple_catch_clauses(): bool {
     catch_type = "string";
   } catch ex: i32 {
     catch_type = "int";
-  };
+  }
   return catch_type == "int";
 }
 
@@ -231,7 +231,7 @@ func test_catch_unknown_fallback(): bool {
     // 不匹配
   } catch ex: unknown {
     unknown_caught = true;
-  };
+  }
   return unknown_caught;
 }
 
@@ -239,7 +239,7 @@ func test_anonymous_catch(): bool {
   var anon_caught = false;
   try throw_error() catch {
     anon_caught = true;
-  };
+  }
   return anon_caught;
 }
 
@@ -249,7 +249,7 @@ func test_auto_propagation(): bool {
     if ex == "propagated" {
       propagated = true;
     }
-  };
+  }
   return propagated;
 }
 
@@ -257,7 +257,7 @@ func test_no_throw_path(): bool {
   var no_error = true;
   try maybe_throw(false) catch ex: string {
     no_error = false;
-  };
+  }
   return no_error;
 }
 
@@ -267,7 +267,7 @@ func test_rethrow_in_catch(): bool {
     if ex == "rethrown: test error" {
       rethrown = true;
     }
-  };
+  }
   return rethrown;
 }
 
@@ -277,7 +277,7 @@ func test_throw_catch_custom_type(): bool {
   try throw_ex_type(404, "not found") catch ex: ExAppError {
     app_code = ex.code;
     app_msg = ex.msg;
-  };
+  }
   return app_code == 404 && app_msg == "not found";
 }
 
@@ -285,7 +285,7 @@ func test_throw_catch_spec_value(): bool {
   var spec_msg = "";
   try throw_ex_spec("spec-error") catch ex: ExTaggedError {
     spec_msg = ex.msg;
-  };
+  }
   return spec_msg == "spec-error";
 }
 
@@ -444,7 +444,7 @@ func call_auto_propagate() {
 func call_rethrow() {
   try throw_error() catch ex: string {
     throw "rethrown: " + ex;
-  };
+  }
 }
 
 // ============================================================================
@@ -466,7 +466,7 @@ func test_throw_catch_tuple_point(): bool {
   try throw_tuple_point(5.0, 6.0) catch ex: ExTuplePoint {
     caught_x = ex.item1;
     caught_y = ex.item2;
-  };
+  }
   return caught_x == 5.0 && caught_y == 6.0;
 }
 
@@ -505,7 +505,7 @@ func test_throw_catch_value_point(): bool {
   try throw_value_point(3.0, 4.0) catch ex: ExValuePoint {
     caught_x = ex.x;
     caught_y = ex.y;
-  };
+  }
   return caught_x == 3.0 && caught_y == 4.0;
 }
 
@@ -516,7 +516,7 @@ func test_throw_catch_value_error(): bool {
   try throw_value_error(404, "not found") catch ex: ExValueError {
     caught_code = ex.code;
     caught_msg = ex.message;
-  };
+  }
   return caught_code == 404 && caught_msg == "not found";
 }
 
@@ -533,7 +533,7 @@ func test_value_exception_independence(): bool {
     caught_x = ex.x;
     // Modify caught value should not affect original
     ex.x = 999.0;
-  };
+  }
   // Original should still be 1.0 (value semantics)
   return caught_x == 1.0 && original.x == 1.0;
 }
@@ -545,7 +545,7 @@ func test_multiple_catch_value_types(): bool {
     catch_type = "point";
   } catch ex: ExValueError {
     catch_type = "error";
-  };
+  }
   return catch_type == "error";
 }
 
@@ -553,13 +553,13 @@ func test_multiple_catch_value_types(): bool {
 func throw_rethrown_value_error() {
   try throw_value_error(100, "first") catch ex: ExValueError {
     throw ExValueError { code: ex.code + 1, message: "rethrown" };
-  };
+  }
 }
 
 func test_value_exception_rethrow(): bool {
   var rethrown_code: int = 0;
   try throw_rethrown_value_error() catch ex: ExValueError {
     rethrown_code = ex.code;
-  };
+  }
   return rethrown_code == 101;
 }

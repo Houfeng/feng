@@ -441,7 +441,6 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
             break;
         case FENG_STMT_TRY:
             dump_expr(stream, stmt->as.expr, 0);
-            fputs(";\n", stream);
             break;
         case FENG_STMT_IF:
             for (index = 0U; index < stmt->as.if_stmt.clause_count; ++index) {

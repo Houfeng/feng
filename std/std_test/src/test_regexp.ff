@@ -158,7 +158,7 @@ func regexp_test_compile_error() {
   var caught = false;
   try RegExp("[invalid") catch e: string {
     caught = e.contains("compile error");
-  };
+  }
   check(caught == true, "regexp/compile-error");
 
   writeLine("__REGEXP_COMPILE_ERROR__=ok");

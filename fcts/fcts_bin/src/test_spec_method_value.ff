@@ -266,7 +266,7 @@ func verifyGenericSpecMethodExceptionLifetime(): bool {
   var caught = false;
   try throwWithGenericSpecMethodLifetime() catch error: string {
     caught = error == "mv02-method-value";
-  };
+  }
   return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
          LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }

@@ -163,7 +163,7 @@ func exerciseObjectSpecLifecycleException(): bool {
   var caught = false;
   try throwWithObjectSpecLifecycleView() catch error: string {
     caught = error == "object-spec-lifecycle";
-  };
+  }
   return caught;
 }
 

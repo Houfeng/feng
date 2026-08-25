@@ -29,7 +29,7 @@ func rethrowCrossFeatureLeaf(value: LibAdvancedLifetimeLeaf): void {
   try libCrossFeaturePropagate<LibAdvancedLifetimeLeaf>(value)
   catch ex: string {
     throw "rethrown:" + ex;
-  };
+  }
 }
 
 /** Catch and rethrow an exception while a closed aggregate remains live. */
@@ -39,7 +39,7 @@ func rethrowCrossFeatureComposite(
   try libCrossFeatureThrowComposite<LibAdvancedLifetimeLeaf>(value)
   catch ex: string {
     throw "rethrown:" + ex;
-  };
+  }
 }
 
 /** Exercise managed exception values and return their explicit creation count. */
@@ -51,21 +51,21 @@ func runCrossFeatureExceptionLifetime(): i64 {
     catch ex: string {
       assert(ex == "generic-direct",
              "direct generic local survives until a concrete throw");
-    };
+    }
 
     let propagated = LibAdvancedLifetimeLeaf("propagated-throw");
     try libCrossFeaturePropagate<LibAdvancedLifetimeLeaf>(propagated)
     catch ex: string {
       assert(ex == "generic-direct",
              "exception propagates through a shared generic caller");
-    };
+    }
 
     let rethrown = LibAdvancedLifetimeLeaf("rethrown-direct");
     try rethrowCrossFeatureLeaf(rethrown)
     catch ex: string {
       assert(ex == "rethrown:generic-direct",
              "consumer catch rethrows after generic propagation");
-    };
+    }
 
     let compositeLeaf = LibAdvancedLifetimeLeaf("composite-throw");
     let composite = LibAdvancedComposite<LibAdvancedLifetimeLeaf>(
@@ -77,7 +77,7 @@ func runCrossFeatureExceptionLifetime(): i64 {
     catch ex: string {
       assert(ex == "rethrown:generic-composite",
              "consumer rethrows while a generic aggregate remains live");
-    };
+    }
 
     let recoveredLeaf = LibAdvancedLifetimeLeaf("recovered-fallback");
     let recovered = libCrossFeatureRecover<LibAdvancedLifetimeLeaf>(
@@ -137,7 +137,7 @@ func runCrossFeatureDeferLifetime(): i64 {
       true
     ) catch ex: string {
       assert(ex == "generic-defer", "defer helper throws the expected value");
-    };
+    }
     assert(thrownObserved == "defer-throw-replacement",
            "exceptional defer observes the replaced generic value");
   }

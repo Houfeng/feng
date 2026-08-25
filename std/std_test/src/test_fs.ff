@@ -12,7 +12,7 @@ let fsTestDir = "/tmp/feng_fs_test";
 
 func safeRemove(path: string) {
   if exists(path) {
-    try remove(path) catch {};
+    try remove(path) catch {}
   }
 }
 
@@ -22,12 +22,12 @@ func setupFsTests() {
     let oldEntries = readDir(fsTestDir);
     for var i: int = 0; i < oldEntries.length(); i += (int)1 {
       if oldEntries[i].kind == EntryKind.Dir {
-        try rmdir(oldEntries[i].path) catch {};
+        try rmdir(oldEntries[i].path) catch {}
       } else {
-        try remove(oldEntries[i].path) catch {};
+        try remove(oldEntries[i].path) catch {}
       }
     }
-    try rmdir(fsTestDir) catch {};
+    try rmdir(fsTestDir) catch {}
   }
   mkdir(fsTestDir);
 }
@@ -37,12 +37,12 @@ func cleanupFsTests() {
   let entries = readDir(fsTestDir);
   for var i: int = 0; i < entries.length(); i += (int)1 {
     if entries[i].kind == EntryKind.Dir {
-      try rmdir(entries[i].path) catch {};
+      try rmdir(entries[i].path) catch {}
     } else {
-      try remove(entries[i].path) catch {};
+      try remove(entries[i].path) catch {}
     }
   }
-  try rmdir(fsTestDir) catch {};
+  try rmdir(fsTestDir) catch {}
 }
 
 // ---- File basic read/write ----
@@ -232,7 +232,7 @@ func fs_fileMode_writeNew() {
 
   // WriteNew must fail when file exists
   var caught = false;
-  try File.create(path, FileMode.WriteNew) catch ex: string { caught = true; };
+  try File.create(path, FileMode.WriteNew) catch ex: string { caught = true; }
   check(caught == true, "fs/fileMode-writeNew-exists-fails");
 
   // WriteNew succeeds for new file

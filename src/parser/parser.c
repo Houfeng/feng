@@ -23,6 +23,10 @@ typedef struct Parser {
      * object literal. Used while parsing control-flow head expressions to
      * preserve the unparenthesized `{` for the required body block. */
     bool suppress_object_literal_suffix;
+    /* When true, a trailing throw statement may use the enclosing `}` as
+     * its terminator. Enabled only while parsing result branches of
+     * if/match/try expressions. */
+    bool allow_trailing_throw_without_semicolon;
 } Parser;
 
 #define APPEND_VALUE(parser, items, count, capacity, value) \
@@ -37,6 +41,10 @@ static const char *const k_tuple_item_names[FENG_TUPLE_MAX_ITEMS] = {
 static FengProgram *parse_program(Parser *parser);
 static FengDecl *parse_declaration(Parser *parser);
 static FengBlock *parse_block(Parser *parser);
+static FengBlock *parse_expression_branch_block(Parser *parser);
+static bool parse_block_statements(Parser *parser,
+                                   FengBlock *block,
+                                   bool allow_trailing_throw_without_semicolon);
 static FengStmt *parse_statement(Parser *parser);
 static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator);
 static FengExpr *parse_expression(Parser *parser);
@@ -3243,7 +3251,9 @@ static bool parse_match_branch_binding_prefix(
     return true;
 }
 
-static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
+static bool parse_match_branch(Parser *parser,
+                               FengMatchBranch *out_branch,
+                               bool expression_form) {
     size_t label_capacity = 0U;
 
     out_branch->token = *parser_current(parser);
@@ -3278,7 +3288,9 @@ static bool parse_match_branch(Parser *parser, FengMatchBranch *out_branch) {
         }
     }
 
-    out_branch->body = parse_block(parser);
+    out_branch->body = expression_form
+                           ? parse_expression_branch_block(parser)
+                           : parse_block(parser);
     if (out_branch->body == NULL) {
         free_match_branch_contents(out_branch);
         return false;
@@ -3346,11 +3358,12 @@ static FengExpr *parse_infix_match_op(Parser *parser, FengToken match_token, Fen
 /* Parses a match body's contents from the current token (after the `{` is
  * already consumed) up to and including the closing `}`. Branches are
  * appended to *branches, and *out_else_block receives the optional else body
- * (NULL if none). */
+ * (NULL if none). Expression form enables result-branch terminator rules. */
 static bool parse_match_body(Parser *parser,
                              FengMatchBranch **branches,
                              size_t *branch_count,
-                             FengBlock **out_else_block) {
+                             FengBlock **out_else_block,
+                             bool expression_form) {
     size_t branch_capacity = 0U;
     bool seen_else = false;
 
@@ -3364,7 +3377,9 @@ static bool parse_match_body(Parser *parser,
                 return false;
             }
             (void)parser_advance(parser);
-            *out_else_block = parse_block(parser);
+            *out_else_block = expression_form
+                                  ? parse_expression_branch_block(parser)
+                                  : parse_block(parser);
             if (*out_else_block == NULL) {
                 return false;
             }
@@ -3372,7 +3387,7 @@ static bool parse_match_body(Parser *parser,
         } else {
             FengMatchBranch branch;
 
-            if (!parse_match_branch(parser, &branch)) {
+            if (!parse_match_branch(parser, &branch, expression_form)) {
                 return false;
             }
             if (!APPEND_VALUE(parser, *branches, *branch_count, branch_capacity, branch)) {
@@ -3561,7 +3576,8 @@ static FengExpr *parse_match_expression(Parser *parser, FengToken match_token) {
     if (!parse_match_body(parser,
                           &expr->as.match_expr.branches,
                           &expr->as.match_expr.branch_count,
-                          &expr->as.match_expr.else_block)) {
+                          &expr->as.match_expr.else_block,
+                          true)) {
         free_expr(expr);
         return NULL;
     }
@@ -3606,24 +3622,9 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
         free_expr(expr);
         return NULL;
     }
-    {
-        size_t capacity = 0U;
-        while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-            FengStmt *stmt = parse_statement(parser);
-            if (stmt == NULL) {
-                free_expr(expr);
-                return NULL;
-            }
-            if (!APPEND_VALUE(parser,
-                              expr->as.if_expr.then_block->statements,
-                              expr->as.if_expr.then_block->statement_count,
-                              capacity,
-                              stmt)) {
-                free_stmt(stmt);
-                free_expr(expr);
-                return NULL;
-            }
-        }
+    if (!parse_block_statements(parser, expr->as.if_expr.then_block, true)) {
+        free_expr(expr);
+        return NULL;
     }
     convert_trailing_yield_stmt_to_expr(parser, expr->as.if_expr.then_block);
     if (!parser_expect(parser,
@@ -3636,7 +3637,7 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
         free_expr(expr);
         return NULL;
     }
-    expr->as.if_expr.else_block = parse_block(parser);
+    expr->as.if_expr.else_block = parse_expression_branch_block(parser);
     if (expr->as.if_expr.else_block == NULL) {
         free_expr(expr);
         return NULL;
@@ -3645,7 +3646,10 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
     return expr;
 }
 
-static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
+/* Parse try/catch and select statement or result-branch rules for catches. */
+static FengExpr *parse_try_expression(Parser *parser,
+                                      FengToken try_token,
+                                      bool expression_form) {
     FengExpr *expr = new_expr(parser, FENG_EXPR_TRY, try_token);
     size_t clause_capacity = 0U;
 
@@ -3685,7 +3689,9 @@ static FengExpr *parse_try_expression(Parser *parser, FengToken try_token) {
                 return NULL;
             }
         }
-        clause.body = parse_block(parser);
+        clause.body = expression_form
+                          ? parse_expression_branch_block(parser)
+                          : parse_block(parser);
         if (clause.body == NULL) {
             free_type_ref(clause.type);
             free_expr(expr);
@@ -3839,7 +3845,7 @@ static FengExpr *parse_primary(Parser *parser) {
             FengExpr *try_expr;
 
             (void)parser_advance(parser);
-            try_expr = parse_try_expression(parser, token);
+            try_expr = parse_try_expression(parser, token, true);
             if (try_expr != NULL) {
                 for (size_t ci = 0U; ci < try_expr->as.try_expr.clause_count; ++ci) {
                     convert_trailing_yield_stmt_to_expr(parser, try_expr->as.try_expr.clauses[ci].body);
@@ -4287,9 +4293,41 @@ static FengExpr *parse_expression(Parser *parser) {
     return parse_or(parser);
 }
 
-static FengBlock *parse_block(Parser *parser) {
-    FengBlock *block = new_block(parser, parser_current_token(parser));
+/* Parse statements into a newly allocated block until its closing brace.
+ * Result-branch mode allows only the final throw statement to omit `;`;
+ * nested ordinary blocks restore the default statement rule independently. */
+static bool parse_block_statements(Parser *parser,
+                                   FengBlock *block,
+                                   bool allow_trailing_throw_without_semicolon) {
     size_t capacity = 0U;
+    bool saved_allow = parser->allow_trailing_throw_without_semicolon;
+    bool success = false;
+
+    parser->allow_trailing_throw_without_semicolon =
+        allow_trailing_throw_without_semicolon;
+    while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
+        FengStmt *stmt = parse_statement(parser);
+
+        if (stmt == NULL) {
+            goto done;
+        }
+        if (!APPEND_VALUE(parser, block->statements, block->statement_count, capacity, stmt)) {
+            free_stmt(stmt);
+            goto done;
+        }
+    }
+    success = true;
+
+done:
+    parser->allow_trailing_throw_without_semicolon = saved_allow;
+    return success;
+}
+
+/* Parse a braced block with the requested trailing-throw terminator rule. */
+static FengBlock *parse_block_with_trailing_throw_rule(
+    Parser *parser,
+    bool allow_trailing_throw_without_semicolon) {
+    FengBlock *block = new_block(parser, parser_current_token(parser));
 
     if (block == NULL) {
         return NULL;
@@ -4299,18 +4337,11 @@ static FengBlock *parse_block(Parser *parser) {
         return NULL;
     }
 
-    while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-        FengStmt *stmt = parse_statement(parser);
-
-        if (stmt == NULL) {
-            free_block(block);
-            return NULL;
-        }
-        if (!APPEND_VALUE(parser, block->statements, block->statement_count, capacity, stmt)) {
-            free_stmt(stmt);
-            free_block(block);
-            return NULL;
-        }
+    if (!parse_block_statements(parser,
+                                block,
+                                allow_trailing_throw_without_semicolon)) {
+        free_block(block);
+        return NULL;
     }
 
     if (!parser_expect(parser, FENG_TOKEN_RBRACE, "SE0005", "expected '}' to close block")) {
@@ -4318,6 +4349,16 @@ static FengBlock *parse_block(Parser *parser) {
         return NULL;
     }
     return block;
+}
+
+/* Parse an ordinary statement block, where throw statements require `;`. */
+static FengBlock *parse_block(Parser *parser) {
+    return parse_block_with_trailing_throw_rule(parser, false);
+}
+
+/* Parse an if/match/try expression result branch. */
+static FengBlock *parse_expression_branch_block(Parser *parser) {
+    return parse_block_with_trailing_throw_rule(parser, true);
 }
 
 static FengStmt *parse_match_statement(Parser *parser) {
@@ -4346,7 +4387,8 @@ static FengStmt *parse_match_statement(Parser *parser) {
     if (!parse_match_body(parser,
                           &stmt->as.match_stmt.branches,
                           &stmt->as.match_stmt.branch_count,
-                          &stmt->as.match_stmt.else_block)) {
+                          &stmt->as.match_stmt.else_block,
+                          false)) {
         free_stmt(stmt);
         return NULL;
     }
@@ -4387,28 +4429,11 @@ static FengStmt *parse_if_statement(Parser *parser) {
             free_stmt(stmt);
             return NULL;
         }
-        {
-            size_t block_capacity = 0U;
-            while (!parser_check(parser, FENG_TOKEN_RBRACE) && !parser_is_at_end(parser)) {
-                FengStmt *body_stmt = parse_statement(parser);
-                if (body_stmt == NULL) {
-                    free_block(clause.block);
-                    free_expr(first_condition);
-                    free_stmt(stmt);
-                    return NULL;
-                }
-                if (!APPEND_VALUE(parser,
-                                  clause.block->statements,
-                                  clause.block->statement_count,
-                                  block_capacity,
-                                  body_stmt)) {
-                    free_stmt(body_stmt);
-                    free_block(clause.block);
-                    free_expr(first_condition);
-                    free_stmt(stmt);
-                    return NULL;
-                }
-            }
+        if (!parse_block_statements(parser, clause.block, false)) {
+            free_block(clause.block);
+            free_expr(first_condition);
+            free_stmt(stmt);
+            return NULL;
         }
         if (!parser_expect(parser, FENG_TOKEN_RBRACE, "SE1106", "expected '}' to close if block")) {
             free_block(clause.block);
@@ -4715,7 +4740,12 @@ static FengStmt *parse_statement(Parser *parser) {
             free_stmt(stmt);
             return NULL;
         }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "SE0001", "throw statements must end with ';'")) {
+        if (!parser_match(parser, FENG_TOKEN_SEMICOLON) &&
+            !(parser->allow_trailing_throw_without_semicolon &&
+              parser_check(parser, FENG_TOKEN_RBRACE))) {
+            (void)parser_error_current(parser,
+                                       "SE0001",
+                                       "throw statements must end with ';'");
             free_stmt(stmt);
             return NULL;
         }
@@ -4750,19 +4780,13 @@ static FengStmt *parse_statement(Parser *parser) {
         if (stmt == NULL) {
             return NULL;
         }
-        stmt->as.expr = parse_try_expression(parser, try_token);
+        stmt->as.expr = parse_try_expression(parser, try_token, false);
         if (stmt->as.expr == NULL) {
             free_stmt(stmt);
             return NULL;
         }
-        /* try...catch ends with '}'; allow omitting ';' at end of block. */
-        if (parser_current_token(parser).kind == FENG_TOKEN_RBRACE) {
-            return stmt;
-        }
-        if (!parser_expect(parser, FENG_TOKEN_SEMICOLON, "SE0001", "try statements must end with ';'")) {
-            free_stmt(stmt);
-            return NULL;
-        }
+        /* The final catch brace delimits the statement, consistently with
+         * other braced control-flow statements. */
         return stmt;
     }
 

@@ -11741,11 +11741,11 @@ static void test_void_try_expression_codegen(void) {
         "}\n"
         "func run_case() {\n"
         "    try fail_i32() catch ex: i32 {\n"
-        "    };\n"
-        "    try noop() catch {};\n"
+        "    }\n"
+        "    try noop() catch {}\n"
         "    try fail() catch ex: string {\n"
         "        noop();\n"
-        "    };\n"
+        "    }\n"
         "}\n";
     FengProgram *program = parse_or_die(kSource, "tests/tryvoid.ff");
     const FengProgram *programs[1] = {program};

@@ -267,6 +267,6 @@ func main(args: string[]) {
   // 异常处理
   try arr[10] catch err {
     print("数组越界异常");
-  };
+  }
 }
 ```

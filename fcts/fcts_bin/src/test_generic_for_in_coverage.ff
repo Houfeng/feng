@@ -75,7 +75,7 @@ func genericForInExceptionalCleanupIsComplete(): bool {
   var caught = false;
   try genericForInThrowWithManagedElements() catch error: string {
     caught = error == "generic-for-in";
-  };
+  }
   return caught && LibAdvancedLifetimeLeaf.createdCount() == 2 &&
          LibAdvancedLifetimeLeaf.finalizedCount() == 2;
 }

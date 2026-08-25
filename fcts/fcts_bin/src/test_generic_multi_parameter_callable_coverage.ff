@@ -129,7 +129,7 @@ func multiCallableExceptionLifetimeIsComplete(): bool {
   var caught = false;
   try throwWithMultiCallableLifetime() catch error: string {
     caught = error == "multi-callable-lifetime";
-  };
+  }
   return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
          LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }

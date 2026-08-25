@@ -221,6 +221,123 @@ static void test_try_expression_with_typed_catches(void) {
     feng_program_free(program);
 }
 
+/* A final catch brace delimits a try/catch statement even when another
+ * statement follows in the same enclosing block. */
+static void test_try_statement_ends_at_final_catch_brace(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    try true catch {}\n"
+        "    try false catch {}\n"
+        "    while false {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    FILE *stream;
+    char buffer[2048];
+    size_t length;
+
+    ASSERT(feng_parse_source(source, strlen(source), "try_stmt_terminator.f", &program, &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 3U);
+    ASSERT(body->statements[0]->kind == FENG_STMT_TRY);
+    ASSERT(body->statements[1]->kind == FENG_STMT_TRY);
+    ASSERT(body->statements[2]->kind == FENG_STMT_WHILE);
+
+    stream = tmpfile();
+    ASSERT(stream != NULL);
+    feng_program_dump(stream, program);
+    ASSERT(fflush(stream) == 0);
+    ASSERT(fseek(stream, 0L, SEEK_SET) == 0);
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, stream);
+    ASSERT(!ferror(stream));
+    buffer[length] = '\0';
+    ASSERT(fclose(stream) == 0);
+    ASSERT(strstr(buffer, "}\n;\n") == NULL);
+
+    feng_program_free(program);
+}
+
+/* Like other braced control-flow statements, try/catch rejects a trailing
+ * semicolon after its final closing brace. */
+static void test_try_statement_rejects_trailing_semicolon(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    try true catch {};\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "try_stmt_semicolon.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, "SE0006") == 0);
+}
+
+/* Result branches of if/match/try expressions may terminate with a throw
+ * statement whose semicolon is omitted before the closing brace. */
+static void test_expression_branch_trailing_throw_omits_semicolon(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(value: int) {\n"
+        "    let if_value = if value > 0 { throw \"if\" } else { 1 };\n"
+        "    let match_value = match value {\n"
+        "        0 { throw \"match\" }\n"
+        "        else { 1 }\n"
+        "    };\n"
+        "    let try_value = try value catch err: string { throw err };\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengExpr *if_expr;
+    const FengExpr *match_expr;
+    const FengExpr *try_expr;
+
+    ASSERT(feng_parse_source(source, strlen(source), "branch_throw_terminator.f", &program, &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 3U);
+
+    if_expr = body->statements[0]->as.binding.initializer;
+    ASSERT(if_expr->kind == FENG_EXPR_IF);
+    ASSERT(if_expr->as.if_expr.then_block->statement_count == 1U);
+    ASSERT(if_expr->as.if_expr.then_block->statements[0]->kind == FENG_STMT_THROW);
+
+    match_expr = body->statements[1]->as.binding.initializer;
+    ASSERT(match_expr->kind == FENG_EXPR_MATCH);
+    ASSERT(match_expr->as.match_expr.branch_count == 1U);
+    ASSERT(match_expr->as.match_expr.branches[0].body->statement_count == 1U);
+    ASSERT(match_expr->as.match_expr.branches[0].body->statements[0]->kind == FENG_STMT_THROW);
+
+    try_expr = body->statements[2]->as.binding.initializer;
+    ASSERT(try_expr->kind == FENG_EXPR_TRY);
+    ASSERT(try_expr->as.try_expr.clause_count == 1U);
+    ASSERT(try_expr->as.try_expr.clauses[0].body->statement_count == 1U);
+    ASSERT(try_expr->as.try_expr.clauses[0].body->statements[0]->kind == FENG_STMT_THROW);
+
+    feng_program_free(program);
+}
+
+/* Ordinary statement blocks keep the general rule that throw requires `;`. */
+static void test_ordinary_block_trailing_throw_requires_semicolon(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    throw \"error\"\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(!feng_parse_source(source, strlen(source), "ordinary_throw_terminator.f", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, "SE0001") == 0);
+}
+
 static void test_try_without_catch_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -3878,6 +3995,10 @@ int main(void) {
     test_statements_and_expressions();
     test_try_block_form_is_rejected();
     test_try_expression_with_typed_catches();
+    test_try_statement_ends_at_final_catch_brace();
+    test_try_statement_rejects_trailing_semicolon();
+    test_expression_branch_trailing_throw_omits_semicolon();
+    test_ordinary_block_trailing_throw_requires_semicolon();
     test_try_without_catch_is_rejected();
     test_defer_block_parses();
     test_defer_without_block_is_rejected();

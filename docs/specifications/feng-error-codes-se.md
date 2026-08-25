@@ -23,7 +23,7 @@
 
 | 新错误码 | 用途 | 涵盖的旧消息 |
 |----------|------|-------------|
-| SE0001 | 缺失分号 | break/continue/return/throw/try/expression statements and local bindings/top-level bindings/import/module/tuple type/spec callable/fit declarations without body must end with ';' |
+| SE0001 | 缺失分号 | break/continue/return/throw/expression statements and local bindings/top-level bindings/import/module/tuple type/spec callable/fit declarations without body must end with ';' |
 | SE0002 | 缺失结构定义标识符 | expected a binding name、expected a function name after 'func'、expected a method name after 'func'、expected a spec name after 'spec'、expected a type name、expected an enum name、expected an enum item name、expected a parameter name、expected a type parameter name、expected an alias name after 'as'、expected an object literal field name、expected an identifier after '.' in a qualified name/member access |
 | SE0003 | 非法结构定义标识符 | expected top-level declaration、expected type member declaration、expected spec member declaration |
 | SE0004 | 类型转换错误 | expected '(' to start cast expression、expected ')' after cast type |

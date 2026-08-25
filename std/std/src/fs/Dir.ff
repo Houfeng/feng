@@ -154,7 +154,7 @@ open type Dir {
     self.closed = true;
     try c_closedir(self.dir) catch {
       // 幂等：忽略 closedir 异常
-    };
+    }
   }
 
   /**

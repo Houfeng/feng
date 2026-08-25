@@ -169,7 +169,7 @@ func verifyCallableValuePairExceptionLifetime(): bool {
   var caught = false;
   try throwWithCallableValuePairLifetime() catch error: string {
     caught = error == "pair-callable-lifetime";
-  };
+  }
   return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
          LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }

@@ -76,7 +76,7 @@ func defer_throw_helper() {
 
 func test_defer_on_throw(): bool {
   reset_defer_log();
-  try defer_throw_helper() catch ex: string {};
+  try defer_throw_helper() catch ex: string {}
   return g_defer_log == "deferred;";
 }
 
@@ -87,7 +87,7 @@ func defer_try_catch_helper(): string {
     defer { result = result + "dOuter;"; }
     try throw_ex_for_defer() catch ex: string {
       result = result + "catch:" + ex + ";";
-    };
+    }
     result = result + "after;";
   }
   return result;

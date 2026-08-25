@@ -241,7 +241,7 @@ func verifyValueMethodExceptionLifetime(): bool {
   var caught = false;
   try throwWithValueMethodLifetime() catch error: string {
     caught = error == "value-method-lifetime";
-  };
+  }
   return caught && LibAdvancedLifetimeLeaf.createdCount() == 1 &&
          LibAdvancedLifetimeLeaf.finalizedCount() == 1;
 }

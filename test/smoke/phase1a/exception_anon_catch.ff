@@ -24,21 +24,21 @@ func main(args: string[]) {
     // anonymous catch as statement: catches any exception
     try throw_i32() catch {
         puts(&"anon-stmt-any");
-    };
+    }
 
     // anonymous catch after specific catch: specific should fire when type matches
     try throw_i32() catch ex: i32 {
         puts(&"specific-i32");
     } catch {
         puts(&"anon-fallback");
-    };
+    }
 
     // anonymous catch fires when specific clause does not match
     try throw_string() catch ex: i32 {
         puts(&"specific-i32");
     } catch {
         puts(&"anon-fallback");
-    };
+    }
 
     // anonymous catch as expression: produce a value
     let v = anon_catch_expr();
