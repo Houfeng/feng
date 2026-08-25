@@ -13659,6 +13659,69 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
     return false;
 }
 
+/* Matches one candidate reference against the requested symbol. Exact symbol
+ * identity remains the default; a concrete type additionally owns the source
+ * names of its constructors and finalizer. The direction is intentional so a
+ * constructor query remains overload-exact. */
+static bool reference_targets_match(const FengLspResolvedTarget *expected,
+                                    const FengLspResolvedTarget *candidate) {
+    if (resolved_targets_equal(expected, candidate)) {
+        return true;
+    }
+    return expected != NULL &&
+           expected->kind == FENG_LSP_RESOLVED_DECL &&
+           expected->decl != NULL &&
+           expected->decl->kind == FENG_DECL_TYPE &&
+           candidate != NULL &&
+           candidate->kind == FENG_LSP_RESOLVED_MEMBER &&
+           candidate->decl == expected->decl &&
+           candidate->member != NULL &&
+           (candidate->member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+            candidate->member->kind == FENG_TYPE_MEMBER_FINALIZER);
+}
+
+/* Returns whether Rename must operate on one complete type-name family. */
+static bool resolved_target_is_type_name_family(
+    const FengLspResolvedTarget *target) {
+    if (target == NULL) {
+        return false;
+    }
+    if (target->kind == FENG_LSP_RESOLVED_DECL) {
+        return target->decl != NULL && target->decl->kind == FENG_DECL_TYPE;
+    }
+    return target->kind == FENG_LSP_RESOLVED_MEMBER &&
+           target->decl != NULL &&
+           target->decl->kind == FENG_DECL_TYPE &&
+           target->member != NULL &&
+           (target->member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR ||
+            target->member->kind == FENG_TYPE_MEMBER_FINALIZER);
+}
+
+/* Promotes a constructor or finalizer Rename target to its exact owner type.
+ * Ordinary methods, including spec methods with the owner's spelling, retain
+ * their original symbol identity. */
+static bool normalize_type_name_family_rename_target(
+    const FengLspResolvedTarget *target,
+    FengLspResolvedTarget *normalized) {
+    if (target == NULL || normalized == NULL) {
+        return false;
+    }
+    *normalized = *target;
+    if (target->kind != FENG_LSP_RESOLVED_MEMBER ||
+        target->member == NULL ||
+        (target->member->kind != FENG_TYPE_MEMBER_CONSTRUCTOR &&
+         target->member->kind != FENG_TYPE_MEMBER_FINALIZER)) {
+        return true;
+    }
+    if (target->decl == NULL || target->decl->kind != FENG_DECL_TYPE) {
+        return false;
+    }
+    memset(normalized, 0, sizeof(*normalized));
+    normalized->kind = FENG_LSP_RESOLVED_DECL;
+    normalized->decl = target->decl;
+    return true;
+}
+
 /* Returns whether one AST-owned type-parameter list contains target. */
 static bool type_param_list_contains(const FengTypeParam *type_params,
                                      size_t type_param_count,
@@ -15560,7 +15623,7 @@ static bool add_reference_if_match(FengLspReferenceList *references,
                                    FengSlice slice,
                                    const FengLspResolvedTarget *expected,
                                    const FengLspResolvedTarget *candidate) {
-    if (!resolved_targets_equal(expected, candidate)) {
+    if (!reference_targets_match(expected, candidate)) {
         return true;
     }
     return reference_list_push_slice(references, source, slice);
@@ -17321,12 +17384,17 @@ static bool collect_references_in_member(const FengLspAnalysisSession *session,
                                          bool include_declaration,
                                          const FengLspResolvedTarget *target,
                                          FengLspReferenceList *references) {
+    FengLspResolvedTarget candidate = {
+        .kind = FENG_LSP_RESOLVED_MEMBER,
+        .decl = owner_decl,
+        .member = member
+    };
+
     if (member == NULL) {
         return true;
     }
-    if (include_declaration && target != NULL &&
-        target->kind == FENG_LSP_RESOLVED_MEMBER &&
-        target->member == member &&
+    if (include_declaration &&
+        reference_targets_match(target, &candidate) &&
         !reference_list_push_slice(references, source, member_name_slice(member))) {
         return false;
     }
@@ -25647,6 +25715,7 @@ static bool build_prepare_rename_from_session(const FengLspAnalysisSession *sess
 
     if (session == NULL || program == NULL ||
         !resolve_target_at(session, program, offset, &target) ||
+        resolved_target_is_type_name_family(&target) ||
         !resolved_target_can_rename(session, &target) ||
         !collect_references(session, true, &target, references)) {
         return false;
@@ -25669,6 +25738,7 @@ static bool build_rename_from_session(const FengLspAnalysisSession *session,
 
     return session != NULL && program != NULL &&
            resolve_target_at(session, program, offset, &target) &&
+           !resolved_target_is_type_name_family(&target) &&
            resolved_target_can_rename(session, &target) &&
            collect_references(session, true, &target, references) &&
            reference_list_find_offset(references, path, offset) != NULL &&
@@ -25687,6 +25757,7 @@ static bool build_prepare_rename_from_workspace(
     FengLspString *json) {
     const FengLspAnalysisSession *origin_session;
     const FengLspAnalysisSession *defining_session;
+    FengLspResolvedTarget requested_target = {0};
     FengLspResolvedTarget target = {0};
     FengLspResolvedTarget defining_target = {0};
     const FengLspReferenceEntry *entry;
@@ -25699,7 +25770,8 @@ static bool build_prepare_rename_from_workspace(
     }
     origin_session = &service->last_successful_analyses[origin_workspace_index]
                           .last_successful_analysis;
-    if (!resolve_target_at(origin_session, program, offset, &target) ||
+    if (!resolve_target_at(origin_session, program, offset, &requested_target) ||
+        !normalize_type_name_family_rename_target(&requested_target, &target) ||
         !collect_workspace_references(service,
                                       origin_workspace_index,
                                       true,
@@ -25737,6 +25809,7 @@ static bool build_rename_from_workspace(
     FengLspString *json) {
     const FengLspAnalysisSession *origin_session;
     const FengLspAnalysisSession *defining_session;
+    FengLspResolvedTarget requested_target = {0};
     FengLspResolvedTarget target = {0};
     FengLspResolvedTarget defining_target = {0};
     size_t defining_workspace_index = origin_workspace_index;
@@ -25748,7 +25821,8 @@ static bool build_rename_from_workspace(
     }
     origin_session = &service->last_successful_analyses[origin_workspace_index]
                           .last_successful_analysis;
-    if (!resolve_target_at(origin_session, program, offset, &target) ||
+    if (!resolve_target_at(origin_session, program, offset, &requested_target) ||
+        !normalize_type_name_family_rename_target(&requested_target, &target) ||
         !collect_workspace_references(service,
                                       origin_workspace_index,
                                       true,

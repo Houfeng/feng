@@ -1,6 +1,6 @@
 # Feng LSP 类型名称族 References / Rename 优化方案
 
-> 状态：待 Review，尚未实施。
+> 状态：已实施并通过自动化、性能与全量回归，待人工代码 Review。
 >
 > 本文档是 Feng 类型、构造函数和终结器名称关联语义在 LSP References / Rename 中的主规范。
 >
@@ -558,47 +558,76 @@ type Widget {
 
 ### Phase 1：规范确认
 
-- [ ] Review 并确认 §1 的 References / Rename 行为矩阵；
-- [ ] 确认类型查询在 `includeDeclaration == true` 时聚合构造和终结器声明；
-- [ ] 确认具体构造 References 保持重载级精度；
-- [ ] 确认同名不同 generic arity 的类型名称族严格隔离；
-- [ ] 确认普通方法、普通重载方法及 spec 同名方法严格排除在类型名称族之外；
-- [ ] 确认从构造、构造调用和终结器发起 Rename 时统一提升到 owner type；
-- [ ] 确认生产代码仅允许修改 `src/cli/lsp/`。
+- [x] Review 并确认 §1 的 References / Rename 行为矩阵；
+- [x] 确认类型查询在 `includeDeclaration == true` 时聚合构造和终结器声明；
+- [x] 确认具体构造 References 保持重载级精度；
+- [x] 确认同名不同 generic arity 的类型名称族严格隔离；
+- [x] 确认普通方法、普通重载方法及 spec 同名方法严格排除在类型名称族之外；
+- [x] 确认从构造、构造调用和终结器发起 Rename 时统一提升到 owner type；
+- [x] 确认生产代码仅允许修改 `src/cli/lsp/`。
 
 ### Phase 2：References 最小实现
 
-- [ ] 增加带注释的非对称 target 匹配 helper；
-- [ ] 将调用 callee 引用匹配接入 helper；
-- [ ] 将构造及终结器声明引用匹配接入 helper；
-- [ ] 保持具体构造与终结器查询为精确成员身份；
-- [ ] 保持 textual prefilter、range 去重和取消检查不变。
+- [x] 增加带注释的非对称 target 匹配 helper；
+- [x] 将调用 callee 引用匹配接入 helper；
+- [x] 将构造及终结器声明引用匹配接入 helper；
+- [x] 保持具体构造与终结器查询为精确成员身份；
+- [x] 保持 textual prefilter、range 去重和取消检查不变。
 
 ### Phase 3：Rename 最小实现
 
-- [ ] 增加带注释的 Rename owner-type 规范化 helper；
-- [ ] Prepare Rename 在稳定目标构建前规范化类型名称族目标；
-- [ ] Rename 在稳定目标构建前规范化类型名称族目标；
-- [ ] current-parse fallback 识别并拒绝无法证明完整的类型名称族 Rename，禁止返回单文件部分 edit；
-- [ ] 复用既有全局 References、完整 session 检查和 WorkspaceEdit 构建；
-- [ ] 确认普通符号 Rename 行为零变化。
+- [x] 增加带注释的 Rename owner-type 规范化 helper；
+- [x] Prepare Rename 在稳定目标构建前规范化类型名称族目标；
+- [x] Rename 在稳定目标构建前规范化类型名称族目标；
+- [x] current-parse fallback 识别并拒绝无法证明完整的类型名称族 Rename，禁止返回单文件部分 edit；
+- [x] 复用既有全局 References、完整 session 检查和 WorkspaceEdit 构建；
+- [x] 确认普通符号 Rename 行为零变化。
 
 ### Phase 4：新增测试
 
-- [ ] 增加 §7.1 单项目 References 用例；
-- [ ] 增加 §7.2 Rename 等价入口用例；
-- [ ] 增加 §7.3 本地项目依赖用例；
-- [ ] 增加 §7.4 `Thickness` 协议回归；
-- [ ] 不修改已有测试用例。
+- [x] 增加 §7.1 References 语义覆盖；
+- [x] 增加 §7.2 Rename 等价入口覆盖；
+- [x] 增加 §7.3 本地项目依赖用例；
+- [x] 完成 §7.4 `Thickness` 真实协议回归；
+- [x] 不修改已有测试用例的断言或预期。
 
 ### Phase 5：验收
 
-- [ ] 执行新增定向测试；
-- [ ] 执行既有 LSP 性能回归；
-- [ ] 在非 Codex 沙箱执行全量 `make test`；
-- [ ] 检查生产变更范围和测试变更范围；
-- [ ] 更新本文档 TODO 状态和实测结果；
+- [x] 执行新增定向测试；
+- [x] 执行既有 LSP 性能回归；
+- [x] 在非 Codex 沙箱执行全量 `make test`；
+- [x] 检查生产变更范围和测试变更范围；
+- [x] 更新本文档 TODO 状态和实测结果；
 - [ ] 完成人工代码 Review。
+
+### 8.1 实施与验收结果
+
+生产实现只修改 `src/cli/lsp/service.c`。新增协议用例位于 `test/cli/test_cli.c`，使用两个 hermetic
+本地项目验证类型宽 References、构造重载精确 References、类型名称族 Rename、终结器、
+`includeDeclaration`、跨 session 稳定身份、generic arity 隔离，以及普通重载方法和 spec 同名方法
+不串线。
+
+真实工程协议复验结果：
+
+| 查询位置 | 总结果 | `test_tui.ff` 结果 |
+| --- | ---: | ---: |
+| `Thickness.ff` 第 9 行类型名 | 29 | 13 |
+| `Thickness.ff` 第 52 行 `int` 构造 | 15 | 13 |
+
+类型查询已包含 `test_tui.ff` 的全部 13 个合法构造调用；具体构造查询仍保持原重载级结果。
+
+性能实测：
+
+- 常规 LSP 交互 P99 为 0.072ms；
+- 1 万、10 万、100 万行矩阵交互 P99 / Max 为 0.387 / 0.439ms；
+- 调度回归 Definition P95 为 0.240ms，queued cancellation 为 1.207ms；
+- inferred callable 和 Completion 恢复专项回归通过；
+- 缓存保留专项的 LSP 场景通过。现有脚本仍读取旧的 `build/<name>.fb` 路径，而当前 `pack` 输出到
+  `build/pkg/<name>.fb`；直接运行会在启动 LSP 前终止。本次只在 `build/` 使用一次性路径适配器完成
+  场景验证，未修改该脚本或任何范围外代码。
+
+非 Codex 沙箱全量 `make test` 通过：UBSan 与普通优化两轮 CLI/LSP 用例均通过，smoke 91/91、
+`std_test` 601/601、FCTS 923/923，perf constraints、增量构建、发布脚本和工具链测试全部通过。
 
 ---
 

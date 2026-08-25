@@ -9669,6 +9669,56 @@ static char *build_lsp_test_position_request(const char *method,
         character);
 }
 
+/* Builds one References request with an explicit declaration policy. */
+static char *build_lsp_test_references_request(unsigned int id,
+                                               const char *uri,
+                                               unsigned int line,
+                                               unsigned int character,
+                                               bool include_declaration) {
+    return dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+        "\"method\":\"textDocument/references\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"context\":{\"includeDeclaration\":%s}}}",
+        id,
+        uri,
+        line,
+        character,
+        include_declaration ? "true" : "false");
+}
+
+/* Builds one Rename request for an already located test token. */
+static char *build_lsp_test_rename_request(unsigned int id,
+                                           const char *uri,
+                                           unsigned int line,
+                                           unsigned int character,
+                                           const char *new_name) {
+    return dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+        "\"method\":\"textDocument/rename\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"},"
+        "\"position\":{\"line\":%u,\"character\":%u},"
+        "\"newName\":\"%s\"}}",
+        id,
+        uri,
+        line,
+        character,
+        new_name);
+}
+
+/* Builds the stable prefix of one Location for response assertions. */
+static char *build_lsp_test_location_marker(const char *uri,
+                                            unsigned int line,
+                                            unsigned int character) {
+    return dup_printf(
+        "\"uri\":\"%s\",\"range\":{\"start\":{\"line\":%u,"
+        "\"character\":%u}",
+        uri,
+        line,
+        character);
+}
+
 /* Asserts one framed LSP response contains text before the next response. */
 static void assert_lsp_test_response_contains(const char *output,
                                               unsigned int id,
@@ -9705,6 +9755,33 @@ static void assert_lsp_test_response_not_contains(const char *output,
     match = strstr(response, unexpected);
     ASSERT(match == NULL || (next_response != NULL && match > next_response));
     free(id_marker);
+}
+
+/* Counts text only inside one framed LSP response. */
+static size_t count_lsp_test_response_occurrences(const char *output,
+                                                  unsigned int id,
+                                                  const char *needle) {
+    char *id_marker = dup_printf("\"id\":%u,", id);
+    const char *response;
+    const char *next_response;
+    const char *cursor;
+    size_t needle_length;
+    size_t count = 0U;
+
+    ASSERT(id_marker != NULL);
+    ASSERT(needle != NULL && needle[0] != '\0');
+    response = strstr(output, id_marker);
+    ASSERT(response != NULL);
+    next_response = strstr(response, "Content-Length:");
+    needle_length = strlen(needle);
+    cursor = response;
+    while ((cursor = strstr(cursor, needle)) != NULL &&
+           (next_response == NULL || cursor < next_response)) {
+        ++count;
+        cursor += needle_length;
+    }
+    free(id_marker);
+    return count;
 }
 
 /* Sends one request and reads through its framed response. */
@@ -21194,6 +21271,584 @@ static void test_lsp_local_project_dependency_generic_fit_member_identity(void) 
     free(dependency_dir);
 }
 
+/* Verifies type-name-family aggregation and Rename promotion across a local
+ * project dependency while preserving constructor overloads, generic arity,
+ * ordinary method overloads, and same-named spec methods. */
+static void test_lsp_local_project_dependency_type_name_family(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kDependencySource =
+        "open module test.lsp.type_family_dependency;\n"
+        "\n"
+        "open type Family {\n"
+        "    open func Family(value: int): void {}\n"
+        "    open func Family(value: string): void {}\n"
+        "    open func regular(value: int): int { return value; }\n"
+        "    open func regular(value: string): string { return value; }\n"
+        "    func ~Family(): void {}\n"
+        "}\n"
+        "\n"
+        "open type Family<T> {\n"
+        "    open func Family(first: T, second: T): void {}\n"
+        "}\n"
+        "\n"
+        "open spec SameName {\n"
+        "    static func SameName(): string;\n"
+        "    func SameName(): int;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.type_family_consumer;\n"
+        "import test.lsp.type_family_dependency;\n"
+        "\n"
+        "open func accept(value: SameName): void {}\n"
+        "\n"
+        "open func exercise(): void {\n"
+        "    let integer = Family(1);\n"
+        "    let textual = Family(\"text\");\n"
+        "    let typed: Family = integer;\n"
+        "    let generic = Family<int>(2, 3);\n"
+        "    let integerResult = integer.regular(3);\n"
+        "    let textualResult = textual.regular(\"value\");\n"
+        "}\n";
+    enum {
+        DEP_TYPE,
+        DEP_INT_CONSTRUCTOR,
+        DEP_STRING_CONSTRUCTOR,
+        DEP_REGULAR_INT,
+        DEP_REGULAR_STRING,
+        DEP_FINALIZER,
+        DEP_GENERIC_TYPE,
+        DEP_GENERIC_CONSTRUCTOR,
+        DEP_SPEC,
+        DEP_SPEC_STATIC_METHOD,
+        DEP_SPEC_INSTANCE_METHOD,
+        DEP_POSITION_COUNT
+    };
+    enum {
+        CONSUMER_SPEC_USE,
+        CONSUMER_INT_CALL,
+        CONSUMER_STRING_CALL,
+        CONSUMER_TYPE_USE,
+        CONSUMER_GENERIC_CALL,
+        CONSUMER_REGULAR_INT_CALL,
+        CONSUMER_REGULAR_STRING_CALL,
+        CONSUMER_POSITION_COUNT
+    };
+    enum {
+        MARK_TYPE,
+        MARK_INT_CONSTRUCTOR,
+        MARK_STRING_CONSTRUCTOR,
+        MARK_REGULAR_INT,
+        MARK_REGULAR_STRING,
+        MARK_FINALIZER,
+        MARK_GENERIC_TYPE,
+        MARK_GENERIC_CONSTRUCTOR,
+        MARK_SPEC,
+        MARK_SPEC_STATIC_METHOD,
+        MARK_SPEC_INSTANCE_METHOD,
+        MARK_SPEC_USE,
+        MARK_INT_CALL,
+        MARK_STRING_CALL,
+        MARK_TYPE_USE,
+        MARK_GENERIC_CALL,
+        MARK_REGULAR_INT_CALL,
+        MARK_REGULAR_STRING_CALL,
+        MARK_COUNT
+    };
+    char template_path[] = "temp/feng_lsp_type_family_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *dependency_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *dependency_uri;
+    char *consumer_uri;
+    char *escaped_dependency;
+    char *escaped_consumer;
+    char *did_open_dependency;
+    char *did_open_consumer;
+    unsigned int dependency_lines[DEP_POSITION_COUNT];
+    unsigned int dependency_characters[DEP_POSITION_COUNT];
+    unsigned int consumer_lines[CONSUMER_POSITION_COUNT];
+    unsigned int consumer_characters[CONSUMER_POSITION_COUNT];
+    char *markers[MARK_COUNT];
+    char *request_storage[19];
+    char *shutdown;
+    const char *requests[21];
+    char *output;
+    size_t index;
+    char *remove_error = NULL;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    dependency_source_path = path_join(dependency_src_dir, "family.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_type_family_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dependency_source_path, kDependencySource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_type_family_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_type_family_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+
+    find_line_character(kDependencySource,
+                        "open type Family {",
+                        strlen("open type "),
+                        &dependency_lines[DEP_TYPE],
+                        &dependency_characters[DEP_TYPE]);
+    find_line_character(kDependencySource,
+                        "    open func Family(value: int): void {}",
+                        strlen("    open func "),
+                        &dependency_lines[DEP_INT_CONSTRUCTOR],
+                        &dependency_characters[DEP_INT_CONSTRUCTOR]);
+    find_line_character(kDependencySource,
+                        "    open func Family(value: string): void {}",
+                        strlen("    open func "),
+                        &dependency_lines[DEP_STRING_CONSTRUCTOR],
+                        &dependency_characters[DEP_STRING_CONSTRUCTOR]);
+    find_line_character(kDependencySource,
+                        "    open func regular(value: int): int { return value; }",
+                        strlen("    open func "),
+                        &dependency_lines[DEP_REGULAR_INT],
+                        &dependency_characters[DEP_REGULAR_INT]);
+    find_line_character(kDependencySource,
+                        "    open func regular(value: string): string { return value; }",
+                        strlen("    open func "),
+                        &dependency_lines[DEP_REGULAR_STRING],
+                        &dependency_characters[DEP_REGULAR_STRING]);
+    find_line_character(kDependencySource,
+                        "    func ~Family(): void {}",
+                        strlen("    func ~"),
+                        &dependency_lines[DEP_FINALIZER],
+                        &dependency_characters[DEP_FINALIZER]);
+    find_line_character(kDependencySource,
+                        "open type Family<T> {",
+                        strlen("open type "),
+                        &dependency_lines[DEP_GENERIC_TYPE],
+                        &dependency_characters[DEP_GENERIC_TYPE]);
+    find_line_character(kDependencySource,
+                        "    open func Family(first: T, second: T): void {}",
+                        strlen("    open func "),
+                        &dependency_lines[DEP_GENERIC_CONSTRUCTOR],
+                        &dependency_characters[DEP_GENERIC_CONSTRUCTOR]);
+    find_line_character(kDependencySource,
+                        "open spec SameName {",
+                        strlen("open spec "),
+                        &dependency_lines[DEP_SPEC],
+                        &dependency_characters[DEP_SPEC]);
+    find_line_character(kDependencySource,
+                        "    static func SameName(): string;",
+                        strlen("    static func "),
+                        &dependency_lines[DEP_SPEC_STATIC_METHOD],
+                        &dependency_characters[DEP_SPEC_STATIC_METHOD]);
+    find_line_character(kDependencySource,
+                        "    func SameName(): int;",
+                        strlen("    func "),
+                        &dependency_lines[DEP_SPEC_INSTANCE_METHOD],
+                        &dependency_characters[DEP_SPEC_INSTANCE_METHOD]);
+    find_line_character(kConsumerSource,
+                        "open func accept(value: SameName): void {}",
+                        strlen("open func accept(value: "),
+                        &consumer_lines[CONSUMER_SPEC_USE],
+                        &consumer_characters[CONSUMER_SPEC_USE]);
+    find_line_character(kConsumerSource,
+                        "    let integer = Family(1);",
+                        strlen("    let integer = "),
+                        &consumer_lines[CONSUMER_INT_CALL],
+                        &consumer_characters[CONSUMER_INT_CALL]);
+    find_line_character(kConsumerSource,
+                        "    let textual = Family(\"text\");",
+                        strlen("    let textual = "),
+                        &consumer_lines[CONSUMER_STRING_CALL],
+                        &consumer_characters[CONSUMER_STRING_CALL]);
+    find_line_character(kConsumerSource,
+                        "    let typed: Family = integer;",
+                        strlen("    let typed: "),
+                        &consumer_lines[CONSUMER_TYPE_USE],
+                        &consumer_characters[CONSUMER_TYPE_USE]);
+    find_line_character(kConsumerSource,
+                        "    let generic = Family<int>(2, 3);",
+                        strlen("    let generic = "),
+                        &consumer_lines[CONSUMER_GENERIC_CALL],
+                        &consumer_characters[CONSUMER_GENERIC_CALL]);
+    find_line_character(kConsumerSource,
+                        "    let integerResult = integer.regular(3);",
+                        strlen("    let integerResult = integer."),
+                        &consumer_lines[CONSUMER_REGULAR_INT_CALL],
+                        &consumer_characters[CONSUMER_REGULAR_INT_CALL]);
+    find_line_character(kConsumerSource,
+                        "    let textualResult = textual.regular(\"value\");",
+                        strlen("    let textualResult = textual."),
+                        &consumer_lines[CONSUMER_REGULAR_STRING_CALL],
+                        &consumer_characters[CONSUMER_REGULAR_STRING_CALL]);
+
+    dependency_uri = file_uri_from_path(dependency_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_dependency = json_escape_text(kDependencySource);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    did_open_dependency = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        dependency_uri,
+        escaped_dependency);
+    did_open_consumer = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+
+    markers[MARK_TYPE] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_TYPE],
+        dependency_characters[DEP_TYPE]);
+    markers[MARK_INT_CONSTRUCTOR] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_INT_CONSTRUCTOR],
+        dependency_characters[DEP_INT_CONSTRUCTOR]);
+    markers[MARK_STRING_CONSTRUCTOR] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_STRING_CONSTRUCTOR],
+        dependency_characters[DEP_STRING_CONSTRUCTOR]);
+    markers[MARK_REGULAR_INT] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_REGULAR_INT],
+        dependency_characters[DEP_REGULAR_INT]);
+    markers[MARK_REGULAR_STRING] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_REGULAR_STRING],
+        dependency_characters[DEP_REGULAR_STRING]);
+    markers[MARK_FINALIZER] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_FINALIZER],
+        dependency_characters[DEP_FINALIZER]);
+    markers[MARK_GENERIC_TYPE] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_GENERIC_TYPE],
+        dependency_characters[DEP_GENERIC_TYPE]);
+    markers[MARK_GENERIC_CONSTRUCTOR] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_GENERIC_CONSTRUCTOR],
+        dependency_characters[DEP_GENERIC_CONSTRUCTOR]);
+    markers[MARK_SPEC] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_SPEC],
+        dependency_characters[DEP_SPEC]);
+    markers[MARK_SPEC_STATIC_METHOD] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_SPEC_STATIC_METHOD],
+        dependency_characters[DEP_SPEC_STATIC_METHOD]);
+    markers[MARK_SPEC_INSTANCE_METHOD] = build_lsp_test_location_marker(
+        dependency_uri,
+        dependency_lines[DEP_SPEC_INSTANCE_METHOD],
+        dependency_characters[DEP_SPEC_INSTANCE_METHOD]);
+    markers[MARK_SPEC_USE] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_SPEC_USE],
+        consumer_characters[CONSUMER_SPEC_USE]);
+    markers[MARK_INT_CALL] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_INT_CALL],
+        consumer_characters[CONSUMER_INT_CALL]);
+    markers[MARK_STRING_CALL] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_STRING_CALL],
+        consumer_characters[CONSUMER_STRING_CALL]);
+    markers[MARK_TYPE_USE] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_TYPE_USE],
+        consumer_characters[CONSUMER_TYPE_USE]);
+    markers[MARK_GENERIC_CALL] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_GENERIC_CALL],
+        consumer_characters[CONSUMER_GENERIC_CALL]);
+    markers[MARK_REGULAR_INT_CALL] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_REGULAR_INT_CALL],
+        consumer_characters[CONSUMER_REGULAR_INT_CALL]);
+    markers[MARK_REGULAR_STRING_CALL] = build_lsp_test_location_marker(
+        consumer_uri,
+        consumer_lines[CONSUMER_REGULAR_STRING_CALL],
+        consumer_characters[CONSUMER_REGULAR_STRING_CALL]);
+
+    request_storage[0] = build_lsp_test_references_request(
+        2U,
+        dependency_uri,
+        dependency_lines[DEP_TYPE],
+        dependency_characters[DEP_TYPE],
+        true);
+    request_storage[1] = build_lsp_test_references_request(
+        3U,
+        dependency_uri,
+        dependency_lines[DEP_TYPE],
+        dependency_characters[DEP_TYPE],
+        false);
+    request_storage[2] = build_lsp_test_references_request(
+        4U,
+        dependency_uri,
+        dependency_lines[DEP_INT_CONSTRUCTOR],
+        dependency_characters[DEP_INT_CONSTRUCTOR],
+        true);
+    request_storage[3] = build_lsp_test_references_request(
+        5U,
+        dependency_uri,
+        dependency_lines[DEP_STRING_CONSTRUCTOR],
+        dependency_characters[DEP_STRING_CONSTRUCTOR],
+        true);
+    request_storage[4] = build_lsp_test_references_request(
+        6U,
+        dependency_uri,
+        dependency_lines[DEP_FINALIZER],
+        dependency_characters[DEP_FINALIZER],
+        true);
+    request_storage[5] = build_lsp_test_references_request(
+        7U,
+        dependency_uri,
+        dependency_lines[DEP_GENERIC_TYPE],
+        dependency_characters[DEP_GENERIC_TYPE],
+        true);
+    request_storage[6] = build_lsp_test_references_request(
+        8U,
+        dependency_uri,
+        dependency_lines[DEP_REGULAR_INT],
+        dependency_characters[DEP_REGULAR_INT],
+        true);
+    request_storage[7] = build_lsp_test_references_request(
+        9U,
+        dependency_uri,
+        dependency_lines[DEP_SPEC],
+        dependency_characters[DEP_SPEC],
+        true);
+    request_storage[8] = build_lsp_test_references_request(
+        10U,
+        dependency_uri,
+        dependency_lines[DEP_SPEC_INSTANCE_METHOD],
+        dependency_characters[DEP_SPEC_INSTANCE_METHOD],
+        true);
+    request_storage[9] = build_lsp_test_rename_request(
+        11U,
+        dependency_uri,
+        dependency_lines[DEP_TYPE],
+        dependency_characters[DEP_TYPE],
+        "RenamedFamily");
+    request_storage[10] = build_lsp_test_rename_request(
+        12U,
+        dependency_uri,
+        dependency_lines[DEP_INT_CONSTRUCTOR],
+        dependency_characters[DEP_INT_CONSTRUCTOR],
+        "RenamedFamily");
+    request_storage[11] = build_lsp_test_rename_request(
+        13U,
+        consumer_uri,
+        consumer_lines[CONSUMER_INT_CALL],
+        consumer_characters[CONSUMER_INT_CALL],
+        "RenamedFamily");
+    request_storage[12] = build_lsp_test_rename_request(
+        14U,
+        dependency_uri,
+        dependency_lines[DEP_FINALIZER],
+        dependency_characters[DEP_FINALIZER],
+        "RenamedFamily");
+    request_storage[13] = build_lsp_test_rename_request(
+        15U,
+        dependency_uri,
+        dependency_lines[DEP_GENERIC_TYPE],
+        dependency_characters[DEP_GENERIC_TYPE],
+        "RenamedGeneric");
+    request_storage[14] = build_lsp_test_rename_request(
+        16U,
+        dependency_uri,
+        dependency_lines[DEP_REGULAR_INT],
+        dependency_characters[DEP_REGULAR_INT],
+        "renamedRegular");
+    request_storage[15] = build_lsp_test_rename_request(
+        17U,
+        dependency_uri,
+        dependency_lines[DEP_SPEC],
+        dependency_characters[DEP_SPEC],
+        "RenamedSpec");
+    request_storage[16] = build_lsp_test_rename_request(
+        18U,
+        dependency_uri,
+        dependency_lines[DEP_SPEC_INSTANCE_METHOD],
+        dependency_characters[DEP_SPEC_INSTANCE_METHOD],
+        "renamedMember");
+    request_storage[17] = build_lsp_test_position_request(
+        "textDocument/prepareRename",
+        19U,
+        dependency_uri,
+        kDependencySource,
+        "    func ~Family(): void {}",
+        strlen("    func ~"));
+    request_storage[18] = build_lsp_test_references_request(
+        20U,
+        consumer_uri,
+        consumer_lines[CONSUMER_INT_CALL],
+        consumer_characters[CONSUMER_INT_CALL],
+        true);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\","
+        "\"params\":null}");
+    for (index = 0U; index < 19U; ++index) {
+        ASSERT(request_storage[index] != NULL);
+        requests[index] = request_storage[index];
+    }
+    ASSERT(shutdown != NULL);
+    requests[19] = shutdown;
+    requests[20] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open_dependency,
+        did_open_consumer,
+        "textDocument/references",
+        dependency_uri,
+        dependency_lines[DEP_TYPE],
+        dependency_characters[DEP_TYPE],
+        consumer_uri,
+        requests,
+        21U,
+        NULL);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 2U, "\"uri\":") == 7U);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_TYPE]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_INT_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_STRING_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_FINALIZER]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_INT_CALL]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_STRING_CALL]);
+    assert_lsp_test_response_contains(output, 2U, markers[MARK_TYPE_USE]);
+    assert_lsp_test_response_not_contains(output, 2U, markers[MARK_GENERIC_TYPE]);
+    assert_lsp_test_response_not_contains(output, 2U, markers[MARK_GENERIC_CALL]);
+    assert_lsp_test_response_not_contains(output, 2U, markers[MARK_REGULAR_INT]);
+    assert_lsp_test_response_not_contains(output, 2U, markers[MARK_SPEC_INSTANCE_METHOD]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 3U, "\"uri\":") == 3U);
+    assert_lsp_test_response_not_contains(output, 3U, dependency_uri);
+    assert_lsp_test_response_contains(output, 3U, markers[MARK_INT_CALL]);
+    assert_lsp_test_response_contains(output, 3U, markers[MARK_STRING_CALL]);
+    assert_lsp_test_response_contains(output, 3U, markers[MARK_TYPE_USE]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 4U, "\"uri\":") == 2U);
+    assert_lsp_test_response_contains(output, 4U, markers[MARK_INT_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 4U, markers[MARK_INT_CALL]);
+    assert_lsp_test_response_not_contains(output, 4U, markers[MARK_TYPE]);
+    assert_lsp_test_response_not_contains(output, 4U, markers[MARK_STRING_CALL]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 5U, "\"uri\":") == 2U);
+    assert_lsp_test_response_contains(output, 5U, markers[MARK_STRING_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 5U, markers[MARK_STRING_CALL]);
+    assert_lsp_test_response_not_contains(output, 5U, markers[MARK_INT_CALL]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 6U, "\"uri\":") == 1U);
+    assert_lsp_test_response_contains(output, 6U, markers[MARK_FINALIZER]);
+    assert_lsp_test_response_not_contains(output, 6U, markers[MARK_TYPE]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 7U, "\"uri\":") == 3U);
+    assert_lsp_test_response_contains(output, 7U, markers[MARK_GENERIC_TYPE]);
+    assert_lsp_test_response_contains(output, 7U, markers[MARK_GENERIC_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 7U, markers[MARK_GENERIC_CALL]);
+    assert_lsp_test_response_not_contains(output, 7U, markers[MARK_TYPE]);
+    assert_lsp_test_response_not_contains(output, 7U, markers[MARK_INT_CALL]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 8U, "\"uri\":") == 2U);
+    assert_lsp_test_response_contains(output, 8U, markers[MARK_REGULAR_INT]);
+    assert_lsp_test_response_contains(output, 8U, markers[MARK_REGULAR_INT_CALL]);
+    assert_lsp_test_response_not_contains(output, 8U, markers[MARK_REGULAR_STRING]);
+    assert_lsp_test_response_not_contains(output, 8U, markers[MARK_REGULAR_STRING_CALL]);
+    assert_lsp_test_response_not_contains(output, 8U, markers[MARK_TYPE]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 9U, "\"uri\":") == 2U);
+    assert_lsp_test_response_contains(output, 9U, markers[MARK_SPEC]);
+    assert_lsp_test_response_contains(output, 9U, markers[MARK_SPEC_USE]);
+    assert_lsp_test_response_not_contains(output, 9U, markers[MARK_SPEC_STATIC_METHOD]);
+    assert_lsp_test_response_not_contains(output, 9U, markers[MARK_SPEC_INSTANCE_METHOD]);
+
+    ASSERT(count_lsp_test_response_occurrences(output, 10U, "\"uri\":") == 1U);
+    assert_lsp_test_response_contains(output, 10U, markers[MARK_SPEC_INSTANCE_METHOD]);
+    assert_lsp_test_response_not_contains(output, 10U, markers[MARK_SPEC]);
+    assert_lsp_test_response_not_contains(output, 10U, markers[MARK_SPEC_STATIC_METHOD]);
+
+    for (index = 11U; index <= 14U; ++index) {
+        ASSERT(count_lsp_test_response_occurrences(
+                   output, (unsigned int)index, "\"newText\":\"RenamedFamily\"") == 7U);
+        assert_lsp_test_response_contains(output, (unsigned int)index, dependency_uri);
+        assert_lsp_test_response_contains(output, (unsigned int)index, consumer_uri);
+    }
+    ASSERT(count_lsp_test_response_occurrences(
+               output, 15U, "\"newText\":\"RenamedGeneric\"") == 3U);
+    ASSERT(count_lsp_test_response_occurrences(
+               output, 16U, "\"newText\":\"renamedRegular\"") == 2U);
+    ASSERT(count_lsp_test_response_occurrences(
+               output, 17U, "\"newText\":\"RenamedSpec\"") == 2U);
+    ASSERT(count_lsp_test_response_occurrences(
+               output, 18U, "\"newText\":\"renamedMember\"") == 1U);
+    assert_lsp_test_response_contains(output, 15U, dependency_uri);
+    assert_lsp_test_response_contains(output, 15U, consumer_uri);
+    assert_lsp_test_response_contains(output, 16U, dependency_uri);
+    assert_lsp_test_response_contains(output, 16U, consumer_uri);
+    assert_lsp_test_response_contains(output, 17U, dependency_uri);
+    assert_lsp_test_response_contains(output, 17U, consumer_uri);
+    assert_lsp_test_response_contains(output, 18U, dependency_uri);
+    assert_lsp_test_response_not_contains(output, 18U, consumer_uri);
+    assert_lsp_test_response_contains(output, 19U, "\"placeholder\":\"Family\"");
+    ASSERT(count_lsp_test_response_occurrences(output, 20U, "\"uri\":") == 2U);
+    assert_lsp_test_response_contains(output, 20U, markers[MARK_INT_CONSTRUCTOR]);
+    assert_lsp_test_response_contains(output, 20U, markers[MARK_INT_CALL]);
+    assert_lsp_test_response_not_contains(output, 20U, markers[MARK_STRING_CALL]);
+
+    free(output);
+    free(shutdown);
+    for (index = 0U; index < 19U; ++index) {
+        free(request_storage[index]);
+    }
+    for (index = 0U; index < MARK_COUNT; ++index) {
+        free(markers[index]);
+    }
+    free(did_open_consumer);
+    free(did_open_dependency);
+    free(escaped_consumer);
+    free(escaped_dependency);
+    free(consumer_uri);
+    free(dependency_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(dependency_source_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 /* State used by the ordered cache-lifecycle protocol assertions. */
 typedef struct LspWorkspaceCacheLifecycleAction {
     const char *dependency_uri;
@@ -21652,6 +22307,7 @@ int main(void) {
     test_lsp_hover_inferred_callable_across_dependency_boundaries();
     test_lsp_local_project_dependency_workspace_queries();
     test_lsp_local_project_dependency_generic_fit_member_identity();
+    test_lsp_local_project_dependency_type_name_family();
     test_lsp_local_project_dependency_cache_lifecycle();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
