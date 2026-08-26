@@ -1298,6 +1298,14 @@ typedef struct Local {
     CGType   *type;
     bool      is_param; /* parameters are not released by the frame (caller owns) */
     bool      is_unknown_exception;
+    /* Whether source-level mutability is known for this local. Compiler-only
+     * temporaries leave this false; user bindings, parameters and `self`
+     * record their declared mutability explicitly. */
+    bool      binding_mutability_known;
+    /* True only for a source-level `var` binding whose slot may be rebound.
+     * This compile-time fact lets assignment lowering prove when a managed
+     * reference identity remains stable without adding ARC operations. */
+    bool      binding_is_rebindable;
     /* The C expression names an address that already points at the Feng
      * value's storage. Taking its address again would pass a pointer to the
      * storage pointer instead of a pointer to the value. */
@@ -1358,19 +1366,40 @@ static Scope *scope_push(Scope *parent) {
     return s;
 }
 
+/* Release every heap-owned metadata field of one compiler local record. */
+static void local_metadata_free(Local *local) {
+    if (local == NULL) {
+        return;
+    }
+    free(local->name);
+    free(local->c_name);
+    free(local->capture_cell_c_name);
+    free(local->capture_cell_struct_name);
+    free(local->capture_cell_desc_name);
+    free(local->erased_generic_descriptor_c_name);
+    free(local->erased_generic_size_c_name);
+    free(local->reified_descriptor_c_name);
+    free(local->reified_size_c_name);
+    cgtype_free(local->type);
+    memset(local, 0, sizeof(*local));
+}
+
+/* Discard compiler metadata for locals at and after `new_count`. Generated
+ * runtime cleanup must already have been emitted for every owning entry. */
+static void scope_discard_suffix(Scope *scope, size_t new_count) {
+    if (scope == NULL || new_count > scope->count) {
+        return;
+    }
+    for (size_t index = scope->count; index > new_count; --index) {
+        local_metadata_free(&scope->items[index - 1U]);
+    }
+    scope->count = new_count;
+}
+
 static void scope_pop_free(Scope *s) {
     if (!s) return;
     for (size_t i = 0; i < s->count; i++) {
-        free(s->items[i].name);
-        free(s->items[i].c_name);
-        free(s->items[i].capture_cell_c_name);
-        free(s->items[i].capture_cell_struct_name);
-        free(s->items[i].capture_cell_desc_name);
-        free(s->items[i].erased_generic_descriptor_c_name);
-        free(s->items[i].erased_generic_size_c_name);
-        free(s->items[i].reified_descriptor_c_name);
-        free(s->items[i].reified_size_c_name);
-        cgtype_free(s->items[i].type);
+        local_metadata_free(&s->items[i]);
     }
     free(s->items);
     free(s);
@@ -1391,6 +1420,8 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->type = type;
     l->is_param = is_param;
     l->is_unknown_exception = false;
+    l->binding_mutability_known = false;
+    l->binding_is_rebindable = false;
     l->is_storage_address = false;
     l->uses_erased_generic_storage = false;
     l->erased_generic_cleanup_aggregate_only = false;
@@ -1404,6 +1435,33 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->capture_cell_desc_name = NULL;
     l->capture_cell_uses_dynamic_storage = false;
     return l->name && l->c_name;
+}
+
+/* Record source-level mutability for the most recently registered local.
+ * FENG_MUTABILITY_DEFAULT is the immutable default used by parameters. */
+static bool scope_mark_last_binding_mutability(Scope *s,
+                                               FengMutability mutability) {
+    if (s == NULL || s->count == 0U) {
+        return false;
+    }
+    s->items[s->count - 1U].binding_mutability_known = true;
+    s->items[s->count - 1U].binding_is_rebindable =
+        mutability == FENG_MUTABILITY_VAR;
+    return true;
+}
+
+/* Copy already-resolved binding mutability onto the most recent alias.
+ * Unknown compiler-only sources remain unknown and therefore conservative. */
+static bool scope_copy_last_binding_mutability(Scope *s,
+                                               const Local *source) {
+    if (s == NULL || s->count == 0U || source == NULL) {
+        return false;
+    }
+    s->items[s->count - 1U].binding_mutability_known =
+        source->binding_mutability_known;
+    s->items[s->count - 1U].binding_is_rebindable =
+        source->binding_is_rebindable;
+    return true;
 }
 
 /* Record that the C expression of the most recently registered local already
@@ -18547,6 +18605,10 @@ struct ExprResult {
      * a temporary and release after use. Meaningful for managed and
      * aggregate types. */
     bool    owns_ref;
+    /* For a borrowed managed result, true when compile-time mutability facts
+     * prove that its reference identity and owning path cannot change while
+     * later subexpressions of the current statement are evaluated. */
+    bool    managed_identity_is_stable;
     /* True when the result has stable storage for the current statement. */
     bool    is_addressable;
     /* True when c_expr itself is the address of the Feng value storage.
@@ -18784,6 +18846,7 @@ static void er_init(ExprResult *r) {
     r->c_expr = NULL;
     r->type = NULL;
     r->owns_ref = false;
+    r->managed_identity_is_stable = false;
     r->is_addressable = false;
     r->is_storage_address = false;
     r->uses_erased_generic_storage = false;
@@ -19357,6 +19420,8 @@ static bool cg_emit_imported_binding_expr(CG *cg,
     buf_append_fmt(cg->cur_body, "    %s();\n", ensure_init_name);
     out->c_expr = slot_name;
     out->owns_ref = false;
+    out->managed_identity_is_stable =
+        decl->as.binding.mutability != FENG_MUTABILITY_VAR;
     out->is_addressable = true;
     free(ensure_init_name);
     return true;
@@ -19521,6 +19586,7 @@ static void er_free(ExprResult *r) {
     r->c_expr = NULL;
     r->type = NULL;
     r->owns_ref = false;
+    r->managed_identity_is_stable = false;
     r->is_addressable = false;
     r->is_storage_address = false;
     r->uses_erased_generic_storage = false;
@@ -20072,6 +20138,8 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
         return storage_name;
     }
 
+    bool adopts_owned_managed_identity =
+        cgtype_is_managed(r->type) && r->owns_ref;
     char *tmp = cg_fresh_temp(cg, prefix);
     if (!tmp) return NULL;
     char *cty = cg_ctype_dup(r->type);
@@ -20130,6 +20198,11 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     free(r->c_expr);
     r->c_expr = strdup(tmp);
     r->owns_ref = false;
+    if (adopts_owned_managed_identity) {
+        /* The scope-tracked local now owns the former +1 result, so later
+         * code cannot invalidate this reference by rebinding another slot. */
+        r->managed_identity_is_stable = true;
+    }
     r->is_addressable = true;
     return tmp;
 }
@@ -22347,7 +22420,8 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                         captures[i]->capture_cell_struct_name,
                                         captures[i]->capture_cell_desc_name,
                                         captures[i]->type,
-                                        dynamic_capture)) {
+                                        dynamic_capture) ||
+            !scope_copy_last_binding_mutability(fn_scope, captures[i])) {
             buf_free(&cell_expr);
             buf_free(&value_expr);
             free(capture_descriptor_name);
@@ -22460,7 +22534,9 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                !scope_mark_last_binding_mutability(fn_scope,
+                                                    param->mutability)) {
                 free(param_expr);
                 goto cleanup;
             }
@@ -22470,7 +22546,9 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         char *param_name = strndup(param->name.data, param->name.length);
         CGType *param_type = cgtype_clone(spec->callable_param_types[i]);
         if (param_name == NULL || param_type == NULL ||
-            !scope_add(fn_scope, param_name, param_expr, param_type, true)) {
+            !scope_add(fn_scope, param_name, param_expr, param_type, true) ||
+            !scope_mark_last_binding_mutability(fn_scope,
+                                                param->mutability)) {
             free(param_name);
             free(param_expr);
             cgtype_free(param_type);
@@ -22828,6 +22906,8 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = strdup(l->c_name);
         out->type = cgtype_clone(l->type);
         out->owns_ref = false;  /* borrow from local slot */
+        out->managed_identity_is_stable =
+            l->binding_mutability_known && !l->binding_is_rebindable;
         out->is_addressable = true;
         out->is_storage_address = l->is_storage_address;
         out->uses_erased_generic_storage =
@@ -22855,6 +22935,7 @@ static bool cg_emit_identifier(CG *cg, const FengExpr *e, ExprResult *out) {
         out->c_expr = cg_module_binding_slot_expr_dup(mb);
         out->type = cgtype_clone(mb->type);
         out->owns_ref = false;  /* borrow from static slot */
+        out->managed_identity_is_stable = !mb->is_var;
         out->is_addressable = true;
         return out->c_expr && out->type;
     }
@@ -24369,6 +24450,7 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = strdup(l->c_name);
             out->type = cgtype_clone(l->type);
             out->owns_ref = false;
+            out->managed_identity_is_stable = true;
             out->is_addressable = true;
             /* `self` is a dedicated AST node, but its lowered storage form is
              * still owned by the scope binding. In particular, a shared
@@ -30008,6 +30090,17 @@ static bool cg_emit_spec_field_borrow(CG *cg,
             out->reified_descriptor_c_name != NULL);
 }
 
+/* Return whether an immutable field reached through a stable receiver keeps
+ * the same managed identity while later subexpressions are evaluated. */
+static bool cg_user_field_managed_identity_is_stable(
+    const ExprResult *receiver,
+    const UserField *field) {
+    return receiver != NULL && receiver->managed_identity_is_stable &&
+           field != NULL && field->member != NULL &&
+           field->member->kind == FENG_TYPE_MEMBER_FIELD &&
+           field->member->as.field.mutability == FENG_MUTABILITY_LET;
+}
+
 /* Borrow one already-evaluated user field while preserving the receiver's
  * concrete storage authority. Shared generic bodies must use descriptor
  * offsets for every field of a reified layout, including fixed-size fields
@@ -30108,6 +30201,8 @@ static bool cg_emit_user_field_borrow(CG *cg,
             out->c_expr = value.data;
             out->type = cgtype_clone(field->type);
             out->owns_ref = false;
+            out->managed_identity_is_stable =
+                cg_user_field_managed_identity_is_stable(receiver, field);
             out->is_addressable = receiver->is_addressable;
             out->is_storage_address =
                 field->type != NULL &&
@@ -30135,6 +30230,8 @@ static bool cg_emit_user_field_borrow(CG *cg,
         }
         out->type = cgtype_clone(field->type);
         out->owns_ref = false;
+        out->managed_identity_is_stable =
+            cg_user_field_managed_identity_is_stable(receiver, field);
         out->is_addressable = receiver->is_addressable;
         er_free(receiver);
         return out->c_expr != NULL && out->type != NULL;
@@ -30206,6 +30303,8 @@ static bool cg_emit_user_field_borrow(CG *cg,
         out->c_expr = value.data;
         out->type = cgtype_clone(field->type);
         out->owns_ref = false;
+        out->managed_identity_is_stable =
+            cg_user_field_managed_identity_is_stable(receiver, field);
         out->is_addressable = true;
         out->is_storage_address =
             field->type != NULL &&
@@ -30242,6 +30341,8 @@ static bool cg_emit_user_field_borrow(CG *cg,
     }
     out->type = cgtype_clone(field->type);
     out->owns_ref = false;
+    out->managed_identity_is_stable =
+        cg_user_field_managed_identity_is_stable(receiver, field);
     out->is_addressable = true;
     out->is_storage_address =
         field->type != NULL && field->type->kind == CG_TYPE_GENERIC_PARAM;
@@ -30346,6 +30447,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
                 free(state_name);
                 out->type = cgtype_clone(binding->type);
                 out->owns_ref = false;
+                out->managed_identity_is_stable = !binding->is_var;
                 out->is_addressable = true;
                 return out->c_expr != NULL && out->type != NULL;
             }
@@ -30355,6 +30457,7 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
             out->c_expr = strdup(binding->c_name);
             out->type = cgtype_clone(binding->type);
             out->owns_ref = false;
+            out->managed_identity_is_stable = !binding->is_var;
             out->is_addressable = true;
             return out->c_expr != NULL && out->type != NULL;
         }
@@ -30430,6 +30533,9 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         }
         out->type = field_type;
         out->owns_ref = false;
+        out->managed_identity_is_stable =
+            recv.managed_identity_is_stable &&
+            field_member->as.field.mutability == FENG_MUTABILITY_LET;
         out->is_addressable = true;
         out->is_storage_address =
             field_type->kind == CG_TYPE_GENERIC_PARAM ||
@@ -34802,21 +34908,27 @@ static bool cg_emit_initialized_local_binding(CG *cg,
                                               FengSlice name,
                                               const CGType *decl_type,
                                               ExprResult *init,
-                                              FengToken token) {
+                                              FengToken token,
+                                              FengMutability mutability) {
     if (name.data == NULL || name.length == 0U || decl_type == NULL || init == NULL) {
         return false;
     }
     if (cg_current_callable_captures_name(cg, name.data, name.length)) {
-        return cg_scope_bind_capture_cell(cg,
-                                          cg->cur_scope,
-                                          name,
-                                          decl_type,
-                                          token,
-                                          init->c_expr,
-                                          true,
-                                          init->owns_ref,
-                                          true,
-                                          FENG_CODEGEN_MAPING_VARIABLE_BINDING);
+        bool bound = cg_scope_bind_capture_cell(
+            cg,
+            cg->cur_scope,
+            name,
+            decl_type,
+            token,
+            init->c_expr,
+            true,
+            init->owns_ref,
+            true,
+            FENG_CODEGEN_MAPING_VARIABLE_BINDING);
+
+        return bound &&
+               scope_mark_last_binding_mutability(cg->cur_scope,
+                                                  mutability);
     }
 
     char *cname = cg_local_cname(cg, name.data, name.length);
@@ -34881,7 +34993,8 @@ static bool cg_emit_initialized_local_binding(CG *cg,
 
     CGType *local_type = cgtype_clone(decl_type);
     if (local_type == NULL ||
-        !scope_add(cg->cur_scope, "_unused_internal_name__", cname, local_type, false)) {
+        !scope_add(cg->cur_scope, "_unused_internal_name__", cname, local_type, false) ||
+        !scope_mark_last_binding_mutability(cg->cur_scope, mutability)) {
         cgtype_free(local_type);
         free(cname);
         return cg_fail(cg, token, "IE0001", "codegen: out of memory");
@@ -34938,7 +35051,8 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
                                                    name,
                                                    item.type,
                                                    &item,
-                                                   binding->token)) {
+                                                   binding->token,
+                                                   binding->mutability)) {
                 er_free(&item);
                 return false;
             }
@@ -34995,7 +35109,8 @@ static bool cg_emit_destructure_binding(CG *cg, const FengStmt *stmt) {
                                                name,
                                                field->type,
                                                &field_value,
-                                               binding->token)) {
+                                               binding->token,
+                                               binding->mutability)) {
             er_free(&field_value);
             er_free(&source);
             return false;
@@ -36015,6 +36130,10 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                                             true,
                                             FENG_CODEGEN_MAPING_VARIABLE_BINDING);
         }
+        if (ok) {
+            ok = scope_mark_last_binding_mutability(cg->cur_scope,
+                                                    b->mutability);
+        }
         cgtype_free(decl_type);
         return ok;
     }
@@ -36120,7 +36239,9 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                        false) ||
             !scope_mark_last_erased_generic_storage(cg->cur_scope,
                                                     descriptor_name,
-                                                    size_name)) {
+                                                    size_name) ||
+            !scope_mark_last_binding_mutability(cg->cur_scope,
+                                                b->mutability)) {
             free(cname);
             free(descriptor_name);
             free(size_name);
@@ -36235,7 +36356,9 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                        false) ||
             !scope_mark_last_reified_storage(cg->cur_scope,
                                              descriptor_name,
-                                             size_name)) {
+                                             size_name) ||
+            !scope_mark_last_binding_mutability(cg->cur_scope,
+                                                b->mutability)) {
             free(cname);
             free(descriptor_name);
             free(size_name);
@@ -36374,7 +36497,9 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     free(cty);
 
     if (!scope_add(cg->cur_scope, /*feng*/ "_unused_internal_name__", cname,
-                   decl_type, false)) {
+                   decl_type, false) ||
+        !scope_mark_last_binding_mutability(cg->cur_scope,
+                                            b->mutability)) {
         free(cname); return false;
     }
     /* Replace the placeholder with the real Feng name. */
@@ -36798,11 +36923,149 @@ cleanup:
     return ok;
 }
 
+/* Statement-scoped ownership state for one assignment receiver. An active
+ * guard pairs a generated strong-reference temporary with a cleanup-chain
+ * node until the final target write has completed. */
+typedef struct CGAssignmentOwnerGuard {
+    bool active;
+    Scope *scope;
+    size_t first_local_index;
+} CGAssignmentOwnerGuard;
+
+/* Conservatively prove that evaluating an expression cannot execute user
+ * code or rebind any assignment target. Only intrinsic scalar computation
+ * and reads from already-resolved local slots participate in this proof. */
+static bool cg_assignment_expr_cannot_mutate_state(CG *cg,
+                                                   const FengExpr *expr) {
+    if (cg == NULL || expr == NULL) {
+        return false;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+        case FENG_EXPR_SELF:
+            return true;
+        case FENG_EXPR_IDENTIFIER:
+            /* Non-local identifiers can trigger module/static lazy
+             * initialization, so only a lexical local read is proven safe. */
+            return scope_lookup(cg->cur_scope,
+                                expr->as.identifier.data,
+                                expr->as.identifier.length) != NULL;
+        case FENG_EXPR_UNARY:
+            return cg_assignment_expr_cannot_mutate_state(
+                cg, expr->as.unary.operand);
+        case FENG_EXPR_BINARY:
+            return cg_assignment_expr_cannot_mutate_state(
+                       cg, expr->as.binary.left) &&
+                   cg_assignment_expr_cannot_mutate_state(
+                       cg, expr->as.binary.right);
+        default:
+            return false;
+    }
+}
+
+/* Return whether final storage replacement finishes locating and writing the
+ * target before it can invoke a user finalizer. Trivial stores execute no
+ * user code, while managed-pointer stores publish the new pointer before
+ * releasing the old one. Aggregate helpers release old managed slots before
+ * their final byte copy, and erased generic writes can select that aggregate
+ * path at runtime, so both require the receiver guard. */
+static bool cg_assignment_writeback_cannot_invalidate_receiver(
+    const CGType *target_type) {
+    return target_type != NULL &&
+           target_type->kind != CG_TYPE_GENERIC_PARAM &&
+           !cgtype_is_aggregate(target_type);
+}
+
+/* Snapshot and retain an unstable borrowed managed receiver when a later
+ * operation may invalidate it. The existing cleanup chain releases the
+ * snapshot if evaluation unwinds before the final assignment write. */
+static bool cg_assignment_owner_guard_begin(
+    CG *cg,
+    ExprResult *receiver,
+    bool later_work_cannot_invalidate_receiver,
+    FengToken blame,
+    CGAssignmentOwnerGuard *guard) {
+    char *temporary;
+    char *ctype;
+
+    if (cg == NULL || receiver == NULL || receiver->type == NULL ||
+        guard == NULL) {
+        return false;
+    }
+    guard->active = false;
+    guard->scope = NULL;
+    guard->first_local_index = 0U;
+    if (later_work_cannot_invalidate_receiver ||
+        !cgtype_is_managed(receiver->type) || receiver->owns_ref ||
+        receiver->managed_identity_is_stable) {
+        return true;
+    }
+
+    temporary = cg_fresh_temp(cg, "_assign_owner");
+    ctype = cg_ctype_dup(receiver->type);
+    if (temporary == NULL || ctype == NULL) {
+        free(temporary);
+        free(ctype);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    %s %s = %s; feng_retain(%s);\n",
+                   ctype,
+                   temporary,
+                   receiver->c_expr,
+                   temporary);
+    free(ctype);
+    guard->scope = cg->cur_scope;
+    guard->first_local_index = cg->cur_scope->count;
+    if (!cg_register_local_for_cleanup(cg,
+                                       temporary,
+                                       receiver->type,
+                                       blame)) {
+        free(temporary);
+        guard->scope = NULL;
+        return false;
+    }
+
+    free(receiver->c_expr);
+    receiver->c_expr = temporary;
+    receiver->managed_identity_is_stable = true;
+    guard->active = true;
+    return true;
+}
+
+/* End one active assignment receiver guard after the final target write.
+ * Every cleanup local registered by later RHS lowering is released first;
+ * the guarded receiver is the oldest item in this suffix and releases last. */
+static void cg_assignment_owner_guard_end(
+    CG *cg,
+    ExprResult *receiver,
+    CGAssignmentOwnerGuard *guard) {
+    Scope suffix;
+
+    if (cg == NULL || receiver == NULL || receiver->c_expr == NULL ||
+        guard == NULL || !guard->active || guard->scope == NULL ||
+        guard->first_local_index >= guard->scope->count) {
+        return;
+    }
+    memset(&suffix, 0, sizeof(suffix));
+    suffix.items = guard->scope->items + guard->first_local_index;
+    suffix.count = guard->scope->count - guard->first_local_index;
+    cg_release_scope(cg, &suffix);
+    scope_discard_suffix(guard->scope, guard->first_local_index);
+    guard->active = false;
+    guard->scope = NULL;
+}
+
 static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
     const FengExpr *target = stmt->as.assign.target;
     const bool is_compound = cg_assignment_is_compound(stmt->as.assign.op);
     const FengTokenKind binary_op = cg_assignment_binary_op(stmt->as.assign.op);
     if (target->kind == FENG_EXPR_INDEX) {
+        CGAssignmentOwnerGuard owner_guard = {0};
         ExprResult recv;
         if (!cg_emit_expr(cg, target->as.index.object, &recv)) return false;
         if (recv.type->kind != CG_TYPE_ARRAY || !recv.type->element) {
@@ -36811,7 +37074,25 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "CE0237", "codegen: indexed assignment requires an array value");
         }
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
-            cg_materialize_to_local(cg, &recv, "_t");
+            if (cg_materialize_to_local(cg, &recv, "_t") == NULL) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                               "IE0001", "codegen: out of memory");
+            }
+        }
+        if (!cg_assignment_owner_guard_begin(
+                cg,
+                &recv,
+                cg_assignment_expr_cannot_mutate_state(
+                    cg, target->as.index.index) &&
+                    cg_assignment_expr_cannot_mutate_state(
+                        cg, stmt->as.assign.value) &&
+                    cg_assignment_writeback_cannot_invalidate_receiver(
+                        recv.type->element),
+                stmt->token,
+                &owner_guard)) {
+            er_free(&recv);
+            return false;
         }
         ExprResult ix;
         if (!cg_emit_expr(cg, target->as.index.index, &ix)) {
@@ -36885,6 +37166,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
                 elem_cty, recv.c_expr, idx_tmp, elem_cty, expr.data);
+
+            cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
 
             buf_free(&expr);
             er_free(&v);
@@ -36971,6 +37254,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 slot_tmp,
                 slot_tmp,
                 slot_tmp, src_tmp, desc);
+            cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
             free(slot_tmp);
             free(src_tmp);
             free(elem_cty);
@@ -37069,6 +37353,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "    ((%s *)feng_array_data(%s))[%s] = (%s)(%s);\n",
                 elem_cty, recv.c_expr, idx_tmp, elem_cty, v.c_expr);
         }
+        cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
         free(elem_cty); free(idx_tmp);
         er_free(&v); er_free(&ix); er_free(&recv);
         return true;
@@ -37831,8 +38116,25 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
         }
         /* @value types use `.` (value), regular objects use `->` (pointer). */
         const char *acc = cg_type_is_value_user(recv.type) ? "." : "->";
+        CGAssignmentOwnerGuard owner_guard = {0};
         if (cgtype_is_managed(recv.type) && recv.owns_ref) {
-            cg_materialize_to_local(cg, &recv, "_t");
+            if (cg_materialize_to_local(cg, &recv, "_t") == NULL) {
+                er_free(&recv);
+                return cg_fail(cg, stmt->token,
+                               "IE0001", "codegen: out of memory");
+            }
+        }
+        if (!cg_assignment_owner_guard_begin(
+                cg,
+                &recv,
+                cg_assignment_expr_cannot_mutate_state(
+                    cg, stmt->as.assign.value) &&
+                    cg_assignment_writeback_cannot_invalidate_receiver(
+                        uf->type),
+                stmt->token,
+                &owner_guard)) {
+            er_free(&recv);
+            return false;
         }
         if (recv.uses_reified_storage ||
             cg_reference_needs_reified_field_layout(cg, recv.type)) {
@@ -37842,6 +38144,9 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                                               uf,
                                                               is_compound,
                                                               binary_op);
+            if (assigned) {
+                cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
+            }
             er_free(&recv);
             return assigned;
         }
@@ -37894,6 +38199,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "    (%s)%s%s = (%s)(%s);\n",
                 recv.c_expr, acc, uf->c_name, field_cty, expr.data);
+
+            cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
 
             buf_free(&expr);
             er_free(&v);
@@ -38012,6 +38319,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
             free(cty);
         }
+        cg_assignment_owner_guard_end(cg, &recv, &owner_guard);
         er_free(&v);
         er_free(&recv);
         return true;
@@ -42271,7 +42579,9 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
                            infos[i].local->name,
                            alias_c_name,
                            alias_type,
-                           true)) {
+                           true) ||
+                !scope_copy_last_binding_mutability(fn_scope,
+                                                    infos[i].local)) {
                 /* is_param = true: the captured binding is owned by the
                  * outer scope. cg_release_scope skips is_param locals, so
                  * the defer function does not emit a stray release for it. */
@@ -47637,7 +47947,9 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                         true,
                         false,
                         true,
-                        FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                        FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                    !scope_mark_last_binding_mutability(
+                        fn_scope, sig->params[i].mutability)) {
                     cg->cur_scope = NULL;
                     scope_pop_free(fn_scope);
                     goto cleanup_params;
@@ -47645,7 +47957,10 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                 continue;
             }
             CGType *pt = cgtype_clone(param_types[i]);
-            if (!scope_add(fn_scope, param_fnames[i], param_cnames[i], pt, /*is_param=*/true)) {
+            if (!scope_add(fn_scope, param_fnames[i], param_cnames[i], pt,
+                           /*is_param=*/true) ||
+                !scope_mark_last_binding_mutability(
+                    fn_scope, sig->params[i].mutability)) {
                 cgtype_free(pt);
                 cg->cur_scope = NULL;
                 scope_pop_free(fn_scope);
@@ -49190,13 +49505,19 @@ static bool cg_emit_function(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                !scope_mark_last_binding_mutability(
+                    fn_scope,
+                    decl->as.function_decl.params[i].mutability)) {
                 goto cleanup;
             }
             continue;
         }
         CGType *pt = cgtype_clone(fn->param_types[i]);
-        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+        if (!scope_add(fn_scope, pn, pn, pt, true) ||
+            !scope_mark_last_binding_mutability(
+                fn_scope,
+                decl->as.function_decl.params[i].mutability)) {
             cgtype_free(pt);
             cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -59482,7 +59803,9 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                 true,
                 false,
                 true,
-                FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
+                FENG_CODEGEN_MAPING_VARIABLE_SELF) ||
+            !scope_mark_last_binding_mutability(fn_scope,
+                                                FENG_MUTABILITY_LET)) {
             cgtype_free(self_type);
             goto cleanup;
         }
@@ -59492,7 +59815,9 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         if (self_type != NULL) {
             self_type->user = &owner_view;
         }
-        if (!self_type || !scope_add(fn_scope, "self", self_expr, self_type, true)) {
+        if (!self_type || !scope_add(fn_scope, "self", self_expr, self_type, true) ||
+            !scope_mark_last_binding_mutability(fn_scope,
+                                                FENG_MUTABILITY_LET)) {
             cgtype_free(self_type);
             cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -59520,13 +59845,17 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                     true,
                     false,
                     true,
-                    FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                    FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                !scope_mark_last_binding_mutability(
+                    fn_scope, sig->params[i].mutability)) {
                 goto cleanup;
             }
             continue;
         }
         CGType *pt = cgtype_clone(param_types[i]);
-        if (!pt || !scope_add(fn_scope, param_fnames[i], param_cnames[i], pt, true)) {
+        if (!pt || !scope_add(fn_scope, param_fnames[i], param_cnames[i], pt, true) ||
+            !scope_mark_last_binding_mutability(
+                fn_scope, sig->params[i].mutability)) {
             cgtype_free(pt);
             cg_fail(cg, member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -60218,11 +60547,16 @@ static bool cg_bind_concrete_callable_self(CG *cg,
             false,
             true,
             FENG_CODEGEN_MAPING_VARIABLE_SELF);
+        if (ok) {
+            ok = scope_mark_last_binding_mutability(scope,
+                                                    FENG_MUTABILITY_LET);
+        }
         cgtype_free(self_type);
         return ok;
     }
 
-    if (!scope_add(scope, "self", source_expr, self_type, true)) {
+    if (!scope_add(scope, "self", source_expr, self_type, true) ||
+        !scope_mark_last_binding_mutability(scope, FENG_MUTABILITY_LET)) {
         cgtype_free(self_type);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
@@ -60407,13 +60741,19 @@ static bool cg_emit_user_method(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                !scope_mark_last_binding_mutability(
+                    fn_scope,
+                    m->member->as.callable.params[i].mutability)) {
                 goto cleanup;
             }
             continue;
         }
         CGType *pt = cgtype_clone(m->param_types[i]);
-        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+        if (!scope_add(fn_scope, pn, pn, pt, true) ||
+            !scope_mark_last_binding_mutability(
+                fn_scope,
+                m->member->as.callable.params[i].mutability)) {
             cgtype_free(pt);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -60921,7 +61261,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                         true,
                                         false,
                                         true,
-                                        FENG_CODEGEN_MAPING_VARIABLE_SELF)) {
+                                        FENG_CODEGEN_MAPING_VARIABLE_SELF) ||
+            !scope_mark_last_binding_mutability(fn_scope,
+                                                FENG_MUTABILITY_LET)) {
             goto cleanup;
         }
     } else if (!is_static_method) {
@@ -60930,7 +61272,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
-        if (!scope_add(fn_scope, "self", "self", self_t, true)) {
+        if (!scope_add(fn_scope, "self", "self", self_t, true) ||
+            !scope_mark_last_binding_mutability(fn_scope,
+                                                FENG_MUTABILITY_LET)) {
             cgtype_free(self_t);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
@@ -60958,13 +61302,19 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                                             true,
                                             false,
                                             true,
-                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM)) {
+                                            FENG_CODEGEN_MAPING_VARIABLE_PARAM) ||
+                !scope_mark_last_binding_mutability(
+                    fn_scope,
+                    m->member->as.callable.params[i].mutability)) {
                 goto cleanup;
             }
             continue;
         }
         CGType *pt = cgtype_clone(m->param_types[i]);
-        if (!scope_add(fn_scope, pn, pn, pt, true)) {
+        if (!scope_add(fn_scope, pn, pn, pt, true) ||
+            !scope_mark_last_binding_mutability(
+                fn_scope,
+                m->member->as.callable.params[i].mutability)) {
             cgtype_free(pt);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;

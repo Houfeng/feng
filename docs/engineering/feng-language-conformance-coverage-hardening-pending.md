@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01、G02 已交付；G03～G25 待 Review
+> 状态：G01～G03 已交付；G04～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -258,31 +258,44 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
 
 ### 7.2 用例 TODO
 
-- [ ] ASN01：普通索引赋值按 base、index、右值顺序求值；
-- [ ] ASN02：普通成员赋值按 receiver、右值顺序求值；
-- [ ] ASN03：索引复合赋值的 base 和 index 各求值一次；
-- [ ] ASN04：成员复合赋值的 receiver 只求值一次；
-- [ ] ASN05：位运算复合赋值同样满足单次求值；
-- [ ] ASN06：右值改变选择状态后仍写回此前已定位的位置。
+- [x] ASN01：普通索引赋值按 base、index、右值顺序各求值一次，最后写回已定位元素；
+- [x] ASN02：普通成员赋值按 receiver、右值顺序各求值一次，最后写回已定位成员；
+- [x] ASN03：索引算术复合赋值按 base、index、旧值读取、右值、写回顺序执行，base 和 index 各求值一次；
+- [x] ASN04：成员算术复合赋值按 receiver、旧值读取、右值、写回顺序执行，receiver 只求值一次；
+- [x] ASN05：带副作用索引或 receiver 的位运算复合赋值满足相同顺序与单次求值规则；
+- [x] ASN06：右值改变 index 后，仍写回此前已定位的索引位置；
+- [x] ASN07：右值重新绑定 base 或 receiver 后，仍写回此前已定位的原数组或原对象。
 
 每项同时断言事件轨迹、调用次数和最终状态，不能只检查最终数值。
 
 ### 7.3 独立验收与交付 TODO
 
-- [ ] 核对表达式规范，并确认不重复 EVAL01～EVAL06；
-- [ ] 独立运行 G03，核对左侧定位、右值顺序、求值次数和写回位置；
-- [ ] 在 Codex 沙箱外为 G03 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G03 问题；
-- [ ] 填写本组实际文件、专项结果、全量结果和交付结论。
+- [x] 核对表达式规范，并确认不重复 EVAL01～EVAL06；
+- [x] 独立运行 G03，核对左侧定位、右值顺序、求值次数和写回位置；
+- [x] 在 Codex 沙箱外为 G03 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G03 问题；
+- [x] 填写本组实际文件、专项结果、全量结果和交付结论。
 
 ### 7.4 独立交付记录
 
-- 状态：待实施
-- 实际文件与用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: cover assignment evaluation order`
+- 状态：已交付
+- 实际文件与用例：
+  - `fcts/fcts_bin/src/test_assignment_evaluation_semantics.ff`：新增 ASN01～ASN07，覆盖事件轨迹、
+    调用次数、旧值读取、目标定位、右值重绑和语句级受管临时值 LIFO 释放；
+  - `fcts/fcts_bin/src/main.ff`：登记 G03 FCTS 入口；
+  - `src/codegen/codegen.c`：增加编译期绑定可变性与 managed identity 稳定性事实，只为无法证明
+    稳定，且后续求值或最终写回可能使其失效的 borrowed managed 目标建立语句级强引用；
+  - `test/codegen/test_codegen.c`：验证 `let`、`self`、不可变成员链、已有拥有型临时结果与纯标量
+    写回不新增目标保护，并验证不稳定成员、索引及 aggregate 写回目标使用既有 cleanup 链；
+  - 本文：记录 `ISSUE-G03-001` 的发现、决策、修复和验收结果。
+- 本组专项结果：Codegen tests 通过；完整 FCTS 976/976；ASN01～ASN07 全部通过；ASN07 同时验证
+  右值临时对象在目标写回后立即终结；
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 976/976、smoke 均为
+  91/91、std 均为 601/601，Runtime、CLI、性能约束、增量构建与发布脚本检查均通过；
+- 问题：`ISSUE-G03-001` 已关闭；
+- 交付结论：普通与复合赋值的左侧定位、单次求值和写回语义已有直接行为证据；右值重绑缺陷已按
+  证明驱动方案修复，稳定路径不新增 ARC，且未变更 runtime 私有 ABI、公开 ABI 或 `.ft` 格式；
+- 建议 commit message：`fix: preserve assignment targets across RHS rebinding`
 
 ## 8 G04：动态整数运行时语义
 
@@ -1216,6 +1229,66 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
 - 本组专项结果：完整 FCTS 969/969；
 - 本组沙箱外 `make test`：通过；
 - 关闭依据：人工决策已写入模块主规范和中英文手册,实现与 IMP27 一致,专项和全量回归均通过。
+
+#### ISSUE-G03-001：右值重绑 base 或 receiver 后写回了新目标
+
+##### 归属
+
+- 发现组：G03；
+- 关联组：无；
+- 发现用例：ASN07。
+
+##### 现象与结论
+
+- 最小复现：先以 `holder.activeArray[index]` 或 `holder.activeCell.value` 作为左侧，再在右值
+  函数中将 `holder.activeArray` 或 `holder.activeCell` 重新绑定到新引用；
+- 实际结果：首次 `make fcts-tests` 中 ASN01～ASN06 通过，ASN07 失败；数组和成员两条路径均
+  写入了右值重绑后的新目标，结果为 976 项中 975 通过、1 失败；
+- 规范依据与预期结果：表达式主规范规定普通赋值先定位左侧可写位置，再求值右侧，
+  最后写入已定位目标；因此应写入原数组和原 receiver；
+- 结论及根因：产品缺陷。Codegen 只在 managed base/receiver 是拥有型临时结果时将其
+  物化到局部变量；借用型成员读取仍保留包含原绑定的 C 表达式，最终写回时再次读取
+  已被右值修改的绑定，没有固定左侧定位阶段观察到的引用值。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：产品缺陷、性能风险；
+- 建议方案：通过递归的目标稳定性证明和保守的右值副作用证明先排除无需 ARC 的路径；
+  只对无法证明原目标在右值期间仍被稳定持有的 borrowed managed base/receiver，建立
+  语句级临时强引用，正常写回后立即释放，异常退出由现有 cleanup 链释放；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：是；稳定 `let`、`self`、递归不可重绑链路、已有拥有型临时结果，
+  以及右值可证明不会触发用户代码或改变目标链路时不新增 retain/release；只有无法证明
+  安全的路径增加临时强引用开销；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：当前分析为否；
+- 人工决策与批准范围：已批准按上述证明驱动方案修复，批准无法证明安全的赋值目标
+  增加语句级 retain/release 与现有 cleanup 节点；不批准无条件为所有成员或索引赋值
+  增加 ARC，也不批准变更 runtime、ABI 或 `.ft` 格式；
+- 收尾审计补充：只证明 index 与右值不改变状态仍不足以覆盖 aggregate 目标槽；现有
+  `feng_aggregate_assign` / `feng_aggregate_take` 会在最终字节写入前 release 目标旧槽，旧槽终结器
+  可能重绑并释放承载该槽的 receiver。直接 managed pointer 写入会先发布新指针再 release 旧值，
+  标量写入不执行用户代码，二者没有该风险；擦除泛型写回可能在运行时选择 aggregate 分支，必须
+  保守按 aggregate 处理。该补充仍属于“无法证明安全才保护”的已批准边界，不改变纯标量 RHS
+  不新增 ARC 的结论；
+- 实际变更：Codegen 为源码绑定记录可变性，并将稳定性沿 `let`、`self`、不可变成员和已有拥有型
+  临时结果递归传播；对字面量、局部读取及其一元和二元组合做保守的无状态改写证明。只有 borrowed
+  managed 目标无法证明稳定，且 index、右值或最终写回任一环节无法证明不会使目标失效时，才在左侧
+  定位阶段保存并 retain 原引用；aggregate 与擦除泛型目标按不安全写回保守处理，标量和直接 managed
+  pointer 写回按安全处理。目标写回后，按作用域后缀逆序释放后续右值临时量和目标保护，再移除对应
+  编译期元数据；异常路径继续由既有 cleanup 链释放。该顺序符合生命周期主规范中临时值在表达式结束时
+  release 的规则，并保持 cleanup 节点严格 LIFO；未新增 runtime 接口，未变更 ABI 或 `.ft` 格式。
+
+##### 验收与关闭
+
+- 本组专项复验结果：Codegen tests 通过；完整 FCTS 976/976，ASN01～ASN07 全部通过；Codegen
+  断言同时证明稳定路径、已有拥有型临时结果和不安全因素均可排除的纯标量路径不生成目标保护，
+  不稳定成员、索引及 aggregate 写回路径生成保护；ASN07 的终结器断言证明后续 RHS 临时量先于
+  目标保护按 LIFO 在赋值语句结束时释放；
+- 本组沙箱外 `make test` 结果：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 976/976、smoke
+  均为 91/91、std 均为 601/601，其余单元、CLI、性能约束、增量构建和发布脚本检查均通过；
+- 关闭依据：实现符合表达式与生命周期主规范，ASN07 最小复现已修复，条件 ARC 性能边界已有 Codegen
+  直接证据，专项和全量回归均通过。
 
 ### 30.2 编号与状态
 

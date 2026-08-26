@@ -14931,6 +14931,147 @@ static void test_generic_spec_field_stable_address_abi_codegen(void) {
     feng_program_free(program);
 }
 
+/* Assignment receiver stabilization retains only borrowed managed targets
+ * whose identity can be invalidated by later evaluation or aggregate
+ * writeback. Stable let paths and pure scalar writes remain ARC-free. */
+static void test_assignment_receiver_stabilization_codegen(void) {
+    static const char *source =
+        "module feng.codegen.assignment_owner;\n"
+        "type Cell {\n"
+        "    var value: int = 0;\n"
+        "    func read(): int { return self.value; }\n"
+        "}\n"
+        "spec View {\n"
+        "    func read(): int;\n"
+        "}\n"
+        "type Holder {\n"
+        "    var cell: Cell = Cell();\n"
+        "    var values: int[!] = [0];\n"
+        "}\n"
+        "type AggregateHolder {\n"
+        "    var view: View;\n"
+        "}\n"
+        "type AggregateOwner {\n"
+        "    var holder: AggregateHolder = AggregateHolder();\n"
+        "}\n"
+        "type StableHolder {\n"
+        "    let cell: Cell = Cell();\n"
+        "    func assignThroughSelf() {\n"
+        "        self.cell.value = sideEffect();\n"
+        "    }\n"
+        "}\n"
+        "func sideEffect(): int { return 9; }\n"
+        "func rebindCell(holder: Holder): int {\n"
+        "    holder.cell = Cell();\n"
+        "    return 5;\n"
+        "}\n"
+        "func rebindValues(holder: Holder): int {\n"
+        "    holder.values = [0];\n"
+        "    return 0;\n"
+        "}\n"
+        "func stableLet() {\n"
+        "    let values: int[!] = [0];\n"
+        "    values[0] = sideEffect();\n"
+        "}\n"
+        "func stableChain(holder: StableHolder) {\n"
+        "    holder.cell.value = sideEffect();\n"
+        "}\n"
+        "func pureVar() {\n"
+        "    var values: int[!] = [0];\n"
+        "    values[0] = 7 + 2;\n"
+        "}\n"
+        "func ownedTemporary() {\n"
+        "    Cell().value = sideEffect();\n"
+        "}\n"
+        "func guardedMember(holder: Holder) {\n"
+        "    holder.cell.value = rebindCell(holder) + Cell().read();\n"
+        "}\n"
+        "func guardedIndex(holder: Holder) {\n"
+        "    holder.values[rebindValues(holder)] = sideEffect();\n"
+        "}\n"
+        "func guardedAggregate(owner: AggregateOwner, value: View) {\n"
+        "    owner.holder.view = value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "assignment_receiver_stabilization_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__stableLet",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end,
+                          "feng_retain(_assign_owner"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__stableChain",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end,
+                          "feng_retain(_assign_owner"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__pureVar",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end,
+                          "feng_retain(_assign_owner"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__ownedTemporary",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end,
+                          "feng_retain(_assign_owner"));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__guardedMember",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_retain(_assign_owner"));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_cleanup_push(&_cu__assign_owner"));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_cleanup_pop(); feng_release(") >= 2U);
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__guardedIndex",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_retain(_assign_owner"));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_cleanup_pop(); feng_release(_assign_owner"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void feng__feng__codegen__assignment_owner__guardedAggregate",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_retain(_assign_owner"));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_aggregate_assign"));
+    ASSERT(count_substr(output.c_source,
+                        "feng_retain(_assign_owner") == 3U);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -15143,6 +15284,7 @@ int main(void) {
     test_literal_adaptation_compound_assignment();
     test_literal_adaptation_array_literal();
     test_literal_adaptation_tuple_literal();
+    test_assignment_receiver_stabilization_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

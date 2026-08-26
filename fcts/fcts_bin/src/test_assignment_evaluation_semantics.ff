@@ -1,0 +1,254 @@
+module fcts_bin;
+
+import std.test;
+
+/** Mutable cell used to observe member-assignment destinations. */
+type AssignmentEvaluationCell {
+  var value: int;
+}
+
+/** Managed temporary used to verify assignment-statement cleanup ordering. */
+type AssignmentEvaluationTemporary {
+  open static var finalized: int = 0;
+  let value: int;
+
+  /** Return the stored scalar while keeping the receiver in the RHS. */
+  func read(): int {
+    return self.value;
+  }
+
+  /** Record that the RHS temporary was released at expression completion. */
+  func ~AssignmentEvaluationTemporary() {
+    AssignmentEvaluationTemporary.finalized += 1;
+  }
+}
+
+/** Holder whose mutable references can be rebound while an assignment runs. */
+type AssignmentEvaluationHolder {
+  var activeArray: int[!];
+  var activeCell: AssignmentEvaluationCell;
+}
+
+/** Probe that records assignment evaluation order and execution count. */
+type AssignmentEvaluationProbe {
+  var trace: int;
+  var calls: int;
+  var selectedIndex: int;
+
+  /** Append one marker to the observable evaluation trace. */
+  func record(marker: int): void {
+    self.trace = self.trace * 10 + marker;
+    self.calls += 1;
+  }
+
+  /** Record base evaluation and return the selected writable array. */
+  func selectArray(value: int[!], marker: int): int[!] {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record index evaluation and return the selected index. */
+  func selectIndex(value: int, marker: int): int {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record receiver evaluation and return the selected cell. */
+  func selectCell(value: AssignmentEvaluationCell, marker: int): AssignmentEvaluationCell {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record holder evaluation and return the selected holder. */
+  func selectHolder(value: AssignmentEvaluationHolder, marker: int): AssignmentEvaluationHolder {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record right-value evaluation and return the supplied value. */
+  func rightValue(value: int, marker: int): int {
+    self.record(marker);
+    return value;
+  }
+
+  /** Overwrite an array element while evaluating and return an operand. */
+  func overwriteElementAndReturn(
+    values: int[!],
+    index: int,
+    replacement: int,
+    result: int,
+    marker: int
+  ): int {
+    self.record(marker);
+    values[index] = replacement;
+    return result;
+  }
+
+  /** Overwrite a cell member while evaluating and return an operand. */
+  func overwriteCellAndReturn(
+    cell: AssignmentEvaluationCell,
+    replacement: int,
+    result: int,
+    marker: int
+  ): int {
+    self.record(marker);
+    cell.value = replacement;
+    return result;
+  }
+
+  /** Record and read the index selected by the probe state. */
+  func readSelectedIndex(marker: int): int {
+    self.record(marker);
+    return self.selectedIndex;
+  }
+
+  /** Change the selected index while evaluating and return a value. */
+  func changeSelectedIndexAndReturn(
+    nextIndex: int,
+    result: int,
+    marker: int
+  ): int {
+    self.record(marker);
+    self.selectedIndex = nextIndex;
+    return result;
+  }
+
+  /** Rebind a holder's array while evaluating and return a value. */
+  func replaceArrayAndReturn(
+    holder: AssignmentEvaluationHolder,
+    replacement: int[!],
+    result: int,
+    marker: int
+  ): int {
+    self.record(marker);
+    holder.activeArray = replacement;
+    return result;
+  }
+
+  /** Rebind a holder's cell while evaluating and return a value. */
+  func replaceCellAndReturn(
+    holder: AssignmentEvaluationHolder,
+    replacement: AssignmentEvaluationCell,
+    result: int,
+    marker: int
+  ): int {
+    self.record(marker);
+    holder.activeCell = replacement;
+    return result;
+  }
+}
+
+/** Execute assignment evaluation-order conformance coverage. */
+open func test_assignment_evaluation_semantics(): void {
+  describe("assignment evaluation semantics", () {
+    test("ASN01 ordinary indexed assignment evaluates base index and value once", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let values: int[!] = [10, 20];
+
+      probe.selectArray(values, 1)[probe.selectIndex(1, 2)] =
+        probe.rightValue(90, 3);
+
+      assert(probe.trace == 123 && probe.calls == 3,
+             "ASN01 preserves base-index-value order and count");
+      assert(values[0] == 10 && values[1] == 90,
+             "ASN01 writes only the located array element");
+    });
+
+    test("ASN02 ordinary member assignment evaluates receiver and value once", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let cell = AssignmentEvaluationCell { value: 10 };
+
+      probe.selectCell(cell, 1).value = probe.rightValue(52, 2);
+
+      assert(probe.trace == 12 && probe.calls == 2,
+             "ASN02 preserves receiver-value order and count");
+      assert(cell.value == 52, "ASN02 writes the located member");
+    });
+
+    test("ASN03 indexed arithmetic compound assignment reads the old value first", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let values: int[!] = [10];
+
+      probe.selectArray(values, 1)[probe.selectIndex(0, 2)] +=
+        probe.overwriteElementAndReturn(values, 0, 100, 5, 3);
+
+      assert(probe.trace == 123 && probe.calls == 3,
+             "ASN03 preserves base-index-value order and count");
+      assert(values[0] == 15,
+             "ASN03 computes from the old value read before the right value");
+    });
+
+    test("ASN04 member arithmetic compound assignment reads the old value first", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let cell = AssignmentEvaluationCell { value: 10 };
+
+      probe.selectCell(cell, 1).value +=
+        probe.overwriteCellAndReturn(cell, 100, 5, 2);
+
+      assert(probe.trace == 12 && probe.calls == 2,
+             "ASN04 preserves receiver-value order and count");
+      assert(cell.value == 15,
+             "ASN04 computes from the old member read before the right value");
+    });
+
+    test("ASN05 indexed bitwise compound assignment evaluates its target once", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let values: int[!] = [3];
+
+      probe.selectArray(values, 1)[probe.selectIndex(0, 2)] <<=
+        probe.overwriteElementAndReturn(values, 0, 8, 1, 3);
+
+      assert(probe.trace == 123 && probe.calls == 3,
+             "ASN05 preserves bitwise target order and count");
+      assert(values[0] == 6,
+             "ASN05 uses the old element value for the bitwise write");
+    });
+
+    test("ASN06 changing the index still writes the previously located element", () {
+      let probe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let values: int[!] = [10, 20];
+
+      values[probe.readSelectedIndex(1)] =
+        probe.changeSelectedIndexAndReturn(1, 99, 2);
+
+      assert(probe.trace == 12 && probe.calls == 2 && probe.selectedIndex == 1,
+             "ASN06 evaluates and changes index state once in order");
+      assert(values[0] == 99 && values[1] == 20,
+             "ASN06 writes the index captured before right-value evaluation");
+    });
+
+    test("ASN07 rebinding base or receiver preserves the original destination", () {
+      let arrayProbe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      let originalArray: int[!] = [10];
+      let replacementArray: int[!] = [20];
+      let originalCell = AssignmentEvaluationCell { value: 30 };
+      let replacementCell = AssignmentEvaluationCell { value: 40 };
+      let holder = AssignmentEvaluationHolder {
+        activeArray: originalArray,
+        activeCell: originalCell
+      };
+
+      arrayProbe.selectHolder(holder, 1).activeArray[arrayProbe.selectIndex(0, 2)] =
+        arrayProbe.replaceArrayAndReturn(holder, replacementArray, 77, 3);
+
+      assert(arrayProbe.trace == 123 && arrayProbe.calls == 3,
+             "ASN07 evaluates array base index and right value once in order");
+      assert(originalArray[0] == 77 && replacementArray[0] == 20,
+             "ASN07 writes the original array after its holder field is rebound");
+
+      let receiverProbe = AssignmentEvaluationProbe { trace: 0, calls: 0, selectedIndex: 0 };
+      holder.activeCell = originalCell;
+      AssignmentEvaluationTemporary.finalized = 0;
+      receiverProbe.selectHolder(holder, 1).activeCell.value =
+        receiverProbe.replaceCellAndReturn(holder, replacementCell, 80, 2) +
+        (AssignmentEvaluationTemporary { value: 8 }).read();
+
+      assert(receiverProbe.trace == 12 && receiverProbe.calls == 2,
+             "ASN07 evaluates member receiver and right value once in order");
+      assert(originalCell.value == 88 && replacementCell.value == 40,
+             "ASN07 writes the original receiver after its holder field is rebound");
+      assert(AssignmentEvaluationTemporary.finalized == 1,
+             "ASN07 releases later RHS temporaries after writeback in LIFO order");
+    });
+  });
+}
