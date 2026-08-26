@@ -11010,6 +11010,197 @@ static void test_lsp_signature_help_repairs_enclosing_expressions(void) {
     free(manifest_path);
 }
 
+/* Signature Help must collect every overload from the selected imported
+ * function module without merging a same-named function from another module. */
+static void test_lsp_signature_help_collects_imported_function_overloads(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kProviderSource =
+        "open module test.lsp.signature_provider;\n"
+        "open func emit(fmt: string, args: string...): int { return 1; }\n"
+        "open func emit<T>(fmt: string, first: T, args: T...): int { return 2; }\n";
+    static const char *kOtherSource =
+        "open module test.lsp.signature_other;\n"
+        "open func emit(value: bool): bool { return value; }\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.signature_consumer;\n"
+        "import test.lsp.signature_provider;\n"
+        "open func run(): void {\n"
+        "    emit(\"ready\");\n"
+        "}\n";
+    static const char *kDirtyConsumerSource =
+        "open module test.lsp.signature_consumer;\n"
+        "import test.lsp.signature_provider;\n"
+        "open func run(): void {\n"
+        "    emit(\n"
+        "}\n";
+    char template_path[] = "temp/feng_lsp_signature_overloads_XXXXXX";
+    char *workspace_dir;
+    char *provider_dir;
+    char *provider_manifest;
+    char *provider_src_dir;
+    char *provider_source_path;
+    char *other_dir;
+    char *other_manifest;
+    char *other_src_dir;
+    char *other_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *consumer_uri;
+    char *escaped_consumer;
+    char *escaped_dirty_consumer;
+    char *did_open;
+    char *did_change;
+    char *signature_request;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[4];
+    unsigned int ready_line;
+    unsigned int ready_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    provider_dir = path_join(workspace_dir, "provider");
+    provider_manifest = path_join(provider_dir, "feng.fm");
+    provider_src_dir = path_join(provider_dir, "src");
+    provider_source_path = path_join(provider_src_dir, "lib.ff");
+    other_dir = path_join(workspace_dir, "other");
+    other_manifest = path_join(other_dir, "feng.fm");
+    other_src_dir = path_join(other_dir, "src");
+    other_source_path = path_join(other_src_dir, "lib.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(provider_src_dir);
+    mkdir_p(other_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(provider_manifest,
+                    "[package]\n"
+                    "name: \"lsp_signature_provider\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(provider_source_path, kProviderSource);
+    write_text_file(other_manifest,
+                    "[package]\n"
+                    "name: \"lsp_signature_other\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(other_source_path, kOtherSource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_signature_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_signature_provider: \"../provider\"\n"
+                    "lsp_signature_other: \"../other\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+    {
+        char *build_argv[] = {consumer_dir};
+
+        ASSERT(feng_cli_project_build_main("feng", 1, build_argv) == 0);
+    }
+
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    escaped_dirty_consumer = json_escape_text(kDirtyConsumerSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    did_change = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+        "\"contentChanges\":[{\"text\":\"%s\"}]}}",
+        consumer_uri,
+        escaped_dirty_consumer);
+    signature_request = build_lsp_test_position_request(
+        "textDocument/signatureHelp",
+        2U,
+        consumer_uri,
+        kDirtyConsumerSource,
+        "    emit(",
+        strlen("    emit("));
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    ASSERT(did_open != NULL && did_change != NULL &&
+           signature_request != NULL && shutdown != NULL);
+    requests[0] = did_change;
+    requests[1] = signature_request;
+    requests[2] = shutdown;
+    requests[3] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(kConsumerSource,
+                        "    emit(\"ready\")",
+                        strlen("    emit("),
+                        &ready_line,
+                        &ready_character);
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/signatureHelp",
+        consumer_uri,
+        ready_line,
+        ready_character,
+        "func emit(fmt: string, args: string...): i64",
+        requests,
+        4U,
+        NULL);
+    assert_lsp_test_response_contains(
+        output,
+        2U,
+        "func emit(fmt: string, args: string...): i64");
+    assert_lsp_test_response_contains(
+        output,
+        2U,
+        "func emit(fmt: string, first: T, args: T...): i64");
+    assert_lsp_test_response_not_contains(output,
+                                          2U,
+                                          "func emit(value: bool): bool");
+    ASSERT(count_lsp_test_response_occurrences(output,
+                                               2U,
+                                               "func emit(") == 2U);
+
+    free(output);
+    free(shutdown);
+    free(signature_request);
+    free(did_change);
+    free(did_open);
+    free(escaped_dirty_consumer);
+    free(escaped_consumer);
+    free(consumer_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(other_source_path);
+    free(other_src_dir);
+    free(other_manifest);
+    free(other_dir);
+    free(provider_source_path);
+    free(provider_src_dir);
+    free(provider_manifest);
+    free(provider_dir);
+}
+
 static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation(void) {
     static const char *kSource =
         "module test.lsp.fitmember;\n"
@@ -23534,6 +23725,7 @@ int main(void) {
     test_lsp_local_project_dependency_cache_lifecycle();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_signature_help_repairs_enclosing_expressions();
+    test_lsp_signature_help_collects_imported_function_overloads();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_member_completion_repairs_control_flow_heads();
