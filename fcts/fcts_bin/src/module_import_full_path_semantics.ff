@@ -1,0 +1,63 @@
+module fcts_bin;
+
+/** IMP27 与模块路径后续段同名的局部对象类型。 */
+type G02LocalModuleBranch {
+  let g02Immutable: int;
+}
+
+/** IMP27 与模块路径首段同名的局部对象类型。 */
+type G02LocalModuleRoot {
+  let g02_primary: G02LocalModuleBranch;
+}
+
+/** IMP07 无 import 直接调用完整路径顶层函数。 */
+open func g02CallFullPath(): int {
+  return fcts_lib.g02_primary.g02Add(3, 4);
+}
+
+/** IMP08 无 import 取得完整路径顶层函数值并调用。 */
+open func g02CallFullPathFunctionValue(): int {
+  let mapper: fcts_lib.g02_primary.G02Mapper =
+    fcts_lib.g02_primary.g02Increment;
+  return mapper(8);
+}
+
+/** IMP09 无 import 通过完整路径引用并构造公开 type。 */
+open func g02ConstructFullPathType(): int {
+  let value: fcts_lib.g02_primary.G02Record =
+    fcts_lib.g02_primary.G02Record { value: 90 };
+  return value.value;
+}
+
+/** IMP10 无 import 通过完整路径引用公开 enum。 */
+open func g02ReadFullPathEnum(): int {
+  let mode: fcts_lib.g02_primary.G02Mode =
+    fcts_lib.g02_primary.G02Mode.Second;
+  return (int)mode;
+}
+
+/** IMP11 无 import 通过完整路径引用公开 spec。 */
+open func g02ReadFullPathSpec(): int {
+  let value: fcts_lib.g02_primary.G02Readable =
+    fcts_lib.g02_primary.G02Record { value: 110 };
+  return value.value;
+}
+
+/** IMP12 无 import 通过完整路径读取公开模块级 let。 */
+open func g02ReadFullPathLet(): int {
+  return fcts_lib.g02_primary.g02Immutable;
+}
+
+/** IMP13 无 import 通过完整路径读写公开模块级 var。 */
+open func g02WriteAndReadFullPathVar(value: int): int {
+  fcts_lib.g02_primary.g02Mutable = value;
+  return fcts_lib.g02_primary.g02Mutable;
+}
+
+/** IMP27 局部值遮蔽完整模块路径首段后按普通成员链解析。 */
+open func g02ReadLocalValueBeforeFullPath(): int {
+  let fcts_lib = G02LocalModuleRoot {
+    g02_primary: G02LocalModuleBranch { g02Immutable: 270 }
+  };
+  return fcts_lib.g02_primary.g02Immutable;
+}

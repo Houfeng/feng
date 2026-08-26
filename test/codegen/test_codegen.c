@@ -4179,6 +4179,78 @@ static void test_imported_full_path_type_annotations_codegen_compile_without_use
     imported_source_fixture_dispose(&fixture);
 }
 
+/* A complete module path recovers the same imported top-level declarations
+ * without a lexical import and emits their ordinary external surfaces. */
+static void test_full_path_values_codegen_compile_without_import(void) {
+    static const char *kImportedSource =
+        "open module vendor.full_path;\n"
+        "open enum Mode { First, Second }\n"
+        "open let seed: int = 7;\n"
+        "open var current: int = 1;\n"
+        "open func add(left: int, right: int): int {\n"
+        "    return left + right;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module demo.main;\n"
+        "func project(next: int): int {\n"
+        "    let mode: vendor.full_path.Mode = vendor.full_path.Mode.Second;\n"
+        "    vendor.full_path.current = next;\n"
+        "    return vendor.full_path.add(vendor.full_path.seed, vendor.full_path.current) + (int)mode;\n"
+        "}\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    imported_source_fixture_init(
+        &fixture,
+        "tests/full_path_function_binding_vendor.ff",
+        kImportedSource);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
+
+    program = parse_or_die(
+        kConsumerSource,
+        "tests/full_path_function_binding_consumer.ff");
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__full_path__add__from__") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__full_path__seed__ensure_init__from__void();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng__vendor__full_path__current__ensure_init__from__void();") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 static void test_imported_public_let_binding_codegen_compiles(void) {
     static const char *kImportedSource =
         "open module vendor.values;\n"
@@ -14928,6 +15000,7 @@ int main(void) {
     test_imported_feng_function_prototypes_compile();
     test_imported_alias_qualified_type_annotations_codegen_compile();
     test_imported_full_path_type_annotations_codegen_compile_without_use();
+    test_full_path_values_codegen_compile_without_import();
     test_imported_public_let_binding_codegen_compiles();
     test_imported_public_static_members_codegen_compiles();
     test_imported_selected_seal_static_fields_codegen_compiles();

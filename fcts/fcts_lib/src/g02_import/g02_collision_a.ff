@@ -1,0 +1,6 @@
+open module fcts_lib.g02_collision_a;
+
+/** IMP14/IMP16 第一项同名导出。 */
+open func g02Collision(): int {
+  return -2;
+}

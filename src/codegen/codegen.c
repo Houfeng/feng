@@ -2404,6 +2404,8 @@ static bool cg_scope_bind_capture_cell(CG *cg,
                                        FengCodegenMapingVariableKind debug_kind);
 static void cg_free_cstr_array(char **items, size_t count);
 static void cg_free_const_cstr_array(const char **items, size_t count);
+static FengSlice *cg_expr_path_segments_alloc(const FengExpr *expr,
+                                              size_t *out_count);
 static const UserType *cg_find_user_type_by_expr_path(CG *cg, const FengExpr *expr);
 static bool cg_pass_emit_type_static_binding_ensure_inits(CG *cg);
 static const FreeFn *cg_find_free_fn_by_decl(const CG *cg, const FengDecl *decl);
@@ -5271,6 +5273,59 @@ static const FengDecl *cg_find_visible_binding_decl(const CG *cg, const char *na
     return visible;
 }
 
+/* Resolve the module and final member name for either `alias.member` or
+ * `module.path.member`. Semantic analysis has already enforced visibility;
+ * codegen only recovers the canonical provider declaration. */
+static const FengSemanticModule *cg_resolve_module_member_target(
+    const CG *cg,
+    const FengExpr *expr,
+    FengSlice *out_member_name) {
+    FengSlice *segments;
+    size_t segment_count = 0U;
+    const FengSemanticModule *module = NULL;
+
+    if (out_member_name != NULL) {
+        memset(out_member_name, 0, sizeof(*out_member_name));
+    }
+    if (cg == NULL || expr == NULL || out_member_name == NULL ||
+        expr->kind != FENG_EXPR_MEMBER || expr->as.member.object == NULL) {
+        return NULL;
+    }
+
+    segments = cg_expr_path_segments_alloc(expr, &segment_count);
+    if (segments != NULL && segment_count > 1U && cg->cur_scope != NULL &&
+        scope_lookup(cg->cur_scope,
+                     segments[0].data,
+                     segments[0].length) != NULL) {
+        free(segments);
+        return NULL;
+    }
+
+    if (cg->cur_program != NULL &&
+        expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
+        module = cg_find_alias_target_module_from_program(
+            cg,
+            cg->cur_program,
+            expr->as.member.object->as.identifier);
+        if (module != NULL) {
+            *out_member_name = expr->as.member.member;
+            free(segments);
+            return module;
+        }
+    }
+
+    if (segments != NULL && segment_count > 1U) {
+        module = cg_find_semantic_module_by_segments(cg,
+                                                     segments,
+                                                     segment_count - 1U);
+        if (module != NULL) {
+            *out_member_name = segments[segment_count - 1U];
+        }
+    }
+    free(segments);
+    return module;
+}
+
 static const FengDecl *cg_resolve_imported_module_binding_decl(const CG *cg,
                                                                const FengExpr *expr) {
     if (cg == NULL || expr == NULL) {
@@ -5291,28 +5346,17 @@ static const FengDecl *cg_resolve_imported_module_binding_decl(const CG *cg,
             return decl;
         }
 
-        case FENG_EXPR_MEMBER:
-            if (cg->cur_program != NULL && expr->as.member.object != NULL &&
-                expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-                size_t use_index;
+        case FENG_EXPR_MEMBER: {
+            FengSlice member_name;
+            const FengSemanticModule *module =
+                cg_resolve_module_member_target(cg, expr, &member_name);
 
-                for (use_index = 0U; use_index < cg->cur_program->use_count; ++use_index) {
-                    const FengUseDecl *use_decl = &cg->cur_program->uses[use_index];
-
-                    if (!use_decl->has_alias ||
-                        !cg_slice_equals(use_decl->alias,
-                                         expr->as.member.object->as.identifier)) {
-                        continue;
-                    }
-
-                    return cg_find_public_binding_decl_in_module(
-                        cg_find_semantic_module_by_segments(cg,
-                                                            use_decl->segments,
-                                                            use_decl->segment_count),
-                        expr->as.member.member);
-                }
+            if (module != NULL) {
+                return cg_find_public_binding_decl_in_module(module,
+                                                             member_name);
             }
             return NULL;
+        }
         default:
             return NULL;
     }
@@ -5693,28 +5737,19 @@ static const FengDecl *cg_resolve_type_target_enum_decl(const CG *cg, const Feng
                                              target_expr->as.identifier.data,
                                              target_expr->as.identifier.length);
 
-        case FENG_EXPR_MEMBER:
-            if (cg->cur_program != NULL && target_expr->as.member.object != NULL &&
-                target_expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-                size_t use_index;
+        case FENG_EXPR_MEMBER: {
+            FengSlice member_name;
+            const FengSemanticModule *module =
+                cg_resolve_module_member_target(cg,
+                                                target_expr,
+                                                &member_name);
 
-                for (use_index = 0U; use_index < cg->cur_program->use_count; ++use_index) {
-                    const FengUseDecl *use_decl = &cg->cur_program->uses[use_index];
-
-                    if (!use_decl->has_alias ||
-                        !cg_slice_equals(use_decl->alias,
-                                         target_expr->as.member.object->as.identifier)) {
-                        continue;
-                    }
-
-                    return cg_find_public_enum_decl_in_module(
-                        cg_find_semantic_module_by_segments(cg,
-                                                            use_decl->segments,
-                                                            use_decl->segment_count),
-                        target_expr->as.member.member);
-                }
+            if (module != NULL) {
+                return cg_find_public_enum_decl_in_module(module,
+                                                          member_name);
             }
             return NULL;
+        }
 
         default:
             return NULL;

@@ -1,0 +1,135 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.g02_primary as g02;
+
+/** 验证 G02 三种模块名称访问形式及文件级 import 隔离。 */
+open func test_module_import_semantics() {
+  describe("G02 module name resolution semantics", () {
+    test("IMP01 import introduces a callable short name", () {
+      assert(g02CallShortName() == 3, "IMP01 short-name function call");
+    });
+
+    test("IMP02 import alias calls a public top-level function", () {
+      assert(g02.g02Add(2, 3) == 5, "IMP02 alias function call");
+    });
+
+    test("IMP03 alias and full path share one binding slot", () {
+      let aliasAddress: int* = &g02.g02Mutable;
+      let pathAddress: int* = &fcts_lib.g02_primary.g02Mutable;
+      assert(aliasAddress == pathAddress, "IMP03 canonical binding address");
+      g02.g02Mutable = 31;
+      assert(fcts_lib.g02_primary.g02Mutable == 31,
+             "IMP03 full path observes alias write");
+    });
+
+    test("IMP04 alias references an exported type", () {
+      let value: g02.G02Record = g02.G02Record { value: 40 };
+      assert(value.value == 40, "IMP04 alias type");
+    });
+
+    test("IMP05 alias references an exported enum", () {
+      let mode: g02.G02Mode = g02.G02Mode.Second;
+      assert((int)mode == 1, "IMP05 alias enum");
+    });
+
+    test("IMP06 alias references an exported spec", () {
+      let value: g02.G02Readable = g02.G02Record { value: 60 };
+      assert(value.value == 60, "IMP06 alias spec");
+    });
+
+    test("IMP07 full path calls a public top-level function", () {
+      assert(g02CallFullPath() == 7, "IMP07 full-path function call");
+    });
+
+    test("IMP08 full path forms and invokes a function value", () {
+      assert(g02CallFullPathFunctionValue() == 9,
+             "IMP08 full-path function value");
+    });
+
+    test("IMP09 full path references and constructs a type", () {
+      assert(g02ConstructFullPathType() == 90, "IMP09 full-path type");
+    });
+
+    test("IMP10 full path references an enum", () {
+      assert(g02ReadFullPathEnum() == 1, "IMP10 full-path enum");
+    });
+
+    test("IMP11 full path references a spec", () {
+      assert(g02ReadFullPathSpec() == 110, "IMP11 full-path spec");
+    });
+
+    test("IMP12 full path reads a module let", () {
+      assert(g02ReadFullPathLet() == 120, "IMP12 full-path let");
+    });
+
+    test("IMP13 full path reads and writes a module var", () {
+      assert(g02WriteAndReadFullPathVar(130) == 130,
+             "IMP13 full-path var");
+    });
+
+    test("IMP14 unused same-name imports remain legal", () {
+      assert(g02UnusedImportCollisionMarker() == 140,
+             "IMP14 unused import collision");
+    });
+
+    test("IMP15 unused import and local collision remains legal", () {
+      assert(g02UnusedLocalCollisionMarker() == 150,
+             "IMP15 unused local collision");
+    });
+
+    test("IMP16 imports do not leak to another file", () {
+      assert(g02FileImportIsolationValue() == 160,
+             "IMP16 file import isolation");
+    });
+
+    test("IMP17 alias and short name share binding state", () {
+      g02WriteShortName(170);
+      assert(g02ReadAlias() == 170, "IMP17 shared binding state");
+    });
+
+    test("IMP18 import introduces a type short name", () {
+      assert(g02ConstructShortNameType() == 180, "IMP18 short-name type");
+    });
+
+    test("IMP19 import introduces an enum short name", () {
+      assert(g02ReadShortNameEnum() == 1, "IMP19 short-name enum");
+    });
+
+    test("IMP20 import introduces a spec short name", () {
+      assert(g02ReadShortNameSpec() == 200, "IMP20 short-name spec");
+    });
+
+    test("IMP21 import introduces a module let short name", () {
+      assert(g02ReadShortNameLet() == 120, "IMP21 short-name let");
+    });
+
+    test("IMP22 import introduces a module var short name", () {
+      assert(g02WriteAndReadShortNameVar(220) == 220,
+             "IMP22 short-name var");
+    });
+
+    test("IMP23 import alias reads a public module let", () {
+      assert(g02ReadAliasLet() == 120, "IMP23 alias let");
+    });
+
+    test("IMP24 import alias reads and writes a public module var", () {
+      assert(g02WriteAndReadAliasVar(240) == 240, "IMP24 alias var");
+    });
+
+    test("IMP25 import alias forms and invokes a function value", () {
+      assert(g02CallAliasFunctionValue() == 25,
+             "IMP25 alias function value");
+    });
+
+    test("IMP26 import introduces a callable function short name", () {
+      assert(g02CallShortNameFunctionValue() == 26,
+             "IMP26 short-name function value");
+    });
+
+    test("IMP27 local value takes precedence over a full-path root", () {
+      assert(g02ReadLocalValueBeforeFullPath() == 270,
+             "IMP27 lexical local precedence");
+    });
+  });
+}

@@ -30,11 +30,23 @@ import app.user;
 import app.service as service;
 ```
 
-无别名导入会把目标模块的公开名称以短名引入当前文件。别名导入通过限定名访问：
+公开顶层声明有三种名称访问形式：
 
 ```feng
-let current = service.load();
+import app.user;
+import app.service as service;
+
+let first = load();                    // import 后使用短名
+let second = service.load();           // import + as 后使用别名
+let third = app.archive.load();        // 无需 import，直接使用完整模块路径
 ```
+
+三种形式访问同一公开声明。完整模块路径适用于公开的 `type`、`enum`、`spec`、顶层函数和模块级
+`let` / `var`；模块及目标声明都必须公开。详细规则见
+[Feng 语言模块规范](../../specifications/feng-module.md#4-模块导入规则)。
+
+表达式中的局部值优先于同名的完整模块路径首段。需要访问被局部值遮蔽的模块时，使用不冲突的
+import alias。
 
 每个文件的导入彼此独立；同一模块中另一个文件的 `import` 不会自动作用于当前文件。
 
@@ -79,12 +91,12 @@ open fit User {
 
 ## 避免名称冲突
 
-来自多个导入的同名符号在真正使用裸名时产生二义性。优先使用导入别名或完整模块路径消除冲突：
+来自多个导入的同名符号在真正使用裸名时产生二义性。可使用导入别名或完整模块路径消除冲突：
 
 ```feng
 import app.first as first;
 import app.second as second;
 
 let a = first.User {};
-let b = second.User {};
+let b = app.second.User {};
 ```

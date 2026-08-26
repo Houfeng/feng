@@ -233,7 +233,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
 - 场景 1/2/3 同名 type / enum / spec / let / var / func,使用裸名时按场景报 AE0005。
 - 交叉类型歧义(import type + 本地 let 同名,使用裸名时按场景报 AE0005)。
 - 未使用的冲突名称不报错。
-- 使用完整模块路径或 import 别名消歧义,编译成功。
+- 按模块主规范的三种名称访问形式,使用完整模块路径或 import 别名消歧义后编译成功。
 - 第 4/5/6 类不受影响。
 - 通过 `make test` 全量回归测试。
 
@@ -257,7 +257,7 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
     - `test_lazy_ambiguity_import_vs_local_type`:import 同名 type + 本地 type,使用裸名类型标注 → AE0005(场景 3)。
     - `test_lazy_ambiguity_import_vs_local_value`:import 同名 func + 本地 func,调用裸名 → AE0005(场景 3)。
     - `test_lazy_ambiguity_unused_no_error`:两个 import 同名,未使用 → 编译成功。
-    - `test_lazy_ambiguity_resolved_by_qualified_path`:使用完整模块路径 → 编译成功。
+    - `test_lazy_ambiguity_resolved_by_qualified_path`:原交付用例实际使用 import alias；G02 已将其修正为真正的完整模块路径并完成回归。
     - `test_lazy_ambiguity_resolved_by_alias`:使用 `as` 别名 → 编译成功。
     - `test_lazy_ambiguity_import_vs_other_file_in_same_module`:import + 同模块其他文件同名,使用裸名 → AE0005(场景 2)。
     - `test_lazy_ambiguity_spec_reference`:spec 引用位置的歧义 → AE0005。

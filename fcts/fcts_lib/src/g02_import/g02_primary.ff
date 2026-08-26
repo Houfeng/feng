@@ -1,0 +1,41 @@
+open module fcts_lib.g02_primary;
+
+/** IMP04/IMP09 跨包公开类型。 */
+open type G02Record: G02Readable {
+  open let value: int;
+}
+
+/** IMP05/IMP10 跨包公开枚举。 */
+open enum G02Mode {
+  First,
+  Second
+}
+
+/** IMP06/IMP11 跨包公开对象契约。 */
+open spec G02Readable {
+  let value: int;
+}
+
+/** IMP08 跨包公开 callable-form spec。 */
+open spec G02Mapper(value: int): int;
+
+/** IMP01/IMP02/IMP07 跨包公开顶层函数。 */
+open func g02Add(left: int, right: int): int {
+  return left + right;
+}
+
+/** IMP08 可作为完整路径函数值的公开顶层函数。 */
+open func g02Increment(value: int): int {
+  return value + 1;
+}
+
+/** IMP12 通过完整路径读取的公开模块级 let。 */
+open let g02Immutable: int = 120;
+
+/** IMP03/IMP13/IMP17 由三种名称形式共享的公开模块级 var。 */
+open var g02Mutable: int = 130;
+
+/** IMP15 与 consumer 本地声明形成未使用惰性碰撞的公开函数。 */
+open func g02LocalCollision(): int {
+  return -1;
+}

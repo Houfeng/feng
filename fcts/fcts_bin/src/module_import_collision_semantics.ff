@@ -1,0 +1,20 @@
+module fcts_bin;
+
+import fcts_lib.g02_primary;
+import fcts_lib.g02_collision_a;
+import fcts_lib.g02_collision_b;
+
+/** IMP15 与未使用的 import 名称形成惰性碰撞。 */
+func g02LocalCollision(): int {
+  return 150;
+}
+
+/** IMP14 证明两个同名 import 未被引用时保持合法。 */
+open func g02UnusedImportCollisionMarker(): int {
+  return 140;
+}
+
+/** IMP15 证明 import 与同名本地声明未被引用时保持合法。 */
+open func g02UnusedLocalCollisionMarker(): int {
+  return 150;
+}

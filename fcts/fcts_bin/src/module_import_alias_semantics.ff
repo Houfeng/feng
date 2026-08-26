@@ -1,0 +1,25 @@
+module fcts_bin;
+
+import fcts_lib.g02_primary as g02alias;
+
+/** IMP17 通过 import alias 读取同一跨包公开模块级 var。 */
+open func g02ReadAlias(): int {
+  return g02alias.g02Mutable;
+}
+
+/** IMP23 通过 import alias 读取公开模块级 let。 */
+open func g02ReadAliasLet(): int {
+  return g02alias.g02Immutable;
+}
+
+/** IMP24 通过 import alias 读写公开模块级 var。 */
+open func g02WriteAndReadAliasVar(value: int): int {
+  g02alias.g02Mutable = value;
+  return g02alias.g02Mutable;
+}
+
+/** IMP25 通过 import alias 取得公开顶层函数值并调用。 */
+open func g02CallAliasFunctionValue(): int {
+  let mapper: g02alias.G02Mapper = g02alias.g02Increment;
+  return mapper(24);
+}

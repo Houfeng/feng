@@ -2587,12 +2587,12 @@ static bool builtin_type_name_is_integer(FengSlice name) {
 }
 
 /* Stronger check than the legacy "target is public" predicate: a target
- * module is *use-visible* from the current resolve context only if either
+ * module is import-visible from the current resolve context only if either
  * (a) it is the same module, or (b) the target is `open mod` AND the current
- * file imported it via a `use` declaration. Required by docs/specifications/feng-module.md
+ * file imported it via an `import` declaration. Required by docs/specifications/feng-module.md
  * to prevent ambient access to any public module without an explicit import. */
-static bool module_is_use_visible_from(const ResolveContext *ctx,
-                                       const FengSemanticModule *target) {
+static bool module_is_import_visible_from(const ResolveContext *ctx,
+                                          const FengSemanticModule *target) {
     size_t i;
 
     if (ctx == NULL || target == NULL) {
@@ -5231,6 +5231,98 @@ static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, Fe
     return find_alias(context->aliases, context->alias_count, alias_name);
 }
 
+/* A module member can be qualified either by a file-local import alias or by
+ * the module's complete path.  Keeping both spellings behind one resolver
+ * guarantees that all top-level declaration categories share the same module
+ * identity and visibility rules. */
+typedef struct ResolvedModuleMemberTarget {
+    const FengSemanticModule *module;
+    FengSlice member_name;
+    const AliasEntry *alias;
+} ResolvedModuleMemberTarget;
+
+/* Resolve `alias.member` or `module.path.member` without performing a lookup
+ * for the member declaration itself. */
+static bool resolve_module_member_target(
+    const ResolveContext *context,
+    const FengExpr *expr,
+    ResolvedModuleMemberTarget *out_target) {
+    const FengExpr *object;
+    size_t segment_count = 0U;
+    FengSlice *segments = NULL;
+
+    if (out_target != NULL) {
+        memset(out_target, 0, sizeof(*out_target));
+    }
+    if (context == NULL || expr == NULL || out_target == NULL ||
+        expr->kind != FENG_EXPR_MEMBER || expr->as.member.object == NULL) {
+        return false;
+    }
+
+    object = expr->as.member.object;
+    if (object->kind == FENG_EXPR_IDENTIFIER) {
+        const AliasEntry *alias =
+            find_unshadowed_alias(context, object->as.identifier);
+
+        if (alias != NULL) {
+            out_target->module = alias->target_module;
+            out_target->member_name = expr->as.member.member;
+            out_target->alias = alias;
+            return true;
+        }
+    }
+
+    segments = expr_path_segments_alloc(expr, &segment_count);
+    if (segments != NULL && segment_count > 1U) {
+        size_t module_index;
+
+        /* A lexical local keeps ordinary member-access meaning even when the
+         * same segments also form a complete module path. */
+        if (resolver_has_local_name(context, segments[0])) {
+            free(segments);
+            return false;
+        }
+        module_index = find_module_index_by_path(
+            context->analysis, segments, segment_count - 1U);
+
+        if (module_index < context->analysis->module_count &&
+            module_is_full_path_visible_from(
+                context, &context->analysis->modules[module_index])) {
+            out_target->module = &context->analysis->modules[module_index];
+            out_target->member_name = segments[segment_count - 1U];
+        }
+    }
+    free(segments);
+    return out_target->module != NULL;
+}
+
+/* Format the source-visible qualified name for diagnostics while preserving
+ * an import alias when that was the spelling used by the program. */
+static char *format_module_member_target_name(
+    const ResolvedModuleMemberTarget *target) {
+    char *qualifier;
+    char *result;
+
+    if (target == NULL || target->module == NULL) {
+        return NULL;
+    }
+    qualifier = target->alias != NULL
+                    ? format_message("%.*s",
+                                     (int)target->alias->alias.length,
+                                     target->alias->alias.data)
+                    : format_module_name(target->module->segments,
+                                         target->module->segment_count);
+    if (qualifier == NULL) {
+        return NULL;
+    }
+    result = format_message("%s.%.*s",
+                            qualifier,
+                            (int)target->member_name.length,
+                            target->member_name.data);
+    free(qualifier);
+    return result;
+}
+
 static const FengDecl *find_named_type_decl(const ResolveContext *context,
                                             const FengSlice *segments,
                                             size_t segment_count,
@@ -7317,16 +7409,13 @@ static bool expr_is_top_level_function_reference(ResolveContext *context, const 
                                               expr->as.identifier) != NULL;
 
         case FENG_EXPR_MEMBER:
-            if (expr->as.member.object != NULL &&
-                expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias =
-                    find_unshadowed_alias(context, expr->as.member.object->as.identifier);
+            {
+                ResolvedModuleMemberTarget target;
 
-                return alias != NULL &&
-                       find_module_public_function_decl(alias->target_module,
-                                                        expr->as.member.member) != NULL;
+                return resolve_module_member_target(context, expr, &target) &&
+                       find_module_public_function_decl(target.module,
+                                                        target.member_name) != NULL;
             }
-            return false;
 
         default:
             return false;
@@ -12391,27 +12480,26 @@ static bool callable_value_expr_may_escape_exception(ResolveContext *context,
         }
 
         case FENG_EXPR_MEMBER: {
-            const FengExpr *object = expr->as.member.object;
+            ResolvedModuleMemberTarget target;
 
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+            if (resolve_module_member_target(context, expr, &target)) {
+                const FengDecl *binding_decl =
+                    find_module_public_binding_decl(target.module,
+                                                    target.member_name);
 
-                if (alias != NULL) {
-                    const FengDecl *binding_decl =
-                        find_module_public_binding_decl(alias->target_module, expr->as.member.member);
+                if (binding_decl != NULL &&
+                    binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                    binding_decl->as.binding.initializer != NULL) {
+                    const FengTypeRef *source_type_ref =
+                        binding_decl->as.binding.type != NULL
+                            ? binding_decl->as.binding.type
+                            : expected_type_ref;
 
-                    if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
-                        binding_decl->as.binding.initializer != NULL) {
-                        const FengTypeRef *source_type_ref = binding_decl->as.binding.type != NULL
-                                                                 ? binding_decl->as.binding.type
-                                                                 : expected_type_ref;
-
-                        return callable_value_expr_may_escape_exception(
-                            context,
-                            binding_decl->as.binding.initializer,
-                            source_type_ref,
-                            depth + 1U);
-                    }
+                    return callable_value_expr_may_escape_exception(
+                        context,
+                        binding_decl->as.binding.initializer,
+                        source_type_ref,
+                        depth + 1U);
                 }
             }
             break;
@@ -13861,17 +13949,15 @@ static bool throw_expr_is_callable_value(ResolveContext *context,
 
     if (expr->kind == FENG_EXPR_MEMBER) {
         const FengExpr *object = expr->as.member.object;
+        ResolvedModuleMemberTarget module_target;
 
-        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-            const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
-
-            if (alias != NULL &&
-                find_module_public_function_decl(alias->target_module, expr->as.member.member) != NULL) {
-                if (out_reason != NULL) {
-                    *out_reason = "function values cannot be thrown as exceptions";
-                }
-                return true;
+        if (resolve_module_member_target(context, expr, &module_target) &&
+            find_module_public_function_decl(module_target.module,
+                                             module_target.member_name) != NULL) {
+            if (out_reason != NULL) {
+                *out_reason = "function values cannot be thrown as exceptions";
             }
+            return true;
         }
 
         {
@@ -15438,7 +15524,7 @@ static bool fit_decl_is_visible_from(const ResolveContext *ctx,
      * owning module via `use`. Mirrors docs/specifications/feng-fit.md §4: "其他 mod 通过
      * use 引入当前模块后，该契约关系在其作用域内生效". */
     return fit_decl->visibility == FENG_VISIBILITY_PUBLIC &&
-           module_is_use_visible_from(ctx, fit_module);
+           module_is_import_visible_from(ctx, fit_module);
 }
 
 static bool visit_visible_fit_methods_for_type(const ResolveContext *ctx,
@@ -17354,19 +17440,22 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
             }
         }
 
-        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-            const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+        {
+            ResolvedModuleMemberTarget module_target;
 
-            if (alias != NULL) {
+            if (resolve_module_member_target(
+                    context, callee, &module_target)) {
                 FunctionCallResolution resolution =
-                    resolve_module_public_function_overload(context,
-                                                            alias->target_module,
-                                                            callee->as.member.member,
-                                                            expr->as.call.args,
-                                                            expr->as.call.arg_count,
-                                                            expr->as.call.has_explicit_type_args,
-                                                            (const FengTypeRef *const *)expr->as.call.explicit_type_args,
-                                                            expr->as.call.explicit_type_arg_count);
+                    resolve_module_public_function_overload(
+                        context,
+                        module_target.module,
+                        module_target.member_name,
+                        expr->as.call.args,
+                        expr->as.call.arg_count,
+                        expr->as.call.has_explicit_type_args,
+                        (const FengTypeRef *const *)
+                            expr->as.call.explicit_type_args,
+                        expr->as.call.explicit_type_arg_count);
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
@@ -17374,18 +17463,22 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                     if (resolution.callable->return_type != NULL) {
                         const FengTypeRef *return_type_ref =
-                            substitute_callable_return_type_for_call(context,
-                                                                     NULL,
-                                                                     NULL,
-                                                                     inferred_expr_type_unknown(),
-                                                                     expr,
-                                                                     resolution.callable,
-                                                                     resolution.decl != NULL &&
-                                                                     resolution.decl->is_extern);
+                            substitute_callable_return_type_for_call(
+                                context,
+                                NULL,
+                                NULL,
+                                inferred_expr_type_unknown(),
+                                expr,
+                                resolution.callable,
+                                resolution.decl != NULL &&
+                                    resolution.decl->is_extern);
 
-                        return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
+                        return_type =
+                            inferred_expr_type_from_return_type_ref(
+                                return_type_ref);
                     } else {
-                        return_type = callable_effective_return_type(context, resolution.callable);
+                        return_type = callable_effective_return_type(
+                            context, resolution.callable);
                     }
 
                     if (inferred_expr_type_is_known(return_type)) {
@@ -17586,26 +17679,26 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
 
             if (callee->kind == FENG_EXPR_MEMBER) {
                 const FengExpr *object = callee->as.member.object;
+                ResolvedModuleMemberTarget module_target;
 
-                if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                    const AliasEntry *alias =
-                        find_unshadowed_alias(context, object->as.identifier);
+                if (resolve_module_member_target(
+                        context, callee, &module_target)) {
+                    FunctionCallResolution resolution =
+                        resolve_module_public_function_overload(
+                            context,
+                            module_target.module,
+                            module_target.member_name,
+                            expr->as.call.args,
+                            expr->as.call.arg_count,
+                            expr->as.call.has_explicit_type_args,
+                            (const FengTypeRef *const *)
+                                expr->as.call.explicit_type_args,
+                            expr->as.call.explicit_type_arg_count);
 
-                    if (alias != NULL) {
-                        FunctionCallResolution resolution =
-                            resolve_module_public_function_overload(context,
-                                                                    alias->target_module,
-                                                                    callee->as.member.member,
-                                                                    expr->as.call.args,
-                                                                    expr->as.call.arg_count,
-                                                                    expr->as.call.has_explicit_type_args,
-                                                                    (const FengTypeRef *const *)expr->as.call.explicit_type_args,
-                                                                    expr->as.call.explicit_type_arg_count);
-
-                        if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
-                            callable_return_inference_is_pending(context, resolution.callable)) {
-                            return true;
-                        }
+                    if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
+                        callable_return_inference_is_pending(
+                            context, resolution.callable)) {
+                        return true;
                     }
                 }
 
@@ -18738,19 +18831,25 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
                 return append_assignment_target_not_writable_error(context, target);
             }
 
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+            {
+                ResolvedModuleMemberTarget module_target;
 
-                if (alias != NULL) {
+                if (resolve_module_member_target(
+                        context, target, &module_target)) {
                     const FengDecl *binding_decl =
-                        find_module_public_binding_decl(alias->target_module, target->as.member.member);
+                        find_module_public_binding_decl(
+                            module_target.module,
+                            module_target.member_name);
 
-                    if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
-                        mutability_is_writable(binding_decl->as.binding.mutability)) {
+                    if (binding_decl != NULL &&
+                        binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
+                        mutability_is_writable(
+                            binding_decl->as.binding.mutability)) {
                         return true;
                     }
 
-                    return append_assignment_target_not_writable_error(context, target);
+                    return append_assignment_target_not_writable_error(
+                        context, target);
                 }
             }
 
@@ -19329,15 +19428,16 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         return inferred_expr_type_from_decl(type_target.type_decl);
     }
 
-    if (expr->as.member.object != NULL && expr->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-        const AliasEntry *alias =
-            find_unshadowed_alias(context, expr->as.member.object->as.identifier);
+    {
+        ResolvedModuleMemberTarget module_target;
 
-        if (alias != NULL) {
+        if (resolve_module_member_target(context, expr, &module_target)) {
             const FengDecl *binding_decl =
-                find_module_public_binding_decl(alias->target_module, expr->as.member.member);
+                find_module_public_binding_decl(module_target.module,
+                                                module_target.member_name);
 
-            if (binding_decl != NULL && binding_decl->kind == FENG_DECL_GLOBAL_BINDING) {
+            if (binding_decl != NULL &&
+                binding_decl->kind == FENG_DECL_GLOBAL_BINDING) {
                 return infer_global_binding_decl_type(context, binding_decl);
             }
 
@@ -20078,21 +20178,18 @@ static CallableValueResolution resolve_explicit_generic_callable_value(
 
     if (target != NULL && target->kind == FENG_EXPR_MEMBER) {
         const FengExpr *object = target->as.member.object;
+        ResolvedModuleMemberTarget module_target;
 
-        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-            const AliasEntry *alias =
-                find_unshadowed_alias(context, object->as.identifier);
-
-            if (alias != NULL) {
-                return resolve_module_public_function_value_overload(
-                    context,
-                    alias->target_module,
-                    target->as.member.member,
-                    expected_type_ref,
-                    function_type_decl,
-                    explicit_type_args,
-                    explicit_type_arg_count);
-            }
+        if (resolve_module_member_target(
+                context, target, &module_target)) {
+            return resolve_module_public_function_value_overload(
+                context,
+                module_target.module,
+                module_target.member_name,
+                expected_type_ref,
+                function_type_decl,
+                explicit_type_args,
+                explicit_type_arg_count);
         }
 
         {
@@ -20228,33 +20325,33 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
         case FENG_EXPR_MEMBER: {
             const FengExpr *object = expr->as.member.object;
             InferredExprType expr_type;
+            ResolvedModuleMemberTarget module_target;
 
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
-
-                if (alias != NULL) {
-                    result = resolve_module_public_function_value_overload(context,
-                                                                          alias->target_module,
-                                                                          expr->as.member.member,
-                                                                          expected_type_ref,
-                                                                          function_type_decl,
-                                                                          NULL,
-                                                                          0U);
-                    if (result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
-                        return result;
-                    }
-
-                    expr_type = infer_member_expr_type(context, expr);
-                    if (inferred_expr_type_is_known(expr_type) &&
-                        inferred_expr_type_matches_type_ref(context, expr_type, expected_type_ref)) {
-                        result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
-                        result.callable_decl = NULL;
-                        result.callable_member = NULL;
-                        result.callable_owner_type_decl = NULL;
-                        result.callable_fit_decl = NULL;
-                    }
+            if (resolve_module_member_target(
+                    context, expr, &module_target)) {
+                result = resolve_module_public_function_value_overload(
+                    context,
+                    module_target.module,
+                    module_target.member_name,
+                    expected_type_ref,
+                    function_type_decl,
+                    NULL,
+                    0U);
+                if (result.kind != FENG_CALLABLE_VALUE_RESOLUTION_NONE) {
                     return result;
                 }
+
+                expr_type = infer_member_expr_type(context, expr);
+                if (inferred_expr_type_is_known(expr_type) &&
+                    inferred_expr_type_matches_type_ref(
+                        context, expr_type, expected_type_ref)) {
+                    result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+                    result.callable_decl = NULL;
+                    result.callable_member = NULL;
+                    result.callable_owner_type_decl = NULL;
+                    result.callable_fit_decl = NULL;
+                }
+                return result;
             }
 
             {
@@ -21309,14 +21406,13 @@ static bool expr_is_callable_value_reference(ResolveContext *context, const Feng
 
         case FENG_EXPR_MEMBER: {
             const FengExpr *object = expr->as.member.object;
+            ResolvedModuleMemberTarget module_target;
 
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-                const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
-
-                if (alias != NULL) {
-                    return count_module_public_function_overloads(alias->target_module,
-                                                                  expr->as.member.member) > 0U;
-                }
+            if (resolve_module_member_target(
+                    context, expr, &module_target)) {
+                return count_module_public_function_overloads(
+                           module_target.module,
+                           module_target.member_name) > 0U;
             }
 
             {
@@ -22359,11 +22455,13 @@ static FengSpecCoercionCallableSource classify_callable_source(
             return FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
         }
         case FENG_EXPR_MEMBER: {
-            /* `mod.fn` (alias-qualified top-level function) reports as
+            /* Alias-qualified and full-path top-level functions report as
              * TOP_LEVEL_FN; `obj.method` reports as METHOD_VALUE. */
-            const FengExpr *object = expr->as.member.object;
-            if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER &&
-                find_unshadowed_alias(context, object->as.identifier) != NULL) {
+            ResolvedModuleMemberTarget target;
+
+            if (resolve_module_member_target(context, expr, &target) &&
+                find_module_public_function_decl(target.module,
+                                                 target.member_name) != NULL) {
                 return FENG_SPEC_COERCION_CALLABLE_SOURCE_TOP_LEVEL_FN;
             }
             return FENG_SPEC_COERCION_CALLABLE_SOURCE_METHOD_VALUE;
@@ -22732,25 +22830,27 @@ static AbiFunctionPointerAddressResolution resolve_abi_function_pointer_address(
         return result;
     }
 
-    if (operand->kind == FENG_EXPR_MEMBER && operand->as.member.object != NULL &&
-        operand->as.member.object->kind == FENG_EXPR_IDENTIFIER) {
-        const AliasEntry *alias =
-            find_unshadowed_alias(context, operand->as.member.object->as.identifier);
+    if (operand->kind == FENG_EXPR_MEMBER) {
+        ResolvedModuleMemberTarget module_target;
 
-        if (alias == NULL) {
+        if (!resolve_module_member_target(
+                context, operand, &module_target)) {
             return result;
         }
 
         result.kind = ABI_FUNCTION_POINTER_ADDRESS_RESOLUTION_NO_MATCH;
-        for (size_t program_index = 0U; program_index < alias->target_module->program_count;
+        for (size_t program_index = 0U;
+             program_index < module_target.module->program_count;
              ++program_index) {
-            const FengProgram *program = alias->target_module->programs[program_index];
+            const FengProgram *program =
+                module_target.module->programs[program_index];
 
             for (size_t decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
                 const FengDecl *decl = program->declarations[decl_index];
 
                 if (decl->kind != FENG_DECL_FUNCTION || !decl_is_public(decl) || decl->is_extern ||
-                    !slice_equals(decl->as.function_decl.name, operand->as.member.member) ||
+                    !slice_equals(decl->as.function_decl.name,
+                                  module_target.member_name) ||
                     !annotations_contain_kind(decl->annotations,
                                               decl->annotation_count,
                                               FENG_ANNOTATION_ABI) ||
@@ -25651,13 +25751,14 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
         InferredExprType owner_type;
         FunctionCallResolution resolution;
 
-        if (object != NULL && object->kind == FENG_EXPR_IDENTIFIER) {
-            const AliasEntry *alias = find_unshadowed_alias(context, object->as.identifier);
+        {
+            ResolvedModuleMemberTarget module_target;
 
-            if (alias != NULL) {
+            if (resolve_module_member_target(
+                    context, callee, &module_target)) {
                 resolution = resolve_module_public_function_overload(context,
-                                                                    alias->target_module,
-                                                                    callee->as.member.member,
+                                                                    module_target.module,
+                                                                    module_target.member_name,
                                                                     expr->as.call.args,
                                                                     expr->as.call.arg_count,
                                                                     expr->as.call.has_explicit_type_args,
@@ -25703,15 +25804,18 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     return true;
                 }
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
-                    return resolver_append_error(
-                        context,
-                        callee->token,
-                        "AE0511", format_message("function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
-                                       (int)object->as.identifier.length,
-                                       object->as.identifier.data,
-                                       (int)callee->as.member.member.length,
-                                       callee->as.member.member.data,
-                                       expr->as.call.arg_count));
+                    char *member_name =
+                        format_module_member_target_name(&module_target);
+                    char *message = format_message(
+                        "function '%s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                        member_name != NULL ? member_name : "<unknown>",
+                        expr->as.call.arg_count);
+
+                    free(member_name);
+                    return resolver_append_error(context,
+                                                 callee->token,
+                                                 "AE0511",
+                                                 message);
                 }
                 if (resolution.prepacked_variadic_rejection !=
                     FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
@@ -25721,16 +25825,20 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                 if (resolution.rejected_existing_array_for_variadic) {
                     return report_existing_array_rejected_for_variadic_call(context, callee);
                 }
-                if (find_module_public_function_decl(alias->target_module, callee->as.member.member) != NULL) {
-                    return resolver_append_error(
-                        context,
-                        callee->token,
-                        "AE0512", format_message("function '%.*s.%.*s' has no overload accepting %zu argument(s)",
-                                       (int)object->as.identifier.length,
-                                       object->as.identifier.data,
-                                       (int)callee->as.member.member.length,
-                                       callee->as.member.member.data,
-                                       expr->as.call.arg_count));
+                if (find_module_public_function_decl(module_target.module,
+                                                     module_target.member_name) != NULL) {
+                    char *member_name =
+                        format_module_member_target_name(&module_target);
+                    char *message = format_message(
+                        "function '%s' has no overload accepting %zu argument(s)",
+                        member_name != NULL ? member_name : "<unknown>",
+                        expr->as.call.arg_count);
+
+                    free(member_name);
+                    return resolver_append_error(context,
+                                                 callee->token,
+                                                 "AE0512",
+                                                 message);
                 }
 
                 return validate_callable_typed_expr_call(context,
@@ -27703,41 +27811,43 @@ static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_re
     return true;
 }
 
-static bool resolve_alias_member_expr(ResolveContext *context, const FengExpr *expr) {
-    const FengExpr *object;
-    FengSlice alias_name;
-    const AliasEntry *alias;
+/* Validate a public top-level member reached through either an import alias or
+ * a complete module path. */
+static bool resolve_module_member_expr(ResolveContext *context,
+                                       const FengExpr *expr) {
+    ResolvedModuleMemberTarget target;
     char *module_name;
 
-    if (expr->kind != FENG_EXPR_MEMBER) {
+    if (!resolve_module_member_target(context, expr, &target)) {
         return false;
     }
 
-    object = expr->as.member.object;
-    if (object == NULL || object->kind != FENG_EXPR_IDENTIFIER) {
-        return false;
-    }
-
-    alias_name = object->as.identifier;
-    alias = find_unshadowed_alias(context, alias_name);
-    if (alias == NULL) {
-        return false;
-    }
-
-    if (module_exports_public_name(alias->target_module, expr->as.member.member, NULL, NULL)) {
+    if (module_exports_public_name(target.module,
+                                   target.member_name,
+                                   NULL,
+                                   NULL)) {
         return true;
     }
 
-    module_name = format_module_name(alias->use_decl->segments, alias->use_decl->segment_count);
+    module_name = format_module_name(target.module->segments,
+                                     target.module->segment_count);
     if (!resolver_append_error(
             context,
             expr->token,
-            "AE0903", format_message("module alias '%.*s' does not export public name '%.*s' from module '%s'",
-                           (int)alias_name.length,
-                           alias_name.data,
-                           (int)expr->as.member.member.length,
-                           expr->as.member.member.data,
-                           module_name != NULL ? module_name : "<unknown>"))) {
+            "AE0903",
+            target.alias != NULL
+                ? format_message(
+                      "module alias '%.*s' does not export public name '%.*s' from module '%s'",
+                      (int)target.alias->alias.length,
+                      target.alias->alias.data,
+                      (int)target.member_name.length,
+                      target.member_name.data,
+                      module_name != NULL ? module_name : "<unknown>")
+                : format_message(
+                      "module '%s' does not export public name '%.*s'",
+                      module_name != NULL ? module_name : "<unknown>",
+                      (int)target.member_name.length,
+                      target.member_name.data))) {
         free(module_name);
         return false;
     }
@@ -28120,7 +28230,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             return true;
 
         case FENG_EXPR_MEMBER:
-            if (resolve_alias_member_expr(context, expr)) {
+            if (resolve_module_member_expr(context, expr)) {
                 return record_type_fact_for_site(
                     context, expr, infer_expr_type(context, expr));
             }

@@ -78,22 +78,27 @@ import app.api.user;
 
 - `import` 别名（`as` 声明的名称）与当前文件内的任何符号（本地 `type`、`enum`、`spec`、顶层 `func`、模块级 `let` / `var`、其他 `import` 别名、无别名 `import` 引入的公开名称）重名时,在声明时即报重复定义错误。别名是显式声明,其冲突是确定的,不属于潜在二义性。
 
-别名导入规则:
+名称访问形式:
 
-- `as` 别名仅在当前文件内生效,不改变被导入模块的真实模块名。
-- 使用别名后,该导入目标的公开 `type`、公开 `enum`、顶层 `func` 与模块级 `let` / `var` 都通过 `别名.成员名` 访问,不再以短名直接注入当前作用域。
-- 在类型引用位置允许使用完整模块路径访问公开 `type` / `enum`,例如 `my.app.user.User`; 完整模块路径本身即确定目标模块,不要求额外编写 `import my.app.user;`。该规则适用于类型标注、函数参数与返回类型、数组元素类型、对象构造目标类型等所有要求类型名的语境。
-- 若未使用 `as`,则目标模块的公开 `type`、公开 `enum`、顶层 `func` 与模块级 `let` / `var` 以短名直接进入当前文件作用域。
+- 无别名 import：目标模块的公开 `type`、公开 `enum`、公开 `spec`、公开顶层 `func` 与公开模块级 `let` / `var` 以短名进入当前文件作用域,通过 `成员名` 访问。
+- 别名 import：`as` 别名仅在当前文件内生效,不改变目标模块的真实模块名；目标模块的全部公开顶层声明通过 `别名.成员名` 访问,不再以短名注入当前文件作用域。
+- 完整模块路径：无需 import,可以通过 `模块完整路径.成员名` 直接访问公开模块中的全部公开顶层声明,包括 `type`、`enum`、`spec`、顶层 `func` 和模块级 `let` / `var`。
+
+三种形式只改变名称查找入口,不改变声明身份。它们访问同一公开声明；其中模块级绑定必须指向同一存储槽,并继续遵循 §5 的绑定级惰性初始化和可变性规则。公开 `type`、`enum`、`spec` 的限定路径可用于对应的类型引用、构造和契约语境；公开顶层 `func` 和模块级 `let` / `var` 的限定路径可用于对应的调用、取值、写入等普通表达式语境。
+
+在表达式语境中,若完整模块路径的首段与当前词法作用域中的局部值同名,局部值优先,整条表达式按普通成员访问解析。需要访问被局部值遮蔽的模块时,应通过 `import ... as` 使用不冲突的别名。该规则不改变文件级顶层声明与无别名 import 引入名称之间的惰性二义性规则。
 
 ```feng
-import my.app.user as user;
+import my.app.user;
 import my.utils.math as math;
 
-let item = user.get_current();
+let item = get_current();
 let total = math.add(1, 2);
 let limit = math.default_limit;
 
 let current: my.app.user.User;
+let fresh = my.app.account.load_current();
+let retries = my.app.config.default_retries;
 ```
 
 ## 5 模块级绑定初始化

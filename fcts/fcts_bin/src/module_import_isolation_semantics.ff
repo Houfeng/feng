@@ -1,0 +1,11 @@
+module fcts_bin;
+
+/** IMP16 与其他文件 import 的名称相同，但本文件不继承其 import。 */
+func g02Collision(): int {
+  return 160;
+}
+
+/** IMP16 本文件名称解析只看到同模块声明，不受其他文件 import 影响。 */
+open func g02FileImportIsolationValue(): int {
+  return g02Collision();
+}

@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01 已交付；G02～G25 待 Review
+> 状态：G01、G02 已交付；G03～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -173,45 +173,80 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
 - 问题：`ISSUE-G01-001`、`ISSUE-G01-002`、`ISSUE-G01-003` 均已关闭
 - 建议 commit message：`test: cover lazy initialization semantics`
 
-## 6 G02：import 名称解析语义
+## 6 G02：模块名称解析语义
 
 ### 6.1 测试重点
 
-验证 import alias、完整模块路径、canonical slot、惰性名称碰撞和文件级 import 隔离的合法行为。
+验证 import alias、完整模块路径、同一模块级绑定的存储身份、惰性名称碰撞和文件级 import 隔离的合法行为。
 
-预期新增 `test_module_import_semantics.ff` 和必要的最小 `fcts_lib` 导出声明。
+完整模块路径无需先 import,可访问公开模块中的全部公开顶层声明：`type`、`enum`、`spec`、顶层
+`func` 和模块级 `let` / `var`。本组逐类提供直接运行证据，不把“类型路径可用”替代为“所有顶层路径
+均可用”。
+
+实际新增 `test_module_import_semantics.ff`、必要的多文件辅助用例和最小 `fcts_lib` 导出声明。
 
 ### 6.2 用例 TODO
 
-- [ ] IMP01：import alias 调用函数；
-- [ ] IMP02：alias 与规范绑定名指向同一 canonical slot；
-- [ ] IMP03：alias 引用导出类型；
-- [ ] IMP04：alias 引用导出 enum；
-- [ ] IMP05：alias 引用导出 spec；
-- [ ] IMP06：无 import 时使用完整模块路径访问导出成员；
-- [ ] IMP07：未使用 import 与同名 import 的惰性碰撞保持合法；
-- [ ] IMP08：未使用 import 与同名局部声明的惰性碰撞保持合法；
-- [ ] IMP09：同模块多文件的 import 不泄漏到其他文件；
-- [ ] IMP10：alias 与短名访问同一导出绑定时共享状态。
+- [x] IMP01：无别名 import 后使用短名调用公开顶层函数；
+- [x] IMP02：alias 调用公开顶层函数；
+- [x] IMP03：alias 与完整模块路径访问同一公开模块级 `var` 时指向同一存储槽；
+- [x] IMP04：alias 引用导出类型；
+- [x] IMP05：alias 引用导出 enum；
+- [x] IMP06：alias 引用导出 spec；
+- [x] IMP07：无 import 时使用完整模块路径调用公开顶层函数；
+- [x] IMP08：无 import 时使用完整模块路径取得公开顶层函数值并调用；
+- [x] IMP09：无 import 时使用完整模块路径引用并构造公开 `type`；
+- [x] IMP10：无 import 时使用完整模块路径引用公开 `enum`；
+- [x] IMP11：无 import 时使用完整模块路径引用公开 `spec`；
+- [x] IMP12：无 import 时使用完整模块路径读取公开模块级 `let`；
+- [x] IMP13：无 import 时使用完整模块路径读写公开模块级 `var`；
+- [x] IMP14：未使用的同名 import 保持合法；
+- [x] IMP15：未使用 import 与同名局部声明的惰性碰撞保持合法；
+- [x] IMP16：同模块多文件的 import 不泄漏到其他文件；
+- [x] IMP17：alias 与短名访问同一公开模块级绑定时共享状态；
+- [x] IMP18：无别名 import 后使用短名引用并构造公开 `type`；
+- [x] IMP19：无别名 import 后使用短名引用公开 `enum`；
+- [x] IMP20：无别名 import 后使用短名引用公开 `spec`；
+- [x] IMP21：无别名 import 后使用短名读取公开模块级 `let`；
+- [x] IMP22：无别名 import 后使用短名读写公开模块级 `var`；
+- [x] IMP23：alias 读取公开模块级 `let`；
+- [x] IMP24：alias 读写公开模块级 `var`；
+- [x] IMP25：alias 取得公开顶层函数值并调用；
+- [x] IMP26：无别名 import 后使用短名取得公开顶层函数值并调用；
+- [x] IMP27：完整模块路径首段与局部值同名时,局部值优先按普通成员链解析。
 
 碰撞真正被引用后的非法行为不属于本组，归 G22。
 
 ### 6.3 独立验收与交付 TODO
 
-- [ ] 核对模块规范并确认 IMP01～IMP10 没有等价直接证据；
-- [ ] 独立运行 G02，核对 alias、完整路径、状态共享、惰性碰撞和文件隔离；
-- [ ] 在 Codex 沙箱外为 G02 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G02 问题；
-- [ ] 填写本组实际文件、专项结果、全量结果和交付结论。
+- [x] 核对模块规范并确认 IMP01～IMP27 没有等价直接证据；
+- [x] 独立运行 G02，核对 alias、完整路径、状态共享、惰性碰撞和文件隔离；
+- [x] 在 Codex 沙箱外为 G02 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G02 问题；
+- [x] 填写本组实际文件、专项结果、全量结果和交付结论。
 
 ### 6.4 独立交付记录
 
-- 状态：待实施
-- 实际文件与用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: cover import name resolution semantics`
+- 状态：已交付
+- 实际文件与用例：
+  - `docs/specifications/feng-module.md`：统一定义三种名称访问形式、声明身份和局部值优先规则；
+  - 中英文模块手册：同步面向用户的名称访问与局部值优先说明；
+  - `docs/engineering/feng-use-optimize.md`、`feng-module-optimize-dev.md` 与覆盖计划：消除过期或互相
+    冲突的实现状态描述；
+  - `src/semantic/analyzer.c`：统一 alias 与完整模块路径的公开顶层成员解析,并保持局部值优先；
+  - `src/codegen/codegen.c`：统一恢复完整路径函数、模块级绑定和 enum 的提供方声明；
+  - `test/semantic/test_semantic.c`：把既有 `qualified_path` 正例修正为真正的完整模块路径；
+  - `test/codegen/test_codegen.c`：新增无 import 的完整路径函数、enum 与模块级绑定生成测试；
+  - `fcts_lib/src/g02_import/`：提供公开顶层声明和惰性碰撞夹具；
+  - `module_import_*_semantics.ff` 与 `test_module_import_semantics.ff`：实现 IMP01～IMP27；
+  - `main.ff`：登记 G02 FCTS 入口。
+- 本组专项结果：Semantic tests、Codegen tests 均通过；完整 FCTS 969/969；
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成,FCTS 均为 969/969,smoke 均为
+  91/91,Runtime、CLI、标准库、性能约束、增量构建与发布脚本检查均通过；
+- 问题：`ISSUE-G02-001`、`ISSUE-G02-002` 均已关闭；
+- 交付结论：三种名称访问形式已对全部公开顶层声明形成直接行为证据,实现缺口已修复,未增加运行时
+  查找或分派,未变更 runtime 私有 ABI、公开 ABI 或 `.ft` 格式；
+- 建议 commit message：`feat: support full-path module member access`
 
 ## 7 G03：赋值求值顺序
 
@@ -1024,14 +1059,17 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
   `fcts_lib.g01_binding.g01CrossPackageCalls`；
 - 实际结果：首次 `make fcts-tests` 在 Semantic 阶段报告 `AE0001: undefined identifier 'fcts_lib'`，
   并产生由未解析类型派生的 `AE0030`、`AE0512`；
-- 规范依据与预期结果：模块规范 §4 规定，无别名 import 将公开模块级绑定以短名引入当前文件；完整模块
-  路径免 import 只适用于公开 `type` / `enum` 的类型引用位置；
-- 当前结论：新增测试错误地在普通值表达式中使用了完整模块路径，不是产品缺陷。
+- G01 当时的主规范依据与预期结果：模块规范 §4 只明确允许公开 `type` / `enum` 在类型引用位置免
+  import 使用完整模块路径，因此 G01 按当时的主规范将新增用例改为短名访问；
+- 后续 G02 复核：更早的模块优化工程文档已经把完整模块路径列为全部顶层名称的消歧方式，但对应
+  `qualified_path` 测试实际只使用 import alias，主规范、工程文档、测试与实现未收敛；
+- 当前规则：经人工确认，公开模块中的全部公开顶层声明均允许通过完整模块路径免 import 访问；G01
+  的历史交付结果保持有效，规范和实现缺口归 G02 统一补齐。
 
 ##### 决策与实施
 
 - 状态：已关闭；
-- 分类：测试用例问题；
+- 分类：G01 阶段按当时主规范关闭；后续发现的规范不一致、既有测试问题和实现缺口归 G02；
 - 建议方案：已按模块规范改为 import 后使用公开绑定短名；
 - 是否涉及既有测试修改：否；
 - 是否涉及运行时性能：当前无；
@@ -1043,7 +1081,8 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
 
 - 本组专项复验结果：第二次 `make fcts-tests` 中 MOD06 通过；
 - 本组沙箱外 `make test` 结果：通过；UBSan 与 normal 阶段的 FCTS 均为 942/942；
-- 关闭依据：主规范唯一确定短名访问形式，修正后的 MOD06 已真实编译、运行并通过独立全量回归。
+- 关闭依据：修正后的 MOD06 已按 G01 当时的主规范真实编译、运行并通过独立全量回归；后续扩展并
+  收敛的完整路径规则由 G02 独立验收，不复用 G01 结果。
 
 #### ISSUE-G01-003：模块绑定初始化循环自然耗尽调用栈
 
@@ -1093,6 +1132,90 @@ MOD07 会有意终止进程，不接入常规 FCTS 可执行入口；在 `test/c
 - 本组沙箱外 `make test` 结果：通过；UBSan 与 normal 全量阶段均完成；
 - 关闭依据：模块主规范、早期设计和当前实现已经收敛一致，MOD07 自动化隔离验收、常规 G01 专项及
   全量回归均通过。
+
+#### ISSUE-G02-001：完整模块路径历史验收用例未覆盖其声明目标
+
+##### 归属
+
+- 发现组：G02；
+- 关联组：G01、G22；
+- 发现用例：既有 `test_lazy_ambiguity_resolved_by_qualified_path` 与 IMP07～IMP13 Review。
+
+##### 现象与结论
+
+- 历史工程文档 `feng-module-optimize-dev.md` 要求 `type`、`enum`、`spec`、`func`、`let` / `var`
+  均可使用完整模块路径或 import alias 消歧义，并把
+  `test_lazy_ambiguity_resolved_by_qualified_path` 记录为完整路径正例；
+- 既有测试实际写成 `import demo.a as a;` 后调用 `a.compute()`，与紧随其后的 alias 正例重复，没有
+  使用 `demo.a.compute()`；
+- G02 最小实测确认，无 import 和无别名 import 两种情况下，`my.utils.math.add(1, 2)` 当前都在
+  `my` 处报告 `AE0001: undefined identifier 'my'`；
+- G02 实施时进一步确认，完整路径 enum 已在 Semantic 解析成功，但 Codegen 仍把路径首段当作普通
+  标识符，报告 `CE0104: codegen: identifier 'fcts_lib' not found`；
+- 原模块主规范只明确规定完整路径类型引用，工程文档、主规范、测试和实现存在不一致；
+- 人工决策：公开模块中的全部公开顶层声明均支持三种名称访问形式：import 后短名、import alias
+  限定名、无需 import 的完整模块路径；三种形式解析到同一声明和存储身份。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：规范歧义、既有测试问题、产品缺陷；
+- 决策方案：以模块主规范统一定义三种形式；Semantic 和 Codegen 复用通用完整模块路径解析，不按
+  声明类别添加互相独立的临时特判；
+- 是否涉及既有测试修改：是；已人工批准在本次补完整用例并修正名为 `qualified_path`、实际只测
+  alias 的既有测试；
+- 是否涉及运行时性能：不应涉及；名称查找和路径收敛必须在编译期完成，不增加生成程序的运行时
+  查找或分派；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：预期不涉及；若实施审计发现需要变更，必须
+  停止并请求人工决策；
+- 人工决策与批准范围：已批准对齐相关文档，补齐 compiler tests 与 FCTS，并修复实现缺口；未批准
+  增加运行时开销、runtime 私有 ABI、公开 ABI 或 `.ft` 格式变更；
+- 实际变更：模块主规范和中英文手册已收敛三种名称访问形式；Semantic 与 Codegen 已统一复用模块
+  成员目标解析，完整路径顶层函数、函数值、模块级绑定和 enum 不再按表达式类别各自依赖 alias；既有
+  `qualified_path` Semantic 用例已改为真正的完整模块路径；G02 FCTS 已覆盖三种形式及全部公开顶层
+  声明类别。
+
+##### 验收与关闭
+
+- 本组专项复验结果：Semantic tests、Codegen tests 均通过；包含 IMP01～IMP27 的完整 FCTS
+  969/969；
+- 本组沙箱外 `make test` 结果：通过；UBSan 与 normal 两阶段均完成；
+- 关闭依据：模块主规范、手册、Semantic、Codegen、compiler tests 与 FCTS 已收敛一致,专项和全量
+  回归均通过。
+
+#### ISSUE-G02-002：完整模块路径首段与局部值同名时的解析优先级未定义
+
+##### 归属
+
+- 发现组：G02；
+- 关联组：G22；
+- 发现用例：完整模块路径表达式解析链路审计。
+
+##### 现象与结论
+
+- 函数和模块级绑定的完整路径使用普通成员表达式语法，例如 `app.service.value`；
+- 若当前表达式作用域同时存在名为 `app` 的局部值，该源码既可能表示局部值的连续成员访问，也可能
+  表示公开模块 `app.service` 的顶层成员；
+- import alias 已有急切重名规则，不存在同类歧义；类型位置也由类型语境直接区分；
+- 发现时模块主规范没有定义完整模块路径首段与局部值同名时的解析优先级；
+- 发现时的 G02 实现按精确完整模块路径优先解析,与局部值的既有词法作用域规则不一致。
+
+##### 决策与实施
+
+- 人工决策：局部值优先,符合词法作用域,也避免新增依赖后意外改变既有成员表达式语义；需要访问
+  被局部值遮蔽的模块时使用 import alias；
+- 决策边界：不扩展为文件级顶层声明优先；文件级顶层声明与无别名 import 引入名称继续按既有规则
+  在使用时报告二义性；
+- 运行时、ABI 与 `.ft` 影响：无,只调整编译期名称解析；
+- 状态：已关闭。
+
+##### 验收与关闭
+
+- 实现与用例：Semantic 与 Codegen 的通用模块成员解析均先保留局部值成员链；IMP27 直接验证局部
+  值结果未被同名模块路径改绑；
+- 本组专项结果：完整 FCTS 969/969；
+- 本组沙箱外 `make test`：通过；
+- 关闭依据：人工决策已写入模块主规范和中英文手册,实现与 IMP27 一致,专项和全量回归均通过。
 
 ### 30.2 编号与状态
 

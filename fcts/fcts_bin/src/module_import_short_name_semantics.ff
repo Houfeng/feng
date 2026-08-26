@@ -1,0 +1,48 @@
+module fcts_bin;
+
+import fcts_lib.g02_primary;
+
+/** IMP01 使用无别名 import 引入的函数短名。 */
+open func g02CallShortName(): int {
+  return g02Add(1, 2);
+}
+
+/** IMP18 使用无别名 import 引入的 type 短名。 */
+open func g02ConstructShortNameType(): int {
+  let value: G02Record = G02Record { value: 180 };
+  return value.value;
+}
+
+/** IMP19 使用无别名 import 引入的 enum 短名。 */
+open func g02ReadShortNameEnum(): int {
+  let mode: G02Mode = G02Mode.Second;
+  return (int)mode;
+}
+
+/** IMP20 使用无别名 import 引入的 spec 短名。 */
+open func g02ReadShortNameSpec(): int {
+  let value: G02Readable = G02Record { value: 200 };
+  return value.value;
+}
+
+/** IMP21 使用无别名 import 引入的模块级 let 短名。 */
+open func g02ReadShortNameLet(): int {
+  return g02Immutable;
+}
+
+/** IMP22 使用无别名 import 引入的模块级 var 短名读写。 */
+open func g02WriteAndReadShortNameVar(value: int): int {
+  g02Mutable = value;
+  return g02Mutable;
+}
+
+/** IMP26 使用无别名 import 引入的函数短名形成函数值。 */
+open func g02CallShortNameFunctionValue(): int {
+  let mapper: G02Mapper = g02Increment;
+  return mapper(25);
+}
+
+/** IMP17 通过短名写入跨包公开模块级 var。 */
+open func g02WriteShortName(value: int) {
+  g02Mutable = value;
+}

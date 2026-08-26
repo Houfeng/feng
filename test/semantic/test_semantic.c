@@ -8938,10 +8938,8 @@ static void test_lazy_ambiguity_resolved_by_qualified_path(void) {
         "}\n";
     const char *main_source =
         "module demo.main;\n"
-        "import demo.a as a;\n"
-        "import demo.b as b;\n"
         "func run(): int {\n"
-        "    return a.compute() + b.compute();\n"
+        "    return demo.a.compute() + demo.b.compute();\n"
         "}\n";
     FengProgram *program_a = parse_program_or_die("lazy_qualified_a.f", source_a);
     FengProgram *program_b = parse_program_or_die("lazy_qualified_b.f", source_b);
