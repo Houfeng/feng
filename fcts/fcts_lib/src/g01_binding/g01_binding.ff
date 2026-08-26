@@ -1,0 +1,13 @@
+open module fcts_lib.g01_binding;
+
+/** MOD06 跨包绑定初始化次数。 */
+open var g01CrossPackageCalls: int = 0;
+
+/** MOD06 由 consumer 首次读取触发的跨包绑定。 */
+open let g01CrossPackageValue: int = g01InitializeCrossPackageValue();
+
+/** 初始化 MOD06 跨包绑定。 */
+func g01InitializeCrossPackageValue(): int {
+  g01CrossPackageCalls += 1;
+  return 61;
+}

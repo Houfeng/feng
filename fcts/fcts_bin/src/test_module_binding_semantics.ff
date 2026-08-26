@@ -1,0 +1,249 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.g01_binding;
+
+/** MOD01 初始化次数。 */
+var g01FirstReadCalls: int = 0;
+
+/** MOD01 首次读取时初始化的模块绑定。 */
+let g01FirstReadValue: int = g01InitializeFirstReadValue();
+
+/** 初始化 MOD01 模块绑定。 */
+func g01InitializeFirstReadValue(): int {
+  g01FirstReadCalls += 1;
+  return 11;
+}
+
+/** MOD02 初始化次数。 */
+var g01DirectWriteCalls: int = 0;
+
+/** MOD02 首次直接写入前必须初始化的模块绑定。 */
+var g01DirectWriteValue: int = g01InitializeDirectWriteValue();
+
+/** 初始化 MOD02 模块绑定。 */
+func g01InitializeDirectWriteValue(): int {
+  g01DirectWriteCalls += 1;
+  return 20;
+}
+
+/** MOD03 初始化次数。 */
+var g01CompoundWriteCalls: int = 0;
+
+/** MOD03 首次复合写入前必须初始化的模块绑定。 */
+var g01CompoundWriteValue: int = g01InitializeCompoundWriteValue();
+
+/** 初始化 MOD03 模块绑定。 */
+func g01InitializeCompoundWriteValue(): int {
+  g01CompoundWriteCalls += 1;
+  return 30;
+}
+
+/** MOD04 反向声明依赖的执行轨迹。 */
+var g01ReverseTrace: int = 0;
+
+/** MOD04 依赖绑定的初始化次数。 */
+var g01ReverseDependentCalls: int = 0;
+
+/** MOD04 先书写、后初始化的依赖绑定。 */
+let g01ReverseDependent: int = g01InitializeReverseDependent();
+
+/** MOD04 被依赖绑定的初始化次数。 */
+var g01ReverseDependencyCalls: int = 0;
+
+/** MOD04 后书写、先初始化的被依赖绑定。 */
+let g01ReverseDependency: int = g01InitializeReverseDependency();
+
+/** 初始化 MOD04 依赖绑定。 */
+func g01InitializeReverseDependent(): int {
+  g01ReverseDependentCalls += 1;
+  let dependency = g01ReverseDependency;
+  g01ReverseTrace = g01ReverseTrace * 10 + 2;
+  return dependency + 3;
+}
+
+/** 初始化 MOD04 被依赖绑定。 */
+func g01InitializeReverseDependency(): int {
+  g01ReverseDependencyCalls += 1;
+  g01ReverseTrace = g01ReverseTrace * 10 + 1;
+  return 40;
+}
+
+/** MOD10 被 static 绑定读取的模块绑定初始化次数。 */
+var g01StaticModuleDependencyCalls: int = 0;
+
+/** MOD10 被 static 绑定读取的模块绑定。 */
+let g01StaticModuleDependency: int = g01InitializeStaticModuleDependency();
+
+/** 初始化 MOD10 模块绑定。 */
+func g01InitializeStaticModuleDependency(): int {
+  g01StaticModuleDependencyCalls += 1;
+  return 100;
+}
+
+/** MOD08～MOD10 的非泛型 static 绑定探针。 */
+type G01StaticBindingProbe {
+  /** MOD08 static let 初始化次数。 */
+  static var letCalls: int = 0;
+
+  /** MOD08 首次读取时初始化的 static let。 */
+  static let immutable: int = G01StaticBindingProbe.initializeLet();
+
+  /** MOD08 static var 初始化次数。 */
+  static var varCalls: int = 0;
+
+  /** MOD08 首次读取时初始化的 static var。 */
+  static var mutable: int = G01StaticBindingProbe.initializeVar();
+
+  /** MOD09 static 依赖的执行轨迹。 */
+  static var dependencyTrace: int = 0;
+
+  /** MOD09 先书写、后初始化的 static 依赖绑定。 */
+  static let dependent: int = G01StaticBindingProbe.initializeDependent();
+
+  /** MOD09 被依赖的 static 绑定。 */
+  static let dependency: int = G01StaticBindingProbe.initializeDependency();
+
+  /** MOD10 读取模块绑定的 static 绑定。 */
+  static let fromModule: int = G01StaticBindingProbe.initializeFromModule();
+
+  /** 初始化 MOD08 static let。 */
+  static func initializeLet(): int {
+    G01StaticBindingProbe.letCalls += 1;
+    return 81;
+  }
+
+  /** 初始化 MOD08 static var。 */
+  static func initializeVar(): int {
+    G01StaticBindingProbe.varCalls += 1;
+    return 82;
+  }
+
+  /** 初始化 MOD09 static 依赖绑定。 */
+  static func initializeDependent(): int {
+    let value = G01StaticBindingProbe.dependency;
+    G01StaticBindingProbe.dependencyTrace =
+      G01StaticBindingProbe.dependencyTrace * 10 + 2;
+    return value + 1;
+  }
+
+  /** 初始化 MOD09 被依赖的 static 绑定。 */
+  static func initializeDependency(): int {
+    G01StaticBindingProbe.dependencyTrace =
+      G01StaticBindingProbe.dependencyTrace * 10 + 1;
+    return 90;
+  }
+
+  /** 初始化 MOD10 static 绑定并读取模块绑定。 */
+  static func initializeFromModule(): int {
+    return g01StaticModuleDependency + 1;
+  }
+}
+
+/** 验证 G01 模块级与 static 绑定的惰性初始化语义。 */
+open func test_module_binding_semantics() {
+  describe("G01 lazy binding initialization semantics", () {
+    test("MOD01 first read initializes a module binding once", () {
+      assert(g01FirstReadCalls == 0, "MOD01 initializer has not run before access");
+      assert(g01FirstReadValue == 11, "MOD01 first read observes initialized value");
+      assert(g01FirstReadValue == 11, "MOD01 repeated read preserves value");
+      assert(g01FirstReadCalls == 1, "MOD01 initializer runs once");
+    });
+
+    test("MOD02 first direct write initializes a module binding", () {
+      assert(g01DirectWriteCalls == 0, "MOD02 initializer has not run before write");
+      g01DirectWriteValue = 22;
+      assert(g01DirectWriteCalls == 1, "MOD02 direct write triggers initialization once");
+      assert(g01DirectWriteValue == 22, "MOD02 direct write stores the new value");
+    });
+
+    test("MOD03 first compound write initializes a module binding once", () {
+      assert(g01CompoundWriteCalls == 0, "MOD03 initializer has not run before write");
+      g01CompoundWriteValue += 3;
+      assert(g01CompoundWriteCalls == 1, "MOD03 compound write triggers initialization once");
+      assert(g01CompoundWriteValue == 33, "MOD03 compound write uses initialized value");
+    });
+
+    test("MOD04 dependency initialization ignores declaration order", () {
+      assert(g01ReverseTrace == 0, "MOD04 dependency chain has not run before access");
+      assert(g01ReverseDependent == 43, "MOD04 dependent observes initialized dependency");
+      assert(g01ReverseTrace == 12, "MOD04 dependency initializes before dependent");
+      assert(
+        g01ReverseDependencyCalls == 1 && g01ReverseDependentCalls == 1,
+        "MOD04 each initializer runs once"
+      );
+    });
+
+    test("MOD05 same-module multi-file dependency initializes by access", () {
+      assert(g01MultiFileTrace == 0, "MOD05 multi-file chain has not run before access");
+      assert(g01MultiFileDependent == 34, "MOD05 dependent observes other file binding");
+      assert(g01MultiFileTrace == 12, "MOD05 dependency order ignores file order");
+      assert(
+        g01MultiFileDependencyCalls == 1 && g01MultiFileDependentCalls == 1,
+        "MOD05 each multi-file initializer runs once"
+      );
+    });
+
+    test("MOD06 cross-package first read initializes provider binding", () {
+      assert(
+        g01CrossPackageCalls == 0,
+        "MOD06 provider initializer has not run before access"
+      );
+      assert(
+        g01CrossPackageValue == 61,
+        "MOD06 first consumer read observes provider value"
+      );
+      assert(
+        g01CrossPackageValue == 61 && g01CrossPackageCalls == 1,
+        "MOD06 repeated consumer read reuses provider storage"
+      );
+    });
+
+    test("MOD08 static let and var initialize once", () {
+      assert(
+        G01StaticBindingProbe.letCalls == 0 && G01StaticBindingProbe.varCalls == 0,
+        "MOD08 static initializers have not run before access"
+      );
+      assert(
+        G01StaticBindingProbe.immutable == 81 &&
+          G01StaticBindingProbe.immutable == 81,
+        "MOD08 repeated static let reads share storage"
+      );
+      assert(
+        G01StaticBindingProbe.mutable == 82 && G01StaticBindingProbe.mutable == 82,
+        "MOD08 repeated static var reads share storage"
+      );
+      assert(
+        G01StaticBindingProbe.letCalls == 1 && G01StaticBindingProbe.varCalls == 1,
+        "MOD08 each static initializer runs once"
+      );
+    });
+
+    test("MOD09 static dependency initializes by access", () {
+      assert(
+        G01StaticBindingProbe.dependencyTrace == 0,
+        "MOD09 static dependency chain has not run before access"
+      );
+      assert(G01StaticBindingProbe.dependent == 91, "MOD09 dependent value is correct");
+      assert(
+        G01StaticBindingProbe.dependencyTrace == 12,
+        "MOD09 static dependency initializes before dependent"
+      );
+    });
+
+    test("MOD10 static binding initializes its module dependency", () {
+      assert(
+        g01StaticModuleDependencyCalls == 0,
+        "MOD10 module dependency has not run before static access"
+      );
+      assert(
+        G01StaticBindingProbe.fromModule == 101,
+        "MOD10 static binding observes initialized module dependency"
+      );
+      assert(
+        g01StaticModuleDependencyCalls == 1,
+        "MOD10 module dependency initializer runs once"
+      );
+    });
+  });
+}

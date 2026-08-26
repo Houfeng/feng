@@ -1,0 +1,17 @@
+module fcts_bin;
+
+/** MOD05 同模块多文件依赖的执行轨迹。 */
+var g01MultiFileTrace: int = 0;
+
+/** MOD05 被依赖绑定的初始化次数。 */
+var g01MultiFileDependencyCalls: int = 0;
+
+/** MOD05 定义于第一个文件中的被依赖绑定。 */
+let g01MultiFileDependency: int = g01InitializeMultiFileDependency();
+
+/** 初始化 MOD05 被依赖绑定并记录执行顺序。 */
+func g01InitializeMultiFileDependency(): int {
+  g01MultiFileDependencyCalls += 1;
+  g01MultiFileTrace = g01MultiFileTrace * 10 + 1;
+  return 30;
+}

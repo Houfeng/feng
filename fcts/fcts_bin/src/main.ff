@@ -53,6 +53,7 @@ func main(args: string[]) {
       test_tuple();
       test_iterator();
       test_module();
+      test_module_binding_semantics();
       test_match_alias();
       test_defer();
       test_value_type();
