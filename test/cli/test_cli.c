@@ -17354,8 +17354,8 @@ static void test_project_run_rejects_platform_and_sysroot_options(void) {
 }
 
 /* Verify a module-binding initialization cycle follows ordinary recursive
- * access semantics and terminates only after the isolated child exhausts its
- * stack. The concrete terminating signal is intentionally platform-defined. */
+ * access semantics and does not return successfully after the isolated child
+ * exhausts its stack. The concrete process status is platform-defined. */
 static void test_direct_module_binding_initialization_cycle_exhausts_stack(void) {
     char template_path[] = "temp/feng_cli_module_init_cycle_XXXXXX";
     char *workspace_dir;
@@ -17430,7 +17430,12 @@ static void test_direct_module_binding_initialization_cycle_exhausts_stack(void)
     }
 
     ASSERT(waitpid(child, &status, 0) == child);
-    ASSERT(WIFSIGNALED(status));
+    /* Sanitizer runtimes may translate the fatal stack-exhaustion signal into
+     * a non-zero exit. Status 127 is reserved above for execl failure. */
+    ASSERT(WIFSIGNALED(status) ||
+           (WIFEXITED(status) &&
+            WEXITSTATUS(status) != 0 &&
+            WEXITSTATUS(status) != 127));
 
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
