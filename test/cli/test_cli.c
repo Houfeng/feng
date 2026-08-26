@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -17352,6 +17353,94 @@ static void test_project_run_rejects_platform_and_sysroot_options(void) {
     ASSERT(feng_cli_project_run_main("feng", 1, sysroot_argv) != 0);
 }
 
+/* Verify a module-binding initialization cycle follows ordinary recursive
+ * access semantics and terminates only after the isolated child exhausts its
+ * stack. The concrete terminating signal is intentionally platform-defined. */
+static void test_direct_module_binding_initialization_cycle_exhausts_stack(void) {
+    char template_path[] = "temp/feng_cli_module_init_cycle_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *out_dir;
+    char *binary_path;
+    char *out_option;
+    char *name_option;
+    char *remove_error = NULL;
+    pid_t child;
+    int status = 0;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "build");
+    binary_path = path_join(out_dir, "bin/module_init_cycle");
+    out_option = make_out_option(out_dir);
+    name_option = dup_printf("--name=%s", "module_init_cycle");
+    ASSERT(name_option != NULL);
+
+    write_text_file(source_path,
+                    "module test.cli.moduleinitcycle;\n"
+                    "\n"
+                    "let left: int = initializeLeft();\n"
+                    "let right: int = initializeRight();\n"
+                    "\n"
+                    "func initializeLeft(): int {\n"
+                    "  return right;\n"
+                    "}\n"
+                    "\n"
+                    "func initializeRight(): int {\n"
+                    "  return left;\n"
+                    "}\n"
+                    "\n"
+                    "func main(args: string[]) {\n"
+                    "  let observed = left;\n"
+                    "}\n");
+    {
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_option,
+            name_option,
+        };
+        ASSERT(run_direct_for_host(4, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+
+    fflush(stdout);
+    fflush(stderr);
+    child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        struct rlimit core_limit = {0U, 0U};
+        struct rlimit stack_limit;
+        int null_fd;
+
+        null_fd = open("/dev/null", O_WRONLY);
+        ASSERT(null_fd >= 0);
+        ASSERT(dup2(null_fd, STDERR_FILENO) >= 0);
+        close(null_fd);
+        ASSERT(setrlimit(RLIMIT_CORE, &core_limit) == 0);
+        ASSERT(getrlimit(RLIMIT_STACK, &stack_limit) == 0);
+        if (stack_limit.rlim_cur == RLIM_INFINITY ||
+            stack_limit.rlim_cur > (rlim_t)(1024U * 1024U)) {
+            stack_limit.rlim_cur = (rlim_t)(1024U * 1024U);
+            ASSERT(setrlimit(RLIMIT_STACK, &stack_limit) == 0);
+        }
+        execl(binary_path, binary_path, (char *)NULL);
+        _exit(127);
+    }
+
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFSIGNALED(status));
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(name_option);
+    free(out_option);
+    free(binary_path);
+    free(out_dir);
+    free(source_path);
+}
+
 static void test_project_build_default_uses_debug_friendly_flags(void) {
     char template_path[] = "temp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
@@ -23811,6 +23900,7 @@ int main(void) {
     test_project_platform_selection_rules();
     test_project_build_and_pack_multiple_platforms();
     test_project_run_rejects_platform_and_sysroot_options();
+    test_direct_module_binding_initialization_cycle_exhausts_stack();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
     test_project_build_bin_copies_assets_and_refreshes_existing_output();
