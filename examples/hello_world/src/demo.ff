@@ -34,7 +34,7 @@ type Future<T, E> {
       FutureState.Resolved { self._value }
       FutureState.Rejected { throw self._error }
       FutureState.Pending { self.waiters.add(ctx); none }
-      else { none; }
+      else { none }
     };
   }
 

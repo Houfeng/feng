@@ -23959,59 +23959,196 @@ static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
     }
 }
 
-/* Return whether the source following the cursor can continue or terminate
- * the repaired expression without inserting another statement delimiter. */
-static bool completion_repair_has_following_expression_syntax(const char *text,
-                                                              size_t offset,
-                                                              char *out_syntax) {
-    size_t length;
-    size_t cursor;
+/* Classify the outer expression boundary following a repaired member. */
+typedef enum FengLspCompletionRepairBoundaryKind {
+    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_UNRESOLVED = 0,
+    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL,
+    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_SEMICOLON,
+    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_BLOCK,
+    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_SEPARATOR
+} FengLspCompletionRepairBoundaryKind;
 
-    if (out_syntax != NULL) {
-        *out_syntax = '\0';
-    }
-    if (text == NULL) {
-        return false;
-    }
-    length = strlen(text);
-    if (offset > length) {
-        return false;
-    }
-    cursor = offset;
-    while (cursor < length && isspace((unsigned char)text[cursor])) {
-        ++cursor;
-    }
-    if (cursor >= length) {
-        return false;
-    }
-    if (out_syntax != NULL) {
-        *out_syntax = text[cursor];
-    }
-    switch (text[cursor]) {
-        case ';':
-        case ',':
-        case ')':
-        case ']':
-        case '{':
-        case '(':
-        case '[':
-        case '.':
-        case '+':
-        case '-':
-        case '*':
-        case '/':
-        case '%':
-        case '&':
-        case '|':
-        case '^':
-        case '<':
-        case '>':
-        case '=':
-        case '!':
+/* Store where a completion repair may append its outer syntax tail. */
+typedef struct FengLspCompletionRepairBoundary {
+    FengLspCompletionRepairBoundaryKind kind;
+    size_t offset;
+} FengLspCompletionRepairBoundary;
+
+/* Return whether a token continues an otherwise complete expression. */
+static bool completion_repair_token_continues_expression(FengTokenKind kind) {
+    switch (kind) {
+        case FENG_TOKEN_KW_AS:
+        case FENG_TOKEN_DOT:
+        case FENG_TOKEN_PLUS:
+        case FENG_TOKEN_MINUS:
+        case FENG_TOKEN_STAR:
+        case FENG_TOKEN_SLASH:
+        case FENG_TOKEN_PERCENT:
+        case FENG_TOKEN_PLUS_ASSIGN:
+        case FENG_TOKEN_MINUS_ASSIGN:
+        case FENG_TOKEN_STAR_ASSIGN:
+        case FENG_TOKEN_SLASH_ASSIGN:
+        case FENG_TOKEN_PERCENT_ASSIGN:
+        case FENG_TOKEN_ASSIGN:
+        case FENG_TOKEN_LT:
+        case FENG_TOKEN_LE:
+        case FENG_TOKEN_GT:
+        case FENG_TOKEN_GE:
+        case FENG_TOKEN_EQ:
+        case FENG_TOKEN_NE:
+        case FENG_TOKEN_AND_AND:
+        case FENG_TOKEN_OR_OR:
+        case FENG_TOKEN_AMP:
+        case FENG_TOKEN_AMP_ASSIGN:
+        case FENG_TOKEN_PIPE:
+        case FENG_TOKEN_PIPE_ASSIGN:
+        case FENG_TOKEN_CARET:
+        case FENG_TOKEN_CARET_ASSIGN:
+        case FENG_TOKEN_SHL:
+        case FENG_TOKEN_SHL_ASSIGN:
+        case FENG_TOKEN_SHR:
+        case FENG_TOKEN_SHR_ASSIGN:
             return true;
         default:
             return false;
     }
+}
+
+/* Return whether a token can prefix the next operand of an expression. */
+static bool completion_repair_token_prefixes_operand(FengTokenKind kind) {
+    return kind == FENG_TOKEN_PLUS || kind == FENG_TOKEN_MINUS ||
+           kind == FENG_TOKEN_NOT || kind == FENG_TOKEN_TILDE;
+}
+
+/* Find the outer expression boundary after the member at `offset`.
+ * Parentheses and brackets already present after the cursor remain intact;
+ * the returned offset is therefore suitable for a block or semicolon tail. */
+static FengLspCompletionRepairBoundary
+completion_repair_find_expression_boundary(const char *text, size_t offset) {
+    FengLspCompletionRepairBoundary boundary = {
+        FENG_LSP_COMPLETION_REPAIR_BOUNDARY_UNRESOLVED,
+        offset
+    };
+    FengLexer lexer;
+    FengToken token;
+    size_t length;
+    size_t last_expression_end = offset;
+    int paren_depth = 0;
+    int bracket_depth = 0;
+    bool expression_complete = true;
+
+    if (text == NULL) {
+        return boundary;
+    }
+    length = strlen(text);
+    if (offset > length) {
+        return boundary;
+    }
+
+    feng_lexer_init(&lexer, text, offset, NULL);
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF || token.kind == FENG_TOKEN_ERROR) {
+            break;
+        }
+        if (token.kind == FENG_TOKEN_LPAREN) {
+            ++paren_depth;
+        } else if (token.kind == FENG_TOKEN_RPAREN && paren_depth > 0) {
+            --paren_depth;
+        } else if (token.kind == FENG_TOKEN_LBRACKET) {
+            ++bracket_depth;
+        } else if (token.kind == FENG_TOKEN_RBRACKET && bracket_depth > 0) {
+            --bracket_depth;
+        }
+    }
+
+    feng_lexer_init(&lexer, text + offset, length - offset, NULL);
+    for (;;) {
+        size_t token_offset;
+
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF || token.kind == FENG_TOKEN_ERROR) {
+            break;
+        }
+        token_offset = offset + token.offset;
+        if (paren_depth == 0 && bracket_depth == 0) {
+            switch (token.kind) {
+                case FENG_TOKEN_SEMICOLON:
+                    boundary.kind =
+                        FENG_LSP_COMPLETION_REPAIR_BOUNDARY_SEMICOLON;
+                    boundary.offset = token_offset;
+                    return boundary;
+                case FENG_TOKEN_LBRACE:
+                    boundary.kind = FENG_LSP_COMPLETION_REPAIR_BOUNDARY_BLOCK;
+                    boundary.offset = token_offset;
+                    return boundary;
+                case FENG_TOKEN_COMMA:
+                case FENG_TOKEN_RPAREN:
+                case FENG_TOKEN_RBRACKET:
+                    boundary.kind =
+                        FENG_LSP_COMPLETION_REPAIR_BOUNDARY_SEPARATOR;
+                    boundary.offset = token_offset;
+                    return boundary;
+                case FENG_TOKEN_RBRACE:
+                    boundary.kind =
+                        FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL;
+                    boundary.offset = last_expression_end;
+                    return boundary;
+                default:
+                    break;
+            }
+            if (expression_complete &&
+                token.kind != FENG_TOKEN_LPAREN &&
+                token.kind != FENG_TOKEN_LBRACKET &&
+                !completion_repair_token_continues_expression(token.kind)) {
+                boundary.kind =
+                    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL;
+                boundary.offset = last_expression_end;
+                return boundary;
+            }
+        }
+
+        switch (token.kind) {
+            case FENG_TOKEN_LPAREN:
+                ++paren_depth;
+                expression_complete = false;
+                break;
+            case FENG_TOKEN_RPAREN:
+                if (paren_depth > 0) {
+                    --paren_depth;
+                    expression_complete = true;
+                }
+                break;
+            case FENG_TOKEN_LBRACKET:
+                ++bracket_depth;
+                expression_complete = false;
+                break;
+            case FENG_TOKEN_RBRACKET:
+                if (bracket_depth > 0) {
+                    --bracket_depth;
+                    expression_complete = true;
+                }
+                break;
+            default:
+                if (paren_depth == 0 && bracket_depth == 0) {
+                    if (completion_repair_token_continues_expression(
+                            token.kind) ||
+                        completion_repair_token_prefixes_operand(token.kind)) {
+                        expression_complete = false;
+                    } else {
+                        expression_complete = true;
+                    }
+                }
+                break;
+        }
+        last_expression_end = token_offset + token.length;
+    }
+
+    if (paren_depth == 0 && bracket_depth == 0) {
+        boundary.kind = FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL;
+        boundary.offset = last_expression_end;
+    }
+    return boundary;
 }
 
 /* Detect an unfinished grammar head whose expression is followed by a block.
@@ -24108,11 +24245,14 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     size_t placeholder_length = 0U;
     const char *tail_text = NULL;
     size_t tail_length = 0U;
+    size_t tail_offset = offset;
     bool is_member_access;
     bool is_member_dot;
-    bool has_following_syntax;
     bool prefers_block_tail;
-    char following_syntax = '\0';
+    FengLspCompletionRepairBoundary boundary = {
+        FENG_LSP_COMPLETION_REPAIR_BOUNDARY_UNRESOLVED,
+        offset
+    };
     char *out;
 
     if (text == NULL) {
@@ -24125,28 +24265,36 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     is_member_access = completion_context_is_member_access(text, offset);
     is_member_dot = is_member_access &&
                     completion_context_is_member_dot(text, offset);
-    has_following_syntax = is_member_dot &&
-                           completion_repair_has_following_expression_syntax(
-                               text,
-                               offset,
-                               &following_syntax);
     prefers_block_tail = is_member_dot &&
                          completion_repair_prefers_block_tail(text, offset);
     if (is_member_dot) {
         placeholder_length = strlen(kPlaceholder);
+        boundary = completion_repair_find_expression_boundary(text, offset);
+        tail_offset = boundary.offset;
     }
     if (prefers_block_tail &&
-        (!has_following_syntax || following_syntax == '{')) {
-        tail_text = following_syntax == '{'
-                        ? kBlockExpressionTail
-                        : kBlockTail;
+        boundary.kind == FENG_LSP_COMPLETION_REPAIR_BOUNDARY_BLOCK) {
+        tail_text = kBlockExpressionTail;
         tail_length = strlen(tail_text);
-    } else if ((!is_member_dot || !has_following_syntax) &&
+    } else if (prefers_block_tail &&
+               boundary.kind ==
+                   FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL) {
+        tail_text = kBlockTail;
+        tail_length = strlen(tail_text);
+    } else if (is_member_dot &&
+               boundary.kind ==
+                   FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL) {
+        tail_text = ";";
+        tail_length = 1U;
+    } else if (!is_member_dot &&
                completion_repair_needs_semicolon(text, offset)) {
         tail_text = ";";
         tail_length = 1U;
     }
     if (placeholder_length == 0U && tail_length == 0U) {
+        return NULL;
+    }
+    if (tail_offset < offset || tail_offset > text_length) {
         return NULL;
     }
     out = (char *)malloc(text_length + placeholder_length + tail_length + 1U);
@@ -24157,12 +24305,17 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     if (placeholder_length > 0U) {
         memcpy(out + offset, kPlaceholder, placeholder_length);
     }
-    if (tail_length > 0U) {
-        memcpy(out + offset + placeholder_length, tail_text, tail_length);
-    }
-    memcpy(out + offset + placeholder_length + tail_length,
+    memcpy(out + offset + placeholder_length,
            text + offset,
-           text_length - offset + 1U);
+           tail_offset - offset);
+    if (tail_length > 0U) {
+        memcpy(out + tail_offset + placeholder_length,
+               tail_text,
+               tail_length);
+    }
+    memcpy(out + tail_offset + placeholder_length + tail_length,
+           text + tail_offset,
+           text_length - tail_offset + 1U);
     return out;
 }
 
