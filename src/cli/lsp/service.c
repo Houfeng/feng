@@ -24120,7 +24120,7 @@ completion_repair_find_expression_boundary(const char *text, size_t offset) {
 /* Detect an unfinished grammar head whose expression is followed by a block.
  * Lexer tokens reset the decision at block and statement boundaries, so
  * comments, literals, receiver names, and earlier statements cannot affect it. */
-static bool completion_repair_prefers_block_tail(const char *text,
+static bool expression_repair_prefers_block_tail(const char *text,
                                                  size_t offset) {
     FengLexer lexer;
     FengToken token;
@@ -24163,11 +24163,21 @@ static bool completion_repair_prefers_block_tail(const char *text,
     return needs_block;
 }
 
-/* Repair source for signatureHelp by closing unclosed parentheses at offset. */
+/* Repair an incomplete Signature Help call while preserving existing closing
+ * delimiters and selecting the enclosing expression's required syntax tail. */
 static char *dup_text_with_signature_repair(const char *text, size_t offset) {
+    static const char kBlockTail[] = " == true {}";
     size_t text_length;
-    int depth;
-    size_t i;
+    FengLexer lexer;
+    FengToken token;
+    char *closers;
+    size_t closer_count = 0U;
+    size_t missing_closer_count;
+    size_t insertion_offset;
+    const char *tail;
+    size_t tail_length;
+    size_t cursor;
+    size_t index;
     char *out;
 
     if (text == NULL) {
@@ -24177,29 +24187,95 @@ static char *dup_text_with_signature_repair(const char *text, size_t offset) {
     if (offset > text_length) {
         return NULL;
     }
-    /* Count unclosed parens from start to offset. */
-    depth = 0;
-    for (i = 0U; i < offset; ++i) {
-        if (text[i] == '(') {
-            ++depth;
-        } else if (text[i] == ')') {
-            if (depth > 0) {
-                --depth;
+    closers = (char *)malloc(offset + 1U);
+    if (closers == NULL) {
+        return NULL;
+    }
+    feng_lexer_init(&lexer, text, offset, NULL);
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF) {
+            break;
+        }
+        if (token.kind == FENG_TOKEN_ERROR) {
+            free(closers);
+            return NULL;
+        }
+        if (token.kind == FENG_TOKEN_LPAREN) {
+            closers[closer_count++] = ')';
+        } else if (token.kind == FENG_TOKEN_LBRACKET) {
+            closers[closer_count++] = ']';
+        } else if (token.kind == FENG_TOKEN_RPAREN ||
+                   token.kind == FENG_TOKEN_RBRACKET) {
+            char actual = token.kind == FENG_TOKEN_RPAREN ? ')' : ']';
+
+            if (closer_count == 0U ||
+                closers[closer_count - 1U] != actual) {
+                free(closers);
+                return NULL;
             }
+            --closer_count;
         }
     }
-    if (depth <= 0) {
+    /* The innermost unmatched delimiter must be the active call. */
+    if (closer_count == 0U || closers[closer_count - 1U] != ')') {
+        free(closers);
         return NULL;
     }
-    /* Insert ");" at offset to close the call and terminate the statement. */
-    out = (char *)malloc(text_length + 3U);
+
+    missing_closer_count = closer_count;
+    insertion_offset = offset;
+    feng_lexer_init(&lexer,
+                    text + offset,
+                    text_length - offset,
+                    NULL);
+    token = feng_lexer_next(&lexer);
+    while (missing_closer_count > 0U) {
+        FengTokenKind expected =
+            closers[missing_closer_count - 1U] == ')'
+                ? FENG_TOKEN_RPAREN
+                : FENG_TOKEN_RBRACKET;
+
+        if (token.kind != expected) {
+            break;
+        }
+        --missing_closer_count;
+        insertion_offset = offset + token.offset + token.length;
+        token = feng_lexer_next(&lexer);
+    }
+
+    if (expression_repair_prefers_block_tail(text, offset)) {
+        tail = token.kind == FENG_TOKEN_LBRACE ? NULL : kBlockTail;
+    } else {
+        tail = token.kind == FENG_TOKEN_SEMICOLON ? NULL : ";";
+    }
+    tail_length = tail != NULL ? strlen(tail) : 0U;
+    if (missing_closer_count == 0U && tail_length == 0U) {
+        free(closers);
+        return NULL;
+    }
+    if (text_length > SIZE_MAX - missing_closer_count - tail_length - 1U) {
+        free(closers);
+        return NULL;
+    }
+    out = (char *)malloc(text_length + missing_closer_count + tail_length + 1U);
     if (out == NULL) {
+        free(closers);
         return NULL;
     }
-    memcpy(out, text, offset);
-    out[offset] = ')';
-    out[offset + 1U] = ';';
-    memcpy(out + offset + 2U, text + offset, text_length - offset + 1U);
+    memcpy(out, text, insertion_offset);
+    cursor = insertion_offset;
+    for (index = missing_closer_count; index > 0U; --index) {
+        out[cursor++] = closers[index - 1U];
+    }
+    if (tail_length > 0U) {
+        memcpy(out + cursor, tail, tail_length);
+        cursor += tail_length;
+    }
+    memcpy(out + cursor,
+           text + insertion_offset,
+           text_length - insertion_offset + 1U);
+    free(closers);
     return out;
 }
 
@@ -24236,7 +24312,7 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
                     completion_context_is_member_dot(text, offset);
     has_expression_tail = completion_repair_has_expression_tail(text, offset);
     prefers_block_tail = has_expression_tail &&
-                         completion_repair_prefers_block_tail(text, offset);
+                         expression_repair_prefers_block_tail(text, offset);
     if (is_member_dot) {
         placeholder_length = strlen(kPlaceholder);
     }
