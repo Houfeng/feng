@@ -23902,6 +23902,8 @@ static bool append_builtin_type_items(FengLspString *json,
     return true;
 }
 
+/* Return whether the cursor follows an expression fragment that can anchor
+ * request-local completion repair. */
 static bool completion_repair_has_expression_tail(const char *text, size_t offset) {
     size_t cursor;
     char ch;
@@ -23923,43 +23925,7 @@ static bool completion_repair_has_expression_tail(const char *text, size_t offse
     return completion_identifier_continue(ch) || ch == ')' || ch == ']' || ch == '"';
 }
 
-static bool completion_repair_needs_semicolon(const char *text, size_t offset) {
-    size_t length;
-    size_t cursor;
-    bool has_expression_tail;
-
-    if (text == NULL) {
-        return false;
-    }
-    length = strlen(text);
-    if (offset > length) {
-        return false;
-    }
-    has_expression_tail = completion_repair_has_expression_tail(text, offset);
-    if (!has_expression_tail) {
-        return false;
-    }
-    cursor = offset;
-    while (cursor < length && isspace((unsigned char)text[cursor])) {
-        ++cursor;
-    }
-    if (cursor >= length) {
-        return true;
-    }
-    switch (text[cursor]) {
-        case ';':
-        case ',':
-        case ')':
-        case ']':
-            return false;
-        case '}':
-            return true;
-        default:
-            return true;
-    }
-}
-
-/* Classify the outer expression boundary following a repaired member. */
+/* Classify the outer expression boundary following a repairable prefix. */
 typedef enum FengLspCompletionRepairBoundaryKind {
     FENG_LSP_COMPLETION_REPAIR_BOUNDARY_UNRESOLVED = 0,
     FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL,
@@ -24020,7 +23986,7 @@ static bool completion_repair_token_prefixes_operand(FengTokenKind kind) {
            kind == FENG_TOKEN_NOT || kind == FENG_TOKEN_TILDE;
 }
 
-/* Find the outer expression boundary after the member at `offset`.
+/* Find the outer expression boundary after the prefix at `offset`.
  * Parentheses and brackets already present after the cursor remain intact;
  * the returned offset is therefore suitable for a block or semicolon tail. */
 static FengLspCompletionRepairBoundary
@@ -24237,6 +24203,8 @@ static char *dup_text_with_signature_repair(const char *text, size_t offset) {
     return out;
 }
 
+/* Duplicate current text and add only the syntax required to parse the
+ * completion position without changing its source offset. */
 static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     static const char kPlaceholder[] = "__feng_completion_placeholder__";
     static const char kBlockExpressionTail[] = " == true";
@@ -24248,6 +24216,7 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     size_t tail_offset = offset;
     bool is_member_access;
     bool is_member_dot;
+    bool has_expression_tail;
     bool prefers_block_tail;
     FengLspCompletionRepairBoundary boundary = {
         FENG_LSP_COMPLETION_REPAIR_BOUNDARY_UNRESOLVED,
@@ -24265,10 +24234,13 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
     is_member_access = completion_context_is_member_access(text, offset);
     is_member_dot = is_member_access &&
                     completion_context_is_member_dot(text, offset);
-    prefers_block_tail = is_member_dot &&
+    has_expression_tail = completion_repair_has_expression_tail(text, offset);
+    prefers_block_tail = has_expression_tail &&
                          completion_repair_prefers_block_tail(text, offset);
     if (is_member_dot) {
         placeholder_length = strlen(kPlaceholder);
+    }
+    if (has_expression_tail) {
         boundary = completion_repair_find_expression_boundary(text, offset);
         tail_offset = boundary.offset;
     }
@@ -24281,13 +24253,9 @@ static char *dup_text_with_completion_repair(const char *text, size_t offset) {
                    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL) {
         tail_text = kBlockTail;
         tail_length = strlen(tail_text);
-    } else if (is_member_dot &&
+    } else if (has_expression_tail &&
                boundary.kind ==
                    FENG_LSP_COMPLETION_REPAIR_BOUNDARY_NATURAL) {
-        tail_text = ";";
-        tail_length = 1U;
-    } else if (!is_member_dot &&
-               completion_repair_needs_semicolon(text, offset)) {
         tail_text = ";";
         tail_length = 1U;
     }
@@ -24412,6 +24380,8 @@ static bool handle_completion_request(FengLspService *service,
     FengCliLoadedSource current_source = {0};
     const FengLspWorkspaceAnalysis *workspace;
     const FengLspAnalysisSession *last_successful;
+    const FengCliLoadedSource *last_successful_source;
+    const char *last_successful_source_text = NULL;
     FengLspCacheQueryContext cache = {0};
     const FengProgram *program;
     FengLspString json = {0};
@@ -24476,7 +24446,10 @@ static bool handle_completion_request(FengLspService *service,
                                                           16U,
                                                           &partial);
     }
-    can_repair_completion = is_member_completion || completion_repair_needs_semicolon(document->text, offset);
+    can_repair_completion = is_member_completion ||
+                            completion_repair_has_expression_tail(
+                                document->text,
+                                offset);
     request.uri = uri;
     /* A cold workspace must not parse a large document on the request path.
      * Return exact text-only candidates until a published index is ready. */
@@ -24537,13 +24510,27 @@ static bool handle_completion_request(FengLspService *service,
     pthread_mutex_lock(&service->analysis_mutex);
     workspace = find_workspace_analysis_for_document(service, document);
     last_successful = workspace != NULL ? &workspace->last_successful_analysis : NULL;
+    last_successful_source = last_successful != NULL
+                                 ? find_source(last_successful, document->path)
+                                 : NULL;
     if (analysis_matches_document(last_successful, document)) {
+        last_successful_source_text = document->text;
+    } else if (workspace != NULL && last_successful_source != NULL &&
+               analysis_position_matches_document(
+                   document,
+                   workspace->last_successful_generation,
+                   offset)) {
+        /* The current and successful buffers are byte-identical through this
+         * position.  Query the successful AST with its own source buffer. */
+        last_successful_source_text = last_successful_source->source;
+    }
+    if (last_successful_source_text != NULL) {
         program = find_program(last_successful, document->path);
         last_successful_has_items =
             program != NULL &&
             build_completion_json(last_successful,
                                   program,
-                                  document->text,
+                                  last_successful_source_text,
                                   offset,
                                   &json,
                                   &request) &&
