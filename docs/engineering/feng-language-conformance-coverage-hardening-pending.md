@@ -442,8 +442,8 @@ LET05～LET09 属于编译器诊断测试；LET11～LET12 必须由实际写出�
 
 #### 9.2.8 真实跨包构造写法与可用性负向用例
 
-- [ ] CTOR16：经过真实 package-public `.ft` 往返后，隐式默认构造仍只接受零参数；consumer 的
-  `Type(arg)` 与 `Type(arg) { ... }` 必须报错；
+- [ ] CTOR16：provider type 未显式声明任何构造函数时，经过真实 package-public `.ft` 往返后得到的
+  隐式默认构造仍只接受零参数；consumer 的 `Type(arg)` 与 `Type(arg) { ... }` 必须报错；
 - [ ] CTOR17：provider 只显式声明公开有参构造时，consumer 不得重新获得默认无参构造；
   `Type()`、`Type() {}` 与 `Type {}` 必须分别报错；
 - [ ] CTOR18：provider 的全部构造均为 `seal` 时，`.ft` 必须保留“已显式声明构造”的事实；consumer
