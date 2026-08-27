@@ -56,6 +56,10 @@ for var index = 0; index < 10; index += 1 {
 
 初始化、条件和更新子句都可以省略。`for ;; { ... }` 表示无限循环。
 
+初始化执行次数、外部绑定与初始化绑定的共享范围、循环体局部绑定的逐轮身份，以及相应的闭包捕获
+结果，以 [Feng 语言流程控制规范](../../../specifications/feng-flow.md#61-%E4%B8%89%E6%AE%B5%E5%BC%8F-for)
+为准。
+
 ## for/in
 
 ```feng
@@ -67,7 +71,9 @@ for let value in values {
 }
 ```
 
-`for/in` 可遍历数组，以及通过 `@iterable` / `@iterator` 协议接入的标准库或自定义迭代器。循环变量每轮形成新的绑定。
+`for/in` 可遍历数组，以及通过 `@iterable` / `@iterator` 协议接入的标准库或自定义迭代器。循环变量
+的逐轮身份、`let` / `var` 可变性和闭包捕获结果，以
+[Feng 语言流程控制规范](../../../specifications/feng-flow.md#62-forin-%E5%BE%AA%E7%8E%AF)为准。
 
 ## 控制转移
 

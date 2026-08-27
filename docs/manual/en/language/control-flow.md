@@ -56,6 +56,10 @@ for var index = 0; index < 10; index += 1 {
 
 The initializer, condition, and update clauses can each be omitted. `for ;; { ... }` is an infinite loop.
 
+The execution count of the initializer, the sharing of outer and initializer bindings, the per-iteration identity of
+body-local bindings, and the resulting closure behavior are defined by the
+[Feng Control Flow Specification](../../../specifications/feng-flow.md#61-%E4%B8%89%E6%AE%B5%E5%BC%8F-for).
+
 ## for/in
 
 ```feng
@@ -67,7 +71,10 @@ for let value in values {
 }
 ```
 
-`for/in` can iterate over arrays and over standard-library or user-defined iterators that implement the `@iterable` / `@iterator` protocols. The loop variable is a new binding on every iteration.
+`for/in` can iterate over arrays and over standard-library or user-defined iterators that implement the `@iterable` /
+`@iterator` protocols. The loop binding's per-iteration identity, `let` / `var` mutability, and resulting closure
+behavior are defined by the
+[Feng Control Flow Specification](../../../specifications/feng-flow.md#62-forin-%E5%BE%AA%E7%8E%AF).
 
 ## Control Transfer
 
