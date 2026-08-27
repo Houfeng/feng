@@ -1,9 +1,11 @@
 # Feng 统一 ValueBox 与 throw/catch 类型对齐开发方案
 
-> **状态**：待 Review，尚未实施。
+> **状态**：方案、测试白名单与实施前基线已完成；标量与 enum 相等语义决策已通过，主规范同步尚未
+> 完成，尚未修改代码。
 >
-> **性质**：工程实现提案，不定义新的语言规则。异常载荷类型的最终权威规则仍应在实施阶段先更新
-> [`feng-exception.md`](../specifications/feng-exception.md)；值类型、enum 与 spec 的既有语言语义分别以
+> **性质**：工程实现方案，不作为语言规则的唯一来源。异常载荷类型的最终权威规则仍应在实施阶段先更新
+> [`feng-exception.md`](../specifications/feng-exception.md)；本方案已批准的 enum object-form spec 相等语义
+> 修正必须先写入 [`feng-spec.md`](../specifications/feng-spec.md)。值类型与 enum 的语言语义分别以
 > [`feng-type.md`](../specifications/feng-type.md)、[`feng-tuple.md`](../specifications/feng-tuple.md)、
 > [`feng-enum.md`](../specifications/feng-enum.md) 和 [`feng-spec.md`](../specifications/feng-spec.md) 为准。
 
@@ -12,13 +14,15 @@
 本方案分为两个严格串行的阶段：
 
 1. **统一 ValueBox**：先将标量、enum、tuple 与 `@value type` 的逃逸装箱统一为按具体类型静态生成的
-   `ValueBox<T>` 模型，保持现有语言行为和异常匹配行为不变；
+   `ValueBox<T>` 模型；内建标量的全部可观察行为和现有异常匹配行为保持不变，仅按已批准规则修正
+   不同动态 enum 类型在 object-form spec 中的相等结果；
 2. **对齐 throw/catch**：在统一箱模型稳定后，再统一 `throw` 与具体类型 `catch` 的类型许可规则，删除
    异常专用描述符，并通过箱描述符或托管对象描述符完成精确匹配。
 
 两个阶段不得合并提交。阶段一完成全部定向测试和全量回归后，才能开始阶段二。这样可以独立验证：
 
-- 阶段一只改变值的托管承载方式，不改变异常语言规则；
+- 阶段一改变值的托管承载方式，并完成已批准的 enum object-form spec 名义类型相等语义修正，但不改变
+  异常语言规则；
 - 阶段二只消费已经统一的托管载荷模型，不再同时重构装箱基础设施。
 
 ## 2. 当前实现与问题
@@ -165,6 +169,12 @@ struct DynamicValueBox {
 运行时分支、间接访问、descriptor 查询或比较以及 ARC/CC 操作数量，只能小于或等于变更前基线。任一项
 确认高于当前开销即视为方案不合格，不能以功能正确、测试通过或回退幅度较小为由接受。**
 
+Feng 的语言实现层禁止运行时查找，本约束是长期架构原则，不仅适用于本次变更。类型、descriptor、box、
+witness 与异常匹配所需的目标或 ABI 槽位必须由编译器在编译期确定；生成代码只能直接静态引用目标，或
+从编译期固定的泛型 ABI 参数/固定索引槽直接取值。禁止引入运行时 registry、descriptor 查找或映射、
+哈希查找、字符串查找、线性搜索以及为完成类型识别而增加的动态分派。本方案不得以任何形式预留或引入
+此类机制。
+
 两个阶段均不得：
 
 - 为原本不装箱的表达式、普通参数传递、算术或泛型直接调用新增装箱；
@@ -196,6 +206,11 @@ struct DynamicValueBox {
    §3.5 的结构性约束与验证要求；
 9. 对语言许可集合、descriptor 身份、跨 package 链接、ABI、生命周期、性能影响、测试归类或实现取舍存在
    任何不确定时，必须停止对应工作，陈列事实与可选方案并交由人工决策，禁止自行选择或增加特判。
+10. `bool` 与全部数值标量的普通表达式、object-form spec、装箱前后相等结果及其他可观察行为必须与
+    变更前完全一致；本次结构重构不得改变、扩展或收窄任何标量语义；
+11. enum 的行为修正仅限已经批准的名义类型规则：object-form spec 中动态值必须使用具名 enum 的箱
+    descriptor 标识类型；不同具名 enum 以及 enum 与其底层标量即使底层值相同也必须不相等。普通静态
+    enum 表达式的类型检查与相等规则保持不变。
 
 本文中的建议项只有在 §9 Review 后才成为实施决策；实施期间发现本文未覆盖的新问题，不得以“沿用总体
 方向”为由自行扩展范围。
@@ -209,21 +224,22 @@ struct DynamicValueBox {
 
 ### 4.2 箱类型与符号
 
-建议统一使用与用途无关的命名：
+`ValueBox<T>` 是统一编译抽象名称，不强制改变现有生成 C 的 per-type box 命名。发码名称沿用既有规则：
 
 ```text
-FengValueBox__<canonical-type-mangle>
-FengValueBoxDesc__<canonical-type-mangle>
-FengValueBoxReleaseChildren__<canonical-type-mangle>
+<type-c-name>__spec_box
+<type-c-name>__spec_box_desc
+<type-c-name>__spec_box_release_children
 ```
 
-现有 tuple/`@value type` 的 `__spec_box` 命名应迁移到通用 `value_box` 命名，因为箱不再只服务 spec。
-生成符号属于 Feng 内部 ABI，迁移要求全量重编译，不改变 `@abi` C surface。
+现有 tuple/`@value type` 的 box 结构、descriptor、`__spec_box` 系列发码名称以及 `tuple_box__as` /
+`value_box__as` witness 名称保持不变。名称中的 `spec` 是既有内部符号约定，不表示箱只能服务 spec；
+Codegen 的统一由 box 元数据与装箱/解箱入口实现，不通过批量重命名既有符号实现。
 
 内建标量的箱类型与箱描述符由 runtime 提供唯一全局符号，避免不同模块分别生成而破坏指针身份。
 `int` 等平台相关别名复用其规范化底层标量箱。具名 enum、tuple、`@value type` 及闭合泛型 Value 的箱
-描述符按完整名义类型生成稳定符号；公开或跨包类型沿用现有外部可见/弱定义规则，必须保证链接后的描述符
-地址唯一。
+描述符按完整名义类型并沿用现有 per-type box mangle 规则生成稳定符号；公开或跨包类型沿用现有外部
+可见/弱定义规则，必须保证链接后的描述符地址唯一。
 
 ### 4.3 标量与 enum
 
@@ -235,11 +251,14 @@ struct FengValueBox__i32 {
     int32_t value;
 };
 
-struct FengValueBox__demo__Color {
+struct FengEnum__demo__Color__spec_box {
     FengManagedHeader header;
     FengEnum__demo__Color value;
 };
 ```
+
+上例中 builtin scalar 是 runtime 提供的固定箱符号；enum 是 codegen 生成的 per-type box，沿用现有
+`<type-c-name>__spec_box` 命名规则。两者实现同一 ValueBox 抽象，不要求 C 符号前缀完全相同。
 
 本阶段删除：
 
@@ -250,11 +269,13 @@ struct FengValueBox__demo__Color {
 - Codegen 中的 scalar payload 字段映射与 scalar box 构造函数映射。
 
 本阶段用类型化 box 的 `.value` 直接写入和读取。enum 的箱是 `ValueBox<Enum>` 的普通具体化，不引入
-enum 专用箱抽象、运行时 enum 分支或 enum `kind`。
+enum 专用箱抽象、运行时 enum 分支或 enum `kind`。每个具名 enum 的 `ValueBox<Enum>.header.desc` 必须
+指向该具名 enum 声明级唯一的箱 descriptor，不得指向原始值 descriptor、共享标量箱 descriptor 或
+底层标量的箱 descriptor。
 
 ### 4.4 tuple 与 `@value type`
 
-tuple 与 `@value type` 继续复用现有每类型独立箱结构，但收敛命名和通用生成入口：
+tuple 与 `@value type` 继续复用现有每类型独立箱结构和发码名称，只收敛通用生成入口：
 
 - trivial Value 直接赋值到 `box->value`；
 - aggregate Value 通过其 `FengAggregateDescriptor` 调用 `feng_aggregate_assign`；
@@ -299,9 +320,46 @@ spec fat value、witness ABI、witness 缓存键和 `subject: void *` 表示保�
 - spec 成员分派仍是一次 witness 间接调用，不能增加运行时类型判断；
 - spec subject 的 retain/release 和逃逸所有权规则保持不变。
 
-箱对象相等行为也必须保持阶段一变更前的结果，包括浮点边界值。类型化 box 可以使用按具体 `T` 静态
-生成或 runtime 预定义的 `equal_fn`，但不得借重构改变 object-form spec subject 的既有相等语义；任何
-相等语义调整都应作为独立语言变更处理。
+#### 4.6.1 标量可观察行为必须保持不变
+
+`bool` 与全部数值标量的可观察行为是阶段一不可放宽的回归红线，结构重构不得改变任何结果：
+
+- 普通表达式继续遵循现有静态类型检查和字面量适配规则；例如无目标类型的 `1 == 1.0` 仍因两侧分别为
+  `int` 与 `double` 而不合法，不得因统一 ValueBox 引入隐式数值提升；
+- object-form spec 中，同一具体标量类型继续按现有值相等规则比较；不同具体标量类型保持不相等，
+  例如分别装箱且未预先转换为同一类型的 `int(1)` 与 `double(1.0)` 结果仍为 `false`；
+- `int` 等平台相关别名继续复用其规范化底层标量的类型与箱 descriptor；
+- `f32`、`f64` 的零值、符号零、无穷、NaN 及 payload 等边界输入必须逐项保持变更前结果，不能借重构
+  重新定义浮点箱相等性。
+
+实现路径允许由“共享 scalar-box descriptor 后检查 `kind`”变为“先比较具体标量箱 descriptor”，但这
+只是内部表示变化。类型化标量箱可以使用按具体 `T` 静态预定义的 `equal_fn`；对所有输入组合，最终结果
+必须与变更前一致，也不得增加运行时工作。
+
+#### 4.6.2 enum 使用具名类型 descriptor
+
+enum 的 object-form spec 相等语义按名义类型定义。每个具名 enum 必须拥有声明级唯一的
+`ValueBox<Enum>` descriptor；公开或导入的 enum 必须保证链接后同一具名类型对应同一 descriptor 地址。
+spec subject 相等比较继续使用既有流程：先比较箱 descriptor 指针，只有 descriptor 相同才调用该具名
+enum 箱静态绑定的 `equal_fn` 比较 enum 值。
+
+| object-form spec 中的两个动态值 | 结果 |
+|---|---|
+| 同一具名 enum，底层值相同 | `true` |
+| 同一具名 enum，底层值不同 | `false` |
+| 不同具名 enum，底层值相同或不同 | `false` |
+| 具名 enum 与其底层标量，底层值相同或不同 | `false` |
+
+普通静态表达式的规则不变：不同具名 enum 之间、enum 与其底层标量之间仍是类型不兼容，不能直接使用
+`==` 得到布尔结果。上表只定义二者已经适配为同一 object-form spec 后的动态 subject 相等结果。
+
+该规则修正当前 enum 复用 `FengScalarBox` 的 `i32 kind + payload` 后丢失具名类型身份的问题；这是经过
+人工批准的阶段一可观察行为修正，不得扩展到其他类型或其他语言行为。它接近 C# `Enum.Equals` 的语义：
+只有 enum 运行时类型相同且底层值相同才相等，参见
+[Microsoft `Enum.Equals`](https://learn.microsoft.com/en-us/dotnet/api/system.enum.equals)。
+
+实现不得增加 `is_enum_descriptor`、`kind` 检查、运行时查找或其他 enum 特判。不同动态类型通过既有的一次
+descriptor 指针比较直接返回 `false`；同一动态类型才进入该 descriptor 已静态绑定的 `equal_fn`。
 
 ### 4.7 阶段一中的异常兼容
 
@@ -316,6 +374,8 @@ ValueBox<T> 负责载荷承载与生命周期
 
 阶段一不得借机修正 enum、array 或 spec 的异常匹配结果；这些变化必须留到阶段二单独验证。阶段一完成后
 文档和代码中必须明确标记该过渡层，并在阶段二完整删除，不能作为永久方案。
+§4.6.2 的 enum object-form spec 相等语义修正不授权在阶段一提前改变 enum 的 throw/catch 匹配；二者
+必须分别实施和验证。
 
 ### 4.8 阶段一验证
 
@@ -327,6 +387,9 @@ Runtime/Codegen 测试至少覆盖：
 - 闭合泛型 Value box 的 descriptor 唯一性和跨模块符号一致性；
 - spec `BORROW_LOCAL` 不装箱；
 - spec `BOX_OWNER` 对 bool、整数、浮点、enum、tuple、`@value type` 正确装箱；
+- scalar object-form spec 相等结果对所有同类型、跨类型及浮点边界组合与变更前完全一致；
+- enum object-form spec 相等覆盖同一具名 enum、不同具名 enum、enum 与底层标量的完整矩阵，并符合
+  §4.6.2；
 - 从 spec 视角访问成员、调用 type method/fit method，返回值与 mutation 语义不变；
 - spec 值复制、返回、字段保存和释放不泄漏、不重复释放；
 - 普通标量运算、参数传递、泛型直接调用和非逃逸 spec 临时调用不新增装箱；
@@ -505,28 +568,109 @@ Semantic 测试必须对允许与禁止集合中的每个类别分别覆盖 `thr
 
 ### 8.1 Review 与变更前基线
 
-- [ ] 完成本方案 §9 的全部人工 Review 决策并记录结论；
-- [ ] 确认工作区只包含本方案已经 Review 的文档变更；
-- [ ] 在沙箱外运行变更前完整 `make test`，记录各测试套件数量与结果；
-- [ ] 保存当前 scalar spec `BORROW_LOCAL` 与 `BOX_OWNER` 的代表性生成 C 片段；
-- [ ] 保存当前标量、enum、tuple、`@value type` throw/catch 的代表性生成 C 片段；
-- [ ] 记录 `FengScalarBox`、11 个标量原始值描述符、共享箱描述符和异常专用描述符的基线符号；
-- [ ] 运行既有性能约束并记录直接标量、泛型标量与非逃逸 spec 路径的基线；
-- [ ] 记录所有受影响路径的动态分配次数与大小、运行时分支和间接访问、descriptor 比较以及 ARC/CC 操作
+- [x] 完成本方案 §9 的全部人工 Review 决策并记录结论；
+- [x] 确认工作区只包含本方案已经 Review 的文档变更；
+- [x] 在沙箱外运行变更前完整 `make test`，记录各测试套件数量与结果；
+- [x] 保存当前 scalar spec `BORROW_LOCAL` 与 `BOX_OWNER` 的代表性生成 C 片段；
+- [x] 保存当前标量、enum、tuple、`@value type` throw/catch 的代表性生成 C 片段；
+- [x] 记录 `FengScalarBox`、11 个标量原始值描述符、共享箱描述符和异常专用描述符的基线符号；
+- [x] 运行既有性能约束并记录直接标量、泛型标量与非逃逸 spec 路径的基线；
+- [x] 记录所有受影响路径的动态分配次数与大小、运行时分支和间接访问、descriptor 比较以及 ARC/CC 操作
   基线，作为两个阶段不可放宽的比较上限；
-- [ ] 列出 `test/` 下直接强断言旧标量箱的用例精确清单；
-- [ ] 将拟修改的每个旧标量箱测试函数、旧断言和迁移目标提交人工确认；
-- [ ] 记录人工批准修改的 `test/` 用例白名单，阶段一不得修改白名单外的既有用例。
+- [x] 列出 `test/` 下直接强断言旧标量箱的用例精确清单；
+- [x] 将拟修改的每个旧标量箱测试函数、旧断言和迁移目标提交人工确认；
+- [x] 记录人工批准修改的 `test/` 用例白名单，阶段一不得修改白名单外的既有用例。
+
+#### 8.1.1 旧标量箱强断言候选白名单
+
+以下清单是 2026-08-27 对 `test/` 的全量文本审计结果。行号用于 Review 定位，以函数名作为稳定身份。
+清单中的 9 个函数已经人工批准为测试修改白名单：函数全部保留，只允许将旧标量箱相关断言迁移为
+面向新 `ValueBox` 的等价或更强断言。
+
+| 文件与函数 | 现有旧表示断言 | 必须保持的测试意图 | 建议迁移 |
+|---|---|---|---|
+| `test/runtime/test_runtime.c:123` `test_scalar_box_runtime_contract` | 直接构造共享 `FengScalarBox`；断言共享 descriptor、`kind`、union payload 与布局 | 箱 header、descriptor、值、引用计数和释放契约 | 改为全部 11 种内建标量的具体 `ValueBox<T>`，逐一断言专属箱 descriptor、`.value`、布局和释放 |
+| `test/codegen/test_codegen.c:2336` `test_object_spec_owned_subjects_move_into_persistent_slots` | 断言生成 C 不含 `feng_scalar_box_new_` | spec 持久槽 move 路径不得额外装箱 | 改为断言该路径不含任何对应具体标量 `ValueBox<T>` 分配；其余 move/cleanup 断言原样保留 |
+| `test/codegen/test_codegen.c:4898` `test_enum_codegen_emits_stable_symbols` | 断言普通 enum 路径不调用规范化整数 scalar-box constructor | 普通 enum 运算、参数与返回不得装箱 | 改为断言不分配该 enum 的专属 ValueBox；其余 enum 稳定符号断言原样保留 |
+| `test/codegen/test_codegen.c:5927` `test_fit_builtin_and_array_object_spec_coercion_codegen` | 精确断言 4 个 `FengScalarBox`、共享 descriptor 不在生成单元重复定义以及 `payload.i32` 解箱文本 | builtin scalar 逃逸 spec subject 必须装箱，直接调用不得装箱，witness thunk 必须正确解箱 | 改为精确断言具体标量 ValueBox 的分配数量、静态 descriptor 引用和 `.value` 解箱；其余 array/string/witness 断言原样保留 |
+| `test/codegen/test_codegen.c:6049` `test_fit_enum_object_spec_coercion_codegen` | 断言存在 `FengScalarBox` 和 `payload.i32` 解箱 | enum 逃逸 spec subject 必须使用其具名类型箱，thunk 正确解箱 | 改为断言该 enum 的专属 ValueBox、专属箱 descriptor 和 `.value` 解箱 |
+| `test/codegen/test_codegen.c:6403` `test_object_spec_thunk_subject_cast_shape_codegen` | 断言指定普通对象 subject 路径不含 `FengScalarBox` | 引用实体的 object-form spec thunk 不得经过值箱 | 改为断言不含任何 ValueBox 分配或值箱 cast；其余 thunk cast 断言原样保留 |
+| `test/codegen/test_codegen.c:7557` `test_fit_enum_generic_constraint_codegen` | 断言 enum 泛型直接借用路径不含 `FengScalarBox`/`payload.i32` | 非逃逸泛型 enum subject 必须直接借用，不得装箱 | 改为断言不分配 enum ValueBox 且直接读取原始 enum 地址；其余 witness 断言原样保留 |
+| `test/codegen/test_codegen.c:11578` `test_generic_scalar_instance_direct_call_codegen` | 断言泛型标量直接调用不含 scalar-box constructor/临时变量 | 泛型标量实例直接调用不得装箱或经过 witness | 改为断言不分配对应标量 ValueBox；其余直接调用与无 witness 断言原样保留 |
+| `test/codegen/test_codegen.c:12533` `test_multi_parameter_generic_callable_abi_codegen` | 断言 generic callable ABI 路径不含 scalar-box constructor | address-form 泛型 callable 参数不得转为托管箱 | 改为断言不分配任何对应 ValueBox；其余 callable dispatch、临时存储和 descriptor 依赖断言原样保留 |
+
+白名单之外没有发现 `FengScalarBox`、`FengBuiltinScalarKind`、`feng_scalar_box_*` 或其 payload 字段的
+直接测试断言。只允许修改表中与旧标量箱表示直接相关的断言；同一测试函数中的其他断言仍须保持原样，
+除非再次取得人工批准。
+
+#### 8.1.2 变更前基线记录
+
+2026-08-27 在沙箱外执行完整 `make test`，结果全部通过：
+
+| 套件 | 基线结果 |
+|---|---|
+| C unit / CLI / symbol | archive、lexer、parser、semantic、runtime、codegen、debug、CLI、CLI paths、symbol 全部通过 |
+| smoke | 91/91 |
+| `std/std_test` | 601/601，Skipped 0 |
+| `fcts/` | 1018/1018，Skipped 0 |
+| perf constraints | 全部通过 |
+| 其他 `make test` 门禁 | incremental、release scripts、macOS finalize、bundled packages、toolchain prebuilt fetch 全部通过 |
+
+当前 arm64 macOS C 布局基线：`sizeof(FengManagedHeader) == 24`、`alignof == 8`；
+`sizeof(FengScalarBox) == 40`、`alignof == 8`，其中 `kind` 位于 offset 24，union payload 位于 offset 32。
+
+代表性生成 C/Codegen 基线：
+
+```c
+/* scalar spec BORROW_LOCAL：0 次分配，直接读取一次。 */
+int32_t self_value = *(const int32_t *)_subject;
+
+/* scalar spec BOX_OWNER：1 次箱分配，thunk 读取共享箱 payload。 */
+struct FengScalarBox *box = feng_scalar_box_new_i32(value);
+int32_t self_value = ((const struct FengScalarBox *)_subject)->payload.i32;
+
+/* scalar throw/catch：1 次箱分配，catch 搜索 1 次 descriptor 指针比较。 */
+FengScalarBox *box = feng_scalar_box_new_i32(value);
+feng_throw(box, &feng_scalar_i32_exception_descriptor);
+int32_t caught = ((FengScalarBox *)feng_caught_value())->payload.i32;
+
+/* tuple/@value throw：1 次现有 per-type box 分配；trivial 直接赋值，aggregate assign。 */
+struct T__spec_box *box = feng_object_new(&T__spec_box_desc);
+box->value = value; /* 或 feng_aggregate_assign(&box->value, &value, &T__aggregate_desc) */
+feng_throw(box, &T__spec_box_desc);
+```
+
+Runtime 符号基线包括 11 个原始值 descriptor（`feng_bool_descriptor` 至 `feng_f64_descriptor`）、共享
+`feng_scalar_box_descriptor`、11 个 `feng_scalar_box_new_<kind>` 构造函数，以及 11 个
+`feng_scalar_<kind>_exception_descriptor`。普通 enum 不装箱；enum 的 escaping spec 当前复用共享 scalar
+box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spec_box_desc`。
+
+受影响路径的结构性开销上限：
+
+| 路径 | 分配 | 运行时类型工作 | ARC/CC 与间接访问 |
+|---|---:|---|---|
+| 普通标量/enum 运算、参数、返回 | 0 | 0 | 0 |
+| scalar/enum spec `BORROW_LOCAL` | 0 | 无查找、无类型分支 | 1 次 `_subject` 直接取值；既有单层 witness 调用 |
+| scalar/enum spec `BOX_OWNER` | 1 | 构造器写 `kind`；thunk 无查找 | 既有箱 ARC；1 次 payload 取值 |
+| scalar throw | 1 | personality 仅 1 次 descriptor 指针比较 | 既有箱 ARC；catch 1 次 payload 取值 |
+| tuple/`@value type` throw | 1 | personality 仅 1 次 descriptor 指针比较 | trivial 直接赋值；aggregate 保持既有 assign/release |
+
+阶段一与阶段二均不得超过上表任一项；尤其不得新增运行时查找、分配、类型分支、间接访问、descriptor
+操作或 ARC/CC 操作。
 
 ### 8.2 阶段一文档
 
-- [ ] 更新值模型工程文档，定义所有可装箱具体值类型统一使用 `ValueBox<T>`；
-- [ ] 更新 `@value type` 工程文档中“`FengScalarBox` 与 per-type box 不合并”的历史结论；
-- [ ] 更新 builtin fit/spec 工程文档中的 scalar box subject 表示；
-- [ ] 明确记录阶段一不改变 throw/catch 语言许可集合和匹配行为；
-- [ ] 明确记录 `ValueBox<T>` 是静态具体化模式，不是动态 payload 容器；
-- [ ] 明确记录每个具体值类型分别拥有原始值描述符和箱描述符；
-- [ ] 明确记录箱中不增加原始值描述符字段，descriptor 中不增加反向链接。
+- [x] 更新值模型工程文档，定义所有可装箱具体值类型统一使用 `ValueBox<T>`；
+- [x] 更新 `@value type` 工程文档中“`FengScalarBox` 与 per-type box 不合并”的历史结论；
+- [x] 更新 builtin fit/spec 工程文档中的 scalar box subject 表示；
+- [x] 明确记录阶段一不改变 throw/catch 语言许可集合和匹配行为；
+- [x] 明确记录 `ValueBox<T>` 是静态具体化模式，不是动态 payload 容器；
+- [x] 明确记录每个具体值类型分别拥有原始值描述符和箱描述符；
+- [x] 明确记录箱中不增加原始值描述符字段，descriptor 中不增加反向链接；
+- [ ] 在主规范 `feng-spec.md` 中明确：内建标量的 object-form spec 相等结果保持不变；具名 enum 按动态
+  具名类型和 enum 值共同决定相等结果；
+- [ ] 在主规范及对应测试设计中明确：不同具名 enum、enum 与其底层标量在普通静态表达式中仍不可直接
+  比较，在同一 object-form spec 视角下则返回 `false`。
 
 ### 8.3 阶段一 Runtime：内建 ValueBox
 
@@ -551,8 +695,10 @@ Semantic 测试必须对允许与禁止集合中的每个类别分别覆盖 `thr
 - [ ] 实现 trivial `T` 的静态 `.value` 解箱；
 - [ ] 实现 aggregate `T` 的 `feng_aggregate_assign` 解箱；
 - [ ] 将 tuple/`@value type` 的 `UserType.c_value_box_*` 路径接入统一 box 查询入口；
-- [ ] 将现有 `__spec_box` 内部符号迁移为用途无关的 `value_box` 命名；
+- [ ] 保持现有 tuple/`@value type` 的 `__spec_box` 与 witness 发码名称，统一 box 抽象但不批量重命名；
 - [ ] 为每个具名 enum 生成声明级唯一的 `ValueBox<Enum>` descriptor；
+- [ ] 为每个具名 enum 箱 descriptor 静态绑定只比较该 enum 值的 `equal_fn`，不得复用共享 i32 箱
+  descriptor 或增加 enum 运行时分类；
 - [ ] 为 public/imported enum 保证跨 package 的箱 descriptor 符号地址唯一；
 - [ ] 为闭合泛型 Value 保证按完整类型参数生成唯一箱 descriptor；
 - [ ] 删除 scalar payload 字段映射 helper；
@@ -568,6 +714,9 @@ Semantic 测试必须对允许与禁止集合中的每个类别分别覆盖 `thr
 - [ ] 将 builtin scalar witness thunk 从 `payload.<kind>` 改为静态 box 类型的 `.value`；
 - [ ] 将 enum witness thunk 从 `payload.i32` 改为 `ValueBox<Enum>.value`；
 - [ ] 将 tuple/`@value type` witness thunk 接入相同的 box 信息查询；
+- [ ] 保持所有 builtin scalar object-form spec 相等结果不变，包括跨标量类型与 `f32`/`f64` 边界值；
+- [ ] 使 enum object-form spec 相等按具名 enum 箱 descriptor 精确区分动态类型；
+- [ ] 验证不同具名 enum 以及 enum 与底层标量的 descriptor 不同，并且相等比较直接返回 `false`；
 - [ ] 验证 spec getter、setter、type method 与 fit method thunk 不增加类型判断；
 - [ ] 验证 spec fat value、witness ABI、witness cache key 和 subject 所有权协议没有变化。
 
@@ -588,6 +737,9 @@ Semantic 测试必须对允许与禁止集合中的每个类别分别覆盖 `thr
 - [ ] Codegen 测试覆盖 builtin scalar、enum、trivial Value、aggregate Value 的 box 生成；
 - [ ] Codegen 测试覆盖 public/imported enum 与闭合泛型 Value 的 descriptor 唯一性；
 - [ ] FCTS 覆盖 scalar/enum spec 的 `BORROW_LOCAL` 与 `BOX_OWNER`；
+- [ ] FCTS 覆盖 builtin scalar spec 相等性的变更前完整基线，证明所有可观察结果均未改变；
+- [ ] FCTS 覆盖同一具名 enum 同值/异值、不同具名 enum 同值/异值、enum 与底层标量的 spec 相等矩阵；
+- [ ] Semantic/FCTS 证明不同具名 enum 以及 enum 与底层标量的普通静态相等规则没有变化；
 - [ ] FCTS 覆盖 spec getter、setter、type method、fit method、返回、字段保存和复制；
 - [ ] FCTS 覆盖 tuple/`@value type` 装箱行为无回归；
 - [ ] 异常现有用例证明阶段一 throw/catch 行为无变化；
@@ -696,20 +848,35 @@ Semantic 测试必须对允许与禁止集合中的每个类别分别覆盖 `thr
 - [ ] 记录两个阶段最终测试数量、逐项运行时开销对比结果与完整 `make test` 结果；
 - [ ] 将本文状态从“待 Review”更新为与实际交付进度一致的状态。
 
-本提案经 Review 前不得开始代码实施。
+本提案已通过人工 Review，§8.1 的变更前基线与测试白名单已经完成。§8.2 中新增的标量/enum 相等语义
+主规范任务完成前，不得开始代码实施或修改既有测试。
 
 ## 9. Review 决策清单
 
 开始实施前需要逐项确认：
 
-- [ ] 接受删除共享 `FengScalarBox`、`FengBuiltinScalarKind` 与固定 union，统一为静态
+- [x] 接受删除共享 `FengScalarBox`、`FengBuiltinScalarKind` 与固定 union，统一为静态
   `ValueBox<T>`；
-- [ ] 接受每个具体值类型分别拥有原始值描述符与托管箱描述符，且不增加运行时反向链接；
-- [ ] 接受不增加 `type_identity`，不修改 `FengManagedHeader` 与三类整体描述符的结构布局；
-- [ ] 接受阶段一暂时保留现有异常匹配描述符以隔离行为变更，阶段二必须完整删除；
-- [ ] 接受 object-form spec 仅修改 subject 装箱/解箱适配，不修改 fat value 与 witness ABI；
-- [ ] 接受阶段二建议的 throw/catch 允许集合与拒绝集合；
-- [ ] 接受本阶段拒绝 array 和所有 spec，不增加 catch 搜索时的实例元数据检查；
-- [ ] 接受普通 `@abi type` 与 `@value @abi type` 可作为异常载荷，同时保持异常不得跨
+- [x] 接受每个具体值类型分别拥有原始值描述符与托管箱描述符，且不增加运行时反向链接；
+- [x] 接受不增加 `type_identity`，不修改 `FengManagedHeader` 与三类整体描述符的结构布局；
+- [x] 接受阶段一暂时保留现有异常匹配描述符以隔离行为变更，阶段二必须完整删除；
+- [x] 接受 object-form spec 仅修改 subject 装箱/解箱适配，不修改 fat value 与 witness ABI；
+- [x] 接受阶段二建议的 throw/catch 允许集合与拒绝集合；
+- [x] 接受本阶段拒绝 array 和所有 spec，不增加 catch 搜索时的实例元数据检查；
+- [x] 接受普通 `@abi type` 与 `@value @abi type` 可作为异常载荷，同时保持异常不得跨
   `@abi func` 边界；
-- [ ] 接受每个阶段分别执行性能约束与沙箱外完整 `make test`。
+- [x] 接受每个阶段分别执行性能约束与沙箱外完整 `make test`；
+- [x] 接受零增量运行时开销的结构性判定口径：不得增加分配次数或大小、运行时分支、间接访问、
+  descriptor 操作、ARC/CC 操作及其他运行时工作；
+- [x] 确认 Feng 语言实现层永久禁止运行时查找；descriptor 等类型目标或固定 ABI 槽位必须编译期确定，
+  运行时只能直接引用或从固定槽取值，不得搜索、映射或动态选择；
+- [x] 接受 builtin scalar 的所有可观察行为必须与变更前完全一致，统一 ValueBox 不得改变普通表达式、
+  object-form spec 相等结果或浮点边界行为；
+- [x] 接受 enum 的 object-form spec 相等按具名类型 descriptor 和 enum 值共同决定：不同具名 enum 及
+  enum 与底层标量均不相等；该规则接近 C# `Enum.Equals`，且不改变普通静态 enum 相等规则；
+- [x] 接受上述 enum 行为修正必须先写入 `feng-spec.md`，再实施代码和测试。
+
+> **人工 Review 记录（2026-08-27）**：以上决策已全部通过，并已完成旧标量箱强断言用例清单审计。
+>
+> **测试白名单 Review 记录（2026-08-27）**：§8.1.1 的 9 个测试函数全部批准保留并迁移为面向新
+> `ValueBox` 的断言；函数中的非标量箱断言不在修改授权范围内。
