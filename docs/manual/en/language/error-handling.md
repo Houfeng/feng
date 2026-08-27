@@ -12,7 +12,11 @@ func require_positive(value: int) {
 }
 ```
 
-You can throw scalars, `bool`, `string`, arrays, or concrete user-defined types. Functions, method values, and values viewed through a `spec` cannot be thrown.
+You can throw numeric scalars, `bool`, `string`, named enums, named tuples, and concrete closed user-defined types,
+including their supported `@abi` and `@value` forms. Typed `catch` uses the same set of concrete types. Arrays,
+values viewed through any `spec`, open generic types, pointers, `void`, and callable values or types cannot be
+thrown or used by a typed `catch`. See the [exception specification](../../../specifications/feng-exception.md#33-catch)
+for the authoritative rules.
 
 ## Catch an Exception
 

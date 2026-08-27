@@ -1,7 +1,6 @@
 # Feng 统一 ValueBox 与 throw/catch 类型对齐开发方案
 
-> **状态**：方案、测试白名单与实施前基线已完成；标量与 enum 相等语义决策已通过，主规范同步尚未
-> 完成，尚未修改代码。
+> **状态**：阶段一统一 ValueBox 与阶段二 throw/catch 对齐均已完成，并通过定向验证和完整回归。
 >
 > **性质**：工程实现方案，不作为语言规则的唯一来源。异常载荷类型的最终权威规则仍应在实施阶段先更新
 > [`feng-exception.md`](../specifications/feng-exception.md)；本方案已批准的 enum object-form spec 相等语义
@@ -658,6 +657,68 @@ box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spe
 阶段一与阶段二均不得超过上表任一项；尤其不得新增运行时查找、分配、类型分支、间接访问、descriptor
 操作或 ARC/CC 操作。
 
+#### 8.1.3 实施问题记录
+
+| 阶段 | 现象 | 分析 | 处理 | 状态 |
+|---|---|---|---|---|
+| 阶段一 FCTS 定向验证 | tuple literal 直接赋给 object-form spec 报 `AE0301` | tuple literal 必须先由具名 tuple 目标确定结构；spec 目标不能替代具名 tuple 的构造目标。这是新增用例写法问题，不是 ValueBox 发码缺陷 | 先物化为具名 `UnifiedBoxPair`，再转换为 spec；不改变语言规则或实现 | 已解决 |
+| 阶段一首次完整回归 | UBSan 阶段 `test_cli` 的 LLDB-prefix 用例构建 `std` 依赖时，写入 `std/std/build/macos-arm64/ir/c/feng.c` 报父目录不存在 | Runtime、Semantic、Codegen 已先通过；单独以完全相同的 UBSan 环境重跑 `test_cli` 通过，随后从 clean 状态重跑完整 `make test` 也通过，无法稳定复现，且没有证据表明与 ValueBox 变更相关 | 不修改无关 CLI 实现或测试；以同条件定向重跑和 clean 全量回归共同验证，按“未复现”关闭，保留本记录供后续出现相同现象时追踪 | 已关闭（未复现） |
+| 阶段二既有测试授权审计 | 两个既有 Semantic 测试直接断言已被批准新规范反转的旧语义：`test_throw_rejects_abi_type_value` 拒绝普通 `@abi type`，`test_throw_allows_spec_values` 接受 object-form spec | 阶段二必须分别改为接受 `@abi type`、拒绝所有 spec；保留旧断言会与主规范和实现目标冲突。全量文本审计未发现其他既有测试直接断言这两项旧语义 | 2026-08-28 获得人工批准并完成迁移：两个测试函数均保留并改为等价或更强的新规范断言；Semantic 定向测试和完整回归通过，其他既有测试保持原样 | 已解决 |
+| 阶段二 FCTS 兼容审计 | `fcts/fcts_bin/src/test_exception.ff` 的既有 `throw_ex_spec()` 通过返回类型为 `ExDescribable` 的 helper 抛出 object-form spec | 新规范要求所有 spec 在 Semantic 阶段拒绝；改为抛出具体 `ExTaggedError` 后，其 spec 实现关系不参与许可或匹配，只会重复既有 `ExAppError` 普通实体覆盖，不能继续作为 spec 异常测试 | 2026-08-28 获得人工批准并删除该旧 FCTS、专用 helper 与注册；所有 spec 的拒绝行为由 Semantic 负向矩阵覆盖，普通实体行为由既有 `ExAppError` 覆盖；FCTS 全量通过 | 已解决 |
+| 阶段二 FCTS 原样重抛验证 | `catch error: unknown { throw error; }` 后由外层具名 Value catch 捕获时，Apple libunwind 报告搜索阶段与清理阶段的 handler 结果不一致并终止 | 生成 C 正确保留同一异常；直接聚合 Value throw/catch 对照不崩溃。根因是 `feng_rethrow()` 误用只用于继续同一次清理阶段的 `_Unwind_Resume`，第一次搜索选中的内层 `unknown` handler 不能据此改选外层 handler。vendored LLVM libunwind 已提供 `_Unwind_Resume_or_Rethrow`，并明确在非强制异常上以同一对象重新执行 `_Unwind_RaiseException` | 2026-08-28 人工批准并完成：`feng_rethrow()` 改用既有 `_Unwind_Resume_or_Rethrow`，以同一异常对象重新搜索外层 handler；旧实现的直接崩溃不是可用行为，不作为正确重抛的性能基线。实现未新增 Feng 侧分支、分配、字段、间接访问、ARC/CC、descriptor 映射或运行时查找；§8.1.5 完整矩阵和完整回归均通过 | 已解决 |
+| 阶段二 Codegen 原样重抛断言 | 首版新增断言按生成 C 中 `feng_rethrow();` 的总次数统计两处显式 `throw unknownBinding`，但实际还包含每个 try landing pad 在没有命中已选子句时生成的既有自动向外传播调用 | 总次数同时覆盖显式原样重抛和 try 的防御性/自动传播，不能证明二者的来源；实现没有多生成异常或 ValueBox | 改为分别断言两个具名 unknown 绑定从 `feng_caught_value()` 取得后直接调用 `feng_rethrow()`，并独立断言整个生成单元只有初始 throw 的一次 `feng_throw` 和一次 ValueBox 分配 | 已解决 |
+| 阶段二 smoke 兼容审计 | `test/smoke/phase1a/exception_spec.ff` 仍通过返回 `Describable` 的 helper 抛出 object-form spec，按已批准规范报 `AE0076`，使 smoke 91 项中 1 项编译失败 | 该用例断言的是已被规范反转的旧语义；若改为直接抛出 `AppError`，其 spec 实现关系与 throw/catch 完全无关，并与既有 `exception_type.ff` 的普通实体字段捕获重复 | 2026-08-28 获得人工批准并删除 `exception_spec.ff` 及其 `.expected`；所有 spec 拒绝由 Semantic 负向矩阵覆盖，普通实体运行时行为由 `exception_type.ff` 和 FCTS 覆盖；smoke `90/90` 通过 | 已解决 |
+| 阶段二 FCTS aggregate 生命周期断言 | aggregate Value 对象字面量中的实体字段在显式赋值前先执行该字段的默认初始化，因此测试资源的 finalizer 总计数包含一个默认实体和一个显式载荷实体 | 生成 C 中 ValueBox 的 `release_children` 与 aggregate assign/release 成对；额外计数来自既有非空实体字段默认值语义，不是箱或异常泄漏 | 终结器仅统计带显式测试标记 `code == 51` 的载荷子对象，继续严格断言该目标对象构造一次、终结一次；不修改语言或实现 | 已解决 |
+| 阶段二最终文档审计 | 英文手册仍将 array 列为可抛出类型；异常工程文档 §6 的历史清单仍以完成项展示共享 `FengScalarBox`、spec throw 和 `catch` 必填等已废弃语义；union-spec bug 记录仍显示“纳入实施” | 前两处与异常主规范和最终实现冲突，后一处会把已完成修复误读为仍在实施 | 修正手册并只引用异常主规范；将 §6 收敛为不含旧规则断言的历史摘要；将 bug 记录更新为已修复且回归通过，当前实现状态统一指向本文 | 已解决 |
+
+#### 8.1.4 阶段二既有语义断言迁移白名单
+
+2026-08-28 人工批准以下两个既有测试函数的必要语义迁移：
+
+- `test/semantic/test_semantic.c` 的 `test_throw_rejects_abi_type_value`：保留函数并迁移为普通
+  `@abi type` throw/catch 均被接受的正向断言；
+- `test/semantic/test_semantic.c` 的 `test_throw_allows_spec_values`：保留函数并迁移为所有 spec form 的
+  throw/catch 共用拒绝规则的负向断言。
+
+不得删除或跳过这两个函数；白名单不授权修改其他既有测试。
+
+同日人工批准删除 `fcts/fcts_bin/src/test_exception.ff` 中已被新规范判为非法且没有独立替代价值的
+`make_ex_describable`、`throw_ex_spec`、`test_throw_catch_spec_value` 及其测试注册。普通实体正向行为已有
+`ExAppError` 覆盖；所有 spec 的拒绝诊断由阶段二 Semantic 矩阵覆盖。
+
+同日人工批准删除 `test/smoke/phase1a/exception_spec.ff` 及其 `.expected`。该 smoke 只断言已被新规范
+反转的 object-form spec throw；迁移为具体实体后会与 `exception_type.ff` 重复，因此不保留伪 spec
+覆盖。
+
+#### 8.1.5 原样重抛实现决策与覆盖矩阵
+
+2026-08-28 人工批准原样重抛采用 `_Unwind_Resume_or_Rethrow`。`throw unknownBinding` 必须复用当前
+`FengUnwindException` 及其载荷，不创建新异常对象或新载荷；非 forced-unwind 路径由 libunwind 以同一
+异常对象重新执行 handler 搜索。`_Unwind_Resume` 仅用于 landing pad 继续同一次清理阶段，禁止再作为
+Feng 原样重抛入口。
+
+完整验证必须覆盖下列相互独立的维度：
+
+- [x] Codegen：`throw unknownBinding` 只生成 `feng_rethrow()`，不生成 `feng_throw()`、新 ValueBox 或新
+  `FengUnwindException`；
+- [x] 同函数嵌套：内层 `catch unknown` 原样重抛后，由同一函数的外层具体 catch 命中；
+- [x] 跨函数单次重抛：覆盖 `bool` 与全部数值标量、string、普通实体、具名 enum、具名 tuple、trivial
+  与 aggregate `@value type`、闭合泛型普通实体与 Value、普通 `@abi type`、`@value @abi type`；
+- [x] 跨 package：provider 抛出的 public 具名 enum 经 consumer 的 `catch unknown` 重抛后，仍由同一
+  public enum 的具体 catch 命中；
+- [x] 匹配顺序：重抛后的错误具体类型 catch 不得命中，后续精确类型 catch 必须命中；
+- [x] 跨函数连续重抛：同一异常连续经过两个 `catch unknown { throw binding; }` 栈帧后仍保持原类型和值；
+- [x] 生命周期：含托管子字段的 aggregate Value 经原样重抛后，载荷及其子对象恰好释放一次；
+- [x] 全部路径不得引入运行时 descriptor 查找、映射或 descriptor 内容比较，personality 仍只做静态
+  descriptor 指针相等比较。
+
+阶段一完成记录（2026-08-28）：第二次从 clean 状态在沙箱外执行完整 `make test`，C unit、CLI、symbol、
+smoke 91/91、`std/std_test` 601/601、`fcts` 1025/1025、perf constraints、incremental 与全部发布脚本门禁
+均通过。11 种新内建标量箱在当前 arm64 macOS 上均为 32 字节，小于原 `FengScalarBox` 的 40 字节；
+BOX_OWNER 与 throw 均保持 1 次分配，BORROW_LOCAL 保持 0 次分配，ARC/CC、descriptor 比较及间接访问
+次数没有增加。新路径删除了共享箱 `kind` 写入及其相关运行时分类数据；未增加运行时查找、分支或 descriptor
+操作。
+
 ### 8.2 阶段一文档
 
 - [x] 更新值模型工程文档，定义所有可装箱具体值类型统一使用 `ValueBox<T>`；
@@ -667,189 +728,213 @@ box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spe
 - [x] 明确记录 `ValueBox<T>` 是静态具体化模式，不是动态 payload 容器；
 - [x] 明确记录每个具体值类型分别拥有原始值描述符和箱描述符；
 - [x] 明确记录箱中不增加原始值描述符字段，descriptor 中不增加反向链接；
-- [ ] 同步更新其他文档：在主规范 `feng-spec.md` 中定义内建标量的 object-form spec 相等结果保持不变，
+- [x] 同步更新其他文档：在主规范 `feng-spec.md` 中定义内建标量的 object-form spec 相等结果保持不变，
   具名 enum 按动态具名类型和 enum 值共同决定相等结果，不同具名 enum、enum 与底层标量在同一
   object-form spec 视角下返回 `false`；普通静态比较规则保持不变。检查 `feng-enum.md` 及关联工程文档，
   仅修正冲突内容或增加对主规范的引用，不重复定义规则。该 TODO 是阶段一代码修改前的第一项任务。
 
 ### 8.3 阶段一 Runtime：内建 ValueBox
 
-- [ ] 为 `bool` 与 10 种数值标量定义类型化内建 `ValueBox<T>` C 结构；
-- [ ] 为 `bool` 与 10 种数值标量定义全局唯一的内建箱 `FengTypeDescriptor`；
-- [ ] 保证 `int` 按目标平台复用规范化 `i32` 或 `i64` 箱类型及描述符；
-- [ ] 为每种内建箱提供无额外分派的构造/初始化路径；
-- [ ] 保持当前 scalar object-form spec subject 的相等行为，包括 `f32`/`f64` 边界值；
-- [ ] 删除 `FengBuiltinScalarKind`；
-- [ ] 删除共享 `FengScalarBox` 的 `kind + union` 结构；
-- [ ] 删除 `feng_scalar_box_descriptor`；
-- [ ] 删除 `feng_scalar_box_new_<kind>` 构造函数族；
-- [ ] 检查 runtime 公开头中不再残留 `FengScalarBox` 或 scalar-box API。
+- [x] 为 `bool` 与 10 种数值标量定义类型化内建 `ValueBox<T>` C 结构；
+- [x] 为 `bool` 与 10 种数值标量定义全局唯一的内建箱 `FengTypeDescriptor`；
+- [x] 保证 `int` 按目标平台复用规范化 `i32` 或 `i64` 箱类型及描述符；
+- [x] 为每种内建箱提供无额外分派的构造/初始化路径；
+- [x] 保持当前 scalar object-form spec subject 的相等行为，包括 `f32`/`f64` 边界值；
+- [x] 删除 `FengBuiltinScalarKind`；
+- [x] 删除共享 `FengScalarBox` 的 `kind + union` 结构；
+- [x] 删除 `feng_scalar_box_descriptor`；
+- [x] 删除 `feng_scalar_box_new_<kind>` 构造函数族；
+- [x] 检查 runtime 公开头中不再残留 `FengScalarBox` 或 scalar-box API。
 
 ### 8.4 阶段一 Codegen：统一 Box 抽象
 
-- [ ] 定义按完整具体 `CGType` 键控的统一 box registry/key；
-- [ ] 实现查询/确保 `ValueBox<T>` C struct 符号的统一入口；
-- [ ] 实现查询/确保 `ValueBox<T>` descriptor 符号的统一入口；
-- [ ] 实现 trivial `T` 的静态 box 分配与直接 `.value` 初始化；
-- [ ] 实现 aggregate `T` 的 box 分配与 `feng_aggregate_assign` 初始化；
-- [ ] 实现 trivial `T` 的静态 `.value` 解箱；
-- [ ] 实现 aggregate `T` 的 `feng_aggregate_assign` 解箱；
-- [ ] 将 tuple/`@value type` 的 `UserType.c_value_box_*` 路径接入统一 box 查询入口；
-- [ ] 保持现有 tuple/`@value type` 的 `__spec_box` 与 witness 发码名称，统一 box 抽象但不批量重命名；
-- [ ] 为每个具名 enum 生成声明级唯一的 `ValueBox<Enum>` descriptor；
-- [ ] 为每个具名 enum 箱 descriptor 静态绑定只比较该 enum 值的 `equal_fn`，不得复用共享 i32 箱
+- [x] 定义按完整具体 `CGType` 分类并查询 box 信息的统一编译期入口；不建立运行时 registry；
+- [x] 实现查询/确保 `ValueBox<T>` C struct 符号的统一入口；
+- [x] 实现查询/确保 `ValueBox<T>` descriptor 符号的统一入口；
+- [x] 实现 trivial `T` 的静态 box 分配与直接 `.value` 初始化；
+- [x] 实现 aggregate `T` 的 box 分配与 `feng_aggregate_assign` 初始化；
+- [x] 实现 trivial `T` 的静态 `.value` 解箱；
+- [x] 实现 aggregate `T` 的 `feng_aggregate_assign` 解箱；
+- [x] 将 tuple/`@value type` 的 `UserType.c_value_box_*` 路径接入统一 box 查询入口；
+- [x] 保持现有 tuple/`@value type` 的 `__spec_box` 与 witness 发码名称，统一 box 抽象但不批量重命名；
+- [x] 为每个具名 enum 生成声明级唯一的 `ValueBox<Enum>` descriptor；
+- [x] 为每个具名 enum 箱 descriptor 静态绑定只比较该 enum 值的 `equal_fn`，不得复用共享 i32 箱
   descriptor 或增加 enum 运行时分类；
-- [ ] 为 public/imported enum 保证跨 package 的箱 descriptor 符号地址唯一；
-- [ ] 为闭合泛型 Value 保证按完整类型参数生成唯一箱 descriptor；
-- [ ] 删除 scalar payload 字段映射 helper；
-- [ ] 删除 scalar box 构造函数名称映射 helper；
-- [ ] 删除 Codegen 中只服务 `FengScalarBox` 的状态和 guard。
+- [x] 为 public/imported enum 保证跨 package 的箱 descriptor 符号地址唯一；
+- [x] 为闭合泛型 Value 保证按完整类型参数生成唯一箱 descriptor；
+- [x] 删除 scalar payload 字段映射 helper；
+- [x] 删除 scalar box 构造函数名称映射 helper；
+- [x] 删除 Codegen 中只服务 `FengScalarBox` 的状态和 guard。
 
 ### 8.5 阶段一 Codegen：spec 适配
 
-- [ ] 将 `FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER` 文档化为通用 ValueBox owner；
-- [ ] 保持 scalar/enum spec `BORROW_LOCAL` 路径直接借用原始值地址；
-- [ ] 将逃逸 builtin scalar spec subject 改为对应的 `ValueBox<T>`；
-- [ ] 将逃逸 enum spec subject 改为对应的 `ValueBox<Enum>`；
-- [ ] 将 builtin scalar witness thunk 从 `payload.<kind>` 改为静态 box 类型的 `.value`；
-- [ ] 将 enum witness thunk 从 `payload.i32` 改为 `ValueBox<Enum>.value`；
-- [ ] 将 tuple/`@value type` witness thunk 接入相同的 box 信息查询；
-- [ ] 保持所有 builtin scalar object-form spec 相等结果不变，包括跨标量类型与 `f32`/`f64` 边界值；
-- [ ] 使 enum object-form spec 相等按具名 enum 箱 descriptor 精确区分动态类型；
-- [ ] 验证不同具名 enum 以及 enum 与底层标量的 descriptor 不同，并且相等比较直接返回 `false`；
-- [ ] 验证 spec getter、setter、type method 与 fit method thunk 不增加类型判断；
-- [ ] 验证 spec fat value、witness ABI、witness cache key 和 subject 所有权协议没有变化。
+- [x] 将 `FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER` 文档化为通用 ValueBox owner；
+- [x] 保持 scalar/enum spec `BORROW_LOCAL` 路径直接借用原始值地址；
+- [x] 将逃逸 builtin scalar spec subject 改为对应的 `ValueBox<T>`；
+- [x] 将逃逸 enum spec subject 改为对应的 `ValueBox<Enum>`；
+- [x] 将 builtin scalar witness thunk 从 `payload.<kind>` 改为静态 box 类型的 `.value`；
+- [x] 将 enum witness thunk 从 `payload.i32` 改为 `ValueBox<Enum>.value`；
+- [x] 将 tuple/`@value type` witness thunk 接入相同的 box 信息查询；
+- [x] 保持所有 builtin scalar object-form spec 相等结果不变，包括跨标量类型与 `f32`/`f64` 边界值；
+- [x] 使 enum object-form spec 相等按具名 enum 箱 descriptor 精确区分动态类型；
+- [x] 验证不同具名 enum 以及 enum 与底层标量的 descriptor 不同，并且相等比较直接返回 `false`；
+- [x] 验证 spec getter、setter、type method 与 fit method thunk 不增加类型判断；
+- [x] 验证 spec fat value、witness ABI、witness cache key 和 subject 所有权协议没有变化。
 
 ### 8.6 阶段一 Codegen：异常兼容迁移
 
-- [ ] 将标量 throw 载荷从 `FengScalarBox` 迁移为对应的 `ValueBox<T>`；
-- [ ] 将 enum throw 载荷迁移为对应的 `ValueBox<Enum>`；
-- [ ] 将标量 catch 解箱从 `payload.<kind>` 迁移为静态 box 类型的 `.value`；
-- [ ] 保留阶段一所需的现有异常匹配 descriptor，保证匹配行为不变；
-- [ ] 为过渡匹配 descriptor 添加明确的阶段二删除标记，禁止扩展为新永久抽象；
-- [ ] 验证阶段一没有新增 enum 异常专用 descriptor；
-- [ ] 验证阶段一没有改变 array/spec 的现有 Semantic 接受或拒绝行为。
+- [x] 将标量 throw 载荷从 `FengScalarBox` 迁移为对应的 `ValueBox<T>`；
+- [x] 将 enum throw 载荷迁移为对应的 `ValueBox<Enum>`；
+- [x] 将标量 catch 解箱从 `payload.<kind>` 迁移为静态 box 类型的 `.value`；
+- [x] 保留阶段一所需的现有异常匹配 descriptor，保证匹配行为不变；
+- [x] 为过渡匹配 descriptor 添加明确的阶段二删除标记，禁止扩展为新永久抽象；
+- [x] 验证阶段一没有新增 enum 异常专用 descriptor；
+- [x] 验证阶段一没有改变 array/spec 的现有 Semantic 接受或拒绝行为。
 
 ### 8.7 阶段一测试与完成门禁
 
-- [ ] Runtime 测试覆盖 11 种内建 ValueBox 的 header descriptor、值读写、相等与释放；
-- [ ] Runtime/Codegen 测试证明类型化标量箱不大于原 `FengScalarBox`；
-- [ ] Codegen 测试覆盖 builtin scalar、enum、trivial Value、aggregate Value 的 box 生成；
-- [ ] Codegen 测试覆盖 public/imported enum 与闭合泛型 Value 的 descriptor 唯一性；
-- [ ] FCTS 覆盖 scalar/enum spec 的 `BORROW_LOCAL` 与 `BOX_OWNER`；
-- [ ] FCTS 覆盖 builtin scalar spec 相等性的变更前完整基线，证明所有可观察结果均未改变；
-- [ ] FCTS 覆盖同一具名 enum 同值/异值、不同具名 enum 同值/异值、enum 与底层标量的 spec 相等矩阵；
-- [ ] Semantic/FCTS 证明不同具名 enum 以及 enum 与底层标量的普通静态相等规则没有变化；
-- [ ] FCTS 覆盖 spec getter、setter、type method、fit method、返回、字段保存和复制；
-- [ ] FCTS 覆盖 tuple/`@value type` 装箱行为无回归；
-- [ ] 异常现有用例证明阶段一 throw/catch 行为无变化；
-- [ ] ARC/CC 测试证明箱及其托管子字段恰好释放一次；
-- [ ] 运行性能约束，证明直接标量、泛型直接调用和非逃逸 spec 路径不新增装箱；
-- [ ] 对照变更前基线，证明阶段一所有受影响路径的运行时开销逐项小于或等于当前开销；
-- [ ] 检查生成 C 中不再出现 `FengScalarBox`、`payload.<kind>` 或 scalar-box constructor；
-- [ ] 检查 runtime/generated symbols 中不再出现共享 scalar-box 符号；
-- [ ] 确认仅修改人工批准白名单内的旧标量箱强断言用例；
-- [ ] 将白名单内旧标量箱断言迁移为统一 ValueBox 的等价或更强断言，不删除、不跳过；
-- [ ] `test/` 下除白名单内表示迁移用例外的全部既有用例保持原样并通过；
-- [ ] `test/` 下迁移后的标量箱相关用例全部通过；
-- [ ] `fcts/` 下全部用例全量通过；
-- [ ] `std/std_test/` 下全部用例全量通过；
-- [ ] 运行所有阶段一定向测试；
-- [ ] 在沙箱外运行完整 `make test`；
-- [ ] **阶段一完成门禁**：以上阶段一任务全部完成，`test/`、`fcts/`、`std/std_test/` 满足 §3.6 强制
+- [x] Runtime 测试覆盖 11 种内建 ValueBox 的 header descriptor、值读写、相等与释放；
+- [x] Runtime/Codegen 测试证明类型化标量箱不大于原 `FengScalarBox`；
+- [x] Codegen 测试覆盖 builtin scalar、enum、trivial Value、aggregate Value 的 box 生成；
+- [x] Codegen/FCTS 覆盖 public/imported enum 与闭合泛型 Value 的 descriptor 唯一性；
+- [x] FCTS 覆盖 scalar/enum spec 的 `BORROW_LOCAL` 与 `BOX_OWNER`；
+- [x] FCTS 覆盖 builtin scalar spec 相等性的变更前完整基线，证明所有可观察结果均未改变；
+- [x] FCTS 覆盖同一具名 enum 同值/异值、不同具名 enum 同值/异值、enum 与底层标量的 spec 相等矩阵；
+- [x] Semantic/FCTS 证明不同具名 enum 以及 enum 与底层标量的普通静态相等规则没有变化；
+- [x] FCTS 覆盖 spec getter、setter、type method、fit method、返回、字段保存和复制；
+- [x] FCTS 覆盖 tuple/`@value type` 装箱行为无回归；
+- [x] 异常现有用例证明阶段一 throw/catch 行为无变化；
+- [x] ARC/CC 测试证明箱及其托管子字段恰好释放一次；
+- [x] 运行性能约束，证明直接标量、泛型直接调用和非逃逸 spec 路径不新增装箱；
+- [x] 对照变更前基线，证明阶段一所有受影响路径的运行时开销逐项小于或等于当前开销；
+- [x] 检查生成 C 中不再出现 `FengScalarBox`、`payload.<kind>` 或 scalar-box constructor；
+- [x] 检查 runtime/generated symbols 中不再出现共享 scalar-box 符号；
+- [x] 确认仅修改人工批准白名单内的旧标量箱强断言用例；
+- [x] 将白名单内旧标量箱断言迁移为统一 ValueBox 的等价或更强断言，不删除、不跳过；
+- [x] `test/` 下除白名单内表示迁移用例外的全部既有用例保持原样并通过；
+- [x] `test/` 下迁移后的标量箱相关用例全部通过；
+- [x] `fcts/` 下全部用例全量通过；
+- [x] `std/std_test/` 下全部用例全量通过；
+- [x] 运行所有阶段一定向测试；
+- [x] 在沙箱外运行完整 `make test`；
+- [x] **阶段一完成门禁**：以上阶段一任务全部完成，`test/`、`fcts/`、`std/std_test/` 满足 §3.6 强制
   要求，完整回归结果已记录，允许开始阶段二。
 
 ### 8.8 阶段二语言规范与工程文档
 
-- [ ] 更新 `feng-exception.md`，定义 throw 与具体类型 catch 共用的允许集合；
-- [ ] 更新 `feng-exception.md`，定义 throw 与具体类型 catch 共用的拒绝集合；
-- [ ] 在主规范中明确具名 enum、具名 tuple 与闭合泛型按精确类型身份匹配；
-- [ ] 在主规范中明确普通 `@abi type` 与 `@value @abi type` 可作为异常载荷；
-- [ ] 在主规范中保持异常不得跨 `@abi func` 边界；
-- [ ] 在主规范中明确 array 因缺少闭合类型对象 descriptor 而暂不允许；
-- [ ] 在主规范中明确所有 spec、开放泛型、pointer、`void` 与 callable 不允许；
-- [ ] 更新关联语言手册，只引用主规范而不重复定义独立规则；
-- [ ] 更新异常工程文档中的规范化载荷表和 descriptor 不变量；
-- [ ] 将 `bug-union-spec-throw.md` 的方案收敛到统一 Semantic 拒绝路径。
+- [x] 更新 `feng-exception.md`，定义 throw 与具体类型 catch 共用的允许集合；
+- [x] 更新 `feng-exception.md`，定义 throw 与具体类型 catch 共用的拒绝集合；
+- [x] 在主规范中明确具名 enum、具名 tuple 与闭合泛型按精确类型身份匹配；
+- [x] 在主规范中明确普通 `@abi type` 与 `@value @abi type` 可作为异常载荷；
+- [x] 在主规范中保持异常不得跨 `@abi func` 边界；
+- [x] 在主规范中明确 array 因缺少闭合类型对象 descriptor 而暂不允许；
+- [x] 在主规范中明确所有 spec、开放泛型、pointer、`void` 与 callable 不允许；
+- [x] 更新关联语言手册，只引用主规范而不重复定义独立规则；
+- [x] 更新异常工程文档中的规范化载荷表和 descriptor 不变量；
+- [x] 将 `bug-union-spec-throw.md` 的方案收敛到统一 Semantic 拒绝路径。
 
 ### 8.9 阶段二 Semantic
 
-- [ ] 实现 `throw` 与具体类型 `catch` 共用的异常载荷分类入口；
-- [ ] 接受 bool、数值标量、string、具名 enum；
-- [ ] 接受普通实体 type、具名 tuple 与 `@value type`；
-- [ ] 接受上述用户类型的闭合泛型实例；
-- [ ] 接受普通 `@abi type` 与 `@value @abi type`；
-- [ ] 拒绝 array；
-- [ ] 拒绝所有形式的 spec；
-- [ ] 拒绝直接类型参数和仍含开放类型参数的类型；
-- [ ] 拒绝 pointer、`void`、函数值、函数类型和成员方法；
-- [ ] 保持 `catch ex: unknown` 与匿名 catch 不进入具体类型分类；
-- [ ] 保持 `throw unknownBinding` 为原样重抛；
-- [ ] 为每个拒绝类别提供稳定且一致的 Semantic 诊断原因；
-- [ ] 验证相同类型不会在 throw 与 catch 两侧得到不同分类结果。
+- [x] 实现 `throw` 与具体类型 `catch` 共用的异常载荷分类入口；
+- [x] 接受 bool、数值标量、string、具名 enum；
+- [x] 接受普通实体 type、具名 tuple 与 `@value type`；
+- [x] 接受上述用户类型的闭合泛型实例；
+- [x] 接受普通 `@abi type` 与 `@value @abi type`；
+- [x] 拒绝 array；
+- [x] 拒绝所有形式的 spec；
+- [x] 拒绝直接类型参数和仍含开放类型参数的类型；
+- [x] 拒绝 pointer、`void`、函数值、函数类型和成员方法；
+- [x] 保持 `catch ex: unknown` 与匿名 catch 不进入具体类型分类；
+- [x] 保持 `throw unknownBinding` 为原样重抛；
+- [x] 为每个拒绝类别提供稳定且一致的 Semantic 诊断原因；
+- [x] 验证相同类型不会在 throw 与 catch 两侧得到不同分类结果。
 
 ### 8.10 阶段二 Runtime 与 Codegen
 
-- [ ] 删除所有 `feng_scalar_<kind>_exception_descriptor` 声明；
-- [ ] 删除所有 `feng_scalar_<kind>_exception_descriptor` 定义；
-- [ ] 删除 Codegen 中的 scalar exception descriptor 映射；
-- [ ] 确认没有生成 `FengEnumExceptionDesc__...` 或其他异常专用 descriptor；
-- [ ] 标量 throw 使用 `ValueBox<T>.header.desc` 对应的箱 descriptor；
-- [ ] enum throw 使用 `ValueBox<Enum>.header.desc` 对应的箱 descriptor；
-- [ ] tuple/`@value type` throw 使用各自 ValueBox descriptor；
-- [ ] 普通实体 type 与 string throw 使用原对象 descriptor；
-- [ ] 所有新 throw 路径满足 `value->header.desc == exception->desc`；
-- [ ] 具体类型 catch 的 LSDA 项使用与 throw 相同的对象/箱 descriptor；
-- [ ] personality 保持单次 descriptor 指针相等比较，不读取 descriptor 或 box 内容；
-- [ ] 标量、enum、tuple、`@value type` catch 使用静态 box 类型 `.value` 解箱；
-- [ ] 普通实体 type 与 string catch 保持直接对象指针绑定；
-- [ ] Codegen 为 Semantic 已拒绝的 array/spec/open generic 保留防御性诊断；
-- [ ] 未捕获、正常 catch 完成和重抛路径保持异常载荷恰好释放一次。
+- [x] 删除所有 `feng_scalar_<kind>_exception_descriptor` 声明；
+- [x] 删除所有 `feng_scalar_<kind>_exception_descriptor` 定义；
+- [x] 删除 Codegen 中的 scalar exception descriptor 映射；
+- [x] 确认没有生成 `FengEnumExceptionDesc__...` 或其他异常专用 descriptor；
+- [x] 标量 throw 使用 `ValueBox<T>.header.desc` 对应的箱 descriptor；
+- [x] enum throw 使用 `ValueBox<Enum>.header.desc` 对应的箱 descriptor；
+- [x] tuple/`@value type` throw 使用各自 ValueBox descriptor；
+- [x] 普通实体 type 与 string throw 使用原对象 descriptor；
+- [x] 所有新 throw 路径满足 `value->header.desc == exception->desc`；
+- [x] 具体类型 catch 的 LSDA 项使用与 throw 相同的对象/箱 descriptor；
+- [x] personality 保持单次 descriptor 指针相等比较，不读取 descriptor 或 box 内容；
+- [x] 标量、enum、tuple、`@value type` catch 使用静态 box 类型 `.value` 解箱；
+- [x] 普通实体 type 与 string catch 保持直接对象指针绑定；
+- [x] Codegen 为 Semantic 已拒绝的 array/spec/open generic 保留防御性诊断；
+- [x] 修正 `feng_rethrow` 使用 `_Unwind_Resume_or_Rethrow` 重新搜索外层 handler，禁止以
+  `_Unwind_Resume` 继续已经命中内层 catch 的清理阶段；
+- [x] 未捕获、正常 catch 完成和重抛路径保持异常载荷恰好释放一次。
 
 ### 8.11 阶段二测试与完成门禁
 
-- [ ] Semantic 正向矩阵覆盖全部允许类别的 throw；
-- [ ] Semantic 正向矩阵覆盖全部允许类别的具体类型 catch；
-- [ ] Semantic 负向矩阵覆盖全部拒绝类别的 throw；
-- [ ] Semantic 负向矩阵覆盖全部拒绝类别的具体类型 catch；
-- [ ] Codegen 测试证明生成结果不再包含任何异常专用 descriptor；
-- [ ] FCTS 覆盖所有内建标量精确匹配和错误标量不匹配；
-- [ ] FCTS 覆盖 enum 不匹配底层 `i32`；
-- [ ] FCTS 覆盖两个不同具名 enum 不互相匹配；
-- [ ] FCTS 覆盖 public enum 跨 package 精确匹配；
-- [ ] FCTS 覆盖两个同布局具名 tuple 不互相匹配；
-- [ ] FCTS 覆盖 trivial/aggregate `@value type` 精确匹配；
-- [ ] FCTS 覆盖闭合泛型普通 type 与 Value 的精确匹配；
-- [ ] FCTS 覆盖普通 `@abi type` 与 `@value @abi type` 精确匹配；
-- [ ] FCTS 覆盖 `unknown`、匿名 catch、catch 顺序和原样重抛；
-- [ ] FCTS/Runtime 覆盖 catch 后字段访问、方法调用、返回、再次抛出和释放；
-- [ ] 验证 `examples/hello_world` 的不合法 spec/开放抽象 throw 得到稳定 Semantic 诊断；
-- [ ] 运行性能约束，证明 catch 搜索仍只有 descriptor 指针比较；
-- [ ] 对照变更前基线，证明阶段二所有受影响路径的运行时开销逐项小于或等于当前开销；
-- [ ] 检查生成 C 中 `value->header.desc` 与传给 `feng_throw` 的 descriptor 一致；
-- [ ] 确认阶段二没有修改任何未获人工批准的既有 `test/` 用例；
-- [ ] `test/` 下全部用例通过；
-- [ ] `fcts/` 下全部用例全量通过；
-- [ ] `std/std_test/` 下全部用例全量通过；
-- [ ] 运行所有阶段二定向测试、FCTS 与 smoke；
-- [ ] 在沙箱外运行完整 `make test`；
-- [ ] **阶段二完成门禁**：以上阶段二任务全部完成，`test/`、`fcts/`、`std/std_test/` 满足 §3.6 强制
+- [x] Semantic 正向矩阵覆盖全部允许类别的 throw；
+- [x] Semantic 正向矩阵覆盖全部允许类别的具体类型 catch；
+- [x] Semantic 负向矩阵覆盖全部拒绝类别的 throw；
+- [x] Semantic 负向矩阵覆盖全部拒绝类别的具体类型 catch；
+- [x] Codegen 测试证明生成结果不再包含任何异常专用 descriptor；
+- [x] FCTS 覆盖所有内建标量精确匹配和错误标量不匹配；
+- [x] FCTS 覆盖 enum 不匹配底层 `i32`；
+- [x] FCTS 覆盖两个不同具名 enum 不互相匹配；
+- [x] FCTS 覆盖 public enum 跨 package 精确匹配；
+- [x] FCTS 覆盖两个同布局具名 tuple 不互相匹配；
+- [x] FCTS 覆盖 trivial/aggregate `@value type` 精确匹配；
+- [x] FCTS 覆盖闭合泛型普通 type 与 Value 的精确匹配；
+- [x] FCTS 覆盖普通 `@abi type` 与 `@value @abi type` 精确匹配；
+- [x] FCTS 覆盖 `unknown`、匿名 catch、catch 顺序和原样重抛；
+- [x] FCTS/Runtime 覆盖 catch 后字段访问、方法调用、返回、再次抛出和释放；
+- [x] 验证 `examples/hello_world` 的不合法 spec/开放抽象 throw 得到稳定 Semantic 诊断；
+- [x] 运行性能约束，证明 catch 搜索仍只有 descriptor 指针比较；
+- [x] 对照变更前基线，证明阶段二所有受影响路径的运行时开销逐项小于或等于当前开销；
+- [x] 检查生成 C 中 `value->header.desc` 与传给 `feng_throw` 的 descriptor 一致；
+- [x] 确认阶段二没有修改任何未获人工批准的既有 `test/` 用例；
+- [x] `test/` 下全部用例通过；
+- [x] `fcts/` 下全部用例全量通过；
+- [x] `std/std_test/` 下全部用例全量通过；
+- [x] 运行所有阶段二定向测试、FCTS 与 smoke；
+- [x] 在沙箱外运行完整 `make test`；
+- [x] **阶段二完成门禁**：以上阶段二任务全部完成，`test/`、`fcts/`、`std/std_test/` 满足 §3.6 强制
   要求，且无遗留过渡 descriptor。
+
+阶段二完成记录（2026-08-28）：在沙箱外执行完整 `make test`，UBSan 与普通构建阶段均通过；C unit、
+CLI、symbol、smoke、`std/std_test`、FCTS、perf constraints、incremental 和全部发布脚本门禁无失败，
+也未再出现原样重抛崩溃。
+
+| 完成点 | smoke | `std/std_test` | FCTS | 完整回归 |
+|---|---:|---:|---:|---|
+| 阶段一 | 91/91 | 601/601 | 1025/1025 | `make test` 通过 |
+| 阶段二最终状态 | 90/90 | 601/601 | 1037/1037 | UBSan 与普通阶段的 `make test` 均通过 |
+
+阶段二 smoke 数量减少一项，是按人工批准删除了只断言旧 object-form spec throw 语义、且改为实体后会与
+既有用例重复的 `exception_spec`；不是跳过失败用例。`examples/hello_world` 原先 enum 字段默认值的
+`CE0227` 已消失；当前 `throw self._error` 因静态类型为开放泛型 `Option<E>` 而稳定报告 `AE0076`，符合
+已批准的异常载荷拒绝集合。
+
+运行时开销复核结果：阶段二没有改变 ValueBox 布局或分配策略；值类型 throw 仍为一次 ValueBox 分配加
+既有的一次 `FengUnwindException` 分配，实体/string throw 仍不分配 ValueBox；typed catch 仍只对每个
+候选子句执行一次静态 descriptor 指针比较，并按静态箱类型直接读取 `.value`。原样重抛复用同一异常与
+载荷，不创建 ValueBox 或 `FengUnwindException`，不新增 Feng 侧分支、字段、间接访问、ARC/CC、
+descriptor 操作或运行时查找；仅将错误的 `_Unwind_Resume` 替换为获批的
+`_Unwind_Resume_or_Rethrow`，由 libunwind 完成外层 handler 必需的重新搜索。性能约束全部通过。
 
 ### 8.12 最终收尾
 
-- [ ] 全仓搜索并确认没有 `FengScalarBox`、`FengBuiltinScalarKind`、共享 scalar-box API；
-- [ ] 全仓搜索并确认没有标量或 enum 异常专用 descriptor；
-- [ ] 检查所有已交付工程文档，不保留与最终实现冲突的历史现状描述；
-- [ ] 检查主规范、手册与工程文档之间没有重复且不一致的规则定义；
-- [ ] 检查 public/imported/closed-generic box descriptor 的链接符号和地址唯一性；
-- [ ] 检查 `git diff --check`、工作区变更范围和新增测试清单；
-- [ ] 对实施期间所有不确定项附上人工决策记录，确认没有未授权的推断或特判；
-- [ ] 记录两个阶段最终测试数量、逐项运行时开销对比结果与完整 `make test` 结果；
-- [ ] 将本文状态从“待 Review”更新为与实际交付进度一致的状态。
+- [x] 检查生产实现、runtime 头与生成产物，确认没有 `FengScalarBox`、`FengBuiltinScalarKind` 或共享
+  scalar-box API；旧名称仅保留在本文变更前基线和测试的负向不存在断言中；
+- [x] 全仓搜索并确认没有标量或 enum 异常专用 descriptor 实现或生成符号；
+- [x] 检查所有已交付工程文档，不保留与最终实现冲突的历史现状描述；
+- [x] 检查主规范、手册与工程文档之间没有重复且不一致的规则定义；
+- [x] 检查 public/imported/closed-generic box descriptor 的链接符号和地址唯一性；
+- [x] 检查 `git diff --check`、工作区变更范围和新增测试清单；
+- [x] 对实施期间所有不确定项附上人工决策记录，确认没有未授权的推断或特判；
+- [x] 记录两个阶段最终测试数量、逐项运行时开销对比结果与完整 `make test` 结果；
+- [x] 将本文状态更新为两个阶段均已完成并通过完整回归。
 
-本提案已通过人工 Review，§8.1 的变更前基线与测试白名单已经完成，可以开始执行阶段一 TODO。§8.2 的
-“同步更新其他文档”是第一项任务；完成该项后，才能进入代码修改和测试修改。
+本提案已通过人工 Review。阶段一与阶段二均已完成全部文档、实现、定向验证、性能约束和沙箱外完整
+回归；实施问题及人工决策均记录于 §8.1.3—§8.1.5。
 
 ## 9. Review 决策清单
 

@@ -424,17 +424,23 @@ void feng_rethrow(void) {
     feng_panic("feng_rethrow: native Windows exception backend is not implemented");
 #else
     FengUnwindException *exception = g_current_unwind;
+    _Unwind_Reason_Code reason;
 
     if (exception == NULL) {
         feng_panic("feng_rethrow: no current exception");
     }
     g_current_unwind = NULL;
-    _Unwind_Resume(&exception->unwind);
-    feng_panic("feng_rethrow: _Unwind_Resume returned unexpectedly");
+    reason = _Unwind_Resume_or_Rethrow(&exception->unwind);
+
+    /* A return means the restarted search found no outer handler. Match the
+     * uncaught feng_throw path by draining live frames and releasing the same
+     * exception object before terminating. */
+    feng_cleanup_release_all();
+    feng_unwind_exception_cleanup(reason, &exception->unwind);
+    feng_panic("uncaught rethrown exception (unwind reason=%d)", (int)reason);
 #endif
 }
 
 void feng_release_unwind_exception(void) {
     feng_release_current_unwind_exception(true);
 }
-

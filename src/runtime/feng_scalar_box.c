@@ -2,127 +2,45 @@
 
 #include <string.h>
 
-static bool feng_scalar_box_equal(const void *left, const void *right) {
-    const FengScalarBox *lb = (const FengScalarBox *)left;
-    const FengScalarBox *rb = (const FengScalarBox *)right;
-    if (lb == rb) return true;
-    if (lb == NULL || rb == NULL) return false;
-    if (lb->kind != rb->kind) return false;
-    return memcmp(&lb->payload, &rb->payload, sizeof(lb->payload)) == 0;
-}
-
-const FengTypeDescriptor feng_scalar_box_descriptor = {
-    .name = "feng.<internal>.scalar_box",
-    .size = sizeof(FengScalarBox),
-    .finalizer = NULL,
-    .release_children = NULL,
-    .is_potentially_cyclic = false,
-    .managed_field_count = 0,
-    .managed_fields = NULL,
-    .equal_fn = feng_scalar_box_equal,
-    .reified_generic_params_count = 0, .reified_generic_params = NULL,
-    .reified_field_offset_count = 0,   .reified_field_offsets = NULL,
-    .reified_agg_deps_count = 0,       .reified_agg_deps = NULL,
-    .reified_type_deps_count = 0,      .reified_type_deps = NULL,
-};
-
-#define FENG_SCALAR_EXCEPTION_DESCRIPTOR(symbol, runtime_name) \
-    const FengTypeDescriptor symbol = { \
-        .name = runtime_name, \
-        .size = sizeof(FengScalarBox), \
+/* Define one concrete builtin ValueBox<T> descriptor. Byte comparison is
+ * intentional: it preserves the former scalar-box observable behavior,
+ * including signed-zero and NaN payload handling for floating values. */
+#define FENG_DEFINE_SCALAR_VALUE_BOX(suffix, runtime_name) \
+    static bool feng_value_box_##suffix##_equal( \
+        const void *left, const void *right) { \
+        const FengValueBox__##suffix *left_box = \
+            (const FengValueBox__##suffix *)left; \
+        const FengValueBox__##suffix *right_box = \
+            (const FengValueBox__##suffix *)right; \
+        return memcmp(&left_box->value, \
+                      &right_box->value, \
+                      sizeof(left_box->value)) == 0; \
+    } \
+    const FengTypeDescriptor feng_value_box_##suffix##_descriptor = { \
+        .name = "feng.<internal>.value_box." runtime_name, \
+        .size = sizeof(FengValueBox__##suffix), \
         .finalizer = NULL, \
         .release_children = NULL, \
         .is_potentially_cyclic = false, \
         .managed_field_count = 0, \
         .managed_fields = NULL, \
+        .equal_fn = feng_value_box_##suffix##_equal, \
         .reified_generic_params_count = 0, .reified_generic_params = NULL, \
         .reified_field_offset_count = 0,   .reified_field_offsets = NULL, \
         .reified_agg_deps_count = 0,       .reified_agg_deps = NULL, \
         .reified_type_deps_count = 0,      .reified_type_deps = NULL, \
     }
 
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_bool_exception_descriptor, "bool");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_i8_exception_descriptor, "i8");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_i16_exception_descriptor, "i16");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_i32_exception_descriptor, "i32");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_i64_exception_descriptor, "i64");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_u8_exception_descriptor, "u8");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_u16_exception_descriptor, "u16");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_u32_exception_descriptor, "u32");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_u64_exception_descriptor, "u64");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_f32_exception_descriptor, "f32");
-FENG_SCALAR_EXCEPTION_DESCRIPTOR(feng_scalar_f64_exception_descriptor, "f64");
+FENG_DEFINE_SCALAR_VALUE_BOX(bool, "bool");
+FENG_DEFINE_SCALAR_VALUE_BOX(i8, "i8");
+FENG_DEFINE_SCALAR_VALUE_BOX(i16, "i16");
+FENG_DEFINE_SCALAR_VALUE_BOX(i32, "i32");
+FENG_DEFINE_SCALAR_VALUE_BOX(i64, "i64");
+FENG_DEFINE_SCALAR_VALUE_BOX(u8, "u8");
+FENG_DEFINE_SCALAR_VALUE_BOX(u16, "u16");
+FENG_DEFINE_SCALAR_VALUE_BOX(u32, "u32");
+FENG_DEFINE_SCALAR_VALUE_BOX(u64, "u64");
+FENG_DEFINE_SCALAR_VALUE_BOX(f32, "f32");
+FENG_DEFINE_SCALAR_VALUE_BOX(f64, "f64");
 
-#undef FENG_SCALAR_EXCEPTION_DESCRIPTOR
-
-static FengScalarBox *feng_scalar_box_new_empty(FengBuiltinScalarKind kind) {
-    FengScalarBox *box = (FengScalarBox *)feng_object_new(&feng_scalar_box_descriptor);
-    box->kind = kind;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_bool(bool value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_BOOL);
-    box->payload.b = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_i8(int8_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_I8);
-    box->payload.i8 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_i16(int16_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_I16);
-    box->payload.i16 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_i32(int32_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_I32);
-    box->payload.i32 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_i64(int64_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_I64);
-    box->payload.i64 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_u8(uint8_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_U8);
-    box->payload.u8 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_u16(uint16_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_U16);
-    box->payload.u16 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_u32(uint32_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_U32);
-    box->payload.u32 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_u64(uint64_t value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_U64);
-    box->payload.u64 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_f32(float value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_F32);
-    box->payload.f32 = value;
-    return box;
-}
-
-FengScalarBox *feng_scalar_box_new_f64(double value) {
-    FengScalarBox *box = feng_scalar_box_new_empty(FENG_BUILTIN_SCALAR_F64);
-    box->payload.f64 = value;
-    return box;
-}
+#undef FENG_DEFINE_SCALAR_VALUE_BOX

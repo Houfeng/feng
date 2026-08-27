@@ -1,0 +1,14 @@
+open module fcts_lib.test;
+
+/** Public enum whose ValueBox descriptor must be unique across packages. */
+open enum LibExceptionPayloadStatus {
+  Ready = 7,
+  Failed = 9
+}
+
+/** Throw a public enum from the provider package. */
+open func throwLibExceptionPayloadStatus(
+  value: LibExceptionPayloadStatus
+): void {
+  throw value;
+}

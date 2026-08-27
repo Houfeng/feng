@@ -5,6 +5,10 @@
 > 语言语义以 [docs/specifications/feng-spec.md](../specifications/feng-spec.md)、[docs/specifications/feng-fit.md](../specifications/feng-fit.md)、[docs/specifications/feng-function.md](../specifications/feng-function.md) 为准。
 > 值模型基座见 [feng-value-model-delivered.md](./feng-value-model-delivered.md)；本文档不重复其规范，只声明 spec 如何在该基座上落点。
 > 本文档只讨论非 C ABI 场景，不涉及 C ABI 与函数指针桥接（Phase 2 范畴）。
+>
+> **后续演进**：本文记录 4b 交付时的 subject 身份比较基线。当前 ValueBox 与 subject 相等规则已经由
+> [统一 ValueBox 与异常开发方案](./feng-unified-value-box-and-exception-dev.md) 接续；最终语言规则仅以
+> [feng-spec.md](../specifications/feng-spec.md) 为准，本文不再重复定义。
 
 ## 1 目标与范围
 
@@ -52,7 +56,8 @@
 - 无初始值的 `spec` 绑定必须得到默认 witness。
 - 默认 witness 对开发者不可见，不可显式引用。
 - 每次 `spec` 默认初始化都创建新实例，不复用共享单例。
-- `spec` 值的 `==` / `!=` 默认比较 **subject 引用身份**，不受中间 coercion 次数影响。
+- 4b 交付时 `spec` 值的 `==` / `!=` 以 subject 引用身份为基线；当前 descriptor 驱动规则仅见
+  [feng-spec.md](../specifications/feng-spec.md)，本文不再维护该规则副本。
 - callable-form `spec` 是可调用形状，不是对象布局契约（Phase 2 处理）。
 
 ### 2.2 必须贴合的现有运行时基座
@@ -283,19 +288,10 @@ feng_aggregate_default_init(&s, &FengSpecAgg__demo__Named);
 
 ## 7 相等性 \[4b-β]
 
-object-form `spec` 的 `==` / `!=` **比较 subject 引用身份**：
-
-```c
-/* a, b 是 struct FengSpecValue__M__S */
-bool eq = (a.subject == b.subject);
-```
-
-理由：
-
-- fat 值无 box，比较结构体本身字段不能区分"两次不同 coercion 得到的同一 subject"——witness 是只读静态表指针，跨 (T, S) 必然不等。
-- 仅比较 subject 与"身份比较 = 判断是否同一被引用对象"语义吻合。
-
-semantic 已通过 `FengSpecEquality` sidecar 把"两侧表达式应按 spec 身份比较"的结论给到 codegen；codegen 不再二次推导。该规则只对 object-form `spec` 生效；非 spec 值仍走原有路径。
+4b 最初按 subject 引用身份实现；后续为 string、标量 ValueBox 及具名 enum ValueBox 收敛为 descriptor
+驱动的 subject 相等入口。当前实现与后续变更必须遵循
+[feng-spec.md](../specifications/feng-spec.md) §7，不在本交付记录中维护第二份规则。`FengSpecEquality`
+sidecar 仍只记录两侧应走 spec subject 相等路径；codegen 不得据此重新推导动态类型或执行运行时查找。
 
 ## 8 callable-form spec（不在 4b 范围）
 

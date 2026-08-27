@@ -2444,7 +2444,8 @@ static void test_object_spec_owned_subjects_move_into_persistent_slots(void) {
                borrowed_start, borrowed_end, "feng_aggregate_assign(") == 1U);
     ASSERT(count_substr_in_span(
                borrowed_start, borrowed_end, "feng_aggregate_take(") == 0U);
-    ASSERT(strstr(output.c_source, "feng_scalar_box_new_") == NULL);
+    ASSERT(strstr(output.c_source, "feng_value_box_") == NULL);
+    ASSERT(strstr(output.c_source, "__spec_box_desc") == NULL);
     compile_generated_c_or_die(output.c_source);
 
     feng_codegen_output_free(&output);
@@ -4953,13 +4954,14 @@ static void test_enum_codegen_emits_stable_symbols(void) {
                   "FengEnum__feng__codegen__enumvalue__HttpStatus__NotFound") != NULL);
     ASSERT(strstr(out.c_source,
                   "FengEnum__feng__codegen__enumvalue__HttpStatus__Ok") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct FengEnum__feng__codegen__enumvalue__HttpStatus__spec_box {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__enumvalue__HttpStatus__spec_box_desc = {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  ".equal_fn = &FengEnum__feng__codegen__enumvalue__HttpStatus__spec_box_desc__equal") != NULL);
     ASSERT(strstr(out.c_source, "use_status_ptr") != NULL);
-    {
-        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
-        char pattern[128];
-        snprintf(pattern, sizeof(pattern), "feng_scalar_box_new_%s", int_canonical);
-        ASSERT(strstr(out.c_source, pattern) == NULL);
-    }
+    ASSERT(strstr(out.c_source, "struct FengValueBox__") == NULL);
 
     compile_generated_c_or_die(out.c_source);
 
@@ -6018,19 +6020,25 @@ static void test_fit_builtin_and_array_object_spec_coercion_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
     ASSERT(strstr(out.c_source, "__name") != NULL);
-    ASSERT(count_substr(out.c_source, "struct FengScalarBox *_sb") == 4U);
+    ASSERT(count_substr(out.c_source,
+                        "struct FengValueBox__i32 *_value_box") == 4U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_object_new(&feng_value_box_i32_descriptor)") == 4U);
     ASSERT(strstr(out.c_source, ".witness->name(") != NULL);
     ASSERT(strstr(out.c_source, "witness->witness->") == NULL);
-    ASSERT(strstr(out.c_source, "static const FengTypeDescriptor feng_scalar_box_descriptor") == NULL);
-    ASSERT(strstr(out.c_source, "struct FengScalarBox {") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "static const FengTypeDescriptor feng_value_box_i32_descriptor") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengValueBox__i32 {") == NULL);
     ASSERT(count_substr(out.c_source, "FENG_SLOT_POINTER") >= 1U);
     ASSERT(count_substr(out.c_source, ".managed_slot_count = 1,") >= 1U);
     ASSERT(count_substr(out.c_source, "__twice_only_scalar(") >= 3U);
     ASSERT(strstr(out.c_source, "twice_only_scalar_box") == NULL);
     ASSERT(strstr(out.c_source, "subject_") != NULL);
     ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") == NULL);
-    ASSERT(strstr(out.c_source, "_self_value = ((const struct FengScalarBox *)_subject)->payload.i32;") != NULL);
-    ASSERT(strstr(out.c_source, "__twice_only_scalar(((const struct FengScalarBox *)_subject)->payload.i32") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "_self_value = ((const struct FengValueBox__i32 *)_subject)->value;") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__twice_only_scalar(((const struct FengValueBox__i32 *)_subject)->value") == NULL);
     ASSERT(strstr(out.c_source, "__twice_only_scalar(*(const int32_t *)_subject") == NULL);
     ASSERT(strstr(out.c_source, "_self_ref = (FengArray *)_subject;") != NULL);
     ASSERT(strstr(out.c_source, "_self_ref = (FengString *)_subject;") != NULL);
@@ -6097,10 +6105,12 @@ static void test_fit_enum_object_spec_coercion_codegen(void) {
 
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "FengFitBuiltin_") != NULL);
-    ASSERT(strstr(out.c_source, "FengScalarBox") != NULL);
-    ASSERT(strstr(out.c_source, "payload.i32") != NULL);
     ASSERT(strstr(out.c_source,
-                  "_self_value = ((const struct FengScalarBox *)_subject)->payload.i32;") != NULL);
+                  "struct FengEnum__feng__codegen__fit_enum_spec__Status__spec_box {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&FengEnum__feng__codegen__fit_enum_spec__Status__spec_box_desc)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_self_value = ((const struct FengEnum__feng__codegen__fit_enum_spec__Status__spec_box *)_subject)->value;") != NULL);
     ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") == NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -6108,6 +6118,133 @@ static void test_fit_enum_object_spec_coercion_codegen(void) {
     feng_codegen_error_free(&cgerr);
     feng_semantic_analysis_free(analysis);
     free(errors);
+    feng_program_free(program);
+}
+
+/* Unified ValueBox codegen uses statically selected concrete box symbols for
+ * builtin scalars, enums, tuples, @value types, and closed generic values. */
+static void test_unified_value_box_codegen_contract(void) {
+    static const char *kSource =
+        "module feng.codegen.unified_value_box;\n"
+        "spec View { func code(): int; }\n"
+        "spec IntView { func code(): int; }\n"
+        "fit bool: View { func code(): int { return if self { 1 } else { 0 }; } }\n"
+        "fit i32: View { func code(): int { return (int)self; } }\n"
+        "fit int: IntView { func code(): int { return self; } }\n"
+        "enum First { Ready = 7, Failed = 9 }\n"
+        "enum Second { Ready = 7, Failed = 9 }\n"
+        "fit First: View { func code(): int { return (int)self; } }\n"
+        "fit Second: View { func code(): int { return (int)self; } }\n"
+        "type Pair(i32, i32);\n"
+        "fit Pair: View { func code(): int { return (int)(self.item1 + self.item2); } }\n"
+        "@value type Record {\n"
+        "    let value: int;\n"
+        "    let label: string;\n"
+        "    func Record(value: int, label: string) {\n"
+        "        self.value = value; self.label = label;\n"
+        "    }\n"
+        "}\n"
+        "fit Record: View { func code(): int { return self.value; } }\n"
+        "@value type GenericBox<T> {\n"
+        "    let payload: T;\n"
+        "    let value: int;\n"
+        "    func GenericBox(payload: T, value: int) {\n"
+        "        self.payload = payload; self.value = value;\n"
+        "    }\n"
+        "}\n"
+        "fit GenericBox<T>: View { func code(): int { return self.value; } }\n"
+        "func boxBool(value: bool): View { return value; }\n"
+        "func boxI32(value: i32): View { return value; }\n"
+        "func boxInt(value: int): IntView { return value; }\n"
+        "func boxFirst(value: First): View { return value; }\n"
+        "func boxSecond(value: Second): View { return value; }\n"
+        "func boxPair(value: Pair): View { return value; }\n"
+        "func boxRecord(value: Record): View { return value; }\n"
+        "func boxGenericI32(value: GenericBox<i32>): View { return value; }\n"
+        "func boxGenericI64(value: GenericBox<i64>): View { return value; }\n"
+        "func borrow<T: View>(value: T): int { return value.code(); }\n";
+    FengProgram *program = parse_or_die(
+        kSource, "unified_value_box_codegen_contract.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *borrow_start;
+    const char *borrow_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    ASSERT(strstr(out.c_source, "struct FengValueBox__bool *_value_box") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&feng_value_box_bool_descriptor)") != NULL);
+    ASSERT(strstr(out.c_source, "struct FengValueBox__i32 *_value_box") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&feng_value_box_i32_descriptor)") != NULL);
+    {
+        const char *int_canonical = sizeof(void *) >= 8U ? "i64" : "i32";
+        char expected[128];
+
+        ASSERT(snprintf(expected,
+                        sizeof(expected),
+                        "feng_object_new(&feng_value_box_%s_descriptor)",
+                        int_canonical) > 0);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+    }
+    ASSERT(strstr(out.c_source,
+                  "struct FengEnum__feng__codegen__unified_value_box__First__spec_box {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct FengEnum__feng__codegen__unified_value_box__Second__spec_box {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__unified_value_box__First__spec_box_desc__equal") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__unified_value_box__Second__spec_box_desc__equal") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&FengEnum__feng__codegen__unified_value_box__First__spec_box_desc)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&FengEnum__feng__codegen__unified_value_box__Second__spec_box_desc)") != NULL);
+    ASSERT(strstr(out.c_source, "__Pair__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source, "__Record__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source, "GenericBox__G__i32__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source, "GenericBox__G__i64__spec_box_desc") != NULL);
+    ASSERT(count_substr(out.c_source, "feng_aggregate_assign(&_value_box") >= 3U);
+    ASSERT(strstr(out.c_source, "->value = _value_subject") != NULL);
+    ASSERT(strstr(out.c_source, "FengScalarBox") == NULL);
+    ASSERT(strstr(out.c_source, "FengBuiltinScalarKind") == NULL);
+    ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
+    ASSERT(strstr(out.c_source, "payload.i32") == NULL);
+
+    ASSERT(find_generated_function_body(
+        out.c_source,
+        "feng__feng__codegen__unified_value_box__borrow_G__from__",
+        &borrow_start,
+        &borrow_end));
+    ASSERT(count_substr_in_span(borrow_start, borrow_end,
+                                "feng_object_new(") == 0U);
+    ASSERT(count_substr_in_span(borrow_start, borrow_end,
+                                "feng_retain(") == 0U);
+    ASSERT(count_substr_in_span(borrow_start, borrow_end,
+                                "feng_release(") == 0U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -6448,7 +6585,8 @@ static void test_object_spec_thunk_subject_cast_shape_codegen(void) {
     ASSERT(strstr(out.c_source, "FengSpecThunk__") != NULL);
     ASSERT(strstr(out.c_source, " *)_subject") != NULL);
     ASSERT(strstr(out.c_source, ".witness->name(") != NULL);
-    ASSERT(strstr(out.c_source, "FengScalarBox") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengValueBox__") == NULL);
+    ASSERT(strstr(out.c_source, "__spec_box_desc") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -7607,8 +7745,10 @@ static void test_fit_enum_generic_constraint_codegen(void) {
     ASSERT(out.c_source != NULL);
     ASSERT(strstr(out.c_source, "_K->witness") != NULL);
     ASSERT(strstr(out.c_source, "_self_value = *(const int32_t *)_subject;") != NULL);
-    ASSERT(strstr(out.c_source, "FengScalarBox") == NULL);
-    ASSERT(strstr(out.c_source, "payload.i32") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__fit_enum_generic__Status__spec_box_desc = {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_self_value = ((const struct FengEnum__feng__codegen__fit_enum_generic__Status__spec_box *)_subject)->value;") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -11615,8 +11755,8 @@ static void test_generic_scalar_instance_direct_call_codegen(void) {
                  int_canonical);
         ASSERT(strstr(out.c_source, pattern) != NULL);
     }
-    ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
-    ASSERT(strstr(out.c_source, "struct FengScalarBox *_sb") == NULL);
+    ASSERT(strstr(out.c_source, "feng_value_box_") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengValueBox__") == NULL);
     ASSERT(strstr(out.c_source, "FengSpecThunk__") == NULL);
     ASSERT(strstr(out.c_source, "FengSpecSlotWitness__") == NULL);
     ASSERT(strstr(out.c_source, "witness->") == NULL);
@@ -12245,6 +12385,171 @@ static void test_try_catch_return_codegen(void) {
     feng_program_free(program);
 }
 
+/* Exception lowering reuses the exact managed object or ValueBox descriptor
+ * on throw and typed catch paths and emits no exception-only descriptors. */
+static void test_exception_payload_descriptor_alignment_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.exception_alignment;\n"
+        "enum Status { Ready = 1, Failed = 2 }\n"
+        "type Pair(i32, string);\n"
+        "type Entity { let code: int; }\n"
+        "@value type ValueError { let code: i32; }\n"
+        "@value type AggregateError { let message: string; }\n"
+        "type GenericEntity<T> { let value: T; }\n"
+        "@value type GenericValue<T> { let value: T; }\n"
+        "@abi type AbiEntity { let code: int; }\n"
+        "@value @abi\n"
+        "type AbiValue { let code: int; }\n"
+        "func throwI32(v: i32) { throw v; }\n"
+        "func throwStatus(v: Status) { throw v; }\n"
+        "func throwPair(v: Pair) { throw v; }\n"
+        "func throwEntity(v: Entity) { throw v; }\n"
+        "func throwValue(v: ValueError) { throw v; }\n"
+        "func throwAggregate(v: AggregateError) { throw v; }\n"
+        "func throwGenericEntity(v: GenericEntity<i32>) { throw v; }\n"
+        "func throwGenericValue(v: GenericValue<string>) { throw v; }\n"
+        "func throwAbiEntity(v: AbiEntity) { throw v; }\n"
+        "func throwAbiValue(v: AbiValue) { throw v; }\n"
+        "func throwText(v: string) { throw v; }\n"
+        "func normal(): int { return 0; }\n"
+        "func catches() {\n"
+        "  try normal() catch ex: i32 {}\n"
+        "  try normal() catch ex: Status {}\n"
+        "  try normal() catch ex: Pair {}\n"
+        "  try normal() catch ex: Entity {}\n"
+        "  try normal() catch ex: ValueError {}\n"
+        "  try normal() catch ex: AggregateError {}\n"
+        "  try normal() catch ex: GenericEntity<i32> {}\n"
+        "  try normal() catch ex: GenericValue<string> {}\n"
+        "  try normal() catch ex: AbiEntity {}\n"
+        "  try normal() catch ex: AbiValue {}\n"
+        "  try normal() catch ex: string {}\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/exception_payload_descriptor_alignment.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&feng_value_box_i32_descriptor)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_throw((void *)") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        "&feng_value_box_i32_descriptor") >= 3U);
+    ASSERT(strstr(out.c_source,
+                  "FengEnum__feng__codegen__exception_alignment__Status__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__Pair__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__ValueError__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__AggregateError__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "GenericValue__G__string__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengTypeDesc__feng__codegen__exception_alignment__Entity") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengTypeDesc__feng__codegen__exception_alignment__GenericEntity__G__i32") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengTypeDesc__feng__codegen__exception_alignment__AbiEntity") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "__AbiValue__spec_box_desc") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "&feng_string_descriptor") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_caught_value())->value") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_assign(") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_scalar_bool_exception_descriptor") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_scalar_i32_exception_descriptor") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengEnumExceptionDesc") == NULL);
+    ASSERT(strstr(out.c_source, "_exception_descriptor") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* An unknown binding is the original unwind object, so each direct rethrow
+ * must call feng_rethrow without allocating or lowering a replacement throw. */
+static void test_unknown_original_rethrow_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.original_rethrow;\n"
+        "func throwI32() { throw (i32)42; }\n"
+        "func rethrowOnce() {\n"
+        "  try throwI32() catch first: unknown { throw first; }\n"
+        "}\n"
+        "func rethrowTwice() {\n"
+        "  try rethrowOnce() catch second: unknown { throw second; }\n"
+        "}\n"
+        "func catches() {\n"
+        "  try rethrowTwice() catch ex: i32 {}\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        kSource, "tests/unknown_original_rethrow.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+
+    ASSERT(strstr(out.c_source,
+                  "_l_first_0 = feng_caught_value();\n    feng_rethrow();") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "_l_second_0 = feng_caught_value();\n    feng_rethrow();") != NULL);
+    ASSERT(count_substr(out.c_source, "feng_throw((void *)") == 1U);
+    ASSERT(count_substr(out.c_source,
+                        "feng_object_new(&feng_value_box_i32_descriptor)") == 1U);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* A generic call result inside a try protected range uses descriptor-sized
  * C storage. The range must form its own lexical block so the landing-pad
  * preservation jump never enters the scope of that variably sized storage. */
@@ -12641,7 +12946,8 @@ static void test_multi_parameter_generic_callable_abi_codegen(void) {
                                 "_desc->reified_callable_deps[") == 0U);
     ASSERT(count_substr_in_span(body_start, body_end,
                                 "feng_object_new(") == 0U);
-    ASSERT(strstr(out.c_source, "feng_scalar_box_new_") == NULL);
+    ASSERT(strstr(out.c_source, "feng_value_box_") == NULL);
+    ASSERT(strstr(out.c_source, "struct FengValueBox__") == NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -15457,6 +15763,7 @@ int main(void) {
     test_fit_builtin_array_open_generic_value_return_codegen();
     test_fit_builtin_and_array_object_spec_coercion_codegen();
     test_fit_enum_object_spec_coercion_codegen();
+    test_unified_value_box_codegen_contract();
     test_object_spec_upcast_witness_and_lowering_codegen();
     test_object_spec_thunk_subject_cast_shape_codegen();
     test_intersection_spec_witness_struct_codegen();
@@ -15541,6 +15848,8 @@ int main(void) {
     test_callable_field_default_and_explicit_initialization_codegen();
     test_void_try_expression_codegen();
     test_try_catch_return_codegen();
+    test_exception_payload_descriptor_alignment_codegen();
+    test_unknown_original_rethrow_codegen();
     test_generic_try_body_reified_storage_codegen();
     test_generic_loop_reified_storage_codegen();
     test_generic_iterator_fixed_storage_reified_cleanup_codegen();

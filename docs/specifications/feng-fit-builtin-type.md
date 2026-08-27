@@ -166,7 +166,7 @@ fit *byte {
 - 对所有具体直接 `fit` 方法调用（无论用户类型还是内建类型），编译器必须在编译期完成静态分派。语言层隐式 `self` 始终引用当前接收者，方法调用本身不引入用户可观察的接收者副本；底层可按目标类型采用与该语义等价的既有表示。不得为此引入 boxing、wrapper object、额外 carrier struct 或额外 heap allocation。
 - 具体直接调用的运行时开销不得大于等价的自由函数调用。即 `it.some()` 的调用成本不得高于 `some(it)`。
 - 对标量内建类型，语言层隐式 `self` 引用当前标量接收者。由于标量没有可变子结构或可观察的存储身份，直接调用与 witness thunk 可继续按该标量的原生值表示传递 `self`，这是对同一语义的等价 lowering，不构成 Feng 语言的显式参数、赋值、返回或捕获边界。接收者表达式必须只求值一次，且不得为 direct-call 装箱。
-- 对已具体化的泛型标量实例（例如 `Set<int>`）的 direct-call, 编译器必须走具体实例 wrapper 的单态化发码路径并以原生标量值传递参数/返回值；不得在 direct-call 路径中触发 `FengScalarBox` 分配或任何等价运行时装箱。
+- 对已具体化的泛型标量实例（例如 `Set<int>`）的 direct-call, 编译器必须走具体实例 wrapper 的单态化发码路径并以原生标量值传递参数/返回值；不得在 direct-call 路径中触发 `ValueBox<T>` 分配或任何等价运行时装箱。
 - 对 `string` 与数组，`fit` 方法的隐式 `self` 必须引用当前受管引用所指向的实例，底层继续使用既有受管引用表示。方法调用不复制字符串或数组对象，对用户仍表现为普通 `string` 值或普通数组值。
 - 编译器不得在具体直接调用的调用路径中插入任何运行时类型查询、方法选择或 witness 解析逻辑。
 - 调用方返回槽属于泛型共享体的静态 ABI,不得引入 heap allocation、boxing、运行时类型查询或额外动态分发；具体返回类型与聚合描述符仍必须在编译期确定。
@@ -186,15 +186,24 @@ fit *byte {
 ### 6.3 标量 subject 稳定承载
 
 - 当标量内建类型的 object-form `spec` 值需要逃逸到局部作用域之外时, 运行时必须提供稳定的 subject 承载。
-- 该稳定承载由 runtime-internal `FengScalarBox` 提供, 仅用于内部 subject 物化, 不暴露给用户语言层。
-- `FengScalarBox` 不改变 fat spec 的两字段外层 ABI, 也不改变 direct-call 的零 boxing 约束。
-- 非逃逸的标量 `spec` 调用仍可借用局部物化地址, 不要求分配 `FengScalarBox`。
+- 该稳定承载使用 runtime-internal 的静态具体化 `ValueBox<T>` 模型, 仅用于内部 subject 物化, 不暴露给
+  用户语言层。`ValueBox<T>` 的物理结构固定为 `FengManagedHeader header + T value`，不是动态 payload
+  容器。
+- 每个规范化内建标量 `T` 必须拥有唯一的内建箱 C 类型与唯一全局 `FengTypeDescriptor`；`int` 等平台
+  相关别名复用规范化底层标量的箱类型与 descriptor。每个箱的 `header.desc` 必须直接指向自身箱
+  descriptor。
+- 不得使用所有标量共享的 `kind + union` 箱，不得增加原始值 descriptor 字段、反向链接、运行时
+  descriptor 查找、映射、字符串匹配或动态类型分派。
+- `ValueBox<T>` 不改变 fat spec 的两字段外层 ABI, 也不改变 direct-call 的零 boxing 约束。
+- 非逃逸的标量 `spec` 调用仍可借用局部物化地址, 不要求分配 `ValueBox<T>`。
 - 当前阶段对“非逃逸”的可证明口径收敛为: 标量到 object-form `spec` 的调用实参临时 coercion 点只在当前调用栈帧内消费 subject, 不进入局部绑定、返回值或聚合字段/元素存储。
-- `FengScalarBox` 只服务于标量内建类型, 不作为 `string`、数组或用户 `type` 的通用承载模型。
-- `FengScalarBox` 必须是 runtime 内单一托管对象类型, 用同一套对象头与同一套 retain/release 生命周期承载全部标量内建类型。
-- `FengScalarBox` 的 payload 必须使用自然对齐的 `union` 成员布局（`bool` / 有符号整数 / 无符号整数 / 浮点）, 不得退化为字节数组 payload。
-- `FengScalarBox` 必须标记为非循环对象且不包含 managed fields；其职责仅是稳定 subject ownership, 不参与额外运行时分派。
-- 标量 spec thunk 必须只做一次原生类型取值后直接调用 fit 方法实现；当 coercion site 标记为临时借用时从借用地址取值, 当标记为稳定 owner 时从 `FengScalarBox` payload 取值。不得引入第二层 wrapper 或运行时查表。
+- 内建标量 `ValueBox<T>` 必须标记为非循环对象且不包含 managed fields；其职责仅是稳定 subject
+  ownership，不参与额外运行时分派。
+- 标量 spec thunk 必须只做一次原生类型取值后直接调用 fit 方法实现；当 coercion site 标记为临时借用
+  时从借用地址取值，当标记为稳定 owner 时从静态已知的 `ValueBox<T>.value` 取值。不得引入第二层
+  wrapper、`kind` 分支或运行时查表。
+- 标量 subject 的相等结果必须遵循 [feng-spec.md](./feng-spec.md) 的统一规则；更换箱结构不得改变任何
+  既有标量可观察行为。
 
 ## 7 关联
 

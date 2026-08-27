@@ -1,0 +1,333 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Common object-form view implemented by every builtin value-box scalar. */
+spec UnifiedValueBoxView {
+  /** Return an integer observation of the concrete value. */
+  func code(): int;
+}
+
+/** Boolean fit used by escaping and constrained subject paths. */
+fit bool: UnifiedValueBoxView {
+  /** Return one for true and zero for false. */
+  func code(): int {
+    return if self { 1 } else { 0 };
+  }
+}
+
+/** i8 fit used by escaping and constrained subject paths. */
+fit i8: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** i16 fit used by escaping and constrained subject paths. */
+fit i16: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** i32 fit used by escaping and constrained subject paths. */
+fit i32: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** i64 fit used by escaping and constrained subject paths. */
+fit i64: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** u8 fit used by escaping and constrained subject paths. */
+fit u8: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** u16 fit used by escaping and constrained subject paths. */
+fit u16: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** u32 fit used by escaping and constrained subject paths. */
+fit u32: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** u64 fit used by escaping and constrained subject paths. */
+fit u64: UnifiedValueBoxView {
+  /** Return the widened receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** f32 fit used by escaping and constrained subject paths. */
+fit f32: UnifiedValueBoxView {
+  /** Return the truncated receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** f64 fit used by escaping and constrained subject paths. */
+fit f64: UnifiedValueBoxView {
+  /** Return the truncated receiver value. */
+  func code(): int { return (int)self; }
+}
+
+/** First nominal enum with the same physical values as the second enum. */
+enum UnifiedBoxStatusA {
+  Ready = 7,
+  Failed = 9
+}
+
+/** Second nominal enum with the same physical values as the first enum. */
+enum UnifiedBoxStatusB {
+  Ready = 7,
+  Failed = 9
+}
+
+/** Expose the first enum through the common object-form view. */
+fit UnifiedBoxStatusA: UnifiedValueBoxView {
+  /** Return the current enum item's numeric code. */
+  func code(): int { return (int)self; }
+}
+
+/** Expose the second enum through the common object-form view. */
+fit UnifiedBoxStatusB: UnifiedValueBoxView {
+  /** Return the current enum item's numeric code. */
+  func code(): int { return (int)self; }
+}
+
+/** Trivial tuple used to preserve the existing per-type box path. */
+type UnifiedBoxPair(i32, i32);
+
+/** Expose the trivial tuple through the common object-form view. */
+fit UnifiedBoxPair: UnifiedValueBoxView {
+  /** Return the sum of both tuple items. */
+  func code(): int { return (int)(self.item1 + self.item2); }
+}
+
+/** Aggregate value used to verify managed fields inside a ValueBox. */
+@value
+type UnifiedBoxRecord {
+  /** Numeric observation returned by the fit implementation. */
+  let value: int;
+
+  /** Managed field whose ownership must follow the existing aggregate path. */
+  let label: string;
+
+  /** Construct one aggregate value-box subject. */
+  func UnifiedBoxRecord(value: int, label: string) {
+    self.value = value;
+    self.label = label;
+  }
+}
+
+/** Expose the aggregate value through the common object-form view. */
+fit UnifiedBoxRecord: UnifiedValueBoxView {
+  /** Return the stored numeric observation. */
+  func code(): int { return self.value; }
+}
+
+/** Closed generic value used to verify per-instance box symbols. */
+@value
+type UnifiedGenericBox<T> {
+  /** Generic payload determines the closed nominal instance. */
+  let payload: T;
+
+  /** Numeric observation shared by both closed instances. */
+  let value: int;
+
+  /** Construct one closed generic value. */
+  func UnifiedGenericBox(payload: T, value: int) {
+    self.payload = payload;
+    self.value = value;
+  }
+}
+
+/** Expose every closed generic value through the common view. */
+fit UnifiedGenericBox<T>: UnifiedValueBoxView {
+  /** Return the stored numeric observation. */
+  func code(): int { return self.value; }
+}
+
+/** Holder proving a ValueBox-backed spec survives field storage and writes. */
+type UnifiedValueBoxHolder {
+  /** Escaping object-form spec slot. */
+  var value: UnifiedValueBoxView;
+}
+
+/** Compare two already-materialized object-form values. */
+func assertUnifiedValueBoxEquality(
+  left: UnifiedValueBoxView,
+  right: UnifiedValueBoxView,
+  expected: bool,
+  message: string
+) {
+  assert((left == right) == expected, message);
+}
+
+/** Return an escaping scalar-backed object-form value. */
+func makeUnifiedI32View(value: i32): UnifiedValueBoxView {
+  return value;
+}
+
+/** Read an already boxed object-form value through its witness. */
+func readUnifiedValueBox(value: UnifiedValueBoxView): int {
+  return value.code();
+}
+
+/** Read a constrained subject through the non-escaping borrowed path. */
+func readUnifiedConstrained<T: UnifiedValueBoxView>(value: T): int {
+  return value.code();
+}
+
+/** Complete behavioral coverage for the unified ValueBox implementation. */
+open func test_value_box() {
+  describe("unified ValueBox", () {
+    test("all builtin scalar boxes preserve value equality", () {
+      assertUnifiedValueBoxEquality(true, true, true, "bool same value");
+      assertUnifiedValueBoxEquality(true, false, false, "bool different value");
+      assertUnifiedValueBoxEquality((i8)1, (i8)1, true, "i8 same value");
+      assertUnifiedValueBoxEquality((i8)1, (i8)2, false, "i8 different value");
+      assertUnifiedValueBoxEquality((i16)1, (i16)1, true, "i16 same value");
+      assertUnifiedValueBoxEquality((i16)1, (i16)2, false, "i16 different value");
+      assertUnifiedValueBoxEquality((i32)1, (i32)1, true, "i32 same value");
+      assertUnifiedValueBoxEquality((i32)1, (i32)2, false, "i32 different value");
+      assertUnifiedValueBoxEquality((i64)1, (i64)1, true, "i64 same value");
+      assertUnifiedValueBoxEquality((i64)1, (i64)2, false, "i64 different value");
+      assertUnifiedValueBoxEquality((u8)1, (u8)1, true, "u8 same value");
+      assertUnifiedValueBoxEquality((u8)1, (u8)2, false, "u8 different value");
+      assertUnifiedValueBoxEquality((u16)1, (u16)1, true, "u16 same value");
+      assertUnifiedValueBoxEquality((u16)1, (u16)2, false, "u16 different value");
+      assertUnifiedValueBoxEquality((u32)1, (u32)1, true, "u32 same value");
+      assertUnifiedValueBoxEquality((u32)1, (u32)2, false, "u32 different value");
+      assertUnifiedValueBoxEquality((u64)1, (u64)1, true, "u64 same value");
+      assertUnifiedValueBoxEquality((u64)1, (u64)2, false, "u64 different value");
+      assertUnifiedValueBoxEquality((f32)1.5, (f32)1.5, true, "f32 same value");
+      assertUnifiedValueBoxEquality((f32)1.5, (f32)2.5, false, "f32 different value");
+      assertUnifiedValueBoxEquality((f64)1.5, (f64)1.5, true, "f64 same value");
+      assertUnifiedValueBoxEquality((f64)1.5, (f64)2.5, false, "f64 different value");
+      assertUnifiedValueBoxEquality((f64)0.0, (f64)-0.0, false, "f64 signed zero remains bit-distinct");
+    });
+
+    test("different builtin scalar box descriptors remain unequal", () {
+      let values: UnifiedValueBoxView[!] = UnifiedValueBoxView[:11];
+      values[0] = true;
+      values[1] = (i8)1;
+      values[2] = (i16)1;
+      values[3] = (i32)1;
+      values[4] = (i64)1;
+      values[5] = (u8)1;
+      values[6] = (u16)1;
+      values[7] = (u32)1;
+      values[8] = (u64)1;
+      values[9] = (f32)1.0;
+      values[10] = (f64)1.0;
+
+      var left: int = 0;
+      while left < 11 {
+        var right = left + 1;
+        while right < 11 {
+          assert(values[left] != values[right],
+                 "different scalar types remain unequal");
+          right = right + 1;
+        }
+        left = left + 1;
+      }
+    });
+
+    test("named enum boxes use nominal descriptor equality", () {
+      assertUnifiedValueBoxEquality(
+        UnifiedBoxStatusA.Ready,
+        UnifiedBoxStatusA.Ready,
+        true,
+        "same named enum and value are equal"
+      );
+      assertUnifiedValueBoxEquality(
+        UnifiedBoxStatusA.Ready,
+        UnifiedBoxStatusA.Failed,
+        false,
+        "same named enum and different values are unequal"
+      );
+      assertUnifiedValueBoxEquality(
+        UnifiedBoxStatusA.Ready,
+        UnifiedBoxStatusB.Ready,
+        false,
+        "different named enums with the same value are unequal"
+      );
+      assertUnifiedValueBoxEquality(
+        UnifiedBoxStatusA.Ready,
+        UnifiedBoxStatusB.Failed,
+        false,
+        "different named enums with different values are unequal"
+      );
+      assertUnifiedValueBoxEquality(
+        UnifiedBoxStatusA.Ready,
+        (i32)7,
+        false,
+        "named enum and underlying scalar are unequal"
+      );
+      assert(UnifiedBoxStatusA.Ready == UnifiedBoxStatusA.Ready &&
+             UnifiedBoxStatusA.Ready != UnifiedBoxStatusA.Failed,
+             "ordinary same-enum equality is unchanged");
+    });
+
+    test("scalar boxes survive return field array and copy boundaries", () {
+      let returned = makeUnifiedI32View((i32)41);
+      let copied = returned;
+      let holder = UnifiedValueBoxHolder { value: returned };
+      let values: UnifiedValueBoxView[!] = UnifiedValueBoxView[:2];
+      values[0] = copied;
+      values[1] = (u16)43;
+
+      assert(returned == copied &&
+             readUnifiedValueBox(holder.value) == 41 &&
+             readUnifiedValueBox(values[0]) == 41 &&
+             readUnifiedValueBox(values[1]) == 43,
+             "escaping scalar box ownership remains stable");
+
+      holder.value = (i8)42;
+      assert(holder.value.code() == 42,
+             "field overwrite dispatches through the replacement box");
+    });
+
+    test("generic constraints retain the borrowed non-escaping path", () {
+      assert(readUnifiedConstrained<bool>(true) == 1 &&
+             readUnifiedConstrained<i32>((i32)42) == 42 &&
+             readUnifiedConstrained<UnifiedBoxStatusA>(
+               UnifiedBoxStatusA.Ready
+             ) == 7,
+             "constrained scalar and enum subjects dispatch directly");
+    });
+
+    test("tuple aggregate value and closed generic boxes remain valid", () {
+      let concretePair: UnifiedBoxPair = ((i32)20, (i32)22);
+      let pair: UnifiedValueBoxView = concretePair;
+      let record: UnifiedValueBoxView = UnifiedBoxRecord(42, "managed");
+      let genericI32: UnifiedValueBoxView =
+        UnifiedGenericBox<i32>((i32)1, 42);
+      let genericI64: UnifiedValueBoxView =
+        UnifiedGenericBox<i64>((i64)1, 42);
+
+      assert(pair.code() == 42 && record.code() == 42 &&
+             genericI32.code() == 42 && genericI64.code() == 42,
+             "all existing value box families dispatch through one model");
+      assert(genericI32 != genericI64,
+             "different closed generic value types remain distinct");
+    });
+
+    test("public enum box descriptor is unique across packages", () {
+      let provider = makeCrossPackageEnumView(CrossPackageBoxStatus.Ready);
+      let consumer: CrossPackageEnumView = CrossPackageBoxStatus.Ready;
+      let different = makeCrossPackageEnumView(CrossPackageBoxStatus.Failed);
+
+      assert(provider == consumer && provider != different &&
+             provider.code() == 7 && different.code() == 9,
+             "provider and consumer share one public enum box descriptor");
+    });
+  });
+}

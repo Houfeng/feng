@@ -13892,9 +13892,9 @@ static bool validate_loop_control_stmt(ResolveContext *context,
                        keyword));
 }
 
-static bool inferred_expr_type_is_throwable(const ResolveContext *context,
-                                            InferredExprType type,
-                                            const char **out_reason);
+static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
+                                                    InferredExprType type,
+                                                    const char **out_reason);
 static InferredExprType resolve_expr_owner_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengDecl **out_type_decl,
@@ -14002,54 +14002,49 @@ static bool throw_expr_is_callable_value(ResolveContext *context,
     return false;
 }
 
-static bool type_ref_is_throwable(const ResolveContext *context,
-                                  const FengTypeRef *type_ref,
-                                  const char **out_reason) {
-    const FengDecl *decl;
+/* Return whether a type reference still contains a type parameter that is
+ * open in the current semantic scope. Closed generic arguments recurse to
+ * false and therefore retain their concrete nominal exception identity. */
+static bool exception_type_ref_contains_open_type_param(
+    const ResolveContext *context,
+    const FengTypeRef *type_ref) {
+    size_t type_arg_index;
 
-    if (type_ref == NULL) {
-        return true;
+    if (context == NULL || type_ref == NULL) {
+        return false;
     }
-
     switch (type_ref->kind) {
         case FENG_TYPE_REF_POINTER:
-            if (out_reason != NULL) {
-                *out_reason = "pointer values cannot be thrown as exceptions";
-            }
-            return false;
-
         case FENG_TYPE_REF_ARRAY:
-            /* Element type does not affect throwability of the array value
-             * itself: arrays are always Feng-managed. */
-            return true;
+            return exception_type_ref_contains_open_type_param(
+                context, type_ref->as.inner);
 
         case FENG_TYPE_REF_NAMED:
-            decl = resolve_type_ref_decl(context, type_ref);
-            if (decl != NULL && decl->kind == FENG_DECL_SPEC &&
-                decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
-                if (out_reason != NULL) {
-                    *out_reason = "callable-spec values are function types and cannot be thrown as exceptions";
-                }
-                return false;
+            if (type_ref->as.named.segment_count == 1U &&
+                type_ref->as.named.type_arg_count == 0U &&
+                find_type_param(context, type_ref->as.named.segments[0]) != NULL) {
+                return true;
             }
-            if (decl != NULL && decl->kind == FENG_DECL_TYPE &&
-                annotations_contain_kind(decl->annotations,
-                                         decl->annotation_count,
-                                         FENG_ANNOTATION_ABI)) {
-                if (out_reason != NULL) {
-                    *out_reason = "@abi types are ABI-bound and cannot be thrown as exceptions";
+            for (type_arg_index = 0U;
+                 type_arg_index < type_ref->as.named.type_arg_count;
+                 ++type_arg_index) {
+                if (exception_type_ref_contains_open_type_param(
+                        context, type_ref->as.named.type_args[type_arg_index])) {
+                    return true;
                 }
-                return false;
             }
-            return true;
+            return false;
     }
 
-    return true;
+    return false;
 }
 
-static bool type_ref_is_catchable_exception_type(ResolveContext *context,
-                                                 const FengTypeRef *type_ref,
-                                                 const char **out_reason) {
+/* Classify the finite set of concrete exception payload types shared by
+ * throw expressions and typed catch clauses. Reasons are deliberately
+ * context-neutral so both sites report the same classification decision. */
+static bool type_ref_is_exception_payload(const ResolveContext *context,
+                                          const FengTypeRef *type_ref,
+                                          const char **out_reason) {
     const FengDecl *decl;
 
     if (type_ref == NULL) {
@@ -14062,64 +14057,61 @@ static bool type_ref_is_catchable_exception_type(ResolveContext *context,
     switch (type_ref->kind) {
         case FENG_TYPE_REF_POINTER:
             if (out_reason != NULL) {
-                *out_reason = "pointer types cannot be used in catch clauses";
+                *out_reason = "pointer values cannot be thrown or used as concrete catch types";
             }
             return false;
 
         case FENG_TYPE_REF_ARRAY:
-            return true;
+            if (out_reason != NULL) {
+                *out_reason = "array values have no closed-type exception identity";
+            }
+            return false;
 
         case FENG_TYPE_REF_NAMED:
             if (type_ref_is_void(type_ref)) {
                 if (out_reason != NULL) {
-                    *out_reason = "void cannot be used in catch clauses";
+                    *out_reason = "void is not an exception payload type";
+                }
+                return false;
+            }
+            if (exception_type_ref_contains_open_type_param(context, type_ref)) {
+                if (out_reason != NULL) {
+                    *out_reason = "open generic types have no concrete exception identity";
                 }
                 return false;
             }
             if (type_ref_builtin_canonical_name(type_ref, context->pointer_size) != NULL) {
                 return true;
             }
-            if (type_ref->as.named.segment_count == 1U &&
-                find_type_param(context, type_ref->as.named.segments[0]) != NULL) {
-                if (out_reason != NULL) {
-                    *out_reason = "generic type parameters cannot be used in catch clauses";
-                }
-                return false;
-            }
             decl = resolve_type_ref_decl(context, type_ref);
             if (decl == NULL) {
+                /* Resolution reports the primary unknown-type diagnostic. */
                 return true;
             }
             if (decl->kind == FENG_DECL_SPEC) {
                 if (out_reason != NULL) {
-                    *out_reason = "spec types cannot be used in catch clauses";
+                    *out_reason = "spec values have no concrete exception identity";
                 }
                 return false;
             }
-            if (decl->kind == FENG_DECL_ENUM) {
-                if (out_reason != NULL) {
-                    *out_reason = "enum types cannot be used in catch clauses";
-                }
-                return false;
+            if (decl->kind == FENG_DECL_TYPE || decl->kind == FENG_DECL_ENUM) {
+                return true;
             }
-            if (decl->kind == FENG_DECL_TYPE &&
-                annotations_contain_kind(decl->annotations,
-                                         decl->annotation_count,
-                                         FENG_ANNOTATION_ABI)) {
-                if (out_reason != NULL) {
-                    *out_reason = "@abi types cannot be used in catch clauses";
-                }
-                return false;
+            if (out_reason != NULL) {
+                *out_reason = "callable values are not exception payload types";
             }
-            return true;
+            return false;
     }
 
-    return true;
+    return false;
 }
 
-static bool inferred_expr_type_is_throwable(const ResolveContext *context,
-                                            InferredExprType type,
-                                            const char **out_reason) {
+/* Classify one inferred throw operand through the same concrete payload gate
+ * used by typed catch clauses. Callable expressions with no representable
+ * type reference are rejected here or by throw_expr_is_callable_value. */
+static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
+                                                    InferredExprType type,
+                                                    const char **out_reason) {
     switch (type.kind) {
         case FENG_INFERRED_EXPR_TYPE_UNKNOWN:
             /* Unknown types are reported through other diagnostics; do not
@@ -14136,26 +14128,25 @@ static bool inferred_expr_type_is_throwable(const ResolveContext *context,
             return false;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return type_ref_is_throwable(context, type.type_ref, out_reason);
+            return type_ref_is_exception_payload(context, type.type_ref, out_reason);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
-            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC &&
-                type.type_decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE) {
+            if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC) {
                 if (out_reason != NULL) {
-                    *out_reason = "callable-spec values are function types and cannot be thrown as exceptions";
+                    *out_reason = "spec values have no concrete exception identity";
                 }
                 return false;
             }
             if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_TYPE &&
-                annotations_contain_kind(type.type_decl->annotations,
-                                         type.type_decl->annotation_count,
-                                         FENG_ANNOTATION_ABI)) {
+                type.type_decl->as.type_decl.type_param_count > 0U) {
                 if (out_reason != NULL) {
-                    *out_reason = "@abi types are ABI-bound and cannot be thrown as exceptions";
+                    *out_reason = "open generic types have no concrete exception identity";
                 }
                 return false;
             }
-            return true;
+            return type.type_decl != NULL &&
+                   (type.type_decl->kind == FENG_DECL_TYPE ||
+                    type.type_decl->kind == FENG_DECL_ENUM);
     }
 
     return true;
@@ -14185,7 +14176,7 @@ static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
             "AE1402", format_message("throw statement requires a non-void expression"));
     }
 
-    if (!inferred_expr_type_is_throwable(context, throw_type, &reason)) {
+    if (!inferred_expr_type_is_exception_payload(context, throw_type, &reason)) {
         char *type_name = format_inferred_expr_type_name(throw_type, context->pointer_size);
         char *message = format_message(
             "throw expression of type '%s' is not throwable: %s",
@@ -28740,8 +28731,8 @@ static bool resolve_try_expr(ResolveContext *context,
                 clause->token,
                 "AE1406", format_message("catch clause matching any exception must be the last catch clause"));
         }
-        if (!is_anonymous &&
-            !type_ref_is_catchable_exception_type(context, clause->type, &catch_reason)) {
+        if (!is_anonymous && !type_ref_is_unknown(clause->type) &&
+            !type_ref_is_exception_payload(context, clause->type, &catch_reason)) {
             char *type_name = format_type_ref_name(clause->type);
             char *message = format_message(
                 "catch type '%s' is not catchable: %s",

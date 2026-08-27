@@ -1,6 +1,6 @@
-/* Spec subject equality: dispatches comparison based on the subject's type
- * descriptor. String subjects use content comparison; scalar-box subjects
- * compare kind + payload; all other subjects use pointer identity. */
+/* Compare object-form spec subjects by their managed dynamic descriptor.
+ * Descriptor-specific equality handles strings and value boxes; descriptors
+ * without an equality function retain managed-object identity semantics. */
 #include "runtime/feng_runtime.h"
 
 bool feng_spec_subject_equal(void *left, void *right) {

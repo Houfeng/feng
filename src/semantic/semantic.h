@@ -212,7 +212,7 @@ typedef enum FengSpecCoercionCallableSource {
 
 /* Object-form coercion site 的 subject 承载策略。
  * - BORROW_LOCAL: 仅允许在可证明不逃逸的临时调用点借用局部物化地址。
- * - BOX_OWNER: 需要稳定 owner 生命周期时使用 FengScalarBox。
+ * - BOX_OWNER: 需要稳定 owner 生命周期时使用具体类型的 ValueBox<T>。
  */
 typedef enum FengSpecObjectSubjectStorageKind {
     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BORROW_LOCAL = 0,

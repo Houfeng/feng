@@ -7,6 +7,12 @@
 >
 > 隐式 `self` 在语言层统一引用当前接收者；标量没有可变子结构或可观察的存储身份，原生值 `self` ABI
 > 是该语义的等价 lowering，不构成 Feng 语言中的赋值或显式参数复制边界。
+>
+> **后续演进**：本文中的 `FengScalarBox`、共享 `kind + union` 与相关发码名称记录的是本优化交付时的
+> 实现基线，已由
+> [统一 ValueBox 与异常开发方案](./feng-unified-value-box-and-exception-dev.md) 接续，不再作为当前箱结构
+> 设计依据。语言规则以 [feng-fit-builtin-type.md](../specifications/feng-fit-builtin-type.md) 与
+> [feng-spec.md](../specifications/feng-spec.md) 为准。
 
 ## 1. 目标
 
@@ -219,9 +225,10 @@ static int32_t witness_thunk(void *_subject) {
 - fit 方法实现层永远不接收箱对象作为 `self`。
 - 箱对象只用于 escaping scalar spec 值的 stable subject ownership。
 
-### 4.5 当前推荐的内部承载：`FengScalarBox`
+### 4.5 交付时采用的内部承载：`FengScalarBox`（已被统一 ValueBox 方案接续）
 
-当前阶段只需要覆盖内建标量；因此推荐的内部承载不是用户可见的 `ValueBox<T>`，而是一个 runtime-internal 的单一 `FengScalarBox`：
+本节保留当时交付基线，供迁移测试和性能对照使用；当前实现目标不再采用该共享结构，统一方案见
+[feng-unified-value-box-and-exception-dev.md](./feng-unified-value-box-and-exception-dev.md)。当时的结构为：
 
 ```c
 struct FengScalarBox {

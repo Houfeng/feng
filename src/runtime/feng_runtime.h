@@ -207,65 +207,75 @@ typedef struct FengManagedHeader {
     uint32_t cycle_state;
 } FengManagedHeader;
 
-/* Runtime-internal stable subject owner for escaping scalar spec values.
- * Codegen reads payload directly in witness thunks and invokes the typed
- * constructors below at coercion sites. */
-typedef enum FengBuiltinScalarKind {
-    FENG_BUILTIN_SCALAR_BOOL = 1,
-    FENG_BUILTIN_SCALAR_I8 = 2,
-    FENG_BUILTIN_SCALAR_I16 = 3,
-    FENG_BUILTIN_SCALAR_I32 = 4,
-    FENG_BUILTIN_SCALAR_I64 = 5,
-    FENG_BUILTIN_SCALAR_U8 = 6,
-    FENG_BUILTIN_SCALAR_U16 = 7,
-    FENG_BUILTIN_SCALAR_U32 = 8,
-    FENG_BUILTIN_SCALAR_U64 = 9,
-    FENG_BUILTIN_SCALAR_F32 = 10,
-    FENG_BUILTIN_SCALAR_F64 = 11
-} FengBuiltinScalarKind;
-
-typedef struct FengScalarBox {
+/* Runtime-internal ValueBox<T> concrete types for escaping builtin scalar
+ * values. Each box stores only its managed header and statically known value;
+ * the header descriptor is the complete dynamic type identity. */
+typedef struct FengValueBox__bool {
     FengManagedHeader header;
-    FengBuiltinScalarKind kind;
-    union {
-        bool b;
-        int8_t i8;
-        int16_t i16;
-        int32_t i32;
-        int64_t i64;
-        uint8_t u8;
-        uint16_t u16;
-        uint32_t u32;
-        uint64_t u64;
-        float f32;
-        double f64;
-    } payload;
-} FengScalarBox;
+    bool value;
+} FengValueBox__bool;
 
-extern const FengTypeDescriptor feng_scalar_box_descriptor;
-extern const FengTypeDescriptor feng_scalar_bool_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_i8_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_i16_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_i32_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_i64_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_u8_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_u16_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_u32_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_u64_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_f32_exception_descriptor;
-extern const FengTypeDescriptor feng_scalar_f64_exception_descriptor;
+typedef struct FengValueBox__i8 {
+    FengManagedHeader header;
+    int8_t value;
+} FengValueBox__i8;
 
-FengScalarBox *feng_scalar_box_new_bool(bool value);
-FengScalarBox *feng_scalar_box_new_i8(int8_t value);
-FengScalarBox *feng_scalar_box_new_i16(int16_t value);
-FengScalarBox *feng_scalar_box_new_i32(int32_t value);
-FengScalarBox *feng_scalar_box_new_i64(int64_t value);
-FengScalarBox *feng_scalar_box_new_u8(uint8_t value);
-FengScalarBox *feng_scalar_box_new_u16(uint16_t value);
-FengScalarBox *feng_scalar_box_new_u32(uint32_t value);
-FengScalarBox *feng_scalar_box_new_u64(uint64_t value);
-FengScalarBox *feng_scalar_box_new_f32(float value);
-FengScalarBox *feng_scalar_box_new_f64(double value);
+typedef struct FengValueBox__i16 {
+    FengManagedHeader header;
+    int16_t value;
+} FengValueBox__i16;
+
+typedef struct FengValueBox__i32 {
+    FengManagedHeader header;
+    int32_t value;
+} FengValueBox__i32;
+
+typedef struct FengValueBox__i64 {
+    FengManagedHeader header;
+    int64_t value;
+} FengValueBox__i64;
+
+typedef struct FengValueBox__u8 {
+    FengManagedHeader header;
+    uint8_t value;
+} FengValueBox__u8;
+
+typedef struct FengValueBox__u16 {
+    FengManagedHeader header;
+    uint16_t value;
+} FengValueBox__u16;
+
+typedef struct FengValueBox__u32 {
+    FengManagedHeader header;
+    uint32_t value;
+} FengValueBox__u32;
+
+typedef struct FengValueBox__u64 {
+    FengManagedHeader header;
+    uint64_t value;
+} FengValueBox__u64;
+
+typedef struct FengValueBox__f32 {
+    FengManagedHeader header;
+    float value;
+} FengValueBox__f32;
+
+typedef struct FengValueBox__f64 {
+    FengManagedHeader header;
+    double value;
+} FengValueBox__f64;
+
+extern const FengTypeDescriptor feng_value_box_bool_descriptor;
+extern const FengTypeDescriptor feng_value_box_i8_descriptor;
+extern const FengTypeDescriptor feng_value_box_i16_descriptor;
+extern const FengTypeDescriptor feng_value_box_i32_descriptor;
+extern const FengTypeDescriptor feng_value_box_i64_descriptor;
+extern const FengTypeDescriptor feng_value_box_u8_descriptor;
+extern const FengTypeDescriptor feng_value_box_u16_descriptor;
+extern const FengTypeDescriptor feng_value_box_u32_descriptor;
+extern const FengTypeDescriptor feng_value_box_u64_descriptor;
+extern const FengTypeDescriptor feng_value_box_f32_descriptor;
+extern const FengTypeDescriptor feng_value_box_f64_descriptor;
 
 #define FENG_REFCOUNT_IMMORTAL ((uint32_t)0xFFFFFFFFu)
 

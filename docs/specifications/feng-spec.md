@@ -483,7 +483,21 @@ type Stream: ReadWrite {}
 - 返回 `void` 的行为签名提供空实现; 返回非 `void` 的行为签名返回其返回类型默认零值; 若返回值是 `spec` 类型,则返回该 `spec` 对应的默认 witness。
 - 通过具体类型名访问 spec 静态成员的运行时开销与访问 `type` 静态成员完全一致; 通过泛型类型参数访问 spec 静态成员时,采用与 spec 实例方法 witness 表一致的间接分派策略,不在运行时引入额外的候选搜索或回退。
 - 每次对 `spec` 类型执行默认初始化时,都会创建该 `spec` 默认 witness 的新实例,不复用共享单例。
-- object-form 与 intersection-form `spec` 值上的 `==` / `!=` 比较其 subject 引用身份，不执行深度比较；callable-form `spec` 值上的 `==` / `!=` 比较 callable/closure 引用身份，不比较捕获内容、绑定对象或调用签名。union-form `spec` 未收窄前仍不允许直接使用 `==` / `!=`。
+- object-form 与 intersection-form `spec` 值上的 `==` / `!=` 比较其 subject 的动态具体类型与该类型既有
+  相等语义，不比较 witness：同一 subject 指针相等；仅一侧为空时不相等；两个非空 subject 的
+  `FengManagedHeader.desc` 必须为同一 descriptor，descriptor 不同时直接不相等；descriptor 相同且提供
+  `equal_fn` 时调用该函数，否则两个不同 subject 不相等。该流程只使用编译期确定并随对象携带的
+  descriptor 指针，不执行运行时类型查找、映射或字符串比较。
+- `bool` 与数值标量进入 object-form 或 intersection-form `spec` 后，按各自规范化具体标量箱 descriptor
+  和变更前既有值相等行为比较；不同具体标量类型不进行数值提升或跨类型等值比较。例如未预先显式转换为
+  同一类型的 `int(1)` 与 `double(1.0)` 不相等。普通标量表达式的静态类型检查、字面量适配与相等规则不因
+  spec 装箱改变。
+- 具名 `enum` 进入 object-form 或 intersection-form `spec` 后，按其声明级唯一的箱 descriptor 保持名义
+  类型身份；只有同一具名 enum 且 enum 值相同才相等。不同具名 enum，以及 enum 与其底层 `int`，即使
+  底层值相同也不相等。普通静态表达式仍只允许同一 enum 类型直接使用 `==` / `!=`。
+- `string` subject 继续按字符串内容相等语义比较；没有 descriptor `equal_fn` 的普通引用实体继续按
+  subject 引用身份比较。callable-form `spec` 值上的 `==` / `!=` 比较 callable/closure 引用身份，不比较
+  捕获内容、绑定对象或调用签名。union-form `spec` 未收窄前仍不允许直接使用 `==` / `!=`。
 - 代码以 `spec` 视角访问成员或发起调用时,运行时可采用分发表、内联缓存、静态去虚化或其他等价策略完成成员映射与分发。
 - object-form `spec` 实例方法值调用只使用形成点保存的 subject、witness 视角与
   requirement 槽，不执行运行时成员搜索、签名比较、重载选择或接收者重绑定。

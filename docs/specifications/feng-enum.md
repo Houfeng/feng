@@ -77,7 +77,10 @@ enum Bad {
 
 - `enum` 声明一个新的具名类型，不与 `int` 互相等同。
 - 每个枚举项都拥有一个底层 `int` 值。
-- `enum` 在语言层保持独立名义类型；其运行时表示与发码表示固定按 `int` 标量处理，不引入额外 runtime 对象或元数据。
+- `enum` 在未装箱值、普通参数/返回值与 C ABI 路径中固定按 `int` 标量表示，不增加对象或动态元数据；当
+  enum 值需要作为 object-form `spec` 的稳定 subject 或其他统一托管载荷时，使用通用的 per-type
+  `ValueBox<Enum>`，其箱 descriptor 按具名 enum 声明唯一。该箱不是 enum 专用运行时抽象，不改变普通
+  enum 路径的标量表示与零额外开销。
 - 若一个 `enum` 不包含显式赋值，则各枚举项按声明顺序从 `0` 开始递增 `1`。
 - 若一个 `enum` 包含显式赋值，则其全部枚举项都必须显式赋值。
 - 显式赋值只允许使用整数字面量，且该值直接成为对应枚举项的底层值。
@@ -86,6 +89,8 @@ enum Bad {
 - 允许从 `enum` 显式转换到 `int`。
 - 不允许从 `int` 显式转换到 `enum`，包括整数字面量、常量表达式与一般运行时 `int` 值的 cast；也不允许 `enum` 与 `int` 之间的隐式转换。
 - 仅允许同一 `enum` 类型之间直接做 `==` / `!=` 比较；若需要数值比较或算术运算，必须先显式转换为 `int`。
+- enum 经 object-form 或 intersection-form `spec` 适配后的相等语义由
+  [Feng `spec` 规范](./feng-spec.md) 统一定义；本文不重复该规则。
 - `enum` 可以作为 `fit` 的目标类型；相关适配与扩展规则统一遵循 [Feng 语言 `fit` 规范](./feng-fit.md)。
 - `enum` 可以作为 `match` 常量相等性匹配的目标类型；分支标签必须为该 `enum` 的 item 引用，具体规则与限制见 [Feng 语言流程控制规范](./feng-flow.md) §3.1。
 - `enum` 在 C ABI 边界上视为与 `int` 相同的 ABI 标量；具体 ABI 资格与传递规则统一遵循 [Feng 语言 ABI 互操作规范](./feng-interop.md)。
@@ -133,7 +138,8 @@ enum Bad {
 
 - `enum` 值在运行时按其底层 `int` 值表示。
 - `enum` 默认值不依赖底层值是否为 `0`；始终取声明顺序中的第一个枚举项。
-- 运行时不为 `enum` 引入独立对象头、标签、反射表或专用 helper；对 plain `int` 路径不增加额外运行时开销。
+- 运行时不为 `enum` 引入专用对象头、标签、反射表、动态查找或专用 helper；普通未装箱 enum 路径不增加
+  额外运行时开销。需要稳定托管载荷时复用所有具体值类型统一的 `ValueBox<T>` 静态具体化模型。
 - 当前阶段运行时不提供从任意 `int` 到 `enum` 的动态校验或恢复机制。
 
 ## 7 关联
@@ -143,4 +149,5 @@ enum Bad {
 - [Feng 语言变量绑定与作用域规范](./feng-binding.md)：无初始值绑定的默认值规则。
 - [Feng 语言表达式与运算规范](./feng-expression.md)：显式转换与比较运算通用规则。
 - [Feng 语言流程控制规范](./feng-flow.md)：`match` 模式匹配与 `enum` 作为匹配目标的规则。
+- [Feng `spec` 规范](./feng-spec.md)：enum 进入 object-form/intersection-form spec 后的名义类型相等规则。
 - [Feng 语言 ABI 互操作规范](./feng-interop.md)：ABI 边界总规则。

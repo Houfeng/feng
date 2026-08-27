@@ -3,6 +3,12 @@
 > 规范来源：[docs/specifications/feng-exception.md](../specifications/feng-exception.md)
 > 本文记录运行时机制、实现原理与待办任务。  
 > **交付范围**：仅覆盖 `throw` / `try` / `catch` / `unknown` 的完整实现。`match` 类型收窄与 `defer` 另立文档单独交付，本文不涉及。
+>
+> **当前演进**：异常载荷许可集合只由
+> [异常模型主规范](../specifications/feng-exception.md#33-catch) 定义；统一箱表示、descriptor 不变量、实施顺序与
+> 阶段门禁由 [统一 ValueBox 与 throw/catch 对齐方案](./feng-unified-value-box-and-exception-dev.md) 定义。
+> 本文不另行定义语言规则。§6 保留异常系统首次交付的历史记录，其中已经被统一方案替代的条目不代表
+> 当前实现目标。
 
 ---
 
@@ -20,7 +26,9 @@ Feng 采用基于静态 LSDA 表 + libunwind 的零开销异常机制：
 - **`.eh_frame` CFI**：C 编译器（Clang/GCC）自动为每个函数生成，描述寄存器还原规则，Feng 不需要手动生成。
 - **LSDA**（Language-Specific Data Area）：由 Feng codegen 在生成的 C 文件中以静态 struct 输出，描述 try 的 PC 区间、landing pad 地址、catch 类型列表。
 - **Personality 函数**（`__feng_personality_v0`）：libunwind 在展开过程中逐帧调用，读取 LSDA 决定是否在当前帧 catch、跳转到哪个 landing pad。
-- **`_Unwind_RaiseException` / `_Unwind_Resume`**：libunwind 提供的展开入口，由 `feng_throw` 调用。
+- **`_Unwind_RaiseException` / `_Unwind_Resume_or_Rethrow`**：libunwind 提供的抛出与重抛入口，分别由
+  `feng_throw` 与 `feng_rethrow` 调用。`_Unwind_Resume` 只用于 landing pad 继续同一次清理阶段，不能用于
+  已进入 catch 后重新搜索外层 handler。
 
 当前 vendoring 选择：
 
@@ -31,6 +39,10 @@ Feng 采用基于静态 LSDA 表 + libunwind 的零开销异常机制：
 
 **正常路径**：`try` 入口无任何代码，PC 区间在 LSDA 中隐式标记 try 范围，完全零开销。  
 **抛出路径**：`feng_throw` → `_Unwind_RaiseException` → libunwind 逐帧调用 personality → personality 读 LSDA 匹配类型 → 跳转 landing pad。
+**原样重抛路径**：`feng_rethrow` → `_Unwind_Resume_or_Rethrow` → libunwind 从当前 catch 外重新执行搜索与
+清理阶段 → personality 继续以同一异常值和 descriptor 匹配外层 catch。重抛不分配新的异常或载荷，
+不增加 Feng 自有分支、descriptor 映射或 ARC/CC 操作；重新搜索外层 handler 必然执行外层 catch 的既有
+descriptor 指针比较。
 
 ### Landing pad 地址获取
 
@@ -96,7 +108,8 @@ int   feng_caught_clause(void);  // landing pad 入口处取得命中子句索�
 void  feng_rethrow(void);        // unknown catch 块中重抛
 ```
 
-- **macOS / Linux**：内部调用 `_Unwind_RaiseException` / `_Unwind_Resume`，实现 Feng personality 函数。
+- **macOS / Linux**：内部调用 `_Unwind_RaiseException` / `_Unwind_Resume_or_Rethrow`，实现 Feng personality
+  函数。仓库 vendored LLVM libunwind 同时提供这两个入口。
 - **Windows**：尚未交付。LLVM libunwind 有 Windows/SEH 源码，但当前 Feng C 后端的 GNU label address + DWARF/Mach-O/ELF LSDA 方案不能直接迁移到 MSVC/SEH。
 
 ### 托管局部展开清理
@@ -203,16 +216,19 @@ typedef struct FengTypeDescriptor {
 
 ## 2 throw 入口规范化
 
-`feng_throw` **堆分配** `FengUnwindException`（`_Unwind_RaiseException` 在展开过程中会销毁 throw 所在帧的栈，栈分配会导致对象失效），将抛出值规范化为托管指针后写入 `.value`，再调用 `_Unwind_RaiseException`。异常被 catch 消费后，landing pad 代码负责释放该堆对象：
+`feng_throw` **堆分配** `FengUnwindException`（`_Unwind_RaiseException` 在展开过程中会销毁 throw 所在帧的栈，栈分配会导致对象失效），将主规范允许的抛出值规范化为托管指针后写入 `.value`，再调用 `_Unwind_RaiseException`。异常被 catch 消费后，landing pad 代码负责释放该堆对象：
 
 | 抛出值形态 | 规范化方式 |
 |---|---|
-| 具体 `type` 实例（托管对象） | 直接作为 `void*` |
-| `string` / `array` | 同上 |
-| `spec` fat value（双指针：subject + witness） | 提取 subject，丢弃 witness |
-| 标量（`i8`…`f64`）/ `bool` | 堆分配 `FengScalarBox` 写入值，将 box 指针作为 `void*` |
+| 普通实体 `type`、普通 `@abi type` | 原托管对象指针 |
+| `string` | 原字符串对象指针 |
+| 标量与 `bool` | 对应静态具体 `ValueBox<T> *` |
+| 具名 enum | 该具名 enum 的 `ValueBox<Enum> *` |
+| 具名 tuple、`@value type`、`@value @abi type` 及闭合泛型 Value | 对应静态具体 `ValueBox<T> *` |
 
-**spec witness 为何可丢弃**：witness 是 `(具体类型 → spec)` 的静态映射。catch 只按具体类型匹配（`desc` 指针比较），不需要 witness，故丢弃合法。
+array、所有 spec、开放泛型、pointer、`void` 与 callable 在 Semantic 阶段拒绝，不进入规范化。每条允许
+路径都必须满足 `((const FengManagedHeader *)value)->desc == desc`；编译器静态选定对象或箱 descriptor，
+不执行运行时查找、映射或按载荷内容分类。
 
 ---
 
@@ -235,9 +251,11 @@ for each FengCatchClause in LSDA（按源码顺序）:
 
 **Landing pad 入口**：
 - `feng_caught_value()` 从当前 `FengUnwindException` 中取出 `.value`。
-- `catch ex: T` → `ex` 绑定为 `T*`（直接转型）。
+- 普通实体与 `string` 的 `catch ex: T` 直接绑定对象指针。
+- 标量、enum、tuple 与 `@value type` 的 `catch ex: T` 按静态 `T` 从对应 `ValueBox<T>.value` 解箱。
 - `catch ex: unknown` → `ex` 静态类型为 `unknown`，只允许 `throw ex`，不可访问字段或方法。
-- 标量（`FengScalarBox`）通过 `FengBuiltinScalarKind` 区分具体标量种类，在具体类型 catch 中进一步细分。
+
+personality 只执行一次 `clause.type == ex_desc` 指针比较，不读取 descriptor 或箱内容，不执行类型查找。
 
 ---
 
@@ -295,7 +313,7 @@ void generated_fn(void) {
                 goto __after_1;
             }
             case 1:              // catch ex: unknown
-                feng_rethrow();  // 重抛，FengUnwindException 生命期交回 libunwind
+                feng_rethrow();  // 原样重抛，以同一 FengUnwindException 重新搜索外层 handler
         }
     }
     __after_1:;
@@ -306,70 +324,14 @@ void generated_fn(void) {
 
 ---
 
-## 6 TODO
+## 6 首次交付记录（历史）
 
-当前状态：新版 `throw` / `try <expr>` / typed catch / multi catch / `unknown` 的词法、解析、语义与 C 后端 LSDA/libunwind 路径已落地；旧版 `try { ... } catch { ... } finally { ... }` 兼容语法已移除。Feng 尚未公开发布，后续只维护主规范中的 `try <expr> catch ...` 形态（`catch` 子句为必填，零 catch 在解析阶段报错）。剩余 TODO 聚焦正常路径开销继续收敛、Windows 后端与回归验证。
+首次交付建立了 `throw`、`try <expr>`、typed/multi catch、`unknown`、LSDA/personality、异常帧清理及
+macOS/Linux libunwind 路径。原始逐项清单曾记录共享 `FengScalarBox`、允许 object-form spec throw、
+`catch` 必填等过渡实现；这些条目均已被后续规范与统一 ValueBox 方案替代，因此不再保留为当前 TODO
+或完成断言。
 
-### 运行时机制
-
-- [x] 定义 `FengUnwindException` 结构体（`src/runtime/feng_runtime.h`）
-- [x] 定义 `FengLSDA` / `FengCatchClause` 结构体（`src/runtime/feng_runtime.h`）
-- [x] 实现 `feng_throw` / `feng_caught_value` / `feng_caught_clause` / `feng_rethrow` / `feng_release_unwind_exception`
-- [x] 实现 macOS/Linux `_Unwind_RaiseException` 路径与 `__feng_personality_v0`
-- [x] Personality 函数：搜索阶段按 LSDA 子句顺序匹配 `desc` 指针；清理阶段将命中子句索引写入 `FengUnwindException.matched_clause`，再调用 `_Unwind_SetIP` 跳转 landing pad
-- [x] LSDA 注册：当前以函数内 static `FengLSDA` + `feng_register_lsda` 注册；FDE/personality 通过生成函数入口 `.cfi_personality` / `.cfi_lsda` 注入
-- [x] 定义 `FengFrameMarker` 节点类型，扩展 TLS cleanup chain 支持帧边界标记（`src/runtime/feng_runtime.h`）
-- [x] 实现 `feng_frame_push` / `feng_frame_pop` / `feng_try_frame_push` / `feng_frame_release_to`（`src/runtime/feng_exception.c`）
-- [x] Personality 函数 CLEANUP_PHASE 中间帧处理：从链顶释放托管局部至函数帧标记，pop 帧标记，返回 `_URC_CONTINUE_UNWIND`
-- [ ] 验证正常路径（无异常抛出）汇编输出中无任何异常相关代码
-- [x] 生成 C 文件以 `-std=gnu11 -fexceptions` 编译，为 LSDA 后端的 GNU label address 与 unwind metadata 做准备（`src/cli/compile/driver.c`）
-
-### 词法 / 解析层
-
-- [x] `src/lexer/token.h`：从 `FENG_KEYWORD_LIST` 中移除 `X(FINALLY, "finally")`
-- [x] `src/lexer/token.h`：在 `FENG_KEYWORD_LIST` 中添加 `X(UNKNOWN, "unknown")`
-- [x] `src/parser/parser.c`：新增表达式形式 `try <expr>`；旧块形式 `try { ... } catch { ... } finally { ... }` 已移除
-- [x] `src/parser/parser.c`：实现多 `catch` 子句解析，每个子句须含 `id: Type` 注解
-- [x] `src/parser/parser.c`：catch 子句类型注解支持 `unknown` token
-- [x] `src/parser/parser.c`：`try` 至少须有一个 `catch` 子句；零 catch 的 `try <expr>` 在解析阶段报错（`'try' requires at least one 'catch' clause`）
-
-### 语义层
-
-- [x] `src/semantic/`：`unknown` 类型节点仅在 catch 子句类型注解位置合法，其余位置报语义错误
-- [x] `src/semantic/`：`catch ex: unknown` 中 `ex` 标记为 unknown 类型，禁止方法调用、字段访问
-- [x] `src/semantic/`：`throw` 表达式类型检查：拒绝 spec 类型值、函数类型值、成员方法
-- [x] `src/semantic/`：`catch` 子句类型注解检查：拒绝 spec 类型、函数类型、成员方法
-
-### Codegen 层
-
-- [x] `src/codegen/codegen.c`：`cg_emit_throw` 新增标量装箱路径（分配 `FengScalarBox`，填充 kind 与 payload）
-- [x] `src/codegen/codegen.c`：`cg_emit_throw` 新增 spec fat value 路径（提取 `.subject`，通过 `FengManagedHeader::desc` 运行时取描述符，丢弃 witness）
-- [x] `src/codegen/codegen.c`：`cg_emit_try` 重写为表达式形式，emit `__try_begin` / `__try_end` / `__lp` labels 及静态 LSDA 数据
-- [x] `src/codegen/codegen.c`：实现有类型 catch 的 landing pad 代码生成（`feng_caught_value()` + 转型绑定）
-- [x] `src/codegen/codegen.c`：实现多 catch 子句的 landing pad 分派（按命中子句索引 if/else-if 跳转，避免 C switch 捕获 Feng break/continue）
-- [x] `src/codegen/codegen.c`：`catch ex: unknown` 子句：绑定 ex，生成 `feng_rethrow()` 路径（当前为兼容层）
-- [x] `src/codegen/codegen.c`：try 表达式作为右值，结果值正确穿透到外层（当前为兼容层）
-- [x] `src/codegen/codegen.c`：void try 表达式作为语句时不生成非法 `void` 结果槽；void catch 块允许正常结束（当前为兼容层）
-- [x] `src/codegen/codegen.c`：catch 块内 `return` 会在离开函数前释放当前异常对象并清理已打开的异常帧（当前为兼容层）
-- [x] `src/codegen/codegen.c`：catch 块内 `break` / `continue` 会在跳出 try/catch 前释放当前异常对象并清理需要离开的异常帧（当前为兼容层）
-- [x] `src/codegen/codegen.c`：try 体内托管局部清理——通过 `feng_try_frame_push` + `feng_frame_release_to` 机制实现（正常路径 `cg_release_scope` 释放；异常路径 landing pad 入口 `feng_frame_release_to(&try_marker)` 释放，等价于 NULL 初始化方案，但复用 cleanup chain）
-- [x] `src/codegen/codegen.c`：landing pad 入口处 dispatch 之前调用 `feng_frame_release_to(&try_marker)` 清理 try 体内所有托管局部（NULL-safe）
-- [x] `src/codegen/codegen.c`：在每个含托管局部的函数入口/出口发射 `feng_frame_push` / `feng_frame_pop` 帧标记（中间帧展开清理所需），通过 `cg_emit_function_eh_prologue` 实现
-
-### 测试
-
-- [x] 新增测试：throw 具体 type，catch 匹配具体类型
-- [x] 新增测试：throw spec 类型值（提取 subject 后抛），catch 匹配具体类型
-- [x] 新增测试：throw 标量（`i32` / `bool`），catch 匹配对应类型
-- [x] 新增测试：多 catch 子句，按序匹配
-- [x] 新增测试：`catch ex: unknown`，仅 `throw ex` 合法
-- [x] 新增测试：`catch ex: unknown` 中访问字段/方法，期望语义错误
-- [x] 新增测试：`unknown` 用于 `let` / 参数 / 返回类型，期望语义错误
-- [x] 规范变更：throw 允许 spec fat value（提取 subject 抛出，catch 仍须实体类型）；语义层移除对 spec throw 的拒绝
-- [x] 新增测试：throw 函数值，期望编译错误
-- [x] 新增测试：try 表达式作为右值（赋值）
-- [x] 新增测试：void try 表达式作为语句，含 void catch 块
-- [x] 新增测试：catch 块内 `return` 可正确离开函数并释放异常对象
-- [x] 新增测试：catch 块内 `break` / `continue` 可正确离开 try/catch 并继续循环控制流
-- [x] 新增测试：零 catch 的 `try <expr>` 在解析阶段报错（parser 单元测试 `test_try_without_catch_is_rejected` + semantic 单元测试 `test_try_without_catch_is_rejected` 各一条）
-- [x] 全量回归测试通过（兼容层）
+当前语言规则只见[异常模型主规范](../specifications/feng-exception.md)，当前箱表示、descriptor 不变量、
+实现决策、测试矩阵与最终回归结果只见
+[统一 ValueBox 与 throw/catch 对齐方案](./feng-unified-value-box-and-exception-dev.md#8-分步实施-todo)。
+Windows 后端仍是独立于本次统一工作的后续设计范围。

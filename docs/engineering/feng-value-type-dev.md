@@ -4,6 +4,10 @@
 > **状态**：草案阶段，尚未实现，仅讨论。
 > 本文档是 [feng-value-model-delivered.md](./feng-value-model-delivered.md) 的 Phase 3（值语义 struct）落地方案。
 > 本文档不修改任何语言权威规范（`docs/`），待方案确认后迁入规范。
+>
+> **后续演进**：本文中关于 `FengScalarBox` 与 per-type value box 不统一的历史结论，已由
+> [统一 ValueBox 与异常开发方案](./feng-unified-value-box-and-exception-dev.md) 替代。本文只保留
+> `@value type` 自身设计；当前箱结构与 descriptor 决策统一引用该后续方案。
 
 ---
 
@@ -42,7 +46,7 @@ type Point {
 ### 非目标
 
 - 不修改 `FengManagedHeader`、`FengTypeTag`、单指针原语或五类聚合 API。
-- 不修改 `FengScalarBox` 结构或其 API。
+- 本文自身不决定标量箱结构或 API；统一 ValueBox 迁移由后续专项方案负责。
 - 不为 `@value type` 引入新的 runtime 类型或 runtime 函数。
 - 不改变 tuple 的现有语义或实现。
 
@@ -493,7 +497,9 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 
 **每个值类型的 box 是单独生成的**（per-type codegen，tuple 与 `@value type` 均如此）。`@value type` 禁止定义终结器（见 §2.3），故 box 的 `finalizer` 字段统一为 `NULL`（与 tuple 完全一致）。box 释放时仅由 runtime 框架调用 `release_children` 走 `feng_aggregate_release`。
 
-`FengScalarBox`（runtime 预编译的固定 union，服务 11 种标量）保持不变——标量 box 与 per-type box 在 payload 布局、构造函数、descriptor 策略上本质不同，强行合并无收益。
+标量、tuple 与 `@value type` 的逃逸箱统一遵循静态具体化 `ValueBox<T>` 抽象；现有 tuple/`@value type`
+per-type box 结构与发码名称保持不变，标量共享 `kind + union` 箱迁移为每个规范化标量的内建类型化箱。
+完整约束仅见 [统一 ValueBox 与异常开发方案](./feng-unified-value-box-and-exception-dev.md)。
 
 **Non-escape 优化**：当 `@value` 值仅在调用栈帧内消费时（临时 coercion），可直接使用栈上地址作为 subject，不分配 box。逃逸到局部绑定、返回值或字段存储时才分配 box。口径沿用现有定义（`feng-fit-builtin-type.md` §6.3）。
 
@@ -551,7 +557,7 @@ const FengTypeDescriptor Feng__demo__User__spec_box_desc = {
 - `FengManagedHeader`、`FengTypeTag`：不变
 - 单指针原语（`feng_retain/release/assign`）：不变
 - 五类聚合 API：不变
-- `FengScalarBox`：不变
+- 标量箱：由统一 ValueBox 专项迁移，本文不另行定义
 - Cycle collector：不变（box 走现有 `FengTypeDescriptor` 路径）
 - 数组元素分类：不变（已支持三分类）
 - `FENG_NODE_DEFER`：不变（`@value type` 禁止终结器，见 §2.3，不使用此节点注册栈值终结器）

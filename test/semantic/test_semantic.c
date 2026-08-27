@@ -3824,25 +3824,32 @@ static void test_throw_rejects_pointer_value(void) {
 }
 
 static void test_throw_rejects_abi_type_value(void) {
+    /* Legacy function name retained by the approved migration whitelist:
+     * ordinary @abi entity types keep Feng identity and are valid on both
+     * sides of the shared exception-payload classifier. */
     const char *source =
         "module demo.main;\n"
         "@abi type Handle { let id: int; }\n"
-        "func run(h: Handle) {\n"
+        "func fail(h: Handle): int {\n"
         "    throw h;\n"
+        "    return 0;\n"
+        "}\n"
+        "func run(h: Handle) {\n"
+        "    try fail(h) catch ex: Handle { ex.id; }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("throw_abi_error.f", source);
+    FengProgram *program = parse_program_or_die("throw_abi_payload_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strcmp(errors[0].path, "throw_abi_error.f") == 0);
-    ASSERT(errors[0].token.line == 4U);
-    ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
-    ASSERT(strstr(errors[0].message, "@abi types are ABI-bound") != NULL);
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -4055,24 +4062,44 @@ static void test_throw_rejects_callable_values(void) {
 }
 
 static void test_throw_allows_spec_values(void) {
-    /* spec fat values are now throwable: codegen extracts .subject and reads
-     * the concrete descriptor from FengManagedHeader at throw time. */
-    const char *source =
+    /* Legacy function name retained by the approved migration whitelist.
+     * Every spec form now follows one shared rejection rule at throw. */
+    static const char *const cases[] = {
         "module demo.main;\n"
         "spec Named { func greet(): string; }\n"
-        "type Foo: Named { let x: i32; func greet(): string { return \"ok\"; } }\n"
-        "func run(v: Named) { throw v; }\n";
-    FengProgram *program = parse_program_or_die("throw_spec_value_ok.f", source);
-    const FengProgram *programs[] = {program};
-    FengSemanticAnalysis *analysis = NULL;
-    FengSemanticError *errors = NULL;
-    size_t error_count = 0U;
+        "func run(v: Named) { throw v; }\n",
+        "module demo.main;\n"
+        "spec Choice: int | string;\n"
+        "func run(v: Choice) { throw v; }\n",
+        "module demo.main;\n"
+        "spec Left { func left(): int; }\n"
+        "spec Right { func right(): int; }\n"
+        "spec Both: Left & Right;\n"
+        "func run(v: Both) { throw v; }\n",
+        "module demo.main;\n"
+        "spec Callback(): void;\n"
+        "func run(v: Callback) { throw v; }\n"
+    };
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 0U);
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(
+            "throw_spec_payload_error.f", cases[index]);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
 
-    feng_semantic_analysis_free(analysis);
-    feng_program_free(program);
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count >= 1U);
+        ASSERT(strcmp(errors[0].path, "throw_spec_payload_error.f") == 0);
+        ASSERT(strstr(errors[0].message, "is not throwable") != NULL);
+        ASSERT(strstr(errors[0].message,
+                      "spec values have no concrete exception identity") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_program_free(program);
+    }
 }
 
 static void test_catch_rejects_non_exception_types(void) {
@@ -18430,6 +18457,38 @@ static void test_enum_rejects_different_enum_equality_compare(void) {
     feng_program_free(program);
 }
 
+/* Ordinary static equality keeps a named enum distinct from its i32 carrier;
+ * the object-form spec equality rule does not relax source type checking. */
+static void test_enum_rejects_underlying_scalar_equality_compare(void) {
+    const char *src =
+        "module demo.enums;\n"
+        "enum Status { Ok = 0, Failed = 1 }\n"
+        "func bad(): bool {\n"
+        "    return Status.Ok == (i32)0;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "enum_scalar_compare_error.f", src);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs,
+                                  1U,
+                                  FENG_COMPILE_TARGET_LIB,
+                                  &analysis,
+                                  &errors,
+                                  &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "enum_scalar_compare_error.f") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(strstr(errors[0].message,
+                  "binary operator '==' requires operands of the same type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_enum_rejects_different_enum_cast(void) {
     const char *src =
         "module demo.enums;\n"
@@ -20484,6 +20543,183 @@ static void assert_single_source_semantic_error_contains(const char *path,
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+/* Verify every approved concrete exception category is accepted by both a
+ * throw operand and a typed catch clause through one semantic analysis. */
+static void test_exception_payload_positive_type_matrix(void) {
+    const char *source =
+        "module demo.exception_payload_positive;\n"
+        "enum Status { Ready = 1, Failed = 2 }\n"
+        "type EntityError { let code: int; }\n"
+        "type PairError(i32, string);\n"
+        "@value type ValueError { let code: i32; }\n"
+        "@value type AggregateValueError { let message: string; }\n"
+        "type GenericEntityError<T> { let value: T; }\n"
+        "@value type GenericValueError<T> { let value: T; }\n"
+        "@abi type AbiEntityError { let code: int; }\n"
+        "@value @abi\n"
+        "type AbiValueError { let code: int; }\n"
+        "func normal(): int { return 0; }\n"
+        "func throw_bool(v: bool) { throw v; }\n"
+        "func throw_i8(v: i8) { throw v; }\n"
+        "func throw_i16(v: i16) { throw v; }\n"
+        "func throw_i32(v: i32) { throw v; }\n"
+        "func throw_i64(v: i64) { throw v; }\n"
+        "func throw_u8(v: u8) { throw v; }\n"
+        "func throw_u16(v: u16) { throw v; }\n"
+        "func throw_u32(v: u32) { throw v; }\n"
+        "func throw_u64(v: u64) { throw v; }\n"
+        "func throw_f32(v: f32) { throw v; }\n"
+        "func throw_f64(v: f64) { throw v; }\n"
+        "func throw_string(v: string) { throw v; }\n"
+        "func throw_enum(v: Status) { throw v; }\n"
+        "func throw_entity(v: EntityError) { throw v; }\n"
+        "func throw_tuple(v: PairError) { throw v; }\n"
+        "func throw_value(v: ValueError) { throw v; }\n"
+        "func throw_aggregate_value(v: AggregateValueError) { throw v; }\n"
+        "func throw_generic_entity(v: GenericEntityError<i32>) { throw v; }\n"
+        "func throw_generic_value(v: GenericValueError<string>) { throw v; }\n"
+        "func throw_abi_entity(v: AbiEntityError) { throw v; }\n"
+        "func throw_abi_value(v: AbiValueError) { throw v; }\n"
+        "func catches() {\n"
+        "  try normal() catch ex: bool {}\n"
+        "  try normal() catch ex: i8 {}\n"
+        "  try normal() catch ex: i16 {}\n"
+        "  try normal() catch ex: i32 {}\n"
+        "  try normal() catch ex: i64 {}\n"
+        "  try normal() catch ex: u8 {}\n"
+        "  try normal() catch ex: u16 {}\n"
+        "  try normal() catch ex: u32 {}\n"
+        "  try normal() catch ex: u64 {}\n"
+        "  try normal() catch ex: f32 {}\n"
+        "  try normal() catch ex: f64 {}\n"
+        "  try normal() catch ex: string {}\n"
+        "  try normal() catch ex: Status {}\n"
+        "  try normal() catch ex: EntityError {}\n"
+        "  try normal() catch ex: PairError {}\n"
+        "  try normal() catch ex: ValueError {}\n"
+        "  try normal() catch ex: AggregateValueError {}\n"
+        "  try normal() catch ex: GenericEntityError<i32> {}\n"
+        "  try normal() catch ex: GenericValueError<string> {}\n"
+        "  try normal() catch ex: AbiEntityError {}\n"
+        "  try normal() catch ex: AbiValueError {}\n"
+        "}\n";
+
+    assert_single_source_semantic_ok(
+        "exception_payload_positive_matrix.ff", source);
+}
+
+/* One negative row contains matching throw and catch sources so the shared
+ * classifier's stable rejection reason is checked symmetrically. */
+typedef struct ExceptionPayloadRejectPair {
+    const char *throw_source;
+    const char *catch_source;
+    const char *reason;
+} ExceptionPayloadRejectPair;
+
+/* Verify every rejected concrete-type category receives the same reason at
+ * throw and typed catch sites. Existing focused tests cover void operands,
+ * lambdas, free functions, and member-method values. */
+static void test_exception_payload_negative_type_matrix(void) {
+    static const ExceptionPayloadRejectPair cases[] = {
+        {
+            "module demo.neg_array_throw;\n"
+            "func run(v: int[]) { throw v; }\n",
+            "module demo.neg_array_catch;\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: int[] {} }\n",
+            "array values have no closed-type exception identity"
+        },
+        {
+            "module demo.neg_object_spec_throw;\n"
+            "spec Named { func name(): string; }\n"
+            "func run(v: Named) { throw v; }\n",
+            "module demo.neg_object_spec_catch;\n"
+            "spec Named { func name(): string; }\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: Named {} }\n",
+            "spec values have no concrete exception identity"
+        },
+        {
+            "module demo.neg_union_spec_throw;\n"
+            "spec Choice: int | string;\n"
+            "func run(v: Choice) { throw v; }\n",
+            "module demo.neg_union_spec_catch;\n"
+            "spec Choice: int | string;\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: Choice {} }\n",
+            "spec values have no concrete exception identity"
+        },
+        {
+            "module demo.neg_intersection_spec_throw;\n"
+            "spec Left { func left(): int; }\n"
+            "spec Right { func right(): int; }\n"
+            "spec Both: Left & Right;\n"
+            "func run(v: Both) { throw v; }\n",
+            "module demo.neg_intersection_spec_catch;\n"
+            "spec Left { func left(): int; }\n"
+            "spec Right { func right(): int; }\n"
+            "spec Both: Left & Right;\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: Both {} }\n",
+            "spec values have no concrete exception identity"
+        },
+        {
+            "module demo.neg_callable_spec_throw;\n"
+            "spec Callback(): void;\n"
+            "func run(v: Callback) { throw v; }\n",
+            "module demo.neg_callable_spec_catch;\n"
+            "spec Callback(): void;\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: Callback {} }\n",
+            "spec values have no concrete exception identity"
+        },
+        {
+            "module demo.neg_type_param_throw;\n"
+            "func run<T>(v: T) { throw v; }\n",
+            "module demo.neg_type_param_catch;\n"
+            "func value(): int { return 0; }\n"
+            "func run<T>() { try value() catch ex: T {} }\n",
+            "open generic types have no concrete exception identity"
+        },
+        {
+            "module demo.neg_open_instance_throw;\n"
+            "type Box<T> { let value: T; }\n"
+            "func run<T>(v: Box<T>) { throw v; }\n",
+            "module demo.neg_open_instance_catch;\n"
+            "type Box<T> { let value: T; }\n"
+            "func value(): int { return 0; }\n"
+            "func run<T>() { try value() catch ex: Box<T> {} }\n",
+            "open generic types have no concrete exception identity"
+        },
+        {
+            "module demo.neg_pointer_throw;\n"
+            "func run(v: int*) { throw v; }\n",
+            "module demo.neg_pointer_catch;\n"
+            "func value(): int { return 0; }\n"
+            "func run() { try value() catch ex: int* {} }\n",
+            "pointer values cannot be thrown or used as concrete catch types"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_single_source_semantic_error_contains(
+            "exception_payload_throw_error.ff",
+            cases[index].throw_source,
+            cases[index].reason);
+        assert_single_source_semantic_error_contains(
+            "exception_payload_catch_error.ff",
+            cases[index].catch_source,
+            cases[index].reason);
+    }
+
+    assert_single_source_semantic_error_contains(
+        "exception_payload_void_catch_error.ff",
+        "module demo.neg_void_catch;\n"
+        "func value(): int { return 0; }\n"
+        "func run() { try value() catch ex: void {} }\n",
+        "void is not an exception payload type");
 }
 
 /* ===== infix match operator tests ===== */
@@ -29629,6 +29865,8 @@ int main(void) {
     test_catch_rejects_non_exception_types();
     test_catch_without_binding_accepts_anonymous_clause();
     test_catch_anonymous_must_be_last_clause();
+    test_exception_payload_positive_type_matrix();
+    test_exception_payload_negative_type_matrix();
     test_top_level_function_auto_infers_return_type_for_forward_call();
     test_top_level_function_rejects_conflicting_inferred_return_types();
     test_instance_method_rejects_conflicting_inferred_return_types();
@@ -30032,6 +30270,7 @@ int main(void) {
     test_enum_is_valid_in_ordinary_type_positions();
     test_enum_rejects_different_enum_assignment();
     test_enum_rejects_different_enum_equality_compare();
+    test_enum_rejects_underlying_scalar_equality_compare();
     test_enum_rejects_different_enum_cast();
     test_enum_arithmetic_is_rejected();
     test_enum_abi_surfaces_accept_enum_signatures();

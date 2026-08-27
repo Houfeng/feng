@@ -120,39 +120,125 @@ static void test_take(void) {
     ASSERT(g_finalize_count == 1);
 }
 
+#define ASSERT_SCALAR_VALUE_BOX(box_type, descriptor, initial_value, other_value) \
+    do {                                                                            \
+        box_type *left = (box_type *)feng_object_new(&(descriptor));                \
+        box_type *right = (box_type *)feng_object_new(&(descriptor));               \
+                                                                                    \
+        ASSERT(left != NULL);                                                       \
+        ASSERT(right != NULL);                                                      \
+        ASSERT(left->header.desc == &(descriptor));                                 \
+        ASSERT(right->header.desc == &(descriptor));                                \
+        ASSERT(left->header.tag == FENG_TYPE_TAG_OBJECT);                           \
+        ASSERT(right->header.tag == FENG_TYPE_TAG_OBJECT);                          \
+        ASSERT(left->header.refcount == 1U);                                        \
+        ASSERT(right->header.refcount == 1U);                                       \
+        ASSERT((descriptor).size == sizeof(box_type));                              \
+        ASSERT((descriptor).is_potentially_cyclic == false);                        \
+        ASSERT((descriptor).managed_field_count == 0U);                             \
+        ASSERT((descriptor).managed_fields == NULL);                                \
+        ASSERT((descriptor).equal_fn != NULL);                                      \
+        ASSERT(sizeof(box_type) <= 40U);                                            \
+                                                                                    \
+        left->value = (initial_value);                                              \
+        right->value = (initial_value);                                             \
+        ASSERT(feng_spec_subject_equal(left, right));                               \
+        right->value = (other_value);                                               \
+        ASSERT(!feng_spec_subject_equal(left, right));                              \
+                                                                                    \
+        feng_release(left);                                                         \
+        feng_release(right);                                                        \
+    } while (0)
+
 static void test_scalar_box_runtime_contract(void) {
-    FengScalarBox *i32_box;
-    FengScalarBox *bool_box;
-    FengScalarBox *f64_box;
+    const FengTypeDescriptor *const descriptors[] = {
+        &feng_value_box_bool_descriptor,
+        &feng_value_box_i8_descriptor,
+        &feng_value_box_i16_descriptor,
+        &feng_value_box_i32_descriptor,
+        &feng_value_box_i64_descriptor,
+        &feng_value_box_u8_descriptor,
+        &feng_value_box_u16_descriptor,
+        &feng_value_box_u32_descriptor,
+        &feng_value_box_u64_descriptor,
+        &feng_value_box_f32_descriptor,
+        &feng_value_box_f64_descriptor,
+    };
+    FengValueBox__i32 *i32_box;
+    FengValueBox__f32 *f32_box;
+    FengValueBox__f64 *positive_zero_box;
+    FengValueBox__f64 *negative_zero_box;
+    FengValueBox__f64 *nan_left_box;
+    FengValueBox__f64 *nan_right_box;
+    uint64_t nan_bits = UINT64_C(0x7ff8000000000042);
+    double nan_value;
 
-    ASSERT(feng_scalar_box_descriptor.is_potentially_cyclic == false);
-    ASSERT(feng_scalar_box_descriptor.managed_field_count == 0U);
-    ASSERT(offsetof(FengScalarBox, payload) % _Alignof(double) == 0U);
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__bool, feng_value_box_bool_descriptor, true, false);
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__i8, feng_value_box_i8_descriptor, INT8_C(-7), INT8_C(8));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__i16, feng_value_box_i16_descriptor, INT16_C(-70), INT16_C(80));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__i32, feng_value_box_i32_descriptor, INT32_C(-700), INT32_C(800));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__i64, feng_value_box_i64_descriptor, INT64_C(-7000), INT64_C(8000));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__u8, feng_value_box_u8_descriptor, UINT8_C(7), UINT8_C(8));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__u16, feng_value_box_u16_descriptor, UINT16_C(70), UINT16_C(80));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__u32, feng_value_box_u32_descriptor, UINT32_C(700), UINT32_C(800));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__u64, feng_value_box_u64_descriptor, UINT64_C(7000), UINT64_C(8000));
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__f32, feng_value_box_f32_descriptor, 1.5F, 2.5F);
+    ASSERT_SCALAR_VALUE_BOX(
+        FengValueBox__f64, feng_value_box_f64_descriptor, 1.5, 2.5);
 
-    i32_box = feng_scalar_box_new_i32(7);
+    for (size_t i = 0U; i < sizeof(descriptors) / sizeof(descriptors[0]); ++i) {
+        for (size_t j = i + 1U; j < sizeof(descriptors) / sizeof(descriptors[0]); ++j) {
+            ASSERT(descriptors[i] != descriptors[j]);
+        }
+    }
+
+    i32_box = (FengValueBox__i32 *)feng_object_new(&feng_value_box_i32_descriptor);
+    f32_box = (FengValueBox__f32 *)feng_object_new(&feng_value_box_f32_descriptor);
     ASSERT(i32_box != NULL);
-    ASSERT(i32_box->header.desc == &feng_scalar_box_descriptor);
-    ASSERT(i32_box->header.tag == FENG_TYPE_TAG_OBJECT);
-    ASSERT(i32_box->header.refcount == 1U);
-    ASSERT(i32_box->kind == FENG_BUILTIN_SCALAR_I32);
-    ASSERT(i32_box->payload.i32 == 7);
-
-    bool_box = feng_scalar_box_new_bool(true);
-    ASSERT(bool_box != NULL);
-    ASSERT(bool_box->header.desc == &feng_scalar_box_descriptor);
-    ASSERT(bool_box->kind == FENG_BUILTIN_SCALAR_BOOL);
-    ASSERT(bool_box->payload.b == true);
-
-    f64_box = feng_scalar_box_new_f64(3.5);
-    ASSERT(f64_box != NULL);
-    ASSERT(f64_box->header.desc == &feng_scalar_box_descriptor);
-    ASSERT(f64_box->kind == FENG_BUILTIN_SCALAR_F64);
-    ASSERT(f64_box->payload.f64 == 3.5);
-
+    ASSERT(f32_box != NULL);
+    i32_box->value = 1;
+    f32_box->value = 1.0F;
+    ASSERT(!feng_spec_subject_equal(i32_box, f32_box));
     feng_release(i32_box);
-    feng_release(bool_box);
-    feng_release(f64_box);
+    feng_release(f32_box);
+
+    positive_zero_box =
+        (FengValueBox__f64 *)feng_object_new(&feng_value_box_f64_descriptor);
+    negative_zero_box =
+        (FengValueBox__f64 *)feng_object_new(&feng_value_box_f64_descriptor);
+    ASSERT(positive_zero_box != NULL);
+    ASSERT(negative_zero_box != NULL);
+    positive_zero_box->value = 0.0;
+    negative_zero_box->value = -0.0;
+    ASSERT(!feng_spec_subject_equal(positive_zero_box, negative_zero_box));
+    feng_release(positive_zero_box);
+    feng_release(negative_zero_box);
+
+    memcpy(&nan_value, &nan_bits, sizeof(nan_value));
+    nan_left_box =
+        (FengValueBox__f64 *)feng_object_new(&feng_value_box_f64_descriptor);
+    nan_right_box =
+        (FengValueBox__f64 *)feng_object_new(&feng_value_box_f64_descriptor);
+    ASSERT(nan_left_box != NULL);
+    ASSERT(nan_right_box != NULL);
+    nan_left_box->value = nan_value;
+    nan_right_box->value = nan_value;
+    ASSERT(feng_spec_subject_equal(nan_left_box, nan_right_box));
+    feng_release(nan_left_box);
+    feng_release(nan_right_box);
 }
+
+#undef ASSERT_SCALAR_VALUE_BOX
 
 static void test_string_literal_immortal(void) {
     FengString *a = feng_string_literal("hello", 5);

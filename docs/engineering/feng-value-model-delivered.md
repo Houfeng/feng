@@ -172,6 +172,15 @@ runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（�
 
 上表三处差异（offset 起点、是否需要 kind、是否需要嵌套）都是本质差异。强行合并会让两边都背上自己用不到的字段；同时，堆对象描述符的多数字段（finalizer / refcount 语义 / tag）对按值聚合值无意义，强行复用 `FengTypeDescriptor` 也会让其字段语义跨语境，长期容易出错。
 
+### 3.5 值类型的托管承载边界
+
+本值模型中的原始值 descriptor 只描述未装箱值。具体值需要逃逸为稳定托管对象时，统一采用静态具体化
+`ValueBox<T>`，并使用独立的 `FengTypeDescriptor` 描述箱对象；箱头 descriptor 必须描述箱本身，箱实例
+不保存原始值 descriptor，箱 descriptor 也不增加到原始值 descriptor 的运行时反向链接。完整迁移方案、
+性能约束与实施顺序仅见
+[统一 ValueBox 与 throw/catch 类型对齐开发方案](./feng-unified-value-box-and-exception-dev.md)，本文不重复
+箱结构规则。
+
 二者唯一的桥接点见 §7.2。
 
 ## 4 默认初始化

@@ -26,6 +26,7 @@ func main(args: string[]) {
       test_object_construction_order();
       test_finalizer_capture();
       test_enum();
+      test_value_box();
       test_spec();
       test_object_spec_contract_surface();
       test_object_spec_field_surfaces();
@@ -48,6 +49,7 @@ func main(args: string[]) {
       test_nested_union();
       test_union_spec_leaf_coercion();
       test_exception();
+      test_exception_payload();
       test_try_branch_exception_cleanup();
       test_array();
       test_generic();

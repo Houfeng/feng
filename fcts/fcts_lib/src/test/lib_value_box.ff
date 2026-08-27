@@ -1,0 +1,28 @@
+open module fcts_lib.test;
+
+/** Cross-package object-form view used to verify public enum box identity. */
+open spec CrossPackageEnumView {
+  /** Return the enum's stable numeric code. */
+  func code(): i32;
+}
+
+/** Public enum whose ValueBox descriptor is referenced by two packages. */
+open enum CrossPackageBoxStatus {
+  Ready = 7,
+  Failed = 9
+}
+
+/** Export the public enum's object-form spec implementation. */
+open fit CrossPackageBoxStatus: CrossPackageEnumView {
+  /** Return the current enum item's numeric code. */
+  open func code(): i32 {
+    return (i32)self;
+  }
+}
+
+/** Construct the enum-backed spec value inside the provider package. */
+open func makeCrossPackageEnumView(
+  value: CrossPackageBoxStatus
+): CrossPackageEnumView {
+  return value;
+}

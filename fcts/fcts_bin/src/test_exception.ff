@@ -9,30 +9,6 @@ type ExAppError {
   let msg: string;
 }
 
-// 用于异常测试的 spec
-spec ExDescribable {
-  func ex_describe(): string;
-}
-
-type ExTaggedError: ExDescribable {
-  let msg: string;
-
-  func ex_describe(): string {
-    return self.msg;
-  }
-}
-
-// 构造 spec 值并 throw
-func make_ex_describable(msg: string): ExDescribable {
-  let e = ExTaggedError { msg: msg };
-  return e;
-}
-
-func throw_ex_spec(msg: string): string {
-  throw make_ex_describable(msg);
-  return "unreachable";
-}
-
 // throw 自定义 type
 func throw_ex_type(code: int, msg: string): string {
   let e = ExAppError { code: code, msg: msg };
@@ -281,14 +257,6 @@ func test_throw_catch_custom_type(): bool {
   return app_code == 404 && app_msg == "not found";
 }
 
-func test_throw_catch_spec_value(): bool {
-  var spec_msg = "";
-  try throw_ex_spec("spec-error") catch ex: ExTaggedError {
-    spec_msg = ex.msg;
-  }
-  return spec_msg == "spec-error";
-}
-
 /** 异常处理测试 */
 open func test_exception() {
   describe("exception", () {
@@ -342,10 +310,6 @@ open func test_exception() {
 
     test("throw/catch custom type", () {
       assert(test_throw_catch_custom_type(), "throw/catch custom type");
-    });
-
-    test("throw/catch spec value via concrete type", () {
-      assert(test_throw_catch_spec_value(), "throw/catch spec value via concrete type");
     });
 
     test("lambda basic try/catch", () {

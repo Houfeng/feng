@@ -220,15 +220,34 @@ typedef struct CGAggregateFacts {
     CGAggregateCleanupZeroEmitter emit_cleanup_zero;
 } CGAggregateFacts;
 
+/* Compile-time symbols for one concrete ValueBox<T>. Strings are owned so
+ * callers can use one uniform cleanup path for builtin, enum, and user-value
+ * boxes without exposing symbol-lifetime differences. */
+typedef struct CGValueBoxInfo {
+    char *struct_name;
+    char *descriptor_name;
+} CGValueBoxInfo;
+
 static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out);
 static char *cg_enum_trivial_descriptor_name(const CG *cg,
                                              const FengDecl *enum_decl);
+static char *cg_enum_value_box_struct_name(const CG *cg,
+                                           const FengDecl *enum_decl);
+static char *cg_enum_value_box_descriptor_name(const CG *cg,
+                                               const FengDecl *enum_decl);
+static bool cg_ensure_enum_emitted(CG *cg, const FengDecl *decl);
 static char *cg_managed_pointer_descriptor_expr(const CGType *t);
 static bool cg_type_is_tuple_user(const CGType *t);
 static bool cg_type_is_value_user(const CGType *t);
 static bool cg_type_is_value_semantics(const CGType *t);
 static bool cg_user_type_is_value_semantics(const struct UserType *t);
 static bool cg_update_value_type_descriptor_names(CG *cg);
+static bool cg_type_has_value_box(const CGType *type);
+static void cg_value_box_info_dispose(CGValueBoxInfo *info);
+static bool cg_value_box_info_for_type(CG *cg,
+                                       const CGType *type,
+                                       FengToken blame,
+                                       CGValueBoxInfo *out_info);
 
 static CGType *cgtype_new(CGTypeKind k) {
     CGType *t = calloc(1, sizeof *t);
@@ -347,74 +366,59 @@ static bool cg_type_kind_is_scalar_builtin(CGTypeKind k) {
            k == CG_TYPE_F32 || k == CG_TYPE_F64;
 }
 
-static bool cg_scalar_box_payload_field(CGTypeKind kind, const char **out_field) {
-    if (out_field == NULL) return false;
+/* Return the statically known runtime ValueBox<T> symbols for one canonical
+ * builtin scalar. This is a compile-time switch; generated code performs no
+ * runtime type selection. */
+static bool cg_scalar_value_box_names(CGTypeKind kind,
+                                      const char **out_struct_name,
+                                      const char **out_descriptor_name) {
+    if (out_struct_name == NULL || out_descriptor_name == NULL) return false;
     switch (kind) {
-        case CG_TYPE_BOOL: *out_field = "b"; return true;
-        case CG_TYPE_I8: *out_field = "i8"; return true;
-        case CG_TYPE_I16: *out_field = "i16"; return true;
-        case CG_TYPE_I32: *out_field = "i32"; return true;
-        case CG_TYPE_I64: *out_field = "i64"; return true;
-        case CG_TYPE_U8: *out_field = "u8"; return true;
-        case CG_TYPE_U16: *out_field = "u16"; return true;
-        case CG_TYPE_U32: *out_field = "u32"; return true;
-        case CG_TYPE_U64: *out_field = "u64"; return true;
-        case CG_TYPE_F32: *out_field = "f32"; return true;
-        case CG_TYPE_F64: *out_field = "f64"; return true;
+        case CG_TYPE_BOOL:
+            *out_struct_name = "FengValueBox__bool";
+            *out_descriptor_name = "feng_value_box_bool_descriptor";
+            return true;
+        case CG_TYPE_I8:
+            *out_struct_name = "FengValueBox__i8";
+            *out_descriptor_name = "feng_value_box_i8_descriptor";
+            return true;
+        case CG_TYPE_I16:
+            *out_struct_name = "FengValueBox__i16";
+            *out_descriptor_name = "feng_value_box_i16_descriptor";
+            return true;
+        case CG_TYPE_I32:
+            *out_struct_name = "FengValueBox__i32";
+            *out_descriptor_name = "feng_value_box_i32_descriptor";
+            return true;
+        case CG_TYPE_I64:
+            *out_struct_name = "FengValueBox__i64";
+            *out_descriptor_name = "feng_value_box_i64_descriptor";
+            return true;
+        case CG_TYPE_U8:
+            *out_struct_name = "FengValueBox__u8";
+            *out_descriptor_name = "feng_value_box_u8_descriptor";
+            return true;
+        case CG_TYPE_U16:
+            *out_struct_name = "FengValueBox__u16";
+            *out_descriptor_name = "feng_value_box_u16_descriptor";
+            return true;
+        case CG_TYPE_U32:
+            *out_struct_name = "FengValueBox__u32";
+            *out_descriptor_name = "feng_value_box_u32_descriptor";
+            return true;
+        case CG_TYPE_U64:
+            *out_struct_name = "FengValueBox__u64";
+            *out_descriptor_name = "feng_value_box_u64_descriptor";
+            return true;
+        case CG_TYPE_F32:
+            *out_struct_name = "FengValueBox__f32";
+            *out_descriptor_name = "feng_value_box_f32_descriptor";
+            return true;
+        case CG_TYPE_F64:
+            *out_struct_name = "FengValueBox__f64";
+            *out_descriptor_name = "feng_value_box_f64_descriptor";
+            return true;
         default: return false;
-    }
-}
-
-static bool cg_scalar_box_ctor_name(CGTypeKind kind, const char **out_name) {
-    if (out_name == NULL) return false;
-    switch (kind) {
-        case CG_TYPE_BOOL: *out_name = "feng_scalar_box_new_bool"; return true;
-        case CG_TYPE_I8: *out_name = "feng_scalar_box_new_i8"; return true;
-        case CG_TYPE_I16: *out_name = "feng_scalar_box_new_i16"; return true;
-        case CG_TYPE_I32: *out_name = "feng_scalar_box_new_i32"; return true;
-        case CG_TYPE_I64: *out_name = "feng_scalar_box_new_i64"; return true;
-        case CG_TYPE_U8: *out_name = "feng_scalar_box_new_u8"; return true;
-        case CG_TYPE_U16: *out_name = "feng_scalar_box_new_u16"; return true;
-        case CG_TYPE_U32: *out_name = "feng_scalar_box_new_u32"; return true;
-        case CG_TYPE_U64: *out_name = "feng_scalar_box_new_u64"; return true;
-        case CG_TYPE_F32: *out_name = "feng_scalar_box_new_f32"; return true;
-        case CG_TYPE_F64: *out_name = "feng_scalar_box_new_f64"; return true;
-        default: return false;
-    }
-}
-
-static bool cg_scalar_exception_descriptor_name(CGTypeKind kind, const char **out_name) {
-    if (out_name == NULL) return false;
-    switch (kind) {
-        case CG_TYPE_BOOL: *out_name = "feng_scalar_bool_exception_descriptor"; return true;
-        case CG_TYPE_I8: *out_name = "feng_scalar_i8_exception_descriptor"; return true;
-        case CG_TYPE_I16: *out_name = "feng_scalar_i16_exception_descriptor"; return true;
-        case CG_TYPE_I32: *out_name = "feng_scalar_i32_exception_descriptor"; return true;
-        case CG_TYPE_I64: *out_name = "feng_scalar_i64_exception_descriptor"; return true;
-        case CG_TYPE_U8: *out_name = "feng_scalar_u8_exception_descriptor"; return true;
-        case CG_TYPE_U16: *out_name = "feng_scalar_u16_exception_descriptor"; return true;
-        case CG_TYPE_U32: *out_name = "feng_scalar_u32_exception_descriptor"; return true;
-        case CG_TYPE_U64: *out_name = "feng_scalar_u64_exception_descriptor"; return true;
-        case CG_TYPE_F32: *out_name = "feng_scalar_f32_exception_descriptor"; return true;
-        case CG_TYPE_F64: *out_name = "feng_scalar_f64_exception_descriptor"; return true;
-        default: return false;
-    }
-}
-
-static const char *cg_scalar_box_payload_field_name(CGTypeKind kind) {
-    switch (kind) {
-        case CG_TYPE_BOOL: return "b";
-        case CG_TYPE_I8: return "i8";
-        case CG_TYPE_I16: return "i16";
-        case CG_TYPE_I32: return "i32";
-        case CG_TYPE_I64: return "i64";
-        case CG_TYPE_U8: return "u8";
-        case CG_TYPE_U16: return "u16";
-        case CG_TYPE_U32: return "u32";
-        case CG_TYPE_U64: return "u64";
-        case CG_TYPE_F32: return "f32";
-        case CG_TYPE_F64: return "f64";
-        default: return NULL;
     }
 }
 
@@ -1905,7 +1909,6 @@ typedef struct CG {
     } *default_parent_witnesses;
     size_t default_parent_witness_count;
     size_t default_parent_witness_capacity;
-    bool scalar_box_support_emitted;
     size_t subject_witness_counter;
     ModuleBinding *module_bindings;
     size_t         module_binding_count;
@@ -2500,7 +2503,6 @@ static bool cg_ensure_witness_instance_for_subject_key(
     FengSpecObjectSubjectStorageKind scalar_subject_storage,
     FengToken blame,
     const char **out_var);
-static bool cg_emit_scalar_box_support(CG *cg);
 static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                                         const UserSpec *dst, FengToken blame,
                                         const char **out_var);
@@ -2759,6 +2761,72 @@ static bool cg_fail(CG *cg, FengToken token, const char *code, const char *fmt, 
         }
     }
     return false;
+}
+
+/* Return whether a lowered type has the common managed ValueBox<T>
+ * representation when it must escape. */
+static bool cg_type_has_value_box(const CGType *type) {
+    return type != NULL &&
+           (cg_type_kind_is_scalar_builtin(type->kind) ||
+            cg_type_is_value_semantics(type));
+}
+
+/* Release compile-time strings owned by one ValueBox symbol record. */
+static void cg_value_box_info_dispose(CGValueBoxInfo *info) {
+    if (info == NULL) return;
+    free(info->struct_name);
+    free(info->descriptor_name);
+    memset(info, 0, sizeof(*info));
+}
+
+/* Resolve the statically generated ValueBox<T> type and descriptor symbols.
+ * This is the sole box-symbol classifier used by scalar, enum, tuple, and
+ * @value lowering; it never emits runtime lookup code. */
+static bool cg_value_box_info_for_type(CG *cg,
+                                       const CGType *type,
+                                       FengToken blame,
+                                       CGValueBoxInfo *out_info) {
+    const char *builtin_struct = NULL;
+    const char *builtin_descriptor = NULL;
+
+    if (cg == NULL || type == NULL || out_info == NULL) {
+        return false;
+    }
+    memset(out_info, 0, sizeof(*out_info));
+
+    if (type->enum_decl != NULL) {
+        if (!cg_ensure_enum_emitted(cg, type->enum_decl)) {
+            return false;
+        }
+        out_info->struct_name =
+            cg_enum_value_box_struct_name(cg, type->enum_decl);
+        out_info->descriptor_name =
+            cg_enum_value_box_descriptor_name(cg, type->enum_decl);
+    } else if (cg_scalar_value_box_names(type->kind,
+                                         &builtin_struct,
+                                         &builtin_descriptor)) {
+        out_info->struct_name = strdup(builtin_struct);
+        out_info->descriptor_name = strdup(builtin_descriptor);
+    } else if (cg_type_is_value_semantics(type) && type->user != NULL) {
+        if (type->user->c_value_box_struct_name != NULL) {
+            out_info->struct_name =
+                strdup(type->user->c_value_box_struct_name);
+        }
+        if (type->user->c_value_box_desc_name != NULL) {
+            out_info->descriptor_name =
+                strdup(type->user->c_value_box_desc_name);
+        }
+    } else {
+        return cg_fail(cg,
+                       blame,
+                       "CE0067", "codegen: type has no ValueBox representation");
+    }
+
+    if (out_info->struct_name == NULL || out_info->descriptor_name == NULL) {
+        cg_value_box_info_dispose(out_info);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return true;
 }
 
 /* Returns true when this codegen run should collect abstract debug metadata. */
@@ -3193,17 +3261,6 @@ static void cg_emit_current_stmt_line_directive_force(CG *cg) {
         return;
     }
     (void)cg_emit_line_directive_force(cg, cg->current_stmt_anchor_token);
-}
-
-static bool cg_emit_scalar_box_support(CG *cg) {
-    if (cg == NULL) return false;
-    if (cg->scalar_box_support_emitted) {
-        return true;
-    }
-    /* Scalar box ABI is provided by runtime/feng_runtime.h + runtime objects;
-     * codegen only needs to gate emission sites. */
-    cg->scalar_box_support_emitted = true;
-    return true;
 }
 
 /* ===================== mangling ===================== */
@@ -5253,6 +5310,46 @@ static char *cg_enum_trivial_descriptor_name(const CG *cg, const FengDecl *enum_
     return b.data;
 }
 
+/* Build the existing per-type box struct symbol for one named enum. */
+static char *cg_enum_value_box_struct_name(const CG *cg,
+                                           const FengDecl *enum_decl) {
+    char *typedef_name = cg_enum_typedef_name(cg, enum_decl);
+    Buf name;
+
+    if (typedef_name == NULL) return NULL;
+    buf_init(&name);
+    buf_append_fmt(&name, "%s__spec_box", typedef_name);
+    free(typedef_name);
+    return name.data;
+}
+
+/* Build the declaration-unique box descriptor symbol for one named enum. */
+static char *cg_enum_value_box_descriptor_name(const CG *cg,
+                                               const FengDecl *enum_decl) {
+    char *struct_name = cg_enum_value_box_struct_name(cg, enum_decl);
+    Buf name;
+
+    if (struct_name == NULL) return NULL;
+    buf_init(&name);
+    buf_append_fmt(&name, "%s_desc", struct_name);
+    free(struct_name);
+    return name.data;
+}
+
+/* Build the private equality helper symbol owned by one enum box descriptor. */
+static char *cg_enum_value_box_equal_name(const CG *cg,
+                                          const FengDecl *enum_decl) {
+    char *descriptor_name =
+        cg_enum_value_box_descriptor_name(cg, enum_decl);
+    Buf name;
+
+    if (descriptor_name == NULL) return NULL;
+    buf_init(&name);
+    buf_append_fmt(&name, "%s__equal", descriptor_name);
+    free(descriptor_name);
+    return name.data;
+}
+
 static char *cg_enum_item_c_name(const CG *cg,
                                  const FengDecl *enum_decl,
                                  FengSlice item_name) {
@@ -5628,6 +5725,9 @@ static bool cg_emit_imported_binding_expr(CG *cg,
 static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     char *typedef_name;
     char *descriptor_name;
+    char *box_struct_name;
+    char *box_descriptor_name;
+    char *box_equal_name;
     char *module_dot_name;
     const FengProgram *owner_program;
     size_t item_index;
@@ -5638,14 +5738,22 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
 
     typedef_name = cg_enum_typedef_name(cg, decl);
     descriptor_name = cg_enum_trivial_descriptor_name(cg, decl);
+    box_struct_name = cg_enum_value_box_struct_name(cg, decl);
+    box_descriptor_name = cg_enum_value_box_descriptor_name(cg, decl);
+    box_equal_name = cg_enum_value_box_equal_name(cg, decl);
     owner_program = cg_find_decl_owner_program(cg, decl);
     module_dot_name = owner_program != NULL
                           ? cg_module_dot(owner_program->module_segments,
                                           owner_program->module_segment_count)
                           : NULL;
-    if (typedef_name == NULL || descriptor_name == NULL || module_dot_name == NULL) {
+    if (typedef_name == NULL || descriptor_name == NULL ||
+        box_struct_name == NULL || box_descriptor_name == NULL ||
+        box_equal_name == NULL || module_dot_name == NULL) {
         free(typedef_name);
         free(descriptor_name);
+        free(box_struct_name);
+        free(box_descriptor_name);
+        free(box_equal_name);
         free(module_dot_name);
         return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory emitting enum typedef");
     }
@@ -5668,6 +5776,43 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
                    (int)decl->as.enum_decl.name.length,
                    decl->as.enum_decl.name.data,
                    typedef_name);
+    buf_append_fmt(&cg->enum_defs,
+                   "struct %s {\n"
+                   "    FengManagedHeader _hdr;\n"
+                   "    %s value;\n"
+                   "};\n"
+                   "static bool %s(const void *_left, const void *_right) {\n"
+                   "    const struct %s *_left_box = (const struct %s *)_left;\n"
+                   "    const struct %s *_right_box = (const struct %s *)_right;\n"
+                   "    return _left_box->value == _right_box->value;\n"
+                   "}\n",
+                   box_struct_name,
+                   typedef_name,
+                   box_equal_name,
+                   box_struct_name,
+                   box_struct_name,
+                   box_struct_name,
+                   box_struct_name);
+    buf_append_fmt(&cg->enum_defs,
+                   ext_visible
+                       ? "const FengTypeDescriptor %s __attribute__((weak)) = {\n"
+                       : "static const FengTypeDescriptor %s = {\n",
+                   box_descriptor_name);
+    buf_append_fmt(&cg->enum_defs,
+                   "    .name = \"%s.%.*s.__enum_box\",\n"
+                   "    .size = sizeof(struct %s),\n"
+                   "    .finalizer = NULL,\n"
+                   "    .release_children = NULL,\n"
+                   "    .is_potentially_cyclic = false,\n"
+                   "    .managed_field_count = 0,\n"
+                   "    .managed_fields = NULL,\n"
+                   "    .equal_fn = &%s,\n"
+                   "};\n",
+                   module_dot_name,
+                   (int)decl->as.enum_decl.name.length,
+                   decl->as.enum_decl.name.data,
+                   box_struct_name,
+                   box_equal_name);
     for (item_index = 0U; item_index < decl->as.enum_decl.item_count; ++item_index) {
         const FengEnumItem *item = &decl->as.enum_decl.items[item_index];
         int64_t value = item->has_explicit_value
@@ -5678,6 +5823,9 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
         if (item_c_name == NULL) {
             free(typedef_name);
             free(descriptor_name);
+            free(box_struct_name);
+            free(box_descriptor_name);
+            free(box_equal_name);
             free(module_dot_name);
             return cg_fail(cg, item->token, "IE0001", "codegen: out of memory emitting enum item constant");
         }
@@ -5693,6 +5841,9 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
 
     free(typedef_name);
     free(descriptor_name);
+    free(box_struct_name);
+    free(box_descriptor_name);
+    free(box_equal_name);
     free(module_dot_name);
     return true;
 }
@@ -19290,42 +19441,48 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
     return out->c_expr != NULL && out->type != NULL;
 }
 
-/* Box a by-value type (tuple or @value) when it is coerced to an object-form
- * spec value. The returned subject is a managed object reference owned by
- * the spec fat value. */
-static bool cg_emit_spec_box_subject(CG *cg,
-                                           ExprResult *source,
-                                           const UserType *value_type,
-                                           FengToken blame,
-                                           char **out_subject_expr) {
+/* Box one statically known scalar, enum, tuple, or @value value. The returned
+ * managed object uses the concrete ValueBox<T> descriptor and is owned by the
+ * caller. Aggregate values preserve their existing retain semantics. */
+static bool cg_emit_value_box_subject(CG *cg,
+                                      ExprResult *source,
+                                      FengToken blame,
+                                      char **out_subject_expr) {
     char *box_tmp;
+    CGValueBoxInfo box_info;
 
-    if (source == NULL || value_type == NULL || out_subject_expr == NULL ||
-        !cg_user_type_is_value_semantics(value_type) || value_type->c_value_box_struct_name == NULL ||
-        value_type->c_value_box_desc_name == NULL) {
-        return cg_fail(cg, blame, "CE0067", "codegen: value-type spec coercion is missing box metadata");
+    if (source == NULL || source->type == NULL || out_subject_expr == NULL ||
+        !cg_type_has_value_box(source->type)) {
+        return cg_fail(cg, blame,
+                       "CE0067", "codegen: value box emission is missing type metadata");
+    }
+    if (!cg_value_box_info_for_type(cg, source->type, blame, &box_info)) {
+        return false;
     }
 
     if (cg_materialize_to_local(cg, source, "_value_subject") == NULL) {
+        cg_value_box_info_dispose(&box_info);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     box_tmp = cg_fresh_temp(cg, "_value_box");
     if (box_tmp == NULL) {
+        cg_value_box_info_dispose(&box_info);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
                    "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
-                   value_type->c_value_box_struct_name,
+                   box_info.struct_name,
                    box_tmp,
-                   value_type->c_value_box_struct_name,
-                   value_type->c_value_box_desc_name);
+                   box_info.struct_name,
+                   box_info.descriptor_name);
 
     if (cgtype_is_aggregate(source->type)) {
         const char *desc = cg_aggregate_desc_name(source->type);
 
         if (desc == NULL) {
             free(box_tmp);
+            cg_value_box_info_dispose(&box_info);
             return cg_fail(cg, blame, "CE0068", "codegen: missing value-type aggregate descriptor for spec coercion");
         }
         buf_append_fmt(cg->cur_body,
@@ -19340,6 +19497,7 @@ static bool cg_emit_spec_box_subject(CG *cg,
                        source->c_expr);
     }
 
+    cg_value_box_info_dispose(&box_info);
     *out_subject_expr = box_tmp;
     return true;
 }
@@ -33502,25 +33660,26 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         free(feng_name);
         return cg_fail(cg, err_token, "CE0213", "codegen: missing catch binding type");
     }
-    /* Value-semantics types (tuple / @value): extract value from spec box.
-     * The caught value is a box pointer; we extract and copy the value,
-     * registering for cleanup as a regular local (not param). */
-    if (cg_type_is_value_semantics(catch_type)) {
-        const UserType *ut = catch_type->user;
+    /* Scalars, enums, tuples, and @value types all extract from their
+     * statically known ValueBox<T>. Aggregate values retain managed fields
+     * through the existing aggregate assignment path. */
+    if (cg_type_has_value_box(catch_type)) {
+        CGValueBoxInfo box_info;
         char *cty = cg_ctype_dup(catch_type);
+        bool is_user_value = cg_type_is_value_semantics(catch_type);
 
-        if (ut == NULL || ut->c_value_box_struct_name == NULL || cty == NULL) {
+        if (cty == NULL ||
+            !cg_value_box_info_for_type(cg,
+                                        catch_type,
+                                        err_token,
+                                        &box_info)) {
             free(cty);
             free(c_name);
             free(feng_name);
-            return cg_fail(cg, err_token,
-                           "CE0214", "codegen: missing value-type box metadata for catch binding");
+            return false;
         }
 
-        /* Declare local and extract value from box. */
         if (cgtype_is_aggregate(catch_type)) {
-            /* Aggregate: declare, initialize to zero, then use feng_aggregate_assign
-             * to copy with retain. */
             buf_append_fmt(cg->cur_body,
                            "        %s %s;\n"
                            "        memset(&%s, 0, sizeof %s);\n",
@@ -33532,6 +33691,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
             const char *agg_desc = cg_aggregate_desc_name(catch_type);
             if (agg_desc == NULL) {
                 free(cty);
+                cg_value_box_info_dispose(&box_info);
                 free(c_name);
                 free(feng_name);
                 return cg_fail(cg, err_token,
@@ -33541,25 +33701,23 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                            "        feng_aggregate_assign(&%s, "
                            "&((struct %s *)feng_caught_value())->value, &%s);\n",
                            c_name,
-                           ut->c_value_box_struct_name,
+                           box_info.struct_name,
                            agg_desc);
         } else {
-            /* Trivial: declare and direct struct copy. */
             buf_append_fmt(cg->cur_body,
                            "        %s %s = ((struct %s *)feng_caught_value())->value;\n",
                            cty,
                            c_name,
-                           ut->c_value_box_struct_name);
+                           box_info.struct_name);
         }
         free(cty);
+        cg_value_box_info_dispose(&box_info);
 
-        /* Register for cleanup as regular local (is_param = false) so the
-         * extracted value gets released when the catch scope exits. */
         if (!scope_add(cg->cur_scope,
                        feng_name,
                        c_name,
                        cgtype_clone(catch_type),
-                       false)) {
+                       !is_user_value)) {
             free(c_name);
             free(feng_name);
             return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
@@ -33571,24 +33729,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
         free(feng_name);
         return true;
     }
-    if (cg_type_kind_is_scalar_builtin(catch_type->kind)) {
-        const char *field_name = cg_scalar_box_payload_field_name(catch_type->kind);
-        char *cty = cg_ctype_dup(catch_type);
-
-        if (field_name == NULL || cty == NULL) {
-            free(cty);
-            free(c_name);
-            free(feng_name);
-            return cg_fail(cg, err_token,
-                           "CE0214", "codegen: missing scalar catch binding payload field");
-        }
-        buf_append_fmt(cg->cur_body,
-                       "        %s %s = ((FengScalarBox *)feng_caught_value())->payload.%s;\n",
-                       cty,
-                       c_name,
-                       field_name);
-        free(cty);
-    } else {
+    {
         char *cty = cg_ctype_dup(catch_type);
 
         if (cty == NULL) {
@@ -34178,11 +34319,10 @@ static bool cg_emit_expr_with_spec_coercion(
                                                               &witness_var)) {
                         return false;
                     }
-                    if (!cg_emit_spec_box_subject(cg,
-                                                        out,
-                                                        src_t,
-                                                        e->token,
-                                                        &subject_expr)) {
+                    if (!cg_emit_value_box_subject(cg,
+                                                   out,
+                                                   e->token,
+                                                   &subject_expr)) {
                         return false;
                     }
                     subject_owned = true;
@@ -34237,25 +34377,12 @@ static bool cg_emit_expr_with_spec_coercion(
                 out->type->kind == CG_TYPE_U8 || out->type->kind == CG_TYPE_U16 ||
                 out->type->kind == CG_TYPE_U32 || out->type->kind == CG_TYPE_U64 ||
                 out->type->kind == CG_TYPE_F32 || out->type->kind == CG_TYPE_F64) {
-                const char *ctor_name = NULL;
-                char *box_tmp = NULL;
-
-                cg_materialize_to_local(cg, out, "_t");
-                if (!cg_emit_scalar_box_support(cg)) {
+                if (!cg_emit_value_box_subject(cg,
+                                               out,
+                                               e->token,
+                                               &subject_expr)) {
                     return false;
                 }
-                if (!cg_scalar_box_ctor_name(out->type->kind, &ctor_name) || ctor_name == NULL) {
-                    return cg_fail(cg, e->token,
-                        "CE0219", "codegen: scalar spec coercion has unsupported source kind");
-                }
-                box_tmp = cg_fresh_temp(cg, "_sb");
-                if (box_tmp == NULL) {
-                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-                }
-                buf_append_fmt(cg->cur_body,
-                    "    struct FengScalarBox *%s = %s(%s);\n",
-                    box_tmp, ctor_name, out->c_expr);
-                subject_expr = box_tmp;
                 subject_owned = true;
             } else if (out->type->kind == CG_TYPE_STRING || out->type->kind == CG_TYPE_ARRAY) {
                 subject_owned = out->owns_ref;
@@ -41299,7 +41426,6 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
                                                   const CGType *type,
                                                   FengToken token,
                                                   char **out_expr) {
-    const char *scalar_desc;
     Buf b;
 
     if (out_expr == NULL) {
@@ -41310,9 +41436,15 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
         return cg_fail(cg, token, "CE0280", "codegen: missing exception payload type");
     }
 
-    if (cg_scalar_exception_descriptor_name(type->kind, &scalar_desc)) {
+    if (cg_type_has_value_box(type)) {
+        CGValueBoxInfo box_info;
+
+        if (!cg_value_box_info_for_type(cg, type, token, &box_info)) {
+            return false;
+        }
         buf_init(&b);
-        buf_append_fmt(&b, "&%s", scalar_desc);
+        buf_append_fmt(&b, "&%s", box_info.descriptor_name);
+        cg_value_box_info_dispose(&box_info);
         *out_expr = b.data;
         return *out_expr != NULL;
     }
@@ -41322,21 +41454,9 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
             *out_expr = strdup("&feng_string_descriptor");
             return *out_expr != NULL;
         case CG_TYPE_ARRAY:
-            *out_expr = strdup("&feng_array_descriptor");
-            return *out_expr != NULL;
+            return cg_fail(cg, token,
+                           "CE0282", "codegen: array is not a supported exception payload type");
         case CG_TYPE_OBJECT:
-            /* Value-semantics types (tuple / @value) use their spec box
-             * descriptor for exception identity. */
-            if (cg_type_is_value_semantics(type)) {
-                if (type->user == NULL || type->user->c_value_box_desc_name == NULL) {
-                    return cg_fail(cg, token,
-                                   "CE0281", "codegen: value-type exception payload is missing a box descriptor");
-                }
-                buf_init(&b);
-                buf_append_fmt(&b, "&%s", type->user->c_value_box_desc_name);
-                *out_expr = b.data;
-                return *out_expr != NULL;
-            }
             if (type->user == NULL || type->user->c_desc_name == NULL) {
                 return cg_fail(cg, token,
                                "CE0281", "codegen: object exception payload is missing a descriptor");
@@ -41361,8 +41481,9 @@ static bool cg_expr_is_unknown_exception_identifier(CG *cg, const FengExpr *expr
     return local != NULL && local->is_unknown_exception;
 }
 
-/* throw <expr>; scalars are boxed into managed FengScalarBox values, while
- * string / array / object payloads are retained and passed through directly. */
+/* Emit a throw whose managed value and descriptor describe the same object.
+ * Concrete value types use ValueBox<T>; string and reference-object payloads
+ * retain and transfer their existing managed pointer. */
 static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     if (stmt->as.throw_value == NULL) {
         return cg_fail(cg, stmt->token,
@@ -41375,101 +41496,37 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     ExprResult r;
     if (!cg_emit_expr(cg, stmt->as.throw_value, &r)) return false;
 
-    /* Object-form spec fat value: extract the concrete subject pointer and
-     * retrieve its FengTypeDescriptor from the embedded FengManagedHeader.
-     * The witness is discarded — catch only matches on concrete type identity. */
+    /* Semantic rejects every spec form. Keep this guard so malformed analysis
+     * input cannot reach representation-specific subject extraction. */
     if (r.type->kind == CG_TYPE_SPEC) {
-        if (r.type->user_spec == NULL || r.type->user_spec->c_value_struct_name == NULL) {
-            er_free(&r);
-            return cg_fail(cg, stmt->token,
-                           "CE0284", "codegen: spec fat value is missing its value struct name");
-        }
-        char *tmp_sv   = cg_fresh_temp(cg, "_thr_sv");
-        char *tmp_subj = cg_fresh_temp(cg, "_thr");
-        if (tmp_sv == NULL || tmp_subj == NULL) {
-            free(tmp_sv);
-            free(tmp_subj);
-            er_free(&r);
-            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-        }
-        /* Materialize the fat value struct to load .subject exactly once, then
-         * retain the subject before transferring ownership to feng_throw. */
-        buf_append_fmt(cg->cur_body,
-                       "    struct %s %s = %s;\n"
-                       "    void *%s = %s.subject;\n"
-                       "    feng_retain(%s);\n"
-                       "    feng_throw(%s, ((const FengManagedHeader *)%s)->desc);\n",
-                       r.type->user_spec->c_value_struct_name, tmp_sv, r.c_expr,
-                       tmp_subj, tmp_sv,
-                       tmp_subj,
-                       tmp_subj, tmp_subj);
-        free(tmp_sv);
-        free(tmp_subj);
         er_free(&r);
-        return true;
+        return cg_fail(cg, stmt->token,
+                       "CE0284", "codegen: spec is not a supported exception payload type");
     }
 
-    /* Value-semantics types (tuple / @value): box into spec box for exception
-     * identity. Pattern mirrors cg_emit_spec_box_subject — materialize source,
-     * allocate box, copy value, throw box pointer. */
-    if (cg_type_is_value_semantics(r.type)) {
-        const UserType *ut = r.type->user;
-        if (ut == NULL || ut->c_value_box_struct_name == NULL ||
-            ut->c_value_box_desc_name == NULL) {
-            er_free(&r);
-            return cg_fail(cg, stmt->token,
-                           "CE0281", "codegen: value-type exception payload is missing box metadata");
-        }
+    if (cg_type_has_value_box(r.type)) {
+        char *box_tmp = NULL;
+        char *desc_expr = NULL;
 
-        /* Materialize source to local (handles ownership: retains if borrowed,
-         * registers for cleanup). */
-        if (cg_materialize_to_local(cg, &r, "_thr_val") == NULL) {
+        if (!cg_exception_descriptor_expr_for_type(cg,
+                                                   r.type,
+                                                   stmt->token,
+                                                   &desc_expr) ||
+            !cg_emit_value_box_subject(cg,
+                                       &r,
+                                       stmt->token,
+                                       &box_tmp)) {
+            free(box_tmp);
+            free(desc_expr);
             er_free(&r);
-            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+            return false;
         }
-
-        char *box_tmp = cg_fresh_temp(cg, "_thr_box");
-        if (box_tmp == NULL) {
-            er_free(&r);
-            return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-        }
-
-        /* Allocate box with feng_object_new using box descriptor. */
         buf_append_fmt(cg->cur_body,
-                       "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
-                       ut->c_value_box_struct_name,
+                       "    feng_throw((void *)%s, %s);\n",
                        box_tmp,
-                       ut->c_value_box_struct_name,
-                       ut->c_value_box_desc_name);
-
-        /* Copy value into box: aggregate uses feng_aggregate_assign (retains
-         * managed fields), trivial uses direct assignment. */
-        if (cgtype_is_aggregate(r.type)) {
-            const char *agg_desc = cg_aggregate_desc_name(r.type);
-            if (agg_desc == NULL) {
-                free(box_tmp);
-                er_free(&r);
-                return cg_fail(cg, stmt->token,
-                               "CE0281", "codegen: missing aggregate descriptor for value-type exception");
-            }
-            buf_append_fmt(cg->cur_body,
-                           "    feng_aggregate_assign(&%s->value, &%s, &%s);\n",
-                           box_tmp,
-                           r.c_expr,
-                           agg_desc);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                           "    %s->value = %s;\n",
-                           box_tmp,
-                           r.c_expr);
-        }
-
-        /* Throw the box pointer. */
-        buf_append_fmt(cg->cur_body,
-                       "    feng_throw((void *)%s, &%s);\n",
-                       box_tmp,
-                       ut->c_value_box_desc_name);
+                       desc_expr);
         free(box_tmp);
+        free(desc_expr);
         er_free(&r);
         return true;
     }
@@ -41485,24 +41542,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
         er_free(&r);
         return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
-    if (cg_type_kind_is_scalar_builtin(r.type->kind)) {
-        const char *ctor_name = NULL;
-
-        if (!cg_emit_scalar_box_support(cg) ||
-            !cg_scalar_box_ctor_name(r.type->kind, &ctor_name) ||
-            ctor_name == NULL) {
-            free(tmp);
-            free(desc_expr);
-            er_free(&r);
-            return cg_fail(cg, stmt->token,
-                           "CE0285", "codegen: missing scalar box constructor for throw payload");
-        }
-        buf_append_fmt(cg->cur_body,
-                       "    FengScalarBox *%s = %s(%s);\n",
-                       tmp,
-                       ctor_name,
-                       r.c_expr);
-    } else {
+    {
         char *cty = cg_ctype_dup(r.type);
         if (cty == NULL) {
             free(tmp);
@@ -50369,6 +50409,7 @@ static bool cg_subject_key_to_target_kind(const FengSemanticSubjectKey *subject_
 static bool cg_emit_scalar_subject_load(CG *cg,
                                         Buf *out,
                                         CGTypeKind subject_kind,
+                                        const FengDecl *enum_decl,
                                         FengSpecObjectSubjectStorageKind storage,
                                         FengToken blame,
                                         const char *value_name) {
@@ -50388,15 +50429,24 @@ static bool cg_emit_scalar_subject_load(CG *cg,
         return true;
     }
     if (storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER) {
-        const char *field_name = NULL;
-        if (!cg_scalar_box_payload_field(subject_kind, &field_name)) {
-            return cg_fail(cg, blame, "CE0310", "codegen: invalid scalar subject key");
+        CGType subject_type;
+        CGValueBoxInfo box_info;
+
+        memset(&subject_type, 0, sizeof(subject_type));
+        subject_type.kind = subject_kind;
+        subject_type.enum_decl = enum_decl;
+        if (!cg_value_box_info_for_type(cg,
+                                        &subject_type,
+                                        blame,
+                                        &box_info)) {
+            return false;
         }
         buf_append_fmt(out,
-            "    %s %s = ((const struct FengScalarBox *)_subject)->payload.%s;\n",
+            "    %s %s = ((const struct %s *)_subject)->value;\n",
             self_cty,
             value_name,
-            field_name);
+            box_info.struct_name);
+        cg_value_box_info_dispose(&box_info);
         return true;
     }
     return cg_fail(cg, blame, "CE0311", "codegen: invalid scalar subject storage kind");
@@ -51257,11 +51307,6 @@ static bool cg_ensure_witness_instance(
             char *s_san = NULL;
             Buf prefix;
 
-            if (scalar_subject_storage == FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER &&
-                !cg_emit_scalar_box_support(cg)) {
-                return false;
-            }
-
             witness = feng_semantic_lookup_spec_witness(cg->analysis, subject_key, s->decl);
 
             s_san = cg_sanitize(spec_unique_name, strlen(spec_unique_name));
@@ -51457,6 +51502,7 @@ static bool cg_ensure_witness_instance(
                     if (!cg_emit_scalar_subject_load(cg,
                                                     fd,
                                                     CG_TYPE_I32,
+                                                    enum_decl,
                                                     scalar_subject_storage,
                                                     blame,
                                                     "_self_value")) {
@@ -51519,6 +51565,7 @@ static bool cg_ensure_witness_instance(
                     if (!cg_emit_scalar_subject_load(cg,
                                                     fd,
                                                     CG_TYPE_I32,
+                                                    enum_decl,
                                                     scalar_subject_storage,
                                                     blame,
                                                     "_self_value")) {
@@ -51663,10 +51710,6 @@ static bool cg_ensure_witness_instance(
         return cg_fail(cg, blame,
             "CE0328", "codegen: object-form spec coercion has unknown subject key");
     }
-    if (cg_type_kind_is_scalar_builtin(subject_kind) && !cg_emit_scalar_box_support(cg)) {
-        return false;
-    }
-
     const FengSpecWitness *witness = feng_semantic_lookup_spec_witness(
         cg->analysis, subject_key, s->decl);
     if (witness == NULL) {
@@ -51885,6 +51928,7 @@ static bool cg_ensure_witness_instance(
                 if (!cg_emit_scalar_subject_load(cg,
                                                 fd,
                                                 subject_kind,
+                                                NULL,
                                                 scalar_subject_storage,
                                                 blame,
                                                 "_self_value")) {
@@ -51961,6 +52005,7 @@ static bool cg_ensure_witness_instance(
                 if (!cg_emit_scalar_subject_load(cg,
                                                 fd,
                                                 subject_kind,
+                                                NULL,
                                                 scalar_subject_storage,
                                                 blame,
                                                 "_self_value")) {
@@ -51992,6 +52037,7 @@ static bool cg_ensure_witness_instance(
                 if (!cg_emit_scalar_subject_load(cg,
                                                 fd,
                                                 subject_kind,
+                                                NULL,
                                                 scalar_subject_storage,
                                                 blame,
                                                 "_self_value")) {

@@ -1,6 +1,6 @@
 # Union-form Spec Throw 代码生成 Bug
 
-> **状态**：已知 Bug（未修复）
+> **状态**：已修复，并通过 Semantic 定向测试与完整回归
 > **日期**：2026-07-07
 > **严重程度**：中（会导致编译失败，但不影响正确程序的运行）
 
@@ -62,62 +62,20 @@ func test() {
 
 生成的 C 代码会尝试访问 `v.subject`，但 `IntOrString` 的值结构没有 `subject` 字段，导致 C 编译失败。
 
-## 修复方案（待定）
+## 已实施修复
 
-### 方案 1：语义验证拒绝
+按 [Feng 异常模型规范](../specifications/feng-exception.md#33-catch)，`throw` 与具体类型 `catch` 共用同一个
+有限类型分类，object-form、intersection-form、union-form 与 callable-form 在内的所有 `spec` 均在
+Semantic 阶段拒绝。实现使用统一分类入口，不再为 union-form 增加独立特判，也不为 spec 增加箱、异常
+descriptor 或运行时匹配逻辑。
 
-在 `type_ref_is_throwable` 中增加对 union-form spec 的拒绝：
-
-```c
-if (decl->kind == FENG_DECL_SPEC &&
-    (decl->as.spec_decl.form == FENG_SPEC_FORM_CALLABLE ||
-     decl->as.spec_decl.form == FENG_SPEC_FORM_UNION)) {
-    *out_reason = "spec values cannot be thrown as exceptions";
-    return false;
-}
-```
-
-**优点**：简单，与 catch 拒绝所有 spec 保持一致
-**缺点**：限制了 union-form spec 的使用场景
-
-### 方案 2：Codegen 特殊处理
-
-为 union-form spec 实现独立的 throw 逻辑：
-
-```c
-if (r.type->kind == CG_TYPE_SPEC) {
-    if (r.type->user_spec->form == FENG_SPEC_FORM_UNION) {
-        // Union-form spec: 需要特殊的 throw 逻辑
-        // 可能需要 box 或提取具体成员
-    } else {
-        // Object-form spec: 提取 subject
-    }
-}
-```
-
-**优点**：允许 throw union-form spec
-**缺点**：需要设计 union-form spec 的异常匹配语义（如何 match？按 tag？按具体成员类型？）
-
-### 方案 3：Box 包装
-
-将 union-form spec 值 box 为具体类型，类似 value-semantics 类型的处理方式。
-
-**优点**：统一处理方式
-**缺点**：增加运行时开销，需要设计 box 结构
-
-## 建议
-
-考虑到：
-1. Catch 已经拒绝所有 spec 类型（包括 union-form）
-2. Throw union-form spec 的语义不明确（如何匹配？）
-3. 目前没有明确的用例需要 throw union-form spec
-
-**建议采用方案 1**：在语义验证中拒绝 union-form spec throw，与 catch 的限制保持一致。
+Codegen 仅保留防御性拒绝：通过 Semantic 的合法程序不可能进入 `CG_TYPE_SPEC` 的 throw 路径。该方案不
+增加分配、运行时分支、间接访问、descriptor 操作或 ARC/CC 操作，也不执行运行时查找。
 
 ## 关联
 
-- Intersection-form spec 也会有同样的问题（值结构是 `{ subject, merged_witness }`，与 object-form 一致，理论上可以 throw，但需要确认）
-- Catch 拒绝所有 spec 类型（analyzer.c:11725-11729）
+- 主规则：[Feng 异常模型规范](../specifications/feng-exception.md#33-catch)
+- 实施与测试门禁：[统一 ValueBox 与 throw/catch 对齐方案](./feng-unified-value-box-and-exception-dev.md)
 
 ## 测试用例
 
@@ -127,6 +85,6 @@ spec IntOrString: int | string;
 
 func test_throw_union_spec() {
     let v: IntOrString = 42;
-    throw v;  // 期望：AE0076 错误
+    throw v;  // 期望：稳定的 Semantic “不可作为异常载荷”诊断
 }
 ```

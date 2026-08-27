@@ -1,0 +1,614 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Callable used to drive one payload through a cross-function unknown catch. */
+spec ExceptionPayloadThrowAction(): void;
+
+/** First nominal enum exception identity. */
+enum ExceptionPayloadStatusA {
+  Ready = 7,
+  Failed = 9
+}
+
+/** Second nominal enum with the same physical values. */
+enum ExceptionPayloadStatusB {
+  Ready = 7,
+  Failed = 9
+}
+
+/** First named tuple exception identity. */
+type ExceptionPayloadTupleA(i32, i32);
+
+/** Second named tuple with the same physical layout. */
+type ExceptionPayloadTupleB(i32, i32);
+
+/** First trivial value-type exception identity. */
+@value
+type ExceptionPayloadValueA {
+  let code: i32;
+}
+
+/** Second trivial value type with the same physical layout. */
+@value
+type ExceptionPayloadValueB {
+  let code: i32;
+}
+
+/** Reference entity used for field and method access after a catch. */
+type ExceptionPayloadEntity {
+  let code: int;
+
+  /** Return a stable observation of the caught entity. */
+  func doubled(): int {
+    return self.code * 2;
+  }
+}
+
+/** Closed generic reference exception identity. */
+type ExceptionPayloadGenericEntity<T> {
+  let marker: int;
+  let payload: T;
+}
+
+/** Closed generic value exception identity. */
+@value
+type ExceptionPayloadGenericValue<T> {
+  let marker: int;
+  let payload: T;
+}
+
+/** First ordinary ABI entity exception identity. */
+@abi
+type ExceptionPayloadAbiEntityA {
+  let code: int;
+}
+
+/** Same-layout ordinary ABI entity that must not match the first. */
+@abi
+type ExceptionPayloadAbiEntityB {
+  let code: int;
+}
+
+/** First ABI value exception identity. */
+@value @abi
+type ExceptionPayloadAbiValueA {
+  let code: int;
+}
+
+/** Same-layout ABI value that must not match the first. */
+@value @abi
+type ExceptionPayloadAbiValueB {
+  let code: int;
+}
+
+/** Reference resource with observable exception-payload lifetime. */
+type ExceptionPayloadResource {
+  static var created: int = 0;
+  static var finalized: int = 0;
+  let code: int;
+
+  /** Construct one counted resource. */
+  func ExceptionPayloadResource(code: int) {
+    self.code = code;
+    ExceptionPayloadResource.created += 1;
+  }
+
+  /** Count finalization of the explicitly constructed payload child. */
+  func ~ExceptionPayloadResource() {
+    if self.code == 51 {
+      ExceptionPayloadResource.finalized += 1;
+    }
+  }
+
+  /** Reset counters after the preceding payload has been released. */
+  static func resetCounts(): void {
+    ExceptionPayloadResource.created = 0;
+    ExceptionPayloadResource.finalized = 0;
+  }
+
+  /** Return the current creation count. */
+  static func createdCount(): int {
+    return ExceptionPayloadResource.created;
+  }
+
+  /** Return the current finalization count. */
+  static func finalizedCount(): int {
+    return ExceptionPayloadResource.finalized;
+  }
+}
+
+/** Aggregate value payload whose managed child exercises box cleanup. */
+@value
+type ExceptionPayloadAggregate {
+  let resource: ExceptionPayloadResource;
+  let message: string;
+}
+
+/** Throw one bool payload. */
+func throwExceptionPayloadBool(value: bool): void { throw value; }
+
+/** Throw one i8 payload. */
+func throwExceptionPayloadI8(value: i8): void { throw value; }
+
+/** Throw one i16 payload. */
+func throwExceptionPayloadI16(value: i16): void { throw value; }
+
+/** Throw one i32 payload. */
+func throwExceptionPayloadI32(value: i32): void { throw value; }
+
+/** Throw one i64 payload. */
+func throwExceptionPayloadI64(value: i64): void { throw value; }
+
+/** Throw one u8 payload. */
+func throwExceptionPayloadU8(value: u8): void { throw value; }
+
+/** Throw one u16 payload. */
+func throwExceptionPayloadU16(value: u16): void { throw value; }
+
+/** Throw one u32 payload. */
+func throwExceptionPayloadU32(value: u32): void { throw value; }
+
+/** Throw one u64 payload. */
+func throwExceptionPayloadU64(value: u64): void { throw value; }
+
+/** Throw one f32 payload. */
+func throwExceptionPayloadF32(value: f32): void { throw value; }
+
+/** Throw one f64 payload. */
+func throwExceptionPayloadF64(value: f64): void { throw value; }
+
+/** Throw one string payload. */
+func throwExceptionPayloadString(value: string): void { throw value; }
+
+/** Throw the first local enum identity. */
+func throwExceptionPayloadStatusA(value: ExceptionPayloadStatusA): void {
+  throw value;
+}
+
+/** Throw the first named tuple identity. */
+func throwExceptionPayloadTupleA(): void {
+  let value: ExceptionPayloadTupleA = ((i32)20, (i32)22);
+  throw value;
+}
+
+/** Throw the first trivial value identity. */
+func throwExceptionPayloadValueA(): void {
+  throw ExceptionPayloadValueA { code: (i32)42 };
+}
+
+/** Throw one ordinary entity identity. */
+func throwExceptionPayloadEntity(): void {
+  throw ExceptionPayloadEntity { code: 21 };
+}
+
+/** Throw one closed generic reference identity. */
+func throwExceptionPayloadGenericEntity(): void {
+  throw ExceptionPayloadGenericEntity<i32> {
+    marker: 31,
+    payload: (i32)1
+  };
+}
+
+/** Throw one closed generic value identity. */
+func throwExceptionPayloadGenericValue(): void {
+  throw ExceptionPayloadGenericValue<string> {
+    marker: 32,
+    payload: "generic"
+  };
+}
+
+/** Throw the first ordinary ABI entity identity. */
+func throwExceptionPayloadAbiEntity(): void {
+  throw ExceptionPayloadAbiEntityA { code: 41 };
+}
+
+/** Throw the first ABI value identity. */
+func throwExceptionPayloadAbiValue(): void {
+  throw ExceptionPayloadAbiValueA { code: 42 };
+}
+
+/** Throw an aggregate value with one independently counted child. */
+func throwExceptionPayloadAggregate(): void {
+  throw ExceptionPayloadAggregate {
+    resource: ExceptionPayloadResource(51),
+    message: "aggregate"
+  };
+}
+
+/** Rethrow the current aggregate exception without replacing its identity. */
+func rethrowUnknownExceptionPayloadAggregate(): void {
+  try throwExceptionPayloadAggregate() catch error: unknown {
+    throw error;
+  }
+}
+
+/** Rethrow any concrete payload through one separate unknown-catch frame. */
+func rethrowUnknownExceptionPayload(
+  action: ExceptionPayloadThrowAction
+): void {
+  try action() catch error: unknown {
+    throw error;
+  }
+}
+
+/** Rethrow the same concrete payload through two separate catch frames. */
+func rethrowUnknownExceptionPayloadTwice(
+  action: ExceptionPayloadThrowAction
+): void {
+  try rethrowUnknownExceptionPayload(action) catch error: unknown {
+    throw error;
+  }
+}
+
+/** Return an entity observation from inside its exact catch clause. */
+func catchAndReturnExceptionPayloadEntity(): int {
+  try throwExceptionPayloadEntity() catch error: ExceptionPayloadEntity {
+    return error.doubled();
+  }
+  return -1;
+}
+
+/** Complete runtime conformance coverage for aligned throw/catch payloads. */
+open func test_exception_payload(): void {
+  describe("exception payload identity", () {
+    test("all builtin scalar payloads match only their exact box descriptor", () {
+      var matched: int = 0;
+      var wrong = false;
+
+      try throwExceptionPayloadBool(true)
+      catch error: i8 { wrong = true; }
+      catch error: bool { if error { matched += 1; } }
+
+      try throwExceptionPayloadI8((i8)-8)
+      catch error: bool { wrong = true; }
+      catch error: i8 { if error == (i8)-8 { matched += 1; } }
+
+      try throwExceptionPayloadI16((i16)-16)
+      catch error: i8 { wrong = true; }
+      catch error: i16 { if error == (i16)-16 { matched += 1; } }
+
+      try throwExceptionPayloadI32((i32)-32)
+      catch error: i16 { wrong = true; }
+      catch error: i32 { if error == (i32)-32 { matched += 1; } }
+
+      try throwExceptionPayloadI64((i64)-64)
+      catch error: i32 { wrong = true; }
+      catch error: i64 { if error == (i64)-64 { matched += 1; } }
+
+      try throwExceptionPayloadU8((u8)8)
+      catch error: i8 { wrong = true; }
+      catch error: u8 { if error == (u8)8 { matched += 1; } }
+
+      try throwExceptionPayloadU16((u16)16)
+      catch error: u8 { wrong = true; }
+      catch error: u16 { if error == (u16)16 { matched += 1; } }
+
+      try throwExceptionPayloadU32((u32)32)
+      catch error: u16 { wrong = true; }
+      catch error: u32 { if error == (u32)32 { matched += 1; } }
+
+      try throwExceptionPayloadU64((u64)64)
+      catch error: u32 { wrong = true; }
+      catch error: u64 { if error == (u64)64 { matched += 1; } }
+
+      try throwExceptionPayloadF32((f32)3.25)
+      catch error: f64 { wrong = true; }
+      catch error: f32 { if error == (f32)3.25 { matched += 1; } }
+
+      try throwExceptionPayloadF64((f64)6.5)
+      catch error: f32 { wrong = true; }
+      catch error: f64 { if error == (f64)6.5 { matched += 1; } }
+
+      assert(!wrong && matched == 11,
+             "all scalar catches use exact ValueBox descriptors");
+    });
+
+    test("named enum and underlying scalar identities remain distinct", () {
+      var caught = false;
+      var wrong = false;
+      try throwExceptionPayloadStatusA(ExceptionPayloadStatusA.Ready)
+      catch error: i32 { wrong = true; }
+      catch error: ExceptionPayloadStatusB { wrong = true; }
+      catch error: ExceptionPayloadStatusA {
+        caught = error == ExceptionPayloadStatusA.Ready;
+      }
+      assert(caught && !wrong,
+             "enum catch ignores i32 and a different named enum");
+    });
+
+    test("public enum descriptor is identical across package boundaries", () {
+      var caught = false;
+      var wrong = false;
+      try throwLibExceptionPayloadStatus(LibExceptionPayloadStatus.Ready)
+      catch error: ExceptionPayloadStatusA { wrong = true; }
+      catch error: LibExceptionPayloadStatus {
+        caught = error == LibExceptionPayloadStatus.Ready;
+      }
+      assert(caught && !wrong,
+             "provider throw and consumer catch share one enum box descriptor");
+    });
+
+    test("same-layout named tuple and value types retain nominal identity", () {
+      var tupleCaught = false;
+      var valueCaught = false;
+      var wrong = false;
+
+      try throwExceptionPayloadTupleA()
+      catch error: ExceptionPayloadTupleB { wrong = true; }
+      catch error: ExceptionPayloadTupleA {
+        tupleCaught = error.item1 == (i32)20 && error.item2 == (i32)22;
+      }
+
+      try throwExceptionPayloadValueA()
+      catch error: ExceptionPayloadValueB { wrong = true; }
+      catch error: ExceptionPayloadValueA {
+        valueCaught = error.code == (i32)42;
+      }
+
+      assert(tupleCaught && valueCaught && !wrong,
+             "same-layout named values use distinct box descriptors");
+    });
+
+    test("closed generic entity and value instances match exact arguments", () {
+      var entityCaught = false;
+      var valueCaught = false;
+      var wrong = false;
+
+      try throwExceptionPayloadGenericEntity()
+      catch error: ExceptionPayloadGenericEntity<i64> { wrong = true; }
+      catch error: ExceptionPayloadGenericEntity<i32> {
+        entityCaught = error.marker == 31 && error.payload == (i32)1;
+      }
+
+      try throwExceptionPayloadGenericValue()
+      catch error: ExceptionPayloadGenericValue<i32> { wrong = true; }
+      catch error: ExceptionPayloadGenericValue<string> {
+        valueCaught = error.marker == 32 && error.payload == "generic";
+      }
+
+      assert(entityCaught && valueCaught && !wrong,
+             "closed generic descriptors include every type argument");
+    });
+
+    test("ordinary and value ABI types preserve nominal exception identity", () {
+      var entityCaught = false;
+      var valueCaught = false;
+      var wrong = false;
+
+      try throwExceptionPayloadAbiEntity()
+      catch error: ExceptionPayloadAbiEntityB { wrong = true; }
+      catch error: ExceptionPayloadAbiEntityA {
+        entityCaught = error.code == 41;
+      }
+
+      try throwExceptionPayloadAbiValue()
+      catch error: ExceptionPayloadAbiValueB { wrong = true; }
+      catch error: ExceptionPayloadAbiValueA {
+        valueCaught = error.code == 42;
+      }
+
+      assert(entityCaught && valueCaught && !wrong,
+             "@abi does not erase ordinary or value type identity");
+    });
+
+    test("entity catch supports method access and direct return", () {
+      assert(catchAndReturnExceptionPayloadEntity() == 42,
+             "caught entity remains usable before exception release");
+    });
+
+    test("cross-function rethrow preserves every builtin scalar payload", () {
+      var matched: int = 0;
+      var wrong = false;
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadBool(true); }
+      )
+      catch error: i8 { wrong = true; }
+      catch error: bool { if error { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadI8((i8)-8); }
+      )
+      catch error: bool { wrong = true; }
+      catch error: i8 { if error == (i8)-8 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadI16((i16)-16); }
+      )
+      catch error: i8 { wrong = true; }
+      catch error: i16 { if error == (i16)-16 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadI32((i32)-32); }
+      )
+      catch error: i16 { wrong = true; }
+      catch error: i32 { if error == (i32)-32 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadI64((i64)-64); }
+      )
+      catch error: i32 { wrong = true; }
+      catch error: i64 { if error == (i64)-64 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadU8((u8)8); }
+      )
+      catch error: i8 { wrong = true; }
+      catch error: u8 { if error == (u8)8 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadU16((u16)16); }
+      )
+      catch error: u8 { wrong = true; }
+      catch error: u16 { if error == (u16)16 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadU32((u32)32); }
+      )
+      catch error: u16 { wrong = true; }
+      catch error: u32 { if error == (u32)32 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadU64((u64)64); }
+      )
+      catch error: u32 { wrong = true; }
+      catch error: u64 { if error == (u64)64 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadF32((f32)3.25); }
+      )
+      catch error: f64 { wrong = true; }
+      catch error: f32 { if error == (f32)3.25 { matched += 1; } }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadF64((f64)6.5); }
+      )
+      catch error: f32 { wrong = true; }
+      catch error: f64 { if error == (f64)6.5 { matched += 1; } }
+
+      assert(!wrong && matched == 11,
+             "rethrow preserves all builtin ValueBox descriptors and values");
+    });
+
+    test("cross-function rethrow preserves string and entity payloads", () {
+      var stringCaught = false;
+      var entityCaught = false;
+      var wrong = false;
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadString("rethrown-string"); }
+      )
+      catch error: bool { wrong = true; }
+      catch error: string { stringCaught = error == "rethrown-string"; }
+
+      try rethrowUnknownExceptionPayloadTwice(
+        () { throwExceptionPayloadEntity(); }
+      )
+      catch error: ExceptionPayloadValueA { wrong = true; }
+      catch error: ExceptionPayloadEntity {
+        entityCaught = error.code == 21 && error.doubled() == 42;
+      }
+
+      assert(stringCaught && entityCaught && !wrong,
+             "reference payloads survive one and two original rethrows");
+    });
+
+    test("cross-function rethrow preserves local and public enum identity", () {
+      var localCaught = false;
+      var publicCaught = false;
+      var wrong = false;
+
+      try rethrowUnknownExceptionPayload(
+        () {
+          throwExceptionPayloadStatusA(ExceptionPayloadStatusA.Ready);
+        }
+      )
+      catch error: i32 { wrong = true; }
+      catch error: ExceptionPayloadStatusB { wrong = true; }
+      catch error: ExceptionPayloadStatusA {
+        localCaught = error == ExceptionPayloadStatusA.Ready;
+      }
+
+      try rethrowUnknownExceptionPayload(
+        () {
+          throwLibExceptionPayloadStatus(LibExceptionPayloadStatus.Ready);
+        }
+      )
+      catch error: ExceptionPayloadStatusA { wrong = true; }
+      catch error: LibExceptionPayloadStatus {
+        publicCaught = error == LibExceptionPayloadStatus.Ready;
+      }
+
+      assert(localCaught && publicCaught && !wrong,
+             "rethrow keeps nominal and cross-package enum descriptors");
+    });
+
+    test("cross-function rethrow preserves all structured value identities", () {
+      var tupleCaught = false;
+      var valueCaught = false;
+      var genericValueCaught = false;
+      var abiValueCaught = false;
+      var wrong = false;
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadTupleA(); }
+      )
+      catch error: ExceptionPayloadTupleB { wrong = true; }
+      catch error: ExceptionPayloadTupleA {
+        tupleCaught = error.item1 == (i32)20 && error.item2 == (i32)22;
+      }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadValueA(); }
+      )
+      catch error: ExceptionPayloadValueB { wrong = true; }
+      catch error: ExceptionPayloadValueA {
+        valueCaught = error.code == (i32)42;
+      }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadGenericValue(); }
+      )
+      catch error: ExceptionPayloadGenericValue<i32> { wrong = true; }
+      catch error: ExceptionPayloadGenericValue<string> {
+        genericValueCaught = error.marker == 32 && error.payload == "generic";
+      }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadAbiValue(); }
+      )
+      catch error: ExceptionPayloadAbiValueB { wrong = true; }
+      catch error: ExceptionPayloadAbiValueA {
+        abiValueCaught = error.code == 42;
+      }
+
+      assert(tupleCaught && valueCaught && genericValueCaught &&
+             abiValueCaught && !wrong,
+             "rethrow preserves tuple value generic and ABI value boxes");
+    });
+
+    test("cross-function rethrow preserves generic and ABI entity identity", () {
+      var genericEntityCaught = false;
+      var abiEntityCaught = false;
+      var wrong = false;
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadGenericEntity(); }
+      )
+      catch error: ExceptionPayloadGenericEntity<i64> { wrong = true; }
+      catch error: ExceptionPayloadGenericEntity<i32> {
+        genericEntityCaught = error.marker == 31 && error.payload == (i32)1;
+      }
+
+      try rethrowUnknownExceptionPayload(
+        () { throwExceptionPayloadAbiEntity(); }
+      )
+      catch error: ExceptionPayloadAbiEntityB { wrong = true; }
+      catch error: ExceptionPayloadAbiEntityA {
+        abiEntityCaught = error.code == 41;
+      }
+
+      assert(genericEntityCaught && abiEntityCaught && !wrong,
+             "rethrow preserves generic and ABI managed descriptors");
+    });
+
+    test("aggregate value catch and unknown rethrow release exactly once", () {
+      ExceptionPayloadResource.resetCounts();
+      var caught = false;
+      try rethrowUnknownExceptionPayloadAggregate()
+      catch error: ExceptionPayloadValueA {
+        assert(false, "wrong value descriptor must not catch aggregate payload");
+      }
+      catch error: ExceptionPayloadAggregate {
+        caught = error.resource.code == 51 && error.message == "aggregate";
+      }
+      assert(caught, "the original aggregate payload survives rethrow");
+      assert(ExceptionPayloadResource.createdCount() == 1,
+             "the aggregate payload creates one managed child");
+      assert(ExceptionPayloadResource.finalizedCount() == 1,
+             "the aggregate payload releases its managed child exactly once");
+    });
+  });
+}
