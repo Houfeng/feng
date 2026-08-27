@@ -5483,6 +5483,50 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
     feng_program_free(program);
 }
 
+/* String literal lowering must preserve explicit bytes while emitting only
+ * stable ASCII C source. This covers embedded NUL followed by a hex digit,
+ * fixed-width Feng hex escapes, high bytes, and raw CRLF bytes. */
+static void test_string_literal_codegen_preserves_exact_bytes(void) {
+    static const char kSource[] =
+        "module feng.codegen.stringbytes;\r\n"
+        "func nulThenHex(): string { return \"\\0B\"; }\r\n"
+        "func exactHex(): string { return \"\\x1b1\"; }\r\n"
+        "func highBytes(): string { return \"\\x80\\xff\"; }\r\n"
+        "func rawCrLf(): string { return `A\r\nB`; }\r\n";
+    FengProgram *program = parse_or_die(
+        kSource, "string_literal_exact_bytes_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(strstr(output.c_source,
+                  "feng_string_literal(\"\\000B\", 2);") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_string_literal(\"\\0331\", 2);") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_string_literal(\"\\200\\377\", 2);") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "feng_string_literal(\"A\\015\\012B\", 4);") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Assert that one generated integer operation uses its compile-time
  * intrinsic and introduces no wrapping helper or conditional branch. The
  * ordinary Feng function frame prologue and epilogue remain out of scope. */
@@ -15312,6 +15356,7 @@ int main(void) {
     test_imported_field_debug_type_uses_declaring_program_context();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
+    test_string_literal_codegen_preserves_exact_bytes();
     test_integer_runtime_semantics_codegen_is_zero_cost();
     test_fit_builtin_direct_call_codegen_shape();
     test_fit_builtin_array_open_generic_return_codegen();

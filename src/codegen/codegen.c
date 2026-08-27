@@ -82,22 +82,32 @@ static void buf_append_fmt(Buf *b, const char *fmt, ...) {
     va_end(ap2);
 }
 
-/* Append text as one escaped C string literal. */
-static void buf_append_c_string_literal(Buf *b, const char *text) {
-    const unsigned char *cursor = (const unsigned char *)text;
+/* Append an explicit byte sequence as one escaped C string literal. Fixed
+ * three-digit octal escapes preserve embedded NUL and cannot consume bytes
+ * that follow the escape. */
+static void buf_append_c_bytes_literal(Buf *b,
+                                       const char *bytes,
+                                       size_t length) {
+    size_t index;
 
     buf_append_cstr(b, "\"");
-    while (*cursor != '\0') {
-        if (*cursor == '"' || *cursor == '\\') {
-            buf_append_fmt(b, "\\%c", (char)*cursor);
-        } else if (*cursor >= 0x20U && *cursor <= 0x7eU) {
-            buf_append(b, (const char *)cursor, 1U);
+    for (index = 0U; index < length; ++index) {
+        unsigned char value = (unsigned char)bytes[index];
+
+        if (value == '"' || value == '\\') {
+            buf_append_fmt(b, "\\%c", (char)value);
+        } else if (value >= 0x20U && value <= 0x7eU) {
+            buf_append(b, bytes + index, 1U);
         } else {
-            buf_append_fmt(b, "\\%03o", (unsigned int)*cursor);
+            buf_append_fmt(b, "\\%03o", (unsigned int)value);
         }
-        ++cursor;
     }
     buf_append_cstr(b, "\"");
+}
+
+/* Append NUL-terminated text as one escaped C string literal. */
+static void buf_append_c_string_literal(Buf *b, const char *text) {
+    buf_append_c_bytes_literal(b, text, strlen(text));
 }
 
 /* ===================== type kinds ===================== */
@@ -56024,23 +56034,10 @@ static void cg_emit_string_literal_init(CG *cg, Buf *body) {
     for (size_t i = 0; i < cg->string_literal_count; i++) {
         buf_append_fmt(body,
             "    %s = feng_string_literal(", cg->string_literals[i].c_var);
-        buf_append_cstr(body, "\"");
-        const char *p = cg->string_literals[i].content;
-        size_t n = cg->string_literals[i].length;
-        for (size_t j = 0; j < n; j++) {
-            unsigned char c = (unsigned char)p[j];
-            switch (c) {
-                case '\\': buf_append_cstr(body, "\\\\"); break;
-                case '"':  buf_append_cstr(body, "\\\""); break;
-                case '\n': buf_append_cstr(body, "\\n"); break;
-                case '\r': buf_append_cstr(body, "\\r"); break;
-                case '\t': buf_append_cstr(body, "\\t"); break;
-                default:
-                    if (c < 0x20 || c == 0x7f) buf_append_fmt(body, "\\x%02x", c);
-                    else { char ch = (char)c; buf_append(body, &ch, 1); }
-            }
-        }
-        buf_append_fmt(body, "\", %zu);\n", cg->string_literals[i].length);
+        buf_append_c_bytes_literal(body,
+                                   cg->string_literals[i].content,
+                                   cg->string_literals[i].length);
+        buf_append_fmt(body, ", %zu);\n", cg->string_literals[i].length);
     }
 }
 

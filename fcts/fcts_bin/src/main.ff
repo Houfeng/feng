@@ -15,6 +15,7 @@ func main(args: string[]) {
       test_assignment_evaluation_semantics();
       test_branch_result_fitting();
       test_string();
+      test_string_literal_semantics();
       test_flow();
       test_function();
       test_function_inference();

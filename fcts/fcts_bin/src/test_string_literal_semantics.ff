@@ -1,0 +1,157 @@
+module fcts_bin;
+
+import std.test;
+import std.text;
+import std.collections;
+
+/** Assert one string's logical length and every content byte. */
+func g06AssertBytes(value: string, expected: byte[], message: string): void {
+  let sameLength = value.length() == expected.length();
+  assert(sameLength, message + " length");
+  if !sameLength { return; }
+
+  var index: int = 0;
+  while index < expected.length() {
+    assert(value.getByte(index) == expected[index], message + " byte");
+    index += 1;
+  }
+}
+
+/** Execute exact string-literal byte-semantics conformance coverage. */
+open func test_string_literal_semantics(): void {
+  describe("string literal byte semantics", () {
+    test("STR01 common escapes produce specified bytes", () {
+      g06AssertBytes(
+        "\n\r\t",
+        [(byte)10, (byte)13, (byte)9],
+        "STR01 common escape bytes"
+      );
+    });
+
+    test("STR02 embedded NUL remains content", () {
+      let value = "A\0B";
+      g06AssertBytes(
+        value,
+        [(byte)65, (byte)0, (byte)66],
+        "STR02 embedded NUL bytes"
+      );
+      assert(value.length() == 3,
+             "STR02 embedded NUL contributes to length");
+      assert(value.at(1) == "\0" && value.at(1).length() == 1,
+             "STR02 embedded NUL remains indexable");
+      assert(value == "\x41\x00\x42" && value != "A" && value != "A\0C",
+             "STR02 embedded NUL participates in comparison");
+    });
+
+    test("STR03 hex escapes preserve byte boundaries", () {
+      g06AssertBytes(
+        "\x00\x1b\x7F\x80\xFf",
+        [(byte)0, (byte)27, (byte)127, (byte)128, (byte)255],
+        "STR03 boundary hex bytes"
+      );
+      g06AssertBytes(
+        "\xAB\xCd",
+        [(byte)171, (byte)205],
+        "STR03 mixed-case hex bytes"
+      );
+    });
+
+    test("STR04 adjacent escape kinds preserve order", () {
+      g06AssertBytes(
+        "Z\n\t\x41\0\\\"",
+        [(byte)90, (byte)10, (byte)9, (byte)65,
+         (byte)0, (byte)92, (byte)34],
+        "STR04 adjacent escape bytes"
+      );
+    });
+
+    test("STR05 quote and backslash escapes preserve content", () {
+      let escaped = "say: \"hi\" C:\\tmp";
+      let raw = `say: "hi" C:\tmp`;
+      assert(escaped == raw,
+             "STR05 escaped quote and backslash match raw content");
+      g06AssertBytes(
+        escaped,
+        [(byte)115, (byte)97, (byte)121, (byte)58, (byte)32,
+         (byte)34, (byte)104, (byte)105, (byte)34, (byte)32,
+         (byte)67, (byte)58, (byte)92, (byte)116, (byte)109, (byte)112],
+        "STR05 quote and backslash bytes"
+      );
+    });
+
+    test("STR06 operations observe the same decoded bytes", () {
+      let escaped = "A\nB";
+      let hex = "\x41\x0a\x42";
+      assert(escaped == hex && escaped != "A\nC",
+             "STR06 equality observes decoded bytes");
+      assert(escaped.length() == 3 && escaped.at(1) == "\n" &&
+             escaped.getByte(1) == (byte)10,
+             "STR06 length and byte-offset access agree");
+    });
+
+    test("STR07 hex escape consumes exactly two digits", () {
+      g06AssertBytes(
+        "\x1b1A",
+        [(byte)27, (byte)49, (byte)65],
+        "STR07 exact two-digit hex escape"
+      );
+    });
+
+    test("RAW01 backslash sequences remain literal", () {
+      let value = `\n\t\x1b`;
+      g06AssertBytes(
+        value,
+        [(byte)92, (byte)110, (byte)92, (byte)116,
+         (byte)92, (byte)120, (byte)49, (byte)98],
+        "RAW01 literal backslash sequences"
+      );
+      assert(value == "\\n\\t\\x1b",
+             "RAW01 raw and escaped spellings compare by final bytes");
+    });
+
+    test("RAW02 double quotes remain literal", () {
+      let value = `say "hi"`;
+      assert(value == "say \"hi\"",
+             "RAW02 raw double quotes match escaped content");
+    });
+
+    test("RAW03 real newline and whitespace remain literal", () {
+      let value = `A
+ B	C`;
+      g06AssertBytes(
+        value,
+        [(byte)65, (byte)10, (byte)32, (byte)66, (byte)9, (byte)67],
+        "RAW03 newline and whitespace bytes"
+      );
+      assert(value == "A\n B\tC",
+             "RAW03 raw whitespace matches escaped content");
+    });
+
+    test("RAW04 operations observe the same raw bytes", () {
+      let value = `A\nB`;
+      assert(value == "A\\nB" && value != "A\nB",
+             "RAW04 equality observes raw bytes");
+      assert(value.length() == 4 && value.at(1) == "\\" &&
+             value.getByte(2) == (byte)110,
+             "RAW04 length and byte-offset access agree");
+    });
+
+    test("RAW05 doubled backticks produce one backtick", () {
+      let value = `say ``hello```;
+      assert(value == "say `hello`",
+             "RAW05 doubled backticks preserve literal delimiters");
+      g06AssertBytes(
+        value,
+        [(byte)115, (byte)97, (byte)121, (byte)32, (byte)96,
+         (byte)104, (byte)101, (byte)108, (byte)108, (byte)111, (byte)96],
+        "RAW05 embedded backtick bytes"
+      );
+    });
+
+    test("RAW06 empty raw string equals empty escaped string", () {
+      let value = ``;
+      assert(value.length() == 0 && value == "",
+             "RAW06 empty raw string has empty content");
+    });
+  });
+}

@@ -2,7 +2,7 @@
 
 ## 概述
 
-Feng 字符串字面量支持以下转义序列。所有转义在编译期由 codegen 解码为字节，运行时 `FengString` 存储的是已解析的 byte 数组。
+双引号字符串字面量支持以下转义序列。所有转义均在编译期解码为字节，运行时字符串存储的是解码后的完整 byte 数组。内部 `0x00` 是普通内容字节，计入逻辑长度并参与索引和比较，不按 C 风格字符串终止规则处理。
 
 ## 支持的转义序列
 
@@ -47,6 +47,7 @@ Feng 字符串字面量支持以下转义序列。所有转义在编译期由 co
 - **支持连续书写**：多个 `\xNN` 可无缝连接，每个独立解析为一个字节。
 - **可表达所有 Unicode**：UTF-8 编码的任意 Unicode 字符均可通过多个 `\xNN` 组合表示。
 - **编译期解码**：codegen 阶段将 `\xNN` 转换为对应字节值，运行时零开销。
+- **完整字节范围**：`\xNN` 可以产生 `0x00`～`0xFF` 的任意字节；编译器不得因生成 C 源码的转义规则或源码编码而改变最终字节。
 
 ## 不支持的转义序列
 
@@ -56,70 +57,9 @@ Feng 字符串字面量支持以下转义序列。所有转义在编译期由 co
 | `\UXXXXXXXX` | 未支持 | 同上 |
 | `\a`, `\b`, `\f`, `\v` | 未支持 | 如有需求可按相同模式扩展 |
 
-## 实现位置
+## 实现约束
 
-| 阶段 | 文件 | 职责 |
-|------|------|------|
-| Lexer | `src/lexer/lexer.c` | 验证转义语法合法性，拒绝非法格式 |
-| Codegen | `src/codegen/codegen.c` | 将转义序列解码为字节，生成 C 字符串字面量 |
-| Runtime | `src/runtime/feng_string.c` | `feng_string_literal()` 仅做 memcpy，不做任何转换 |
-
-## Codegen 解码实现方案
-
-### 当前流程
-
-Codegen 在处理 `FENG_EXPR_STRING` 时（`src/codegen/codegen.c:10824-10862`），从 AST 节点获取原始 lexeme（含引号和未处理转义），通过一个解码循环将其转换为字节数组，再传给 `cg_string_literal_var()`。
-
-当前解码循环的 switch 仅处理 `\\ \" \n \r \t \0`，遇到其他字符走 default 报错。
-
-### `\xNN` 解码逻辑
-
-在解码循环的 switch 中增加 `case 'x'` 分支：
-
-```c
-case 'x':
-    /* \xNN: exactly 2 hex digits → one byte */
-    if (i + 2 >= blen ||
-        !is_hex_digit(body[i + 1]) ||
-        !is_hex_digit(body[i + 2])) {
-        free(decoded);
-        return cg_fail(cg, e->token,
-            "codegen: invalid \\x escape, expected 2 hex digits");
-    }
-    {
-        unsigned int high = hex_value(body[i + 1]);
-        unsigned int low  = hex_value(body[i + 2]);
-        decoded[di++] = (char)((high << 4) | low);
-        i += 2; /* skip the 2 hex digits (loop will ++i again) */
-    }
-    break;
-```
-
-### 辅助函数
-
-需要两个静态辅助函数（放在解码循环之前）：
-
-```c
-/* 判断字符是否为十六进制数字 */
-static bool is_hex_digit(char c) {
-    return (c >= '0' && c <= '9') ||
-           (c >= 'a' && c <= 'f') ||
-           (c >= 'A' && c <= 'F');
-}
-
-/* 将十六进制字符转为数值 0-15 */
-static unsigned int hex_value(char c) {
-    if (c >= '0' && c <= '9') return (unsigned int)(c - '0');
-    if (c >= 'a' && c <= 'f') return (unsigned int)(c - 'a' + 10);
-    if (c >= 'A' && c <= 'F') return (unsigned int)(c - 'A' + 10);
-    return 0; /* unreachable if guarded by is_hex_digit */
-}
-```
-
-### 关键点
-
-- **Lexer 已验证语法**：codegen 中的检查是防御性编程，正常情况下不会触发。
-- **编译期完成**：解码后的字节直接写入 `decoded` buffer，运行时零开销。
-- **与现有转义一致**：遵循相同的 switch-case 模式，不引入额外抽象。
-- **生成的 C 代码**：`cg_string_literal_var()` 将解码后的字节存入静态变量，`feng_string_literal()` 调用时传入的是已解析的 byte 数组。
-DOCEOF; __aone_exit=$?; pwd -P > '/var/folders/_0/s4cd_7ln2lz9gtn1lyh5l8j40000gp/T/aone-copilot-cwd-1781272999498-ujjszhtlq4d.txt' 2>/dev/null; exit $__aone_exit
+- Lexer 负责验证转义语法，非法字面量在进入 Codegen 前报告稳定诊断。
+- Codegen 必须先把字面量解码为带显式长度的 byte 数组，再生成目标代码；不得用首个 NUL 判断解码结果长度。
+- 生成 C 字符串字面量时必须使用长度感知的统一字节编码。安全 ASCII 可以直接输出，其他字节必须使用不会继续吞入后续字符的固定宽度表示，避免 C 的 `\x` 转义贪婪消费或宿主源码编码改变 `0x80`～`0xFF`。
+- Runtime 的 `feng_string_literal()` 只按显式长度复制最终字节，不执行二次转义或终止符扫描，因此该规则不增加运行时开销。
