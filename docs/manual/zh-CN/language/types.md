@@ -22,6 +22,7 @@ let ready = true;
 ```
 
 运行时整数溢出按位宽回绕；编译期可确定的越界字面量会被拒绝。
+整数除法与取模的未定义行为边界以 [Feng 语言表达式与运算规范](../../../specifications/feng-expression.md) §3.1 为准。
 
 ## 字符串
 
