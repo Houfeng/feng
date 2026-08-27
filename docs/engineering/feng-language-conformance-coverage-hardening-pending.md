@@ -587,7 +587,8 @@ STR01～STR07、RAW01～RAW06 由新增 FCTS 行为文件覆盖；RAW07 由直�
 
 验证三段式 `for` 与 `for/in` 的绑定实例化次数、跨轮共享或隔离、`let` / `var` 可变性，以及引用捕获
 后的可观察结果。三段式 `for` 采用已确认的 C# 模型：外部绑定与初始化子句绑定在整个循环中各自共享
-同一实例；循环体内声明的绑定按每次执行独立。`for/in` 循环变量每轮独立。
+同一实例。三段式 `for` 循环体内执行到的局部声明与 `for/in` 循环变量均按轮产生新绑定；`for/in`
+循环变量等同于在每轮进入循环体前执行一次相应的局部声明。
 
 规范依据统一引用 [流程控制规范](../specifications/feng-flow.md)第 6 节；闭包捕获方式引用
 [函数规范](../specifications/feng-function.md)与[生命周期规范](../specifications/feng-lifetime.md)，迭代器

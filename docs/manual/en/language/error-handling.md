@@ -46,7 +46,10 @@ let port = try parse_port(text) catch error: string {
 };
 ```
 
-The normal path and every normally completing `catch` must produce the same type. Omitting `catch` creates only an exception propagation point; the exception continues to the caller.
+The normal path and every normally completing `catch` must produce a result. A path that ends with `throw` produces
+no result. When the context provides a target type, every normal result must fit that type. Without a contextual
+target, Feng determines a target type from these results and requires the remaining normal results to fit it. Omitting
+`catch` creates only an exception propagation point; the exception continues to the caller.
 
 ## defer
 

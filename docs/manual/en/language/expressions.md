@@ -79,4 +79,8 @@ let category = match code {
 };
 ```
 
-Every normally completing branch of an expression must produce the same result type. The final expression is the value of its block. See [Control Flow](./control-flow.md), [Pattern Matching](./pattern-matching.md), and [Error Handling](./error-handling.md).
+Every normally completing branch must produce a result, and the final expression is the value of its block. A branch
+that ends with `throw` produces no result. When the context provides a target type, every normal branch result must fit
+that type. Without a contextual target, Feng determines a target type from the branch results and requires the
+remaining normal results to fit it. See [Control Flow](./control-flow.md), [Pattern Matching](./pattern-matching.md),
+and [Error Handling](./error-handling.md) for the syntax of each expression form.

@@ -26,7 +26,9 @@ let status = if ready {
 };
 ```
 
-The expression form requires an `else`, and every normally completing branch must produce a value of the same type.
+The expression form requires an `else`, and every normally completing branch must produce a value. When the context
+provides a target type, every branch result must fit that type. Without a contextual target, Feng determines a target
+type from the branch results and requires the remaining results to fit it.
 
 ## while
 
@@ -56,9 +58,13 @@ for var index = 0; index < 10; index += 1 {
 
 The initializer, condition, and update clauses can each be omitted. `for ;; { ... }` is an infinite loop.
 
-The execution count of the initializer, the sharing of outer and initializer bindings, the per-iteration identity of
-body-local bindings, and the resulting closure behavior are defined by the
-[Feng Control Flow Specification](../../../specifications/feng-flow.md#61-%E4%B8%89%E6%AE%B5%E5%BC%8F-for).
+A nonempty initializer runs exactly once when control enters the loop. A binding declared by the initializer remains
+the same binding throughout the loop, and a binding declared outside the loop remains the original binding. The
+condition, update, and every execution of the body refer to those same bindings.
+
+Each entry into the body is a new execution of that block. Whenever a body-local declaration is executed, it creates
+a new binding. Closures created in different iterations therefore share a captured outer or initializer binding, but
+capture separate body-local bindings for their respective iterations.
 
 ## for/in
 
@@ -72,9 +78,15 @@ for let value in values {
 ```
 
 `for/in` can iterate over arrays and over standard-library or user-defined iterators that implement the `@iterable` /
-`@iterator` protocols. The loop binding's per-iteration identity, `let` / `var` mutability, and resulting closure
-behavior are defined by the
-[Feng Control Flow Specification](../../../specifications/feng-flow.md#62-forin-%E5%BE%AA%E7%8E%AF).
+`@iterator` protocols. Before each entry into the body, Feng creates a new loop-variable binding initialized with the
+current element. This is equivalent to executing the corresponding local declaration once per iteration immediately
+before the body begins.
+
+A `let` loop variable cannot be reassigned. A `var` loop variable can be modified during its iteration, but doing so
+does not change the iterated sequence or the next iteration's initial value. A closure captures only the current
+iteration's binding: closures created in the same iteration share that binding, while closures from different
+iterations do not. If a closure is created before the same iteration's `var` is modified, it observes the modified
+value.
 
 ## Control Transfer
 

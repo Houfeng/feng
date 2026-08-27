@@ -22,6 +22,9 @@ let ready = true;
 ```
 
 At runtime, integer overflow wraps at the type's bit width. A literal known at compile time to be out of range is rejected.
+Integer division or remainder with a right operand of `0` is undefined behavior (UB). For every signed integer type,
+`MIN / -1` and `MIN % -1` are also UB, where `MIN` is that type's minimum value. Feng adds no runtime protection for
+these cases.
 
 ## Strings
 

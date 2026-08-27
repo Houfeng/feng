@@ -42,8 +42,7 @@ let third = app.archive.load();        // 无需 import，直接使用完整模�
 ```
 
 三种形式访问同一公开声明。完整模块路径适用于公开的 `type`、`enum`、`spec`、顶层函数和模块级
-`let` / `var`；模块及目标声明都必须公开。详细规则见
-[Feng 语言模块规范](../../specifications/feng-module.md#4-模块导入规则)。
+`let` / `var`；模块及目标声明都必须公开。
 
 表达式中的局部值优先于同名的完整模块路径首段。需要访问被局部值遮蔽的模块时，使用不冲突的
 import alias。

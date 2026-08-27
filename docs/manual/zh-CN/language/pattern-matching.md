@@ -87,4 +87,6 @@ if result match text: string && !text.isEmpty() {
 
 ## 表达式结果
 
-`match` 作为表达式时，每个正常分支的最后一个表达式是结果；目标类型选择与贴合规则统一见 [Feng 语言流程控制规范](../../../specifications/feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)，`throw` 分支与 `else` 完备性见同规范的[块形式 `match` 表达式结果](../../../specifications/feng-flow.md#34-%E5%9D%97%E5%BD%A2%E5%BC%8F-match-%E7%9A%84%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C)。
+`match` 作为表达式时，每个正常分支的最后一个表达式是结果；以 `throw` 结束的分支不产生结果，也
+不参与结果类型检查。表达式形式必须包含 `else`。上下文提供目标类型时，每个正常分支的结果都必须
+能够贴合该类型；没有目标类型时，Feng 从分支结果确定目标类型，并要求其余正常分支的结果能够贴合。

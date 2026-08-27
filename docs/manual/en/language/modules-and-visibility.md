@@ -41,7 +41,8 @@ let second = service.load();           // alias after import ... as
 let third = app.archive.load();        // full module path without import
 ```
 
-All three forms access the same public declaration. Full module paths apply to public `type`, `enum`, `spec`, top-level functions, and module-level `let` / `var`; both the module and target declaration must be public. See the [Feng Module Specification](../../specifications/feng-module.md#4-模块导入规则) for the normative rules.
+All three forms access the same public declaration. Full module paths apply to public `type`, `enum`, `spec`,
+top-level functions, and module-level `let` / `var`; both the module and target declaration must be public.
 
 In expression contexts, a local value takes precedence over the same first segment of a full module path. Use a non-conflicting import alias to access a module hidden by a local value.
 
