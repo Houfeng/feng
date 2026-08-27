@@ -11257,6 +11257,40 @@ static void test_object_literal_rejects_ctor_bound_let_member_for_selected_overl
     feng_program_free(program);
 }
 
+/* Ensure direct object-literal shorthand applies the selected zero-argument
+ * constructor's immutable-member binding facts before literal validation. */
+static void test_object_literal_shorthand_rejects_ctor_bound_let_member(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type User {\n"
+        "    let id: int;\n"
+        "    func User() {\n"
+        "        self.id = 1;\n"
+        "    }\n"
+        "}\n"
+        "func make(): User {\n"
+        "    return User { id: 2 };\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die(
+        "let_ctor_object_literal_shorthand_error.f", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path,
+                  "let_ctor_object_literal_shorthand_error.f") == 0);
+    ASSERT(errors[0].token.line == 9U);
+    ASSERT(strstr(errors[0].message,
+                  "already completed by constructor") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_object_literal_allows_unbound_let_member(void) {
     const char *source =
         "module demo.main;\n"
@@ -11279,6 +11313,77 @@ static void test_object_literal_allows_unbound_let_member(void) {
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+/* Once all construction phases end, immutable members reject assignment
+ * regardless of which phase finalized them or whether they kept zero. */
+static void test_let_member_rejects_post_construction_assignment_for_all_phases(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+    } kRejected[] = {
+        {
+            "let_post_decl_error.f",
+            "module demo.post_decl;\n"
+            "type Value { let field: int = 1; }\n"
+            "func reject() {\n"
+            "    var value = Value();\n"
+            "    value.field = 2;\n"
+            "}\n",
+        },
+        {
+            "let_post_ctor_error.f",
+            "module demo.post_ctor;\n"
+            "type Value {\n"
+            "    let field: int;\n"
+            "    func Value(field: int) { self.field = field; }\n"
+            "}\n"
+            "func reject() {\n"
+            "    var value = Value(1);\n"
+            "    value.field = 2;\n"
+            "}\n",
+        },
+        {
+            "let_post_literal_error.f",
+            "module demo.post_literal;\n"
+            "type Value { let field: int; }\n"
+            "func reject() {\n"
+            "    var value = Value { field: 1 };\n"
+            "    value.field = 2;\n"
+            "}\n",
+        },
+        {
+            "let_post_default_error.f",
+            "module demo.post_default;\n"
+            "type Value { let field: int; }\n"
+            "func reject() {\n"
+            "    var value = Value();\n"
+            "    value.field = 2;\n"
+            "}\n",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(kRejected) / sizeof(kRejected[0]);
+         ++index) {
+        FengProgram *program = parse_program_or_die(
+            kRejected[index].path, kRejected[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, kRejected[index].path) == 0);
+        ASSERT(strstr(errors[0].message, "is not writable") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
 }
 
 static void test_object_literal_rejects_duplicate_fields(void) {
@@ -29614,7 +29719,9 @@ int main(void) {
     test_method_rejects_let_member_assignment();
     test_object_literal_rejects_ctor_bound_let_member();
     test_object_literal_rejects_ctor_bound_let_member_for_selected_overload();
+    test_object_literal_shorthand_rejects_ctor_bound_let_member();
     test_object_literal_allows_unbound_let_member();
+    test_let_member_rejects_post_construction_assignment_for_all_phases();
     test_object_literal_rejects_duplicate_fields();
     test_object_literal_rejects_inaccessible_private_field();
     test_object_literal_rejects_private_field_outside_owner_in_same_module();

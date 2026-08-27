@@ -1290,6 +1290,198 @@ static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     free(tmp_dir);
 }
 
+/* Analyze one consumer against declarations restored from package-public FT
+ * and require the expected immutable-member diagnostic. */
+static void assert_ft_let_consumer_rejected(
+    const FengSemanticAnalyzeOptions *options,
+    const char *path,
+    const char *source,
+    const char *expected_code,
+    const char *expected_message_fragment) {
+    FengProgram *program = parse_or_die(path, source);
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(strstr(errors[0].message, expected_message_fragment) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Package-public FT must preserve every fact needed to enforce let binding
+ * across all construction phases and after imported construction completes. */
+static void test_let_three_phase_binding_semantics_survive_ft_roundtrip(void) {
+    static const char *kProviderSource =
+        "open module vendor.g05_let;\n"
+        "open type DeclarationBoundLet {\n"
+        "    open let value: int = 101;\n"
+        "}\n"
+        "open type ConstructorBoundLet {\n"
+        "    open let value: int;\n"
+        "    open func ConstructorBoundLet() { self.value = 202; }\n"
+        "}\n"
+        "open type LiteralBoundLet {\n"
+        "    open let value: int;\n"
+        "}\n"
+        "open type DefaultUnboundLet {\n"
+        "    open let value: int;\n"
+        "}\n";
+    static const char *kAllowedSource =
+        "module consumer.g05_let_allowed;\n"
+        "import vendor.g05_let as provider;\n"
+        "func read(): int {\n"
+        "    let declaration = provider.DeclarationBoundLet();\n"
+        "    let constructor = provider.ConstructorBoundLet();\n"
+        "    let literal = provider.LiteralBoundLet { value: 303 };\n"
+        "    let zero = provider.DefaultUnboundLet();\n"
+        "    return declaration.value + constructor.value +\n"
+        "           literal.value + zero.value;\n"
+        "}\n";
+    /* Rejected consumers cover phase-to-phase rebinding and assignments after
+     * each possible final-binding state, including the unbound zero state. */
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+        const char *expected_message_fragment;
+    } kRejected[] = {
+        {
+            "ft_let_decl_literal_error.ff",
+            "module consumer.g05_decl_literal;\n"
+            "import vendor.g05_let as provider;\n"
+            "func make(): provider.DeclarationBoundLet {\n"
+            "    return provider.DeclarationBoundLet { value: 1 };\n"
+            "}\n",
+            "AE0102",
+            "declaration initializer",
+        },
+        {
+            "ft_let_ctor_literal_error.ff",
+            "module consumer.g05_ctor_literal;\n"
+            "import vendor.g05_let as provider;\n"
+            "func make(): provider.ConstructorBoundLet {\n"
+            "    return provider.ConstructorBoundLet { value: 1 };\n"
+            "}\n",
+            "AE0102",
+            "already completed by constructor",
+        },
+        {
+            "ft_let_post_decl_error.ff",
+            "module consumer.g05_post_decl;\n"
+            "import vendor.g05_let as provider;\n"
+            "func reject() {\n"
+            "    var value = provider.DeclarationBoundLet();\n"
+            "    value.value = 1;\n"
+            "}\n",
+            "AE0104",
+            "is not writable",
+        },
+        {
+            "ft_let_post_ctor_error.ff",
+            "module consumer.g05_post_ctor;\n"
+            "import vendor.g05_let as provider;\n"
+            "func reject() {\n"
+            "    var value = provider.ConstructorBoundLet();\n"
+            "    value.value = 1;\n"
+            "}\n",
+            "AE0104",
+            "is not writable",
+        },
+        {
+            "ft_let_post_literal_error.ff",
+            "module consumer.g05_post_literal;\n"
+            "import vendor.g05_let as provider;\n"
+            "func reject() {\n"
+            "    var value = provider.LiteralBoundLet { value: 1 };\n"
+            "    value.value = 2;\n"
+            "}\n",
+            "AE0104",
+            "is not writable",
+        },
+        {
+            "ft_let_post_default_error.ff",
+            "module consumer.g05_post_default;\n"
+            "import vendor.g05_let as provider;\n"
+            "func reject() {\n"
+            "    var value = provider.DefaultUnboundLet();\n"
+            "    value.value = 1;\n"
+            "}\n",
+            "AE0104",
+            "is not writable",
+        },
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g05_let_provider.ff",
+                                kProviderSource,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+
+    program = parse_or_die("ft_let_allowed.ff", kAllowedSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    for (size_t index = 0U;
+         index < sizeof(kRejected) / sizeof(kRejected[0]);
+         ++index) {
+        assert_ft_let_consumer_rejected(
+            &options,
+            kRejected[index].path,
+            kRejected[index].source,
+            kRejected[index].expected_code,
+            kRejected[index].expected_message_fragment);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* Verifies generated mixin members are exported as ordinary target members
  * while the propagated static wrapper preserves its mixable declaration fact. */
 static void test_mixin_generated_members_ft_roundtrip(void) {
@@ -4398,6 +4590,7 @@ int main(void) {
     test_local_friend_fit_can_target_imported_type();
     test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
+    test_let_three_phase_binding_semantics_survive_ft_roundtrip();
     test_mixin_generated_members_ft_roundtrip();
     test_mixable_seal_member_ft_roundtrip_preserves_field_facts();
     test_roundtrip_public_module_docs();

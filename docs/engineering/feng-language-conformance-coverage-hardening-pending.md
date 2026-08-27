@@ -380,10 +380,41 @@ CTOR05 中的“覆盖”只表示同一对象的 `var` 实例成员先由构造
 外层 `let` / `var` 变量重新绑定。对象字面量可以完成尚未绑定的 `let` 成员，但不得覆盖已经由声明
 初始化器或构造函数完成绑定的 `let` 成员；后者必须在编译期报错，不属于 CTOR05 的正向行为用例。
 
+#### 9.2.1 同包 `let` 三阶段正向用例
+
+- [x] LET01：`let` 成员在成员声明初始化阶段首次显式绑定，构造完成后保持该值；
+- [x] LET02：无声明初始化器的 `let` 成员在构造函数阶段首次显式绑定，构造完成后保持该值；
+- [x] LET03：前两个阶段均未绑定的 `let` 成员可在对象字面量阶段首次显式绑定；
+- [x] LET04：三个阶段均未显式绑定的 `let` 成员在构造结束后保留类型默认零值。
+
+#### 9.2.2 同包 `let` 三阶段负向用例
+
+- [x] LET05：声明初始化阶段已绑定后，构造函数再次绑定必须报错；
+- [x] LET06：声明初始化阶段已绑定后，对象字面量再次绑定必须报错；
+- [x] LET07：同一构造函数内对同一 `let` 成员绑定两次必须报错；
+- [x] LET08：当前选中的构造函数已绑定后，对象字面量再次绑定必须报错；
+- [x] LET09：三个构造阶段结束后，无论成员在声明、构造函数、对象字面量阶段完成绑定，还是始终只
+  保留默认零值，任何再次绑定或赋值都必须报错。
+
+#### 9.2.3 跨包 `let` 三阶段正向用例
+
+- [x] LET10：通过真实包依赖分别构造“声明阶段绑定、构造函数阶段绑定、consumer 对象字面量阶段
+  绑定、三个阶段均未绑定”的公开 `let` 成员，并得到对应显式值或默认零值。
+
+#### 9.2.4 跨包 `let` 三阶段负向用例
+
+- [x] LET11：经过真实 `.ft` 往返后，provider 声明阶段或当前选中构造函数已经绑定的公开 `let`
+  成员，在 consumer 对象字面量中再次绑定必须报错；
+- [x] LET12：经过真实 `.ft` 往返后，无论公开 `let` 成员在三个阶段中的哪个阶段完成绑定，或始终
+  只保留默认零值，consumer 在构造结束后的任何再次绑定或赋值都必须报错。
+
+LET05～LET09 属于编译器诊断测试；LET11～LET12 必须由实际写出并重新读取 `.ft` 的测试提供证据，
+不能仅以同一进程中的源码 AST 或内存符号图代替跨包边界。
+
 ### 9.3 独立验收与交付 TODO
 
 - [x] 核对类型和表达式规范，确认三阶段和未定义顺序边界；
-- [x] 独立运行 G05，核对事件轨迹、参数求值、字段覆盖和跨包一致性；
+- [x] 独立运行 G05，核对事件轨迹、参数求值、字段覆盖、`let` 三阶段绑定和跨包一致性；
 - [x] 在 Codex 沙箱外为 G05 独立执行 `make test`；
 - [x] 执行 `git diff --check`，关闭或决策 G05 问题；
 - [x] 填写本组实际文件、专项结果、全量结果和交付结论。
@@ -392,25 +423,33 @@ CTOR05 中的“覆盖”只表示同一对象的 `var` 实例成员先由构造
 
 - 状态：已完成
 - 实际文件与用例：
-  - `fcts/fcts_bin/src/test_object_construction_order.ff`：新增 CTOR01～CTOR06，逐项断言事件轨迹、
-    调用次数和最终字段值，并覆盖引用类型、`@value` 类型、直接空字面量简写和跨包构造；
-  - `fcts/fcts_lib/src/g05_construction/g05_construction.ff`：提供跨包三阶段构造及事件轨迹接口；
+  - `fcts/fcts_bin/src/test_object_construction_order.ff`：覆盖 CTOR01～CTOR06、同包 LET01～LET04
+    和跨包 LET10，逐项断言事件轨迹、调用次数、各阶段 `let` 最终值和默认零值；
+  - `fcts/fcts_lib/src/g05_construction/g05_construction.ff`：提供跨包三阶段构造、事件轨迹以及 LET10
+    四种公开 `let` 成员状态；
   - `fcts/fcts_bin/src/main.ff`：将 G05 行为测试接入完整 FCTS；
   - `src/parser/parser.h`、`src/semantic/analyzer.c`、`src/codegen/codegen.c`：在对象字面量 AST 保存语义
     阶段唯一选中的构造函数，并让直接 `Type { ... }` 与显式 `Type() { ... }` 复用同一构造调用路径；
   - `test/codegen/test_codegen.c`：验证引用类型与 `@value` 类型的直接空字面量均生成且只生成一次已选
     无参构造函数调用，并编译生成 C；
+  - `test/semantic/test_semantic.c`：覆盖同包 LET05～LET09，验证阶段间重复绑定，并验证四种阶段状态
+    在构造结束后再次赋值均被拒绝；
+  - `test/symbol/test_symbol.c`：实际写出并重新读取 provider `.ft`，覆盖跨包 LET11～LET12，验证
+    声明阶段或当前选中构造函数绑定信息能够跨 `.ft` 恢复，并精确断言 `AE0102`、`AE0104`；
   - 本文：记录 `ISSUE-G05-001`～`ISSUE-G05-003` 的发现、分析和验收结果。
-- 本组专项结果：Codegen tests 通过；完整 FCTS 990/990；CTOR01～CTOR06 全部通过；引用类型、
-  `@value` 类型和跨包路径的声明初始化、构造函数与字面量写入顺序一致；
-- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 990/990、smoke 均为
+- 本组专项结果：Semantic tests、Symbol tests、Codegen tests 均通过；完整 FCTS 998/998；
+  CTOR01～CTOR06、LET01～LET12 全部通过；引用类型、`@value` 类型、同包与跨包路径的三阶段行为
+  及诊断一致；
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 998/998、smoke 均为
   91/91、std 均为 601/601，Runtime、CLI、性能约束、增量构建与发布脚本检查均通过；
 - 问题：`ISSUE-G05-001`、`ISSUE-G05-002` 已关闭；`ISSUE-G05-003` 经专项复验和第二次完整
   `make test` 均未复现，记录为一次性测试环境产物缺失，未据此修改产品代码；
-- 交付结论：CTOR01～CTOR06 已形成完整行为证据；直接对象字面量简写会执行语义阶段已选中的显式
-  无参构造函数。修复不增加运行时判断、分支或辅助调用，不变更 runtime 私有 ABI、公开 ABI 或
-  `.ft` 格式；新增的构造函数调用是恢复规范要求的既有构造语义；
-- 建议 commit message：`fix: invoke selected constructors for object literal shorthand`
+- 交付结论：CTOR01～CTOR06 和 LET01～LET12 已形成完整行为与诊断证据；直接对象字面量简写会执行
+  语义阶段已选中的显式无参构造函数；`let` 可在三个构造阶段中的任一阶段首次绑定，首次绑定后不可
+  在后续阶段再次绑定，构造结束后无论是否显式绑定都不可再次赋值，同包与真实 `.ft` 跨包边界一致。
+  本轮用例补充未修改产品实现，不增加运行时判断、分支或辅助调用，不变更 runtime 私有 ABI、公开
+  ABI 或 `.ft` 格式；
+- 建议 commit message：`test: cover let binding across construction phases`
 
 ## 10 G06：字符串字面量语义
 

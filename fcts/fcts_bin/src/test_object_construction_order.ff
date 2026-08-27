@@ -106,6 +106,35 @@ type G05MutableFieldOverride {
   }
 }
 
+/** Same-package probe bound during member declaration initialization. */
+type G05DeclarationBoundLet {
+  /** Immutable value finalized by the first construction phase. */
+  let value: int = 11;
+}
+
+/** Same-package probe bound by its selected constructor. */
+type G05ConstructorBoundLet {
+  /** Immutable value left unbound until the constructor phase. */
+  let value: int;
+
+  /** Finalize the immutable value during construction. */
+  func G05ConstructorBoundLet(value: int) {
+    self.value = value;
+  }
+}
+
+/** Same-package probe bound by its object-literal phase. */
+type G05LiteralBoundLet {
+  /** Immutable value left unbound for the object literal. */
+  let value: int;
+}
+
+/** Same-package probe left explicitly unbound through all three phases. */
+type G05DefaultUnboundLet {
+  /** Immutable value that retains its default zero value. */
+  let value: int;
+}
+
 /** Execute object-construction order conformance coverage. */
 open func test_object_construction_order(): void {
   describe("object construction order", () {
@@ -204,6 +233,62 @@ open func test_object_construction_order(): void {
              value.declarationValue == 10 &&
              value.constructorValue == 20 && value.literalValue == 30,
              "CTOR06 preserves construction order across the package boundary");
+    });
+
+    test("LET01 declaration phase can finalize a let member", () {
+      let value = G05DeclarationBoundLet();
+
+      assert(value.value == 11,
+             "LET01 preserves the declaration-bound immutable value");
+    });
+
+    test("LET02 constructor phase can finalize an unbound let member", () {
+      let value = G05ConstructorBoundLet(22);
+
+      assert(value.value == 22,
+             "LET02 preserves the constructor-bound immutable value");
+    });
+
+    test("LET03 literal phase can finalize an unbound let member", () {
+      let value = G05LiteralBoundLet { value: 33 };
+
+      assert(value.value == 33,
+             "LET03 preserves the literal-bound immutable value");
+    });
+
+    test("LET04 unbound let member retains its default zero value", () {
+      let value = G05DefaultUnboundLet();
+
+      assert(value.value == 0,
+             "LET04 preserves the immutable member's default zero value");
+    });
+
+    test("LET10-A imported declaration phase finalizes a let member", () {
+      let value = G05ImportedDeclarationBoundLet();
+
+      assert(value.value == 101,
+             "LET10-A preserves the imported declaration-bound value");
+    });
+
+    test("LET10-B imported constructor phase finalizes a let member", () {
+      let value = G05ImportedConstructorBoundLet(202);
+
+      assert(value.value == 202,
+             "LET10-B preserves the imported constructor-bound value");
+    });
+
+    test("LET10-C consumer literal phase finalizes an imported let member", () {
+      let value = G05ImportedLiteralBoundLet { value: 303 };
+
+      assert(value.value == 303,
+             "LET10-C preserves the consumer literal-bound value");
+    });
+
+    test("LET10-D imported unbound let retains its default zero value", () {
+      let value = G05ImportedDefaultUnboundLet();
+
+      assert(value.value == 0,
+             "LET10-D preserves the imported member's default zero value");
     });
   });
 }

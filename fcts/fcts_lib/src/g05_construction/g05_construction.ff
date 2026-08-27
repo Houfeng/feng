@@ -51,3 +51,32 @@ open type G05ImportedConstruction {
     return value;
   }
 }
+
+/** Imported probe finalized by member declaration initialization. */
+open type G05ImportedDeclarationBoundLet {
+  /** Immutable value finalized in the provider's first construction phase. */
+  open let value: int = 101;
+}
+
+/** Imported probe finalized by its selected constructor. */
+open type G05ImportedConstructorBoundLet {
+  /** Immutable value left unbound until the constructor phase. */
+  open let value: int;
+
+  /** Finalize the immutable value in provider code. */
+  open func G05ImportedConstructorBoundLet(value: int) {
+    self.value = value;
+  }
+}
+
+/** Imported probe finalized by the consumer's object literal. */
+open type G05ImportedLiteralBoundLet {
+  /** Immutable value exported as unbound for consumer initialization. */
+  open let value: int;
+}
+
+/** Imported probe left explicitly unbound through all construction phases. */
+open type G05ImportedDefaultUnboundLet {
+  /** Immutable value that retains its default zero value. */
+  open let value: int;
+}
