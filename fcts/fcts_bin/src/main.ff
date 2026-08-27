@@ -10,6 +10,7 @@ func main(args: string[]) {
       test_builtin_type();
       test_numeric_literal();
       test_expression();
+      test_integer_runtime_semantics();
       test_evaluation_order();
       test_assignment_evaluation_semantics();
       test_branch_result_fitting();

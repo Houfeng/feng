@@ -1,0 +1,88 @@
+module fcts_bin;
+
+import std.test;
+
+/** Add two dynamic u8 operands. */
+func g04AddU8(left: u8, right: u8): u8 {
+  return left + right;
+}
+
+/** Subtract two dynamic u8 operands. */
+func g04SubtractU8(left: u8, right: u8): u8 {
+  return left - right;
+}
+
+/** Add two dynamic i8 operands. */
+func g04AddI8(left: i8, right: i8): i8 {
+  return left + right;
+}
+
+/** Subtract two dynamic i8 operands. */
+func g04SubtractI8(left: i8, right: i8): i8 {
+  return left - right;
+}
+
+/** Multiply two dynamic i32 operands. */
+func g04MultiplyI32(left: i32, right: i32): i32 {
+  return left * right;
+}
+
+/** Multiply two dynamic u32 operands. */
+func g04MultiplyU32(left: u32, right: u32): u32 {
+  return left * right;
+}
+
+/** Right-shift one dynamic i32 operand by a dynamic distance. */
+func g04ShiftI32(value: i32, distance: i32): i32 {
+  return value >> distance;
+}
+
+/** Right-shift one dynamic u32 operand by a dynamic distance. */
+func g04ShiftU32(value: u32, distance: u32): u32 {
+  return value >> distance;
+}
+
+/** Execute dynamic fixed-width integer runtime-semantics coverage. */
+open func test_integer_runtime_semantics(): void {
+  describe("dynamic integer runtime semantics", () {
+    test("INT01 dynamic u8 addition wraps silently", () {
+      assert(g04AddU8(250, 10) == 4,
+             "INT01 u8 addition wraps at eight bits");
+    });
+
+    test("INT02 dynamic u8 subtraction wraps silently", () {
+      assert(g04SubtractU8(3, 5) == 254,
+             "INT02 u8 subtraction wraps at eight bits");
+    });
+
+    test("INT03 dynamic i8 addition wraps silently", () {
+      assert(g04AddI8(120, 20) == (i8)-116,
+             "INT03 i8 addition wraps at eight bits");
+    });
+
+    test("INT04 dynamic i8 subtraction wraps silently", () {
+      assert(g04SubtractI8((i8)-120, 20) == 116,
+             "INT04 i8 subtraction wraps at eight bits");
+    });
+
+    test("INT05 dynamic i32 multiplication wraps silently", () {
+      assert(g04MultiplyI32(1073741824, 3) == (i32)-1073741824,
+             "INT05 i32 multiplication wraps at thirty-two bits");
+    });
+
+    test("INT06 dynamic u32 multiplication wraps silently", () {
+      assert(g04MultiplyU32(0x80000000, 3) == 0x80000000,
+             "INT06 u32 multiplication wraps at thirty-two bits");
+    });
+
+    test("INT07 negative i32 right shift is arithmetic", () {
+      assert(g04ShiftI32((i32)-1073741824, 3) == (i32)-134217728,
+             "INT07 i32 right shift fills with sign bits");
+    });
+
+    test("INT08 u32 right shift is logical", () {
+      assert(g04ShiftU32(0x80000000, 4) == 0x08000000,
+             "INT08 u32 right shift fills with zero bits");
+    });
+  });
+}

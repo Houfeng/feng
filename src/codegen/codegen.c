@@ -21517,6 +21517,25 @@ static bool cg_assignment_is_compound(FengTokenKind op) {
     return op != FENG_TOKEN_ASSIGN;
 }
 
+/* Return the compiler intrinsic used to implement one wrapping integer
+ * operation. The intrinsic writes the result directly in the requested
+ * fixed-width type; its overflow flag is intentionally ignored. */
+static const char *cg_integer_wrapping_builtin(FengTokenKind op) {
+    switch (op) {
+        case FENG_TOKEN_PLUS:
+            return "__builtin_add_overflow";
+        case FENG_TOKEN_MINUS:
+            return "__builtin_sub_overflow";
+        case FENG_TOKEN_STAR:
+            return "__builtin_mul_overflow";
+        default:
+            return NULL;
+    }
+}
+
+/* Append one numeric expression while preserving Feng's fixed-width integer
+ * semantics. Wrapping arithmetic uses compiler intrinsics so signed overflow
+ * and narrow-integer promotion remain defined without runtime checks. */
 static bool cg_append_numeric_op_expr(Buf *b,
                                       CGTypeKind kind,
                                       const char *lhs,
@@ -21524,6 +21543,24 @@ static bool cg_append_numeric_op_expr(Buf *b,
                                       const char *rhs) {
     const char *cty = cgtype_to_c(kind);
     const char *cop = cg_binop_c(op);
+    const char *wrapping_builtin = cgtype_is_integer(kind)
+                                       ? cg_integer_wrapping_builtin(op)
+                                       : NULL;
+
+    if (wrapping_builtin != NULL) {
+        buf_append_fmt(
+            b,
+            "(__extension__ ({ %s _wrap_result; "
+            "(void)%s((%s)(%s), (%s)(%s), &_wrap_result); "
+            "_wrap_result; }))",
+            cty,
+            wrapping_builtin,
+            cty,
+            lhs,
+            cty,
+            rhs);
+        return true;
+    }
 
     if (op == FENG_TOKEN_PERCENT && kind == CG_TYPE_F32) {
         buf_append_fmt(b, "fmodf((float)(%s), (float)(%s))", lhs, rhs);
@@ -21715,16 +21752,16 @@ static bool cg_emit_binary(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&lr); er_free(&rr); return false;
     }
     Buf b; buf_init(&b);
-    const char *cty = cgtype_to_c(common->kind);
-    if (e->as.binary.op == FENG_TOKEN_PERCENT && cgtype_is_float(common->kind)) {
-        if (!cg_append_numeric_op_expr(&b, common->kind, lr.c_expr, e->as.binary.op, rr.c_expr)) {
-            cgtype_free(common);
-            er_free(&lr);
-            er_free(&rr);
-            return cg_fail(cg, e->token, "CE0089", "codegen: unsupported float modulo operation");
-        }
-    } else {
-        buf_append_fmt(&b, "((%s)%s %s (%s)%s)", cty, lr.c_expr, cop, cty, rr.c_expr);
+    if (!cg_append_numeric_op_expr(&b,
+                                   common->kind,
+                                   lr.c_expr,
+                                   e->as.binary.op,
+                                   rr.c_expr)) {
+        cgtype_free(common);
+        er_free(&lr);
+        er_free(&rr);
+        return cg_fail(cg, e->token,
+                       "CE0089", "codegen: unsupported numeric operation");
     }
     out->c_expr = b.data;
     if (is_cmp) {

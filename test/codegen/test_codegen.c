@@ -5483,6 +5483,90 @@ static void test_float_modulo_codegen_uses_math_runtime(void) {
     feng_program_free(program);
 }
 
+/* Assert that one generated integer operation uses its compile-time
+ * intrinsic and introduces no wrapping helper or conditional branch. The
+ * ordinary Feng function frame prologue and epilogue remain out of scope. */
+static void assert_integer_wrapping_body(const char *c_source,
+                                         const char *symbol_fragment,
+                                         const char *builtin_name) {
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(find_generated_function_body(c_source,
+                                        symbol_fragment,
+                                        &body_start,
+                                        &body_end));
+    ASSERT(span_contains(body_start, body_end, builtin_name));
+    ASSERT(!span_contains(body_start, body_end, "if ("));
+    ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
+}
+
+/* Integer wrapping is defined by compiler intrinsics whose ignored overflow
+ * flag must not become a runtime check. Signed and unsigned forms share the
+ * same lowering; right shifts remain direct fixed-width C operations. */
+static void test_integer_runtime_semantics_codegen_is_zero_cost(void) {
+    static const char *kSource =
+        "open module feng.codegen.integerwrap;\n"
+        "open func addI8(left: i8, right: i8): i8 { return left + right; }\n"
+        "open func addU8(left: u8, right: u8): u8 { return left + right; }\n"
+        "open func subtractI8(left: i8, right: i8): i8 { return left - right; }\n"
+        "open func subtractU8(left: u8, right: u8): u8 { return left - right; }\n"
+        "open func multiplyI32(left: i32, right: i32): i32 { return left * right; }\n"
+        "open func multiplyU32(left: u32, right: u32): u32 { return left * right; }\n"
+        "open func shiftI32(value: i32, distance: i32): i32 { return value >> distance; }\n"
+        "open func shiftU32(value: u32, distance: u32): u32 { return value >> distance; }\n";
+    FengProgram *program = parse_or_die(kSource, "integer_runtime_semantics_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__addI8", "__builtin_add_overflow");
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__addU8", "__builtin_add_overflow");
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__subtractI8", "__builtin_sub_overflow");
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__subtractU8", "__builtin_sub_overflow");
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__multiplyI32", "__builtin_mul_overflow");
+    assert_integer_wrapping_body(output.c_source,
+        "feng__feng__codegen__integerwrap__multiplyU32", "__builtin_mul_overflow");
+
+    ASSERT(find_generated_function_body(output.c_source,
+        "feng__feng__codegen__integerwrap__shiftI32", &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end, ">>"));
+    ASSERT(!span_contains(body_start, body_end, "__builtin_"));
+    ASSERT(!span_contains(body_start, body_end, "if ("));
+    ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
+    ASSERT(find_generated_function_body(output.c_source,
+        "feng__feng__codegen__integerwrap__shiftU32", &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end, ">>"));
+    ASSERT(!span_contains(body_start, body_end, "__builtin_"));
+    ASSERT(!span_contains(body_start, body_end, "if ("));
+    ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_fit_builtin_direct_call_codegen_shape(void) {
     static const char *kFitBuiltinSource =
         "module feng.codegen.fitbuiltin;\n"
@@ -15157,6 +15241,7 @@ int main(void) {
     test_imported_field_debug_type_uses_declaring_program_context();
     test_same_named_types_in_distinct_modules();
     test_float_modulo_codegen_uses_math_runtime();
+    test_integer_runtime_semantics_codegen_is_zero_cost();
     test_fit_builtin_direct_call_codegen_shape();
     test_fit_builtin_array_open_generic_return_codegen();
     test_fit_builtin_array_open_generic_value_return_codegen();
