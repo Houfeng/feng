@@ -117,7 +117,113 @@ open func test_inferred_generic_field() {
       h.push(99);
       assert(h.pop() == 99, "local holder push/pop 2nd");
     });
+
+    test("generic owner resolves every inferred field fact category", () {
+      let holder = LocalInferredFactHolder<i32>();
+      assert(holder.integerValue() == 1, "builtin integer field initializer");
+      assert(holder.booleanValue(), "builtin boolean field initializer");
+      assert(holder.textValue() == "ready", "builtin string field initializer");
+      assert(holder.stateValue() == LocalInferredState.Pending,
+             "enum declaration field initializer");
+      assert(holder.payloadMarker() == 7,
+             "object declaration field initializer");
+      assert(holder.genericValue() == 0,
+             "generic type-ref field default value");
+      assert(holder.explicitStateValue() == LocalInferredState.Ready,
+             "explicit field type control");
+
+      holder.update(9, false, "changed", LocalInferredState.Ready);
+      holder.setGenericValue(42);
+      assert(holder.integerValue() == 9, "inferred integer field assignment");
+      assert(!holder.booleanValue(), "inferred boolean field assignment");
+      assert(holder.textValue() == "changed", "inferred string field assignment");
+      assert(holder.stateValue() == LocalInferredState.Ready,
+             "inferred enum field assignment");
+      assert(holder.genericValue() == 42,
+             "inferred generic type-ref field assignment");
+    });
   });
+}
+
+/** 推导为 DECL 的枚举类型。 */
+enum LocalInferredState {
+  Pending = 0,
+  Ready = 1
+}
+
+/** 推导为 DECL 的非泛型对象类型。 */
+type LocalInferredPayload {
+  seal var marker: int = 7;
+
+  func markerValue(): int {
+    return self.marker;
+  }
+}
+
+/** 推导为 TYPE_REF 的泛型对象类型。 */
+type LocalInferredGenericPayload<T> {
+  seal var value: T;
+
+  func setValue(value: T) {
+    self.value = value;
+  }
+
+  func getValue(): T {
+    return self.value;
+  }
+}
+
+/** 覆盖开放泛型 owner 中全部字段类型事实类别。 */
+type LocalInferredFactHolder<T> {
+  seal var integer = 1;
+  seal var boolean = true;
+  seal var text = "ready";
+  seal var state = LocalInferredState.Pending;
+  seal var payload = LocalInferredPayload();
+  seal var genericPayload = LocalInferredGenericPayload<T>();
+  seal var explicitState: LocalInferredState = LocalInferredState.Ready;
+
+  func integerValue(): int {
+    return self.integer;
+  }
+
+  func booleanValue(): bool {
+    return self.boolean;
+  }
+
+  func textValue(): string {
+    return self.text;
+  }
+
+  func stateValue(): LocalInferredState {
+    return self.state;
+  }
+
+  func payloadMarker(): int {
+    return self.payload.markerValue();
+  }
+
+  func genericValue(): T {
+    return self.genericPayload.getValue();
+  }
+
+  func explicitStateValue(): LocalInferredState {
+    return self.explicitState;
+  }
+
+  func update(integer: int,
+              boolean: bool,
+              text: string,
+              state: LocalInferredState) {
+    self.integer = integer;
+    self.boolean = boolean;
+    self.text = text;
+    self.state = state;
+  }
+
+  func setGenericValue(value: T) {
+    self.genericPayload.setValue(value);
+  }
 }
 
 /** 本包定义的泛型类型，含推断泛型字段，用于验证单文件场景。 */

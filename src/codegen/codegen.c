@@ -12903,6 +12903,25 @@ static bool cg_resolve_type_fact_for_user_type_member(CG *cg,
     return false;
 }
 
+/* Resolve one field type-ref in the owner context that owns its layout.
+ * Ephemeral generic-owner views already run inside the active shared-body
+ * generic context, so applying owner-instance substitution again would form
+ * a different reified dependency identity. */
+static bool cg_resolve_user_field_type_ref(CG *cg,
+                                           const UserType *owner,
+                                           const FengTypeRef *type_ref,
+                                           const FengToken *fallback,
+                                           CGType **out_type) {
+    if (owner != NULL && owner->is_ephemeral_generic_owner_view) {
+        return cg_resolve_type(cg, type_ref, fallback, out_type);
+    }
+    return cg_resolve_type_for_user_type_member(cg,
+                                                owner,
+                                                type_ref,
+                                                fallback,
+                                                out_type);
+}
+
 static bool cg_resolve_user_field_type(CG *cg,
                                        const UserType *owner,
                                        const FengTypeMember *member,
@@ -12918,15 +12937,22 @@ static bool cg_resolve_user_field_type(CG *cg,
     }
 
     if (member->as.field.type != NULL) {
-        return cg_resolve_type_for_user_type_member(cg,
-                                                    owner,
-                                                    member->as.field.type,
-                                                    &member->token,
-                                                    out_type);
+        return cg_resolve_user_field_type_ref(cg,
+                                              owner,
+                                              member->as.field.type,
+                                              &member->token,
+                                              out_type);
     }
 
     if (cg->analysis != NULL) {
         fact = feng_semantic_lookup_type_fact(cg->analysis, member);
+    }
+    if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+        return cg_resolve_user_field_type_ref(cg,
+                                              owner,
+                                              fact->type_ref,
+                                              &member->token,
+                                              out_type);
     }
     if (fact != NULL) {
         return cg_resolve_type_fact_for_user_type_member(cg,
@@ -30543,21 +30569,10 @@ static bool cg_emit_member(CG *cg, const FengExpr *e, ExprResult *out) {
         }
 
         CGType *field_type = NULL;
-        const FengTypeRef *field_type_ref = field_member->as.field.type;
-        /* Inferred fields (`let x = List<T>()` with no explicit annotation)
-         * carry field.type == NULL.  Fall back to the semantic type fact so
-         * the inferred type_ref (which carries type args + type-param refs)
-         * is resolved instead of degrading to CG_TYPE_VOID, which would make
-         * any subsequent method call on the field fail with CE0163. */
-        if (field_type_ref == NULL && cg->analysis != NULL) {
-            const FengSemanticTypeFact *fact =
-                feng_semantic_lookup_type_fact(cg->analysis, field_member);
-            if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
-                field_type_ref = fact->type_ref;
-            }
-        }
-        if (!cg_resolve_type(cg, field_type_ref,
-                             &field_member->token, &field_type)) {
+        if (!cg_resolve_user_field_type(cg,
+                                        recv.type->user,
+                                        field_member,
+                                        &field_type)) {
             er_free(&recv);
             return false;
         }
@@ -37595,18 +37610,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     target->as.member.member.data);
             }
             CGType *field_type = NULL;
-            const FengTypeRef *field_type_ref = field_member->as.field.type;
-            /* Inferred fields (field.type == NULL): fall back to the semantic
-             * type fact so the inferred type_ref is resolved instead of VOID. */
-            if (field_type_ref == NULL && cg->analysis != NULL) {
-                const FengSemanticTypeFact *fact =
-                    feng_semantic_lookup_type_fact(cg->analysis, field_member);
-                if (fact != NULL && fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
-                    field_type_ref = fact->type_ref;
-                }
-            }
-            if (!cg_resolve_type(cg, field_type_ref,
-                                 &field_member->token, &field_type)) {
+            if (!cg_resolve_user_field_type(cg,
+                                            recv.type->user,
+                                            field_member,
+                                            &field_type)) {
                 er_free(&recv);
                 return false;
             }
@@ -59210,7 +59217,6 @@ static bool cg_init_generic_owner_view(CG *cg,
     view->field_count = field_count;
     for (size_t i = 0U; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
-        const FengTypeRef *field_type_ref;
         UserField *field;
 
         if (member == NULL || member->kind != FENG_TYPE_MEMBER_FIELD ||
@@ -59223,21 +59229,8 @@ static bool cg_init_generic_owner_view(CG *cg,
                                    member->as.field.name.length);
         field->c_name = cg_sanitize(member->as.field.name.data,
                                     member->as.field.name.length);
-        field_type_ref = member->as.field.type;
-        if (field_type_ref == NULL && cg->analysis != NULL) {
-            const FengSemanticTypeFact *fact =
-                feng_semantic_lookup_type_fact(cg->analysis, member);
-
-            if (fact != NULL &&
-                fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
-                field_type_ref = fact->type_ref;
-            }
-        }
         if (field->feng_name == NULL || field->c_name == NULL ||
-            !cg_resolve_type(cg,
-                             field_type_ref,
-                             &member->token,
-                             &field->type)) {
+            !cg_resolve_user_field_type(cg, view, member, &field->type)) {
             return false;
         }
     }

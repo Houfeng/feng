@@ -1683,6 +1683,99 @@ static void test_generic_type_inferred_field_codegen(void) {
     feng_program_free(program);
 }
 
+/* Regression for CE0227: the ephemeral owner view used by shared generic
+ * instance methods must resolve every semantic field-type fact through the
+ * same path as ordinary user-type registration.  In particular, BUILTIN and
+ * DECL facts must not degrade to CG_TYPE_VOID while TYPE_REF and explicit
+ * fields continue to work. */
+static void test_generic_owner_inferred_field_type_facts_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.inferred_field_facts;\n"
+        "enum State { Pending = 0, Ready = 1 }\n"
+        "type Payload { seal var marker: int = 7; }\n"
+        "type GenericPayload<T> { seal var value: T; }\n"
+        "type Holder<T> {\n"
+        "    seal var integer = 1;\n"
+        "    seal var boolean = true;\n"
+        "    seal var text = \"ready\";\n"
+        "    seal var state = State.Pending;\n"
+        "    seal var payload = Payload();\n"
+        "    seal var genericPayload = GenericPayload<T>();\n"
+        "    seal var explicitState: State = State.Ready;\n"
+        "    func integerValue(): int { return self.integer; }\n"
+        "    func booleanValue(): bool { return self.boolean; }\n"
+        "    func textValue(): string { return self.text; }\n"
+        "    func stateValue(): State { return self.state; }\n"
+        "    func payloadValue(): Payload { return self.payload; }\n"
+        "    func genericPayloadValue(): GenericPayload<T> { return self.genericPayload; }\n"
+        "    func explicitStateValue(): State { return self.explicitState; }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "inferred_field_facts.ff");
+    const FengProgram *programs[1] = { program };
+    const FengDecl *state_decl = program->declarations[0];
+    const FengDecl *payload_decl = program->declarations[1];
+    const FengDecl *holder_decl = program->declarations[3];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(holder_decl->as.type_decl.member_count == 14U);
+
+    for (size_t index = 0U; index < 3U; ++index) {
+        const FengSemanticTypeFact *fact = feng_semantic_lookup_type_fact(
+            analysis, holder_decl->as.type_decl.members[index]);
+
+        ASSERT(fact != NULL);
+        ASSERT(fact->kind == FENG_SEMANTIC_TYPE_FACT_BUILTIN);
+    }
+    {
+        const FengSemanticTypeFact *enum_fact = feng_semantic_lookup_type_fact(
+            analysis, holder_decl->as.type_decl.members[3]);
+        const FengSemanticTypeFact *object_fact = feng_semantic_lookup_type_fact(
+            analysis, holder_decl->as.type_decl.members[4]);
+        const FengSemanticTypeFact *generic_fact = feng_semantic_lookup_type_fact(
+            analysis, holder_decl->as.type_decl.members[5]);
+        const FengSemanticTypeFact *explicit_fact = feng_semantic_lookup_type_fact(
+            analysis, holder_decl->as.type_decl.members[6]);
+
+        ASSERT(enum_fact != NULL);
+        ASSERT(enum_fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL);
+        ASSERT(enum_fact->type_decl == state_decl);
+        ASSERT(object_fact != NULL);
+        ASSERT(object_fact->kind == FENG_SEMANTIC_TYPE_FACT_DECL);
+        ASSERT(object_fact->type_decl == payload_decl);
+        ASSERT(generic_fact != NULL);
+        ASSERT(generic_fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF);
+        ASSERT(explicit_fact != NULL);
+        ASSERT(explicit_fact->kind == FENG_SEMANTIC_TYPE_FACT_TYPE_REF);
+    }
+
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                           NULL, &out, &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (generic inferred field facts): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "integerValue") != NULL);
+    ASSERT(strstr(out.c_source, "genericPayloadValue") != NULL);
+    ASSERT(strstr(out.c_source, "explicitStateValue") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 /* Regression for CE0005: a single-file lib-target program with a concrete
  * instantiation call site (`Holder<i32>()`) where the generic type has an
  * inferred generic field (`seal let items = Inner<T>()`).  The constructor
@@ -15298,6 +15391,7 @@ int main(void) {
     test_generic_static_methods_codegen();
     test_generic_type_static_field_codegen();
     test_generic_type_inferred_field_codegen();
+    test_generic_owner_inferred_field_type_facts_codegen();
     test_generic_type_inferred_field_concrete_call_codegen();
     test_spec_static_member_witness_codegen();
     test_object_spec_method_parameter_bindings_keep_witness_abi();
