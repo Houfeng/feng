@@ -247,6 +247,9 @@ struct FengExpr {
             FengExpr *target;
             FengObjectFieldInit *fields;
             size_t field_count;
+            /* Constructor uniquely selected by semantic analysis. NULL means
+             * the type uses its implicit constructor. */
+            const FengTypeMember *resolved_constructor;
         } object_literal;
         struct {
             FengExpr *target;

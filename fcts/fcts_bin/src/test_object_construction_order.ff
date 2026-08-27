@@ -1,0 +1,209 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.g05_construction;
+
+/** Trace shared only by the local G05 construction probes. */
+var g05ConstructionTrace: int = 0;
+
+/** Number of observable local construction steps. */
+var g05ConstructionCalls: int = 0;
+
+/** Reset the local construction trace before one assertion. */
+func g05ResetConstructionTrace(): void {
+  g05ConstructionTrace = 0;
+  g05ConstructionCalls = 0;
+}
+
+/** Append one marker and return the supplied construction value. */
+func g05MarkConstructionValue(value: int, marker: int): int {
+  g05ConstructionTrace = g05ConstructionTrace * 10 + marker;
+  g05ConstructionCalls += 1;
+  return value;
+}
+
+/** Probe for declaration-initializer, constructor, and literal phases. */
+type G05ThreePhaseConstruction {
+  /** Value established by the declaration initializer. */
+  var declarationValue: int = g05MarkConstructionValue(10, 1);
+
+  /** Value established by the constructor. */
+  var constructorValue: int;
+
+  /** Value established by the object literal. */
+  var literalValue: int;
+
+  /** Record the constructor phase. */
+  func G05ThreePhaseConstruction(value: int) {
+    self.constructorValue = g05MarkConstructionValue(value, 2);
+  }
+}
+
+/** Probe for source-order object-literal field evaluation. */
+type G05LiteralFieldOrder {
+  /** First field in the literal-order assertion. */
+  var first: int;
+
+  /** Second field in the literal-order assertion. */
+  var second: int;
+
+  /** Third field in the literal-order assertion. */
+  var third: int;
+}
+
+/** Probe for constructor-argument and literal-value ordering. */
+type G05ConstructorArgumentOrder {
+  /** Value assembled by the constructor body. */
+  var constructorValue: int;
+
+  /** Value written after the constructor returns. */
+  var literalValue: int;
+
+  /** Record constructor entry after both arguments have been evaluated. */
+  func G05ConstructorArgumentOrder(first: int, second: int) {
+    self.constructorValue =
+      g05MarkConstructionValue(first * 10 + second, 3);
+  }
+}
+
+/** Probe for empty object-literal shorthand equivalence. */
+type G05EmptyLiteralConstruction {
+  /** Value established before the no-argument constructor. */
+  var declarationValue: int = g05MarkConstructionValue(10, 1);
+
+  /** Value established by the no-argument constructor. */
+  var constructorValue: int;
+
+  /** Record execution of the no-argument constructor. */
+  func G05EmptyLiteralConstruction() {
+    self.constructorValue = g05MarkConstructionValue(20, 2);
+  }
+}
+
+/** Value-type probe for empty object-literal shorthand equivalence. */
+@value
+type G05EmptyLiteralValueConstruction {
+  /** Value established before the no-argument constructor. */
+  var declarationValue: int = g05MarkConstructionValue(30, 3);
+
+  /** Value established by the no-argument constructor. */
+  var constructorValue: int;
+
+  /** Record execution of the value type's no-argument constructor. */
+  func G05EmptyLiteralValueConstruction() {
+    self.constructorValue = g05MarkConstructionValue(40, 4);
+  }
+}
+
+/** Probe whose mutable field is written by two construction phases. */
+type G05MutableFieldOverride {
+  /** Mutable field overwritten by the object-literal phase. */
+  var value: int;
+
+  /** Establish the field's constructor-phase value. */
+  func G05MutableFieldOverride(value: int) {
+    self.value = g05MarkConstructionValue(value, 1);
+  }
+}
+
+/** Execute object-construction order conformance coverage. */
+open func test_object_construction_order(): void {
+  describe("object construction order", () {
+    test("CTOR01 declaration constructor and literal phases are ordered", () {
+      g05ResetConstructionTrace();
+      let value = G05ThreePhaseConstruction(20) {
+        literalValue: g05MarkConstructionValue(30, 3)
+      };
+
+      assert(g05ConstructionTrace == 123 && g05ConstructionCalls == 3 &&
+             value.declarationValue == 10 &&
+             value.constructorValue == 20 && value.literalValue == 30,
+             "CTOR01 executes all three construction phases once in order");
+    });
+
+    test("CTOR02 object literal fields evaluate in source order", () {
+      g05ResetConstructionTrace();
+      let value = G05LiteralFieldOrder {
+        first: g05MarkConstructionValue(10, 1),
+        second: g05MarkConstructionValue(20, 2),
+        third: g05MarkConstructionValue(30, 3)
+      };
+
+      assert(g05ConstructionTrace == 123 && g05ConstructionCalls == 3 &&
+             value.first == 10 && value.second == 20 && value.third == 30,
+             "CTOR02 evaluates and writes literal fields once in source order");
+    });
+
+    test("CTOR03 constructor arguments precede body and literal value", () {
+      g05ResetConstructionTrace();
+      let value = G05ConstructorArgumentOrder(
+        g05MarkConstructionValue(1, 1),
+        g05MarkConstructionValue(2, 2)
+      ) {
+        literalValue: g05MarkConstructionValue(40, 4)
+      };
+
+      assert(g05ConstructionTrace == 1234 && g05ConstructionCalls == 4 &&
+             value.constructorValue == 12 && value.literalValue == 40,
+             "CTOR03 evaluates arguments left to right before later phases");
+    });
+
+    test("CTOR04 empty literal shorthand matches no-argument construction", () {
+      g05ResetConstructionTrace();
+      let shorthand = G05EmptyLiteralConstruction {};
+      let shorthandTrace = g05ConstructionTrace;
+      let shorthandCalls = g05ConstructionCalls;
+
+      g05ResetConstructionTrace();
+      let direct = G05EmptyLiteralConstruction();
+
+      assert(shorthandTrace == 12 && shorthandCalls == 2,
+             "CTOR04 reference shorthand executes initializer and constructor");
+      assert(g05ConstructionTrace == 12 && g05ConstructionCalls == 2,
+             "CTOR04 explicit reference construction executes the same steps");
+      assert(shorthand.declarationValue == direct.declarationValue &&
+             shorthand.constructorValue == direct.constructorValue,
+             "CTOR04 reference spellings produce the same fields");
+
+      g05ResetConstructionTrace();
+      let valueShorthand = G05EmptyLiteralValueConstruction {};
+      let valueShorthandTrace = g05ConstructionTrace;
+      let valueShorthandCalls = g05ConstructionCalls;
+
+      g05ResetConstructionTrace();
+      let valueDirect = G05EmptyLiteralValueConstruction();
+
+      assert(valueShorthandTrace == 34 && valueShorthandCalls == 2,
+             "CTOR04 value shorthand executes initializer and constructor");
+      assert(g05ConstructionTrace == 34 && g05ConstructionCalls == 2,
+             "CTOR04 explicit value construction executes the same steps");
+      assert(valueShorthand.declarationValue == valueDirect.declarationValue &&
+             valueShorthand.constructorValue == valueDirect.constructorValue,
+             "CTOR04 value spellings produce the same fields");
+    });
+
+    test("CTOR05 literal phase overwrites the constructor var member", () {
+      g05ResetConstructionTrace();
+      let value = G05MutableFieldOverride(30) {
+        value: g05MarkConstructionValue(31, 2)
+      };
+
+      assert(g05ConstructionTrace == 12 && g05ConstructionCalls == 2 &&
+             value.value == 31,
+             "CTOR05 literal value is the final mutable member value");
+    });
+
+    test("CTOR06 imported construction preserves all three phases", () {
+      G05ImportedConstruction.reset();
+      let value = G05ImportedConstruction {
+        literalValue: G05ImportedConstruction.markLiteral(30)
+      };
+
+      assert(G05ImportedConstruction.trace() == 123 &&
+             G05ImportedConstruction.calls() == 3 &&
+             value.declarationValue == 10 &&
+             value.constructorValue == 20 && value.literalValue == 30,
+             "CTOR06 preserves construction order across the package boundary");
+    });
+  });
+}

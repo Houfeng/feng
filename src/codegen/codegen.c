@@ -30923,19 +30923,20 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         return false;
     }
 
+    if (e->as.object_literal.resolved_constructor != NULL) {
+        ctor = cg_user_type_constructor_by_member(
+            ut, e->as.object_literal.resolved_constructor);
+        if (ctor == NULL) {
+            return cg_fail(cg, e->token,
+                "CE0169", "codegen: resolved constructor for type '%s' was not registered",
+                ut->feng_name);
+        }
+    }
+
     if (e->as.object_literal.target != NULL &&
         e->as.object_literal.target->kind == FENG_EXPR_CALL) {
         target_call = e->as.object_literal.target;
-        if (target_call->as.call.resolved_callable.member != NULL) {
-            ctor = cg_user_type_constructor_by_member(
-                ut,
-                target_call->as.call.resolved_callable.member);
-            if (ctor == NULL) {
-                return cg_fail(cg, target_call->token,
-                    "CE0169", "codegen: resolved constructor for type '%s' was not registered",
-                    ut->feng_name);
-            }
-        } else if (target_call->as.call.arg_count != 0U) {
+        if (target_call->as.call.arg_count != 0U && ctor == NULL) {
             return cg_fail(cg, target_call->token,
                 "CE0076", "codegen: constructor arguments require a resolved user-defined constructor");
         }
@@ -31092,15 +31093,18 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         return false;
     }
 
-    if (target_call != NULL) {
+    if (ctor != NULL) {
         if (!cg_emit_constructor_invoke(cg,
-                                        target_call->as.call.args,
-                                        target_call->as.call.arg_count,
+                                        target_call != NULL
+                                            ? target_call->as.call.args : NULL,
+                                        target_call != NULL
+                                            ? target_call->as.call.arg_count : 0U,
                                         ut,
                                         ctor,
                                         tmp,
                                         NULL,
-                                        target_call->token)) {
+                                        target_call != NULL
+                                            ? target_call->token : e->token)) {
             free(tmp);
             return false;
         }

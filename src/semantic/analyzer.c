@@ -26546,6 +26546,7 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
 static bool validate_object_literal_expr(ResolveContext *context, const FengExpr *expr) {
     ResolvedTypeTarget target;
+    const FengTypeMember *constructor_member = NULL;
     char *target_name;
     FengSlice *seen_field_names = NULL;
     size_t seen_field_count = 0U;
@@ -26567,20 +26568,31 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
         return ok;
     }
 
-    if (expr->as.object_literal.target->kind != FENG_EXPR_CALL &&
-        !validate_constructor_invocation(context,
-                                         expr->as.object_literal.target,
-                                         target.type_decl,
-                                         target.provider_module,
-                                         NULL,
-                                         0U,
-                                         NULL,
-                                         0U,
-                                         NULL)) {
-        free(target_name);
-        free(seen_field_names);
-        return false;
+    if (expr->as.object_literal.target->kind != FENG_EXPR_CALL) {
+        if (!validate_constructor_invocation(context,
+                                             expr->as.object_literal.target,
+                                             target.type_decl,
+                                             target.provider_module,
+                                             NULL,
+                                             0U,
+                                             NULL,
+                                             0U,
+                                             &constructor_member)) {
+            free(target_name);
+            free(seen_field_names);
+            return false;
+        }
+    } else if (expr->as.object_literal.target->as.call.resolved_callable.kind ==
+                   FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR) {
+        constructor_member =
+            expr->as.object_literal.target->as.call.resolved_callable.member;
     }
+
+    /* Preserve semantic overload and visibility resolution for codegen.
+     * Direct `Type { ... }` targets have no call node on which to store the
+     * selected zero-argument constructor. */
+    ((FengExpr *)expr)->as.object_literal.resolved_constructor =
+        constructor_member;
 
     for (field_index = 0U; field_index < expr->as.object_literal.field_count; ++field_index) {
         const FengObjectFieldInit *field = &expr->as.object_literal.fields[field_index];

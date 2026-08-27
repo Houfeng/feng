@@ -1,0 +1,53 @@
+open module fcts_lib.g05_construction;
+
+/** Cross-package construction probe for CTOR06. */
+open type G05ImportedConstruction {
+  /** Trace of the most recent imported construction. */
+  seal static var traceValue: int = 0;
+
+  /** Number of observable imported construction steps. */
+  seal static var callCountValue: int = 0;
+
+  /** Value established by the declaration initializer. */
+  open var declarationValue: int = G05ImportedConstruction.recordValue(10, 1);
+
+  /** Value established by the constructor. */
+  open var constructorValue: int;
+
+  /** Value established by the consumer's object literal. */
+  open var literalValue: int;
+
+  /** Construct an imported probe and record the constructor phase. */
+  open func G05ImportedConstruction() {
+    self.constructorValue = G05ImportedConstruction.recordValue(20, 2);
+  }
+
+  /** Reset the imported construction trace before one assertion. */
+  open static func reset(): void {
+    G05ImportedConstruction.traceValue = 0;
+    G05ImportedConstruction.callCountValue = 0;
+  }
+
+  /** Record the consumer-side object-literal value evaluation. */
+  open static func markLiteral(value: int): int {
+    return G05ImportedConstruction.recordValue(value, 3);
+  }
+
+  /** Return the current imported construction trace. */
+  open static func trace(): int {
+    return G05ImportedConstruction.traceValue;
+  }
+
+  /** Return the current imported construction call count. */
+  open static func calls(): int {
+    return G05ImportedConstruction.callCountValue;
+  }
+
+  /** Append one marker and return the supplied field value. */
+  seal static func recordValue(value: int, marker: int): int {
+    G05ImportedConstruction.traceValue =
+      G05ImportedConstruction.traceValue * 10 + marker;
+    G05ImportedConstruction.callCountValue += 1;
+    return value;
+  }
+}

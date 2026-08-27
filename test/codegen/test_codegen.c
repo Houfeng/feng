@@ -11679,6 +11679,77 @@ static void test_user_constructor_forms_codegen(void) {
     feng_program_free(program);
 }
 
+/* Direct object-literal shorthand must consume the constructor selected by
+ * semantic analysis for both reference and value types. */
+static void test_object_literal_shorthand_invokes_selected_constructor(void) {
+    static const char *kSource =
+        "module feng.codegen.g05ctor;\n"
+        "type RefProbe {\n"
+        "    var value: int;\n"
+        "    func RefProbe() { self.value = 7; }\n"
+        "}\n"
+        "@value\n"
+        "type ValueProbe {\n"
+        "    var value: int;\n"
+        "    func ValueProbe() { self.value = 9; }\n"
+        "}\n"
+        "func makeRefShorthand(): RefProbe { return RefProbe {}; }\n"
+        "func makeValueShorthand(): ValueProbe { return ValueProbe {}; }\n";
+    FengProgram *program = parse_or_die(kSource, "g05_object_literal_ctor.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    {
+        bool semantic_ok = feng_semantic_analyze(
+            programs, 1U, FENG_COMPILE_TARGET_LIB,
+            &analysis, &errors, &error_count);
+
+        if (!semantic_ok) {
+            for (size_t index = 0U; index < error_count; ++index) {
+                fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                        errors[index].path,
+                        errors[index].token.line,
+                        errors[index].token.column,
+                        errors[index].message);
+            }
+        }
+        ASSERT(semantic_ok);
+    }
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "feng__feng__codegen__g05ctor__makeRefShorthand",
+        &body_start,
+        &body_end));
+    ASSERT(count_substr_in_span(
+        body_start, body_end, "__ctor__RefProbe__from__void(") == 1U);
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "feng__feng__codegen__g05ctor__makeValueShorthand",
+        &body_start,
+        &body_end));
+    ASSERT(count_substr_in_span(
+        body_start, body_end, "__ctor__ValueProbe__from__void(") == 1U);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_type_field_initializers_codegen(void) {
     static const char *kSource =
         "module feng.codegen.fieldinit;\n"
@@ -15337,6 +15408,7 @@ int main(void) {
     test_multi_parameter_generic_callable_abi_codegen();
     test_empty_array_literal_codegen_uses_target_contexts();
     test_user_constructor_forms_codegen();
+    test_object_literal_shorthand_invokes_selected_constructor();
     test_variadic_zero_args_codegen();
     test_variadic_multi_args_codegen();
     test_variadic_fixed_prefix_codegen();
