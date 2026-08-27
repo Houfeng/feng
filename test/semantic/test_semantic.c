@@ -11096,6 +11096,167 @@ static void test_object_literal_constructor_call_reports_inaccessible_imported_c
     feng_program_free(main_program);
 }
 
+/* CTOR07-CTOR09: every valid same-package construction surface must resolve,
+ * including sealed constructors called from both owning-type contexts. */
+static void test_constructor_availability_same_package_positive(void) {
+    const char *source =
+        "module demo.g05_ctor_positive;\n"
+        "type ImplicitDefault { var value: int; }\n"
+        "type ExplicitSurface {\n"
+        "    var value: int;\n"
+        "    func ExplicitSurface() { self.value = 10; }\n"
+        "    func ExplicitSurface(value: int) { self.value = value; }\n"
+        "}\n"
+        "type SealedOwner {\n"
+        "    var value: int;\n"
+        "    seal func SealedOwner() { self.value = 20; }\n"
+        "    seal func SealedOwner(value: int) { self.value = value; }\n"
+        "    static func create(value: int): SealedOwner { return SealedOwner(value); }\n"
+        "    func copy(): SealedOwner { return SealedOwner(self.value); }\n"
+        "}\n"
+        "func run(): int {\n"
+        "    let i0 = ImplicitDefault();\n"
+        "    let i1 = ImplicitDefault() {};\n"
+        "    let i2 = ImplicitDefault() { value: 1 };\n"
+        "    let i3 = ImplicitDefault {};\n"
+        "    let i4 = ImplicitDefault { value: 2 };\n"
+        "    let e0 = ExplicitSurface();\n"
+        "    let e1 = ExplicitSurface() { value: 3 };\n"
+        "    let e2 = ExplicitSurface { value: 4 };\n"
+        "    let e3 = ExplicitSurface(5);\n"
+        "    let e4 = ExplicitSurface(6) { value: 7 };\n"
+        "    let owned = SealedOwner.create(8);\n"
+        "    let copied = owned.copy();\n"
+        "    return i0.value + i1.value + i2.value + i3.value + i4.value +\n"
+        "           e0.value + e1.value + e2.value + e3.value + e4.value +\n"
+        "           owned.value + copied.value;\n"
+        "}\n";
+    FengProgram *program = parse_program_or_die("g05_ctor_positive.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* CTOR10-CTOR12: implicit-default arity, explicit-constructor suppression,
+ * and owner-private constructor visibility are independent diagnostics. */
+static void test_constructor_availability_same_package_negative(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+        const char *expected_message;
+    } cases[] = {
+        {
+            "g05_ctor10_direct_arg.ff",
+            "module demo.g05_ctor10_direct;\n"
+            "type Subject {}\n"
+            "func run() { Subject(1); }\n",
+            "AE0313",
+            "has no constructor accepting 1 argument(s)",
+        },
+        {
+            "g05_ctor10_literal_arg.ff",
+            "module demo.g05_ctor10_literal;\n"
+            "type Subject {}\n"
+            "func run() { Subject(1) {}; }\n",
+            "AE0313",
+            "has no constructor accepting 1 argument(s)",
+        },
+        {
+            "g05_ctor11_direct_zero.ff",
+            "module demo.g05_ctor11_direct;\n"
+            "type Subject { func Subject(value: int) {} }\n"
+            "func run() { Subject(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor11_literal_zero.ff",
+            "module demo.g05_ctor11_literal;\n"
+            "type Subject { func Subject(value: int) {} }\n"
+            "func run() { Subject() {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor11_shorthand_zero.ff",
+            "module demo.g05_ctor11_shorthand;\n"
+            "type Subject { func Subject(value: int) {} }\n"
+            "func run() { Subject {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor12_direct_zero.ff",
+            "module demo.g05_ctor12_direct_zero;\n"
+            "type Subject { seal func Subject() {} seal func Subject(value: int) {} }\n"
+            "func run() { Subject(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor12_literal_zero.ff",
+            "module demo.g05_ctor12_literal_zero;\n"
+            "type Subject { seal func Subject() {} seal func Subject(value: int) {} }\n"
+            "func run() { Subject() {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor12_shorthand_zero.ff",
+            "module demo.g05_ctor12_shorthand_zero;\n"
+            "type Subject { seal func Subject() {} seal func Subject(value: int) {} }\n"
+            "func run() { Subject {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "g05_ctor12_direct_arg.ff",
+            "module demo.g05_ctor12_direct_arg;\n"
+            "type Subject { seal func Subject() {} seal func Subject(value: int) {} }\n"
+            "func run() { Subject(1); }\n",
+            "AE0315",
+            "no accessible constructor accepting 1 argument(s)",
+        },
+        {
+            "g05_ctor12_literal_arg.ff",
+            "module demo.g05_ctor12_literal_arg;\n"
+            "type Subject { seal func Subject() {} seal func Subject(value: int) {} }\n"
+            "func run() { Subject(1) {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 1 argument(s)",
+        },
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = parse_program_or_die(cases[index].path,
+                                                    cases[index].source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                      &analysis, &errors, &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].code, cases[index].expected_code) == 0);
+        ASSERT(strstr(errors[0].message, cases[index].expected_message) != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
 static void test_object_literal_rejects_decl_bound_let_member(void) {
     const char *source =
         "module demo.main;\n"
@@ -29713,6 +29874,8 @@ int main(void) {
     test_object_literal_reports_inaccessible_imported_constructor();
     test_constructor_call_reports_inaccessible_imported_constructor();
     test_object_literal_constructor_call_reports_inaccessible_imported_constructor();
+    test_constructor_availability_same_package_positive();
+    test_constructor_availability_same_package_negative();
     test_object_literal_rejects_decl_bound_let_member();
     test_constructor_rejects_decl_bound_let_member_assignment();
     test_constructor_rejects_repeated_let_member_binding();

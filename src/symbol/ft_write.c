@@ -762,9 +762,12 @@ static bool writer_should_export_decl(FengSymbolProfile profile, const FengSymbo
         decl->is_extern &&
         decl->calling_convention != FENG_ANNOTATION_NONE) return true;
     if (decl->kind == FENG_SYMBOL_DECL_KIND_FIELD) return true;
-    /* Type members (constructors/methods) default to PUBLIC when not seal. */
-    if ((decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
-         decl->kind == FENG_SYMBOL_DECL_KIND_METHOD) &&
+    /* Every explicit constructor is part of the type's semantic skeleton:
+     * even a seal constructor suppresses the implicit public no-argument
+     * constructor. Its serialized visibility still keeps it inaccessible to
+     * package consumers. Ordinary methods remain public-surface only. */
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) return true;
+    if (decl->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
         decl->visibility != FENG_VISIBILITY_PRIVATE) return true;
     /* A seal mixable static method is a package capability fact, not a
      * public member. Initial-tree traversal reaches it only through an owner

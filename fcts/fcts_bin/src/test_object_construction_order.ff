@@ -135,6 +135,69 @@ type G05DefaultUnboundLet {
   let value: int;
 }
 
+/** Same-package probe with an implicit public no-argument constructor. */
+type G05ImplicitDefaultConstructor {
+  /** Mutable value used by every supported default-construction spelling. */
+  var value: int;
+}
+
+/** Same-package probe exposing explicit no-argument and one-argument constructors. */
+type G05ExplicitConstructorSurface {
+  /** Number of selected constructor bodies executed since reset. */
+  seal static var callCountValue: int = 0;
+
+  /** Value established by the selected constructor or object literal. */
+  var value: int;
+
+  /** Execute the explicit no-argument constructor. */
+  func G05ExplicitConstructorSurface() {
+    G05ExplicitConstructorSurface.callCountValue += 1;
+    self.value = 210;
+  }
+
+  /** Execute the explicit one-argument constructor. */
+  func G05ExplicitConstructorSurface(value: int) {
+    G05ExplicitConstructorSurface.callCountValue += 1;
+    self.value = value;
+  }
+
+  /** Reset the constructor execution count. */
+  static func resetCalls(): void {
+    G05ExplicitConstructorSurface.callCountValue = 0;
+  }
+
+  /** Return the constructor execution count. */
+  static func calls(): int {
+    return G05ExplicitConstructorSurface.callCountValue;
+  }
+}
+
+/** Same-package probe whose construction is private to its owning type. */
+type G05SealedOwnerConstruction {
+  /** Value established by an owner-authorized sealed constructor. */
+  var value: int;
+
+  /** Private no-argument constructor available to owner contexts. */
+  seal func G05SealedOwnerConstruction() {
+    self.value = 310;
+  }
+
+  /** Private one-argument constructor available to owner contexts. */
+  seal func G05SealedOwnerConstruction(value: int) {
+    self.value = value;
+  }
+
+  /** Construct an instance through the owning type's static context. */
+  static func create(value: int): G05SealedOwnerConstruction {
+    return G05SealedOwnerConstruction(value);
+  }
+
+  /** Construct a copy through the owning type's instance context. */
+  func copy(): G05SealedOwnerConstruction {
+    return G05SealedOwnerConstruction(self.value);
+  }
+}
+
 /** Execute object-construction order conformance coverage. */
 open func test_object_construction_order(): void {
   describe("object construction order", () {
@@ -289,6 +352,78 @@ open func test_object_construction_order(): void {
 
       assert(value.value == 0,
              "LET10-D preserves the imported member's default zero value");
+    });
+
+    test("CTOR07 implicit default constructor supports every no-argument spelling", () {
+      let direct = G05ImplicitDefaultConstructor();
+      let explicitEmpty = G05ImplicitDefaultConstructor() {};
+      let explicitLiteral = G05ImplicitDefaultConstructor() { value: 71 };
+      let shorthandEmpty = G05ImplicitDefaultConstructor {};
+      let shorthandLiteral = G05ImplicitDefaultConstructor { value: 72 };
+
+      assert(direct.value == 0 && explicitEmpty.value == 0 &&
+             explicitLiteral.value == 71 && shorthandEmpty.value == 0 &&
+             shorthandLiteral.value == 72,
+             "CTOR07 normalizes all implicit default constructor spellings");
+    });
+
+    test("CTOR08 explicit constructors execute once before literal writes", () {
+      G05ExplicitConstructorSurface.resetCalls();
+      let directZero = G05ExplicitConstructorSurface();
+      let explicitZero = G05ExplicitConstructorSurface() { value: 211 };
+      let shorthandZero = G05ExplicitConstructorSurface { value: 212 };
+      let directArg = G05ExplicitConstructorSurface(213);
+      let explicitArg = G05ExplicitConstructorSurface(214) { value: 215 };
+
+      assert(G05ExplicitConstructorSurface.calls() == 5 &&
+             directZero.value == 210 && explicitZero.value == 211 &&
+             shorthandZero.value == 212 && directArg.value == 213 &&
+             explicitArg.value == 215,
+             "CTOR08 selects one explicit constructor for every valid spelling");
+    });
+
+    test("CTOR09 owner instance and static methods can use sealed constructors", () {
+      let created = G05SealedOwnerConstruction.create(309);
+      let copied = created.copy();
+
+      assert(created.value == 309 && copied.value == 309,
+             "CTOR09 authorizes sealed construction in both owner contexts");
+    });
+
+    test("CTOR13 imported implicit default supports every no-argument spelling", () {
+      let direct = G05ImportedImplicitDefaultConstructor();
+      let explicitEmpty = G05ImportedImplicitDefaultConstructor() {};
+      let explicitLiteral = G05ImportedImplicitDefaultConstructor() { value: 131 };
+      let shorthandEmpty = G05ImportedImplicitDefaultConstructor {};
+      let shorthandLiteral = G05ImportedImplicitDefaultConstructor { value: 132 };
+
+      assert(direct.value == 0 && explicitEmpty.value == 0 &&
+             explicitLiteral.value == 131 && shorthandEmpty.value == 0 &&
+             shorthandLiteral.value == 132,
+             "CTOR13 preserves implicit default construction across package metadata");
+    });
+
+    test("CTOR14 imported public constructors support direct and literal forms", () {
+      G05ImportedPublicConstructorSurface.resetCalls();
+      let directZero = G05ImportedPublicConstructorSurface();
+      let explicitZero = G05ImportedPublicConstructorSurface() { value: 411 };
+      let shorthandZero = G05ImportedPublicConstructorSurface { value: 412 };
+      let directArg = G05ImportedPublicConstructorSurface(413);
+      let explicitArg = G05ImportedPublicConstructorSurface(414) { value: 415 };
+
+      assert(G05ImportedPublicConstructorSurface.calls() == 5 &&
+             directZero.value == 410 && explicitZero.value == 411 &&
+             shorthandZero.value == 412 && directArg.value == 413 &&
+             explicitArg.value == 415,
+             "CTOR14 preserves public constructor selection across package metadata");
+    });
+
+    test("CTOR15 imported owner methods retain sealed construction authority", () {
+      let created = G05ImportedSealedOwnerConstruction.create(509);
+      let copied = created.copy();
+
+      assert(created.value == 509 && copied.value == 509,
+             "CTOR15 keeps sealed construction inside provider owner contexts");
     });
   });
 }

@@ -718,6 +718,15 @@ attr key 常量建议如下:
 - `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
 - 被语义分析判定为“不得导出”的声明,不进入公开 `.ft`; 本地缓存 `.ft` 可按本地需要保留。
+- 已进入 package-public `.ft` 的具体 `type` 必须收录其全部显式构造声明，包括 `open`、省略修饰和
+  `seal` 构造。构造声明沿用 `FT_SYM_KIND_CTOR` 与 `SYMS.flags.public` 忠实保存原可见性，只携带签名
+  及签名所需声明依赖，不携带函数体。该完整构造集合用于判断该 type 是否仍拥有隐式公开无参构造；
+  实际构造调用和重载决议仍只允许当前作用域可访问的候选。普通用户符号枚举、补全和公开 API 查询
+  必须继续过滤 `public = 0` 的构造，不得因编译器元数据收录而扩大 `seal` 可见性。
+- 显式构造声明集合是“是否存在隐式默认构造”的唯一事实来源；不得再增加
+  `hasExplicitConstructor` 一类与声明集合重复的 type flag、attr 或 relation。package-public writer
+  必须为已收录构造补齐参数与返回类型的声明依赖闭包，使 reader 能按现有 constructor kind、可见性和
+  callable 签名原样恢复。
 - object-form `spec` 的完整成员骨架必须进入已导出 spec 的 `.ft`，包括
   `spec seal` requirement；每个成员沿用 `SYMS.flags.public` 忠实保存其
   spec 访问面。该收录不把 `spec seal` 成员变成普通公开 API。

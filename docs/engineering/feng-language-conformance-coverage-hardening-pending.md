@@ -415,41 +415,41 @@ LET05～LET09 属于编译器诊断测试；LET11～LET12 必须由实际写出�
 
 #### 9.2.5 本包构造写法与可用性正向用例
 
-- [ ] CTOR07：未显式声明任何构造函数时，公开隐式无参构造允许 `Type()`、`Type() {}`、
+- [x] CTOR07：未显式声明任何构造函数时，公开隐式无参构造允许 `Type()`、`Type() {}`、
   `Type() { field: value }`、`Type {}` 与 `Type { field: value }`，并执行一次统一构造流程；
-- [ ] CTOR08：显式公开无参或有参构造分别允许 `Type()`、`Type(args)` 及其对象字面量后缀形式；只有
+- [x] CTOR08：显式公开无参或有参构造分别允许 `Type()`、`Type(args)` 及其对象字面量后缀形式；只有
   无参构造允许 `Type { ... }` 简写，选中的显式构造只执行一次；
-- [ ] CTOR09：type 自身的实例方法和静态方法均可调用该 type 的 `seal` 无参或有参构造，并得到完整
+- [x] CTOR09：type 自身的实例方法和静态方法均可调用该 type 的 `seal` 无参或有参构造，并得到完整
   构造后的实例。
 
 #### 9.2.6 本包构造写法与可用性负向用例
 
-- [ ] CTOR10：未显式声明任何构造函数时，隐式默认构造只接受零参数；`Type(arg)` 与
+- [x] CTOR10：未显式声明任何构造函数时，隐式默认构造只接受零参数；`Type(arg)` 与
   `Type(arg) { ... }` 必须报错；
-- [ ] CTOR11：只显式声明有参构造后不再存在默认无参构造；`Type()`、`Type() {}` 与 `Type {}`
+- [x] CTOR11：只显式声明有参构造后不再存在默认无参构造；`Type()`、`Type() {}` 与 `Type {}`
   必须分别报错；
-- [ ] CTOR12：同 module 或同包但位于所属 type 外部的代码，不得调用该 type 的 `seal` 无参或有参
+- [x] CTOR12：同 module 或同包但位于所属 type 外部的代码，不得调用该 type 的 `seal` 无参或有参
   构造；直接调用、显式对象字面量后缀和无参简写均必须报错。
 
 #### 9.2.7 真实跨包构造写法与可用性正向用例
 
-- [ ] CTOR13：经过真实 package-public `.ft` 往返后，未显式声明构造函数的 provider type 仍通过
+- [x] CTOR13：经过真实 package-public `.ft` 往返后，未显式声明构造函数的 provider type 仍通过
   公开隐式无参构造支持 CTOR07 的全部无参写法；
-- [ ] CTOR14：经过真实 package-public `.ft` 往返后，consumer 可通过公开无参或有参构造使用
+- [x] CTOR14：经过真实 package-public `.ft` 往返后，consumer 可通过公开无参或有参构造使用
   `Type()`、`Type(args)`、对应对象字面量后缀，以及仅适用于无参构造的 `Type { ... }` 简写；
-- [ ] CTOR15：provider type 的实例方法和静态方法均可使用自身 `seal` 构造；consumer 不能直接调用
+- [x] CTOR15：provider type 的实例方法和静态方法均可使用自身 `seal` 构造；consumer 不能直接调用
   该构造，但可调用公开方法取得并使用 provider 已完成构造的实例。
 
 #### 9.2.8 真实跨包构造写法与可用性负向用例
 
-- [ ] CTOR16：provider type 未显式声明任何构造函数时，经过真实 package-public `.ft` 往返后得到的
+- [x] CTOR16：provider type 未显式声明任何构造函数时，经过真实 package-public `.ft` 往返后得到的
   隐式默认构造仍只接受零参数；consumer 的 `Type(arg)` 与 `Type(arg) { ... }` 必须报错；
-- [ ] CTOR17：provider 只显式声明公开有参构造时，consumer 不得重新获得默认无参构造；
+- [x] CTOR17：provider 只显式声明公开有参构造时，consumer 不得重新获得默认无参构造；
   `Type()`、`Type() {}` 与 `Type {}` 必须分别报错；
-- [ ] CTOR18：provider 的全部构造均为 `seal` 时，`.ft` 必须保留“已显式声明构造”的事实；consumer
+- [x] CTOR18：provider 的全部构造均为 `seal` 时，`.ft` 必须保留“已显式声明构造”的事实；consumer
   不得获得隐式无参构造，也不得调用匹配的 `seal` 构造，直接调用、对象字面量后缀和无参简写均必须
   报错；
-- [ ] CTOR19：provider 同时存在 `open` 与 `seal` 构造重载时，consumer 只允许选择匹配的 `open`
+- [x] CTOR19：provider 同时存在 `open` 与 `seal` 构造重载时，consumer 只允许选择匹配的 `open`
   候选；`seal` 候选不得参与外部重载决议、遮蔽公开候选或导致重新生成默认无参构造。
 
 CTOR13～CTOR19 必须由实际写出并重新读取 package-public `.ft` 的测试提供证据。只把 provider 与
@@ -462,47 +462,51 @@ consumer 源码 AST 一起交给同一进程语义分析，不属于真实跨包
 - [x] 在 Codex 沙箱外为 G05 独立执行 `make test`；
 - [x] 执行 `git diff --check`，关闭或决策 G05 问题；
 - [x] 填写本组实际文件、专项结果、全量结果和交付结论。
-- [ ] Review 并决策 `ISSUE-G05-004` 的 package-public `.ft` 构造声明保留方案；
-- [ ] 在主符号表规范中定义 package-public `.ft` 必须保留全部显式构造声明及其原可见性；
-- [ ] 补齐 CTOR07～CTOR19，并修复真实跨包构造可用性缺口；
-- [ ] 独立运行 G05 补充用例，覆盖本包/跨包、正向/负向和真实 `.ft` 往返；
-- [ ] 在 Codex 沙箱外为 G05 补充交付独立执行 `make test`；
-- [ ] 执行 `git diff --check`，更新问题、专项结果、全量结果和交付结论。
+- [x] Review 并决策 `ISSUE-G05-004` 的 package-public `.ft` 构造声明保留方案；
+- [x] 在主符号表规范中定义 package-public `.ft` 必须保留全部显式构造声明及其原可见性；
+- [x] 补齐 CTOR07～CTOR19，并修复真实跨包构造可用性缺口；
+- [x] 独立运行 G05 补充用例，覆盖本包/跨包、正向/负向和真实 `.ft` 往返；
+- [x] 在 Codex 沙箱外为 G05 补充交付独立执行 `make test`；
+- [x] 执行 `git diff --check`，更新问题、专项结果、全量结果和交付结论。
 
 ### 9.4 独立交付记录
 
-- 状态：原 CTOR01～CTOR06、LET01～LET12 已完成；CTOR07～CTOR19 待实施
+- 状态：已完成
 - 实际文件与用例：
-  - `fcts/fcts_bin/src/test_object_construction_order.ff`：覆盖 CTOR01～CTOR06、同包 LET01～LET04
-    和跨包 LET10，逐项断言事件轨迹、调用次数、各阶段 `let` 最终值和默认零值；
-  - `fcts/fcts_lib/src/g05_construction/g05_construction.ff`：提供跨包三阶段构造、事件轨迹以及 LET10
-    四种公开 `let` 成员状态；
+  - `fcts/fcts_bin/src/test_object_construction_order.ff`：覆盖 CTOR01～CTOR09、CTOR13～CTOR15、同包
+    LET01～LET04 和跨包 LET10，逐项断言事件轨迹、调用次数、构造写法、owner 内 `seal` 构造能力、
+    各阶段 `let` 最终值和默认零值；
+  - `fcts/fcts_lib/src/g05_construction/g05_construction.ff`：提供跨包三阶段构造、隐式默认构造、公开
+    构造重载、owner 内 `seal` 构造入口以及 LET10 四种公开 `let` 成员状态；
   - `fcts/fcts_bin/src/main.ff`：将 G05 行为测试接入完整 FCTS；
   - `src/parser/parser.h`、`src/semantic/analyzer.c`、`src/codegen/codegen.c`：在对象字面量 AST 保存语义
     阶段唯一选中的构造函数，并让直接 `Type { ... }` 与显式 `Type() { ... }` 复用同一构造调用路径；
+  - `src/symbol/ft_write.c`：package-public `.ft` 为已收录 type 保留全部显式构造声明，包括原可见性为
+    `seal` 的构造，不增加独立状态标记；
   - `test/codegen/test_codegen.c`：验证引用类型与 `@value` 类型的直接空字面量均生成且只生成一次已选
     无参构造函数调用，并编译生成 C；
-  - `test/semantic/test_semantic.c`：覆盖同包 LET05～LET09，验证阶段间重复绑定，并验证四种阶段状态
-    在构造结束后再次赋值均被拒绝；
-  - `test/symbol/test_symbol.c`：实际写出并重新读取 provider `.ft`，覆盖跨包 LET11～LET12，验证
-    声明阶段或当前选中构造函数绑定信息能够跨 `.ft` 恢复，并精确断言 `AE0102`、`AE0104`；
+  - `test/semantic/test_semantic.c`：覆盖同包 LET05～LET09 和 CTOR10～CTOR12，验证阶段间重复绑定、
+    构造结束后赋值、隐式默认构造参数限制、显式有参构造取消默认构造及 type 外 `seal` 构造拒绝；
+  - `test/symbol/test_symbol.c`：实际写出并重新读取 provider `.ft`，覆盖跨包 LET11～LET12 和
+    CTOR13～CTOR19；同时验证完整构造集合、原可见性、公开成员查询过滤以及 consumer 构造候选；
+  - `docs/specifications/feng-symbol-table.md`：定义 package-public `.ft` 的完整显式构造集合、可见性、
+    签名依赖闭包、隐式默认构造判定和公开查询过滤规则；
   - 本文：记录 `ISSUE-G05-001`～`ISSUE-G05-004` 的发现、分析、决策和验收状态。
-- 本组专项结果：Semantic tests、Symbol tests、Codegen tests 均通过；完整 FCTS 998/998；
-  CTOR01～CTOR06、LET01～LET12 全部通过；引用类型、`@value` 类型、同包与跨包路径的三阶段行为
-  及诊断一致；
-- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 998/998、smoke 均为
+- 本组专项结果：Semantic tests、Symbol tests、Codegen tests 均通过；完整 FCTS 1004/1004；
+  CTOR01～CTOR19、LET01～LET12 全部通过；引用类型、`@value` 类型、同包与真实 `.ft` 跨包路径的
+  构造阶段行为、构造可用性和诊断一致；
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 1004/1004、smoke 均为
   91/91、std 均为 601/601，Runtime、CLI、性能约束、增量构建与发布脚本检查均通过；
 - 问题：`ISSUE-G05-001`、`ISSUE-G05-002` 已关闭；`ISSUE-G05-003` 经专项复验和第二次完整
   `make test` 均未复现，记录为一次性测试环境产物缺失，未据此修改产品代码；
-  `ISSUE-G05-004` 已确认真实跨包产品缺陷，修复方案待人工决策；
-- 交付结论：CTOR01～CTOR06 和 LET01～LET12 已形成完整行为与诊断证据；直接对象字面量简写会执行
+  `ISSUE-G05-004` 已按人工确认方案修复并关闭；
+- 交付结论：CTOR01～CTOR19 和 LET01～LET12 已形成完整行为与诊断证据；直接对象字面量简写会执行
   语义阶段已选中的显式无参构造函数；`let` 可在三个构造阶段中的任一阶段首次绑定，首次绑定后不可
   在后续阶段再次绑定，构造结束后无论是否显式绑定都不可再次赋值，同包与真实 `.ft` 跨包边界一致。
-  本轮用例补充未修改产品实现，不增加运行时判断、分支或辅助调用，不变更 runtime 私有 ABI、公开
-  ABI 或 `.ft` 格式；
-- 补充范围：上述交付结论不包含 CTOR07～CTOR19 的构造写法与可用性矩阵；该矩阵及
-  `ISSUE-G05-004` 修复完成并独立全量回归前，G05 补充交付不关闭；
-- 建议 commit message：`test: cover let binding across construction phases`
+  package-public `.ft` 现以完整显式构造集合决定是否存在隐式默认构造，同时仅把可访问构造用于调用
+  候选；本轮不增加运行时判断、分支、辅助调用或 runtime 接口，不变更 runtime 私有 ABI、公开 ABI
+  或 `.ft` wire 格式，仅修正 package-public 声明内容选择；
+- 建议 commit message：`fix: preserve explicit constructors in package metadata`
 
 ## 10 G06：字符串字面量语义
 
@@ -1694,7 +1698,7 @@ consumer 源码 AST 一起交给同一进程语义分析，不属于真实跨包
 
 ##### 决策与实施
 
-- 状态：待决策；
+- 状态：已关闭；
 - 分类：产品缺陷、ABI 或格式风险；
 - 是否涉及既有测试修改：否；新增 CTOR07～CTOR19，不修改既有用例；
 - 是否涉及运行时性能：否；构造可用性继续在编译期决定，不增加运行时检查、分支或辅助调用；
@@ -1709,19 +1713,23 @@ consumer 源码 AST 一起交给同一进程语义分析，不属于真实跨包
   Codegen 分别消费；旧 consumer 忽略新标记后仍会错误编译，因此不能把它作为可静默忽略的同 major
   `.ft` 扩展。若最终选择标记方案，必须另行决策格式版本和旧 consumer 的显式拒绝策略；
 - 禁止同时采用“导出全部构造声明”和“新增显式构造标记”；前者已经完整表达语义事实，后者属于冗余
-  状态。
+  状态；
+- 人工决策：采用推荐方案；全部显式构造进入 package-public `.ft`，保持原可见性，不增加独立标记。
+- 实际变更：package-public writer 对构造声明不再按可见性过滤；reader、构造校验和公开成员查询继续
+  使用现有 constructor kind、`public` 可见性及签名，无新增 wire 字段、格式版本或运行时逻辑。
 
 ##### 验收与关闭
 
-- [ ] 人工确认采用“全部显式构造进入 package-public `.ft`，保持原可见性且不增加标记”的方案，或
-  明确选择其他格式方案；
-- [ ] 主符号表规范先定义构造声明选择、可见性恢复、签名依赖闭包和用户符号查询过滤规则；
-- [ ] 真实 `.ft` 往返后，consumer 能看到 `seal` 构造事实，但普通成员枚举、补全和调用候选仍不得把
+- [x] 人工确认采用“全部显式构造进入 package-public `.ft`，保持原可见性且不增加标记”的方案；
+- [x] 主符号表规范先定义构造声明选择、可见性恢复、签名依赖闭包和用户符号查询过滤规则；
+- [x] 真实 `.ft` 往返后，consumer 能看到 `seal` 构造事实，但普通成员枚举、补全和调用候选仍不得把
   `seal` 构造暴露为公开 API；
-- [ ] CTOR07～CTOR19 全部通过，其中 CTOR18 必须覆盖全 `seal` 无参、全 `seal` 有参和全 `seal`
+- [x] CTOR07～CTOR19 全部通过，其中 CTOR18 必须覆盖全 `seal` 无参、全 `seal` 有参和全 `seal`
   重载集合；
-- [ ] G05 专项、沙箱外 `make test` 与 `git diff --check` 全部通过；
-- [ ] 关闭依据：待填写。
+- [x] G05 专项、沙箱外 `make test` 与 `git diff --check` 全部通过；
+- [x] 关闭依据：Symbol tests 通过真实 package-public `.ft` 写入和读取确认全 `seal`、全 `seal` 有参及
+  `open + seal` 重载集合完整恢复，公开成员查询不返回 `seal` 构造；Semantic tests 精确确认外部调用
+  被拒绝且公开候选正常选择；CTOR07～CTOR19、完整 FCTS 1004/1004 及沙箱外全量 `make test` 均通过。
 
 ### 30.2 编号与状态
 

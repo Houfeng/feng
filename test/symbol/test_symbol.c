@@ -1482,6 +1482,360 @@ static void test_let_three_phase_binding_semantics_survive_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Analyze one constructor-availability consumer against package-public FT and
+ * require the exact semantic diagnostic selected after import. */
+static void assert_ft_constructor_consumer_rejected(
+    const FengSemanticAnalyzeOptions *options,
+    const char *path,
+    const char *source,
+    const char *expected_code,
+    const char *expected_message_fragment) {
+    FengProgram *program = parse_or_die(path, source);
+    const FengProgram *programs[1] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(strstr(errors[0].message, expected_message_fragment) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* CTOR13-CTOR19: package-public FT must retain the complete constructor set
+ * while exposing only constructors that are public and signature-compatible. */
+static void test_constructor_availability_survives_ft_roundtrip(void) {
+    static const char *kProviderSource =
+        "open module vendor.g05_constructor;\n"
+        "open type ImplicitDefault { open var value: int; }\n"
+        "open type PublicSurface {\n"
+        "    open var value: int;\n"
+        "    open func PublicSurface() { self.value = 10; }\n"
+        "    open func PublicSurface(value: int) { self.value = value; }\n"
+        "}\n"
+        "open type PublicArgsOnly {\n"
+        "    open var value: int;\n"
+        "    open func PublicArgsOnly(value: int) { self.value = value; }\n"
+        "}\n"
+        "open type SealedOnly {\n"
+        "    open var value: int;\n"
+        "    seal func SealedOnly() { self.value = 20; }\n"
+        "    seal func SealedOnly(value: int) { self.value = value; }\n"
+        "    open static func create(value: int): SealedOnly { return SealedOnly(value); }\n"
+        "    open func copy(): SealedOnly { return SealedOnly(self.value); }\n"
+        "}\n"
+        "open type SealedArgsOnly {\n"
+        "    open var value: int;\n"
+        "    seal func SealedArgsOnly(value: int) { self.value = value; }\n"
+        "    open static func create(value: int): SealedArgsOnly { return SealedArgsOnly(value); }\n"
+        "}\n"
+        "open type MixedConstructors {\n"
+        "    open var value: int;\n"
+        "    open func MixedConstructors(value: int) { self.value = value; }\n"
+        "    seal func MixedConstructors(value: string) { self.value = 30; }\n"
+        "}\n";
+    static const char *kAllowedSource =
+        "module consumer.g05_constructor_allowed;\n"
+        "import vendor.g05_constructor as provider;\n"
+        "func read(): int {\n"
+        "    let i0 = provider.ImplicitDefault();\n"
+        "    let i1 = provider.ImplicitDefault() {};\n"
+        "    let i2 = provider.ImplicitDefault() { value: 1 };\n"
+        "    let i3 = provider.ImplicitDefault {};\n"
+        "    let i4 = provider.ImplicitDefault { value: 2 };\n"
+        "    let p0 = provider.PublicSurface();\n"
+        "    let p1 = provider.PublicSurface() { value: 3 };\n"
+        "    let p2 = provider.PublicSurface { value: 4 };\n"
+        "    let p3 = provider.PublicSurface(5);\n"
+        "    let p4 = provider.PublicSurface(6) { value: 7 };\n"
+        "    let sealed = provider.SealedOnly.create(8);\n"
+        "    let copied = sealed.copy();\n"
+        "    let mixed = provider.MixedConstructors(9);\n"
+        "    return i0.value + i1.value + i2.value + i3.value + i4.value +\n"
+        "           p0.value + p1.value + p2.value + p3.value + p4.value +\n"
+        "           sealed.value + copied.value + mixed.value;\n"
+        "}\n";
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *expected_code;
+        const char *expected_message_fragment;
+    } kRejected[] = {
+        {
+            "ft_ctor16_direct_arg.ff",
+            "module consumer.g05_ctor16_direct;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.ImplicitDefault(1); }\n",
+            "AE0313",
+            "has no constructor accepting 1 argument(s)",
+        },
+        {
+            "ft_ctor16_literal_arg.ff",
+            "module consumer.g05_ctor16_literal;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.ImplicitDefault(1) {}; }\n",
+            "AE0313",
+            "has no constructor accepting 1 argument(s)",
+        },
+        {
+            "ft_ctor17_direct_zero.ff",
+            "module consumer.g05_ctor17_direct;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.PublicArgsOnly(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor17_literal_zero.ff",
+            "module consumer.g05_ctor17_literal;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.PublicArgsOnly() {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor17_shorthand_zero.ff",
+            "module consumer.g05_ctor17_shorthand;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.PublicArgsOnly {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor18_direct_zero.ff",
+            "module consumer.g05_ctor18_direct_zero;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedOnly(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor18_literal_zero.ff",
+            "module consumer.g05_ctor18_literal_zero;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedOnly() {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor18_shorthand_zero.ff",
+            "module consumer.g05_ctor18_shorthand_zero;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedOnly {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor18_direct_arg.ff",
+            "module consumer.g05_ctor18_direct_arg;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedOnly(1); }\n",
+            "AE0315",
+            "no accessible constructor accepting 1 argument(s)",
+        },
+        {
+            "ft_ctor18_literal_arg.ff",
+            "module consumer.g05_ctor18_literal_arg;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedOnly(1) {}; }\n",
+            "AE0315",
+            "no accessible constructor accepting 1 argument(s)",
+        },
+        {
+            "ft_ctor18_sealed_args_no_default.ff",
+            "module consumer.g05_ctor18_args_only;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.SealedArgsOnly(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+        {
+            "ft_ctor19_private_overload.ff",
+            "module consumer.g05_ctor19_private;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.MixedConstructors(\"hidden\"); }\n",
+            "AE0315",
+            "no accessible constructor accepting 1 argument(s)",
+        },
+        {
+            "ft_ctor19_no_default.ff",
+            "module consumer.g05_ctor19_default;\n"
+            "import vendor.g05_constructor as provider;\n"
+            "func run() { provider.MixedConstructors(); }\n",
+            "AE0315",
+            "no accessible constructor accepting 0 argument(s)",
+        },
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengSlice module_segments[2];
+    const FengSymbolImportedModule *module;
+    const FengSymbolDeclView *implicit_default;
+    const FengSymbolDeclView *public_args_only;
+    const FengSymbolDeclView *sealed_only;
+    const FengSymbolDeclView *mixed;
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    size_t constructor_count;
+    size_t public_constructor_count;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g05_constructor_provider.ff",
+                                kProviderSource,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+
+    module_segments[0] = slice_from_cstr("vendor");
+    module_segments[1] = slice_from_cstr("g05_constructor");
+    module = feng_symbol_provider_find_module(provider, module_segments, 2U);
+    ASSERT(module != NULL);
+    implicit_default = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("ImplicitDefault"));
+    public_args_only = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("PublicArgsOnly"));
+    sealed_only = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("SealedOnly"));
+    mixed = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("MixedConstructors"));
+    ASSERT(implicit_default != NULL);
+    ASSERT(public_args_only != NULL);
+    ASSERT(sealed_only != NULL);
+    ASSERT(mixed != NULL);
+
+    constructor_count = 0U;
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(implicit_default);
+         ++index) {
+        if (feng_symbol_decl_kind(
+                feng_symbol_decl_member_at(implicit_default, index)) ==
+            FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+            ++constructor_count;
+        }
+    }
+    ASSERT(constructor_count == 0U);
+
+    constructor_count = 0U;
+    public_constructor_count = 0U;
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(public_args_only);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(public_args_only, index);
+        if (feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+            continue;
+        }
+        ++constructor_count;
+        if (feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PUBLIC) {
+            ++public_constructor_count;
+        }
+    }
+    ASSERT(constructor_count == 1U);
+    ASSERT(public_constructor_count == 1U);
+
+    constructor_count = 0U;
+    public_constructor_count = 0U;
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(sealed_only);
+         ++index) {
+        const FengSymbolDeclView *member =
+            feng_symbol_decl_member_at(sealed_only, index);
+        if (feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+            continue;
+        }
+        ++constructor_count;
+        if (feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PUBLIC) {
+            ++public_constructor_count;
+        }
+    }
+    ASSERT(constructor_count == 2U);
+    ASSERT(public_constructor_count == 0U);
+    ASSERT(feng_symbol_decl_public_member_count(
+               sealed_only, slice_from_cstr("SealedOnly")) == 0U);
+    ASSERT(feng_symbol_decl_find_public_member(
+               sealed_only, slice_from_cstr("SealedOnly")) == NULL);
+
+    constructor_count = 0U;
+    public_constructor_count = 0U;
+    for (size_t index = 0U;
+         index < feng_symbol_decl_member_count(mixed);
+         ++index) {
+        const FengSymbolDeclView *member = feng_symbol_decl_member_at(mixed, index);
+        if (feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+            continue;
+        }
+        ++constructor_count;
+        if (feng_symbol_decl_visibility(member) == FENG_VISIBILITY_PUBLIC) {
+            ++public_constructor_count;
+        }
+    }
+    ASSERT(constructor_count == 2U);
+    ASSERT(public_constructor_count == 1U);
+    ASSERT(feng_symbol_decl_public_member_count(
+               mixed, slice_from_cstr("MixedConstructors")) == 1U);
+    ASSERT(feng_symbol_decl_kind(feng_symbol_decl_find_public_member(
+               mixed, slice_from_cstr("MixedConstructors"))) ==
+           FENG_SYMBOL_DECL_KIND_CONSTRUCTOR);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+
+    program = parse_or_die("ft_ctor_allowed.ff", kAllowedSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    for (size_t index = 0U;
+         index < sizeof(kRejected) / sizeof(kRejected[0]);
+         ++index) {
+        assert_ft_constructor_consumer_rejected(
+            &options,
+            kRejected[index].path,
+            kRejected[index].source,
+            kRejected[index].expected_code,
+            kRejected[index].expected_message_fragment);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* Verifies generated mixin members are exported as ordinary target members
  * while the propagated static wrapper preserves its mixable declaration fact. */
 static void test_mixin_generated_members_ft_roundtrip(void) {
@@ -4591,6 +4945,7 @@ int main(void) {
     test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
     test_let_three_phase_binding_semantics_survive_ft_roundtrip();
+    test_constructor_availability_survives_ft_roundtrip();
     test_mixin_generated_members_ft_roundtrip();
     test_mixable_seal_member_ft_roundtrip_preserves_field_facts();
     test_roundtrip_public_module_docs();

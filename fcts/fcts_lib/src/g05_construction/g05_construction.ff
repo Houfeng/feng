@@ -80,3 +80,66 @@ open type G05ImportedDefaultUnboundLet {
   /** Immutable value that retains its default zero value. */
   open let value: int;
 }
+
+/** Imported probe with no explicit constructor and therefore a public default constructor. */
+open type G05ImportedImplicitDefaultConstructor {
+  /** Mutable value used by every supported default-construction spelling. */
+  open var value: int;
+}
+
+/** Imported probe exposing public no-argument and one-argument constructors. */
+open type G05ImportedPublicConstructorSurface {
+  /** Number of selected constructor bodies executed since reset. */
+  seal static var callCountValue: int = 0;
+
+  /** Value established by the selected constructor or consumer literal. */
+  open var value: int;
+
+  /** Execute the public no-argument constructor. */
+  open func G05ImportedPublicConstructorSurface() {
+    G05ImportedPublicConstructorSurface.callCountValue += 1;
+    self.value = 410;
+  }
+
+  /** Execute the public one-argument constructor. */
+  open func G05ImportedPublicConstructorSurface(value: int) {
+    G05ImportedPublicConstructorSurface.callCountValue += 1;
+    self.value = value;
+  }
+
+  /** Reset the constructor execution count. */
+  open static func resetCalls(): void {
+    G05ImportedPublicConstructorSurface.callCountValue = 0;
+  }
+
+  /** Return the constructor execution count. */
+  open static func calls(): int {
+    return G05ImportedPublicConstructorSurface.callCountValue;
+  }
+}
+
+/** Imported probe whose construction is available only inside its owning type. */
+open type G05ImportedSealedOwnerConstruction {
+  /** Value established by an owner-authorized sealed constructor. */
+  open var value: int;
+
+  /** Private no-argument constructor retained in package metadata. */
+  seal func G05ImportedSealedOwnerConstruction() {
+    self.value = 510;
+  }
+
+  /** Private one-argument constructor retained in package metadata. */
+  seal func G05ImportedSealedOwnerConstruction(value: int) {
+    self.value = value;
+  }
+
+  /** Construct an instance through the owning type's static context. */
+  open static func create(value: int): G05ImportedSealedOwnerConstruction {
+    return G05ImportedSealedOwnerConstruction(value);
+  }
+
+  /** Construct a copy through the owning type's instance context. */
+  open func copy(): G05ImportedSealedOwnerConstruction {
+    return G05ImportedSealedOwnerConstruction(self.value);
+  }
+}
