@@ -667,10 +667,10 @@ box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spe
 - [x] 明确记录 `ValueBox<T>` 是静态具体化模式，不是动态 payload 容器；
 - [x] 明确记录每个具体值类型分别拥有原始值描述符和箱描述符；
 - [x] 明确记录箱中不增加原始值描述符字段，descriptor 中不增加反向链接；
-- [ ] 在主规范 `feng-spec.md` 中明确：内建标量的 object-form spec 相等结果保持不变；具名 enum 按动态
-  具名类型和 enum 值共同决定相等结果；
-- [ ] 在主规范及对应测试设计中明确：不同具名 enum、enum 与其底层标量在普通静态表达式中仍不可直接
-  比较，在同一 object-form spec 视角下则返回 `false`。
+- [ ] 同步更新其他文档：在主规范 `feng-spec.md` 中定义内建标量的 object-form spec 相等结果保持不变，
+  具名 enum 按动态具名类型和 enum 值共同决定相等结果，不同具名 enum、enum 与底层标量在同一
+  object-form spec 视角下返回 `false`；普通静态比较规则保持不变。检查 `feng-enum.md` 及关联工程文档，
+  仅修正冲突内容或增加对主规范的引用，不重复定义规则。该 TODO 是阶段一代码修改前的第一项任务。
 
 ### 8.3 阶段一 Runtime：内建 ValueBox
 
@@ -848,8 +848,8 @@ box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spe
 - [ ] 记录两个阶段最终测试数量、逐项运行时开销对比结果与完整 `make test` 结果；
 - [ ] 将本文状态从“待 Review”更新为与实际交付进度一致的状态。
 
-本提案已通过人工 Review，§8.1 的变更前基线与测试白名单已经完成。§8.2 中新增的标量/enum 相等语义
-主规范任务完成前，不得开始代码实施或修改既有测试。
+本提案已通过人工 Review，§8.1 的变更前基线与测试白名单已经完成，可以开始执行阶段一 TODO。§8.2 的
+“同步更新其他文档”是第一项任务；完成该项后，才能进入代码修改和测试修改。
 
 ## 9. Review 决策清单
 
@@ -874,7 +874,8 @@ box 的 `payload.i32`。tuple/`@value type` 使用各自 `__spec_box` 与 `__spe
   object-form spec 相等结果或浮点边界行为；
 - [x] 接受 enum 的 object-form spec 相等按具名类型 descriptor 和 enum 值共同决定：不同具名 enum 及
   enum 与底层标量均不相等；该规则接近 C# `Enum.Equals`，且不改变普通静态 enum 相等规则；
-- [x] 接受上述 enum 行为修正必须先写入 `feng-spec.md`，再实施代码和测试。
+- [x] 接受将其他文档同步作为阶段一 TODO 的第一项任务；先在 `feng-spec.md` 定义上述规则并收敛关联文档，
+  再实施代码和测试。
 
 > **人工 Review 记录（2026-08-27）**：以上决策已全部通过，并已完成旧标量箱强断言用例清单审计。
 >
