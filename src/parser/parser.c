@@ -2543,7 +2543,9 @@ static bool token_starts_expression(FengTokenKind kind) {
 
 static bool looks_like_lambda(const Parser *parser) {
     size_t index;
-    size_t depth = 0U;
+    size_t paren_depth = 0U;
+    size_t brace_depth = 0U;
+    size_t bracket_depth = 0U;
     bool saw_colon = false;
 
     if (!parser_check(parser, FENG_TOKEN_LPAREN)) {
@@ -2554,14 +2556,17 @@ static bool looks_like_lambda(const Parser *parser) {
         FengTokenKind kind = parser->tokens[index].kind;
 
         if (kind == FENG_TOKEN_LPAREN) {
-            ++depth;
+            ++paren_depth;
             continue;
         }
         if (kind == FENG_TOKEN_RPAREN) {
-            if (depth == 0U) {
+            if (paren_depth == 0U) {
                 bool is_empty = (index == parser->current + 1U);
                 FengTokenKind after = parser->tokens[index + 1U].kind;
 
+                if (brace_depth != 0U || bracket_depth != 0U) {
+                    return false;
+                }
                 if (after == FENG_TOKEN_ARROW && (saw_colon || is_empty)) {
                     return true;
                 }
@@ -2570,10 +2575,31 @@ static bool looks_like_lambda(const Parser *parser) {
                 }
                 return false;
             }
-            --depth;
+            --paren_depth;
             continue;
         }
-        if (depth == 0U && kind == FENG_TOKEN_COLON) {
+        if (kind == FENG_TOKEN_LBRACE) {
+            ++brace_depth;
+            continue;
+        }
+        if (kind == FENG_TOKEN_RBRACE) {
+            if (brace_depth > 0U) {
+                --brace_depth;
+            }
+            continue;
+        }
+        if (kind == FENG_TOKEN_LBRACKET) {
+            ++bracket_depth;
+            continue;
+        }
+        if (kind == FENG_TOKEN_RBRACKET) {
+            if (bracket_depth > 0U) {
+                --bracket_depth;
+            }
+            continue;
+        }
+        if (paren_depth == 0U && brace_depth == 0U &&
+            bracket_depth == 0U && kind == FENG_TOKEN_COLON) {
             saw_colon = true;
         }
     }

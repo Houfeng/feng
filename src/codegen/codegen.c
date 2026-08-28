@@ -39909,6 +39909,366 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
  *   - break / continue paths emit the same active try/catch cleanup used by
  *     return before jumping out of generated try/catch blocks.
  */
+
+/* Register one already-initialized, non-captured loop binding in the current
+ * per-iteration scope. Dynamic storage metadata is optional: direct generic
+ * array elements keep their existing borrowed-address representation, while
+ * descriptor-sized aggregate copies own storage and cleanup in this scope. */
+static bool cg_register_loop_binding_local(
+    CG *cg,
+    const FengBinding *binding,
+    const char *c_name,
+    const CGType *binding_type,
+    const char *erased_descriptor_name,
+    const char *erased_size_name,
+    const char *reified_descriptor_name,
+    const char *reified_size_name) {
+    CGType *local_type;
+    Local *added;
+    size_t prior_count;
+
+    if (cg == NULL || binding == NULL || c_name == NULL ||
+        binding_type == NULL) {
+        return false;
+    }
+    local_type = cgtype_clone(binding_type);
+    if (local_type == NULL) {
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    prior_count = cg->cur_scope->count;
+    if (!scope_add(cg->cur_scope,
+                   "_unused_internal_name__",
+                   c_name,
+                   local_type,
+                   false)) {
+        if (cg->cur_scope->count > prior_count) {
+            scope_discard_suffix(cg->cur_scope, prior_count);
+        } else {
+            cgtype_free(local_type);
+        }
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    if (erased_descriptor_name != NULL &&
+        !scope_mark_last_erased_generic_storage(cg->cur_scope,
+                                                erased_descriptor_name,
+                                                erased_size_name)) {
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    if (reified_descriptor_name != NULL &&
+        !scope_mark_last_reified_storage(cg->cur_scope,
+                                         reified_descriptor_name,
+                                         reified_size_name)) {
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    if (!scope_mark_last_binding_mutability(cg->cur_scope,
+                                            binding->mutability)) {
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+
+    added = &cg->cur_scope->items[cg->cur_scope->count - 1U];
+    free(added->name);
+    added->name = strndup(binding->name.data, binding->name.length);
+    if (added->name == NULL ||
+        !cg_debug_add_variable_record_slice_cgtype(
+            cg,
+            c_name,
+            binding->name,
+            NULL,
+            binding_type,
+            FENG_CODEGEN_MAPING_VARIABLE_BINDING,
+            binding->token)) {
+        return false;
+    }
+
+    if (erased_descriptor_name != NULL) {
+        cg_emit_cleanup_push_for_erased_generic_storage(
+            cg, c_name, erased_descriptor_name);
+    } else if (reified_descriptor_name != NULL) {
+        cg_emit_cleanup_push_for_reified_aggregate_storage(
+            cg, c_name, reified_descriptor_name);
+    } else if (cgtype_is_managed(binding_type)) {
+        cg_emit_cleanup_push_for_managed_local(cg, c_name);
+    } else if (cgtype_is_aggregate(binding_type)) {
+        cg_emit_cleanup_push_for_aggregate_local(cg, c_name, binding_type);
+    }
+    return true;
+}
+
+/* Initialize fresh descriptor-sized loop storage directly from a borrowed
+ * element. Fresh storage has no old managed slots to release, so copy then
+ * retain preserves ownership without the zero-fill and destination traversal
+ * required by assignment into an already initialized value. */
+static bool cg_emit_fresh_reified_loop_binding_storage(
+    CG *cg,
+    const CGType *type,
+    const char *storage_c_name,
+    const char *source_expr,
+    FengToken blame,
+    char **out_descriptor_c_name,
+    char **out_size_c_name) {
+    char *descriptor_expr;
+    char *descriptor_name;
+    char *size_name;
+
+    if (cg == NULL || type == NULL || storage_c_name == NULL ||
+        source_expr == NULL || out_descriptor_c_name == NULL ||
+        out_size_c_name == NULL) {
+        return false;
+    }
+    descriptor_expr =
+        cg_reified_aggregate_descriptor_expr_dup(cg, type, blame);
+    descriptor_name = cg_fresh_temp(cg, "_rad");
+    size_name = cg_fresh_temp(cg, "_rsize");
+    if (descriptor_expr == NULL || descriptor_name == NULL ||
+        size_name == NULL) {
+        free(descriptor_expr);
+        free(descriptor_name);
+        free(size_name);
+        if (!cg->failed) {
+            cg_fail(cg, blame,
+                    "IE0001", "codegen: out of memory");
+        }
+        return false;
+    }
+
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    const FengAggregateDescriptor *%s = %s;\n"
+                   "    const size_t %s = %s->size;\n"
+                   "    _Alignas(max_align_t) char %s[%s];\n"
+                   "    memcpy(%s, %s, %s);\n"
+                   "    feng_aggregate_retain(%s, %s);\n",
+                   descriptor_name,
+                   descriptor_expr,
+                   size_name,
+                   descriptor_name,
+                   storage_c_name,
+                   size_name,
+                   storage_c_name,
+                   source_expr,
+                   size_name,
+                   storage_c_name,
+                   descriptor_name);
+    free(descriptor_expr);
+    *out_descriptor_c_name = descriptor_name;
+    *out_size_c_name = size_name;
+    return true;
+}
+
+/* Create one source-level `for/in` binding from a borrowed element value.
+ * Both array and iterator-protocol lowering call this function, so capture
+ * selection, per-iteration identity, mutability metadata and cleanup cannot
+ * diverge between the two paths. An address-form source is dereferenced for
+ * fixed-layout values and passed directly to descriptor-sized storage code. */
+static bool cg_emit_loop_binding_from_borrowed_source(
+    CG *cg,
+    const FengBinding *binding,
+    const CGType *binding_type,
+    const char *source_expr,
+    bool source_is_address) {
+    Buf value_expr;
+    const char *fixed_value_expr = source_expr;
+    char *c_name = NULL;
+    char *c_type = NULL;
+    char *descriptor_name = NULL;
+    char *size_name = NULL;
+    bool ok = false;
+
+    if (cg == NULL || binding == NULL || binding_type == NULL ||
+        source_expr == NULL) {
+        return false;
+    }
+    buf_init(&value_expr);
+
+    if (source_is_address &&
+        !cg_capture_cell_uses_dynamic_storage(cg, binding_type)) {
+        c_type = cg_ctype_dup(binding_type);
+        if (c_type == NULL) {
+            goto cleanup;
+        }
+        buf_append_fmt(&value_expr, "(*(%s *)%s)", c_type, source_expr);
+        if (value_expr.data == NULL) {
+            goto cleanup;
+        }
+        fixed_value_expr = value_expr.data;
+    }
+
+    if (cg_current_callable_captures_name(
+            cg, binding->name.data, binding->name.length)) {
+        const char *capture_source =
+            cg_capture_cell_uses_dynamic_storage(cg, binding_type)
+                ? source_expr
+                : fixed_value_expr;
+
+        ok = cg_scope_bind_capture_cell(
+                 cg,
+                 cg->cur_scope,
+                 binding->name,
+                 binding_type,
+                 binding->token,
+                 capture_source,
+                 true,
+                 false,
+                 true,
+                 FENG_CODEGEN_MAPING_VARIABLE_BINDING) &&
+             scope_mark_last_binding_mutability(cg->cur_scope,
+                                                binding->mutability);
+        goto cleanup;
+    }
+
+    c_name = cg_local_cname(
+        cg, binding->name.data, binding->name.length);
+    if (c_name == NULL) {
+        cg_fail(cg, binding->token,
+                "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (!cg_emit_line_directive_force(cg, binding->token)) {
+        goto cleanup;
+    }
+
+    if (binding_type->kind == CG_TYPE_GENERIC_PARAM) {
+        if (c_type == NULL) {
+            c_type = cg_ctype_dup(binding_type);
+        }
+        if (c_type == NULL) {
+            cg_fail(cg, binding->token,
+                    "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        /* Preserve the existing zero-copy borrowed address for an uncaptured
+         * direct generic element. Captured generic bindings take an owned
+         * per-iteration copy in the capture cell above. */
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = %s;\n",
+                       c_type,
+                       c_name,
+                       source_expr);
+        ok = cg_register_loop_binding_local(cg,
+                                            binding,
+                                            c_name,
+                                            binding_type,
+                                            NULL,
+                                            NULL,
+                                            NULL,
+                                            NULL);
+        goto cleanup;
+    }
+
+    if (source_is_address &&
+        cg_type_uses_reified_storage(cg, binding_type)) {
+        if (!cg_emit_fresh_reified_loop_binding_storage(
+                cg,
+                binding_type,
+                c_name,
+                source_expr,
+                binding->token,
+                &descriptor_name,
+                &size_name)) {
+            goto cleanup;
+        }
+        ok = cg_register_loop_binding_local(cg,
+                                            binding,
+                                            c_name,
+                                            binding_type,
+                                            NULL,
+                                            NULL,
+                                            descriptor_name,
+                                            size_name);
+        goto cleanup;
+    }
+
+    if (c_type == NULL) {
+        c_type = cg_ctype_dup(binding_type);
+    }
+    if (c_type == NULL) {
+        cg_fail(cg, binding->token,
+                "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (cgtype_is_managed(binding_type)) {
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = %s; feng_retain(%s);\n",
+                       c_type,
+                       c_name,
+                       fixed_value_expr,
+                       c_name);
+    } else if (cgtype_is_aggregate(binding_type)) {
+        const char *aggregate_name = cg_aggregate_desc_name(binding_type);
+        size_t aggregate_index;
+
+        if (aggregate_name == NULL) {
+            cg_fail(cg, binding->token,
+                    "CE0278",
+                    "codegen: missing aggregate descriptor for spec for/in element");
+            goto cleanup;
+        }
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = %s;",
+                       c_type,
+                       c_name,
+                       fixed_value_expr);
+        if (cg_value_needs_reified_layout(cg, binding_type) &&
+            cg_lookup_reified_agg_dep_index(
+                cg, aggregate_name, &aggregate_index)) {
+            const char *source = cg->generic_type_method_rad_via_desc
+                                     ? "_desc"
+                                     : "_td";
+            buf_append_fmt(
+                cg->cur_body,
+                " feng_aggregate_retain(&%s, "
+                "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);",
+                c_name,
+                source,
+                aggregate_index);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                           " feng_aggregate_retain(&%s, &%s);",
+                           c_name,
+                           aggregate_name);
+        }
+        buf_append_cstr(cg->cur_body, "\n");
+    } else if (cgtype_is_by_value_struct(binding_type)) {
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = %s;\n",
+                       c_type,
+                       c_name,
+                       fixed_value_expr);
+    } else {
+        buf_append_fmt(cg->cur_body,
+                       "    %s %s = (%s)(%s);\n",
+                       c_type,
+                       c_name,
+                       c_type,
+                       fixed_value_expr);
+    }
+    ok = cg_register_loop_binding_local(cg,
+                                        binding,
+                                        c_name,
+                                        binding_type,
+                                        NULL,
+                                        NULL,
+                                        NULL,
+                                        NULL);
+
+cleanup:
+    free(c_name);
+    free(c_type);
+    free(descriptor_name);
+    free(size_name);
+    buf_free(&value_expr);
+    if (!ok && !cg->failed) {
+        return cg_fail(cg, binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    return ok;
+}
+
 static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     int id = cg->label_counter++;
     char cont_label[64];
@@ -40802,79 +41162,44 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     }
     buf_append_cstr(cg->cur_body, "break; }\n");
 
-    /* Bind loop variable: let it = result.item2 */
-    const FengBinding *ib = &stmt->as.for_stmt.iter_binding;
-    char *iter_cname = cg_local_cname(cg, ib->name.data, ib->name.length);
-    if (!iter_cname) {
-        free(result_var); free(result_cty);
-        free(result_descriptor_name); free(result_size_name);
-        cgtype_free(element_type); cgtype_free(result_type);
-        free(cont_label_owned);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(cursor_var);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-    }
+    /* Bind the current element through the same per-iteration lowering used
+     * by the array path. Fixed-layout fields are value expressions; erased
+     * or descriptor-sized fields remain address expressions. */
+    {
+        const FengBinding *binding = &stmt->as.for_stmt.iter_binding;
+        Buf element_source;
+        bool source_is_address =
+            result_uses_reified_storage ||
+            element_type->kind == CG_TYPE_GENERIC_PARAM ||
+            cg_type_uses_reified_storage(cg, element_type);
 
-    char *elem_cty = cg_ctype_dup(element_type);
-    Buf element_address;
-    bool element_registered = false;
-    buf_init(&element_address);
-    if (result_uses_reified_storage) {
-        buf_append_fmt(&element_address,
-            "(void *)((char *)%s + %s->reified_field_offsets[1])",
-            result_var, result_descriptor_name);
-    } else {
-        buf_append_fmt(&element_address,
-            "(void *)&%s.%s", result_var, elem_field->c_name);
-    }
-    if (elem_cty == NULL || element_address.data == NULL) {
-        free(elem_cty);
-        buf_free(&element_address);
-        free(iter_cname); free(result_var); free(result_cty);
-        free(result_descriptor_name); free(result_size_name);
-        free(cont_label_owned);
-        cgtype_free(element_type); cgtype_free(result_type);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(cursor_var);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token,
-            "IE0001", "codegen: out of memory");
-    }
-    if (element_type->kind == CG_TYPE_GENERIC_PARAM) {
-        /* A direct generic binding borrows the descriptor-sized field for the
-         * duration of this iteration. The owning result remains live until
-         * after the user body and therefore dominates every use. */
-        buf_append_fmt(cg->cur_body,
-            "        %s %s = %s;\n",
-            elem_cty, iter_cname, element_address.data);
-    } else if (cg_type_uses_reified_storage(cg, element_type)) {
-        char *element_descriptor_name = NULL;
-        char *element_size_name = NULL;
-
-        if (!cg_emit_reified_storage_declaration(
-                cg,
-                element_type,
-                iter_cname,
-                stmt->token,
-                &element_descriptor_name,
-                &element_size_name)) {
-            free(elem_cty);
-            buf_free(&element_address);
-            free(iter_cname); free(result_var); free(result_cty);
+        buf_init(&element_source);
+        if (result_uses_reified_storage) {
+            buf_append_fmt(&element_source,
+                "(void *)((char *)%s + %s->reified_field_offsets[1])",
+                result_var, result_descriptor_name);
+        } else if (source_is_address) {
+            buf_append_fmt(&element_source,
+                           "(void *)&%s.%s",
+                           result_var,
+                           elem_field->c_name);
+        } else {
+            buf_append_fmt(&element_source,
+                           "%s.%s",
+                           result_var,
+                           elem_field->c_name);
+        }
+        if (element_source.data == NULL ||
+            !cg_emit_loop_binding_from_borrowed_source(cg,
+                                                       binding,
+                                                       element_type,
+                                                       element_source.data,
+                                                       source_is_address)) {
+            buf_free(&element_source);
+            free(result_var); free(result_cty);
             free(result_descriptor_name); free(result_size_name);
-            free(cont_label_owned);
             cgtype_free(element_type); cgtype_free(result_type);
+            free(cont_label_owned);
             body_scope->continue_label = NULL;
             cg->cur_scope = body_scope->parent;
             scope_pop_free(body_scope);
@@ -40885,149 +41210,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             scope_pop_free(outer_scope);
             return false;
         }
-        buf_append_fmt(cg->cur_body,
-            "        feng_aggregate_assign(%s, %s, %s);\n",
-            iter_cname, element_address.data, element_descriptor_name);
-        if (!scope_add(cg->cur_scope,
-                       "_unused_internal_name__",
-                       iter_cname,
-                       cgtype_clone(element_type),
-                       false) ||
-            !scope_mark_last_reified_storage(cg->cur_scope,
-                                             element_descriptor_name,
-                                             element_size_name)) {
-            free(element_descriptor_name); free(element_size_name);
-            free(elem_cty);
-            buf_free(&element_address);
-            free(iter_cname); free(result_var); free(result_cty);
-            free(result_descriptor_name); free(result_size_name);
-            free(cont_label_owned);
-            cgtype_free(element_type); cgtype_free(result_type);
-            body_scope->continue_label = NULL;
-            cg->cur_scope = body_scope->parent;
-            scope_pop_free(body_scope);
-            free(cursor_var);
-            cg->loop_depth--;
-            cg_release_scope(cg, outer_scope);
-            cg->cur_scope = outer_scope->parent;
-            scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token,
-                "IE0001", "codegen: out of memory");
-        }
-        Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
-        free(added->name);
-        added->name = strndup(ib->name.data, ib->name.length);
-        if (added->name == NULL) {
-            free(element_descriptor_name); free(element_size_name);
-            free(elem_cty);
-            buf_free(&element_address);
-            free(iter_cname); free(result_var); free(result_cty);
-            free(result_descriptor_name); free(result_size_name);
-            free(cont_label_owned);
-            cgtype_free(element_type); cgtype_free(result_type);
-            body_scope->continue_label = NULL;
-            cg->cur_scope = body_scope->parent;
-            scope_pop_free(body_scope);
-            free(cursor_var);
-            cg->loop_depth--;
-            cg_release_scope(cg, outer_scope);
-            cg->cur_scope = outer_scope->parent;
-            scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token,
-                "IE0001", "codegen: out of memory");
-        }
-        cg_emit_cleanup_push_for_reified_aggregate_storage(
-            cg, iter_cname, element_descriptor_name);
-        free(element_descriptor_name);
-        free(element_size_name);
-        element_registered = true;
-    } else if (cgtype_is_managed(element_type)) {
-        if (result_uses_reified_storage) {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = *(%s *)%s; feng_retain(%s);\n",
-                elem_cty, iter_cname, elem_cty,
-                element_address.data, iter_cname);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = %s.%s; feng_retain(%s);\n",
-                elem_cty, iter_cname,
-                result_var, elem_field->c_name, iter_cname);
-        }
-    } else if (cgtype_is_aggregate(element_type)) {
-        const char *desc = cg_aggregate_desc_name(element_type);
-        if (result_uses_reified_storage) {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = *(%s *)%s;",
-                elem_cty, iter_cname, elem_cty, element_address.data);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = %s.%s;",
-                elem_cty, iter_cname, result_var, elem_field->c_name);
-        }
-        if (desc) {
-            buf_append_fmt(cg->cur_body,
-                " feng_aggregate_retain(&%s, &%s);", iter_cname, desc);
-        }
-        buf_append_cstr(cg->cur_body, "\n");
-    } else {
-        if (result_uses_reified_storage) {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = *(%s *)%s;\n",
-                elem_cty, iter_cname, elem_cty, element_address.data);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = %s.%s;\n",
-                elem_cty, iter_cname, result_var, elem_field->c_name);
-        }
+        buf_free(&element_source);
     }
-    free(elem_cty);
-    buf_free(&element_address);
-
-    /* Register loop var in body scope. */
-    if (!element_registered &&
-        !scope_add(cg->cur_scope, "_unused_internal_name__", iter_cname,
-                   cgtype_clone(element_type), false)) {
-        free(iter_cname); free(result_var); free(result_cty);
-        free(result_descriptor_name); free(result_size_name);
-        free(cont_label_owned);
-        cgtype_free(element_type); cgtype_free(result_type);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(cursor_var);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-    }
-    if (!element_registered) {
-        Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
-        free(added->name);
-        added->name = strndup(ib->name.data, ib->name.length);
-        if (added->name == NULL) {
-            free(iter_cname); free(result_var); free(result_cty);
-            free(result_descriptor_name); free(result_size_name);
-            free(cont_label_owned);
-            cgtype_free(element_type); cgtype_free(result_type);
-            body_scope->continue_label = NULL;
-            cg->cur_scope = body_scope->parent;
-            scope_pop_free(body_scope);
-            free(cursor_var);
-            cg->loop_depth--;
-            cg_release_scope(cg, outer_scope);
-            cg->cur_scope = outer_scope->parent;
-            scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token,
-                "IE0001", "codegen: out of memory");
-        }
-        if (cgtype_is_managed(element_type)) {
-            cg_emit_cleanup_push_for_managed_local(cg, iter_cname);
-        } else if (cgtype_is_aggregate(element_type)) {
-            cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname, element_type);
-        }
-    }
-    free(iter_cname);
 
     /* Emit loop body. */
     if (!cg_emit_block(cg, stmt->as.for_stmt.body)) {
@@ -41202,43 +41386,67 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
     body_scope->continue_label = cont_label_owned;
     cg->cur_scope = body_scope;
 
-    /* Declare the iter binding for this iteration. It joins body_scope so
-     * the existing release path (normal-end + break/continue inclusive
-     * release) handles managed/aggregate ARC correctly. */
-    const FengBinding *ib = &stmt->as.for_stmt.iter_binding;
-    char *iter_cname = cg_local_cname(cg, ib->name.data, ib->name.length);
-    if (!iter_cname) {
-        free(cont_label_owned);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(idx_var); free(seq_tmp); cgtype_free(element_type);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-    }
-    char *elem_cty = cg_ctype_dup(element_type);
-    /* Slot read: ((T*)feng_array_data(seq))[idx]. */
-    if (element_type->kind == CG_TYPE_GENERIC_PARAM) {
-        buf_append_fmt(
-            cg->cur_body,
-            "        %s %s = (void *)((char *)feng_array_data(%s) + "
-            "(%s) * %s);\n",
-            elem_cty,
-            iter_cname,
-            seq_tmp,
-            idx_var,
-            generic_element_size);
-    } else if (cgtype_is_managed(element_type)) {
-        buf_append_fmt(cg->cur_body,
-            "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_retain(%s);\n",
-            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname);
-    } else if (cgtype_is_aggregate(element_type)) {
-        const char *desc = cg_aggregate_desc_name(element_type);
-        if (!desc) {
-            free(elem_cty); free(iter_cname); free(cont_label_owned);
+    /* Build the current array element source, then use the same binding
+     * lowering as iterator-protocol loops. Descriptor-sized array elements
+     * use byte addressing; ordinary fixed-layout elements remain lvalues. */
+    {
+        const FengBinding *binding = &stmt->as.for_stmt.iter_binding;
+        Buf element_source;
+        char *element_c_type = cg_ctype_dup(element_type);
+        bool source_is_address = false;
+
+        buf_init(&element_source);
+        if (element_type->kind == CG_TYPE_GENERIC_PARAM) {
+            source_is_address = true;
+            buf_append_fmt(
+                &element_source,
+                "(void *)((char *)feng_array_data(%s) + (%s) * %s)",
+                seq_tmp,
+                idx_var,
+                generic_element_size);
+        } else if (cgtype_is_aggregate(element_type)) {
+            const char *aggregate_name =
+                cg_aggregate_desc_name(element_type);
+            size_t aggregate_index;
+
+            if (aggregate_name != NULL &&
+                cg_lookup_reified_agg_dep_index(
+                    cg, aggregate_name, &aggregate_index)) {
+                const char *source = cg->generic_type_method_rad_via_desc
+                                         ? "_desc"
+                                         : "_td";
+                source_is_address = true;
+                buf_append_fmt(
+                    &element_source,
+                    "(void *)((char *)feng_array_data(%s) + (%s) * "
+                    "%s->reified_agg_deps[%zu]->size)",
+                    seq_tmp,
+                    idx_var,
+                    source,
+                    aggregate_index);
+            } else if (element_c_type != NULL) {
+                buf_append_fmt(&element_source,
+                               "((%s *)feng_array_data(%s))[%s]",
+                               element_c_type,
+                               seq_tmp,
+                               idx_var);
+            }
+        } else if (element_c_type != NULL) {
+            buf_append_fmt(&element_source,
+                           "((%s *)feng_array_data(%s))[%s]",
+                           element_c_type,
+                           seq_tmp,
+                           idx_var);
+        }
+        if (element_c_type == NULL || element_source.data == NULL ||
+            !cg_emit_loop_binding_from_borrowed_source(cg,
+                                                       binding,
+                                                       element_type,
+                                                       element_source.data,
+                                                       source_is_address)) {
+            free(element_c_type);
+            buf_free(&element_source);
+            free(cont_label_owned);
             body_scope->continue_label = NULL;
             cg->cur_scope = body_scope->parent;
             scope_pop_free(body_scope);
@@ -41247,52 +41455,11 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
             cg_release_scope(cg, outer_scope);
             cg->cur_scope = outer_scope->parent;
             scope_pop_free(outer_scope);
-            return cg_fail(cg, stmt->token,
-                "CE0278", "codegen: missing aggregate descriptor for spec for/in element");
+            return false;
         }
-        size_t forin_rad_idx;
-        if (cg_lookup_reified_agg_dep_index(cg, desc, &forin_rad_idx)) {
-            const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
-            buf_append_fmt(cg->cur_body,
-                "        %s %s; memcpy(&%s, (char *)feng_array_data(%s) + (%s) * %s->reified_agg_deps[%zu]->size, "
-                "%s->reified_agg_deps[%zu]->size); feng_aggregate_retain(&%s, %s->reified_agg_deps[%zu]);\n",
-                elem_cty, iter_cname, iter_cname, seq_tmp, idx_var, rad_src, forin_rad_idx,
-                rad_src, forin_rad_idx, iter_cname, rad_src, forin_rad_idx);
-        } else {
-            buf_append_fmt(cg->cur_body,
-                "        %s %s = ((%s *)feng_array_data(%s))[%s]; feng_aggregate_retain(&%s, &%s);\n",
-                elem_cty, iter_cname, elem_cty, seq_tmp, idx_var, iter_cname, desc);
-        }
-    } else {
-        buf_append_fmt(cg->cur_body,
-            "        %s %s = ((%s *)feng_array_data(%s))[%s];\n",
-            elem_cty, iter_cname, elem_cty, seq_tmp, idx_var);
+        free(element_c_type);
+        buf_free(&element_source);
     }
-    free(elem_cty);
-    /* Register iter binding in body scope under its Feng name and arrange
-     * cleanup. We mirror cg_emit_binding's tail. */
-    if (!scope_add(cg->cur_scope, "_unused_internal_name__", iter_cname,
-                   cgtype_clone(element_type), false)) {
-        free(iter_cname); free(cont_label_owned);
-        body_scope->continue_label = NULL;
-        cg->cur_scope = body_scope->parent;
-        scope_pop_free(body_scope);
-        free(idx_var); free(seq_tmp); cgtype_free(element_type);
-        cg->loop_depth--;
-        cg_release_scope(cg, outer_scope);
-        cg->cur_scope = outer_scope->parent;
-        scope_pop_free(outer_scope);
-        return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-    }
-    Local *added = &cg->cur_scope->items[cg->cur_scope->count - 1];
-    free(added->name);
-    added->name = strndup(ib->name.data, ib->name.length);
-    if (cgtype_is_managed(element_type)) {
-        cg_emit_cleanup_push_for_managed_local(cg, iter_cname);
-    } else if (cgtype_is_aggregate(element_type)) {
-        cg_emit_cleanup_push_for_aggregate_local(cg, iter_cname, element_type);
-    }
-    free(iter_cname);
 
     if (!cg_emit_block(cg, stmt->as.for_stmt.body)) {
         body_scope->continue_label = NULL;

@@ -15670,6 +15670,220 @@ static void test_assignment_receiver_stabilization_codegen(void) {
     feng_program_free(program);
 }
 
+/* Captured for/in bindings allocate one ordinary capture cell per iteration
+ * for both array traversal and the iterable/iterator protocol path. */
+static void test_loop_binding_capture_codegen(void) {
+    static const char *source =
+        "module feng.codegen.loop_binding_capture;\n"
+        "spec Reader(): int;\n"
+        "type IteratorResult(bool, int);\n"
+        "type Cursor {\n"
+        "    var current: int;\n"
+        "    let end: int;\n"
+        "    @iterator\n"
+        "    func next(): IteratorResult {\n"
+        "        if self.current >= self.end { return (false, 0); }\n"
+        "        let value = self.current;\n"
+        "        self.current += 1;\n"
+        "        return (true, value);\n"
+        "    }\n"
+        "}\n"
+        "type Range {\n"
+        "    let start: int;\n"
+        "    let end: int;\n"
+        "    @iterable\n"
+        "    func iter(): Cursor {\n"
+        "        return Cursor { current: self.start, end: self.end };\n"
+        "    }\n"
+        "}\n"
+        "func captureArrayLet(values: int[], readers: Reader[!]) {\n"
+        "    var index = 0;\n"
+        "    for let value in values {\n"
+        "        readers[index] = () -> value;\n"
+        "        index += 1;\n"
+        "    }\n"
+        "}\n"
+        "func captureArrayVar(values: int[], readers: Reader[!]) {\n"
+        "    var index = 0;\n"
+        "    for var value in values {\n"
+        "        readers[index] = () -> value;\n"
+        "        value += 1;\n"
+        "        index += 1;\n"
+        "    }\n"
+        "}\n"
+        "func captureIteratorLet(range: Range, readers: Reader[!]) {\n"
+        "    var index = 0;\n"
+        "    for let value in range {\n"
+        "        readers[index] = () -> value;\n"
+        "        index += 1;\n"
+        "    }\n"
+        "}\n"
+        "func captureIteratorVar(range: Range, readers: Reader[!]) {\n"
+        "    var index = 0;\n"
+        "    for var value in range {\n"
+        "        readers[index] = () -> value;\n"
+        "        value += 1;\n"
+        "        index += 1;\n"
+        "    }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "loop_binding_capture_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+    static const char *function_prefixes[] = {
+        "static void "
+        "feng__feng__codegen__loop_binding_capture__captureArrayLet",
+        "static void "
+        "feng__feng__codegen__loop_binding_capture__captureArrayVar",
+        "static void "
+        "feng__feng__codegen__loop_binding_capture__captureIteratorLet",
+        "static void "
+        "feng__feng__codegen__loop_binding_capture__captureIteratorVar",
+    };
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    for (size_t index = 0U;
+         index < sizeof(function_prefixes) / sizeof(function_prefixes[0]);
+         ++index) {
+        ASSERT(find_generated_function_body(
+            output.c_source, function_prefixes[index],
+            &body_start, &body_end));
+        ASSERT(count_substr_in_span(
+                   body_start, body_end,
+                   "feng_object_new(&FengCaptureCellDesc__") == 1U);
+    }
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* Uncaptured scalar loop bindings add neither capture allocation nor capture
+ * ARC beyond the existing source-lifetime pair; let/var mutability still
+ * controls assignment-owner stabilization. */
+static void test_loop_binding_uncaptured_codegen(void) {
+    static const char *source =
+        "module feng.codegen.loop_binding_uncaptured;\n"
+        "type Pair<T>(T, T);\n"
+        "func sink(value: int) {}\n"
+        "func sideEffect(): int { return 9; }\n"
+        "func scalarLet(values: int[]) {\n"
+        "    for let value in values { sink(value); }\n"
+        "}\n"
+        "func scalarVar(values: int[]) {\n"
+        "    for var value in values {\n"
+        "        value += 1;\n"
+        "        sink(value);\n"
+        "    }\n"
+        "}\n"
+        "func aggregateLet<T>(values: Pair<T>[]) {\n"
+        "    for let value in values { value; }\n"
+        "}\n"
+        "func letOwners(rows: int[!][]) {\n"
+        "    for let row in rows { row[0] = sideEffect(); }\n"
+        "}\n"
+        "func varOwners(rows: int[!][]) {\n"
+        "    for var row in rows { row[0] = sideEffect(); }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "loop_binding_uncaptured_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+    const char *storage_start;
+    const char *cleanup_start;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "FengCaptureCell__") == NULL);
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_binding_uncaptured__scalarLet",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end, "feng_object_new("));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_retain(") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_release(") == 1U);
+    ASSERT(span_contains(body_start, body_end, "feng_retain(_fseq"));
+    ASSERT(span_contains(body_start, body_end, "feng_release(_fseq"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_binding_uncaptured__scalarVar",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end, "feng_object_new("));
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_retain(") == 1U);
+    ASSERT(count_substr_in_span(body_start, body_end,
+                                "feng_release(") == 1U);
+    ASSERT(span_contains(body_start, body_end, "feng_retain(_fseq"));
+    ASSERT(span_contains(body_start, body_end, "feng_release(_fseq"));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_binding_uncaptured__aggregateLet_G__from__",
+        &body_start, &body_end));
+    storage_start = strstr(
+        body_start, "_Alignas(max_align_t) char _l_value");
+    ASSERT(storage_start != NULL && storage_start < body_end);
+    cleanup_start = strstr(storage_start, "feng_cleanup_push_aggregate(");
+    ASSERT(cleanup_start != NULL && cleanup_start < body_end);
+    ASSERT(span_contains(storage_start, cleanup_start, "memcpy("));
+    ASSERT(span_contains(storage_start, cleanup_start,
+                         "feng_aggregate_retain("));
+    ASSERT(!span_contains(storage_start, cleanup_start, "memset("));
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_assign("));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_binding_uncaptured__letOwners",
+        &body_start, &body_end));
+    ASSERT(!span_contains(body_start, body_end,
+                          "feng_retain(_assign_owner"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_binding_uncaptured__varOwners",
+        &body_start, &body_end));
+    ASSERT(span_contains(body_start, body_end,
+                         "feng_retain(_assign_owner"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -15890,6 +16104,8 @@ int main(void) {
     test_literal_adaptation_array_literal();
     test_literal_adaptation_tuple_literal();
     test_assignment_receiver_stabilization_codegen();
+    test_loop_binding_capture_codegen();
+    test_loop_binding_uncaptured_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

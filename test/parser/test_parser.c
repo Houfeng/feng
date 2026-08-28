@@ -2052,6 +2052,35 @@ static void test_for_in_empty_blocks(void) {
     feng_program_free(program);
 }
 
+/* A field colon inside a grouped object literal belongs to that literal and
+ * must not make the outer `(expr) { body }` shape look like a block Lambda. */
+static void test_for_in_grouped_nonempty_object_literal(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run() {\n"
+        "    for let object in (Items { value: 1 }) {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengStmt *loop;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "for_in_grouped_object.f",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    loop = program->declarations[0]->as.function_decl.body->statements[0];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(loop->as.for_stmt.is_for_in);
+    ASSERT(loop->as.for_stmt.iter_expr != NULL);
+    ASSERT(loop->as.for_stmt.iter_expr->kind == FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(loop->as.for_stmt.iter_expr->as.object_literal.field_count == 1U);
+    ASSERT(loop->as.for_stmt.body->statement_count == 0U);
+
+    feng_program_free(program);
+}
+
 /* Empty while bodies must remain body blocks rather than being consumed as
  * empty object literal suffixes on the final member expression. */
 static void test_while_empty_blocks(void) {
@@ -4018,6 +4047,7 @@ int main(void) {
     test_match_chain_with_binding_parse();
     test_for_in_loop();
     test_for_in_empty_blocks();
+    test_for_in_grouped_nonempty_object_literal();
     test_while_empty_blocks();
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();
