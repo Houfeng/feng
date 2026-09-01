@@ -13516,6 +13516,155 @@ static void test_tuple_value_codegen_core(void) {
     feng_program_free(program);
 }
 
+/* TUP11 proves that named tuple sources are evaluated once while direct
+ * tuple-literal destructuring remains a compile-time positional expansion. */
+static void test_tuple_destructuring_evaluation_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.tuple_destructure_evaluation;\n"
+        "/** Named tuple used to distinguish materialized and direct paths. */\n"
+        "type Triple(i32, i32, i32);\n"
+        "/** Return the first directly destructured value. */\n"
+        "func first(): i32 { return 11; }\n"
+        "/** Return the value corresponding to a skipped position. */\n"
+        "func skipped(): i32 { return 22; }\n"
+        "/** Return the third directly destructured value. */\n"
+        "func third(): i32 { return 33; }\n"
+        "/** Produce one complete named tuple. */\n"
+        "func makeTriple(): Triple { return (1, 2, 3); }\n"
+        "/** Destructure one named tuple factory result with a skipped field. */\n"
+        "func namedSkip(): i32 {\n"
+        "    let (left, , right) = makeTriple();\n"
+        "    return left + right;\n"
+        "}\n"
+        "/** Directly expand a tuple literal with one skipped expression. */\n"
+        "func directSkip(): i32 {\n"
+        "    let (left, , right) = (first(), skipped(), third());\n"
+        "    return left + right;\n"
+        "}\n"
+        "/** Directly expand a tuple literal whose positions are all skipped. */\n"
+        "func directAllSkip(): i32 {\n"
+        "    let (, , ) = (first(), skipped(), third());\n"
+        "    return 0;\n"
+        "}\n"
+        "/** Adapt a literal first, then destructure the complete named value. */\n"
+        "func adaptedThenSkip(): i32 {\n"
+        "    let value: Triple = (first(), skipped(), third());\n"
+        "    let (left, , right) = value;\n"
+        "    return left + right;\n"
+        "}\n";
+    static const char *kMakeTripleSymbol =
+        "feng__feng__codegen__tuple_destructure_evaluation__makeTriple__from__void";
+    static const char *kFirstSymbol =
+        "feng__feng__codegen__tuple_destructure_evaluation__first__from__void";
+    static const char *kSkippedSymbol =
+        "feng__feng__codegen__tuple_destructure_evaluation__skipped__from__void";
+    static const char *kThirdSymbol =
+        "feng__feng__codegen__tuple_destructure_evaluation__third__from__void";
+    static const char *kNamedPrefix =
+        "feng__feng__codegen__tuple_destructure_evaluation__namedSkip__from__void(";
+    static const char *kDirectPrefix =
+        "feng__feng__codegen__tuple_destructure_evaluation__directSkip__from__void(";
+    static const char *kDirectAllPrefix =
+        "feng__feng__codegen__tuple_destructure_evaluation__directAllSkip__from__void(";
+    static const char *kAdaptedPrefix =
+        "feng__feng__codegen__tuple_destructure_evaluation__adaptedThenSkip__from__void(";
+    static const char *kTupleTypeFragment =
+        "Feng__feng__codegen__tuple_destructure_evaluation__Triple";
+    static const char *const kForbiddenDirectRuntimeFragments[] = {
+        "if (",
+        "switch (",
+        "goto ",
+        "feng_object_new(",
+        "feng_array_new(",
+        "malloc(",
+        "calloc(",
+        "realloc("
+    };
+    FengProgram *program = parse_or_die(
+        kSource, "tests/tuple_destructure_evaluation_codegen.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    const char *named_start = NULL;
+    const char *named_end = NULL;
+    const char *direct_start = NULL;
+    const char *direct_end = NULL;
+    const char *direct_all_start = NULL;
+    const char *direct_all_end = NULL;
+    const char *adapted_start = NULL;
+    const char *adapted_end = NULL;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    if (!feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                   NULL, &out, &cgerr)) {
+        fprintf(stderr, "codegen error (tuple destructuring evaluation): %s\n",
+                cgerr.message != NULL ? cgerr.message : "(unknown)");
+        ASSERT(false);
+    }
+    ASSERT(out.c_source != NULL);
+    ASSERT(find_generated_function_body(out.c_source, kNamedPrefix,
+                                        &named_start, &named_end));
+    ASSERT(find_generated_function_body(out.c_source, kDirectPrefix,
+                                        &direct_start, &direct_end));
+    ASSERT(find_generated_function_body(out.c_source, kDirectAllPrefix,
+                                        &direct_all_start, &direct_all_end));
+    ASSERT(find_generated_function_body(out.c_source, kAdaptedPrefix,
+                                        &adapted_start, &adapted_end));
+
+    /* A named tuple factory is called exactly once and materialized once before
+     * the non-skipped fields are read from that single result. */
+    ASSERT(count_substr_in_span(named_start, named_end, kMakeTripleSymbol) == 1U);
+    ASSERT(count_substr_in_span(named_start, named_end, kTupleTypeFragment) == 1U);
+
+    /* Direct literal destructuring emits only the two selected scalar calls and
+     * locals. It has no tuple storage, skipped binding, branch, or allocation. */
+    ASSERT(count_substr_in_span(direct_start, direct_end, kFirstSymbol) == 1U);
+    ASSERT(count_substr_in_span(direct_start, direct_end, kSkippedSymbol) == 0U);
+    ASSERT(count_substr_in_span(direct_start, direct_end, kThirdSymbol) == 1U);
+    ASSERT(count_substr_in_span(direct_start, direct_end, "int32_t _l_") == 2U);
+    ASSERT(!span_contains(direct_start, direct_end, kTupleTypeFragment));
+    ASSERT(!span_contains(direct_start, direct_end, "memset(&"));
+    ASSERT(!span_contains(direct_start, direct_end, "_l_skipped_"));
+    for (size_t i = 0U;
+         i < sizeof(kForbiddenDirectRuntimeFragments) /
+                 sizeof(kForbiddenDirectRuntimeFragments[0]);
+         ++i) {
+        ASSERT(!span_contains(direct_start, direct_end,
+                              kForbiddenDirectRuntimeFragments[i]));
+        ASSERT(!span_contains(direct_all_start, direct_all_end,
+                              kForbiddenDirectRuntimeFragments[i]));
+    }
+
+    /* An all-skipped direct literal has no element calls or tuple storage. */
+    ASSERT(count_substr_in_span(direct_all_start, direct_all_end, kFirstSymbol) == 0U);
+    ASSERT(count_substr_in_span(direct_all_start, direct_all_end, kSkippedSymbol) == 0U);
+    ASSERT(count_substr_in_span(direct_all_start, direct_all_end, kThirdSymbol) == 0U);
+    ASSERT(count_substr_in_span(direct_all_start, direct_all_end,
+                                "int32_t _l_") == 0U);
+    ASSERT(!span_contains(direct_all_start, direct_all_end, kTupleTypeFragment));
+    ASSERT(!span_contains(direct_all_start, direct_all_end, "memset(&"));
+
+    /* Named adaptation is intentionally the contrasting path: it evaluates all
+     * three element calls once and materializes the complete tuple value. */
+    ASSERT(count_substr_in_span(adapted_start, adapted_end, kFirstSymbol) == 1U);
+    ASSERT(count_substr_in_span(adapted_start, adapted_end, kSkippedSymbol) == 1U);
+    ASSERT(count_substr_in_span(adapted_start, adapted_end, kThirdSymbol) == 1U);
+    ASSERT(span_contains(adapted_start, adapted_end, kTupleTypeFragment));
+    ASSERT(span_contains(adapted_start, adapted_end, "memset(&"));
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 static void test_tuple_managed_slots_codegen(void) {
     static const char *kSource =
         "module feng.codegen.tuplemanaged;\n"
@@ -16237,6 +16386,7 @@ int main(void) {
     test_prepacked_variadic_forwarding_codegen();
     test_variadic_callable_spec_lambda_codegen();
     test_tuple_value_codegen_core();
+    test_tuple_destructuring_evaluation_codegen();
     test_tuple_managed_slots_codegen();
     test_union_form_spec_codegen();
     test_union_object_spec_leaf_coercion_codegen();

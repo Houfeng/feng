@@ -1,0 +1,180 @@
+module fcts_bin;
+
+import std.test;
+
+/** Three-element named tuple used by G10 evaluation tests. */
+type G10Triple(int, int, int);
+
+/** Five-element named tuple used to cover multiple skipped positions. */
+type G10Five(int, int, int, int, int);
+
+/** Zero-element named tuple used to verify that its factory still executes. */
+type G10Unit();
+
+/** Mutable observer for tuple factory calls and literal-element evaluation. */
+type G10TupleEvaluationProbe {
+  var trace: int;
+  var elementCalls: int;
+  var factoryCalls: int;
+
+  /** Record one literal-element evaluation and return its supplied value. */
+  func mark(value: int, marker: int): int {
+    self.trace = self.trace * 10 + marker;
+    self.elementCalls += 1;
+    return value;
+  }
+
+  /** Return one generation-tagged three-element named tuple. */
+  func makeTriple(): G10Triple {
+    self.factoryCalls += 1;
+    let base = self.factoryCalls * 100;
+    return (base + 1, base + 2, base + 3);
+  }
+
+  /** Return one generation-tagged five-element named tuple. */
+  func makeFive(): G10Five {
+    self.factoryCalls += 1;
+    let base = self.factoryCalls * 100;
+    return (base + 1, base + 2, base + 3, base + 4, base + 5);
+  }
+
+  /** Return a zero-element named tuple after recording one factory call. */
+  func makeUnit(): G10Unit {
+    self.factoryCalls += 1;
+    return ();
+  }
+}
+
+/** Create a fresh observer for one independently asserted scenario. */
+func newG10TupleEvaluationProbe(): G10TupleEvaluationProbe {
+  return G10TupleEvaluationProbe {
+    trace: 0,
+    elementCalls: 0,
+    factoryCalls: 0
+  };
+}
+
+/** Execute G10 tuple-destructuring evaluation conformance coverage. */
+open func test_tuple_destructuring_evaluation(): void {
+  describe("tuple destructuring evaluation", () {
+    test("TUP01 named tuple factory without skips evaluates once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (first, second, third) = probe.makeTriple();
+      assert(first == 101 && second == 102 && third == 103 &&
+             probe.factoryCalls == 1,
+             "all bindings come from one named tuple factory result");
+    });
+
+    test("TUP02 named tuple factory with one skip evaluates once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (first, , third) = probe.makeTriple();
+      assert(first == 101 && third == 103 && probe.factoryCalls == 1,
+             "one skipped component does not duplicate or suppress the factory");
+    });
+
+    test("TUP03 named tuple factory with multiple skips evaluates once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (, second, , fourth, ) = probe.makeFive();
+      assert(second == 102 && fourth == 104 && probe.factoryCalls == 1,
+             "multiple skipped components retain one factory result");
+    });
+
+    test("TUP04 all-skip named tuple pattern still evaluates factory once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (, , ) = probe.makeTriple();
+      assert(probe.factoryCalls == 1,
+             "all skipped components do not suppress the named tuple factory");
+    });
+
+    test("TUP05 zero tuple pattern still evaluates factory once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let () = probe.makeUnit();
+      assert(probe.factoryCalls == 1,
+             "zero tuple destructuring preserves the factory call");
+    });
+
+    test("TUP06 var destructuring creates independent bindings", () {
+      let namedProbe = newG10TupleEvaluationProbe();
+      let source = namedProbe.makeTriple();
+      var (first, second, third) = source;
+      first = 901;
+      second = 902;
+      assert(first == 901 && second == 902 && third == 103 &&
+             source.item1 == 101 && source.item2 == 102 && source.item3 == 103 &&
+             namedProbe.factoryCalls == 1,
+             "named tuple source and destructured var bindings remain independent");
+
+      let literalProbe = newG10TupleEvaluationProbe();
+      var (left, middle, right) = (
+        literalProbe.mark(11, 1),
+        literalProbe.mark(22, 2),
+        literalProbe.mark(33, 3)
+      );
+      left = 44;
+      middle = 55;
+      assert(left == 44 && middle == 55 && right == 33 &&
+             literalProbe.trace == 123 && literalProbe.elementCalls == 3,
+             "literal var bindings mutate independently without reevaluation");
+    });
+
+    test("TUP07 direct literal evaluates every bound position left to right once", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (first, second, third) = (
+        probe.mark(11, 1),
+        probe.mark(22, 2),
+        probe.mark(33, 3)
+      );
+      assert(first == 11 && second == 22 && third == 33 &&
+             probe.trace == 123 && probe.elementCalls == 3,
+             "direct literal evaluates all bound positions in order once");
+    });
+
+    test("TUP08 direct literal does not evaluate one skipped position", () {
+      let probe = newG10TupleEvaluationProbe();
+      let (first, , third) = (
+        probe.mark(11, 1),
+        probe.mark(22, 2),
+        probe.mark(33, 3)
+      );
+      assert(first == 11 && third == 33 &&
+             probe.trace == 13 && probe.elementCalls == 2,
+             "direct literal omits the skipped expression and preserves order");
+    });
+
+    test("TUP09 direct literal supports multiple and all skipped positions", () {
+      let partialProbe = newG10TupleEvaluationProbe();
+      let (, second, , fourth, ) = (
+        partialProbe.mark(11, 1),
+        partialProbe.mark(22, 2),
+        partialProbe.mark(33, 3),
+        partialProbe.mark(44, 4),
+        partialProbe.mark(55, 5)
+      );
+      assert(second == 22 && fourth == 44 &&
+             partialProbe.trace == 24 && partialProbe.elementCalls == 2,
+             "direct literal evaluates only its non-skipped positions");
+
+      let allSkippedProbe = newG10TupleEvaluationProbe();
+      let (, , ) = (
+        allSkippedProbe.mark(11, 1),
+        allSkippedProbe.mark(22, 2),
+        allSkippedProbe.mark(33, 3)
+      );
+      assert(allSkippedProbe.trace == 0 && allSkippedProbe.elementCalls == 0,
+             "all skipped direct-literal positions suppress every expression");
+    });
+
+    test("TUP10 named tuple adaptation evaluates every literal element", () {
+      let probe = newG10TupleEvaluationProbe();
+      let source: G10Triple = (
+        probe.mark(11, 1),
+        probe.mark(22, 2),
+        probe.mark(33, 3)
+      );
+      let (first, , third) = source;
+      assert(first == 11 && third == 33 && source.item2 == 22 &&
+             probe.trace == 123 && probe.elementCalls == 3,
+             "named adaptation completes before later skipped destructuring");
+    });
+  });
+}
