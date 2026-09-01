@@ -4137,7 +4137,1580 @@ static void test_friend_annotation_type_arguments_parse_on_all_members(void) {
     feng_program_free(program);
 }
 
+/* Describes one user-reachable Parser failure whose complete diagnostic is
+ * part of the G12 syntax-conformance contract. */
+typedef struct G12ParserFailureCase {
+    const char *name;
+    const char *source;
+    const char *code;
+    const char *message;
+    FengTokenKind token_kind;
+    const char *token_lexeme;
+    size_t token_occurrence;
+} G12ParserFailureCase;
+
+/* Reports the failing G12 case and attribute before terminating the test. */
+static void assert_g12_case(bool condition,
+                            const char *case_name,
+                            const char *attribute) {
+    if (!condition) {
+        fprintf(stderr,
+                "G12 parser case '%s': assertion failed for %s\n",
+                case_name,
+                attribute);
+        exit(1);
+    }
+}
+
+/* Locates a one-based occurrence of an expected error-token lexeme. */
+static size_t g12_find_token_offset(const char *source,
+                                    const char *lexeme,
+                                    size_t occurrence,
+                                    const char *case_name) {
+    const char *cursor = source;
+    const char *found = NULL;
+    size_t index;
+
+    assert_g12_case(occurrence > 0U, case_name, "token occurrence");
+    for (index = 0U; index < occurrence; ++index) {
+        found = strstr(cursor, lexeme);
+        assert_g12_case(found != NULL, case_name, "token anchor");
+        cursor = found + strlen(lexeme);
+    }
+    return (size_t)(found - source);
+}
+
+/* Computes the lexer's one-based line and column for a source offset. */
+static void g12_source_position(const char *source,
+                                size_t offset,
+                                unsigned int *out_line,
+                                unsigned int *out_column) {
+    unsigned int line = 1U;
+    unsigned int column = 1U;
+    size_t index;
+
+    for (index = 0U; index < offset; ++index) {
+        if (source[index] == '\n') {
+            ++line;
+            column = 1U;
+        } else {
+            ++column;
+        }
+    }
+    *out_line = line;
+    *out_column = column;
+}
+
+/* Verifies that an invalid source is rejected by Parser with a complete,
+ * stable diagnostic and without returning a partial AST. */
+static void assert_g12_parser_failure(const G12ParserFailureCase *test_case) {
+    FengProgram *program = NULL;
+    FengParseError error;
+    size_t expected_offset;
+    size_t expected_length = strlen(test_case->token_lexeme);
+    unsigned int expected_line;
+    unsigned int expected_column;
+
+    memset(&error, 0, sizeof(error));
+    assert_g12_case(!feng_parse_source(test_case->source,
+                                      strlen(test_case->source),
+                                      test_case->name,
+                                      &program,
+                                      &error),
+                    test_case->name,
+                    "parse result");
+    assert_g12_case(program == NULL, test_case->name, "empty AST");
+    assert_g12_case(error.code != NULL, test_case->name, "diagnostic code");
+    assert_g12_case(strncmp(error.code, "SE", 2U) == 0,
+                    test_case->name,
+                    "Parser failure stage");
+    if (strcmp(error.code, test_case->code) != 0) {
+        fprintf(stderr,
+                "G12 parser case '%s': expected code %s, got %s (%s)\n",
+                test_case->name,
+                test_case->code,
+                error.code,
+                error.message != NULL ? error.message : "<no message>");
+    }
+    assert_g12_case(strcmp(error.code, test_case->code) == 0,
+                    test_case->name,
+                    "exact diagnostic code");
+    assert_g12_case(error.message != NULL, test_case->name, "diagnostic message");
+    if (strcmp(error.message, test_case->message) != 0) {
+        fprintf(stderr,
+                "G12 parser case '%s': expected message '%s', got '%s'\n",
+                test_case->name,
+                test_case->message,
+                error.message);
+    }
+    assert_g12_case(strcmp(error.message, test_case->message) == 0,
+                    test_case->name,
+                    "exact diagnostic message");
+    assert_g12_case(error.token.kind == test_case->token_kind,
+                    test_case->name,
+                    "error token kind");
+
+    expected_offset = test_case->token_kind == FENG_TOKEN_EOF
+                          ? strlen(test_case->source)
+                          : g12_find_token_offset(test_case->source,
+                                                  test_case->token_lexeme,
+                                                  test_case->token_occurrence,
+                                                  test_case->name);
+    g12_source_position(test_case->source,
+                        expected_offset,
+                        &expected_line,
+                        &expected_column);
+    assert_g12_case(error.token.length == expected_length,
+                    test_case->name,
+                    "error token length");
+    assert_g12_case(error.token.length == 0U ||
+                        memcmp(error.token.lexeme,
+                               test_case->token_lexeme,
+                               error.token.length) == 0,
+                    test_case->name,
+                    "error token lexeme");
+    assert_g12_case(error.token.offset == expected_offset,
+                    test_case->name,
+                    "error token offset");
+    assert_g12_case(error.token.line == expected_line,
+                    test_case->name,
+                    "error token line");
+    assert_g12_case(error.token.column == expected_column,
+                    test_case->name,
+                    "error token column");
+}
+
+/* Runs a complete group of G12 negative syntax cases. */
+static void assert_g12_parser_failures(const G12ParserFailureCase *cases,
+                                       size_t case_count) {
+    size_t index;
+
+    for (index = 0U; index < case_count; ++index) {
+        assert_g12_parser_failure(&cases[index]);
+    }
+}
+
+/* Covers module visibility, path shapes, import aliases, and top-level
+ * declaration dispatch with both legal ASTs and exact rejections. */
+static void test_g12_module_import_and_top_level_syntax(void) {
+    static const struct {
+        const char *source;
+        FengVisibility visibility;
+        size_t module_segment_count;
+        size_t use_count;
+    } success_cases[] = {
+        {"module app;\nimport base;\n", FENG_VISIBILITY_DEFAULT, 1U, 1U},
+        {"open module app.main;\n"
+         "import base.core;\n"
+         "import app.util as util;\n",
+         FENG_VISIBILITY_PUBLIC,
+         2U,
+         2U},
+        {"seal module app.internal;\n", FENG_VISIBILITY_PRIVATE, 2U, 0U}
+    };
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g12_module_missing_keyword.ff",
+            "open app.main;\n",
+            "SE0901",
+            "source file must begin with module declaration",
+            FENG_TOKEN_IDENTIFIER,
+            "app",
+            1U
+        },
+        {
+            "g12_module_missing_path.ff",
+            "module ;\n",
+            "SE0902",
+            "expected a module path after 'module'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            1U
+        },
+        {
+            "g12_module_missing_path_segment.ff",
+            "module app.;\n",
+            "SE0002",
+            "expected an identifier after '.' in a qualified name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            1U
+        },
+        {
+            "g12_module_missing_semicolon.ff",
+            "module app.main",
+            "SE0001",
+            "module declarations must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_import_missing_path.ff",
+            "module app;\nimport ;\n",
+            "SE0902",
+            "expected a module path after 'import'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_import_missing_path_segment.ff",
+            "module app;\nimport base.;\n",
+            "SE0002",
+            "expected an identifier after '.' in a qualified name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_import_missing_alias.ff",
+            "module app;\nimport base as ;\n",
+            "SE0002",
+            "expected an alias name after 'as'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_import_missing_semicolon.ff",
+            "module app;\nimport base",
+            "SE0001",
+            "import declarations must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_isolated_annotation.ff",
+            "module app;\n@abi;\n",
+            "SE1301",
+            "annotation must be followed immediately by a declaration; remove the trailing ';'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_extern_non_function.ff",
+            "module app;\nextern type Item {}\n",
+            "SE0003",
+            "'extern' can only be applied to top-level 'func' declarations",
+            FENG_TOKEN_KW_TYPE,
+            "type",
+            1U
+        },
+        {
+            "g12_missing_top_level_func_keyword.ff",
+            "module app;\nrun(): int {}\n",
+            "SE0501",
+            "top-level function declarations must start with 'func'",
+            FENG_TOKEN_IDENTIFIER,
+            "run",
+            1U
+        },
+        {
+            "g12_missing_top_level_binding_keyword.ff",
+            "module app;\nvalue: int;\n",
+            "SE0102",
+            "top-level bindings must start with 'let' or 'var'",
+            FENG_TOKEN_IDENTIFIER,
+            "value",
+            1U
+        },
+        {
+            "g12_unknown_top_level_declaration.ff",
+            "module app;\nwhile true {}\n",
+            "SE0003",
+            "expected top-level declaration: 'let', 'var', 'extern func', 'type', 'spec', 'fit', or 'func'",
+            FENG_TOKEN_KW_WHILE,
+            "while",
+            1U
+        },
+        {
+            "g12_function_missing_name.ff",
+            "module app;\nfunc () {}\n",
+            "SE0002",
+            "expected a function name after 'func'",
+            FENG_TOKEN_LPAREN,
+            "(",
+            1U
+        }
+    };
+    size_t index;
+
+    for (index = 0U;
+         index < sizeof(success_cases) / sizeof(success_cases[0]);
+         ++index) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(feng_parse_source(success_cases[index].source,
+                                 strlen(success_cases[index].source),
+                                 "g12_module_success.ff",
+                                 &program,
+                                 &error));
+        ASSERT(program != NULL);
+        ASSERT(error.code == NULL);
+        ASSERT(program->module_visibility == success_cases[index].visibility);
+        ASSERT(program->module_segment_count ==
+               success_cases[index].module_segment_count);
+        ASSERT(program->use_count == success_cases[index].use_count);
+        if (program->use_count == 2U) {
+            ASSERT(!program->uses[0].has_alias);
+            ASSERT(program->uses[1].has_alias);
+            assert_slice_text(program->uses[1].alias, "util");
+        }
+        feng_program_free(program);
+    }
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
+/* Covers bindings, destructuring, object/tuple type declarations, function
+ * signatures, generics, variadics, constructors, and lambda forms. */
+static void test_g12_binding_type_and_callable_syntax(void) {
+    const char *source =
+        "module g12.declarations;\n"
+        "let inferred = 1;\n"
+        "var typed: int;\n"
+        "type Pair(int, string);\n"
+        "type Entity<T: Named>: Named, Serializable {\n"
+        "  let fixed: int;\n"
+        "  var evolving = 1;\n"
+        "  static let total: int = 0;\n"
+        "  func Entity(value: int) { self.evolving = value; }\n"
+        "  func read<U>(item: U): int { return self.evolving; }\n"
+        "  func ~Entity() {}\n"
+        "}\n"
+        "func collect(first: int, rest: int...): int { return first; }\n"
+        "extern func native(value: int): int;\n"
+        "func bind(pair: Pair) {\n"
+        "  let typed_local: int;\n"
+        "  let inferred_local = 1;\n"
+        "  var mutable_local = 2;\n"
+        "  let () = ();\n"
+        "  let (a, , c) = pair;\n"
+        "  let (a1, a2, a3, a4, a5, a6, a7, a8) = pair;\n"
+        "  let expression_lambda = (x: int) -> x + 1;\n"
+        "  let block_lambda = (x: int) { return x; };\n"
+        "}\n";
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g12_binding_missing_name.ff",
+            "module g;\nfunc run() { let ; }\n",
+            "SE0002",
+            "expected a binding name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_binding_missing_type_and_initializer.ff",
+            "module g;\nfunc run() { let value; }\n",
+            "SE0101",
+            "binding declarations require a type annotation or an initializer",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_binding_missing_type_name.ff",
+            "module g;\nfunc run() { let value: ; }\n",
+            "SE0002",
+            "expected a type name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_top_level_destructure.ff",
+            "module g;\nlet (left, right) = pair;\n",
+            "SE0109",
+            "destructuring is not valid in this binding context",
+            FENG_TOKEN_LPAREN,
+            "(",
+            1U
+        },
+        {
+            "g12_single_destructure_position.ff",
+            "module g;\nfunc run() { let (only) = pair; }\n",
+            "SE0104",
+            "destructuring bindings require 0 or 2 to 8 positions",
+            FENG_TOKEN_LPAREN,
+            "(",
+            2U
+        },
+        {
+            "g12_nested_destructure.ff",
+            "module g;\nfunc run() { let (left, (middle, right)) = pair; }\n",
+            "SE0105",
+            "nested destructuring bindings are not supported",
+            FENG_TOKEN_LPAREN,
+            "(",
+            3U
+        },
+        {
+            "g12_invalid_destructure_position.ff",
+            "module g;\nfunc run() { let (left, 1) = pair; }\n",
+            "SE0106",
+            "destructuring positions must be identifiers or empty slots",
+            FENG_TOKEN_INTEGER,
+            "1",
+            1U
+        },
+        {
+            "g12_destructure_type_annotation.ff",
+            "module g;\nfunc run() { let (left, right): Pair = pair; }\n",
+            "SE0107",
+            "destructuring bindings cannot use a single type annotation",
+            FENG_TOKEN_IDENTIFIER,
+            "Pair",
+            1U
+        },
+        {
+            "g12_destructure_missing_initializer.ff",
+            "module g;\nfunc run() { let (left, right); }\n",
+            "SE0108",
+            "destructuring bindings require an initializer",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_type_missing_name.ff",
+            "module g;\ntype {}\n",
+            "SE0002",
+            "expected a type name",
+            FENG_TOKEN_LBRACE,
+            "{",
+            1U
+        },
+        {
+            "g12_type_missing_body.ff",
+            "module g;\ntype Item;\n",
+            "SE0301",
+            "type declarations require '{...}' after the optional spec list",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_type_field_missing_semicolon.ff",
+            "module g;\ntype Item { let value: int }\n",
+            "SE0001",
+            "type field declarations must end with ';'",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_type_missing_closing_brace.ff",
+            "module g;\ntype Item { let value: int;\n",
+            "SE0312",
+            "expected '}' to close type body",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_type_invalid_member.ff",
+            "module g;\ntype Item { return; }\n",
+            "SE0003",
+            "expected type member declaration: 'let', 'var', 'func', or 'static'",
+            FENG_TOKEN_KW_RETURN,
+            "return",
+            1U
+        },
+        {
+            "g12_tuple_type_missing_closing_paren.ff",
+            "module g;\ntype Pair(int, string;\n",
+            "SE0312",
+            "expected ')' to close tuple type declaration",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_tuple_type_missing_semicolon.ff",
+            "module g;\ntype Pair(int, string)",
+            "SE0001",
+            "tuple type declarations must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_parameter_missing_name.ff",
+            "module g;\nfunc run(: int) {}\n",
+            "SE0002",
+            "expected a parameter name",
+            FENG_TOKEN_COLON,
+            ":",
+            1U
+        },
+        {
+            "g12_parameter_missing_colon.ff",
+            "module g;\nfunc run(value int) {}\n",
+            "SE0504",
+            "expected ':' after parameter name in parameter list",
+            FENG_TOKEN_IDENTIFIER,
+            "int",
+            1U
+        },
+        {
+            "g12_parameter_list_missing_close.ff",
+            "module g;\nfunc run(value: int {}\n",
+            "SE0515",
+            "expected ')' to close parameter list",
+            FENG_TOKEN_LBRACE,
+            "{",
+            1U
+        },
+        {
+            "g12_variadic_parameter_not_last.ff",
+            "module g;\nfunc run(values: int..., tail: int) {}\n",
+            "SE0502",
+            "variadic parameter must be the last parameter",
+            FENG_TOKEN_COMMA,
+            ",",
+            1U
+        },
+        {
+            "g12_function_missing_body.ff",
+            "module g;\nfunc run();\n",
+            "SE0518",
+            "function declarations must provide a body '{...}'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_extern_function_has_body.ff",
+            "module g;\nextern func run() {}\n",
+            "SE0517",
+            "extern function declarations must end with ';' and cannot have a body '{...}'",
+            FENG_TOKEN_LBRACE,
+            "{",
+            1U
+        },
+        {
+            "g12_lambda_arrow_block.ff",
+            "module g;\nfunc run() { let f = (x: int) -> { return x; }; }\n",
+            "SE0514",
+            "multi-line lambda body must omit '->' and use the block form '(params) { ... }'",
+            FENG_TOKEN_LBRACE,
+            "{",
+            2U
+        }
+    };
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *entity;
+    const FengBlock *bind_body;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g12_declarations_success.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    ASSERT(program->declaration_count == 7U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_GLOBAL_BINDING);
+    ASSERT(program->declarations[1]->kind == FENG_DECL_GLOBAL_BINDING);
+    ASSERT(program->declarations[2]->kind == FENG_DECL_TYPE);
+    ASSERT(program->declarations[2]->as.type_decl.is_tuple);
+    ASSERT(program->declarations[2]->as.type_decl.member_count == 2U);
+    entity = program->declarations[3];
+    ASSERT(entity->kind == FENG_DECL_TYPE);
+    ASSERT(entity->as.type_decl.type_param_count == 1U);
+    ASSERT(entity->as.type_decl.declared_spec_count == 2U);
+    ASSERT(entity->as.type_decl.member_count == 6U);
+    ASSERT(entity->as.type_decl.members[2]->is_static);
+    ASSERT(entity->as.type_decl.members[3]->kind == FENG_TYPE_MEMBER_CONSTRUCTOR);
+    ASSERT(entity->as.type_decl.members[5]->kind == FENG_TYPE_MEMBER_FINALIZER);
+    ASSERT(program->declarations[4]->as.function_decl.params[1].is_variadic);
+    ASSERT(program->declarations[5]->is_extern);
+    bind_body = program->declarations[6]->as.function_decl.body;
+    ASSERT(bind_body->statement_count == 8U);
+    ASSERT(bind_body->statements[3]->as.binding.is_destructure);
+    ASSERT(bind_body->statements[3]->as.binding.destructure_count == 0U);
+    ASSERT(bind_body->statements[5]->as.binding.destructure_count == 8U);
+    ASSERT(bind_body->statements[6]->as.binding.initializer->kind ==
+           FENG_EXPR_LAMBDA);
+    ASSERT(!bind_body->statements[6]
+                ->as.binding.initializer->as.lambda.is_block_body);
+    ASSERT(bind_body->statements[7]
+               ->as.binding.initializer->as.lambda.is_block_body);
+    feng_program_free(program);
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
+/* Covers both enum value modes, all spec declaration forms, and fit forms,
+ * including their user-reachable malformed boundaries. */
+static void test_g12_enum_spec_and_fit_syntax(void) {
+    const char *source =
+        "module g12.contracts;\n"
+        "enum Automatic { red, green, blue }\n"
+        "enum Explicit { low = -1, zero = 0, high = 1 }\n"
+        "spec Reader<T>: Named {\n"
+        "  let id: int;\n"
+        "  func read<U>(value: U): int;\n"
+        "}\n"
+        "spec Callback(value: int): int;\n"
+        "spec Scalar: int | string;\n"
+        "spec Combined: Reader<int> & Named;\n"
+        "type User {}\n"
+        "fit User: Reader<int>, Named;\n"
+        "fit User {\n"
+        "  func read(): int { return 1; }\n"
+        "  static func make(): User { return User {}; }\n"
+        "}\n";
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g12_enum_missing_name.ff",
+            "module g;\nenum {}\n",
+            "SE0002",
+            "expected an enum name",
+            FENG_TOKEN_LBRACE,
+            "{",
+            1U
+        },
+        {
+            "g12_enum_generic_parameters.ff",
+            "module g;\nenum Status<T> { ready }\n",
+            "SE0403",
+            "enum declarations do not support generic parameters",
+            FENG_TOKEN_LT,
+            "<",
+            1U
+        },
+        {
+            "g12_enum_parent_spec.ff",
+            "module g;\nenum Status: Named { ready }\n",
+            "SE0404",
+            "enum declarations cannot declare parent specs",
+            FENG_TOKEN_COLON,
+            ":",
+            1U
+        },
+        {
+            "g12_enum_callable_signature.ff",
+            "module g;\nenum Status() { ready }\n",
+            "SE0405",
+            "enum declarations cannot declare callable signatures",
+            FENG_TOKEN_LPAREN,
+            "(",
+            1U
+        },
+        {
+            "g12_enum_empty.ff",
+            "module g;\nenum Status {}\n",
+            "SE0406",
+            "enum declarations must declare at least one item",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_enum_illegal_member.ff",
+            "module g;\nenum Status { let ready }\n",
+            "SE0407",
+            "enum declarations only allow item names and optional integer literal initializers",
+            FENG_TOKEN_KW_LET,
+            "let",
+            1U
+        },
+        {
+            "g12_enum_non_integer_initializer.ff",
+            "module g;\nenum Status { ready = value }\n",
+            "SE0408",
+            "enum item initializer must be an integer literal",
+            FENG_TOKEN_IDENTIFIER,
+            "value",
+            1U
+        },
+        {
+            "g12_enum_initializer_expression.ff",
+            "module g;\nenum Status { ready = 1 + 2 }\n",
+            "SE0408",
+            "enum item initializer must be a single integer literal",
+            FENG_TOKEN_PLUS,
+            "+",
+            1U
+        },
+        {
+            "g12_enum_trailing_comma.ff",
+            "module g;\nenum Status { ready, }\n",
+            "SE0409",
+            "enum declarations do not allow a trailing ',' after the last item",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_enum_missing_closing_brace.ff",
+            "module g;\nenum Status { ready\n",
+            "SE0410",
+            "expected '}' to close enum body",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_spec_missing_name.ff",
+            "module g;\nspec {}\n",
+            "SE0002",
+            "expected a spec name after 'spec'",
+            FENG_TOKEN_LBRACE,
+            "{",
+            1U
+        },
+        {
+            "g12_spec_callable_missing_colon.ff",
+            "module g;\nspec Callback(value: int);\n",
+            "SE0607",
+            "spec callable declarations require ':' before the return type",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_spec_callable_missing_semicolon.ff",
+            "module g;\nspec Callback(value: int): int",
+            "SE0001",
+            "spec callable declarations must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_spec_object_missing_body.ff",
+            "module g;\nspec Reader;\n",
+            "SE0608",
+            "spec object declarations require '{...}' after the optional spec list",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_spec_field_initializer.ff",
+            "module g;\nspec Reader { let value: int = 1; }\n",
+            "SE0603",
+            "spec field declarations cannot have an initializer",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_spec_method_body.ff",
+            "module g;\nspec Reader { func read(): int {} }\n",
+            "SE0605",
+            "spec method signatures must end with ';' and cannot have a body '{...}'",
+            FENG_TOKEN_LBRACE,
+            "{",
+            2U
+        },
+        {
+            "g12_spec_method_missing_return_type.ff",
+            "module g;\nspec Reader { func read(); }\n",
+            "SE0604",
+            "spec method signatures must declare a return type",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_spec_union_missing_member.ff",
+            "module g;\nspec Scalar: int | ;\n",
+            "SE0002",
+            "expected a type name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_spec_union_missing_semicolon.ff",
+            "module g;\nspec Scalar: int | string",
+            "SE0001",
+            "union-form spec declarations must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_spec_missing_closing_brace.ff",
+            "module g;\nspec Reader { let value: int;\n",
+            "SE0610",
+            "expected '}' to close spec body",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_fit_missing_target.ff",
+            "module g;\nfit ;\n",
+            "SE0002",
+            "expected a type name",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_fit_target_only.ff",
+            "module g;\nfit User;\n",
+            "SE0804",
+            "fit declarations must include a spec list, a body block, or both",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_fit_missing_semicolon.ff",
+            "module g;\nfit User: Reader",
+            "SE0001",
+            "fit declarations without a body must end with ';'",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_fit_private_visibility.ff",
+            "module g;\nseal fit User: Reader;\n",
+            "SE0803",
+            "fit declarations cannot use 'seal'",
+            FENG_TOKEN_IDENTIFIER,
+            "User",
+            1U
+        },
+        {
+            "g12_fit_annotation.ff",
+            "module g;\n@abi fit User: Reader;\n",
+            "SE0802",
+            "annotations cannot be applied to 'fit' declarations",
+            FENG_TOKEN_IDENTIFIER,
+            "User",
+            1U
+        },
+        {
+            "g12_fit_field.ff",
+            "module g;\nfit User { let value: int; }\n",
+            "SE0807",
+            "fit blocks cannot declare 'let' or 'var' fields; declare them on the original type",
+            FENG_TOKEN_KW_LET,
+            "let",
+            1U
+        },
+        {
+            "g12_fit_invalid_member.ff",
+            "module g;\nfit User { value(): int {} }\n",
+            "SE0808",
+            "fit block members must start with 'func'",
+            FENG_TOKEN_IDENTIFIER,
+            "value",
+            1U
+        },
+        {
+            "g12_fit_method_missing_body.ff",
+            "module g;\nfit User { func read(): int; }\n",
+            "SE0805",
+            "fit block methods must provide a body '{...}'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_fit_missing_closing_brace.ff",
+            "module g;\nfit User { func read(): int { return 1; }\n",
+            "SE0806",
+            "expected '}' to close fit body",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        }
+    };
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g12_contracts_success.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    ASSERT(program->declaration_count == 9U);
+    ASSERT(program->declarations[0]->kind == FENG_DECL_ENUM);
+    ASSERT(program->declarations[0]->as.enum_decl.item_count == 3U);
+    ASSERT(!program->declarations[0]->as.enum_decl.items[0].has_explicit_value);
+    ASSERT(program->declarations[1]->as.enum_decl.items[0].has_explicit_value);
+    ASSERT(program->declarations[1]->as.enum_decl.items[0].explicit_value == -1);
+    ASSERT(program->declarations[2]->as.spec_decl.form == FENG_SPEC_FORM_OBJECT);
+    ASSERT(program->declarations[2]->as.spec_decl.type_param_count == 1U);
+    ASSERT(program->declarations[2]->as.spec_decl.parent_spec_count == 1U);
+    ASSERT(program->declarations[2]->as.spec_decl.as.object.member_count == 2U);
+    ASSERT(program->declarations[3]->as.spec_decl.form ==
+           FENG_SPEC_FORM_CALLABLE);
+    ASSERT(program->declarations[4]->as.spec_decl.form == FENG_SPEC_FORM_UNION);
+    ASSERT(program->declarations[5]->as.spec_decl.form ==
+           FENG_SPEC_FORM_INTERSECTION);
+    ASSERT(program->declarations[7]->kind == FENG_DECL_FIT);
+    ASSERT(!program->declarations[7]->as.fit_decl.has_body);
+    ASSERT(program->declarations[7]->as.fit_decl.spec_count == 2U);
+    ASSERT(program->declarations[8]->as.fit_decl.has_body);
+    ASSERT(program->declarations[8]->as.fit_decl.member_count == 2U);
+    ASSERT(program->declarations[8]->as.fit_decl.members[1]->is_static);
+    feng_program_free(program);
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
+/* Covers primary, postfix, object/array, grouping, tuple, cast, unary,
+ * binary, assignment, and expression-form control-flow syntax. */
+static void test_g12_expression_and_postfix_syntax(void) {
+    const char *source =
+        "module g12.expressions;\n"
+        "func run(value: int, factory: Factory) {\n"
+        "  let array = [1, 2, 3];\n"
+        "  let indexed = array[1];\n"
+        "  let allocated = Item[:3];\n"
+        "  let generic_object = Box<int>() { value: 1 };\n"
+        "  let call_chain = factory.make<int>(value).next()[0];\n"
+        "  let empty_object = Item {};\n"
+        "  let initialized_object = Item(value) { field: 2 };\n"
+        "  let precedence = 1 + 2 * 3 == 7 || false;\n"
+        "  let unary = !false && -value < 0;\n"
+        "  let grouped = (value);\n"
+        "  let tupled = (value, 1);\n"
+        "  let casted = (int)value;\n"
+        "  let conditional = if true { 1 } else { 2 };\n"
+        "  let chained = if false { 0 } else if true { 1 } else { 2 };\n"
+        "  let matched = match value { 0 { 1 } 1, 2 { 2 } else { 3 } };\n"
+        "  let attempted = try parse() catch error: Error { 0 };\n"
+        "  var mutable = 0;\n"
+        "  mutable += 1;\n"
+        "}\n";
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g12_array_missing_item.ff",
+            "module g;\nfunc run() { let value = [1, ]; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_RBRACKET,
+            "]",
+            1U
+        },
+        {
+            "g12_array_missing_close.ff",
+            "module g;\nfunc run() { let value = [1; }\n",
+            "SE0202",
+            "expected ']' to close array literal",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_call_missing_argument.ff",
+            "module g;\nfunc run() { call(1,); }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_RPAREN,
+            ")",
+            2U
+        },
+        {
+            "g12_call_missing_close.ff",
+            "module g;\nfunc run() { call(1; }\n",
+            "SE0005",
+            "expected ')' to close argument list",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_member_missing_name.ff",
+            "module g;\nfunc run() { value.; }\n",
+            "SE0002",
+            "expected an identifier after '.' in member access",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_object_missing_field_name.ff",
+            "module g;\nfunc run() { let value = Item { good: 0, : 1 }; }\n",
+            "SE0002",
+            "expected an object literal field name",
+            FENG_TOKEN_COLON,
+            ":",
+            2U
+        },
+        {
+            "g12_object_missing_colon.ff",
+            "module g;\nfunc run() { let value = Item { good: 0, field 1 }; }\n",
+            "SE1001",
+            "expected ':' after object literal field name",
+            FENG_TOKEN_INTEGER,
+            "1",
+            1U
+        },
+        {
+            "g12_object_missing_value.ff",
+            "module g;\nfunc run() { let value = Item { field: }; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_object_missing_close.ff",
+            "module g;\nfunc run() { let value = Item { field: 1; }\n",
+            "SE1002",
+            "expected '}' to close object literal",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_index_missing_expression.ff",
+            "module g;\nfunc run() { let value = items[]; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_RBRACKET,
+            "]",
+            1U
+        },
+        {
+            "g12_index_missing_close.ff",
+            "module g;\nfunc run() { let value = items[0; }\n",
+            "SE0202",
+            "expected ']' to close index expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_array_new_non_type_target.ff",
+            "module g;\nfunc run() { let value = factory()[:1]; }\n",
+            "SE0201",
+            "array-new segment '[:expr]' requires a type name",
+            FENG_TOKEN_INTEGER,
+            "1",
+            1U
+        },
+        {
+            "g12_array_new_missing_size.ff",
+            "module g;\nfunc run() { let value = Item[:]; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_RBRACKET,
+            "]",
+            1U
+        },
+        {
+            "g12_array_new_missing_close.ff",
+            "module g;\nfunc run() { let value = Item[:1; }\n",
+            "SE0202",
+            "expected ']' after array size in '[:expr]'",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_group_missing_close.ff",
+            "module g;\nfunc run() { let value = (other; }\n",
+            "SE0005",
+            "expected ')' to close grouped expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_tuple_trailing_comma.ff",
+            "module g;\nfunc run() { let value = (1,); }\n",
+            "SE0310",
+            "tuple literals require an expression after ','",
+            FENG_TOKEN_RPAREN,
+            ")",
+            2U
+        },
+        {
+            "g12_unary_missing_operand.ff",
+            "module g;\nfunc run() { let value = !; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_binary_missing_operand.ff",
+            "module g;\nfunc run() { let value = 1 + ; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_assignment_missing_value.ff",
+            "module g;\nfunc run() { var value = 0; value = ; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            3U
+        },
+        {
+            "g12_invalid_expression_term.ff",
+            "module g;\nfunc run() { let value = return; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_KW_RETURN,
+            "return",
+            1U
+        }
+    };
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g12_expressions_success.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 18U);
+    ASSERT(body->statements[0]->as.binding.initializer->kind ==
+           FENG_EXPR_ARRAY_LITERAL);
+    ASSERT(body->statements[1]->as.binding.initializer->kind == FENG_EXPR_INDEX);
+    ASSERT(body->statements[2]->as.binding.initializer->kind ==
+           FENG_EXPR_ARRAY_NEW);
+    ASSERT(body->statements[3]->as.binding.initializer->kind ==
+           FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(body->statements[4]->as.binding.initializer->kind == FENG_EXPR_INDEX);
+    ASSERT(body->statements[5]->as.binding.initializer->kind ==
+           FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(body->statements[7]->as.binding.initializer->kind ==
+           FENG_EXPR_BINARY);
+    ASSERT(body->statements[7]->as.binding.initializer->as.binary.op ==
+           FENG_TOKEN_OR_OR);
+    ASSERT(body->statements[9]->as.binding.initializer->kind ==
+           FENG_EXPR_IDENTIFIER);
+    ASSERT(body->statements[10]->as.binding.initializer->kind ==
+           FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(body->statements[11]->as.binding.initializer->kind == FENG_EXPR_CAST);
+    ASSERT(body->statements[12]->as.binding.initializer->kind == FENG_EXPR_IF);
+    ASSERT(body->statements[13]->as.binding.initializer->kind == FENG_EXPR_IF);
+    ASSERT(body->statements[13]
+               ->as.binding.initializer->as.if_expr.else_block->statement_count == 1U);
+    ASSERT(body->statements[13]
+               ->as.binding.initializer->as.if_expr.else_block->statements[0]
+               ->kind == FENG_STMT_EXPR);
+    ASSERT(body->statements[13]
+               ->as.binding.initializer->as.if_expr.else_block->statements[0]
+               ->as.expr->kind == FENG_EXPR_IF);
+    ASSERT(body->statements[14]->as.binding.initializer->kind == FENG_EXPR_MATCH);
+    ASSERT(body->statements[15]->as.binding.initializer->kind == FENG_EXPR_TRY);
+    ASSERT(body->statements[17]->kind == FENG_STMT_ASSIGN);
+    ASSERT(body->statements[17]->as.assign.op == FENG_TOKEN_PLUS_ASSIGN);
+    feng_program_free(program);
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
+/* Covers statement-form branches, both loop families, defer, control
+ * terminators, and statement/expression try-catch forms. */
+static void test_g12_control_flow_and_try_syntax(void) {
+    const char *source =
+        "module g12.flow;\n"
+        "func flow(items: Items) {\n"
+        "  { let nested = 1; }\n"
+        "  if ready {} else if retry {} else {}\n"
+        "  match value { 0 {} 1, 2 {} else {} }\n"
+        "  while ready { break; }\n"
+        "  for ;; { continue; break; }\n"
+        "  for var index = 0; index < 3; index += 1 {}\n"
+        "  for let item in items {}\n"
+        "  for var (key, value) in items {}\n"
+        "  defer { cleanup(); }\n"
+        "  try work() catch {} catch error: Error { recover(); }\n"
+        "  return;\n"
+        "}\n"
+        "func fail() { throw failure; }\n";
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g12_if_statement_missing_block.ff",
+            "module g;\nfunc run() { if ready; }\n",
+            "SE1106",
+            "expected '{' after if condition",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_else_missing_block.ff",
+            "module g;\nfunc run() { if ready {} else; }\n",
+            "SE0005",
+            "expected '{' to start block",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_if_expression_missing_else.ff",
+            "module g;\nfunc run() { let value = if ready { 1 }; }\n",
+            "SE1102",
+            "if expressions require an 'else' branch",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_match_statement_missing_body.ff",
+            "module g;\nfunc run() { match value; }\n",
+            "SE1106",
+            "expected '{' after match target",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_match_invalid_label.ff",
+            "module g;\nfunc run() { match value { 1.5 {} } }\n",
+            "SE1105",
+            "match label must be an integer, string, bool literal or named constant",
+            FENG_TOKEN_FLOAT,
+            "1.5",
+            1U
+        },
+        {
+            "g12_match_duplicate_else.ff",
+            "module g;\nfunc run() { match value { else {} else {} } }\n",
+            "SE1104",
+            "match expression cannot declare more than one 'else' branch",
+            FENG_TOKEN_KW_ELSE,
+            "else",
+            2U
+        },
+        {
+            "g12_match_expression_missing_else.ff",
+            "module g;\nfunc run() { let result = match value { 0 { 1 } }; }\n",
+            "SE1103",
+            "match expressions require an 'else' branch",
+            FENG_TOKEN_KW_MATCH,
+            "match",
+            1U
+        },
+        {
+            "g12_match_missing_closing_brace.ff",
+            "module g;\nfunc run() { match value { 0 {}\n",
+            "SE1106",
+            "expected '}' to close match body",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_while_missing_block.ff",
+            "module g;\nfunc run() { while ready; }\n",
+            "SE0005",
+            "expected '{' to start block",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_for_missing_initializer_semicolon.ff",
+            "module g;\nfunc run() { for let start = 0 condition < 2; update = 1 {} }\n",
+            "SE1201",
+            "for statements require ';' after the initializer",
+            FENG_TOKEN_IDENTIFIER,
+            "condition",
+            1U
+        },
+        {
+            "g12_for_missing_condition_semicolon.ff",
+            "module g;\nfunc run() { for let start = 0; condition < 2 update = 1 {} }\n",
+            "SE1202",
+            "for statements require ';' after the condition",
+            FENG_TOKEN_IDENTIFIER,
+            "update",
+            1U
+        },
+        {
+            "g12_for_missing_body.ff",
+            "module g;\nfunc run() { for ;;",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_EOF,
+            "",
+            0U
+        },
+        {
+            "g12_for_in_missing_body.ff",
+            "module g;\nfunc run() { for let item in items; }\n",
+            "SE0005",
+            "expected '{' to start block",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_defer_missing_block.ff",
+            "module g;\nfunc run() { defer cleanup(); }\n",
+            "SE0005",
+            "expected '{' to start block",
+            FENG_TOKEN_IDENTIFIER,
+            "cleanup",
+            1U
+        },
+        {
+            "g12_return_missing_semicolon.ff",
+            "module g;\nfunc run() { return value }\n",
+            "SE0001",
+            "return statements must end with ';'",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_throw_missing_value.ff",
+            "module g;\nfunc run() { throw; }\n",
+            "SE0006",
+            "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        },
+        {
+            "g12_throw_missing_semicolon.ff",
+            "module g;\nfunc run() { throw failure }\n",
+            "SE0001",
+            "throw statements must end with ';'",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_break_missing_semicolon.ff",
+            "module g;\nfunc run() { break }\n",
+            "SE0001",
+            "break statements must end with ';'",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_continue_missing_semicolon.ff",
+            "module g;\nfunc run() { continue }\n",
+            "SE0001",
+            "continue statements must end with ';'",
+            FENG_TOKEN_RBRACE,
+            "}",
+            1U
+        },
+        {
+            "g12_expression_statement_missing_semicolon.ff",
+            "module g;\nfunc run() { call() let next = 1; }\n",
+            "SE0001",
+            "expression statements and local bindings must end with ';'",
+            FENG_TOKEN_KW_LET,
+            "let",
+            1U
+        },
+        {
+            "g12_try_missing_catch.ff",
+            "module g;\nfunc run() { try work(); }\n",
+            "SE1401",
+            "'try' requires at least one 'catch' clause",
+            FENG_TOKEN_KW_TRY,
+            "try",
+            1U
+        },
+        {
+            "g12_catch_missing_name.ff",
+            "module g;\nfunc run() { try work() catch : Error {} }\n",
+            "SE1402",
+            "catch clauses must bind an exception name",
+            FENG_TOKEN_COLON,
+            ":",
+            1U
+        },
+        {
+            "g12_catch_missing_colon.ff",
+            "module g;\nfunc run() { try work() catch error Error {} }\n",
+            "SE1403",
+            "catch clauses must include a ': Type' annotation",
+            FENG_TOKEN_IDENTIFIER,
+            "Error",
+            1U
+        },
+        {
+            "g12_catch_missing_type.ff",
+            "module g;\nfunc run() { try work() catch error: {} }\n",
+            "SE0002",
+            "expected a type name",
+            FENG_TOKEN_LBRACE,
+            "{",
+            2U
+        },
+        {
+            "g12_catch_missing_body.ff",
+            "module g;\nfunc run() { try work() catch error: Error; }\n",
+            "SE0005",
+            "expected '{' to start block",
+            FENG_TOKEN_SEMICOLON,
+            ";",
+            2U
+        }
+    };
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+
+    if (!feng_parse_source(source,
+                           strlen(source),
+                           "g12_flow_success.ff",
+                           &program,
+                           &error)) {
+        fprintf(stderr,
+                "G12 flow success source failed: %s %s at %u:%u\n",
+                error.code != NULL ? error.code : "<no code>",
+                error.message != NULL ? error.message : "<no message>",
+                error.token.line,
+                error.token.column);
+        exit(1);
+    }
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    ASSERT(program->declaration_count == 2U);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 11U);
+    ASSERT(body->statements[0]->kind == FENG_STMT_BLOCK);
+    ASSERT(body->statements[1]->kind == FENG_STMT_IF);
+    ASSERT(body->statements[1]->as.if_stmt.clause_count == 2U);
+    ASSERT(body->statements[1]->as.if_stmt.else_block != NULL);
+    ASSERT(body->statements[2]->kind == FENG_STMT_MATCH);
+    ASSERT(body->statements[3]->kind == FENG_STMT_WHILE);
+    ASSERT(body->statements[4]->kind == FENG_STMT_FOR);
+    ASSERT(!body->statements[4]->as.for_stmt.is_for_in);
+    ASSERT(body->statements[4]->as.for_stmt.init == NULL);
+    ASSERT(body->statements[4]->as.for_stmt.condition == NULL);
+    ASSERT(body->statements[4]->as.for_stmt.update == NULL);
+    ASSERT(body->statements[5]->kind == FENG_STMT_FOR);
+    ASSERT(!body->statements[5]->as.for_stmt.is_for_in);
+    ASSERT(body->statements[6]->as.for_stmt.is_for_in);
+    ASSERT(!body->statements[6]->as.for_stmt.iter_binding.is_destructure);
+    ASSERT(body->statements[7]->as.for_stmt.is_for_in);
+    ASSERT(body->statements[7]->as.for_stmt.iter_binding.is_destructure);
+    ASSERT(body->statements[7]->as.for_stmt.iter_binding.destructure_count == 2U);
+    ASSERT(body->statements[8]->kind == FENG_STMT_DEFER);
+    ASSERT(body->statements[9]->kind == FENG_STMT_TRY);
+    ASSERT(body->statements[9]->as.expr->as.try_expr.clause_count == 2U);
+    ASSERT(body->statements[10]->kind == FENG_STMT_RETURN);
+    ASSERT(program->declarations[1]
+               ->as.function_decl.body->statements[0]->kind == FENG_STMT_THROW);
+    feng_program_free(program);
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
+/* Locks the AST distinction at legal boundaries that share leading tokens. */
+static void test_g12_ambiguous_legal_ast_boundaries(void) {
+    const char *source =
+        "module g12.boundaries;\n"
+        "func inspect(items: Items, value: int, left: int, right: int) {\n"
+        "  let object = Item { field: 1 };\n"
+        "  if (Item { field: 1 }) {}\n"
+        "  let grouped = (value);\n"
+        "  let tupled = (value, right);\n"
+        "  let expression_lambda = (x: int) -> x;\n"
+        "  let block_lambda = (x: int) { return x; };\n"
+        "  let casted = (int)value;\n"
+        "  let generic_call = make<int>(value);\n"
+        "  let relation = left < right;\n"
+        "  let indexed = Item[1];\n"
+        "  let allocated = Item[:1];\n"
+        "  let bit_or = 1 | 2;\n"
+        "  let matched = value match 1 | 2;\n"
+        "  for let item in items {}\n"
+        "  for let index = 0; index < 1; index = index + 1 {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g12_boundaries_success.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 15U);
+    ASSERT(body->statements[0]->as.binding.initializer->kind ==
+           FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(body->statements[1]->kind == FENG_STMT_IF);
+    ASSERT(body->statements[1]->as.if_stmt.clauses[0].condition->kind ==
+           FENG_EXPR_OBJECT_LITERAL);
+    ASSERT(body->statements[2]->as.binding.initializer->kind ==
+           FENG_EXPR_IDENTIFIER);
+    ASSERT(body->statements[3]->as.binding.initializer->kind ==
+           FENG_EXPR_TUPLE_LITERAL);
+    ASSERT(body->statements[4]->as.binding.initializer->kind ==
+           FENG_EXPR_LAMBDA);
+    ASSERT(!body->statements[4]
+                ->as.binding.initializer->as.lambda.is_block_body);
+    ASSERT(body->statements[5]
+               ->as.binding.initializer->as.lambda.is_block_body);
+    ASSERT(body->statements[6]->as.binding.initializer->kind == FENG_EXPR_CAST);
+    ASSERT(body->statements[7]->as.binding.initializer->kind == FENG_EXPR_CALL);
+    ASSERT(body->statements[7]
+               ->as.binding.initializer->as.call.has_explicit_type_args);
+    ASSERT(body->statements[8]->as.binding.initializer->kind ==
+           FENG_EXPR_BINARY);
+    ASSERT(body->statements[8]->as.binding.initializer->as.binary.op ==
+           FENG_TOKEN_LT);
+    ASSERT(body->statements[9]->as.binding.initializer->kind == FENG_EXPR_INDEX);
+    ASSERT(body->statements[10]->as.binding.initializer->kind ==
+           FENG_EXPR_ARRAY_NEW);
+    ASSERT(body->statements[11]->as.binding.initializer->kind ==
+           FENG_EXPR_BINARY);
+    ASSERT(body->statements[11]->as.binding.initializer->as.binary.op ==
+           FENG_TOKEN_PIPE);
+    ASSERT(body->statements[12]->as.binding.initializer->kind ==
+           FENG_EXPR_MATCH_OP);
+    ASSERT(body->statements[12]
+               ->as.binding.initializer->as.match_op.label_count == 2U);
+    ASSERT(body->statements[13]->as.for_stmt.is_for_in);
+    ASSERT(!body->statements[14]->as.for_stmt.is_for_in);
+    feng_program_free(program);
+}
+
 int main(void) {
+    test_g12_module_import_and_top_level_syntax();
+    test_g12_binding_type_and_callable_syntax();
+    test_g12_enum_spec_and_fit_syntax();
+    test_g12_expression_and_postfix_syntax();
+    test_g12_control_flow_and_try_syntax();
+    test_g12_ambiguous_legal_ast_boundaries();
     test_friend_annotation_type_arguments_parse_on_all_members();
     test_top_level_declarations();
     test_annotation_accepts_two_arguments();

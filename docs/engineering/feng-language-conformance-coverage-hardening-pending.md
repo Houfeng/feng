@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G11 已交付；G12～G25 待 Review
+> 状态：G01～G12 已交付；G13～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -936,34 +936,86 @@ enum 必须为每个枚举项显式赋值；部分指定属于编译期错误，
 
 ### 16.1 测试重点
 
-验证用户输入可达的稳定 Parser 诊断和合法邻界 AST，不混入 Lexer 或 Semantic 错误。
+以语法结构覆盖完整性为目标，验证 Parser 对合法源码的 AST、对非法源码的稳定拒绝以及易混淆结构的
+消歧结果。正向和反向用例必须覆盖当前用户输入可达的主要语法分支；诊断码只是反向用例的稳定属性
+之一，不以机械命中全部 `SE` 码为目标，也不为不可达内部防御制造用例。输入必须通过 Lexer，且
+Parser 失败时不得混入 Semantic 错误。
 
 ### 16.2 用例 TODO
 
-- [ ] PARSE01：模块声明结构错误；
-- [ ] PARSE02：import 声明结构错误；
-- [ ] PARSE03：修饰符或声明结构错误；
-- [ ] PARSE04：对象字面量结构错误；
-- [ ] PARSE05：tuple 结构错误；
-- [ ] PARSE06：循环结构错误；
-- [ ] PARSE07：易混淆结构对应的合法邻界 AST。
+- [x] PARSE01：模块声明与 import 的正向和反向结构；覆盖默认/显式可见性、单段/多段路径、无别名/
+  有别名导入，以及缺少 `module`、路径、路径段、别名或分号；
+- [x] PARSE02：顶层声明分派与修饰结构；覆盖合法注解、可见性、`extern func`、函数和绑定声明，以及
+  孤立注解、非法 `extern` 目标、缺少 `func`、缺少 `let` / `var` 和未知顶层声明；
+- [x] PARSE03：普通绑定与 tuple 解构绑定；覆盖 `let` / `var`、显式类型/推导初始化、空槽、零位置和
+  2～8 位置，以及缺少名称、类型或初始化器、非法嵌套、非法位置、非法数量、单一类型注解和缺少
+  `=`；
+- [x] PARSE04：对象形式 type 与 tuple type；覆盖字段、方法、构造、finalizer、静态成员、泛型参数、
+  父 spec 和成员展开，以及缺少名称、主体、字段分号、闭合字符、非法成员形式和 tuple 元素数量边界；
+- [x] PARSE05：enum、三种 spec form 与 fit；覆盖各合法最小/完整形式，以及空 enum、非法 enum 成员/
+  初始化器、spec 字段/方法/callable 约束、union/intersection 终止符、fit 空声明、非法成员和未闭合
+  主体；
+- [x] PARSE06：函数、参数、泛型参数、变长参数与 lambda；覆盖零/多参数、返回类型、普通/extern
+  函数、表达式/block lambda，以及缺少名称、括号、冒号、函数体、非法变长参数位置和 arrow-block
+  混用；
+- [x] PARSE07：数组、调用、成员、泛型 target 与对象字面量等 postfix 结构；覆盖数组字面量、索引、
+  array-new、普通/泛型调用、成员链和有参/无参对象字面量，以及缺少闭合字符、成员名、字段名、冒号、
+  字段值和非法 array-new target；
+- [x] PARSE08：基础表达式、分组、cast、tuple、unary/binary 和赋值结构；覆盖优先级与结合方向 AST，
+  以及缺少操作数、分组/实参/tuple 闭合字符、tuple 尾随逗号元素和非法表达式项；
+- [x] PARSE09：`if` / `match` 的 statement 与 expression form；覆盖 `else if`、多标签、range、type/
+  chain/binding 标签和结果分支，以及缺少块、闭合字符或 `else`、重复 `else` 和非法标签；
+- [x] PARSE10：`while`、三段式 `for`、`for/in`、tuple 解构迭代和 `defer`；覆盖空/非空块、可省略的
+  三段式子句，以及缺少两个分号、循环体或 defer block；
+- [x] PARSE11：`return`、`throw`、`break`、`continue` 与普通表达式语句终止边界；覆盖要求分号、
+  表达式分支末尾允许省略的 `throw`、块末尾 yield，以及非法尾随或缺失分号；
+- [x] PARSE12：`try/catch` 的 statement 与 expression form；覆盖匿名/具名 typed catch、多 catch 和
+  结果分支，以及缺少 catch、名称、类型、冒号或主体；
+- [x] PARSE13：集中覆盖易混淆合法邻界 AST；包括 block/对象字面量、group/tuple/lambda/cast、泛型
+  target/关系表达式、index/array-new、`match`/bit-or、三段式 `for`/`for-in`；
+- [x] PARSE14：对所有新增反向用例统一核对失败阶段、错误码、文案、错误 token、lexeme、offset、
+  行列和空 AST；同时覆盖普通 token 与 EOF 两类错误位置，不修改既有测试用例；
+- [x] PARSE15：审计用户不可达的内部防御与失效映射，只记录调用链依据和本组处理结论，不把它们
+  计入正反向覆盖率，也不在 G12 重构为 `IE` 或改变 Parser 分派。
 
 ### 16.3 独立验收与交付 TODO
 
-- [ ] 建立稳定 Parser `SE` 码到现有 Parser test 的映射，确认真实缺口；
-- [ ] 独立运行 G12，核对诊断码、token、行列、数量、阶段和合法 AST；
-- [ ] 在 Codex 沙箱外为 G12 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G12 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [x] 建立主要语法结构到现有 Parser test 的正向/反向映射，按用户可达分支确认真实缺口；
+- [x] 独立运行 G12，核对合法 AST，以及反向用例的诊断码、token、行列、阶段和空 AST；
+- [x] 在 Codex 沙箱外为 G12 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G12 问题；
+- [x] 填写本组映射、实际新增用例、专项结果和全量结果。
 
 ### 16.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: close parser diagnostic coverage gaps`
+- 状态：已交付
+- 语法结构映射与新增用例：
+  - 复核既有 module/top-level、type/static/spec、enum、generic/variadic、tuple/destructure、array/postfix、
+    `if` / `match`、loop、try/defer 和 mixin Parser 测试，保留其已有专项 AST 与合法邻界证据；其中
+    range/type/chain/binding match 形态继续由既有 `test_match_*` 系列直接覆盖；
+  - 在 `test/parser/test_parser.c` 新增统一的 `G12ParserFailureCase` 与断言辅助代码；每个反向源码均
+    直接调用 `feng_parse_source`，精确核对 `SE` 阶段、错误码、完整文案、token kind、lexeme、offset、
+    行列和空 AST，并同时覆盖普通 token 与 EOF 定位；
+  - 新增 `test_g12_module_import_and_top_level_syntax`、
+    `test_g12_binding_type_and_callable_syntax`、`test_g12_enum_spec_and_fit_syntax`、
+    `test_g12_expression_and_postfix_syntax`、`test_g12_control_flow_and_try_syntax` 和
+    `test_g12_ambiguous_legal_ast_boundaries`；合计执行 8 份正向源码和 111 份独立反向源码，覆盖
+    PARSE01～PARSE14，未修改任何既有测试用例；
+  - PARSE15 审计确认 15 个发码点属于用户输入不可达路径，另有 3 个规范条目当前无实现发码点；按
+    `ISSUE-G12-001` 只记录边界，不制造伪用例，也不进行 `SE` / `IE` 或 Parser 分派重构；
+  - 新用例发现并修复 `else if` 简单标识符条件误吞空 block，以及直接 `if` 表达式不接受
+    `else if` 链两个 Parser Bug；前者统一复用块前表达式解析入口，后者归一化为既有嵌套
+    `FENG_EXPR_IF` AST。主规范无需修改。
+- 本组专项结果：`make build/bin/test_parser && build/bin/test_parser` 通过，输出
+  `parser tests passed`；新增 111 份反向源码和全部正向 AST 断言均实际执行；
+- 本组沙箱外 `make test`：通过，退出码 0；UBSan 与 normal 两个干净阶段均完成，FCTS 均为
+  1072/1072、smoke 均为 90/90、std 均为 601/601；CLI、性能约束、增量构建、发布、安装、bundled
+  package 和预构建工具链检查全部通过；
+- 问题：`ISSUE-G12-001`～`ISSUE-G12-003` 均已关闭；
+- 交付结论：G12 已覆盖用户输入可达的主要 Parser 正向/反向语法结构、精确诊断属性和易混淆 AST
+  边界。产品实现只修复编译期 Parser，不改变生成程序执行路径，不增加运行时开销，也未变更 runtime
+  私有 ABI、公开 ABI、`.ft` 格式或错误码主规范；
+- 建议 commit message：`test: harden parser syntax coverage`
 
 ## 17 G13：名称绑定诊断
 

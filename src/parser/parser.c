@@ -3670,7 +3670,47 @@ static FengExpr *parse_if_expression(Parser *parser, FengToken if_token) {
         free_expr(expr);
         return NULL;
     }
-    expr->as.if_expr.else_block = parse_expression_branch_block(parser);
+    if (parser_match(parser, FENG_TOKEN_KW_IF)) {
+        FengToken nested_if_token = parser_previous_token(parser);
+        FengExpr *nested_if = parse_if_expression(parser, nested_if_token);
+        FengBlock *else_block;
+        FengStmt *nested_statement;
+        size_t statement_capacity = 0U;
+
+        if (nested_if == NULL) {
+            free_expr(expr);
+            return NULL;
+        }
+        else_block = new_block(parser, nested_if_token);
+        if (else_block == NULL) {
+            free_expr(nested_if);
+            free_expr(expr);
+            return NULL;
+        }
+        nested_statement = new_stmt(parser, FENG_STMT_EXPR, nested_if_token);
+        if (nested_statement == NULL) {
+            free_block(else_block);
+            free_expr(nested_if);
+            free_expr(expr);
+            return NULL;
+        }
+        nested_statement->as.expr = nested_if;
+        if (!APPEND_VALUE(parser,
+                          else_block->statements,
+                          else_block->statement_count,
+                          statement_capacity,
+                          nested_statement)) {
+            free_stmt(nested_statement);
+            free_block(else_block);
+            free_expr(expr);
+            return NULL;
+        }
+        /* Normalize a direct `else if` expression chain to the same nested
+         * if-expression AST already produced by an explicit `else { if ... }`. */
+        expr->as.if_expr.else_block = else_block;
+    } else {
+        expr->as.if_expr.else_block = parse_expression_branch_block(parser);
+    }
     if (expr->as.if_expr.else_block == NULL) {
         free_expr(expr);
         return NULL;
@@ -4489,7 +4529,7 @@ static FengStmt *parse_if_statement(Parser *parser) {
             if (parser_match(parser, FENG_TOKEN_KW_IF)) {
                 FengIfClause more;
 
-                more.condition = parse_expression(parser);
+                more.condition = parse_expression_before_block(parser);
                 if (more.condition == NULL) {
                     free_stmt(stmt);
                     return NULL;
