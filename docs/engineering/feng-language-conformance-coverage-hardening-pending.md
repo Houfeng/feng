@@ -977,6 +977,12 @@ Parser 失败时不得混入 Semantic 错误。
   行列和空 AST；同时覆盖普通 token 与 EOF 两类错误位置，不修改既有测试用例；
 - [x] PARSE15：审计用户不可达的内部防御与失效映射，只记录调用链依据和本组处理结论，不把它们
   计入正反向覆盖率，也不在 G12 重构为 `IE` 或改变 Parser 分派。
+- [x] PARSE16：为本组新增的合法 Parser 边界建立 FCTS 行为映射；已有直接行为证据时引用既有 FCTS，
+  不重复新增同义用例；本组发现并修复的合法语法缺口必须新增独立 FCTS，不能只以 AST 断言验收。
+- [x] PARSE17：直接书写的 `if` 表达式 `else if` 链必须在 FCTS 中覆盖三个结果块分别被选中，并按
+  流程控制主规范 §4.1 覆盖完整上下文目标对各块的独立贴合、无目标时有确定类型的非字面量分支
+  分别位于 `then` / `else if` / `else` 的推导、全数值字面量的默认推导，以及 `throw` 结果块不参与
+  目标选择和贴合。语句形式还必须覆盖简单标识符条件紧邻空 block 的真实执行行为。
 
 ### 16.3 独立验收与交付 TODO
 
@@ -985,10 +991,14 @@ Parser 失败时不得混入 Semantic 错误。
 - [x] 在 Codex 沙箱外为 G12 独立执行 `make test`；
 - [x] 执行 `git diff --check`，关闭或决策 G12 问题；
 - [x] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [x] 独立运行 G12 FCTS 追加用例，核对 `else if` 语句空 block、表达式分支选择及全部 §4.1 贴合/
+  推导规则；
+- [x] 在 Codex 沙箱外为 G12 追加交付重新执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G12 追加问题并更新独立交付记录。
 
 ### 16.4 独立交付记录
 
-- 状态：已交付
+- 状态：已交付（含 PARSE16～PARSE17 追加交付）
 - 语法结构映射与新增用例：
   - 复核既有 module/top-level、type/static/spec、enum、generic/variadic、tuple/destructure、array/postfix、
     `if` / `match`、loop、try/defer 和 mixin Parser 测试，保留其已有专项 AST 与合法邻界证据；其中
@@ -1006,16 +1016,54 @@ Parser 失败时不得混入 Semantic 错误。
   - 新用例发现并修复 `else if` 简单标识符条件误吞空 block，以及直接 `if` 表达式不接受
     `else if` 链两个 Parser Bug；前者统一复用块前表达式解析入口，后者归一化为既有嵌套
     `FENG_EXPR_IF` AST。主规范无需修改。
+
+#### 16.4.1 正向 FCTS 行为映射
+
+Parser 正向源码用于隔离语法结构，允许使用尚未定义的占位类型或函数；FCTS 使用语义完整且可执行的
+程序映射同一合法结构，不机械复制 Parser 夹具：
+
+- PARSE01～PARSE03 的 module/import、顶层声明、普通绑定与 tuple 解构，由 `test_module`、
+  `test_module_import_semantics`、`test_module_binding_semantics`、`test_binding`、`test_tuple`、
+  `test_tuple_destructuring_evaluation`、`test_function` 和 `test_extern` 提供直接行为证据；
+- PARSE04～PARSE06 的对象/tuple type、构造与成员、enum、三种 spec form、fit、泛型、变长参数和
+  两种 lambda，由 `test_type`、`test_object_construction_order`、`test_enum`、`test_spec`、
+  `test_union`、`test_intersection`、`test_fit`、`test_generic`、`test_variadic` 和 `test_lambda` 提供直接
+  行为证据；
+- PARSE07、PARSE08 和 PARSE13 的 array/postfix、对象字面量、调用与成员链、group/tuple/cast、
+  unary/binary/assignment、泛型 target、index/array-new、infix match/bit-or 及两类 `for` 消歧，由
+  `test_array`、`test_callable_result_immediate_invocation`、`test_expression`、`test_numeric_literal`、
+  `test_assignment_evaluation_semantics`、`test_evaluation_order`、`test_tuple`、`test_flow` 和
+  `test_loop_binding` 提供直接行为证据；
+- PARSE09～PARSE12 的 `if` / `match`、循环与控制转移、`defer`、`try/catch`、`return` 和 `throw`，由
+  `test_flow`、`test_branch_result_fitting`、`test_loop_binding`、`test_loop_control`、`test_defer`、
+  `test_exception` 和 `test_try_branch_exception_cleanup` 提供直接行为证据；
+- PARSE09 / PARSE13 本次修复的两个缺口由新增 `test_g12_parser_positive_semantics` 独立补齐，不以
+  上述宽泛映射替代直接证据。
+
+#### 16.4.2 追加用例与验收
+
+- `fcts/fcts_bin/src/test_g12_parser_positive_semantics.ff` 新增 5 个 FCTS：语句形式以简单标识符条件紧邻
+  空 block；直接表达式链分别选择 `then` / `else if` / `else`；完整 union-form 绑定目标、函数参数、
+  函数返回、局部赋值和成员赋值目标分别传播到每个结果块；无目标时 `f32` 非字面量锚点分别位于
+  三个结果块；全整数与全浮点字面量分别默认推导为 `int` 与 `double`；三个位置的 `throw` 块均不
+  参与目标选择和贴合；
+- `fcts/fcts_bin/src/main.ff` 只登记上述独立 FCTS 入口，未改写既有测试用例；
+- 专项 `make fcts-tests` 通过，FCTS 1077/1077；Parser 专项继续通过并输出 `parser tests passed`；
+- 首次追加全量回归的 UBSan 阶段完整通过，normal 阶段一次在 bundled init 子进程处收到系统
+  `SIGKILL(9)`；独立 `make init-bundled-packages-test` 随即通过，第二次完整 `make test` 通过，确认
+  该失败不可复现，未据此修改产品或测试脚本。
+
 - 本组专项结果：`make build/bin/test_parser && build/bin/test_parser` 通过，输出
-  `parser tests passed`；新增 111 份反向源码和全部正向 AST 断言均实际执行；
+  `parser tests passed`；新增 111 份反向源码、全部正向 AST 断言和 5 个追加 FCTS 均实际执行；
 - 本组沙箱外 `make test`：通过，退出码 0；UBSan 与 normal 两个干净阶段均完成，FCTS 均为
-  1072/1072、smoke 均为 90/90、std 均为 601/601；CLI、性能约束、增量构建、发布、安装、bundled
+  1077/1077、smoke 均为 90/90、std 均为 601/601；CLI、性能约束、增量构建、发布、安装、bundled
   package 和预构建工具链检查全部通过；
-- 问题：`ISSUE-G12-001`～`ISSUE-G12-003` 均已关闭；
+- 问题：`ISSUE-G12-001`～`ISSUE-G12-006` 均已关闭；
 - 交付结论：G12 已覆盖用户输入可达的主要 Parser 正向/反向语法结构、精确诊断属性和易混淆 AST
-  边界。产品实现只修复编译期 Parser，不改变生成程序执行路径，不增加运行时开销，也未变更 runtime
-  私有 ABI、公开 ABI、`.ft` 格式或错误码主规范；
-- 建议 commit message：`test: harden parser syntax coverage`
+  边界；所有合法 Parser 结构均已映射到 FCTS 行为证据，新增 `else if` 语法缺口另有直接 FCTS 验收。
+  产品实现只修复编译期 Parser，不改变生成程序执行路径，不增加运行时开销，也未变更 runtime 私有
+  ABI、公开 ABI、`.ft` 格式或错误码主规范；
+- 建议 commit message：`fix(parser): complete else-if parsing and conformance coverage`
 
 ## 17 G13：名称绑定诊断
 

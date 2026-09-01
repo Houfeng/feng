@@ -14,6 +14,7 @@ func main(args: string[]) {
       test_evaluation_order();
       test_assignment_evaluation_semantics();
       test_branch_result_fitting();
+      test_g12_parser_positive_semantics();
       test_string();
       test_string_literal_semantics();
       test_flow();

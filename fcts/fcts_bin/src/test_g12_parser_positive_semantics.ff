@@ -1,0 +1,303 @@
+module fcts_bin;
+
+import std.test;
+
+/** Complete target used to prove that each direct else-if result fits independently. */
+spec G12IfChainValue: i32 | string | bool;
+
+/** Holder used to provide a member-assignment target to a direct else-if expression. */
+type G12IfChainHolder {
+  var value: i16;
+}
+
+/** Execute a statement else-if whose first two branches are intentionally empty. */
+func g12StatementElseIfEmptyBlock(first: bool, second: bool): i32 {
+  var marker: i32 = 0;
+  if first {
+  } else if second {
+  } else {
+    marker = 1;
+  }
+  return marker;
+}
+
+/** Infer the default integer type of a direct three-result else-if expression. */
+func g12PickDefaultInteger(selector: i32): int {
+  let value = if selector == 0 {
+    10
+  } else if selector == 1 {
+    20
+  } else {
+    30
+  };
+  return value;
+}
+
+/** Infer the default double type of a direct three-result else-if expression. */
+func g12PickDefaultDouble(selector: i32): double {
+  let value = if selector == 0 {
+    10.5
+  } else if selector == 1 {
+    20.5
+  } else {
+    30.5
+  };
+  return value;
+}
+
+/** Fit all three heterogeneous results directly to one complete union-form target. */
+func g12PickContextualUnion(selector: i32): G12IfChainValue {
+  let value: G12IfChainValue = if selector == 0 {
+    41
+  } else if selector == 1 {
+    "middle"
+  } else {
+    true
+  };
+  return value;
+}
+
+/** Preserve an i8 argument target supplied to a direct else-if expression. */
+func g12AcceptI8(value: i8): i8 {
+  return value;
+}
+
+/** Exercise function-argument contextual fitting for every direct else-if result. */
+func g12PickArgumentTarget(selector: i32): i8 {
+  return g12AcceptI8(if selector == 0 {
+    1
+  } else if selector == 1 {
+    2
+  } else {
+    3
+  });
+}
+
+/** Exercise function-return contextual fitting for every direct else-if result. */
+func g12PickReturnTarget(selector: i32): u8 {
+  return if selector == 0 {
+    4
+  } else if selector == 1 {
+    5
+  } else {
+    6
+  };
+}
+
+/** Exercise local-assignment contextual fitting for every direct else-if result. */
+func g12PickLocalAssignmentTarget(selector: i32): i16 {
+  var value: i16 = 0;
+  value = if selector == 0 {
+    7
+  } else if selector == 1 {
+    8
+  } else {
+    9
+  };
+  return value;
+}
+
+/** Exercise member-assignment contextual fitting for every direct else-if result. */
+func g12PickMemberAssignmentTarget(selector: i32): i16 {
+  let holder = G12IfChainHolder {};
+  holder.value = if selector == 0 {
+    10
+  } else if selector == 1 {
+    11
+  } else {
+    12
+  };
+  return holder.value;
+}
+
+/** Infer f32 when the first result block supplies the first typed non-literal. */
+func g12InferFromThen(selector: i32): f32 {
+  let anchor: f32 = 51.5;
+  let value = if selector == 0 {
+    anchor
+  } else if selector == 1 {
+    52.5
+  } else {
+    53.5
+  };
+  return value;
+}
+
+/** Infer f32 when the middle result block supplies the first typed non-literal. */
+func g12InferFromElseIf(selector: i32): f32 {
+  let anchor: f32 = 62.5;
+  let value = if selector == 0 {
+    61.5
+  } else if selector == 1 {
+    anchor
+  } else {
+    63.5
+  };
+  return value;
+}
+
+/** Infer f32 when the final result block supplies the first typed non-literal. */
+func g12InferFromElse(selector: i32): f32 {
+  let anchor: f32 = 73.5;
+  let value = if selector == 0 {
+    71.5
+  } else if selector == 1 {
+    72.5
+  } else {
+    anchor
+  };
+  return value;
+}
+
+/** Exclude a throwing first result block from direct else-if result fitting. */
+func g12ThrowFromThen(selector: i32): f32 {
+  let anchor: f32 = 83.5;
+  let value = if selector == 0 {
+    throw "then";
+  } else if selector == 1 {
+    82.5
+  } else {
+    anchor
+  };
+  return value;
+}
+
+/** Exclude a throwing middle result block from direct else-if result fitting. */
+func g12ThrowFromElseIf(selector: i32): f32 {
+  let anchor: f32 = 91.5;
+  let value = if selector == 0 {
+    anchor
+  } else if selector == 1 {
+    throw "else-if";
+  } else {
+    93.5
+  };
+  return value;
+}
+
+/** Exclude a throwing final result block from direct else-if result fitting. */
+func g12ThrowFromElse(selector: i32): f32 {
+  let anchor: f32 = 102.5;
+  let value = if selector == 0 {
+    101.5
+  } else if selector == 1 {
+    anchor
+  } else {
+    throw "else";
+  };
+  return value;
+}
+
+/** Assert the active member and value selected by the contextual union target. */
+func g12AssertContextualUnion(
+  value: G12IfChainValue,
+  selector: i32
+) {
+  match value {
+    actual: i32 {
+      assert(selector == 0 && actual == 41,
+             "then result independently fits the complete union target");
+    }
+    actual: string {
+      assert(selector == 1 && actual == "middle",
+             "else-if result independently fits the complete union target");
+    }
+    actual: bool {
+      assert(selector == 2 && actual,
+             "else result independently fits the complete union target");
+    }
+    else {
+      assert(false, "contextual union result has an unexpected active member");
+    }
+  }
+}
+
+/** G12 runtime coverage for all newly accepted direct else-if forms and type rules. */
+open func test_g12_parser_positive_semantics() {
+  describe("G12 parser positive semantics", () {
+    test("statement else-if keeps an identifier condition separate from an empty block", () {
+      assert(g12StatementElseIfEmptyBlock(true, false) == 0,
+             "the first empty branch is selected");
+      assert(g12StatementElseIfEmptyBlock(false, true) == 0,
+             "the else-if empty branch is selected");
+      assert(g12StatementElseIfEmptyBlock(false, false) == 1,
+             "the final else branch is selected");
+    });
+
+    test("direct else-if evaluates every result block and defaults numeric literals", () {
+      assert(g12PickDefaultInteger(0) == 10, "direct else-if selects then");
+      assert(g12PickDefaultInteger(1) == 20, "direct else-if selects else-if");
+      assert(g12PickDefaultInteger(2) == 30, "direct else-if selects else");
+      assert(g12PickDefaultDouble(0) == 10.5, "float literals default in then");
+      assert(g12PickDefaultDouble(1) == 20.5, "float literals default in else-if");
+      assert(g12PickDefaultDouble(2) == 30.5, "float literals default in else");
+    });
+
+    test("direct else-if propagates every contextual target to every result block", () {
+      g12AssertContextualUnion(g12PickContextualUnion(0), 0);
+      g12AssertContextualUnion(g12PickContextualUnion(1), 1);
+      g12AssertContextualUnion(g12PickContextualUnion(2), 2);
+
+      assert(g12PickArgumentTarget(0) == 1 &&
+             g12PickArgumentTarget(1) == 2 &&
+             g12PickArgumentTarget(2) == 3,
+             "argument target reaches all direct else-if results");
+      assert(g12PickReturnTarget(0) == 4 &&
+             g12PickReturnTarget(1) == 5 &&
+             g12PickReturnTarget(2) == 6,
+             "return target reaches all direct else-if results");
+      assert(g12PickLocalAssignmentTarget(0) == 7 &&
+             g12PickLocalAssignmentTarget(1) == 8 &&
+             g12PickLocalAssignmentTarget(2) == 9,
+             "local assignment target reaches all direct else-if results");
+      assert(g12PickMemberAssignmentTarget(0) == 10 &&
+             g12PickMemberAssignmentTarget(1) == 11 &&
+             g12PickMemberAssignmentTarget(2) == 12,
+             "member assignment target reaches all direct else-if results");
+    });
+
+    test("direct else-if infers from a typed branch at every chain position", () {
+      assert(g12InferFromThen(0) == 51.5 &&
+             g12InferFromThen(1) == 52.5 &&
+             g12InferFromThen(2) == 53.5,
+             "then typed branch determines all results");
+      assert(g12InferFromElseIf(0) == 61.5 &&
+             g12InferFromElseIf(1) == 62.5 &&
+             g12InferFromElseIf(2) == 63.5,
+             "else-if typed branch determines all results");
+      assert(g12InferFromElse(0) == 71.5 &&
+             g12InferFromElse(1) == 72.5 &&
+             g12InferFromElse(2) == 73.5,
+             "else typed branch determines all results");
+    });
+
+    test("direct else-if excludes throwing blocks at every chain position", () {
+      var thenCaught = false;
+      try g12ThrowFromThen(0) catch error: string {
+        thenCaught = error == "then";
+      }
+      assert(thenCaught &&
+             g12ThrowFromThen(1) == 82.5 &&
+             g12ThrowFromThen(2) == 83.5,
+             "throwing then is excluded while normal results remain f32");
+
+      var elseIfCaught = false;
+      try g12ThrowFromElseIf(1) catch error: string {
+        elseIfCaught = error == "else-if";
+      }
+      assert(elseIfCaught &&
+             g12ThrowFromElseIf(0) == 91.5 &&
+             g12ThrowFromElseIf(2) == 93.5,
+             "throwing else-if is excluded while normal results remain f32");
+
+      var elseCaught = false;
+      try g12ThrowFromElse(2) catch error: string {
+        elseCaught = error == "else";
+      }
+      assert(elseCaught &&
+             g12ThrowFromElse(0) == 101.5 &&
+             g12ThrowFromElse(1) == 102.5,
+             "throwing else is excluded while normal results remain f32");
+    });
+  });
+}
