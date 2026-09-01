@@ -1,0 +1,70 @@
+module fcts_bin;
+
+import std.test;
+
+/** All-explicit enum whose first item has a positive non-zero value. */
+enum G09PositiveDefault {
+  First = 37,
+  Zero = 0,
+  Negative = -11
+}
+
+/** All-explicit enum whose first item has a negative value. */
+enum G09NegativeDefault {
+  First = -37,
+  Zero = 0,
+  Positive = 11
+}
+
+/** Module-level immutable enum binding without an initializer. */
+let g09ModuleLet: G09PositiveDefault;
+
+/** Module-level mutable enum binding without an initializer. */
+var g09ModuleVar: G09NegativeDefault;
+
+/** Object fields covering immutable and mutable enum default initialization. */
+type G09EnumDefaultFields {
+  let positive: G09PositiveDefault;
+  var negative: G09NegativeDefault;
+}
+
+/** Verify that all-explicit enums default to their first declared item. */
+open func test_enum_default_semantics(): void {
+  describe("enum default semantics", () {
+    test("ENUM01 positive non-zero first item defaults local bindings", () {
+      let immutable: G09PositiveDefault;
+      var mutable: G09PositiveDefault;
+
+      assert(immutable == G09PositiveDefault.First &&
+             mutable == G09PositiveDefault.First &&
+             (int)immutable == 37 && (int)mutable == 37,
+             "local let and var use the positive first enum item");
+    });
+
+    test("ENUM02 negative first item defaults local bindings", () {
+      let immutable: G09NegativeDefault;
+      var mutable: G09NegativeDefault;
+
+      assert(immutable == G09NegativeDefault.First &&
+             mutable == G09NegativeDefault.First &&
+             (int)immutable == -37 && (int)mutable == -37,
+             "local let and var use the negative first enum item");
+    });
+
+    test("ENUM03 module bindings preserve the explicit first item", () {
+      assert(g09ModuleLet == G09PositiveDefault.First &&
+             g09ModuleVar == G09NegativeDefault.First &&
+             (int)g09ModuleLet == 37 && (int)g09ModuleVar == -37,
+             "module let and var use the explicit first enum item");
+    });
+
+    test("ENUM04 object fields preserve the explicit first item", () {
+      let fields = G09EnumDefaultFields();
+
+      assert(fields.positive == G09PositiveDefault.First &&
+             fields.negative == G09NegativeDefault.First &&
+             (int)fields.positive == 37 && (int)fields.negative == -37,
+             "object let and var fields use the explicit first enum item");
+    });
+  });
+}
