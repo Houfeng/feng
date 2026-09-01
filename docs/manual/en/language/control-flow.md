@@ -112,8 +112,13 @@ value. The same rules apply independently to every nonempty tuple-pattern positi
 
 ## Control Transfer
 
-- `break` exits the nearest loop.
-- `continue` skips the current iteration of the nearest loop.
+- `break` exits the nearest loop immediately. It does not run the pending iterator clause of a three-clause `for` or
+  acquire another element from a `for/in` loop.
+- `continue` skips the remaining statements in the current iteration of the nearest loop. A `while` reevaluates its
+  condition; a three-clause `for` runs its iterator clause exactly once and then reevaluates its condition; a `for/in`
+  loop acquires the next element. Multiple `continue` branches still reach the continuation step only once on any
+  executed path.
 - `return` ends the current function and can carry a value when required by the function's return type.
 
-Feng does not support loop labels, so one `break` or `continue` cannot cross multiple nested loops.
+Neither `break` nor `continue` accepts a label or nesting count. Loops can be nested, but each statement targets only
+the nearest loop and cannot cross multiple nesting levels.

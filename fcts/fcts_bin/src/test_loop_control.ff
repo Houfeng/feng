@@ -1,0 +1,154 @@
+module fcts_bin;
+
+import std.test;
+
+/** Counts executions of one three-clause for update expression. */
+type LoopControlUpdateCounter {
+  var updates: int;
+}
+
+/** Increment a control variable while recording one update-clause execution. */
+func loop_control_next(counter: LoopControlUpdateCounter, value: int): int {
+  counter.updates += 1;
+  return value + 1;
+}
+
+/** Verify break and continue ordering and their nearest-loop targets. */
+open func test_loop_control() {
+  describe("loop control transfer", () {
+    test("LOOP-CTRL01 continue executes the update exactly once", () {
+      let counter = LoopControlUpdateCounter { updates: 0 };
+      var index = 0;
+      var bodyCount = 0;
+      var tailCount = 0;
+      var visited = 0;
+
+      for ; index < 4 && bodyCount < 10;
+            index = loop_control_next(counter, index) {
+        bodyCount += 1;
+        visited = visited * 10 + index + 1;
+        if index == 3 {
+          continue;
+        }
+        tailCount += 1;
+      }
+
+      assert(index == 4 && counter.updates == 4 && bodyCount == 4 &&
+             tailCount == 3 && visited == 1234,
+             "continue reaches one update before the next condition");
+    });
+
+    test("LOOP-CTRL02 multiple continue branches share one update", () {
+      let counter = LoopControlUpdateCounter { updates: 0 };
+      var index = 0;
+      var bodyCount = 0;
+      var firstBranchCount = 0;
+      var secondBranchCount = 0;
+      var tailCount = 0;
+      var visited = 0;
+
+      for ; index < 6 && bodyCount < 12;
+            index = loop_control_next(counter, index) {
+        bodyCount += 1;
+        visited = visited * 10 + index + 1;
+        if index == 1 {
+          firstBranchCount += 1;
+          continue;
+        }
+        if index == 3 {
+          secondBranchCount += 1;
+          continue;
+        }
+        tailCount += 1;
+      }
+
+      assert(index == 6 && counter.updates == 6 && bodyCount == 6 &&
+             firstBranchCount == 1 && secondBranchCount == 1 &&
+             tailCount == 4 && visited == 123456,
+             "each executed continue branch reaches the update once");
+    });
+
+    test("LOOP-CTRL03 break skips the pending update", () {
+      let counter = LoopControlUpdateCounter { updates: 0 };
+      var index = 0;
+      var bodyCount = 0;
+      var tailCount = 0;
+      var visited = 0;
+
+      for ; index < 10; index = loop_control_next(counter, index) {
+        bodyCount += 1;
+        visited = visited * 10 + index + 1;
+        if index == 3 {
+          break;
+        }
+        tailCount += 1;
+      }
+
+      assert(index == 3 && counter.updates == 3 && bodyCount == 4 &&
+             tailCount == 3 && visited == 1234,
+             "break exits before the current round update");
+    });
+
+    test("LOOP-CTRL04 nested continue targets only the inner loop", () {
+      let outerCounter = LoopControlUpdateCounter { updates: 0 };
+      let innerCounter = LoopControlUpdateCounter { updates: 0 };
+      var outer = 0;
+      var outerBodyCount = 0;
+      var outerTailCount = 0;
+      var innerBodyCount = 0;
+      var innerTailCount = 0;
+
+      for ; outer < 3 && outerBodyCount < 10;
+            outer = loop_control_next(outerCounter, outer) {
+        outerBodyCount += 1;
+        var inner = 0;
+        for ; inner < 4 && innerBodyCount < 30;
+              inner = loop_control_next(innerCounter, inner) {
+          innerBodyCount += 1;
+          if inner == 1 {
+            continue;
+          }
+          innerTailCount += 1;
+        }
+        outerTailCount += 1;
+      }
+
+      assert(outer == 3 && outerCounter.updates == 3 &&
+             innerCounter.updates == 12 && outerBodyCount == 3 &&
+             outerTailCount == 3 && innerBodyCount == 12 &&
+             innerTailCount == 9,
+             "inner continue preserves the outer body and update paths");
+    });
+
+    test("LOOP-CTRL05 nested break exits only the inner loop", () {
+      let outerCounter = LoopControlUpdateCounter { updates: 0 };
+      let innerCounter = LoopControlUpdateCounter { updates: 0 };
+      var outer = 0;
+      var outerBodyCount = 0;
+      var outerTailCount = 0;
+      var innerBodyCount = 0;
+      var innerTailCount = 0;
+      var breakValues = 0;
+
+      for ; outer < 3; outer = loop_control_next(outerCounter, outer) {
+        outerBodyCount += 1;
+        var inner = 0;
+        for ; inner < 5; inner = loop_control_next(innerCounter, inner) {
+          innerBodyCount += 1;
+          if inner == 2 {
+            break;
+          }
+          innerTailCount += 1;
+        }
+        breakValues = breakValues * 10 + inner + 1;
+        outerTailCount += 1;
+      }
+
+      assert(outer == 3 && outerCounter.updates == 3 &&
+             innerCounter.updates == 6 && outerBodyCount == 3 &&
+             outerTailCount == 3 && innerBodyCount == 9 &&
+             innerTailCount == 6 && breakValues == 333,
+             "inner break skips its update and preserves the outer loop");
+    });
+  });
+}

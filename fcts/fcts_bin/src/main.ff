@@ -18,6 +18,7 @@ func main(args: string[]) {
       test_string_literal_semantics();
       test_flow();
       test_loop_binding();
+      test_loop_control();
       test_function();
       test_function_inference();
       test_callable_result_immediate_invocation();
