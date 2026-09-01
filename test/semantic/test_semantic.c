@@ -21755,6 +21755,60 @@ static void test_tuple_destructuring_non_tuple_is_rejected(void) {
                                                  "destructuring binding initializer must be a tuple");
 }
 
+/* for/in tuple patterns introduce one correctly typed local per nonempty
+ * position and apply the pattern's let/var mutability to every such local. */
+static void test_for_in_tuple_destructuring_semantics(void) {
+    const char *source =
+        "module demo.main;\n"
+        "type Unit();\n"
+        "type Pair(int, int);\n"
+        "type Triple(int, int, int);\n"
+        "func run(units: Unit[], pairs: Pair[], triples: Triple[]): int {\n"
+        "    var total = 0;\n"
+        "    for let () in units { total += 1; }\n"
+        "    for let (left, right) in pairs { total += left + right; }\n"
+        "    for var (first, , third) in triples {\n"
+        "        first += 10;\n"
+        "        third += 20;\n"
+        "        total += first + third;\n"
+        "    }\n"
+        "    return total;\n"
+        "}\n";
+
+    assert_single_source_semantic_ok("for_in_tuple_destructure_ok.f", source);
+}
+
+/* for/in tuple patterns reject non-tuple elements, mismatched arity, and
+ * reassignment through any component introduced by a let pattern. */
+static void test_for_in_tuple_destructuring_semantic_errors(void) {
+    const char *non_tuple =
+        "module demo.main;\n"
+        "func run(values: int[]) { for let (a, b) in values {} }\n";
+    const char *arity =
+        "module demo.main;\n"
+        "type Pair(int, int);\n"
+        "func run(values: Pair[]) { for let (a, b, c) in values {} }\n";
+    const char *immutable =
+        "module demo.main;\n"
+        "type Pair(int, int);\n"
+        "func run(values: Pair[]) {\n"
+        "    for let (a, b) in values { a = b; }\n"
+        "}\n";
+
+    assert_single_source_semantic_error_contains(
+        "for_in_tuple_destructure_non_tuple.f",
+        non_tuple,
+        "destructuring binding initializer must be a tuple");
+    assert_single_source_semantic_error_contains(
+        "for_in_tuple_destructure_arity.f",
+        arity,
+        "destructuring binding has 3 position(s) but tuple initializer has 2");
+    assert_single_source_semantic_error_contains(
+        "for_in_tuple_destructure_immutable.f",
+        immutable,
+        "assignment target 'a' is not writable");
+}
+
 static void test_tuple_item_assignment_is_rejected(void) {
     const char *source =
         "module demo.main;\n"
@@ -30324,6 +30378,8 @@ int main(void) {
     test_tuple_named_conversion_rules();
     test_tuple_destructuring_semantics();
     test_tuple_destructuring_non_tuple_is_rejected();
+    test_for_in_tuple_destructuring_semantics();
+    test_for_in_tuple_destructuring_semantic_errors();
     test_tuple_item_assignment_is_rejected();
     test_tuple_whole_assignment_semantics();
     test_tuple_type_constraint_is_rejected();

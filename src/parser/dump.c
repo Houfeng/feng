@@ -482,7 +482,22 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
                 fputs("for ", stream);
                 fputs(mutability_name(stmt->as.for_stmt.iter_binding.mutability), stream);
                 fputc(' ', stream);
-                dump_slice(stream, stmt->as.for_stmt.iter_binding.name);
+                if (stmt->as.for_stmt.iter_binding.is_destructure) {
+                    fputc('(', stream);
+                    for (size_t index = 0U;
+                         index < stmt->as.for_stmt.iter_binding.destructure_count;
+                         ++index) {
+                        if (index > 0U) {
+                            fputs(", ", stream);
+                        }
+                        dump_slice(
+                            stream,
+                            stmt->as.for_stmt.iter_binding.destructure_names[index]);
+                    }
+                    fputc(')', stream);
+                } else {
+                    dump_slice(stream, stmt->as.for_stmt.iter_binding.name);
+                }
                 fputs(" in ", stream);
                 dump_expr(stream, stmt->as.for_stmt.iter_expr, 0);
                 fputc('\n', stream);

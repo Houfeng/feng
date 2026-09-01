@@ -37,6 +37,47 @@ type LoopBindingRange {
   }
 }
 
+/** Pair element used by the G07 tuple loop-binding cases. */
+type LoopBindingPair(int, int);
+
+/** Empty tuple element used to verify an empty loop pattern. */
+type LoopBindingUnit();
+
+/** Triple element used to verify an empty tuple-pattern position. */
+type LoopBindingTriple(int, int, int);
+
+/** Iterator result carrying one pair for tuple loop destructuring. */
+type LoopBindingPairIteratorResult(bool, LoopBindingPair);
+
+/** Mutable cursor that yields pair elements. */
+type LoopBindingPairCursor {
+  var current: int;
+  let end: int;
+
+  /** Produce the next pair until the configured end value is reached. */
+  @iterator
+  func next(): LoopBindingPairIteratorResult {
+    if self.current >= self.end {
+      return (false, (0, 0));
+    }
+    let value = self.current;
+    self.current += 1;
+    return (true, (value, value + 10));
+  }
+}
+
+/** Iterable pair range used by the protocol-path tuple case. */
+type LoopBindingPairRange {
+  let start: int;
+  let end: int;
+
+  /** Create one independent pair cursor for this traversal. */
+  @iterable
+  func iter(): LoopBindingPairCursor {
+    return LoopBindingPairCursor { current: self.start, end: self.end };
+  }
+}
+
 /** Verify per-iteration loop binding identity and closure capture behavior. */
 open func test_loop_binding() {
   describe("loop binding identity", () {
@@ -175,6 +216,85 @@ open func test_loop_binding() {
              letReaders[2]() == 6 && varReaders[0]() == 24 &&
              varReaders[1]() == 25 && varReaders[2]() == 26,
              "iterator and array paths use the same per-iteration bindings");
+    });
+
+    test("LOOP-BIND14 for/in let destructures tuple elements", () {
+      let first: LoopBindingPair = (1, 10);
+      let second: LoopBindingPair = (2, 20);
+      let third: LoopBindingPair = (3, 30);
+      let source: LoopBindingPair[] = [first, second, third];
+      var observed = 0;
+      for let (left, right) in source {
+        observed = observed * 100 + left * 10 + right;
+      }
+      assert(observed == 204060,
+             "each tuple position initializes its let binding by position");
+    });
+
+    test("LOOP-BIND15 for/in var components do not modify the source", () {
+      let first: LoopBindingPair = (1, 10);
+      let second: LoopBindingPair = (2, 20);
+      let source: LoopBindingPair[!] = [first, second];
+      var observed = 0;
+      for var (left, right) in source {
+        left += 100;
+        right += 200;
+        observed += left + right;
+      }
+      assert(observed == 633 && source[0].item1 == 1 &&
+             source[0].item2 == 10 && source[1].item1 == 2 &&
+             source[1].item2 == 20,
+             "var tuple components are per-round values, not source fields");
+    });
+
+    test("LOOP-BIND16 empty tuple-pattern positions create no binding", () {
+      let first: LoopBindingTriple = (1, 100, 3);
+      let second: LoopBindingTriple = (4, 200, 6);
+      let source: LoopBindingTriple[] = [first, second];
+      let unit: LoopBindingUnit = ();
+      let units: LoopBindingUnit[] = [unit, unit];
+      var observed = 0;
+      var unitCount = 0;
+      for let (first, , third) in source {
+        observed += first * 10 + third;
+      }
+      for let () in units {
+        unitCount += 1;
+      }
+      assert(observed == 59 && unitCount == 2,
+             "empty positions skip fields and an empty pattern still iterates");
+    });
+
+    test("LOOP-BIND17 iterator protocol supports tuple destructuring", () {
+      var observed = 0;
+      for let (left, right) in (LoopBindingPairRange { start: 1, end: 4 }) {
+        observed += left * 10 + right;
+      }
+      assert(observed == 96,
+             "iterator and array paths destructure the same element shape");
+    });
+
+    test("LOOP-BIND18 captured tuple components retain per-round identity", () {
+      let empty: LoopBindingReader = () -> 0;
+      let leftReaders: LoopBindingReader[!] = [empty, empty, empty];
+      let rightReaders: LoopBindingReader[!] = [empty, empty, empty];
+      let first: LoopBindingPair = (1, 10);
+      let second: LoopBindingPair = (2, 20);
+      let third: LoopBindingPair = (3, 30);
+      let source: LoopBindingPair[!] = [first, second, third];
+      var index = 0;
+      for var (left, right) in source {
+        leftReaders[index] = () -> left;
+        rightReaders[index] = () -> right;
+        left += 100;
+        right += 200;
+        index += 1;
+      }
+      assert(leftReaders[0]() == 101 && leftReaders[1]() == 102 &&
+             leftReaders[2]() == 103 && rightReaders[0]() == 210 &&
+             rightReaders[1]() == 220 && rightReaders[2]() == 230 &&
+             source[0].item1 == 1 && source[0].item2 == 10,
+             "each captured component shares only its own round binding");
     });
   });
 }

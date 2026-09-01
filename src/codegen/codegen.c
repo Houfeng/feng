@@ -3720,10 +3720,18 @@ static char *cg_fresh_temp(CG *cg, const char *prefix) {
     return b.data;
 }
 
+/* Add one real binding name to a compiler-side name set. Destructuring empty
+ * positions carry an empty slice and deliberately create no binding. */
 static bool cg_capture_name_list_add(char ***items,
                                      size_t *count,
                                      size_t *capacity,
                                      FengSlice name) {
+    if (name.length == 0U) {
+        return true;
+    }
+    if (name.data == NULL) {
+        return false;
+    }
     for (size_t i = 0; i < *count; ++i) {
         if (strlen((*items)[i]) == name.length &&
             memcmp((*items)[i], name.data, name.length) == 0) {
@@ -40269,6 +40277,155 @@ cleanup:
     return ok;
 }
 
+/* Lower one source-level for/in binding pattern from a borrowed element.
+ * Tuple patterns borrow each selected field directly and delegate every
+ * component to the ordinary loop-binding path; they never materialize or
+ * retain the complete tuple. Dynamic tuple layouts use their descriptor
+ * offsets, while fixed layouts keep direct C field access. */
+static bool cg_emit_loop_binding_pattern_from_borrowed_source(
+    CG *cg,
+    const FengBinding *binding,
+    const CGType *element_type,
+    const char *source_expr,
+    bool source_is_address) {
+    char *tuple_c_type = NULL;
+    char *descriptor_expr = NULL;
+    char *descriptor_name = NULL;
+    bool uses_reified_layout;
+    bool has_named_position = false;
+    bool ok = false;
+
+    if (cg == NULL || binding == NULL || element_type == NULL ||
+        source_expr == NULL) {
+        return false;
+    }
+    if (!binding->is_destructure) {
+        return cg_emit_loop_binding_from_borrowed_source(cg,
+                                                         binding,
+                                                         element_type,
+                                                         source_expr,
+                                                         source_is_address);
+    }
+    if (!cg_type_is_tuple_user(element_type)) {
+        return cg_fail(cg,
+                       binding->token,
+                       "CE0231", "codegen: destructuring source must be a tuple value");
+    }
+    if (element_type->user->field_count != binding->destructure_count) {
+        return cg_fail(cg,
+                       binding->token,
+                       "CE0230", "codegen: destructuring arity mismatch");
+    }
+
+    for (size_t i = 0U; i < binding->destructure_count; ++i) {
+        if (binding->destructure_names[i].length > 0U) {
+            has_named_position = true;
+            break;
+        }
+    }
+    if (!has_named_position) {
+        return true;
+    }
+
+    uses_reified_layout = cg_type_uses_reified_storage(cg, element_type);
+    if (uses_reified_layout) {
+        if (!source_is_address) {
+            return cg_fail(cg,
+                           binding->token,
+                           "IE0001", "codegen: reified tuple loop element requires address storage");
+        }
+        descriptor_expr =
+            cg_reified_aggregate_descriptor_expr_dup(cg,
+                                                      element_type,
+                                                      binding->token);
+        descriptor_name = cg_fresh_temp(cg, "_loop_tuple_desc");
+        if (descriptor_expr == NULL || descriptor_name == NULL) {
+            goto cleanup;
+        }
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body,
+                       "    const FengAggregateDescriptor *%s = %s;\n",
+                       descriptor_name,
+                       descriptor_expr);
+    } else if (source_is_address) {
+        tuple_c_type = cg_ctype_dup(element_type);
+        if (tuple_c_type == NULL) {
+            goto cleanup;
+        }
+    }
+
+    for (size_t i = 0U; i < binding->destructure_count; ++i) {
+        const UserField *field;
+        FengBinding component;
+        Buf field_source;
+        bool field_source_is_address = false;
+
+        if (binding->destructure_names[i].length == 0U) {
+            continue;
+        }
+        field = &element_type->user->fields[i];
+        if (field->type == NULL) {
+            cg_fail(cg,
+                    binding->token,
+                    "IE0001", "codegen: tuple loop element field type is missing");
+            goto cleanup;
+        }
+
+        component = *binding;
+        component.name = binding->destructure_names[i];
+        component.type = NULL;
+        component.initializer = NULL;
+        component.is_destructure = false;
+        component.destructure_names = NULL;
+        component.destructure_count = 0U;
+
+        buf_init(&field_source);
+        if (uses_reified_layout) {
+            field_source_is_address = true;
+            buf_append_fmt(
+                &field_source,
+                "(void *)((char *)%s + %s->reified_field_offsets[%zu])",
+                source_expr,
+                descriptor_name,
+                i);
+        } else if (source_is_address) {
+            buf_append_fmt(&field_source,
+                           "((%s *)%s)->%s",
+                           tuple_c_type,
+                           source_expr,
+                           field->c_name);
+        } else {
+            buf_append_fmt(&field_source,
+                           "(%s).%s",
+                           source_expr,
+                           field->c_name);
+        }
+        if (field_source.data == NULL ||
+            !cg_emit_loop_binding_from_borrowed_source(
+                cg,
+                &component,
+                field->type,
+                field_source.data,
+                field_source_is_address)) {
+            buf_free(&field_source);
+            goto cleanup;
+        }
+        buf_free(&field_source);
+    }
+    ok = true;
+
+cleanup:
+    free(tuple_c_type);
+    free(descriptor_expr);
+    free(descriptor_name);
+    if (!ok && !cg->failed) {
+        return cg_fail(cg,
+                       binding->token,
+                       "IE0001", "codegen: out of memory");
+    }
+    return ok;
+}
+
 static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
     int id = cg->label_counter++;
     char cont_label[64];
@@ -41190,11 +41347,12 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                            elem_field->c_name);
         }
         if (element_source.data == NULL ||
-            !cg_emit_loop_binding_from_borrowed_source(cg,
-                                                       binding,
-                                                       element_type,
-                                                       element_source.data,
-                                                       source_is_address)) {
+            !cg_emit_loop_binding_pattern_from_borrowed_source(
+                cg,
+                binding,
+                element_type,
+                element_source.data,
+                source_is_address)) {
             buf_free(&element_source);
             free(result_var); free(result_cty);
             free(result_descriptor_name); free(result_size_name);
@@ -41439,11 +41597,12 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
                            idx_var);
         }
         if (element_c_type == NULL || element_source.data == NULL ||
-            !cg_emit_loop_binding_from_borrowed_source(cg,
-                                                       binding,
-                                                       element_type,
-                                                       element_source.data,
-                                                       source_is_address)) {
+            !cg_emit_loop_binding_pattern_from_borrowed_source(
+                cg,
+                binding,
+                element_type,
+                element_source.data,
+                source_is_address)) {
             free(element_c_type);
             buf_free(&element_source);
             free(cont_label_owned);
@@ -41823,10 +41982,28 @@ static bool cg_defer_add_local_binding_name(const FengStmt *stmt,
             return true;
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
-                name = stmt->as.for_stmt.iter_binding.name;
-                if (name.length > 0U &&
-                    !cg_capture_name_list_add(out_names, out_count, out_capacity, name)) {
-                    return false;
+                const FengBinding *binding =
+                    &stmt->as.for_stmt.iter_binding;
+
+                if (binding->is_destructure) {
+                    for (size_t i = 0U;
+                         i < binding->destructure_count;
+                         ++i) {
+                        if (!cg_capture_name_list_add(
+                                out_names,
+                                out_count,
+                                out_capacity,
+                                binding->destructure_names[i])) {
+                            return false;
+                        }
+                    }
+                } else {
+                    name = binding->name;
+                    if (name.length > 0U &&
+                        !cg_capture_name_list_add(
+                            out_names, out_count, out_capacity, name)) {
+                        return false;
+                    }
                 }
             }
             return true;

@@ -29336,14 +29336,29 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     }
                 }
                 if (ok && element_type_ref != NULL) {
-                    InferredExprType element_type =
-                        inferred_expr_type_from_type_ref(element_type_ref);
+                    const FengBinding *binding =
+                        &stmt->as.for_stmt.iter_binding;
 
-                    ok = resolver_add_local_typed_name(
-                        context,
-                        stmt->as.for_stmt.iter_binding.name,
-                        element_type,
-                        stmt->as.for_stmt.iter_binding.mutability);
+                    if (binding->is_destructure) {
+                        const FengDecl *tuple_decl =
+                            resolve_tuple_type_ref_decl(context, element_type_ref);
+
+                        ok = add_destructure_locals_from_tuple_type(
+                            context,
+                            binding,
+                            tuple_decl,
+                            element_type_ref,
+                            true);
+                    } else {
+                        InferredExprType element_type =
+                            inferred_expr_type_from_type_ref(element_type_ref);
+
+                        ok = resolver_add_local_typed_name(
+                            context,
+                            binding->name,
+                            element_type,
+                            binding->mutability);
+                    }
                 }
             } else {
                 ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&

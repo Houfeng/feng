@@ -15884,6 +15884,164 @@ static void test_loop_binding_uncaptured_codegen(void) {
     feng_program_free(program);
 }
 
+/* for/in tuple patterns borrow selected fields directly on array and
+ * iterator paths. Empty positions add no binding work, generic tuple layouts
+ * use descriptor offsets, and only captured components allocate cells. */
+static void test_loop_tuple_destructuring_codegen(void) {
+    static const char *source =
+        "module feng.codegen.loop_tuple_destructure;\n"
+        "spec Reader(): int;\n"
+        "type Unit();\n"
+        "type Pair(int, int);\n"
+        "type Triple(int, int, int);\n"
+        "type TextPair(string, string);\n"
+        "type GenericPair<T>(T, T);\n"
+        "type PairIteratorResult(bool, Pair);\n"
+        "type PairCursor {\n"
+        "    var current: int;\n"
+        "    let end: int;\n"
+        "    @iterator\n"
+        "    func next(): PairIteratorResult {\n"
+        "        if self.current >= self.end { return (false, (0, 0)); }\n"
+        "        let value = self.current;\n"
+        "        self.current += 1;\n"
+        "        return (true, (value, value + 10));\n"
+        "    }\n"
+        "}\n"
+        "type PairRange {\n"
+        "    let start: int;\n"
+        "    let end: int;\n"
+        "    @iterable\n"
+        "    func iter(): PairCursor {\n"
+        "        return PairCursor { current: self.start, end: self.end };\n"
+        "    }\n"
+        "}\n"
+        "func sinkInt(value: int) {}\n"
+        "func sinkText(value: string) {}\n"
+        "func emptyPattern(values: Unit[]) {\n"
+        "    for let () in values { sinkInt(1); }\n"
+        "}\n"
+        "func deferPattern(values: Triple[]) {\n"
+        "    defer {\n"
+        "        for let (first, , third) in values { sinkInt(first + third); }\n"
+        "    }\n"
+        "}\n"
+        "func fixedArray(values: Pair[]) {\n"
+        "    for let (left, right) in values { sinkInt(left + right); }\n"
+        "}\n"
+        "func skipManaged(values: TextPair[]) {\n"
+        "    for let (first, ) in values { sinkText(first); }\n"
+        "}\n"
+        "func genericFirst<T>(values: GenericPair<T>[]) {\n"
+        "    for let (first, ) in values { first; }\n"
+        "}\n"
+        "func captureOne(values: Pair[], readers: Reader[!]) {\n"
+        "    var index = 0;\n"
+        "    for var (left, right) in values {\n"
+        "        readers[index] = () -> left;\n"
+        "        left += 100;\n"
+        "        right += 200;\n"
+        "        sinkInt(right);\n"
+        "        index += 1;\n"
+        "    }\n"
+        "}\n"
+        "func iteratorPath(range: PairRange) {\n"
+        "    for let (left, right) in range { sinkInt(left + right); }\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "loop_tuple_destructure_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                     NULL, &output, &codegen_error));
+    ASSERT(output.c_source != NULL);
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__emptyPattern",
+        &body_start,
+        &body_end));
+    ASSERT(!span_contains(body_start, body_end, "_l_"));
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_retain("));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__deferPattern",
+        &body_start,
+        &body_end));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__fixedArray",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start, body_end, "_l_left"));
+    ASSERT(span_contains(body_start, body_end, "_l_right"));
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_retain("));
+    ASSERT(!span_contains(body_start, body_end, " _tuple"));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__skipManaged",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start, body_end, "_l_first"));
+    ASSERT(!span_contains(body_start, body_end, "_l_second"));
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_retain("));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__genericFirst_G__from__",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start, body_end, "reified_field_offsets[0]"));
+    ASSERT(!span_contains(body_start, body_end, "reified_field_offsets[1]"));
+    ASSERT(!span_contains(body_start, body_end, "memcpy("));
+    ASSERT(!span_contains(body_start, body_end, "feng_aggregate_retain("));
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__captureOne",
+        &body_start,
+        &body_end));
+    ASSERT(count_substr_in_span(
+               body_start,
+               body_end,
+               "feng_object_new(&FengCaptureCellDesc__") == 1U);
+
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "static void "
+        "feng__feng__codegen__loop_tuple_destructure__iteratorPath",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start, body_end, "_l_left"));
+    ASSERT(span_contains(body_start, body_end, "_l_right"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -16106,6 +16264,7 @@ int main(void) {
     test_assignment_receiver_stabilization_codegen();
     test_loop_binding_capture_codegen();
     test_loop_binding_uncaptured_codegen();
+    test_loop_tuple_destructuring_codegen();
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

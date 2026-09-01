@@ -407,7 +407,7 @@ struct FengStmt {
             FengExpr *condition;
             FengStmt *update;
             /* for/in form (when is_for_in == true). */
-            FengBinding iter_binding; /* name + mutability + type (NULL until inferred) */
+            FengBinding iter_binding; /* name/pattern + mutability; type is inferred */
             FengExpr *iter_expr;
             /* Iterator protocol metadata (filled by semantic when iter_expr
              * type implements @iterable/@iterator; NULL for array for/in). */

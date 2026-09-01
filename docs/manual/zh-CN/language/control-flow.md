@@ -79,9 +79,31 @@ for let value in values {
 循环体前，都会以本轮元素值创建一个新的循环变量绑定；这等同于在循环体开始前，每轮执行一次相应
 的局部声明。
 
+序列元素为具名 tuple 时，可以在循环头直接解构：
+
+```feng
+type Entry(string, int);
+let apples: Entry = ("苹果", 2);
+let pears: Entry = ("梨", 3);
+let entries: Entry[] = [apples, pears];
+
+for let (name, count) in entries {
+  println("{0}: {1}", name, count);
+}
+
+for var (name, count) in entries {
+  count += 1;
+}
+```
+
+tuple 模式必须显式写 `let` 或 `var`，并同时作用于每个非空位置。模式位置数必须与 tuple 元素数一致；
+空位表示跳过该元素，例如 `for let (name, ) in entries`。模式只支持一层，不支持嵌套 tuple 模式、
+单位置模式或模式内类型标注。每个非空位置都是独立的逐轮绑定。
+
 `let` 循环变量不可重新赋值；`var` 循环变量可在本轮修改，但不会改变被遍历的序列，也不会影响下一
 轮的初始值。闭包只捕获当前轮的绑定：同一轮的多个闭包共享该轮绑定，不同轮的闭包互不共享；如果
-先创建闭包、再修改同轮的 `var` 循环变量，闭包会读取修改后的值。
+先创建闭包、再修改同轮的 `var` 循环变量，闭包会读取修改后的值。tuple 模式中的每个非空位置分别
+遵循相同规则。
 
 ## 控制转移
 

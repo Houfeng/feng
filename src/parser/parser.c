@@ -854,21 +854,28 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
     return true;
 }
 
+/* Initialize one binding node before parsing its name or destructuring pattern. */
+static void initialize_binding(FengBinding *binding,
+                               FengToken token,
+                               FengMutability mutability) {
+    binding->token = token;
+    binding->mutability = mutability;
+    binding->name.data = NULL;
+    binding->name.length = 0U;
+    binding->type = NULL;
+    binding->initializer = NULL;
+    binding->is_destructure = false;
+    binding->destructure_names = NULL;
+    binding->destructure_count = 0U;
+}
+
 static FengBinding parse_binding_core(Parser *parser,
                                       FengMutability mutability,
                                       bool require_type,
                                       bool allow_destructure) {
     FengBinding binding;
 
-    binding.token = parser_current_token(parser);
-    binding.mutability = mutability;
-    binding.name.data = NULL;
-    binding.name.length = 0U;
-    binding.type = NULL;
-    binding.initializer = NULL;
-    binding.is_destructure = false;
-    binding.destructure_names = NULL;
-    binding.destructure_count = 0U;
+    initialize_binding(&binding, parser_current_token(parser), mutability);
 
     if (parser_check(parser, FENG_TOKEN_LPAREN)) {
         if (!allow_destructure) {
@@ -4553,6 +4560,48 @@ static FengStmt *parse_defer_statement(Parser *parser) {
     return stmt;
 }
 
+/* Return whether the current `let`/`var` starts a for/in binding. Tuple
+ * patterns require scanning to their matching ')' so a three-clause
+ * destructuring initializer followed by '=' remains unambiguously distinct. */
+static bool parser_starts_for_in_binding(const Parser *parser) {
+    size_t lookahead;
+    size_t depth;
+
+    if (!parser_check(parser, FENG_TOKEN_KW_LET) &&
+        !parser_check(parser, FENG_TOKEN_KW_VAR)) {
+        return false;
+    }
+    if (parser_peek(parser, 1U)->kind == FENG_TOKEN_IDENTIFIER) {
+        return parser_peek(parser, 2U)->kind == FENG_TOKEN_KW_IN;
+    }
+    if (parser_peek(parser, 1U)->kind != FENG_TOKEN_LPAREN) {
+        return false;
+    }
+
+    depth = 0U;
+    for (lookahead = 1U;; ++lookahead) {
+        FengTokenKind kind = parser_peek(parser, lookahead)->kind;
+
+        if (kind == FENG_TOKEN_EOF) {
+            return false;
+        }
+        if (kind == FENG_TOKEN_LPAREN) {
+            ++depth;
+            continue;
+        }
+        if (kind != FENG_TOKEN_RPAREN) {
+            continue;
+        }
+        if (depth == 0U) {
+            return false;
+        }
+        --depth;
+        if (depth == 0U) {
+            return parser_peek(parser, lookahead + 1U)->kind == FENG_TOKEN_KW_IN;
+        }
+    }
+}
+
 static FengStmt *parse_for_statement(Parser *parser) {
     FengStmt *stmt = new_stmt(parser, FENG_STMT_FOR, parser_previous_token(parser));
 
@@ -4560,28 +4609,33 @@ static FengStmt *parse_for_statement(Parser *parser) {
         return NULL;
     }
 
-    /* Detect for/in: `for let|var IDENT in EXPR { ... }`. The lookahead must
-     * be unambiguous because three-clause `for` may also start with `let`/`var`. */
-    if ((parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) &&
-        parser_peek(parser, 1U)->kind == FENG_TOKEN_IDENTIFIER &&
-        parser_peek(parser, 2U)->kind == FENG_TOKEN_KW_IN) {
+    /* Detect for/in without consuming a valid three-clause initializer. */
+    if (parser_starts_for_in_binding(parser)) {
         FengToken kw_token = *parser_current(parser);
         FengMutability mutability = (kw_token.kind == FENG_TOKEN_KW_LET)
                                         ? FENG_MUTABILITY_LET
                                         : FENG_MUTABILITY_VAR;
-        FengToken name_token;
+        FengBinding *binding = &stmt->as.for_stmt.iter_binding;
 
         (void)parser_advance(parser); /* consume let/var */
-        name_token = *parser_current(parser);
-        (void)parser_advance(parser); /* consume identifier */
-        (void)parser_advance(parser); /* consume 'in' */
-
         stmt->as.for_stmt.is_for_in = true;
-        stmt->as.for_stmt.iter_binding.token = name_token;
-        stmt->as.for_stmt.iter_binding.mutability = mutability;
-        stmt->as.for_stmt.iter_binding.name = slice_from_token(&name_token);
-        stmt->as.for_stmt.iter_binding.type = NULL;
-        stmt->as.for_stmt.iter_binding.initializer = NULL;
+        initialize_binding(binding, parser_current_token(parser), mutability);
+
+        if (parser_check(parser, FENG_TOKEN_LPAREN)) {
+            binding->is_destructure = true;
+            if (!parse_destructure_binding_names(parser, binding)) {
+                free_stmt(stmt);
+                return NULL;
+            }
+        } else {
+            FengToken name_token = *parser_current(parser);
+
+            binding->name = slice_from_token(&name_token);
+            (void)parser_advance(parser); /* consume identifier */
+        }
+        /* parser_starts_for_in_binding() guarantees this delimiter after the
+         * complete identifier or tuple pattern. */
+        (void)parser_advance(parser); /* consume 'in' */
 
         stmt->as.for_stmt.iter_expr = parse_expression_before_block(parser);
         if (stmt->as.for_stmt.iter_expr == NULL) {
@@ -5195,6 +5249,7 @@ static void free_stmt(FengStmt *stmt) {
         case FENG_STMT_FOR:
             if (stmt->as.for_stmt.is_for_in) {
                 free_type_ref(stmt->as.for_stmt.iter_binding.type);
+                free(stmt->as.for_stmt.iter_binding.destructure_names);
                 free_expr(stmt->as.for_stmt.iter_expr);
             } else {
                 free_stmt(stmt->as.for_stmt.init);

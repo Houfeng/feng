@@ -82,11 +82,33 @@ for let value in values {
 current element. This is equivalent to executing the corresponding local declaration once per iteration immediately
 before the body begins.
 
+When each element is a named tuple, the loop can destructure it directly:
+
+```feng
+type Entry(string, int);
+let apples: Entry = ("apples", 2);
+let pears: Entry = ("pears", 3);
+let entries: Entry[] = [apples, pears];
+
+for let (name, count) in entries {
+  println("{0}: {1}", name, count);
+}
+
+for var (name, count) in entries {
+  count += 1;
+}
+```
+
+The `let` or `var` keyword is required and applies to every named position. A pattern must have the same number of
+positions as the tuple. An empty position skips that element, for example `for let (name, ) in entries`. Patterns are
+one level only: nested tuple patterns, single-position patterns, and type annotations inside a pattern are not
+supported. Each nonempty position is a separate per-iteration binding.
+
 A `let` loop variable cannot be reassigned. A `var` loop variable can be modified during its iteration, but doing so
 does not change the iterated sequence or the next iteration's initial value. A closure captures only the current
 iteration's binding: closures created in the same iteration share that binding, while closures from different
 iterations do not. If a closure is created before the same iteration's `var` is modified, it observes the modified
-value.
+value. The same rules apply independently to every nonempty tuple-pattern position.
 
 ## Control Transfer
 

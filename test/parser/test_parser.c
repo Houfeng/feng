@@ -2006,6 +2006,127 @@ static void test_for_in_loop(void) {
     feng_program_free(program);
 }
 
+/* Explicit let/var for/in bindings accept the same one-level tuple patterns
+ * as ordinary destructuring declarations without stealing three-clause for
+ * initializers that start with a destructuring binding. */
+static void test_for_in_tuple_destructuring_parse(void) {
+    const char *source =
+        "module demo.main;\n"
+        "func run(items: Pair[], triples: Triple[], units: Unit[], pair: Pair) {\n"
+        "    for let (left, right) in items {}\n"
+        "    for var (first, , third) in triples {}\n"
+        "    for let () in units {}\n"
+        "    for var (a, b) = pair; a < b; a += 1 {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengBinding *binding;
+    const FengStmt *loop;
+    FILE *stream;
+    char buffer[4096];
+    size_t length;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "for_in_tuple_destructure.f",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body->statement_count == 4U);
+
+    loop = body->statements[0];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(loop->as.for_stmt.is_for_in);
+    binding = &loop->as.for_stmt.iter_binding;
+    ASSERT(binding->mutability == FENG_MUTABILITY_LET);
+    ASSERT(binding->is_destructure);
+    ASSERT(binding->destructure_count == 2U);
+    assert_slice_text(binding->destructure_names[0], "left");
+    assert_slice_text(binding->destructure_names[1], "right");
+
+    loop = body->statements[1];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(loop->as.for_stmt.is_for_in);
+    binding = &loop->as.for_stmt.iter_binding;
+    ASSERT(binding->mutability == FENG_MUTABILITY_VAR);
+    ASSERT(binding->is_destructure);
+    ASSERT(binding->destructure_count == 3U);
+    assert_slice_text(binding->destructure_names[0], "first");
+    assert_slice_text(binding->destructure_names[1], NULL);
+    assert_slice_text(binding->destructure_names[2], "third");
+
+    loop = body->statements[2];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(loop->as.for_stmt.is_for_in);
+    ASSERT(loop->as.for_stmt.iter_binding.is_destructure);
+    ASSERT(loop->as.for_stmt.iter_binding.destructure_count == 0U);
+
+    loop = body->statements[3];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(!loop->as.for_stmt.is_for_in);
+    ASSERT(loop->as.for_stmt.init != NULL);
+    ASSERT(loop->as.for_stmt.init->kind == FENG_STMT_BINDING);
+    ASSERT(loop->as.for_stmt.init->as.binding.is_destructure);
+
+    stream = tmpfile();
+    ASSERT(stream != NULL);
+    feng_program_dump(stream, program);
+    ASSERT(fflush(stream) == 0);
+    ASSERT(fseek(stream, 0L, SEEK_SET) == 0);
+    length = fread(buffer, 1U, sizeof(buffer) - 1U, stream);
+    ASSERT(!ferror(stream));
+    buffer[length] = '\0';
+    ASSERT(fclose(stream) == 0);
+    ASSERT(strstr(buffer, "for let (left, right) in items") != NULL);
+    ASSERT(strstr(buffer, "for var (first, , third) in triples") != NULL);
+    ASSERT(strstr(buffer, "for let () in units") != NULL);
+
+    feng_program_free(program);
+}
+
+/* Tuple loop patterns retain the established destructuring shape errors, and
+ * omitting let/var remains outside the syntax supported by this delivery. */
+static void test_for_in_tuple_destructuring_errors(void) {
+    static const struct {
+        const char *source;
+        const char *message;
+    } cases[] = {
+        {
+            "module demo.main;\n"
+            "func run(items: Pair[]) { for let (only) in items {} }\n",
+            "destructuring bindings require 0 or 2 to 8 positions"
+        },
+        {
+            "module demo.main;\n"
+            "func run(items: Pair[]) { for let (a, (b, c)) in items {} }\n",
+            "nested destructuring bindings are not supported"
+        },
+        {
+            "module demo.main;\n"
+            "func run(items: Pair[]) { for (a, b) in items {} }\n",
+            NULL
+        }
+    };
+
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        ASSERT(!feng_parse_source(cases[i].source,
+                                  strlen(cases[i].source),
+                                  "for_in_tuple_destructure_error.f",
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.message != NULL);
+        if (cases[i].message != NULL) {
+            ASSERT(strstr(error.message, cases[i].message) != NULL);
+        }
+    }
+}
+
 /* Verify that a for/in body delimiter is not consumed as an empty object
  * literal suffix, while an explicitly parenthesized object literal remains
  * available as the iteration expression. */
@@ -4046,6 +4167,8 @@ int main(void) {
     test_match_three_level_chain_parse();
     test_match_chain_with_binding_parse();
     test_for_in_loop();
+    test_for_in_tuple_destructuring_parse();
+    test_for_in_tuple_destructuring_errors();
     test_for_in_empty_blocks();
     test_for_in_grouped_nonempty_object_literal();
     test_while_empty_blocks();

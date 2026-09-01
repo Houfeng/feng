@@ -627,6 +627,20 @@ STR01～STR07、RAW01～RAW06 由新增 FCTS 行为文件覆盖；RAW07 由直�
 - [x] LOOP-BIND13：Codegen 正确记录 `for/in` 循环变量的 `let` / `var` 稳定性；可证明稳定的 `let`
   链路允许消除 assignment owner guard，`var` 链路保持必要的保守保护。
 
+#### 11.2.4 `for/in` tuple 解构
+
+- [x] LOOP-BIND14：`for let (a, b) in items` 按位置解构具名 tuple 元素，两个非空位置均为不可变的
+  逐轮绑定；
+- [x] LOOP-BIND15：`for var (a, b) in items` 的各分量可在本轮独立修改，修改不得写回源 tuple，
+  也不得影响下一轮初始值；
+- [x] LOOP-BIND16：tuple 解构空位只跳过对应位置且不创建名称；嵌套模式、单位置模式、位置数不匹配
+  及非 tuple 元素分别在 Parser 或 Semantic 阶段报错；
+- [x] LOOP-BIND17：数组与 `@iterable` / `@iterator` 协议路径支持相同的 tuple 解构语义；
+- [x] LOOP-BIND18：tuple 解构分量被闭包捕获时，各分量分别遵循逐轮绑定身份；先捕获再修改同轮
+  `var` 分量时，闭包读取修改后的本轮值，不同轮不共享；
+- [x] LOOP-BIND19：未捕获 tuple 解构直接从本轮元素各分量建立绑定，不物化或复制完整 tuple，不
+  增加运行时模式判断、堆分配或空位专属 ARC；只有实际捕获的非空分量使用既有 capture cell。
+
 除 LOOP-BIND05 的同轮共享检查外，捕获用例必须在循环结束后调用闭包，避免只证明循环内即时值。
 LOOP-BIND12 只排除捕获模型带来的新增开销，不排除元素类型按生命周期规范本来就需要的
 retain/release，也不排除遍历期间保护源集合存活的既有 ARC。
@@ -642,6 +656,13 @@ retain/release，也不排除遍历期间保护源集合存活的既有 ARC。
 - [x] 捕获判断必须在编译期完成；未捕获路径保持零新增运行时分支、调用、分配和 ARC；
 - [x] 被实际捕获的逐轮绑定复用普通闭包 capture-cell 与 ARC 机制，不新增 runtime 私有 ABI、公开
   ABI 或 `.ft` 格式。
+- [x] Parser 在既有显式 `let` / `var` 循环绑定入口接受 tuple 模式，并复用普通一级解构的结构与
+  语法约束；绑定关键字仍不可省略；
+- [x] Semantic 复用普通 tuple 解构的类型、位置数和局部名称检查，不为数组或迭代器协议添加特判；
+- [x] Codegen 在数组与迭代器协议共用的循环绑定 lowering 中按分量直接建绑定；不得先合成完整 tuple
+  局部，不得增加运行时判断、分配、冗余复制或 ARC；
+- [x] Parser dump、名称作用域及编译器辅助路径完整识别 tuple 模式中的每个非空名称；不变更 runtime
+  私有 ABI、公开 ABI 或 `.ft` 格式。
 
 ### 11.4 独立验收与交付 TODO
 
@@ -653,33 +674,40 @@ retain/release，也不排除遍历期间保护源集合存活的既有 ARC。
 - [x] 在 Codex 沙箱外为 G07 独立执行 `make test`；
 - [x] 执行 `git diff --check`，关闭或决策 G07 问题；
 - [x] 填写本组实际文件、专项结果、全量结果和交付结论。
+- [x] 独立运行 LOOP-BIND14～LOOP-BIND19，核对 tuple 解构、非法模式、数组与迭代器、闭包身份和
+  源值不变；
+- [x] 运行追加 Codegen 专项，核对无完整 tuple 临时、无运行时模式判断、空位无绑定专属 ARC，且仅
+  实际捕获的分量创建 capture cell；
+- [x] 在 Codex 沙箱外为 G07 追加交付独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G07 追加问题并更新独立交付记录。
 
 ### 11.5 独立交付记录
 
-- 状态：已交付
+- 状态：已交付（含 LOOP-BIND14～LOOP-BIND19 追加交付）
 - 实际文件与用例：
-  - `src/codegen/codegen.c`：新增数组与迭代器协议共用的逐轮绑定 lowering；在编译期选择普通局部或
-    capture cell，并统一登记 `let` / `var` 稳定性、调试信息和既有清理；
-  - `src/parser/parser.c`、`test/parser/test_parser.c`：修复 Lambda 前瞻对括号内对象字面量字段冒号的
-    误判，并新增带字段对象字面量的解析回归；
-  - `fcts/fcts_bin/src/test_loop_binding.ff`、`fcts/fcts_bin/src/main.ff`：新增 LOOP-BIND01～
-    LOOP-BIND11 的运行行为用例；
-  - `test/codegen/test_codegen.c`：新增 LOOP-BIND11～LOOP-BIND13 的捕获、生成 C 编译、未捕获零新增
-    开销、描述符尺寸聚合的新鲜存储初始化和稳定性结构回归；
-  - 本文：记录并关闭 `ISSUE-G07-001`～`ISSUE-G07-007`。
-- 本组专项结果：Parser tests、Codegen tests 与生成 C 编译通过；完整 FCTS 1048/1048，
-  LOOP-BIND01～LOOP-BIND11 全部通过；LOOP-BIND12 证明未捕获标量路径无 capture cell、分配或捕获
-  ARC，并证明描述符尺寸聚合的新鲜存储直接 copy + retain、无新增清零或空目标 release 遍历；
-  LOOP-BIND13 证明 `let` owner guard 被消除而 `var` 保留必要保护
-- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 1048/1048、smoke 均为
+  - `docs/specifications/feng-flow.md`、`docs/specifications/feng-tuple.md` 与中英文流程控制手册：收敛
+    `for/in` 一级 tuple 解构的语法、逐轮绑定、空位、非法模式与性能约束；
+  - `src/parser/parser.c`、`src/parser/parser.h`、`src/parser/dump.c`、`test/parser/test_parser.c`：在显式
+    `let` / `var` 入口解析并输出 tuple 模式，保持三段式 `for` 消歧，并覆盖空位与非法语法；
+  - `src/semantic/analyzer.c`、`test/semantic/test_semantic.c`：复用普通 tuple 解构检查，覆盖类型、位置
+    数、可变性与局部名称；
+  - `src/codegen/codegen.c`、`test/codegen/test_codegen.c`：数组与迭代器协议共用逐轮绑定 lowering，按
+    非空分量直接建立普通局部或既有 capture cell，并覆盖固定布局、描述符尺寸布局、空位、闭包与
+    `defer` 名称收集；
+  - `fcts/fcts_bin/src/test_loop_binding.ff`：新增 LOOP-BIND14～LOOP-BIND18 的运行行为用例；
+  - 本文：记录并关闭 `ISSUE-G07-001`～`ISSUE-G07-012`。
+- 本组专项结果：Parser、Semantic、Codegen tests 与生成 C 编译通过；完整 FCTS 1053/1053，
+  LOOP-BIND01～LOOP-BIND18 全部通过；LOOP-BIND19 的结构断言覆盖数组与迭代器、固定与描述符尺寸
+  布局、空位、按分量捕获及 `defer` 辅助路径，确认未合成完整 tuple 临时且只处理实际命名分量
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 1053/1053、smoke 均为
   90/90、std 测试均为 601/601；性能约束、增量构建、发布、安装及其余单元与 CLI 测试全部通过
-- 问题：`ISSUE-G07-001`～`ISSUE-G07-007` 均已关闭
-- 交付结论：数组与迭代器协议现在共用通用逐轮绑定 lowering；合法捕获不再触发 `CE0102`，三段式
-  `for` 与 `for/in` 的绑定共享或隔离行为符合主规范。捕获选择只发生在编译期；未捕获路径不新增
-  运行时分支、调用、分配或 ARC，描述符尺寸聚合不新增冗余初始化遍历，稳定 `let` 路径还能消除
-  冗余 owner guard。被捕获路径只复用既有 capture-cell/ARC 机制；未变更 runtime 私有 ABI、公开
-  ABI 或 `.ft` 格式
-- 建议 commit message：`fix: preserve loop binding identity across closures`
+- 问题：`ISSUE-G07-001`～`ISSUE-G07-012` 均已关闭
+- 交付结论：显式 `for let (a, b) in items` 与 `for var (a, b) in items` 已完整交付；绑定关键字省略仍
+  不支持。数组与迭代器协议共用通用逐轮绑定 lowering；固定布局直接访问字段，描述符尺寸布局复用
+  既有 reified field offset，空位不创建绑定。编译期完成模式与捕获选择；除实际分量绑定按其类型本来
+  需要的生命周期操作外，不新增运行时模式判断、分支、堆分配、完整 tuple 复制或空位 ARC。只有实际
+  捕获的非空分量复用既有 capture-cell/ARC 机制；未变更 runtime 私有 ABI、公开 ABI 或 `.ft` 格式
+- 建议 commit message：`feat: support tuple destructuring in for-in loops`
 
 ## 12 G08：循环控制转移语义
 
@@ -2257,6 +2285,165 @@ retain/release，也不排除遍历期间保护源集合存活的既有 ARC。
   阶段的 `feng init bundled package tests` 均通过；
 - 关闭依据：已证明终止发生在 dyld 进入 Feng `main` 之前，且只随当前机器的执行路径变化；不修改
   产品或测试代码即可完成全部回归，确认与 G07 无因果关系。
+
+#### ISSUE-G07-008：新增不可变 tuple 分量用例使用了错误的诊断文案
+
+##### 归属
+
+- 发现组：G07；
+- 关联组：无；
+- 发现用例：LOOP-BIND16 的 Semantic 负向专项首次运行。
+
+##### 现象与结论
+
+- 现象：`for let (a, b) in values { a = b; }` 已被 Semantic 正确拒绝，但新增断言期待
+  `cannot assign to immutable binding 'a'`，实际统一诊断为 `assignment target 'a' is not writable`；
+- 定位结果：tuple 循环分量已按 `let` 正确登记，赋值校验沿用现有普通不可写目标路径；产品行为与
+  既有诊断均正确，失败仅来自新增用例写错预期文案；
+- 当前结论：新增测试预期错误，不修改产品诊断，也不修改任何既有用例。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：测试基础设施；
+- 修复方案：只把本轮新增负向用例的预期改为实际统一诊断文案；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：否；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：否。
+
+##### 验收与关闭
+
+- [x] Semantic 专项通过；
+- [x] 确认产品诊断、既有用例与实现均未改变；只修正本轮新增断言的预期文案。
+
+#### ISSUE-G07-009：新增 FCTS 使用了未定义的 tuple 数组字面量贴合形式
+
+##### 归属
+
+- 发现组：G07；
+- 关联组：无；
+- 发现用例：LOOP-BIND14 的 FCTS 专项首次运行。
+
+##### 现象与结论
+
+- 现象：新增测试以 `let values: Pair[] = [(1, 2), (3, 4)]` 构造输入；Semantic 接受后，Codegen
+  报告 `CE0121: tuple literal requires an explicit named tuple target type`；
+- 规范核对：tuple 主规范第 5 节只允许字面量在绑定、参数、返回、成员和显式转换五类直接目标上下文
+  中贴合具名 tuple，没有定义数组字面量把元素类型继续作为 tuple 字面量目标的语义；
+- 当前结论：新增测试和用户手册示例超出了现行 tuple 规范，不能借 G07 私自扩展语言行为。G07 只
+  验证循环头解构，输入数组应先构造具有明确具名类型的 tuple 值，再组成数组。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：测试基础设施；
+- 修复方案：新增 FCTS 先以显式类型绑定构造每个 tuple 值，再组成数组；同步修正本轮新增的中英文
+  用户手册示例。是否未来支持数组元素目标继续传递给 tuple 字面量，不属于 G07，需另行规范和决策；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：否；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：否。
+
+##### 验收与关闭
+
+- [x] LOOP-BIND14～LOOP-BIND18 FCTS 通过，完整 FCTS 为 1053/1053；
+- [x] 用户手册示例只使用主规范已定义的 tuple 构造上下文；
+- [x] 未修改 Semantic 或 Codegen 的数组字面量行为；是否扩展数组元素的 tuple 字面量目标传播仍不
+  属于 G07。
+
+#### ISSUE-G07-010：FCTS 专项复验复用了已被清理的自定义临时根
+
+##### 归属
+
+- 发现组：G07；
+- 关联组：测试基础设施；
+- 发现用例：修正 `ISSUE-G07-009` 后的 FCTS 专项复验命令。
+
+##### 现象与结论
+
+- 现象：首次专项运行结束时 `feng run` 清理了通过 `FENG_TEMP_DIR` 指定的工程内临时根；第二次直接
+  复用同一路径时，包准备阶段报告 `failed to create bundle temp directory: No such file or directory`；
+- 定位结果：错误发生在编译 FCTS 源码之前，目标临时根已不存在；与 tuple 解构 Parser、Semantic、
+  Codegen 和 FCTS 行为无关；
+- 当前结论：专项命令前置目录遗漏，不修改产品或测试代码。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：测试基础设施；
+- 修复方案：在工程 `build/` 下显式创建独立临时根后重新运行同一 FCTS 专项；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：否；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：否。
+
+##### 验收与关闭
+
+- [x] 在工程 `build/` 下重新创建独立临时根后，FCTS 专项进入实际编译和执行阶段；
+- [x] LOOP-BIND14～LOOP-BIND18 通过，完整 FCTS 为 1053/1053。
+
+#### ISSUE-G07-011：追加交付全量回归的损坏包诊断路径断言失败
+
+##### 归属
+
+- 发现组：G07；
+- 关联组：CLI 与测试基础设施；
+- 发现用例：G07 tuple 解构追加交付的沙箱外 `make test`，normal 阶段
+  `init-bundled-packages-test`。
+
+##### 现象与结论
+
+- 现象：normal 阶段的 smoke 90/90、CLI direct 和 CLI project 均通过，随后损坏 `.fb` 用例报告
+  `FAIL[init_bundled_packages] corrupt bundle error omitted its path`；
+- 复现结果：路径映射使脚本创建的逻辑路径位于工程 `temp/`，物理路径则位于
+  `.g07-regression-work/`；CLI 诊断按既有规则输出物理规范化路径，测试按逻辑路径核对，因而报告
+  路径缺失；
+- 当前结论：追加验收所用的临时符号链接映射副作用，不是 tuple 解构、CLI 或包诊断产品缺陷。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：测试基础设施；
+- 修复方案：撤销验收目录符号链接，恢复普通工程 `temp/` 后重新执行；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：否；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：否。
+
+##### 验收与关闭
+
+- [x] 已独立复现；实际错误输出包含物理规范化路径，确认与测试期待的逻辑路径不同；
+- [x] 撤销映射后，既有 `init-bundled-packages-test` 独立通过，未修改产品或既有测试；
+- [x] 在普通工程 `temp/` 下重新完成沙箱外 `make test`。
+
+#### ISSUE-G07-012：`defer` 局部名称收集未跳过 tuple 解构空位
+
+##### 归属
+
+- 发现组：G07；
+- 关联组：`defer` 与普通 tuple 解构；
+- 发现用例：LOOP-BIND16、LOOP-BIND19 最终静态复核。
+
+##### 现象与结论
+
+- 现象：`defer` 块局部名称收集会把 tuple 解构的每个位置直接加入名称集合，空位也被传给通用名称
+  复制入口；这可能对空数据指针执行零长度复制，并产生无意义的空名称；
+- 根因：名称集合入口没有统一落实“空位不创建绑定”的 AST 不变量；普通解构路径已有同样缺口，
+  本轮新增的 `for/in` tuple 路径会扩大其可达范围；
+- 当前结论：编译期辅助路径缺口。应在通用名称集合入口统一忽略空 slice，不为 `for/in` 添加特判。
+
+##### 决策与实施
+
+- 状态：已关闭；
+- 分类：产品缺陷；
+- 修复方案：通用局部名称集合入口直接接受并忽略空 slice；新增 `defer` 内 tuple 循环模式的 Codegen
+  回归；
+- 是否涉及既有测试修改：否；
+- 是否涉及运行时性能：否，仅改变编译期 AST 名称收集；
+- 是否涉及 runtime 私有 ABI、公开 ABI 或 `.ft` 格式：否。
+
+##### 验收与关闭
+
+- [x] `defer` 内带空位的 `for/in` tuple 模式完成 Semantic、Codegen 和生成 C 编译；
+- [x] 通用名称集合入口忽略空 slice，空位不进入局部名称集合，普通非空名称行为不变；
+- [x] Parser、Semantic、Codegen 专项、生成 C 编译及沙箱外 `make test` 全部通过。
 
 ### 30.2 编号与状态
 
