@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G10 已交付；G11～G25 待 Review
+> 状态：G01～G11 已交付；G12～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -884,28 +884,52 @@ enum 必须为每个枚举项显式赋值；部分指定属于编译期错误，
 
 ### 15.2 用例 TODO
 
-- [ ] LEX01：非法转义序列的稳定诊断；
-- [ ] LEX02：不完整十六进制转义的稳定诊断；
-- [ ] LEX03：未闭合双引号字符串的稳定诊断；
-- [ ] LEX04：未闭合反引号字符串的稳定诊断；
-- [ ] LEX05：未闭合块注释的稳定诊断；
-- [ ] LEX06：每类非法输入的最小合法邻界 token 序列。
+- [x] LEX01：`\\u`、`\\U`、`\\a`、`\\b`、`\\f`、`\\v` 及其他不受支持的普通转义在 Lexer
+  遇到首个非法转义字符时产生 `LE0004`；
+- [x] LEX02：`\\x` 后零位、一位以及第一位或第二位非十六进制字符均产生 `LE0004`；
+- [x] LEX03：双引号字符串在 EOF、LF、CRLF 或尾随反斜线处未闭合时产生 `LE0003`；
+- [x] LEX04：单行、多行以及以双反引号结尾但没有终止符的反引号字符串产生 `LE0003`；
+- [x] LEX05：普通块注释、文档块注释和多行块注释在 EOF 前未闭合时产生 `LE0006`；
+- [x] LEX06：为上述每类非法输入补齐最小合法邻界 token 序列，包括全部合法普通转义、完整
+  `\\xNN`、闭合双引号字符串、闭合反引号字符串以及闭合块注释后的下一 token；
+- [x] LEX07：反向映射 `LE0001`～`LE0007`；已有测试只在诊断码、错误 token、源码片段、行列、
+  数量或 Lexer 阶段归属上缺少直接证据时，新增最小用例，不为重复数量修改既有用例；
+- [x] LEX08：超过 `u64` 的整数源码字面量产生数字字面量错误 `LE0002`，最大 `u64` 字面量仍是
+  合法整数 token，回归 [ISSUE-G11-001](./feng-language-conformance-coverage-hardening-issues/g11.md)。
 
 ### 15.3 独立验收与交付 TODO
 
-- [ ] 建立稳定 `LE` 码到现有 Lexer test 的映射，确认真实缺口；
-- [ ] 独立运行 G11，核对诊断码、token、行列、数量和 Lexer 阶段归属；
-- [ ] 在 Codex 沙箱外为 G11 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G11 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [x] 建立稳定 `LE` 码到现有 Lexer test 的映射，确认真实缺口；
+- [x] 独立运行 G11，核对诊断码、token、行列、数量和 Lexer 阶段归属；
+- [x] 在 Codex 沙箱外为 G11 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G11 问题；
+- [x] 填写本组映射、实际新增用例、专项结果和全量结果。
 
 ### 15.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
+- 状态：已交付
+- 稳定码映射与新增用例：
+  - 复核既有 `test_reserved_words_rejected`、`test_error_tokens`、`test_hex_escape_valid`、
+    `test_hex_escape_invalid`、`test_raw_string_literals` 和 `test_raw_string_unterminated`，确认其可作为
+    基础行为证据，但尚未完整断言稳定诊断码、精确错误 token、行列、诊断数量和 Lexer 阶段归属；
+  - 新增 `assert_g11_lexer_error`，统一断言错误码、文案、lexeme、offset、行列、Lexer 状态以及错误后
+    紧邻 EOF，从直接 Lexer 调用证明阶段归属，并证明每个最小非法输入只产生一个诊断；
+  - 新增 `test_g11_invalid_escape_diagnostics`、`test_g11_unterminated_string_diagnostics`、
+    `test_g11_unterminated_raw_string_diagnostics`、`test_g11_unterminated_block_comment_diagnostics`、
+    `test_g11_remaining_error_code_mapping` 和 `test_g11_legal_lexer_boundaries`，完成 `LE0001`～`LE0007`
+    反向映射、所有计划非法分支及其合法邻界覆盖；未修改既有测试用例；
+  - 将超过 `u64` 的整数源码字面量从误用的 `LE0003` 更正为 `LE0002`，并覆盖最大 `u64` 与最大值
+    加一两个邻界。
+- 本组专项结果：`make build/bin/test_lexer && build/bin/test_lexer` 通过，输出
+  `lexer tests passed`；
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两个干净阶段均完成，FCTS 均为 1072/1072、
+  smoke 均为 90/90；std、CLI、性能约束、增量构建、发布、安装、bundled package 和预构建工具链
+  检查全部通过；首次 normal 回归中的外部瞬时 `SIGKILL` 已记录，独立复验失败目标和完整复跑均
+  通过；
+- 问题：`ISSUE-G11-001`～`ISSUE-G11-002` 均已关闭；
+- 交付结论：G11 已完整覆盖用户输入可达的 `LE0001`～`LE0007` 稳定诊断、精确位置、单诊断数量、
+  Lexer 阶段归属及合法邻界。本组仅更正编译器错误路径的静态错误码，不改变合法程序 Lexer 路径，
+  不增加生成程序运行时开销，也未变更 runtime 私有 ABI、公开 ABI 或 `.ft` 格式；
 - 建议 commit message：`test: close lexer diagnostic coverage gaps`
 
 ## 16 G12：Parser 稳定诊断

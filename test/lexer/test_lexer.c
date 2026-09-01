@@ -773,6 +773,283 @@ static void test_raw_string_unterminated(void) {
     }
 }
 
+/* Asserts one direct Lexer diagnostic and the EOF boundary that follows it. */
+static void assert_g11_lexer_error(const char *source,
+                                   const char *expected_code,
+                                   const char *expected_message,
+                                   const char *expected_lexeme,
+                                   size_t expected_offset,
+                                   unsigned int expected_line,
+                                   unsigned int expected_column) {
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, source, strlen(source), "g11.ff");
+    token = feng_lexer_next(&lexer);
+
+    ASSERT(token.kind == FENG_TOKEN_ERROR);
+    ASSERT(token.error_code != NULL);
+    ASSERT(strcmp(token.error_code, expected_code) == 0);
+    ASSERT(token.error_message != NULL);
+    ASSERT(strcmp(token.error_message, expected_message) == 0);
+    assert_lexeme(&token, expected_lexeme);
+    ASSERT(token.offset == expected_offset);
+    ASSERT(token.line == expected_line);
+    ASSERT(token.column == expected_column);
+    ASSERT(token.annotation_kind == FENG_ANNOTATION_NONE);
+    ASSERT(token.leading_doc == NULL);
+    ASSERT(token.leading_doc_length == 0U);
+    ASSERT(feng_lexer_last_error(&lexer) != NULL);
+    ASSERT(strcmp(feng_lexer_last_error(&lexer), expected_message) == 0);
+    ASSERT(strcmp(feng_lexer_path(&lexer), "g11.ff") == 0);
+
+    token = feng_lexer_next(&lexer);
+    ASSERT(token.kind == FENG_TOKEN_EOF);
+    ASSERT(token.error_code == NULL);
+    ASSERT(token.error_message == NULL);
+}
+
+/* G11 LEX01-LEX02: invalid ordinary and hexadecimal escapes stay LE0004. */
+static void test_g11_invalid_escape_diagnostics(void) {
+    /* Each source ends immediately after the evidence needed for one error. */
+    static const struct {
+        const char *source;
+        const char *message;
+        const char *lexeme;
+        size_t offset;
+        unsigned int line;
+        unsigned int column;
+    } cases[] = {
+        {"\"\\q", "invalid string escape", "\"\\q", 0U, 1U, 1U},
+        {"\n  \"\\u", "invalid string escape", "\"\\u", 3U, 2U, 3U},
+        {"\"\\U", "invalid string escape", "\"\\U", 0U, 1U, 1U},
+        {"\"\\a", "invalid string escape", "\"\\a", 0U, 1U, 1U},
+        {"\"\\b", "invalid string escape", "\"\\b", 0U, 1U, 1U},
+        {"\"\\f", "invalid string escape", "\"\\f", 0U, 1U, 1U},
+        {"\"\\v", "invalid string escape", "\"\\v", 0U, 1U, 1U},
+        {"\"\\x", "invalid \\x escape: expected 2 hex digits", "\"\\x", 0U, 1U, 1U},
+        {"\r\n\t\"\\x1", "invalid \\x escape: expected 2 hex digits", "\"\\x1", 3U, 2U, 2U},
+        {"\"\\xG", "invalid \\x escape: expected hex digit", "\"\\xG", 0U, 1U, 1U},
+        {"\n \"\\x0G", "invalid \\x escape: expected hex digit", "\"\\x0G", 2U, 2U, 2U}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g11_lexer_error(cases[index].source,
+                               "LE0004",
+                               cases[index].message,
+                               cases[index].lexeme,
+                               cases[index].offset,
+                               cases[index].line,
+                               cases[index].column);
+    }
+}
+
+/* G11 LEX03: every double-quoted unterminated boundary stays LE0003. */
+static void test_g11_unterminated_string_diagnostics(void) {
+    /* EOF, LF, CRLF, and a trailing backslash exercise distinct scan exits. */
+    static const struct {
+        const char *source;
+        const char *lexeme;
+        size_t offset;
+        unsigned int line;
+        unsigned int column;
+    } cases[] = {
+        {"\"plain", "\"plain", 0U, 1U, 1U},
+        {"\n  \"line\n", "\"line", 3U, 2U, 3U},
+        {"\r\n \"line\r\n", "\"line", 3U, 2U, 2U},
+        {"\"tail\\", "\"tail\\", 0U, 1U, 1U}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g11_lexer_error(cases[index].source,
+                               "LE0003",
+                               "unterminated string literal",
+                               cases[index].lexeme,
+                               cases[index].offset,
+                               cases[index].line,
+                               cases[index].column);
+    }
+}
+
+/* G11 LEX04: single-line, multiline, and escaped-tail raw strings stay LE0003. */
+static void test_g11_unterminated_raw_string_diagnostics(void) {
+    /* A final doubled backtick is content and cannot terminate the raw string. */
+    static const struct {
+        const char *source;
+        const char *lexeme;
+        size_t offset;
+        unsigned int line;
+        unsigned int column;
+    } cases[] = {
+        {"`raw", "`raw", 0U, 1U, 1U},
+        {"\n  `line1\nline2", "`line1\nline2", 3U, 2U, 3U},
+        {"`value``", "`value``", 0U, 1U, 1U}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g11_lexer_error(cases[index].source,
+                               "LE0003",
+                               "unterminated raw string literal",
+                               cases[index].lexeme,
+                               cases[index].offset,
+                               cases[index].line,
+                               cases[index].column);
+    }
+}
+
+/* G11 LEX05: ordinary, documentation, and multiline block comments stay LE0006. */
+static void test_g11_unterminated_block_comment_diagnostics(void) {
+    /* Documentation comments share the same unterminated-comment diagnostic. */
+    static const struct {
+        const char *source;
+        const char *lexeme;
+        size_t offset;
+        unsigned int line;
+        unsigned int column;
+    } cases[] = {
+        {"/* open", "/* open", 0U, 1U, 1U},
+        {"/** docs", "/** docs", 0U, 1U, 1U},
+        {"\n  /* line1\r\nline2", "/* line1\r\nline2", 3U, 2U, 3U}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g11_lexer_error(cases[index].source,
+                               "LE0006",
+                               "unterminated block comment",
+                               cases[index].lexeme,
+                               cases[index].offset,
+                               cases[index].line,
+                               cases[index].column);
+    }
+}
+
+/* G11 LEX07-LEX08: map the remaining LE codes and guard numeric overflow. */
+static void test_g11_remaining_error_code_mapping(void) {
+    assert_g11_lexer_error("\n class",
+                           "LE0001",
+                           "reserved word cannot be used as an identifier in the current language version",
+                           "class",
+                           2U,
+                           2U,
+                           2U);
+    assert_g11_lexer_error("\n 0x",
+                           "LE0002",
+                           "invalid numeric literal",
+                           "0x",
+                           2U,
+                           2U,
+                           2U);
+    assert_g11_lexer_error("18446744073709551616",
+                           "LE0002",
+                           "integer literal overflows u64",
+                           "18446744073709551616",
+                           0U,
+                           1U,
+                           1U);
+    assert_g11_lexer_error("\n @",
+                           "LE0005",
+                           "expected annotation name after '@'",
+                           "@",
+                           2U,
+                           2U,
+                           2U);
+    assert_g11_lexer_error("\n ?",
+                           "LE0007",
+                           "unexpected character",
+                           "?",
+                           2U,
+                           2U,
+                           2U);
+}
+
+/* G11 LEX06: valid neighbors produce complete tokens and preserve following tokens. */
+static void test_g11_legal_lexer_boundaries(void) {
+    {
+        const char *source =
+            "\""
+            "\\\\"
+            "\\\""
+            "\\n"
+            "\\r"
+            "\\t"
+            "\\0"
+            "\\x00"
+            "\\xFf"
+            "\""
+            " next";
+        const char *expected_string =
+            "\""
+            "\\\\"
+            "\\\""
+            "\\n"
+            "\\r"
+            "\\t"
+            "\\0"
+            "\\x00"
+            "\\xFf"
+            "\"";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, source, strlen(source), "g11_valid_string.ff");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, expected_string);
+        ASSERT(token.line == 1U && token.column == 1U);
+        token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        assert_lexeme(&token, "next");
+        ASSERT(token.line == 1U && token.column == 24U);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    {
+        const char *source = "`a``` next";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, source, strlen(source), "g11_valid_raw.ff");
+        token = next_token(&lexer, FENG_TOKEN_STRING);
+        assert_lexeme(&token, "`a```");
+        token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        assert_lexeme(&token, "next");
+        ASSERT(token.line == 1U && token.column == 7U);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    {
+        const char *source = "/* closed */\r\nnext";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, source, strlen(source), "g11_valid_comment.ff");
+        token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        assert_lexeme(&token, "next");
+        ASSERT(token.offset == 14U);
+        ASSERT(token.line == 2U && token.column == 1U);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+
+    {
+        const char *source = "18446744073709551615 className @a !";
+        FengLexer lexer;
+        FengToken token;
+
+        feng_lexer_init(&lexer, source, strlen(source), "g11_valid_codes.ff");
+        token = next_token(&lexer, FENG_TOKEN_INTEGER);
+        assert_lexeme(&token, "18446744073709551615");
+        token = next_token(&lexer, FENG_TOKEN_IDENTIFIER);
+        assert_lexeme(&token, "className");
+        token = next_token(&lexer, FENG_TOKEN_ANNOTATION);
+        assert_lexeme(&token, "@a");
+        ASSERT(token.annotation_kind == FENG_ANNOTATION_CUSTOM);
+        (void)next_token(&lexer, FENG_TOKEN_NOT);
+        (void)next_token(&lexer, FENG_TOKEN_EOF);
+    }
+}
+
 int main(void) {
     test_keyword_and_annotation_counts();
     test_reserved_words_rejected();
@@ -795,6 +1072,12 @@ int main(void) {
     test_generic_token_sequences();
     test_raw_string_literals();
     test_raw_string_unterminated();
+    test_g11_invalid_escape_diagnostics();
+    test_g11_unterminated_string_diagnostics();
+    test_g11_unterminated_raw_string_diagnostics();
+    test_g11_unterminated_block_comment_diagnostics();
+    test_g11_remaining_error_code_mapping();
+    test_g11_legal_lexer_boundaries();
 
     puts("lexer tests passed");
     return 0;

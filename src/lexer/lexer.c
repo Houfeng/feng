@@ -525,7 +525,7 @@ static FengToken scan_number(FengLexer *lexer,
                               start_offset,
                               start_line,
                               start_column,
-                              "LE0003",
+                              "LE0002",
                               "integer literal overflows u64");
         }
     } else {
