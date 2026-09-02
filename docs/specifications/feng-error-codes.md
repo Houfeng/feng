@@ -35,7 +35,7 @@
 | **AE0024** | 联合类型约束违反 | binary operator '%s' requires union-form operands to be narrowed to a single member first |
 | **AE0031** | 分支结构错误 | %s branch block must end with an expression statement |
 | **AE0033** | 分支结构错误 | if expressions require an else branch |
-| **AE0035** | 返回语句错误 | catch clause must end with a result expression, 'return', or 'throw' |
+| **AE0035** | 返回语句错误 | catch clause must end with a result expression or 'throw' |
 | **AE0038** | 模式匹配错误 | match range label endpoints must be integer literals or 'let' bindings to integer literals |
 | **AE0039** | 模式匹配错误 | match range label endpoints must be integer values |
 | **AE0040** | 模式匹配错误 | match range label requires low <= high, got %lld and %lld |

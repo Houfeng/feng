@@ -15,19 +15,18 @@ func require_positive(value: int) {
 You can throw numeric scalars, `bool`, `string`, named enums, named tuples, and concrete closed user-defined types,
 including their supported `@abi` and `@value` forms. Typed `catch` uses the same set of concrete types. Arrays,
 values viewed through any `spec`, open generic types, pointers, `void`, and callable values or types cannot be
-thrown or used by a typed `catch`. See the [exception specification](../../../specifications/feng-exception.md#33-catch)
-for the authoritative rules.
+thrown or used by a typed `catch`.
 
 ## Catch an Exception
 
-`try` is followed by an expression, not a statement block:
+`try` is followed by an expression, not a statement block, and requires at least one `catch` clause:
 
 ```feng
 try load_config() catch error: string {
   println("load failed: {0}", error);
 } catch {
   println("unknown failure");
-};
+}
 ```
 
 Multiple `catch` clauses are matched in source order. Put concrete type branches first. `catch error: unknown` and an anonymous `catch` are catch-all branches.
@@ -40,7 +39,7 @@ An `unknown` binding can only be rethrown; its fields and methods are not access
 ```feng
 try run_task() catch error: unknown {
   throw error;
-};
+}
 ```
 
 ## try/catch Expressions
@@ -55,8 +54,9 @@ let port = try parse_port(text) catch error: string {
 
 The normal path and every normally completing `catch` must produce a result. A path that ends with `throw` produces
 no result. When the context provides a target type, every normal result must fit that type. Without a contextual
-target, Feng determines a target type from these results and requires the remaining normal results to fit it. Omitting
-`catch` creates only an exception propagation point; the exception continues to the caller.
+target, Feng determines a target type from these results and requires the remaining normal results to fit it. A result
+branch cannot use `return` to exit its enclosing function; write the final expression as the branch result instead.
+A nested lambda may still use `return` for that lambda. An exception not matched by any `catch` continues to the caller.
 
 ## defer
 

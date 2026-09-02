@@ -12,18 +12,20 @@ func require_positive(value: int) {
 }
 ```
 
-可以抛出标量、`bool`、`string`、数组或具体用户类型。不能抛出函数、方法值或 `spec` 视角值。
+可以抛出数值标量、`bool`、`string`、具名 enum、具名 tuple 和允许的具体闭合用户类型。不能抛出
+array、`spec` 视角值、开放泛型、pointer、`void`、函数、Lambda 或方法值。具名 `catch` 使用相同的
+类型集合。
 
 ## 捕获异常
 
-`try` 后跟一个表达式，不是语句块：
+`try` 后跟一个表达式，不是语句块，并且必须至少包含一个 `catch`：
 
 ```feng
 try load_config() catch error: string {
   println("load failed: {0}", error);
 } catch {
   println("unknown failure");
-};
+}
 ```
 
 多个 `catch` 按书写顺序匹配。具体类型分支应写在前面，`catch error: unknown` 或匿名 `catch` 是兜底分支。
@@ -35,7 +37,7 @@ try load_config() catch error: string {
 ```feng
 try run_task() catch error: unknown {
   throw error;
-};
+}
 ```
 
 ## try/catch 表达式
@@ -50,7 +52,9 @@ let port = try parse_port(text) catch error: string {
 
 正常路径与每个正常结束的 `catch` 必须产生结果；以 `throw` 结束的路径不产生结果。上下文提供目标
 类型时，每个正常结果都必须能够贴合该类型；没有目标类型时，Feng 从这些结果确定目标类型，并要求
-其余正常结果能够贴合。省略 `catch` 表示只建立异常传播点，异常会继续向调用方传播。
+其余正常结果能够贴合。结果分支内不能使用返回外围函数的 `return`；应把最后一个表达式直接写成
+该分支结果。嵌套 Lambda 自己的 `return` 不受此限制。没有被任一 `catch` 匹配的异常会继续向调用方
+传播。
 
 ## defer
 

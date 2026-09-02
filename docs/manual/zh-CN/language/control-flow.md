@@ -126,3 +126,5 @@ Feng 的 `break` 和 `continue` 不携带标签或层数参数。循环可以嵌
 `if`、`match` 或 `try/catch` 作为表达式使用时，每个结果分支都是控制转移边界：分支内的 `break` /
 `continue` 不能作用于表达式外部的循环。分支内部新建的 `while`、三段式 `for` 或 `for/in` 循环仍可
 正常使用 `break` / `continue`，并且只作用于该内层循环。相同结构作为语句使用时没有这一额外限制。
+结果分支也不能使用 `return` 退出外围函数；普通嵌套结构不改变这一规则，嵌套 Lambda 自己的
+`return` 合法。

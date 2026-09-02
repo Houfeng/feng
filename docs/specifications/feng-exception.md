@@ -9,7 +9,7 @@
 - Feng 支持结构化异常处理,使用 `throw` 触发异常,使用 `try/catch` 处理异常。
 - `try` 后只能是表达式,不能是语句块。
 - 异常沿调用栈向外传播,直到被最近的 `catch` 捕获。
-- `catch` 可省略; 省略 `catch` 时异常自动继续向上传播。
+- 每个 `try` 至少包含一个 `catch` 子句；普通调用产生但未被当前函数捕获的异常自动继续向上传播。
 - 异常不能跨越 C ABI 边界传播。
 
 ## 2 `throw` 语句
@@ -50,7 +50,7 @@ try foo() catch ex: string {
   return; // 作为语句时，使用 return 结束函数
 }
 
-// catch 省略 ex
+// 匿名 catch，不建立异常值绑定
 try foo() catch {
   // 这里不能访问 ex，因为 ex 没有绑定，也就不存在 ex
   puts("unknown error");
@@ -71,7 +71,7 @@ let x = try foo() catch ex: string {
   123; 
 };
 
-// catch 省略 ex
+// 匿名 catch，不建立异常值绑定
 let x = try foo() catch {
   // 这里不能访问 ex，因为 ex 没有绑定，也就不存在 ex
   puts("unknown error");
@@ -79,14 +79,14 @@ let x = try foo() catch {
   // 不可使用 return 语句（与 if 表达式一致）
   // 必须有返回值，结果类型按流程控制规范的统一分支规则确定
   123;  
-}
+};
 
 ```
 
 ### 3.2 `try`
 
 - `try` 用于求值一个可能抛出异常的表达式。
-- 语法形态: `try <expr> [catch [ex: Type] { ... }]*`，后可附加零个或多个 `catch` 子句；各子句可为绑定形式 `catch ex: Type { ... }` 或匿名形式 `catch { ... }`。
+- 语法形态: `try <expr> (catch [ex: Type] { ... })+`，后必须附加至少一个 `catch` 子句；各子句可为绑定形式 `catch ex: Type { ... }` 或匿名形式 `catch { ... }`。
 - `try` 后只能是单个表达式,不允许 `try { ... }` 语句块形态。
 
 ### 3.3 `catch`
@@ -141,34 +141,15 @@ let x = try foo() catch {
 **作为表达式使用时（出现在赋值右值或需要求值的位置）：**
 
 - 每个可正常完成的 `catch` 块必须以结果表达式结束（块中最后一个表达式作为求值结果，可带可不带分号，与 `if` 表达式一致）。
-- `catch` 块内**不允许使用 `return`**（与 `if` 表达式一致）。
+- 结果分支中的 `return` 控制转移边界统一遵循
+  [Feng 语言流程控制规范 §4.1](./feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)，
+  不在异常规范中另行定义一套规则。
 - `try` 主表达式与各 `catch` 块的结果类型按 [Feng 语言流程控制规范 §4.1](./feng-flow.md#41-if--match--try-%E8%A1%A8%E8%BE%BE%E5%BC%8F%E7%BB%93%E6%9E%9C%E7%B1%BB%E5%9E%8B)统一选择目标类型并贴合。
 - 若路径以 `throw <expr>;` 终止，则该路径无需提供结果表达式。
 - 当 `try` 主表达式结果类型为 `void` 时，`catch` 块可以只执行语句并正常结束，不需要结果表达式。
 - 若表达式上下文提供目标类型，则 `try` 主表达式结果与各 `catch` 块结果都必须分别符合该目标类型。
 
-### 3.5 省略 `catch` 时的自动上抛
-
-- 支持 `try <expr>;` 与 `let x = try <expr>;`。
-- 正常时返回 `<expr>` 的求值结果（位于表达式上下文时）。
-- 异常时不在当前点处理,自动继续向上传播,并终止当前语句之后的同级后续语句执行。
-
-```feng
-func load_port(): int {
-    let v = try parse_port() catch err: ParseError {
-        8080
-    } catch err: unknown {
-        throw err;
-    };
-    return v;
-}
-
-func startup() {
-    try init_runtime();
-}
-```
-
-### 3.6 `if`/`match` 表达式分支中的 `throw`
+### 3.5 `if`/`match` 表达式分支中的 `throw`
 
 `if` 表达式和 `match` 表达式的各分支块允许以 `throw` 结尾，与 `try/catch` 表达式的 `catch` 子句规则一致。
 
@@ -195,7 +176,7 @@ let label = if value {
 - 未被当前函数处理的异常会继续向调用方传播。
 - 若异常传播到程序入口 `main` 仍未被捕获,程序立即以异常失败状态结束。
 - 对于 `try/catch` 表达式,`catch` 完成结果返回后,控制流从该表达式之后继续执行。
-- 对于省略 `catch` 的 `try` 表达式,异常直接继续向外传播。
+- 当前 `try/catch` 没有匹配当前异常的子句时，异常继续向外传播。
 
 ### 4.1 异常路径上的资源清理
 
