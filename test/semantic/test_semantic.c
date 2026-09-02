@@ -20545,6 +20545,80 @@ static void assert_single_source_semantic_error_contains(const char *path,
     feng_program_free(program);
 }
 
+/* Assert one stable Semantic diagnostic, including its phase code and exact
+ * source token, for the G13 negative name-binding matrix. */
+static void assert_g13_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    if (error_count != 1U) {
+        fprintf(stderr,
+                "%s: expected exactly one G13 semantic error, got %zu\n",
+                path,
+                error_count);
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "  %s:%u:%u [%s] %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(error_count == 1U);
+    if (strcmp(errors[0].path, path) != 0 ||
+        strcmp(errors[0].code, expected_code) != 0 ||
+        errors[0].token.line != expected_line ||
+        errors[0].token.column != expected_column ||
+        errors[0].token.length != strlen(expected_lexeme) ||
+        memcmp(errors[0].token.lexeme,
+               expected_lexeme,
+               errors[0].token.length) != 0 ||
+        strstr(errors[0].message, expected_message) == NULL) {
+        fprintf(stderr,
+                "%s: expected %u:%u [%s] token '%s' containing '%s'; "
+                "got %s:%u:%u [%s] token '%.*s': %s\n",
+                path,
+                expected_line,
+                expected_column,
+                expected_code,
+                expected_lexeme,
+                expected_message,
+                errors[0].path,
+                errors[0].token.line,
+                errors[0].token.column,
+                errors[0].code,
+                (int)errors[0].token.length,
+                errors[0].token.lexeme,
+                errors[0].message);
+    }
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(errors[0].token.line == expected_line);
+    ASSERT(errors[0].token.column == expected_column);
+    ASSERT(errors[0].token.length == strlen(expected_lexeme));
+    ASSERT(memcmp(errors[0].token.lexeme,
+                  expected_lexeme,
+                  errors[0].token.length) == 0);
+    ASSERT(strstr(errors[0].message, expected_message) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Verify every approved concrete exception category is accepted by both a
  * throw operand and a typed catch clause through one semantic analysis. */
 static void test_exception_payload_positive_type_matrix(void) {
@@ -29597,7 +29671,401 @@ static void test_object_spec_generic_receiver_call_selects_exact_overload(void) 
     feng_program_free(program);
 }
 
+/* BIND01: undefined value names fail in read, assignment-target and
+ * call-target positions at the original use token. */
+static void test_g13_undefined_value_name_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_undefined_read.ff",
+        "module g13.undefined_read;\n"
+        "func run(): int {\n"
+        "    return missing;\n"
+        "}\n",
+        "AE0001", 3U, 12U, "missing", "undefined identifier 'missing'");
+    assert_g13_semantic_error(
+        "g13_undefined_assignment.ff",
+        "module g13.undefined_assignment;\n"
+        "func run(): void {\n"
+        "    missing = 1;\n"
+        "}\n",
+        "AE0001", 3U, 5U, "missing", "undefined identifier 'missing'");
+    assert_g13_semantic_error(
+        "g13_undefined_call.ff",
+        "module g13.undefined_call;\n"
+        "func run(): void {\n"
+        "    missing();\n"
+        "}\n",
+        "AE0001", 3U, 5U, "missing", "undefined identifier 'missing'");
+}
+
+/* BIND02: every let/var ordering is rejected at the later declaration in
+ * one ordinary lexical value scope. */
+static void test_g13_same_block_duplicate_binding_diagnostics(void) {
+    const char *const paths[] = {
+        "g13_duplicate_let_let.ff",
+        "g13_duplicate_let_var.ff",
+        "g13_duplicate_var_let.ff",
+        "g13_duplicate_var_var.ff",
+    };
+    const char *const sources[] = {
+        "module g13.duplicate_let_let;\n"
+        "func run(): void {\n"
+        "    let value = 1;\n"
+        "    let value = 2;\n"
+        "}\n",
+        "module g13.duplicate_let_var;\n"
+        "func run(): void {\n"
+        "    let value = 1;\n"
+        "    var value = 2;\n"
+        "}\n",
+        "module g13.duplicate_var_let;\n"
+        "func run(): void {\n"
+        "    var value = 1;\n"
+        "    let value = 2;\n"
+        "}\n",
+        "module g13.duplicate_var_var;\n"
+        "func run(): void {\n"
+        "    var value = 1;\n"
+        "    var value = 2;\n"
+        "}\n",
+    };
+
+    for (size_t index = 0U; index < sizeof(paths) / sizeof(paths[0]); ++index) {
+        assert_g13_semantic_error(paths[index],
+                                  sources[index],
+                                  "AE0105",
+                                  4U,
+                                  9U,
+                                  "value",
+                                  "duplicate binding 'value' in the same scope");
+    }
+    assert_g13_semantic_error(
+        "g13_duplicate_ordinary_underscore.ff",
+        "module g13.duplicate_ordinary_underscore;\n"
+        "func run(): void {\n"
+        "    let _ = 1;\n"
+        "    let _ = 2;\n"
+        "}\n",
+        "AE0105", 4U, 9U, "_", "duplicate binding '_' in the same scope");
+}
+
+/* BIND03: callable parameters share one lexical value scope with the
+ * callable's outermost body, for functions, methods and block lambdas. */
+static void test_g13_callable_parameter_duplicate_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_function_duplicate_parameter.ff",
+        "module g13.function_duplicate_parameter;\n"
+        "func run(value: int, value: int): void {}\n",
+        "AE0105", 2U, 22U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_function_parameter_body_duplicate.ff",
+        "module g13.function_parameter_body_duplicate;\n"
+        "func run(value: int): void {\n"
+        "    let value = 2;\n"
+        "}\n",
+        "AE0105", 3U, 9U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_method_duplicate_parameter.ff",
+        "module g13.method_duplicate_parameter;\n"
+        "type Box {\n"
+        "    func run(value: int, value: int): void {}\n"
+        "}\n",
+        "AE0105", 3U, 26U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_method_parameter_body_duplicate.ff",
+        "module g13.method_parameter_body_duplicate;\n"
+        "type Box {\n"
+        "    func run(value: int): void {\n"
+        "        let value = 2;\n"
+        "    }\n"
+        "}\n",
+        "AE0105", 4U, 13U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_lambda_duplicate_parameter.ff",
+        "module g13.lambda_duplicate_parameter;\n"
+        "spec Mapper(left: int, right: int): int;\n"
+        "func run(): void {\n"
+        "    let mapper: Mapper = (value: int, value: int) -> value;\n"
+        "}\n",
+        "AE0105", 4U, 39U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_lambda_parameter_body_duplicate.ff",
+        "module g13.lambda_parameter_body_duplicate;\n"
+        "spec Mapper(value: int): int;\n"
+        "func run(): void {\n"
+        "    let mapper: Mapper = (value: int) {\n"
+        "        let value = 2;\n"
+        "        return value;\n"
+        "    };\n"
+        "}\n",
+        "AE0105", 5U, 13U, "value", "duplicate binding 'value'");
+}
+
+/* BIND04: every nonempty position in ordinary and for/in tuple patterns is
+ * a declaration; empty positions remain non-bindings. */
+static void test_g13_tuple_pattern_duplicate_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_tuple_literal_pattern_duplicate.ff",
+        "module g13.tuple_literal_pattern_duplicate;\n"
+        "func run(): void {\n"
+        "    let (value, value) = (1, 2);\n"
+        "}\n",
+        "AE0105", 3U, 17U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_named_tuple_pattern_duplicate.ff",
+        "module g13.named_tuple_pattern_duplicate;\n"
+        "type Pair(int, int);\n"
+        "func run(pair: Pair): void {\n"
+        "    let (value, value) = pair;\n"
+        "}\n",
+        "AE0105", 4U, 17U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_for_in_tuple_pattern_duplicate.ff",
+        "module g13.for_in_tuple_pattern_duplicate;\n"
+        "type Pair(int, int);\n"
+        "func run(pairs: Pair[]): void {\n"
+        "    for let (value, value) in pairs {}\n"
+        "}\n",
+        "AE0105", 4U, 21U, "value", "duplicate binding 'value'");
+}
+
+/* BIND05: an earlier ordinary local conflicts with every later nonempty
+ * tuple-pattern position, not only the first position. */
+static void test_g13_binding_then_destructure_duplicate_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_binding_then_first_tuple_position.ff",
+        "module g13.binding_then_first_tuple_position;\n"
+        "func run(): void {\n"
+        "    let value = 1;\n"
+        "    let (value, other) = (2, 3);\n"
+        "}\n",
+        "AE0105", 4U, 10U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_binding_then_later_tuple_position.ff",
+        "module g13.binding_then_later_tuple_position;\n"
+        "func run(): void {\n"
+        "    let value = 1;\n"
+        "    let (other, value) = (2, 3);\n"
+        "}\n",
+        "AE0105", 4U, 17U, "value", "duplicate binding 'value'");
+}
+
+/* BIND06: all bindings propagated by one && condition inhabit the same
+ * header scope, so a repeated infix-match name fails at the later binder. */
+static void test_g13_infix_match_duplicate_binding_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_if_infix_match_duplicate.ff",
+        "module g13.if_infix_match_duplicate;\n"
+        "spec Value: int | string;\n"
+        "func run(left: Value, right: Value): void {\n"
+        "    if left match value: int && right match value: int {}\n"
+        "}\n",
+        "AE0105", 4U, 45U, "value", "duplicate binding 'value'");
+    assert_g13_semantic_error(
+        "g13_while_infix_match_duplicate.ff",
+        "module g13.while_infix_match_duplicate;\n"
+        "spec Value: int | string;\n"
+        "func run(left: Value, right: Value): void {\n"
+        "    while left match value: int && right match value: int {}\n"
+        "}\n",
+        "AE0105", 4U, 48U, "value", "duplicate binding 'value'");
+}
+
+/* BIND07: every immutable local-binding form rejects reassignment with the
+ * common writable-target diagnostic at the assignment identifier. */
+static void test_g13_immutable_binding_assignment_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_local_let_assignment.ff",
+        "module g13.local_let_assignment;\n"
+        "func run(): void {\n"
+        "    let value = 1;\n"
+        "    value = 2;\n"
+        "}\n",
+        "AE0104", 4U, 5U, "value", "assignment target 'value' is not writable");
+    assert_g13_semantic_error(
+        "g13_default_parameter_assignment.ff",
+        "module g13.default_parameter_assignment;\n"
+        "func run(value: int): void {\n"
+        "    value = 2;\n"
+        "}\n",
+        "AE0104", 3U, 5U, "value", "assignment target 'value' is not writable");
+    assert_g13_semantic_error(
+        "g13_explicit_let_parameter_assignment.ff",
+        "module g13.explicit_let_parameter_assignment;\n"
+        "func run(let value: int): void {\n"
+        "    value = 2;\n"
+        "}\n",
+        "AE0104", 3U, 5U, "value", "assignment target 'value' is not writable");
+    assert_g13_semantic_error(
+        "g13_for_in_let_assignment.ff",
+        "module g13.for_in_let_assignment;\n"
+        "func run(): void {\n"
+        "    for let value in [1] {\n"
+        "        value = 2;\n"
+        "    }\n"
+        "}\n",
+        "AE0104", 4U, 9U, "value", "assignment target 'value' is not writable");
+    assert_g13_semantic_error(
+        "g13_match_default_let_assignment.ff",
+        "module g13.match_default_let_assignment;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    match value {\n"
+        "        item: int {\n"
+        "            item = 2;\n"
+        "        }\n"
+        "        else {}\n"
+        "    }\n"
+        "}\n",
+        "AE0104", 6U, 13U, "item", "assignment target 'item' is not writable");
+    assert_g13_semantic_error(
+        "g13_match_explicit_let_assignment.ff",
+        "module g13.match_explicit_let_assignment;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    match value {\n"
+        "        let item: int {\n"
+        "            item = 2;\n"
+        "        }\n"
+        "        else {}\n"
+        "    }\n"
+        "}\n",
+        "AE0104", 6U, 13U, "item", "assignment target 'item' is not writable");
+    assert_g13_semantic_error(
+        "g13_catch_binding_assignment.ff",
+        "module g13.catch_binding_assignment;\n"
+        "func fail(): string { throw \"boom\"; return \"\"; }\n"
+        "func run(): void {\n"
+        "    try fail() catch error: string {\n"
+        "        error = \"changed\";\n"
+        "    }\n"
+        "}\n",
+        "AE0104", 5U, 9U, "error", "assignment target 'error' is not writable");
+}
+
+/* BIND08: bindings disappear at each lexical boundary and never leak into
+ * siblings, else blocks, or outside their controlling statement. */
+static void test_g13_binding_lifetime_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_child_block_binding_out_of_scope.ff",
+        "module g13.child_block_binding_out_of_scope;\n"
+        "func run(): void {\n"
+        "    if true {\n"
+        "        let value = 1;\n"
+        "    }\n"
+        "    value;\n"
+        "}\n",
+        "AE0001", 6U, 5U, "value", "undefined identifier 'value'");
+    assert_g13_semantic_error(
+        "g13_three_clause_for_binding_out_of_scope.ff",
+        "module g13.three_clause_for_binding_out_of_scope;\n"
+        "func run(): void {\n"
+        "    for var index = 0; index < 1; index += 1 {}\n"
+        "    index;\n"
+        "}\n",
+        "AE0001", 4U, 5U, "index", "undefined identifier 'index'");
+    assert_g13_semantic_error(
+        "g13_for_in_binding_out_of_scope.ff",
+        "module g13.for_in_binding_out_of_scope;\n"
+        "func run(): void {\n"
+        "    for let item in [1] {}\n"
+        "    item;\n"
+        "}\n",
+        "AE0001", 4U, 5U, "item", "undefined identifier 'item'");
+    assert_g13_semantic_error(
+        "g13_match_binding_out_of_scope.ff",
+        "module g13.match_binding_out_of_scope;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    match value { item: int {} else {} }\n"
+        "    item;\n"
+        "}\n",
+        "AE0001", 5U, 5U, "item", "undefined identifier 'item'");
+    assert_g13_semantic_error(
+        "g13_catch_binding_out_of_scope.ff",
+        "module g13.catch_binding_out_of_scope;\n"
+        "func fail(): string { throw \"boom\"; return \"\"; }\n"
+        "func run(): void {\n"
+        "    try fail() catch error: string {}\n"
+        "    error;\n"
+        "}\n",
+        "AE0001", 5U, 5U, "error", "undefined identifier 'error'");
+    assert_g13_semantic_error(
+        "g13_infix_match_binding_out_of_scope.ff",
+        "module g13.infix_match_binding_out_of_scope;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    if value match item: int {}\n"
+        "    item;\n"
+        "}\n",
+        "AE0001", 5U, 5U, "item", "undefined identifier 'item'");
+    assert_g13_semantic_error(
+        "g13_infix_match_binding_in_else.ff",
+        "module g13.infix_match_binding_in_else;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    if value match item: int {} else {\n"
+        "        item;\n"
+        "    }\n"
+        "}\n",
+        "AE0001", 5U, 9U, "item", "undefined identifier 'item'");
+    assert_g13_semantic_error(
+        "g13_match_sibling_binding_isolation.ff",
+        "module g13.match_sibling_binding_isolation;\n"
+        "spec Value: int | string;\n"
+        "func run(value: Value): void {\n"
+        "    match value {\n"
+        "        item: int {}\n"
+        "        string { item; }\n"
+        "        else {}\n"
+        "    }\n"
+        "}\n",
+        "AE0001", 6U, 18U, "item", "undefined identifier 'item'");
+    assert_g13_semantic_error(
+        "g13_catch_sibling_binding_isolation.ff",
+        "module g13.catch_sibling_binding_isolation;\n"
+        "func fail(): void { throw \"boom\"; }\n"
+        "func run(): void {\n"
+        "    try fail() catch first: string {} catch second: i32 {\n"
+        "        first;\n"
+        "    }\n"
+        "}\n",
+        "AE0001", 5U, 9U, "first", "undefined identifier 'first'");
+}
+
+/* BIND12: existing module-level symbol validation directly covers ordinary
+ * binding duplicates and both declaration orders of binding/function name
+ * conflicts without changing module binding implementation. */
+static void test_g13_module_binding_conflict_diagnostics(void) {
+    assert_g13_semantic_error(
+        "g13_same_file_module_binding_duplicate.ff",
+        "module g13.same_file_module_binding_duplicate;\n"
+        "let entry = 1;\n"
+        "var entry = 2;\n",
+        "AE0216", 3U, 5U, "entry", "duplicate top-level binding 'entry'");
+    assert_g13_semantic_error(
+        "g13_module_binding_then_function_conflict.ff",
+        "module g13.module_binding_then_function_conflict;\n"
+        "let entry = 1;\n"
+        "func entry(): int { return 2; }\n",
+        "AE0217", 3U, 6U, "entry", "conflicts with an existing top-level binding");
+    assert_g13_semantic_error(
+        "g13_module_function_then_binding_conflict.ff",
+        "module g13.module_function_then_binding_conflict;\n"
+        "func entry(): int { return 1; }\n"
+        "let entry = 2;\n",
+        "AE0215", 3U, 5U, "entry", "conflicts with an existing top-level function");
+}
+
 int main(void) {
+    test_g13_undefined_value_name_diagnostics();
+    test_g13_same_block_duplicate_binding_diagnostics();
+    test_g13_callable_parameter_duplicate_diagnostics();
+    test_g13_tuple_pattern_duplicate_diagnostics();
+    test_g13_binding_then_destructure_duplicate_diagnostics();
+    test_g13_infix_match_duplicate_binding_diagnostics();
+    test_g13_immutable_binding_assignment_diagnostics();
+    test_g13_binding_lifetime_diagnostics();
+    test_g13_module_binding_conflict_diagnostics();
     test_object_spec_declared_method_overload_diagnostics();
     test_object_spec_accumulated_method_overload_diagnostics();
     test_object_spec_parent_parameter_overload_without_concrete_overlap();

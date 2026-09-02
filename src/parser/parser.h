@@ -186,12 +186,14 @@ typedef struct FengMatchBranch {
      * type in the chain. */
     bool has_binding;
     FengSlice binding_name;
+    FengToken binding_token;
     FengMutability binding_mutability;
 } FengMatchBranch;
 
 typedef struct FengTryCatchClause {
     FengToken token;
     FengSlice name;
+    FengToken binding_token;
     FengTypeRef *type;
     FengBlock *body;
 } FengTryCatchClause;
@@ -313,6 +315,7 @@ struct FengExpr {
             size_t label_count;        /* label count, >= 1 */
             bool has_binding;          /* whether the binding prefix was consumed */
             FengSlice binding_name;    /* binding variable name (valid when has_binding) */
+            FengToken binding_token;   /* exact declaration token when has_binding */
             FengMutability binding_mutability;  /* let / var, defaults to let */
         } match_op;
         struct {
@@ -335,6 +338,7 @@ typedef struct FengBinding {
     FengExpr *initializer;
     bool is_destructure;
     FengSlice *destructure_names;
+    FengToken *destructure_tokens; /* declaration token parallel to each destructure name */
     size_t destructure_count;
 } FengBinding;
 

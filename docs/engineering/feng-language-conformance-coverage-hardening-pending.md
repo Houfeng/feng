@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G12 已交付；G13～G25 待 Review
+> 状态：G01～G13 已交付；G14～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -1069,33 +1069,98 @@ Parser 正向源码用于隔离语法结构，允许使用尚未定义的占位�
 
 ### 17.1 测试重点
 
-验证名称声明、查找、遮蔽和可变性规则产生的稳定 Semantic 诊断。
+验证值名称的声明、查找、同级唯一性、子块屏蔽、词法生命周期和可变性规则。非法程序在 Semantic
+test 中核对稳定诊断码、位置、数量和阶段; 所有能够合法编译并形成可观察行为的边界均在 FCTS 中
+直接运行,Semantic 正向用例不得替代可进入 FCTS 的行为证据。
+
+同一词法值作用域中的名称不得重复声明; 子级花括号块可以屏蔽父作用域同名绑定。函数、方法和
+Lambda 的参数与最外层函数体处于同一词法值作用域。`for` 头、`match` 分支头、传播到 `if` /
+`while` 体的 infix `match` 绑定以及 `catch` 子句头位于各自的头部作用域,其花括号 body 是子级块;
+body 可屏蔽头部绑定,不同分支或子句可独立复用名称。
+
+本组不重复覆盖 import / alias / 跨模块二义性（归 G22）、函数重载合法性（归 G15）或泛型名称与
+arity 身份（归 G25）。模块内同名顶层声明和跨声明类别冲突只建立到现有直接证据的映射,缺口仍由
+G13 补齐。
 
 ### 17.2 用例 TODO
 
-- [ ] BIND01：未声明名称引用；
-- [ ] BIND02：同一作用域重复绑定；
-- [ ] BIND03：不可变绑定被重新赋值；
-- [ ] BIND04：名称超出词法作用域后被引用；
-- [ ] BIND05：允许遮蔽时的合法邻界程序；
-- [ ] BIND06：不同命名空间同名时的合法或非法边界。
+- [x] BIND01：分别在普通读取、赋值目标和调用目标位置引用未声明的值名称; Semantic 必须在该
+  使用位置报告 `AE0001`,不得延迟到 Codegen,也不得由后续可写性或可调用性诊断替代首个错误；
+- [x] BIND02：同一普通花括号块中重复声明局部绑定; 覆盖 `let` / `let`、`let` / `var`、`var` /
+  `let` 与 `var` / `var`,均在第二个声明名称处产生一个重复绑定诊断,不得把后声明解释为屏蔽；`_`
+  是普通标识符而非丢弃符,同一作用域重复声明 `_` 适用相同规则；
+- [x] BIND03：同一函数、方法和 Lambda 的参数名称重复,以及参数与最外层函数体局部绑定同名时
+  均报错; 在函数体更深一层子块中声明同名绑定则合法并进入 FCTS；
+- [x] BIND04：同一普通 tuple 解构模式及同一 `for/in` tuple 解构模式中的非空位置名称重复时
+  报错; 解构空位不产生名称,不得与其他位置形成重复；
+- [x] BIND05：同一块中先声明普通局部、后由单变量或 tuple 解构再次声明同名名称时在后一个声明
+  处报错; 解构一次引入的所有非空名称都必须参与同级唯一性检查；
+- [x] BIND06：同一 `if` / `while` 条件经 `&&` 同时传播的多个 infix `match` 绑定名称重复时在
+  后一个绑定处报错; `||`、`!` 或语句结束后不传播的名称继续按既有可见性规则处理；
+- [x] BIND07：不可变普通局部、默认或显式 `let` 参数、`for/in let`、`match` 默认或显式 `let`
+  绑定以及不可变 `catch` 绑定被重新赋值时,Semantic 在赋值目标处报告不可变绑定诊断; `var`
+  对应项的合法重新赋值全部进入 FCTS；
+- [x] BIND08：名称离开普通子块、三段式 `for`、`for/in`、`match` 分支、`catch` 子句或 infix
+  `match` 的可传播范围后再被引用时报告 `AE0001`; 不同 `match` 分支、不同 `catch` 子句以及
+  `else` 均不得读取其他分支或条件专属绑定；
+- [x] BIND09：在普通子块中覆盖父块绑定,逐项覆盖外层 / 内层 `let` 与 `var` 的四种组合;
+  FCTS 必须证明块内解析到最近绑定、内层 `var` 修改不影响外层值,并在离开子块后恢复外层绑定；
+- [x] BIND10：在 `for` 体、块形式 `match` 分支体、infix `match` 的 `if` / `while` 体以及
+  `catch` body 中声明与头部绑定同名的局部名称; 全部作为合法子块屏蔽进入 FCTS,并证明头部绑定
+  在进入屏蔽点前可见、内层绑定在声明后优先；
+- [x] BIND11：不同 `match` 分支、不同 `catch` 子句及循环的不同嵌套 body 独立复用同一名称;
+  全部进入 FCTS,证明同名绑定不跨兄弟作用域共享值或可变性；
+- [x] BIND12：模块级普通绑定重复声明以及模块级不同声明类别同名冲突,映射或补齐现有 Semantic
+  直接证据; import / alias 情形留给 G22,函数重载留给 G15,泛型 arity 留给 G25。
 
 ### 17.3 独立验收与交付 TODO
 
-- [ ] 建立本领域稳定诊断码到现有 Semantic test 的映射；
-- [ ] 独立运行 G13，核对诊断码、位置、数量、阶段和绑定上下文；
-- [ ] 在 Codex 沙箱外为 G13 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G13 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [x] 先按已确认的同级唯一、子块屏蔽和头部 / body 父子作用域更新变量绑定、流程控制与异常主规范,
+  并同步中英文用户手册；
+- [x] 建立本领域稳定诊断码到现有 Semantic test 的映射,只为没有直接证据的非法边界新增测试；
+- [x] 为 BIND03、BIND07、BIND09～BIND11 的全部合法边界建立 FCTS 直接运行证据; 可进入 FCTS
+  的正向程序不得只停留在 Semantic test；
+- [x] 独立运行 G13 Semantic tests 与 FCTS，核对诊断码、位置、数量、阶段、最近绑定、屏蔽恢复和
+  兄弟作用域隔离；
+- [x] 在 Codex 沙箱外为 G13 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G13 问题；
+- [x] 填写本组映射、实际新增用例、专项结果和全量结果。
 
 ### 17.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: close name binding diagnostic gaps`
+- 状态：已交付
+- 稳定码映射与新增用例：
+  - BIND01、BIND08 以 `AE0001` 覆盖未声明名称及离开作用域后的读取；赋值目标不再追加派生
+    `AE0104`；
+  - BIND02～BIND06 新增 `AE0105`，覆盖普通局部、参数、tuple 解构、`for/in` 解构及同一 `&&`
+    条件传播的 infix `match` 绑定，并精确断言后声明 token；
+  - BIND07 以 `AE0104` 覆盖所有不可变局部绑定形态，FCTS 覆盖对应 `var` 正向行为；
+  - BIND09～BIND11 在 FCTS 覆盖四种 `let` / `var` 子块屏蔽组合、所有控制头 / body 父子作用域及
+    兄弟作用域隔离；`_` 作为普通可读取标识符同时具有正向屏蔽与反向重复声明证据；
+  - BIND12 复用并补齐 `AE0215`、`AE0216`、`AE0217` 的同文件模块级直接证据；模块级绑定实现未
+    改动。
+- 实际文件：
+  - `docs/specifications/feng-binding.md`、`feng-flow.md`、`feng-exception.md`、
+    `feng-error-codes-ae.md` 与中英文用户手册：收敛同级唯一、子块屏蔽、参数 / body、控制头 /
+    body、`_` 普通标识符及 `AE0105`；
+  - `src/parser/parser.h`、`src/parser/parser.c` 与 `src/codegen/codegen.c`：为 tuple、`match`、
+    infix `match` 和 `catch` 绑定保留精确声明 token，并在 `for/in` tuple 分量 lowering 中传播；
+  - `src/semantic/analyzer.c`：统一源码局部声明检查，统一块形式 union `match` 的父子作用域，并消除
+    未声明赋值目标的派生可写性诊断；
+  - `test/semantic/test_semantic.c`：新增 BIND01～BIND08、BIND12 的精确反向矩阵；
+  - `fcts/fcts_bin/src/test_name_binding_scope.ff`：新增 BIND02～BIND04、BIND07、BIND09～BIND11 的
+    正向运行用例；
+  - `std/std/src/compiler/parser/FengParser.ff`、`std/std_test/src/test_lexer.ff`：按人工确认移除仅用于
+    忽略返回值的重复 `let _`，改用表达式语句。
+- 本组专项结果：Parser、Semantic、Codegen tests 均通过；std 601/601；FCTS 1094/1094；
+  `git diff --check` 通过。
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 1094/1094、smoke 均为
+  90/90、std 测试均为 601/601；性能约束、增量构建、发布、安装及其余单元与 CLI 测试全部通过。
+- 性能与兼容性：变更只增加编译期名称检查和 AST 声明位置信息；未增加运行时分支、分配或 ARC，
+  未修改 runtime 私有 ABI、公开 ABI 或 `.ft` 格式。
+- 问题：[G13 问题记录](./feng-language-conformance-coverage-hardening-issues/g13.md) 中
+  `ISSUE-G13-001`～`ISSUE-G13-005` 均已关闭。
+- 建议 commit message：`fix(semantic): enforce lexical binding uniqueness and complete G13 coverage`
 
 ## 18 G14：表达式诊断
 

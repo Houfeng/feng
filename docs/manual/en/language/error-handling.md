@@ -31,6 +31,9 @@ try load_config() catch error: string {
 ```
 
 Multiple `catch` clauses are matched in source order. Put concrete type branches first. `catch error: unknown` and an anonymous `catch` are catch-all branches.
+A `catch` name is an immutable header binding, and the following braced body is a child block that may declare a local
+binding with the same name. Each `catch` clause has an independent header scope, so different clauses may reuse the
+same exception name.
 
 An `unknown` binding can only be rethrown; its fields and methods are not accessible:
 

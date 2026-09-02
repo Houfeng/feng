@@ -52,6 +52,10 @@ let message = match result {
 };
 ```
 
+A branch-head binding belongs to that branch's own header scope, and the following braced body is a child block. The
+body may declare a local binding with the same name and shadows the header binding from that declaration onward.
+Different branches may independently reuse one binding name.
+
 A branch without a binding only tests the member type and does not change the original variable's static type:
 
 ```feng
@@ -83,7 +87,10 @@ if result match text: string && !text.isEmpty() {
 }
 ```
 
-A binding is visible only where a successful match can be guaranteed statically. `&&` carries a binding from its left side into its right side and branch body; `||`, `!`, and `else` do not propagate bindings.
+A binding is visible only where a successful match can be guaranteed statically. `&&` carries a binding from its left
+side into its right side and branch body; `||`, `!`, and `else` do not propagate bindings. A binding propagated into an
+`if` or `while` belongs to the condition-header scope, and the braced body is a child block that may shadow it. Multiple
+bindings propagated by one `&&` condition must use distinct names.
 
 ## Expression Results
 

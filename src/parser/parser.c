@@ -780,6 +780,50 @@ static bool parse_parameters(Parser *parser, FengParameter **out_params, size_t 
     return true;
 }
 
+/* Append one destructuring position while keeping its name and declaration
+ * token arrays index-aligned for precise Semantic diagnostics. */
+static bool append_destructure_binding_position(Parser *parser,
+                                                FengBinding *binding,
+                                                size_t *capacity,
+                                                FengSlice name,
+                                                FengToken token) {
+    if (binding->destructure_count == *capacity) {
+        size_t new_capacity = *capacity == 0U ? 4U : *capacity * 2U;
+        FengSlice *new_names = (FengSlice *)realloc(
+            binding->destructure_names,
+            new_capacity * sizeof(*new_names));
+        FengToken *new_tokens;
+
+        if (new_names == NULL) {
+            if (parser->error.message == NULL) {
+                parser->error.code = "IE0001";
+                parser->error.message = "out of memory";
+                parser->error.token = parser->tokens[parser->current];
+            }
+            return false;
+        }
+        binding->destructure_names = new_names;
+        new_tokens = (FengToken *)realloc(
+            binding->destructure_tokens,
+            new_capacity * sizeof(*new_tokens));
+        if (new_tokens == NULL) {
+            if (parser->error.message == NULL) {
+                parser->error.code = "IE0001";
+                parser->error.message = "out of memory";
+                parser->error.token = parser->tokens[parser->current];
+            }
+            return false;
+        }
+        binding->destructure_tokens = new_tokens;
+        *capacity = new_capacity;
+    }
+
+    binding->destructure_names[binding->destructure_count] = name;
+    binding->destructure_tokens[binding->destructure_count] = token;
+    binding->destructure_count += 1U;
+    return true;
+}
+
 static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding) {
     size_t capacity = 0U;
 
@@ -794,6 +838,7 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
 
     for (;;) {
         FengSlice name = {0};
+        FengToken name_token = parser_current_token(parser);
 
         if (parser_check(parser, FENG_TOKEN_LPAREN)) {
             return parser_error_current(parser, "SE0105", "nested destructuring bindings are not supported");
@@ -811,11 +856,8 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
             return parser_error_current(parser,
                                         "SE0104", "destructuring bindings support at most 8 positions");
         }
-        if (!APPEND_VALUE(parser,
-                          binding->destructure_names,
-                          binding->destructure_count,
-                          capacity,
-                          name)) {
+        if (!append_destructure_binding_position(
+                parser, binding, &capacity, name, name_token)) {
             return false;
         }
 
@@ -827,16 +869,14 @@ static bool parse_destructure_binding_names(Parser *parser, FengBinding *binding
         }
         if (parser_check(parser, FENG_TOKEN_RPAREN)) {
             FengSlice empty = {0};
+            FengToken empty_token = parser_current_token(parser);
 
             if (binding->destructure_count >= FENG_TUPLE_MAX_ITEMS) {
                 return parser_error_current(parser,
                                             "SE0104", "destructuring bindings support at most 8 positions");
             }
-            if (!APPEND_VALUE(parser,
-                              binding->destructure_names,
-                              binding->destructure_count,
-                              capacity,
-                              empty)) {
+            if (!append_destructure_binding_position(
+                    parser, binding, &capacity, empty, empty_token)) {
                 return false;
             }
             break;
@@ -866,6 +906,7 @@ static void initialize_binding(FengBinding *binding,
     binding->initializer = NULL;
     binding->is_destructure = false;
     binding->destructure_names = NULL;
+    binding->destructure_tokens = NULL;
     binding->destructure_count = 0U;
 }
 
@@ -3225,12 +3266,14 @@ static bool parse_match_branch_binding_prefix(
     Parser *parser,
     bool *out_has_binding,
     FengSlice *out_binding_name,
+    FengToken *out_binding_token,
     FengMutability *out_mutability) {
     size_t saved = parser->current;
     FengMutability mut = FENG_MUTABILITY_LET;
 
     *out_has_binding = false;
     *out_binding_name = (FengSlice){NULL, 0U};
+    memset(out_binding_token, 0, sizeof(*out_binding_token));
     *out_mutability = FENG_MUTABILITY_LET;
 
     /* Case 1: explicit let/var keyword. */
@@ -3244,11 +3287,13 @@ static bool parse_match_branch_binding_prefix(
             parser->current = saved;
             return true;
         }
+        *out_binding_token = *parser_current(parser);
         *out_binding_name = slice_from_token(parser_current(parser));
         (void)parser_advance(parser);
         if (!parser_check(parser, FENG_TOKEN_COLON)) {
             parser->current = saved;
             *out_binding_name = (FengSlice){NULL, 0U};
+            memset(out_binding_token, 0, sizeof(*out_binding_token));
             return true;
         }
         (void)parser_advance(parser);
@@ -3259,6 +3304,8 @@ static bool parse_match_branch_binding_prefix(
 
     /* Case 2: bare IDENT : (no let/var keyword, single-segment only). */
     if (parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
+        FengToken name_token = *parser_current(parser);
+
         (void)parser_advance(parser);
         /* Multi-segment name (IDENT . ...) is a qualified type reference. */
         if (parser_check(parser, FENG_TOKEN_DOT)) {
@@ -3275,6 +3322,7 @@ static bool parse_match_branch_binding_prefix(
             (void)parser_advance(parser);
             *out_has_binding = true;
             *out_binding_name = name;
+            *out_binding_token = name_token;
             *out_mutability = FENG_MUTABILITY_LET;
             return true;
         }
@@ -3295,11 +3343,13 @@ static bool parse_match_branch(Parser *parser,
     out_branch->body = NULL;
     out_branch->has_binding = false;
     out_branch->binding_name = (FengSlice){NULL, 0U};
+    memset(&out_branch->binding_token, 0, sizeof(out_branch->binding_token));
     out_branch->binding_mutability = FENG_MUTABILITY_LET;
 
     if (!parse_match_branch_binding_prefix(parser,
                                            &out_branch->has_binding,
                                            &out_branch->binding_name,
+                                           &out_branch->binding_token,
                                            &out_branch->binding_mutability)) {
         return false;
     }
@@ -3355,11 +3405,15 @@ static FengExpr *parse_infix_match_op(Parser *parser, FengToken match_token, Fen
     expr->as.match_op.label_count = 0U;
     expr->as.match_op.has_binding = false;
     expr->as.match_op.binding_name = (FengSlice){NULL, 0U};
+    memset(&expr->as.match_op.binding_token,
+           0,
+           sizeof(expr->as.match_op.binding_token));
     expr->as.match_op.binding_mutability = FENG_MUTABILITY_LET;
 
     if (!parse_match_branch_binding_prefix(parser,
                                            &expr->as.match_op.has_binding,
                                            &expr->as.match_op.binding_name,
+                                           &expr->as.match_op.binding_token,
                                            &expr->as.match_op.binding_mutability)) {
         free_expr(expr);
         return NULL;
@@ -3743,6 +3797,7 @@ static FengExpr *parse_try_expression(Parser *parser,
         clause.token = parser_previous_token(parser);
 
         if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
+            clause.binding_token = *parser_current(parser);
             if (!parser_expect_identifier_like(parser,
                                                &clause.name,
                                                false,
@@ -5255,6 +5310,7 @@ static void free_stmt(FengStmt *stmt) {
             free_type_ref(stmt->as.binding.type);
             free_expr(stmt->as.binding.initializer);
             free(stmt->as.binding.destructure_names);
+            free(stmt->as.binding.destructure_tokens);
             break;
         case FENG_STMT_ASSIGN:
             free_expr(stmt->as.assign.target);
@@ -5290,6 +5346,7 @@ static void free_stmt(FengStmt *stmt) {
             if (stmt->as.for_stmt.is_for_in) {
                 free_type_ref(stmt->as.for_stmt.iter_binding.type);
                 free(stmt->as.for_stmt.iter_binding.destructure_names);
+                free(stmt->as.for_stmt.iter_binding.destructure_tokens);
                 free_expr(stmt->as.for_stmt.iter_expr);
             } else {
                 free_stmt(stmt->as.for_stmt.init);
@@ -5366,6 +5423,7 @@ static void free_decl(FengDecl *decl) {
             free_type_ref(decl->as.binding.type);
             free_expr(decl->as.binding.initializer);
             free(decl->as.binding.destructure_names);
+            free(decl->as.binding.destructure_tokens);
             break;
         case FENG_DECL_TYPE:
             free_type_params(decl->as.type_decl.type_params,

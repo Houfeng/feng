@@ -7,6 +7,7 @@ import std.test;
 func main(args: string[]) {
   describe("Feng Conformance Test Suite", () {
       test_binding();
+      test_name_binding_scope();
       test_builtin_type();
       test_numeric_literal();
       test_expression();

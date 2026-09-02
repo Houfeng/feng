@@ -40373,10 +40373,14 @@ static bool cg_emit_loop_binding_pattern_from_borrowed_source(
 
         component = *binding;
         component.name = binding->destructure_names[i];
+        if (binding->destructure_tokens != NULL) {
+            component.token = binding->destructure_tokens[i];
+        }
         component.type = NULL;
         component.initializer = NULL;
         component.is_destructure = false;
         component.destructure_names = NULL;
+        component.destructure_tokens = NULL;
         component.destructure_count = 0U;
 
         buf_init(&field_source);

@@ -52,6 +52,7 @@
 | AE0102 | let 成员重复完成赋值约束 | AE0096 | constructor assignment repeats final binding of let member '%.*s' already completed by declaration initializer |
 | AE0102 | let 成员重复完成赋值约束 | AE0097 | constructor assignment repeats final binding of let member '%.*s' more than once in constructor '%.*s' |
 | AE0104 | 赋值目标可写性约束 | AE0099 | assignment target '%s' is not writable |
+| AE0105 | 同一词法值作用域绑定名称唯一性约束 | （新增） | duplicate binding '%.*s' in the same scope |
 | AE0108 | 解构初始化元组要求 | AE0174 | destructuring binding initializer must be a tuple |
 | AE0109 | 解构位置数量匹配约束 | AE0175 | destructuring binding has %zu position(s) but tuple initializer has %zu |
 | AE0109 | 解构位置数量匹配约束 | AE0176 | destructuring binding has %zu position(s) but tuple literal has %zu |

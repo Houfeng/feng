@@ -3962,6 +3962,9 @@ static void resolver_pop_type_params(ResolveContext *context,
     context->type_param_count = prev_count;
 }
 
+/* Append a compiler-local entry without source-declaration diagnostics.
+ * Derived inference and exception replays use this path after primary
+ * resolution has already validated the source declarations. */
 static bool resolver_add_local_entry(ResolveContext *context,
                                      FengSlice name,
                                      InferredExprType type,
@@ -3988,6 +3991,55 @@ static bool resolver_add_local_entry(ResolveContext *context,
                       &entry);
 }
 
+/* Return whether the active lexical value scope already declares name.
+ * Parent frames are deliberately excluded so child-block shadowing remains
+ * legal. */
+static bool resolver_current_scope_contains_local_name(
+    const ResolveContext *context,
+    FengSlice name) {
+    const ScopeFrame *frame;
+
+    if (context == NULL || context->scope_count == 0U) {
+        return false;
+    }
+    frame = &context->scopes[context->scope_count - 1U];
+    for (size_t index = 0U; index < frame->local_count; ++index) {
+        if (slice_equals(frame->locals[index].name, name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Declare one source-level local in the active frame. Duplicate declarations
+ * are diagnosed at the later name and still registered for error recovery so
+ * subsequent references resolve to the declaration nearest their use. */
+static bool resolver_declare_local_entry(
+    ResolveContext *context,
+    FengToken token,
+    FengSlice name,
+    InferredExprType type,
+    FengMutability mutability,
+    const FengExpr *source_expr,
+    const UnionNarrowingSet *union_narrowing) {
+    if (resolver_current_scope_contains_local_name(context, name) &&
+        !resolver_append_error(
+            context,
+            token,
+            "AE0105",
+            format_message("duplicate binding '%.*s' in the same scope",
+                           (int)name.length,
+                           name.data))) {
+        return false;
+    }
+    return resolver_add_local_entry(context,
+                                    name,
+                                    type,
+                                    mutability,
+                                    source_expr,
+                                    union_narrowing);
+}
+
 static bool resolver_add_local_typed_name_with_source(ResolveContext *context,
                                                       FengSlice name,
                                                       InferredExprType type,
@@ -4001,6 +4053,37 @@ static bool resolver_add_local_typed_name(ResolveContext *context,
                                           InferredExprType type,
                                           FengMutability mutability) {
     return resolver_add_local_typed_name_with_source(context, name, type, mutability, NULL);
+}
+
+/* Declare a typed source binding with an optional initializer provenance. */
+static bool resolver_declare_local_typed_name_with_source(
+    ResolveContext *context,
+    FengToken token,
+    FengSlice name,
+    InferredExprType type,
+    FengMutability mutability,
+    const FengExpr *source_expr) {
+    return resolver_declare_local_entry(context,
+                                        token,
+                                        name,
+                                        type,
+                                        mutability,
+                                        source_expr,
+                                        NULL);
+}
+
+/* Declare a typed source binding without initializer provenance. */
+static bool resolver_declare_local_typed_name(ResolveContext *context,
+                                              FengToken token,
+                                              FengSlice name,
+                                              InferredExprType type,
+                                              FengMutability mutability) {
+    return resolver_declare_local_typed_name_with_source(context,
+                                                         token,
+                                                         name,
+                                                         type,
+                                                         mutability,
+                                                         NULL);
 }
 
 static const LocalNameEntry *resolver_find_local_name_entry(const ResolveContext *context,
@@ -4893,11 +4976,13 @@ static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
                                                    const FengBinding *binding,
                                                    const FengDecl *tuple_decl,
                                                    const FengTypeRef *tuple_type_ref,
-                                                   bool add_to_scope);
+                                                   bool add_to_scope,
+                                                   bool diagnose_duplicates);
 static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
                                                       const FengBinding *binding,
                                                       const FengExpr *literal,
-                                                      bool add_to_scope);
+                                                      bool add_to_scope,
+                                                      bool diagnose_duplicates);
 static bool inferred_expr_types_equal(const ResolveContext *context,
                                       InferredExprType left,
                                       InferredExprType right);
@@ -8867,6 +8952,7 @@ static bool resolve_union_match_block_with_deepest_narrowing(
     const FengExpr *target_expr,
     const FengTypeRef *deepest_type_ref,
     FengSlice binding_name,
+    FengToken binding_token,
     FengMutability binding_mutability) {
     bool ok;
 
@@ -8878,24 +8964,17 @@ static bool resolve_union_match_block_with_deepest_narrowing(
     }
     ok = true;
     if (deepest_type_ref != NULL) {
-        ok = resolver_add_local_entry(context,
-                                      binding_name,
-                                      inferred_expr_type_from_type_ref(deepest_type_ref),
-                                      binding_mutability,
-                                      target_expr,
-                                      NULL);
+        ok = resolver_declare_local_entry(
+            context,
+            binding_token,
+            binding_name,
+            inferred_expr_type_from_type_ref(deepest_type_ref),
+            binding_mutability,
+            target_expr,
+            NULL);
     }
     if (ok) {
-        ok = resolve_block_contents(context, (FengBlock *)block, allow_self);
-    }
-    if (ok && !block_terminates_with_throw(block)) {
-        const FengExpr *yield = block_yield_expression(block);
-
-        if (yield != NULL) {
-            InferredExprType yield_type = infer_expr_type(context, yield);
-
-            ok = record_type_fact_for_site(context, yield, yield_type);
-        }
+        ok = resolve_branch_result_block(context, block, allow_self);
     }
     resolver_pop_scope(context);
     return ok;
@@ -8911,16 +8990,21 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                                                      const bool *active_members,
                                                      bool has_binding,
                                                      FengSlice binding_name,
+                                                     FengToken binding_token,
                                                      FengMutability binding_mutability) {
     bool ok;
+    bool pushed_binding_scope = false;
     size_t active_count = union_active_member_count(active_members,
                                                     info != NULL ? info->member_count : 0U);
 
     if (block == NULL) {
         return true;
     }
-    if (!resolver_push_scope(context)) {
-        return false;
+    if (has_binding) {
+        if (!resolver_push_scope(context)) {
+            return false;
+        }
+        pushed_binding_scope = true;
     }
     ok = true;
     /* Only add a narrowed binding when the branch explicitly declares one. */
@@ -8933,8 +9017,9 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                 union_spec_type_ref,
                 info->members[member_index].type_ref);
 
-            ok = resolver_add_local_entry(
+            ok = resolver_declare_local_entry(
                 context,
+                binding_token,
                 binding_name,
                 inferred_expr_type_from_type_ref(member_type_ref),
                 binding_mutability,
@@ -8948,27 +9033,21 @@ static bool resolve_union_match_block_with_narrowing(ResolveContext *context,
                 info->member_count);
 
             ok = narrowing != NULL &&
-                 resolver_add_local_entry(context,
-                                          binding_name,
-                                          original_type,
-                                          binding_mutability,
-                                          target_expr,
-                                          narrowing);
+                 resolver_declare_local_entry(context,
+                                              binding_token,
+                                              binding_name,
+                                              original_type,
+                                              binding_mutability,
+                                              target_expr,
+                                              narrowing);
         }
     }
     if (ok) {
-        ok = resolve_block_contents(context, block, allow_self);
+        ok = resolve_branch_result_block(context, block, allow_self);
     }
-    if (ok && !block_terminates_with_throw(block)) {
-        const FengExpr *yield = block_yield_expression(block);
-
-        if (yield != NULL) {
-            InferredExprType yield_type = infer_expr_type(context, yield);
-
-            ok = record_type_fact_for_site(context, yield, yield_type);
-        }
+    if (pushed_binding_scope) {
+        resolver_pop_scope(context);
     }
-    resolver_pop_scope(context);
     return ok;
 }
 
@@ -9255,6 +9334,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                             target,
                             deepest_type_ref,
                             branches[branch_index].binding_name,
+                            branches[branch_index].binding_token,
                             branches[branch_index].binding_mutability);
                     } else {
                         /* Chain branch without binding: narrow to first-level member. */
@@ -9268,7 +9348,9 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                 context, branches[branch_index].body, allow_self,
                                 target, target_type, info, union_spec_type_ref,
                                 narrow_members,
-                                false, (FengSlice){NULL, 0U}, FENG_MUTABILITY_LET);
+                                false, (FengSlice){NULL, 0U},
+                                branches[branch_index].token,
+                                FENG_MUTABILITY_LET);
                             free(narrow_members);
                         }
                     }
@@ -9283,6 +9365,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                                   branch_members,
                                                                   branches[branch_index].has_binding,
                                                                   branches[branch_index].binding_name,
+                                                                  branches[branch_index].binding_token,
                                                                   branches[branch_index].binding_mutability);
                 }
             }
@@ -9328,6 +9411,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                           else_members,
                                                           false,
                                                           (FengSlice){NULL, 0U},
+                                                          anchor,
                                                           FENG_MUTABILITY_LET);
             free(else_members);
         }
@@ -10238,6 +10322,7 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
         temp_branch.body = NULL;
         temp_branch.has_binding = false;
         temp_branch.binding_name = (FengSlice){NULL, 0U};
+        memset(&temp_branch.binding_token, 0, sizeof(temp_branch.binding_token));
         temp_branch.binding_mutability = FENG_MUTABILITY_LET;
 
         ok = collect_match_branch_label_records(context,
@@ -10369,12 +10454,14 @@ static bool register_visible_match_binding(ResolveContext *context,
         if (active_count == 1U) {
             if (deepest_chain_type != NULL) {
                 /* Chain label: narrow to deepest type in chain. */
-                ok = resolver_add_local_entry(context,
-                                              binding->name,
-                                              inferred_expr_type_from_type_ref(deepest_chain_type),
-                                              binding->mutability,
-                                              target,
-                                              NULL);
+                ok = resolver_declare_local_entry(
+                    context,
+                    match_op->as.match_op.binding_token,
+                    binding->name,
+                    inferred_expr_type_from_type_ref(deepest_chain_type),
+                    binding->mutability,
+                    target,
+                    NULL);
             } else {
                 member_index = union_first_active_member_index(active_members, info->member_count);
                 const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
@@ -10382,12 +10469,14 @@ static bool register_visible_match_binding(ResolveContext *context,
                     info->spec_decl,
                     union_spec_type_ref,
                     info->members[member_index].type_ref);
-                ok = resolver_add_local_entry(context,
-                                              binding->name,
-                                              inferred_expr_type_from_type_ref(member_type_ref),
-                                              binding->mutability,
-                                              target,
-                                              NULL);
+                ok = resolver_declare_local_entry(
+                    context,
+                    match_op->as.match_op.binding_token,
+                    binding->name,
+                    inferred_expr_type_from_type_ref(member_type_ref),
+                    binding->mutability,
+                    target,
+                    NULL);
             }
         } else {
             const UnionNarrowingSet *narrowing = resolver_create_union_narrowing(
@@ -10396,12 +10485,14 @@ static bool register_visible_match_binding(ResolveContext *context,
                 active_members,
                 info->member_count);
             ok = narrowing != NULL &&
-                 resolver_add_local_entry(context,
-                                          binding->name,
-                                          target_type,
-                                          binding->mutability,
-                                          target,
-                                          narrowing);
+                 resolver_declare_local_entry(
+                     context,
+                     match_op->as.match_op.binding_token,
+                     binding->name,
+                     target_type,
+                     binding->mutability,
+                     target,
+                     narrowing);
         }
     }
     free(active_members);
@@ -17048,7 +17139,8 @@ static InferredExprType infer_block_return_type(ResolveContext *context, const F
                     (void)add_destructure_locals_from_tuple_literal(context,
                                                                     &stmt->as.binding,
                                                                     stmt->as.binding.initializer,
-                                                                    true);
+                                                                    true,
+                                                                    false);
                     continue;
                 }
 
@@ -17065,7 +17157,8 @@ static InferredExprType infer_block_return_type(ResolveContext *context, const F
                                                                  &stmt->as.binding,
                                                                  tuple_decl,
                                                                  tuple_type_ref,
-                                                                 true);
+                                                                 true,
+                                                                 false);
                 }
                 continue;
             }
@@ -18757,6 +18850,7 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
         case FENG_EXPR_IDENTIFIER: {
             const LocalNameEntry *local_entry =
                 resolver_find_local_name_entry(context, target->as.identifier);
+            const VisibleValueEntry *visible_value;
 
             if (local_entry != NULL) {
                 return mutability_is_writable(local_entry->mutability)
@@ -18764,21 +18858,33 @@ static bool validate_assignment_target_writable(ResolveContext *context, const F
                            : append_assignment_target_not_writable_error(context, target);
             }
 
-            {
-                const VisibleValueEntry *visible_value =
-                    find_visible_value(context->visible_values,
-                                       context->visible_value_count,
-                                       target->as.identifier);
-
-                if (visible_value != NULL && !visible_value->is_function &&
+            visible_value = find_visible_value(context->visible_values,
+                                               context->visible_value_count,
+                                               target->as.identifier);
+            if (visible_value != NULL) {
+                if (!visible_value->is_function &&
                     visible_value->decl != NULL &&
                     visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
                     mutability_is_writable(visible_value->mutability)) {
                     return true;
                 }
+                return append_assignment_target_not_writable_error(context,
+                                                                   target);
             }
 
-            return append_assignment_target_not_writable_error(context, target);
+            if (find_visible_type_any_arity(context->visible_types,
+                                            context->visible_type_count,
+                                            target->as.identifier) != NULL ||
+                find_type_param(context, target->as.identifier) != NULL) {
+                return append_assignment_target_not_writable_error(context,
+                                                                   target);
+            }
+
+            /* Name resolution has already emitted AE0001 for an unknown
+             * identifier, or AE0904 for a bare module alias. Neither denotes
+             * a value whose mutability can be checked, so do not append a
+             * derived AE0104 diagnostic for the same invalid target. */
+            return true;
         }
 
         case FENG_EXPR_MEMBER: {
@@ -27904,8 +28010,9 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
 
     ok = true;
     for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
-        ok = resolver_add_local_typed_name(
+        ok = resolver_declare_local_typed_name(
             context,
+            expr->as.lambda.params[param_index].token,
             expr->as.lambda.params[param_index].name,
             inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
             expr->as.lambda.params[param_index].mutability);
@@ -28403,7 +28510,8 @@ static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
                                                    const FengBinding *binding,
                                                    const FengDecl *tuple_decl,
                                                    const FengTypeRef *tuple_type_ref,
-                                                   bool add_to_scope) {
+                                                   bool add_to_scope,
+                                                   bool diagnose_duplicates) {
     size_t index;
 
     if (!decl_is_tuple_type(tuple_decl)) {
@@ -28433,13 +28541,28 @@ static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
         if (field_type == NULL) {
             return false;
         }
-        if (add_to_scope &&
-            !resolver_add_local_typed_name_with_source(context,
-                                                       name,
-                                                       inferred_expr_type_from_type_ref(field_type),
-                                                       binding->mutability,
-                                                       NULL)) {
-            return false;
+        if (add_to_scope) {
+            FengToken token = binding->destructure_tokens != NULL
+                                  ? binding->destructure_tokens[index]
+                                  : binding->token;
+            bool added = diagnose_duplicates
+                             ? resolver_declare_local_typed_name_with_source(
+                                   context,
+                                   token,
+                                   name,
+                                   inferred_expr_type_from_type_ref(field_type),
+                                   binding->mutability,
+                                   NULL)
+                             : resolver_add_local_typed_name_with_source(
+                                   context,
+                                   name,
+                                   inferred_expr_type_from_type_ref(field_type),
+                                   binding->mutability,
+                                   NULL);
+
+            if (!added) {
+                return false;
+            }
         }
     }
 
@@ -28450,7 +28573,8 @@ static bool add_destructure_locals_from_tuple_type(ResolveContext *context,
 static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
                                                       const FengBinding *binding,
                                                       const FengExpr *literal,
-                                                      bool add_to_scope) {
+                                                      bool add_to_scope,
+                                                      bool diagnose_duplicates) {
     size_t index;
 
     if (literal == NULL || literal->kind != FENG_EXPR_TUPLE_LITERAL) {
@@ -28481,13 +28605,28 @@ static bool add_destructure_locals_from_tuple_literal(ResolveContext *context,
         }
 
         item_type = infer_expr_type(context, item);
-        if (add_to_scope &&
-            !resolver_add_local_typed_name_with_source(context,
-                                                       name,
-                                                       item_type,
-                                                       binding->mutability,
-                                                       item)) {
-            return false;
+        if (add_to_scope) {
+            FengToken token = binding->destructure_tokens != NULL
+                                  ? binding->destructure_tokens[index]
+                                  : binding->token;
+            bool added = diagnose_duplicates
+                             ? resolver_declare_local_typed_name_with_source(
+                                   context,
+                                   token,
+                                   name,
+                                   item_type,
+                                   binding->mutability,
+                                   item)
+                             : resolver_add_local_typed_name_with_source(
+                                   context,
+                                   name,
+                                   item_type,
+                                   binding->mutability,
+                                   item);
+
+            if (!added) {
+                return false;
+            }
         }
     }
 
@@ -28517,7 +28656,8 @@ static bool resolve_destructure_binding(ResolveContext *context,
         return add_destructure_locals_from_tuple_literal(context,
                                                          binding,
                                                          binding->initializer,
-                                                         add_to_scope);
+                                                         add_to_scope,
+                                                         true);
     }
 
     initializer_type = infer_expr_type(context, binding->initializer);
@@ -28540,7 +28680,8 @@ static bool resolve_destructure_binding(ResolveContext *context,
                                                   binding,
                                                   tuple_decl,
                                                   tuple_type_ref,
-                                                  add_to_scope);
+                                                  add_to_scope,
+                                                  true);
 }
 
 static bool resolve_binding(ResolveContext *context,
@@ -28651,8 +28792,13 @@ static bool resolve_binding(ResolveContext *context,
         return false;
     }
     if (add_to_scope) {
-        return resolver_add_local_typed_name_with_source(
-            context, binding->name, binding_type, binding->mutability, binding->initializer);
+        return resolver_declare_local_typed_name_with_source(
+            context,
+            binding->token,
+            binding->name,
+            binding_type,
+            binding->mutability,
+            binding->initializer);
     }
     return true;
 }
@@ -28767,10 +28913,12 @@ static bool resolve_try_expr(ResolveContext *context,
                                        body_type,
                                        result_required);
             } else {
-                ok = resolver_add_local_typed_name(context,
-                                   clause->name,
-                                   catch_type,
-                                   FENG_MUTABILITY_LET) &&
+                ok = resolver_declare_local_typed_name(
+                         context,
+                         clause->binding_token,
+                         clause->name,
+                         catch_type,
+                         FENG_MUTABILITY_LET) &&
                      resolve_branch_result_block(context,
                                                  clause->body,
                                                  allow_self) &&
@@ -29348,13 +29496,15 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                             binding,
                             tuple_decl,
                             element_type_ref,
+                            true,
                             true);
                     } else {
                         InferredExprType element_type =
                             inferred_expr_type_from_type_ref(element_type_ref);
 
-                        ok = resolver_add_local_typed_name(
+                        ok = resolver_declare_local_typed_name(
                             context,
+                            binding->token,
                             binding->name,
                             element_type,
                             binding->mutability);
@@ -29618,8 +29768,9 @@ static bool resolve_callable(ResolveContext *context,
 
     ok = true;
     for (param_index = 0U; param_index < callable->param_count && ok; ++param_index) {
-        ok = resolver_add_local_typed_name(
+        ok = resolver_declare_local_typed_name(
             context,
+            callable->params[param_index].token,
             callable->params[param_index].name,
             inferred_expr_type_from_type_ref(callable->params[param_index].type),
             callable->params[param_index].mutability);

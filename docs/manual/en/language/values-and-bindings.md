@@ -62,10 +62,13 @@ func advance(step: int, var position: int): int {
 ```
 
 Parameters enter a function by value. `var` only allows the parameter binding to be modified inside the function body; reassignment is not written back to the caller's binding.
+Names in one parameter list must be unique, and the outermost function body cannot redeclare a parameter name. A
+deeper nested block may shadow a parameter.
 
 ## Block Scope
 
-A binding is visible from its declaration through its containing block and nested blocks. A nested block can shadow an outer binding with a binding of the same name:
+A binding is visible from its declaration through its containing block and nested blocks. The same block cannot
+declare one binding name twice. A nested block can shadow an outer binding with a binding of the same name:
 
 ```feng
 let label = "outer";
@@ -80,6 +83,14 @@ println(label);
 
 After the nested block ends, the outer `label` becomes visible again.
 
+`_` is an ordinary identifier, not a discard marker. `let _ = expression;` declares an ordinary binding named `_`,
+so declaring `_` again in the same scope is a duplicate-binding error. To evaluate an expression and ignore its result,
+write it as an expression statement:
+
+```feng
+advance();
+```
+
 ## Destructuring Bindings
 
 Named tuples and tuple literals can be destructured by position:
@@ -93,4 +104,5 @@ let (first, second) = (1, 2);
 let (, only_text) = pair;
 ```
 
-An empty position discards the corresponding value. Feng currently supports only one level of destructuring.
+An empty position discards the corresponding value and creates no binding. Nonempty positions in one destructuring
+pattern must use distinct names. Feng currently supports only one level of destructuring.

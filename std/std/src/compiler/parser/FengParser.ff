@@ -117,7 +117,7 @@ open type FengParser {
     if !self.check(kind) {
       return false;
     }
-    let _ = self.advance();
+    self.advance();
     return true;
   }
 
@@ -157,7 +157,7 @@ open type FengParser {
   seal func peekToken(): FengToken {
     var token = self.lexer.peek();
     while FengTokenUtil.isTrivia(token.kind) {
-      let _ = self.lexer.next();
+      self.lexer.next();
       token = self.lexer.peek();
     }
     return token;
@@ -277,7 +277,7 @@ open type FengParser {
       return true;
     }
     if self.check(FengTokenKind.OperatorShiftRight) {
-      let _ = self.advance();
+      self.advance();
       self.pendingGt = 1;
       return true;
     }
@@ -653,7 +653,7 @@ open type FengParser {
       return false;
     }
     let saved = self.saveState();
-    let _ = self.advance();
+    self.advance();
 
     var depth: int = 0;
     var sawColon = false;
@@ -661,13 +661,13 @@ open type FengParser {
     while self.current.kind != FengTokenKind.SpecialEndOfFile {
       if self.current.kind == FengTokenKind.PunctuationLeftParen {
         depth = depth + 1;
-        let _ = self.advance();
+        self.advance();
         continue;
       }
       if self.current.kind == FengTokenKind.PunctuationRightParen {
         if depth == 0 {
           let isEmpty = (self._previous.kind == FengTokenKind.PunctuationLeftParen);
-          let _ = self.advance();
+          self.advance();
           let afterKind = self.current.kind;
           self.restoreState(saved);
           if afterKind == FengTokenKind.OperatorArrow && (sawColon || isEmpty) {
@@ -679,13 +679,13 @@ open type FengParser {
           return false;
         }
         depth = depth - 1;
-        let _ = self.advance();
+        self.advance();
         continue;
       }
       if depth == 0 && self.current.kind == FengTokenKind.PunctuationColon {
         sawColon = true;
       }
-      let _ = self.advance();
+      self.advance();
     }
 
     self.restoreState(saved);
@@ -705,25 +705,25 @@ open type FengParser {
       return false;
     }
     let saved = self.saveState();
-    let _ = self.advance();
+    self.advance();
 
     if !self.isIdentifierLike(true) {
       self.restoreState(saved);
       return false;
     }
-    let _ = self.advance();
+    self.advance();
 
     while self.matchToken(FengTokenKind.PunctuationDot) {
       if !self.isIdentifierLike(false) {
         self.restoreState(saved);
         return false;
       }
-      let _ = self.advance();
+      self.advance();
     }
 
     if self.check(FengTokenKind.OperatorLess) {
       var depth: int = 1;
-      let _ = self.advance();
+      self.advance();
       while depth > 0 && self.current.kind != FengTokenKind.SpecialEndOfFile {
         if self.current.kind == FengTokenKind.OperatorLess {
           depth = depth + 1;
@@ -732,16 +732,16 @@ open type FengParser {
         } else if self.current.kind == FengTokenKind.OperatorShiftRight {
           depth = depth - 2;
         }
-        let _ = self.advance();
+        self.advance();
       }
     }
 
     while self.check(FengTokenKind.OperatorStar) {
-      let _ = self.advance();
+      self.advance();
     }
     while self.check(FengTokenKind.PunctuationLeftBracket) {
-      let _ = self.advance();
-      let _ = self.matchToken(FengTokenKind.OperatorNot);
+      self.advance();
+      self.matchToken(FengTokenKind.OperatorNot);
       if !self.matchToken(FengTokenKind.PunctuationRightBracket) {
         self.restoreState(saved);
         return false;

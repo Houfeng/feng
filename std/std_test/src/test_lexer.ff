@@ -414,7 +414,7 @@ func lexer_location_first_token() {
 
 func lexer_location_after_whitespace() {
   var lexer = makeLexer("  abc");
-  let _ = lexer.next();
+  lexer.next();
   let token = lexer.next();
   check(token.location.offset == (int)2, "lexer/loc-after-ws-offset");
   check(token.location.line == (int)1, "lexer/loc-after-ws-line");
@@ -424,8 +424,8 @@ func lexer_location_after_whitespace() {
 
 func lexer_location_after_newline() {
   var lexer = makeLexer("a\nb");
-  let _ = lexer.next();
-  let _ = lexer.next();
+  lexer.next();
+  lexer.next();
   let token = lexer.next();
   check(token.kind == FengTokenKind.Identifier, "lexer/loc-newline-kind");
   check(token.value.toString() == "b", "lexer/loc-newline-value");

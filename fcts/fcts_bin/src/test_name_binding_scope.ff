@@ -1,0 +1,314 @@
+module fcts_bin;
+
+import std.test;
+
+/** Callable target used to exercise Lambda parameter/body scope boundaries. */
+spec G13BindingMapper(value: int): int;
+
+/** Union value used by block and infix match binding-scope cases. */
+spec G13BindingValue: int | string;
+
+/** Named triple used to exercise empty tuple-pattern positions. */
+type G13BindingTriple(int, int, int);
+
+/** Method body used to prove a deeper block may shadow a method parameter. */
+type G13BindingMethodHost {
+  /** Return the inner value followed by the restored parameter value. */
+  func observe(value: int): int {
+    var inner = 0;
+    if true {
+      let value = 9;
+      inner = value;
+    }
+    return inner * 10 + value;
+  }
+}
+
+/** Prove a deeper function block may shadow and then restore a parameter. */
+func g13ObserveFunctionParameter(value: int): int {
+  var inner = 0;
+  if true {
+    let value = 8;
+    inner = value;
+  }
+  return inner * 10 + value;
+}
+
+/** Prove an explicitly mutable parameter remains assignable. */
+func g13IncrementParameter(var value: int): int {
+  value += 1;
+  return value;
+}
+
+/** Throw one string so catch-header/body shadowing is observable. */
+func g13ThrowBindingString(value: string): void {
+  throw value;
+}
+
+/** Throw one i32 so sibling typed catch clauses can be distinguished. */
+func g13ThrowBindingI32(value: i32): void {
+  throw value;
+}
+
+/** Verify G13 value-name lookup, shadowing and mutability behavior. */
+open func test_name_binding_scope() {
+  describe("name binding scope", () {
+    test("BIND03 function method and Lambda parameters allow child shadowing", () {
+      let host = G13BindingMethodHost();
+      let mapper: G13BindingMapper = (value: int) {
+        var inner = 0;
+        if true {
+          let value = 7;
+          inner = value;
+        }
+        return inner * 10 + value;
+      };
+
+      assert(g13ObserveFunctionParameter(1) == 81,
+             "function child block uses the inner binding then restores the parameter");
+      assert(host.observe(2) == 92,
+             "method child block uses the inner binding then restores the parameter");
+      assert(mapper(3) == 73,
+             "Lambda child block uses the inner binding then restores the parameter");
+    });
+
+    test("BIND02 underscore is an ordinary readable binding name", () {
+      let _ = 7;
+      var inner = 0;
+      if true {
+        let _ = 8;
+        inner = _;
+      }
+      assert(inner == 8 && _ == 7,
+             "underscore follows ordinary lexical binding and shadowing rules");
+    });
+
+    test("BIND04 tuple empty positions do not introduce bindings", () {
+      let (left, , right) = (1, 100, 3);
+      let first: G13BindingTriple = (2, 200, 4);
+      let second: G13BindingTriple = (5, 500, 6);
+      var observed = left * 10 + right;
+
+      for let (left, , right) in [first, second] {
+        observed += left * 10 + right;
+      }
+
+      assert(observed == 93,
+             "only nonempty tuple-pattern positions introduce local names");
+    });
+
+    test("BIND07 mutable binding forms remain writable", () {
+      var local = 1;
+      local = 2;
+
+      var loopValue = 0;
+      for var item in [3] {
+        item += 1;
+        loopValue = item;
+      }
+
+      let matched: G13BindingValue = 5;
+      var matchValue = 0;
+      match matched {
+        var item: int {
+          item += 1;
+          matchValue = item;
+        }
+        else {}
+      }
+
+      assert(local == 2 && g13IncrementParameter(2) == 3 &&
+             loopValue == 4 && matchValue == 6,
+             "local, parameter, for/in and match var bindings are assignable");
+    });
+
+    test("BIND09 outer let inner let shadowing restores the outer value", () {
+      let value = 1;
+      var inner = 0;
+      if true {
+        let value = 2;
+        inner = value;
+      }
+      assert(inner == 2 && value == 1,
+             "let/let shadowing resolves to the nearest binding");
+    });
+
+    test("BIND09 outer let inner var mutation stays in the child block", () {
+      let value = 3;
+      var inner = 0;
+      if true {
+        var value = 4;
+        value += 1;
+        inner = value;
+      }
+      assert(inner == 5 && value == 3,
+             "let/var shadowing does not mutate the outer let binding");
+    });
+
+    test("BIND09 outer var inner let shadowing restores the outer value", () {
+      var value = 6;
+      value += 1;
+      var inner = 0;
+      if true {
+        let value = 8;
+        inner = value;
+      }
+      assert(inner == 8 && value == 7,
+             "var/let shadowing restores the previously mutated outer binding");
+    });
+
+    test("BIND09 outer var inner var mutations remain independent", () {
+      var value = 9;
+      var inner = 0;
+      if true {
+        var value = 10;
+        value += 1;
+        inner = value;
+      }
+      value += 1;
+      assert(inner == 11 && value == 10,
+             "var/var shadowing mutates two distinct bindings");
+    });
+
+    test("BIND10 three-clause for body shadows its header binding", () {
+      var observed = 0;
+      for var item = 1; item < 2; item += 1 {
+        observed = item * 10;
+        let item = 7;
+        observed += item;
+      }
+      assert(observed == 17,
+             "the for header is visible before the body-local shadow");
+    });
+
+    test("BIND10 for/in body shadows its iteration binding", () {
+      var observed = 0;
+      for let item in [2] {
+        observed = item * 10;
+        let item = 7;
+        observed += item;
+      }
+      assert(observed == 27,
+             "the iteration binding is visible before the body-local shadow");
+    });
+
+    test("BIND10 block match body shadows its branch-header binding", () {
+      let matched: G13BindingValue = 3;
+      var observed = 0;
+      match matched {
+        item: int {
+          observed = item * 10;
+          let item = 7;
+          observed += item;
+        }
+        else {}
+      }
+      assert(observed == 37,
+             "the match header is visible before the branch-body shadow");
+    });
+
+    test("BIND10 infix match if body shadows its condition binding", () {
+      let matched: G13BindingValue = 4;
+      var observed = 0;
+      if matched match item: int {
+        observed = item * 10;
+        let item = 7;
+        observed += item;
+      }
+      assert(observed == 47,
+             "the if condition binding is visible before the body-local shadow");
+    });
+
+    test("BIND10 infix match while body shadows its condition binding", () {
+      var matched: G13BindingValue = 2;
+      var observed = 0;
+      while matched match item: int && item > 0 {
+        observed = item * 10;
+        let item = 7;
+        observed += item;
+        matched = 0;
+      }
+      assert(observed == 27,
+             "the while condition binding is visible before the body-local shadow");
+    });
+
+    test("BIND10 catch body shadows its clause-header binding", () {
+      var observed = "";
+      try g13ThrowBindingString("header") catch error: string {
+        observed = error;
+        let error = "body";
+        observed = observed + ":" + error;
+      }
+      assert(observed == "header:body",
+             "the catch header is visible before the body-local shadow");
+    });
+
+    test("BIND11 sibling match branches reuse one name independently", () {
+      let integerValue: G13BindingValue = 5;
+      let stringValue: G13BindingValue = "text";
+      var integerObserved = 0;
+      var stringObserved = "";
+
+      match integerValue {
+        var item: int {
+          item += 1;
+          integerObserved = item;
+        }
+        var item: string {
+          item = item + "!";
+          stringObserved = item;
+        }
+        else {}
+      }
+      match stringValue {
+        var item: int {
+          item += 1;
+          integerObserved = item;
+        }
+        var item: string {
+          item = item + "!";
+          stringObserved = item;
+        }
+        else {}
+      }
+
+      assert(integerObserved == 6 && stringObserved == "text!",
+             "sibling match bindings do not share values or mutability");
+    });
+
+    test("BIND11 sibling catch clauses reuse one name independently", () {
+      var observed = 0;
+      try g13ThrowBindingI32((i32)5) catch error: string {
+        observed = 1;
+      } catch error: i32 {
+        observed = (int)error + 2;
+      }
+      assert(observed == 7,
+             "only the matching catch clause exposes its own binding");
+    });
+
+    test("BIND11 sibling and nested loop bodies isolate reused names", () {
+      var siblingTotal = 0;
+      for let value in [1, 2] {
+        let local = value;
+        siblingTotal += local;
+      }
+      for let value in [3, 4] {
+        let local = value * 10;
+        siblingTotal += local;
+      }
+
+      var nestedTotal = 0;
+      for let value in [1, 2] {
+        nestedTotal += value;
+        for let value in [10] {
+          nestedTotal += value;
+        }
+        nestedTotal += value;
+      }
+
+      assert(siblingTotal == 73 && nestedTotal == 26,
+             "loop-body names are isolated across siblings and nesting");
+    });
+  });
+}

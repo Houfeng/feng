@@ -61,6 +61,8 @@ The initializer, condition, and update clauses can each be omitted. `for ;; { ..
 A nonempty initializer runs exactly once when control enters the loop. A binding declared by the initializer remains
 the same binding throughout the loop, and a binding declared outside the loop remains the original binding. The
 condition, update, and every execution of the body refer to those same bindings.
+An initializer binding belongs to the loop-header scope, and the braced body is its child block. A body-local binding
+may use the same name and shadows the initializer binding from its declaration onward.
 
 Each entry into the body is a new execution of that block. Whenever a body-local declaration is executed, it creates
 a new binding. Closures created in different iterations therefore share a captured outer or initializer binding, but
@@ -80,7 +82,8 @@ for let value in values {
 `for/in` can iterate over arrays and over standard-library or user-defined iterators that implement the `@iterable` /
 `@iterator` protocols. Before each entry into the body, Feng creates a new loop-variable binding initialized with the
 current element. This is equivalent to executing the corresponding local declaration once per iteration immediately
-before the body begins.
+before the body begins. The loop variable belongs to the current iteration's header scope, and the braced body is its
+child block. A body-local binding may use the same name and shadows the loop variable from its declaration onward.
 
 When each element is a named tuple, the loop can destructure it directly:
 
@@ -103,6 +106,7 @@ The `let` or `var` keyword is required and applies to every named position. A pa
 positions as the tuple. An empty position skips that element, for example `for let (name, ) in entries`. Patterns are
 one level only: nested tuple patterns, single-position patterns, and type annotations inside a pattern are not
 supported. Each nonempty position is a separate per-iteration binding.
+Names in one pattern must be distinct.
 
 A `let` loop variable cannot be reassigned. A `var` loop variable can be modified during its iteration, but doing so
 does not change the iterated sequence or the next iteration's initial value. A closure captures only the current
