@@ -387,6 +387,16 @@ struct UnionNarrowingSet {
     size_t member_count;
 };
 
+/* Nearest value-expression branch boundary that may not transfer control to
+ * a loop outside that branch. Inner loops temporarily make loop_depth nonzero
+ * and therefore remain valid targets without weakening the boundary. */
+typedef enum ExpressionLoopBoundary {
+    EXPRESSION_LOOP_BOUNDARY_NONE = 0,
+    EXPRESSION_LOOP_BOUNDARY_IF,
+    EXPRESSION_LOOP_BOUNDARY_MATCH,
+    EXPRESSION_LOOP_BOUNDARY_CATCH
+} ExpressionLoopBoundary;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -454,11 +464,10 @@ typedef struct ResolveContext {
      * callable / lambda boundaries so that a lambda nested in a loop cannot
      * jump out of the surrounding loop. */
     size_t loop_depth;
-    /* Number of nested `if` expression value blocks currently being resolved.
-     * When non-zero, `break` and `continue` from an outer loop cannot escape
-     * into one of these blocks because every path through the expression must
-     * produce a value.  Reset to 0 across callable / lambda boundaries. */
-    size_t if_expr_depth;
+    /* Nearest if/match/try result branch that prevents break/continue from
+     * targeting a loop outside the value expression. Reset across callable
+     * boundaries; loops declared inside the branch use loop_depth normally. */
+    ExpressionLoopBoundary expression_loop_boundary;
     /* When non-NULL, the resolver is currently resolving an expression that
      * has an explicit target type (binding annotation, function argument,
      * return value, member assignment). Used by the shared if/match/try
@@ -476,12 +485,6 @@ typedef struct ResolveContext {
      * type field — the correct type is committed after resolution picks the
      * unique winner (see commit_literal_arg_adaptations_for_resolved_call). */
     bool suppress_literal_type_commit;
-    /* Number of catch blocks belonging to a try expression currently being
-     * resolved.  When non-zero, `break` and `continue` from an outer loop
-     * cannot escape into a catch block because every path through the
-     * expression must produce a value.  Reset to 0 across callable / lambda
-     * boundaries. */
-    size_t catch_expr_depth;
     /* Number of nested `defer { ... }` blocks currently being resolved.
      * Used to enforce the §4 semantic restrictions on control flow inside
      * defer bodies: `return`/`throw`/nested `defer` are forbidden at any
@@ -517,6 +520,33 @@ typedef struct ResolveContext {
      * FengSemanticAnalyzeOptions.pointer_size through the analysis entry. */
     size_t pointer_size;
 } ResolveContext;
+
+/* Saved resolver state while entering one value-expression result branch. */
+typedef struct ExpressionLoopBoundaryState {
+    size_t loop_depth;
+    ExpressionLoopBoundary boundary;
+} ExpressionLoopBoundaryState;
+
+/* Enter a result branch without inheriting loop targets from outside the
+ * value expression. A loop declared inside the branch increments loop_depth
+ * from zero and remains a legal target. */
+static void enter_expression_loop_boundary(
+    ResolveContext *context,
+    ExpressionLoopBoundary boundary,
+    ExpressionLoopBoundaryState *saved) {
+    saved->loop_depth = context->loop_depth;
+    saved->boundary = context->expression_loop_boundary;
+    context->loop_depth = 0U;
+    context->expression_loop_boundary = boundary;
+}
+
+/* Restore the resolver state that surrounded a value-expression branch. */
+static void leave_expression_loop_boundary(
+    ResolveContext *context,
+    const ExpressionLoopBoundaryState *saved) {
+    context->loop_depth = saved->loop_depth;
+    context->expression_loop_boundary = saved->boundary;
+}
 
 static bool resolver_append_error(ResolveContext *context, FengToken token, const char *code, char *message);
 
@@ -8124,7 +8154,12 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
                                        condition_type_name != NULL ? condition_type_name : "<unknown>");
 
         free(condition_type_name);
-        return resolver_append_error(context, expr->token, "AE0032", message);
+        return resolver_append_error(
+                   context,
+                   expr->as.if_expr.condition->token,
+                   "AE1102",
+                   message) &&
+               false;
     }
 
     if (expr->as.if_expr.else_block == NULL) {
@@ -8711,6 +8746,13 @@ static bool persist_branch_expression_type(ResolveContext *context,
         return true;
     }
     persistent_type_ref = clone_type_ref_for_inference(type_ref);
+    if (persistent_type_ref != NULL) {
+        /* Branch-result targets can be synthesized after the program-wide
+         * alias-normalization phase (for example, an inferred `int`). Keep
+         * every persisted result type in the same canonical form consumed by
+         * later semantic queries and Codegen. */
+        normalize_type_ref(persistent_type_ref, context->pointer_size);
+    }
     if (persistent_type_ref == NULL ||
         !analysis_track_synthetic_type_ref(context->analysis,
                                            persistent_type_ref)) {
@@ -10669,8 +10711,8 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
 }
 
 static bool validate_stmt_condition_expr(ResolveContext *context,
-                                         FengToken token,
                                          const FengExpr *condition,
+                                         const char *code,
                                          const char *statement_kind) {
     InferredExprType condition_type;
     char *condition_type_name;
@@ -10690,7 +10732,7 @@ static bool validate_stmt_condition_expr(ResolveContext *context,
                              statement_kind,
                              condition_type_name != NULL ? condition_type_name : "<unknown>");
     free(condition_type_name);
-    return resolver_append_error(context, token, "AE0054", message);
+    return resolver_append_error(context, condition->token, code, message);
 }
 
 static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) {
@@ -13561,8 +13603,7 @@ typedef struct LambdaCallableContext {
     bool has_escaping_exception;
     size_t exception_capture_depth;
     size_t loop_depth;
-    size_t if_expr_depth;
-    size_t catch_expr_depth;
+    ExpressionLoopBoundary expression_loop_boundary;
     size_t defer_depth;
     bool self_capturable;
     FengCallableSignature synthetic_signature;
@@ -13580,8 +13621,7 @@ static void lambda_enter_callable_context(ResolveContext *context,
     saved->has_escaping_exception = context->current_callable_has_escaping_exception;
     saved->exception_capture_depth = context->exception_capture_depth;
     saved->loop_depth = context->loop_depth;
-    saved->if_expr_depth = context->if_expr_depth;
-    saved->catch_expr_depth = context->catch_expr_depth;
+    saved->expression_loop_boundary = context->expression_loop_boundary;
     saved->defer_depth = context->defer_depth;
     saved->self_capturable = context->self_capturable;
 
@@ -13601,8 +13641,7 @@ static void lambda_enter_callable_context(ResolveContext *context,
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
-    context->if_expr_depth = 0U;
-    context->catch_expr_depth = 0U;
+    context->expression_loop_boundary = EXPRESSION_LOOP_BOUNDARY_NONE;
     context->defer_depth = 0U;
 }
 
@@ -13616,8 +13655,7 @@ static void lambda_leave_callable_context(ResolveContext *context,
     context->current_callable_has_escaping_exception = saved->has_escaping_exception;
     context->exception_capture_depth = saved->exception_capture_depth;
     context->loop_depth = saved->loop_depth;
-    context->if_expr_depth = saved->if_expr_depth;
-    context->catch_expr_depth = saved->catch_expr_depth;
+    context->expression_loop_boundary = saved->expression_loop_boundary;
     context->defer_depth = saved->defer_depth;
     context->self_capturable = saved->self_capturable;
 }
@@ -15100,31 +15138,46 @@ static bool callable_signatures_equal_for_owner_instances(
 static bool validate_loop_control_stmt(ResolveContext *context,
                                        const FengStmt *stmt,
                                        const char *keyword) {
+    FengToken token = stmt != NULL ? stmt->token : context->program->module_token;
+
     if (context != NULL && context->loop_depth > 0U) {
         return true;
     }
 
-    if (context != NULL && context->if_expr_depth > 0U) {
-        return resolver_append_error(
-            context,
-            stmt != NULL ? stmt->token : context->program->module_token,
-            "AE1110", format_message("'%s' cannot appear directly inside an 'if' expression block; "
-                           "place it inside a loop within the block",
-                           keyword));
-    }
-
-    if (context != NULL && context->catch_expr_depth > 0U) {
-        return resolver_append_error(
-            context,
-            stmt != NULL ? stmt->token : context->program->module_token,
-            "AE1405", format_message("'%s' cannot appear directly inside a catch block; "
-                           "place it inside a loop within the block",
-                           keyword));
+    if (context != NULL) {
+        switch (context->expression_loop_boundary) {
+            case EXPRESSION_LOOP_BOUNDARY_IF:
+                return resolver_append_error(
+                    context,
+                    token,
+                    "AE1110",
+                    format_message(
+                        "'%s' cannot appear directly inside an 'if' expression block or inside its nested ordinary blocks when targeting a loop outside the expression; place it inside a loop declared within the branch",
+                        keyword));
+            case EXPRESSION_LOOP_BOUNDARY_MATCH:
+                return resolver_append_error(
+                    context,
+                    token,
+                    "AE1110",
+                    format_message(
+                        "'%s' cannot appear directly inside a 'match' expression block or inside its nested ordinary blocks when targeting a loop outside the expression; place it inside a loop declared within the branch",
+                        keyword));
+            case EXPRESSION_LOOP_BOUNDARY_CATCH:
+                return resolver_append_error(
+                    context,
+                    token,
+                    "AE1405",
+                    format_message(
+                        "'%s' cannot appear directly inside a catch block or inside its nested ordinary blocks when targeting a loop outside the try expression; place it inside a loop declared within the branch",
+                        keyword));
+            case EXPRESSION_LOOP_BOUNDARY_NONE:
+                break;
+        }
     }
 
     return resolver_append_error(
         context,
-        stmt != NULL ? stmt->token : context->program->module_token,
+        token,
         "AE1201", format_message("'%s' statement is only allowed inside a 'while' or 'for' loop",
 
                        keyword));
@@ -29764,40 +29817,47 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                    validate_cast_expr(context, expr);
 
         case FENG_EXPR_IF: {
-            size_t prev_loop_depth = context->loop_depth;
+            ExpressionLoopBoundaryState boundary_state;
             bool ok;
 
             if (!resolve_expr(context, expr->as.if_expr.condition, allow_self)) {
                 return false;
             }
-            /* Prevent break/continue from an outer loop from appearing directly
-             * inside an if-expression block.  Blocks must yield a value on every
-             * path, so a bare break/continue would make the expression
-             * unevaluable.  Loops nested inside the block restore loop_depth and
-             * may contain their own break/continue normally. */
-            context->loop_depth = 0U;
-            context->if_expr_depth += 1U;
+            enter_expression_loop_boundary(
+                context,
+                EXPRESSION_LOOP_BOUNDARY_IF,
+                &boundary_state);
             ok = resolve_branch_result_block(context,
                                              expr->as.if_expr.then_block,
                                              allow_self) &&
                  resolve_branch_result_block(context,
                                              expr->as.if_expr.else_block,
                                              allow_self);
-            context->loop_depth = prev_loop_depth;
-            context->if_expr_depth -= 1U;
+            leave_expression_loop_boundary(context, &boundary_state);
             return ok && validate_if_expr(context, expr);
         }
 
-        case FENG_EXPR_MATCH:
-            return resolve_and_validate_match_common(context,
-                                                     expr,
-                                                     expr->as.match_expr.target,
-                                                     expr->as.match_expr.branches,
-                                                     expr->as.match_expr.branch_count,
-                                                     expr->as.match_expr.else_block,
-                                                     expr->token,
-                                                     true,
-                                                     allow_self);
+        case FENG_EXPR_MATCH: {
+            ExpressionLoopBoundaryState boundary_state;
+            bool ok;
+
+            enter_expression_loop_boundary(
+                context,
+                EXPRESSION_LOOP_BOUNDARY_MATCH,
+                &boundary_state);
+            ok = resolve_and_validate_match_common(
+                context,
+                expr,
+                expr->as.match_expr.target,
+                expr->as.match_expr.branches,
+                expr->as.match_expr.branch_count,
+                expr->as.match_expr.else_block,
+                expr->token,
+                true,
+                allow_self);
+            leave_expression_loop_boundary(context, &boundary_state);
+            return ok;
+        }
 
         case FENG_EXPR_MATCH_OP:
             return resolve_and_validate_match_op(context, expr, allow_self);
@@ -30207,16 +30267,13 @@ static bool resolve_try_expr(ResolveContext *context,
             return false;
         }
         {
-            /* Prevent break/continue from an outer loop from escaping into a
-             * catch block that belongs to a try expression: every path through
-             * the expression must produce a value, so a bare break/continue
-             * would leave the result undefined.  Loops nested inside the catch
-             * block restore loop_depth and may contain break/continue normally. */
-            size_t saved_loop_depth = context->loop_depth;
+            ExpressionLoopBoundaryState boundary_state;
 
             if (result_required) {
-                context->loop_depth = 0U;
-                context->catch_expr_depth += 1U;
+                enter_expression_loop_boundary(
+                    context,
+                    EXPRESSION_LOOP_BOUNDARY_CATCH,
+                    &boundary_state);
             }
             if (is_anonymous) {
                 ok = resolve_branch_result_block(context,
@@ -30244,8 +30301,7 @@ static bool resolve_try_expr(ResolveContext *context,
                                        result_required);
             }
             if (result_required) {
-                context->loop_depth = saved_loop_depth;
-                context->catch_expr_depth -= 1U;
+                leave_expression_loop_boundary(context, &boundary_state);
             }
         }
         resolver_pop_scope(context);
@@ -30440,8 +30496,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 free_visible_match_binding_set(&bindings);
 
                 if (!validate_stmt_condition_expr(context,
-                                                   stmt->token,
                                                    stmt->as.if_stmt.clauses[clause_index].condition,
+                                                   "AE1102",
                                                    "if statement")) {
                     if (pushed_binding_scope) {
                         resolver_pop_scope(context);
@@ -30514,7 +30570,10 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             free_visible_match_binding_set(&bindings);
 
             if (!validate_stmt_condition_expr(
-                    context, stmt->token, stmt->as.while_stmt.condition, "while statement")) {
+                    context,
+                    stmt->as.while_stmt.condition,
+                    "AE1202",
+                    "while statement")) {
                 if (pushed_binding_scope) {
                     resolver_pop_scope(context);
                 }
@@ -30829,7 +30888,10 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                 ok = resolve_stmt(context, stmt->as.for_stmt.init, allow_self) &&
                      resolve_expr(context, stmt->as.for_stmt.condition, allow_self) &&
                      validate_stmt_condition_expr(
-                         context, stmt->token, stmt->as.for_stmt.condition, "for statement") &&
+                         context,
+                         stmt->as.for_stmt.condition,
+                         "AE1202",
+                         "for statement") &&
                      resolve_stmt(context, stmt->as.for_stmt.update, allow_self);
             }
             if (ok) {
@@ -30959,8 +31021,8 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
     size_t previous_loop_depth = context->loop_depth;
-    size_t previous_if_expr_depth = context->if_expr_depth;
-    size_t previous_catch_expr_depth = context->catch_expr_depth;
+    ExpressionLoopBoundary previous_expression_loop_boundary =
+        context->expression_loop_boundary;
     size_t previous_defer_depth = context->defer_depth;
     bool previous_self_capturable = context->self_capturable;
     /* G4-1/G4-14: push callable-level type params (method generics). */
@@ -31007,8 +31069,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
     context->loop_depth = 0U;
-    context->if_expr_depth = 0U;
-    context->catch_expr_depth = 0U;
+    context->expression_loop_boundary = EXPRESSION_LOOP_BOUNDARY_NONE;
     context->defer_depth = 0U;
     /* Inside a member method or constructor body, lambdas may capture self. */
     if (allow_self && context->current_type_decl != NULL) {
@@ -31022,8 +31083,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
-        context->if_expr_depth = previous_if_expr_depth;
-        context->catch_expr_depth = previous_catch_expr_depth;
+        context->expression_loop_boundary = previous_expression_loop_boundary;
         context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -31038,8 +31098,7 @@ static bool resolve_callable(ResolveContext *context,
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
             context->exception_capture_depth = previous_exception_capture_depth;
             context->loop_depth = previous_loop_depth;
-            context->if_expr_depth = previous_if_expr_depth;
-            context->catch_expr_depth = previous_catch_expr_depth;
+            context->expression_loop_boundary = previous_expression_loop_boundary;
             context->defer_depth = previous_defer_depth;
             context->current_callable_signature = previous_callable_signature;
             context->self_capturable = previous_self_capturable;
@@ -31054,8 +31113,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
-        context->if_expr_depth = previous_if_expr_depth;
-        context->catch_expr_depth = previous_catch_expr_depth;
+        context->expression_loop_boundary = previous_expression_loop_boundary;
         context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -31076,8 +31134,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
         context->loop_depth = previous_loop_depth;
-        context->if_expr_depth = previous_if_expr_depth;
-        context->catch_expr_depth = previous_catch_expr_depth;
+        context->expression_loop_boundary = previous_expression_loop_boundary;
         context->defer_depth = previous_defer_depth;
         context->current_callable_signature = previous_callable_signature;
         context->self_capturable = previous_self_capturable;
@@ -31156,8 +31213,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
     context->exception_capture_depth = previous_exception_capture_depth;
     context->loop_depth = previous_loop_depth;
-    context->if_expr_depth = previous_if_expr_depth;
-    context->catch_expr_depth = previous_catch_expr_depth;
+    context->expression_loop_boundary = previous_expression_loop_boundary;
     context->defer_depth = previous_defer_depth;
     context->current_callable_signature = previous_callable_signature;
     context->self_capturable = previous_self_capturable;

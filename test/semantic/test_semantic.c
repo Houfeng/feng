@@ -20686,6 +20686,61 @@ static void assert_g15_semantic_error(const char *path,
                                  expected_message);
 }
 
+/* Assert one exact diagnostic for the G16 control-flow matrix. */
+static void assert_g16_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G16",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* Assert that one G16 library program is accepted without diagnostics. */
+static void assert_g16_semantic_accepts(const char *path,
+                                        const char *source) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool analyzed = feng_semantic_analyze(programs,
+                                          1U,
+                                          FENG_COMPILE_TARGET_LIB,
+                                          &analysis,
+                                          &errors,
+                                          &error_count);
+
+    if (!analyzed || error_count != 0U) {
+        size_t index;
+
+        fprintf(stderr, "G16: expected %s to be accepted\n", path);
+        for (index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "%s:%u:%u [%s] %s\n",
+                    errors[index].path != NULL ? errors[index].path : "<unknown>",
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(analyzed);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 /* Assert one exact G15 diagnostic for a selected compilation target. */
 static void assert_g15_target_semantic_error(
     const char *path,
@@ -31332,7 +31387,453 @@ static void test_g15_block_lambda_return_acceptance(void) {
         "}\n");
 }
 
+/* FLOW01/FLOW02: plain blocks do not create loop targets, and callable
+ * boundaries do not inherit a loop from the enclosing function body. */
+static void test_g16_base_loop_control_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *keyword;
+        unsigned int line;
+        unsigned int column;
+    } cases[] = {
+        {
+            "g16_direct_break.ff",
+            "module g16.direct_break;\n"
+            "func run(): void {\n"
+            "  break;\n"
+            "}\n",
+            "break", 3U, 3U
+        },
+        {
+            "g16_direct_continue.ff",
+            "module g16.direct_continue;\n"
+            "func run(): void {\n"
+            "  continue;\n"
+            "}\n",
+            "continue", 3U, 3U
+        },
+        {
+            "g16_nested_block_break.ff",
+            "module g16.nested_block_break;\n"
+            "func run(): void {\n"
+            "  {\n"
+            "    break;\n"
+            "  }\n"
+            "}\n",
+            "break", 4U, 5U
+        },
+        {
+            "g16_nested_block_continue.ff",
+            "module g16.nested_block_continue;\n"
+            "func run(): void {\n"
+            "  {\n"
+            "    continue;\n"
+            "  }\n"
+            "}\n",
+            "continue", 4U, 5U
+        },
+        {
+            "g16_lambda_break.ff",
+            "module g16.lambda_break;\n"
+            "spec Action(): void;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let action: Action = () {\n"
+            "      break;\n"
+            "    };\n"
+            "    action();\n"
+            "  }\n"
+            "}\n",
+            "break", 6U, 7U
+        },
+        {
+            "g16_lambda_continue.ff",
+            "module g16.lambda_continue;\n"
+            "spec Action(): void;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let action: Action = () {\n"
+            "      continue;\n"
+            "    };\n"
+            "    action();\n"
+            "  }\n"
+            "}\n",
+            "continue", 6U, 7U
+        }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g16_semantic_error(
+            cases[index].path,
+            cases[index].source,
+            "AE1201",
+            cases[index].line,
+            cases[index].column,
+            cases[index].keyword,
+            "statement is only allowed inside a 'while' or 'for' loop");
+    }
+}
+
+/* FLOW01-A/FLOW02: value-expression result branches reject transfers to an
+ * outer loop even through ordinary nested blocks or statement-form ifs. */
+static void test_g16_expression_loop_boundary_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+        const char *keyword;
+        unsigned int line;
+        unsigned int column;
+        const char *message;
+    } cases[] = {
+        {
+            "g16_if_expr_nested_break.ff",
+            "module g16.if_expr_nested_break;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = if true {\n"
+            "      {\n"
+            "        break;\n"
+            "      }\n"
+            "      1\n"
+            "    } else { 2 };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "break", 6U, 9U,
+            "cannot appear directly inside an 'if' expression block"
+        },
+        {
+            "g16_if_expr_nested_continue.ff",
+            "module g16.if_expr_nested_continue;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = if true {\n"
+            "      if true {\n"
+            "        continue;\n"
+            "      }\n"
+            "      1\n"
+            "    } else { 2 };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "continue", 6U, 9U,
+            "cannot appear directly inside an 'if' expression block"
+        },
+        {
+            "g16_match_expr_branch_break.ff",
+            "module g16.match_expr_branch_break;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = match 1 {\n"
+            "      1 {\n"
+            "        {\n"
+            "          break;\n"
+            "        }\n"
+            "        1\n"
+            "      }\n"
+            "      else { 2 }\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "break", 7U, 11U,
+            "cannot appear directly inside a 'match' expression block"
+        },
+        {
+            "g16_match_expr_branch_continue.ff",
+            "module g16.match_expr_branch_continue;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = match 1 {\n"
+            "      1 {\n"
+            "        continue;\n"
+            "        1\n"
+            "      }\n"
+            "      else { 2 }\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "continue", 6U, 9U,
+            "cannot appear directly inside a 'match' expression block"
+        },
+        {
+            "g16_match_expr_else_break.ff",
+            "module g16.match_expr_else_break;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = match 1 {\n"
+            "      1 { 1 }\n"
+            "      else {\n"
+            "        break;\n"
+            "        2\n"
+            "      }\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "break", 7U, 9U,
+            "cannot appear directly inside a 'match' expression block"
+        },
+        {
+            "g16_match_expr_else_continue.ff",
+            "module g16.match_expr_else_continue;\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = match 1 {\n"
+            "      1 { 1 }\n"
+            "      else {\n"
+            "        if true {\n"
+            "          continue;\n"
+            "        }\n"
+            "        2\n"
+            "      }\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1110", "continue", 8U, 11U,
+            "cannot appear directly inside a 'match' expression block"
+        },
+        {
+            "g16_try_expr_nested_break.ff",
+            "module g16.try_expr_nested_break;\n"
+            "func fail(): i32 { throw \"boom\"; }\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = try fail() catch {\n"
+            "      {\n"
+            "        break;\n"
+            "      }\n"
+            "      0\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1405", "break", 7U, 9U,
+            "cannot appear directly inside a catch block"
+        },
+        {
+            "g16_try_expr_nested_continue.ff",
+            "module g16.try_expr_nested_continue;\n"
+            "func fail(): i32 { throw \"boom\"; }\n"
+            "func run(): void {\n"
+            "  while true {\n"
+            "    let value = try fail() catch {\n"
+            "      if true {\n"
+            "        continue;\n"
+            "      }\n"
+            "      0\n"
+            "    };\n"
+            "  }\n"
+            "}\n",
+            "AE1405", "continue", 7U, 9U,
+            "cannot appear directly inside a catch block"
+        }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g16_semantic_error(cases[index].path,
+                                  cases[index].source,
+                                  cases[index].code,
+                                  cases[index].line,
+                                  cases[index].column,
+                                  cases[index].keyword,
+                                  cases[index].message);
+    }
+}
+
+/* FLOW03/FLOW03-A: every condition family uses its stable segment code and
+ * points at the actual non-bool condition, including both else-if shapes. */
+static void test_g16_condition_type_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+        unsigned int line;
+        unsigned int column;
+        const char *lexeme;
+        const char *message;
+    } cases[] = {
+        {
+            "g16_if_stmt_condition.ff",
+            "module g16.if_stmt_condition;\n"
+            "func run(): void {\n"
+            "  if 1 {}\n"
+            "}\n",
+            "AE1102", 3U, 6U, "1", "if statement condition must have type 'bool'"
+        },
+        {
+            "g16_else_if_stmt_condition.ff",
+            "module g16.else_if_stmt_condition;\n"
+            "func run(): void {\n"
+            "  if true {} else if \"bad\" {}\n"
+            "}\n",
+            "AE1102", 3U, 22U, "\"bad\"", "if statement condition must have type 'bool'"
+        },
+        {
+            "g16_if_expr_condition.ff",
+            "module g16.if_expr_condition;\n"
+            "type Flag {}\n"
+            "func run(): void {\n"
+            "  let value = if Flag() { 1 } else { 2 };\n"
+            "}\n",
+            "AE1102", 4U, 18U, "Flag", "if expression condition must have type 'bool'"
+        },
+        {
+            "g16_else_if_expr_condition.ff",
+            "module g16.else_if_expr_condition;\n"
+            "func run(): void {\n"
+            "  let value = if true { 1 } else if 2 { 2 } else { 3 };\n"
+            "}\n",
+            "AE1102", 3U, 37U, "2", "if expression condition must have type 'bool'"
+        },
+        {
+            "g16_while_condition.ff",
+            "module g16.while_condition;\n"
+            "func run(): void {\n"
+            "  while \"bad\" {}\n"
+            "}\n",
+            "AE1202", 3U, 9U, "\"bad\"", "while statement condition must have type 'bool'"
+        },
+        {
+            "g16_for_condition.ff",
+            "module g16.for_condition;\n"
+            "type Flag {}\n"
+            "func run(): void {\n"
+            "  for ; Flag(); {}\n"
+            "}\n",
+            "AE1202", 4U, 9U, "Flag", "for statement condition must have type 'bool'"
+        }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g16_semantic_error(cases[index].path,
+                                  cases[index].source,
+                                  cases[index].code,
+                                  cases[index].line,
+                                  cases[index].column,
+                                  cases[index].lexeme,
+                                  cases[index].message);
+    }
+}
+
+/* FLOW04/FLOW05: invalid iteration targets and tuple-pattern shapes keep one
+ * exact diagnostic at the iterable expression or pattern opening token. */
+static void test_g16_for_in_diagnostics(void) {
+    assert_g16_semantic_error(
+        "g16_for_in_scalar.ff",
+        "module g16.for_in_scalar;\n"
+        "func run(): void {\n"
+        "  for let item in 1 {}\n"
+        "}\n",
+        "AE0326", 3U, 19U, "1", "is not iterable");
+    assert_g16_semantic_error(
+        "g16_for_in_object.ff",
+        "module g16.for_in_object;\n"
+        "type Plain {}\n"
+        "func run(): void {\n"
+        "  for let item in Plain() {}\n"
+        "}\n",
+        "AE0326", 4U, 19U, "Plain", "is not iterable");
+    assert_g16_semantic_error(
+        "g16_for_in_non_tuple_pattern.ff",
+        "module g16.for_in_non_tuple_pattern;\n"
+        "func run(values: i32[]): void {\n"
+        "  for let (left, right) in values {}\n"
+        "}\n",
+        "AE0108", 3U, 11U, "(", "initializer must be a tuple");
+    assert_g16_semantic_error(
+        "g16_for_in_tuple_arity.ff",
+        "module g16.for_in_tuple_arity;\n"
+        "type Pair(i32, i32);\n"
+        "func run(values: Pair[]): void {\n"
+        "  for let (left, middle, right) in values {}\n"
+        "}\n",
+        "AE0109", 4U, 11U, "(", "has 3 position(s) but tuple initializer has 2");
+}
+
+/* FLOW01-B/FLOW03-B/FLOW05-A/FLOW06-A: legal control targets, bool
+ * conditions, update shapes and tuple/iterator neighbors remain accepted. */
+static void test_g16_control_flow_acceptance(void) {
+    assert_g16_semantic_accepts(
+        "g16_control_flow_acceptance.ff",
+        "module g16.control_flow_acceptance;\n"
+        "spec Action(): int;\n"
+        "type NextResult(bool, i32);\n"
+        "type Cursor {\n"
+        "  var value: i32;\n"
+        "  @iterator func next(): NextResult {\n"
+        "    if self.value >= 3 { return (false, 0); }\n"
+        "    let current = self.value;\n"
+        "    self.value += 1;\n"
+        "    return (true, current);\n"
+        "  }\n"
+        "}\n"
+        "func truth(value: int): bool { return value > 0; }\n"
+        "func fail(): int { throw \"boom\"; }\n"
+        "func tick(): void {}\n"
+        "func run(): void {\n"
+        "  while true { { break; } }\n"
+        "  var statementCount = 0;\n"
+        "  while statementCount < 3 {\n"
+        "    statementCount += 1;\n"
+        "    if statementCount == 1 { continue; }\n"
+        "    match statementCount { 2 { continue; } else { break; } }\n"
+        "  }\n"
+        "  while true { try fail() catch { break; } }\n"
+        "  let ifValue = if true {\n"
+        "    var count = 0;\n"
+        "    while count < 3 {\n"
+        "      count += 1;\n"
+        "      if count == 1 { continue; }\n"
+        "      break;\n"
+        "    }\n"
+        "    count\n"
+        "  } else { 0 };\n"
+        "  let matchValue = match 1 {\n"
+        "    1 {\n"
+        "      var total = 0;\n"
+        "      for var index = 0; index < 3; index += 1 {\n"
+        "        if index == 0 { continue; }\n"
+        "        total += index;\n"
+        "        break;\n"
+        "      }\n"
+        "      total\n"
+        "    }\n"
+        "    else { 0 }\n"
+        "  };\n"
+        "  let tryValue = try fail() catch {\n"
+        "    var total = 0;\n"
+        "    for let item in [1, 2, 3] {\n"
+        "      if item == 1 { continue; }\n"
+        "      total += item;\n"
+        "      break;\n"
+        "    }\n"
+        "    total\n"
+        "  };\n"
+        "  let action: Action = () {\n"
+        "    var count = 0;\n"
+        "    while true { count += 1; if count < 2 { continue; } break; }\n"
+        "    return count;\n"
+        "  };\n"
+        "  if truth(ifValue + matchValue + tryValue) {}\n"
+        "  var whileValue = 0;\n"
+        "  while whileValue match 0...1 { whileValue += 1; }\n"
+        "  for let fixed = 0; false; {}\n"
+        "  for var assigned = 0; assigned < 1; assigned = assigned + 1 {}\n"
+        "  for var compounded = 0; compounded < 1; compounded += 1 {}\n"
+        "  for var called = 0; called < 0; tick() {}\n"
+        "  let cursor = Cursor { value: 0 };\n"
+        "  for let item in cursor { if item == 1 { continue; } if item == 2 { break; } }\n"
+        "  action();\n"
+        "}\n");
+}
+
 int main(void) {
+    test_g16_base_loop_control_diagnostics();
+    test_g16_expression_loop_boundary_diagnostics();
+    test_g16_condition_type_diagnostics();
+    test_g16_for_in_diagnostics();
+    test_g16_control_flow_acceptance();
     test_g15_main_entry_diagnostics();
     test_g15_signature_and_return_shape_diagnostics();
     test_g15_fixed_argument_call_diagnostics();

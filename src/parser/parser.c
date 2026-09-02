@@ -47,6 +47,7 @@ static bool parse_block_statements(Parser *parser,
                                    bool allow_trailing_throw_without_semicolon);
 static FengStmt *parse_statement(Parser *parser);
 static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator);
+static FengStmt *parse_simple_statement_before_block(Parser *parser);
 static FengExpr *parse_expression(Parser *parser);
 static FengExpr *parse_unary(Parser *parser);
 static FengTypeRef *parse_type_ref(Parser *parser);
@@ -4779,7 +4780,16 @@ static FengStmt *parse_for_statement(Parser *parser) {
     }
 
     if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
-        stmt->as.for_stmt.update = parse_simple_statement(parser, FENG_TOKEN_LBRACE);
+        if (parser_check(parser, FENG_TOKEN_KW_LET) ||
+            parser_check(parser, FENG_TOKEN_KW_VAR)) {
+            (void)parser_error_current(
+                parser,
+                "SE1203",
+                "for update clauses cannot declare bindings; declare the binding in the initializer or before the loop");
+            free_stmt(stmt);
+            return NULL;
+        }
+        stmt->as.for_stmt.update = parse_simple_statement_before_block(parser);
         if (stmt->as.for_stmt.update == NULL) {
             free_stmt(stmt);
             return NULL;
@@ -4855,6 +4865,19 @@ static FengStmt *parse_simple_statement(Parser *parser, FengTokenKind terminator
         return assign;
     }
 
+    return stmt;
+}
+
+/* Parse a simple control-flow head statement while preserving the following
+ * unparenthesized `{` for the required body block. Grouped subexpressions keep
+ * their existing ability to opt back into object-literal suffix parsing. */
+static FengStmt *parse_simple_statement_before_block(Parser *parser) {
+    FengStmt *stmt;
+    bool saved_suppress = parser->suppress_object_literal_suffix;
+
+    parser->suppress_object_literal_suffix = true;
+    stmt = parse_simple_statement(parser, FENG_TOKEN_LBRACE);
+    parser->suppress_object_literal_suffix = saved_suppress;
     return stmt;
 }
 

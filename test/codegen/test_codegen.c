@@ -11164,6 +11164,83 @@ static void test_match_expr_aggregate_result_codegen(void) {
     feng_program_free(program);
 }
 
+static const char *kG16BranchLocalExpressionResultSrc =
+    "module feng.codegen.g16_branch_local;\n"
+    "func fail(): int {\n"
+    "    throw \"g16\";\n"
+    "    return 0;\n"
+    "}\n"
+    "func pick_if(): int {\n"
+    "    return if true {\n"
+    "        var count = 0;\n"
+    "        while count < 2 {\n"
+    "            count += 1;\n"
+    "            break;\n"
+    "        }\n"
+    "        count\n"
+    "    } else {\n"
+    "        0\n"
+    "    };\n"
+    "}\n"
+    "func pick_match(): int {\n"
+    "    return match 1 {\n"
+    "        1 {\n"
+    "            var total = 0;\n"
+    "            for var index = 0; index < 2; index += 1 {\n"
+    "                total += index;\n"
+    "            }\n"
+    "            total\n"
+    "        }\n"
+    "        else { 0 }\n"
+    "    };\n"
+    "}\n"
+    "func pick_try(): int {\n"
+    "    return try fail() catch {\n"
+    "        var total = 0;\n"
+    "        for let item in [1, 2] {\n"
+    "            total += item;\n"
+    "        }\n"
+    "        total\n"
+    "    };\n"
+    "}\n";
+
+/* G16 branch results may refer to locals introduced earlier in the same
+ * result block. Codegen must consume Semantic's selected result type instead
+ * of probing the trailing expression outside that lexical scope. */
+static void test_g16_branch_local_expression_results_codegen(void) {
+    FengProgram *program = parse_or_die(kG16BranchLocalExpressionResultSrc,
+                                        "g16_branch_local.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool cg_ok;
+
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G16 branch-local results): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+        ASSERT(cg_ok);
+    }
+    ASSERT(out.c_source != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    free(errors);
+    feng_program_free(program);
+}
+
 static const char *kGenericExpressionJoinResultSrc =
     "module feng.codegen.generic_join;\n"
     "@value\n"
@@ -16354,6 +16431,7 @@ int main(void) {
     test_generic_constrained_aggregate_spec_value_codegen();
     test_if_expr_aggregate_result_codegen();
     test_match_expr_aggregate_result_codegen();
+    test_g16_branch_local_expression_results_codegen();
     test_generic_expression_join_result_codegen();
     test_match_statement_codegen();
     test_enum_match_statement_codegen();

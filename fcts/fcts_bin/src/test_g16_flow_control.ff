@@ -1,0 +1,180 @@
+module fcts_bin;
+
+import std.test;
+
+/** Callable used to prove that a lambda establishes its own loop targets. */
+spec G16LoopAction(): int;
+
+/** Mutable state used by a function-call update clause. */
+type G16UpdateCounter {
+  var value: int;
+}
+
+/** Return whether a value remains below the requested loop limit. */
+func g16_below(value: int, limit: int): bool {
+  return value < limit;
+}
+
+/** Increment one counter from a three-clause for update. */
+func g16_advance(counter: G16UpdateCounter): void {
+  counter.value += 1;
+}
+
+/** Always throw so statement and expression catch paths can be exercised. */
+func g16_fail(): int {
+  throw "g16";
+}
+
+/** G16 control-flow conformance coverage. */
+open func test_g16_flow_control() {
+  describe("G16 control-flow diagnostics legal boundaries", () {
+    test("FLOW03-B bool condition forms execute", () {
+      var branch = 0;
+      if false {
+        branch = -1;
+      } else if g16_below(1, 2) {
+        branch = 1;
+      }
+
+      var whileValue = 0;
+      while whileValue match 0...2 {
+        whileValue += 1;
+      }
+
+      var forValue = 0;
+      for ; g16_below(forValue, 3); forValue += 1 {}
+
+      var infiniteValue = 0;
+      for ;; {
+        infiniteValue += 1;
+        break;
+      }
+
+      assert(branch == 1 && whileValue == 3 && forValue == 3 &&
+             infiniteValue == 1,
+             "literal, call, infix match and omitted conditions remain legal");
+    });
+
+    test("FLOW01-B statement branches target their outer loop", () {
+      var ifRounds = 0;
+      while true {
+        ifRounds += 1;
+        if true {
+          break;
+        }
+      }
+
+      var matchRounds = 0;
+      var matchTail = 0;
+      while matchRounds < 4 {
+        matchRounds += 1;
+        match matchRounds {
+          1 { continue; }
+          2 { break; }
+          else {}
+        }
+        matchTail += 1;
+      }
+
+      var catchCount = 0;
+      while true {
+        try g16_fail() catch {
+          catchCount += 1;
+          break;
+        }
+      }
+
+      assert(ifRounds == 1 && matchRounds == 2 && matchTail == 0 &&
+             catchCount == 1,
+             "statement if, match and catch preserve the nearest outer loop");
+    });
+
+    test("FLOW01-B expression branches control only inner loops", () {
+      let ifValue = if true {
+        var count = 0;
+        while count < 4 {
+          count += 1;
+          if count == 1 {
+            continue;
+          }
+          break;
+        }
+        count
+      } else {
+        0
+      };
+
+      let matchValue = match 1 {
+        1 {
+          var total = 0;
+          for var index = 0; index < 4; index += 1 {
+            if index == 0 {
+              continue;
+            }
+            total += index;
+            break;
+          }
+          total
+        }
+        else { 0 }
+      };
+
+      let tryValue = try g16_fail() catch {
+        var total = 0;
+        for let item in [1, 2, 3] {
+          if item == 1 {
+            continue;
+          }
+          total += item;
+          break;
+        }
+        total
+      };
+
+      assert(ifValue == 2 && matchValue == 1 && tryValue == 2,
+             "if, match and catch result branches retain their inner loops");
+    });
+
+    test("FLOW05-A legal initializer and update forms execute", () {
+      var letUpdate = 0;
+      for let fixed = 7; fixed == 7 && letUpdate == 0; letUpdate += 1 {}
+
+      var assignedBody = 0;
+      for var assigned = 0; assigned < 3; assigned = assigned + 1 {
+        assignedBody += assigned;
+      }
+
+      var compoundedBody = 0;
+      for var compounded = 0; compounded < 3; compounded += 1 {
+        compoundedBody += 1;
+      }
+
+      let counter = G16UpdateCounter { value: 0 };
+      var callBody = 0;
+      for ; counter.value < 3; g16_advance(counter) {
+        callBody += counter.value;
+      }
+
+      assert(letUpdate == 1 && assignedBody == 3 && compoundedBody == 3 &&
+             counter.value == 3 && callBody == 3,
+             "initializer bindings and assignment, compound and call updates execute");
+    });
+
+    test("FLOW06-A lambda-local loop targets execute", () {
+      let action: G16LoopAction = () {
+        var count = 0;
+        while true {
+          count += 1;
+          if count < 2 {
+            continue;
+          }
+          break;
+        }
+        return count;
+      };
+
+      assert(action() == 2,
+             "a callable boundary may declare and control its own loop");
+    });
+  });
+}

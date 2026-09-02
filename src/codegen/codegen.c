@@ -11517,10 +11517,16 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     }
 
     /* Substituted members inherit the instantiation point's still-open
-     * parameters. A callable member adds its own generic scope below. */
+     * parameters. A fully closed owner also needs its callable members
+     * collected through the owner declaration's generic domain, matching
+     * the owner-then-method descriptor slots used by closed wrappers. */
     CGTypeParamScope member_scope = open_scope != NULL
         ? *open_scope
         : (CGTypeParamScope){0};
+    CGTypeParamScope callable_owner_scope = {
+        .first = decl->as.type_decl.type_params,
+        .first_count = decl->as.type_decl.type_param_count,
+    };
     for (size_t i = 0; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
@@ -11570,6 +11576,17 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                     decl->as.type_decl.type_param_count,
                     type_args,
                     member_scope,
+                    generic_decl->owner_program)) {
+                return false;
+            }
+            if (!has_open_type_arg &&
+                !cg_collect_instantiated_callable_member_instances(
+                    cg,
+                    callable,
+                    decl->as.type_decl.type_params,
+                    decl->as.type_decl.type_param_count,
+                    type_args,
+                    callable_owner_scope,
                     generic_decl->owner_program)) {
                 return false;
             }
@@ -32372,7 +32389,30 @@ static CGType *cg_probe_expr_type(CG *cg, const FengExpr *expr) {
     return result;
 }
 
-static CGType *cg_probe_branch_yield_type(CG *cg, const FengExpr *yield) {
+/* Resolve a branching expression's selected result type before falling back
+ * to probing one yield. Semantic persists the post-fitting result on the
+ * branching AST, so branch-local names and contextual coercions need not be
+ * replayed outside their lexical scope. */
+static CGType *cg_probe_branch_yield_type(CG *cg,
+                                          const FengExpr *branching_expr,
+                                          const FengExpr *yield) {
+    CGType *result = NULL;
+
+    if (branching_expr != NULL && branching_expr->type != NULL) {
+        if (!cg_resolve_type(cg,
+                             branching_expr->type,
+                             &branching_expr->token,
+                             &result)) {
+            return NULL;
+        }
+        return result;
+    }
+    if (yield != NULL && yield->type != NULL) {
+        if (!cg_resolve_type(cg, yield->type, &yield->token, &result)) {
+            return NULL;
+        }
+        return result;
+    }
     return cg_probe_expr_type(cg, yield);
 }
 
@@ -32458,7 +32498,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
      * branch; the throwing branch is emitted as a plain block (its throw
      * leaves control flow before the slot would ever be read). */
     const FengExpr *yield_for_type = then_yield != NULL ? then_yield : else_yield;
-    CGType *result_type = cg_probe_branch_yield_type(cg, yield_for_type);
+    CGType *result_type = cg_probe_branch_yield_type(cg, e, yield_for_type);
     if (!result_type) return false;
 
     bool managed = cgtype_is_managed(result_type);
@@ -32923,7 +32963,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         return ok;
     }
 
-    CGType *result_type = cg_probe_branch_yield_type(cg, yield_for_type);
+    CGType *result_type = cg_probe_branch_yield_type(cg, e, yield_for_type);
     if (!result_type) {
         er_free(&tgt);
         return false;

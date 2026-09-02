@@ -22,6 +22,7 @@ func main(args: string[]) {
       test_flow();
       test_loop_binding();
       test_loop_control();
+      test_g16_flow_control();
       test_function();
       test_function_return_paths();
       test_function_inference();

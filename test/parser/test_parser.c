@@ -5704,7 +5704,130 @@ static void test_g12_ambiguous_legal_ast_boundaries(void) {
     feng_program_free(program);
 }
 
+/* FLOW05-A: only the initializer of a three-clause for may declare a
+ * binding; the update clause rejects both declaration keywords precisely. */
+static void test_g16_for_update_binding_declarations_are_rejected(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        FengTokenKind token_kind;
+        const char *lexeme;
+    } cases[] = {
+        {
+            "g16_for_update_let.ff",
+            "module g16.for_update_let;\n"
+            "func run() {\n"
+            "  for var index = 0; index < 1;\n"
+            "      let next = index + 1 {}\n"
+            "}\n",
+            FENG_TOKEN_KW_LET,
+            "let"
+        },
+        {
+            "g16_for_update_var.ff",
+            "module g16.for_update_var;\n"
+            "func run() {\n"
+            "  for var index = 0; index < 1;\n"
+            "      var next = index + 1 {}\n"
+            "}\n",
+            FENG_TOKEN_KW_VAR,
+            "var"
+        }
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        FengProgram *program = NULL;
+        FengParseError error;
+
+        memset(&error, 0, sizeof(error));
+        ASSERT(!feng_parse_source(cases[index].source,
+                                  strlen(cases[index].source),
+                                  cases[index].path,
+                                  &program,
+                                  &error));
+        ASSERT(program == NULL);
+        ASSERT(error.code != NULL);
+        ASSERT(strcmp(error.code, "SE1203") == 0);
+        ASSERT(error.message != NULL);
+        ASSERT(strcmp(error.message,
+                      "for update clauses cannot declare bindings; declare the binding in the initializer or before the loop") == 0);
+        ASSERT(error.token.kind == cases[index].token_kind);
+        ASSERT(error.token.line == 4U);
+        ASSERT(error.token.column == 7U);
+        ASSERT(error.token.length == strlen(cases[index].lexeme));
+        ASSERT(memcmp(error.token.lexeme,
+                      cases[index].lexeme,
+                      error.token.length) == 0);
+    }
+}
+
+/* FLOW05-A: legal initializer bindings and all three permitted update shapes
+ * retain their distinct Parser AST nodes. */
+static void test_g16_for_update_legal_ast_boundaries(void) {
+    const char *source =
+        "module g16.for_update_positive;\n"
+        "func advance() {}\n"
+        "func run() {\n"
+        "  for let fixed = 0; fixed < 0; {}\n"
+        "  for var assigned = 0; assigned < 1; assigned = assigned + 1 {}\n"
+        "  for var compounded = 0; compounded < 1; compounded += 1 {}\n"
+        "  for var called = 0; called < 0; advance() {}\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengStmt *loop;
+    bool parsed;
+
+    memset(&error, 0, sizeof(error));
+    parsed = feng_parse_source(source,
+                               strlen(source),
+                               "g16_for_update_positive.ff",
+                               &program,
+                               &error);
+    if (!parsed) {
+        fprintf(stderr,
+                "G16 legal for-update parse failed at %u:%u [%s]: %s\n",
+                error.token.line,
+                error.token.column,
+                error.code != NULL ? error.code : "<no-code>",
+                error.message != NULL ? error.message : "<no-message>");
+    }
+    ASSERT(parsed);
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    ASSERT(program->declaration_count == 2U);
+    body = program->declarations[1]->as.function_decl.body;
+    ASSERT(body->statement_count == 4U);
+
+    loop = body->statements[0];
+    ASSERT(loop->kind == FENG_STMT_FOR);
+    ASSERT(loop->as.for_stmt.init->kind == FENG_STMT_BINDING);
+    ASSERT(loop->as.for_stmt.init->as.binding.mutability == FENG_MUTABILITY_LET);
+    ASSERT(loop->as.for_stmt.update == NULL);
+
+    loop = body->statements[1];
+    ASSERT(loop->as.for_stmt.init->as.binding.mutability == FENG_MUTABILITY_VAR);
+    ASSERT(loop->as.for_stmt.update->kind == FENG_STMT_ASSIGN);
+    ASSERT(loop->as.for_stmt.update->as.assign.op == FENG_TOKEN_ASSIGN);
+
+    loop = body->statements[2];
+    ASSERT(loop->as.for_stmt.init->as.binding.mutability == FENG_MUTABILITY_VAR);
+    ASSERT(loop->as.for_stmt.update->kind == FENG_STMT_ASSIGN);
+    ASSERT(loop->as.for_stmt.update->as.assign.op == FENG_TOKEN_PLUS_ASSIGN);
+
+    loop = body->statements[3];
+    ASSERT(loop->as.for_stmt.init->as.binding.mutability == FENG_MUTABILITY_VAR);
+    ASSERT(loop->as.for_stmt.update->kind == FENG_STMT_EXPR);
+    ASSERT(loop->as.for_stmt.update->as.expr->kind == FENG_EXPR_CALL);
+
+    feng_program_free(program);
+}
+
 int main(void) {
+    test_g16_for_update_binding_declarations_are_rejected();
+    test_g16_for_update_legal_ast_boundaries();
     test_g12_module_import_and_top_level_syntax();
     test_g12_binding_type_and_callable_syntax();
     test_g12_enum_spec_and_fit_syntax();
