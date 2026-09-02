@@ -48,7 +48,7 @@ func g15_maybe_throw(flag: bool): int {
 
 func g15_try_catch_return_path(flag: bool): int {
   let value = try g15_maybe_throw(flag) catch error: string {
-    return 31;
+    31;
   };
   return value;
 }
@@ -63,7 +63,7 @@ func g15_return_or_throw(flag: bool): int {
 
 func g15_observe_return_or_throw(flag: bool): int {
   let value = try g15_return_or_throw(flag) catch error: string {
-    return 33;
+    33;
   };
   return value;
 }
@@ -176,13 +176,12 @@ func g15_cast_block_picker(flag: bool): i32 {
   return picker(flag);
 }
 
-/// Pass a block Lambda whose target-typed return is nested in a try binding.
+/// Pass a block Lambda whose target-typed return is a try expression.
 func g15_nested_try_lambda_argument(flag: bool): i32 {
   return g15_apply_i32_picker((inner: bool) {
-    let value = try g15_maybe_throw(inner) catch error: string {
-      return 78;
+    return try (i32)g15_maybe_throw(inner) catch error: string {
+      78;
     };
-    throw "g15-nested-try";
   }, flag);
 }
 
@@ -316,7 +315,7 @@ open func test_function_return_paths() {
         if flag { return 76; } else { return 77; }
       }, true) == 76, "parameter target");
       assert(g15_nested_try_lambda_argument(true) == 78,
-             "nested catch return keeps the block Lambda target");
+             "nested catch result keeps the block Lambda target");
       assert(g15_child_local_lambda_argument(true) == 86 &&
              g15_child_local_lambda_argument(false) == 87,
              "child-local returns keep their lexical type");

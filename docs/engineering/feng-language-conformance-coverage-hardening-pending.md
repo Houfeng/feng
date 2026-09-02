@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G16 已交付；G17～G25 待 Review
+> 状态：G01～G17 已交付；G18～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -1707,76 +1707,76 @@ Lambda 建立新的 callable 边界，其 body 中返回该 Lambda 的 `return` 
 
 #### 21.2.1 `try/catch` 语法边界
 
-- [ ] EXC01：`try` 后必须是单个表达式并至少跟一个 `catch`；分别锁定裸 `try expr`、`try { ... }`、
+- [x] EXC01：`try` 后必须是单个表达式并至少跟一个 `catch`；分别锁定裸 `try expr`、`try { ... }`、
   缺失 `catch` body、绑定形式缺失名称或类型、语句形式末尾多余分号的 Parser 诊断码、实际 token、
   行列、唯一诊断和空 AST；已有 G12 精确证据只建立映射，不重复新增同构用例；
-- [ ] EXC02：匿名 `catch { ... }`、`catch name: Type { ... }`、多个具体类型分支后接一个
+- [x] EXC02：匿名 `catch { ... }`、`catch name: Type { ... }`、多个具体类型分支后接一个
   `catch name: unknown` 或匿名兜底分支均可通过 Parser；语句形式不要求结果表达式，值形式必须按
   EXC12～EXC15 提供结果或终止路径；
-- [ ] EXC03：`catch name { ... }`、`catch : Type { ... }` 及其他不完整绑定形态分别使用现有
+- [x] EXC03：`catch name { ... }`、`catch : Type { ... }` 及其他不完整绑定形态分别使用现有
   `SE1402` / `SE1403` 契约，匿名 `catch` 不得被误判为缺失名称。
 
 #### 21.2.2 异常载荷与具体捕获类型
 
-- [ ] EXC04：`throw` 与具名 `catch` 对规范允许的完整具体类型矩阵使用同一个判定结果；覆盖
+- [x] EXC04：`throw` 与具名 `catch` 对规范允许的完整具体类型矩阵使用同一个判定结果；覆盖
   `bool`、全部固定宽度整数与浮点、`string`、具名 enum、实体 `type`、具名 tuple、`@value type`、
   闭合泛型实例及规范允许的 `@abi` 类型形态，并为可执行类别建立或映射 FCTS 直接行为证据；
-- [ ] EXC05：`throw` 与具名 `catch` 对 array、全部 `spec` 形态、直接类型参数、仍含开放参数的泛型
+- [x] EXC05：`throw` 与具名 `catch` 对 array、全部 `spec` 形态、直接类型参数、仍含开放参数的泛型
   实例、pointer、`void`、函数 / 方法 / Lambda / callable-form 值分别产生精确 Semantic 反向证据；
   同一非法类型在 throw 与 catch 入口必须给出一致的拒绝原因，`void` throw 保留更精确的 `AE1402`；
-- [ ] EXC06：不同具名 enum、enum 与底层整数、不同具名 tuple、布局相同的不同 `@value type`、同一
+- [x] EXC06：不同具名 enum、enum 与底层整数、不同具名 tuple、布局相同的不同 `@value type`、同一
   泛型类型的不同闭合实参分别不互相捕获；相同精确类型可以捕获并在 FCTS 中观察载荷值，证明匹配按
   完整名义类型身份而不是布局或底层值。
 
 #### 21.2.3 捕获顺序、绑定和重抛
 
-- [ ] EXC07：具体 `catch` 按书写顺序匹配，第一个精确命中分支执行且后续分支不执行；多个未命中
+- [x] EXC07：具体 `catch` 按书写顺序匹配，第一个精确命中分支执行且后续分支不执行；多个未命中
   分支后由 `unknown` 或匿名兜底捕获，并在 FCTS 中通过互异结果观察实际选择；
-- [ ] EXC08：`catch name: unknown` 与匿名 `catch` 必须位于最后；后续仍有任意 `catch` 时使用
+- [x] EXC08：`catch name: unknown` 与匿名 `catch` 必须位于最后；后续仍有任意 `catch` 时使用
   `AE1406`，分别核对两种兜底形态的诊断位置、数量和阶段；
-- [ ] EXC09：具名 catch 绑定为 `let`，其头部作用域、body 子块遮蔽、不同子句复用同名绑定按 G13
+- [x] EXC09：具名 catch 绑定为 `let`，其头部作用域、body 子块遮蔽、不同子句复用同名绑定按 G13
   已确认规则工作；直接重新赋值被拒绝，合法读取具体类型载荷进入 FCTS；
-- [ ] EXC10：`catch error: unknown` 中仅允许 `throw error` 原样重抛；把 `error` 用作绑定初始化值、
+- [x] EXC10：`catch error: unknown` 中仅允许 `throw error` 原样重抛；把 `error` 用作绑定初始化值、
   参数、返回值、成员 / 方法接收者、普通 throw 子表达式或其他运算时，均在实际使用 token 产生
   `AE1404`；匿名 catch 中引用不存在的异常名称仍按普通未定义名称诊断；
-- [ ] EXC11：具体类型 catch 可读取载荷、调用合法成员并以 `throw error` 重新抛出；外层相同具体
+- [x] EXC11：具体类型 catch 可读取载荷、调用合法成员并以 `throw error` 重新抛出；外层相同具体
   类型或 `unknown` catch 能捕获原值，FCTS 直接验证一次及多层重抛后的类型和值不变。
 
 #### 21.2.4 `try` 表达式结果与 `return` 边界
 
-- [ ] EXC12：非 `void` 值形式 `try` 的主表达式与每个可正常完成的 catch 均产生结果；空 catch、
+- [x] EXC12：非 `void` 值形式 `try` 的主表达式与每个可正常完成的 catch 均产生结果；空 catch、
   仅含普通语句的 catch 及末句不是表达式的 catch 使用 `AE1401`，诊断定位该 catch；末句 `throw`
   的路径无需结果且不参与结果类型选择；
-- [ ] EXC13：主表达式、具体 catch 和兜底 catch 的结果按流程控制规范 §4.1 统一贴合；覆盖显式目标、
+- [x] EXC13：主表达式、具体 catch 和兜底 catch 的结果按流程控制规范 §4.1 统一贴合；覆盖显式目标、
   无目标时首个确定非字面量目标、全数字字面量默认推导、越界字面量、union 完整目标及结果类型不
   兼容，所有合法可执行组合进入 FCTS；
-- [ ] EXC14：值形式 try 的 catch 在直接位置、普通嵌套 block、嵌套 `if` / `match`、循环和嵌套
+- [x] EXC14：值形式 try 的 catch 在直接位置、普通嵌套 block、嵌套 `if` / `match`、循环和嵌套
   `try/catch` 中出现指向外围 callable 的 `return`，即使其后另有不可达结果表达式，也必须在实际
   `return` token 产生唯一 `AE1405`；不得再把 `return` 的值当成 catch 结果参与贴合；
-- [ ] EXC15：语句形式 `if`、块形式 `match` 和 `try/catch` 的分支在直接位置及普通嵌套结构中返回当前
+- [x] EXC15：语句形式 `if`、块形式 `match` 和 `try/catch` 的分支在直接位置及普通嵌套结构中返回当前
   callable 均保持合法；值形式 catch 内定义并调用块 Lambda 时，Lambda 自己的 `return` 合法且不得
   错误触发 EXC14。上述边界必须建立或映射 FCTS 直接运行证据；
-- [ ] EXC16：复验值形式 `if` / `match` 的相同外围-callable `return` 禁令：直接位置、普通嵌套结构和
+- [x] EXC16：复验值形式 `if` / `match` 的相同外围-callable `return` 禁令：直接位置、普通嵌套结构和
   “`return` 后仍有结果表达式”均拒绝，嵌套 Lambda 自有 `return` 合法。三种值表达式必须复用一个
   通用编译期 callable 边界模型，不得为 `try` 添加特判。
 
 #### 21.2.5 普通 Feng 调用链传播
 
-- [ ] EXC17：未捕获异常跨一层和多层普通函数 / 方法 / Lambda 调用传播，由最外层精确类型或兜底
+- [x] EXC17：未捕获异常跨一层和多层普通函数 / 方法 / Lambda 调用传播，由最外层精确类型或兜底
   catch 捕获；传播不要求 callable 声明异常，也不要求调用点添加额外语法，FCTS 直接验证捕获结果；
-- [ ] EXC18：内层具体 catch 完成后不再传播，内层未匹配异常继续向外传播，内层 `throw` 新值按新值
+- [x] EXC18：内层具体 catch 完成后不再传播，内层未匹配异常继续向外传播，内层 `throw` 新值按新值
   类型重新匹配，原样重抛保持原类型和值；每种路径都以互异可观察结果证明只执行预期分支一次；
-- [ ] EXC19：异常路径执行已经登记的 `defer`，并保持既有托管值清理与传播行为；只建立到 defer、
+- [x] EXC19：异常路径执行已经登记的 `defer`，并保持既有托管值清理与传播行为；只建立到 defer、
   生命周期和现有异常清理专项的直接证据映射，缺少可观察运行证据时才新增 FCTS，不在 G17 改 runtime。
 
 ### 21.3 已知问题、既有用例迁移与实现 TODO
 
 - [x] 按 `ISSUE-G17-001` 修正主异常规范和中英文用户手册中“catch 可省略”的旧描述；实际 Parser
   继续要求至少一个 catch，不改语法实现；
-- [ ] 按 `ISSUE-G17-002` 删除值形式 try 将末尾 `return` 当作 catch 结果的 Semantic 特例，建立三种
+- [x] 按 `ISSUE-G17-002` 删除值形式 try 将末尾 `return` 当作 catch 结果的 Semantic 特例，建立三种
   值表达式共用的外围-callable return 边界；只在表达式 AST 上建立边界，不得改变语句形式的
   `if` / `match` / `try` 语义、诊断或发码；检查只发生在编译期，不增加运行时开销；
-- [ ] 实施 EXC14～EXC16 前须由人工明确批准以下既有测试迁移；批准后仅允许迁移该清单，且必须保留
+- [x] 实施 EXC14～EXC16 前须由人工明确批准以下既有测试迁移；批准后仅允许迁移该清单，且必须保留
   各项原测试重点，不能简单删除：
   - `test/semantic/test_semantic.c` 的 `test_g15_lambda_target_signature_diagnostics` 中嵌套 try case，改用
     非法 catch 结果类型继续验证 Lambda 目标签名；
@@ -1790,36 +1790,98 @@ Lambda 建立新的 callable 边界，其 body 中返回该 Lambda 的 `return` 
     保留“语句 catch 可退出 callable”的行为证据；
   - `fcts/fcts_bin/src/test_function_return_paths.ff` 的三个值形式 catch-return 路径及对应断言，改用 catch
     结果表达式或直接返回整个 try 表达式，保持原正常 / 异常路径结果；
-- [ ] 除上述明确列出的既有用例外，本组只新增测试；发现其他既有测试必须修改时先记录原因并再次由
+- [x] 除上述明确列出的既有用例外，本组只新增测试；发现其他既有测试必须修改时先记录原因并再次由
   人工决策；
-- [ ] 不迁移或扩展 ABI 异常效果测试，不修改 `AE1313`、`.ft`、公开 ABI 或 runtime 私有 ABI；发现
+- [x] 不迁移或扩展 ABI 异常效果测试，不修改 `AE1313`、`.ft`、公开 ABI 或 runtime 私有 ABI；发现
   相关失败时记录为延期问题，不在 G17 内顺带修复；
-- [ ] 明显重复或使用错误的异常诊断码只可在新增用例直接覆盖的产生点内修正；不做与新增覆盖无关的
+- [x] 明显重复或使用错误的异常诊断码只可在新增用例直接覆盖的产生点内修正；不做与新增覆盖无关的
   错误码整理或代码重构。
 
 ### 21.4 独立验收与交付 TODO
 
-- [ ] 建立 EXC01～EXC19 到现有 Parser、Semantic、Codegen、smoke 与 FCTS 的逐项映射，只为没有直接
+- [x] 建立 EXC01～EXC19 到现有 Parser、Semantic、Codegen、smoke 与 FCTS 的逐项映射，只为没有直接
   证据的边界新增用例；Semantic 接受不能代替可进入 FCTS 的运行行为证据；
-- [ ] 独立运行 G17 Parser / Semantic / Codegen 专项，核对诊断码、实际 token、行列、数量、阶段、
+- [x] 独立运行 G17 Parser / Semantic / Codegen 专项，核对诊断码、实际 token、行列、数量、阶段、
   类型身份、表达式结果和 callable 边界；
-- [ ] 独立运行 G17 FCTS 与 smoke 追加 / 迁移用例，核对精确捕获、兜底、重抛、普通调用链传播、
+- [x] 独立运行 G17 FCTS 与 smoke 追加 / 迁移用例，核对精确捕获、兜底、重抛、普通调用链传播、
   语句 catch 返回及嵌套 Lambda 返回；
-- [ ] 复核生成代码差异，确认 return 边界修复和诊断补齐只影响编译期，合法程序没有新增运行时判断、
+- [x] 复核生成代码差异，确认 return 边界修复和诊断补齐只影响编译期，合法程序没有新增运行时判断、
   分支、调用、分配、ARC 或 runtime 接口；
-- [ ] 在 Codex 沙箱外为 G17 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G17 问题；
-- [ ] 填写本组映射、实际新增 / 迁移用例、专项结果、全量结果、性能结论和交付结论。
+- [x] 在 Codex 沙箱外为 G17 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G17 问题；
+- [x] 填写本组映射、实际新增 / 迁移用例、专项结果、全量结果、性能结论和交付结论。
 
 ### 21.5 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增 / 迁移用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 性能与 ABI：—
-- 问题：见 [G17 问题记录](./feng-language-conformance-coverage-hardening-issues/g17.md)
-- 建议 commit message：`test: harden exception semantics coverage`
+- 状态：已交付；
+- 稳定码映射：`try` / catch 绑定语法继续使用 `SE1401`～`SE1403`；非法 throw / 具体 catch 类型分别
+  映射既有 `AE0076` / `AE0179`，void throw 使用 `AE1402`；值形式 catch 缺少结果使用 `AE1401`，
+  `unknown` 非原样重抛使用 `AE1404`，值形式 catch 的外围 callable return 使用 `AE1405`，兜底
+  catch 非末位使用 `AE1406`；值形式 `if` / `match` 的同类 return 使用 `AE1110`，匿名 catch 内引用
+  不存在的名称继续使用 `AE0001`；
+- 实际新增：Semantic 新增 5 个 G17 测试函数，覆盖两种兜底顺序、6 类非法 `unknown` 使用、匿名 catch
+  无绑定、3 类缺失 catch 结果、直接重抛 / 终端 throw、11 个外围 return 反向程序及语句 / Lambda
+  正向矩阵；FCTS 新增 `test_g17_exception_semantics.ff` 并登记 9 条运行用例；
+- 既有迁移：只修改 §21.3 人工批准的 Semantic、Codegen、smoke 及两处 FCTS 用例；语句 catch 返回
+  继续返回外围 callable，值形式 catch 改用结果表达式，原有 smoke 输出保持不变；没有修改清单外的
+  既有测试用例；
+- 本组专项结果：Parser、Semantic、Codegen 测试程序全部通过；smoke 为 `90/90`，FCTS 为
+  `1123/1123`；
+- 本组沙箱外 `make test`：2026-09-02 以退出码 `0` 通过；UBSan 与 normal 两阶段的 smoke 均为
+  `90/90`、FCTS 均为 `1123/1123`，两阶段的 Parser、Semantic、Codegen、runtime、CLI、symbol、
+  std、增量构建、发布脚本、性能约束及其余回归全部通过；
+- 性能与 ABI：产品实现只修改 Semantic 编译期上下文与检查；Codegen、runtime、`.ft` 和公开 ABI
+  没有产品代码差异，合法程序不新增运行时判断、分支、调用、分配或 ARC；跨 ABI 异常效果分析继续
+  按 `ISSUE-G17-003` 延期；
+- 问题：实施中记录 6 项问题，其中 5 项已关闭、1 项延期，见
+  [G17 问题记录](./feng-language-conformance-coverage-hardening-issues/g17.md)；
+- 建议 commit message：`fix(semantic): enforce exception result boundaries and complete G17 coverage`
+
+#### 21.5.1 EXC01～EXC03：语法边界
+
+- Parser 的 `test_try_block_form_is_rejected`、`test_try_expression_with_typed_catches`、
+  `test_try_statement_ends_at_final_catch_brace`、`test_try_statement_rejects_trailing_semicolon`、
+  `test_try_without_catch_is_rejected` 与 G12 `test_g12_control_flow_and_try_syntax` 共同覆盖合法匿名 / 具名 /
+  多 catch AST，以及 `try` 块形态、缺 catch、缺名称、缺冒号 / 类型、缺 body 和多余分号的精确
+  Parser 诊断、实际 token、行列、数量与空 AST；无需新增同构 Parser 用例。
+
+#### 21.5.2 EXC04～EXC06：载荷集合与名义身份
+
+- Semantic 的 `test_exception_payload_positive_type_matrix` 与
+  `test_exception_payload_negative_type_matrix` 对 throw / typed catch 使用同一允许和拒绝矩阵；既有
+  void、函数、方法、Lambda、pointer、spec 和 unknown 位置专项补齐稳定原因；
+- FCTS `test_exception_payload.ff` 运行全部内建标量、string、实体、enum、tuple、`@value type`、闭合
+  泛型和 `@abi` Feng 类型，并以不同 enum、底层整数、不同 tuple / value type、不同泛型实参及
+  跨包 enum 验证精确名义匹配；聚合载荷的捕获、重抛和释放次数也在同一文件直接观察。
+
+#### 21.5.3 EXC07～EXC11：捕获顺序、绑定与重抛
+
+- 新增 `test_g17_catch_order_and_unknown_diagnostics` 精确锁定两种兜底非末位的 `AE1406`、匿名 catch
+  的 `AE0001`，以及 `unknown` 绑定作为初始化值、参数、返回值、成员接收者、普通 throw 子表达式
+  和运算操作数时实际 token 上的 `AE1404`；直接 `throw error` 继续通过；
+- G13 的 catch `let` 赋值、作用域、body 遮蔽与兄弟子句隔离用例直接映射 EXC09；
+- FCTS `test_exception.ff`、`test_exception_payload.ff` 与新增 G17 文件直接观察首个精确 catch、兜底、
+  具体载荷读取、具体重抛及一层 / 两层 unknown 原样重抛的类型和值。
+
+#### 21.5.4 EXC12～EXC16：表达式结果与 callable return 边界
+
+- 新增 `test_g17_try_result_presence_diagnostics` 锁定空 body、仅 binding 和仅 assignment 的
+  `AE1401`；`test_g17_rethrow_and_terminal_throw_acceptance` 证明终端 throw 路径不要求结果；既有 try
+  结果显式目标、首个非字面量目标、全字面量、越界、union 和不兼容类型 Semantic/FCTS 覆盖直接
+  映射 EXC13；
+- 新增 `test_g17_expression_return_boundary_diagnostics` 对值形式 catch 的直接位置、return 后结果、
+  普通 block、嵌套 if / match、循环和嵌套 try 锁定 `AE1405`，并复验值形式 if / match 的 `AE1110`；
+  每项均定位实际 return token 且只有一个诊断；
+- `test_g17_expression_return_boundary_acceptance` 与新增 FCTS 证明语句形式 if / match / try 可经普通
+  嵌套块返回当前 callable，值形式三者内部的 Lambda 可合法返回自身；获批 Codegen 与 smoke 迁移
+  继续覆盖语句 catch 返回、异常 frame / unwind 清理及相同运行输出。
+
+#### 21.5.5 EXC17～EXC19：普通传播与清理
+
+- 新增 FCTS 直接观察异常跨两层函数、两层方法和 Lambda + 函数调用传播；分别证明内层捕获后停止、
+  未匹配继续传播、替换值按新类型匹配、具体重抛及 unknown 原样重抛保持原类型和值；
+- EXC19 映射 `test_defer.ff` 的异常路径 defer、`test_try_branch_exception_cleanup.ff` 的分支局部清理、
+  `test_exception_payload.ff` 的聚合载荷释放，以及 `exception_cleanup` smoke；本组未修改 runtime。
 
 ## 22 G18：普通类型与值诊断
 

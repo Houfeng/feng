@@ -9,10 +9,10 @@ func fail(): string {
 }
 
 func catch_returns(): string {
-    let value = try fail() catch ex: string {
+    try fail() catch ex: string {
         return "catch-return";
-    };
-    return value;
+    }
+    return "normal";
 }
 
 func normal_value(): string {

@@ -1,0 +1,277 @@
+module fcts_bin;
+
+import std.test;
+
+/** Callable used to prove that a nested Lambda owns its return statements. */
+spec G17ExceptionReader(): int;
+
+/** Entity whose methods propagate one exception through multiple frames. */
+type G17ExceptionEmitter {
+  let message: string;
+
+  /** Throw the entity's configured message from the leaf method. */
+  func leaf(): int {
+    throw self.message;
+    return 0;
+  }
+
+  /** Propagate the leaf exception without an exception declaration or marker. */
+  func middle(): int {
+    return self.leaf();
+  }
+}
+
+/** Throw the stable string used by the function-chain scenarios. */
+func g17ExceptionFunctionLeaf(): int {
+  throw "function-chain";
+  return 0;
+}
+
+/** Propagate the function-leaf exception through a second ordinary frame. */
+func g17ExceptionFunctionMiddle(): int {
+  return g17ExceptionFunctionLeaf();
+}
+
+/** Invoke one reader so a throwing Lambda crosses an ordinary function frame. */
+func g17InvokeExceptionReader(reader: G17ExceptionReader): int {
+  return reader();
+}
+
+/** Throw one integer for ordered exact-catch selection. */
+func g17ThrowOrderedInteger(): void {
+  throw 17;
+}
+
+/** Return directly through an ordinary block nested in a statement if. */
+func g17StatementIfReturn(): int {
+  if true {
+    {
+      return 10;
+    }
+  }
+  return -1;
+}
+
+/** Return directly through an ordinary block nested in a statement match. */
+func g17StatementMatchReturn(): int {
+  match 1 {
+    1 {
+      {
+        return 20;
+      }
+    }
+    else {}
+  }
+  return -1;
+}
+
+/** Return directly through an ordinary block nested in a statement catch. */
+func g17StatementTryReturn(): int {
+  try g17ExceptionFunctionLeaf() catch {
+    {
+      return 30;
+    }
+  }
+  return -1;
+}
+
+/** Execute self-contained Lambda returns in all three value branch forms. */
+func g17NestedLambdaReturns(): bool {
+  let ifValue = if true {
+    let reader: G17ExceptionReader = () { return 40; };
+    reader()
+  } else {
+    0
+  };
+  let matchValue = match 1 {
+    1 {
+      let reader: G17ExceptionReader = () { return 41; };
+      reader()
+    }
+    else { 0 }
+  };
+  let tryValue = try g17ExceptionFunctionLeaf() catch {
+    let reader: G17ExceptionReader = () { return 42; };
+    reader()
+  };
+  return ifValue == 40 && matchValue == 41 && tryValue == 42;
+}
+
+/** Observe unhandled exceptions across function, method, and Lambda frames. */
+func g17PropagatesAcrossOrdinaryCallables(): bool {
+  var functionCaught = false;
+  try g17ExceptionFunctionMiddle() catch error: string {
+    functionCaught = error == "function-chain";
+  }
+
+  var methodCaught = false;
+  let emitter = G17ExceptionEmitter { message: "method-chain" };
+  try emitter.middle() catch error: string {
+    methodCaught = error == "method-chain";
+  }
+
+  var lambdaCaught = false;
+  let reader: G17ExceptionReader = () {
+    throw "lambda-chain";
+    return 0;
+  };
+  try g17InvokeExceptionReader(reader) catch error: string {
+    lambdaCaught = error == "lambda-chain";
+  }
+
+  return functionCaught && methodCaught && lambdaCaught;
+}
+
+/** Return the first exact catch branch selected in source order. */
+func g17OrderedExactCatch(): int {
+  var selected = 0;
+  try g17ThrowOrderedInteger() catch error: string {
+    selected = 1;
+  } catch first: int {
+    selected = 2;
+  } catch second: int {
+    selected = 3;
+  } catch {
+    selected = 4;
+  }
+  return selected;
+}
+
+/** Handle the function-chain exception completely in an inner catch. */
+func g17HandleInnerException(): int {
+  try g17ExceptionFunctionMiddle() catch error: string {
+    if error == "function-chain" {
+      return 7;
+    }
+    return -1;
+  }
+  return -1;
+}
+
+/** Prove that a completed inner catch suppresses further propagation. */
+func g17CompletedCatchStopsPropagation(): bool {
+  var outerCaught = false;
+  let result = try g17HandleInnerException() catch {
+    outerCaught = true;
+    -1
+  };
+  return result == 7 && !outerCaught;
+}
+
+/** Leave a string unmatched so it propagates through the inner try. */
+func g17LeaveInnerExceptionUnmatched(): void {
+  try g17ExceptionFunctionMiddle() catch error: i32 {}
+}
+
+/** Prove that an unmatched inner exception reaches the outer exact catch. */
+func g17UnmatchedExceptionPropagates(): bool {
+  var caught = false;
+  try g17LeaveInnerExceptionUnmatched() catch error: string {
+    caught = error == "function-chain";
+  }
+  return caught;
+}
+
+/** Replace a caught string with a new integer exception. */
+func g17ReplaceInnerException(): void {
+  try g17ExceptionFunctionMiddle() catch error: string {
+    throw 1718;
+  }
+}
+
+/** Prove that replacement throw matching uses the replacement value's type. */
+func g17ReplacementExceptionRematches(): bool {
+  var selected = 0;
+  try g17ReplaceInnerException() catch error: string {
+    selected = -1;
+  } catch error: int {
+    if error == 1718 {
+      selected = 1;
+    }
+  }
+  return selected == 1;
+}
+
+/** Rethrow a concrete catch binding without changing its payload. */
+func g17RethrowConcreteException(): void {
+  try g17ExceptionFunctionMiddle() catch error: string {
+    throw error;
+  }
+}
+
+/** Prove that concrete rethrow preserves both the precise type and value. */
+func g17ConcreteRethrowPreservesValue(): bool {
+  var caught = false;
+  try g17RethrowConcreteException() catch error: string {
+    caught = error == "function-chain";
+  }
+  return caught;
+}
+
+/** Rethrow the original exception object from an unknown catch. */
+func g17RethrowOriginalException(): void {
+  try g17ExceptionFunctionMiddle() catch error: unknown {
+    throw error;
+  }
+}
+
+/** Prove that original rethrow preserves both the precise type and value. */
+func g17OriginalRethrowPreservesValue(): bool {
+  var caught = false;
+  try g17RethrowOriginalException() catch error: string {
+    caught = error == "function-chain";
+  }
+  return caught;
+}
+
+/** G17 exception syntax, branch, catch, and propagation behavior coverage. */
+open func test_g17_exception_semantics(): void {
+  describe("G17 exception semantics", () {
+    test("statement branches may return from the current callable", () {
+      assert(g17StatementIfReturn() == 10 &&
+             g17StatementMatchReturn() == 20 &&
+             g17StatementTryReturn() == 30,
+             "statement if, match and try preserve callable returns");
+    });
+
+    test("nested Lambdas own returns inside value branches", () {
+      assert(g17NestedLambdaReturns(),
+             "value if, match and try permit a nested Lambda's return");
+    });
+
+    test("exceptions propagate across ordinary callable kinds", () {
+      assert(g17PropagatesAcrossOrdinaryCallables(),
+             "functions, methods and Lambdas propagate to the outer catch");
+    });
+
+    test("the first exact catch wins in source order", () {
+      assert(g17OrderedExactCatch() == 2,
+             "later exact and fallback catches do not execute");
+    });
+
+    test("a completed inner catch suppresses propagation", () {
+      assert(g17CompletedCatchStopsPropagation(),
+             "normal completion resumes after the handled call");
+    });
+
+    test("an unmatched inner exception propagates", () {
+      assert(g17UnmatchedExceptionPropagates(),
+             "the outer exact catch receives the original string");
+    });
+
+    test("a replacement exception is matched by its new type", () {
+      assert(g17ReplacementExceptionRematches(),
+             "the replacement integer reaches only the integer catch");
+    });
+
+    test("concrete rethrow preserves the precise payload", () {
+      assert(g17ConcreteRethrowPreservesValue(),
+             "the outer string catch receives the concrete payload");
+    });
+
+    test("unknown rethrow preserves the original type and value", () {
+      assert(g17OriginalRethrowPreservesValue(),
+             "the outer string catch receives the original payload");
+    });
+  });
+}

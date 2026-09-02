@@ -30990,10 +30990,9 @@ static void test_g15_lambda_target_signature_diagnostics(void) {
         "func consume(picker: Picker): void {}\n"
         "func run(): void {\n"
         "    consume((flag: bool) {\n"
-        "        let value = try may_fail() catch {\n"
-        "            return \"bad\";\n"
+        "        return try may_fail() catch {\n"
+        "            \"bad\";\n"
         "        };\n"
-        "        throw \"done\";\n"
         "    });\n"
         "}\n",
         "AE0512", 6U, 5U, "consume", "no overload accepting 1 argument(s)");
@@ -31293,7 +31292,7 @@ static void test_g15_structured_return_acceptance(void) {
         "    return 30;\n"
         "}\n"
         "func try_returns(flag: bool): i32 {\n"
-        "    let value = try may_fail(flag) catch { return 31; };\n"
+        "    let value = try may_fail(flag) catch { 31; };\n"
         "    return value;\n"
         "}\n"
         "func try_rethrows(flag: bool): i32 {\n"
@@ -31828,7 +31827,446 @@ static void test_g16_control_flow_acceptance(void) {
         "}\n");
 }
 
+/* EXC08/EXC10: catch-all clauses are terminal, and an unknown binding is
+ * usable only as the complete operand of an original rethrow. */
+static void test_g17_catch_order_and_unknown_diagnostics(void) {
+    assert_stable_semantic_error(
+        "G17",
+        "g17_unknown_catch_not_last.ff",
+        "module g17.unknown_catch_not_last;\n"
+        "func fail(): i32 { throw 1; return 0; }\n"
+        "func run(): void {\n"
+        "  try fail()\n"
+        "  catch error: unknown {}\n"
+        "  catch value: i32 {}\n"
+        "}\n",
+        "AE1406", 5U, 3U, "catch", "must be the last catch clause");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_anonymous_catch_not_last.ff",
+        "module g17.anonymous_catch_not_last;\n"
+        "func fail(): i32 { throw 1; return 0; }\n"
+        "func run(): void {\n"
+        "  try fail()\n"
+        "  catch {}\n"
+        "  catch value: i32 {}\n"
+        "}\n",
+        "AE1406", 5U, 3U, "catch", "must be the last catch clause");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_anonymous_catch_has_no_binding.ff",
+        "module g17.anonymous_catch_has_no_binding;\n"
+        "func fail(): i32 { throw 1; return 0; }\n"
+        "func run(): void {\n"
+        "  try fail() catch { error; }\n"
+        "}\n",
+        "AE0001", 4U, 22U, "error", "undefined identifier 'error'");
+
+    static const struct {
+        const char *path;
+        const char *body;
+        unsigned int line;
+        unsigned int column;
+    } unknown_use_cases[] = {
+        {
+            "g17_unknown_binding_initializer.ff",
+            "    let copy = error;\n",
+            7U,
+            16U
+        },
+        {
+            "g17_unknown_argument.ff",
+            "    consume(error);\n",
+            7U,
+            13U
+        },
+        {
+            "g17_unknown_return_value.ff",
+            "    return error;\n",
+            7U,
+            12U
+        },
+        {
+            "g17_unknown_member_receiver.ff",
+            "    error.message;\n",
+            7U,
+            5U
+        },
+        {
+            "g17_unknown_throw_subexpression.ff",
+            "    throw identity(error);\n",
+            7U,
+            20U
+        },
+        {
+            "g17_unknown_binary_operand.ff",
+            "    throw error + 1;\n",
+            7U,
+            11U
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(unknown_use_cases) / sizeof(unknown_use_cases[0]);
+         ++index) {
+        char source[1024];
+        int written = snprintf(
+            source,
+            sizeof(source),
+            "module g17.unknown_use;\n"
+            "func fail(): i32 { throw 1; return 0; }\n"
+            "func consume(value: string): void {}\n"
+            "func identity(value: string): string { return value; }\n"
+            "func run(): string {\n"
+            "  try fail() catch error: unknown {\n"
+            "%s"
+            "  }\n"
+            "  return \"done\";\n"
+            "}\n",
+            unknown_use_cases[index].body);
+
+        ASSERT(written >= 0);
+        ASSERT((size_t)written < sizeof(source));
+        FengProgram *program = parse_program_or_die(
+            unknown_use_cases[index].path, source);
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        bool found = false;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      1U,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        for (size_t error_index = 0U;
+             error_index < error_count;
+             ++error_index) {
+            const FengSemanticError *error = &errors[error_index];
+
+            if (strcmp(error->code, "AE1404") == 0 &&
+                error->token.line == unknown_use_cases[index].line &&
+                error->token.column == unknown_use_cases[index].column &&
+                error->token.length == strlen("error") &&
+                memcmp(error->token.lexeme,
+                       "error",
+                       error->token.length) == 0 &&
+                strstr(error->message,
+                       "can only be used in 'throw error'") != NULL) {
+                found = true;
+            }
+        }
+        ASSERT(found);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* EXC12: each normally completing catch of a non-void try expression must
+ * provide a result expression; an empty or statement-only body does not. */
+static void test_g17_try_result_presence_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *body;
+    } cases[] = {
+        {"g17_try_empty_catch.ff", ""},
+        {"g17_try_binding_only_catch.ff", "    let ignored = 1;\n"},
+        {"g17_try_assignment_only_catch.ff", "    seen = true;\n"}
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        char source[768];
+        int written = snprintf(
+            source,
+            sizeof(source),
+            "module g17.try_result_presence;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  var seen = false;\n"
+            "  let value = try fail() catch {\n"
+            "%s"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            cases[index].body);
+
+        ASSERT(written >= 0);
+        ASSERT((size_t)written < sizeof(source));
+        assert_stable_semantic_error(
+            "G17",
+            cases[index].path,
+            source,
+            "AE1401",
+            5U,
+            26U,
+            "catch",
+            "must end with a result expression or 'throw'");
+    }
+}
+
+/* EXC10/EXC12: a direct unknown rethrow and a terminal replacement throw are
+ * valid terminating catch paths and do not need a result expression. */
+static void test_g17_rethrow_and_terminal_throw_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g17_rethrow_and_terminal_throw_acceptance.ff",
+        "module g17.rethrow_and_terminal_throw_acceptance;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func rethrow(): void {\n"
+        "  try fail() catch error: unknown { throw error; }\n"
+        "}\n"
+        "func replace(): i32 {\n"
+        "  return try fail() catch { throw 42; };\n"
+        "}\n");
+}
+
+/* EXC14/EXC16: value-expression result branches cannot return from the
+ * enclosing callable, including through ordinary nested control-flow. */
+static void test_g17_expression_return_boundary_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+        unsigned int line;
+        unsigned int column;
+        const char *message;
+    } cases[] = {
+        {
+            "g17_try_direct_terminal_return.ff",
+            "module g17.try_direct_terminal_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    return 1;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 5U, 5U, "try expression catch result branch"
+        },
+        {
+            "g17_try_return_before_result.ff",
+            "module g17.try_return_before_result;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    return 1;\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 5U, 5U, "try expression catch result branch"
+        },
+        {
+            "g17_try_nested_block_return.ff",
+            "module g17.try_nested_block_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    {\n"
+            "      return 1;\n"
+            "    }\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 6U, 7U, "try expression catch result branch"
+        },
+        {
+            "g17_try_nested_if_statement_return.ff",
+            "module g17.try_nested_if_statement_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    if true {\n"
+            "      return 1;\n"
+            "    }\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 6U, 7U, "try expression catch result branch"
+        },
+        {
+            "g17_try_nested_match_statement_return.ff",
+            "module g17.try_nested_match_statement_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    match 1 {\n"
+            "      1 {\n"
+            "        return 1;\n"
+            "      }\n"
+            "      else {}\n"
+            "    }\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 7U, 9U, "try expression catch result branch"
+        },
+        {
+            "g17_try_nested_loop_return.ff",
+            "module g17.try_nested_loop_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    while true {\n"
+            "      return 1;\n"
+            "    }\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 6U, 7U, "try expression catch result branch"
+        },
+        {
+            "g17_try_nested_try_statement_return.ff",
+            "module g17.try_nested_try_statement_return;\n"
+            "func fail(): i32 { throw \"g17\"; return 0; }\n"
+            "func run(): i32 {\n"
+            "  let value = try fail() catch {\n"
+            "    try fail() catch {\n"
+            "      return 1;\n"
+            "    }\n"
+            "    2;\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1405", 6U, 7U, "try expression catch result branch"
+        },
+        {
+            "g17_if_return_before_result.ff",
+            "module g17.if_return_before_result;\n"
+            "func run(): i32 {\n"
+            "  let value = if true {\n"
+            "    return 1;\n"
+            "    2;\n"
+            "  } else { 3; };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1110", 4U, 5U, "'if' expression result branch"
+        },
+        {
+            "g17_if_nested_block_return.ff",
+            "module g17.if_nested_block_return;\n"
+            "func run(): i32 {\n"
+            "  let value = if true {\n"
+            "    {\n"
+            "      return 1;\n"
+            "    }\n"
+            "    2;\n"
+            "  } else { 3; };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1110", 5U, 7U, "'if' expression result branch"
+        },
+        {
+            "g17_match_return_before_result.ff",
+            "module g17.match_return_before_result;\n"
+            "func run(): i32 {\n"
+            "  let value = match 1 {\n"
+            "    1 {\n"
+            "      return 1;\n"
+            "      2;\n"
+            "    }\n"
+            "    else { 3; }\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1110", 5U, 7U, "'match' expression result branch"
+        },
+        {
+            "g17_match_nested_if_statement_return.ff",
+            "module g17.match_nested_if_statement_return;\n"
+            "func run(): i32 {\n"
+            "  let value = match 1 {\n"
+            "    1 {\n"
+            "      if true {\n"
+            "        return 1;\n"
+            "      }\n"
+            "      2;\n"
+            "    }\n"
+            "    else { 3; }\n"
+            "  };\n"
+            "  return value;\n"
+            "}\n",
+            "AE1110", 6U, 9U, "'match' expression result branch"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        assert_stable_semantic_error("G17",
+                                     cases[index].path,
+                                     cases[index].source,
+                                     cases[index].code,
+                                     cases[index].line,
+                                     cases[index].column,
+                                     "return",
+                                     cases[index].message);
+    }
+}
+
+/* EXC15/EXC16: statement forms retain ordinary callable returns, while a
+ * lambda nested in any value-expression branch returns only from itself. */
+static void test_g17_expression_return_boundary_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g17_expression_return_boundary_acceptance.ff",
+        "module g17.expression_return_boundary_acceptance;\n"
+        "spec Reader(): i32;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func statement_if(flag: bool): i32 {\n"
+        "  if flag { return 10; }\n"
+        "  return 11;\n"
+        "}\n"
+        "func statement_match(value: i32): i32 {\n"
+        "  match value {\n"
+        "    0 { return 20; }\n"
+        "    else { return 21; }\n"
+        "  }\n"
+        "}\n"
+        "func statement_try(): i32 {\n"
+        "  try fail() catch { return 30; }\n"
+        "  return 31;\n"
+        "}\n"
+        "func value_if_lambda(): i32 {\n"
+        "  let value = if true {\n"
+        "    let reader: Reader = () { return 40; };\n"
+        "    reader();\n"
+        "  } else { 0; };\n"
+        "  return value;\n"
+        "}\n"
+        "func value_match_lambda(): i32 {\n"
+        "  let value = match 1 {\n"
+        "    1 {\n"
+        "      let reader: Reader = () { return 41; };\n"
+        "      reader();\n"
+        "    }\n"
+        "    else { 0; }\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func value_try_lambda(): i32 {\n"
+        "  let value = try fail() catch {\n"
+        "    let reader: Reader = () { return 42; };\n"
+        "    reader();\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n");
+}
+
 int main(void) {
+    test_g17_catch_order_and_unknown_diagnostics();
+    test_g17_try_result_presence_diagnostics();
+    test_g17_rethrow_and_terminal_throw_acceptance();
+    test_g17_expression_return_boundary_diagnostics();
+    test_g17_expression_return_boundary_acceptance();
     test_g16_base_loop_control_diagnostics();
     test_g16_expression_loop_boundary_diagnostics();
     test_g16_condition_type_diagnostics();

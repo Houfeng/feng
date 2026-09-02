@@ -58,6 +58,7 @@ func main(args: string[]) {
       test_union_spec_leaf_coercion();
       test_exception();
       test_exception_payload();
+      test_g17_exception_semantics();
       test_try_branch_exception_cleanup();
       test_array();
       test_generic();

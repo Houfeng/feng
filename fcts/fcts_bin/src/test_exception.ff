@@ -46,10 +46,10 @@ func ex_continue_from_catch(): int {
 
 // catch 中 return 辅助
 func ex_return_from_catch(): string {
-  let value = try throw_ex_text() catch ex: string {
+  try throw_ex_text() catch ex: string {
     return "catch-return";
-  };
-  return value;
+  }
+  return "normal";
 }
 
 func throw_ex_text(): string {
