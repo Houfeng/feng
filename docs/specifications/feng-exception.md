@@ -216,5 +216,7 @@ let label = if value {
 
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch` 表达式的控制流关系。
+- [feng-function.md](./feng-function.md): 逃逸异常与本地 `catch` 如何参与非 `void` callable 的正常落尾
+  可达性判断。
 - [feng-interop.md](./feng-interop.md): C ABI 路径下的 `extern func` 导入规则、`@abi` 的 ABI 规则与异常边界。
 - 本文档: `throw`、`try/catch` 表达式语义、传播模型与 C ABI 边界限制。

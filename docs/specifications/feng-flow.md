@@ -364,7 +364,8 @@ for let (key, value) in entries {
 
 - [feng-language.md](./feng-language.md): 语言总体规范、流程控制概要、模块、类型、函数、异常、自动内存管理、包分发与完整示例。
 - [feng-binding.md](./feng-binding.md): `let` / `var` 可变性、块作用域与名称屏蔽规则。
-- [feng-function.md](./feng-function.md): Lambda 对既定绑定实例的引用捕获规则。
+- [feng-function.md](./feng-function.md): Lambda 对既定绑定实例的引用捕获规则，以及分支、异常与循环
+  如何参与非 `void` callable 的正常落尾可达性判断。
 - [feng-lifetime.md](./feng-lifetime.md): 被捕获绑定的 ARC 持久化与普通局部生命周期规则。
 - [feng-iterator.md](./feng-iterator.md): `@iterable` / `@iterator` 协议与 `for/in` 展开规则。
 - [feng-exception.md](./feng-exception.md): `throw`、异常传播与 `try/catch` 表达式的异常语义。

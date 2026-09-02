@@ -38,8 +38,12 @@ Review 后只保留分组范围、实施顺序、状态和本文链接；用例 
 - [模块规范](../specifications/feng-module.md)；
 - [变量绑定与作用域规范](../specifications/feng-binding.md)；
 - [表达式与运算规范](../specifications/feng-expression.md)；
+- [函数规范](../specifications/feng-function.md)；
+- [函数变长参数规范](../specifications/feng-function-variadic.md)；
+- [`spec` 规范](../specifications/feng-spec.md)；
 - [类型规范](../specifications/feng-type.md)；
 - [流程控制规范](../specifications/feng-flow.md)；
+- [异常模型规范](../specifications/feng-exception.md)；
 - [enum 规范](../specifications/feng-enum.md)；
 - [tuple 规范](../specifications/feng-tuple.md)；
 - [字符串转义规范](../specifications/feng-string-escape.md)；
@@ -1242,24 +1246,146 @@ static / 实例访问方式归 G18；数组元素、维度和多维关系归 G21
 
 ### 19.1 测试重点
 
-验证函数声明、参数、调用和返回规则产生的稳定 Semantic 诊断。
+验证普通函数系统中的声明签名、参数、重载、调用、callable / Lambda 目标类型和返回契约产生的稳定
+Semantic 诊断，并为对应合法邻界建立可直接运行的 FCTS 证据。
+
+本组覆盖顶层函数、`type` 中的实例方法与静态方法、`fit` 方法、object-form `spec` 方法签名、
+callable-form `spec` 值和块 Lambda。相同规则存在多个声明面时，先映射现有直接证据，只为缺少精确
+诊断码、token、行列、数量、阶段或合法运行证据的边界新增测试，不机械排列全部笛卡尔积。
+
+参数缺少类型属于 Parser 语法诊断，参数重名、默认 `let` / 显式 `let` / `var` 可写性属于 G13；
+构造函数与终结器的声明、可见性及特殊返回限制属于 G05 和类型规范；import / alias / 完整模块路径的
+名称解析属于 G22；spec 满足与适配属于 G23；复合类型参数与返回值属于 G24；泛型 callable 的类型实参
+数量、推导与约束属于 G25；`extern func`、C ABI、注解和 runtime 私有 ABI 不属于 G15。上述边界只建立
+必要映射，不在本组重复新增同构用例。
 
 ### 19.2 用例 TODO
 
-- [ ] FUNC-D01：调用实参数量不匹配；
-- [ ] FUNC-D02：调用实参类型不匹配；
-- [ ] FUNC-D03：返回值类型不匹配；
-- [ ] FUNC-D04：要求返回值的路径缺少返回；
-- [ ] FUNC-D05：无返回值函数错误返回值；
-- [ ] FUNC-D06：对应函数规则的最小合法邻界程序。
+#### 19.2.1 声明签名与参数规则
+
+- [ ] FUNC-D01：重复签名、仅返回类型不同、变参与定参覆盖范围重叠以及当前可见契约关系导致的参数
+  接受范围重叠，分别覆盖顶层函数、`type` 实例 / 静态方法、`fit` 方法和 object-form `spec` 方法签名；
+  非法程序必须在形成冲突的后一个声明名称处产生一个稳定 Semantic 诊断。参数个数或参数类型不同且
+  接受范围不重叠的合法重载、实例与 static 两个成员面中的同名方法，以及当前不存在共同满足类型的
+  两个 object-form `spec` 参数重载必须继续合法；已有直接证据只建立映射；
+- [ ] FUNC-D02：函数与 Lambda 参数必须具有显式非 `void` 类型；参数省略 `let` / `var` 时按 `let`
+  处理，显式 `let` 与 `var` 均可声明。缺失类型的 Parser 诊断只映射 G12，参数重名及参数赋值只映射
+  G13；G15 仅补 `void` 参数位置及函数签名层仍缺少的稳定 Semantic 证据，默认 `let` 读取、显式
+  `let` 读取和 `var` 修改的合法行为直接映射 G13 已有 FCTS，不重复新增同构用例；
+- [ ] FUNC-D02-A：编译目标为 `bin` 时，分别覆盖缺少入口、同包多个入口、`main` 参数数量 / 参数
+  类型不等于唯一合法的 `main(args: string[])` 以及显式非 `void` 返回类型，精确映射 `AE0907`～
+  `AE0910`；合法入口的可见性和所在 module 可见性不得影响入口资格。编译目标为 `lib` 时，同名
+  `main` 按普通顶层函数规则处理，不得误触发 bin 入口诊断；已有入口专项足够时只建立映射；
+
+#### 19.2.2 固定参数与重载调用
+
+- [ ] FUNC-D03：对顶层函数、实例方法、静态方法和 callable-form `spec` 值分别构造少于及多于声明
+  数量的固定实参调用；普通函数 / 方法重载集合必须在被调用名称处报告“无匹配重载”的稳定诊断，
+  callable 值必须在调用目标处报告“目标函数类型不接受该参数数量”的稳定诊断；每个最小程序只产生
+  一个 Semantic 诊断，不得延迟到 Codegen；
+- [ ] FUNC-D03-A：使用三个固定参数分别覆盖第一个、中间和最后一个实参类型不匹配；顶层函数完成三
+  个位置矩阵，实例方法、静态方法和 callable 值各至少覆盖一个独立不匹配位置。已具备静态类型的
+  `i32` / `u32`、`bool` / `i32` 等不兼容值必须被拒绝；数值字面量及纯字面量常量表达式按目标固定
+  宽度数值类型贴合、显式转换后的值以及全部参数精确匹配必须进入 FCTS 直接运行；
+- [ ] FUNC-D03-B：普通重载调用分别覆盖唯一精确匹配、无匹配和仍存在多个匹配三个结果；合法调用必须
+  执行被选中的顶层、实例或 static 实现并断言返回值，非法调用必须区分“无匹配重载”和“多个匹配
+  候选”稳定诊断，不得以声明顺序静默选择。若普通声明期重叠检查使某种二义调用在用户程序中不可达，
+  必须记录并映射实际可达的 spec / 约束调用证据，不为凑数制造内部不可达输入；
+
+#### 19.2.3 返回语句与路径完整性
+
+- [ ] FUNC-D04：已经人工确认，显式声明或经返回类型推导确定为非 `void`、且具有实现 body 的
+  callable，所有能够正常到达 body 末尾的分支都必须在此前返回值；编译器必须在 Semantic 阶段
+  检查并报错，不得把缺失返回保留到运行时 panic。逃逸当前 callable 的 `throw` 和可证明没有正常
+  出口的循环终止相应路径，
+  不要求实际返回值；本地捕获继续按 `catch` body 的结果判断，见
+  [ISSUE-G15-001](./feng-language-conformance-coverage-hardening-issues/g15.md#issue-g15-001func-d04-要求返回值的路径可落到-callable-末尾)。
+  最小反向示例为：
+
+  ```feng
+  func choose(flag: bool): i32 {
+      if flag {
+          return 1;
+      }
+      // flag == false 时没有执行 return，控制流会到达函数末尾。
+  }
+  ```
+
+  当前实现会通过 Semantic，并在该路径运行到函数末尾时执行 Codegen 注入的
+  `feng_panic("function reached end without return")`；实施后的预期是在命名 callable 的名称 token
+  或块 Lambda 的起始 `(` token 产生一个函数段稳定 Semantic 诊断。该规则覆盖非 `void` 顶层函数、实例 /
+  静态 / `fit` 方法和非 `void` 块 Lambda；省略返回类型但存在有值 `return`、因而推导为非 `void` 的
+  callable 也适用。反向用例至少覆盖直接落尾、无 `else` 的单分支 `if`、完整
+  `if / else if / else` 中一个分支落尾、缺少 `else` 或一个分支落尾的块 `match`、主表达式或本地
+  `catch` 正常完成后继续落尾的 `try/catch`，以及顶层函数、普通方法和块 Lambda 三种 callable
+  body；正向用例覆盖所有分支返回、一个分支返回而另一分支以逃逸 `throw` 终止、本地捕获后每个可达
+  `catch` 均返回或重新抛出、可能退出的循环后存在明确返回、恒真且没有可达 `break` 的循环使函数
+  末尾不可达，以及 `void` body 自然结束。`for/in` 始终保留循环后的正常路径；恒真循环的判断严格
+  使用函数主规范定义的布尔字面量 `true` 或三段式 `for` 空条件，不扩展为实现自选的常量折叠；
+- [ ] FUNC-D04-A：显式非 `void` callable 中的空 `return;`、`return` 表达式与声明返回类型不匹配，
+  以及省略返回类型的同一 callable 中混用空 `return;` 与有值 `return`、或使用两个互不兼容的有值
+  返回，均在相应 `return` 或返回表达式位置产生一个函数段稳定 Semantic 诊断。顶层函数、实例方法、
+  静态方法、`fit` 方法与块 Lambda 的既有 FUNC01～FUNC08 证据只做反向映射；缺少的“空返回与有值
+  返回混用”和显式返回类型不匹配才新增最小程序；
+- [ ] FUNC-D05：显式 `: void` 的顶层函数、实例 / 静态 / `fit` 方法和目标返回类型为 `void` 的块
+  Lambda 均拒绝 `return expr;`，并在返回表达式位置产生一个函数段稳定 Semantic 诊断；无
+  `return` 自然结束和显式 `return;` 均合法。构造函数与终结器的 `return` 值形态只映射 G05 已有
+  证据，不在 G15 重复；
+
+#### 19.2.4 变长参数调用
+
+- [ ] FUNC-D06：映射变参专项已有的顶层函数、实例方法、静态方法、构造函数和 callable-form `spec`
+  证据，并只补精确诊断缺口：缺少固定前缀实参、普通变参元素类型不匹配、把既有 `T[]` 当作一个
+  普通变参元素、`...expr` 目标不是变参 callable、转发不从第一个变参位置开始、转发表达式不是匹配
+  的只读 `T[]`。非法程序必须分别稳定落入参数匹配、`AE0505` 或 `AE0524` 所属根因；合法的零个、
+  一个、多个变参元素及预打包数组直接转发必须映射或补齐 FCTS 运行证据；
+
+#### 19.2.5 callable 值与 Lambda 目标类型
+
+- [ ] FUNC-D07：未绑定的顶层函数、实例方法、静态方法引用和 Lambda 在普通值位置缺少明确
+  callable-form `spec` 目标时产生稳定诊断；同名重载在目标 callable 下仍有多个匹配候选、来源签名
+  与目标的参数数量 / 参数类型 / 变参标记 / 返回类型任一不一致时，分别产生目标消歧或签名不匹配
+  诊断。非法程序至少覆盖绑定、函数实参和函数返回三个目标位置，并精确断言 `AE0520`～`AE0523`
+  中与实际根因对应的码；泛型来源显式闭合和 spec 方法值的专项规则只映射 G23 / G25；
+- [ ] FUNC-D08：callable-form `spec` 目标下的单表达式 Lambda 与块 Lambda 分别覆盖参数数量、参数
+  类型和返回类型贴合；合法目标分别来自显式绑定类型、形参类型、显式函数返回类型和显式转换，均在
+  FCTS 中调用并断言结果。块 Lambda 的 `return` 必须只使用自身 callable 上下文，不能继承外层函数
+  的返回约束；FUNC06～FUNC08 已有直接证据只建立映射；
+
+#### 19.2.6 合法邻界与稳定诊断收敛
+
+- [ ] FUNC-D09：在同一个最小 FCTS 文件中直接运行固定参数顶层函数、实例方法、静态方法、`fit`
+  方法、callable 值、单表达式 Lambda、块 Lambda、合法重载选择、显式非 `void` 返回、推导返回、
+  `void` 自然结束 / `return;` 和合法变参调用；已有直接运行证据足以唯一证明某项时只记录映射，不
+  新增同构程序，Semantic 接受不得替代可进入 FCTS 的运行断言；
+- [ ] FUNC-D10：审计函数领域仍由实现产生的 `AE0057`、`AE0058`、`AE0218`～`AE0220`。重复顶层
+  函数签名、仅返回类型不同和变参覆盖冲突应与成员方法复用 `AE0508`～`AE0510`；返回语句及推导
+  冲突应先在 AE 函数段定义稳定码，再同步实现和精确测试，见
+  [ISSUE-G15-002](./feng-language-conformance-coverage-hardening-issues/g15.md#issue-g15-002函数诊断仍产生未进入当前-ae-分段规范的旧错误码)。
+  不得借 G15 重排 ABI、注解、构造、spec 满足、复合类型或泛型诊断；若迁移 `AE0058`，必须取得
+  修改 FUNC01-D～FUNC06-D 六条既有错误码断言的人工批准。
 
 ### 19.3 独立验收与交付 TODO
 
-- [ ] 建立本领域稳定诊断码到现有 Semantic test 的映射，并排除 FUNC01～FUNC08 的重复项；
-- [ ] 独立运行 G15，核对诊断码、位置、数量、阶段和函数上下文；
-- [ ] 在 Codex 沙箱外为 G15 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G15 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [ ] 按已经确认的“非 `void` callable 正常落尾必须在编译期报错”结论及函数主规范 §4.1.1，使用
+  通用控制流结果分析实现块、`if`、`match`、`throw`、本地 `try/catch`、`while`、三段式 `for`、
+  `for/in`、`break` 和 `continue` 的末尾可达性；不得通过新增运行时检查实现，不得把恒真识别扩大
+  为未定义的常量折叠；
+- [ ] 按 `ISSUE-G15-002` 对齐 AE 函数段稳定码；只迁移 G15 直接覆盖的旧码产生点，并在取得批准后
+  更新必须随迁移变化的既有 FUNC01-D～FUNC06-D 错误码断言，不开展无关错误码重构；
+- [ ] 建立 FUNC-D01～FUNC-D10 到现有 Semantic、Parser 与 FCTS 的逐项映射；每条已有证据必须能
+  直接证明对应声明面、调用形态或返回边界，FUNC01～FUNC08、变参、method value 和 spec 专项只
+  映射不重复；
+- [ ] 对映射后仍缺少的非法边界新增最小 Semantic 程序；每个程序至少断言恰好一个诊断、稳定错误码、
+  触发 token、行列、来源文件和 Semantic 阶段，消息只锁定规范承诺稳定的必要片段；
+- [ ] 对所有可以合法编译并形成可观察结果的缺口新增或映射 FCTS；专项执行必须证明新增测试函数已由
+  `fcts_bin` 主入口登记并真实运行，不能以 Semantic 正向分析或 Codegen 文本替代；
+- [ ] 独立运行 Parser、Semantic、Codegen、std 与 FCTS 专项，记录各套件准确通过数量；G15 的返回
+  路径实现如影响发码，必须额外核对没有新增运行时分支、调用、分配或 ARC；
+- [ ] 在 Codex 沙箱外为 G15 独立执行完整 `make test`，记录 UBSan 与 normal 两阶段的 smoke、std、
+  FCTS、性能约束及其余回归结果；其他组或此前的全量结果不能替代本组回归；
+- [ ] 执行 `git diff --check`，逐项关闭或取得人工决定保留 G15 问题，填写稳定码映射、实际新增用例、
+  专项结果、全量结果、性能与兼容性结论及英文 commit message 后，才可标记 G15 已交付。
 
 ### 19.4 独立交付记录
 
@@ -1268,7 +1394,7 @@ static / 实例访问方式归 G18；数组元素、维度和多维关系归 G21
 - 本组专项结果：—
 - 本组沙箱外 `make test`：—
 - 问题：—
-- 建议 commit message：`test: close function diagnostic gaps`
+- 建议 commit message：`fix(semantic): stabilize function diagnostics and complete G15 coverage`
 
 ## 20 G16：流程控制诊断
 

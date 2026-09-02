@@ -14,6 +14,19 @@ let sum = add(20, 22);
 
 Every parameter must declare a type. A function that returns no value can omit `: void`. A regular function without a declared return type can also infer its return type from consistent `return` paths. Public APIs should declare return types explicitly.
 
+A function whose return type is explicitly declared or inferred as non-`void` must not have a path that reaches the end of its body normally without returning a value:
+
+```feng
+func choose(flag: bool): i32 {
+  if flag {
+    return 1;
+  }
+  // Error: flag == false reaches the end of the function normally.
+}
+```
+
+The compiler rejects this function at compile time. A complete `if / else` is valid when every branch returns a value. A `throw` that escapes the function terminates its current path and does not require a following return; if a local `catch` handles it, analysis continues with the outcome of that `catch`. A loop that may execute zero times or exit through `break` does not guarantee a return. When a loop condition is the literal `true` and there is no reachable `break` targeting that loop, code after the loop is unreachable. A non-`void` function may therefore contain a non-terminating `while true {}` because that loop never reaches the end of the function normally.
+
 Functions can be overloaded by name and parameter list. The return type does not distinguish overloads:
 
 ```feng
