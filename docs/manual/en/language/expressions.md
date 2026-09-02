@@ -79,8 +79,10 @@ let category = match code {
 };
 ```
 
-Every normally completing branch must produce a result, and the final expression is the value of its block. A branch
-that ends with `throw` produces no result. When the context provides a target type, every normal branch result must fit
-that type. Without a contextual target, Feng determines a target type from the branch results and requires the
-remaining normal results to fit it. See [Control Flow](./control-flow.md), [Pattern Matching](./pattern-matching.md),
-and [Error Handling](./error-handling.md) for the syntax of each expression form.
+Every normally completing path must produce a result, and the final reachable expression is the value of its block.
+A path that returns from the current function, method, or lambda, or escapes through `throw`, produces no result.
+When the context provides a target type, every normal result must fit that type. Without a contextual target, Feng
+determines a target type from the normal results and requires the remaining normal results to fit it. An expression
+after an unconditional `return` or `throw` is unreachable and is not a block result. See
+[Control Flow](./control-flow.md), [Pattern Matching](./pattern-matching.md), and
+[Error Handling](./error-handling.md) for the syntax of each expression form.

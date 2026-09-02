@@ -12462,6 +12462,98 @@ static void test_try_catch_return_codegen(void) {
     feng_program_free(program);
 }
 
+/* G17 EXC20-EXC23: value if/match/try branches lower callable returns and
+ * escaping throws without writing the expression join slot on those paths. */
+static void test_g17_expression_branch_exit_codegen(void) {
+    static const char *kSource =
+        "module feng.codegen.g17branchexit;\n"
+        "func fail(): string {\n"
+        "    throw \"boom\";\n"
+        "    return \"unreachable\";\n"
+        "}\n"
+        "func from_if(flag: bool): string {\n"
+        "    let value: string = if flag {\n"
+        "        let local = \"if-return\";\n"
+        "        return local;\n"
+        "        101;\n"
+        "    } else { \"if-value\"; };\n"
+        "    return value;\n"
+        "}\n"
+        "func from_match(value: i32): string {\n"
+        "    let result: string = match value {\n"
+        "        0 { return \"match-return\"; 102; }\n"
+        "        1 { throw \"match-throw\"; 103; }\n"
+        "        else { \"match-value\"; }\n"
+        "    };\n"
+        "    return result;\n"
+        "}\n"
+        "func from_try(stop: bool): string {\n"
+        "    let value: string = try fail() catch error: string {\n"
+        "        let local = error;\n"
+        "        if stop { return local; }\n"
+        "        \"try-value\";\n"
+        "    };\n"
+        "    return value;\n"
+        "}\n"
+        "func from_mixed_if(flag: bool, stop: bool): string {\n"
+        "    let value: string = if flag {\n"
+        "        if stop { return \"mixed-return\"; } else { throw \"mixed-throw\"; }\n"
+        "    } else { \"mixed-value\"; };\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(kSource, "tests/g17branchexit.ff");
+    const FengProgram *programs[1] = {program};
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSemanticAnalysis *analysis = NULL;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+    bool sem_ok;
+    bool cg_ok;
+
+    sem_ok = feng_semantic_analyze(programs,
+                                   1U,
+                                   FENG_COMPILE_TARGET_LIB,
+                                   &analysis,
+                                   &errors,
+                                   &error_count);
+    if (!sem_ok) {
+        for (size_t i = 0U; i < error_count; ++i) {
+            fprintf(stderr, "%s:%u:%u: semantic error: %s\n",
+                    errors[i].path,
+                    errors[i].token.line,
+                    errors[i].token.column,
+                    errors[i].message);
+        }
+    }
+    ASSERT(sem_ok);
+    ASSERT(error_count == 0U);
+
+    cg_ok = feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &out,
+                                      &cgerr);
+    if (!cg_ok) {
+        fprintf(stderr, "codegen error (G17 expression branch exit): %s\n",
+                cgerr.message ? cgerr.message : "(unknown)");
+    }
+    ASSERT(cg_ok);
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source, "g17branchexit__from_if") != NULL);
+    ASSERT(strstr(out.c_source, "g17branchexit__from_match") != NULL);
+    ASSERT(strstr(out.c_source, "g17branchexit__from_try") != NULL);
+    ASSERT(strstr(out.c_source, "g17branchexit__from_mixed_if") != NULL);
+    ASSERT(strstr(out.c_source, "feng_release_unwind_exception();") != NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 /* Exception lowering reuses the exact managed object or ValueBox descriptor
  * on throw and typed catch paths and emits no exception-only descriptors. */
 static void test_exception_payload_descriptor_alignment_codegen(void) {
@@ -16447,6 +16539,7 @@ int main(void) {
     test_callable_field_default_and_explicit_initialization_codegen();
     test_void_try_expression_codegen();
     test_try_catch_return_codegen();
+    test_g17_expression_branch_exit_codegen();
     test_exception_payload_descriptor_alignment_codegen();
     test_unknown_original_rethrow_codegen();
     test_generic_try_body_reified_storage_codegen();

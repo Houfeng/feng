@@ -387,10 +387,10 @@ struct UnionNarrowingSet {
     size_t member_count;
 };
 
-/* Nearest value-expression result branch. It blocks returns to the enclosing
- * callable and loop control targeting a loop outside the branch. Inner loops
- * remain valid break/continue targets, while nested lambdas reset the boundary
- * because they establish an independent callable. */
+/* Nearest value-expression result branch. It blocks loop control targeting a
+ * loop outside the branch. Inner loops remain valid break/continue targets,
+ * while nested lambdas reset the boundary because they establish an
+ * independent callable. */
 typedef enum ExpressionBranchBoundary {
     EXPRESSION_BRANCH_BOUNDARY_NONE = 0,
     EXPRESSION_BRANCH_BOUNDARY_IF,
@@ -468,10 +468,9 @@ typedef struct ResolveContext {
      * callable / lambda boundaries so that a lambda nested in a loop cannot
      * jump out of the surrounding loop. */
     size_t loop_depth;
-    /* Nearest if/match/try result branch. It prevents return from exiting the
-     * enclosing callable and prevents break/continue from targeting a loop
-     * outside the value expression. Reset across callable boundaries; loops
-     * declared inside the branch use loop_depth normally. */
+    /* Nearest if/match/try result branch. It prevents break/continue from
+     * targeting a loop outside the value expression. Reset across callable
+     * boundaries; loops declared inside the branch use loop_depth normally. */
     ExpressionBranchBoundary expression_branch_boundary;
     /* When non-NULL, the resolver is currently resolving an expression that
      * has an explicit target type (binding annotation, function argument,
@@ -7924,29 +7923,17 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
 }
 
 static const FengExpr *block_yield_expression(const FengBlock *block) {
-    const FengStmt *last;
+    FengSemanticResultBlockFlow flow;
 
-    if (block == NULL || block->statement_count == 0U) {
-        return NULL;
-    }
-    last = block->statements[block->statement_count - 1U];
-    if (last == NULL || last->kind != FENG_STMT_EXPR) {
-        return NULL;
-    }
-    return last->as.expr;
+    flow = feng_semantic_classify_result_block(block);
+    return flow.kind == FENG_SEMANTIC_RESULT_BLOCK_VALUE
+               ? flow.result_expr
+               : NULL;
 }
 
-static const FengStmt *block_last_statement(const FengBlock *block) {
-    if (block == NULL || block->statement_count == 0U) {
-        return NULL;
-    }
-    return block->statements[block->statement_count - 1U];
-}
-
-static bool block_terminates_with_throw(const FengBlock *block) {
-    const FengStmt *last = block_last_statement(block);
-
-    return last != NULL && last->kind == FENG_STMT_THROW;
+static bool block_exits_via_return_or_throw(const FengBlock *block) {
+    return feng_semantic_classify_result_block(block).kind ==
+           FENG_SEMANTIC_RESULT_BLOCK_RETURN_OR_THROW;
 }
 
 static InferredExprType block_yield_inferred_type(ResolveContext *context, const FengBlock *block) {
@@ -7962,17 +7949,17 @@ static bool validate_block_yields_expression(ResolveContext *context,
     if (block_yield_expression(block) != NULL) {
         return true;
     }
-    /* A branch block that terminates with 'throw' never yields a value, but
-     * it does terminate the control-flow path so it is a legal ending for
-     * if/match expression branches (the same rule already applies to
-     * try-expression catch clauses). */
-    if (block_terminates_with_throw(block)) {
+    /* A block whose reachable paths all return from the owning callable or
+     * escape through throw needs no branch-result value. */
+    if (block_exits_via_return_or_throw(block)) {
         return true;
     }
     return resolver_append_error(
         context,
         anchor,
-        "AE1101", format_message("%s branch block must end with an expression statement", ctx_label));
+        "AE1101", format_message(
+            "%s branch block must end with an expression statement on every normally completing path, or every reachable path must exit through return/throw",
+            ctx_label));
 }
 
 /* Check a previously evaluated numeric constant against one concrete target.
@@ -8184,11 +8171,11 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
         size_t result_count = 0U;
         bool all_results_conform = false;
 
-        if (!block_terminates_with_throw(expr->as.if_expr.then_block)) {
+        if (!block_exits_via_return_or_throw(expr->as.if_expr.then_block)) {
             results[result_count++] =
                 block_yield_expression(expr->as.if_expr.then_block);
         }
-        if (!block_terminates_with_throw(expr->as.if_expr.else_block)) {
+        if (!block_exits_via_return_or_throw(expr->as.if_expr.else_block)) {
             results[result_count++] =
                 block_yield_expression(expr->as.if_expr.else_block);
         }
@@ -8210,12 +8197,12 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     {
-        bool then_throws = block_terminates_with_throw(expr->as.if_expr.then_block);
-        bool else_throws = block_terminates_with_throw(expr->as.if_expr.else_block);
+        bool then_exits = block_exits_via_return_or_throw(expr->as.if_expr.then_block);
+        bool else_exits = block_exits_via_return_or_throw(expr->as.if_expr.else_block);
 
-        /* Throw-terminated branches never produce a result value, so they do
+        /* Return/throw-only branches never produce a result value, so they do
          * not participate in the type-consistency check. */
-        if (then_throws || else_throws) {
+        if (then_exits || else_exits) {
             return true;
         }
     }
@@ -8273,7 +8260,7 @@ static bool validate_try_expr(ResolveContext *context,
         const FengTryCatchClause *clause = &expr->as.try_expr.clauses[clause_index];
         const FengExpr *result_expr = block_yield_expression(clause->body);
 
-        if (result_expr != NULL && !block_terminates_with_throw(clause->body)) {
+        if (result_expr != NULL && !block_exits_via_return_or_throw(clause->body)) {
             results[result_count++] = result_expr;
         }
     }
@@ -8307,7 +8294,7 @@ static bool validate_try_expr(ResolveContext *context,
         InferredExprType result_type;
 
         if (result_expr == NULL) {
-            if (block_terminates_with_throw(clause->body)) {
+            if (block_exits_via_return_or_throw(clause->body)) {
                 continue;
             }
             if (inferred_expr_type_is_known(body_type) &&
@@ -8317,7 +8304,8 @@ static bool validate_try_expr(ResolveContext *context,
             (void)resolver_append_error(
                 context,
                 clause->token,
-                "AE1401", format_message("catch clause must end with a result expression or 'throw'"));
+                "AE1401", format_message(
+                    "catch clause must produce a final result expression on every normally completing path or exit every reachable path through return/throw"));
             return false;
         }
 
@@ -8342,8 +8330,9 @@ static bool validate_try_expr(ResolveContext *context,
     return true;
 }
 
-/* Validate that a value-producing try expression catch has a terminal result
- * expression or a throw. Result type fitting runs once for all branches. */
+/* Validate that a value-producing try-expression catch either produces a
+ * result on normal completion or exits every path through return/throw.
+ * Result type fitting runs once for all value-producing branches. */
 static bool validate_try_catch_clause_result_presence(
     ResolveContext *context,
     const FengExpr *try_expr,
@@ -8358,7 +8347,7 @@ static bool validate_try_catch_clause_result_presence(
 
     result_expr = block_yield_expression(clause->body);
     if (result_expr == NULL) {
-        if (block_terminates_with_throw(clause->body)) {
+        if (block_exits_via_return_or_throw(clause->body)) {
             return true;
         }
         if (inferred_expr_type_is_known(body_type) &&
@@ -8368,7 +8357,8 @@ static bool validate_try_catch_clause_result_presence(
         (void)resolver_append_error(
             context,
             clause->token,
-            "AE1401", format_message("catch clause must end with a result expression or 'throw'"));
+            "AE1401", format_message(
+                "catch clause must produce a final result expression on every normally completing path or exit every reachable path through return/throw"));
         return false;
     }
     return true;
@@ -8771,7 +8761,7 @@ static bool resolve_branch_result_block(ResolveContext *context,
         return false;
     }
     ok = resolve_block_contents(context, block, allow_self);
-    if (ok && !block_terminates_with_throw(block)) {
+    if (ok && !block_exits_via_return_or_throw(block)) {
         const FengExpr *yield = block_yield_expression(block);
 
         if (yield != NULL) {
@@ -9113,7 +9103,7 @@ static bool fit_match_branch_results_to_target(
         return false;
     }
     for (index = 0U; index < branch_count; ++index) {
-        if (!block_terminates_with_throw(branches[index].body)) {
+        if (!block_exits_via_return_or_throw(branches[index].body)) {
             const FengExpr *yield = block_yield_expression(branches[index].body);
 
             if (yield != NULL) {
@@ -9121,7 +9111,7 @@ static bool fit_match_branch_results_to_target(
             }
         }
     }
-    if (else_block != NULL && !block_terminates_with_throw(else_block)) {
+    if (else_block != NULL && !block_exits_via_return_or_throw(else_block)) {
         const FengExpr *yield = block_yield_expression(else_block);
 
         if (yield != NULL) {
@@ -9151,13 +9141,13 @@ static bool validate_match_default_result_types(
     InferredExprType expected = inferred_expr_type_unknown();
     size_t index;
 
-    if (else_block != NULL && !block_terminates_with_throw(else_block)) {
+    if (else_block != NULL && !block_exits_via_return_or_throw(else_block)) {
         expected = branch_result_inferred_type(
             context, block_yield_expression(else_block));
     }
     if (!inferred_expr_type_is_known(expected)) {
         for (index = 0U; index < branch_count; ++index) {
-            if (block_terminates_with_throw(branches[index].body)) {
+            if (block_exits_via_return_or_throw(branches[index].body)) {
                 continue;
             }
             expected = branch_result_inferred_type(
@@ -9174,7 +9164,7 @@ static bool validate_match_default_result_types(
     for (index = 0U; index < branch_count; ++index) {
         InferredExprType branch_type;
 
-        if (block_terminates_with_throw(branches[index].body)) {
+        if (block_exits_via_return_or_throw(branches[index].body)) {
             continue;
         }
         branch_type = branch_result_inferred_type(
@@ -10864,7 +10854,11 @@ typedef enum CallableFlowOutcome {
     CALLABLE_FLOW_RETURN = 1U << 1U,
     CALLABLE_FLOW_THROW = 1U << 2U,
     CALLABLE_FLOW_BREAK = 1U << 3U,
-    CALLABLE_FLOW_CONTINUE = 1U << 4U
+    CALLABLE_FLOW_CONTINUE = 1U << 4U,
+    /* A locally provable infinite path. Callable fallthrough treats it as
+     * terminal, while expression result blocks deliberately do not accept it
+     * as a substitute for the user-approved return/throw outcomes. */
+    CALLABLE_FLOW_NONTERMINATING = 1U << 5U
 } CallableFlowOutcome;
 
 typedef unsigned CallableFlowOutcomes;
@@ -11133,10 +11127,19 @@ static CallableFlowOutcomes callable_stmt_flow(const FengStmt *stmt) {
                 return result;
             }
             body = callable_block_flow(stmt->as.while_stmt.body);
-            result |= body & (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW);
-            if (!callable_expr_is_true_literal(stmt->as.while_stmt.condition) ||
-                (body & CALLABLE_FLOW_BREAK) != 0U) {
+            result |= body & (CALLABLE_FLOW_RETURN |
+                              CALLABLE_FLOW_THROW |
+                              CALLABLE_FLOW_NONTERMINATING);
+            if (!callable_expr_is_true_literal(stmt->as.while_stmt.condition)) {
                 result |= CALLABLE_FLOW_NORMAL;
+            } else {
+                if ((body & CALLABLE_FLOW_BREAK) != 0U) {
+                    result |= CALLABLE_FLOW_NORMAL;
+                }
+                if ((body & (CALLABLE_FLOW_NORMAL |
+                             CALLABLE_FLOW_CONTINUE)) != 0U) {
+                    result |= CALLABLE_FLOW_NONTERMINATING;
+                }
             }
             return result;
         }
@@ -11152,7 +11155,9 @@ static CallableFlowOutcomes callable_stmt_flow(const FengStmt *stmt) {
 
                 body = callable_block_flow(stmt->as.for_stmt.body);
                 result = CALLABLE_FLOW_NORMAL |
-                         (body & (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW));
+                         (body & (CALLABLE_FLOW_RETURN |
+                                  CALLABLE_FLOW_THROW |
+                                  CALLABLE_FLOW_NONTERMINATING));
                 return callable_flow_sequence(
                     prefix, callable_flow_sequence(iterator, result));
             }
@@ -11170,10 +11175,18 @@ static CallableFlowOutcomes callable_stmt_flow(const FengStmt *stmt) {
                 if ((condition & CALLABLE_FLOW_NORMAL) != 0U) {
                     body = callable_block_flow(stmt->as.for_stmt.body);
                     result |= body &
-                              (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW);
+                              (CALLABLE_FLOW_RETURN |
+                               CALLABLE_FLOW_THROW |
+                               CALLABLE_FLOW_NONTERMINATING);
                     if ((body & (CALLABLE_FLOW_NORMAL |
                                  CALLABLE_FLOW_CONTINUE)) != 0U) {
-                        result |= update & CALLABLE_FLOW_THROW;
+                        result |= update & (CALLABLE_FLOW_RETURN |
+                                            CALLABLE_FLOW_THROW |
+                                            CALLABLE_FLOW_NONTERMINATING);
+                        if (condition_is_true &&
+                            (update & CALLABLE_FLOW_NORMAL) != 0U) {
+                            result |= CALLABLE_FLOW_NONTERMINATING;
+                        }
                     }
                     if (!condition_is_true ||
                         (body & CALLABLE_FLOW_BREAK) != 0U) {
@@ -11225,6 +11238,48 @@ static CallableFlowOutcomes callable_block_flow(const FengBlock *block) {
             flow, callable_stmt_flow(block->statements[index]));
     }
     return flow;
+}
+
+/* Classify one expression result block from its complete reachable control
+ * flow. Semantic validation and Codegen call this shared pure AST query so a
+ * trailing token pattern can never make the two phases disagree. */
+FengSemanticResultBlockFlow feng_semantic_classify_result_block(
+    const FengBlock *block) {
+    FengSemanticResultBlockFlow result = {
+        FENG_SEMANTIC_RESULT_BLOCK_MISSING,
+        NULL
+    };
+    CallableFlowOutcomes outcomes;
+    const FengStmt *last = NULL;
+
+    if (block == NULL) {
+        return result;
+    }
+    if (block->statement_count > 0U) {
+        last = block->statements[block->statement_count - 1U];
+    }
+    outcomes = callable_block_flow(block);
+
+    if ((outcomes & CALLABLE_FLOW_NORMAL) != 0U ||
+        ((outcomes & (CALLABLE_FLOW_BREAK | CALLABLE_FLOW_CONTINUE)) != 0U &&
+         last != NULL && last->kind == FENG_STMT_EXPR)) {
+        /* An unconsumed break/continue is already rejected by the expression
+         * branch boundary. Preserve a syntactic final result solely for
+         * diagnostic recovery so that invalid input does not cascade into an
+         * unrelated missing-result/type error. Legal loop-local transfers are
+         * consumed by callable_stmt_flow before reaching this point. */
+        if (last != NULL && last->kind == FENG_STMT_EXPR) {
+            result.kind = FENG_SEMANTIC_RESULT_BLOCK_VALUE;
+            result.result_expr = last->as.expr;
+        }
+        return result;
+    }
+
+    if (outcomes != 0U &&
+        (outcomes & ~(CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW)) == 0U) {
+        result.kind = FENG_SEMANTIC_RESULT_BLOCK_RETURN_OR_THROW;
+    }
+    return result;
 }
 
 /* Return true exactly when the callable body retains a normal path to its
@@ -15171,51 +15226,6 @@ static bool validate_loop_control_stmt(ResolveContext *context,
         "AE1201", format_message("'%s' statement is only allowed inside a 'while' or 'for' loop",
 
                        keyword));
-}
-
-/* Reject a return that would escape the callable containing a value-expression
- * result branch. Statement-form if/match/try never enter this boundary, and a
- * nested lambda resets it before resolving its own return statements. */
-static bool validate_expression_branch_return_stmt(ResolveContext *context,
-                                                   const FengStmt *stmt) {
-    FengToken token;
-
-    if (context == NULL ||
-        context->expression_branch_boundary == EXPRESSION_BRANCH_BOUNDARY_NONE) {
-        return true;
-    }
-    token = stmt != NULL ? stmt->token : context->program->module_token;
-
-    switch (context->expression_branch_boundary) {
-        case EXPRESSION_BRANCH_BOUNDARY_IF:
-            return resolver_append_error(
-                context,
-                token,
-                "AE1110",
-                duplicate_cstr(
-                    "'return' cannot exit the enclosing callable from an 'if' expression result branch; use the branch's final expression as its value")) &&
-                   false;
-        case EXPRESSION_BRANCH_BOUNDARY_MATCH:
-            return resolver_append_error(
-                context,
-                token,
-                "AE1110",
-                duplicate_cstr(
-                    "'return' cannot exit the enclosing callable from a 'match' expression result branch; use the branch's final expression as its value")) &&
-                   false;
-        case EXPRESSION_BRANCH_BOUNDARY_CATCH:
-            return resolver_append_error(
-                context,
-                token,
-                "AE1405",
-                duplicate_cstr(
-                    "'return' cannot exit the enclosing callable from a try expression catch result branch; use the catch block's final expression as its value")) &&
-                   false;
-        case EXPRESSION_BRANCH_BOUNDARY_NONE:
-            return true;
-    }
-
-    return true;
 }
 
 static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
@@ -21293,9 +21303,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             then_type = block_yield_inferred_type(context, expr->as.if_expr.then_block);
             else_type = block_yield_inferred_type(context, expr->as.if_expr.else_block);
 
-            /* Throw-terminated branches contribute no yield value, so their
+            /* Return/throw-only branches contribute no yield value, so their
              * inferred type is unknown. Pick the first known branch type;
-             * when both branches throw the result type stays unknown. */
+             * when neither branch yields, the result type stays unknown. */
             if (inferred_expr_type_is_known(then_type)) {
                 return then_type;
             }
@@ -21309,11 +21319,11 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             InferredExprType result_type =
                 block_yield_inferred_type(context, expr->as.match_expr.else_block);
 
-            /* If the else branch throws (or its type is otherwise unknown),
-             * fall back to the first branch with a known yield type. */
+            /* If the else branch exits without a result (or its type is
+             * otherwise unknown), fall back to the first known branch type. */
             if (!inferred_expr_type_is_known(result_type)) {
                 for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
-                    if (block_terminates_with_throw(expr->as.match_expr.branches[index].body)) {
+                    if (block_exits_via_return_or_throw(expr->as.match_expr.branches[index].body)) {
                         continue;
                     }
                     result_type =
@@ -21331,9 +21341,9 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
             for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
                 InferredExprType branch_type;
 
-                /* Throw-terminated branches do not produce a result value,
+                /* Return/throw-only branches do not produce a result value,
                  * so they do not participate in type consistency checks. */
-                if (block_terminates_with_throw(expr->as.match_expr.branches[index].body)) {
+                if (block_exits_via_return_or_throw(expr->as.match_expr.branches[index].body)) {
                     continue;
                 }
                 branch_type =
@@ -22531,7 +22541,7 @@ static bool branching_expr_results_match_expected_type(
             for (index = 0U; index < 2U; ++index) {
                 const FengExpr *result;
 
-                if (block_terminates_with_throw(blocks[index])) {
+                if (block_exits_via_return_or_throw(blocks[index])) {
                     continue;
                 }
                 result = block_yield_expression(blocks[index]);
@@ -22550,7 +22560,7 @@ static bool branching_expr_results_match_expected_type(
                 const FengBlock *block = expr->as.match_expr.branches[index].body;
                 const FengExpr *result;
 
-                if (block_terminates_with_throw(block)) {
+                if (block_exits_via_return_or_throw(block)) {
                     continue;
                 }
                 result = block_yield_expression(block);
@@ -22561,7 +22571,7 @@ static bool branching_expr_results_match_expected_type(
                     return false;
                 }
             }
-            if (!block_terminates_with_throw(expr->as.match_expr.else_block)) {
+            if (!block_exits_via_return_or_throw(expr->as.match_expr.else_block)) {
                 const FengExpr *result =
                     block_yield_expression(expr->as.match_expr.else_block);
 
@@ -22584,7 +22594,7 @@ static bool branching_expr_results_match_expected_type(
                 const FengBlock *block = expr->as.try_expr.clauses[index].body;
                 const FengExpr *result;
 
-                if (block_terminates_with_throw(block)) {
+                if (block_exits_via_return_or_throw(block)) {
                     continue;
                 }
                 result = block_yield_expression(block);
@@ -24838,7 +24848,7 @@ static bool validate_branching_expr_against_expected_type(
             for (index = 0U; index < 2U; ++index) {
                 bool conforms = true;
 
-                if (block_terminates_with_throw(blocks[index])) {
+                if (block_exits_via_return_or_throw(blocks[index])) {
                     continue;
                 }
                 if (!validate_branch_result_against_expected_type(
@@ -24861,7 +24871,7 @@ static bool validate_branching_expr_against_expected_type(
                 const FengBlock *block = expr->as.match_expr.branches[index].body;
                 bool conforms = true;
 
-                if (block_terminates_with_throw(block)) {
+                if (block_exits_via_return_or_throw(block)) {
                     continue;
                 }
                 if (!validate_branch_result_against_expected_type(
@@ -24877,7 +24887,7 @@ static bool validate_branching_expr_against_expected_type(
                 }
             }
             if (all_conform &&
-                !block_terminates_with_throw(expr->as.match_expr.else_block)) {
+                !block_exits_via_return_or_throw(expr->as.match_expr.else_block)) {
                 bool conforms = true;
 
                 if (!validate_branch_result_against_expected_type(
@@ -24906,7 +24916,7 @@ static bool validate_branching_expr_against_expected_type(
                 const FengExpr *result;
                 bool conforms = true;
 
-                if (block_terminates_with_throw(block)) {
+                if (block_exits_via_return_or_throw(block)) {
                     continue;
                 }
                 result = block_yield_expression(block);
@@ -30941,9 +30951,6 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     context,
                     stmt->token,
                     "AE1501", duplicate_cstr("defer block cannot contain 'return'"));
-            }
-            if (!validate_expression_branch_return_stmt(context, stmt)) {
-                return false;
             }
             {
                 const FengTypeRef *prev_expected_type_ref = context->current_expr_expected_type_ref;

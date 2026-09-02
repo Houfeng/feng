@@ -33,9 +33,9 @@
 | **AE0021** | 运算符使用错误 | unsupported compound assignment operator '%s' |
 | **AE0022** | 不可变绑定赋值 | cannot assign to immutable binding '%.*s' |
 | **AE0024** | 联合类型约束违反 | binary operator '%s' requires union-form operands to be narrowed to a single member first |
-| **AE0031** | 分支结构错误 | %s branch block must end with an expression statement |
+| **AE0031** | 分支结构错误 | %s branch block must end with an expression statement on every normally completing path, or every reachable path must exit through return/throw |
 | **AE0033** | 分支结构错误 | if expressions require an else branch |
-| **AE0035** | 返回语句错误 | catch clause must end with a result expression or 'throw' |
+| **AE0035** | 返回语句错误 | catch clause must produce a final result expression on every normally completing path or exit every reachable path through return/throw |
 | **AE0038** | 模式匹配错误 | match range label endpoints must be integer literals or 'let' bindings to integer literals |
 | **AE0039** | 模式匹配错误 | match range label endpoints must be integer values |
 | **AE0040** | 模式匹配错误 | match range label requires low <= high, got %lld and %lld |
@@ -428,15 +428,15 @@
 | **CE0196** | 聚合描述符缺失 | codegen: missing aggregate descriptor for if/match result slot |
 | **CE0197** | 代码生成 | codegen: try/catch branches yield mismatched types |
 | **CE0198** | 聚合描述符缺失 | codegen: missing aggregate descriptor for try-expression result |
-| **CE0199** | 代码生成 | codegen: if-expression branches must end with an expression statement |
+| **CE0199** | 代码生成 | codegen: if-expression branches must produce a result or exit through return/throw |
 | **CE0200** | 聚合描述符缺失 | codegen: missing aggregate descriptor for if-expression result |
 | **CE0201** | 代码生成 | codegen: if-expression condition must be bool |
 | **CE0202** | 聚合描述符缺失 | codegen: missing aggregate default-init rule for if-expression result |
 | **CE0203** | 模块/程序 | codegen: range labels apply to integer match targets only |
 | **CE0204** | 代码生成 | codegen: unknown match label kind |
 | **CE0205** | 代码生成 | codegen: match expression requires an else branch |
-| **CE0206** | 代码生成 | codegen: match expression else branch must end with an expression statement |
-| **CE0207** | 代码生成 | codegen: match branch must end with an expression statement |
+| **CE0206** | 代码生成 | codegen: match expression else branch must produce a result or exit through return/throw |
+| **CE0207** | 代码生成 | codegen: match branch must produce a result or exit through return/throw |
 | **CE0208** | 聚合描述符缺失 | codegen: missing aggregate descriptor for match expression result |
 | **CE0209** | 聚合描述符缺失 | codegen: missing aggregate default-init rule for match expression result |
 | **CE0210** | 代码生成 | codegen: match branch has no labels |
@@ -444,7 +444,7 @@
 | **CE0212** | 赋值/绑定 | codegen: failed to register unknown catch binding |
 | **CE0213** | 赋值/绑定 | codegen: missing catch binding type |
 | **CE0214** | 赋值/绑定 | codegen: missing scalar catch binding payload field |
-| **CE0215** | 代码生成 | codegen: catch block must produce a try-expression value |
+| **CE0215** | 代码生成 | codegen: catch block must produce a result or exit through return/throw |
 | **CE0216** | 聚合描述符缺失 | codegen: missing aggregate default-init rule for try-expression result |
 | **CE0217** | 规约处理 | codegen: spec coercion source type is missing |
 | **CE0218** | 规约处理 | codegen: spec coercion references type outside current codegen scope |

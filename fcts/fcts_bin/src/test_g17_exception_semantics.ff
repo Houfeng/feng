@@ -5,6 +5,9 @@ import std.test;
 /** Callable used to prove that a nested Lambda owns its return statements. */
 spec G17ExceptionReader(): int;
 
+/** Fixed-width callable used by value-branch return coverage. */
+spec G17I32Reader(): i32;
+
 /** Entity whose methods propagate one exception through multiple frames. */
 type G17ExceptionEmitter {
   let message: string;
@@ -25,6 +28,12 @@ type G17ExceptionEmitter {
 func g17ExceptionFunctionLeaf(): int {
   throw "function-chain";
   return 0;
+}
+
+/** Throw the same payload while exposing a string result type to try. */
+func g17ExceptionStringLeaf(): string {
+  throw "function-chain";
+  return "unreachable";
 }
 
 /** Propagate the function-leaf exception through a second ordinary frame. */
@@ -224,6 +233,171 @@ func g17OriginalRethrowPreservesValue(): bool {
   return caught;
 }
 
+/** Observable log for defer execution on value-branch return paths. */
+var g17BranchExitLog = "";
+
+/** Return from an if-expression branch or consume its normal result. */
+func g17ValueIfReturn(flag: bool): string {
+  g17BranchExitLog = "";
+  let value: string = if flag {
+    let local = "if-return";
+    defer { g17BranchExitLog = g17BranchExitLog + "if-defer;"; }
+    return local;
+    101
+  } else {
+    "if-value"
+  };
+  return value;
+}
+
+/** Return, throw, or produce a value from separate match-expression arms. */
+func g17ValueMatchExit(value: i32): string {
+  let result: string = match value {
+    0 { return "match-return"; 102 }
+    1 { throw "match-throw"; 103 }
+    else { "match-value" }
+  };
+  return result;
+}
+
+/** Return directly from a catch result block after running its defer. */
+func g17ValueTryDirectReturn(): string {
+  g17BranchExitLog = "";
+  let value: string = try g17ExceptionStringLeaf() catch error: string {
+    defer { g17BranchExitLog = g17BranchExitLog + "try-direct-defer;"; }
+    return error;
+    104
+  };
+  return value;
+}
+
+/** Select a callable return or a normal catch value from the same catch. */
+func g17ValueTryPartialReturn(stop: bool): string {
+  g17BranchExitLog = "";
+  let value: string = try g17ExceptionStringLeaf() catch {
+    defer { g17BranchExitLog = g17BranchExitLog + "try-partial-defer;"; }
+    if stop { return "try-return"; }
+    "try-value"
+  };
+  return value;
+}
+
+/** Exercise a result block whose nested conditional only returns or throws. */
+func g17ValueIfMixedExit(flag: bool, stop: bool): string {
+  let value: string = if flag {
+    if stop { return "mixed-return"; } else { throw "mixed-throw"; }
+  } else {
+    "mixed-value"
+  };
+  return value;
+}
+
+/** Keep existing target selection when the only result is a typed binding. */
+func g17ValueIfInferenceUnchanged(stop: bool): i32 {
+  let fallback: i32 = 91;
+  let value = if stop { return 90; } else { fallback };
+  return value;
+}
+
+/** Return from a value branch owned by an instance method. */
+type G17BranchReturnOwner {
+  /** Select the method return or its branch result. */
+  func read(stop: bool): i32 {
+    let value: i32 = if stop { return 92; } else { 93 };
+    return value;
+  }
+}
+
+/** Return from a value branch owned by a block Lambda. */
+func g17LambdaValueBranchReturn(): i32 {
+  let reader: G17I32Reader = () {
+    let value: i32 = if true { return (i32)94; } else { 95 };
+    return value;
+  };
+  return reader();
+}
+
+/** Return or throw through a match nested as an outer result block. */
+func g17NestedMatchExit(outer: bool, route: i32): string {
+  let value: string = if outer {
+    match route {
+      0 { return "nested-match-return"; }
+      else { throw "nested-match-throw"; }
+    }
+  } else {
+    "nested-match-value"
+  };
+  return value;
+}
+
+/** Either return normally or throw the shared payload for a nested try. */
+func g17MaybeStringLeaf(stop: bool): string {
+  if stop { throw "nested-try-caught"; }
+  return "nested-try-normal";
+}
+
+/** Make all paths of a result block exit through a nested try plus throw. */
+func g17NestedTryExit(outer: bool, stop: bool): string {
+  let value: string = if outer {
+    try g17MaybeStringLeaf(stop) catch error: string {
+      return error;
+    }
+    throw "nested-try-throw";
+  } else {
+    "nested-try-value"
+  };
+  return value;
+}
+
+/** Throw an i32-typed call result for nested catch-return coverage. */
+func g17ExceptionI32Leaf(): i32 {
+  throw "nested-catch-return";
+  return 0;
+}
+
+/** Return through an ordinary block nested in a value-form catch. */
+func g17ValueTryNestedBlockReturn(): i32 {
+  let value: i32 = try g17ExceptionI32Leaf() catch {
+    { return 96; }
+  };
+  return value;
+}
+
+/** Return through a match statement nested in a value-form catch. */
+func g17ValueTryNestedMatchReturn(route: i32): i32 {
+  let value: i32 = try g17ExceptionI32Leaf() catch {
+    match route {
+      0 { return 97; }
+      else { return 98; }
+    }
+  };
+  return value;
+}
+
+/** Return through a loop nested in a value-form catch. */
+func g17ValueTryNestedLoopReturn(): i32 {
+  let value: i32 = try g17ExceptionI32Leaf() catch {
+    while true { return 99; }
+  };
+  return value;
+}
+
+/** Return through a nested try/catch inside a value-form catch. */
+func g17ValueTryNestedTryReturn(): i32 {
+  let value: i32 = try g17ExceptionI32Leaf() catch {
+    try g17ExceptionI32Leaf() catch { return 100; }
+    return 101;
+  };
+  return value;
+}
+
+/** Infer the callable result while a value branch returns directly. */
+func g17InferredValueBranchReturn(stop: bool) {
+  let fallback: i32 = 106;
+  let value = if stop { return (i32)105; } else { fallback };
+  return value;
+}
+
 /** G17 exception syntax, branch, catch, and propagation behavior coverage. */
 open func test_g17_exception_semantics(): void {
   describe("G17 exception semantics", () {
@@ -272,6 +446,91 @@ open func test_g17_exception_semantics(): void {
     test("unknown rethrow preserves the original type and value", () {
       assert(g17OriginalRethrowPreservesValue(),
              "the outer string catch receives the original payload");
+    });
+
+    test("if-expression return exits the owning function", () {
+      assert(g17ValueIfReturn(true) == "if-return" &&
+             g17BranchExitLog == "if-defer;" &&
+             g17ValueIfReturn(false) == "if-value" &&
+             g17BranchExitLog == "",
+             "return skips the join value while normal completion uses it");
+    });
+
+    test("match-expression branches return, throw, or produce a value", () {
+      var thrown = false;
+      try g17ValueMatchExit(1) catch error: string {
+        thrown = error == "match-throw";
+      }
+      assert(g17ValueMatchExit(0) == "match-return" &&
+             g17ValueMatchExit(2) == "match-value" &&
+             thrown,
+             "each match path preserves its own control-flow outcome");
+    });
+
+    test("try-expression catch returns preserve cleanup", () {
+      let direct = g17ValueTryDirectReturn();
+      let directLog = g17BranchExitLog;
+      let partialReturn = g17ValueTryPartialReturn(true);
+      let partialReturnLog = g17BranchExitLog;
+      let partialValue = g17ValueTryPartialReturn(false);
+      let partialValueLog = g17BranchExitLog;
+      assert(direct == "function-chain" &&
+             directLog == "try-direct-defer;" &&
+             partialReturn == "try-return" &&
+             partialReturnLog == "try-partial-defer;" &&
+             partialValue == "try-value" &&
+             partialValueLog == "try-partial-defer;",
+             "return and normal catch paths both release the catch and run defer");
+    });
+
+    test("nested return-or-throw paths need no branch result", () {
+      var thrown = false;
+      try g17ValueIfMixedExit(true, false) catch error: string {
+        thrown = error == "mixed-throw";
+      }
+      assert(g17ValueIfMixedExit(true, true) == "mixed-return" &&
+             g17ValueIfMixedExit(false, false) == "mixed-value" &&
+             thrown &&
+             g17ValueIfInferenceUnchanged(true) == 90 &&
+             g17ValueIfInferenceUnchanged(false) == 91,
+             "mixed exits bypass the join and existing result inference remains stable");
+    });
+
+    test("methods and Lambdas own value-branch returns", () {
+      let owner = G17BranchReturnOwner();
+      assert(owner.read(true) == 92 &&
+             owner.read(false) == 93 &&
+             g17LambdaValueBranchReturn() == 94,
+             "return targets the nearest owning callable kind");
+    });
+
+    test("nested match and try paths are classified transitively", () {
+      var matchThrown = false;
+      try g17NestedMatchExit(true, 1) catch error: string {
+        matchThrown = error == "nested-match-throw";
+      }
+      var tryThrown = false;
+      try g17NestedTryExit(true, false) catch error: string {
+        tryThrown = error == "nested-try-throw";
+      }
+      assert(g17NestedMatchExit(true, 0) == "nested-match-return" &&
+             g17NestedMatchExit(false, 0) == "nested-match-value" &&
+             matchThrown &&
+             g17NestedTryExit(true, true) == "nested-try-caught" &&
+             g17NestedTryExit(false, false) == "nested-try-value" &&
+             tryThrown,
+             "nested result blocks preserve every return, throw and value path");
+    });
+
+    test("value-form catch returns cover every nested control-flow shape", () {
+      assert(g17ValueTryNestedBlockReturn() == 96 &&
+             g17ValueTryNestedMatchReturn(0) == 97 &&
+             g17ValueTryNestedMatchReturn(1) == 98 &&
+             g17ValueTryNestedLoopReturn() == 99 &&
+             g17ValueTryNestedTryReturn() == 100 &&
+             g17InferredValueBranchReturn(true) == 105 &&
+             g17InferredValueBranchReturn(false) == 106,
+             "nested catch returns and inferred callable returns keep their owners");
     });
   });
 }

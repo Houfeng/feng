@@ -26,9 +26,10 @@ let status = if ready {
 };
 ```
 
-The expression form requires an `else`, and every normally completing branch must produce a value. When the context
-provides a target type, every branch result must fit that type. Without a contextual target, Feng determines a target
-type from the branch results and requires the remaining results to fit it.
+The expression form requires an `else`, and every normally completing path must reach the block's final result
+expression. A path that returns from the current function, method, or lambda, or escapes through `throw`, produces no
+result. When the context provides a target type, every normal result must fit that type. Without a contextual target,
+Feng determines a target type from the normal results and requires the remaining normal results to fit it.
 
 ## while
 
@@ -134,5 +135,7 @@ When `if`, `match`, or `try/catch` is used as an expression, each result branch 
 `break` or `continue` in that branch cannot target a loop outside the expression. A `while`, three-clause `for`, or
 `for/in` loop declared inside the branch may still use `break` and `continue`, which target only that inner loop. The
 same constructs do not impose this additional boundary when used as statements.
-A result branch also cannot use `return` to exit its enclosing function. Ordinary nested control-flow does not change
-this rule, while a nested lambda may return from that lambda normally.
+
+A result branch may use `return` to exit the current function, method, or lambda. Only paths that continue normally
+must reach the block's final result expression; a return path produces no branch value and does not participate in
+branch-result type inference. A `return` inside a nested lambda returns only from that lambda.

@@ -275,7 +275,7 @@
 
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
 |---|---|---|---|
-| AE1101 | if 分支完备性 | AE0031 | %s branch block must end with an expression statement |
+| AE1101 | if 分支完备性 | AE0031 | %s branch block must end with an expression statement on every normally completing path, or every reachable path must exit through return/throw |
 | AE1101 | if 分支完备性 | AE0033 | if expressions require an else branch |
 | AE1103 | match 区间标签端点整型约束 | AE0038 | match range label endpoints must be integer literals or 'let' bindings to integer literals |
 | AE1103 | match 区间标签端点整型约束 | AE0039 | match range label endpoints must be integer values |
@@ -288,7 +288,7 @@
 | AE1108 | match 结果一致性 | AE0048 | match expressions require an else branch |
 | AE1108 | match 结果一致性 | AE0049 | match expression branches must have the same type, got '%s' and '%s' |
 | AE1102 | if 条件 bool 约束 | AE0032、AE0054（if 产生点） | if expression condition must have type 'bool', got '%s'、if statement condition must have type 'bool', got '%s' |
-| AE1110 | 表达式结果分支控制转移边界 | AE0073、（扩展至 match 表达式） | break / continue cannot target a loop outside an if / match expression result branch；return cannot exit the enclosing callable from an if / match expression result branch |
+| AE1110 | 表达式结果分支循环控制转移边界 | AE0073、（扩展至 match 表达式） | break / continue cannot target a loop outside an if / match expression result branch |
 
 ## 12 循环段
 
@@ -351,11 +351,11 @@
 
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
 |---|---|---|---|
-| AE1401 | catch 子句结果语义 | AE0035 | catch clause must end with a result expression or 'throw' |
+| AE1401 | catch 子句结果语义 | AE0035 | catch clause must produce a final result expression on every normally completing path or exit every reachable path through return/throw |
 | AE1402 | throw 表达式值约束 | AE0077 | throw statement requires a non-void expression |
 | AE1403 | catch 类型专用约束 | AE0164 | type 'unknown' is only valid as a catch clause type |
 | AE1404 | unknown catch 值重抛约束 | AE0168 | unknown catch value '%.*s' can only be used in 'throw %.*s' |
-| AE1405 | catch 结果分支控制转移边界 | AE0074 | break / continue cannot target a loop outside a try expression catch result branch；return cannot exit the enclosing callable from a try expression catch result branch |
+| AE1405 | catch 结果分支循环控制转移边界 | AE0074 | break / continue cannot target a loop outside a try expression catch result branch |
 | AE1406 | catch 分支顺序约束 | AE0178 | catch clause matching any exception must be the last catch clause |
 
 ## 说明

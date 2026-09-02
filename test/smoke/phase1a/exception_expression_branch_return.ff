@@ -1,0 +1,50 @@
+module feng.smoke;
+
+@cdecl("libc")
+extern func puts(msg: string*): int;
+
+func fail_string(): string {
+    throw "try-payload";
+    return "unreachable";
+}
+
+func from_if(stop: bool): string {
+    let value: string = if stop {
+        return "if-return";
+        101
+    } else {
+        "if-value"
+    };
+    return value;
+}
+
+func from_match(route: i32): string {
+    let value: string = match route {
+        0 { return "match-return"; 102 }
+        1 { throw "match-throw"; 103 }
+        else { "match-value" }
+    };
+    return value;
+}
+
+func caught_match_throw(): string {
+    return try from_match(1) catch error: string { error };
+}
+
+func from_try(stop: bool): string {
+    let value: string = try fail_string() catch error: string {
+        if stop { return error; }
+        "try-value"
+    };
+    return value;
+}
+
+func main(args: string[]): void {
+    puts(&from_if(true));
+    puts(&from_if(false));
+    puts(&from_match(0));
+    puts(&from_match(2));
+    puts(&caught_match_throw());
+    puts(&from_try(true));
+    puts(&from_try(false));
+}

@@ -52,11 +52,11 @@ let port = try parse_port(text) catch error: string {
 };
 ```
 
-The normal path and every normally completing `catch` must produce a result. A path that ends with `throw` produces
-no result. When the context provides a target type, every normal result must fit that type. Without a contextual
-target, Feng determines a target type from these results and requires the remaining normal results to fit it. A result
-branch cannot use `return` to exit its enclosing function; write the final expression as the branch result instead.
-A nested lambda may still use `return` for that lambda. An exception not matched by any `catch` continues to the caller.
+The normal path of the `try` operand and every normally completing `catch` must produce a result. A path that returns
+from the current function, method, or lambda, or escapes the current `try/catch` through `throw`, produces no result.
+When the context provides a target type, every normal result must fit that type. Without a contextual target, Feng
+determines a target type from these normal results and requires the remaining normal results to fit it. A `return`
+inside a nested lambda returns only from that lambda. An exception not matched by any `catch` continues to the caller.
 
 ## defer
 

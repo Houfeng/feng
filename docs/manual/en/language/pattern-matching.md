@@ -94,8 +94,8 @@ bindings propagated by one `&&` condition must use distinct names.
 
 ## Expression Results
 
-When `match` is an expression, the final expression in every normally completing branch is its result. A branch that
-ends with `throw` produces no result and does not participate in result-type checking. The expression form always
-requires an `else` branch. When the context provides a target type, every normal branch result must fit that type.
-Without a contextual target, Feng determines a target type from the branch results and requires the remaining normal
-results to fit it.
+When `match` is an expression, every normally completing path must reach the final result expression of its branch.
+A path that returns from the current function, method, or lambda, or escapes through `throw`, produces no result and
+does not participate in result-type checking. The expression form always requires an `else` branch. When the context
+provides a target type, every normal result must fit that type. Without a contextual target, Feng determines a target
+type from the normal results and requires the remaining normal results to fit it.

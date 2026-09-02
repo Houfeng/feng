@@ -35,6 +35,27 @@ typedef struct FengSemanticInfo {
     FengToken token;
 } FengSemanticInfo;
 
+/* Compile-time classification of one if/match/try expression result block.
+ * The classifier is derived only from the AST and is shared by Semantic and
+ * Codegen so both phases agree about which paths can produce a block value. */
+typedef enum FengSemanticResultBlockKind {
+    /* At least one normal path evaluates the block's final expression. */
+    FENG_SEMANTIC_RESULT_BLOCK_VALUE = 0,
+    /* Every reachable path exits through the owning callable or an escaping
+     * throw. No branch-result value exists on these paths. */
+    FENG_SEMANTIC_RESULT_BLOCK_RETURN_OR_THROW,
+    /* A normal value is missing, or an unsupported transfer/non-terminating
+     * path prevents return/throw from being the complete block outcome. */
+    FENG_SEMANTIC_RESULT_BLOCK_MISSING
+} FengSemanticResultBlockKind;
+
+/* Result-block classification plus the final value expression when kind is
+ * FENG_SEMANTIC_RESULT_BLOCK_VALUE. The expression pointer borrows the AST. */
+typedef struct FengSemanticResultBlockFlow {
+    FengSemanticResultBlockKind kind;
+    const FengExpr *result_expr;
+} FengSemanticResultBlockFlow;
+
 typedef enum FengSemanticModuleOrigin {
     FENG_SEMANTIC_MODULE_ORIGIN_LOCAL = 0,
     FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE
@@ -513,6 +534,12 @@ typedef struct FengSemanticAnalyzeOptions {
      * via a dedicated compile option instead of host sizeof(void *). */
     size_t pointer_size;
 } FengSemanticAnalyzeOptions;
+
+/* Classify whether an expression result block has a reachable final value,
+ * exits every path via return/throw, or is missing a required value. This is
+ * a pure compile-time AST query and does not mutate semantic analysis state. */
+FengSemanticResultBlockFlow feng_semantic_classify_result_block(
+    const FengBlock *block);
 
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,

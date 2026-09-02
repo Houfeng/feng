@@ -424,16 +424,16 @@
 | CE1028 | 类型字段不存在约束 | CE0176 | codegen: type '%s' has no field '%.*s' | 回到AE |
 | CE1029 | if 表达式分支类型一致性约束 | CE0195 | codegen: if-expression branches yield mismatched types | 回到AE |
 | CE1030 | try 表达式分支类型一致性约束 | CE0197 | codegen: try/catch branches yield mismatched types | 回到AE |
-| CE1031 | if 表达式分支结果语句约束 | CE0199 | codegen: if-expression branches must end with an expression statement | 回到AE |
+| CE1031 | if 表达式分支结果语句约束 | CE0199 | codegen: if-expression branches must produce a result or exit through return/throw | 回到AE |
 | CE1032 | if 表达式条件 bool 约束 | CE0201 | codegen: if-expression condition must be bool | 回到AE |
 | CE1033 | match 区间标签目标整型约束 | CE0203 | codegen: range labels apply to integer match targets only | 回到AE |
 | CE1034 | match 标签 kind 未知 | CE0204 | codegen: unknown match label kind | 消解 |
 | CE1035 | match 表达式 else 分支存在性约束 | CE0205 | codegen: match expression requires an else branch | 回到AE |
-| CE1036 | match 表达式 else 分支结果语句约束 | CE0206 | codegen: match expression else branch must end with an expression statement | 回到AE |
-| CE1037 | match 分支结果语句约束 | CE0207 | codegen: match branch must end with an expression statement | 回到AE |
+| CE1036 | match 表达式 else 分支结果语句约束 | CE0206 | codegen: match expression else branch must produce a result or exit through return/throw | 回到AE |
+| CE1037 | match 分支结果语句约束 | CE0207 | codegen: match branch must produce a result or exit through return/throw | 回到AE |
 | CE1038 | match 分支标签存在性约束 | CE0210 | codegen: match branch has no labels | 回到AE |
 | CE1039 | match 目标类型约束 | CE0211 | codegen: match target must be integer, bool, string, or enum | 回到AE |
-| CE1040 | catch 块结果值约束 | CE0215 | codegen: catch block must produce a try-expression value | 回到AE |
+| CE1040 | catch 块结果值约束 | CE0215 | codegen: catch block must produce a result or exit through return/throw | 回到AE |
 | CE1041 | void 函数返回值禁用 | CE0264 | codegen: void function cannot return a value | 回到AE |
 | CE1042 | non-void 函数返回值必需 | CE0265 | codegen: non-void function must return a value | 回到AE |
 | CE1043 | if 语句条件 bool 约束 | CE0266 | codegen: if condition must be bool | 回到AE |

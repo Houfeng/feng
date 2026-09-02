@@ -32006,7 +32006,7 @@ static void test_g17_try_result_presence_diagnostics(void) {
             5U,
             26U,
             "catch",
-            "must end with a result expression or 'throw'");
+            "must produce a final result expression");
     }
 }
 
@@ -32025,192 +32025,206 @@ static void test_g17_rethrow_and_terminal_throw_acceptance(void) {
         "}\n");
 }
 
-/* EXC14/EXC16: value-expression result branches cannot return from the
- * enclosing callable, including through ordinary nested control-flow. */
-static void test_g17_expression_return_boundary_diagnostics(void) {
-    static const struct {
-        const char *path;
-        const char *source;
-        const char *code;
-        unsigned int line;
-        unsigned int column;
-        const char *message;
-    } cases[] = {
-        {
-            "g17_try_direct_terminal_return.ff",
-            "module g17.try_direct_terminal_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    return 1;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 5U, 5U, "try expression catch result branch"
-        },
-        {
-            "g17_try_return_before_result.ff",
-            "module g17.try_return_before_result;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    return 1;\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 5U, 5U, "try expression catch result branch"
-        },
-        {
-            "g17_try_nested_block_return.ff",
-            "module g17.try_nested_block_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    {\n"
-            "      return 1;\n"
-            "    }\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 6U, 7U, "try expression catch result branch"
-        },
-        {
-            "g17_try_nested_if_statement_return.ff",
-            "module g17.try_nested_if_statement_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    if true {\n"
-            "      return 1;\n"
-            "    }\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 6U, 7U, "try expression catch result branch"
-        },
-        {
-            "g17_try_nested_match_statement_return.ff",
-            "module g17.try_nested_match_statement_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    match 1 {\n"
-            "      1 {\n"
-            "        return 1;\n"
-            "      }\n"
-            "      else {}\n"
-            "    }\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 7U, 9U, "try expression catch result branch"
-        },
-        {
-            "g17_try_nested_loop_return.ff",
-            "module g17.try_nested_loop_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    while true {\n"
-            "      return 1;\n"
-            "    }\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 6U, 7U, "try expression catch result branch"
-        },
-        {
-            "g17_try_nested_try_statement_return.ff",
-            "module g17.try_nested_try_statement_return;\n"
-            "func fail(): i32 { throw \"g17\"; return 0; }\n"
-            "func run(): i32 {\n"
-            "  let value = try fail() catch {\n"
-            "    try fail() catch {\n"
-            "      return 1;\n"
-            "    }\n"
-            "    2;\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1405", 6U, 7U, "try expression catch result branch"
-        },
-        {
-            "g17_if_return_before_result.ff",
-            "module g17.if_return_before_result;\n"
-            "func run(): i32 {\n"
-            "  let value = if true {\n"
-            "    return 1;\n"
-            "    2;\n"
-            "  } else { 3; };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1110", 4U, 5U, "'if' expression result branch"
-        },
-        {
-            "g17_if_nested_block_return.ff",
-            "module g17.if_nested_block_return;\n"
-            "func run(): i32 {\n"
-            "  let value = if true {\n"
-            "    {\n"
-            "      return 1;\n"
-            "    }\n"
-            "    2;\n"
-            "  } else { 3; };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1110", 5U, 7U, "'if' expression result branch"
-        },
-        {
-            "g17_match_return_before_result.ff",
-            "module g17.match_return_before_result;\n"
-            "func run(): i32 {\n"
-            "  let value = match 1 {\n"
-            "    1 {\n"
-            "      return 1;\n"
-            "      2;\n"
-            "    }\n"
-            "    else { 3; }\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1110", 5U, 7U, "'match' expression result branch"
-        },
-        {
-            "g17_match_nested_if_statement_return.ff",
-            "module g17.match_nested_if_statement_return;\n"
-            "func run(): i32 {\n"
-            "  let value = match 1 {\n"
-            "    1 {\n"
-            "      if true {\n"
-            "        return 1;\n"
-            "      }\n"
-            "      2;\n"
-            "    }\n"
-            "    else { 3; }\n"
-            "  };\n"
-            "  return value;\n"
-            "}\n",
-            "AE1110", 6U, 9U, "'match' expression result branch"
-        }
-    };
+/* EXC14/EXC16/EXC20-EXC22: return exits the owning callable from value
+ * branches. Return/throw-only paths do not provide or constrain a branch
+ * result, including when an unreachable expression follows the exit. */
+static void test_g17_expression_return_path_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g17_expression_return_path_acceptance.ff",
+        "module g17.expression_return_path_acceptance;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func directIf(flag: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    return 10;\n"
+        "    \"unreachable-if\";\n"
+        "  } else { 11; };\n"
+        "  return value;\n"
+        "}\n"
+        "func directMatch(value: i32): i32 {\n"
+        "  let result: i32 = match value {\n"
+        "    0 { return 20; \"unreachable-match\"; }\n"
+        "    1 { 21; }\n"
+        "    else { 22; }\n"
+        "  };\n"
+        "  return result;\n"
+        "}\n"
+        "func directTry(): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    return 30;\n"
+        "    \"unreachable-catch\";\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func partialNestedIf(flag: bool, stop: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    if stop { return 40; }\n"
+        "    41;\n"
+        "  } else { 42; };\n"
+        "  return value;\n"
+        "}\n"
+        "func partialNestedMatch(value: i32): i32 {\n"
+        "  let result: i32 = match value {\n"
+        "    0 {\n"
+        "      match value { 0 { return 50; } else {} }\n"
+        "      51;\n"
+        "    }\n"
+        "    else { 52; }\n"
+        "  };\n"
+        "  return result;\n"
+        "}\n"
+        "func partialNestedTry(stop: bool): i32 {\n"
+        "  let value = try fail() catch {\n"
+        "    if stop { return 60; }\n"
+        "    61;\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func mixedReturnThrow(flag: bool, stop: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    if stop { return 70; } else { throw \"stop\"; }\n"
+        "  } else { 71; };\n"
+        "  return value;\n"
+        "}\n"
+        "func throwBeforeUnreachableValue(flag: bool): i32 {\n"
+        "  let value: i32 = if flag { throw \"stop\"; \"unreachable\"; } else { 80; };\n"
+        "  return value;\n"
+        "}\n");
+}
 
-    for (size_t index = 0U;
-         index < sizeof(cases) / sizeof(cases[0]);
-         ++index) {
-        assert_stable_semantic_error("G17",
-                                     cases[index].path,
-                                     cases[index].source,
-                                     cases[index].code,
-                                     cases[index].line,
-                                     cases[index].column,
-                                     "return",
-                                     cases[index].message);
-    }
+/* EXC14/EXC15: every ordinary nested control-flow form inside a value-form
+ * catch may return from its owning callable. A callable without an explicit
+ * return annotation keeps using its existing return-type inference. */
+static void test_g17_try_expression_nested_return_path_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g17_try_expression_nested_return_path_acceptance.ff",
+        "module g17.try_expression_nested_return_path_acceptance;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func nestedBlock(): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    { return 100; }\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func nestedMatch(route: i32): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    match route {\n"
+        "      0 { return 110; }\n"
+        "      else { return 111; }\n"
+        "    }\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func nestedLoop(): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    while true { return 120; }\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func nestedTry(): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    try fail() catch { return 130; }\n"
+        "    return 131;\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n"
+        "func inferredReturn(stop: bool) {\n"
+        "  let fallback: i32 = 141;\n"
+        "  let value = if stop { return (i32)140; } else { fallback; };\n"
+        "  return value;\n"
+        "}\n");
+}
+
+/* EXC20/EXC21: a branch without a reachable final value is valid only when
+ * every reachable path returns or throws. Normal fallthrough, a nested
+ * Lambda return, a handled throw, and nontermination remain non-results. */
+static void test_g17_expression_result_path_diagnostics(void) {
+    assert_stable_semantic_error(
+        "G17",
+        "g17_if_partial_return_without_result.ff",
+        "module g17.if_partial_return_without_result;\n"
+        "func run(flag: bool, stop: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    if stop { return 1; }\n"
+        "    let marker = 0;\n"
+        "  } else { 2; };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1101", 3U, 20U, "if", "branch block must end with an expression statement");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_match_partial_return_without_result.ff",
+        "module g17.match_partial_return_without_result;\n"
+        "func run(stop: bool): i32 {\n"
+        "  let value: i32 = match 0 {\n"
+        "    0 { if stop { return 1; } let marker = 0; }\n"
+        "    else { 2; }\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1101", 4U, 5U, "0", "branch block must end with an expression statement");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_try_partial_return_without_result.ff",
+        "module g17.try_partial_return_without_result;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func run(stop: bool): i32 {\n"
+        "  let value: i32 = try fail() catch {\n"
+        "    if stop { return 1; }\n"
+        "    let marker = 0;\n"
+        "  };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1401", 4U, 31U, "catch", "must produce a final result expression");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_if_nonterminating_without_result.ff",
+        "module g17.if_nonterminating_without_result;\n"
+        "func run(flag: bool): i32 {\n"
+        "  let value: i32 = if flag { while true {} } else { 2; };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1101", 3U, 20U, "if", "branch block must end with an expression statement");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_if_nested_lambda_return_without_result.ff",
+        "module g17.if_nested_lambda_return_without_result;\n"
+        "spec Reader(): i32;\n"
+        "func run(flag: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    let reader: Reader = () { return 1; };\n"
+        "  } else { 2; };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1101", 4U, 20U, "if", "branch block must end with an expression statement");
+    assert_stable_semantic_error(
+        "G17",
+        "g17_if_handled_throw_without_result.ff",
+        "module g17.if_handled_throw_without_result;\n"
+        "func fail(): i32 { throw \"g17\"; return 0; }\n"
+        "func run(flag: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    try fail() catch {}\n"
+        "    let marker = 0;\n"
+        "  } else { 2; };\n"
+        "  return value;\n"
+        "}\n",
+        "AE1101", 4U, 20U, "if", "branch block must end with an expression statement");
+}
+
+/* EXC22: a return inside a value branch is still checked against the owning
+ * callable's return type, independently of the branch expression's value. */
+static void test_g17_expression_branch_return_type_diagnostic(void) {
+    assert_stable_semantic_error(
+        "G17",
+        "g17_expression_branch_return_type.ff",
+        "module g17.expression_branch_return_type;\n"
+        "func run(flag: bool): i32 {\n"
+        "  let value: i32 = if flag {\n"
+        "    return \"wrong\";\n"
+        "  } else { 1; };\n"
+        "  return 2;\n"
+        "}\n",
+        "AE1003", 4U, 12U, "\"wrong\"", "does not match expected type 'i32'");
 }
 
 /* EXC15/EXC16: statement forms retain ordinary callable returns, while a
@@ -32265,7 +32279,10 @@ int main(void) {
     test_g17_catch_order_and_unknown_diagnostics();
     test_g17_try_result_presence_diagnostics();
     test_g17_rethrow_and_terminal_throw_acceptance();
-    test_g17_expression_return_boundary_diagnostics();
+    test_g17_expression_return_path_acceptance();
+    test_g17_try_expression_nested_return_path_acceptance();
+    test_g17_expression_result_path_diagnostics();
+    test_g17_expression_branch_return_type_diagnostic();
     test_g17_expression_return_boundary_acceptance();
     test_g16_base_loop_control_diagnostics();
     test_g16_expression_loop_boundary_diagnostics();
