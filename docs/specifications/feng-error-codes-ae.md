@@ -287,13 +287,15 @@
 | AE1111 | match enum 目标区间标签禁用约束 | (新增) | match enum target does not support range labels |
 | AE1108 | match 结果一致性 | AE0048 | match expressions require an else branch |
 | AE1108 | match 结果一致性 | AE0049 | match expression branches must have the same type, got '%s' and '%s' |
-| AE1110 | 分支上下文语义限制 | AE0073 | '%s' cannot appear directly inside an 'if' expression block; |
+| AE1102 | if 条件 bool 约束 | AE0032、AE0054（if 产生点） | if expression condition must have type 'bool', got '%s'、if statement condition must have type 'bool', got '%s' |
+| AE1110 | 表达式结果分支控制转移边界 | AE0073、（扩展至 match 表达式） | '%s' cannot target a loop outside an '%s' expression result branch; place it inside a loop declared within the branch |
 
 ## 12 循环段
 
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
 |---|---|---|---|
 | AE1201 | 循环上下文语义 | AE0075 | '%s' statement is only allowed inside a 'while' or 'for' loop |
+| AE1202 | 循环条件 bool 约束 | AE0054（while / for 产生点） | while statement condition must have type 'bool', got '%s'、for statement condition must have type 'bool', got '%s' |
 
 ## 13 注解/ABI段
 

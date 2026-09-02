@@ -171,6 +171,7 @@
 |----------|------|-------------|
 | SE1201 | for 初始化器后缺少分号 | for statements require ';' after the initializer |
 | SE1202 | for 条件后缺少分号 | for statements require ';' after the condition |
+| SE1203 | for 更新子句禁止声明绑定 | for update clauses cannot declare bindings; declare the binding in the initializer or before the loop |
 
 ## SE13XX - 注解段
 

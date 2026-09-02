@@ -58,6 +58,9 @@ for var index = 0; index < 10; index += 1 {
 
 The initializer, condition, and update clauses can each be omitted. `for ;; { ... }` is an infinite loop.
 
+A binding can be declared only in the initializer clause. The update clause may modify an already visible binding or
+call a function, but it cannot declare a new binding with `let` or `var`.
+
 A nonempty initializer runs exactly once when control enters the loop. A binding declared by the initializer remains
 the same binding throughout the loop, and a binding declared outside the loop remains the original binding. The
 condition, update, and every execution of the body refer to those same bindings.
@@ -126,3 +129,8 @@ value. The same rules apply independently to every nonempty tuple-pattern positi
 
 Neither `break` nor `continue` accepts a label or nesting count. Loops can be nested, but each statement targets only
 the nearest loop and cannot cross multiple nesting levels.
+
+When `if`, `match`, or `try/catch` is used as an expression, each result branch is a control-transfer boundary: a
+`break` or `continue` in that branch cannot target a loop outside the expression. A `while`, three-clause `for`, or
+`for/in` loop declared inside the branch may still use `break` and `continue`, which target only that inner loop. The
+same constructs do not impose this additional boundary when used as statements.

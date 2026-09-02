@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G15 已交付；G16～G25 待 Review
+> 状态：G01～G15 已交付；G16 已完成实施前 Review、待实施；G17～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -1528,33 +1528,106 @@ callable-form `spec` 值和块 Lambda。相同规则存在多个声明面时，�
 
 ### 20.1 测试重点
 
-验证条件、循环及控制转移规则产生的稳定 Semantic 诊断。
+验证条件、循环及控制转移规则产生的稳定 Semantic 诊断，并为能够合法执行的邻界建立或映射 FCTS
+直接运行证据。本组同时修复实施前发现的一项窄 Parser 缺口：三段式 `for` 的更新子句不得使用
+`let` / `var` 声明绑定。
+
+`if`、块形式 `match` 与带 `catch` 的 `try` 作为表达式使用时，每个结果分支形成控制转移边界：
+分支内的 `break` / `continue` 不得作用于该表达式外部的循环。这里的限制按控制目标判断，不只检查
+分支块的直接子语句；嵌套普通 block 或普通 `if` 中的跳转如果仍以表达式外部循环为目标，同样非法。
+结果分支内部另行声明的 `while`、三段式 `for` 或 `for/in` 则建立新的合法目标，其循环体内的
+`break` / `continue` 仍可正常使用。相同结构作为语句使用时不形成该表达式边界。
+
+三段式 `for` 只有初始化子句可以声明 `let` / `var` 绑定；更新子句只能操作此前已经可见的绑定或
+执行函数调用，不得引入新绑定。`for/in` 的绑定关键字、一级 tuple 模式和逐轮身份继续遵循已交付
+G07；语法形态映射 G12，同级重名和 `let` / `var` 可写性映射 G13，不在本组重复排列。
 
 ### 20.2 用例 TODO
 
-- [ ] FLOW01：`break` 出现在不允许的上下文；
-- [ ] FLOW02：`continue` 出现在不允许的上下文；
-- [ ] FLOW03：条件表达式类型不合法；
-- [ ] FLOW04：`for/in` 迭代目标不合法；
-- [ ] FLOW05：循环绑定形式不合法；
-- [ ] FLOW06：嵌套流程控制的最小合法邻界程序。
+#### 20.2.1 `break` / `continue` 上下文
+
+- [ ] FLOW01：分别覆盖函数普通块及其嵌套普通 block 中没有任何包围循环的 `break`，以及外层循环体
+  中新建块 Lambda 后在 Lambda body 直接使用 `break`；均在 `break` token 产生唯一 `AE1201`，证明
+  普通块不建立循环目标、callable 边界不能继承外层循环；
+- [ ] FLOW01-A：在包围循环中，分别把 `break` 放入值形式 `if` 的结果分支、值形式 `match` 的普通
+  分支 / `else` 分支和 `try` 表达式的结果 catch 分支，并使其只能指向表达式外部循环；`if` / `match`
+  使用 `AE1110`，catch 使用 `AE1405`，诊断均位于 `break` token。嵌套普通 block 或普通 `if` 不得
+  绕过该边界；
+- [ ] FLOW01-B：映射 defer 直接位置的 `AE1504` 既有证据；在值形式 `if`、`match`、`try` 的结果
+  分支内分别新建一个循环并在该内层循环中执行 `break`，全部必须合法并进入 FCTS 直接运行；语句
+  形式的 `if` / `match` / `try` 位于循环内时，分支中的 `break` 可以作用于包围该语句的最近循环；
+- [ ] FLOW02：对 FLOW01、FLOW01-A 和 FLOW01-B 的每个上下文建立对应 `continue` 矩阵；普通块与
+  Lambda callable 边界使用 `AE1201`，值形式 `if` / `match` 使用 `AE1110`，结果 catch 使用
+  `AE1405`，defer 直接位置映射 `AE1505`；结果分支内新建循环及语句形式分支的合法控制目标必须在
+  FCTS 中直接运行。
+
+#### 20.2.2 条件类型
+
+- [ ] FLOW03：普通 `if` 的首个条件与 `else if` 条件、直接值形式 `if` 及值形式 `else if` 链的内层
+  条件分别使用最小非 `bool` 表达式触发 `AE1102`；每个诊断必须定位实际出错条件表达式的起始 token，
+  不能把后续 `else if` 错误定位到首个 `if`；
+- [ ] FLOW03-A：`while` 与三段式 `for` 的非空条件分别使用最小非 `bool` 表达式触发 `AE1202`，定位
+  实际条件表达式起始 token；三段式 `for` 省略条件继续表示恒真，不产生条件类型诊断；
+- [ ] FLOW03-B：在 FCTS 中直接运行布尔字面量、返回 `bool` 的调用和 infix `match` 结果分别作为
+  `if` / `else if`、`while` 与三段式 `for` 条件的合法邻界；不得把数值、字符串或对象视为 truthy。
+
+#### 20.2.3 `for/in` 目标与循环绑定
+
+- [ ] FLOW04：内建标量与没有 `@iterable` / `@iterator` 的普通对象分别作为 `for/in` 目标时，在
+  迭代表达式起始 token 产生唯一 `AE0326`；数组 `T[]`、`T[!]`、普通 `@iterable` 容器和 self-cursor
+  `@iterator` 继续合法，并在 FCTS 中直接运行。迭代协议声明自身的签名诊断只建立既有映射，不混入
+  本组目标可迭代性用例；
+- [ ] FLOW05：`for/in` 一级 tuple 解构分别覆盖“序列元素不是具名 tuple”的 `AE0108` 和“模式位置数
+  与元素 tuple 不一致”的 `AE0109`，诊断位于模式绑定 token；零 tuple、带空位及位置数完全匹配的
+  模式继续合法。嵌套 / 单位置 / 类型标注 / 省略 `let|var` 等语法错误映射 G12，同一模式重名及
+  `let` 分量赋值映射 G13，不重复新增同构诊断；
+- [ ] FLOW05-A：三段式 `for` 的更新子句以 `let` 或 `var` 开始时，Parser 均在绑定关键字处产生唯一
+  `SE1203`，返回空 AST 且不得进入 Semantic；初始化子句中的 `let` / `var`、更新子句对既有绑定的
+  普通赋值 / 复合赋值及函数调用继续合法，并建立精确 Parser AST 与 FCTS 运行证据。
+
+#### 20.2.4 合法嵌套邻界
+
+- [ ] FLOW06：在 FCTS 中覆盖 `while`、三段式 `for`、数组及迭代器协议 `for/in` 的 `break` /
+  `continue`，并覆盖异构嵌套循环只作用于最近一层；已有 G08 / `test_flow.ff` / `test_iterator.ff`
+  直接证据足够的行为只建立映射，缺少的表达式结果分支内层循环和语句形式分支外层控制目标才新增；
+- [ ] FLOW06-A：Semantic 正向矩阵必须同时证明普通嵌套 block 不改变最近循环目标、Lambda callable
+  边界内自行声明循环后可使用自己的 `break` / `continue`，以及值表达式结果分支内自行声明的循环
+  不受表达式外部控制转移禁令影响；所有可执行边界同步进入 FCTS。
 
 ### 20.3 独立验收与交付 TODO
 
-- [ ] 建立本领域稳定诊断码到现有 Semantic test 的映射；
-- [ ] 独立运行 G16，核对诊断码、位置、数量、阶段和流程上下文；
+- [x] 按人工确认更新流程控制主规范、SE / AE 分段错误码规范及中英文用户手册，明确表达式结果分支
+  的外部循环控制转移边界、内层循环合法邻界和更新子句绑定禁令；
+- [ ] 将 if 表达式当前产生的旧 `AE0032`、if 语句当前产生的旧 `AE0054` 收敛为 `AE1102`，将
+  `while` / 三段式 `for` 当前产生的旧 `AE0054` 收敛为 `AE1202`；只修改这四类 G16 产生点，不开展
+  其他旧错误码迁移；
+- [ ] 为值形式 `match` 的结果分支建立与值形式 `if` 相同的外部循环目标隔离，同时保留结果分支
+  内层循环；不得通过禁止整个分支子树中的控制转移实现；
+- [ ] Parser 使用 `SE1203` 拒绝三段式 `for` 更新子句中的 `let` / `var`，不得影响初始化子句绑定、
+  `for/in` 显式绑定或合法更新表达式的 AST；
+- [ ] 建立 `AE1201`、`AE1110`、`AE1405`、`AE1504`、`AE1505`、`AE1102`、`AE1202`、`AE0326`、
+  `AE0108`、`AE0109` 与 `SE1203` 到现有或新增测试的逐项映射；
+- [ ] 本组按当前计划只新增 Parser、Semantic 与 FCTS 用例，不修改既有测试；既有
+  `test_break_inside_loop_inside_if_expr_block_is_accepted` 和
+  `test_break_inside_loop_inside_try_expr_catch_block_is_accepted` 必须保持正向且继续通过。若实施中发现
+  必须修改任何既有用例，先记录问题并再次取得人工决策；
+- [ ] 每个新增反向程序核对唯一诊断、稳定码、触发 token、行列、来源文件及 Parser / Semantic 阶段；
+  每个可执行合法邻界均建立或映射 FCTS 直接运行证据；
+- [ ] 独立运行 G16 的 Parser、Semantic、Codegen 与 FCTS 专项，核对诊断及实际控制流结果；所有实现
+  变更必须只影响编译期，不得新增生成程序的运行时分支、调用、分配或 ARC；
 - [ ] 在 Codex 沙箱外为 G16 独立执行 `make test`；
 - [ ] 执行 `git diff --check`，关闭或决策 G16 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [ ] 填写本组映射、实际新增用例、专项结果、全量结果、性能与兼容性结论。
 
 ### 20.4 独立交付记录
 
-- 状态：待实施
+- 状态：已完成实施前 Review，待实施
 - 稳定码映射与新增用例：—
 - 本组专项结果：—
 - 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: close control-flow diagnostic gaps`
+- 问题：[G16 问题记录](./feng-language-conformance-coverage-hardening-issues/g16.md) 中
+  `ISSUE-G16-001`～`ISSUE-G16-003` 待实施关闭
+- 建议 commit message：`fix(compiler): stabilize control-flow diagnostics and complete G16 coverage`
 
 ## 21 G17：异常诊断
 
