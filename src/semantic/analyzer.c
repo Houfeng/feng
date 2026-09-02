@@ -6952,8 +6952,11 @@ static const FengDecl *resolve_abi_function_pointer_type_decl(const ResolveConte
     return type_decl;
 }
 
-static const FengDecl *resolve_callable_constraint_type_decl(const ResolveContext *context,
-                                                            InferredExprType expr_type) {
+/* Resolve the callable-form constraint reference carried by one active type
+ * parameter. The returned reference retains any concrete spec type arguments. */
+static const FengTypeRef *resolve_callable_constraint_type_ref(
+    const ResolveContext *context,
+    InferredExprType expr_type) {
     const TypeParamEntry *type_param_entry;
 
     if (expr_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
@@ -6970,7 +6973,15 @@ static const FengDecl *resolve_callable_constraint_type_decl(const ResolveContex
         return NULL;
     }
 
-    return resolve_function_type_decl(context, type_param_entry->type_param->constraint);
+    return type_param_entry->type_param->constraint;
+}
+
+/* Resolve the declaration behind an active callable-form constraint. */
+static const FengDecl *resolve_callable_constraint_type_decl(
+    const ResolveContext *context,
+    InferredExprType expr_type) {
+    return resolve_function_type_decl(
+        context, resolve_callable_constraint_type_ref(context, expr_type));
 }
 
 static bool inferred_expr_type_is_void(InferredExprType expr_type) {
@@ -10736,7 +10747,16 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
             message = format_message("return statement does not match expected type '%s'",
                                      expected_type_name != NULL ? expected_type_name : "<type>");
             free(expected_type_name);
-            return resolver_append_error(context, stmt->token, "AE0057", message) && false;
+            return resolver_append_error(context, stmt->token, "AE0501", message) && false;
+        }
+
+        if (type_ref_is_void(context->current_callable_signature->return_type)) {
+            return resolver_append_error(
+                       context,
+                       stmt->token,
+                       "AE0501",
+                       duplicate_cstr("return statement does not match expected type 'void'")) &&
+                   false;
         }
 
         return validate_expr_against_expected_type(context,
@@ -10770,6 +10790,16 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
     if (!inferred_expr_type_is_known(return_type)) {
         return true;
     }
+    /* A block Lambda can receive its callable target only after overload
+     * selection. Persist each value-return type while the real lexical scope
+     * is active so that delayed target validation does not need to replay
+     * body-local bindings with a second scope model. */
+    if (stmt->as.return_value != NULL &&
+        context->lambda_frame_count > 0U &&
+        !record_type_fact_for_site(
+            context, stmt->as.return_value, return_type)) {
+        return false;
+    }
     if (!inferred_expr_type_is_known(context->current_callable_inferred_return_type)) {
         context->current_callable_inferred_return_type = return_type;
         return true;
@@ -10790,7 +10820,385 @@ static bool validate_return_stmt(ResolveContext *context, const FengStmt *stmt) 
                              return_type_name != NULL ? return_type_name : "<type>");
     free(existing_type_name);
     free(return_type_name);
-    return resolver_append_error(context, stmt->token, "AE0058", message) && false;
+    return resolver_append_error(context, stmt->token, "AE0504", message) && false;
+}
+
+/* Structured control-flow outcomes used by the compile-time callable
+ * fallthrough check. A statement can expose more than one outcome because
+ * different branches may return, throw, transfer loop control, or complete
+ * normally. Nested loops consume their own break/continue outcomes. */
+typedef enum CallableFlowOutcome {
+    CALLABLE_FLOW_NORMAL = 1U << 0U,
+    CALLABLE_FLOW_RETURN = 1U << 1U,
+    CALLABLE_FLOW_THROW = 1U << 2U,
+    CALLABLE_FLOW_BREAK = 1U << 3U,
+    CALLABLE_FLOW_CONTINUE = 1U << 4U
+} CallableFlowOutcome;
+
+typedef unsigned CallableFlowOutcomes;
+
+static CallableFlowOutcomes callable_expr_flow(const FengExpr *expr);
+static CallableFlowOutcomes callable_block_flow(const FengBlock *block);
+
+/* Sequence a following operation only across paths on which the preceding
+ * operation completed normally; all already-terminal outcomes are retained. */
+static CallableFlowOutcomes callable_flow_sequence(CallableFlowOutcomes preceding,
+                                                   CallableFlowOutcomes following) {
+    CallableFlowOutcomes result = preceding & ~CALLABLE_FLOW_NORMAL;
+
+    if ((preceding & CALLABLE_FLOW_NORMAL) != 0U) {
+        result |= following;
+    }
+    return result;
+}
+
+/* Return true only for the exact boolean literal required by the function
+ * specification. Optimizer constant folding deliberately does not affect
+ * language-level fallthrough acceptance. */
+static bool callable_expr_is_true_literal(const FengExpr *expr) {
+    return expr != NULL && expr->kind == FENG_EXPR_BOOL && expr->as.boolean;
+}
+
+/* Return true for the two catch-all forms: anonymous `catch { ... }` and
+ * bound `catch error: unknown { ... }`. Semantic validation separately keeps
+ * either form last in its catch sequence. */
+static bool callable_catch_clause_matches_all(
+    const FengTryCatchClause *clause) {
+    return clause != NULL &&
+           (clause->type == NULL || type_ref_is_unknown(clause->type));
+}
+
+/* Merge the outcomes of one expression. Calls conservatively expose both a
+ * normal and an exceptional result; this makes surrounding catch bodies
+ * reachable without introducing an exception-effect runtime mechanism. */
+static CallableFlowOutcomes callable_expr_flow(const FengExpr *expr) {
+    CallableFlowOutcomes flow;
+    size_t index;
+
+    if (expr == NULL) {
+        return CALLABLE_FLOW_NORMAL;
+    }
+
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+        case FENG_EXPR_LAMBDA:
+            return CALLABLE_FLOW_NORMAL;
+
+        case FENG_EXPR_ARRAY_LITERAL:
+            flow = CALLABLE_FLOW_NORMAL;
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                flow = callable_flow_sequence(
+                    flow, callable_expr_flow(expr->as.array_literal.items[index]));
+            }
+            return flow;
+
+        case FENG_EXPR_TUPLE_LITERAL:
+            flow = CALLABLE_FLOW_NORMAL;
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                flow = callable_flow_sequence(
+                    flow, callable_expr_flow(expr->as.tuple_literal.items[index]));
+            }
+            return flow;
+
+        case FENG_EXPR_OBJECT_LITERAL:
+            flow = callable_expr_flow(expr->as.object_literal.target);
+            for (index = 0U; index < expr->as.object_literal.field_count; ++index) {
+                flow = callable_flow_sequence(
+                    flow,
+                    callable_expr_flow(expr->as.object_literal.fields[index].value));
+            }
+            return flow;
+
+        case FENG_EXPR_GENERIC_TARGET:
+            return callable_expr_flow(expr->as.generic_target.target);
+
+        case FENG_EXPR_CALL:
+            flow = callable_expr_flow(expr->as.call.callee);
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                flow = callable_flow_sequence(
+                    flow, callable_expr_flow(expr->as.call.args[index]));
+            }
+            return callable_flow_sequence(
+                flow, CALLABLE_FLOW_NORMAL | CALLABLE_FLOW_THROW);
+
+        case FENG_EXPR_MEMBER:
+            return callable_expr_flow(expr->as.member.object);
+
+        case FENG_EXPR_INDEX:
+            return callable_flow_sequence(
+                callable_expr_flow(expr->as.index.object),
+                callable_expr_flow(expr->as.index.index));
+
+        case FENG_EXPR_UNARY:
+            return callable_expr_flow(expr->as.unary.operand);
+
+        case FENG_EXPR_BINARY: {
+            CallableFlowOutcomes left = callable_expr_flow(expr->as.binary.left);
+            CallableFlowOutcomes right = callable_expr_flow(expr->as.binary.right);
+
+            if (expr->as.binary.op == FENG_TOKEN_AND_AND ||
+                expr->as.binary.op == FENG_TOKEN_OR_OR) {
+                CallableFlowOutcomes result = left & ~CALLABLE_FLOW_NORMAL;
+
+                if ((left & CALLABLE_FLOW_NORMAL) != 0U) {
+                    bool must_evaluate_right =
+                        expr->as.binary.left != NULL &&
+                        expr->as.binary.left->kind == FENG_EXPR_BOOL &&
+                        ((expr->as.binary.op == FENG_TOKEN_AND_AND &&
+                          expr->as.binary.left->as.boolean) ||
+                         (expr->as.binary.op == FENG_TOKEN_OR_OR &&
+                          !expr->as.binary.left->as.boolean));
+
+                    result |= right;
+                    if (!must_evaluate_right) {
+                        result |= CALLABLE_FLOW_NORMAL;
+                    }
+                }
+                return result;
+            }
+            return callable_flow_sequence(left, right);
+        }
+
+        case FENG_EXPR_CAST:
+            return callable_expr_flow(expr->as.cast.value);
+
+        case FENG_EXPR_IF: {
+            CallableFlowOutcomes condition =
+                callable_expr_flow(expr->as.if_expr.condition);
+            CallableFlowOutcomes result = condition & ~CALLABLE_FLOW_NORMAL;
+
+            if ((condition & CALLABLE_FLOW_NORMAL) != 0U) {
+                result |= callable_block_flow(expr->as.if_expr.then_block);
+                result |= callable_block_flow(expr->as.if_expr.else_block);
+            }
+            return result;
+        }
+
+        case FENG_EXPR_MATCH: {
+            CallableFlowOutcomes target =
+                callable_expr_flow(expr->as.match_expr.target);
+            CallableFlowOutcomes result = target & ~CALLABLE_FLOW_NORMAL;
+
+            if ((target & CALLABLE_FLOW_NORMAL) != 0U) {
+                for (index = 0U;
+                     index < expr->as.match_expr.branch_count;
+                     ++index) {
+                    result |= callable_block_flow(
+                        expr->as.match_expr.branches[index].body);
+                }
+                result |= callable_block_flow(expr->as.match_expr.else_block);
+            }
+            return result;
+        }
+
+        case FENG_EXPR_TRY: {
+            CallableFlowOutcomes body =
+                callable_expr_flow(expr->as.try_expr.body);
+            CallableFlowOutcomes result = body & ~CALLABLE_FLOW_THROW;
+            bool catches_all = false;
+
+            if ((body & CALLABLE_FLOW_THROW) != 0U) {
+                for (index = 0U;
+                     index < expr->as.try_expr.clause_count;
+                     ++index) {
+                    result |= callable_block_flow(
+                        expr->as.try_expr.clauses[index].body);
+                    if (callable_catch_clause_matches_all(
+                            &expr->as.try_expr.clauses[index])) {
+                        catches_all = true;
+                        break;
+                    }
+                }
+                if (!catches_all) {
+                    result |= CALLABLE_FLOW_THROW;
+                }
+            }
+            return result;
+        }
+
+        case FENG_EXPR_ARRAY_NEW:
+            return callable_expr_flow(expr->as.array_new.size);
+
+        case FENG_EXPR_MATCH_OP:
+            return callable_expr_flow(expr->as.match_op.target);
+    }
+
+    return CALLABLE_FLOW_NORMAL;
+}
+
+/* Merge the outcomes of one statement, consuming loop-local transfers at the
+ * loop that owns them. */
+static CallableFlowOutcomes callable_stmt_flow(const FengStmt *stmt) {
+    CallableFlowOutcomes flow;
+    CallableFlowOutcomes body;
+    size_t index;
+
+    if (stmt == NULL) {
+        return CALLABLE_FLOW_NORMAL;
+    }
+
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return callable_block_flow(stmt->as.block);
+
+        case FENG_STMT_BINDING:
+            return callable_expr_flow(stmt->as.binding.initializer);
+
+        case FENG_STMT_ASSIGN:
+            return callable_flow_sequence(
+                callable_expr_flow(stmt->as.assign.target),
+                callable_expr_flow(stmt->as.assign.value));
+
+        case FENG_STMT_EXPR:
+        case FENG_STMT_TRY:
+            return callable_expr_flow(stmt->as.expr);
+
+        case FENG_STMT_IF:
+            flow = 0U;
+            for (index = 0U;
+                 index < stmt->as.if_stmt.clause_count;
+                 ++index) {
+                flow |= callable_expr_flow(
+                            stmt->as.if_stmt.clauses[index].condition) &
+                        ~CALLABLE_FLOW_NORMAL;
+                flow |= callable_block_flow(
+                    stmt->as.if_stmt.clauses[index].block);
+            }
+            if (stmt->as.if_stmt.else_block != NULL) {
+                flow |= callable_block_flow(stmt->as.if_stmt.else_block);
+            } else {
+                flow |= CALLABLE_FLOW_NORMAL;
+            }
+            return flow;
+
+        case FENG_STMT_MATCH:
+            flow = callable_expr_flow(stmt->as.match_stmt.target) &
+                   ~CALLABLE_FLOW_NORMAL;
+            for (index = 0U;
+                 index < stmt->as.match_stmt.branch_count;
+                 ++index) {
+                flow |= callable_block_flow(
+                    stmt->as.match_stmt.branches[index].body);
+            }
+            if (stmt->as.match_stmt.else_block != NULL) {
+                flow |= callable_block_flow(stmt->as.match_stmt.else_block);
+            } else {
+                flow |= CALLABLE_FLOW_NORMAL;
+            }
+            return flow;
+
+        case FENG_STMT_WHILE: {
+            CallableFlowOutcomes condition =
+                callable_expr_flow(stmt->as.while_stmt.condition);
+            CallableFlowOutcomes result = condition & ~CALLABLE_FLOW_NORMAL;
+
+            if ((condition & CALLABLE_FLOW_NORMAL) == 0U) {
+                return result;
+            }
+            body = callable_block_flow(stmt->as.while_stmt.body);
+            result |= body & (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW);
+            if (!callable_expr_is_true_literal(stmt->as.while_stmt.condition) ||
+                (body & CALLABLE_FLOW_BREAK) != 0U) {
+                result |= CALLABLE_FLOW_NORMAL;
+            }
+            return result;
+        }
+
+        case FENG_STMT_FOR: {
+            CallableFlowOutcomes prefix = callable_stmt_flow(
+                stmt->as.for_stmt.init);
+            CallableFlowOutcomes result;
+
+            if (stmt->as.for_stmt.is_for_in) {
+                CallableFlowOutcomes iterator =
+                    callable_expr_flow(stmt->as.for_stmt.iter_expr);
+
+                body = callable_block_flow(stmt->as.for_stmt.body);
+                result = CALLABLE_FLOW_NORMAL |
+                         (body & (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW));
+                return callable_flow_sequence(
+                    prefix, callable_flow_sequence(iterator, result));
+            }
+
+            {
+                CallableFlowOutcomes condition =
+                    callable_expr_flow(stmt->as.for_stmt.condition);
+                CallableFlowOutcomes update =
+                    callable_stmt_flow(stmt->as.for_stmt.update);
+                bool condition_is_true =
+                    stmt->as.for_stmt.condition == NULL ||
+                    callable_expr_is_true_literal(stmt->as.for_stmt.condition);
+
+                result = condition & ~CALLABLE_FLOW_NORMAL;
+                if ((condition & CALLABLE_FLOW_NORMAL) != 0U) {
+                    body = callable_block_flow(stmt->as.for_stmt.body);
+                    result |= body &
+                              (CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW);
+                    if ((body & (CALLABLE_FLOW_NORMAL |
+                                 CALLABLE_FLOW_CONTINUE)) != 0U) {
+                        result |= update & CALLABLE_FLOW_THROW;
+                    }
+                    if (!condition_is_true ||
+                        (body & CALLABLE_FLOW_BREAK) != 0U) {
+                        result |= CALLABLE_FLOW_NORMAL;
+                    }
+                }
+                return callable_flow_sequence(prefix, result);
+            }
+        }
+
+        case FENG_STMT_RETURN:
+            flow = callable_expr_flow(stmt->as.return_value);
+            return (flow & ~CALLABLE_FLOW_NORMAL) |
+                   (((flow & CALLABLE_FLOW_NORMAL) != 0U)
+                        ? CALLABLE_FLOW_RETURN
+                        : 0U);
+
+        case FENG_STMT_THROW:
+            flow = callable_expr_flow(stmt->as.throw_value);
+            return (flow & ~CALLABLE_FLOW_NORMAL) |
+                   (((flow & CALLABLE_FLOW_NORMAL) != 0U)
+                        ? CALLABLE_FLOW_THROW
+                        : 0U);
+
+        case FENG_STMT_BREAK:
+            return CALLABLE_FLOW_BREAK;
+
+        case FENG_STMT_CONTINUE:
+            return CALLABLE_FLOW_CONTINUE;
+
+        case FENG_STMT_DEFER:
+            return CALLABLE_FLOW_NORMAL;
+    }
+
+    return CALLABLE_FLOW_NORMAL;
+}
+
+/* Evaluate a block in source order. Statements after paths that have already
+ * terminated do not affect those paths or make an unreachable break count. */
+static CallableFlowOutcomes callable_block_flow(const FengBlock *block) {
+    CallableFlowOutcomes flow = CALLABLE_FLOW_NORMAL;
+    size_t index;
+
+    if (block == NULL) {
+        return flow;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        flow = callable_flow_sequence(
+            flow, callable_stmt_flow(block->statements[index]));
+    }
+    return flow;
+}
+
+/* Return true exactly when the callable body retains a normal path to its
+ * closing brace. */
+static bool callable_body_can_fall_through(const FengBlock *body) {
+    return (callable_block_flow(body) & CALLABLE_FLOW_NORMAL) != 0U;
 }
 
 static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *context,
@@ -12397,6 +12805,749 @@ static void note_callable_exception_escape(ResolveContext *context,
     }
 
     note_current_callable_exception_escape(context);
+}
+
+/* Resolve the return type supplied by the current callable-form spec target
+ * for a lambda expression. An untyped lambda deliberately has no target
+ * return contract at this stage. */
+static const FengTypeRef *lambda_target_return_type(ResolveContext *context) {
+    const FengTypeRef *target;
+    const FengDecl *function_type_decl;
+
+    if (context == NULL) {
+        return NULL;
+    }
+    target = context->current_expr_expected_type_ref;
+    function_type_decl = resolve_function_type_decl(context, target);
+    if (function_type_decl == NULL) {
+        return NULL;
+    }
+    return substitute_spec_member_type_ref_for_instance(
+        context,
+        function_type_decl,
+        target,
+        function_type_decl->as.spec_decl.as.callable.return_type);
+}
+
+static InferredExprType infer_block_return_type(ResolveContext *context,
+                                                const FengBlock *block);
+
+typedef enum LambdaReturnTargetCheckMode {
+    LAMBDA_RETURN_TARGET_MATCH_ONLY = 0,
+    LAMBDA_RETURN_TARGET_VALIDATE
+} LambdaReturnTargetCheckMode;
+
+static bool lambda_return_values_fit_target_in_block(
+    ResolveContext *context,
+    const FengBlock *block,
+    const FengTypeRef *target_return_type,
+    LambdaReturnTargetCheckMode mode,
+    bool *saw_return);
+
+static bool lambda_return_values_fit_target_in_expr(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *target_return_type,
+    LambdaReturnTargetCheckMode mode,
+    bool *saw_return);
+
+/* Visit expression-owned blocks without crossing a nested Lambda callable
+ * boundary. Only return statements found in those blocks are target-checked;
+ * ordinary subexpressions retain their existing validation path. */
+static bool lambda_return_values_fit_target_in_expr(
+    ResolveContext *context,
+    const FengExpr *expr,
+    const FengTypeRef *target_return_type,
+    LambdaReturnTargetCheckMode mode,
+    bool *saw_return) {
+    size_t index;
+
+    if (expr == NULL) {
+        return true;
+    }
+    switch (expr->kind) {
+        case FENG_EXPR_IDENTIFIER:
+        case FENG_EXPR_SELF:
+        case FENG_EXPR_BOOL:
+        case FENG_EXPR_INTEGER:
+        case FENG_EXPR_FLOAT:
+        case FENG_EXPR_STRING:
+        case FENG_EXPR_LAMBDA:
+            return true;
+
+        case FENG_EXPR_ARRAY_LITERAL:
+            for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        expr->as.array_literal.items[index],
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_TUPLE_LITERAL:
+            for (index = 0U; index < expr->as.tuple_literal.count; ++index) {
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        expr->as.tuple_literal.items[index],
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_OBJECT_LITERAL:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    expr->as.object_literal.target,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U;
+                 index < expr->as.object_literal.field_count;
+                 ++index) {
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        expr->as.object_literal.fields[index].value,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_GENERIC_TARGET:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                expr->as.generic_target.target,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_CALL:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    expr->as.call.callee,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.call.arg_count; ++index) {
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        expr->as.call.args[index],
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_MEMBER:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                expr->as.member.object,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_INDEX:
+            return lambda_return_values_fit_target_in_expr(
+                       context,
+                       expr->as.index.object,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_expr(
+                       context,
+                       expr->as.index.index,
+                       target_return_type,
+                       mode,
+                       saw_return);
+
+        case FENG_EXPR_UNARY:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                expr->as.unary.operand,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_BINARY:
+            return lambda_return_values_fit_target_in_expr(
+                       context,
+                       expr->as.binary.left,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_expr(
+                       context,
+                       expr->as.binary.right,
+                       target_return_type,
+                       mode,
+                       saw_return);
+
+        case FENG_EXPR_CAST:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                expr->as.cast.value,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_IF:
+            return lambda_return_values_fit_target_in_expr(
+                       context,
+                       expr->as.if_expr.condition,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_block(
+                       context,
+                       expr->as.if_expr.then_block,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_block(
+                       context,
+                       expr->as.if_expr.else_block,
+                       target_return_type,
+                       mode,
+                       saw_return);
+
+        case FENG_EXPR_MATCH:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    expr->as.match_expr.target,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U;
+                 index < expr->as.match_expr.branch_count;
+                 ++index) {
+                const FengMatchBranch *branch =
+                    &expr->as.match_expr.branches[index];
+                size_t label_index;
+
+                for (label_index = 0U;
+                     label_index < branch->label_count;
+                     ++label_index) {
+                    const FengMatchLabel *label = &branch->labels[label_index];
+
+                    if (!lambda_return_values_fit_target_in_expr(
+                            context,
+                            label->value,
+                            target_return_type,
+                            mode,
+                            saw_return) ||
+                        !lambda_return_values_fit_target_in_expr(
+                            context,
+                            label->range_low,
+                            target_return_type,
+                            mode,
+                            saw_return) ||
+                        !lambda_return_values_fit_target_in_expr(
+                            context,
+                            label->range_high,
+                            target_return_type,
+                            mode,
+                            saw_return)) {
+                        return false;
+                    }
+                }
+                if (!lambda_return_values_fit_target_in_block(
+                        context,
+                        branch->body,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return lambda_return_values_fit_target_in_block(
+                context,
+                expr->as.match_expr.else_block,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_TRY:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    expr->as.try_expr.body,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U;
+                 index < expr->as.try_expr.clause_count;
+                 ++index) {
+                if (!lambda_return_values_fit_target_in_block(
+                        context,
+                        expr->as.try_expr.clauses[index].body,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+
+        case FENG_EXPR_ARRAY_NEW:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                expr->as.array_new.size,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_EXPR_MATCH_OP:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    expr->as.match_op.target,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U; index < expr->as.match_op.label_count; ++index) {
+                const FengMatchLabel *label = &expr->as.match_op.labels[index];
+
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        label->value,
+                        target_return_type,
+                        mode,
+                        saw_return) ||
+                    !lambda_return_values_fit_target_in_expr(
+                        context,
+                        label->range_low,
+                        target_return_type,
+                        mode,
+                        saw_return) ||
+                    !lambda_return_values_fit_target_in_expr(
+                        context,
+                        label->range_high,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return true;
+    }
+
+    return true;
+}
+
+/* Check only returns owned by the current block Lambda. Nested Lambda
+ * expressions are values and therefore remain independent callable bodies. */
+static bool lambda_return_values_fit_target_in_stmt(
+    ResolveContext *context,
+    const FengStmt *stmt,
+    const FengTypeRef *target_return_type,
+    LambdaReturnTargetCheckMode mode,
+    bool *saw_return) {
+    size_t index;
+
+    if (stmt == NULL) {
+        return true;
+    }
+    switch (stmt->kind) {
+        case FENG_STMT_BLOCK:
+            return lambda_return_values_fit_target_in_block(
+                context,
+                stmt->as.block,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_IF:
+            for (index = 0U;
+                 index < stmt->as.if_stmt.clause_count;
+                 ++index) {
+                if (!lambda_return_values_fit_target_in_expr(
+                        context,
+                        stmt->as.if_stmt.clauses[index].condition,
+                        target_return_type,
+                        mode,
+                        saw_return) ||
+                    !lambda_return_values_fit_target_in_block(
+                        context,
+                        stmt->as.if_stmt.clauses[index].block,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return lambda_return_values_fit_target_in_block(
+                context,
+                stmt->as.if_stmt.else_block,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_MATCH:
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    stmt->as.match_stmt.target,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            for (index = 0U;
+                 index < stmt->as.match_stmt.branch_count;
+                 ++index) {
+                if (!lambda_return_values_fit_target_in_block(
+                        context,
+                        stmt->as.match_stmt.branches[index].body,
+                        target_return_type,
+                        mode,
+                        saw_return)) {
+                    return false;
+                }
+            }
+            return lambda_return_values_fit_target_in_block(
+                context,
+                stmt->as.match_stmt.else_block,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_WHILE:
+            return lambda_return_values_fit_target_in_expr(
+                       context,
+                       stmt->as.while_stmt.condition,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_block(
+                       context,
+                       stmt->as.while_stmt.body,
+                       target_return_type,
+                       mode,
+                       saw_return);
+
+        case FENG_STMT_FOR:
+            if (!lambda_return_values_fit_target_in_stmt(
+                    context,
+                    stmt->as.for_stmt.init,
+                    target_return_type,
+                    mode,
+                    saw_return) ||
+                !lambda_return_values_fit_target_in_stmt(
+                    context,
+                    stmt->as.for_stmt.update,
+                    target_return_type,
+                    mode,
+                    saw_return) ||
+                !lambda_return_values_fit_target_in_expr(
+                    context,
+                    stmt->as.for_stmt.condition,
+                    target_return_type,
+                    mode,
+                    saw_return) ||
+                !lambda_return_values_fit_target_in_expr(
+                    context,
+                    stmt->as.for_stmt.iter_expr,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            return lambda_return_values_fit_target_in_block(
+                context,
+                stmt->as.for_stmt.body,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_TRY:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                stmt->as.expr,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_RETURN: {
+            const FengExpr *value = stmt->as.return_value;
+            bool target_is_void = type_ref_is_void(target_return_type);
+            bool matches;
+
+            if (!lambda_return_values_fit_target_in_expr(
+                    context,
+                    value,
+                    target_return_type,
+                    mode,
+                    saw_return)) {
+                return false;
+            }
+            if (saw_return != NULL) {
+                *saw_return = true;
+            }
+            if (value == NULL || target_is_void) {
+                bool shape_matches = (value == NULL) == target_is_void;
+
+                if (!shape_matches &&
+                    mode == LAMBDA_RETURN_TARGET_VALIDATE) {
+                    char *target_name =
+                        format_type_ref_name(target_return_type);
+
+                    (void)resolver_append_error(
+                        context,
+                        stmt->token,
+                        "AE0501",
+                        format_message(
+                            "return statement does not match expected type '%s'",
+                            target_name != NULL ? target_name : "<type>"));
+                    free(target_name);
+                }
+                return shape_matches;
+            }
+            matches = expr_matches_expected_type_ref(
+                context, value, target_return_type);
+            if (mode == LAMBDA_RETURN_TARGET_MATCH_ONLY || matches) {
+                if (mode == LAMBDA_RETURN_TARGET_VALIDATE && matches) {
+                    return validate_expr_against_expected_type(
+                        context, value, target_return_type);
+                }
+                return matches;
+            }
+            (void)validate_expr_against_expected_type(
+                context, value, target_return_type);
+            return false;
+        }
+
+        case FENG_STMT_DEFER:
+            return lambda_return_values_fit_target_in_block(
+                context,
+                stmt->as.defer_block,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_BINDING:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                stmt->as.binding.initializer,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_ASSIGN:
+            return lambda_return_values_fit_target_in_expr(
+                       context,
+                       stmt->as.assign.target,
+                       target_return_type,
+                       mode,
+                       saw_return) &&
+                   lambda_return_values_fit_target_in_expr(
+                       context,
+                       stmt->as.assign.value,
+                       target_return_type,
+                       mode,
+                       saw_return);
+
+        case FENG_STMT_EXPR:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                stmt->as.expr,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_THROW:
+            return lambda_return_values_fit_target_in_expr(
+                context,
+                stmt->as.throw_value,
+                target_return_type,
+                mode,
+                saw_return);
+
+        case FENG_STMT_BREAK:
+        case FENG_STMT_CONTINUE:
+            return true;
+    }
+
+    return true;
+}
+
+/* Visit all current-Lambda return values in source order. */
+static bool lambda_return_values_fit_target_in_block(
+    ResolveContext *context,
+    const FengBlock *block,
+    const FengTypeRef *target_return_type,
+    LambdaReturnTargetCheckMode mode,
+    bool *saw_return) {
+    size_t index;
+
+    if (block == NULL || target_return_type == NULL) {
+        return true;
+    }
+    for (index = 0U; index < block->statement_count; ++index) {
+        if (!lambda_return_values_fit_target_in_stmt(
+                context,
+                block->statements[index],
+                target_return_type,
+                mode,
+                saw_return)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Enforce the return-value shape and normal-fallthrough contract supplied by
+ * one callable-form target for a block lambda. The body has already passed
+ * ordinary expression and return-type validation before this check runs. */
+static bool validate_block_lambda_return_contract(
+    ResolveContext *context,
+    const FengExpr *lambda_expr,
+    const FengTypeRef *target_return_type) {
+    bool target_is_void;
+    if (context == NULL || lambda_expr == NULL ||
+        lambda_expr->kind != FENG_EXPR_LAMBDA ||
+        !lambda_expr->as.lambda.is_block_body ||
+        target_return_type == NULL) {
+        return true;
+    }
+
+    target_is_void = type_ref_is_void(target_return_type);
+    if (!lambda_return_values_fit_target_in_block(
+            context,
+            lambda_expr->as.lambda.body_block,
+            target_return_type,
+            LAMBDA_RETURN_TARGET_VALIDATE,
+            NULL)) {
+        return false;
+    }
+    if (!target_is_void &&
+        callable_body_can_fall_through(lambda_expr->as.lambda.body_block)) {
+        (void)resolver_append_error(
+            context,
+            lambda_expr->token,
+            "AE0515",
+            duplicate_cstr(
+                "non-void block lambda can reach the end of its body without returning a value"));
+        return false;
+    }
+    return true;
+}
+
+/* Recreate a resolved Lambda's local type scope when its callable target only
+ * becomes known after call-overload selection. No body expression is emitted
+ * or resolved again; this pass only commits target-directed return fitting. */
+static bool validate_block_lambda_return_contract_in_fresh_scope(
+    ResolveContext *context,
+    const FengExpr *lambda_expr,
+    const FengTypeRef *target_return_type) {
+    bool ok = true;
+    size_t param_index;
+
+    if (context == NULL || lambda_expr == NULL ||
+        lambda_expr->kind != FENG_EXPR_LAMBDA ||
+        !lambda_expr->as.lambda.is_block_body) {
+        return true;
+    }
+    if (!resolver_push_scope(context)) {
+        return false;
+    }
+    for (param_index = 0U;
+         param_index < lambda_expr->as.lambda.param_count && ok;
+         ++param_index) {
+        ok = resolver_add_local_typed_name(
+            context,
+            lambda_expr->as.lambda.params[param_index].name,
+            inferred_expr_type_from_type_ref(
+                lambda_expr->as.lambda.params[param_index].type),
+            lambda_expr->as.lambda.params[param_index].mutability);
+    }
+    if (ok) {
+        ok = validate_block_lambda_return_contract(
+            context, lambda_expr, target_return_type);
+    }
+    resolver_pop_scope(context);
+    return ok;
+}
+
+/* Validate every direct block-lambda argument against the instantiated
+ * callable-form parameter that made the call applicable. Ordinary argument
+ * type matching has already selected this callable surface. */
+static bool validate_function_type_call_block_lambda_arguments(
+    ResolveContext *context,
+    const FengDecl *function_type_decl,
+    const FengTypeRef *function_type_ref,
+    FengExpr *const *args,
+    size_t arg_count) {
+    const FengParameter *params;
+    size_t param_count;
+    bool is_variadic;
+    size_t fixed_count;
+    size_t arg_index;
+
+    if (context == NULL || !decl_is_function_type(function_type_decl)) {
+        return true;
+    }
+    params = function_type_decl->as.spec_decl.as.callable.params;
+    param_count = function_type_decl->as.spec_decl.as.callable.param_count;
+    is_variadic = param_count > 0U && params[param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? param_count - 1U : param_count;
+
+    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
+        const FengExpr *arg = args != NULL ? args[arg_index] : NULL;
+        const FengTypeRef *declared_param_type;
+        const FengTypeRef *param_type;
+        const FengDecl *param_function_type_decl;
+        const FengTypeRef *target_return_type;
+
+        if (arg == NULL || arg->kind != FENG_EXPR_LAMBDA ||
+            !arg->as.lambda.is_block_body) {
+            continue;
+        }
+        if (arg_index < fixed_count || arg->is_prepacked_variadic_arg) {
+            if (arg_index >= param_count) {
+                continue;
+            }
+            declared_param_type = params[arg_index].type;
+        } else {
+            declared_param_type = params[fixed_count].type->as.inner;
+        }
+        param_type = substitute_spec_member_type_ref_for_instance(
+            context,
+            function_type_decl,
+            function_type_ref,
+            declared_param_type);
+        param_function_type_decl = resolve_function_type_decl(context, param_type);
+        if (param_function_type_decl == NULL) {
+            continue;
+        }
+        target_return_type = substitute_spec_member_type_ref_for_instance(
+            context,
+            param_function_type_decl,
+            param_type,
+            param_function_type_decl->as.spec_decl.as.callable.return_type);
+        if (!validate_block_lambda_return_contract_in_fresh_scope(
+                context, arg, target_return_type)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Saved callable-body state while a lambda body is being analysed. The
@@ -16886,8 +18037,10 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               size_t arg_count) {
     InferredExprType callee_type = infer_expr_type(context, callee);
     const FengDecl *callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
+    const FengTypeRef *callee_constraint_ref =
+        resolve_callable_constraint_type_ref(context, callee_type);
     const FengDecl *callee_constraint_decl =
-        resolve_callable_constraint_type_decl(context, callee_type);
+        resolve_function_type_decl(context, callee_constraint_ref);
     char *target_name = NULL;
     bool rejected_existing_array_for_variadic = false;
     PrepackedVariadicRejection spread_rejection =
@@ -16924,7 +18077,14 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                              callee_type_decl->as.spec_decl.as.callable.params,
                                              callee_type_decl->as.spec_decl.as.callable.param_count,
                                              FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
-            return true;
+            return validate_function_type_call_block_lambda_arguments(
+                context,
+                callee_type_decl,
+                callee_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+                    ? callee_type.type_ref
+                    : NULL,
+                args,
+                arg_count);
         }
 
         if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
@@ -16974,7 +18134,12 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                 callee_constraint_decl->as.spec_decl.as.callable.params,
                 callee_constraint_decl->as.spec_decl.as.callable.param_count,
                 FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
-            return true;
+            return validate_function_type_call_block_lambda_arguments(
+                context,
+                callee_constraint_decl,
+                callee_constraint_ref,
+                args,
+                arg_count);
         }
 
         if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
@@ -17019,7 +18184,6 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
 /* Walk a block body and unify the inferred return-statement types into a
  * single result. Returns inferred_expr_type_unknown() when the block has no
  * returns (effectively void) or when return types disagree. */
-static InferredExprType infer_block_return_type(ResolveContext *context, const FengBlock *block);
 
 static InferredExprType infer_stmt_return_type(ResolveContext *context, const FengStmt *stmt) {
     InferredExprType current = inferred_expr_type_unknown();
@@ -20172,14 +21336,30 @@ static bool lambda_expr_matches_function_type(ResolveContext *context,
         if (expr->as.lambda.is_block_body) {
             InferredExprType expected =
                 inferred_expr_type_from_return_type_ref(expected_return);
-            InferredExprType inferred =
-                infer_block_return_type(context, expr->as.lambda.body_block);
+            bool expected_is_void = inferred_expr_type_is_void(expected);
+            bool saw_return = false;
+            bool return_values_match;
+            bool saved_suppress_literal_type_commit =
+                context->suppress_literal_type_commit;
 
-            if (!inferred_expr_type_is_known(inferred)) {
-                inferred = inferred_expr_type_builtin("void");
-            }
+            /* Candidate probing reads return-expression facts captured while
+             * the Lambda's real lexical scopes were active and must not
+             * commit a candidate-specific literal type. */
+            context->suppress_literal_type_commit = true;
+            return_values_match =
+                lambda_return_values_fit_target_in_block(
+                    context,
+                    expr->as.lambda.body_block,
+                    expected_return,
+                    LAMBDA_RETURN_TARGET_MATCH_ONLY,
+                    &saw_return);
+            context->suppress_literal_type_commit =
+                saved_suppress_literal_type_commit;
             matches = inferred_expr_type_is_known(expected) &&
-                      inferred_expr_types_equal(context, expected, inferred);
+                      return_values_match &&
+                      (expected_is_void || saw_return ||
+                       !callable_body_can_fall_through(
+                           expr->as.lambda.body_block));
         } else {
             matches = expr_matches_expected_type_ref(
                 context,
@@ -20351,6 +21531,7 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
                                                            const FengTypeRef *expected_type_ref) {
     CallableValueResolution result;
     const FengDecl *function_type_decl;
+    InferredExprType recorded_expr_type;
     bool requires_abi_callable;
 
     memset(&result, 0, sizeof(result));
@@ -20361,6 +21542,26 @@ static CallableValueResolution resolve_expr_callable_value(ResolveContext *conte
 
     requires_abi_callable =
         function_type_decl_is_abi_callable_type(function_type_decl);
+
+    /* Delayed block-Lambda target checks run after the Lambda's lexical
+     * scopes have been popped.  Prefer the exact expression-site fact saved
+     * while that scope was active; recreating lookup from an identifier name
+     * can otherwise lose a child local or resolve a same-name parameter.
+     * Overload and Lambda sources have no closed type fact here and continue
+     * through the normal source-specific resolution below. */
+    recorded_expr_type = inferred_expr_type_from_type_fact(
+        context != NULL && context->analysis != NULL
+            ? feng_semantic_lookup_type_fact(context->analysis, expr)
+            : NULL);
+    if (inferred_expr_type_is_known(recorded_expr_type) &&
+        inferred_expr_type_matches_type_ref(context,
+                                            recorded_expr_type,
+                                            expected_type_ref) &&
+        (!requires_abi_callable ||
+         inferred_expr_type_can_match_abi_callable_type(recorded_expr_type))) {
+        result.kind = FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE;
+        return result;
+    }
 
     switch (expr->kind) {
         case FENG_EXPR_GENERIC_TARGET:
@@ -27963,11 +29164,16 @@ static bool resolve_module_member_expr(ResolveContext *context,
 
 static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     size_t param_index;
+    size_t errors_before;
     bool effective_allow_self;
+    const FengTypeRef *target_return_type;
     LambdaCaptureFrame frame;
     LambdaCallableContext callable_context;
     FengExpr *mutable_expr = (FengExpr *)expr;
     bool ok;
+
+    target_return_type = lambda_target_return_type(context);
+    errors_before = context->error_count != NULL ? *context->error_count : 0U;
 
     for (param_index = 0U; param_index < expr->as.lambda.param_count; ++param_index) {
         if (!resolve_type_ref(context, expr->as.lambda.params[param_index].type, false)) {
@@ -28021,6 +29227,12 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
         }
     }
 
+    if (ok && expr->as.lambda.is_block_body && target_return_type != NULL &&
+        (context->error_count == NULL || *context->error_count == errors_before)) {
+        ok = validate_block_lambda_return_contract(
+            context, expr, target_return_type);
+    }
+
     lambda_leave_callable_context(context, &callable_context);
 
     resolver_pop_scope(context);
@@ -28042,6 +29254,99 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     return ok;
+}
+
+/* Return the declaration signature selected for one direct call expression. */
+static const FengCallableSignature *resolved_call_signature(
+    const FengResolvedCallable *resolved) {
+    if (resolved == NULL) {
+        return NULL;
+    }
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        resolved->function_decl != NULL) {
+        return &resolved->function_decl->as.function_decl;
+    }
+    if (resolved->member != NULL) {
+        return &resolved->member->as.callable;
+    }
+    return NULL;
+}
+
+/* Enforce block-lambda return contracts after overload resolution has chosen
+ * a unique direct function, method, fit method, spec method, or constructor.
+ * This post-selection location avoids emitting diagnostics while candidates
+ * are still being probed. */
+static bool validate_resolved_call_block_lambda_arguments(
+    ResolveContext *context,
+    const FengExpr *call_expr) {
+    const FengResolvedCallable *resolved;
+    const FengCallableSignature *signature;
+    InferredExprType owner_type = inferred_expr_type_unknown();
+    bool is_variadic;
+    size_t fixed_count;
+    size_t arg_index;
+
+    if (context == NULL || call_expr == NULL ||
+        call_expr->kind != FENG_EXPR_CALL) {
+        return true;
+    }
+    resolved = &call_expr->as.call.resolved_callable;
+    signature = resolved_call_signature(resolved);
+    if (signature == NULL) {
+        return true;
+    }
+    if (resolved->owner_instance_type_ref != NULL) {
+        owner_type = inferred_expr_type_from_type_ref(
+            resolved->owner_instance_type_ref);
+    }
+    is_variadic = signature->param_count > 0U &&
+                  signature->params[signature->param_count - 1U].is_variadic;
+    fixed_count = is_variadic ? signature->param_count - 1U
+                              : signature->param_count;
+
+    for (arg_index = 0U; arg_index < call_expr->as.call.arg_count; ++arg_index) {
+        const FengExpr *arg = call_expr->as.call.args[arg_index];
+        const FengTypeRef *param_type;
+        const FengDecl *param_function_type_decl;
+        const FengTypeRef *target_return_type;
+
+        if (arg == NULL || arg->kind != FENG_EXPR_LAMBDA ||
+            !arg->as.lambda.is_block_body) {
+            continue;
+        }
+        if (arg_index < fixed_count || arg->is_prepacked_variadic_arg) {
+            if (arg_index >= signature->param_count) {
+                continue;
+            }
+            param_type = signature->params[arg_index].type;
+        } else {
+            param_type = signature->params[fixed_count].type->as.inner;
+        }
+        param_type = substitute_type_ref_for_owner_instance(
+            context, resolved->owner_type_decl, owner_type, param_type);
+        param_type = substitute_type_ref_for_fit_instance(
+            context, resolved->fit_decl, owner_type, param_type);
+        param_type = substitute_type_ref_for_explicit_callable_args(
+            context,
+            signature,
+            resolved->callable_type_args,
+            resolved->callable_type_arg_count,
+            param_type);
+        param_function_type_decl = resolve_function_type_decl(context, param_type);
+        if (param_function_type_decl == NULL) {
+            continue;
+        }
+        target_return_type = substitute_spec_member_type_ref_for_instance(
+            context,
+            param_function_type_decl,
+            param_type,
+            param_function_type_decl->as.spec_decl.as.callable.return_type);
+        if (!validate_block_lambda_return_contract_in_fresh_scope(
+                context, arg, target_return_type)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool allow_self) {
@@ -28289,6 +29594,9 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             }
             if (!validate_constructor_call_expr(context, expr) ||
                 !validate_function_call_expr(context, expr)) {
+                return false;
+            }
+            if (!validate_resolved_call_block_lambda_arguments(context, expr)) {
                 return false;
             }
             if (!validate_explicit_prepacked_variadic_argument(context, expr)) {
@@ -28685,6 +29993,7 @@ static bool resolve_binding(ResolveContext *context,
                             bool allow_self,
                             bool add_to_scope) {
     InferredExprType binding_type;
+    bool initializer_added_error = false;
 
     if (binding->is_destructure) {
         return resolve_destructure_binding(context, binding, allow_self, add_to_scope);
@@ -28696,17 +30005,27 @@ static bool resolve_binding(ResolveContext *context,
      * to nested expression resolution (e.g., if-expr branch adaptation). */
     {
         const FengTypeRef *prev_expected_type_ref = context->current_expr_expected_type_ref;
+        size_t errors_before = context->error_count != NULL
+                                   ? *context->error_count
+                                   : 0U;
         bool ok;
 
         context->current_expr_expected_type_ref = binding->type;
         ok = resolve_expr(context, binding->initializer, allow_self);
         context->current_expr_expected_type_ref = prev_expected_type_ref;
+        initializer_added_error = context->error_count != NULL &&
+                                  *context->error_count > errors_before;
         if (!ok) {
             return false;
         }
     }
     if (binding->type != NULL) {
-        if (!validate_expr_against_expected_type(context, binding->initializer, binding->type)) {
+        /* An initializer-local diagnostic is the actionable root cause. Do
+         * not derive a second target-fitting diagnostic from an expression
+         * that is already invalid. */
+        if (!initializer_added_error &&
+            !validate_expr_against_expected_type(
+                context, binding->initializer, binding->type)) {
             return false;
         }
         if (binding->initializer == NULL) {
@@ -29628,6 +30947,9 @@ static bool resolve_callable(ResolveContext *context,
     bool is_constructor = context->current_callable_body_member != NULL &&
                           context->current_callable_body_member->kind ==
                               FENG_TYPE_MEMBER_CONSTRUCTOR;
+    bool is_finalizer = context->current_callable_body_member != NULL &&
+                        context->current_callable_body_member->kind ==
+                            FENG_TYPE_MEMBER_FINALIZER;
     const FengCallableSignature *previous_callable_signature =
         context->current_callable_signature;
     InferredExprType previous_callable_inferred_return_type =
@@ -29778,6 +31100,28 @@ static bool resolve_callable(ResolveContext *context,
     resolver_pop_scope(context);
     if (is_constructor) {
         resolver_clear_current_constructor_bindings(context);
+    }
+    if (ok && !is_constructor && !is_finalizer) {
+        InferredExprType resolved_return_type =
+            callable->return_type != NULL
+                ? inferred_expr_type_from_return_type_ref(callable->return_type)
+                : context->current_callable_saw_return
+                      ? context->current_callable_inferred_return_type
+                      : inferred_expr_type_builtin("void");
+
+        if (inferred_expr_type_is_known(resolved_return_type) &&
+            !inferred_expr_type_is_void(resolved_return_type) &&
+            callable_body_can_fall_through(callable->body)) {
+            (void)resolver_append_error(
+                context,
+                callable->token,
+                "AE0515",
+                format_message(
+                    "non-void callable '%.*s' can reach the end of its body without returning a value",
+                    (int)callable->name.length,
+                    callable->name.data));
+            ok = false;
+        }
     }
     if (ok && callable->return_type == NULL && !is_constructor) {
         InferredExprType inferred_return_type =
@@ -35940,7 +37284,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                                       error_capacity,
                                                       program->path,
                                                       decl->as.function_decl.token,
-                                                      "AE0218", message);
+                                                      "AE0508", message);
                                 } else {
                                     char *message = format_message(
                                         "function overloads cannot differ only by return type: '%.*s'",
@@ -35952,7 +37296,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                                       error_capacity,
                                                       program->path,
                                                       decl->as.function_decl.token,
-                                                      "AE0219", message);
+                                                      "AE0509", message);
                                 }
                             } else {
                                 char *message = format_message(
@@ -35965,7 +37309,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                                   error_capacity,
                                                   program->path,
                                                   decl->as.function_decl.token,
-                                                  "AE0220", message);
+                                                  "AE0510", message);
                             }
                             break;
                         }

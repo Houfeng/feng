@@ -19,10 +19,10 @@ open type Future<T> {
 
   /**
    * Wait for the future to be resolved and return the value.
-   * This function will block until the future is resolved.
+   * Waiting is not implemented yet; calling this method throws Error.
    */
   func await(): T {
-    // TODO: Implement waiting for the future to be resolved and returning the value.
+    throw Error("Future.await is not implemented");
   }
 
   /**

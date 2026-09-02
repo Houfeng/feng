@@ -20,6 +20,8 @@ func main(args: string[]) {
     run_path_tests();
     run_fs_tests();
     run_lexer_tests();
+    run_parser_tests();
+    run_async_tests();
 
     replaceStdin("ABCDE\nFG");
     run_stdio_api_tests();

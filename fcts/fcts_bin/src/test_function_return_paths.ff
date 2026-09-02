@@ -1,0 +1,353 @@
+module fcts_bin;
+
+import std.test;
+
+spec G15Picker(flag: bool): int;
+spec G15I32Picker(flag: bool): i32;
+spec G15Reader(): i32;
+spec G15ReaderFactory(): G15Reader;
+
+type G15ReturnBox {
+  func instance_pick(flag: bool): int {
+    if flag { return 80; } else { return 81; }
+  }
+
+  static func static_pick(flag: bool): int {
+    if flag { return 82; } else { return 83; }
+  }
+}
+
+fit G15ReturnBox {
+  func fit_pick(flag: bool): int {
+    if flag { return 84; } else { return 85; }
+  }
+}
+
+func g15_if_return_path(value: int): int {
+  if value == 0 {
+    return 10;
+  } else if value == 1 {
+    return 11;
+  } else {
+    return 12;
+  }
+}
+
+func g15_match_return_path(value: int): int {
+  match value {
+    0 { return 20; }
+    1 { return 21; }
+    else { return 22; }
+  }
+}
+
+func g15_maybe_throw(flag: bool): int {
+  if flag { throw "g15"; }
+  return 30;
+}
+
+func g15_try_catch_return_path(flag: bool): int {
+  let value = try g15_maybe_throw(flag) catch error: string {
+    return 31;
+  };
+  return value;
+}
+
+func g15_return_or_throw(flag: bool): int {
+  if flag {
+    return 32;
+  } else {
+    throw "g15-return-or-throw";
+  }
+}
+
+func g15_observe_return_or_throw(flag: bool): int {
+  let value = try g15_return_or_throw(flag) catch error: string {
+    return 33;
+  };
+  return value;
+}
+
+func g15_while_terminal(start: int): int {
+  var current = start;
+  while true {
+    if current == 0 { return 40; }
+    current -= 1;
+  }
+}
+
+func g15_while_break_then_return(): int {
+  while true { break; }
+  return 41;
+}
+
+func g15_while_condition_then_return(start: int): int {
+  var current = start;
+  while current > 0 { current -= 1; }
+  return 42 + current;
+}
+
+func g15_for_terminal(limit: int): int {
+  for var index = 0; true; index += 1 {
+    if index < limit { continue; }
+    return 50 + index;
+  }
+}
+
+func g15_for_empty_condition_return(): int {
+  for ;; { return 51; }
+}
+
+func g15_for_break_then_return(): int {
+  for ;; { break; }
+  return 52;
+}
+
+func g15_for_condition_then_return(limit: int): int {
+  var total = 0;
+  for var index = 0; index < limit; index += 1 {
+    total += index;
+  }
+  return total;
+}
+
+func g15_for_in_then_return(values: int[]): int {
+  for let value in values {
+    if value > 5 { return value; }
+  }
+  return -1;
+}
+
+func g15_lambda_binding_path(flag: bool): int {
+  let picker: G15Picker = (inner: bool) {
+    if inner { return 60; } else { return 61; }
+  };
+  return picker(flag);
+}
+
+func g15_apply_picker(picker: G15Picker, flag: bool): int {
+  return picker(flag);
+}
+
+func g15_lambda_argument_path(flag: bool): int {
+  return g15_apply_picker((inner: bool) {
+    if inner { return 62; } else { return 63; }
+  }, flag);
+}
+
+func g15_apply_i32_picker(picker: G15I32Picker, flag: bool): i32 {
+  return picker(flag);
+}
+
+func g15_i32_lambda_argument_path(flag: bool): i32 {
+  return g15_apply_i32_picker((inner: bool) {
+    if inner { return 64; } else { return 65; }
+  }, flag);
+}
+
+/// Verify all fixed arguments after target-driven fixed-width fitting.
+func g15_fixed_i32_arguments(first: i32, middle: i32, last: i32): i32 {
+  return first + middle + last;
+}
+
+/// Return a target-typed single-expression Lambda.
+func g15_make_expression_picker(): G15I32Picker {
+  return (flag: bool) -> 70;
+}
+
+/// Return a target-typed block Lambda.
+func g15_make_block_picker(): G15I32Picker {
+  return (flag: bool) {
+    if flag { return 71; } else { return 72; }
+  };
+}
+
+/// Form a single-expression Lambda through an explicit callable conversion.
+func g15_cast_expression_picker(flag: bool): i32 {
+  let picker = (G15I32Picker)((inner: bool) -> 73);
+  return picker(flag);
+}
+
+/// Form a block Lambda through an explicit callable conversion.
+func g15_cast_block_picker(flag: bool): i32 {
+  let picker = (G15I32Picker)((inner: bool) {
+    if inner { return 74; } else { return 75; }
+  });
+  return picker(flag);
+}
+
+/// Pass a block Lambda whose target-typed return is nested in a try binding.
+func g15_nested_try_lambda_argument(flag: bool): i32 {
+  return g15_apply_i32_picker((inner: bool) {
+    let value = try g15_maybe_throw(inner) catch error: string {
+      return 78;
+    };
+    throw "g15-nested-try";
+  }, flag);
+}
+
+/// Return a child-block local through a directly targeted block Lambda.
+func g15_child_local_lambda_argument(flag: bool): i32 {
+  return g15_apply_i32_picker((inner: bool) {
+    if inner {
+      let value: i32 = 86;
+      return value;
+    }
+    let fallback: i32 = 87;
+    return fallback;
+  }, flag);
+}
+
+/// Restore an outer local after a same-name child binding leaves scope.
+func g15_child_shadow_ends_lambda_argument(flag: bool): i32 {
+  return g15_apply_i32_picker((inner: bool) {
+    let value: i32 = 88;
+    if inner {
+      let value: string = "shadow";
+      value;
+    }
+    return value;
+  }, flag);
+}
+
+/// Return a captured local callable from a target-typed block Lambda.
+func g15_nested_callable_lambda_result(): i32 {
+  let offset: i32 = 89;
+  let factory: G15ReaderFactory = () {
+    let reader: G15Reader = () -> offset;
+    return reader;
+  };
+  return factory()();
+}
+
+var g15_void_effect = 0;
+
+func g15_void_natural_end(): void {
+  g15_void_effect += 1;
+}
+
+func g15_void_explicit_return(): void {
+  g15_void_effect += 2;
+  return;
+}
+
+/// G15：非 void callable 的合法分支与循环路径必须真实运行。
+open func test_function_return_paths() {
+  describe("function return paths", () {
+    test("if branches all return", () {
+      assert(g15_if_return_path(0) == 10, "if first branch");
+      assert(g15_if_return_path(1) == 11, "if else-if branch");
+      assert(g15_if_return_path(2) == 12, "if else branch");
+    });
+
+    test("match branches all return", () {
+      assert(g15_match_return_path(0) == 20, "match first branch");
+      assert(g15_match_return_path(1) == 21, "match second branch");
+      assert(g15_match_return_path(2) == 22, "match else branch");
+    });
+
+    test("try normal and catch paths return", () {
+      assert(g15_try_catch_return_path(false) == 30, "try normal path");
+      assert(g15_try_catch_return_path(true) == 31, "catch return path");
+      assert(g15_observe_return_or_throw(true) == 32, "return path");
+      assert(g15_observe_return_or_throw(false) == 33, "throw path");
+    });
+
+    test("while terminal and fallthrough paths", () {
+      assert(g15_while_terminal(0) == 40, "while immediate return");
+      assert(g15_while_terminal(3) == 40, "while later return");
+      assert(g15_while_break_then_return() == 41, "while break then return");
+      assert(g15_while_condition_then_return(3) == 42, "while exits then return");
+    });
+
+    test("three-part for terminal and fallthrough paths", () {
+      assert(g15_for_terminal(0) == 50, "literal-true for immediate return");
+      assert(g15_for_terminal(3) == 53, "literal-true for later return");
+      assert(g15_for_empty_condition_return() == 51, "empty-condition for return");
+      assert(g15_for_break_then_return() == 52, "for break then return");
+      assert(g15_for_condition_then_return(4) == 6, "for exits then return");
+    });
+
+    test("for-in retains its post-loop return", () {
+      assert(g15_for_in_then_return([1, 7, 9]) == 7, "for-in body return");
+      assert(g15_for_in_then_return([]) == -1, "for-in empty sequence");
+    });
+
+    test("block lambda target paths return", () {
+      assert(g15_lambda_binding_path(true) == 60, "bound lambda true branch");
+      assert(g15_lambda_binding_path(false) == 61, "bound lambda false branch");
+      assert(g15_lambda_argument_path(true) == 62, "argument lambda true branch");
+      assert(g15_lambda_argument_path(false) == 63, "argument lambda false branch");
+      assert(g15_i32_lambda_argument_path(true) == 64,
+             "i32 argument lambda true branch");
+      assert(g15_i32_lambda_argument_path(false) == 65,
+             "i32 argument lambda false branch");
+    });
+
+    test("fixed-width arguments fit at every legal expression boundary", () {
+      let first: i32 = 1;
+      let middle: i32 = 2;
+      let last: i32 = 3;
+      assert(g15_fixed_i32_arguments(1, 2, 3) == 6,
+             "numeric literals fit fixed-width parameters");
+      assert(g15_fixed_i32_arguments(1 + 2, 4 - 1, 2 * 2) == 10,
+             "pure literal expressions fit fixed-width parameters");
+      assert(g15_fixed_i32_arguments((i32)1, (i32)2, (i32)3) == 6,
+             "explicit conversions fit fixed-width parameters");
+      assert(g15_fixed_i32_arguments(first, middle, last) == 6,
+             "exactly typed arguments retain their values");
+    });
+
+    test("single-expression lambda target positions execute", () {
+      let binding: G15I32Picker = (flag: bool) -> 66;
+      assert(binding(true) == 66, "binding target");
+      assert(g15_apply_i32_picker((flag: bool) -> 67, false) == 67,
+             "parameter target");
+      assert(g15_make_expression_picker()(true) == 70, "return target");
+      assert(g15_cast_expression_picker(false) == 73, "conversion target");
+    });
+
+    test("block lambda target positions execute", () {
+      let binding: G15I32Picker = (flag: bool) {
+        if flag { return 68; } else { return 69; }
+      };
+      assert(binding(true) == 68 && binding(false) == 69, "binding target");
+      assert(g15_apply_i32_picker((flag: bool) {
+        if flag { return 76; } else { return 77; }
+      }, true) == 76, "parameter target");
+      assert(g15_nested_try_lambda_argument(true) == 78,
+             "nested catch return keeps the block Lambda target");
+      assert(g15_child_local_lambda_argument(true) == 86 &&
+             g15_child_local_lambda_argument(false) == 87,
+             "child-local returns keep their lexical type");
+      assert(g15_child_shadow_ends_lambda_argument(true) == 88 &&
+             g15_child_shadow_ends_lambda_argument(false) == 88,
+             "child shadowing restores the outer return binding");
+      assert(g15_nested_callable_lambda_result() == 89,
+             "block Lambda returns a captured local callable");
+      assert(g15_make_block_picker()(true) == 71 &&
+             g15_make_block_picker()(false) == 72,
+             "return target");
+      assert(g15_cast_block_picker(true) == 74 &&
+             g15_cast_block_picker(false) == 75,
+             "conversion target");
+    });
+
+    test("instance static and fit method paths return", () {
+      let box = G15ReturnBox();
+      assert(box.instance_pick(true) == 80 && box.instance_pick(false) == 81,
+             "instance method branches");
+      assert(G15ReturnBox.static_pick(true) == 82 && G15ReturnBox.static_pick(false) == 83,
+             "static method branches");
+      assert(box.fit_pick(true) == 84 && box.fit_pick(false) == 85,
+             "fit method branches");
+    });
+
+    test("void bodies end naturally or explicitly", () {
+      g15_void_effect = 0;
+      g15_void_natural_end();
+      g15_void_explicit_return();
+      assert(g15_void_effect == 3, "void return forms");
+    });
+  });
+}

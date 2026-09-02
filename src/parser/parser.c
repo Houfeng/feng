@@ -2174,7 +2174,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
     size_t member_annotation_count = 0U;
     FengVisibility visibility;
     bool is_static;
-    FengToken member_start;
+    FengToken member_name_token;
     FengCallableSignature callable;
     FengSlice name;
     FengTypeMember *member;
@@ -2186,7 +2186,6 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
 
     visibility = parse_visibility(parser);
     is_static = parser_match(parser, FENG_TOKEN_KW_STATIC);
-    member_start = parser_current_token(parser);
 
     if (parser_check(parser, FENG_TOKEN_KW_LET) || parser_check(parser, FENG_TOKEN_KW_VAR)) {
         free_annotations(member_annotations, member_annotation_count);
@@ -2210,13 +2209,16 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
         return NULL;
     }
 
+    /* Keep callable.token consistent with top-level and ordinary type
+     * callables: it identifies the declared callable name, not `func`. */
+    member_name_token = parser_current_token(parser);
     if (!parser_expect_identifier_like(parser, &name, false, "SE0002", "expected a method name after 'func'")) {
         free_annotations(member_annotations, member_annotation_count);
         return NULL;
     }
     callable = parse_callable_signature(
         parser,
-        member_start,
+        member_name_token,
         name,
         true,
         "SE0805", "fit block methods must provide a body '{...}'");

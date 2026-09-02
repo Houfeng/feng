@@ -1,0 +1,66 @@
+module std_test;
+
+import std.test;
+import std.compiler.common;
+import std.compiler.lexer;
+import std.compiler.parser;
+
+func makeParser(content: string): FengParser {
+  return FengParser(FengLexer(FengSource(content, "parser-test.ff")));
+}
+
+func parser_expect_preserves_compile_error() {
+  var parser = makeParser("value");
+  var caught = false;
+  var code = "";
+  var line = 0;
+  var column = 0;
+  var snippet = "";
+
+  try parser.expect(FengTokenKind.KeywordFunc, "PE9999", "expected func")
+  catch error: FengCompileError {
+    caught = true;
+    code = error.code;
+    line = error.line;
+    column = error.column;
+    snippet = error.snippet;
+  }
+
+  check(caught, "parser/expect/error-caught");
+  check(code == "PE9999", "parser/expect/error-code");
+  check(line == 1 && column == 1, "parser/expect/error-location");
+  check(snippet == "value", "parser/expect/error-snippet");
+}
+
+func parser_primary_preserves_compile_error() {
+  var parser = makeParser("}");
+  var caught = false;
+  var code = "";
+  var line = 0;
+  var column = 0;
+  var snippet = "";
+
+  try parser.parsePrimary() catch error: FengCompileError {
+    caught = true;
+    code = error.code;
+    line = error.line;
+    column = error.column;
+    snippet = error.snippet;
+  }
+
+  check(caught, "parser/primary/error-caught");
+  check(code == "PE0007", "parser/primary/error-code");
+  check(line == 1 && column == 1, "parser/primary/error-location");
+  check(snippet == "}", "parser/primary/error-snippet");
+}
+
+open func run_parser_tests() {
+  describe("parser tests", () {
+    test("parser_expect_preserves_compile_error()", () {
+      parser_expect_preserves_compile_error();
+    });
+    test("parser_primary_preserves_compile_error()", () {
+      parser_primary_preserves_compile_error();
+    });
+  });
+}

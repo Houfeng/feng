@@ -1,0 +1,26 @@
+module std_test;
+
+import std;
+import std.async;
+import std.test;
+
+func future_await_reports_not_implemented() {
+  let future = Future<i32>(Promise<i32>());
+  var caught = false;
+
+  try future.await() catch error: Error {
+    caught = true;
+    check(error.name == "Future.await is not implemented",
+          "async/future-await/error-name");
+  }
+
+  check(caught, "async/future-await/throws");
+}
+
+open func run_async_tests() {
+  describe("async tests", () {
+    test("future_await_reports_not_implemented()", () {
+      future_await_reports_not_implemented();
+    });
+  });
+}

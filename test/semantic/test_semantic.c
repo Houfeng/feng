@@ -342,6 +342,7 @@ static void test_function_return_only_overload_error(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0509") == 0);
     ASSERT(errors[0].token.line == 5U);
     ASSERT(strstr(errors[0].message, "cannot differ only by return type") != NULL);
 
@@ -4221,7 +4222,7 @@ static void test_top_level_function_rejects_conflicting_inferred_return_types(vo
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "auto_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 6U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4251,7 +4252,7 @@ static void test_instance_method_rejects_conflicting_inferred_return_types(void)
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "instance_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4282,7 +4283,7 @@ static void test_static_method_rejects_conflicting_inferred_return_types(void) {
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "static_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 7U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4314,7 +4315,7 @@ static void test_fit_instance_method_rejects_conflicting_inferred_return_types(v
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fit_instance_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 8U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4346,7 +4347,7 @@ static void test_fit_static_method_rejects_conflicting_inferred_return_types(voi
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "fit_static_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 8U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4379,7 +4380,7 @@ static void test_block_lambda_rejects_conflicting_inferred_return_types(void) {
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "block_lambda_return_conflict_error.f") == 0);
-    ASSERT(strcmp(errors[0].code, "AE0058") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0504") == 0);
     ASSERT(errors[0].token.line == 8U);
     ASSERT(strstr(errors[0].message, "conflicting inferred return types") != NULL);
 
@@ -4537,6 +4538,7 @@ static void test_explicit_non_void_return_rejects_empty_return(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "explicit_non_void_empty_return_error.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0501") == 0);
     ASSERT(errors[0].token.line == 3U);
     /* int is platform-dependent: i32 on 32-bit, i64 on 64-bit. */
     {
@@ -15261,7 +15263,7 @@ static void test_match_enum_expression_form_accepted(void) {
     feng_program_free(program);
 }
 
-static void test_match_enum_block_tail_return_value_accepted(void) {
+static void test_match_enum_block_tail_does_not_implicitly_return(void) {
     const char *source =
         "module demo.main;\n"
         "enum Color {\n"
@@ -15282,10 +15284,17 @@ static void test_match_enum_block_tail_return_value_accepted(void) {
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
-    ASSERT(error_count == 0U);
+    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, "match_enum_block_tail.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0515") == 0);
+    ASSERT(errors[0].token.line == 7U);
+    ASSERT(errors[0].token.column == 6U);
+    ASSERT(strstr(errors[0].message,
+                  "can reach the end of its body without returning a value") != NULL);
 
-    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -20440,6 +20449,7 @@ static void test_variadic_overload_conflict_rejected(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
+    ASSERT(strcmp(errors[0].code, "AE0510") == 0);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -20465,6 +20475,7 @@ static void test_variadic_single_fixed_and_variadic_overload_conflict_rejected(v
                                   &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
     ASSERT(strcmp(errors[0].path, "variadic_single_conflict.f") == 0);
+    ASSERT(strcmp(errors[0].code, "AE0510") == 0);
     ASSERT(strstr(errors[0].message,
                   "variadic function overload conflicts with existing overload") != NULL);
 
@@ -20655,6 +20666,113 @@ static void assert_g14_semantic_error(const char *path,
                                  expected_column,
                                  expected_lexeme,
                                  expected_message);
+}
+
+/* Assert one exact diagnostic for the G15 function-contract matrix. */
+static void assert_g15_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G15",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* Assert one exact G15 diagnostic for a selected compilation target. */
+static void assert_g15_target_semantic_error(
+    const char *path,
+    const char *source,
+    FengCompileTarget target,
+    const char *expected_path,
+    const char *expected_code,
+    unsigned int expected_line,
+    unsigned int expected_column,
+    const char *expected_lexeme,
+    const char *expected_message) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    size_t expected_lexeme_length = strlen(expected_lexeme);
+
+    ASSERT(!feng_semantic_analyze(programs, 1U, target,
+                                  &analysis, &errors, &error_count));
+    ASSERT(error_count == 1U);
+    if (expected_path == NULL) {
+        ASSERT(errors[0].path == NULL);
+    } else {
+        ASSERT(errors[0].path != NULL);
+        ASSERT(strcmp(errors[0].path, expected_path) == 0);
+    }
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(errors[0].token.line == expected_line);
+    ASSERT(errors[0].token.column == expected_column);
+    ASSERT(errors[0].token.length == expected_lexeme_length);
+    if (expected_lexeme_length > 0U) {
+        ASSERT(memcmp(errors[0].token.lexeme,
+                      expected_lexeme,
+                      expected_lexeme_length) == 0);
+    }
+    ASSERT(strstr(errors[0].message, expected_message) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Assert that one G15 positive program is accepted for a selected target. */
+static void assert_g15_target_semantic_accepts(const char *path,
+                                               const char *source,
+                                               FengCompileTarget target) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool analyzed = feng_semantic_analyze(programs,
+                                          1U,
+                                          target,
+                                          &analysis,
+                                          &errors,
+                                          &error_count);
+
+    if (!analyzed || error_count != 0U) {
+        size_t index;
+
+        fprintf(stderr, "G15: expected %s to be accepted\n", path);
+        for (index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "%s:%u:%u [%s] %s\n",
+                    errors[index].path != NULL ? errors[index].path : "<unknown>",
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(analyzed);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Assert that one G15 library program is accepted without diagnostics. */
+static void assert_g15_semantic_accepts(const char *path,
+                                        const char *source) {
+    assert_g15_target_semantic_accepts(path,
+                                       source,
+                                       FENG_COMPILE_TARGET_LIB);
 }
 
 /* Verify every approved concrete exception category is accepted by both a
@@ -30346,7 +30464,886 @@ static void test_g14_compound_assignment_type_diagnostics(void) {
         "AE1020", 5U, 5U, "value", "requires operands of the same integer type");
 }
 
+/* FUNC-D02-A: bin entry validation uses AE0907-AE0910 at the stable entry
+ * token, while library compilation treats main as an ordinary function. */
+static void test_g15_main_entry_diagnostics(void) {
+    assert_g15_target_semantic_error(
+        "g15_main_missing.ff",
+        "module g15.main_missing;\n"
+        "func helper(): i32 { return 1; }\n",
+        FENG_COMPILE_TARGET_BIN,
+        NULL,
+        "AE0908", 0U, 0U, "", "but none was found");
+    assert_g15_target_semantic_error(
+        "g15_main_zero_parameters.ff",
+        "module g15.main_zero_parameters;\n"
+        "func main(): void {}\n",
+        FENG_COMPILE_TARGET_BIN,
+        "g15_main_zero_parameters.ff",
+        "AE0909", 2U, 6U, "main", "main(args: string[])");
+    assert_g15_target_semantic_error(
+        "g15_main_two_parameters.ff",
+        "module g15.main_two_parameters;\n"
+        "func main(args: string[], extra: i32): void {}\n",
+        FENG_COMPILE_TARGET_BIN,
+        "g15_main_two_parameters.ff",
+        "AE0909", 2U, 6U, "main", "main(args: string[])");
+    assert_g15_target_semantic_error(
+        "g15_main_wrong_parameter_name.ff",
+        "module g15.main_wrong_parameter_name;\n"
+        "func main(value: string[]): void {}\n",
+        FENG_COMPILE_TARGET_BIN,
+        "g15_main_wrong_parameter_name.ff",
+        "AE0909", 2U, 6U, "main", "main(args: string[])");
+    assert_g15_target_semantic_error(
+        "g15_main_wrong_parameter_type.ff",
+        "module g15.main_wrong_parameter_type;\n"
+        "func main(args: i32[]): void {}\n",
+        FENG_COMPILE_TARGET_BIN,
+        "g15_main_wrong_parameter_type.ff",
+        "AE0909", 2U, 6U, "main", "main(args: string[])");
+    assert_g15_target_semantic_error(
+        "g15_main_non_void_return.ff",
+        "module g15.main_non_void_return;\n"
+        "func main(args: string[]): i32 { return 0; }\n",
+        FENG_COMPILE_TARGET_BIN,
+        "g15_main_non_void_return.ff",
+        "AE0910", 2U, 6U, "main", "must return void");
+
+    {
+        const char *source_a =
+            "open module g15.main_duplicate_a;\n"
+            "open func main(args: string[]): void {}\n";
+        const char *source_b =
+            "module g15.main_duplicate_b;\n"
+            "func main(args: string[]): void {}\n";
+        FengProgram *program_a = parse_program_or_die(
+            "g15_main_duplicate_a.ff", source_a);
+        FengProgram *program_b = parse_program_or_die(
+            "g15_main_duplicate_b.ff", source_b);
+        const FengProgram *programs[] = {program_a, program_b};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        ASSERT(!feng_semantic_analyze(programs,
+                                      2U,
+                                      FENG_COMPILE_TARGET_BIN,
+                                      &analysis,
+                                      &errors,
+                                      &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path, "g15_main_duplicate_b.ff") == 0);
+        ASSERT(strcmp(errors[0].code, "AE0907") == 0);
+        ASSERT(errors[0].token.line == 2U);
+        ASSERT(errors[0].token.column == 6U);
+        ASSERT(errors[0].token.length == strlen("main"));
+        ASSERT(memcmp(errors[0].token.lexeme, "main", strlen("main")) == 0);
+        ASSERT(strstr(errors[0].message, "duplicate 'main' entry") != NULL);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program_a);
+        feng_program_free(program_b);
+    }
+
+    assert_g15_target_semantic_accepts(
+        "g15_main_default_visibility.ff",
+        "module g15.main_default_visibility;\n"
+        "func main(args: string[]): void {}\n",
+        FENG_COMPILE_TARGET_BIN);
+    assert_g15_target_semantic_accepts(
+        "g15_main_open_visibility.ff",
+        "open module g15.main_open_visibility;\n"
+        "open func main(args: string[]): void { return; }\n",
+        FENG_COMPILE_TARGET_BIN);
+    assert_g15_semantic_accepts(
+        "g15_main_is_ordinary_in_library.ff",
+        "module g15.main_is_ordinary_in_library;\n"
+        "func main(value: i32): i32 { return value; }\n");
+}
+
+/* FUNC-D01/D02/D04-A/D05/D10: declarations and return statements use the
+ * stable function diagnostic segment at the exact offending token. */
+static void test_g15_signature_and_return_shape_diagnostics(void) {
+    assert_g15_semantic_error(
+        "g15_void_parameter.ff",
+        "module g15.void_parameter;\n"
+        "func run(value: void): void {}\n",
+        "AE0502", 2U, 17U, "void", "only valid as a function return type");
+    assert_g15_semantic_error(
+        "g15_lambda_void_parameter.ff",
+        "module g15.lambda_void_parameter;\n"
+        "spec Mapper(value: i32): i32;\n"
+        "func run(): void {\n"
+        "    let mapper: Mapper = (value: void) -> 1;\n"
+        "}\n",
+        "AE0502", 4U, 34U, "void", "only valid as a function return type");
+    assert_g15_semantic_error(
+        "g15_void_valued_return.ff",
+        "module g15.void_valued_return;\n"
+        "func run(): void {\n"
+        "    return 1;\n"
+        "}\n",
+        "AE0501", 3U, 5U, "return", "expected type 'void'");
+    assert_g15_semantic_error(
+        "g15_inferred_empty_value_return.ff",
+        "module g15.inferred_empty_value_return;\n"
+        "func choose(flag: bool) {\n"
+        "    if flag { return 1; }\n"
+        "    return;\n"
+        "}\n",
+        "AE0504", 4U, 5U, "return", "conflicting inferred return types");
+    assert_g15_semantic_error(
+        "g15_duplicate_top_level_signature.ff",
+        "module g15.duplicate_top_level_signature;\n"
+        "func choose(value: i32): i32 { return value; }\n"
+        "func choose(value: i32): i32 { return value; }\n",
+        "AE0508", 3U, 6U, "choose", "duplicate function signature");
+    assert_g15_semantic_error(
+        "g15_return_only_top_level_overload.ff",
+        "module g15.return_only_top_level_overload;\n"
+        "func choose(value: i32): i32 { return value; }\n"
+        "func choose(value: i32): bool { return true; }\n",
+        "AE0509", 3U, 6U, "choose", "cannot differ only by return type");
+    assert_g15_semantic_error(
+        "g15_variadic_top_level_overlap.ff",
+        "module g15.variadic_top_level_overlap;\n"
+        "func choose(value: i32): i32 { return value; }\n"
+        "func choose(values: i32...): i32 { return 0; }\n",
+        "AE0510", 3U, 6U, "choose", "variadic function overload conflicts");
+    assert_g15_semantic_error(
+        "g15_duplicate_instance_method_signature.ff",
+        "module g15.duplicate_instance_method_signature;\n"
+        "type Box {\n"
+        "    func choose(value: i32): i32 { return value; }\n"
+        "    func choose(value: i32): i32 { return value; }\n"
+        "}\n",
+        "AE0508", 4U, 10U, "choose", "duplicate method signature");
+    assert_g15_semantic_error(
+        "g15_return_only_static_method_overload.ff",
+        "module g15.return_only_static_method_overload;\n"
+        "type Box {\n"
+        "    static func choose(value: i32): i32 { return value; }\n"
+        "    static func choose(value: i32): bool { return true; }\n"
+        "}\n",
+        "AE0509", 4U, 17U, "choose", "cannot differ only by return type");
+    assert_g15_semantic_error(
+        "g15_variadic_fit_method_overlap.ff",
+        "module g15.variadic_fit_method_overlap;\n"
+        "type Box {}\n"
+        "fit Box {\n"
+        "    func choose(value: i32): i32 { return value; }\n"
+        "    func choose(values: i32...): i32 { return 0; }\n"
+        "}\n",
+        "AE0803", 5U, 10U, "choose", "variadic method overload conflicts");
+    assert_g15_semantic_error(
+        "g15_duplicate_object_spec_method_signature.ff",
+        "module g15.duplicate_object_spec_method_signature;\n"
+        "spec Surface {\n"
+        "    func choose(value: i32): i32;\n"
+        "    func choose(value: i32): i32;\n"
+        "}\n",
+        "AE0508", 4U, 10U, "choose", "duplicate method signature");
+    assert_g15_semantic_error(
+        "g15_explicit_return_type_mismatch.ff",
+        "module g15.explicit_return_type_mismatch;\n"
+        "func value(): i32 { return true; }\n",
+        "AE1003", 2U, 28U, "true", "does not match expected type 'i32'");
+}
+
+/* FUNC-D03/D03-A: fixed-arity calls reject both count and independently
+ * positioned type mismatches for every ordinary and callable-value surface. */
+static void test_g15_fixed_argument_call_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+        unsigned int line;
+        unsigned int column;
+        const char *token;
+        const char *message;
+    } cases[] = {
+        {
+            "g15_top_level_too_few_arguments.ff",
+            "module g15.top_level_too_few_arguments;\n"
+            "func choose(first: i32, second: bool): void {}\n"
+            "func run(): void { choose(1); }\n",
+            "AE0512", 3U, 20U, "choose", "no overload accepting 1 argument(s)",
+        },
+        {
+            "g15_top_level_too_many_arguments.ff",
+            "module g15.top_level_too_many_arguments;\n"
+            "func choose(first: i32, second: bool): void {}\n"
+            "func run(): void { choose(1, true, 3); }\n",
+            "AE0512", 3U, 20U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_instance_too_few_arguments.ff",
+            "module g15.instance_too_few_arguments;\n"
+            "type Box {\n"
+            "    func choose(first: i32, second: bool): void {}\n"
+            "}\n"
+            "func run(box: Box): void { box.choose(1); }\n",
+            "AE0512", 5U, 32U, "choose", "no overload accepting 1 argument(s)",
+        },
+        {
+            "g15_instance_too_many_arguments.ff",
+            "module g15.instance_too_many_arguments;\n"
+            "type Box {\n"
+            "    func choose(first: i32, second: bool): void {}\n"
+            "}\n"
+            "func run(box: Box): void { box.choose(1, true, 3); }\n",
+            "AE0512", 5U, 32U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_static_too_few_arguments.ff",
+            "module g15.static_too_few_arguments;\n"
+            "type Box {\n"
+            "    static func choose(first: i32, second: bool): void {}\n"
+            "}\n"
+            "func run(): void { Box.choose(1); }\n",
+            "AE0512", 5U, 24U, "choose", "no overload accepting 1 argument(s)",
+        },
+        {
+            "g15_static_too_many_arguments.ff",
+            "module g15.static_too_many_arguments;\n"
+            "type Box {\n"
+            "    static func choose(first: i32, second: bool): void {}\n"
+            "}\n"
+            "func run(): void { Box.choose(1, true, 3); }\n",
+            "AE0512", 5U, 24U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_callable_too_few_arguments.ff",
+            "module g15.callable_too_few_arguments;\n"
+            "spec Picker(first: i32, second: bool): void;\n"
+            "func run(picker: Picker): void { picker(1); }\n",
+            "AE0506", 3U, 34U, "picker", "accepting 1 argument(s)",
+        },
+        {
+            "g15_callable_too_many_arguments.ff",
+            "module g15.callable_too_many_arguments;\n"
+            "spec Picker(first: i32, second: bool): void;\n"
+            "func run(picker: Picker): void { picker(1, true, 3); }\n",
+            "AE0506", 3U, 34U, "picker", "accepting 3 argument(s)",
+        },
+        {
+            "g15_top_level_first_argument_type.ff",
+            "module g15.top_level_first_argument_type;\n"
+            "func choose(first: i32, middle: bool, last: string): void {}\n"
+            "func run(): void {\n"
+            "    let value: u32 = 1;\n"
+            "    choose(value, true, \"ok\");\n"
+            "}\n",
+            "AE0512", 5U, 5U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_top_level_middle_argument_type.ff",
+            "module g15.top_level_middle_argument_type;\n"
+            "func choose(first: i32, middle: bool, last: string): void {}\n"
+            "func run(): void {\n"
+            "    let value: i32 = 1;\n"
+            "    choose(1, value, \"ok\");\n"
+            "}\n",
+            "AE0512", 5U, 5U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_top_level_last_argument_type.ff",
+            "module g15.top_level_last_argument_type;\n"
+            "func choose(first: i32, middle: bool, last: string): void {}\n"
+            "func run(): void {\n"
+            "    let value: bool = true;\n"
+            "    choose(1, true, value);\n"
+            "}\n",
+            "AE0512", 5U, 5U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_instance_argument_type.ff",
+            "module g15.instance_argument_type;\n"
+            "type Box { func choose(first: i32, middle: bool, last: string): void {} }\n"
+            "func run(box: Box): void {\n"
+            "    let value: u32 = 1;\n"
+            "    box.choose(value, true, \"ok\");\n"
+            "}\n",
+            "AE0512", 5U, 9U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_static_argument_type.ff",
+            "module g15.static_argument_type;\n"
+            "type Box { static func choose(first: i32, middle: bool, last: string): void {} }\n"
+            "func run(): void {\n"
+            "    let value: i32 = 1;\n"
+            "    Box.choose(1, value, \"ok\");\n"
+            "}\n",
+            "AE0512", 5U, 9U, "choose", "no overload accepting 3 argument(s)",
+        },
+        {
+            "g15_callable_argument_type.ff",
+            "module g15.callable_argument_type;\n"
+            "spec Picker(first: i32, middle: bool, last: string): void;\n"
+            "func run(picker: Picker): void {\n"
+            "    let value: bool = true;\n"
+            "    picker(1, true, value);\n"
+            "}\n",
+            "AE0506", 5U, 5U, "picker", "accepting 3 argument(s)",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        assert_g15_semantic_error(cases[index].path,
+                                  cases[index].source,
+                                  cases[index].code,
+                                  cases[index].line,
+                                  cases[index].column,
+                                  cases[index].token,
+                                  cases[index].message);
+    }
+}
+
+/* FUNC-D05: every ordinary void callable surface rejects a valued return at
+ * the return token; the block-Lambda surface is covered separately. */
+static void test_g15_void_method_valued_return_diagnostics(void) {
+    assert_g15_semantic_error(
+        "g15_void_instance_method_valued_return.ff",
+        "module g15.void_instance_method_valued_return;\n"
+        "type Box {\n"
+        "    func run(): void {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n",
+        "AE0501", 4U, 9U, "return", "expected type 'void'");
+    assert_g15_semantic_error(
+        "g15_void_static_method_valued_return.ff",
+        "module g15.void_static_method_valued_return;\n"
+        "type Box {\n"
+        "    static func run(): void {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n",
+        "AE0501", 4U, 9U, "return", "expected type 'void'");
+    assert_g15_semantic_error(
+        "g15_void_fit_method_valued_return.ff",
+        "module g15.void_fit_method_valued_return;\n"
+        "type Box {}\n"
+        "fit Box {\n"
+        "    func run(): void {\n"
+        "        return 1;\n"
+        "    }\n"
+        "}\n",
+        "AE0501", 5U, 9U, "return", "expected type 'void'");
+}
+
+/* FUNC-D07: Lambda and callable references cannot become ordinary values
+ * without a named callable-form spec target. */
+static void test_g15_callable_value_target_diagnostics(void) {
+    assert_g15_semantic_error(
+        "g15_lambda_binding_without_target.ff",
+        "module g15.lambda_binding_without_target;\n"
+        "func run(): void {\n"
+        "    let callable = (value: i32) -> value;\n"
+        "}\n",
+        "AE0520", 3U, 20U, "(", "requires an explicit callable-form spec target type");
+    assert_g15_semantic_error(
+        "g15_lambda_return_without_target.ff",
+        "module g15.lambda_return_without_target;\n"
+        "func make() { return (value: i32) -> value; }\n",
+        "AE0520", 2U, 22U, "(", "requires an explicit callable-form spec target type");
+    assert_g15_semantic_error(
+        "g15_static_method_value_without_target.ff",
+        "module g15.static_method_value_without_target;\n"
+        "type Reader { static func read(offset: i32): string { return \"value\"; } }\n"
+        "func run(): void { let callable = Reader.read; }\n",
+        "AE0523", 3U, 42U, "read", "requires an explicit target function type");
+}
+
+/* FUNC-D08: both Lambda syntaxes must match target parameter count, parameter
+ * types, and return type before a callable value can be formed. */
+static void test_g15_lambda_target_signature_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *lambda;
+        const char *code;
+        unsigned int column;
+        const char *token;
+        const char *message;
+    } cases[] = {
+        {
+            "g15_expression_lambda_parameter_count.ff", "() -> 1",
+            "AE0522", 26U, "(", "does not match expected function type 'Mapper'",
+        },
+        {
+            "g15_expression_lambda_parameter_type.ff", "(value: string) -> 1",
+            "AE0522", 26U, "(", "does not match expected function type 'Mapper'",
+        },
+        {
+            "g15_expression_lambda_return_type.ff", "(value: i32) -> \"bad\"",
+            "AE0522", 26U, "(", "does not match expected function type 'Mapper'",
+        },
+        {
+            "g15_block_lambda_parameter_count.ff", "() { return 1; }",
+            "AE0522", 26U, "(", "does not match expected function type 'Mapper'",
+        },
+        {
+            "g15_block_lambda_parameter_type.ff", "(value: string) { return 1; }",
+            "AE0522", 26U, "(", "does not match expected function type 'Mapper'",
+        },
+        {
+            "g15_block_lambda_return_type.ff", "(value: i32) { return \"bad\"; }",
+            "AE1003", 48U, "\"bad\"", "does not match expected type 'i32'",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        const char *prefix =
+            "module g15.lambda_target_signature;\n"
+            "spec Mapper(value: i32): i32;\n"
+            "func run(): void {\n"
+            "    let mapper: Mapper = ";
+        const char *suffix = ";\n}\n";
+        size_t source_length = strlen(prefix) + strlen(cases[index].lambda) +
+                               strlen(suffix) + 1U;
+        char *source = (char *)malloc(source_length);
+
+        ASSERT(source != NULL);
+        ASSERT(snprintf(source,
+                        source_length,
+                        "%s%s%s",
+                        prefix,
+                        cases[index].lambda,
+                        suffix) > 0);
+        assert_g15_semantic_error(
+            cases[index].path,
+            source,
+            cases[index].code,
+            4U,
+            cases[index].column,
+            cases[index].token,
+            cases[index].message);
+        free(source);
+    }
+
+    assert_g15_semantic_error(
+        "g15_block_lambda_nested_try_return_type.ff",
+        "module g15.block_lambda_nested_try_return_type;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "func may_fail(): i32 { return 1; }\n"
+        "func consume(picker: Picker): void {}\n"
+        "func run(): void {\n"
+        "    consume((flag: bool) {\n"
+        "        let value = try may_fail() catch {\n"
+        "            return \"bad\";\n"
+        "        };\n"
+        "        throw \"done\";\n"
+        "    });\n"
+        "}\n",
+        "AE0512", 6U, 5U, "consume", "no overload accepting 1 argument(s)");
+    assert_g15_semantic_error(
+        "g15_block_lambda_child_local_return_type.ff",
+        "module g15.block_lambda_child_local_return_type;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "func consume(picker: Picker): void {}\n"
+        "func run(): void {\n"
+        "    consume((flag: bool) {\n"
+        "        if flag {\n"
+        "            let value: string = \"bad\";\n"
+        "            return value;\n"
+        "        }\n"
+        "        throw \"done\";\n"
+        "    });\n"
+        "}\n",
+        "AE0512", 5U, 5U, "consume", "no overload accepting 1 argument(s)");
+}
+
+/* FUNC-D04: every named callable body with a known non-void result rejects a
+ * normal path to its closing brace, including inferred and generic bodies. */
+static void test_g15_named_callable_fallthrough_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        unsigned int line;
+        unsigned int column;
+        const char *name;
+    } cases[] = {
+        {
+            "g15_top_level_direct_fallthrough.ff",
+            "module g15.top_level_direct_fallthrough;\n"
+            "func value(): i32 {}\n",
+            2U, 6U, "value",
+        },
+        {
+            "g15_throwing_helper_call_fallthrough.ff",
+            "module g15.throwing_helper_call_fallthrough;\n"
+            "func fail(): void { throw \"failed\"; }\n"
+            "func value(): i32 { fail(); }\n",
+            3U, 6U, "value",
+        },
+        {
+            "g15_top_level_inferred_fallthrough.ff",
+            "module g15.top_level_inferred_fallthrough;\n"
+            "func choose(flag: bool) {\n"
+            "    if flag { return 1; }\n"
+            "}\n",
+            2U, 6U, "choose",
+        },
+        {
+            "g15_instance_method_fallthrough.ff",
+            "module g15.instance_method_fallthrough;\n"
+            "type Box {\n"
+            "    func value(flag: bool): i32 {\n"
+            "        if flag { return 1; }\n"
+            "    }\n"
+            "}\n",
+            3U, 10U, "value",
+        },
+        {
+            "g15_static_method_fallthrough.ff",
+            "module g15.static_method_fallthrough;\n"
+            "type Box {\n"
+            "    static func value(flag: bool): i32 {\n"
+            "        if flag { return 1; }\n"
+            "    }\n"
+            "}\n",
+            3U, 17U, "value",
+        },
+        {
+            "g15_fit_method_fallthrough.ff",
+            "module g15.fit_method_fallthrough;\n"
+            "type Box {}\n"
+            "fit Box {\n"
+            "    func value(flag: bool): i32 {\n"
+            "        if flag { return 1; }\n"
+            "    }\n"
+            "}\n",
+            4U, 10U, "value",
+        },
+        {
+            "g15_generic_function_fallthrough.ff",
+            "module g15.generic_function_fallthrough;\n"
+            "func choose<T>(flag: bool, value: T): T {\n"
+            "    if flag { return value; }\n"
+            "}\n",
+            2U, 6U, "choose",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        assert_g15_semantic_error(
+            cases[index].path,
+            cases[index].source,
+            "AE0515",
+            cases[index].line,
+            cases[index].column,
+            cases[index].name,
+            "can reach the end of its body without returning a value");
+    }
+}
+
+/* FUNC-D04: each structured control form retains a normal exit exactly when
+ * its documented branch or loop shape permits one. */
+static void test_g15_structured_fallthrough_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        unsigned int line;
+        const char *name;
+    } cases[] = {
+        {
+            "g15_if_branch_fallthrough.ff",
+            "module g15.if_branch_fallthrough;\n"
+            "func choose(value: i32): i32 {\n"
+            "    if value == 0 { return 0; }\n"
+            "    else if value == 1 {}\n"
+            "    else { return 2; }\n"
+            "}\n",
+            2U, "choose",
+        },
+        {
+            "g15_match_missing_else_fallthrough.ff",
+            "module g15.match_missing_else_fallthrough;\n"
+            "func choose(value: i32): i32 {\n"
+            "    match value {\n"
+            "        0 { return 0; }\n"
+            "    }\n"
+            "}\n",
+            2U, "choose",
+        },
+        {
+            "g15_match_branch_fallthrough.ff",
+            "module g15.match_branch_fallthrough;\n"
+            "func choose(value: i32): i32 {\n"
+            "    match value {\n"
+            "        0 { return 0; }\n"
+            "        else {}\n"
+            "    }\n"
+            "}\n",
+            2U, "choose",
+        },
+        {
+            "g15_try_main_path_fallthrough.ff",
+            "module g15.try_main_path_fallthrough;\n"
+            "func may_fail(flag: bool): i32 {\n"
+            "    if flag { throw \"failed\"; }\n"
+            "    return 1;\n"
+            "}\n"
+            "func choose(flag: bool): i32 {\n"
+            "    try may_fail(flag) catch { return 2; }\n"
+            "}\n",
+            6U, "choose",
+        },
+        {
+            "g15_try_catch_path_fallthrough.ff",
+            "module g15.try_catch_path_fallthrough;\n"
+            "func may_fail(flag: bool): i32 {\n"
+            "    if flag { throw \"failed\"; }\n"
+            "    return 1;\n"
+            "}\n"
+            "func choose(flag: bool): i32 {\n"
+            "    try may_fail(flag) catch {}\n"
+            "}\n",
+            6U, "choose",
+        },
+        {
+            "g15_while_condition_fallthrough.ff",
+            "module g15.while_condition_fallthrough;\n"
+            "func loop(flag: bool): i32 {\n"
+            "    while flag {}\n"
+            "}\n",
+            2U, "loop",
+        },
+        {
+            "g15_while_reachable_break_fallthrough.ff",
+            "module g15.while_reachable_break_fallthrough;\n"
+            "func loop(): i32 {\n"
+            "    while true { break; }\n"
+            "}\n",
+            2U, "loop",
+        },
+        {
+            "g15_for_reachable_break_fallthrough.ff",
+            "module g15.for_reachable_break_fallthrough;\n"
+            "func loop(): i32 {\n"
+            "    for ;; { break; }\n"
+            "}\n",
+            2U, "loop",
+        },
+        {
+            "g15_for_in_fallthrough.ff",
+            "module g15.for_in_fallthrough;\n"
+            "func first(values: i32[]): i32 {\n"
+            "    for let value in values { return value; }\n"
+            "}\n",
+            2U, "first",
+        },
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(cases) / sizeof(cases[0]);
+         ++index) {
+        assert_g15_semantic_error(
+            cases[index].path,
+            cases[index].source,
+            "AE0515",
+            cases[index].line,
+            6U,
+            cases[index].name,
+            "can reach the end of its body without returning a value");
+    }
+}
+
+/* FUNC-D04/D05/D08: target-typed block Lambdas enforce both return shape and
+ * normal-fallthrough rules at the Lambda or return token. */
+static void test_g15_block_lambda_return_diagnostics(void) {
+    assert_g15_semantic_error(
+        "g15_bound_lambda_fallthrough.ff",
+        "module g15.bound_lambda_fallthrough;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "func run(): void {\n"
+        "    let picker: Picker = (flag: bool) {\n"
+        "        if flag { return 1; }\n"
+        "    };\n"
+        "}\n",
+        "AE0515", 4U, 26U, "(", "non-void block lambda can reach the end");
+    assert_g15_semantic_error(
+        "g15_argument_lambda_fallthrough.ff",
+        "module g15.argument_lambda_fallthrough;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "func consume(picker: Picker): void {}\n"
+        "func run(): void {\n"
+        "    consume((flag: bool) {\n"
+        "        if flag { return 1; }\n"
+        "    });\n"
+        "}\n",
+        "AE0515", 5U, 13U, "(", "non-void block lambda can reach the end");
+    assert_g15_semantic_error(
+        "g15_callable_value_argument_lambda_fallthrough.ff",
+        "module g15.callable_value_argument_lambda_fallthrough;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "spec Consumer(picker: Picker): void;\n"
+        "func run(consumer: Consumer): void {\n"
+        "    consumer((flag: bool) {\n"
+        "        if flag { return 1; }\n"
+        "    });\n"
+        "}\n",
+        "AE0515", 5U, 14U, "(", "non-void block lambda can reach the end");
+    assert_g15_semantic_error(
+        "g15_void_lambda_valued_return.ff",
+        "module g15.void_lambda_valued_return;\n"
+        "spec Action(): void;\n"
+        "func run(): void {\n"
+        "    let action: Action = () {\n"
+        "        return 1;\n"
+        "    };\n"
+        "}\n",
+        "AE0501", 5U, 9U, "return", "expected type 'void'");
+    assert_g15_semantic_error(
+        "g15_non_void_lambda_empty_return.ff",
+        "module g15.non_void_lambda_empty_return;\n"
+        "spec Reader(): i32;\n"
+        "func run(): void {\n"
+        "    let reader: Reader = () {\n"
+        "        return;\n"
+        "    };\n"
+        "}\n",
+        "AE0501", 5U, 9U, "return", "does not match expected type 'i32'");
+}
+
+/* FUNC-D04: all terminal branch forms and the precise loop proof rules are
+ * accepted without relying on a code-generation fallback. */
+static void test_g15_structured_return_acceptance(void) {
+    assert_g15_semantic_accepts(
+        "g15_structured_return_acceptance.ff",
+        "module g15.structured_return_acceptance;\n"
+        "func if_all(flag: bool): i32 {\n"
+        "    if flag { return 1; } else { return 2; }\n"
+        "}\n"
+        "func match_all(value: i32): i32 {\n"
+        "    match value {\n"
+        "        0 { return 10; }\n"
+        "        1 { return 11; }\n"
+        "        else { return 12; }\n"
+        "    }\n"
+        "}\n"
+        "func return_or_throw(flag: bool): i32 {\n"
+        "    if flag { return 20; } else { throw \"failed\"; }\n"
+        "}\n"
+        "func may_fail(flag: bool): i32 {\n"
+        "    if flag { throw \"failed\"; }\n"
+        "    return 30;\n"
+        "}\n"
+        "func try_returns(flag: bool): i32 {\n"
+        "    let value = try may_fail(flag) catch { return 31; };\n"
+        "    return value;\n"
+        "}\n"
+        "func try_rethrows(flag: bool): i32 {\n"
+        "    let value = try may_fail(flag) catch error: string { throw error; };\n"
+        "    return value;\n"
+        "}\n"
+        "func while_returns(): i32 { while true { return 40; } }\n"
+        "func while_never_exits(): i32 { while true {} }\n"
+        "func while_ignores_unreachable_break(): i32 {\n"
+        "    while true { return 41; break; }\n"
+        "}\n"
+        "func for_never_exits(): i32 { for ;; {} }\n"
+        "func for_true_never_exits(): i32 {\n"
+        "    for var index = 0; true; index += 1 { continue; }\n"
+        "}\n"
+        "func while_then_return(flag: bool): i32 {\n"
+        "    while flag { break; }\n"
+        "    return 50;\n"
+        "}\n"
+        "func for_then_return(limit: i32): i32 {\n"
+        "    for var index: i32 = 0; index < limit; index += 1 {}\n"
+        "    return 51;\n"
+        "}\n"
+        "func for_in_then_return(values: i32[]): i32 {\n"
+        "    for let value in values { if value > 0 { return value; } }\n"
+        "    return 52;\n"
+        "}\n"
+        "func nested_loop_break_is_local(): i32 {\n"
+        "    while true {\n"
+        "        while true { break; }\n"
+        "        return 53;\n"
+        "    }\n"
+        "}\n"
+        "func void_natural_end(): void {}\n");
+}
+
+/* FUNC-D08: target-typed block Lambdas accept complete return branches,
+ * escaping throws, and loops whose normal exit is statically impossible. */
+static void test_g15_block_lambda_return_acceptance(void) {
+    assert_g15_semantic_accepts(
+        "g15_block_lambda_return_acceptance.ff",
+        "module g15.block_lambda_return_acceptance;\n"
+        "spec Picker(flag: bool): i32;\n"
+        "spec Reader(): i32;\n"
+        "spec ReaderFactory(): Reader;\n"
+        "func consume(picker: Picker): i32 { return picker(false); }\n"
+        "func make(): Picker {\n"
+        "    return (flag: bool) {\n"
+        "        if flag { return 1; } else { return 2; }\n"
+        "    };\n"
+        "}\n"
+        "func child_local(): i32 {\n"
+        "    return consume((flag: bool) {\n"
+        "        if flag {\n"
+        "            let value: i32 = 7;\n"
+        "            return value;\n"
+        "        }\n"
+        "        let fallback: i32 = 8;\n"
+        "        return fallback;\n"
+        "    });\n"
+        "}\n"
+        "func child_shadow_ends(): i32 {\n"
+        "    return consume((flag: bool) {\n"
+        "        let value: i32 = 9;\n"
+        "        if flag {\n"
+        "            let value: string = \"shadow\";\n"
+        "            value;\n"
+        "        }\n"
+        "        return value;\n"
+        "    });\n"
+        "}\n"
+        "func nested_callable_result(): i32 {\n"
+        "    let factory: ReaderFactory = () {\n"
+        "        let reader: Reader = () -> 10;\n"
+        "        return reader;\n"
+        "    };\n"
+        "    return factory()();\n"
+        "}\n"
+        "func run(): void {\n"
+        "    let complete: Picker = (flag: bool) {\n"
+        "        if flag { return 3; } else { return 4; }\n"
+        "    };\n"
+        "    let throwing: Picker = (flag: bool) { throw \"failed\"; };\n"
+        "    let looping: Picker = (flag: bool) { while true {} };\n"
+        "    consume((flag: bool) {\n"
+        "        if flag { return 5; } else { return 6; }\n"
+        "    });\n"
+        "    complete(true);\n"
+        "    throwing;\n"
+        "    looping;\n"
+        "}\n");
+}
+
 int main(void) {
+    test_g15_main_entry_diagnostics();
+    test_g15_signature_and_return_shape_diagnostics();
+    test_g15_fixed_argument_call_diagnostics();
+    test_g15_void_method_valued_return_diagnostics();
+    test_g15_callable_value_target_diagnostics();
+    test_g15_lambda_target_signature_diagnostics();
+    test_g15_named_callable_fallthrough_diagnostics();
+    test_g15_structured_fallthrough_diagnostics();
+    test_g15_block_lambda_return_diagnostics();
+    test_g15_structured_return_acceptance();
+    test_g15_block_lambda_return_acceptance();
     test_g14_operator_operand_diagnostics();
     test_g14_non_place_assignment_diagnostics();
     test_g14_missing_member_diagnostics();
@@ -30417,7 +31414,7 @@ int main(void) {
     test_match_enum_single_label_accepted();
     test_match_enum_value_list_accepted();
     test_match_enum_expression_form_accepted();
-    test_match_enum_block_tail_return_value_accepted();
+    test_match_enum_block_tail_does_not_implicitly_return();
     test_match_enum_explicit_values_accepted();
     test_match_enum_cross_enum_reference_rejected();
     test_match_enum_range_label_rejected();

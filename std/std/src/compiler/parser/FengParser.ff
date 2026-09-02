@@ -134,6 +134,7 @@ open type FengParser {
       return self.advance();
     }
     self.error(code, message);
+    throw Error("FengParser.error returned unexpectedly");
   }
 
   // ==================== Token 流内部方法 ====================
@@ -823,6 +824,7 @@ open type FengParser {
     }
 
     self.error("PE0007", "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression");
+    throw Error("FengParser.error returned unexpectedly");
   }
 
   /**
