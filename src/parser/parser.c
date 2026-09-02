@@ -3434,7 +3434,7 @@ static FengExpr *parse_infix_match_op(Parser *parser, FengToken match_token, Fen
         /* infix multi-label uses `|` (not `,`); consume all consecutive labels
          * separated by `|` here. Remaining `|` after the loop is left to
          * parse_bit_or (bitwise-or), which is well-defined because
-         * `bool | int` is illegal (AE0030). */
+         * `bool | int` is illegal (AE1019). */
         if (!parser_match(parser, FENG_TOKEN_PIPE)) {
             break;
         }

@@ -1,0 +1,95 @@
+module fcts_bin;
+
+import std.test;
+
+/** Mutable object used by G14 member-read and member-write boundaries. */
+type G14ExpressionBox {
+  static var shared: i32 = 0;
+  var value: i32;
+
+  /** Add one value through an ordinary instance call. */
+  func add(other: i32): i32 {
+    return self.value + other;
+  }
+}
+
+/** Callable value used by the G14 legal call-expression boundary. */
+spec G14ExpressionMapper(value: i32): i32;
+
+/** Return a callable so a computed result can be invoked immediately. */
+func g14MakeExpressionMapper(offset: i32): G14ExpressionMapper {
+  return (value: i32) -> value + offset;
+}
+
+/** Verify the legal neighbors of all G14 expression diagnostics. */
+open func test_expression_diagnostic_boundaries(): void {
+  describe("G14 expression diagnostic boundaries", () {
+    test("EXPR01 fixed-width unary and binary operators remain legal", () {
+      let left: i32 = 20;
+      let right: i32 = 6;
+      let bits: u32 = 0b1010;
+      let mask: u32 = 0b1100;
+      let shift: u32 = 2;
+      let text = "G" + "14";
+
+      assert(left + right == 26 && left - right == 14 &&
+             left * right == 120 && left / right == 3 && left % right == 2,
+             "all fixed-width arithmetic operators retain their values");
+      assert(left > right && left >= right && right < left && right <= left &&
+             left == 20 && left != right,
+             "all comparison and equality operators return bool");
+      assert(true && !false && (false || true),
+             "logical unary and binary operators accept bool operands");
+      assert(-right == -6 && text == "G14",
+             "numeric negation and string addition remain legal");
+      assert((bits & mask) == 0b1000 && (bits | mask) == 0b1110 &&
+             (bits ^ mask) == 0b0110 && (bits << shift) == 40 &&
+             (bits >> shift) == 2 && ((~bits) & 0b1111) == 0b0101,
+             "all fixed-width bitwise operators retain their values");
+    });
+
+    test("EXPR03 through EXPR05 member index and call neighbors remain legal", () {
+      let box = G14ExpressionBox { value: 5 };
+      let values: i32[!] = [10, 20, 30];
+      let signedIndex: i16 = 1;
+      let unsignedIndex: u8 = 2;
+      let mapper: G14ExpressionMapper = (value: i32) -> value * 2;
+
+      G14ExpressionBox.shared = 7;
+      box.value = 8;
+      values[signedIndex] = 21;
+
+      assert(box.value == 8 && box.add(2) == 10 &&
+             G14ExpressionBox.shared == 7,
+             "instance and static members remain readable and writable");
+      assert(values[signedIndex] == 21 && values[unsignedIndex] == 30,
+             "signed and unsigned fixed-width integer indices remain legal");
+      assert(mapper(4) == 8 && g14MakeExpressionMapper(3)(4) == 7,
+             "direct and computed callable values remain callable");
+    });
+
+    test("EXPR02 and EXPR06 assignment neighbors remain legal", () {
+      var assigned: i32 = 0;
+      assigned = 9;
+
+      var numeric: i32 = 20;
+      numeric += 2;
+      numeric -= 3;
+      numeric *= 2;
+      numeric /= 4;
+      numeric %= 4;
+
+      var bits: u32 = 0b1111;
+      bits &= 0b1100;
+      bits |= 0b0010;
+      bits ^= 0b0110;
+      bits <<= 1;
+      bits >>= 2;
+
+      assert(assigned == 9 && numeric == 1,
+             "all fixed-width arithmetic compound assignments remain legal");
+      assert(bits == 4,
+             "all fixed-width bitwise compound assignments remain legal");
+    });
+  });
+}

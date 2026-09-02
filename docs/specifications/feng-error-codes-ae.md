@@ -257,6 +257,11 @@
 | AE1015 | 泛型类型实参数量约束 | AE0163 | '%.*s' expects %zu type argument(s), but %zu were provided |
 | AE1016 | 显式泛型目标值位使用约束 | AE0173 | explicit generic target '%s' cannot be used as a value expression |
 | AE1017 | 类型参数命名遮蔽约束 | AE0181 | type parameter '%.*s' shadows an outer type parameter with the same name |
+| AE1018 | 一元运算符操作数类型约束 | AE0234、AE0235、AE0236 | unary operator '%s' requires a numeric operand, got '%s'、unary operator '%s' requires an integer operand, got '%s'、unary operator '%s' requires a bool operand, got '%s' |
+| AE1019 | 二元运算符操作数类型约束 | AE0030 | binary operator '%s' requires operands of the same numeric or string type, got '%s' and '%s'、binary operator '%s' requires operands of the same numeric type, got '%s' and '%s'、binary operator '%s' requires operands of the same type, got '%s' and '%s'、binary operator '%s' requires bool operands, got '%s' and '%s'、binary operator '%s' requires operands of the same integer type, got '%s' and '%s' |
+| AE1020 | 复合赋值操作数类型约束 | AE0023 | compound assignment operator '%s' requires operands of the same numeric type, got '%s' and '%s'、compound assignment operator '%s' requires operands of the same integer type, got '%s' and '%s' |
+| AE1021 | 索引目标数组类型约束 | AE0052 | index expression target must have array type, got '%s' |
+| AE1022 | 索引操作数整数类型约束 | AE0053 | index expression requires an integer operand, got '%s' |
 
 ## 11 分支/匹配段
 

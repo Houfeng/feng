@@ -132,7 +132,7 @@ match v {
 | union member type `Type` | union-form spec | 是 |
 | 多 label `label1 \| label2 \| ...` | 各 label 须与 target 类型兼容 | 仅当全部为 type 时支持绑定 |
 
-- `|` 在 pattern 位置作为 label 分隔符，**不是按位或运算符**；parser 在 pattern 解析循环内消费 `|`，退出循环后剩余 `|` 才按按位或处理。`bool | int` 本身非法（AE0030），故 `(x match 0) | 1` 这种解读天然无意义。
+- `|` 在 pattern 位置作为 label 分隔符，**不是按位或运算符**；parser 在 pattern 解析循环内消费 `|`，退出循环后剩余 `|` 才按按位或处理。`bool | int` 本身非法（AE1019），故 `(x match 0) | 1` 这种解读天然无意义。
 - 不用 `,` 作为 infix 多 label 分隔符：`,` 在函数参数、元组、数组等容器上下文已是分隔符，混用会歧义；块形式在 `{ ... }` 内无此歧义，继续用 `,`。
 - 运算优先级与关系运算 `<` / `<=` / `>` / `>=` 同级、高于相等运算（`==` / `!=`）、低于算术与移位、高于逻辑 `&&` / `||`、高于赋值 `=`；同级左结合。链式 `x match a match b` 按左结合解析为 `(x match a) match b`，语义合法性由类型检查器捕获。
 

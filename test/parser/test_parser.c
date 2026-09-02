@@ -3715,7 +3715,7 @@ static void test_infix_match_op_in_if_while_condition_parses(void) {
 
 static void test_infix_match_op_pipe_does_not_become_bit_or(void) {
     /* `x match 0 | 1` must parse as infix match with 2 labels, NOT as
-     * `(x match 0) | 1` (bitwise-or). bool | int is illegal (AE0030) so the
+     * `(x match 0) | 1` (bitwise-or). bool | int is illegal (AE1019) so the
      * bitwise-or interpretation would be meaningless. */
     const char *source =
         "module demo.main;\n"

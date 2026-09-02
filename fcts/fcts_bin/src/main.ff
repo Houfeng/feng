@@ -11,6 +11,7 @@ func main(args: string[]) {
       test_builtin_type();
       test_numeric_literal();
       test_expression();
+      test_expression_diagnostic_boundaries();
       test_integer_runtime_semantics();
       test_evaluation_order();
       test_assignment_evaluation_semantics();

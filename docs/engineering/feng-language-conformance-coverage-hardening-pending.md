@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G13 已交付；G14～G25 待 Review
+> 状态：G01～G14 已交付；G15～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -44,7 +44,7 @@ Review 后只保留分组范围、实施顺序、状态和本文链接；用例 
 - [tuple 规范](../specifications/feng-tuple.md)；
 - [字符串转义规范](../specifications/feng-string-escape.md)；
 - [反引号字符串规范](../specifications/feng-string-raw.md)；
-- [错误码规范](../specifications/feng-error-codes.md)。
+- [AE 语义错误码规范](../specifications/feng-error-codes-ae.md)。
 
 实施结果不能由主规范唯一确定时，必须先按第 30 节在对应文件中记录问题并暂停本组，由人工决定是否
 补充规范。不得在测试或实现中自行选择行为。
@@ -1166,34 +1166,77 @@ G13 补齐。
 
 ### 18.1 测试重点
 
-验证运算、成员访问、索引、调用和赋值表达式产生的稳定 Semantic 诊断。
+验证一元与二元运算、成员访问、索引、调用和赋值结构产生的稳定 Semantic 诊断，并为各非法边界建立
+最小合法邻界运行证据。
+
+本组只覆盖表达式结构自身的通用边界：调用参数数量与类型归 G15；普通赋值右值不兼容、显式转换和
+static / 实例访问方式归 G18；数组元素、维度和多维关系归 G21；模块、spec、复合类型与泛型的专属
+诊断分别归 G22～G25。G04 已覆盖的整数溢出、除模零值、移位范围及明确 UB 不在本组重复。ABI 一元
+`&` 及借用边界也不属于 G14。
 
 ### 18.2 用例 TODO
 
-- [ ] EXPR01：运算符操作数类型不合法；
-- [ ] EXPR02：赋值左侧不是可写位置；
-- [ ] EXPR03：成员访问目标或成员不合法；
-- [ ] EXPR04：索引目标或索引类型不合法；
-- [ ] EXPR05：被调用表达式不可调用；
-- [ ] EXPR06：复合赋值的类型关系不合法；
-- [ ] EXPR07：对应运算的最小合法邻界程序。
+- [x] EXPR01：一元 `-`、`!`、`~` 分别拒绝非数值、非 `bool`、非整数操作数；二元 `+ - * / %`、
+  `< <= > >=`、`== !=`、`&& ||`、`& | ^ << >>` 的每个运算符拼写均以所属类型族的最小非法
+  操作数触发一个稳定 Semantic 诊断，不得延迟到 Codegen；
+- [x] EXPR02：字面量、二元表达式和调用结果作为普通或复合赋值左侧时，均在左侧起始 token 报告
+  `AE0104`；不可变绑定和只读数组层分别映射 G13、既有数组测试，不在本组重复排列；
+- [x] EXPR03：普通对象值访问不存在的实例成员、普通类型访问不存在的 static 成员，分别在成员访问
+  位置产生稳定的成员不存在诊断；static / 实例访问方式和可见性专属矩阵留给 G18、G22；
+- [x] EXPR04：读取与写入上下文中的非数组索引目标均被拒绝；数组索引分别拒绝 `bool` 与浮点操作数，
+  接受不同固定宽度的有符号和无符号整数索引；
+- [x] EXPR05：普通非 callable 局部值与返回非 callable 值的计算表达式被立即调用时，均在调用目标处
+  报告 `AE0507`；callable 的参数数量、参数类型和变参规则留给 G15；
+- [x] EXPR06：数值复合赋值拒绝非数值操作数和不同数值类型，位复合赋值拒绝非整数操作数和不同整数
+  类型；对应合法目标贴合覆盖全部 `+= -= *= /= %= &= |= ^= <<= >>=`，左侧只求值一次的行为复用
+  已交付赋值求值顺序专项；
+- [x] EXPR07：在 FCTS 中直接运行一元、二元、成员、索引、调用、普通赋值和复合赋值的最小合法邻界；
+  使用固定宽度数值类型避免 `int` 平台位宽影响，已有直接运行证据只建立映射、不重复新增同构程序。
 
 ### 18.3 独立验收与交付 TODO
 
-- [ ] 建立本领域稳定诊断码到现有 Semantic test 的映射；
-- [ ] 独立运行 G14，核对诊断码、位置、数量、阶段和表达式上下文；
-- [ ] 在 Codex 沙箱外为 G14 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G14 问题；
-- [ ] 填写本组映射、实际新增用例、专项结果和全量结果。
+- [x] 先对齐表达式主规范中的 `int` 平台位宽说明，并把一元、二元、复合赋值与索引旧码收敛到 AE
+  表达式段；不得借 G14 开展无关错误码重构；
+- [x] 建立本领域稳定诊断码到现有 Semantic test 的映射，只为缺少精确码、token、行列、数量和阶段
+  证据的非法边界新增测试；
+- [x] 为 EXPR04 与 EXPR07 的合法边界建立或映射 FCTS 直接运行证据；Semantic 接受不能替代运行断言；
+- [x] 独立运行 G14，核对诊断码、位置、数量、阶段和表达式上下文；
+- [x] 在 Codex 沙箱外为 G14 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或决策 G14 问题；
+- [x] 填写本组映射、实际新增用例、专项结果和全量结果。
 
 ### 18.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: close expression diagnostic gaps`
+- 状态：已交付
+- 稳定码映射与新增用例：
+  - EXPR01：新增 `AE1018` 覆盖 3 种一元运算符，新增 `AE1019` 覆盖 18 种二元运算符拼写；
+  - EXPR02：以 `AE0104` 覆盖字面量、二元表达式和调用结果的普通与复合赋值，共 6 个反向程序；
+  - EXPR03：分别以 `AE0306`、`AE0309` 覆盖不存在的实例与 static 成员；
+  - EXPR04：新增 `AE1021` 覆盖读写位置的非数组目标，新增 `AE1022` 覆盖 `bool` 与浮点索引；FCTS
+    直接运行 `i16`、`u8` 索引；
+  - EXPR05：以 `AE0507` 覆盖直接非 callable 局部值与计算所得非 callable 值；
+  - EXPR06：新增 `AE1020` 覆盖全部 10 种复合赋值拼写及数值、整数宽度不匹配，共 12 个反向程序；
+  - EXPR07：新增 3 项 FCTS，直接运行全部合法运算符、成员、索引、直接及计算 callable、普通赋值和
+    全部 10 种复合赋值；共新增 47 个最小反向程序和 3 项正向运行用例。
+- 实际文件：
+  - `docs/specifications/feng-expression.md`、`feng-error-codes-ae.md` 与 `feng-flow.md`：对齐 `int` 平台
+    位宽说明，定义 `AE1018`～`AE1022` 并更新关联码引用；
+  - `src/semantic/analyzer.c`：将五类既有表达式诊断产生点收敛到新稳定码，不改变接受、拒绝或 lowering；
+  - `test/semantic/test_semantic.c`：新增 G14 精确反向矩阵，逐项断言唯一 Semantic 诊断的错误码、token、
+    行列和消息片段；
+  - `fcts/fcts_bin/src/test_expression_diagnostic_boundaries.ff` 与 `main.ff`：新增并登记 G14 合法邻界运行
+    用例；
+  - `src/parser/parser.c`、`test/parser/test_parser.c` 与 `docs/specifications/feng-flow.md`：同步已迁移错误码
+    的注释和引用。
+- 本组专项结果：Parser、Semantic、Codegen tests 均通过；std 601/601；FCTS 1097/1097；
+  `git diff --check` 通过。
+- 本组沙箱外 `make test`：通过；UBSan 与 normal 两阶段均完成，FCTS 均为 1097/1097、smoke 均为
+  90/90、std 测试均为 601/601；性能约束、增量构建、发布、安装及其余单元与 CLI 测试全部通过。
+- 性能与兼容性：只变更编译期诊断码、规范与测试；未改变表达式发码，未增加运行时分支、调用、分配
+  或 ARC，未修改 runtime 私有 ABI、公开 ABI 或 `.ft` 格式。
+- 问题：[G14 问题记录](./feng-language-conformance-coverage-hardening-issues/g14.md) 中
+  `ISSUE-G14-001`、`ISSUE-G14-002` 均已关闭。
+- 建议 commit message：`fix(semantic): stabilize expression diagnostics and complete G14 coverage`
 
 ## 19 G15：函数诊断
 

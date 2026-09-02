@@ -8030,7 +8030,7 @@ static void test_unary_tilde_rejects_non_integer_operand(void) {
 }
 
 /* Regression: infer_expr_type previously had no FENG_TOKEN_TILDE branch,
- * so ~literal was inferred as UNKNOWN.  This caused AE0030 ("got 'u64' and
+ * so ~literal was inferred as UNKNOWN.  This caused AE1019 ("got 'u64' and
  * '<type>'") when the result was used in a binary bitwise op, and also broke
  * (u64)(~literal) casts.  Verify ~ on a variable, on a literal, and the
  * cast-then-bitwise pattern all pass semantic analysis. */
@@ -20546,14 +20546,15 @@ static void assert_single_source_semantic_error_contains(const char *path,
 }
 
 /* Assert one stable Semantic diagnostic, including its phase code and exact
- * source token, for the G13 negative name-binding matrix. */
-static void assert_g13_semantic_error(const char *path,
-                                      const char *source,
-                                      const char *expected_code,
-                                      unsigned int expected_line,
-                                      unsigned int expected_column,
-                                      const char *expected_lexeme,
-                                      const char *expected_message) {
+ * source token, for one conformance-hardening delivery group. */
+static void assert_stable_semantic_error(const char *group,
+                                         const char *path,
+                                         const char *source,
+                                         const char *expected_code,
+                                         unsigned int expected_line,
+                                         unsigned int expected_column,
+                                         const char *expected_lexeme,
+                                         const char *expected_message) {
     FengProgram *program = parse_program_or_die(path, source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
@@ -20564,8 +20565,9 @@ static void assert_g13_semantic_error(const char *path,
                                   &analysis, &errors, &error_count));
     if (error_count != 1U) {
         fprintf(stderr,
-                "%s: expected exactly one G13 semantic error, got %zu\n",
+                "%s: expected exactly one %s semantic error, got %zu\n",
                 path,
+                group,
                 error_count);
         for (size_t index = 0U; index < error_count; ++index) {
             fprintf(stderr,
@@ -20617,6 +20619,42 @@ static void assert_g13_semantic_error(const char *path,
     feng_semantic_errors_free(errors, error_count);
     feng_semantic_analysis_free(analysis);
     feng_program_free(program);
+}
+
+/* Assert one exact diagnostic for the G13 name-binding matrix. */
+static void assert_g13_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G13",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* Assert one exact diagnostic for the G14 expression matrix. */
+static void assert_g14_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G14",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
 }
 
 /* Verify every approved concrete exception category is accepted by both a
@@ -30056,7 +30094,265 @@ static void test_g13_module_binding_conflict_diagnostics(void) {
         "AE0215", 3U, 5U, "entry", "conflicts with an existing top-level function");
 }
 
+/* EXPR01: every user-visible unary and binary operator spelling rejects an
+ * operand outside its declared type family at the operator token. */
+static void test_g14_operator_operand_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *expression;
+        unsigned int column;
+        const char *lexeme;
+        const char *message;
+    } cases[] = {
+        {"g14_unary_minus.ff", "-true", 5U, "-", "unary operator '-' requires a numeric operand"},
+        {"g14_unary_not.ff", "!1", 5U, "!", "unary operator '!' requires a bool operand"},
+        {"g14_unary_tilde.ff", "~1.0", 5U, "~", "unary operator '~' requires an integer operand"},
+        {"g14_binary_plus.ff", "true + false", 10U, "+", "binary operator '+' requires operands of the same numeric or string type"},
+        {"g14_binary_minus.ff", "true - false", 10U, "-", "binary operator '-' requires operands of the same numeric type"},
+        {"g14_binary_multiply.ff", "true * false", 10U, "*", "binary operator '*' requires operands of the same numeric type"},
+        {"g14_binary_divide.ff", "true / false", 10U, "/", "binary operator '/' requires operands of the same numeric type"},
+        {"g14_binary_modulo.ff", "true % false", 10U, "%", "binary operator '%' requires operands of the same numeric type"},
+        {"g14_binary_less.ff", "true < false", 10U, "<", "binary operator '<' requires operands of the same numeric type"},
+        {"g14_binary_less_equal.ff", "true <= false", 10U, "<=", "binary operator '<=' requires operands of the same numeric type"},
+        {"g14_binary_greater.ff", "true > false", 10U, ">", "binary operator '>' requires operands of the same numeric type"},
+        {"g14_binary_greater_equal.ff", "true >= false", 10U, ">=", "binary operator '>=' requires operands of the same numeric type"},
+        {"g14_binary_equal.ff", "true == 1", 10U, "==", "binary operator '==' requires operands of the same type"},
+        {"g14_binary_not_equal.ff", "true != 1", 10U, "!=", "binary operator '!=' requires operands of the same type"},
+        {"g14_binary_logical_and.ff", "true && 1", 10U, "&&", "binary operator '&&' requires bool operands"},
+        {"g14_binary_logical_or.ff", "true || 1", 10U, "||", "binary operator '||' requires bool operands"},
+        {"g14_binary_bit_and.ff", "true & false", 10U, "&", "binary operator '&' requires operands of the same integer type"},
+        {"g14_binary_bit_or.ff", "true | false", 10U, "|", "binary operator '|' requires operands of the same integer type"},
+        {"g14_binary_bit_xor.ff", "true ^ false", 10U, "^", "binary operator '^' requires operands of the same integer type"},
+        {"g14_binary_shift_left.ff", "true << false", 10U, "<<", "binary operator '<<' requires operands of the same integer type"},
+        {"g14_binary_shift_right.ff", "true >> false", 10U, ">>", "binary operator '>>' requires operands of the same integer type"},
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[256];
+        int written = snprintf(source,
+                               sizeof(source),
+                               "module g14.operator;\n"
+                               "func run(): void {\n"
+                               "    %s;\n"
+                               "}\n",
+                               cases[index].expression);
+
+        ASSERT(written > 0 && (size_t)written < sizeof(source));
+        assert_g14_semantic_error(cases[index].path,
+                                  source,
+                                  cases[index].column == 5U ? "AE1018" : "AE1019",
+                                  3U,
+                                  cases[index].column,
+                                  cases[index].lexeme,
+                                  cases[index].message);
+    }
+}
+
+/* EXPR02: literal, binary and computed-value targets are not writable for
+ * either ordinary or compound assignment. */
+static void test_g14_non_place_assignment_diagnostics(void) {
+    assert_g14_semantic_error(
+        "g14_literal_assignment.ff",
+        "module g14.literal_assignment;\n"
+        "func run(): void {\n"
+        "    1 = 2;\n"
+        "}\n",
+        "AE0104", 3U, 5U, "1", "assignment target '<expression>' is not writable");
+    assert_g14_semantic_error(
+        "g14_binary_assignment.ff",
+        "module g14.binary_assignment;\n"
+        "func run(left: i32, right: i32): void {\n"
+        "    (left + right) = 3;\n"
+        "}\n",
+        "AE0104", 3U, 11U, "+", "assignment target '<expression>' is not writable");
+    assert_g14_semantic_error(
+        "g14_call_result_assignment.ff",
+        "module g14.call_result_assignment;\n"
+        "func number(): i32 { return 1; }\n"
+        "func run(): void {\n"
+        "    number() = 2;\n"
+        "}\n",
+        "AE0104", 4U, 5U, "number", "assignment target 'number' is not writable");
+    assert_g14_semantic_error(
+        "g14_literal_compound_assignment.ff",
+        "module g14.literal_compound_assignment;\n"
+        "func run(): void {\n"
+        "    1 += 2;\n"
+        "}\n",
+        "AE0104", 3U, 5U, "1", "assignment target '<expression>' is not writable");
+    assert_g14_semantic_error(
+        "g14_binary_compound_assignment.ff",
+        "module g14.binary_compound_assignment;\n"
+        "func run(left: i32, right: i32): void {\n"
+        "    (left + right) += 3;\n"
+        "}\n",
+        "AE0104", 3U, 11U, "+", "assignment target '<expression>' is not writable");
+    assert_g14_semantic_error(
+        "g14_call_result_compound_assignment.ff",
+        "module g14.call_result_compound_assignment;\n"
+        "func number(): i32 { return 1; }\n"
+        "func run(): void {\n"
+        "    number() += 2;\n"
+        "}\n",
+        "AE0104", 4U, 5U, "number", "assignment target 'number' is not writable");
+}
+
+/* EXPR03: missing instance and static members retain their distinct stable
+ * diagnostics at the requested member name. */
+static void test_g14_missing_member_diagnostics(void) {
+    assert_g14_semantic_error(
+        "g14_missing_instance_member.ff",
+        "module g14.missing_instance_member;\n"
+        "type Box {}\n"
+        "func run(value: Box): void {\n"
+        "    value.missing;\n"
+        "}\n",
+        "AE0306", 4U, 11U, "missing", "type 'Box' has no member 'missing'");
+    assert_g14_semantic_error(
+        "g14_missing_static_member.ff",
+        "module g14.missing_static_member;\n"
+        "type Box {}\n"
+        "func run(): void {\n"
+        "    Box.missing;\n"
+        "}\n",
+        "AE0309", 4U, 9U, "missing", "type 'Box' has no static member 'missing'");
+}
+
+/* EXPR04: index validation is identical in read and write positions, while
+ * bool and floating-point indices each fail the integer-operand rule. */
+static void test_g14_index_diagnostics(void) {
+    assert_g14_semantic_error(
+        "g14_non_array_index_read.ff",
+        "module g14.non_array_index_read;\n"
+        "func run(): void {\n"
+        "    let value: i32 = 1;\n"
+        "    value[0];\n"
+        "}\n",
+        "AE1021", 4U, 5U, "value", "index expression target must have array type");
+    assert_g14_semantic_error(
+        "g14_non_array_index_write.ff",
+        "module g14.non_array_index_write;\n"
+        "func run(): void {\n"
+        "    var value: i32 = 1;\n"
+        "    value[0] = 2;\n"
+        "}\n",
+        "AE1021", 4U, 5U, "value", "index expression target must have array type");
+    assert_g14_semantic_error(
+        "g14_bool_index.ff",
+        "module g14.bool_index;\n"
+        "func run(): void {\n"
+        "    let values: i32[] = [1];\n"
+        "    values[false];\n"
+        "}\n",
+        "AE1022", 4U, 5U, "values", "index expression requires an integer operand");
+    assert_g14_semantic_error(
+        "g14_float_index.ff",
+        "module g14.float_index;\n"
+        "func run(): void {\n"
+        "    let values: i32[] = [1];\n"
+        "    values[0.0];\n"
+        "}\n",
+        "AE1022", 4U, 5U, "values", "index expression requires an integer operand");
+}
+
+/* EXPR05: direct and computed non-callable values fail at the callee token
+ * before Codegen is reached. */
+static void test_g14_non_callable_expression_diagnostics(void) {
+    assert_g14_semantic_error(
+        "g14_non_callable_local.ff",
+        "module g14.non_callable_local;\n"
+        "func run(): void {\n"
+        "    let value: i32 = 1;\n"
+        "    value();\n"
+        "}\n",
+        "AE0507", 4U, 5U, "value", "expression 'value' is not callable");
+    assert_g14_semantic_error(
+        "g14_non_callable_computed_result.ff",
+        "module g14.non_callable_computed_result;\n"
+        "func number(): i32 { return 1; }\n"
+        "func run(): void {\n"
+        "    number()();\n"
+        "}\n",
+        "AE0507", 4U, 5U, "number", "expression 'number' is not callable");
+}
+
+/* EXPR06: all compound-assignment spellings reject an operand outside their
+ * numeric or integer family, and same-family width mismatches remain illegal. */
+static void test_g14_compound_assignment_type_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *operator_name;
+        const char *family;
+    } cases[] = {
+        {"g14_compound_add.ff", "+=", "numeric"},
+        {"g14_compound_subtract.ff", "-=", "numeric"},
+        {"g14_compound_multiply.ff", "*=", "numeric"},
+        {"g14_compound_divide.ff", "/=", "numeric"},
+        {"g14_compound_modulo.ff", "%=", "numeric"},
+        {"g14_compound_bit_and.ff", "&=", "integer"},
+        {"g14_compound_bit_or.ff", "|=", "integer"},
+        {"g14_compound_bit_xor.ff", "^=", "integer"},
+        {"g14_compound_shift_left.ff", "<<=", "integer"},
+        {"g14_compound_shift_right.ff", ">>=", "integer"},
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[256];
+        char expected_message[160];
+        int source_written = snprintf(source,
+                                      sizeof(source),
+                                      "module g14.compound;\n"
+                                      "func run(): void {\n"
+                                      "    var value: i32 = 1;\n"
+                                      "    value %s true;\n"
+                                      "}\n",
+                                      cases[index].operator_name);
+        int message_written = snprintf(
+            expected_message,
+            sizeof(expected_message),
+            "compound assignment operator '%s' requires operands of the same %s type",
+            cases[index].operator_name,
+            cases[index].family);
+
+        ASSERT(source_written > 0 && (size_t)source_written < sizeof(source));
+        ASSERT(message_written > 0 &&
+               (size_t)message_written < sizeof(expected_message));
+        assert_g14_semantic_error(cases[index].path,
+                                  source,
+                                  "AE1020",
+                                  4U,
+                                  5U,
+                                  "value",
+                                  expected_message);
+    }
+
+    assert_g14_semantic_error(
+        "g14_compound_numeric_width_mismatch.ff",
+        "module g14.compound_numeric_width_mismatch;\n"
+        "func run(): void {\n"
+        "    var value: i32 = 1;\n"
+        "    let other: i64 = 2;\n"
+        "    value += other;\n"
+        "}\n",
+        "AE1020", 5U, 5U, "value", "requires operands of the same numeric type");
+    assert_g14_semantic_error(
+        "g14_compound_integer_width_mismatch.ff",
+        "module g14.compound_integer_width_mismatch;\n"
+        "func run(): void {\n"
+        "    var value: i32 = 1;\n"
+        "    let other: i64 = 2;\n"
+        "    value &= other;\n"
+        "}\n",
+        "AE1020", 5U, 5U, "value", "requires operands of the same integer type");
+}
+
 int main(void) {
+    test_g14_operator_operand_diagnostics();
+    test_g14_non_place_assignment_diagnostics();
+    test_g14_missing_member_diagnostics();
+    test_g14_index_diagnostics();
+    test_g14_non_callable_expression_diagnostics();
+    test_g14_compound_assignment_type_diagnostics();
     test_g13_undefined_value_name_diagnostics();
     test_g13_same_block_duplicate_binding_diagnostics();
     test_g13_callable_parameter_duplicate_diagnostics();

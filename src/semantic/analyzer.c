@@ -7528,7 +7528,6 @@ static bool expr_is_callable_like_address_of_operand(ResolveContext *context,
 static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
     InferredExprType operand_type;
     const char *operator_name;
-    const char *fmt_code;
     char *operand_type_name;
     char *message;
 
@@ -7563,16 +7562,13 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
 
         switch (expr->as.unary.op) {
             case FENG_TOKEN_MINUS:
-                fmt_code = "AE0234";
                 fmt = "unary operator '%s' requires a numeric operand, got '%s'";
                 break;
             case FENG_TOKEN_TILDE:
-                fmt_code = "AE0235";
                 fmt = "unary operator '%s' requires an integer operand, got '%s'";
                 break;
             case FENG_TOKEN_NOT:
             default:
-                fmt_code = "AE0236";
                 fmt = "unary operator '%s' requires a bool operand, got '%s'";
                 break;
         }
@@ -7581,7 +7577,7 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
                                  operand_type_name != NULL ? operand_type_name : "<unknown>");
     }
     free(operand_type_name);
-    return resolver_append_error(context, expr->token, fmt_code, message);
+    return resolver_append_error(context, expr->token, "AE1018", message);
 }
 
 static int canonical_integer_bit_width(const char *canonical_name) {
@@ -7767,7 +7763,7 @@ static bool validate_compound_assignment(ResolveContext *context, const FengStmt
 
     free(left_type_name);
     free(right_type_name);
-    return resolver_append_error(context, stmt->token, "AE0023", message);
+    return resolver_append_error(context, stmt->token, "AE1020", message);
 }
 
 static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) {
@@ -7878,7 +7874,7 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
 
     free(left_type_name);
     free(right_type_name);
-    return resolver_append_error(context, expr->token, "AE0030", message);
+    return resolver_append_error(context, expr->token, "AE1019", message);
 }
 
 static const FengExpr *block_yield_expression(const FengBlock *block) {
@@ -10646,7 +10642,7 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
         message = format_message("index expression target must have array type, got '%s'",
                                  object_type_name != NULL ? object_type_name : "<unknown>");
         free(object_type_name);
-        return resolver_append_error(context, expr->token, "AE0052", message) && false;
+        return resolver_append_error(context, expr->token, "AE1021", message) && false;
     }
 
     index_type = infer_expr_type(context, expr->as.index.index);
@@ -10658,7 +10654,7 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
     message = format_message("index expression requires an integer operand, got '%s'",
                              index_type_name != NULL ? index_type_name : "<unknown>");
     free(index_type_name);
-    return resolver_append_error(context, expr->token, "AE0053", message) && false;
+    return resolver_append_error(context, expr->token, "AE1022", message) && false;
 }
 
 static bool validate_stmt_condition_expr(ResolveContext *context,
