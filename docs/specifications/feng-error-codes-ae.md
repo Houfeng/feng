@@ -116,18 +116,24 @@
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
 |---|---|---|---|
 | AE0501 | 返回语句值形态约束 | AE0055 | %s body must use 'return;' without a value |
+| AE0501 | 非 `void` callable 空返回约束 | AE0057 | return statement does not match expected type '%s' |
+| AE0501 | `void` callable 带值返回约束 | AE1003（仅 `return expr;` 产生点） | return statement does not match expected type 'void' |
 | AE0502 | void 类型使用位置约束 | AE0165 | type 'void' is only valid as a function return type |
 | AE0503 | 返回类型推断失败需显式标注 | AE0223 | function '%.*s' requires an explicit return type because its return type could not be inferred |
 | AE0503 | 返回类型推断失败需显式标注 | AE0224 | method '%.*s.%.*s' requires an explicit return type because its return type could not be inferred |
+| AE0504 | callable 返回类型推断一致性约束 | AE0058 | callable '%.*s' has conflicting inferred return types '%s' and '%s' |
 | AE0505 | 变参位置数组传递约束 | AE0078 | call target '%s' does not accept an existing array at a variadic argument position; use explicit '...array' forwarding for the complete variadic group |
 | AE0506 | 可调用签名缺失约束 | AE0079 | call target '%s' has no function type overload accepting %zu argument(s) |
 | AE0507 | 表达式可调用性约束 | AE0080 | expression '%s' is not callable |
 | AE0508 | 方法签名重复声明约束 | AE0110 | duplicate method signature '%.*s' in type '%.*s' |
 | AE0508 | object-form spec 方法签名重复声明约束 | （新增模板） | duplicate method signature '%.*s' in object-form spec '%.*s' |
+| AE0508 | 顶层函数签名重复声明约束 | AE0218 | duplicate function signature '%.*s' |
 | AE0509 | 仅返回类型差异的重载禁用 | AE0111 | method overloads in type '%.*s' cannot differ only by return type: '%.*s' |
 | AE0509 | object-form spec 仅返回类型差异的重载禁用 | （新增模板） | method overloads in object-form spec '%.*s' cannot differ only by return type: '%.*s' |
+| AE0509 | 顶层函数仅返回类型差异的重载禁用 | AE0219 | function overloads cannot differ only by return type: '%.*s' |
 | AE0510 | 变参方法重载冲突约束 | AE0112 | variadic method overload conflicts with existing method '%.*s' in type '%.*s' |
 | AE0510 | object-form spec 变参方法重载冲突约束 | （新增模板） | variadic method overload conflicts with existing method '%.*s' in object-form spec '%.*s' |
+| AE0510 | 顶层变参函数重载冲突约束 | AE0220 | variadic function overload conflicts with existing overload '%.*s' |
 | AE0511 | 调用重载二义性约束 | AE0144 | function '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0145 | function '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0146 | static method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
@@ -135,6 +141,8 @@
 | AE0512 | 静态约束 requirement 缺失 | （新增） | constraint spec has no static method '%.*s' accessible on type parameter '%.*s' |
 | AE0513 | 字段-方法同名冲突约束 | AE0513 | field '%.*s' and method '%.*s' in type '%.*s' cannot share the same name within the same conflict surface (static or instance) |
 | AE0514 | 同成员面字段名唯一性约束 | （新增） | duplicate field '%.*s' in %s '%.*s' within the %s member surface |
+| AE0515 | 非 `void` callable 正常落尾约束 | （新增） | non-void callable '%.*s' can reach the end of its body without returning a value |
+| AE0515 | 非 `void` 块 Lambda 正常落尾约束 | （新增） | non-void block lambda can reach the end of its body without returning a value |
 | AE0511 | 调用重载二义性约束 | AE0148 | method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |
 | AE0512 | 调用重载缺失匹配约束 | AE0149 | method '%.*s.%.*s' has no overload accepting %zu argument(s) |
 | AE0511 | 调用重载二义性约束 | AE0150 | method '%s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous |

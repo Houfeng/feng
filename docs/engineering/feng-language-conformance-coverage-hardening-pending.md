@@ -1313,24 +1313,25 @@ callable-form `spec` 值和块 Lambda。相同规则存在多个声明面时，�
 
   当前实现会通过 Semantic，并在该路径运行到函数末尾时执行 Codegen 注入的
   `feng_panic("function reached end without return")`；实施后的预期是在命名 callable 的名称 token
-  或块 Lambda 的起始 `(` token 产生一个函数段稳定 Semantic 诊断。该规则覆盖非 `void` 顶层函数、实例 /
-  静态 / `fit` 方法和非 `void` 块 Lambda；省略返回类型但存在有值 `return`、因而推导为非 `void` 的
-  callable 也适用。反向用例至少覆盖直接落尾、无 `else` 的单分支 `if`、完整
+  或块 Lambda 的起始 `(` token 产生一个 `AE0515` Semantic 诊断。该规则覆盖非 `void` 顶层函数、
+  实例 / 静态 / `fit` 方法和非 `void` 块 Lambda；省略返回类型但存在有值 `return`、因而推导为非
+  `void` 的 callable 也适用。反向用例至少覆盖直接落尾、无 `else` 的单分支 `if`、完整
   `if / else if / else` 中一个分支落尾、缺少 `else` 或一个分支落尾的块 `match`、主表达式或本地
   `catch` 正常完成后继续落尾的 `try/catch`，以及顶层函数、普通方法和块 Lambda 三种 callable
   body；正向用例覆盖所有分支返回、一个分支返回而另一分支以逃逸 `throw` 终止、本地捕获后每个可达
   `catch` 均返回或重新抛出、可能退出的循环后存在明确返回、恒真且没有可达 `break` 的循环使函数
   末尾不可达，以及 `void` body 自然结束。`for/in` 始终保留循环后的正常路径；恒真循环的判断严格
   使用函数主规范定义的布尔字面量 `true` 或三段式 `for` 空条件，不扩展为实现自选的常量折叠；
-- [ ] FUNC-D04-A：显式非 `void` callable 中的空 `return;`、`return` 表达式与声明返回类型不匹配，
-  以及省略返回类型的同一 callable 中混用空 `return;` 与有值 `return`、或使用两个互不兼容的有值
-  返回，均在相应 `return` 或返回表达式位置产生一个函数段稳定 Semantic 诊断。顶层函数、实例方法、
-  静态方法、`fit` 方法与块 Lambda 的既有 FUNC01～FUNC08 证据只做反向映射；缺少的“空返回与有值
-  返回混用”和显式返回类型不匹配才新增最小程序；
+- [ ] FUNC-D04-A：显式非 `void` callable 中的空 `return;` 使用 `AE0501`；省略返回类型的同一
+  callable 中混用空 `return;` 与有值 `return`、或使用两个互不兼容的有值返回，均使用 `AE0504`；
+  诊断位于触发冲突的 `return` token。`return` 表达式与显式声明返回类型不匹配继续使用表达式目标
+  类型贴合对应的既有诊断，不得错误归入返回类型推导码。顶层函数、实例方法、静态方法、`fit` 方法
+  与块 Lambda 的既有 FUNC01～FUNC08 证据只做反向映射；缺少的“空返回与有值返回混用”和显式返回
+  类型不匹配才新增最小程序；
 - [ ] FUNC-D05：显式 `: void` 的顶层函数、实例 / 静态 / `fit` 方法和目标返回类型为 `void` 的块
-  Lambda 均拒绝 `return expr;`，并在返回表达式位置产生一个函数段稳定 Semantic 诊断；无
-  `return` 自然结束和显式 `return;` 均合法。构造函数与终结器的 `return` 值形态只映射 G05 已有
-  证据，不在 G15 重复；
+  Lambda 均拒绝 `return expr;`，并在 `return` token 产生一个 `AE0501` Semantic 诊断；不得沿用
+  普通表达式目标类型不匹配的 `AE1003`。无 `return` 自然结束和显式 `return;` 均合法。构造函数与
+  终结器的 `return` 值形态只映射 G05 已有证据，不在 G15 重复；
 
 #### 19.2.4 变长参数调用
 
@@ -1359,11 +1360,14 @@ callable-form `spec` 值和块 Lambda。相同规则存在多个声明面时，�
   `void` 自然结束 / `return;` 和合法变参调用；已有直接运行证据足以唯一证明某项时只记录映射，不
   新增同构程序，Semantic 接受不得替代可进入 FCTS 的运行断言；
 - [ ] FUNC-D10：审计函数领域仍由实现产生的 `AE0057`、`AE0058`、`AE0218`～`AE0220`。重复顶层
-  函数签名、仅返回类型不同和变参覆盖冲突应与成员方法复用 `AE0508`～`AE0510`；返回语句及推导
-  冲突应先在 AE 函数段定义稳定码，再同步实现和精确测试，见
+  函数签名、仅返回类型不同和变参覆盖冲突分别迁移为 `AE0508`～`AE0510`；非 `void` callable 的
+  空 `return;` 从 `AE0057` 迁移为 `AE0501`，冲突的推导返回类型从 `AE0058` 迁移为 `AE0504`，
+  `void` callable 的 `return expr;` 从该产生点当前使用的 `AE1003` 迁移为 `AE0501`，FUNC-D04 的
+  正常落尾使用 `AE0515`。同步实现和精确测试时，既有测试只允许修改问题记录明确列出的十条白名单，
+  见
   [ISSUE-G15-002](./feng-language-conformance-coverage-hardening-issues/g15.md#issue-g15-002函数诊断仍产生未进入当前-ae-分段规范的旧错误码)。
-  不得借 G15 重排 ABI、注解、构造、spec 满足、复合类型或泛型诊断；若迁移 `AE0058`，必须取得
-  修改 FUNC01-D～FUNC06-D 六条既有错误码断言的人工批准。
+  G15 可以新增用例；不得借本组修改白名单外的既有测试，不得重排 ABI、注解、构造、spec 满足、
+  复合类型或泛型诊断。若白名单外既有用例需要修复，必须暂停该修改并再次取得人工决策。
 
 ### 19.3 独立验收与交付 TODO
 
@@ -1371,8 +1375,9 @@ callable-form `spec` 值和块 Lambda。相同规则存在多个声明面时，�
   通用控制流结果分析实现块、`if`、`match`、`throw`、本地 `try/catch`、`while`、三段式 `for`、
   `for/in`、`break` 和 `continue` 的末尾可达性；不得通过新增运行时检查实现，不得把恒真识别扩大
   为未定义的常量折叠；
-- [ ] 按 `ISSUE-G15-002` 对齐 AE 函数段稳定码；只迁移 G15 直接覆盖的旧码产生点，并在取得批准后
-  更新必须随迁移变化的既有 FUNC01-D～FUNC06-D 错误码断言，不开展无关错误码重构；
+- [ ] 按 `ISSUE-G15-002` 对齐 AE 函数段稳定码；只迁移 G15 直接覆盖的旧码产生点，并严格按问题记录
+  的十条白名单替换或新增列明的错误码断言。白名单外只新增用例，不修改其他既有用例，不开展无关
+  错误码重构；
 - [ ] 建立 FUNC-D01～FUNC-D10 到现有 Semantic、Parser 与 FCTS 的逐项映射；每条已有证据必须能
   直接证明对应声明面、调用形态或返回边界，FUNC01～FUNC08、变参、method value 和 spec 专项只
   映射不重复；
