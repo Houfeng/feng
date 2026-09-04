@@ -1929,7 +1929,6 @@ static char *resolve_abi_annotation_string_arg(const FengSemanticModule *module,
 static bool field_is_bounded_decl(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
            !member->is_static &&
-           normalize_mutability(member->as.field.mutability) == FENG_MUTABILITY_LET &&
            (member->as.field.initializer != NULL || member->as.field.declaration_bound);
 }
 

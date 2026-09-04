@@ -101,6 +101,7 @@
 | AE0329 | 成员展开来源构造约束 | (新增) | member mix initializer must be an object construction expression |
 | AE0330 | 成员展开依赖无环约束 | (新增) | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
 | AE0331 | object-form spec 方法级泛参禁用 | (新增) | object-form spec method '%.*s' cannot declare type parameters |
+| AE0332 | 默认零值有限性约束 | CE0226 | type '%s' has no finite default zero value; provide an initializer、construction of type '%s' requires a non-terminating default zero value for field '%.*s'; provide a field declaration initializer |
 
 ## 04 枚举段
 
@@ -270,6 +271,7 @@
 | AE1020 | 复合赋值操作数类型约束 | AE0023 | compound assignment operator '%s' requires operands of the same numeric type, got '%s' and '%s'、compound assignment operator '%s' requires operands of the same integer type, got '%s' and '%s' |
 | AE1021 | 索引目标数组类型约束 | AE0052 | index expression target must have array type, got '%s' |
 | AE1022 | 索引操作数整数类型约束 | AE0053 | index expression requires an integer operand, got '%s' |
+| AE1023 | 显式转换资格约束 | AE0051 | cast from '%s' to '%s' is not allowed |
 
 ## 11 分支/匹配段
 

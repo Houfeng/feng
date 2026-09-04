@@ -496,7 +496,10 @@ struct FengTypeMember {
             FengSlice name;
             FengTypeRef *type;
             FengExpr *initializer;
-            bool declaration_bound; /* declaration-stage final binding fact */
+            /* Instance-field declaration initializer fact. For `let` this
+             * also means declaration-stage final binding; for `var` it only
+             * suppresses the phase-one default value. */
+            bool declaration_bound;
         } field;
         FengCallableSignature callable;
     } as;

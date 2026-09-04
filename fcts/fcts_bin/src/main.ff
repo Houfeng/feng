@@ -30,6 +30,7 @@ func main(args: string[]) {
       test_extern();
       test_lambda();
       test_type();
+      test_ordinary_type_semantics();
       test_object_construction_order();
       test_finalizer_capture();
       test_enum();

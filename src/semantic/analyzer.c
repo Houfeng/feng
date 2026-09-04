@@ -10643,7 +10643,7 @@ static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
                              target_type_name != NULL ? target_type_name : "<type>");
     free(value_type_name);
     free(target_type_name);
-    return resolver_append_error(context, expr->token, "AE0051", message);
+    return resolver_append_error(context, expr->token, "AE1023", message);
 }
 
 static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
@@ -12289,6 +12289,324 @@ static const FengTypeMember *find_decl_instance_member(const ResolveContext *con
 static bool field_has_declaration_initializer(const FengTypeMember *member) {
     return member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD &&
            (member->as.field.initializer != NULL || member->as.field.declaration_bound);
+}
+
+/* One ordinary-object or union instance on the current default-zero expansion
+ * path. Generic owner arguments are retained so distinct closed instances do
+ * not become a false cycle merely because they share one origin declaration. */
+typedef struct DefaultZeroExpansionFrame {
+    const FengDecl *type_decl;
+    const FengTypeRef *instance_type_ref;
+} DefaultZeroExpansionFrame;
+
+/* Compile-time-only state for the finite default-zero predicate. */
+typedef struct DefaultZeroExpansionState {
+    DefaultZeroExpansionFrame *frames;
+    size_t frame_count;
+    size_t frame_capacity;
+    bool out_of_memory;
+} DefaultZeroExpansionState;
+
+/* Return whether a declaration uses ordinary managed-object semantics. Tuple
+ * and @value declarations have inline zero storage and their layout cycles
+ * are rejected independently by the value-layout semantic pass. */
+static bool decl_uses_ordinary_object_semantics(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_TYPE &&
+           !decl->as.type_decl.is_tuple && !decl->as.type_decl.is_value;
+}
+
+/* Return whether a declaration contributes a recursive edge to default-zero
+ * expansion. Union defaults follow their first direct member by language
+ * rule; this is intentionally independent of any standard-library type name. */
+static bool decl_expands_default_zero_recursively(const FengDecl *decl) {
+    return decl_uses_ordinary_object_semantics(decl) ||
+           (decl != NULL && decl->kind == FENG_DECL_SPEC &&
+            decl->as.spec_decl.form == FENG_SPEC_FORM_UNION);
+}
+
+/* Resolve the effective type of one field. Explicit field types are closed
+ * through the current owner instance; inferred fields use the semantic fact
+ * already recorded for the member, with inference as a declaration-order
+ * fallback while the owning module is still being resolved. */
+static InferredExprType default_zero_field_type(
+    ResolveContext *context,
+    const FengDecl *owner_type_decl,
+    InferredExprType owner_type,
+    const FengTypeMember *field) {
+    InferredExprType field_type = inferred_expr_type_unknown();
+
+    if (field == NULL || field->kind != FENG_TYPE_MEMBER_FIELD) {
+        return field_type;
+    }
+    if (field->as.field.type != NULL) {
+        field_type = inferred_expr_type_from_type_ref(
+            substitute_type_ref_for_owner_instance(context,
+                                                   owner_type_decl,
+                                                   owner_type,
+                                                   field->as.field.type));
+        return field_type;
+    }
+    field_type = inferred_expr_type_from_type_fact(
+        feng_semantic_lookup_type_fact(context->analysis, field));
+    if (!inferred_expr_type_is_known(field_type) &&
+        field->as.field.initializer != NULL) {
+        field_type = infer_expr_type(context, field->as.field.initializer);
+    }
+    return field_type;
+}
+
+/* Compare one candidate instance with a frame already on the expansion path.
+ * Non-generic declarations are identified by declaration alone. A missing
+ * generic instance surface is treated conservatively as the same instance;
+ * valid closed construction and binding paths normally retain both refs. */
+static bool default_zero_frame_matches(
+    const ResolveContext *context,
+    const DefaultZeroExpansionFrame *frame,
+    const FengDecl *type_decl,
+    const FengTypeRef *instance_type_ref) {
+    if (frame == NULL || frame->type_decl != type_decl) {
+        return false;
+    }
+    if (type_decl == NULL ||
+        ((type_decl->kind == FENG_DECL_TYPE &&
+          type_decl->as.type_decl.type_param_count == 0U) ||
+         (type_decl->kind == FENG_DECL_SPEC &&
+          type_decl->as.spec_decl.type_param_count == 0U))) {
+        return true;
+    }
+    if (frame->instance_type_ref == NULL || instance_type_ref == NULL) {
+        return true;
+    }
+    return type_refs_semantically_equal(context,
+                                        frame->instance_type_ref,
+                                        instance_type_ref);
+}
+
+/* Append one frame without imposing an arbitrary recursion-depth limit. */
+static bool default_zero_push_frame(DefaultZeroExpansionState *state,
+                                    DefaultZeroExpansionFrame frame) {
+    DefaultZeroExpansionFrame *grown;
+    size_t capacity;
+
+    if (state->frame_count < state->frame_capacity) {
+        state->frames[state->frame_count++] = frame;
+        return true;
+    }
+    capacity = state->frame_capacity == 0U ? 8U : state->frame_capacity * 2U;
+    grown = (DefaultZeroExpansionFrame *)realloc(
+        state->frames, capacity * sizeof(*grown));
+    if (grown == NULL) {
+        state->out_of_memory = true;
+        return false;
+    }
+    state->frames = grown;
+    state->frame_capacity = capacity;
+    state->frames[state->frame_count++] = frame;
+    return true;
+}
+
+/* Determine whether a value of `type` can be produced by finite recursive
+ * default-zero expansion. Arrays and pointers are terminal: an empty array
+ * does not construct an element, and a pointer default does not construct a
+ * pointee. Builtins, enums, callable/object/intersection specs, tuples and
+ * @value types are likewise handled by their own finite default
+ * representation. Union-form specs are not terminal: their default follows
+ * the first direct member, regardless of the union's source-level name. */
+static bool default_zero_type_is_finite(
+    ResolveContext *context,
+    InferredExprType type,
+    DefaultZeroExpansionState *state) {
+    const FengDecl *type_decl = NULL;
+    const FengTypeRef *instance_type_ref = NULL;
+    InferredExprType owner_type;
+    size_t frame_index;
+    size_t field_index;
+
+    if (type.kind == FENG_INFERRED_EXPR_TYPE_BUILTIN ||
+        type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA ||
+        type.kind == FENG_INFERRED_EXPR_TYPE_UNKNOWN) {
+        return true;
+    }
+    if (type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        instance_type_ref = type.type_ref;
+        if (instance_type_ref == NULL ||
+            instance_type_ref->kind == FENG_TYPE_REF_ARRAY ||
+            instance_type_ref->kind == FENG_TYPE_REF_POINTER) {
+            return true;
+        }
+        if (instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
+            type_ref_builtin_canonical_name(instance_type_ref,
+                                            context->pointer_size) != NULL) {
+            return true;
+        }
+        if (instance_type_ref->as.named.segment_count == 1U &&
+            instance_type_ref->as.named.type_arg_count == 0U &&
+            find_type_param(context,
+                            instance_type_ref->as.named.segments[0]) != NULL) {
+            return true;
+        }
+        type_decl = resolve_type_ref_decl(context, instance_type_ref);
+    } else if (type.kind == FENG_INFERRED_EXPR_TYPE_DECL) {
+        type_decl = type.type_decl;
+    }
+    if (!decl_expands_default_zero_recursively(type_decl)) {
+        return true;
+    }
+
+    for (frame_index = 0U; frame_index < state->frame_count; ++frame_index) {
+        if (default_zero_frame_matches(context,
+                                       &state->frames[frame_index],
+                                       type_decl,
+                                       instance_type_ref)) {
+            return false;
+        }
+    }
+    if (!default_zero_push_frame(
+            state,
+            (DefaultZeroExpansionFrame){type_decl, instance_type_ref})) {
+        return false;
+    }
+
+    owner_type = instance_type_ref != NULL
+                     ? inferred_expr_type_from_type_ref(instance_type_ref)
+                     : inferred_expr_type_from_decl(type_decl);
+    if (type_decl->kind == FENG_DECL_SPEC) {
+        const FengTypeRef *first_member_type_ref;
+        InferredExprType first_member_type;
+        bool finite;
+
+        if (type_decl->as.spec_decl.as.union_form.member_count == 0U) {
+            --state->frame_count;
+            return true;
+        }
+        first_member_type_ref = substitute_type_ref_for_owner_instance(
+            context,
+            type_decl,
+            owner_type,
+            type_decl->as.spec_decl.as.union_form.members[0U]);
+        first_member_type = inferred_expr_type_from_type_ref(
+            first_member_type_ref);
+        finite = default_zero_type_is_finite(context,
+                                             first_member_type,
+                                             state);
+        --state->frame_count;
+        return finite;
+    }
+    for (field_index = 0U;
+         field_index < type_decl->as.type_decl.member_count;
+         ++field_index) {
+        const FengTypeMember *field =
+            type_decl->as.type_decl.members[field_index];
+        InferredExprType field_type;
+
+        if (field == NULL || field->kind != FENG_TYPE_MEMBER_FIELD ||
+            field->is_static) {
+            continue;
+        }
+        field_type = default_zero_field_type(context,
+                                             type_decl,
+                                             owner_type,
+                                             field);
+        if (!default_zero_type_is_finite(context, field_type, state)) {
+            --state->frame_count;
+            return false;
+        }
+    }
+    --state->frame_count;
+    return true;
+}
+
+/* Reject one declaration binding that would request a non-terminating default
+ * zero. A binding initializer bypasses this check at the caller. */
+static bool validate_binding_default_zero_target(
+    ResolveContext *context,
+    const FengTypeRef *type_ref,
+    FengToken binding_token) {
+    DefaultZeroExpansionState state = {0};
+    bool finite = default_zero_type_is_finite(
+        context, inferred_expr_type_from_type_ref(type_ref), &state);
+
+    free(state.frames);
+    if (state.out_of_memory) {
+        return resolver_append_error(
+            context,
+            binding_token,
+            "IE0001",
+            format_message("out of memory while checking default zero value"));
+    }
+    if (!finite) {
+        char *type_name = format_type_ref_name(type_ref);
+        bool ok = resolver_append_error(
+            context,
+            binding_token,
+            "AE0332",
+            format_message(
+                "type '%s' has no finite default zero value; provide an initializer",
+                type_name != NULL ? type_name : "<unknown>"));
+
+        free(type_name);
+        return ok;
+    }
+    return true;
+}
+
+/* Validate the member-declaration phase of one object construction. Only a
+ * field declaration initializer supplies its phase-one value directly.
+ * Constructor-body and object-literal writes happen later and therefore do
+ * not cancel a required field default. */
+static bool validate_construction_default_zero_requirements(
+    ResolveContext *context,
+    const FengExpr *target_expr,
+    const FengDecl *type_decl,
+    InferredExprType owner_type) {
+    size_t field_index;
+
+    if (!decl_uses_ordinary_object_semantics(type_decl)) {
+        return true;
+    }
+    for (field_index = 0U;
+         field_index < type_decl->as.type_decl.member_count;
+         ++field_index) {
+        const FengTypeMember *field =
+            type_decl->as.type_decl.members[field_index];
+        DefaultZeroExpansionState state = {0};
+        InferredExprType field_type;
+        bool finite;
+
+        if (field == NULL || field->kind != FENG_TYPE_MEMBER_FIELD ||
+            field->is_static || field_has_declaration_initializer(field)) {
+            continue;
+        }
+        field_type = default_zero_field_type(context,
+                                             type_decl,
+                                             owner_type,
+                                             field);
+        finite = default_zero_type_is_finite(context, field_type, &state);
+        free(state.frames);
+        if (state.out_of_memory) {
+            return resolver_append_error(
+                context,
+                target_expr != NULL ? target_expr->token
+                                    : context->program->module_token,
+                "IE0001",
+                format_message(
+                    "out of memory while checking construction default values"));
+        }
+        if (!finite) {
+            return resolver_append_error(
+                context,
+                target_expr != NULL ? target_expr->token
+                                    : context->program->module_token,
+                "AE0332",
+                format_message(
+                    "construction of type '%.*s' requires a non-terminating default zero value for field '%.*s'; provide a field declaration initializer",
+                    (int)type_decl->as.type_decl.name.length,
+                    type_decl->as.type_decl.name.data,
+                    (int)field->as.field.name.length,
+                    field->as.field.name.data));
+        }
+    }
+    return true;
 }
 
 static bool constructor_has_imported_bound_name(const FengTypeMember *constructor,
@@ -26692,6 +27010,19 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
         FengTypeRef *owner_instance_ref =
             synthesize_constructor_owner_instance_type_ref(
                 context, expr, target.type_decl);
+        InferredExprType owner_type = owner_instance_ref != NULL
+                                          ? inferred_expr_type_from_type_ref(
+                                                owner_instance_ref)
+                                          : resolved_type_target_owner_type(
+                                                &target);
+
+        if (!validate_construction_default_zero_requirements(
+                context,
+                expr->as.call.callee,
+                target.type_decl,
+                owner_type)) {
+            return false;
+        }
 
         mutable_expr->as.call.resolved_callable.kind = FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR;
         mutable_expr->as.call.resolved_callable.owner_type_decl = target.type_decl;
@@ -27964,6 +28295,15 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
                                              NULL,
                                              0U,
                                              &constructor_member)) {
+            free(target_name);
+            free(seen_field_names);
+            return false;
+        }
+        if (!validate_construction_default_zero_requirements(
+                context,
+                expr->as.object_literal.target,
+                target.type_decl,
+                resolved_type_target_owner_type(&target))) {
             free(target_name);
             free(seen_field_names);
             return false;
@@ -30128,6 +30468,11 @@ static bool resolve_binding(ResolveContext *context,
             return false;
         }
         if (binding->initializer == NULL) {
+            if (!validate_binding_default_zero_target(context,
+                                                      binding->type,
+                                                      binding->token)) {
+                return false;
+            }
             /* Phase S2-a: `let s: S;` (or `var s: S;`) without an initializer
              * is a default-witness slot when the declared type is a spec. */
             record_spec_default_binding_if_applicable(
@@ -34925,6 +35270,15 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
                                           member->as.field.initializer->kind == FENG_EXPR_LAMBDA;
 
                     if (!resolve_type_ref(context, member->as.field.type, false)) {
+                        ok = false;
+                        break;
+                    }
+                    if (member->is_static &&
+                        member->as.field.initializer == NULL &&
+                        !validate_binding_default_zero_target(
+                            context,
+                            member->as.field.type,
+                            member->token)) {
                         ok = false;
                         break;
                     }

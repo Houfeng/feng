@@ -1290,6 +1290,90 @@ static void test_bounded_decl_ft_roundtrip_uses_inferred_initializer(void) {
     free(tmp_dir);
 }
 
+/* Package-public FT must retain a var field declaration initializer without
+ * turning the imported field into an immutable let. This is the fact used by
+ * Semantic to skip only that field's construction-phase default zero. */
+static void test_var_declaration_initializer_survives_ft_roundtrip(void) {
+    static const char *kProviderSource =
+        "open module vendor.g18_var_initializer;\n"
+        "open type Empty();\n"
+        "open let empty: Empty = ();\n"
+        "open spec Recursive<T>: T | Empty;\n"
+        "open type Node {\n"
+        "    open var next: Recursive<Node> = empty;\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "module consumer.g18_var_initializer;\n"
+        "import vendor.g18_var_initializer as vendor;\n"
+        "func build(): vendor.Node {\n"
+        "    var node = vendor.Node();\n"
+        "    node.next = vendor.empty;\n"
+        "    return node;\n"
+        "}\n";
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options = {0};
+    FengSymbolError symbol_error = {0};
+    FengProgram *program = NULL;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengSlice module_segments[2];
+    const FengSymbolImportedModule *module = NULL;
+    const FengSymbolDeclView *node_decl = NULL;
+    const FengSymbolDeclView *next_field = NULL;
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g18_var_initializer_provider.ff",
+                                kProviderSource,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &symbol_error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &symbol_error));
+
+    module_segments[0] = slice_from_cstr("vendor");
+    module_segments[1] = slice_from_cstr("g18_var_initializer");
+    module = feng_symbol_provider_find_module(provider, module_segments, 2U);
+    ASSERT(module != NULL);
+    node_decl = feng_symbol_module_find_public_type(module, slice_from_cstr("Node"));
+    ASSERT(node_decl != NULL);
+    next_field = feng_symbol_decl_find_public_member(node_decl, slice_from_cstr("next"));
+    ASSERT(next_field != NULL);
+    ASSERT(feng_symbol_decl_has_bounded_decl(next_field));
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = feng_get_host_pointer_size();
+    program = parse_or_die("g18_var_initializer_consumer.ff", kConsumerSource);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&symbol_error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* Analyze one consumer against declarations restored from package-public FT
  * and require the expected immutable-member diagnostic. */
 static void assert_ft_let_consumer_rejected(
@@ -4944,6 +5028,7 @@ int main(void) {
     test_local_friend_fit_can_target_imported_type();
     test_imported_type_seal_members_do_not_satisfy_consumer_fit();
     test_bounded_decl_ft_roundtrip_uses_inferred_initializer();
+    test_var_declaration_initializer_survives_ft_roundtrip();
     test_let_three_phase_binding_semantics_survive_ft_roundtrip();
     test_constructor_availability_survives_ft_roundtrip();
     test_mixin_generated_members_ft_roundtrip();

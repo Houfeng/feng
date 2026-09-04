@@ -379,7 +379,7 @@
 | CE0908 | 对象字面量目标构造形态限制 | CE0180 | codegen: only direct type constructor targets are supported for object literals | 消解 |
 | CE0909 | 对象字面量字段重复 | CE0181 | codegen: duplicate field '%s' in object literal | 回到AE |
 | CE0910 | 未解析对象类型默认零值生成失败 | CE0225 | codegen: cannot default-zero an unresolved object type | 消解 |
-| CE0911 | 含引用环类型默认零值禁用 | CE0226 | codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer | 继续CE |
+| CE0911 | 含引用环类型默认零值禁用 | CE0226 | codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer | 回到AE（AE0332） |
 | CE0912 | 类型默认值生成失败 | CE0227 | codegen: cannot produce default value for this type | 继续CE |
 | CE0913 | 解构绑定初始化器缺失 | CE0229 | codegen: destructuring binding requires an initializer | 回到AE |
 | CE0914 | 解构绑定元素数量匹配约束 | CE0230 | codegen: destructuring arity mismatch | 回到AE |

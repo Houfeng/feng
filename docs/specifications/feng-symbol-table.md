@@ -713,7 +713,9 @@ attr key 常量建议如下:
 
 - `owner_id` 负责表达层级关系,例如字段/方法归属于某个 `type` 或某个 `fit`。
 - `abi` 表示该声明携带 `@abi` 兼容性元信息。
-- `bounded_decl` 仅用于 `type` 实例 `let` 字段,表示该字段已在成员声明初始化阶段完成最终显式绑定; 顶层 `let`、`static let` 以及其他非实例成员不使用该标志记录绑定状态。
+- `bounded_decl` 仅用于带声明初始化器的 `type` 实例 `let` / `var` 字段，表示构造第一阶段直接使用
+  声明初始化器结果而不先生成字段类型默认零值；对 `let`，该事实同时表示已经完成最终显式绑定，
+  对 `var` 则不限制后续赋值。顶层绑定、static 字段以及其他非实例成员不使用该标志。
 - `enum_item` 是 `enum` 的子符号而不是独立顶层声明: `owner_id` 指向所属 `enum`, `name_str` 表达 item 名称, `extra_ref` 固定表达其 0-based 声明顺序。
 - `enum` 自身作为 type-like 顶层声明导出; `enum_item` 的 `type_ref` 固定写 `0`, 因为其归属 enum 已由 `owner_id` 唯一给出。
 - `fit` 作为独立符号存在,便于记录“由哪个 `fit` 建立了哪些契约关系与扩展方法”。
@@ -984,7 +986,11 @@ RELS
 - `FT_REL_CTOR_BINDS_MEMBER = 4`
 - `FT_REL_SPEC_EXTENDS_SPEC = 5`（追加常量）
 
-带初始化器的 type 实例成员绑定状态由 `SYMS.flags.bounded_decl` 表达,无需额外 relation。读取 `.ft` 时,`bounded_decl` 与 `ctor_binds_member` 都必须还原为语义分析可直接消费的 type 实例成员绑定事实,保证跨包三段式构造的重复绑定检查与本包一致。顶层 `let`、`static let` 以及其他非实例成员的绑定状态不参与对象字面量初始化约束,不得为此写入 `bounded_decl` 或构造绑定 relation。
+带声明初始化器的 type 实例成员事实由 `SYMS.flags.bounded_decl` 表达,无需额外 relation。读取 `.ft` 时，
+`bounded_decl` 必须还原为 `let` / `var` 字段的声明初始化器事实；其中实例 `let` 再与
+`ctor_binds_member` 一起还原为三阶段最终绑定事实，保证跨包默认零值资格、构造初始化和重复绑定检查
+与本包一致。顶层绑定、static 字段以及其他非实例成员不得为此写入 `bounded_decl` 或构造绑定
+relation。
 
 针对泛型,`RELS` 还必须满足以下规则:
 

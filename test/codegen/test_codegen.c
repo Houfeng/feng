@@ -16360,10 +16360,206 @@ static void test_loop_tuple_destructuring_codegen(void) {
     feng_program_free(program);
 }
 
+/* TYPE08-B: the dedicated default-zero graph stops at arrays, strings,
+ * scalars and pointers while the independent ARC graph still marks array-
+ * mediated object cycles as potentially cyclic. */
+static void test_g18_default_zero_termination_boundaries_codegen(void) {
+    static const char *source =
+        "module g18.default_zero_termination_boundaries;\n"
+        "type ArrayNode {\n"
+        "    open var children: ArrayNode[];\n"
+        "    open var label: string;\n"
+        "    open var count: i32;\n"
+        "    open var raw: i32*;\n"
+        "}\n"
+        "type Leaf { open var count: i32; }\n"
+        "type Root { open var leaf: Leaf; }\n"
+        "type Left { open var rights: Right[]; }\n"
+        "type Right { open var left: Left; }\n"
+        "type Direct { open var next: Direct; }\n"
+        "func defaults(): i32 {\n"
+        "    let node: ArrayNode;\n"
+        "    let root: Root;\n"
+        "    let left: Left;\n"
+        "    let right: Right;\n"
+        "    node;\n"
+        "    left;\n"
+        "    right;\n"
+        "    return root.leaf.count;\n"
+        "}\n"
+        "func identity(value: Direct): Direct {\n"
+        "    return value;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "g18_default_zero_termination_boundaries.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    bool analyzed;
+    bool emitted;
+
+    analyzed = feng_semantic_analyze(programs,
+                                     1U,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     &analysis,
+                                     &errors,
+                                     &error_count);
+    if (!analyzed) {
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "%s:%u:%u [%s] %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(analyzed);
+    ASSERT(error_count == 0U);
+    emitted = feng_codegen_emit_program(analysis,
+                                        FENG_COMPILE_TARGET_LIB,
+                                        NULL,
+                                        &output,
+                                        &codegen_error);
+    if (!emitted) {
+        fprintf(stderr,
+                "%s:%u:%u [%s] %s\n",
+                codegen_error.path != NULL
+                    ? codegen_error.path
+                    : "<unknown>",
+                codegen_error.token.line,
+                codegen_error.token.column,
+                codegen_error.code != NULL
+                    ? codegen_error.code
+                    : "<none>",
+                codegen_error.message != NULL
+                    ? codegen_error.message
+                    : "<none>");
+    }
+    ASSERT(emitted);
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Feng__g18__default_zero_termination_boundaries__ArrayNode__default_zero") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Feng__g18__default_zero_termination_boundaries__Left__default_zero") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Feng__g18__default_zero_termination_boundaries__Right__default_zero") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "Feng__g18__default_zero_termination_boundaries__Direct__default_zero") == NULL);
+    ASSERT(strstr(output.c_source, "feng_array_new(") != NULL);
+    ASSERT(strstr(output.c_source, ".is_potentially_cyclic = true") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* ISSUE-G18-004: an object dependency containing an open owner parameter
+ * receives its default through the generic descriptor entry; Codegen must
+ * not emit or call a zero-argument factory for the contextual instance. */
+static void test_g18_open_generic_default_zero_uses_shared_entry_codegen(void) {
+    static const char *source =
+        "module g18.open_generic_default_zero;\n"
+        "type State<T> { open var payload: T; }\n"
+        "type ListLike<T> { open var items: T[]; }\n"
+        "type Holder<T> { open var values: ListLike<State<T> >; }\n"
+        "func create<T>(): Holder<T> { return Holder<T>(); }\n";
+    FengProgram *program = parse_or_die(
+        source, "g18_open_generic_default_zero.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengGenericDefaultZero__g18__open_generic_default_zero__ListLike__G1") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "ListLike__G__State__G__T__CTX__T__default_zero()") == NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* ISSUE-G18-005: exact same-type casts preserve the complete lowered value
+ * result for every ordinary representation and emit no cast helper or
+ * runtime conversion path. */
+static void test_g18_same_type_casts_are_codegen_noops(void) {
+    static const char *source =
+        "module g18.same_type_casts;\n"
+        "type Ref { open var number: i32; }\n"
+        "@value type Value { open var number: i32; }\n"
+        "@abi type Abi { open var number: i32; }\n"
+        "func sameString(value: string): string { return (string)value; }\n"
+        "func sameRef(value: Ref): Ref { return (Ref)value; }\n"
+        "func sameValue(value: Value): Value { return (Value)value; }\n"
+        "func sameAbi(value: Abi): Abi { return (Abi)value; }\n";
+    FengProgram *program = parse_or_die(source, "g18_same_type_casts.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(strstr(output.c_source, "sameString") != NULL);
+    ASSERT(strstr(output.c_source, "sameRef") != NULL);
+    ASSERT(strstr(output.c_source, "sameValue") != NULL);
+    ASSERT(strstr(output.c_source, "sameAbi") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_g18_default_zero_termination_boundaries_codegen();
+    test_g18_open_generic_default_zero_uses_shared_entry_codegen();
+    test_g18_same_type_casts_are_codegen_noops();
     test_multi_file_bin();
     test_member_mix_fields_and_mixable_wrappers_codegen();
     test_mixable_seal_wrappers_use_static_codegen_path();

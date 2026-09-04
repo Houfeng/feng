@@ -1,0 +1,244 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+
+var g18ModuleNumber: i32 = 3;
+var g18ModuleText: string = "module";
+var g18ModuleRoot: G18OrdinaryRoot;
+var g18ModuleNode: G18ArrayNode;
+
+type G18OrdinaryLeaf {
+  open var number: i32;
+}
+
+type G18OrdinaryRoot {
+  open var leaf: G18OrdinaryLeaf;
+  open var label: string;
+  open var values: i32[];
+}
+
+type G18ArrayNode {
+  open var children: G18ArrayNode[];
+  open var label: string;
+  open var count: i32;
+}
+
+@value type G18OrdinaryPoint {
+  open var x: i32;
+  open var y: i32;
+}
+
+@abi type G18AbiRecord {
+  open var code: i32;
+}
+
+type G18Constructed {
+  open var number: i16;
+  open var marker: string;
+  open var leaf: G18OrdinaryLeaf;
+  open var point: G18OrdinaryPoint;
+  open var abi: G18AbiRecord;
+
+  func G18Constructed(number: i16) {
+    self.number = number;
+    self.marker = "constructor";
+  }
+}
+
+type G18LiteralTarget {
+  open var number: i16;
+  open var leaf: G18OrdinaryLeaf;
+  open var point: G18OrdinaryPoint;
+  open var abi: G18AbiRecord;
+}
+
+type G18DualSurface {
+  open var value: i32;
+  open static var value: i32 = 40;
+}
+
+type G18StaticDefaults {
+  open static var root: G18OrdinaryRoot;
+  open static var node: G18ArrayNode;
+}
+
+type G18Empty();
+
+let g18Empty: G18Empty = ();
+
+spec G18Recursive<T>: T | G18Empty;
+
+type G18RecursiveNode {
+  open var next: G18Recursive<G18RecursiveNode> = g18Empty;
+}
+
+/** Return whether the recursive union currently selects its finite member. */
+func g18_recursive_is_empty(
+  value: G18Recursive<G18RecursiveNode>
+): bool {
+  return match value {
+    G18Empty { true }
+    else { false }
+  };
+}
+
+/** G18 ordinary-type matching, conversion, construction and zero-value behavior. */
+open func test_ordinary_type_semantics() {
+  describe("ordinary type semantics", () {
+    test("TYPE04-A fixed-width conversions retain their defined values", () {
+      let wide: i64 = 257;
+      let narrowed: i8 = (i8)wide;
+      let integerFloat: f64 = (f64)wide;
+      let fractional: f64 = 3.75;
+      let truncated: i32 = (i32)fractional;
+      let sameBool: bool = (bool)true;
+      let sameString: string = (string)"same";
+      let start: i8 = 7;
+      let asI16: i16 = (i16)start;
+      let asI32: i32 = (i32)asI16;
+      let asI64: i64 = (i64)asI32;
+      let asU8: u8 = (u8)asI64;
+      let asU16: u16 = (u16)asU8;
+      let asU32: u32 = (u32)asU16;
+      let asU64: u64 = (u64)asU32;
+      let asF32: f32 = (f32)asU64;
+      let asF64: f64 = (f64)asF32;
+      let roundTrip: i8 = (i8)asF64;
+
+      assert((i32)narrowed == 1,
+             "TYPE04-A integer narrowing truncates to the target width");
+      assert(integerFloat == 257.0,
+             "TYPE04-A integer converts to floating point");
+      assert(truncated == 3,
+             "TYPE04-A floating point converts to integer");
+      assert(sameBool && sameString == "same",
+             "TYPE04-A same-type scalar casts preserve values");
+      assert(roundTrip == 7,
+             "TYPE04-A every fixed-width numeric kind converts as source and target");
+    });
+
+    test("TYPE05-A constructor arguments use their fixed-width target", () {
+      let literal = G18Constructed(7);
+      let constantExpression = G18Constructed(2 + 3) {
+        marker: "literal",
+        leaf: G18OrdinaryLeaf { number: 8 },
+        point: G18OrdinaryPoint { x: 9, y: 10 },
+        abi: G18AbiRecord { code: 11 }
+      };
+
+      assert(literal.number == (i16)7 && literal.marker == "constructor",
+             "TYPE05-A numeric literal fits the selected constructor");
+      assert(constantExpression.number == (i16)5 &&
+             constantExpression.marker == "literal" &&
+             constantExpression.leaf.number == 8 &&
+             constantExpression.point.x == 9 &&
+             constantExpression.point.y == 10 &&
+             constantExpression.abi.code == 11,
+             "TYPE05-A typed literal fields run after constructor selection");
+    });
+
+    test("TYPE06-A all object-literal entrances preserve typed fields", () {
+      let shorthand = G18LiteralTarget {
+        number: 11,
+        leaf: G18OrdinaryLeaf { number: 12 },
+        point: G18OrdinaryPoint { x: 13, y: 14 },
+        abi: G18AbiRecord { code: 15 }
+      };
+      let explicit = G18LiteralTarget() {
+        number: 21,
+        leaf: G18OrdinaryLeaf { number: 22 },
+        point: G18OrdinaryPoint { x: 23, y: 24 },
+        abi: G18AbiRecord { code: 25 }
+      };
+
+      assert(shorthand.number == (i16)11 && shorthand.leaf.number == 12 &&
+             shorthand.point.x == 13 && shorthand.point.y == 14 &&
+             shorthand.abi.code == 15,
+             "TYPE06-A shorthand literal applies every ordinary target type");
+      assert(explicit.number == (i16)21 && explicit.leaf.number == 22 &&
+             explicit.point.x == 23 && explicit.point.y == 24 &&
+             explicit.abi.code == 25,
+             "TYPE06-A explicit empty-call literal applies every target type");
+    });
+
+    test("TYPE09 ordinary assignments preserve each value model", () {
+      var number: i32 = 1;
+      var text: string = "before";
+      let leaf = G18OrdinaryLeaf { number: 2 };
+      var leafAlias: G18OrdinaryLeaf = leaf;
+      let point = G18OrdinaryPoint { x: 3, y: 4 };
+      var pointCopy: G18OrdinaryPoint = point;
+      let abi = G18AbiRecord { code: 5 };
+      var abiAlias: G18AbiRecord = abi;
+      let sameLeaf = (G18OrdinaryLeaf)leaf;
+      let samePoint = (G18OrdinaryPoint)point;
+      let sameAbi = (G18AbiRecord)abi;
+
+      number = 6;
+      text = "after";
+      leafAlias.number = 7;
+      pointCopy.x = 8;
+      abiAlias.code = 9;
+
+      assert(number == 6 && text == "after",
+             "TYPE09 scalar and string assignment preserve exact types");
+      assert(leaf.number == 7 && sameLeaf == leaf,
+             "TYPE09 ordinary objects assign and cast by reference");
+      assert(point.x == 3 && pointCopy.x == 8 && samePoint.x == 3,
+             "TYPE09 value types assign and cast by value");
+      assert(abi.code == 9 && sameAbi == abi,
+             "TYPE09 abi types retain ordinary Feng reference semantics");
+    });
+
+    test("TYPE07-B instance and static member surfaces stay disjoint", () {
+      let item = G18DualSurface { value: 2 };
+      G18DualSurface.value = 40;
+      item.value = 3;
+
+      assert(item.value == 3 && G18DualSurface.value == 40,
+             "TYPE07-B identical names resolve through their own surface");
+    });
+
+    test("TYPE08-B nested ordinary defaults terminate at builtin values", () {
+      let root: G18OrdinaryRoot;
+
+      assert(root.leaf.number == 0 && root.label == "" &&
+             root.values.length() == (int)0,
+             "TYPE08-B nested objects, strings and arrays receive zero values");
+    });
+
+    test("TYPE08-B array-mediated cycles retain an empty default array", () {
+      let node: G18ArrayNode;
+
+      assert(node.children.length() == (int)0 && node.label == "" &&
+             node.count == 0,
+             "TYPE08-B empty arrays terminate default-zero recursion");
+    });
+
+    test("TYPE08 explicit recursive unions use provided initializers", () {
+      let value: G18Recursive<G18RecursiveNode> = g18Empty;
+      let node = G18RecursiveNode();
+
+      assert(g18_recursive_is_empty(value) &&
+             g18_recursive_is_empty(node.next),
+             "TYPE08 explicit binding and field initializers bypass recursive defaults");
+    });
+
+    test("TYPE09 module and static storage use the same default rules", () {
+      g18ModuleNumber = 10;
+      g18ModuleText = "updated";
+
+      assert(g18ModuleNumber == 10 && g18ModuleText == "updated",
+             "TYPE09 module scalar and string assignments preserve values");
+      assert(g18ModuleRoot.leaf.number == 0 &&
+             g18ModuleRoot.values.length() == (int)0 &&
+             g18ModuleNode.children.length() == (int)0,
+             "TYPE09 module object defaults use recursive zero values");
+      assert(G18StaticDefaults.root.leaf.number == 0 &&
+             G18StaticDefaults.root.values.length() == (int)0 &&
+             G18StaticDefaults.node.children.length() == (int)0,
+             "TYPE09 static object defaults use recursive zero values");
+    });
+  });
+}

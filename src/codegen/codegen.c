@@ -13775,12 +13775,12 @@ static bool cg_user_spec_member_name_equals(const UserSpecMember *sm,
            memcmp(sm->feng_name, name, len) == 0;
 }
 
-/* Compare the exact lowered identities used by intersection requirement
- * signatures. Unlike the broad assignment-oriented cg_types_equal helper,
- * this comparison preserves generic-parameter indices, nominal enum/spec/type
- * identity, pointer/array nesting, and array writability. */
-static bool cg_spec_slot_type_identity_equal(const CGType *left,
-                                             const CGType *right) {
+/* Compare exact lowered type identities. Unlike the broad
+ * assignment-oriented cg_types_equal helper, this comparison preserves
+ * generic-parameter indices, nominal enum/spec/type identity, pointer/array
+ * nesting, and array writability. */
+static bool cg_type_identity_equal(const CGType *left,
+                                   const CGType *right) {
     if (left == right) return true;
     if (left == NULL || right == NULL || left->kind != right->kind) {
         return false;
@@ -13794,13 +13794,13 @@ static bool cg_spec_slot_type_identity_equal(const CGType *left,
         case CG_TYPE_CALLABLE:
             return left->user_spec == right->user_spec;
         case CG_TYPE_POINTER:
-            return cg_spec_slot_type_identity_equal(left->element,
-                                                    right->element);
+            return cg_type_identity_equal(left->element,
+                                          right->element);
         case CG_TYPE_ARRAY:
             return left->array_element_writable ==
                        right->array_element_writable &&
-                   cg_spec_slot_type_identity_equal(left->element,
-                                                    right->element);
+                   cg_type_identity_equal(left->element,
+                                          right->element);
         default:
             return left->enum_decl == right->enum_decl;
     }
@@ -13834,15 +13834,15 @@ static bool cg_user_spec_members_semantically_equivalent(
     }
     if (left->kind == USM_KIND_FIELD) {
         return left->is_var == right->is_var &&
-               cg_spec_slot_type_identity_equal(left->type, right->type);
+               cg_type_identity_equal(left->type, right->type);
     }
     if (left->param_count != right->param_count ||
-        !cg_spec_slot_type_identity_equal(left->type, right->type)) {
+        !cg_type_identity_equal(left->type, right->type)) {
         return false;
     }
     for (size_t index = 0U; index < left->param_count; ++index) {
-        if (!cg_spec_slot_type_identity_equal(left->param_types[index],
-                                              right->param_types[index]) ||
+        if (!cg_type_identity_equal(left->param_types[index],
+                                    right->param_types[index]) ||
             cg_user_spec_member_param_is_variadic(left, index) !=
                 cg_user_spec_member_param_is_variadic(right, index)) {
             return false;
@@ -31935,12 +31935,22 @@ static bool cg_emit_cast(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&inner);
         return out->c_expr != NULL && out->type != NULL;
     }
+    ExprResult inner;
+    if (!cg_emit_expr(cg, e->as.cast.value, &inner)) { cgtype_free(target); return false; }
+    if (cg_type_identity_equal(target, inner.type)) {
+        /* An exact same-type cast changes no value representation. Moving the
+         * complete result preserves ownership and storage authority without
+         * emitting a runtime operation. */
+        cgtype_free(inner.type);
+        inner.type = target;
+        *out = inner;
+        return true;
+    }
     if (!cgtype_is_numeric(target->kind) && target->kind != CG_TYPE_BOOL) {
+        er_free(&inner);
         cgtype_free(target);
         return cg_fail(cg, e->token, "CE0193", "codegen: only numeric/bool casts supported in 1A iter 1");
     }
-    ExprResult inner;
-    if (!cg_emit_expr(cg, e->as.cast.value, &inner)) { cgtype_free(target); return false; }
     if (!cgtype_is_numeric(inner.type->kind) && inner.type->kind != CG_TYPE_BOOL) {
         er_free(&inner); cgtype_free(target);
         return cg_fail(cg, e->token, "CE0194", "codegen: cast operand must be numeric/bool");
@@ -34888,19 +34898,18 @@ static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
  * FengArray with the right element descriptor; the object default is a
  * recursive zero instance produced by the per-type Feng__M__T__default_zero()
  * factory emitted alongside the type. Cyclic object types (self- or
- * mutually-referential) cannot have a finite default zero and must be
- * rejected at compile time. */
+ * mutually-referential) cannot have a finite default zero and are rejected
+ * by semantic analysis whenever a source construct requests that value. */
 
-/* Recursive predicate: T is default-zero-safe iff T itself is acyclic AND
- * every managed object field of T is itself default-zero-safe. The recursion
- * terminates on the acyclic-types DAG. `visited` tracks the current DFS path
- * to keep the algorithm robust even if the cyclicity marker is somehow
- * inconsistent (defensive — feng_semantic_type_is_potentially_cyclic should
- * already catch true cycles). */
+/* Recursive predicate: T is default-zero-safe iff following only fields whose
+ * defaults recursively construct ordinary objects never returns to a type on
+ * the current path. Arrays deliberately terminate this graph because their
+ * default is empty and does not construct an element. This graph must remain
+ * independent of the runtime ARC cyclicity graph, which traverses array
+ * element types so it can recognize cycles formed after array mutation. */
 static bool cg_user_type_dz_safe_dfs(CG *cg, const UserType *t,
                                      const UserType **stack, size_t depth,
                                      size_t cap) {
-    if (feng_semantic_type_is_potentially_cyclic(cg->analysis, t->decl)) return false;
     for (size_t i = 0; i < depth; i++) if (stack[i] == t) return false;
     if (depth + 1 > cap) return false;  /* defensive */
     stack[depth] = t;
@@ -34931,8 +34940,9 @@ static bool cg_user_type_is_default_zero_safe(CG *cg, const UserType *t) {
  * exception of the IMMORTAL string singleton — it is also safe to treat as
  * "owns_ref" because feng_release/feng_retain are no-ops on IMMORTAL refs.
  *
- * Returns false (and reports through cg_fail) when `type` is not eligible
- * for default-zero (cyclic object type, or a type containing one). */
+ * Returns false (and reports through cg_fail) when Semantic's default-zero
+ * eligibility invariant was violated or another Codegen prerequisite is
+ * missing. */
 static bool cg_default_value_expr(CG *cg, const CGType *type,
                                   const FengToken *blame,
                                   char **out_expr) {
@@ -35084,7 +35094,7 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
             if (!cg_user_type_is_default_zero_safe(cg, type->user)) {
                 buf_free(&b);
                 return cg_fail(cg, blame ? *blame : (FengToken){0},
-                    "CE0226", "codegen: type '%s' contains reference cycles and has no default zero value; provide an explicit initializer",
+                    "IE0002", "codegen: internal: semantic analysis accepted a default-zero request for non-terminating type '%s'",
                     type->user->feng_name != NULL ? type->user->feng_name : "<unknown>");
             }
             if (cg_reference_needs_reified_field_layout(cg, type)) {
@@ -59083,7 +59093,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      *
      * Cyclic types intentionally have no factory; cg_default_value_expr
      * rejects them and the c_default_zero_name slot is freed below. */
-    if (cg_user_type_is_default_zero_safe(cg, t)) {
+    if (descriptor_has_default_zero) {
         /* Forward declare into headers so default_zero callers in any pass
          * (including this same type's own field defaults) can reference it
          * regardless of source order. */

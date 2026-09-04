@@ -20704,6 +20704,24 @@ static void assert_g16_semantic_error(const char *path,
                                  expected_message);
 }
 
+/* Assert one exact diagnostic for the G18 ordinary-type matrix. */
+static void assert_g18_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G18",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
 /* Assert that one G16 library program is accepted without diagnostics. */
 static void assert_g16_semantic_accepts(const char *path,
                                         const char *source) {
@@ -28058,7 +28076,7 @@ static void test_object_spec_method_values_reject_invalid_sources(void) {
             "spec Readable { func read(offset: int): string; }\n"
             "spec WrongReader(flag: bool): string;\n"
             "func run(value: Readable) { let reader = (WrongReader)value.read; }\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "object_spec_method_value_seal_access.ff",
@@ -28195,12 +28213,12 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         {
             "callable_cast_without_source_args.ff",
             "func use(): void { let value = (IntMapper)identity; }\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "callable_method_cast_without_source_args.ff",
             "func use(reader: Reader): void { let value = (IntMapper)reader.identity; }\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "callable_method_value_wrong_arg_count.ff",
@@ -28220,17 +28238,17 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         {
             "callable_method_cast_wrong_signature.ff",
             "func use(reader: Reader): void { let value = (IntMapper)reader.stringIdentity; }\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "callable_top_cast_wrong_signature.ff",
             "func use(): void { let value = (IntMapper)stringIdentity; }\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "callable_lambda_cast_wrong_signature.ff",
             "func use(): void { let value = (IntMapper)((item: string) -> item); }\n",
-            "AE0051"
+            "AE1023"
         }
     };
     const char *prefix =
@@ -28485,7 +28503,7 @@ static void test_callable_variadic_shape_mismatches_are_rejected(void) {
             "  let converted = (Target)value.collect;\n"
             "  converted;\n"
             "}\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "variadic_shape_bound_array_to_variadic_cast.ff",
@@ -28498,7 +28516,7 @@ static void test_callable_variadic_shape_mismatches_are_rejected(void) {
             "  let converted = (Variadic)value;\n"
             "  converted;\n"
             "}\n",
-            "AE0051"
+            "AE1023"
         },
         {
             "variadic_shape_bound_variadic_to_array_cast.ff",
@@ -28511,7 +28529,7 @@ static void test_callable_variadic_shape_mismatches_are_rejected(void) {
             "  let converted = (Fixed)value;\n"
             "  converted;\n"
             "}\n",
-            "AE0051"
+            "AE1023"
         }
     };
 
@@ -28794,9 +28812,9 @@ static void test_object_spec_upcast_rejects_out_of_scope_conversions(void) {
     assert_object_spec_upcast_error_code("spec_upcast_variance.ff",
                                          variance, "AE1003");
     assert_object_spec_upcast_error_code("spec_upcast_explicit_downcast.ff",
-                                         explicit_downcast, "AE0051");
+                                         explicit_downcast, "AE1023");
     assert_object_spec_upcast_error_code("spec_upcast_explicit_unrelated.ff",
-                                         explicit_unrelated, "AE0051");
+                                         explicit_unrelated, "AE1023");
     assert_object_spec_upcast_error_code("spec_upcast_ambiguous.ff",
                                          ambiguous, "AE0511");
 }
@@ -32275,7 +32293,603 @@ static void test_g17_expression_return_boundary_acceptance(void) {
         "}\n");
 }
 
+/* TYPE01/TYPE02: every ordinary binding-storage path applies the same exact
+ * target-type rule to initialization and subsequent assignment. */
+static void test_g18_binding_and_assignment_type_diagnostics(void) {
+    assert_g18_semantic_error(
+        "g18_local_numeric_initialization.ff",
+        "module g18.local_numeric_initialization;\n"
+        "func run(source: i64): void {\n"
+        "    let value: i32 = source;\n"
+        "}\n",
+        "AE1003", 3U, 22U, "source", "does not match expected type 'i32'");
+    assert_g18_semantic_error(
+        "g18_module_bool_initialization.ff",
+        "module g18.module_bool_initialization;\n"
+        "let value: bool = \"wrong\";\n",
+        "AE1003", 2U, 19U, "\"wrong\"", "does not match expected type 'bool'");
+    assert_g18_semantic_error(
+        "g18_instance_string_initialization.ff",
+        "module g18.instance_string_initialization;\n"
+        "type Holder {\n"
+        "    let value: string = false;\n"
+        "}\n",
+        "AE1003", 3U, 25U, "false", "does not match expected type 'string'");
+    assert_g18_semantic_error(
+        "g18_static_object_initialization.ff",
+        "module g18.static_object_initialization;\n"
+        "type Left {}\n"
+        "type Right {}\n"
+        "type Holder {\n"
+        "    static let value: Left = Right();\n"
+        "}\n",
+        "AE1003", 5U, 30U, "Right", "does not match expected type 'Left'");
+    assert_g18_semantic_error(
+        "g18_value_initialization.ff",
+        "module g18.value_initialization;\n"
+        "@value type First { var item: i32; }\n"
+        "@value type Second { var item: i32; }\n"
+        "func run(source: Second): void {\n"
+        "    let value: First = source;\n"
+        "}\n",
+        "AE1003", 5U, 24U, "source", "does not match expected type 'First'");
+    assert_g18_semantic_error(
+        "g18_abi_initialization.ff",
+        "module g18.abi_initialization;\n"
+        "@abi type First { var item: i32; }\n"
+        "@abi type Second { var item: i32; }\n"
+        "func run(source: Second): void {\n"
+        "    let value: First = source;\n"
+        "}\n",
+        "AE1003", 5U, 24U, "source", "does not match expected type 'First'");
+
+    assert_g18_semantic_error(
+        "g18_local_numeric_assignment.ff",
+        "module g18.local_numeric_assignment;\n"
+        "func run(source: i64): void {\n"
+        "    var target: i32 = 0;\n"
+        "    target = source;\n"
+        "}\n",
+        "AE1003", 4U, 14U, "source", "does not match expected type 'i32'");
+    assert_g18_semantic_error(
+        "g18_module_bool_assignment.ff",
+        "module g18.module_bool_assignment;\n"
+        "var target: bool = false;\n"
+        "func run(): void {\n"
+        "    target = \"wrong\";\n"
+        "}\n",
+        "AE1003", 4U, 14U, "\"wrong\"", "does not match expected type 'bool'");
+    assert_g18_semantic_error(
+        "g18_instance_object_assignment.ff",
+        "module g18.instance_object_assignment;\n"
+        "type Left {}\n"
+        "type Right {}\n"
+        "type Holder { open var target: Left; }\n"
+        "func run(holder: Holder, source: Right): void {\n"
+        "    holder.target = source;\n"
+        "}\n",
+        "AE1003", 6U, 21U, "source", "does not match expected type 'Left'");
+    assert_g18_semantic_error(
+        "g18_static_object_assignment.ff",
+        "module g18.static_object_assignment;\n"
+        "type Left {}\n"
+        "type Right {}\n"
+        "type Holder { open static var target: Left = Left(); }\n"
+        "func run(source: Right): void {\n"
+        "    Holder.target = source;\n"
+        "}\n",
+        "AE1003", 6U, 21U, "source", "does not match expected type 'Left'");
+}
+
+/* TYPE03: void is confined to callable return positions on every ordinary
+ * local, module, instance-field and static-field declaration path. */
+static void test_g18_void_binding_type_diagnostics(void) {
+    assert_g18_semantic_error(
+        "g18_local_void_binding.ff",
+        "module g18.local_void_binding;\n"
+        "func run(): void {\n"
+        "    let value: void;\n"
+        "}\n",
+        "AE0502", 3U, 16U, "void", "only valid as a function return type");
+    assert_g18_semantic_error(
+        "g18_module_void_binding.ff",
+        "module g18.module_void_binding;\n"
+        "let value: void;\n",
+        "AE0502", 2U, 12U, "void", "only valid as a function return type");
+    assert_g18_semantic_error(
+        "g18_instance_void_field.ff",
+        "module g18.instance_void_field;\n"
+        "type Holder {\n"
+        "    let value: void;\n"
+        "}\n",
+        "AE0502", 3U, 16U, "void", "only valid as a function return type");
+    assert_g18_semantic_error(
+        "g18_static_void_field.ff",
+        "module g18.static_void_field;\n"
+        "type Holder {\n"
+        "    static let value: void;\n"
+        "}\n",
+        "AE0502", 3U, 23U, "void", "only valid as a function return type");
+}
+
+/* TYPE04: every unsupported ordinary explicit-conversion family exits
+ * through the one AE1023 diagnostic at the cast expression itself. */
+static void test_g18_explicit_cast_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        unsigned int line;
+    } cases[] = {
+        {
+            "g18_cast_bool_to_numeric.ff",
+            "module g18.cast_bool_to_numeric;\n"
+            "func run(source: bool): void {\n"
+            "    let invalid = (i32)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_numeric_to_bool.ff",
+            "module g18.cast_numeric_to_bool;\n"
+            "func run(source: i32): void {\n"
+            "    let invalid = (bool)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_string_to_numeric.ff",
+            "module g18.cast_string_to_numeric;\n"
+            "func run(source: string): void {\n"
+            "    let invalid = (i32)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_numeric_to_string.ff",
+            "module g18.cast_numeric_to_string;\n"
+            "func run(source: i32): void {\n"
+            "    let invalid = (string)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_string_to_bool.ff",
+            "module g18.cast_string_to_bool;\n"
+            "func run(source: string): void {\n"
+            "    let invalid = (bool)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_bool_to_string.ff",
+            "module g18.cast_bool_to_string;\n"
+            "func run(source: bool): void {\n"
+            "    let invalid = (string)source;\n"
+            "}\n",
+            3U,
+        },
+        {
+            "g18_cast_numeric_to_object.ff",
+            "module g18.cast_numeric_to_object;\n"
+            "type Target {}\n"
+            "func run(source: i32): void {\n"
+            "    let invalid = (Target)source;\n"
+            "}\n",
+            4U,
+        },
+        {
+            "g18_cast_object_to_numeric.ff",
+            "module g18.cast_object_to_numeric;\n"
+            "type Source {}\n"
+            "func run(source: Source): void {\n"
+            "    let invalid = (i32)source;\n"
+            "}\n",
+            4U,
+        },
+        {
+            "g18_cast_distinct_objects.ff",
+            "module g18.cast_distinct_objects;\n"
+            "type Source {}\n"
+            "type Target {}\n"
+            "func run(source: Source): void {\n"
+            "    let invalid = (Target)source;\n"
+            "}\n",
+            5U,
+        },
+        {
+            "g18_cast_distinct_values.ff",
+            "module g18.cast_distinct_values;\n"
+            "@value type Source { var item: i32; }\n"
+            "@value type Target { var item: i32; }\n"
+            "func run(source: Source): void {\n"
+            "    let invalid = (Target)source;\n"
+            "}\n",
+            5U,
+        },
+        {
+            "g18_cast_distinct_abi_objects.ff",
+            "module g18.cast_distinct_abi_objects;\n"
+            "@abi type Source { var item: i32; }\n"
+            "@abi type Target { var item: i32; }\n"
+            "func run(source: Source): void {\n"
+            "    let invalid = (Target)source;\n"
+            "}\n",
+            5U,
+        },
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g18_semantic_error(cases[index].path,
+                                  cases[index].source,
+                                  "AE1023",
+                                  cases[index].line,
+                                  19U,
+                                  "(",
+                                  "is not allowed");
+    }
+}
+
+/* TYPE05/TYPE06: constructor selection and all three object-literal entry
+ * forms reject ordinary value mismatches at their stable owning token. */
+static void test_g18_construction_and_literal_type_diagnostics(void) {
+    assert_g18_semantic_error(
+        "g18_constructor_argument_mismatch.ff",
+        "module g18.constructor_argument_mismatch;\n"
+        "type Box { func Box(value: i32) {} }\n"
+        "func run(): void {\n"
+        "    let value = Box(\"wrong\");\n"
+        "}\n",
+        "AE0315", 4U, 17U, "Box", "no accessible constructor accepting 1 argument(s)");
+    assert_g18_semantic_error(
+        "g18_constructor_literal_argument_mismatch.ff",
+        "module g18.constructor_literal_argument_mismatch;\n"
+        "type Box { func Box(value: i32) {} }\n"
+        "func run(): void {\n"
+        "    let value = Box(\"wrong\") {};\n"
+        "}\n",
+        "AE0315", 4U, 17U, "Box", "no accessible constructor accepting 1 argument(s)");
+
+    assert_g18_semantic_error(
+        "g18_shorthand_literal_field_mismatch.ff",
+        "module g18.shorthand_literal_field_mismatch;\n"
+        "type Subject { open var item: i32; }\n"
+        "func run(): void {\n"
+        "    let value = Subject {\n"
+        "        item: \"wrong\"\n"
+        "    };\n"
+        "}\n",
+        "AE1003", 5U, 15U, "\"wrong\"", "does not match expected type 'i32'");
+    assert_g18_semantic_error(
+        "g18_empty_call_literal_field_mismatch.ff",
+        "module g18.empty_call_literal_field_mismatch;\n"
+        "type Left {}\n"
+        "type Right {}\n"
+        "type Subject { open var item: Left; }\n"
+        "func run(): void {\n"
+        "    let value = Subject() {\n"
+        "        item: Right()\n"
+        "    };\n"
+        "}\n",
+        "AE1003", 7U, 15U, "Right", "does not match expected type 'Left'");
+    assert_g18_semantic_error(
+        "g18_argument_call_literal_field_mismatch.ff",
+        "module g18.argument_call_literal_field_mismatch;\n"
+        "@value type Left { var number: i32; }\n"
+        "@value type Right { var number: i32; }\n"
+        "type Subject {\n"
+        "    open var item: Left;\n"
+        "    func Subject(seed: i32) {}\n"
+        "}\n"
+        "func run(source: Right): void {\n"
+        "    let value = Subject(1) {\n"
+        "        item: source\n"
+        "    };\n"
+        "}\n",
+        "AE1003", 10U, 15U, "source", "does not match expected type 'Left'");
+}
+
+/* TYPE07: instance and static surfaces remain disjoint for reads, writes and
+ * calls, while identical names on opposite surfaces remain legal. */
+static void test_g18_instance_static_surface_diagnostics(void) {
+    assert_g18_semantic_error(
+        "g18_instance_reads_static_field.ff",
+        "module g18.instance_reads_static_field;\n"
+        "type Surface { open static let count: i32 = 1; }\n"
+        "func run(value: Surface): void {\n"
+        "    value.count;\n"
+        "}\n",
+        "AE0310", 4U, 11U, "count", "must be accessed through its type");
+    assert_g18_semantic_error(
+        "g18_instance_writes_static_field.ff",
+        "module g18.instance_writes_static_field;\n"
+        "type Surface { open static var count: i32 = 1; }\n"
+        "func run(value: Surface): void {\n"
+        "    value.count = 2;\n"
+        "}\n",
+        "AE0310", 4U, 11U, "count", "must be accessed through its type");
+    assert_g18_semantic_error(
+        "g18_instance_calls_static_method.ff",
+        "module g18.instance_calls_static_method;\n"
+        "type Surface { open static func read(): i32 { return 1; } }\n"
+        "func run(value: Surface): void {\n"
+        "    value.read();\n"
+        "}\n",
+        "AE0310", 4U, 11U, "read", "must be accessed through its type");
+    assert_g18_semantic_error(
+        "g18_type_reads_instance_field.ff",
+        "module g18.type_reads_instance_field;\n"
+        "type Surface { open var count: i32; }\n"
+        "func run(): void {\n"
+        "    Surface.count;\n"
+        "}\n",
+        "AE0309", 4U, 13U, "count", "type 'Surface' has no static member 'count'");
+    assert_g18_semantic_error(
+        "g18_type_calls_instance_method.ff",
+        "module g18.type_calls_instance_method;\n"
+        "type Surface { open func read(): i32 { return 1; } }\n"
+        "func run(): void {\n"
+        "    Surface.read();\n"
+        "}\n",
+        "AE0309", 4U, 13U, "read", "type 'Surface' has no static member 'read'");
+
+    assert_single_source_semantic_ok(
+        "g18_disjoint_member_surfaces.ff",
+        "module g18.disjoint_member_surfaces;\n"
+        "type Surface {\n"
+        "    open var value: i32;\n"
+        "    open static var value: i32 = 2;\n"
+        "}\n"
+        "func read(item: Surface): i32 {\n"
+        "    return item.value + Surface.value;\n"
+        "}\n");
+}
+
+/* TYPE08/TYPE08-A: recursive ordinary-object declarations remain legal, but
+ * every source construct that actually requests an infinite default zero is
+ * rejected by Semantic before Codegen. Constructor and object-literal writes
+ * occur after the member-declaration phase and cannot suppress this check. */
+static void test_g18_default_zero_semantic_diagnostics(void) {
+    assert_g18_semantic_error(
+        "g18_default_zero_local_cycle.ff",
+        "module g18.default_zero_local_cycle;\n"
+        "type Node { var next: Node; }\n"
+        "func run(): void {\n"
+        "    var node: Node;\n"
+        "}\n",
+        "AE0332", 4U, 9U, "node", "has no finite default zero value");
+    assert_g18_semantic_error(
+        "g18_default_zero_module_cycle.ff",
+        "module g18.default_zero_module_cycle;\n"
+        "type Left { var right: Right; }\n"
+        "type Right { var left: Left; }\n"
+        "let value: Left;\n",
+        "AE0332", 4U, 5U, "value", "has no finite default zero value");
+    assert_g18_semantic_error(
+        "g18_default_zero_static_cycle.ff",
+        "module g18.default_zero_static_cycle;\n"
+        "type Node { var next: Node; }\n"
+        "type Holder {\n"
+        "    static let value: Node;\n"
+        "}\n",
+        "AE0332", 4U, 16U, "value", "has no finite default zero value");
+    assert_g18_semantic_error(
+        "g18_default_zero_construction_cycle.ff",
+        "module g18.default_zero_construction_cycle;\n"
+        "type Node { open var next: Node; }\n"
+        "func build(): Node {\n"
+        "    return Node();\n"
+        "}\n",
+        "AE0332", 4U, 12U, "Node",
+        "requires a non-terminating default zero value for field 'next'");
+    assert_g18_semantic_error(
+        "g18_default_zero_literal_does_not_bypass_phase_one.ff",
+        "module g18.default_zero_literal_does_not_bypass_phase_one;\n"
+        "type Node { open var next: Node; }\n"
+        "func copy(source: Node): Node {\n"
+        "    return Node { next: source };\n"
+        "}\n",
+        "AE0332", 4U, 12U, "Node",
+        "requires a non-terminating default zero value for field 'next'");
+    assert_g18_semantic_error(
+        "g18_default_zero_constructor_does_not_bypass_phase_one.ff",
+        "module g18.default_zero_constructor_does_not_bypass_phase_one;\n"
+        "type Node {\n"
+        "    open var next: Node;\n"
+        "    func Node(next: Node) { self.next = next; }\n"
+        "}\n"
+        "func copy(source: Node): Node {\n"
+        "    return Node(source);\n"
+        "}\n",
+        "AE0332", 7U, 12U, "Node",
+        "requires a non-terminating default zero value for field 'next'");
+    assert_g18_semantic_error(
+        "g18_union_first_member_cycle.ff",
+        "module g18.union_first_member_cycle;\n"
+        "type Empty();\n"
+        "spec Recursive<T>: T | Empty;\n"
+        "type Node { open var next: Recursive<Node>; }\n"
+        "func build(): Node {\n"
+        "    return Node();\n"
+        "}\n",
+        "AE0332", 6U, 12U, "Node",
+        "requires a non-terminating default zero value for field 'next'");
+    assert_g18_semantic_error(
+        "g18_union_binding_first_member_cycle.ff",
+        "module g18.union_binding_first_member_cycle;\n"
+        "type Empty();\n"
+        "spec Recursive<T>: T | Empty;\n"
+        "type Node { open var next: Recursive<Node>; }\n"
+        "func defaults(): void {\n"
+        "    let value: Recursive<Node>;\n"
+        "}\n",
+        "AE0332", 6U, 9U, "value", "has no finite default zero value");
+}
+
+/* TYPE08/TYPE08-B: declaration-only recursive shapes and bindings with an
+ * explicit source value do not request default zero. Arrays and arbitrary
+ * union-form specs whose first member is finite terminate expansion without
+ * relying on a standard-library type name. */
+static void test_g18_default_zero_semantic_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g18_recursive_declarations_and_initialized_bindings.ff",
+        "module g18.recursive_declarations_and_initialized_bindings;\n"
+        "type Node { open var next: Node; }\n"
+        "type Left { open var right: Right; }\n"
+        "type Right { open var left: Left; }\n"
+        "func retain(source: Node): Node {\n"
+        "    let first: Node = source;\n"
+        "    var second: Node = first;\n"
+        "    return second;\n"
+        "}\n");
+    assert_single_source_semantic_ok(
+        "g18_named_union_default_terminates.ff",
+        "module g18.named_union_default_terminates;\n"
+        "type Empty();\n"
+        "spec MaybeValue<T>: Empty | T;\n"
+        "type Node { open var next: MaybeValue<Node>; }\n"
+        "func build(): Node { return Node(); }\n"
+        "func defaults(): Node { let node: Node; return node; }\n");
+    assert_single_source_semantic_ok(
+        "g18_field_declaration_initializer_avoids_construction_default.ff",
+        "module g18.field_declaration_initializer_avoids_construction_default;\n"
+        "func unavailable(): Node { throw \"unavailable\"; }\n"
+        "type Node { open var next: Node = unavailable(); }\n"
+        "func build(): Node { return Node(); }\n");
+    assert_single_source_semantic_ok(
+        "g18_recursive_union_explicit_initializers.ff",
+        "module g18.recursive_union_explicit_initializers;\n"
+        "type Empty();\n"
+        "let empty: Empty = ();\n"
+        "spec Recursive<T>: T | Empty;\n"
+        "type Node { open var next: Recursive<Node> = empty; }\n"
+        "func retain(): Recursive<Node> {\n"
+        "    let value: Recursive<Node> = empty;\n"
+        "    var mutable: Recursive<Node> = value;\n"
+        "    mutable = empty;\n"
+        "    return mutable;\n"
+        "}\n"
+        "func build(): Node { return Node(); }\n");
+}
+
+/* TYPE08-A: imported field metadata is sufficient for the same use-site
+ * decision. A field without a declaration initializer is rejected, while an
+ * exported declaration-bound fact suppresses only the construction-phase
+ * default for that field. */
+static void test_g18_imported_default_zero_semantics(void) {
+    {
+        static const char *provider_source =
+            "open module vendor.g18_cycle;\n"
+            "open type Node { open var next: Node; }\n";
+        static const char *consumer_source =
+            "module app.g18_cycle;\n"
+            "import vendor.g18_cycle as vendor;\n"
+            "func build(): vendor.Node {\n"
+            "    return vendor.Node();\n"
+            "}\n";
+        ImportedSourceFixture fixture;
+        FengSemanticImportedModuleQuery query;
+        FengSemanticAnalyzeOptions options;
+        FengProgram *program;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        imported_source_fixture_init(&fixture,
+                                     "g18_imported_cycle_provider.ff",
+                                     provider_source);
+        query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.imported_modules = &query;
+        options.pointer_size = sizeof(void *);
+        program = parse_program_or_die("g18_imported_cycle_consumer.ff",
+                                       consumer_source);
+        programs[0] = program;
+        ASSERT(!feng_semantic_analyze_with_options(programs,
+                                                   1U,
+                                                   &options,
+                                                   &analysis,
+                                                   &errors,
+                                                   &error_count));
+        ASSERT(error_count == 1U);
+        ASSERT(strcmp(errors[0].path,
+                      "g18_imported_cycle_consumer.ff") == 0);
+        ASSERT(strcmp(errors[0].code, "AE0332") == 0);
+        ASSERT(errors[0].token.line == 4U);
+        ASSERT(errors[0].token.column == 19U);
+        ASSERT(errors[0].token.length == strlen("Node"));
+        ASSERT(memcmp(errors[0].token.lexeme,
+                      "Node",
+                      errors[0].token.length) == 0);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        imported_source_fixture_dispose(&fixture);
+    }
+    {
+        static const char *provider_source =
+            "open module vendor.g18_bound_cycle;\n"
+            "open func unavailable(): Node { throw \"unavailable\"; }\n"
+            "open type Node { open var next: Node = unavailable(); }\n";
+        static const char *consumer_source =
+            "module app.g18_bound_cycle;\n"
+            "import vendor.g18_bound_cycle as vendor;\n"
+            "func build(): vendor.Node { return vendor.Node(); }\n";
+        ImportedSourceFixture fixture;
+        FengSemanticImportedModuleQuery query;
+        FengSemanticAnalyzeOptions options;
+        FengProgram *program;
+        const FengProgram *programs[1];
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+
+        imported_source_fixture_init(&fixture,
+                                     "g18_imported_bound_provider.ff",
+                                     provider_source);
+        query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.imported_modules = &query;
+        options.pointer_size = sizeof(void *);
+        program = parse_program_or_die("g18_imported_bound_consumer.ff",
+                                       consumer_source);
+        programs[0] = program;
+        if (!feng_semantic_analyze_with_options(programs,
+                                                1U,
+                                                &options,
+                                                &analysis,
+                                                &errors,
+                                                &error_count)) {
+            for (size_t index = 0U; index < error_count; ++index) {
+                fprintf(stderr,
+                        "%s:%u:%u [%s] %s\n",
+                        errors[index].path,
+                        errors[index].token.line,
+                        errors[index].token.column,
+                        errors[index].code,
+                        errors[index].message);
+            }
+            ASSERT(false);
+        }
+        ASSERT(error_count == 0U);
+
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+        imported_source_fixture_dispose(&fixture);
+    }
+}
+
 int main(void) {
+    test_g18_default_zero_semantic_diagnostics();
+    test_g18_default_zero_semantic_acceptance();
+    test_g18_imported_default_zero_semantics();
+    test_g18_binding_and_assignment_type_diagnostics();
+    test_g18_void_binding_type_diagnostics();
+    test_g18_explicit_cast_diagnostics();
+    test_g18_construction_and_literal_type_diagnostics();
+    test_g18_instance_static_surface_diagnostics();
     test_g17_catch_order_and_unknown_diagnostics();
     test_g17_try_result_presence_diagnostics();
     test_g17_rethrow_and_terminal_throw_acceptance();

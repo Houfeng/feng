@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G17 已交付；G18～G25 待 Review
+> 状态：G01～G18 已交付；G19～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -1948,7 +1948,7 @@ ABI 或 `.ft`，也不得新增生成程序的运行时判断、分支、调用�
 ### 22.1 测试重点与范围
 
 验证非泛型普通值在确定目标类型位置中的匹配、显式转换、对象构造、对象字面量、成员访问方式和
-默认零值资格，并锁定对应的 Semantic 或 Codegen 稳定诊断。语言规则统一引用
+默认零值资格，并锁定对应的 Semantic 稳定诊断及 Codegen 内部不变量。语言规则统一引用
 [变量绑定与作用域规范](../specifications/feng-binding.md)、
 [表达式与运算规范](../specifications/feng-expression.md)、
 [内建类型规范](../specifications/feng-builtin-type.md)和
@@ -1963,6 +1963,9 @@ ABI 或 `.ft`，也不得新增生成程序的运行时判断、分支、调用�
 spec / fit、union / intersection 和泛型分别归 G19～G25。`@value type` 的布局循环、callable 值、
 借用指针和 ABI 边界只建立既有专项映射，不在 G18 重复排列。
 
+TYPE08 只为验证默认零值使用点边界，取样一个最小泛型 union-form；该取样仅检查“首成员是否需要
+展开默认零值”，不扩展到 union 进入、收窄、布局或一般泛型语义，这些仍分别归 G24、G25。
+
 不同声明位置或类型类别只有在经过不同的 Semantic / Codegen 路径时才分别取样；不得机械生成
 “全部位置 × 全部类型”的笛卡尔积。非法程序必须锁定唯一诊断的错误码、触发 token、行列、来源文件
 和编译阶段；能够形成可观察结果的合法邻界必须进入 FCTS 直接运行。
@@ -1971,116 +1974,135 @@ spec / fit、union / intersection 和泛型分别归 G19～G25。`@value type` �
 
 #### 22.2.1 绑定初始化与普通赋值的目标类型
 
-- [ ] TYPE01：对显式声明类型的局部绑定、模块级绑定、实例字段声明初始化器和 static 绑定初始化器
+- [x] TYPE01：对显式声明类型的局部绑定、模块级绑定、实例字段声明初始化器和 static 绑定初始化器
   分别提供一个最小不兼容值；取样必须覆盖已具备静态类型的不同固定宽度数值、`bool` / `string`、
   两个不同普通对象类型、两个不同 `@value type` 和两个不同 `@abi type`，并在实际初始化表达式
   起始 token 产生唯一 `AE1003`。`let` / `var` 只按经过的不同初始化路径取样，不重复可写性矩阵；
-- [ ] TYPE02：对局部 `var`、模块级 `var`、实例 `var` 字段和 static `var` 分别赋入不兼容右值，在
+- [x] TYPE02：对局部 `var`、模块级 `var`、实例 `var` 字段和 static `var` 分别赋入不兼容右值，在
   右值起始 token 产生唯一 `AE1003`。至少覆盖已有静态类型的跨数值类型赋值和不同名义对象类型赋值；
   `let` 目标、非位置左值、数组元素及复合赋值分别映射 G13、G14 和 G21，不混入本项；
-- [ ] TYPE03：`void` 作为局部绑定、模块级绑定、普通实例字段或 static 绑定的声明类型时，均在
+- [x] TYPE03：`void` 作为局部绑定、模块级绑定、普通实例字段或 static 绑定的声明类型时，均在
   `void` token 产生唯一 `AE0502`；函数 / Lambda 参数位置映射 G15，数组元素位置留给 G21，函数
   返回类型 `void` 继续合法。无初始化器但类型具有合法默认零值的对应普通绑定必须继续通过。
 
 #### 22.2.2 显式类型转换
 
-- [ ] TYPE04：建立普通显式转换的反向矩阵，覆盖 `bool` 与数值、`string` 与数值 / `bool`、数值与
+- [x] TYPE04：建立普通显式转换的反向矩阵，覆盖 `bool` 与数值、`string` 与数值 / `bool`、数值与
   普通对象、两个不同普通对象类型、两个不同 `@value type` 以及两个不同 `@abi type` 之间不受支持的
   转换；已有直接证据只建立映射，缺少的名义类型边界新增最小程序。所有非法转换统一在 cast 表达式
   起始 token 产生一个新的稳定表达式诊断 `AE1023`，不得继续产生未进入现行 AE 分段规范的
   `AE0051`，见 `ISSUE-G18-001`；
-- [ ] TYPE04-A：同一普通类型的显式转换和所有数值类型之间的合法显式转换继续通过；FCTS 至少直接
+- [x] TYPE04-A：同一普通类型的显式转换和所有数值类型之间的合法显式转换继续通过；FCTS 至少直接
   观察一次整数缩窄截断、整数到浮点、浮点到整数和同一普通对象 / `@value type` 转换后的值。数组
   可写层转换、enum 底层值转换、tuple 形状转换、spec 视角转换、callable 转换和泛型目标分别只映射
   G19～G25 或既有专项，不在 G18 重复。
 
 #### 22.2.3 对象构造参数与对象字面量字段
 
-- [ ] TYPE05：非泛型普通 `type` 已显式声明构造集合时，分别以 `Type(wrong)` 和
+- [x] TYPE05：非泛型普通 `type` 已显式声明构造集合时，分别以 `Type(wrong)` 和
   `Type(wrong) {}` 传入参数数量正确但静态类型不匹配的值，必须在构造目标 token 产生唯一
   `AE0315`，不得延迟到 Codegen。无显式构造时传入非零参数的 `AE0313`、构造重载二义性的
   `AE0314`、无参 / 有参构造可用性和 `seal` 构造的 `AE0315` 均直接映射 G05；本组不修改这些
   已交付诊断契约；
-- [ ] TYPE05-A：构造参数为固定宽度数值类型时，数值字面量和纯字面量数值常量表达式必须按参数目标
+- [x] TYPE05-A：构造参数为固定宽度数值类型时，数值字面量和纯字面量数值常量表达式必须按参数目标
   类型贴合；已具备另一数值静态类型的绑定必须先显式转换。合法直接构造和带对象字面量后缀的构造
   均进入 FCTS 并断言选中构造及最终字段值；
-- [ ] TYPE06：分别通过 `Type { field: wrong }`、`Type() { field: wrong }` 和
+- [x] TYPE06：分别通过 `Type { field: wrong }`、`Type() { field: wrong }` 和
   `Type(args) { field: wrong }` 向普通实例字段写入不兼容值，在字段值表达式起始 token 产生唯一
   `AE1003`；至少覆盖跨固定宽度数值类型、不同普通对象类型和不同 `@value type`。字段不存在、字段
   重复直接映射既有 Semantic 专项，字段不可见映射 G22，`let` 三阶段重复绑定映射 G05；
-- [ ] TYPE06-A：对象字面量字段的数值字面量贴合、同名义对象引用、`@value type` 值和 `@abi type`
+- [x] TYPE06-A：对象字面量字段的数值字面量贴合、同名义对象引用、`@value type` 值和 `@abi type`
   Feng 内部值必须合法；FCTS 直接观察三种对象字面量入口写入后的最终值。
 
 #### 22.2.4 实例与 static 成员访问面
 
-- [ ] TYPE07：普通对象实例读取 static 绑定、写入 static `var` 或调用 static 方法时，均在成员访问
+- [x] TYPE07：普通对象实例读取 static 绑定、写入 static `var` 或调用 static 方法时，均在成员访问
   token 产生唯一 `AE0310`；不得因为外层是赋值或调用而追加派生诊断；
-- [ ] TYPE07-A：通过类型名读取实例字段或调用实例方法时，按类型的 static 成员面查找失败，在成员
+- [x] TYPE07-A：通过类型名读取实例字段或调用实例方法时，按类型的 static 成员面查找失败，在成员
   访问 token 产生唯一 `AE0309`。这一路径保持现有“类型没有该 static 成员”诊断，不为同一拒绝行为
   新增专用特判错误码；
-- [ ] TYPE07-B：同一 `type` 的实例面和 static 面允许声明同名成员；FCTS 分别通过对象实例与类型名
+- [x] TYPE07-B：同一 `type` 的实例面和 static 面允许声明同名成员；FCTS 分别通过对象实例与类型名
   访问并断言各自结果，证明两条访问路径不会串面。成员不存在映射 G14，`seal` / 跨模块可见性映射
   G22，spec、fit 和泛型约束上的 static 成员访问映射 G23 / G25。
 
 #### 22.2.5 普通对象默认零值资格
 
-- [ ] TYPE08：只声明直接自引用或两个普通对象类型互相引用的类型仍可通过 Semantic；当局部、模块级
-  或 static 绑定无初始化器而实际要求这类对象的递归默认零值时，必须在对应默认值使用位置产生唯一
-  Codegen 诊断 `CE0911`。当前实现仍产生旧 `CE0226`，本组只按现行 CE 分段规范迁移为 `CE0911`，
-  不擅自改变为 Semantic 阶段或新增 AE 码，见 `ISSUE-G18-002`；
-- [ ] TYPE08-A：构造普通对象时，若某个未由声明初始化器、选中构造或对象字面量字段提供值的实例字段
-  需要递归生成不可能终止的普通对象默认零值，同样产生唯一 `CE0911`；显式值已经覆盖相应字段时不得
-  误报。本项只验证默认零值资格，不重复 G05 的三阶段 `let` 最终绑定规则；
-- [ ] TYPE08-B：无环嵌套普通对象必须得到递归零值；`string` 和数组的默认值分别是空字符串和空数组，
+- [x] TYPE08：只声明直接自引用或两个普通对象类型互相引用的类型仍可通过 Semantic；当局部、模块级
+  或 static `let` / `var` 绑定无初始化器而实际要求这类对象的递归默认零值时，必须在该绑定 token
+  产生唯一 Semantic 诊断 `AE0332`。同类绑定有初始化器时直接以初始化值完成初始化，不先产生默认
+  零值；对 `spec Recursive<T>: T | Empty` 这类首成员可形成递归的 union-form 也遵循同一规则：
+  无初始化器时沿首成员检查默认零值，显式初始化为非递归 member 时不得报错。Codegen 的残余防御
+  只能产生 `IE0002`，不得把用户可修复错误继续报告为 `CE`，见 `ISSUE-G18-002`；
+- [x] TYPE08-A：构造普通对象时，若某个实例字段没有声明初始化器，第一阶段需要递归生成不可能终止的
+  普通对象默认零值，必须在构造目标 token 产生唯一 Semantic 诊断 `AE0332`。选中构造函数或对象
+  字面量字段在后续阶段提供值都不能倒推取消第一阶段默认零值；只有该字段自身的声明初始化器直接
+  提供初值时才不请求默认零值；这也包括字段类型为首成员可递归的 union-form、声明初始化器选取其
+  非递归 member 的情况。本项只验证默认零值资格，不重复 G05 的三阶段 `let` 最终绑定规则，见
+  `ISSUE-G18-003`。同包源码与跨包 `.ft` consumer 必须得到相同结论；`.ft` 必须同时保留实例 `let` /
+  `var` 的声明初始化器事实，见 `ISSUE-G18-006`；
+- [x] TYPE08-B：无环嵌套普通对象必须得到递归零值；`string` 和数组的默认值分别是空字符串和空数组，
   因而数组字段必须终止默认零值展开。仅通过数组形成运行时潜在引用环的普通类型仍允许默认初始化，
   并在 FCTS 中直接观察空数组及其他零值字段；默认零值资格不得直接复用包含数组边的 ARC 潜在循环
   标记，见 `ISSUE-G18-002`；
-- [ ] TYPE08-C：`@value type` / tuple 的内联布局循环继续使用既有声明期诊断，callable-form spec、
+- [x] TYPE08-C：`@value type` / tuple 的内联布局循环继续使用既有声明期诊断，callable-form spec、
   enum 和数组自身的默认值分别映射既有专项、G19～G21；G18 不新增这些类别的同构反向用例。
 
 #### 22.2.6 合法邻界与覆盖映射
 
-- [ ] TYPE09：新增或映射一个 FCTS 普通类型合法邻界文件，直接运行固定宽度数值字面量贴合、显式
+- [x] TYPE09：新增或映射一个 FCTS 普通类型合法邻界文件，直接运行固定宽度数值字面量贴合、显式
   数值转换、同类型标量 / 字符串赋值、普通对象引用赋值、`@value type` 值赋值、`@abi type` 的
   Feng 内部同类型赋值、匹配构造参数、对象字面量字段初始化、实例 / static 双访问面和合法默认零值；
-- [ ] TYPE09-A：建立 TYPE01～TYPE09 到现有 Semantic、Codegen 和 FCTS 的逐项映射。已有测试只有
+- [x] TYPE09-A：建立 TYPE01～TYPE09 到现有 Semantic、Codegen 和 FCTS 的逐项映射。已有测试只有
   “分析失败”或消息片段而没有稳定码、精确 token、行列、数量和阶段时，不视为完整反向证据；优先
   新增集中式 G18 精确矩阵，不为统一断言风格修改无关既有测试。
 
 ### 22.3 独立验收与交付 TODO
 
-- [ ] 先记录并关闭 [G18 问题记录](./feng-language-conformance-coverage-hardening-issues/g18.md) 中的
-  `ISSUE-G18-001` 与 `ISSUE-G18-002`：将通用非法 cast 的唯一产生点从 `AE0051` 迁移为
-  `AE1023`；将普通对象默认零值循环的 `CE0226` 迁移为现行 CE 规范已经预留的 `CE0911`，并使默认
-  零值依赖判断在数组、字符串、标量和指针处终止；
-- [ ] `AE0051` 迁移会影响四个既有 Semantic 测试函数中的 11 条错误码断言：
+- [x] 先记录并关闭 [G18 问题记录](./feng-language-conformance-coverage-hardening-issues/g18.md) 中的
+  `ISSUE-G18-001`～`ISSUE-G18-006`：将通用非法 cast 的唯一产生点从 `AE0051` 迁移为
+  `AE1023`；将普通对象默认零值循环从 Codegen 的 `CE0226` 前移为 Semantic `AE0332`，并使默认
+  零值依赖判断在数组、字符串、标量和指针处终止；Codegen 只保留 `IE0002` 内部不变量防御；
+- [x] `AE0051` 迁移会影响四个既有 Semantic 测试函数中的 11 条错误码断言：
   `test_object_spec_method_values_reject_invalid_sources`、
   `test_explicit_generic_callable_values_reject_invalid_sources`、
   `test_callable_variadic_shape_mismatches_are_rejected` 和
   `test_object_spec_upcast_rejects_out_of_scope_conversions`。实施前必须取得修改这四个函数的明确人工
-  批准；批准范围只允许把这些断言由 `AE0051` 更新为 `AE1023`，不得借机改写输入、其他断言或测试
-  结构。除此名单外，既有测试如需修改必须再次取得人工决策；
-- [ ] 对 TYPE01～TYPE07 的反向程序独立运行 G18 Semantic 专项，逐项核对唯一诊断、稳定码、触发
-  token、行列、来源文件和 Semantic 阶段；对 TYPE08 独立运行 Codegen 专项，核对 `CE0911` 的使用
-  位置、数组终止邻界和没有派生错误；
-- [ ] 运行完整 FCTS，确认 TYPE04-A、TYPE05-A、TYPE06-A、TYPE07-B、TYPE08-B 和 TYPE09 的合法
+  批准；现已批准只把这些断言由 `AE0051` 更新为 `AE1023`，不得借机改写输入、其他断言或测试结构。
+  除此名单外，既有测试如需修改必须再次取得人工决策；
+- [x] 对 TYPE01～TYPE08-A 的反向程序独立运行 G18 Semantic 专项，逐项核对唯一诊断、稳定码、触发
+  token、行列、来源文件和 Semantic 阶段；对默认零值 Codegen 防御独立运行结构专项，核对其仅为
+  `IE0002`，并验证数组终止邻界和没有派生错误；
+- [x] 运行完整 FCTS，确认 TYPE04-A、TYPE05-A、TYPE06-A、TYPE07-B、TYPE08-B 和 TYPE09 的合法
   邻界全部由主入口登记并真实执行，不能以 Semantic 接受或生成 C 文本代替运行断言；
-- [ ] 所有实现变更只允许增加或调整编译期诊断、类型检查和默认零值资格分析；不得给既有合法程序
+- [x] 所有实现变更只允许增加或调整编译期诊断、类型检查和默认零值资格分析；不得给既有合法程序
   增加运行时判断、分支、调用、分配或 ARC，不得修改 runtime 私有 ABI、公开 ABI 或 `.ft` 格式；
-- [ ] 在 Codex 沙箱外为 G18 独立执行 `make test`，记录 UBSan 与 normal 两阶段的 smoke、std、FCTS、
+- [x] 在 Codex 沙箱外为 G18 独立执行 `make test`，记录 UBSan 与 normal 两阶段的 smoke、std、FCTS、
   性能约束及其余回归结果；此前分组的全量结果不能代替本组回归；
-- [ ] 执行 `git diff --check`，关闭或取得人工决策保留 G18 问题；填写稳定码映射、既有证据、新增
+- [x] 执行 `git diff --check`，关闭或取得人工决策保留 G18 问题；填写稳定码映射、既有证据、新增
   用例、专项结果、全量结果、性能与兼容性结论以及建议的英文 commit message 后，才可标记 G18
   已交付。
 
 ### 22.4 独立交付记录
 
-- 状态：待 Review；尚未批准修改四个既有 `AE0051` 断言
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：[G18 问题记录](./feng-language-conformance-coverage-hardening-issues/g18.md)
-- 建议 commit message：`test: close ordinary type diagnostic gaps`
+- 状态：已交付
+- 稳定码映射与新增用例：TYPE01～TYPE09-A 已逐项映射；新增集中式 Semantic 精确诊断矩阵，覆盖
+  `AE1003`、`AE0502`、`AE1023`、`AE0315`、`AE0310`、`AE0309` 和 `AE0332` 的唯一诊断、token、
+  行列、来源与阶段；仅按批准范围把四个既有 Semantic 测试函数中的 11 条 `AE0051` 断言迁移为
+  `AE1023`。新增 Codegen 结构用例，覆盖数组终止默认零值展开、开放泛型默认工厂资格、`IE0002`
+  防御和同类型 cast 无操作发码；新增 `.ft` 真实往返用例，覆盖实例 `var` 声明初始化器事实且保持
+  后续可写；新增 `test_ordinary_type_semantics.ff`，运行普通类型匹配、转换、构造、字面量、双成员面、
+  递归零值以及“首成员递归 union 显式选择非递归 member”的合法边界；
+- 本组专项结果：`test_semantic`、`test_codegen`、`test_symbol` 均通过；Smoke 为 `91/91`，标准库为
+  `604/604`，FCTS 为 `1139/1139`；
+- 本组沙箱外 `make test`：2026-09-03 执行，退出码为 `0`；UBSan 与 normal 两阶段的 Smoke 均为
+  `91/91`、标准库均为 `604/604`、FCTS 均为 `1139/1139`；Parser、Semantic、Codegen、runtime、
+  CLI、symbol、增量构建、发布脚本、性能约束及其余回归全部通过；
+- 性能与兼容性：默认零值有限性、类型检查、导出事实和工厂资格判断均只发生在编译期；同类型 cast
+  不发射运行时操作；没有给合法程序增加运行时判断、分支、调用、分配或 ARC，性能约束通过。未修改
+  Parser 行为、runtime、公开 ABI、runtime 私有 ABI 或 `.ft` 布局 / 版本；
+- 问题：`ISSUE-G18-001`～`ISSUE-G18-006` 均已关闭，具体分析与处理见
+  [G18 问题记录](./feng-language-conformance-coverage-hardening-issues/g18.md)；
+- 建议 commit message：`test: harden ordinary type semantics and default-zero diagnostics`
 
 ## 23 G19：enum 诊断
 
