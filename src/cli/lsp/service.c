@@ -248,6 +248,7 @@ static bool service_handle_payload_unlocked(FengLspService *service,
 typedef enum FengLspLocalKind {
     FENG_LSP_LOCAL_PARAM = 0,
     FENG_LSP_LOCAL_BINDING,
+    FENG_LSP_LOCAL_CATCH_BINDING,
     FENG_LSP_LOCAL_SELF
 } FengLspLocalKind;
 
@@ -257,6 +258,7 @@ typedef struct FengLspLocal {
     const FengParameter *parameter;
     const FengBinding *binding;
     const FengExpr *match_op;
+    const FengTryCatchClause *catch_clause;
     const FengDecl *self_owner_decl;
 } FengLspLocal;
 
@@ -305,6 +307,7 @@ typedef enum FengLspResolvedKind {
     FENG_LSP_RESOLVED_PARAM,
     FENG_LSP_RESOLVED_BINDING,
     FENG_LSP_RESOLVED_MATCH_BINDING,
+    FENG_LSP_RESOLVED_CATCH_BINDING,
     FENG_LSP_RESOLVED_SELF,
     FENG_LSP_RESOLVED_TYPE_PARAM
 } FengLspResolvedKind;
@@ -317,6 +320,7 @@ typedef struct FengLspResolvedTarget {
     const FengParameter *parameter;
     const FengBinding *binding;
     const FengExpr *match_op;
+    const FengTryCatchClause *catch_clause;
     const FengDecl *self_owner_decl;
     const FengTypeParam *type_param;       /* resolved type parameter */
     const FengDecl *type_param_owner;      /* decl owning the type parameter */
@@ -328,6 +332,7 @@ typedef struct FengLspCacheResolvedTarget {
     const FengSymbolDeclView *member;
     const FengParameter *parameter;
     const FengBinding *binding;
+    const FengTryCatchClause *catch_clause;
     const FengSymbolDeclView *self_owner_decl;
     const FengTypeParam *type_param;
     const FengSymbolDeclView *type_param_owner;
@@ -5443,9 +5448,33 @@ static bool local_list_push(FengLspLocalList *locals,
         .parameter = parameter,
         .binding = binding,
         .match_op = NULL,
+        .catch_clause = NULL,
         .self_owner_decl = self_owner_decl
     };
 
+    return append_raw((void **)&locals->items,
+                      &locals->count,
+                      &locals->capacity,
+                      sizeof(local),
+                      &local);
+}
+
+/* Append the immutable binding introduced by one typed catch clause. The
+ * binding is represented by its owning clause because it has no FengBinding
+ * AST node of its own. */
+static bool local_list_push_catch_binding(
+    FengLspLocalList *locals,
+    const FengTryCatchClause *clause) {
+    FengLspLocal local;
+
+    if (clause == NULL || clause->name.data == NULL ||
+        clause->name.length == 0U || clause->type == NULL) {
+        return true;
+    }
+    memset(&local, 0, sizeof(local));
+    local.kind = FENG_LSP_LOCAL_CATCH_BINDING;
+    local.name = clause->name;
+    local.catch_clause = clause;
     return append_raw((void **)&locals->items,
                       &locals->count,
                       &locals->capacity,
@@ -5685,9 +5714,15 @@ static bool collect_expr_locals(const FengExpr *expr,
                 return collect_expr_locals(expr->as.try_expr.body, offset, locals);
             }
             for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
-                const FengBlock *body = expr->as.try_expr.clauses[index].body;
+                const FengTryCatchClause *clause =
+                    &expr->as.try_expr.clauses[index];
+                const FengBlock *body = clause->body;
 
-                if (body != NULL && offset <= block_end(body)) {
+                if (body != NULL && offset >= body->token.offset &&
+                    offset <= block_end(body)) {
+                    if (!local_list_push_catch_binding(locals, clause)) {
+                        return false;
+                    }
                     return collect_block_locals(body, offset, locals);
                 }
             }
@@ -9794,9 +9829,9 @@ static bool resolve_match_label_type_ref_at_offset(
     return false;
 }
 
-/* Walk an expression tree looking for TypeRefs inside generic targets
- * (e.g. T in `Span<T>`), explicit call type args (e.g. T in `func<T>(...)`),
- * cast types, and array-new element types.  Recurses into sub-expressions. */
+/* Walk an expression tree looking for source-level TypeRefs and header binding
+ * declarations. This covers generic targets, explicit call type arguments,
+ * casts, array-new element types, match bindings, and typed catch headers. */
 static bool find_type_ref_in_expr(const FengExpr *expr,
                                   const FengProgram *program,
                                   const FengLspAnalysisSession *session,
@@ -10110,7 +10145,34 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                 return true;
             }
             for (index = 0U; index < expr->as.try_expr.clause_count; ++index) {
-                if (find_type_ref_in_block_exprs(expr->as.try_expr.clauses[index].body,
+                const FengTryCatchClause *clause =
+                    &expr->as.try_expr.clauses[index];
+
+                if (clause->name.length > 0U &&
+                    offset_in_token(clause->binding_token, offset)) {
+                    target->kind = FENG_LSP_RESOLVED_CATCH_BINDING;
+                    target->catch_clause = clause;
+                    return true;
+                }
+                if (resolve_type_ref_at_offset(session,
+                                               program,
+                                               clause->type,
+                                               offset,
+                                               target,
+                                               owner_decl,
+                                               member_type_params,
+                                               member_type_param_count) ||
+                    resolve_type_ref_at_offset(session,
+                                               program,
+                                               clause->type,
+                                               offset,
+                                               target,
+                                               owner_decl,
+                                               owner_type_params,
+                                               owner_type_param_count)) {
+                    return true;
+                }
+                if (find_type_ref_in_block_exprs(clause->body,
                                                  program, session, offset, target,
                                                  owner_decl,
                                                  member_type_params, member_type_param_count,
@@ -11369,6 +11431,19 @@ static bool match_binding_signature_to_string_with_style(
     return true;
 }
 
+/* Format the source-level declaration shape of one typed catch binding. */
+static bool catch_binding_signature_to_string_with_style(
+    FengLspString *buffer,
+    const FengTryCatchClause *clause,
+    FengLspTypeNameStyle style) {
+    return clause != NULL && clause->name.data != NULL &&
+           clause->name.length > 0U && clause->type != NULL &&
+           string_append_cstr(buffer, "catch ") &&
+           string_append_bytes(buffer, clause->name.data, clause->name.length) &&
+           string_append_cstr(buffer, ": ") &&
+           type_ref_to_string_with_style(buffer, clause->type, style);
+}
+
 static bool decl_signature_to_string_with_session(FengLspString *buffer,
                                                   const FengLspAnalysisSession *session,
                                                   const FengDecl *decl);
@@ -12302,6 +12377,20 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                     "Kind",
                     hover_category_from_type_ref(session, program, type_ref));
             }
+            break;
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
+            if (!catch_binding_signature_to_string_with_style(
+                    &presentation->signature,
+                    target->catch_clause,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
+                return false;
+            }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_type_ref(session,
+                                             program,
+                                             target->catch_clause->type));
             break;
         case FENG_LSP_RESOLVED_SELF:
             if (!string_append_cstr(&presentation->signature, "self: ") ||
@@ -13514,6 +13603,11 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 }
                 return NULL;
             }
+            if (local->kind == FENG_LSP_LOCAL_CATCH_BINDING) {
+                target->kind = FENG_LSP_RESOLVED_CATCH_BINDING;
+                target->catch_clause = local->catch_clause;
+                return NULL;
+            }
             if (local->self_owner_decl != NULL) {
                 target->kind = FENG_LSP_RESOLVED_SELF;
                 target->self_owner_decl = local->self_owner_decl;
@@ -13796,6 +13890,8 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
             return lhs->binding == rhs->binding;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
             return lhs->match_op == rhs->match_op;
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
+            return lhs->catch_clause == rhs->catch_clause;
         case FENG_LSP_RESOLVED_SELF:
             return lhs->self_owner_decl == rhs->self_owner_decl;
         case FENG_LSP_RESOLVED_TYPE_PARAM:
@@ -13980,6 +14076,7 @@ static bool resolved_target_supports_references(const FengLspResolvedTarget *tar
         case FENG_LSP_RESOLVED_BINDING:
             return target->binding != NULL;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
             return false;
         case FENG_LSP_RESOLVED_TYPE_PARAM:
             return decl_owns_type_param(target->type_param_owner,
@@ -14050,6 +14147,7 @@ static bool resolved_target_can_rename(const FengLspAnalysisSession *session,
             return resolved_decl_has_writable_source(
                 session, target->type_param_owner);
         case FENG_LSP_RESOLVED_MATCH_BINDING:
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
             return false;
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_SELF:
@@ -16313,6 +16411,7 @@ static FengSlice resolved_target_reference_name(
                 : (FengSlice){0};
         case FENG_LSP_RESOLVED_NONE:
         case FENG_LSP_RESOLVED_MATCH_BINDING:
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
         case FENG_LSP_RESOLVED_SELF:
             return (FengSlice){0};
     }
@@ -19179,6 +19278,11 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                 target->binding = local->binding;
                 return NULL;
             }
+            if (local->kind == FENG_LSP_LOCAL_CATCH_BINDING) {
+                target->kind = FENG_LSP_RESOLVED_CATCH_BINDING;
+                target->catch_clause = local->catch_clause;
+                return NULL;
+            }
             if (local->self_owner_decl == NULL) {
                 return NULL;
             }
@@ -19823,6 +19927,19 @@ static bool hover_presentation_for_cache_target(
                 "Kind",
                 hover_category_from_cache_type_ref(context, target->binding->type));
             break;
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
+            if (!catch_binding_signature_to_string_with_style(
+                    &presentation->signature,
+                    target->catch_clause,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
+                return false;
+            }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_cache_type_ref(context,
+                                                   target->catch_clause->type));
+            break;
         case FENG_LSP_RESOLVED_SELF: {
             FengSlice name = target->self_owner_decl != NULL
                                  ? feng_symbol_decl_name(target->self_owner_decl)
@@ -20192,6 +20309,10 @@ static bool definition_location_from_analysis(const FengLspAnalysisSession *sess
             return location_json(result, program->path, target->parameter->token);
         case FENG_LSP_RESOLVED_BINDING:
             return location_json(result, program->path, target->binding->token);
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
+            return location_json(result,
+                                 program->path,
+                                 target->catch_clause->binding_token);
         case FENG_LSP_RESOLVED_SELF:
             (void)find_decl_module(session, target->self_owner_decl, &target_program);
             if (target_program == NULL && session->analysis == NULL) {
@@ -20228,6 +20349,10 @@ static bool definition_location_from_cache(const FengLspCacheQueryContext *cache
             return location_json(result, cache->program->path, target->parameter->token);
         case FENG_LSP_RESOLVED_BINDING:
             return location_json(result, cache->program->path, target->binding->token);
+        case FENG_LSP_RESOLVED_CATCH_BINDING:
+            return location_json(result,
+                                 cache->program->path,
+                                 target->catch_clause->binding_token);
         case FENG_LSP_RESOLVED_SELF: {
             FengSlice path = feng_symbol_decl_path(target->self_owner_decl);
             return location_json(result,

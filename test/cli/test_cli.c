@@ -10558,6 +10558,179 @@ static void test_lsp_hover_infix_match_binding(void) {
     free(output);
 }
 
+/* Typed catch headers must expose both their immutable binding and ordinary
+ * type reference to Hover and Definition. The catch binding must also shadow
+ * an outer local throughout its own body. */
+static void test_lsp_hover_and_definition_typed_catch_header(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kSource =
+        "module test.lsp.typed_catch_header;\n"
+        "\n"
+        "type MyEx {\n"
+        "    let code: int;\n"
+        "}\n"
+        "\n"
+        "func ready(): void {}\n"
+        "\n"
+        "func recover(): int {\n"
+        "    let ex: int = 7;\n"
+        "    let recovered = try 1 catch ex: MyEx {\n"
+        "        ex.code;\n"
+        "    };\n"
+        "    ready();\n"
+        "    return recovered + ex;\n"
+        "}\n";
+    char template_path[] = "temp/feng_lsp_typed_catch_header_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *hover_binding_decl;
+    char *definition_binding_decl;
+    char *hover_catch_type;
+    char *definition_catch_type;
+    char *hover_binding_use;
+    char *definition_binding_use;
+    char *binding_location;
+    char *type_location;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[8];
+    unsigned int ready_line;
+    unsigned int ready_character;
+    unsigned int definition_line;
+    unsigned int definition_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    hover_binding_decl = build_lsp_test_position_request(
+        "textDocument/hover",
+        2U,
+        uri,
+        kSource,
+        "catch ex: MyEx",
+        strlen("catch ") + 1U);
+    definition_binding_decl = build_lsp_test_position_request(
+        "textDocument/definition",
+        3U,
+        uri,
+        kSource,
+        "catch ex: MyEx",
+        strlen("catch ") + 1U);
+    hover_catch_type = build_lsp_test_position_request(
+        "textDocument/hover",
+        4U,
+        uri,
+        kSource,
+        "catch ex: MyEx",
+        strlen("catch ex: ") + 1U);
+    definition_catch_type = build_lsp_test_position_request(
+        "textDocument/definition",
+        5U,
+        uri,
+        kSource,
+        "catch ex: MyEx",
+        strlen("catch ex: ") + 1U);
+    hover_binding_use = build_lsp_test_position_request(
+        "textDocument/hover",
+        6U,
+        uri,
+        kSource,
+        "        ex.code;",
+        strlen("        ") + 1U);
+    definition_binding_use = build_lsp_test_position_request(
+        "textDocument/definition",
+        7U,
+        uri,
+        kSource,
+        "        ex.code;",
+        strlen("        ") + 1U);
+    find_line_character(kSource,
+                        "catch ex: MyEx",
+                        strlen("catch "),
+                        &definition_line,
+                        &definition_character);
+    binding_location = build_lsp_test_location_marker(uri,
+                                                      definition_line,
+                                                      definition_character);
+    find_line_character(kSource,
+                        "type MyEx",
+                        strlen("type "),
+                        &definition_line,
+                        &definition_character);
+    type_location = build_lsp_test_location_marker(uri,
+                                                   definition_line,
+                                                   definition_character);
+    find_line_character(kSource,
+                        "    ready();",
+                        strlen("    ") + 1U,
+                        &ready_line,
+                        &ready_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    requests[0] = hover_binding_decl;
+    requests[1] = definition_binding_decl;
+    requests[2] = hover_catch_type;
+    requests[3] = definition_catch_type;
+    requests[4] = hover_binding_use;
+    requests[5] = definition_binding_use;
+    requests[6] = shutdown;
+    requests[7] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/hover",
+        uri,
+        ready_line,
+        ready_character,
+        "func ready(): void",
+        requests,
+        8U,
+        NULL);
+    assert_lsp_test_response_contains(output, 2U, "catch ex: MyEx");
+    assert_lsp_test_response_contains(output, 3U, binding_location);
+    assert_lsp_test_response_contains(output, 4U, "type MyEx {...}");
+    assert_lsp_test_response_contains(output, 4U, "Kind: Reference Type");
+    assert_lsp_test_response_contains(output, 5U, type_location);
+    assert_lsp_test_response_contains(output, 6U, "catch ex: MyEx");
+    assert_lsp_test_response_contains(output, 7U, binding_location);
+
+    free(output);
+    free(shutdown);
+    free(type_location);
+    free(binding_location);
+    free(definition_binding_use);
+    free(hover_binding_use);
+    free(definition_catch_type);
+    free(hover_catch_type);
+    free(definition_binding_decl);
+    free(hover_binding_decl);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+}
+
 static void test_lsp_hover_type_param(void) {
     static const char *kSource =
         "module test.lsp.type_param_hover;\n"
@@ -24182,6 +24355,7 @@ int main(void) {
     test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
     test_lsp_hover_type_category_survives_failed_edit();
     test_lsp_hover_infix_match_binding();
+    test_lsp_hover_and_definition_typed_catch_header();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
     test_lsp_hover_type_param_in_spec_member();
