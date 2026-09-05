@@ -149,6 +149,21 @@ typedef struct FengLspModuleIndex {
     size_t module_capacity;
 } FengLspModuleIndex;
 
+/* One contiguous provider-module range loaded from an exact package bundle.
+ * The LSP owns this provenance beside the provider; it is never serialized. */
+typedef struct FengLspSymbolIndexPackageRange {
+    size_t first_module_index;
+    size_t module_count;
+    char *package_path;
+} FengLspSymbolIndexPackageRange;
+
+/* Package provenance for the currently published persistent symbol index. */
+typedef struct FengLspSymbolIndexProvenance {
+    FengLspSymbolIndexPackageRange *ranges;
+    size_t range_count;
+    size_t range_capacity;
+} FengLspSymbolIndexProvenance;
+
 /* One protocol-level secondary source location for a diagnostic. */
 typedef struct FengLspDiagnosticRelatedEntry {
     char *path;
@@ -392,6 +407,7 @@ struct FengLspService {
     size_t last_successful_analysis_count;
     size_t last_successful_analysis_capacity;
     FengSymbolProvider *symbol_index;
+    FengLspSymbolIndexProvenance symbol_index_provenance;
     size_t symbol_index_generation;
     char *symbol_index_manifest_path;
     char *symbol_index_primary_path;
@@ -2744,10 +2760,58 @@ static bool analysis_task_clone(const FengLspService *service,
     return true;
 }
 
+/* Releases package provenance owned beside one persistent symbol provider. */
+static void symbol_index_provenance_dispose(
+    FengLspSymbolIndexProvenance *provenance) {
+    size_t index;
+
+    if (provenance == NULL) {
+        return;
+    }
+    for (index = 0U; index < provenance->range_count; ++index) {
+        free(provenance->ranges[index].package_path);
+    }
+    free(provenance->ranges);
+    memset(provenance, 0, sizeof(*provenance));
+}
+
+/* Records the canonical package path for modules appended by one bundle. */
+static bool symbol_index_provenance_append(
+    FengLspSymbolIndexProvenance *provenance,
+    size_t first_module_index,
+    size_t module_count,
+    const char *package_path) {
+    FengLspSymbolIndexPackageRange range = {0};
+
+    if (provenance == NULL || package_path == NULL) {
+        return false;
+    }
+    if (module_count == 0U) {
+        return true;
+    }
+    range.first_module_index = first_module_index;
+    range.module_count = module_count;
+    range.package_path = realpath(package_path, NULL);
+    if (range.package_path == NULL) {
+        range.package_path = dup_cstr(package_path);
+    }
+    if (range.package_path == NULL ||
+        !append_raw((void **)&provenance->ranges,
+                    &provenance->range_count,
+                    &provenance->range_capacity,
+                    sizeof(range),
+                    &range)) {
+        free(range.package_path);
+        return false;
+    }
+    return true;
+}
+
 /* Builds an immutable workspace/dependency symbol index outside request paths. */
 static FengSymbolProvider *build_symbol_index_candidate(
     const FengLspDocument *document,
-    char **out_manifest_path) {
+    char **out_manifest_path,
+    FengLspSymbolIndexProvenance *out_provenance) {
     FengSymbolProvider *provider = NULL;
     FengSymbolError symbol_error = {0};
     FengCliProjectError project_error = {0};
@@ -2760,6 +2824,7 @@ static FengSymbolProvider *build_symbol_index_candidate(
     size_t index;
 
     *out_manifest_path = NULL;
+    memset(out_provenance, 0, sizeof(*out_provenance));
     if (document == NULL || !feng_symbol_provider_create(&provider, &symbol_error)) {
         feng_symbol_error_free(&symbol_error);
         return NULL;
@@ -2801,9 +2866,20 @@ static FengSymbolProvider *build_symbol_index_candidate(
         goto cleanup;
     }
     for (index = 0U; index < resolved.package_count; ++index) {
+        size_t first_module_index = feng_symbol_provider_module_count(provider);
+
         if (!feng_symbol_provider_add_bundle(provider,
                                              resolved.package_paths[index],
                                              &symbol_error)) {
+            feng_symbol_provider_free(provider);
+            provider = NULL;
+            goto cleanup;
+        }
+        if (!symbol_index_provenance_append(
+                out_provenance,
+                first_module_index,
+                feng_symbol_provider_module_count(provider) - first_module_index,
+                resolved.package_paths[index])) {
             feng_symbol_provider_free(provider);
             provider = NULL;
             goto cleanup;
@@ -2836,6 +2912,7 @@ cleanup:
     feng_cli_project_error_dispose(&project_error);
     feng_symbol_error_free(&symbol_error);
     if (provider == NULL) {
+        symbol_index_provenance_dispose(out_provenance);
         free(*out_manifest_path);
         *out_manifest_path = NULL;
     }
@@ -2856,8 +2933,12 @@ static void *symbol_index_worker_main(void *user) {
     char *candidate_primary_path = NULL;
     char *previous_manifest_path = NULL;
     char *previous_primary_path = NULL;
+    FengLspSymbolIndexProvenance candidate_provenance = {0};
+    FengLspSymbolIndexProvenance previous_provenance = {0};
     FengSymbolProvider *candidate = build_symbol_index_candidate(
-        job->document, &candidate_manifest_path);
+        job->document,
+        &candidate_manifest_path,
+        &candidate_provenance);
     FengSymbolProvider *previous = NULL;
 
     if (candidate != NULL) {
@@ -2865,6 +2946,7 @@ static void *symbol_index_worker_main(void *user) {
         if (candidate_primary_path == NULL) {
             feng_symbol_provider_free(candidate);
             candidate = NULL;
+            symbol_index_provenance_dispose(&candidate_provenance);
         }
     }
     if (candidate != NULL) {
@@ -2876,6 +2958,9 @@ static void *symbol_index_worker_main(void *user) {
             previous_primary_path = job->service->symbol_index_primary_path;
             job->service->symbol_index = candidate;
             candidate = NULL;
+            previous_provenance = job->service->symbol_index_provenance;
+            job->service->symbol_index_provenance = candidate_provenance;
+            memset(&candidate_provenance, 0, sizeof(candidate_provenance));
             job->service->symbol_index_manifest_path =
                 candidate_manifest_path;
             candidate_manifest_path = NULL;
@@ -2892,6 +2977,8 @@ static void *symbol_index_worker_main(void *user) {
     free(candidate_manifest_path);
     feng_symbol_provider_free(previous);
     feng_symbol_provider_free(candidate);
+    symbol_index_provenance_dispose(&previous_provenance);
+    symbol_index_provenance_dispose(&candidate_provenance);
     return NULL;
 }
 
@@ -19191,6 +19278,47 @@ static bool resolve_symbol_object_field_target_decl(
     return true;
 }
 
+/* Finds the unique constructor whose fixed/variadic arity accepts one call. */
+static const FengSymbolDeclView *find_symbol_constructor_for_call(
+    const FengSymbolDeclView *owner,
+    const FengExpr *call) {
+    const FengSymbolDeclView *match = NULL;
+    size_t index;
+
+    if (owner == NULL || call == NULL || call->kind != FENG_EXPR_CALL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < feng_symbol_decl_member_count(owner);
+         ++index) {
+        const FengSymbolDeclView *candidate =
+            feng_symbol_decl_member_at(owner, index);
+        size_t param_count;
+        bool variadic;
+        size_t minimum_count;
+
+        if (candidate == NULL ||
+            feng_symbol_decl_kind(candidate) !=
+                FENG_SYMBOL_DECL_KIND_CONSTRUCTOR) {
+            continue;
+        }
+        param_count = feng_symbol_decl_param_count(candidate);
+        variadic = param_count > 0U &&
+                   feng_symbol_decl_param_is_variadic(candidate,
+                                                      param_count - 1U);
+        minimum_count = variadic ? param_count - 1U : param_count;
+        if (call->as.call.arg_count < minimum_count ||
+            (!variadic && call->as.call.arg_count != param_count)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
 static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
                                      size_t offset,
                                      FengLspCacheResolvedTarget *target) {
@@ -19231,6 +19359,28 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
                                                 target)) {
         local_list_dispose(&locals);
         return true;
+    }
+    for (decl_index = 0U;
+         decl_index < context->program->declaration_count;
+         ++decl_index) {
+        const FengExpr *call_hit = find_call_hit_in_decl(
+            context->program->declarations[decl_index],
+            offset);
+        const FengSymbolDeclView *owner;
+        const FengSymbolDeclView *constructor;
+
+        if (call_hit == NULL) {
+            continue;
+        }
+        owner = resolve_symbol_type_constructor_expr(context, call_hit);
+        constructor = find_symbol_constructor_for_call(owner, call_hit);
+        if (owner != NULL && constructor != NULL) {
+            target->kind = FENG_LSP_RESOLVED_MEMBER;
+            target->decl = owner;
+            target->member = constructor;
+            local_list_dispose(&locals);
+            return true;
+        }
     }
     expr = find_expr_hit_in_decl(enclosing_decl, offset);
     if (expr != NULL) {
@@ -20084,6 +20234,567 @@ static bool definition_location_from_cache(const FengLspCacheQueryContext *cache
     }
 }
 
+/* Compares two optional C strings without treating NULL as an empty value. */
+static bool cache_symbol_optional_strings_equal(const char *lhs,
+                                                const char *rhs) {
+    return lhs == rhs ||
+           (lhs != NULL && rhs != NULL && strcmp(lhs, rhs) == 0);
+}
+
+/* Compares the complete serialized shape of two symbol types. */
+static bool cache_symbol_types_equal(const FengSymbolTypeView *lhs,
+                                     const FengSymbolTypeView *rhs) {
+    FengSymbolTypeKind kind;
+    size_t index;
+    size_t count;
+
+    if (lhs == rhs) {
+        return true;
+    }
+    if (lhs == NULL || rhs == NULL ||
+        feng_symbol_type_kind(lhs) != feng_symbol_type_kind(rhs)) {
+        return false;
+    }
+    kind = feng_symbol_type_kind(lhs);
+    switch (kind) {
+        case FENG_SYMBOL_TYPE_KIND_BUILTIN:
+            return slice_equals(feng_symbol_type_builtin_name(lhs),
+                                feng_symbol_type_builtin_name(rhs));
+        case FENG_SYMBOL_TYPE_KIND_NAMED:
+        case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC:
+            count = feng_symbol_type_segment_count(lhs);
+            if (count != feng_symbol_type_segment_count(rhs)) {
+                return false;
+            }
+            for (index = 0U; index < count; ++index) {
+                if (!slice_equals(feng_symbol_type_segment_at(lhs, index),
+                                  feng_symbol_type_segment_at(rhs, index))) {
+                    return false;
+                }
+            }
+            if (kind == FENG_SYMBOL_TYPE_KIND_NAMED) {
+                return true;
+            }
+            count = feng_symbol_type_generic_arg_count(lhs);
+            if (count != feng_symbol_type_generic_arg_count(rhs)) {
+                return false;
+            }
+            for (index = 0U; index < count; ++index) {
+                if (!cache_symbol_types_equal(
+                        feng_symbol_type_generic_arg_at(lhs, index),
+                        feng_symbol_type_generic_arg_at(rhs, index))) {
+                    return false;
+                }
+            }
+            return true;
+        case FENG_SYMBOL_TYPE_KIND_POINTER:
+            return cache_symbol_types_equal(feng_symbol_type_inner(lhs),
+                                            feng_symbol_type_inner(rhs));
+        case FENG_SYMBOL_TYPE_KIND_ARRAY:
+            count = feng_symbol_type_array_rank(lhs);
+            if (count != feng_symbol_type_array_rank(rhs)) {
+                return false;
+            }
+            for (index = 0U; index < count; ++index) {
+                if (feng_symbol_type_array_layer_writable(lhs, index) !=
+                    feng_symbol_type_array_layer_writable(rhs, index)) {
+                    return false;
+                }
+            }
+            return cache_symbol_types_equal(feng_symbol_type_inner(lhs),
+                                            feng_symbol_type_inner(rhs));
+        case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
+            return slice_equals(feng_symbol_type_type_param_ref_name(lhs),
+                                feng_symbol_type_type_param_ref_name(rhs));
+        case FENG_SYMBOL_TYPE_KIND_INVALID:
+            return true;
+    }
+    return false;
+}
+
+/* Compares an ordered list of declaration-owned symbol types. */
+static bool cache_symbol_type_lists_equal(
+    const FengSymbolDeclView *lhs,
+    const FengSymbolDeclView *rhs,
+    size_t lhs_count,
+    size_t rhs_count,
+    const FengSymbolTypeView *(*at)(const FengSymbolDeclView *, size_t)) {
+    size_t index;
+
+    if (lhs_count != rhs_count) {
+        return false;
+    }
+    for (index = 0U; index < lhs_count; ++index) {
+        if (!cache_symbol_types_equal(at(lhs, index), at(rhs, index))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Compares generic parameter names and constraints in declaration order. */
+static bool cache_symbol_type_params_equal(const FengSymbolDeclView *lhs,
+                                           const FengSymbolDeclView *rhs) {
+    size_t lhs_index = 0U;
+    size_t rhs_index = 0U;
+    size_t matched_count = 0U;
+
+    while (true) {
+        const FengSymbolDeclView *lhs_param = NULL;
+        const FengSymbolDeclView *rhs_param = NULL;
+
+        while (lhs_index < feng_symbol_decl_member_count(lhs)) {
+            const FengSymbolDeclView *candidate =
+                feng_symbol_decl_member_at(lhs, lhs_index++);
+
+            if (candidate != NULL &&
+                feng_symbol_decl_kind(candidate) ==
+                    FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                lhs_param = candidate;
+                break;
+            }
+        }
+        while (rhs_index < feng_symbol_decl_member_count(rhs)) {
+            const FengSymbolDeclView *candidate =
+                feng_symbol_decl_member_at(rhs, rhs_index++);
+
+            if (candidate != NULL &&
+                feng_symbol_decl_kind(candidate) ==
+                    FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                rhs_param = candidate;
+                break;
+            }
+        }
+        if (lhs_param == NULL || rhs_param == NULL) {
+            return lhs_param == rhs_param &&
+                   matched_count == feng_symbol_decl_type_param_count(lhs) &&
+                   matched_count == feng_symbol_decl_type_param_count(rhs);
+        }
+        if (!slice_equals(feng_symbol_decl_name(lhs_param),
+                          feng_symbol_decl_name(rhs_param)) ||
+            !cache_symbol_types_equal(feng_symbol_decl_value_type(lhs_param),
+                                      feng_symbol_decl_value_type(rhs_param))) {
+            return false;
+        }
+        ++matched_count;
+    }
+}
+
+/* Compares the complete declaration shape available in both symbol profiles. */
+static bool cache_symbol_decl_shapes_equal(const FengSymbolDeclView *lhs,
+                                           const FengSymbolDeclView *rhs) {
+    size_t index;
+    size_t param_count;
+
+    if (lhs == rhs) {
+        return true;
+    }
+    /* Package-public FT loading promotes exported descendants to public,
+     * whereas the workspace-profile source graph retains their written
+     * visibility. Visibility is therefore deliberately excluded; package
+     * provenance and every source-stable declaration property remain exact. */
+    if (lhs == NULL || rhs == NULL ||
+        feng_symbol_decl_kind(lhs) != feng_symbol_decl_kind(rhs) ||
+        !slice_equals(feng_symbol_decl_name(lhs),
+                      feng_symbol_decl_name(rhs)) ||
+        feng_symbol_decl_mutability(lhs) != feng_symbol_decl_mutability(rhs) ||
+        feng_symbol_decl_is_extern(lhs) != feng_symbol_decl_is_extern(rhs) ||
+        feng_symbol_decl_has_bounded_decl(lhs) !=
+            feng_symbol_decl_has_bounded_decl(rhs) ||
+        feng_symbol_decl_is_static(lhs) != feng_symbol_decl_is_static(rhs) ||
+        feng_symbol_decl_is_mixable(lhs) != feng_symbol_decl_is_mixable(rhs) ||
+        feng_symbol_decl_calling_convention(lhs) !=
+            feng_symbol_decl_calling_convention(rhs) ||
+        feng_symbol_decl_abi_fixed_param_count(lhs) !=
+            feng_symbol_decl_abi_fixed_param_count(rhs) ||
+        !cache_symbol_optional_strings_equal(
+            feng_symbol_decl_abi_library(lhs),
+            feng_symbol_decl_abi_library(rhs)) ||
+        feng_symbol_decl_type_param_count(lhs) !=
+            feng_symbol_decl_type_param_count(rhs) ||
+        !cache_symbol_type_params_equal(lhs, rhs) ||
+        !cache_symbol_types_equal(feng_symbol_decl_value_type(lhs),
+                                  feng_symbol_decl_value_type(rhs)) ||
+        !cache_symbol_types_equal(feng_symbol_decl_return_type(lhs),
+                                  feng_symbol_decl_return_type(rhs)) ||
+        !cache_symbol_types_equal(feng_symbol_decl_fit_target(lhs),
+                                  feng_symbol_decl_fit_target(rhs))) {
+        return false;
+    }
+    param_count = feng_symbol_decl_param_count(lhs);
+    if (param_count != feng_symbol_decl_param_count(rhs)) {
+        return false;
+    }
+    for (index = 0U; index < param_count; ++index) {
+        if (!slice_equals(feng_symbol_decl_param_name(lhs, index),
+                          feng_symbol_decl_param_name(rhs, index)) ||
+            feng_symbol_decl_param_mutability(lhs, index) !=
+                feng_symbol_decl_param_mutability(rhs, index) ||
+            feng_symbol_decl_param_is_variadic(lhs, index) !=
+                feng_symbol_decl_param_is_variadic(rhs, index) ||
+            !cache_symbol_types_equal(
+                feng_symbol_decl_param_type(lhs, index),
+                feng_symbol_decl_param_type(rhs, index))) {
+            return false;
+        }
+    }
+    if (feng_symbol_decl_kind(lhs) == FENG_SYMBOL_DECL_KIND_SPEC &&
+        feng_symbol_decl_spec_form(lhs) != feng_symbol_decl_spec_form(rhs)) {
+        return false;
+    }
+    if (feng_symbol_decl_is_tuple(lhs) != feng_symbol_decl_is_tuple(rhs) ||
+        feng_symbol_decl_is_value_type(lhs) !=
+            feng_symbol_decl_is_value_type(rhs) ||
+        feng_symbol_decl_has_enum_item_value(lhs) !=
+            feng_symbol_decl_has_enum_item_value(rhs) ||
+        (feng_symbol_decl_has_enum_item_value(lhs) &&
+         feng_symbol_decl_enum_item_value(lhs) !=
+             feng_symbol_decl_enum_item_value(rhs)) ||
+        feng_symbol_decl_enum_item_ordinal(lhs) !=
+            feng_symbol_decl_enum_item_ordinal(rhs)) {
+        return false;
+    }
+    return cache_symbol_type_lists_equal(
+               lhs,
+               rhs,
+               feng_symbol_decl_declared_spec_count(lhs),
+               feng_symbol_decl_declared_spec_count(rhs),
+               feng_symbol_decl_declared_spec_at) &&
+           cache_symbol_type_lists_equal(
+               lhs,
+               rhs,
+               feng_symbol_decl_union_member_count(lhs),
+               feng_symbol_decl_union_member_count(rhs),
+               feng_symbol_decl_union_member_at) &&
+           cache_symbol_type_lists_equal(
+               lhs,
+               rhs,
+               feng_symbol_decl_intersection_member_count(lhs),
+               feng_symbol_decl_intersection_member_count(rhs),
+               feng_symbol_decl_intersection_member_at);
+}
+
+/* Finds a target pointer in one symbol tree and reports its top-level owner. */
+static bool cache_symbol_tree_contains(
+    const FengSymbolDeclView *candidate,
+    const FengSymbolDeclView *target,
+    const FengSymbolDeclView *top_level_owner,
+    const FengSymbolDeclView **out_owner) {
+    size_t index;
+
+    if (candidate == NULL || target == NULL || out_owner == NULL) {
+        return false;
+    }
+    if (candidate == target) {
+        *out_owner = top_level_owner;
+        return true;
+    }
+    for (index = 0U;
+         index < feng_symbol_decl_member_count(candidate);
+         ++index) {
+        if (cache_symbol_tree_contains(
+                feng_symbol_decl_member_at(candidate, index),
+                target,
+                top_level_owner,
+                out_owner)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Locates the unique provider module and top-level owner of a cache target. */
+static bool cache_symbol_target_module(
+    const FengLspCacheQueryContext *cache,
+    const FengLspCacheResolvedTarget *target,
+    const FengSymbolImportedModule **out_module,
+    size_t *out_module_index,
+    const FengSymbolDeclView **out_owner,
+    const FengSymbolDeclView **out_symbol) {
+    const FengSymbolDeclView *symbol = NULL;
+    size_t module_index;
+    bool found = false;
+
+    if (cache == NULL || cache->provider == NULL || target == NULL ||
+        out_module == NULL || out_module_index == NULL || out_owner == NULL ||
+        out_symbol == NULL) {
+        return false;
+    }
+    if (target->kind == FENG_LSP_RESOLVED_DECL) {
+        symbol = target->decl;
+    } else if (target->kind == FENG_LSP_RESOLVED_MEMBER ||
+               target->kind == FENG_LSP_RESOLVED_ENUM_ITEM) {
+        symbol = target->member;
+    } else if (target->kind == FENG_LSP_RESOLVED_SELF) {
+        symbol = target->self_owner_decl;
+    }
+    if (symbol == NULL) {
+        return false;
+    }
+    for (module_index = 0U;
+         module_index < feng_symbol_provider_module_count(cache->provider);
+         ++module_index) {
+        const FengSymbolImportedModule *module =
+            feng_symbol_provider_module_at(cache->provider, module_index);
+        size_t decl_index;
+
+        for (decl_index = 0U;
+             decl_index < feng_symbol_module_decl_count(module);
+             ++decl_index) {
+            const FengSymbolDeclView *owner =
+                feng_symbol_module_decl_at(module, decl_index);
+            const FengSymbolDeclView *matched_owner = NULL;
+
+            if (!cache_symbol_tree_contains(owner,
+                                            symbol,
+                                            owner,
+                                            &matched_owner)) {
+                continue;
+            }
+            if (found) {
+                return false;
+            }
+            *out_module = module;
+            *out_module_index = module_index;
+            *out_owner = matched_owner;
+            *out_symbol = symbol;
+            found = true;
+        }
+    }
+    return found;
+}
+
+/* Returns the canonical bundle path that contributed one provider module. */
+static const char *symbol_index_package_path_for_module(
+    const FengLspSymbolIndexProvenance *provenance,
+    size_t module_index) {
+    size_t index;
+
+    if (provenance == NULL) {
+        return NULL;
+    }
+    for (index = 0U; index < provenance->range_count; ++index) {
+        const FengLspSymbolIndexPackageRange *range =
+            &provenance->ranges[index];
+
+        if (module_index >= range->first_module_index &&
+            module_index - range->first_module_index < range->module_count) {
+            return range->package_path;
+        }
+    }
+    return NULL;
+}
+
+/* Finds the unique retained source session for one canonical package path. */
+static const FengLspAnalysisSession *find_workspace_session_by_package_path(
+    const FengLspService *service,
+    const char *package_path) {
+    const FengLspAnalysisSession *match = NULL;
+    size_t index;
+
+    if (service == NULL || package_path == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < service->last_successful_analysis_count;
+         ++index) {
+        const FengLspAnalysisSession *candidate =
+            &service->last_successful_analyses[index]
+                 .last_successful_analysis;
+
+        if (candidate->package_path == NULL ||
+            strcmp(candidate->package_path, package_path) != 0) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Compares the exact dotted names of two provider modules. */
+static bool cache_symbol_module_names_equal(
+    const FengSymbolImportedModule *lhs,
+    const FengSymbolImportedModule *rhs) {
+    size_t index;
+    size_t count;
+
+    if (lhs == NULL || rhs == NULL) {
+        return false;
+    }
+    count = feng_symbol_module_segment_count(lhs);
+    if (count != feng_symbol_module_segment_count(rhs)) {
+        return false;
+    }
+    for (index = 0U; index < count; ++index) {
+        if (!slice_equals(feng_symbol_module_segment_at(lhs, index),
+                          feng_symbol_module_segment_at(rhs, index))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Finds the unique source-profile module matching one imported module. */
+static const FengSymbolImportedModule *find_source_symbol_module(
+    const FengLspAnalysisSession *session,
+    const FengSymbolImportedModule *imported_module) {
+    const FengSymbolImportedModule *match = NULL;
+    size_t index;
+
+    if (session == NULL || session->source_symbol_identity_index == NULL ||
+        imported_module == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < feng_symbol_provider_module_count(
+                     session->source_symbol_identity_index);
+         ++index) {
+        const FengSymbolImportedModule *candidate =
+            feng_symbol_provider_module_at(
+                session->source_symbol_identity_index,
+                index);
+
+        if (!cache_symbol_module_names_equal(imported_module, candidate)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Finds one unique top-level source symbol by its complete cache shape. */
+static const FengSymbolDeclView *find_source_symbol_owner_by_shape(
+    const FengSymbolImportedModule *source_module,
+    const FengSymbolDeclView *imported_owner) {
+    const FengSymbolDeclView *match = NULL;
+    size_t index;
+
+    if (source_module == NULL || imported_owner == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < feng_symbol_module_decl_count(source_module);
+         ++index) {
+        const FengSymbolDeclView *candidate =
+            feng_symbol_module_decl_at(source_module, index);
+
+        if (!cache_symbol_decl_shapes_equal(imported_owner, candidate)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Finds one unique direct source member by its complete cache shape. */
+static const FengSymbolDeclView *find_source_symbol_member_by_shape(
+    const FengSymbolDeclView *source_owner,
+    const FengSymbolDeclView *imported_member) {
+    const FengSymbolDeclView *match = NULL;
+    size_t index;
+
+    if (source_owner == NULL || imported_member == NULL) {
+        return NULL;
+    }
+    for (index = 0U;
+         index < feng_symbol_decl_member_count(source_owner);
+         ++index) {
+        const FengSymbolDeclView *candidate =
+            feng_symbol_decl_member_at(source_owner, index);
+
+        if (!cache_symbol_decl_shapes_equal(imported_member, candidate)) {
+            continue;
+        }
+        if (match != NULL) {
+            return NULL;
+        }
+        match = candidate;
+    }
+    return match;
+}
+
+/* Tries to map a cache-only local dependency target to physical source. The
+ * caller holds analysis_mutex, so provider/session pointers remain valid. */
+static bool definition_location_from_workspace_cache(
+    const FengLspService *service,
+    const FengLspCacheQueryContext *cache,
+    const FengLspCacheResolvedTarget *target,
+    FengLspString *result,
+    bool *out_found) {
+    const FengSymbolImportedModule *imported_module = NULL;
+    const FengSymbolImportedModule *source_module;
+    const FengSymbolDeclView *imported_owner = NULL;
+    const FengSymbolDeclView *imported_symbol = NULL;
+    const FengSymbolDeclView *source_owner;
+    const FengSymbolDeclView *source_symbol;
+    const FengLspAnalysisSession *source_session;
+    const char *package_path;
+    FengSlice existing_path;
+    FengSlice source_path;
+    size_t imported_module_index = 0U;
+
+    if (out_found == NULL) {
+        return false;
+    }
+    *out_found = false;
+    if (service == NULL || cache == NULL || target == NULL || result == NULL ||
+        !cache_symbol_target_module(cache,
+                                    target,
+                                    &imported_module,
+                                    &imported_module_index,
+                                    &imported_owner,
+                                    &imported_symbol)) {
+        return true;
+    }
+    existing_path = feng_symbol_decl_path(imported_symbol);
+    if (existing_path.data != NULL && existing_path.length > 0U) {
+        return true;
+    }
+    package_path = symbol_index_package_path_for_module(
+        &service->symbol_index_provenance,
+        imported_module_index);
+    source_session = find_workspace_session_by_package_path(service,
+                                                            package_path);
+    if (source_session == NULL ||
+        !analysis_matches_open_documents(service, source_session)) {
+        return true;
+    }
+    source_module = find_source_symbol_module(source_session,
+                                              imported_module);
+    source_owner = find_source_symbol_owner_by_shape(source_module,
+                                                     imported_owner);
+    if (source_owner == NULL) {
+        return true;
+    }
+    if (imported_symbol == imported_owner) {
+        source_symbol = source_owner;
+    } else {
+        source_symbol = find_source_symbol_member_by_shape(source_owner,
+                                                           imported_symbol);
+    }
+    if (source_symbol == NULL) {
+        return true;
+    }
+    source_path = feng_symbol_decl_path(source_symbol);
+    if (source_path.data == NULL || source_path.length == 0U ||
+        source_path.data[source_path.length] != '\0') {
+        return true;
+    }
+    *out_found = true;
+    return location_json(result,
+                         source_path.data,
+                         feng_symbol_decl_token(source_symbol));
+}
+
 /* Maps a local imported target to its retained physical source before
  * constructing a Definition location. External packages preserve the
  * existing imported-symbol behavior unchanged. */
@@ -20242,8 +20953,19 @@ static bool handle_definition_request(FengLspService *service,
                                                        document->text,
                                                        &cache) &&
         resolve_symbol_target_at(&cache, offset, &cache_target)) {
+        bool workspace_cache_found = false;
+
         found = true;
-        ok = definition_location_from_cache(&cache, &cache_target, &result);
+        ok = definition_location_from_workspace_cache(service,
+                                                      &cache,
+                                                      &cache_target,
+                                                      &result,
+                                                      &workspace_cache_found);
+        if (ok && !workspace_cache_found) {
+            ok = definition_location_from_cache(&cache,
+                                                &cache_target,
+                                                &result);
+        }
     }
     cache_query_context_dispose(&cache);
     pthread_mutex_unlock(&service->analysis_mutex);
@@ -26789,6 +27511,7 @@ void feng_lsp_service_free(FengLspService *service) {
     }
     free(service->last_successful_analyses);
     feng_symbol_provider_free(service->symbol_index);
+    symbol_index_provenance_dispose(&service->symbol_index_provenance);
     free(service->symbol_index_manifest_path);
     free(service->symbol_index_primary_path);
     module_index_dispose(&service->module_index);

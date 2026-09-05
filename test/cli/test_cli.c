@@ -22570,6 +22570,195 @@ static void test_lsp_local_project_dependency_workspace_queries(void) {
     free(dependency_dir);
 }
 
+/* Verifies Definition maps persistent imported symbols back to a local
+ * dependency when an unrelated origin-project file prevents publication. */
+static void test_lsp_local_dependency_definition_survives_origin_semantic_failure(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kDependencySource =
+        "open module test.lsp.degraded_dependency;\n"
+        "\n"
+        "open type DegradedBox {\n"
+        "    func DegradedBox(value: string): void {}\n"
+        "    func DegradedBox(): void {}\n"
+        "    func set(value: string): void {}\n"
+        "}\n"
+        "\n"
+        "open func degraded_print(value: string): int { return 1; }\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.degraded_consumer;\n"
+        "import test.lsp.degraded_dependency;\n"
+        "\n"
+        "open func exercise(): int {\n"
+        "    let typed: DegradedBox = DegradedBox();\n"
+        "    typed.set(\"ok\");\n"
+        "    return degraded_print(\"ok\");\n"
+        "}\n";
+    static const char *kBrokenSource =
+        "module test.lsp.degraded_consumer;\n"
+        "func broken(): int {}\n";
+    char template_path[] =
+        "temp/feng_lsp_degraded_dependency_definition_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *dependency_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *broken_source_path;
+    char *dependency_uri;
+    char *consumer_uri;
+    char *escaped_consumer;
+    char *did_open;
+    char *definition_type;
+    char *definition_constructor;
+    char *definition_member;
+    char *definition_function;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[6];
+    unsigned int type_line;
+    unsigned int type_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    dependency_source_path = path_join(dependency_src_dir, "lib.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    broken_source_path = path_join(consumer_src_dir, "broken.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_degraded_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dependency_source_path, kDependencySource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_degraded_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_degraded_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+    write_text_file(broken_source_path, kBrokenSource);
+
+    dependency_uri = file_uri_from_path(dependency_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    find_line_character(kConsumerSource,
+                        "typed: DegradedBox",
+                        strlen("typed: ") + 1U,
+                        &type_line,
+                        &type_character);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    definition_type = build_lsp_test_position_request(
+        "textDocument/definition",
+        2U,
+        consumer_uri,
+        kConsumerSource,
+        "typed: DegradedBox",
+        strlen("typed: ") + 1U);
+    definition_constructor = build_lsp_test_position_request(
+        "textDocument/definition",
+        3U,
+        consumer_uri,
+        kConsumerSource,
+        "= DegradedBox()",
+        strlen("= ") + 1U);
+    definition_member = build_lsp_test_position_request(
+        "textDocument/definition",
+        4U,
+        consumer_uri,
+        kConsumerSource,
+        "typed.set",
+        strlen("typed.") + 1U);
+    definition_function = build_lsp_test_position_request(
+        "textDocument/definition",
+        5U,
+        consumer_uri,
+        kConsumerSource,
+        "degraded_print",
+        1U);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    requests[0] = definition_type;
+    requests[1] = definition_constructor;
+    requests[2] = definition_member;
+    requests[3] = definition_function;
+    requests[4] = shutdown;
+    requests[5] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/definition",
+        consumer_uri,
+        type_line,
+        type_character,
+        dependency_uri,
+        requests,
+        6U,
+        NULL);
+    assert_lsp_test_response_contains(output, 2U, dependency_uri);
+    assert_lsp_test_response_contains(
+        output, 2U, "\"start\":{\"line\":2,\"character\":10}");
+    assert_lsp_test_response_contains(output, 3U, dependency_uri);
+    assert_lsp_test_response_contains(
+        output, 3U, "\"start\":{\"line\":4,\"character\":9}");
+    assert_lsp_test_response_contains(output, 4U, dependency_uri);
+    assert_lsp_test_response_contains(
+        output, 4U, "\"start\":{\"line\":5,\"character\":9}");
+    assert_lsp_test_response_contains(output, 5U, dependency_uri);
+    assert_lsp_test_response_contains(
+        output, 5U, "\"start\":{\"line\":8,\"character\":10}");
+
+    free(output);
+    free(shutdown);
+    free(definition_function);
+    free(definition_member);
+    free(definition_constructor);
+    free(definition_type);
+    free(did_open);
+    free(escaped_consumer);
+    free(consumer_uri);
+    free(dependency_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(broken_source_path);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(dependency_source_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 /* Verifies imported generic-fit members use their module-local symbol ids
  * when equal-shaped fits share one module across multiple source files. */
 static void test_lsp_local_project_dependency_generic_fit_member_identity(void) {
@@ -23814,6 +24003,7 @@ int main(void) {
     test_lsp_completion_inferred_callable_without_fact_fails_closed();
     test_lsp_hover_inferred_callable_across_dependency_boundaries();
     test_lsp_local_project_dependency_workspace_queries();
+    test_lsp_local_dependency_definition_survives_origin_semantic_failure();
     test_lsp_local_project_dependency_generic_fit_member_identity();
     test_lsp_local_project_dependency_type_name_family();
     test_lsp_local_project_dependency_cache_lifecycle();

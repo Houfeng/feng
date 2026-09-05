@@ -579,6 +579,22 @@ signature。零个或多个候选均视为无法唯一定位：References/Implem
 4. Location 使用目标 session `sources[].path` 的物理路径；
 5. 找不到本地源码时返回 `null`，不得把 bundle entry 或 `PKG_NAME://...` 包装为 `file://`。
 
+当 origin 项目因为任意源码文件存在语义错误而尚无成功 session 时，Definition 还必须支持以下只读降级
+路径：
+
+1. 使用 current parse 与当前项目的 persistent symbol index 解析光标 target；
+2. symbol index 在后台构建时为每个 imported module 记录其精确 bundle provenance，该元数据仅由 LSP
+   session 持有，不写入 `.ft` / `.fb`；
+3. 仅当 bundle provenance 与某个已发布本地依赖 session 的 canonical `package_path` 精确相等时，才在该
+   session 的 `source_symbol_identity_index` 中查找同 module、同 owner 和完整声明形状的物理源码符号；
+4. 声明形状必须覆盖 kind、名称、泛型参数、完整参数类型、返回类型及成员 owner；零个或多个候选均视为
+   无法证明唯一，不得按名称、参数数量或遍历顺序猜测；
+5. 唯一命中时返回源码符号保存的 physical path/token；否则沿用既有非本地 package Definition 行为。
+
+该降级路径只能读取已经发布的内存索引，不得同步读取 bundle、扫描源码、查找 manifest 或执行 Semantic
+Analysis。它不改变失败 candidate 不得发布的规则，也不把 origin 项目的部分 Semantic Analysis 当作成功
+结果。
+
 ### 7.4 References
 
 1. 遍历全部成功 session；
@@ -787,6 +803,8 @@ char *workspace_index_manifest_path;
 - [ ] 在 A/B/C 之间切换和 `didClose` 后，旧成功 session 仍可命中。
 - [ ] 热请求从成功数组按 source path 命中，不依赖再次查找 manifest。
 - [ ] B 依赖 A 时，从 B use Definition 到 A 的物理 `.ff`。
+- [x] B 存在无关语义错误且没有成功 session 时，imported type、constructor/member 与 free function 的
+      Definition 仍通过精确 bundle/source identity 返回 A 的物理 `.ff`。
 - [ ] 从 A 声明或 B use 发起 References，得到数组中所有合法引用。
 - [x] 本地依赖同一模块存在多个同形 `fit T[]` 及 `fit T[!]` 同名成员时，非字面量接收者的
       Definition/References 精确命中目标物理声明，且不同 `fit` 之间不串线。
