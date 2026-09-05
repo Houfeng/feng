@@ -22759,6 +22759,195 @@ static void test_lsp_local_dependency_definition_survives_origin_semantic_failur
     free(dependency_dir);
 }
 
+/* Verifies local-dependency Definition ignores generated instance wrappers
+ * that share their source token with @mixable static declarations. */
+static void test_lsp_local_dependency_mixable_member_definition(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kDependencySource =
+        "open module test.lsp.mixable_dependency;\n"
+        "\n"
+        "open spec Widget {}\n"
+        "\n"
+        "open type View: Widget {\n"
+        "    @mixable\n"
+        "    open static func useStateStyle(widget: Widget, pseudo: int): int {\n"
+        "        return pseudo;\n"
+        "    }\n"
+        "}\n"
+        "\n"
+        "open type Container: Widget {\n"
+        "    ...: View;\n"
+        "\n"
+        "    @mixable\n"
+        "    open static func addChild(container: Widget, child: Widget): void {}\n"
+        "}\n"
+        "\n"
+        "open func dependency_ready(): void {}\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.mixable_consumer;\n"
+        "import test.lsp.mixable_dependency;\n"
+        "\n"
+        "open func exercise(): void {\n"
+        "    let view = View();\n"
+        "    view.useStateStyle(1);\n"
+        "    let container = Container();\n"
+        "    container.addChild(view);\n"
+        "    dependency_ready();\n"
+        "}\n";
+    char template_path[] = "temp/feng_lsp_mixable_definition_XXXXXX";
+    char *workspace_dir;
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *dependency_source_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_source_path;
+    char *dependency_uri;
+    char *consumer_uri;
+    char *escaped_consumer;
+    char *did_open;
+    char *definition_use_state_style;
+    char *definition_add_child;
+    char *expected_use_state_style;
+    char *expected_add_child;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[4];
+    unsigned int ready_line;
+    unsigned int ready_character;
+    unsigned int definition_line;
+    unsigned int definition_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    dependency_source_path = path_join(dependency_src_dir, "lib.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_source_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_mixable_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dependency_source_path, kDependencySource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_mixable_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_mixable_dependency: \"../dependency\"\n");
+    write_text_file(consumer_source_path, kConsumerSource);
+
+    dependency_uri = file_uri_from_path(dependency_source_path);
+    consumer_uri = file_uri_from_path(consumer_source_path);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    find_line_character(kConsumerSource,
+                        "dependency_ready();",
+                        1U,
+                        &ready_line,
+                        &ready_character);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    definition_use_state_style = build_lsp_test_position_request(
+        "textDocument/definition",
+        2U,
+        consumer_uri,
+        kConsumerSource,
+        "view.useStateStyle",
+        strlen("view.") + 1U);
+    definition_add_child = build_lsp_test_position_request(
+        "textDocument/definition",
+        3U,
+        consumer_uri,
+        kConsumerSource,
+        "container.addChild",
+        strlen("container.") + 1U);
+    find_line_character(kDependencySource,
+                        "func useStateStyle",
+                        strlen("func "),
+                        &definition_line,
+                        &definition_character);
+    expected_use_state_style = build_lsp_test_location_marker(
+        dependency_uri,
+        definition_line,
+        definition_character);
+    find_line_character(kDependencySource,
+                        "func addChild",
+                        strlen("func "),
+                        &definition_line,
+                        &definition_character);
+    expected_add_child = build_lsp_test_location_marker(
+        dependency_uri,
+        definition_line,
+        definition_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    requests[0] = definition_use_state_style;
+    requests[1] = definition_add_child;
+    requests[2] = shutdown;
+    requests[3] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/definition",
+        consumer_uri,
+        ready_line,
+        ready_character,
+        dependency_uri,
+        requests,
+        4U,
+        NULL);
+    assert_lsp_test_response_contains(output,
+                                      2U,
+                                      expected_use_state_style);
+    assert_lsp_test_response_contains(output, 3U, expected_add_child);
+
+    free(output);
+    free(shutdown);
+    free(expected_add_child);
+    free(expected_use_state_style);
+    free(definition_add_child);
+    free(definition_use_state_style);
+    free(did_open);
+    free(escaped_consumer);
+    free(consumer_uri);
+    free(dependency_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_source_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(dependency_source_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 /* Verifies imported generic-fit members use their module-local symbol ids
  * when equal-shaped fits share one module across multiple source files. */
 static void test_lsp_local_project_dependency_generic_fit_member_identity(void) {
@@ -24004,6 +24193,7 @@ int main(void) {
     test_lsp_hover_inferred_callable_across_dependency_boundaries();
     test_lsp_local_project_dependency_workspace_queries();
     test_lsp_local_dependency_definition_survives_origin_semantic_failure();
+    test_lsp_local_dependency_mixable_member_definition();
     test_lsp_local_project_dependency_generic_fit_member_identity();
     test_lsp_local_project_dependency_type_name_family();
     test_lsp_local_project_dependency_cache_lifecycle();

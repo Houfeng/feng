@@ -549,8 +549,11 @@ request-local identity adapter。该适配按以下步骤闭环，不把不同 s
    session，不能按 package name 猜测；
 5. 在 defining session 的 LSP 私有 source symbol identity index 中按相同 module-local symbol id 取得物理
    source path/token，再按 path、kind、owner/member token 唯一定位源码 AST，得到规范化的 source
-   identity；只有索引不可用或精确身份不能唯一验证时，才退回 module、kind、owner chain 与完整
-   signature 匹配；
+   identity；成员目标必须先沿 `mixin_source_member` 链规范化到最终来源，在 defining session 最终按
+   path、kind、owner/member token 定位可返回 Definition 的源码 AST 时，只有 `mixin_origin == NULL` 且
+   `mixin_source_member == NULL` 的手写成员可作为独立 source identity，避免 `@mixable` 派生的实例
+   wrapper 与来源 static 成员共享 token 时形成伪歧义；只有索引不可用或精确身份不能唯一验证时，才退回
+   module、kind、owner chain 与完整 signature 匹配；
 6. 遍历其他 session 时，仅接受 bundle provenance 指向同一 defining session，且 module、symbol id
    或完整声明形状一致的 imported AST；
 7. 定位成本 session target 后，继续使用现有 `resolved_targets_equal()` 和
@@ -805,6 +808,8 @@ char *workspace_index_manifest_path;
 - [ ] B 依赖 A 时，从 B use Definition 到 A 的物理 `.ff`。
 - [x] B 存在无关语义错误且没有成功 session 时，imported type、constructor/member 与 free function 的
       Definition 仍通过精确 bundle/source identity 返回 A 的物理 `.ff`。
+- [x] 本地依赖的 `@mixable static` 成员同时生成同 token 的实例 wrapper 时，实例式调用的 Definition
+      唯一返回最终手写 static 成员；不同 owner 的成员均不得因 wrapper 伪歧义返回 `null`。
 - [ ] 从 A 声明或 B use 发起 References，得到数组中所有合法引用。
 - [x] 本地依赖同一模块存在多个同形 `fit T[]` 及 `fit T[!]` 同名成员时，非字面量接收者的
       Definition/References 精确命中目标物理声明，且不同 `fit` 之间不串线。

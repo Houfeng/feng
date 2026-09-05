@@ -5424,6 +5424,13 @@ static const FengTypeMember *mixin_definition_source_member(
     return member;
 }
 
+/* Return whether a semantic member is backed by its own written source
+ * declaration rather than an expansion or a generated wrapper. */
+static bool member_is_source_identity(const FengTypeMember *member) {
+    return member != NULL && member->mixin_origin == NULL &&
+           member->mixin_source_member == NULL;
+}
+
 static bool local_list_push(FengLspLocalList *locals,
                             FengLspLocalKind kind,
                             FengSlice name,
@@ -15112,8 +15119,8 @@ static const FengTypeMember *find_source_member_by_stable_location(
     for (index = 0U; index < member_count; ++index) {
         const FengTypeMember *candidate = members[index];
 
-        if (candidate == NULL || candidate->kind != kind ||
-            candidate->mixin_origin != NULL ||
+        if (!member_is_source_identity(candidate) ||
+            candidate->kind != kind ||
             !stable_tokens_equal(candidate->token, token) ||
             !slice_equals(member_name_slice(candidate), name)) {
             continue;
