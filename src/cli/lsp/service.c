@@ -7807,6 +7807,68 @@ static bool fit_visible_from_program(const FengLspAnalysisSession *session,
     return false;
 }
 
+/* Find one extension member declared by a fit in the current source program.
+ * This is the source-only fallback used when project semantic analysis cannot
+ * publish; the returned owner keeps Definition anchored to the fit block. */
+static const FengTypeMember *find_program_fit_member_by_name(
+    const FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const FengDecl *owner_decl,
+    FengSlice owner_builtin_name,
+    FengSlice name,
+    const FengDecl **out_fit_decl) {
+    size_t decl_index;
+
+    if (out_fit_decl != NULL) {
+        *out_fit_decl = NULL;
+    }
+    if (session == NULL || program == NULL ||
+        (owner_decl == NULL && owner_builtin_name.length == 0U)) {
+        return NULL;
+    }
+    for (decl_index = 0U; decl_index < program->declaration_count;
+         ++decl_index) {
+        const FengDecl *fit_decl = program->declarations[decl_index];
+        size_t member_index;
+        bool targets_owner;
+
+        if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+            continue;
+        }
+        targets_owner = owner_decl != NULL
+            ? resolve_named_type_ref(session,
+                                     program,
+                                     fit_decl->as.fit_decl.target) == owner_decl
+            : builtin_name_matches_type_ref(fit_decl->as.fit_decl.target,
+                                            owner_builtin_name);
+        if (!targets_owner) {
+            continue;
+        }
+        for (member_index = 0U;
+             member_index < fit_decl->as.fit_decl.member_count;
+             ++member_index) {
+            const FengTypeMember *member =
+                fit_decl->as.fit_decl.members[member_index];
+            FengSlice member_name;
+
+            if (member == NULL) {
+                continue;
+            }
+            member_name = member->kind == FENG_TYPE_MEMBER_FIELD
+                ? member->as.field.name
+                : member->as.callable.name;
+            if (!slice_equals(member_name, name)) {
+                continue;
+            }
+            if (out_fit_decl != NULL) {
+                *out_fit_decl = fit_decl;
+            }
+            return member;
+        }
+    }
+    return NULL;
+}
+
 /* Forward declarations — defined later, used here for filtering and dedup. */
 typedef enum FengLspMemberFilter {
     FENG_LSP_MEMBER_FILTER_ALL = 0,
@@ -8762,10 +8824,14 @@ static bool symbol_fit_targets_decl(const FengLspCacheQueryContext *context,
 static const FengSymbolDeclView *find_symbol_fit_member_by_name(
     const FengLspCacheQueryContext *context,
     const FengSymbolDeclView *type_decl,
-    FengSlice name) {
+    FengSlice name,
+    const FengSymbolDeclView **out_fit_decl) {
     size_t mod_count;
     size_t mod_idx;
 
+    if (out_fit_decl != NULL) {
+        *out_fit_decl = NULL;
+    }
     if (context == NULL || context->provider == NULL || type_decl == NULL) {
         return NULL;
     }
@@ -8789,6 +8855,9 @@ static const FengSymbolDeclView *find_symbol_fit_member_by_name(
                 const FengSymbolDeclView *m = feng_symbol_decl_member_at(fd, i);
 
                 if (slice_equals(feng_symbol_decl_name(m), name)) {
+                    if (out_fit_decl != NULL) {
+                        *out_fit_decl = fd;
+                    }
                     return m;
                 }
             }
@@ -8853,7 +8922,10 @@ static const FengSymbolDeclView *resolve_symbol_call_return_type(
         }
         method = find_symbol_type_member_by_name(obj_type, callee->as.member.member);
         if (method == NULL) {
-            method = find_symbol_fit_member_by_name(context, obj_type, callee->as.member.member);
+            method = find_symbol_fit_member_by_name(context,
+                                                    obj_type,
+                                                    callee->as.member.member,
+                                                    NULL);
         }
         if (method != NULL) {
             ret_type = feng_symbol_decl_return_type(method);
@@ -8888,7 +8960,10 @@ static const FengSymbolDeclView *resolve_symbol_member_access_type(
     }
     member = find_symbol_type_member_by_name(obj_type, member_expr->as.member.member);
     if (member == NULL) {
-        member = find_symbol_fit_member_by_name(context, obj_type, member_expr->as.member.member);
+        member = find_symbol_fit_member_by_name(context,
+                                                obj_type,
+                                                member_expr->as.member.member,
+                                                NULL);
     }
     if (member == NULL) {
         return NULL;
@@ -9106,7 +9181,8 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_receiver_text(
             if (member == NULL) {
                 member = find_symbol_fit_member_by_name(context,
                                                         state.owner_decl,
-                                                        operation->member);
+                                                        operation->member,
+                                                        NULL);
             }
             if (member == NULL) {
                 valid = false;
@@ -9236,7 +9312,10 @@ static FengSlice resolve_symbol_builtin_name_from_expr(
             }
             method = find_symbol_type_member_by_name(obj_type, callee->as.member.member);
             if (method == NULL) {
-                method = find_symbol_fit_member_by_name(context, obj_type, callee->as.member.member);
+                method = find_symbol_fit_member_by_name(context,
+                                                        obj_type,
+                                                        callee->as.member.member,
+                                                        NULL);
             }
             if (method != NULL) {
                 ret_type = feng_symbol_decl_return_type(method);
@@ -9254,7 +9333,10 @@ static FengSlice resolve_symbol_builtin_name_from_expr(
         }
         method = find_symbol_type_member_by_name(obj_type, expr->as.member.member);
         if (method == NULL) {
-            method = find_symbol_fit_member_by_name(context, obj_type, expr->as.member.member);
+            method = find_symbol_fit_member_by_name(context,
+                                                    obj_type,
+                                                    expr->as.member.member,
+                                                    NULL);
         }
         if (method != NULL) {
             FengSymbolDeclKind kind = feng_symbol_decl_kind(method);
@@ -13674,6 +13756,32 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
             target->member = find_member_by_name(target->decl, expr->as.member.member);
             if (target->member != NULL) {
                 target->kind = FENG_LSP_RESOLVED_MEMBER;
+                return target->decl;
+            }
+        }
+        {
+            const FengDecl *fit_decl = NULL;
+            FengSlice owner_builtin_name = {0};
+
+            if (target->decl == NULL &&
+                !resolve_owner_builtin_name_from_object_expr(
+                    session,
+                    program,
+                    expr->as.member.object,
+                    locals,
+                    &owner_builtin_name)) {
+                return NULL;
+            }
+            target->member = find_program_fit_member_by_name(
+                session,
+                program,
+                target->decl,
+                owner_builtin_name,
+                expr->as.member.member,
+                &fit_decl);
+            if (target->member != NULL && fit_decl != NULL) {
+                target->kind = FENG_LSP_RESOLVED_MEMBER;
+                target->decl = fit_decl;
                 return target->decl;
             }
         }
@@ -19343,9 +19451,23 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                                                                   expr->as.member.object,
                                                                   locals);
         if (target->decl != NULL) {
+            const FengSymbolDeclView *owner_decl = target->decl;
+
             target->member = find_symbol_decl_member_by_name(target->decl,
                                                              expr->as.member.member,
                                                              false);
+            if (target->member == NULL) {
+                const FengSymbolDeclView *fit_decl = NULL;
+
+                target->member = find_symbol_fit_member_by_name(
+                    context,
+                    owner_decl,
+                    expr->as.member.member,
+                    &fit_decl);
+                if (target->member != NULL) {
+                    target->decl = fit_decl;
+                }
+            }
             if (target->member != NULL) {
                 target->kind = feng_symbol_decl_kind(target->member) ==
                                        FENG_SYMBOL_DECL_KIND_ENUM_ITEM

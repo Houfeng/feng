@@ -11558,6 +11558,132 @@ static void test_lsp_fit_member_name_param_mutability_and_return_type_navigation
     free(source_path);
 }
 
+/* A parseable document must retain fit-member Definition when a semantic
+ * diagnostic prevents the project result from being published. */
+static void test_lsp_fit_member_definition_survives_project_semantic_failure(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kSource =
+        "module test.lsp.fitmember_degraded;\n"
+        "\n"
+        "type User {}\n"
+        "\n"
+        "fit User {\n"
+        "    func say2(msg: int): void {}\n"
+        "}\n"
+        "\n"
+        "func exercise(): void {\n"
+        "    let user: User = User {};\n"
+        "    user.say2(123);\n"
+        "}\n"
+        "\n"
+        "func broken(): int {}\n";
+    char template_path[] = "temp/feng_lsp_fit_definition_degraded_XXXXXX";
+    char *workspace_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *did_save;
+    char *definition;
+    char *expected_definition;
+    char *shutdown;
+    char *output;
+    char *remove_error = NULL;
+    const char *requests[3];
+    unsigned int call_line;
+    unsigned int call_character;
+    unsigned int declaration_line;
+    unsigned int declaration_character;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    manifest_path = path_join(workspace_dir, "feng.fm");
+    src_dir = path_join(workspace_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"lsp_fit_definition_degraded\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_path, kSource);
+
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        uri,
+        escaped_source);
+    did_save = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}",
+        uri);
+    definition = build_lsp_test_position_request(
+        "textDocument/definition",
+        2U,
+        uri,
+        kSource,
+        "user.say2",
+        strlen("user.") + 1U);
+    find_line_character(kSource,
+                        "func say2",
+                        strlen("func "),
+                        &declaration_line,
+                        &declaration_character);
+    expected_definition = build_lsp_test_location_marker(
+        uri,
+        declaration_line,
+        declaration_character);
+    shutdown = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\","
+        "\"params\":null}");
+    find_line_character(kSource,
+                        "user.say2",
+                        strlen("user.") + 1U,
+                        &call_line,
+                        &call_character);
+    requests[0] = definition;
+    requests[1] = shutdown;
+    requests[2] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        did_save,
+        "textDocument/definition",
+        uri,
+        call_line,
+        call_character,
+        "\"source\":\"semantic\"",
+        requests,
+        3U,
+        NULL);
+    assert_lsp_test_response_contains(output, 2U, expected_definition);
+
+    free(output);
+    free(shutdown);
+    free(expected_definition);
+    free(definition);
+    free(did_save);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+}
+
 static void assert_lsp_completion_contains_labels(const char *source,
                                                   const char *needle,
                                                   size_t char_offset,
@@ -24375,6 +24501,7 @@ int main(void) {
     test_lsp_signature_help_repairs_enclosing_expressions();
     test_lsp_signature_help_collects_imported_function_overloads();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
+    test_lsp_fit_member_definition_survives_project_semantic_failure();
     test_lsp_member_completion_survives_incomplete_member_access();
     test_lsp_member_completion_repairs_control_flow_heads();
     test_lsp_member_completion_repairs_enclosing_expressions();
