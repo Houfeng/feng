@@ -89,6 +89,8 @@ A consumer must import `app.extensions` before using the extension.
 
 ## Avoid Name Conflicts
 
+An import alias that duplicates a declaration in the same file, including another alias, is an error even when unused. If it instead duplicates a name imported by an ordinary import or declared in another file of the same module, the conflict is reported only where the name is used, with both sources identified. This also applies to the alias in `alias.member`: aliases do not take precedence over those names. Choose a nonconflicting alias or use a full module path to resolve the conflict.
+
 Names from multiple imports become ambiguous only when the same bare name is actually used. Use an import alias or a full module path to resolve a conflict:
 
 ```feng
