@@ -45,6 +45,9 @@
 | SE0109 | 解构绑定上下文不合法 | destructuring is not valid in this binding context |
 | SE0110 | 解构绑定字符缺失 | expected '(' to start destructuring binding、expected ')' to close destructuring binding、expected ',' between destructuring positions |
 
+例如 `let (x, y): Pair = value;` 在 `Pair` token 产生 `SE0107`。该写法不形成可交给 Semantic 的
+合法 AST，因此不再为同一用户输入定义重复的 `AE` 诊断。
+
 ## SE02XX - 数组段
 
 | 新错误码 | 用途 | 涵盖的旧消息 |

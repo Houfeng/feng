@@ -324,7 +324,7 @@ let buf: u8[!] = u8[:capacity];
 
 ### 6.4 对象字面量
 
-对象字面量支持 `Type { field: value }`、`Type {}`、`Type() { field: value }`、`Type(args) { field: value }`、`Type<Args>() { field: value }` 与 `Type<Args> { field: value }` 等形式,适用于 `type` 与对象形式的 `@abi type`。字段按名称书写,顺序不限,同名字段不得重复出现,当前作用域不可访问的 `seal` 字段不可在字面量中出现。对象字面量的创建语义与构造阶段规则见 [Feng 语言类型规范](./feng-type.md)。
+对象字面量支持 `Type { field: value }`、`Type {}`、`Type() { field: value }`、`Type(args) { field: value }`、`Type<Args>() { field: value }` 与 `Type<Args> { field: value }` 等形式,仅适用于以花括号形式声明的具体对象 `type`; 合法的 `@value` 或 `@abi` 标注不改变这一语法资格。以圆括号形式声明的具名 tuple 不是对象字面量目标,其创建入口见 [Feng 语言 tuple 规范](./feng-tuple.md#21-创建形式与默认零值)。字段按名称书写,顺序不限,同名字段不得重复出现,当前作用域不可访问的 `seal` 字段不可在字面量中出现。对象字面量的创建语义与构造阶段规则见 [Feng 语言类型规范](./feng-type.md)。
 
 ```feng
 let user = User { name: "guest", age: 18 };

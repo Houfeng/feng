@@ -56,7 +56,9 @@
 | AE0108 | 解构初始化元组要求 | AE0174 | destructuring binding initializer must be a tuple |
 | AE0109 | 解构位置数量匹配约束 | AE0175 | destructuring binding has %zu position(s) but tuple initializer has %zu |
 | AE0109 | 解构位置数量匹配约束 | AE0176 | destructuring binding has %zu position(s) but tuple literal has %zu |
-| AE0110 | 解构类型标注位置约束 | AE0177 | destructuring bindings cannot use a single type annotation |
+
+解构模式后的单一类型标注属于语法错误，由 Parser 以 `SE0107` 拒绝，不进入 Semantic。Semantic
+实现中即使保留针对非法手工 AST 的防御，也不构成用户源码可达的稳定 `AE` 诊断契约。
 
 ## 02 数组段
 
@@ -82,6 +84,7 @@
 | AE0307 | fit 私有成员访问约束 | AE0091 | fit body cannot access private member '%.*s' of target type '%.*s' |
 | AE0308 | 实例成员 type 可见性约束 | AE0092 | member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | AE0312 | 构造目标对象类型约束 | AE0140 | %s '%.*s' is not an object type and cannot be constructed |
+| AE0312 | tuple 非对象构造目标约束 | （新增） | tuple type '%.*s' is not an object type and cannot be constructed |
 | AE0313 | 构造器参数匹配缺失约束 | AE0141 | type '%.*s' has no constructor accepting %zu argument(s) |
 | AE0314 | 构造器重载二义性约束 | AE0142 | type '%.*s' has multiple accessible constructors matching %zu argument(s); argument types are ambiguous |
 | AE0315 | 构造器可见性约束 | AE0143 | type '%.*s' has no accessible constructor accepting %zu argument(s) |
