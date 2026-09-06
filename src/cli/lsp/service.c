@@ -19908,6 +19908,8 @@ static bool hover_presentation_for_literal(FengLspDocument *document,
             return string_append_cstr(&presentation->signature, "float literal");
         case FENG_TOKEN_STRING:
             return string_append_cstr(&presentation->signature, "string literal");
+        case FENG_TOKEN_BOOL:
+            return string_append_cstr(&presentation->signature, "bool literal");
         default:
             break;
     }

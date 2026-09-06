@@ -9600,6 +9600,48 @@ static char *capture_lsp_hover_response(const char *source,
     return output;
 }
 
+/* Boolean literals must expose the same Hover independently of their
+ * surrounding expression or control-flow construct. */
+static void test_lsp_hover_bool_literals_across_expression_contexts(void) {
+    static const char *kSource =
+        "module test.lsp.bool_literals;\n"
+        "\n"
+        "func exercise() {\n"
+        "    try true catch {}\n"
+        "    while true {}\n"
+        "    let disabled = false;\n"
+        "}\n";
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kExpected =
+        "\"id\":2,\"result\":{\"contents\":{\"kind\":\"plaintext\","
+        "\"value\":\"bool literal\"}}}";
+    char *output;
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "try true catch",
+                                        strlen("try ") + 1U);
+    ASSERT(strstr(output, kExpected) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "while true",
+                                        strlen("while ") + 1U);
+    ASSERT(strstr(output, kExpected) != NULL);
+    free(output);
+
+    output = capture_lsp_hover_response(kSource,
+                                        kInitialize,
+                                        "let disabled = false",
+                                        strlen("let disabled = ") + 1U);
+    ASSERT(strstr(output, kExpected) != NULL);
+    free(output);
+}
+
 static char *capture_lsp_position_response_at_path(const char *source_path,
                                                    const char *source,
                                                    const char *initialize,
@@ -24474,6 +24516,7 @@ int main(void) {
     test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_hover_bool_literals_across_expression_contexts();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
     test_lsp_hover_type_categories_and_declaration_shapes();
