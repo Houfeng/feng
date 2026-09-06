@@ -16553,9 +16553,138 @@ static void test_g18_same_type_casts_are_codegen_noops(void) {
     feng_program_free(program);
 }
 
+/* ENUM-D09/D12: local enum representation and constants stay fixed at i32
+ * under both pointer-size models, while an exact enum cast emits no cast. */
+static void test_g19_local_enum_fixed_i32_codegen(void) {
+    static const char *source =
+        "module g19.codegen;\n"
+        "enum Boundary { Min = -2147483648, Zero = 0, Max = 2147483647 }\n"
+        "func same(value: Boundary): Boundary { return (Boundary)value; }\n"
+        "func narrow(value: Boundary): u8 { return (u8)value; }\n"
+        "func widen(value: Boundary): i64 { return (i64)value; }\n";
+    static const size_t pointer_sizes[] = {4U, 8U};
+    size_t index;
+
+    for (index = 0U;
+         index < sizeof(pointer_sizes) / sizeof(pointer_sizes[0]);
+         ++index) {
+        FengProgram *program = parse_or_die(source, "tests/g19_local_enum_codegen.ff");
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalyzeOptions options;
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        FengCodegenOutput out = {0};
+        FengCodegenError cgerr = {0};
+
+        memset(&options, 0, sizeof(options));
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.pointer_size = pointer_sizes[index];
+        ASSERT(feng_semantic_analyze_with_options(programs,
+                                                  1U,
+                                                  &options,
+                                                  &analysis,
+                                                  &errors,
+                                                  &error_count));
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+        ASSERT(feng_codegen_emit_program(analysis,
+                                         FENG_COMPILE_TARGET_LIB,
+                                         NULL,
+                                         &out,
+                                         &cgerr));
+        ASSERT(out.c_source != NULL);
+        ASSERT(strstr(out.c_source,
+                      "typedef int32_t FengEnum__g19__codegen__Boundary;") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengEnum__g19__codegen__Boundary__Min = ((int32_t)-2147483648);") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengEnum__g19__codegen__Boundary__Zero = ((int32_t)0);") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengEnum__g19__codegen__Boundary__Max = ((int32_t)2147483647);") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "((FengEnum__g19__codegen__Boundary)value)") == NULL);
+        compile_generated_c_or_die(out.c_source);
+
+        feng_codegen_output_free(&out);
+        feng_codegen_error_free(&cgerr);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* ENUM-D07/D11/D12: imported enum declarations restore the same signed
+ * boundaries and int32_t carrier for 32- and 64-bit consumer models. */
+static void test_g19_imported_enum_fixed_i32_codegen(void) {
+    static const char *provider_source =
+        "open module vendor.g19_codegen;\n"
+        "open enum Boundary { Min = -2147483648, Zero = 0, Max = 2147483647 }\n";
+    static const char *consumer_source =
+        "module app.g19_codegen;\n"
+        "import vendor.g19_codegen as vendor;\n"
+        "func min(): i32 { return (i32)vendor.Boundary.Min; }\n"
+        "func max(): i32 { return (i32)vendor.Boundary.Max; }\n";
+    static const size_t pointer_sizes[] = {4U, 8U};
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    size_t index;
+
+    imported_source_fixture_init(&fixture,
+                                 "tests/g19_enum_codegen_provider.ff",
+                                 provider_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    for (index = 0U;
+         index < sizeof(pointer_sizes) / sizeof(pointer_sizes[0]);
+         ++index) {
+        FengSemanticAnalyzeOptions options;
+        FengProgram *program = parse_or_die(
+            consumer_source, "tests/g19_enum_codegen_consumer.ff");
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        FengCodegenOutput out = {0};
+        FengCodegenError cgerr = {0};
+
+        memset(&options, 0, sizeof(options));
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.imported_modules = &query;
+        options.pointer_size = pointer_sizes[index];
+        ASSERT(feng_semantic_analyze_with_options(programs,
+                                                  1U,
+                                                  &options,
+                                                  &analysis,
+                                                  &errors,
+                                                  &error_count));
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+        ASSERT(feng_codegen_emit_program(analysis,
+                                         FENG_COMPILE_TARGET_LIB,
+                                         NULL,
+                                         &out,
+                                         &cgerr));
+        ASSERT(out.c_source != NULL);
+        ASSERT(strstr(out.c_source,
+                      "typedef int32_t FengEnum__vendor__g19_codegen__Boundary;") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengEnum__vendor__g19_codegen__Boundary__Min = ((int32_t)-2147483648);") != NULL);
+        ASSERT(strstr(out.c_source,
+                      "FengEnum__vendor__g19_codegen__Boundary__Max = ((int32_t)2147483647);") != NULL);
+        compile_generated_c_or_die(out.c_source);
+
+        feng_codegen_output_free(&out);
+        feng_codegen_error_free(&cgerr);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+    imported_source_fixture_dispose(&fixture);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g19_local_enum_fixed_i32_codegen();
+    test_g19_imported_enum_fixed_i32_codegen();
 
     test_g18_default_zero_termination_boundaries_codegen();
     test_g18_open_generic_default_zero_uses_shared_entry_codegen();

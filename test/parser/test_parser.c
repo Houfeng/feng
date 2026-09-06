@@ -100,7 +100,6 @@ static void test_extern_rejects_non_function_top_level_declarations(void) {
     static const char *kCases[] = {
         "module demo.main;\nextern let value: int;\n",
         "module demo.main;\nextern type Point {\n    var x: int;\n}\n",
-        "module demo.main;\nextern enum Status {\n    ok = 0;\n}\n",
         "module demo.main;\nextern spec Reader {\n}\n",
         "module demo.main;\nextern fit User: Named {\n}\n"
     };
@@ -5825,7 +5824,165 @@ static void test_g16_for_update_legal_ast_boundaries(void) {
     feng_program_free(program);
 }
 
+/* Assert one exact Parser diagnostic added for the G19 enum matrix. */
+static void assert_g19_parser_failure(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      const char *expected_message,
+                                      FengTokenKind expected_kind,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme) {
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    memset(&error, 0, sizeof(error));
+    ASSERT(!feng_parse_source(source, strlen(source), path, &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, expected_code) == 0);
+    ASSERT(error.message != NULL);
+    ASSERT(strcmp(error.message, expected_message) == 0);
+    ASSERT(error.token.kind == expected_kind);
+    ASSERT(error.token.line == expected_line);
+    ASSERT(error.token.column == expected_column);
+    ASSERT(error.token.length == strlen(expected_lexeme));
+    ASSERT(error.token.length == 0U ||
+           memcmp(error.token.lexeme, expected_lexeme, error.token.length) == 0);
+}
+
+/* ENUM-D01/D06: Parser preserves every supported spelling plus the original
+ * sign/magnitude/span needed for Semantic's fixed-i32 range check. */
+static void test_g19_enum_literal_ast_facts(void) {
+    const char *source =
+        "module g19.parser;\n"
+        "enum Automatic { First, Second, Third }\n"
+        "enum Explicit {\n"
+        "  Decimal = 123,\n"
+        "  Negative = -45,\n"
+        "  Hex = 0x7fff_ffff,\n"
+        "  Octal = 0o177_777,\n"
+        "  Binary = 0b1010_0101,\n"
+        "  Zero = 0,\n"
+        "  Huge = 18446744073709551615,\n"
+        "  NegativeHuge = -18446744073709551615\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *automatic;
+    const FengDecl *explicit_enum;
+    const FengEnumItem *items;
+
+    memset(&error, 0, sizeof(error));
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g19_enum_literal_ast.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(error.code == NULL);
+    ASSERT(program->declaration_count == 2U);
+
+    automatic = program->declarations[0];
+    ASSERT(automatic->kind == FENG_DECL_ENUM);
+    ASSERT(automatic->as.enum_decl.item_count == 3U);
+    ASSERT(!automatic->as.enum_decl.items[0].has_explicit_value);
+    ASSERT(!automatic->as.enum_decl.items[1].has_explicit_value);
+    ASSERT(!automatic->as.enum_decl.items[2].has_explicit_value);
+
+    explicit_enum = program->declarations[1];
+    ASSERT(explicit_enum->kind == FENG_DECL_ENUM);
+    ASSERT(explicit_enum->as.enum_decl.item_count == 8U);
+    items = explicit_enum->as.enum_decl.items;
+    for (size_t index = 0U; index < explicit_enum->as.enum_decl.item_count; ++index) {
+        ASSERT(items[index].has_explicit_value);
+        ASSERT(items[index].has_explicit_value_literal);
+    }
+
+    ASSERT(items[0].explicit_value == 123);
+    ASSERT(items[0].explicit_value_magnitude == UINT64_C(123));
+    ASSERT(!items[0].explicit_value_is_negative);
+    assert_slice_text(items[0].explicit_value_source, "123");
+    ASSERT(items[0].explicit_value_token.kind == FENG_TOKEN_INTEGER);
+
+    ASSERT(items[1].explicit_value == -45);
+    ASSERT(items[1].explicit_value_magnitude == UINT64_C(45));
+    ASSERT(items[1].explicit_value_is_negative);
+    assert_slice_text(items[1].explicit_value_source, "-45");
+    ASSERT(items[1].explicit_value_token.kind == FENG_TOKEN_MINUS);
+
+    ASSERT(items[2].explicit_value == INT32_MAX);
+    ASSERT(items[2].explicit_value_magnitude == (uint64_t)INT32_MAX);
+    assert_slice_text(items[2].explicit_value_source, "0x7fff_ffff");
+    ASSERT(items[3].explicit_value == 65535);
+    assert_slice_text(items[3].explicit_value_source, "0o177_777");
+    ASSERT(items[4].explicit_value == 165);
+    assert_slice_text(items[4].explicit_value_source, "0b1010_0101");
+    ASSERT(items[5].explicit_value == 0);
+    assert_slice_text(items[5].explicit_value_source, "0");
+
+    ASSERT(items[6].explicit_value_magnitude == UINT64_MAX);
+    ASSERT(!items[6].explicit_value_is_negative);
+    assert_slice_text(items[6].explicit_value_source, "18446744073709551615");
+    ASSERT(items[7].explicit_value_magnitude == UINT64_MAX);
+    ASSERT(items[7].explicit_value_is_negative);
+    assert_slice_text(items[7].explicit_value_source, "-18446744073709551615");
+
+    feng_program_free(program);
+}
+
+/* ENUM-D02: add the enum-specific Parser exits not already covered by G12. */
+static void test_g19_enum_additional_parser_diagnostics(void) {
+    assert_g19_parser_failure(
+        "g19_extern_enum.ff",
+        "module g19.parser;\nextern enum E { A }\n",
+        "SE0401",
+        "enum declarations cannot be marked 'extern'",
+        FENG_TOKEN_KW_ENUM,
+        2U,
+        8U,
+        "enum");
+    assert_g19_parser_failure(
+        "g19_enum_decl_annotation.ff",
+        "module g19.parser;\n@tag\nenum E { A }\n",
+        "SE0402",
+        "enum declarations do not support annotations in the current phase",
+        FENG_TOKEN_IDENTIFIER,
+        3U,
+        6U,
+        "E");
+    assert_g19_parser_failure(
+        "g19_enum_item_annotation.ff",
+        "module g19.parser;\nenum E { @tag A }\n",
+        "SE0402",
+        "enum items do not support annotations",
+        FENG_TOKEN_ANNOTATION,
+        2U,
+        10U,
+        "@tag");
+    assert_g19_parser_failure(
+        "g19_enum_missing_open_brace.ff",
+        "module g19.parser;\nenum E A\n",
+        "SE0410",
+        "enum declarations require '{...}' after the enum name",
+        FENG_TOKEN_IDENTIFIER,
+        2U,
+        8U,
+        "A");
+    assert_g19_parser_failure(
+        "g19_enum_missing_item_name.ff",
+        "module g19.parser;\nenum E { = 1 }\n",
+        "SE0002",
+        "expected an enum item name",
+        FENG_TOKEN_ASSIGN,
+        2U,
+        10U,
+        "=");
+}
+
 int main(void) {
+    test_g19_enum_literal_ast_facts();
+    test_g19_enum_additional_parser_diagnostics();
     test_g16_for_update_binding_declarations_are_rejected();
     test_g16_for_update_legal_ast_boundaries();
     test_g12_module_import_and_top_level_syntax();

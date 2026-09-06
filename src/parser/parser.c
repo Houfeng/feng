@@ -1117,15 +1117,20 @@ static bool type_ref_is_void_named(const FengTypeRef *type_ref) {
     }
 }
 
-static bool parse_enum_integer_literal(Parser *parser, int64_t *out_value) {
+/* Parse an enum initializer while retaining its unsigned magnitude and source
+ * span. The normalized int64 field is populated only when representable, so
+ * malformed large literals cannot trigger signed negation overflow here. */
+static bool parse_enum_integer_literal(Parser *parser, FengEnumItem *out_item) {
     bool negative = false;
+    FengToken value_token;
     const FengToken *token;
-    int64_t value;
+    uint64_t magnitude;
 
-    if (out_value == NULL) {
+    if (out_item == NULL) {
         return false;
     }
 
+    value_token = parser_current_token(parser);
     if (parser_match(parser, FENG_TOKEN_MINUS)) {
         negative = true;
     }
@@ -1136,31 +1141,36 @@ static bool parse_enum_integer_literal(Parser *parser, int64_t *out_value) {
         return false;
     }
 
-    value = token->value.integer;
-    if (negative) {
-        value = -value;
+    memcpy(&magnitude, &token->value.integer, sizeof(magnitude));
+    out_item->has_explicit_value_literal = true;
+    out_item->explicit_value_is_negative = negative;
+    out_item->explicit_value_magnitude = magnitude;
+    out_item->explicit_value_token = value_token;
+    out_item->explicit_value_source.data = value_token.lexeme;
+    out_item->explicit_value_source.length =
+        (size_t)((token->lexeme + token->length) - value_token.lexeme);
+
+    out_item->explicit_value = 0;
+    if (!negative && magnitude <= (uint64_t)INT64_MAX) {
+        out_item->explicit_value = (int64_t)magnitude;
+    } else if (negative && magnitude <= (uint64_t)INT64_MAX) {
+        out_item->explicit_value = -(int64_t)magnitude;
+    } else if (negative && magnitude == (uint64_t)INT64_MAX + UINT64_C(1)) {
+        out_item->explicit_value = INT64_MIN;
     }
     (void)parser_advance(parser);
-    *out_value = value;
     return true;
 }
 
 static FengDecl *parse_enum_declaration(Parser *parser,
                                         FengSlice doc_comment,
                                         FengVisibility visibility,
-                                        bool is_extern,
                                         FengAnnotation *annotations,
                                         size_t annotation_count) {
     FengToken name_token = parser_current_token(parser);
     FengDecl *decl;
     FengSlice enum_name;
     size_t item_capacity = 0U;
-
-    if (is_extern) {
-        free_annotations(annotations, annotation_count);
-        (void)parser_error_current(parser, "SE0401", "enum declarations cannot be marked 'extern'");
-        return NULL;
-    }
 
     if (annotation_count > 0U) {
         free_annotations(annotations, annotation_count);
@@ -1235,7 +1245,7 @@ static FengDecl *parse_enum_declaration(Parser *parser,
 
         if (parser_match(parser, FENG_TOKEN_ASSIGN)) {
             item.has_explicit_value = true;
-            if (!parse_enum_integer_literal(parser, &item.explicit_value)) {
+            if (!parse_enum_integer_literal(parser, &item)) {
                 free_decl(decl);
                 return NULL;
             }
@@ -2471,6 +2481,13 @@ static FengDecl *parse_declaration(Parser *parser) {
                                               annotations,
                                               annotation_count);
         }
+        if (parser_check(parser, FENG_TOKEN_KW_ENUM)) {
+            free_annotations(annotations, annotation_count);
+            (void)parser_error_current(
+                parser,
+                "SE0401", "enum declarations cannot be marked 'extern'");
+            return NULL;
+        }
         free_annotations(annotations, annotation_count);
         (void)parser_error_current(parser,
                                    "SE0003", "'extern' can only be applied to top-level 'func' declarations");
@@ -2501,7 +2518,6 @@ static FengDecl *parse_declaration(Parser *parser) {
         return parse_enum_declaration(parser,
                                       doc_comment,
                                       visibility,
-                                      is_extern,
                                       annotations,
                                       annotation_count);
     }

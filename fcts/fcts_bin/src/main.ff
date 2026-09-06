@@ -35,6 +35,7 @@ func main(args: string[]) {
       test_finalizer_capture();
       test_enum();
       test_enum_default_semantics();
+      test_enum_diagnostics_semantics();
       test_value_box();
       test_spec();
       test_object_spec_contract_surface();

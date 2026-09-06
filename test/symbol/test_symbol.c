@@ -5012,6 +5012,93 @@ static void test_signature_visibility_error_prevents_public_ft_export(void) {
     free(tmp_dir);
 }
 
+/* ENUM-D11: package-public .ft preserves the fixed-i32 enum boundaries,
+ * declaration order, and imported AST values without changing the format. */
+static void test_g19_enum_i32_boundaries_ft_roundtrip(void) {
+    static const char *source =
+        "open module feng.test.symbol.g19_boundary;\n"
+        "open enum Boundary {\n"
+        "  Min = -2147483648,\n"
+        "  Zero = 0,\n"
+        "  Max = 2147483647\n"
+        "}\n";
+    static const char *names[] = {"Min", "Zero", "Max"};
+    static const int64_t values[] = {
+        (int64_t)INT32_MIN, 0, (int64_t)INT32_MAX
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[5];
+    const FengSymbolImportedModule *symbol_module;
+    const FengSymbolDeclView *enum_decl;
+    const FengSemanticModule *semantic_module;
+    const FengDecl *imported_decl;
+    size_t index;
+
+    ASSERT(snprintf(public_root,
+                    sizeof(public_root),
+                    "%s/g19_enum_boundary_mod",
+                    tmp_dir) > 0);
+    export_public_source_or_die("g19_enum_boundary.ff", source, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("g19_boundary");
+    symbol_module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(symbol_module != NULL);
+    enum_decl = feng_symbol_module_find_public_enum(
+        symbol_module, slice_from_cstr("Boundary"));
+    ASSERT(enum_decl != NULL);
+    ASSERT(feng_symbol_decl_member_count(enum_decl) == 3U);
+    for (index = 0U; index < 3U; ++index) {
+        const FengSymbolDeclView *item =
+            feng_symbol_decl_member_at(enum_decl, index);
+
+        ASSERT(item != NULL);
+        ASSERT(feng_symbol_decl_kind(item) == FENG_SYMBOL_DECL_KIND_ENUM_ITEM);
+        ASSERT(slice_equals_cstr(feng_symbol_decl_name(item), names[index]));
+        ASSERT(feng_symbol_decl_enum_item_ordinal(item) == index);
+        ASSERT(feng_symbol_decl_has_enum_item_value(item));
+        ASSERT(feng_symbol_decl_enum_item_value(item) == values[index]);
+    }
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL);
+    ASSERT(semantic_module->program_count == 1U);
+    ASSERT(semantic_module->programs[0]->declaration_count == 1U);
+    imported_decl = semantic_module->programs[0]->declarations[0];
+    ASSERT(imported_decl != NULL);
+    ASSERT(imported_decl->kind == FENG_DECL_ENUM);
+    ASSERT(imported_decl->as.enum_decl.item_count == 3U);
+    for (index = 0U; index < 3U; ++index) {
+        const FengEnumItem *item = &imported_decl->as.enum_decl.items[index];
+
+        ASSERT(slice_equals_cstr(item->name, names[index]));
+        ASSERT(item->has_explicit_value);
+        ASSERT(!item->has_explicit_value_literal);
+        ASSERT(item->explicit_value == values[index]);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -5038,6 +5125,7 @@ int main(void) {
     test_reader_rejects_bad_magic();
     test_provider_loads_bundle_public_module();
     test_enum_ft_roundtrip_exports_items_and_values();
+    test_g19_enum_i32_boundaries_ft_roundtrip();
     test_provider_rejects_duplicate_bundle_module();
     test_provider_rejects_bad_bundle_symbol_entry();
     test_imported_module_cache_keeps_synthesized_modules_alive();

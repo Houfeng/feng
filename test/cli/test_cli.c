@@ -4382,6 +4382,59 @@ static void test_project_check_reports_enum_semantic_error_without_unknown_type(
     free(project_dir);
 }
 
+/* ENUM-D06/D11: the CLI surfaces AE0405 at the initializer token and stops
+ * the invalid public enum during Semantic analysis. */
+static void test_project_check_reports_enum_i32_range_error(void) {
+    char template_path[] = "temp/feng_cli_check_g19_enum_range_XXXXXX";
+    char *workspace_dir;
+    char *project_dir;
+    char *manifest_path;
+    char *src_dir;
+    char *source_path;
+    char *stderr_text;
+    char *remove_error = NULL;
+    int rc = 0;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "root");
+    manifest_path = path_join(project_dir, "feng.fm");
+    src_dir = path_join(project_dir, "src");
+    source_path = path_join(src_dir, "main.ff");
+
+    mkdir_p(src_dir);
+    write_text_file(manifest_path,
+                    "[package]\n"
+                    "name: \"g19_enum_range_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(source_path,
+                    "open module test.cli.g19_enum_range;\n"
+                    "open enum E { Bad = 2147483648 }\n"
+                    "func main(args: string[]) {}\n");
+
+    {
+        char *argv[] = {source_path};
+        stderr_text = run_project_check_capture_stderr(1, argv, &rc);
+    }
+
+    ASSERT(rc != 0);
+    ASSERT(strstr(stderr_text, ":2:21\n") != NULL);
+    ASSERT(strstr(stderr_text,
+                  "AE0405: enum 'E' item 'Bad' value 2147483648 is outside the 'i32' range") != NULL);
+    ASSERT(strstr(stderr_text, "CE") == NULL);
+
+    free(stderr_text);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(source_path);
+    free(src_dir);
+    free(manifest_path);
+    free(project_dir);
+}
+
 static void test_frontend_outputs_absolute_bundle_paths(void) {
     char template_path[] = "temp/feng_cli_frontend_pkg_XXXXXX";
     char *workspace_dir;
@@ -24622,6 +24675,7 @@ int main(void) {
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_project_check_reports_enum_semantic_error_without_unknown_type();
+    test_project_check_reports_enum_i32_range_error();
     test_frontend_outputs_absolute_bundle_paths();
     test_frontend_source_overlay_replaces_disk_source();
     test_frontend_source_overlay_rejects_duplicate_paths();

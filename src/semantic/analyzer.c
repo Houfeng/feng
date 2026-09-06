@@ -11288,6 +11288,34 @@ static bool callable_body_can_fall_through(const FengBlock *body) {
     return (callable_block_flow(body) & CALLABLE_FLOW_NORMAL) != 0U;
 }
 
+/* Normalize a source enum literal only after proving that its mathematical
+ * signed value fits the language's fixed i32 enum representation. */
+static bool enum_source_literal_as_i32(const FengEnumItem *item,
+                                       int64_t *out_value) {
+    const uint64_t negative_limit = (uint64_t)INT32_MAX + UINT64_C(1);
+
+    if (item == NULL || out_value == NULL ||
+        !item->has_explicit_value_literal) {
+        return false;
+    }
+
+    if (item->explicit_value_is_negative) {
+        if (item->explicit_value_magnitude > negative_limit) {
+            return false;
+        }
+        *out_value = item->explicit_value_magnitude == negative_limit
+                         ? (int64_t)INT32_MIN
+                         : -(int64_t)item->explicit_value_magnitude;
+        return true;
+    }
+
+    if (item->explicit_value_magnitude > (uint64_t)INT32_MAX) {
+        return false;
+    }
+    *out_value = (int64_t)item->explicit_value_magnitude;
+    return true;
+}
+
 static const FengDecl *resolve_inferred_expr_type_decl(const ResolveContext *context,
                                                        InferredExprType expr_type) {
     switch (expr_type.kind) {
@@ -11328,6 +11356,7 @@ static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_
 
     for (item_index = 0U; item_index < enum_decl->as.enum_decl.item_count; ++item_index) {
         const FengEnumItem *item = &enum_decl->as.enum_decl.items[item_index];
+        int64_t normalized_value;
         size_t previous_index;
 
         if (item->has_explicit_value) {
@@ -11359,7 +11388,27 @@ static bool ensure_enum_decl_info(ResolveContext *context, const FengDecl *enum_
             }
         }
 
-        values[item_index] = item->has_explicit_value ? item->explicit_value : (int64_t)item_index;
+        if (item->has_explicit_value && item->has_explicit_value_literal) {
+            if (!enum_source_literal_as_i32(item, &normalized_value)) {
+                free(values);
+                return resolver_append_error(
+                    context,
+                    item->explicit_value_token,
+                    "AE0405", format_message(
+                        "enum '%.*s' item '%.*s' value %.*s is outside the 'i32' range",
+                        (int)enum_decl->as.enum_decl.name.length,
+                        enum_decl->as.enum_decl.name.data,
+                        (int)item->name.length,
+                        item->name.data,
+                        (int)item->explicit_value_source.length,
+                        item->explicit_value_source.data));
+            }
+            values[item_index] = normalized_value;
+        } else {
+            values[item_index] = item->has_explicit_value
+                                     ? item->explicit_value
+                                     : (int64_t)item_index;
+        }
         for (previous_index = 0U; previous_index < item_index; ++previous_index) {
             if (values[previous_index] == values[item_index]) {
                 int64_t duplicate_value = values[item_index];

@@ -451,11 +451,19 @@ typedef struct FengCallableSignature {
     size_t bound_member_count;
 } FengCallableSignature;
 
+/* One enum item and, for source literals, the unnormalized integer facts used
+ * by Semantic to validate the fixed i32 representation without signed
+ * overflow or loss of the original diagnostic span. */
 typedef struct FengEnumItem {
     FengToken token;
     FengSlice name;
     bool has_explicit_value;
     int64_t explicit_value;
+    bool has_explicit_value_literal;
+    bool explicit_value_is_negative;
+    uint64_t explicit_value_magnitude;
+    FengToken explicit_value_token;
+    FengSlice explicit_value_source;
 } FengEnumItem;
 
 /* A compile-time member-expansion directive in a concrete type body.

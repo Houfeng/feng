@@ -32881,7 +32881,478 @@ static void test_g18_imported_default_zero_semantics(void) {
     }
 }
 
+/* Assert one exact diagnostic for the G19 enum matrix. */
+static void assert_g19_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G19",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* ENUM-D03 through ENUM-D07: enum declaration invariants and member lookup
+ * retain stable codes, exact tokens, and a single Semantic diagnostic. */
+static void test_g19_enum_declaration_and_member_diagnostics(void) {
+    assert_g19_semantic_error(
+        "g19_enum_explicit_then_implicit.ff",
+        "module g19.enum_explicit_then_implicit;\n"
+        "enum E {\n"
+        "  First = 0,\n"
+        "  Second\n"
+        "}\n",
+        "AE0401", 4U, 3U, "Second",
+        "enum 'E' cannot mix explicit and implicit item values");
+    assert_g19_semantic_error(
+        "g19_enum_implicit_then_explicit.ff",
+        "module g19.enum_implicit_then_explicit;\n"
+        "enum E {\n"
+        "  First,\n"
+        "  Second = 1\n"
+        "}\n",
+        "AE0401", 4U, 3U, "Second",
+        "enum 'E' cannot mix explicit and implicit item values");
+    assert_g19_semantic_error(
+        "g19_enum_duplicate_name.ff",
+        "module g19.enum_duplicate_name;\n"
+        "enum E {\n"
+        "  Same = 0,\n"
+        "  Same = 1\n"
+        "}\n",
+        "AE0402", 4U, 3U, "Same",
+        "enum 'E' has duplicate item name 'Same'");
+    assert_g19_semantic_error(
+        "g19_enum_duplicate_normalized_value.ff",
+        "module g19.enum_duplicate_normalized_value;\n"
+        "enum E {\n"
+        "  Decimal = 1,\n"
+        "  Hex = 0x1\n"
+        "}\n",
+        "AE0403", 4U, 3U, "Hex",
+        "enum 'E' has duplicate item value 1");
+    assert_g19_semantic_error(
+        "g19_enum_missing_member.ff",
+        "module g19.enum_missing_member;\n"
+        "enum E { Ready }\n"
+        "func bad(): E {\n"
+        "  return E.Missing;\n"
+        "}\n",
+        "AE0404", 4U, 12U, "Missing",
+        "enum 'E' has no item 'Missing'");
+    assert_g19_semantic_error(
+        "g19_enum_bare_item.ff",
+        "module g19.enum_bare_item;\n"
+        "enum E { Ready }\n"
+        "func bad(): E {\n"
+        "  return Ready;\n"
+        "}\n",
+        "AE0001", 4U, 10U, "Ready",
+        "undefined identifier 'Ready'");
+}
+
+/* ENUM-D06: all Lexer-representable values outside i32 fail before value
+ * normalization, including magnitudes whose token bit pattern is negative. */
+static void test_g19_enum_i32_range_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *literal;
+        const char *token;
+    } cases[] = {
+        {"g19_enum_i32_positive_overflow.ff", "2147483648", "2147483648"},
+        {"g19_enum_i32_negative_overflow.ff", "-2147483649", "-"},
+        {"g19_enum_int64_positive_boundary.ff", "9223372036854775808", "9223372036854775808"},
+        {"g19_enum_int64_negative_boundary.ff", "-9223372036854775808", "-"},
+        {"g19_enum_u64_positive_boundary.ff", "18446744073709551615", "18446744073709551615"},
+        {"g19_enum_u64_negative_boundary.ff", "-18446744073709551615", "-"}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[256];
+        char message[192];
+        int source_length;
+        int message_length;
+
+        source_length = snprintf(source,
+                                 sizeof(source),
+                                 "module g19.range;\nenum E { Bad = %s }\n",
+                                 cases[index].literal);
+        message_length = snprintf(message,
+                                  sizeof(message),
+                                  "enum 'E' item 'Bad' value %s is outside the 'i32' range",
+                                  cases[index].literal);
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        ASSERT(message_length > 0 && (size_t)message_length < sizeof(message));
+        assert_g19_semantic_error(cases[index].path,
+                                  source,
+                                  "AE0405",
+                                  2U,
+                                  16U,
+                                  cases[index].token,
+                                  message);
+    }
+}
+
+/* ENUM-D06/D08: boundary values normalize exactly, and the nominal enum type
+ * remains valid in bindings, parameters, returns, casts, and equality. */
+static void test_g19_enum_i32_boundaries_and_same_type_semantics(void) {
+    const char *source =
+        "module g19.boundaries;\n"
+        "enum Boundary { Min = -2147483648, Zero = 0, Max = 2147483647 }\n"
+        "func echo(value: Boundary): Boundary { return value; }\n"
+        "func same(left: Boundary, right: Boundary): bool {\n"
+        "  let copied: Boundary = echo(left);\n"
+        "  return copied == right || copied != Boundary.Zero;\n"
+        "}\n"
+        "func recast(value: Boundary): Boundary { return (Boundary)value; }\n";
+    FengProgram *program = parse_program_or_die("g19_enum_boundaries.ff", source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *decl;
+    const FengSemanticEnumItemInfo *min_info;
+    const FengSemanticEnumItemInfo *zero_info;
+    const FengSemanticEnumItemInfo *max_info;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    decl = find_enum_decl_by_name(analysis, "Boundary");
+    ASSERT(decl != NULL);
+    min_info = feng_semantic_find_enum_item_info(
+        analysis, decl, slice_from_cstr("Min"));
+    zero_info = feng_semantic_find_enum_item_info(
+        analysis, decl, slice_from_cstr("Zero"));
+    max_info = feng_semantic_find_enum_item_info(
+        analysis, decl, slice_from_cstr("Max"));
+    ASSERT(min_info != NULL && min_info->value == (int64_t)INT32_MIN);
+    ASSERT(zero_info != NULL && zero_info->value == 0);
+    ASSERT(max_info != NULL && max_info->value == (int64_t)INT32_MAX);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Analyze one positive G19 source under an explicit pointer size. */
+static void assert_g19_semantic_accepts_with_pointer_size(const char *path,
+                                                          const char *source,
+                                                          size_t pointer_size) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalyzeOptions options;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.pointer_size = pointer_size;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* ENUM-D09: enum can explicitly target every integer type, independently of
+ * whether platform aliases resolve to 32- or 64-bit integers. */
+static void test_g19_enum_all_integer_cast_targets(void) {
+    const char *source =
+        "module g19.integer_casts;\n"
+        "enum E { Negative = -1, Positive = 257 }\n"
+        "func to_i8(value: E): i8 { return (i8)value; }\n"
+        "func to_i16(value: E): i16 { return (i16)value; }\n"
+        "func to_i32(value: E): i32 { return (i32)value; }\n"
+        "func to_i64(value: E): i64 { return (i64)value; }\n"
+        "func to_u8(value: E): u8 { return (u8)value; }\n"
+        "func to_u16(value: E): u16 { return (u16)value; }\n"
+        "func to_u32(value: E): u32 { return (u32)value; }\n"
+        "func to_u64(value: E): u64 { return (u64)value; }\n"
+        "func to_int(value: E): int { return (int)value; }\n"
+        "func to_uint(value: E): uint { return (uint)value; }\n"
+        "func to_byte(value: E): byte { return (byte)value; }\n";
+
+    assert_g19_semantic_accepts_with_pointer_size(
+        "g19_enum_integer_casts_32.ff", source, 4U);
+    assert_g19_semantic_accepts_with_pointer_size(
+        "g19_enum_integer_casts_64.ff", source, 8U);
+}
+
+/* ENUM-D08/D09: implicit scalar crossings and every prohibited explicit cast
+ * direction retain the shared type-system diagnostics. */
+static void test_g19_enum_nominal_and_cast_diagnostics(void) {
+    static const char *integer_sources[] = {
+        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "int", "uint", "byte"
+    };
+    static const char *non_integer_targets[] = {
+        "f32", "f64", "float", "double", "bool", "string"
+    };
+    size_t index;
+
+    assert_g19_semantic_error(
+        "g19_enum_cross_assignment.ff",
+        "module g19.cross_assignment;\n"
+        "enum First { A }\n"
+        "enum Second { A }\n"
+        "func bad(): First {\n"
+        "  return Second.A;\n"
+        "}\n",
+        "AE1003", 5U, 17U, "A",
+        "does not match expected type 'First'");
+    assert_g19_semantic_error(
+        "g19_enum_to_integer_implicit.ff",
+        "module g19.to_integer_implicit;\n"
+        "enum E { A }\n"
+        "func bad(): i32 {\n"
+        "  return E.A;\n"
+        "}\n",
+        "AE1003", 4U, 12U, "A",
+        "does not match expected type 'i32'");
+    assert_g19_semantic_error(
+        "g19_integer_to_enum_implicit.ff",
+        "module g19.from_integer_implicit;\n"
+        "enum E { A }\n"
+        "func bad(): E {\n"
+        "  return 0;\n"
+        "}\n",
+        "AE1003", 4U, 10U, "0",
+        "does not match expected type 'E'");
+
+    for (index = 0U;
+         index < sizeof(integer_sources) / sizeof(integer_sources[0]);
+         ++index) {
+        char path[96];
+        char source[320];
+        int path_length;
+        int source_length;
+
+        path_length = snprintf(path,
+                               sizeof(path),
+                               "g19_%s_to_enum_cast.ff",
+                               integer_sources[index]);
+        source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g19.integer_to_enum;\n"
+            "enum E { A }\n"
+            "func bad(value: %s): E {\n"
+            "  return (E)value;\n"
+            "}\n",
+            integer_sources[index]);
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g19_semantic_error(path,
+                                  source,
+                                  "AE1023",
+                                  4U,
+                                  10U,
+                                  "(",
+                                  "to 'E' is not allowed");
+    }
+
+    assert_g19_semantic_error(
+        "g19_enum_to_enum_cast.ff",
+        "module g19.enum_to_enum;\n"
+        "enum First { A }\n"
+        "enum Second { A }\n"
+        "func bad(value: First): Second {\n"
+        "  return (Second)value;\n"
+        "}\n",
+        "AE1023", 5U, 10U, "(",
+        "cast from 'First' to 'Second' is not allowed");
+
+    for (index = 0U;
+         index < sizeof(non_integer_targets) / sizeof(non_integer_targets[0]);
+         ++index) {
+        char path[96];
+        char source[320];
+        int path_length;
+        int source_length;
+
+        path_length = snprintf(path,
+                               sizeof(path),
+                               "g19_enum_to_%s_cast.ff",
+                               non_integer_targets[index]);
+        source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g19.enum_to_non_integer;\n"
+            "enum E { A }\n"
+            "func bad(value: E): %s {\n"
+            "  return (%s)value;\n"
+            "}\n",
+            non_integer_targets[index],
+            non_integer_targets[index]);
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g19_semantic_error(path,
+                                  source,
+                                  "AE1023",
+                                  4U,
+                                  10U,
+                                  "(",
+                                  "is not allowed");
+    }
+}
+
+/* ENUM-D10: one minimal source per operator family proves that enum remains a
+ * nominal non-numeric type outside == and !=. */
+static void test_g19_enum_operator_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *body;
+        const char *code;
+        const char *token;
+        const char *message;
+        unsigned int column;
+    } cases[] = {
+        {"g19_enum_unary_numeric.ff", "  return -left;\n", "AE1018", "-", "requires a numeric operand", 10U},
+        {"g19_enum_unary_integer.ff", "  return ~left;\n", "AE1018", "~", "requires an integer operand", 10U},
+        {"g19_enum_unary_logic.ff", "  return !left;\n", "AE1018", "!", "requires a bool operand", 10U},
+        {"g19_enum_arithmetic.ff", "  return left + right;\n", "AE1019", "+", "requires operands of the same numeric or string type", 15U},
+        {"g19_enum_order.ff", "  return left < right;\n", "AE1019", "<", "requires operands of the same numeric type", 15U},
+        {"g19_enum_bitwise.ff", "  return left & right;\n", "AE1019", "&", "requires operands of the same integer type", 15U},
+        {"g19_enum_shift.ff", "  return left << right;\n", "AE1019", "<<", "requires operands of the same integer type", 15U},
+        {"g19_enum_logic.ff", "  return left && right;\n", "AE1019", "&&", "requires bool operands", 15U}
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[384];
+        int source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g19.operators;\n"
+            "enum E { A, B }\n"
+            "func bad(left: E, right: E): E {\n"
+            "%s"
+            "}\n",
+            cases[index].body);
+
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g19_semantic_error(cases[index].path,
+                                  source,
+                                  cases[index].code,
+                                  4U,
+                                  cases[index].column,
+                                  cases[index].token,
+                                  cases[index].message);
+    }
+
+    assert_g19_semantic_error(
+        "g19_enum_cross_equality.ff",
+        "module g19.cross_equality;\n"
+        "enum First { A }\n"
+        "enum Second { A }\n"
+        "func bad(left: First, right: Second): bool {\n"
+        "  return left == right;\n"
+        "}\n",
+        "AE1019", 5U, 15U, "==",
+        "requires operands of the same type");
+    assert_g19_semantic_error(
+        "g19_enum_integer_equality.ff",
+        "module g19.integer_equality;\n"
+        "enum E { A }\n"
+        "func bad(value: E): bool {\n"
+        "  return value == 0;\n"
+        "}\n",
+        "AE1019", 4U, 16U, "==",
+        "requires operands of the same type");
+    assert_g19_semantic_error(
+        "g19_enum_compound_numeric.ff",
+        "module g19.compound_numeric;\n"
+        "enum E { A, B }\n"
+        "func bad() {\n"
+        "  var value: E = E.A;\n"
+        "  value += E.B;\n"
+        "}\n",
+        "AE1020", 5U, 3U, "value",
+        "requires operands of the same numeric type");
+    assert_g19_semantic_error(
+        "g19_enum_compound_integer.ff",
+        "module g19.compound_integer;\n"
+        "enum E { A, B }\n"
+        "func bad() {\n"
+        "  var value: E = E.A;\n"
+        "  value &= E.B;\n"
+        "}\n",
+        "AE1020", 5U, 3U, "value",
+        "requires operands of the same integer type");
+}
+
+/* ENUM-D07/D11: an imported public enum retains member names, order, and
+ * signed boundary values when consumed through the imported-module model. */
+static void test_g19_imported_enum_boundaries_and_member_access(void) {
+    static const char *provider_source =
+        "open module vendor.g19_boundary;\n"
+        "open enum Boundary { Min = -2147483648, Zero = 0, Max = 2147483647 }\n";
+    static const char *consumer_source =
+        "module app.g19_boundary;\n"
+        "import vendor.g19_boundary as vendor;\n"
+        "func min(): i32 { return (i32)vendor.Boundary.Min; }\n"
+        "func zero(): i32 { return (i32)vendor.Boundary.Zero; }\n"
+        "func max(): i32 { return (i32)vendor.Boundary.Max; }\n";
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    imported_source_fixture_init(&fixture,
+                                 "g19_imported_enum_provider.ff",
+                                 provider_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = &query;
+    options.pointer_size = sizeof(void *);
+    program = parse_program_or_die("g19_imported_enum_consumer.ff",
+                                   consumer_source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    imported_source_fixture_dispose(&fixture);
+}
+
 int main(void) {
+    test_g19_enum_declaration_and_member_diagnostics();
+    test_g19_enum_i32_range_diagnostics();
+    test_g19_enum_i32_boundaries_and_same_type_semantics();
+    test_g19_enum_all_integer_cast_targets();
+    test_g19_enum_nominal_and_cast_diagnostics();
+    test_g19_enum_operator_diagnostics();
+    test_g19_imported_enum_boundaries_and_member_access();
     test_g18_default_zero_semantic_diagnostics();
     test_g18_default_zero_semantic_acceptance();
     test_g18_imported_default_zero_semantics();

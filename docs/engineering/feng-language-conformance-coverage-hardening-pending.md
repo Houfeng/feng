@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G18 已交付；G19～G25 待 Review
+> 状态：G01～G19 已交付；G20～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -2119,10 +2119,10 @@ G09 已交付的 enum 默认值语义，以及既有 `match`、`fit`、`spec` �
 
 #### 23.2.1 Parser 语法与阶段边界
 
-- [ ] ENUM-D01：全隐式 enum 与全显式 enum 必须解析成功；全显式形式覆盖正数、负数、零，以及十进制、
+- [x] ENUM-D01：全隐式 enum 与全显式 enum 必须解析成功；全显式形式覆盖正数、负数、零，以及十进制、
   十六进制、八进制、二进制和带分隔符的合法整数字面量。Parser 只确认初始化器是单一整数字面量，
   不在本阶段执行 `i32` 语义值域判断；
-- [ ] ENUM-D02：完整映射 enum 专属 Parser 诊断：`extern enum` 为 `SE0401`；enum 声明注解和 enum item
+- [x] ENUM-D02：完整映射 enum 专属 Parser 诊断：`extern enum` 为 `SE0401`；enum 声明注解和 enum item
   注解分别为 `SE0402`；泛型参数、父 `spec`、callable 签名、空声明体、非法成员、非整数字面量或
   字面量表达式、尾随逗号、缺失左 / 右花括号依次覆盖 `SE0403`～`SE0410`。缺少 enum 名或 item 名
   继续映射通用 `SE0002`；超过 Lexer `u64` 幅值上限的字面量继续映射 `LE0002`。G12 已有且满足
@@ -2131,14 +2131,14 @@ G09 已交付的 enum 默认值语义，以及既有 `match`、`fit`、`spec` �
 
 #### 23.2.2 声明一致性与 `i32` 值归一化
 
-- [ ] ENUM-D03：显式成员后出现隐式成员、隐式成员后出现显式成员，均必须在首个破坏一致性的 item
+- [x] ENUM-D03：显式成员后出现隐式成员、隐式成员后出现显式成员，均必须在首个破坏一致性的 item
   名称 token 产生唯一 `AE0401`；
-- [ ] ENUM-D04：同一 enum 中名称重复时，使用不同显式值隔离数值重复因素，并在后一个同名 item 的
+- [x] ENUM-D04：同一 enum 中名称重复时，使用不同显式值隔离数值重复因素，并在后一个同名 item 的
   名称 token 产生唯一 `AE0402`；
-- [ ] ENUM-D05：名称不同但归一化数值相同的全显式成员必须在后一个 item 名称 token 产生唯一
+- [x] ENUM-D05：名称不同但归一化数值相同的全显式成员必须在后一个 item 名称 token 产生唯一
   `AE0403`；至少覆盖不同字面量写法表示同一值，例如十进制 `1` 与十六进制 `0x1`，证明按数值而非
   源码文本判断重复；
-- [ ] ENUM-D06：`-2147483648` 与 `2147483647` 必须合法；`-2147483649`、`2147483648` 以及 Lexer
+- [x] ENUM-D06：`-2147483648` 与 `2147483647` 必须合法；`-2147483649`、`2147483648` 以及 Lexer
   可承载但超过 `INT64_MAX` 的正、负幅值必须在 Semantic 阶段产生唯一 `AE0405`。诊断位置指向初始化
   值的起始 token：正数指向整数 token，负数指向一元 `-`；错误消息保留原始字面量文本。Parser / AST
   必须保留足以表达原始符号、`uint64_t` 幅值和完整源码范围的事实，Semantic 不得只依据已经重解释为
@@ -2148,65 +2148,79 @@ G09 已交付的 enum 默认值语义，以及既有 `match`、`fit`、`spec` �
 
 #### 23.2.3 成员访问、名义类型与运算边界
 
-- [ ] ENUM-D07：本包和真实 package-public `.ft` consumer 均覆盖合法的 `Enum.Item` 访问；不存在的
+- [x] ENUM-D07：本包和真实 package-public `.ft` consumer 均覆盖合法的 `Enum.Item` 访问；不存在的
   item 必须在 item token 产生唯一 `AE0404`。裸写 item 名不得向值命名空间泄漏，继续按通用未定义
   标识符产生 `AE0001`；
-- [ ] ENUM-D08：同一 enum 的绑定、参数、返回值和 `==` / `!=` 必须合法；不同 enum 之间赋值、enum
+- [x] ENUM-D08：同一 enum 的绑定、参数、返回值和 `==` / `!=` 必须合法；不同 enum 之间赋值、enum
   到整数及整数到 enum 的隐式赋值必须在不匹配表达式产生唯一 `AE1003`，不得因底层值相同而放宽；
-- [ ] ENUM-D09：enum 显式转换到 `i8`、`i16`、`i32`、`i64`、`u8`、`u16`、`u32`、`u64`、`int`、
+- [x] ENUM-D09：enum 显式转换到 `i8`、`i16`、`i32`、`i64`、`u8`、`u16`、`u32`、`u64`、`int`、
   `uint`、`byte` 均必须合法，并用负值、窄化值和宽化值核对目标整数类型的既有转换结果；`int` / `uint`
   必须分别使用 32 位和 64 位 `pointer_size` 分析选项验证。同类型 enum 显式转换保持合法且不发码；
   上述每一种整数类型到 enum、不同 enum 之间的显式转换，以及 enum 到 `f32`、`f64`、`float`、
   `double`、`bool`、`string` 的显式转换，必须在 cast 起始 token 产生唯一 `AE1023`；
-- [ ] ENUM-D10：同一 enum 的 `==` / `!=` 保持合法；不同 enum、enum 与整数的相等比较，以及 enum 上的
+- [x] ENUM-D10：同一 enum 的 `==` / `!=` 保持合法；不同 enum、enum 与整数的相等比较，以及 enum 上的
   顺序、算术、位运算、移位、逻辑、一元和复合赋值运算，分别映射既有 `AE1018`、`AE1019`、`AE1020`
   通用诊断。以各条通用验证路径的最小运算符矩阵覆盖全部 enum 非数值边界，不新增 enum 专用错误码；
 
 #### 23.2.4 固定表示与跨包恢复
 
-- [ ] ENUM-D11：公开 enum 以 `INT32_MIN`、`0`、`INT32_MAX` 为成员值完成真实 package-public `.ft`
+- [x] ENUM-D11：公开 enum 以 `INT32_MIN`、`0`、`INT32_MAX` 为成员值完成真实 package-public `.ft`
   写入、读取和 imported-module 恢复；consumer 观察到的声明顺序、成员名和有符号值必须完全一致。
   非法源 enum 必须先由 Semantic 产生 `AE0405`，不得以 `.ft` 导出错误作为用户诊断；既有 `.ft`
   `int32_t` 防御保留，但不改变格式或版本；
-- [ ] ENUM-D12：本包和导入 enum 的 Codegen 均断言类型固定生成为 `int32_t`，`INT32_MIN` / `INT32_MAX`
+- [x] ENUM-D12：本包和导入 enum 的 Codegen 均断言类型固定生成为 `int32_t`，`INT32_MIN` / `INT32_MAX`
   常量不截断、不改号；分别用 32 位与 64 位 `pointer_size` 验证 enum 表示不跟随 `int` 改变。合法 enum
   路径继续复用既有标量 cast，不增加运行时 helper、分支、调用、分配或 ARC；
 
 #### 23.2.5 FCTS 正向行为与覆盖映射
 
-- [ ] ENUM-D13：新增独立 G19 FCTS 文件，真实运行全隐式顺序值、全显式正 / 负 / 零值、`i32` 最小值与
+- [x] ENUM-D13：新增独立 G19 FCTS 文件，真实运行全隐式顺序值、全显式正 / 负 / 零值、`i32` 最小值与
   最大值、全部整数目标显式转换的结果，以及本包与跨包公开 enum 的边界值恢复。G09 默认值和既有 enum
   `match` 行为只映射已有 FCTS，不在本文件复制；
-- [ ] ENUM-D14：建立 ENUM-D01～ENUM-D13 到既有 Lexer、Parser、Semantic、Symbol、Codegen、CLI 和
+- [x] ENUM-D14：建立 ENUM-D01～ENUM-D13 到既有 Lexer、Parser、Semantic、Symbol、Codegen、CLI 和
   FCTS 证据的逐项映射。已有测试只有“失败”或消息片段、没有稳定码、精确 token、行列、数量和阶段时，
   不视为完整反向证据；优先新增集中式 G19 精确矩阵，不为统一断言风格修改无关既有测试。
 
 ### 23.3 独立验收与交付 TODO
 
-- [ ] 先更新并关闭 [G19 问题记录](./feng-language-conformance-coverage-hardening-issues/g19.md)：补齐
+- [x] 先更新并关闭 [G19 问题记录](./feng-language-conformance-coverage-hardening-issues/g19.md)：补齐
   `AE0405` 的原始幅值保存、Semantic 值域检查和诊断位置，完成 enum 到全部整数类型的转换覆盖；
-- [ ] 独立运行 G19 Lexer / Parser / Semantic 专项，核对每个反向程序的唯一诊断、稳定码、触发 token、
+- [x] 独立运行 G19 Lexer / Parser / Semantic 专项，核对每个反向程序的唯一诊断、稳定码、触发 token、
   行列、来源文件、阶段和 enum 上下文；
-- [ ] 独立运行 Symbol / Codegen / CLI 专项，验证 package-public `.ft` 边界值往返、固定 `int32_t`
+- [x] 独立运行 Symbol / Codegen / CLI 专项，验证 package-public `.ft` 边界值往返、固定 `int32_t`
   表示、32 / 64 位别名环境，以及非法公开 enum 在 Semantic 阶段终止；
-- [ ] 运行完整 FCTS，确认 ENUM-D13 已由主入口登记并真实执行，不能以 Semantic 接受、生成 C 文本或
+- [x] 运行完整 FCTS，确认 ENUM-D13 已由主入口登记并真实执行，不能以 Semantic 接受、生成 C 文本或
   `.ft` 读取成功代替运行断言；
-- [ ] G19 的实现变更只允许调整编译期字面量事实保存、enum 值归一化和诊断；不得给合法程序增加运行时
+- [x] G19 的实现变更只允许调整编译期字面量事实保存、enum 值归一化和诊断；不得给合法程序增加运行时
   判断、分支、调用、分配或 ARC，不得修改 runtime、公开 ABI、runtime 私有 ABI 或 `.ft` 格式 / 版本；
-- [ ] 当前审计不要求修改既有测试的输入或断言；优先映射既有证据并新增独立用例。除新增 FCTS 主入口
-  登记外，实施中若必须修改既有测试，需先记录原因并再次取得人工决策；
-- [ ] 在 Codex 沙箱外为 G19 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或取得人工决策保留 G19 问题；填写稳定码映射、既有证据、新增用例、
+- [x] 实施中发现 `extern enum` 的 `SE0401` 专用出口被通用 `SE0003` 提前拦截；已先记录为
+  `ISSUE-G19-003` 并取得人工批准，只迁移既有通用负向矩阵中的这一条 enum 输入，其余既有测试不变；
+- [x] 在 Codex 沙箱外为 G19 独立执行 `make test`；
+- [x] 执行 `git diff --check`，关闭或取得人工决策保留 G19 问题；填写稳定码映射、既有证据、新增用例、
   专项结果、全量结果、性能与兼容性结论及建议的英文 commit message 后，才可标记 G19 已交付。
 
 ### 23.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：[G19 问题记录](./feng-language-conformance-coverage-hardening-issues/g19.md)
-- 建议 commit message：`test: close enum diagnostic gaps`
+- 状态：已交付
+- 稳定码映射与新增用例：ENUM-D01～ENUM-D14 已逐项映射；Parser 精确矩阵覆盖 `LE0002`、`SE0002`
+  及 `SE0401`～`SE0410`，并新增源字面量原始正负号、`uint64_t` 幅值与源码范围 AST 断言；仅按人工
+  批准把既有通用负向矩阵中的 `extern enum` 输入迁移到精确 `SE0401` 断言。Semantic 精确矩阵覆盖
+  `AE0001`、`AE0401`～`AE0405`、`AE1003`、`AE1018`～`AE1020` 和 `AE1023`，包括固定 `i32`
+  正负邻界、Lexer 可承载的大幅值、声明一致性、成员访问、名义类型、所有整数转换方向及全部运算符
+  类别；新增 Symbol 真实 package-public `.ft` 往返、Codegen 32 / 64 位固定 `int32_t` 和同 enum 无操作
+  cast、CLI Semantic 阶段诊断用例。新增并登记 `test_enum_diagnostics_semantics.ff` 及跨包 provider，
+  真实运行全隐式 / 全显式值、边界值、全部整数目标转换和跨包恢复；
+- 本组专项结果：`test_lexer`、`test_parser`、`test_semantic`、`test_symbol`、`test_codegen`、`test_cli`
+  均通过；Smoke 为 `91/91`，标准库为 `604/604`，FCTS 为 `1146/1146`；
+- 本组沙箱外 `make test`：2026-09-06 执行，退出码为 `0`；UBSan 与 normal 两阶段的 Smoke 均为
+  `91/91`、标准库均为 `604/604`、FCTS 均为 `1146/1146`；Parser、Semantic、Codegen、runtime、
+  CLI、symbol、增量构建、发布脚本、性能约束及其余回归全部通过；
+- 性能与兼容性：所有新增检查和原始字面量事实仅存在于编译期；合法 enum 继续使用既有固定
+  `int32_t` 表示和标量 cast，同 enum cast 不发射运行时操作。没有新增运行时 helper、判断、分支、
+  调用、分配或 ARC；性能约束通过。未修改 runtime、公开 ABI、runtime 私有 ABI 或 `.ft` 布局 / 版本；
+- 问题：`ISSUE-G19-001`～`ISSUE-G19-003` 均已关闭，具体分析与处理见
+  [G19 问题记录](./feng-language-conformance-coverage-hardening-issues/g19.md)；
+- 建议 commit message：`fix(enum): enforce fixed i32 values and harden diagnostics`
 
 ## 24 G20：tuple 诊断
 

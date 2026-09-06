@@ -1,0 +1,103 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.g19_enum as external;
+
+enum G19Implicit {
+  First,
+  Second,
+  Third
+}
+
+enum G19Explicit {
+  Negative = -7,
+  Zero = 0,
+  Positive = 42
+}
+
+enum G19Boundary {
+  Min = -2147483648,
+  Zero = 0,
+  Max = 2147483647
+}
+
+enum G19CastValue {
+  Negative = -1,
+  Narrow = 257,
+  Wide = 2147483647
+}
+
+/** G19 enum 声明、固定 i32 值与整数转换行为。 */
+open func test_enum_diagnostics_semantics(): void {
+  describe("G19 enum diagnostics semantics", () {
+    test("implicit values remain sequential", () {
+      assert((i32)G19Implicit.First == (i32)0,
+             "G19 implicit first value");
+      assert((i32)G19Implicit.Second == (i32)1,
+             "G19 implicit second value");
+      assert((i32)G19Implicit.Third == (i32)2,
+             "G19 implicit third value");
+    });
+
+    test("explicit negative zero and positive values", () {
+      assert((i32)G19Explicit.Negative == (i32)-7,
+             "G19 explicit negative value");
+      assert((i32)G19Explicit.Zero == (i32)0,
+             "G19 explicit zero value");
+      assert((i32)G19Explicit.Positive == (i32)42,
+             "G19 explicit positive value");
+    });
+
+    test("local fixed i32 boundaries", () {
+      assert((i64)G19Boundary.Min == (i64)-2147483648,
+             "G19 local i32 minimum");
+      assert((i32)G19Boundary.Zero == (i32)0,
+             "G19 local i32 zero");
+      assert((i64)G19Boundary.Max == (i64)2147483647,
+             "G19 local i32 maximum");
+    });
+
+    test("all signed integer cast targets", () {
+      assert((i8)G19CastValue.Negative == (i8)-1,
+             "G19 enum to i8");
+      assert((i16)G19CastValue.Negative == (i16)-1,
+             "G19 enum to i16");
+      assert((i32)G19CastValue.Negative == (i32)-1,
+             "G19 enum to i32");
+      assert((i64)G19CastValue.Negative == (i64)-1,
+             "G19 enum to i64");
+      assert((int)G19CastValue.Negative == (int)-1,
+             "G19 enum to int");
+    });
+
+    test("all unsigned integer cast targets", () {
+      assert((u8)G19CastValue.Narrow == (u8)1,
+             "G19 enum to u8 narrowing");
+      assert((byte)G19CastValue.Narrow == (byte)1,
+             "G19 enum to byte narrowing");
+      assert((u16)G19CastValue.Narrow == (u16)257,
+             "G19 enum to u16");
+      assert((u32)G19CastValue.Narrow == (u32)257,
+             "G19 enum to u32");
+      assert((u64)G19CastValue.Narrow == (u64)257,
+             "G19 enum to u64");
+      assert((uint)G19CastValue.Narrow == (uint)257,
+             "G19 enum to uint");
+    });
+
+    test("same enum cast is an identity", () {
+      let value: G19CastValue = G19CastValue.Wide;
+      let recast: G19CastValue = (G19CastValue)value;
+      assert(recast == value, "G19 same enum cast");
+    });
+
+    test("package-public enum boundaries survive ft", () {
+      assert((i64)external.G19ExternalBoundary.Min == (i64)-2147483648,
+             "G19 imported i32 minimum");
+      assert((i32)external.G19ExternalBoundary.Zero == (i32)0,
+             "G19 imported i32 zero");
+      assert((i64)external.G19ExternalBoundary.Max == (i64)2147483647,
+             "G19 imported i32 maximum");
+    });
+  });
+}
