@@ -2249,138 +2249,221 @@ G10 已交付的解构求值顺序、G12 已交付的通用语法矩阵、G13 �
 
 #### 24.2.1 声明、字面量与 Parser 阶段边界
 
-- [ ] TUP-D01：具名 tuple 声明的 0、2、8 个元素邻界必须解析成功，1 个与 9 个元素分别产生唯一
+- [x] TUP-D01：具名 tuple 声明的 0、2、8 个元素邻界必须解析成功，1 个与 9 个元素分别产生唯一
   `SE0308`；1 元素诊断定位 tuple 类型名称 token，超过上限的诊断定位第 9 个元素类型的起始 token。
   同时确认 `(expr)` 仍是分组表达式、`()` 与 `(left, right)` 才是 tuple 字面量；
-- [ ] TUP-D02：补齐 tuple 字面量的 Parser 反向邻界：第 9 个元素产生唯一 `SE0309`，逗号后直接
+- [x] TUP-D02：补齐 tuple 字面量的 Parser 反向邻界：第 9 个元素产生唯一 `SE0309`，逗号后直接
   `)` 产生唯一 `SE0310`，缺失右括号产生唯一 `SE0312`。既有用例若只断言消息片段，不视为完整
   诊断证据；
-- [ ] TUP-D03：建立解构模式语法的完整映射：单位置、嵌套位置、非标识符位置、模式后整体类型标注、
+- [x] TUP-D03：建立解构模式语法的完整映射：单位置、嵌套位置、非标识符位置、模式后整体类型标注、
   缺少初始化器、非法声明上下文和括号 / 分隔符缺失依次锁定 `SE0104`～`SE0110`。其中
   `let (x, y): Pair = value;` 必须在 `Pair` token 产生唯一 `SE0107` 并停在 Parser；G12 的精确证据
   直接复用，缺失的错误出口才在 G20 新增，Semantic 不为该输入补造 `AE0110` 用例；
 
 #### 24.2.2 tuple 字面量的目标类型与形状
 
-- [ ] TUP-D04：`let value = ();` 与 `let value = (1, 2);` 等没有具名 tuple 目标、又不处于直接解构
+- [x] TUP-D04：`let value = ();` 与 `let value = (1, 2);` 等没有具名 tuple 目标、又不处于直接解构
   上下文的字面量，均在字面量左括号产生唯一 `AE0301`；目标为标量、普通对象或其他非 tuple 类型时
   也产生 `AE0301`，不得推导匿名 tuple 类型或继续产生派生错误；
-- [ ] TUP-D05：分别以 0、2、8 元素具名 tuple 为目标覆盖完全匹配；以目标数量不足和过多的最小程序
+- [x] TUP-D05：分别以 0、2、8 元素具名 tuple 为目标覆盖完全匹配；以目标数量不足和过多的最小程序
   覆盖 `AE0302`，诊断必须位于字面量左括号，并同时报告实际元素数、目标类型名和期望元素数。泛型
   tuple 在完成类型实参替换后使用相同计数规则；
-- [ ] TUP-D06：对元素数量正确但某一位置类型不兼容的 tuple 字面量，必须在首个不兼容元素表达式
-  起始 token 产生唯一 `AE1003`，且消息中的期望类型是泛型替换后的具体位置类型。绑定、函数实参、
-  函数返回、对象字段和显式 cast 五种规范目标上下文各取一个实际经过不同 Semantic 路径的反向程序；
-- [ ] TUP-D07：为上述五种目标上下文提供合法邻界，覆盖 0 元素、普通 2 元素、8 元素、泛型元素和
+- [x] TUP-D06：对元素数量正确但某一位置类型不兼容的 tuple 字面量，绑定、函数返回、对象字段和
+  显式 cast 目标必须在首个不兼容元素表达式起始 token 产生唯一 `AE1003`，且消息中的期望类型是
+  泛型替换后的具体位置类型。普通函数调用先以完整实参形状进行重载决议；不匹配的 tuple 字面量使
+  候选被排除，并在被调用函数 token 产生唯一 `AE0512`，不绕过 G15 已确定的调用诊断规则，见
+  `ISSUE-G20-003`。五种规范目标上下文均须具有一条实际经过对应 Semantic 路径的反向证据；
+- [x] TUP-D07：为上述五种目标上下文提供合法邻界，覆盖 0 元素、普通 2 元素、8 元素、泛型元素和
   托管元素；数值字面量按位置目标类型贴合，全部元素从左到右各求值一次。可观察结果进入 FCTS，
   已由 G10 证明的求值顺序只建立映射，不复制等价场景；
 
 #### 24.2.3 非对象构造边界与默认零值
 
-- [ ] TUP-D08：同模块的 `Pair()`、`Pair(args)`、`Pair<T, U>()` 与 `Pair<T, U>(args)` 均必须在
+- [x] TUP-D08：同模块的 `Pair()`、`Pair(args)`、`Pair<T, U>()` 与 `Pair<T, U>(args)` 均必须在
   tuple 类型目标 token 产生唯一 `AE0312`；不允许以隐式默认构造、构造参数不匹配 `AE0313` 或
   构造可见性 `AE0315` 描述根因，见 `ISSUE-G20-001`；
-- [ ] TUP-D09：同模块的 `Pair {}`、`Pair { item1: value, ... }` 必须在对象字面量左花括号产生唯一
+- [x] TUP-D09：同模块的 `Pair {}`、`Pair { item1: value, ... }` 必须在对象字面量左花括号产生唯一
   `AE1004`；`Pair() { ... }` 与 `Pair(args) { ... }` 必须先在内部构造调用的 tuple 类型目标 token
   产生唯一 `AE0312`。空字段、完整 `itemN` 字段和缺失 / 重复字段均不得绕过“tuple 不是对象字面量
   目标”这一根因，也不得降级为字段级诊断；
-- [ ] TUP-D10：通过短名、`import ... as alias` 别名和完整模块路径引用公开 tuple 时，TUP-D08～
+- [x] TUP-D10：通过短名、`import ... as alias` 别名和完整模块路径引用公开 tuple 时，TUP-D08～
   TUP-D09 的拒绝阶段、稳定码和根因必须与同模块一致；同时映射既有 Symbol 证据，确认导入后仍保留
   tuple 类型分类。若实施需要修改 `.ft` 格式 / 版本或公开 ABI，必须暂停并再次取得人工决策；
-- [ ] TUP-D11：`let value: Pair;` 与 `let unit: Unit;` 必须合法，分别观察每个元素的默认零值和 0 元素
+- [x] TUP-D11：`let value: Pair;` 与 `let unit: Unit;` 必须合法，分别观察每个元素的默认零值和 0 元素
   tuple；再覆盖一个以 tuple 为字段的合法默认初始化。该入口属于绑定 / 字段默认初始化，不得调用
   构造函数、分配普通对象或先生成一个可观察的临时对象；
-- [ ] TUP-D12：增加 Codegen 结构断言，证明合法 tuple 字面量与无初始化器默认零值继续使用值布局，
+- [x] TUP-D12：增加 Codegen 结构断言，证明合法 tuple 字面量与无初始化器默认零值继续使用值布局，
   不出现普通对象类型描述符或 `feng_object_new`；同时通过 CLI 最小反向程序证明 TUP-D08～TUP-D10
   在 Semantic 失败后没有生成 C，更不能把错误延迟为宿主 C 编译错误；
 
 #### 24.2.4 名义类型关系与显式转换
 
-- [ ] TUP-D13：同一具名 tuple 的绑定、赋值、参数和返回值流转必须合法；两个名称不同但元素形状
+- [x] TUP-D13：同一具名 tuple 的绑定、赋值、参数和返回值流转必须合法；两个名称不同但元素形状
   完全相同的具名 tuple 仍不得隐式转换，在实际不匹配的源表达式 token 产生唯一 `AE1003`。0 元素
   tuple 和普通多元素 tuple 各覆盖一个名义边界；
-- [ ] TUP-D14：不同名称但元素数量及各位置类型完全一致的具名 tuple 允许显式转换，并在 FCTS 观察
+- [x] TUP-D14：不同名称但元素数量及各位置类型完全一致的具名 tuple 允许显式转换，并在 FCTS 观察
   转换后的全部元素；元素数量不同或任一位置类型不同的显式转换在 cast 左括号产生唯一 `AE1023`。
   `(Pair)(left, right)` 属于字面量按显式目标贴合：其数量或元素错误仍分别归 `AE0302` / `AE1003`，
   不得误报为具名 tuple 间的 `AE1023`；
-- [ ] TUP-D15：泛型 tuple 的同一闭合实例正常流转；类型实参导致任一展开位置类型不同时，隐式流转
+- [x] TUP-D15：泛型 tuple 的同一闭合实例正常流转；类型实参导致任一展开位置类型不同时，隐式流转
   与显式转换分别产生 `AE1003` 和 `AE1023`。裸泛型名称、类型实参数量和泛型推断只映射 G25，
   不在本项重复通用泛型矩阵；
-- [ ] TUP-D16：普通具名 tuple 和已闭合泛型 tuple 用作泛型上界时，均在类型参数名称 token 产生唯一
+- [x] TUP-D16：普通具名 tuple 和已闭合泛型 tuple 用作泛型上界时，均在类型参数名称 token 产生唯一
   `AE0304`；通过 `spec` + `fit` 表达共同能力的合法邻界只映射既有 tuple / spec 测试，不为 tuple
   增加结构化上界特例；
 
 #### 24.2.5 元素访问与不可变性
 
-- [ ] TUP-D17：0 元素 tuple 不暴露任何 `itemN`；2 元素、8 元素和泛型 tuple 分别覆盖首个、末个及
+- [x] TUP-D17：0 元素 tuple 不暴露任何 `itemN`；2 元素、8 元素和泛型 tuple 分别覆盖首个、末个及
   泛型替换后元素的合法读取，并在 FCTS 断言值和静态类型行为；
-- [ ] TUP-D18：实例访问 `item0`、超过实际数量的 `itemN` 或任意不存在名称时，在成员名称 token
+- [x] TUP-D18：实例访问 `item0`、超过实际数量的 `itemN` 或任意不存在名称时，在成员名称 token
   产生唯一 `AE0306`；通过类型名写 `Pair.item1` 时按 static 成员面查找，在 `item1` token 产生唯一
   `AE0309`。普通成员不存在矩阵只映射 G14；
-- [ ] TUP-D19：即使 tuple 存放在 `var` 绑定中，对 `value.itemN` 赋值也必须在成员目标 token 产生唯一
-  `AE0104`；`var` 整体替换 tuple 继续合法并进入 FCTS，`let` 整体重绑定的 `AE0101` 只映射 G13。
+- [x] TUP-D19：即使 tuple 存放在 `var` 绑定中，对 `value.itemN` 赋值也必须在成员目标 token 产生唯一
+  `AE0104`；`var` 整体替换 tuple 继续合法并进入 FCTS，`let` 整体重绑定的 `AE0104` 只映射 G13。
   不得把绑定可变性错误传播为元素可变性；
 
 #### 24.2.6 解构的语义诊断与合法邻界
 
-- [ ] TUP-D20：解构右侧为标量、普通对象、数组或其他非 tuple 静态类型时，在解构模式左括号产生
+- [x] TUP-D20：解构右侧为标量、普通对象、数组或其他非 tuple 静态类型时，在解构模式左括号产生
   唯一 `AE0108`；右侧为具名 tuple 与直接 tuple 字面量时，模式位置数不足或过多均在同一位置产生
   唯一 `AE0109`，并分别报告模式位置数与来源位置数；
-- [ ] TUP-D21：具名 tuple 表达式必须整体求值一次后再建立所有非空位置绑定；直接 tuple 字面量只按
+- [x] TUP-D21：具名 tuple 表达式必须整体求值一次后再建立所有非空位置绑定；直接 tuple 字面量只按
   从左到右顺序求值非空位置，空位表达式不求值。覆盖无空位、首 / 中 / 尾空位、多空位、全部空位、
   0 元素，以及 `let` / `var` 独立绑定；直接映射 G10 已有 FCTS 和 Codegen 证据，只有缺口才新增；
-- [ ] TUP-D22：模式中的每个非空名称形成独立绑定；同一模式重名或与同作用域既有绑定重名均映射
-  G13 的 `AE0105` 精确证据。向 `let` 解构名称赋值映射 `AE0101`，`var` 解构名称可独立赋值；tuple
-  元素自身的不可写 `AE0104` 已由 TUP-D19 覆盖。空位不产生名称，Feng 没有 `_` 丢弃符，不为 tuple
-  添加特殊绑定；
-- [ ] TUP-D23：`for let/var (left, right) in values` 的 Parser 形状、元素类型、位置数、空位、逐轮绑定
+- [x] TUP-D22：模式中的每个非空名称形成独立绑定；同一模式重名或与同作用域既有绑定重名均映射
+  G13 的 `AE0105` 精确证据。向 `let` 解构名称赋值产生 `AE0104`，由 G20 增加精确直接证据；`var`
+  解构名称可独立赋值。tuple 元素自身的不可写 `AE0104` 已由 TUP-D19 覆盖。空位不产生名称，Feng
+  没有 `_` 丢弃符，不为 tuple 添加特殊绑定；
+- [x] TUP-D23：`for let/var (left, right) in values` 的 Parser 形状、元素类型、位置数、空位、逐轮绑定
   身份与捕获语义分别映射 G07、G12、G13 和 G16；G20 只确认其复用普通 tuple 解构的 `SE01xx`、
   `AE0108` / `AE0109` 契约，不新增另一套循环专用 tuple 诊断；
-- [ ] TUP-D24：增加合法的“先约束、后解构”邻界 `let value: Pair = source; let (x, y) = value;`，并
+- [x] TUP-D24：增加合法的“先约束、后解构”邻界 `let value: Pair = source; let (x, y) = value;`，并
   与 Parser 拒绝 `let (x, y): Pair = source;` 成对覆盖，明确合法写法不会产生匿名 tuple 类型；
 
 #### 24.2.7 FCTS 行为与覆盖映射
 
-- [ ] TUP-D25：新增或映射一个独立 G20 FCTS 邻界文件，真实运行默认零值、五种字面量目标上下文、
+- [x] TUP-D25：新增或映射一个独立 G20 FCTS 邻界文件，真实运行默认零值、五种字面量目标上下文、
   同名义流转、合法显式转换、首末元素读取、`var` 整体替换和合法解构。Semantic 接受、生成 C 文本
   或既有测试只检查“不崩溃”均不能代替可观察值断言；
-- [ ] TUP-D26：建立 TUP-D01～TUP-D25 到既有 Parser、Semantic、Symbol、Codegen、CLI 和 FCTS
+- [x] TUP-D26：建立 TUP-D01～TUP-D25 到既有 Parser、Semantic、Symbol、Codegen、CLI 和 FCTS
   证据的逐项映射。已有反向测试只有“失败”或消息片段，没有稳定码、精确 token、行列、数量和阶段时，
   不视为完整证据；优先新增集中式 G20 精确矩阵，不为统一断言风格修改无关既有测试。
 
 ### 24.3 独立验收与交付 TODO
 
-- [ ] 先按 [G20 问题记录](./feng-language-conformance-coverage-hardening-issues/g20.md) 实施并关闭
+- [x] 先按 [G20 问题记录](./feng-language-conformance-coverage-hardening-issues/g20.md) 实施并关闭
   `ISSUE-G20-001`：在 Semantic 统一拒绝 tuple 的普通构造与对象字面量入口；确认
   `ISSUE-G20-002` 已把模式整体类型标注收敛为 Parser `SE0107`，不新增可达的 Semantic 重复诊断；
-- [ ] 独立运行 G20 Parser 专项，核对 TUP-D01～TUP-D03 的唯一诊断、稳定码、token、行列、来源文件
+- [x] 独立运行 G20 Parser 专项，核对 TUP-D01～TUP-D03 的唯一诊断、稳定码、token、行列、来源文件
   和 Parser 阶段；G12 已有完整证据可直接映射，缺失项集中新增；
-- [ ] 独立运行 G20 Semantic 专项，至少覆盖 `AE0301`、`AE0302`、`AE0312`、`AE1004`、`AE1003`、
-  `AE1023`、`AE0304`、`AE0306`、`AE0309`、`AE0104`、`AE0108` 与 `AE0109` 的唯一诊断、精确位置、
-  来源文件和 tuple 上下文；非法 tuple 对象构造不得到达 Codegen；
-- [ ] 独立运行 Symbol、Codegen 和 CLI 专项，验证导入类型仍保留 tuple 分类、合法 tuple 使用值布局和
+- [x] 独立运行 G20 Semantic 专项，至少覆盖 `AE0301`、`AE0302`、`AE0312`、`AE1004`、`AE1003`、
+  `AE0512`、`AE1023`、`AE0304`、`AE0306`、`AE0309`、`AE0104`、`AE0108` 与 `AE0109` 的唯一诊断、
+  精确位置、来源文件和 tuple 上下文；非法 tuple 对象构造不得到达 Codegen；
+- [x] 独立运行 Symbol、Codegen 和 CLI 专项，验证导入类型仍保留 tuple 分类、合法 tuple 使用值布局和
   默认零值、没有普通对象分配，以及非法构造在 Semantic 阶段终止。不得以宿主 C 编译失败作为反向
   用例的通过条件；
-- [ ] 运行完整 FCTS，确认 TUP-D07、TUP-D11、TUP-D13～TUP-D15、TUP-D17、TUP-D19、TUP-D21、
+- [x] 运行完整 FCTS，确认 TUP-D07、TUP-D11、TUP-D13～TUP-D15、TUP-D17、TUP-D19、TUP-D21、
   TUP-D24～TUP-D25 的合法行为均由主入口登记并真实执行；
-- [ ] G20 默认只新增集中式测试和修复 `ISSUE-G20-001` 所需的通用 Semantic 类型分类检查；不得为
+- [x] G20 默认只新增集中式测试和修复 `ISSUE-G20-001` 所需的通用 Semantic 类型分类检查；不得为
   tuple 添加运行时特判、helper、判断、分支、调用、分配或 ARC。除测试主入口登记外，如需修改既有
   测试输入或断言，必须列出精确名单并再次取得人工批准；
-- [ ] 不修改 runtime、runtime 私有 ABI、公开 ABI 或 `.ft` 格式 / 版本；若导入 tuple 分类无法仅凭
+- [x] 不修改 runtime、runtime 私有 ABI、公开 ABI 或 `.ft` 格式 / 版本；若导入 tuple 分类无法仅凭
   现有符号事实保持一致，必须记录问题并暂停，由人工决策；
-- [ ] 在 Codex 沙箱外为 G20 独立执行 `make test`，记录 UBSan 与 normal 两阶段的 Smoke、标准库、
+- [x] 在 Codex 沙箱外为 G20 独立执行 `make test`，记录 UBSan 与 normal 两阶段的 Smoke、标准库、
   FCTS、性能约束及其余回归结果；此前分组的全量结果不能代替 G20 回归；
-- [ ] 执行 `git diff --check`，关闭或取得人工决策保留 G20 问题；填写稳定码映射、既有证据、新增
+- [x] 执行 `git diff --check`，关闭或取得人工决策保留 G20 问题；填写稳定码映射、既有证据、新增
   用例、专项结果、全量结果、性能与兼容性结论及建议的英文 commit message 后，才可标记 G20 已交付。
 
 ### 24.4 独立交付记录
 
-- 状态：待实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: close tuple diagnostic gaps`
+#### 24.4.1 状态与实现范围
+
+- 状态：已于 2026-09-06 独立交付，TUP-D01～TUP-D26 及本组验收项全部完成；
+- 产品修复仅位于 Semantic：新增可复用的花括号对象形式 type 分类，统一阻止圆括号 tuple type 进入
+  普通构造、对象字面量后缀、构造器解析和默认零值构造检查；直接 tuple 对象字面量仍由对象字面量
+  入口拒绝；
+- 未修改既有测试输入或断言；只新增 G20 用例并在既有测试主入口登记；
+- 未修改 Codegen、runtime、runtime 私有 ABI、公开 ABI 或 `.ft` 格式 / 版本；合法 tuple 的发码路径
+  不变，没有新增运行时判断、分支、调用、分配、ARC 或其他开销。
+
+#### 24.4.2 TUP-D01～TUP-D26 证据映射
+
+##### Parser：TUP-D01～TUP-D03
+
+- 新增 `test_g20_tuple_declaration_and_literal_parser_diagnostics`，精确覆盖 `SE0308` 的 1 / 9 元素声明、
+  `SE0309` 的第 9 个字面量元素和 `SE0312` 的缺失右括号；0 / 2 / 8 元素合法声明与字面量由 G20
+  Semantic 正向聚合程序实际经过 Parser；
+- 新增 `test_g20_destructure_separator_parser_diagnostic` 覆盖 `SE0110`；复用 G12
+  `test_g12_binding_type_and_callable_syntax` 与 `test_g12_expression_and_postfix_syntax` 对
+  `SE0104`～`SE0109`、`SE0310` 及合法分组 / tuple 形状的精确证据。模式整体类型标注唯一归
+  Parser `SE0107`，没有新增可达的 `AE0110` 契约。
+
+##### 目标贴合、构造与导入：TUP-D04～TUP-D12
+
+- 新增 `test_g20_tuple_literal_target_and_arity_diagnostics` 与
+  `test_g20_tuple_literal_element_type_diagnostics`，覆盖无目标、非 tuple 目标、普通 / 泛型数量不匹配，
+  以及绑定、调用、返回、对象字段和显式 cast 五种目标上下文；稳定码为 `AE0301`、`AE0302`、
+  `AE1003` 与普通调用重载失败的 `AE0512`；
+- 新增 `test_g20_tuple_object_construction_diagnostics`，覆盖 0 / 非零参数、0 / 2 元素、泛型 tuple、
+  直接对象字面量、调用后缀以及空 / 完整 / 缺失 / 重复字段，分别锁定唯一 `AE0312` / `AE1004`；
+- 新增 `test_g20_imported_tuple_construction_diagnostics`，通过真实公开模块模型覆盖短名、alias 和完整
+  模块路径；复用 Symbol 的 `test_private_representation_dependency_closure_roundtrip`，确认公开 `.ft`
+  往返后仍保留 tuple 分类；
+- 新增 `test_g20_tuple_value_layout_and_default_zero_codegen`，验证普通和 0 元素 tuple 的绑定 / 对象字段
+  默认零值、值布局和无 tuple 对象分配；新增 CLI
+  `test_project_check_rejects_tuple_construction_before_codegen`，验证 `AE0312` 后不生成 C。
+
+##### 名义关系、成员与解构：TUP-D13～TUP-D24
+
+- 新增 `test_g20_tuple_nominal_and_conversion_diagnostics`，覆盖普通、0 元素与泛型 tuple 的同名义流转、
+  不同名义隐式拒绝、等形显式转换邻界、数量 / 位置类型错误和 tuple 泛型上界；稳定码为 `AE1003`、
+  `AE1023`、`AE0302`、`AE0304`；
+- 新增 `test_g20_tuple_access_and_destructure_diagnostics`，覆盖 0 / 2 / 8 元素和泛型成员邻界、实例 / static
+  错误访问、元素不可写、非 tuple 解构及具名 / 字面量位置数不匹配；稳定码为 `AE0306`、`AE0309`、
+  `AE0104`、`AE0108`、`AE0109`；
+- 复用 G10 的 `test_tuple_destructuring_evaluation_codegen` 和
+  `test_tuple_destructuring_evaluation.ff` 覆盖具名表达式只求值一次、直接字面量仅求值非空位置及其顺序；
+  复用 G13 的 tuple 模式重名、同作用域重名和 `let` / `var` 可写性证据；
+- 复用 Parser / Semantic 的 `for/in` tuple 解构正反向用例及 G07 / G16 FCTS，覆盖逐轮绑定、空位、
+  数量和来源类型；新增 G20 FCTS 的“先约束普通绑定、后解构”正向用例，并与 G12 的 `SE0107` 反向
+  用例成对验收。
+
+##### FCTS 与总映射：TUP-D07、TUP-D11、TUP-D13～TUP-D15、TUP-D17、TUP-D19、TUP-D21、
+TUP-D24～TUP-D26
+
+- 新增并登记 `test_tuple_diagnostics_semantics.ff`，包含 5 条实际运行用例：五种 tuple 字面量目标上下文；
+  0 / 2 / 8 元素、泛型与托管元素；绑定及对象字段默认零值；同名义流转、整体替换和等形显式转换；
+  带类型普通绑定后的合法解构及 `let` / `var` 独立绑定；
+- TUP-D01～TUP-D25 已分别映射到上述 Parser、Semantic、Symbol、Codegen、CLI、既有 G07 / G10 /
+  G12 / G13 / G16 证据和新增 G20 FCTS；本节完成 TUP-D26 的总映射。
+
+#### 24.4.3 专项与全量回归结果
+
+- Parser、Semantic、Symbol、Codegen、CLI 专项全部通过；生成的 C 编译验证通过；
+- 完整 FCTS 通过：`1151/1151`，相对 G19 增加 5 条 G20 行为用例；
+- 沙箱外 `make test` 全量通过：UBSan 与 normal 两阶段的 Smoke `91/91`、标准库 `604/604`、FCTS
+  `1151/1151`、性能约束、增量构建、发布脚本、macOS 收尾、bundled packages、toolchain fetch、
+  全部单元测试与 CLI 回归均通过；
+- `git diff --check` 通过。
+
+#### 24.4.4 问题关闭情况
+
+- [ISSUE-G20-001](./feng-language-conformance-coverage-hardening-issues/g20.md#issue-g20-001具名-tuple-被误当成对象构造目标并进入-codegen)：
+  产品缺陷已修复，非法 tuple 构造在 Semantic 唯一报错且不再进入 Codegen；
+- [ISSUE-G20-002](./feng-language-conformance-coverage-hardening-issues/g20.md#issue-g20-002解构模式整体类型标注同时登记为-parser-与-semantic-诊断)：
+  已保持用户可达诊断唯一归 Parser `SE0107`；
+- [ISSUE-G20-003](./feng-language-conformance-coverage-hardening-issues/g20.md#issue-g20-003函数实参-tuple-元素不匹配被计划误写为-ae1003)：
+  已按 G15 普通重载规则锁定调用 token 的 `AE0512`，未加入 tuple 特判；
+- [ISSUE-G20-004](./feng-language-conformance-coverage-hardening-issues/g20.md#issue-g20-004正向聚合用例混入无关的整数运算类型错误)：
+  新增测试夹具已修正，不涉及产品语义变更；
+- [ISSUE-G20-005](./feng-language-conformance-coverage-hardening-issues/g20.md#issue-g20-005tuple-不可变绑定赋值沿用已迁移的旧错误码描述)：
+  已把 `let` tuple 整体与解构绑定赋值统一映射到 G13 的 `AE0104`，并增加 tuple 解构直接证据；
+- G20 没有待人工决策或遗留问题。
+
+#### 24.4.5 建议 commit message
+
+`fix(tuple): reject object construction and harden diagnostics`
 
 ## 25 G21：数组与索引诊断
 

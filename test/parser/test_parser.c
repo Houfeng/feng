@@ -5980,7 +5980,124 @@ static void test_g19_enum_additional_parser_diagnostics(void) {
         "=");
 }
 
+/* Assert one exact Parser diagnostic added for the G20 tuple matrix. */
+static void assert_g20_parser_failure(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      const char *expected_message,
+                                      FengTokenKind expected_kind,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme) {
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    memset(&error, 0, sizeof(error));
+    ASSERT(!feng_parse_source(source, strlen(source), path, &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.code != NULL);
+    ASSERT(strcmp(error.code, expected_code) == 0);
+    ASSERT(error.message != NULL);
+    ASSERT(strcmp(error.message, expected_message) == 0);
+    ASSERT(error.token.kind == expected_kind);
+    ASSERT(error.token.line == expected_line);
+    ASSERT(error.token.column == expected_column);
+    ASSERT(error.token.length == strlen(expected_lexeme));
+    ASSERT(error.token.length == 0U ||
+           memcmp(error.token.lexeme, expected_lexeme, error.token.length) == 0);
+}
+
+/* TUP-D01/TUP-D02: close the exact tuple declaration and literal arity
+ * diagnostics that predate the G12 stable Parser matrix. */
+static void test_g20_tuple_declaration_and_literal_parser_diagnostics(void) {
+    assert_g20_parser_failure(
+        "g20_single_tuple_type.ff",
+        "module g20.parser;\n"
+        "type Single(i32);\n",
+        "SE0308",
+        "tuple type declarations require 0 or 2 to 8 elements",
+        FENG_TOKEN_IDENTIFIER,
+        2U,
+        6U,
+        "Single");
+    assert_g20_parser_failure(
+        "g20_large_tuple_type.ff",
+        "module g20.parser;\n"
+        "type TooMany(\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32,\n"
+        "  i32\n"
+        ");\n",
+        "SE0308",
+        "tuple type declarations support at most 8 elements",
+        FENG_TOKEN_IDENTIFIER,
+        11U,
+        3U,
+        "i32");
+    assert_g20_parser_failure(
+        "g20_large_tuple_literal.ff",
+        "module g20.parser;\n"
+        "func bad() {\n"
+        "  let value = (\n"
+        "    1,\n"
+        "    2,\n"
+        "    3,\n"
+        "    4,\n"
+        "    5,\n"
+        "    6,\n"
+        "    7,\n"
+        "    8,\n"
+        "    9\n"
+        "  );\n"
+        "}\n",
+        "SE0309",
+        "tuple literals support at most 8 elements",
+        FENG_TOKEN_INTEGER,
+        12U,
+        5U,
+        "9");
+    assert_g20_parser_failure(
+        "g20_tuple_literal_missing_close.ff",
+        "module g20.parser;\n"
+        "type Pair(i32, i32);\n"
+        "func bad() {\n"
+        "  let value: Pair = (1, 2;\n"
+        "}\n",
+        "SE0312",
+        "expected ')' to close tuple literal",
+        FENG_TOKEN_SEMICOLON,
+        4U,
+        26U,
+        ";");
+}
+
+/* TUP-D03: G12 already owns SE0104 through SE0109; add the remaining
+ * separator failure under SE0110 without duplicating those programs. */
+static void test_g20_destructure_separator_parser_diagnostic(void) {
+    assert_g20_parser_failure(
+        "g20_destructure_missing_separator.ff",
+        "module g20.parser;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(value: Pair) {\n"
+        "  let (x y) = value;\n"
+        "}\n",
+        "SE0110",
+        "expected ',' between destructuring positions",
+        FENG_TOKEN_IDENTIFIER,
+        4U,
+        10U,
+        "y");
+}
+
 int main(void) {
+    test_g20_tuple_declaration_and_literal_parser_diagnostics();
+    test_g20_destructure_separator_parser_diagnostic();
     test_g19_enum_literal_ast_facts();
     test_g19_enum_additional_parser_diagnostics();
     test_g16_for_update_binding_declarations_are_rejected();

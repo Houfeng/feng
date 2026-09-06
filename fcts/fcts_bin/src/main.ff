@@ -69,6 +69,7 @@ func main(args: string[]) {
       test_variadic_method_value_shape();
       test_tuple();
       test_tuple_destructuring_evaluation();
+      test_tuple_diagnostics_semantics();
       test_iterator();
       test_module();
       test_module_binding_semantics();

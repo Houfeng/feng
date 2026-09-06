@@ -31,6 +31,13 @@ static inline bool decl_is_tuple_type(const FengDecl *decl) {
     return decl != NULL && decl->kind == FENG_DECL_TYPE && decl->as.type_decl.is_tuple;
 }
 
+/* Object construction is available only to brace-form type declarations.
+ * Tuple declarations share FENG_DECL_TYPE for name/type resolution, but their
+ * parenthesized form is a distinct value-type category without constructors. */
+static inline bool decl_is_object_form_type(const FengDecl *decl) {
+    return decl != NULL && decl->kind == FENG_DECL_TYPE && !decl->as.type_decl.is_tuple;
+}
+
 /* Forward declaration — defined later in this file alongside the witness
  * materialisation helpers. */
 static bool init_spec_witness_subject_key(const FengDecl *type_decl,
@@ -26920,9 +26927,11 @@ static bool validate_constructor_invocation(ResolveContext *context,
         return true;
     }
 
-    if (type_decl->kind != FENG_DECL_TYPE) {
+    if (!decl_is_object_form_type(type_decl)) {
         FengSlice name = decl_typeish_name(type_decl);
-        const char *kind_label = type_decl->kind == FENG_DECL_SPEC ? "spec" : "type";
+        const char *kind_label = decl_is_tuple_type(type_decl)
+                                     ? "tuple type"
+                                     : (type_decl->kind == FENG_DECL_SPEC ? "spec" : "type");
         bool ok = resolver_append_error(
             context,
             target_expr != NULL ? target_expr->token : context->program->module_token,
@@ -27052,6 +27061,13 @@ static bool validate_constructor_call_expr(ResolveContext *context, const FengEx
                                              : 0U,
                                          &constructor_member)) {
         return false;
+    }
+
+    /* A known non-object type owns the constructibility diagnostic above.
+     * Do not record it as a resolved constructor or run object-only default
+     * initialization checks after that diagnostic has been emitted. */
+    if (!decl_is_object_form_type(target.type_decl)) {
+        return true;
     }
 
     if (target.type_decl->kind == FENG_DECL_TYPE) {
@@ -28322,7 +28338,18 @@ static bool validate_object_literal_expr(ResolveContext *context, const FengExpr
     target = resolve_type_target_expr(context, expr->as.object_literal.target, true);
     target_name = format_expr_target_name(expr->as.object_literal.target);
 
-    if (target.type_decl == NULL || target.type_decl->kind != FENG_DECL_TYPE) {
+    /* A call-form target has already been checked by the nested call. When
+     * its known type is not an object, retain that single root diagnostic at
+     * the type target instead of adding a derived object-literal diagnostic. */
+    if (!decl_is_object_form_type(target.type_decl) &&
+        expr->as.object_literal.target->kind == FENG_EXPR_CALL &&
+        target.type_decl != NULL) {
+        free(target_name);
+        free(seen_field_names);
+        return true;
+    }
+
+    if (!decl_is_object_form_type(target.type_decl)) {
         bool ok = resolver_append_error(
             context,
             expr->token,

@@ -33345,7 +33345,627 @@ static void test_g19_imported_enum_boundaries_and_member_access(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* Assert one exact diagnostic for the G20 tuple matrix. */
+static void assert_g20_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G20",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* TUP-D04/TUP-D05: tuple literals require one named tuple target and must
+ * match that target's positional arity exactly. */
+static void test_g20_tuple_literal_target_and_arity_diagnostics(void) {
+    assert_g20_semantic_error(
+        "g20_untyped_tuple_literal.ff",
+        "module g20.untyped_tuple;\n"
+        "func bad(): void {\n"
+        "  let value = (1, 2);\n"
+        "}\n",
+        "AE0301", 3U, 15U, "(",
+        "tuple literal requires an explicit named tuple target type");
+    assert_g20_semantic_error(
+        "g20_untyped_unit_literal.ff",
+        "module g20.untyped_unit;\n"
+        "func bad(): void {\n"
+        "  let value = ();\n"
+        "}\n",
+        "AE0301", 3U, 15U, "(",
+        "tuple literal requires an explicit named tuple target type");
+    assert_g20_semantic_error(
+        "g20_non_tuple_literal_target.ff",
+        "module g20.non_tuple_target;\n"
+        "func bad(): void {\n"
+        "  let value: i32 = (1, 2);\n"
+        "}\n",
+        "AE0301", 3U, 20U, "(",
+        "tuple literal requires a named tuple target type, got 'i32'");
+    assert_g20_semantic_error(
+        "g20_object_tuple_literal_target.ff",
+        "module g20.object_tuple_target;\n"
+        "type Box {}\n"
+        "func bad(): void {\n"
+        "  let value: Box = (1, 2);\n"
+        "}\n",
+        "AE0301", 4U, 20U, "(",
+        "tuple literal requires a named tuple target type, got 'Box'");
+    assert_g20_semantic_error(
+        "g20_tuple_literal_too_many_items.ff",
+        "module g20.too_many_items;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(): void {\n"
+        "  let value: Pair = (1, 2, 3);\n"
+        "}\n",
+        "AE0302", 4U, 21U, "(",
+        "tuple literal has 3 element(s) but tuple type 'Pair' expects 2");
+    assert_g20_semantic_error(
+        "g20_tuple_literal_too_few_items.ff",
+        "module g20.too_few_items;\n"
+        "type Triple<T>(T, T, T);\n"
+        "func bad(): void {\n"
+        "  let value: Triple<i32> = (1, 2);\n"
+        "}\n",
+        "AE0302", 4U, 28U, "(",
+        "tuple literal has 2 element(s) but tuple type 'Triple<i32>' expects 3");
+}
+
+/* TUP-D06: every distinct expected-type path diagnoses the first incompatible
+ * tuple element, after applying any owner type-argument substitution. */
+static void test_g20_tuple_literal_element_type_diagnostics(void) {
+    assert_g20_semantic_error(
+        "g20_tuple_binding_item_type.ff",
+        "module g20.binding_item_type;\n"
+        "type Pair(i32, string);\n"
+        "func bad(): void {\n"
+        "  let value: Pair = (1, false);\n"
+        "}\n",
+        "AE1003", 4U, 25U, "false", "does not match expected type 'string'");
+    assert_g20_semantic_error(
+        "g20_tuple_argument_item_type.ff",
+        "module g20.argument_item_type;\n"
+        "type Pair(i32, string);\n"
+        "func take(value: Pair): void {}\n"
+        "func bad(): void {\n"
+        "  take((1, false));\n"
+        "}\n",
+        "AE0512", 5U, 3U, "take", "no overload accepting 1 argument(s)");
+    assert_g20_semantic_error(
+        "g20_tuple_return_item_type.ff",
+        "module g20.return_item_type;\n"
+        "type Pair(i32, string);\n"
+        "func bad(): Pair {\n"
+        "  return (1, false);\n"
+        "}\n",
+        "AE1003", 4U, 14U, "false", "does not match expected type 'string'");
+    assert_g20_semantic_error(
+        "g20_tuple_field_item_type.ff",
+        "module g20.field_item_type;\n"
+        "type Pair(i32, string);\n"
+        "type Holder { let pair: Pair; }\n"
+        "func bad(): void {\n"
+        "  let value = Holder { pair: (1, false) };\n"
+        "}\n",
+        "AE1003", 5U, 34U, "false", "does not match expected type 'string'");
+    assert_g20_semantic_error(
+        "g20_tuple_cast_literal_item_type.ff",
+        "module g20.cast_literal_item_type;\n"
+        "type Pair(i32, string);\n"
+        "func bad(): void {\n"
+        "  let value = (Pair)(1, false);\n"
+        "}\n",
+        "AE1003", 4U, 25U, "false", "does not match expected type 'string'");
+    assert_g20_semantic_error(
+        "g20_generic_tuple_item_type.ff",
+        "module g20.generic_item_type;\n"
+        "type Pair<T, U>(T, U);\n"
+        "func bad(): void {\n"
+        "  let value: Pair<i32, string> = (1, false);\n"
+        "}\n",
+        "AE1003", 4U, 38U, "false", "does not match expected type 'string'");
+}
+
+/* TUP-D08/TUP-D09: parenthesized tuple declarations never enter ordinary
+ * constructor or object-literal validation, regardless of call arity or
+ * whether an object-literal suffix is present. */
+static void test_g20_tuple_object_construction_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *expression;
+        const char *code;
+        unsigned int column;
+        const char *token;
+        const char *message;
+    } cases[] = {
+        {
+            "g20_tuple_empty_constructor.ff", "Pair()", "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_argument_constructor.ff", "Pair(1, 2)", "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_direct_empty_literal.ff", "Pair {}", "AE1004", 20U, "{",
+            "object literal target 'Pair' must resolve to an object type"
+        },
+        {
+            "g20_tuple_direct_fields_literal.ff",
+            "Pair { item1: 1, item2: 2 }",
+            "AE1004", 20U, "{",
+            "object literal target 'Pair' must resolve to an object type"
+        },
+        {
+            "g20_tuple_direct_missing_field_literal.ff",
+            "Pair { item1: 1 }",
+            "AE1004", 20U, "{",
+            "object literal target 'Pair' must resolve to an object type"
+        },
+        {
+            "g20_tuple_direct_duplicate_field_literal.ff",
+            "Pair { item1: 1, item1: 2 }",
+            "AE1004", 20U, "{",
+            "object literal target 'Pair' must resolve to an object type"
+        },
+        {
+            "g20_tuple_empty_call_literal.ff",
+            "Pair() {}",
+            "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_call_literal.ff",
+            "Pair() { item1: 1, item2: 2 }",
+            "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_argument_call_literal.ff",
+            "Pair(1, 2) { item1: 3, item2: 4 }",
+            "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_duplicate_call_literal.ff",
+            "Pair() { item1: 1, item1: 2 }",
+            "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_tuple_unit_constructor.ff", "Unit()", "AE0312", 15U, "Unit",
+            "tuple type 'Unit' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_generic_tuple_constructor.ff",
+            "GenericPair<i32, string>()",
+            "AE0312", 15U, "GenericPair",
+            "tuple type 'GenericPair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_generic_tuple_argument_constructor.ff",
+            "GenericPair<i32, string>(1, \"one\")",
+            "AE0312", 15U, "GenericPair",
+            "tuple type 'GenericPair' is not an object type and cannot be constructed"
+        }
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[512];
+        int written = snprintf(
+            source,
+            sizeof(source),
+            "module g20.construction;\n"
+            "type Pair(i32, i32);\n"
+            "type Unit();\n"
+            "type GenericPair<T, U>(T, U);\n"
+            "func bad(): void {\n"
+            "  let value = %s;\n"
+            "}\n",
+            cases[index].expression);
+
+        ASSERT(written > 0 && (size_t)written < sizeof(source));
+        assert_g20_semantic_error(cases[index].path,
+                                  source,
+                                  cases[index].code,
+                                  6U,
+                                  cases[index].column,
+                                  cases[index].token,
+                                  cases[index].message);
+    }
+}
+
+/* TUP-D13 through TUP-D16: tuple identity is nominal for implicit flow,
+ * explicit conversions require equal expanded shape, and tuples are not
+ * generic upper bounds. */
+static void test_g20_tuple_nominal_and_conversion_diagnostics(void) {
+    assert_g20_semantic_error(
+        "g20_tuple_implicit_nominal_mismatch.ff",
+        "module g20.implicit_nominal;\n"
+        "type Left(i32, string);\n"
+        "type Right(i32, string);\n"
+        "func bad(source: Right): Left {\n"
+        "  return source;\n"
+        "}\n",
+        "AE1003", 5U, 10U, "source", "does not match expected type 'Left'");
+    assert_g20_semantic_error(
+        "g20_unit_implicit_nominal_mismatch.ff",
+        "module g20.unit_implicit_nominal;\n"
+        "type Unit();\n"
+        "type OtherUnit();\n"
+        "func bad(source: Unit): OtherUnit {\n"
+        "  return source;\n"
+        "}\n",
+        "AE1003", 5U, 10U, "source",
+        "does not match expected type 'OtherUnit'");
+    assert_g20_semantic_error(
+        "g20_tuple_cast_arity_mismatch.ff",
+        "module g20.cast_arity;\n"
+        "type Pair(i32, string);\n"
+        "type Triple(i32, string, bool);\n"
+        "func bad(source: Triple): Pair {\n"
+        "  return (Pair)source;\n"
+        "}\n",
+        "AE1023", 5U, 10U, "(", "cast from 'Triple' to 'Pair' is not allowed");
+    assert_g20_semantic_error(
+        "g20_tuple_cast_item_mismatch.ff",
+        "module g20.cast_item;\n"
+        "type Left(i32, string);\n"
+        "type Right(i32, bool);\n"
+        "func bad(source: Right): Left {\n"
+        "  return (Left)source;\n"
+        "}\n",
+        "AE1023", 5U, 10U, "(", "cast from 'Right' to 'Left' is not allowed");
+    assert_g20_semantic_error(
+        "g20_tuple_cast_literal_arity_mismatch.ff",
+        "module g20.cast_literal_arity;\n"
+        "type Pair(i32, string);\n"
+        "func bad(): void {\n"
+        "  let value = (Pair)(1, \"two\", 3);\n"
+        "}\n",
+        "AE0302", 4U, 21U, "(",
+        "tuple literal has 3 element(s) but tuple type 'Pair' expects 2");
+    assert_g20_semantic_error(
+        "g20_generic_tuple_implicit_mismatch.ff",
+        "module g20.generic_implicit;\n"
+        "type Pair<T, U>(T, U);\n"
+        "func bad(source: Pair<i64, string>): Pair<i32, string> {\n"
+        "  return source;\n"
+        "}\n",
+        "AE1003", 4U, 10U, "source",
+        "does not match expected type 'Pair<i32, string>'");
+    assert_g20_semantic_error(
+        "g20_generic_tuple_cast_mismatch.ff",
+        "module g20.generic_cast;\n"
+        "type Pair<T, U>(T, U);\n"
+        "func bad(source: Pair<i64, string>): Pair<i32, string> {\n"
+        "  return (Pair<i32, string>)source;\n"
+        "}\n",
+        "AE1023", 4U, 10U, "(",
+        "cast from 'Pair<i64, string>' to 'Pair<i32, string>' is not allowed");
+    assert_g20_semantic_error(
+        "g20_tuple_constraint.ff",
+        "module g20.tuple_constraint;\n"
+        "type Pair(i32, i32);\n"
+        "func bad<T: Pair>(value: T): T { return value; }\n",
+        "AE0304", 3U, 10U, "T", "tuple type cannot be used as a constraint");
+    assert_g20_semantic_error(
+        "g20_generic_tuple_constraint.ff",
+        "module g20.generic_tuple_constraint;\n"
+        "type Pair<T, U>(T, U);\n"
+        "func bad<T: Pair<i32, i32>>(value: T): T { return value; }\n",
+        "AE0304", 3U, 10U, "T", "tuple type cannot be used as a constraint");
+}
+
+/* TUP-D17 through TUP-D20: item access preserves instance/static surfaces,
+ * tuple fields remain immutable, and destructuring validates source kind and
+ * arity at the pattern token. */
+static void test_g20_tuple_access_and_destructure_diagnostics(void) {
+    assert_g20_semantic_error(
+        "g20_unit_item_one.ff",
+        "module g20.unit_item_one;\n"
+        "type Unit();\n"
+        "func bad(value: Unit): void {\n"
+        "  value.item1;\n"
+        "}\n",
+        "AE0306", 4U, 9U, "item1", "type 'Unit' has no member 'item1'");
+    assert_g20_semantic_error(
+        "g20_tuple_item_zero.ff",
+        "module g20.item_zero;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(value: Pair): void {\n"
+        "  value.item0;\n"
+        "}\n",
+        "AE0306", 4U, 9U, "item0", "type 'Pair' has no member 'item0'");
+    assert_g20_semantic_error(
+        "g20_tuple_item_past_end.ff",
+        "module g20.item_past_end;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(value: Pair): void {\n"
+        "  value.item3;\n"
+        "}\n",
+        "AE0306", 4U, 9U, "item3", "type 'Pair' has no member 'item3'");
+    assert_g20_semantic_error(
+        "g20_tuple_static_item.ff",
+        "module g20.static_item;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(): void {\n"
+        "  Pair.item1;\n"
+        "}\n",
+        "AE0309", 4U, 8U, "item1", "type 'Pair' has no static member 'item1'");
+    assert_g20_semantic_error(
+        "g20_tuple_item_assignment.ff",
+        "module g20.item_assignment;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(): void {\n"
+        "  var value: Pair = (1, 2);\n"
+        "  value.item1 = 3;\n"
+        "}\n",
+        "AE0104", 5U, 9U, "item1", "is not writable");
+    assert_g20_semantic_error(
+        "g20_tuple_let_destructure_assignment.ff",
+        "module g20.let_destructure_assignment;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(value: Pair): void {\n"
+        "  let (left, right) = value;\n"
+        "  left = 3;\n"
+        "}\n",
+        "AE0104", 5U, 3U, "left",
+        "assignment target 'left' is not writable");
+    assert_g20_semantic_error(
+        "g20_destructure_scalar.ff",
+        "module g20.destructure_scalar;\n"
+        "func bad(): void {\n"
+        "  let (left, right) = 1;\n"
+        "}\n",
+        "AE0108", 3U, 7U, "(", "initializer must be a tuple");
+    assert_g20_semantic_error(
+        "g20_destructure_object.ff",
+        "module g20.destructure_object;\n"
+        "type Box {}\n"
+        "func bad(value: Box): void {\n"
+        "  let (left, right) = value;\n"
+        "}\n",
+        "AE0108", 4U, 7U, "(", "initializer must be a tuple");
+    assert_g20_semantic_error(
+        "g20_destructure_array.ff",
+        "module g20.destructure_array;\n"
+        "func bad(value: i32[]): void {\n"
+        "  let (left, right) = value;\n"
+        "}\n",
+        "AE0108", 3U, 7U, "(", "initializer must be a tuple");
+    assert_g20_semantic_error(
+        "g20_named_tuple_destructure_too_few.ff",
+        "module g20.named_too_few;\n"
+        "type Triple(i32, i32, i32);\n"
+        "func bad(value: Triple): void {\n"
+        "  let (left, right) = value;\n"
+        "}\n",
+        "AE0109", 4U, 7U, "(",
+        "destructuring binding has 2 position(s) but tuple initializer has 3");
+    assert_g20_semantic_error(
+        "g20_named_tuple_destructure_too_many.ff",
+        "module g20.named_too_many;\n"
+        "type Pair(i32, i32);\n"
+        "func bad(value: Pair): void {\n"
+        "  let (first, second, third) = value;\n"
+        "}\n",
+        "AE0109", 4U, 7U, "(",
+        "destructuring binding has 3 position(s) but tuple initializer has 2");
+    assert_g20_semantic_error(
+        "g20_literal_tuple_destructure_too_few.ff",
+        "module g20.literal_too_few;\n"
+        "func bad(): void {\n"
+        "  let (left, right) = (1, 2, 3);\n"
+        "}\n",
+        "AE0109", 3U, 7U, "(",
+        "destructuring binding has 2 position(s) but tuple literal has 3");
+    assert_g20_semantic_error(
+        "g20_literal_tuple_destructure_too_many.ff",
+        "module g20.literal_too_many;\n"
+        "func bad(): void {\n"
+        "  let (first, second, third) = (1, 2);\n"
+        "}\n",
+        "AE0109", 3U, 7U, "(",
+        "destructuring binding has 3 position(s) but tuple literal has 2");
+}
+
+/* TUP-D07/TUP-D11/TUP-D13 through TUP-D25: all legal tuple boundaries are
+ * accepted together, including default zero, five literal target contexts,
+ * nominal conversion, whole-value replacement, item access, and destructure. */
+static void test_g20_tuple_semantic_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "g20_tuple_acceptance.ff",
+        "module g20.acceptance;\n"
+        "type Unit();\n"
+        "type Pair(i32, string);\n"
+        "type SameShape(i32, string);\n"
+        "type Octet(i32, i32, i32, i32, i32, i32, i32, i32);\n"
+        "type GenericPair<T, U>(T, U);\n"
+        "type Holder { let pair: Pair; }\n"
+        "func take(value: Pair): i32 { return value.item1; }\n"
+        "func make(): Pair { return (2, \"two\"); }\n"
+        "func run(): i32 {\n"
+        "  let unit: Unit = ();\n"
+        "  let zeroUnit: Unit;\n"
+        "  let pair: Pair = (1, \"one\");\n"
+        "  let zero: Pair;\n"
+        "  let octet: Octet = (1, 2, 3, 4, 5, 6, 7, 8);\n"
+        "  let generic: GenericPair<i32, string> = (3, \"three\");\n"
+        "  let argument = take((4, \"four\"));\n"
+        "  let returned = make();\n"
+        "  let holder = Holder { pair: (5, \"five\") };\n"
+        "  let defaultHolder = Holder {};\n"
+        "  let castLiteral = (Pair)(6, \"six\");\n"
+        "  let converted: SameShape = (SameShape)pair;\n"
+        "  var mutable = pair;\n"
+        "  mutable = (7, \"seven\");\n"
+        "  let (left, text) = mutable;\n"
+        "  let (first, , third) = (8, 9, 10);\n"
+        "  let () = unit;\n"
+        "  let () = zeroUnit;\n"
+        "  return argument + returned.item1 + holder.pair.item1 +\n"
+        "         defaultHolder.pair.item1 + castLiteral.item1 +\n"
+        "         converted.item1 + generic.item1 + octet.item8 +\n"
+        "         zero.item1 + left;\n"
+        "}\n");
+}
+
+/* Assert one exact G20 diagnostic while resolving public tuple metadata
+ * through the imported-module model used by package consumers. */
+static void assert_g20_imported_semantic_error(
+    const FengSemanticImportedModuleQuery *query,
+    const char *path,
+    const char *source,
+    const char *expected_code,
+    unsigned int expected_line,
+    unsigned int expected_column,
+    const char *expected_lexeme,
+    const char *expected_message) {
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = query;
+    options.pointer_size = sizeof(void *);
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(analysis == NULL);
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(errors[0].token.line == expected_line);
+    ASSERT(errors[0].token.column == expected_column);
+    ASSERT(errors[0].token.length == strlen(expected_lexeme));
+    ASSERT(memcmp(errors[0].token.lexeme,
+                  expected_lexeme,
+                  errors[0].token.length) == 0);
+    ASSERT(strcmp(errors[0].message, expected_message) == 0);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* TUP-D10: short-name, alias, and full-path package access all preserve the
+ * public declaration's tuple classification at construction boundaries. */
+static void test_g20_imported_tuple_construction_diagnostics(void) {
+    static const char *provider_source =
+        "open module vendor.g20_tuple;\n"
+        "open type Pair(i32, string);\n";
+    static const struct {
+        const char *path;
+        const char *source;
+        const char *code;
+        unsigned int column;
+        const char *token;
+        const char *message;
+    } cases[] = {
+        {
+            "g20_imported_short_constructor.ff",
+            "module app.g20_short_constructor;\n"
+            "import vendor.g20_tuple;\n"
+            "func bad(): void {\n"
+            "  let value = Pair();\n"
+            "}\n",
+            "AE0312", 15U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_imported_short_object_literal.ff",
+            "module app.g20_short_literal;\n"
+            "import vendor.g20_tuple;\n"
+            "func bad(): void {\n"
+            "  let value = Pair {};\n"
+            "}\n",
+            "AE1004", 20U, "{",
+            "object literal target 'Pair' must resolve to an object type"
+        },
+        {
+            "g20_imported_alias_constructor.ff",
+            "module app.g20_alias_constructor;\n"
+            "import vendor.g20_tuple as tuple;\n"
+            "func bad(): void {\n"
+            "  let value = tuple.Pair();\n"
+            "}\n",
+            "AE0312", 21U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_imported_alias_object_literal.ff",
+            "module app.g20_alias_literal;\n"
+            "import vendor.g20_tuple as tuple;\n"
+            "func bad(): void {\n"
+            "  let value = tuple.Pair {};\n"
+            "}\n",
+            "AE1004", 26U, "{",
+            "object literal target 'tuple.Pair' must resolve to an object type"
+        },
+        {
+            "g20_imported_full_path_constructor.ff",
+            "module app.g20_full_constructor;\n"
+            "\n"
+            "func bad(): void {\n"
+            "  let value = vendor.g20_tuple.Pair();\n"
+            "}\n",
+            "AE0312", 32U, "Pair",
+            "tuple type 'Pair' is not an object type and cannot be constructed"
+        },
+        {
+            "g20_imported_full_path_object_literal.ff",
+            "module app.g20_full_literal;\n"
+            "\n"
+            "func bad(): void {\n"
+            "  let value = vendor.g20_tuple.Pair {};\n"
+            "}\n",
+            "AE1004", 37U, "{",
+            "object literal target 'vendor.g20_tuple.Pair' must resolve to an object type"
+        }
+    };
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+
+    imported_source_fixture_init(&fixture,
+                                 "g20_imported_tuple_provider.ff",
+                                 provider_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_g20_imported_semantic_error(&query,
+                                           cases[index].path,
+                                           cases[index].source,
+                                           cases[index].code,
+                                           4U,
+                                           cases[index].column,
+                                           cases[index].token,
+                                           cases[index].message);
+    }
+    imported_source_fixture_dispose(&fixture);
+}
+
 int main(void) {
+    test_g20_tuple_literal_target_and_arity_diagnostics();
+    test_g20_tuple_literal_element_type_diagnostics();
+    test_g20_tuple_object_construction_diagnostics();
+    test_g20_tuple_nominal_and_conversion_diagnostics();
+    test_g20_tuple_access_and_destructure_diagnostics();
+    test_g20_tuple_semantic_acceptance();
+    test_g20_imported_tuple_construction_diagnostics();
     test_g19_enum_declaration_and_member_diagnostics();
     test_g19_enum_i32_range_diagnostics();
     test_g19_enum_i32_boundaries_and_same_type_semantics();

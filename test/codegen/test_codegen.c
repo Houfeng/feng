@@ -16680,9 +16680,81 @@ static void test_g19_imported_enum_fixed_i32_codegen(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* TUP-D11/TUP-D12: named tuple literals and default-zero bindings stay on
+ * value-layout paths; only the containing ordinary object may allocate. */
+static void test_g20_tuple_value_layout_and_default_zero_codegen(void) {
+    static const char *source =
+        "module g20.tuple_codegen;\n"
+        "type Unit();\n"
+        "type Pair(i32, string);\n"
+        "type Holder {\n"
+        "  let pair: Pair;\n"
+        "  let unit: Unit;\n"
+        "}\n"
+        "func defaults(): i32 {\n"
+        "  let pair: Pair;\n"
+        "  let unit: Unit;\n"
+        "  let holder = Holder {};\n"
+        "  let () = unit;\n"
+        "  let () = holder.unit;\n"
+        "  return pair.item1 + holder.pair.item1;\n"
+        "}\n"
+        "func literal(): Pair {\n"
+        "  return (7, \"seven\");\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "tests/g20_tuple_value_layout_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput out = {0};
+    FengCodegenError cgerr = {0};
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &out,
+                                     &cgerr));
+    ASSERT(out.c_source != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__g20__tuple_codegen__Pair {") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "Feng__g20__tuple_codegen__Pair__aggregate_default__init") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_default_init(&_l_pair_0, "
+                  "&Feng__g20__tuple_codegen__Pair__aggregate_desc)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "struct Feng__g20__tuple_codegen__Unit _l_unit_1 = "
+                  "(struct Feng__g20__tuple_codegen__Unit){0}") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_aggregate_default_init(&_obj1->pair, "
+                  "&Feng__g20__tuple_codegen__Pair__aggregate_desc)") != NULL);
+    ASSERT(strstr(out.c_source,
+                  "FengTypeDesc__g20__tuple_codegen__Pair") == NULL);
+    ASSERT(strstr(out.c_source,
+                  "feng_object_new(&FengTypeDesc__g20__tuple_codegen__Pair") == NULL);
+    compile_generated_c_or_die(out.c_source);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&cgerr);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g20_tuple_value_layout_and_default_zero_codegen();
     test_g19_local_enum_fixed_i32_codegen();
     test_g19_imported_enum_fixed_i32_codegen();
 

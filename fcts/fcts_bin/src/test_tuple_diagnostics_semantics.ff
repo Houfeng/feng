@@ -1,0 +1,117 @@
+module fcts_bin;
+
+import std.test;
+
+/** Zero-element tuple used by the G20 boundary matrix. */
+type G20Unit();
+
+/** Distinct zero-element tuple used to observe explicit nominal conversion. */
+type G20OtherUnit();
+
+/** Two-element tuple with both trivial and managed elements. */
+type G20Pair(i32, string);
+
+/** Same-shaped but nominally distinct tuple. */
+type G20EquivalentPair(i32, string);
+
+/** Maximum-arity tuple accepted by the language. */
+type G20Octet(i32, i32, i32, i32, i32, i32, i32, i32);
+
+/** Generic tuple used to observe substituted item types. */
+type G20GenericPair<T, U>(T, U);
+
+/** Ordinary object whose fields exercise tuple default and literal targets. */
+type G20TupleHolder {
+  let pair: G20Pair;
+  let unit: G20Unit;
+}
+
+/** Accept a tuple literal through a function-parameter target. */
+func g20TupleScore(value: G20Pair): i32 {
+  return value.item1;
+}
+
+/** Produce a tuple literal through a function-return target. */
+func g20ReturnedTuple(): G20Pair {
+  return (3, "return");
+}
+
+/** Preserve one tuple through the same nominal type. */
+func g20TupleIdentity(value: G20Pair): G20Pair {
+  return value;
+}
+
+/** Execute the G20 legal-neighbour tuple behavior matrix. */
+open func test_tuple_diagnostics_semantics(): void {
+  describe("tuple diagnostic semantic boundaries", () {
+    test("TUP-D07 all tuple literal target contexts preserve values", () {
+      let binding: G20Pair = (1, "binding");
+      let argument = g20TupleScore((2, "argument"));
+      let returned = g20ReturnedTuple();
+      let holder = G20TupleHolder { pair: (4, "field"), unit: () };
+      let castLiteral = (G20Pair)(5, "cast");
+
+      assert(binding.item1 == (i32)1 && binding.item2 == "binding" &&
+             argument == (i32)2 &&
+             returned.item1 == (i32)3 && returned.item2 == "return" &&
+             holder.pair.item1 == (i32)4 && holder.pair.item2 == "field" &&
+             castLiteral.item1 == (i32)5 && castLiteral.item2 == "cast",
+             "binding parameter return field and cast targets preserve tuple values");
+    });
+
+    test("TUP-D07 zero maximum generic and managed tuple shapes", () {
+      let unit: G20Unit = ();
+      let octet: G20Octet = (1, 2, 3, 4, 5, 6, 7, 8);
+      let generic: G20GenericPair<i32, string> = (9, "managed");
+      let () = unit;
+
+      assert(octet.item1 == (i32)1 && octet.item8 == (i32)8 &&
+             generic.item1 == (i32)9 && generic.item2 == "managed",
+             "zero maximum generic and managed tuple shapes retain their endpoints");
+    });
+
+    test("TUP-D11 tuple default zero covers bindings and object fields", () {
+      let pair: G20Pair;
+      let unit: G20Unit;
+      let holder = G20TupleHolder {};
+      let () = unit;
+      let () = holder.unit;
+
+      assert(pair.item1 == (i32)0 && pair.item2 == "" &&
+             holder.pair.item1 == (i32)0 && holder.pair.item2 == "",
+             "tuple bindings and tuple-valued fields receive element default zero");
+    });
+
+    test("TUP-D13 through TUP-D19 preserve nominal value behavior", () {
+      let source: G20Pair = (10, "source");
+      let copied = g20TupleIdentity(source);
+      var replacement = copied;
+      replacement = (11, "replacement");
+      let converted: G20EquivalentPair = (G20EquivalentPair)replacement;
+      let unit: G20Unit = ();
+      let otherUnit: G20OtherUnit = (G20OtherUnit)unit;
+      let () = otherUnit;
+
+      assert(source.item1 == (i32)10 && source.item2 == "source" &&
+             copied.item1 == (i32)10 && copied.item2 == "source" &&
+             replacement.item1 == (i32)11 &&
+             replacement.item2 == "replacement" &&
+             converted.item1 == (i32)11 && converted.item2 == "replacement",
+             "same-type flow whole-value replacement and explicit conversion remain nominal");
+    });
+
+    test("TUP-D21 and TUP-D24 support inferred destructuring only", () {
+      let source: G20Pair = (12, "destructure");
+      let constrained: G20Pair = source;
+      let (left, label) = constrained;
+      var (mutableLeft, mutableLabel) = source;
+      mutableLeft = 13;
+      mutableLabel = "changed";
+
+      assert(left == (i32)12 && label == "destructure" &&
+             mutableLeft == (i32)13 && mutableLabel == "changed" &&
+             source.item1 == (i32)12 && source.item2 == "destructure",
+             "typed ordinary binding supplies the target before independent destructuring");
+    });
+  });
+}
