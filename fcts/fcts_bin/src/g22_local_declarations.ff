@@ -1,0 +1,15 @@
+module fcts_bin;
+
+/** Sibling-file declarations are legal beside unused file-local aliases. */
+type G22LocalType: G22LocalSpec { func read(): i32 { return 71; } }
+enum G22LocalEnum { Only }
+spec G22LocalSpec { func read(): i32; }
+func g22LocalFunction(): i32 { return 59; }
+let g22LocalLet: i32 = 61;
+var g22LocalVar: i32 = 67;
+
+/** This file has no imports from the G22 providers or collision module. */
+func g22SiblingValue(): i32 {
+  let value = G22LocalType();
+  return g22LocalFunction() + g22LocalLet + g22LocalVar;
+}

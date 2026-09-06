@@ -1,0 +1,21 @@
+module fcts_bin;
+
+import fcts_lib.g22_provider;
+import fcts_lib.g22_collision as collision;
+
+/** Alias-only imports must not make G22Record ambiguous as a short name. */
+func g22ShortRecordValue(): i32 {
+  let local: G22Record = G22Record { value: 71 };
+  let other: collision.G22Record = collision.G22Record();
+  return local.value + other.value;
+}
+
+/** The callable and spec paths observe the same public declarations. */
+func g22ShortBehavior(): i32 {
+  let value: G22Readable = G22Record { value: 2 };
+  let callback: G22Reader = g22Read;
+  return value.read() + callback() + (i32)G22Mode.Second + g22Fixed;
+}
+
+/** A short-name write is observable through a different file's alias. */
+func g22ShortWrite(value: i32) { g22State = value; }

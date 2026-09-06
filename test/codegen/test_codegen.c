@@ -17169,9 +17169,84 @@ static void test_g21_array_new_default_zero_codegen_defense(void) {
     feng_program_free(program);
 }
 
+/* G22: all qualified accesses reuse registered local storage for bin/lib
+ * output, including callable and address-taking consumers. Count ensure
+ * calls to exclude an extra initialization check introduced by dispatch. */
+static void test_g22_qualified_binding_storage_codegen(void) {
+    const char *provider =
+        "open module g22.storage;\n"
+        "open spec Reader(): i32;\n"
+        "open let fixed: i32 = 9;\n"
+        "open var count: i32 = 2;\n"
+        "open func read(): i32 { return count; }\n"
+        "open let callback: Reader = read;\n";
+    const char *consumer =
+        "module g22.consumer;\n"
+        "import g22.storage as api;\n"
+        "@cdecl(\"c\") extern func consume(p: i32*): void;\n"
+        "func exercise(): i32 {\n"
+        "  api.count = 4;\n"
+        "  g22.storage.count += 3;\n"
+        "  consume(&api.count);\n"
+        "  let fixed = g22.storage.fixed;\n"
+        "  return api.count + fixed + g22.storage.callback();\n"
+        "}\n"
+        "func main(args: string[]) { let result = exercise(); }\n";
+    for (size_t library = 0U; library < 2U; ++library) {
+        FengCompileTarget target = library ? FENG_COMPILE_TARGET_LIB : FENG_COMPILE_TARGET_BIN;
+        FengProgram *owner = parse_or_die(provider, "g22_binding_owner.ff");
+        FengProgram *user = parse_or_die(consumer, "g22_binding_consumer.ff");
+        const FengProgram *programs[] = {owner, user};
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        FengCodegenOutput out = {0};
+        FengCodegenError error = {0};
+        const char *slot = library ? "feng__g22__storage__count" : "_feng_g__g22__storage__count";
+        const char *ensure = library ? "feng__g22__storage__count__ensure_init__from__void();" :
+                                       "_feng_ensure_g__g22__storage__count();";
+        char expected[256];
+
+        bool semantic_ok = feng_semantic_analyze(programs, 2U, target, &analysis, &errors, &error_count);
+        if (!semantic_ok) {
+            for (size_t index = 0U; index < error_count; ++index) {
+                fprintf(stderr, "G22 binding %s:%u:%u %s %s\n", errors[index].path,
+                        errors[index].token.line, errors[index].token.column,
+                        errors[index].code, errors[index].message);
+            }
+        }
+        ASSERT(semantic_ok);
+        ASSERT(error_count == 0U);
+        ASSERT(feng_codegen_emit_program(analysis, target, NULL, &out, &error));
+        ASSERT(out.c_source != NULL);
+        snprintf(expected, sizeof(expected), "int32_t %s = 0;", slot);
+        ASSERT(count_substr(out.c_source, expected) == 1U);
+        snprintf(expected, sizeof(expected), "(&(%s))", slot);
+        ASSERT(strstr(out.c_source, expected) != NULL);
+        ASSERT(count_substr(out.c_source, ensure) == 5U);
+        ASSERT(count_substr(out.c_source, library ? "feng__g22__storage__fixed__ensure_init__from__void();" :
+                                                   "_feng_ensure_g__g22__storage__fixed();") == 1U);
+        ASSERT(count_substr(out.c_source, library ? "feng__g22__storage__callback__ensure_init__from__void();" :
+                                                   "_feng_ensure_g__g22__storage__callback();") == 1U);
+        if (!library) {
+            ASSERT(strstr(out.c_source, "feng__g22__storage__count") == NULL);
+            ASSERT(strstr(out.c_source, "feng__g22__storage__fixed") == NULL);
+            ASSERT(strstr(out.c_source, "feng__g22__storage__callback") == NULL);
+        }
+        compile_generated_c_or_die(out.c_source);
+        feng_codegen_output_free(&out);
+        feng_codegen_error_free(&error);
+        feng_semantic_errors_free(errors, error_count);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(owner);
+        feng_program_free(user);
+    }
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g22_qualified_binding_storage_codegen();
     test_g21_array_length_and_index_codegen();
     test_g21_tuple_literal_array_element_target_codegen();
     test_g21_array_new_element_defaults_codegen();

@@ -68,6 +68,7 @@ static FengTypeRef *clone_type_ref_for_analysis(const FengTypeRef *ref) {
     }
     clone->token = ref->token;
     clone->kind = ref->kind;
+    clone->resolution_program = ref->resolution_program;
     clone->array_element_writable = ref->array_element_writable;
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED:

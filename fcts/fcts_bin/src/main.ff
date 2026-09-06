@@ -75,6 +75,7 @@ func main(args: string[]) {
       test_module();
       test_module_binding_semantics();
       test_module_import_semantics();
+      test_g22_module_semantics();
       test_match_alias();
       test_defer();
       test_value_type();

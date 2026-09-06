@@ -817,6 +817,9 @@ static char **resolve_type_ref_segments(const BuildContext *ctx,
         /* Search imported modules for a matching public type. */
         for (use_index = 0U; use_index < ctx->current_program->use_count; ++use_index) {
             const FengUseDecl *use_decl = &ctx->current_program->uses[use_index];
+            if (use_decl->has_alias) {
+                continue;
+            }
             const FengSemanticModule *target = find_analysis_module(
                 ctx->analysis, use_decl->segments, use_decl->segment_count);
 
@@ -860,6 +863,23 @@ static char **resolve_type_ref_segments(const BuildContext *ctx,
     return NULL;
 }
 
+/* Inferred and substituted types may originate in another source file.
+ * Qualify their names in that file while retaining the current output graph. */
+static const BuildContext *type_ref_build_context(const BuildContext *ctx,
+                                                  const FengTypeRef *type_ref,
+                                                  BuildContext *source) {
+    if (ctx == NULL || type_ref == NULL || type_ref->resolution_program == NULL ||
+        type_ref->resolution_program == ctx->current_program) {
+        return ctx;
+    }
+    *source = *ctx;
+    source->current_program = type_ref->resolution_program;
+    source->module = find_analysis_module(ctx->analysis,
+                                          source->current_program->module_segments,
+                                          source->current_program->module_segment_count);
+    return source;
+}
+
 static FengSymbolTypeView *build_type_from_type_ref(const BuildContext *ctx,
                                                     const FengTypeRef *type_ref,
                                                     const char *path,
@@ -867,6 +887,9 @@ static FengSymbolTypeView *build_type_from_type_ref(const BuildContext *ctx,
                                                     FengSymbolError *out_error) {
     FengSymbolTypeView *type;
     size_t index;
+    BuildContext source;
+
+    ctx = type_ref_build_context(ctx, type_ref, &source);
 
     if (type_ref == NULL) {
         return NULL;
@@ -1097,6 +1120,9 @@ static FengSymbolTypeView *build_type_from_type_ref_with_tparams(
     FengSymbolError *out_error) {
     FengSymbolTypeView *type;
     size_t index;
+    BuildContext source;
+
+    ctx = type_ref_build_context(ctx, type_ref, &source);
 
     if (type_ref == NULL) {
         return NULL;

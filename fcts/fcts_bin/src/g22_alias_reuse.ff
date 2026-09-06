@@ -1,0 +1,51 @@
+module fcts_bin;
+
+import fcts_lib.g22_collision as api;
+import fcts_lib.g22_provider as unshadowed;
+
+/** The spelling api is independent of the alias in the test entry file. */
+func g22OtherFileAliasValue(): i32 { return api.G22Record().value; }
+
+/** Same-module private declarations remain accessible across source files. */
+func g22PrivateSiblingAccess(): i32 {
+  let value: G22LocalSpec = G22LocalType();
+  return value.read() + (i32)G22LocalEnum.Only + g22LocalFunction() + g22LocalLet + g22LocalVar;
+}
+
+/** Complete paths require no import of their target module in this file. */
+func g22FullPathBehavior(): i32 {
+  let value: fcts_lib.g22_provider.G22Record =
+    fcts_lib.g22_provider.G22Record { value: 3 };
+  let contract: fcts_lib.g22_provider.G22Readable = value;
+  let callback: fcts_lib.g22_provider.G22Reader = fcts_lib.g22_provider.g22Read;
+  return contract.read() + callback() +
+    (i32)fcts_lib.g22_provider.G22Mode.First + fcts_lib.g22_provider.g22Fixed;
+}
+
+/** The local value keeps ordinary member semantics despite package paths. */
+type G22PathLeaf { var g22Fixed: i32; }
+type G22PathRoot { var g22_provider: G22PathLeaf; }
+
+/** Parameter precedence follows the same rule as local let and var. */
+func g22ParameterRoot(fcts_lib: G22PathRoot): i32 {
+  return fcts_lib.g22_provider.g22Fixed;
+}
+
+/** No concrete-type/module-name precedence is introduced by this case. */
+func g22LocalRoots(): i32 {
+  let leaf = G22PathLeaf { g22Fixed: 79 };
+  let fcts_lib = G22PathRoot { g22_provider: leaf };
+  return fcts_lib.g22_provider.g22Fixed + g22ParameterRoot(fcts_lib);
+}
+
+/** Mutable local roots also shadow complete module paths. */
+func g22MutableRoot(): i32 {
+  var fcts_lib = G22PathRoot { g22_provider: G22PathLeaf { g22Fixed: 83 } };
+  return fcts_lib.g22_provider.g22Fixed;
+}
+
+/** An independent alias still accesses a module hidden by a lexical root. */
+func g22AliasEscape(): i32 {
+  let fcts_lib = G22PathRoot { g22_provider: G22PathLeaf { g22Fixed: 7 } };
+  return fcts_lib.g22_provider.g22Fixed + unshadowed.g22Fixed;
+}

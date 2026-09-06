@@ -26,7 +26,8 @@ typedef struct SynthProgram {
     FengProgram program;
 } SynthProgram;
 
-/* One cache entry per imported package module. */
+/* One stable-address cache entry per imported package module. Both sem_mod
+ * and its inline program-pointer array remain valid until cache disposal. */
 typedef struct SynthModuleEntry {
     FengSlice *segments;
     char **segment_strs;
@@ -38,19 +39,21 @@ typedef struct SynthModuleEntry {
 
 struct FengSymbolImportedModuleCache {
     const FengSymbolProvider *provider; /* borrowed */
-    SynthModuleEntry *entries;
+    SynthModuleEntry **entries;
     size_t entry_count;
     size_t entry_capacity;
 };
 
+/* Grow only the pointer index: callers may retain module views across loads. */
 static SynthModuleEntry *cache_append(FengSymbolImportedModuleCache *cache,
                                       const SynthModuleEntry *entry) {
     size_t new_capacity;
-    SynthModuleEntry *grown;
+    SynthModuleEntry **grown;
+    SynthModuleEntry *stored;
 
     if (cache->entry_count == cache->entry_capacity) {
         new_capacity = cache->entry_capacity == 0U ? 4U : cache->entry_capacity * 2U;
-        grown = (SynthModuleEntry *)realloc(cache->entries,
+        grown = (SynthModuleEntry **)realloc(cache->entries,
                                             new_capacity * sizeof(*grown));
         if (grown == NULL) {
             return NULL;
@@ -58,8 +61,13 @@ static SynthModuleEntry *cache_append(FengSymbolImportedModuleCache *cache,
         cache->entries = grown;
         cache->entry_capacity = new_capacity;
     }
-    cache->entries[cache->entry_count] = *entry;
-    return &cache->entries[cache->entry_count++];
+    stored = (SynthModuleEntry *)malloc(sizeof(*stored));
+    if (stored == NULL) {
+        return NULL;
+    }
+    *stored = *entry;
+    cache->entries[cache->entry_count++] = stored;
+    return stored;
 }
 
 static bool segments_match(const SynthModuleEntry *entry,
@@ -1394,8 +1402,8 @@ static const FengSemanticModule *cache_get_module(const void *user,
     }
 
     for (index = 0U; index < cache->entry_count; ++index) {
-        if (segments_match(&cache->entries[index], segments, segment_count)) {
-            return &cache->entries[index].sem_mod;
+        if (segments_match(cache->entries[index], segments, segment_count)) {
+            return &cache->entries[index]->sem_mod;
         }
     }
 
@@ -1515,7 +1523,8 @@ void feng_symbol_imported_module_cache_free(FengSymbolImportedModuleCache *cache
         return;
     }
     for (index = 0U; index < cache->entry_count; ++index) {
-        entry_free_partial(&cache->entries[index]);
+        entry_free_partial(cache->entries[index]);
+        free(cache->entries[index]);
     }
     free(cache->entries);
     free(cache);
@@ -1542,7 +1551,7 @@ static const SynthDecl *cache_find_synth_decl_for_symbol(
         return NULL;
     }
     for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
-        const SynthProgram *program = cache->entries[entry_index].prog;
+        const SynthProgram *program = cache->entries[entry_index]->prog;
         size_t decl_index;
 
         if (program == NULL) {
@@ -1567,8 +1576,8 @@ static size_t cache_synth_decl_count(
         return 0U;
     }
     for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
-        if (cache->entries[entry_index].prog != NULL) {
-            count += cache->entries[entry_index].prog->decl_count;
+        if (cache->entries[entry_index]->prog != NULL) {
+            count += cache->entries[entry_index]->prog->decl_count;
         }
     }
     return count;
@@ -1655,7 +1664,7 @@ static void populate_imported_intersection_infos(
     size_t depth_limit = cache_synth_decl_count(cache);
 
     for (entry_index = 0U; entry_index < cache->entry_count; ++entry_index) {
-        SynthProgram *program = cache->entries[entry_index].prog;
+        SynthProgram *program = cache->entries[entry_index]->prog;
         size_t decl_index;
 
         if (program == NULL) {
@@ -1780,8 +1789,8 @@ static SynthModuleEntry *cache_entry_for_module_name(
         return NULL;
     }
     for (index = 0U; index < cache->entry_count; ++index) {
-        if (&cache->entries[index].sem_mod == semantic_module) {
-            return &cache->entries[index];
+        if (&cache->entries[index]->sem_mod == semantic_module) {
+            return cache->entries[index];
         }
     }
     return NULL;
@@ -2284,7 +2293,7 @@ void feng_symbol_imported_module_cache_populate_codegen_metadata(
         return;
     }
     for (ei = 0U; ei < cache->entry_count; ++ei) {
-        SynthModuleEntry *entry = &cache->entries[ei];
+        SynthModuleEntry *entry = cache->entries[ei];
         SynthProgram *program = entry->prog;
         char *module_name;
         size_t di;

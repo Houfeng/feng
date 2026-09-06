@@ -1,0 +1,11 @@
+open module fcts_bin.g22_collisions;
+
+import fcts_lib.g22_collision;
+import fcts_lib.g22_collision as external;
+
+/** Imports also coexist with six unused declarations from another source file. */
+open func g22SiblingCollisionValue(): i32 {
+  let value = external.G22ImportedType();
+  return external.g22ImportedFunction() + external.g22ImportedLet +
+    external.g22ImportedVar + fcts_bin.g22_collisions.g22ImportedFunction();
+}

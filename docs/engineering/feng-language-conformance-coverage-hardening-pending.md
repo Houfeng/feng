@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G20 已交付；G21～G25 待 Review
+> 状态：G01～G22 已交付；G23～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -2783,117 +2783,117 @@ G13 的同模块重名、G15 的重载、G18 的静态性等已有用例可以�
 
 #### 26.2.1 原有用例细化
 
-- [ ] MODULE01：在依赖集合固定、源码输入或已加载包内均不存在目标模块时，分别验证无别名 import、
+- [x] MODULE01：在依赖集合固定、源码输入或已加载包内均不存在目标模块时，分别验证无别名 import、
   alias import 被拒绝，即使没有引用成员也应在 import 处报错；未知完整路径分别覆盖类型引用和
   值表达式，诊断落在 consumer 的相关引用。增加改为存在且可见模块后通过的邻界程序。
   包下载失败、网络错误和损坏制品不作为本条的语言诊断用例。
-- [ ] MODULE02：目标模块存在且可见，但目标公开名称确实不存在时，分别验证短名、alias 限定名、
+- [x] MODULE02：目标模块存在且可见，但目标公开名称确实不存在时，分别验证短名、alias 限定名、
   完整路径下的类型引用、函数调用和绑定访问被拒绝；对短名使用不存在任何其他候选的唯一名称，
   区分“名称未定义”与限定访问的“模块未导出名称”。仅把目标名称替换为实际公开声明后应通过，
   不可见声明单列 MODULE03，不能用不存在声明代替私有性检查。
-- [ ] MODULE03：以 `type`、`enum`、`spec`、顶层 `func`、模块级 `let`、模块级 `var` 六类声明分别
+- [x] MODULE03：以 `type`、`enum`、`spec`、顶层 `func`、模块级 `let`、模块级 `var` 六类声明分别
   验证顶层可见性：同模块其他文件可直接访问模块私有声明；同包其他模块和跨包 consumer 不得
   通过短名、alias 或完整路径访问该私有声明。对应公开声明按所在模块的有效可见范围通过；省略
   修饰与显式 `seal` 均须有直接证据。跨包被 `.ft` 过滤的声明允许按未导出或未知名称诊断，不要求
   consumer 恢复已过滤的私有信息。
-- [ ] MODULE04：来自两个不同无别名 import 的同名公开符号，未引用时编译并运行通过，实际裸名
+- [x] MODULE04：来自两个不同无别名 import 的同名公开符号，未引用时编译并运行通过，实际裸名
   引用时报二义性；分别覆盖六类顶层声明，并增加至少一组跨种类冲突和三个来源的多义冲突。
   不得只检查候选插入顺序选出的第一个声明；同名函数来自不同模块时，不因参数签名不同而合成
   新的重载集合。已有直接证据可映射，缺口补最小反例及未引用的正向配对。
-- [ ] MODULE05：alias 与本文件顶层 `type`、`enum`、`spec`、`func`、`let`、`var` 或另一 alias 同名，
+- [x] MODULE05：alias 与本文件顶层 `type`、`enum`、`spec`、`func`、`let`、`var` 或另一 alias 同名，
   分别验证未引用、已引用都在声明检查阶段报错；诊断指向本文件的冲突声明，不依赖函数体执行。
   同名 alias 指向不同目标和同一目标都不能规避重复声明检查。嵌套块局部绑定不混入该矩阵。
   原条目中的两类惰性冲突拆至 MODULE08、MODULE09。
-- [ ] MODULE06：文件 A、B 属于同一模块，只有 A 无别名 import 外部模块；B 使用该外部模块的
+- [x] MODULE06：文件 A、B 属于同一模块，只有 A 无别名 import 外部模块；B 使用该外部模块的
   六类公开名称短名时分别被拒绝，诊断来源文件必须是 B。正向验证 B 自己 import 后通过、B 使用
   可见目标的完整路径后通过，以及本模块自身在 A 声明的名称仍可由 B 使用，避免把文件级导入
   隔离错误扩大为模块声明隔离。
-- [ ] MODULE07：分别以短名、alias 和无需 import 的完整路径访问六类公开顶层声明，正向程序
+- [x] MODULE07：分别以短名、alias 和无需 import 的完整路径访问六类公开顶层声明，正向程序
   实际运行并断言构造后字段、enum 值、spec 视角操作、函数返回值和模块绑定读写结果；函数同时
   覆盖直接调用与函数值，`var` 经一种形式写入后由另一种形式读到同一状态。映射 G02 既有证据，
   补齐本轮 alias 解析变更影响的入口，不仅断言 Semantic 接受或 Codegen 文本。
 
 #### 26.2.2 名称冲突与文件隔离补充
 
-- [ ] MODULE08：alias 与同模块其他文件的六类顶层声明同名时，各自构造“存在冲突但未引用”
+- [x] MODULE08：alias 与同模块其他文件的六类顶层声明同名时，各自构造“存在冲突但未引用”
   的运行正例，以及只增加一次名称引用的反例；后者在使用点报二义性并指出 alias 与其他文件
   声明的来源。类型位和表达式位分别覆盖，不能在 import 声明处报错，也不能无声选择模块或
   本模块声明。关联 ISSUE-G22-001。
-- [ ] MODULE09：alias 与无别名 import 引入的六类公开名称同名时，未引用允许、引用时二义性；
+- [x] MODULE09：alias 与无别名 import 引入的六类公开名称同名时，未引用允许、引用时二义性；
   以 alias import 在普通 import 前后两种顺序验证相同结论。诊断指出 alias 对应的目标模块和
   同名导入声明的来源，不因为 alias 是本文件显式声明而给予优先级。关联 ISSUE-G22-001。
-- [ ] MODULE10：对 MODULE08、MODULE09 的冲突补齐使用入口：`alias.Type` 的绑定类型、参数、
+- [x] MODULE10：对 MODULE08、MODULE09 的冲突补齐使用入口：`alias.Type` 的绑定类型、参数、
   返回类型和构造；`alias.Enum.Item`；`alias.Spec` 的类型引用；`alias.func()` 和函数值；
   `alias.binding` 的读取及可变绑定写入。各入口各有最小反例，不得只在普通调用处检查而遗漏
   类型解析、构造或赋值目标。泛型只覆盖限定类型名出现在类型实参中的名称解析，推导规则归 G25。
-- [ ] MODULE11：对有歧义的限定访问设置“后续成员只存在于 alias 目标”“只存在于另一候选”
+- [x] MODULE11：对有歧义的限定访问设置“后续成员只存在于 alias 目标”“只存在于另一候选”
   两种反例，两者均在首段名称使用处报二义性；另以两个外部同名函数中只有一个签名匹配实参的
   反例，验证不以成员存在性、返回类型或签名匹配来消除名称来源冲突。
-- [ ] MODULE12：仅依赖包或当前编译输入含有同名声明、但该声明所在外部模块未被本文件 import，
+- [x] MODULE12：仅依赖包或当前编译输入含有同名声明、但该声明所在外部模块未被本文件 import，
   不构成本文件 alias 的候选冲突；普通 import 目标的非公开名称也不参与冲突。以未导入、已导入
   但不可见两种运行正例验证候选可见范围，再以对应公开且已导入声明的使用点反例形成配对。
-- [ ] MODULE13：无别名 import 引入名称与本文件顶层声明同名，仍为未引用通过、裸名引用二义性；
+- [x] MODULE13：无别名 import 引入名称与本文件顶层声明同名，仍为未引用通过、裸名引用二义性；
   覆盖六类声明及函数／绑定的跨种类碰撞，防止本轮误改为本文件顶层声明优先或声明时急切报错。
   已有 `test_lazy_ambiguity_import_vs_local_type` 等及 G02 正例优先映射。
-- [ ] MODULE14：无别名 import 引入名称与同模块其他文件顶层声明同名，导入文件未引用时通过、
+- [x] MODULE14：无别名 import 引入名称与同模块其他文件顶层声明同名，导入文件未引用时通过、
   导入文件引用时二义性；没有该 import 的兄弟文件仍能使用本模块声明。覆盖类型、函数和绑定
   三类入口，其余声明种类结合 MODULE04 的统一规则补缺，避免兄弟文件被无关 import 污染。
-- [ ] MODULE15：映射 G13 同模块顶层非法重名和 G15 非法重载的急切诊断，以及合法重载运行证据；
+- [x] MODULE15：映射 G13 同模块顶层非法重名和 G15 非法重载的急切诊断，以及合法重载运行证据；
   同文件和跨文件各保留最小未引用反例，证明 MODULE08 的放宽只针对文件级 alias，不放宽真正的
   模块声明重复。不在本条改动模块级绑定规则或重载规则；若发现需要改实现，先记录原因并人工决策。
-- [ ] MODULE16：对 MODULE04、MODULE08、MODULE09、MODULE13、MODULE14 的碰撞分别用不冲突
+- [x] MODULE16：对 MODULE04、MODULE08、MODULE09、MODULE13、MODULE14 的碰撞分别用不冲突
   alias 和可见目标的完整模块路径消歧，程序运行时断言实际访问的是指定来源；非冲突名称的使用
   不触发旁侧名称的潜在冲突。需要回避局部值遮蔽的模块使用不冲突 alias，不能假定完整路径总能
   绕过局部值。
-- [ ] MODULE17：按既有“局部值优先于模块路径”规则，分别用函数参数、局部 `let` 和局部 `var`
+- [x] MODULE17：按既有“局部值优先于模块路径”规则，分别用函数参数、局部 `let` 和局部 `var`
   与完整路径首段同名；成员存在时读取或调用局部对象并断言结果，成员不存在时报告普通成员错误，
   不能回退到恰好有该成员的模块。正向验证不冲突 alias 仍可访问被遮蔽模块；不新增具体类型、
   顶层声明优先规则。映射 IMP27 后补其反向及绑定形式缺口。
-- [ ] MODULE18：alias 只在声明文件生效：兄弟文件使用未声明的 alias 限定名应失败；两个文件
+- [x] MODULE18：alias 只在声明文件生效：兄弟文件使用未声明的 alias 限定名应失败；两个文件
   各自使用同一 alias 拼写指向不同模块应通过，并分别运行验证目标。alias import 不额外注入其
   成员短名，用唯一名称排除其他候选；同一目标经不同且不冲突的 alias 访问应指向相同声明及绑定
   状态，不因访问入口不同制造两个存储槽。
-- [ ] MODULE19：无名称碰撞的模块 alias 不能单独作为类型或运行时值；分别覆盖 `let x: alias`
+- [x] MODULE19：无名称碰撞的模块 alias 不能单独作为类型或运行时值；分别覆盖 `let x: alias`
   及把 alias 作为值读取、传参或直接调用，检查对应 Semantic 诊断。增加 `alias.Type` 与
   `alias.func()` 的合法邻界；涉及碰撞时由 MODULE08～MODULE11 验证二义性，不以别名误用诊断
   掩盖尚未解析清楚的名称来源。
-- [ ] MODULE20：对同文件急切冲突、两类别名惰性冲突、普通 import 多义及文件隔离用例，分别
+- [x] MODULE20：对同文件急切冲突、两类别名惰性冲突、普通 import 多义及文件隔离用例，分别
   交换 import 顺序和 provider／consumer／兄弟文件输入顺序，验收成功或失败结论、来源集合及
   使用点归属一致；不要求与语义无关的候选列举顺序固定。单个冲突使用点不因多轮分析重复报错，
   无引用时不提前报错；错误不泄漏到没有冲突引用的文件。
 
 #### 26.2.3 可见性与跨包补充
 
-- [ ] MODULE21：验证模块层可见范围：默认和显式 `seal module` 的公开声明可在同包其他模块
+- [x] MODULE21：验证模块层可见范围：默认和显式 `seal module` 的公开声明可在同包其他模块
   使用，但不能由包外经 import、alias 或完整路径访问；`open module` 的公开声明可跨包使用。
   同一模块多文件声明的可见性必须一致，冲突时编译期拒绝；单一文件或一致的多文件声明形成正例。
   不用更改模块可见性同时又更改成员可见性的程序代替单层边界对照。
-- [ ] MODULE22：在可见 owner type 上验证实例及静态字段／普通方法的默认 open、显式 open、
+- [x] MODULE22：在可见 owner type 上验证实例及静态字段／普通方法的默认 open、显式 open、
   显式 seal：所属 type 的实现内可用，普通顶层函数或其他 type 无论在同模块、同包其他模块还是
   包外，都不能越过 seal。字段覆盖读取、可变字段写入和对象字面量字段初始化；方法覆盖调用与
   方法值形成。方法值形成后的普通调用不额外增加运行时权限检查；可变性、静态性另用合法上下文
   隔离，不让其他错误掩盖可见性诊断。
-- [ ] MODULE23：映射 G05 的公开／seal 构造及全 seal 构造跨包证据，补缺时分别覆盖所属 type
+- [x] MODULE23：映射 G05 的公开／seal 构造及全 seal 构造跨包证据，补缺时分别覆盖所属 type
   自身允许构造、同模块外部代码拒绝、同包跨模块拒绝、跨包拒绝；区分 `Type()`、`Type() { ... }`
   和有公开无参构造时的 `Type { ... }`。公开静态工厂返回实例的运行正例可用，不能因 package-public
   `.ft` 未暴露 seal 构造就错误恢复隐式公开无参构造。
-- [ ] MODULE24：在同名成员重载集合中先过滤不可访问候选、再匹配签名：可见 open 候选不被
+- [x] MODULE24：在同名成员重载集合中先过滤不可访问候选、再匹配签名：可见 open 候选不被
   同名 seal 候选遮蔽，仅有不可见候选时拒绝；覆盖实例／静态普通方法直接调用和有目标 callable
   类型的方法值形成，合法路径运行验证选中目标。已有专项直接映射，不改变重载合法性规则。
-- [ ] MODULE25：映射公开签名可见性一致性的 `AE0327` 证据，补齐顶层绑定、函数参数与显式／
+- [x] MODULE25：映射公开签名可见性一致性的 `AE0327` 证据，补齐顶层绑定、函数参数与显式／
   推导返回类型，以及公开 type 的字段、方法、构造签名；递归包含泛型实参、数组元素、指针目标
   和 callable 组成类型，检查私有类型不能因包裹而泄露。合法邻界覆盖私有成员使用私有类型、包内
   可见签名引用同等范围类型。spec / fit 签名及泛型约束的完整检查映射已有专项，不改变其语义。
   显式类型诊断定位相关类型引用，推导类型没有类型 token 时定位声明，provider 失败后不生成公开 `.ft`。
-- [ ] MODULE26：经过真实 package-public `.ft` 往返，验证公开声明可访问、模块私有声明不可见，
+- [x] MODULE26：经过真实 package-public `.ft` 往返，验证公开声明可访问、模块私有声明不可见，
   因布局或实现所需而保留的 seal 成员仍不可由无权限 consumer 访问。分别核对导出选择和 consumer
   语义，不能把“`.ft` 收录”当作“语言公开”；源码直接联合分析或手工构造导入元数据只能作为补充。
-- [ ] MODULE27：在真实跨包 consumer 中复验 MODULE08、MODULE09 的未引用通过／使用时报冲突，
+- [x] MODULE27：在真实跨包 consumer 中复验 MODULE08、MODULE09 的未引用通过／使用时报冲突，
   以及 MODULE16、MODULE18 的合法消歧和文件隔离；provider 与 consumer 分开编译，consumer 只
   通过包公开接口取得 provider 声明。别名只在 consumer 文件产生，不能写成新的 provider 声明，
   也不能按 alias 拼写改变原声明身份；至少覆盖类型、函数、模块绑定入口，六类声明的直接证据在
   源码及跨包矩阵中逐项登记，缺项继续补齐。
-- [ ] MODULE28：映射现有 `@friend`、`@mixable`、spec seal 与 fit 访问授权的正反向测试，核对
+- [x] MODULE28：映射现有 `@friend`、`@mixable`、spec seal 与 fit 访问授权的正反向测试，核对
   本轮名称解析变更没有扩大成员权限、穿透 module／owner 可见性或把保留的 seal 元数据当成 open。
   普通 seal 测试使用不含这些授权的夹具；已存在授权测试继续按各自主规范验收，不在 G22 增加
   新授权形式或重做这些特性的完整组合矩阵。
@@ -2902,13 +2902,13 @@ G13 的同模块重名、G15 的重载、G18 的静态性等已有用例可以�
 
 #### 26.3.1 已知问题与实现边界
 
-- [ ] 按 [ISSUE-G22-001](./feng-language-conformance-coverage-hardening-issues/g22.md#issue-g22-001别名与非本文件声明的名称冲突仍被急切拒绝)
+- [x] 按 [ISSUE-G22-001](./feng-language-conformance-coverage-hardening-issues/g22.md#issue-g22-001别名与非本文件声明的名称冲突仍被急切拒绝)
   调整两类别名冲突：声明检查只保留本文件急切冲突，使用点统一执行外来名称来源的二义性检查；
   类型位、表达式位及赋值目标同时覆盖，不能仅删除前置报错而留下候选静默优先。
-- [ ] 按 [ISSUE-G22-002](./feng-language-conformance-coverage-hardening-issues/g22.md#issue-g22-002ae0906-文档废弃标记与现有别名急切诊断不符)
+- [x] 按 [ISSUE-G22-002](./feng-language-conformance-coverage-hardening-issues/g22.md#issue-g22-002ae0906-文档废弃标记与现有别名急切诊断不符)
   对齐错误码说明：新增惰性冲突沿用名称二义性 `AE0005`，本文件 alias／顶层声明冲突保留当前
   `AE0906`，重复 alias 保留 `AE0902`；纠正文档中的废弃表述，不借此大范围迁移错误码。
-- [ ] 过程中新增问题先在 G22 问题文件记录，再分析、修复并补回归；语义不能由规范确定、需要
+- [x] 过程中新增问题先在 G22 问题文件记录，再分析、修复并补回归；语义不能由规范确定、需要
   特判、改模块级绑定实现、增加运行时开销或改 runtime 私有 ABI／公开 ABI／`.ft` 格式时，说明
   具体原因并交人工决策。与补测无关的纯重构不进入本组。
 
@@ -2917,10 +2917,10 @@ G13 的同模块重名、G15 的重载、G18 的静态性等已有用例可以�
 以下是本次 Review 的完整迁移清单，只调整两类已确认语义对应的诊断断言；实施入口仍以人工
 批准 G22 为准。两条均位于 `test/semantic/test_semantic.c`，原函数名与复现场景保留：
 
-- [ ] `test_import_alias_conflicts_with_other_file_local_value`：原期望在第 2 行 import 处报告
+- [x] `test_import_alias_conflicts_with_other_file_local_value`：原期望在第 2 行 import 处报告
   `AE0906`，改为第 4 行 `helper.assert()` 的 `helper` 使用处报告 `AE0005`，并检查 alias 与
   兄弟文件声明来源；补列、token 和数量断言。
-- [ ] `test_import_alias_conflicts_with_imported_short_name`：原期望在第 3 行 import 处报告
+- [x] `test_import_alias_conflicts_with_imported_short_name`：原期望在第 3 行 import 处报告
   `AE0906`，改为第 5 行 `helper.store()` 的 `helper` 使用处报告 `AE0005`，并检查两方来源；
   补列、token 和数量断言。
 
@@ -2930,32 +2930,184 @@ G13 的同模块重名、G15 的重载、G18 的静态性等已有用例可以�
 
 #### 26.3.3 本组独立验收
 
-- [ ] 逐项登记 MODULE01～MODULE28 的规范条款、已有测试函数／新增用例、测试层级、源码或
+- [x] 逐项登记 MODULE01～MODULE28 的规范条款、已有测试函数／新增用例、测试层级、源码或
   跨包路径、正反向结果。六类顶层声明、三种访问形式及可见范围的适用格均须有证据；不适用格
   写明理由，不用一个成功路径代表全部入口。已有用例满足时可以直接映射，不重复造同构测试。
-- [ ] 建立稳定诊断映射，至少包含 `AE0005`、`AE0901`～`AE0904` 中现用出口、`AE0906`、
+- [x] 建立稳定诊断映射，至少包含 `AE0005`、`AE0901`～`AE0904` 中现用出口、`AE0906`、
   普通成员可见性和 `AE0327`，未知短名／类型引用分别映射现有诊断。每个最小反例断言错误来源
   文件、码、token、行列、数量和 Semantic 阶段；惰性别名冲突定位首段名称 token，急切冲突定位
   相冲突声明。只核对必要的来源信息，不锁定完整诊断文本或无语义要求的候选顺序。
-- [ ] 非法输入在 Semantic 被拒绝，不进入 Codegen 或生成无效后端代码；单个使用点的错误不因
+- [x] 非法输入在 Semantic 被拒绝，不进入 Codegen 或生成无效后端代码；单个使用点的错误不因
   多轮分析重复产生，不退化为 IE／CE。对真实 `.ft` 中已过滤的名称按 consumer 可获得的信息诊断，
   provider 的公开签名错误定位 provider，不转嫁给 consumer。
-- [ ] 合法行为在 FCTS 实际编译、运行并断言选中来源、返回值、字段结果及共享绑定状态；未使用
+- [x] 合法行为在 FCTS 实际编译、运行并断言选中来源、返回值、字段结果及共享绑定状态；未使用
   碰撞的文件通过公开的无冲突测试入口实际纳入编译与运行。Compiler test 的“分析成功”不能代替
   这些运行证据；测试产物在工程 `build/` 或 `temp/` 下执行。
-- [ ] 本组专项完成后，在 Codex 沙箱外独立执行完整 `make test`；记录命令、退出码和各套件结果。
+- [x] 本组专项完成后，在 Codex 沙箱外独立执行完整 `make test`；记录命令、退出码和各套件结果。
   其他组的回归结果不能代替本组验收。若继续修复产品实现或测试，完成后重新执行本组全量回归。
-- [ ] 执行 `git diff --check`，核对只发生已批准的既有测试迁移，关闭或明确决策 G22 问题；填写
+- [x] 执行 `git diff --check`，核对只发生已批准的既有测试迁移，关闭或明确决策 G22 问题；填写
   实际新增用例、实现变更、专项及全量结果，给出英文 commit message，不自动提交。
 
 ### 26.4 独立交付记录
 
-- 状态：TODO 已细化，待人工 Review；尚未开始实施
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：[G22 问题记录](./feng-language-conformance-coverage-hardening-issues/g22.md)
-- 建议 commit message：`test: close module visibility diagnostic gaps`
+#### 26.4.1 实际变更与边界
+
+- 状态：已交付；MODULE01～MODULE28 已逐项验收，无待决策或未解决问题。
+- 两类别名冲突改为使用点检查，保留同文件急切检查及既有名称优先规则；Semantic、Codegen 和
+  Symbol 导出的短名来源均排除仅经 alias 导入的模块，错误码文档已对齐。
+- 修复真实 `.ft` 导入缓存扩容后的悬空指针、限定构造与静态方法值的声明身份丢失，以及非法
+  callee／实参导致的级联诊断。
+- ISSUE-G22-010、ISSUE-G22-011 已分别取得人工批准：限定绑定访问复用声明已注册的存储符号，
+  绑定类型及嵌套类型保留声明文件来源，并在完整验证前准备模块绑定推导事实。类型复制、成员签名
+  替换、Codegen 解析和 Symbol 导出使用一致来源；修复中发现的元数据生命周期和泛型实参来源
+  回归一并修复，未修改既有用例规避失败。
+- 不增加运行时名称解析、权限判断、初始化、ARC 或 callable 操作；不改初始化时机／次数、存储
+  注册规则、runtime 私有 ABI、公开 ABI 或 `.ft` 格式。`parser.h` 仅新增编译期类型来源字段，
+  没有改变语法或 Parser 行为。
+- 仅迁移 §26.3.2 明列的两条既有断言；其余变化为新增用例和必要的入口注册。
+
+#### 26.4.2 用例证据索引
+
+新增源码矩阵位于 [test_g22.c](../../test/semantic/test_g22.c)，其 `g22_analyze` 对反例统一
+检查 Semantic 阶段、唯一诊断、来源文件、码、token 和行列。下文函数名以该文件为默认归属。
+真实跨包矩阵位于 [test_symbol.c](../../test/symbol/test_symbol.c) 的
+`test_g22_real_ft_module_diagnostics`、`g22_check_ft_visibility`；provider 导出后释放源码 AST，
+consumer 仅通过 package-public `.ft` 读取声明，并作同等诊断检查。
+运行证据位于 [test_g22_module_semantics.ff](../../fcts/fcts_bin/src/test_g22_module_semantics.ff)
+及其同包／跨包夹具，共新增 21 个 `test`。该文件的测试标题保留 MODULE 编号。
+
+##### 名称访问与文件隔离
+
+以下条款对应模块规范 §4、§7；MODULE03 同时对应可见性规范 §2、§10。
+
+- MODULE01：`g22_name_diagnostic_matrix` 覆盖两种缺失 import 与未知完整路径类型／值；
+  `g22_top_level_visibility_matrix` 的 open 对照及 FCTS 三种访问形式提供合法邻界。
+- MODULE02：`g22_name_diagnostic_matrix` 覆盖短名／alias／完整路径的缺失类型、函数、绑定；
+  `g22_top_level_visibility_matrix` 与 FCTS MODULE07 使用存在的公开声明作对照。
+- MODULE03：`g22_top_level_visibility_matrix` 覆盖六类声明、默认／seal／open、同模块兄弟文件
+  与同包跨模块；`g22_check_ft_visibility` 补齐跨包三种访问形式。FCTS 的
+  `g22PrivateSiblingAccess` 实际使用六类模块私有声明，公开跨包路径由 MODULE07 运行断言覆盖。
+- MODULE04：`g22_ordinary_import_collision_matrix` 覆盖六类声明、三个来源、未用／已用及顺序；
+  `g22_import_local_collision_matrix` 补函数／绑定跨种类碰撞。前者还验证不同模块函数不因
+  实参只匹配一个签名而消歧；FCTS MODULE04／MODULE13 的多来源碰撞文件实际编译运行。
+- MODULE05：`g22_alias_collision_matrix` 覆盖六类同文件急切冲突的未用／已用；
+  `g22_name_diagnostic_matrix` 覆盖同目标重复 alias 的未用／已用，既有
+  `test_duplicate_use_alias_in_same_file` 覆盖不同目标重复 alias，急切诊断不迁移。
+- MODULE06：`g22_short_name_file_isolation` 覆盖六类短名泄漏反例及本文件 import／完整路径
+  正向对照，交换文件顺序；同模块自身声明共享由 `g22_top_level_visibility_matrix` 与 FCTS
+  `g22SiblingValue`／`g22PrivateSiblingAccess` 覆盖。
+- MODULE07：FCTS 的 MODULE07、MODULE16、MODULE18 及 `g22ShortBehavior`、
+  `g22FullPathBehavior` 覆盖六类声明的三种访问形式、普通构造、字面量、函数值、spec、enum 和
+  `var` 跨形式共享状态；`g22_binding_type_provenance_matrix` 补同名类型、声明文件 import、
+  泛型实参和输入顺序的正反向。跨包绑定类型与转发导出由 Symbol 矩阵及 FCTS MODULE26 验证。
+- MODULE08：`g22_alias_collision_matrix` 的兄弟文件分支覆盖六类声明及全部限定入口；
+  Symbol 矩阵的本包 sibling 加跨包 alias 分支复验；FCTS MODULE08 运行未使用碰撞正例。
+- MODULE09：同一源码矩阵的普通 import 分支覆盖六类声明及 import／文件顺序；Symbol 矩阵
+  仅从 `.ft` 取得六类冲突声明；FCTS MODULE09 运行未使用碰撞正例。
+- MODULE10：`g22_alias_collision_matrix` 的绑定／参数／返回类型、三种构造、enum、spec、
+  函数调用／函数值、绑定读／写及泛型类型实参分别有单点反例；不以一个入口代替其他入口。
+- MODULE11：上述矩阵的 `helper.absent()`、`helper.Only` 及正常成员入口验证后续成员不能选边；
+  `g22_ordinary_import_collision_matrix` 验证两个同名函数不能按参数类型消歧。
+- MODULE12：`g22_alias_isolation_matrix`、Symbol 的短名隔离正例及 FCTS MODULE12 覆盖
+  alias-only、不曾 import 的公开名称、已 import 的私有名称；公开且普通 import 的反例由
+  MODULE09 配对，不把包或模块可见性等同短名可用性。
+- MODULE13：`g22_import_local_collision_matrix` 的同文件分支覆盖六类声明及函数／绑定碰撞；
+  FCTS `g22_ordinary_collisions.ff` 含未引用的普通 import／本文件碰撞及显式来源运行断言。
+- MODULE14：同一矩阵的兄弟文件分支覆盖六类声明，并在未 import 的兄弟文件使用本模块名称；
+  FCTS `g22_ordinary_importer.ff`、`g22_ordinary_sibling.ff` 实际断言双方访问结果。
+- MODULE15：复用 [test_semantic.c](../../test/semantic/test_semantic.c) 的
+  `test_duplicate_type_across_files_same_module`、`test_duplicate_binding_across_files_same_module`、
+  `test_function_return_only_overload_error`、`test_valid_function_overload_by_parameter_type`；
+  同文件／跨文件未引用反例与 G13／G15 既有证据保持不变，合法重载由
+  [test_function.ff](../../fcts/fcts_bin/src/test_function.ff) 实际运行。
+- MODULE16：`g22_alias_isolation_matrix` 与真实 `.ft` 的限定访问正例作编译期对照；FCTS
+  MODULE04、MODULE08、MODULE09、MODULE13、MODULE14、MODULE16 的碰撞文件分别使用不冲突
+  alias／公开完整路径，断言指定来源。新增
+  [test_g22_qualified_binding_storage_codegen](../../test/codegen/test_codegen.c) 核对本包 bin／lib
+  存储名称、ensure 调用和取址；FCTS 验证跨包 lib、共享地址、读写及首次访问仅初始化一次。
+- MODULE17：`g22_local_root_missing_member` 覆盖参数／let／var 的成员缺失不回退；FCTS
+  MODULE17 覆盖三类局部值命中及不冲突 alias 绕开遮蔽，不引入顶层符号优先规则。
+- MODULE18：`g22_alias_isolation_matrix` 覆盖 alias 文件隔离及同目标多 alias；
+  `g22_name_diagnostic_matrix` 验证 alias 不注入短名。Symbol 复验跨包 consumer 文件隔离，
+  FCTS MODULE18 断言不同文件同名 alias 指向不同类型，以及两种 alias 共享一个绑定。
+- MODULE19：`g22_name_diagnostic_matrix` 分别拒绝 `let x: alias`、参数类型中的裸 alias、
+  值读取、传参和直接调用；FCTS MODULE07 的限定类型与函数调用作合法对照。
+- MODULE20：`g22_alias_collision_matrix`、`g22_ordinary_import_collision_matrix`、
+  `g22_import_local_collision_matrix`、`g22_short_name_file_isolation` 交换适用的 import／文件
+  顺序；唯一诊断、来源文件和使用 token 由公共断言校验，两条获批迁移测试另检查冲突双方来源。
+
+##### 可见性与真实跨包边界
+
+以下条款对应可见性规范 §2、§7、§10～§12；MODULE21 同时对应模块规范 §2、§3。
+既有 Semantic 函数均位于上述 `test_semantic.c`，既有 Symbol 函数均位于上述 `test_symbol.c`。
+
+- MODULE21：`g22_top_level_visibility_matrix`、`g22_check_ft_visibility` 和 FCTS MODULE21
+  覆盖默认／seal 模块包内可用、包外三种入口拒绝、open 模块包外可用；复用
+  `test_module_visibility_conflict`，一致多文件声明由兄弟文件矩阵及 FCTS 覆盖。
+- MODULE22：`g22_member_visibility_matrix` 对实例／静态字段读写、字面量字段、实例／静态
+  方法调用和方法值，覆盖默认／open／seal、owner 内部、同模块／跨模块普通函数和其他 type；
+  `g22_check_ft_visibility` 补包外。FCTS MODULE07、MODULE24 及既有
+  [test_seal_member_visibility.ff](../../fcts/fcts_bin/src/test_seal_member_visibility.ff) 验证合法路径。
+- MODULE23：复用 `test_constructor_availability_same_package_positive`、
+  `test_constructor_availability_same_package_negative`、
+  `test_constructor_call_reports_inaccessible_imported_constructor`、
+  `test_object_literal_reports_inaccessible_imported_constructor`、
+  `test_object_literal_constructor_call_reports_inaccessible_imported_constructor`，以及 Symbol 的
+  `test_constructor_availability_survives_ft_roundtrip`；三种构造写法与全 seal 构造不恢复隐式
+  构造由 G05 正反向证据保持，新 FCTS MODULE23 验证公开工厂的 owner 权限。
+- MODULE24：复用 `test_inaccessible_overload_does_not_shadow_accessible_overload`、
+  `test_value_method_value_signature_and_overload_rules`，并用新增成员可见性矩阵补仅有 seal
+  方法时的直接调用／方法值反例；FCTS MODULE24 运行实例／静态的四种合法入口并断言选中重载。
+- MODULE25：复用 `test_signature_visibility_rejects_top_level_surfaces`、
+  `test_signature_visibility_rejects_type_spec_and_fit_surfaces`、
+  `test_signature_visibility_effective_ranges` 及 Symbol 的
+  `test_signature_visibility_error_prevents_public_ft_export`，覆盖声明签名递归可见性、合法
+  范围对照、推导类型定位及失败后禁止导出；本轮不扩大 AE0327 或修改已有断言。
+- MODULE26：新增真实 `.ft` 可见性矩阵核对六类私有顶层声明过滤、seal 字段保留但仍不可访问；
+  复用 `test_private_representation_dependency_closure_roundtrip`、
+  `test_selected_seal_spec_implementations_enter_package_ft`、
+  `test_imported_type_seal_members_do_not_satisfy_consumer_fit` 与
+  `test_mixable_seal_member_ft_roundtrip_preserves_field_facts`。普通 seal 方法已被 `.ft` 过滤
+  时按缺少成员诊断，不要求恢复被过滤的信息。新 FCTS MODULE26 验证绑定类型及转发导出身份。
+- MODULE27：`test_g22_real_ft_module_diagnostics` 对六类声明分别建立跨包 alias／普通 import
+  冲突以及本包 sibling／跨包 alias 冲突，覆盖未用／已用、类型／函数／绑定／enum／spec 入口；
+  consumer 文件隔离和显式消歧也只加载 `.ft`。FCTS MODULE08、MODULE09、MODULE16、MODULE18
+  实际运行跨包正例。访问语法依声明种类适用：例如 enum 项属于 enum，绑定写入只适用于 var，
+  不把这些入口机械套到其余声明种类。
+- MODULE28：复用 `test_spec_seal_member_access_from_implementation_contexts`、
+  `test_spec_seal_member_access_rejected_outside_implementation`、
+  `test_same_package_fit_uses_target_seal_members`、
+  `test_mixable_seal_access_rejects_unauthorized_sources`、
+  `test_friend_type_implementation_contexts_remain_exact`、
+  `test_friend_declaration_and_access_diagnostics`；Symbol 的
+  `test_friend_metadata_is_not_exported_to_ft`、`test_local_friend_fit_can_target_imported_type`
+  及上述 seal 表示测试核对跨包权限，FCTS 的
+  [test_friend.ff](../../fcts/fcts_bin/src/test_friend.ff)、
+  [test_mixable_seal.ff](../../fcts/fcts_bin/src/test_mixable_seal.ff)、
+  [test_spec_seal_dependency.ff](../../fcts/fcts_bin/src/test_spec_seal_dependency.ff) 继续运行。
+
+#### 26.4.3 诊断与回归记录
+
+- 新增反例直接调用 Semantic；源码和 `.ft` 夹具均断言失败，不进入 Codegen。诊断映射包括
+  `AE0005`（二义性）、`AE0901`～`AE0904`（模块／alias 误用与缺失名称）、`AE0906`
+  （本文件 alias 冲突）、`AE0001`／`AE1013`（未知短名／类型）、`AE0305`／`AE0308`／
+  `AE1007`（不可见成员访问／字面量字段）、`AE0306`／`AE0309`（缺少实例／静态成员）。
+  公开签名的 `AE0327` 复用既有直接证据，绑定类型反例另核对 `AE0506`、`AE0507`、`AE0104`。
+- 专项：Semantic、Symbol、Codegen 全套通过；新增 FCTS 21 条，FCTS 全集 1178/1178 通过。
+- 最终全量命令：在 Codex 沙箱外执行 `make test > g22-make-test-delivery.log 2>&1`，退出码 0。
+  本轮从清理重建开始，包含全部最终补充用例；运行前后核对 `src/`、`test/`、`fcts/` 文件摘要一致。
+- UBSan 与常规构建均通过：Archive、Lexer、Parser、Semantic、Runtime、Codegen、Debug、CLI、
+  CLI paths、Symbol，91 项 smoke，CLI direct／project／init，std 604/604、FCTS 1178/1178，
+  以及性能约束检查；未报告 UBSan 错误。
+- 常规阶段的增量构建、发布脚本、安装版本选择、macOS 发布收尾、bundled packages 和 toolchain
+  prebuilt fetch 检查通过。日志位于工程根目录 `g22-make-test-delivery.log`（忽略的本地验收产物）。
+- `git diff --check` 通过；既有断言仅迁移 §26.3.2 的两条，其余既有测试保持原样。没有自动提交。
+
+#### 26.4.4 问题与提交建议
+
+- [G22 问题记录](./feng-language-conformance-coverage-hardening-issues/g22.md) 保存 ISSUE-G22-001～014
+  的发现证据、原因、人工批准范围、修复与验收结果，现已全部关闭。
+- 建议 commit message：`test(language): complete G22 module conformance hardening`
 
 ## 27 G23：spec 适配诊断
 

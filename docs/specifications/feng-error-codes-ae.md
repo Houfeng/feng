@@ -30,6 +30,10 @@
 
 ## 00 通用段
 
+`AE0005` 同时用于模块规范规定的两类别名惰性冲突：别名与同模块其他文件声明同名、别名与
+无别名 import 引入名称同名。诊断位于名称使用 token，包含 alias 目标及冲突声明来源；未引用
+不报错。该说明不改变本文件 alias 急切冲突使用的 `AE0906` 与重复 alias 使用的 `AE0902`。
+
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
 |---|---|---|---|
 | AE0001 | 基础符号与类型存在性 | AE0012 | type '%.*s' is not defined |
@@ -243,7 +247,7 @@
 | AE0904 | 模块别名成员访问语法约束 | AE0169 | module alias '%.*s' must be accessed as '%.*s.name' |
 | AE0902 | import 声明解析约束 | AE0221 | duplicate import alias '%.*s' in the same file |
 | AE0902 | import 声明解析约束 | AE0222 | import target module '%s' was not found in current compilation input |
-| AE0906 | 模块符号唯一性(已废弃,本次优化后不再产生新错误,由 AE0005 在使用处惰性覆盖) | AE0157 | duplicate symbol '%.*s' in module '%.*s' |
+| AE0906 | 本文件 import alias 与顶层声明重名（急切检查，现用） | AE0157（历史用途：模块符号唯一性） | name '%.*s' is already defined in this file, conflicts with import alias from module '%s' |
 | AE0907 | bin 入口唯一性约束 | AE0225 | duplicate 'main' entry: target 'bin' requires exactly one 'main(args: string[])' across all programs |
 | AE0908 | bin 入口存在性约束 | AE0226 | target 'bin' requires a 'main(args: string[])' entry function but none was found |
 | AE0909 | bin 入口参数签名约束 | AE0227 | 'main' entry must have signature 'main(args: string[])' |

@@ -1,0 +1,58 @@
+open module fcts_lib.g22_provider;
+
+/** G22 public contract used through all module-name spellings. */
+open spec G22Readable { func read(): i32; }
+
+/** G22 ordinary public type with private storage and public behavior. */
+open type G22Record: G22Readable {
+  var value: i32;
+  seal var secret: i32 = 17;
+  func read(): i32 { return self.value + self.secret; }
+  static func create(value: i32): G22Record {
+    return G22Record { value: value };
+  }
+}
+
+/** G22 enum identity must survive alias and package-public FT access. */
+open enum G22Mode { First = 4, Second = 9 }
+
+/** Callable shape for public function values. */
+open spec G22Reader(): i32;
+
+/** Public function selected by its declaration source. */
+open func g22Read(): i32 { return 23; }
+
+open let g22Fixed: i32 = 31;
+open var g22State: i32 = 41;
+open let g22BoundReader: G22Reader = g22Read;
+
+/** Generic callable binding exported through real package-public FT. */
+open spec G22Identity<T>(value: T): T;
+
+/** Named array element must not resolve against a consumer homonym. */
+open type G22Payload { open let value: i32 = 29; }
+
+/** Private implementation is callable through its exported binding. */
+func g22Identity(value: i32): i32 { return value; }
+
+open let g22GenericCallback: G22Identity<i32> = g22Identity;
+open let g22InferredCallback = g22GenericCallback;
+open let g22Payloads: G22Payload[] = [G22Payload {}];
+
+/** A public type whose seal construction can only be used by its factory. */
+open type G22FactoryOnly {
+  var value: i32;
+  seal func G22FactoryOnly(value: i32) { self.value = value; }
+  static func create(): G22FactoryOnly { return G22FactoryOnly(43); }
+}
+
+/** Explicit callable target selects the accessible member overload. */
+open spec G22Unary(value: i32): i32;
+
+/** Seal overloads must not hide public instance or static overloads. */
+open type G22Overloaded {
+  seal func select(value: string): i32 { return 1; }
+  func select(value: i32): i32 { return value + 10; }
+  seal static func choose(value: string): i32 { return 2; }
+  static func choose(value: i32): i32 { return value + 20; }
+}

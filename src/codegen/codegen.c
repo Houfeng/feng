@@ -5011,6 +5011,29 @@ static FengSemanticModuleOrigin cg_program_origin(const CG *cg,
     return FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
 }
 
+/* Short names only come from the current module or unaliased imports.
+ * Imported synthetic signatures retain their already-resolved provider
+ * context; alias-qualified lookup uses the broader visibility check below. */
+static bool cg_program_can_use_short_name(const CG *cg,
+                                          const FengProgram *consumer,
+                                          const FengProgram *provider) {
+    if (consumer == NULL || provider == NULL ||
+        cg_module_segments_equal(consumer->module_segments, consumer->module_segment_count,
+                                 provider->module_segments, provider->module_segment_count) ||
+        cg_program_origin(cg, consumer) == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+        return true;
+    }
+    for (size_t index = 0U; index < consumer->use_count; ++index) {
+        const FengUseDecl *use_decl = &consumer->uses[index];
+        if (!use_decl->has_alias &&
+            cg_module_segments_equal(use_decl->segments, use_decl->segment_count,
+                                     provider->module_segments, provider->module_segment_count)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Check a declaration's visibility from an explicit source program. */
 static bool cg_decl_visible_to_program(const CG *cg,
                                        const FengProgram *consumer_program,
@@ -5133,7 +5156,8 @@ static bool cg_named_type_ref_targets_owner_program_from(
     }
 
     if (segment_count == 1U) {
-        return cg_decl_visible_to_program(cg,
+        return cg_program_can_use_short_name(cg, reference_program, owner_program) &&
+               cg_decl_visible_to_program(cg,
                                           reference_program,
                                           owner_program,
                                           visibility);
@@ -6058,11 +6082,8 @@ static const FengDecl *cg_resolve_type_target_enum_decl(const CG *cg, const Feng
 }
 
 static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t len) {
-    /* Prefer a match owned by the program currently being emitted, then any
-     * match visible from it. Falling back to the global list (when nothing
-     * matches under visibility filtering) preserves single-file / legacy
-     * behaviour and keeps cross-program emit-time helpers (e.g. fit-target
-     * resolution before cur_program has been pinned) working. */
+    /* Semantic has rejected ambiguous short names. Recover the corresponding
+     * declaration without treating an alias import as a short-name source. */
     const UserType *visible = NULL;
     for (size_t i = 0; i < cg->user_type_count; i++) {
         const UserType *ut = &cg->user_types[i];
@@ -6072,7 +6093,7 @@ static const UserType *cg_find_user_type(const CG *cg, const char *name, size_t 
             return ut;                 /* own-program wins outright */
         }
         if (!cg->cur_program ||
-            cg_program_can_see(cg, cg->cur_program, ut->owner_program)) {
+            cg_program_can_use_short_name(cg, cg->cur_program, ut->owner_program)) {
             if (!visible) visible = ut;
         }
     }
@@ -6094,7 +6115,7 @@ static const UserSpec *cg_find_user_spec(const CG *cg, const char *name, size_t 
             return us;
         }
         if (!cg->cur_program ||
-            cg_program_can_see(cg, cg->cur_program, us->owner_program)) {
+            cg_program_can_use_short_name(cg, cg->cur_program, us->owner_program)) {
             if (!visible) visible = us;
         }
     }
@@ -6503,6 +6524,13 @@ static bool cg_resolve_callable_return_type(
     return *out_type != NULL;
 }
 
+/* Resolve a source type in its owning file without changing the caller. */
+static bool cg_resolve_type_from_program(CG *cg,
+                                         const FengTypeRef *ref,
+                                         const FengProgram *reference_program,
+                                         const FengToken *fallback,
+                                         CGType **out_type);
+
 static bool cg_resolve_global_binding_type(CG *cg,
                                            const FengDecl *decl,
                                            CGType **out_type) {
@@ -6519,7 +6547,9 @@ static bool cg_resolve_global_binding_type(CG *cg,
 
     binding = &decl->as.binding;
     if (binding->type != NULL) {
-        return cg_resolve_type(cg, binding->type, &decl->token, out_type);
+        return cg_resolve_type_from_program(cg, binding->type,
+                                             cg_find_decl_owner_program(cg, decl),
+                                             &decl->token, out_type);
     }
 
     if (cg->analysis != NULL) {
@@ -6546,7 +6576,9 @@ static bool cg_resolve_global_binding_type(CG *cg,
                                binding->name.data);
 
             case FENG_SEMANTIC_TYPE_FACT_TYPE_REF:
-                return cg_resolve_type(cg, fact->type_ref, &decl->token, out_type);
+                return cg_resolve_type_from_program(cg, fact->type_ref,
+                                                     cg_find_decl_owner_program(cg, decl),
+                                                     &decl->token, out_type);
 
             case FENG_SEMANTIC_TYPE_FACT_DECL:
                 if (fact->type_decl == NULL) {
@@ -9464,6 +9496,7 @@ static FengTypeRef *cg_type_ref_clone(const FengTypeRef *ref) {
     if (!clone) return NULL;
     clone->token = ref->token;
     clone->kind = ref->kind;
+    clone->resolution_program = ref->resolution_program;
     clone->array_element_writable = ref->array_element_writable;
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED:
@@ -12348,6 +12381,14 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
 
 static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fallback,
                             CGType **out_type) {
+    /* Closed types copied across files retain the declaration's namespace.
+     * Re-enter once in that namespace; recursive element/argument resolution
+     * can independently restore a substituted node's own provenance. */
+    if (ref != NULL && ref->resolution_program != NULL &&
+        ref->resolution_program != cg->cur_program) {
+        return cg_resolve_type_from_program(cg, ref, ref->resolution_program,
+                                             fallback, out_type);
+    }
     *out_type = NULL;
     if (!ref) {
         *out_type = cgtype_new(CG_TYPE_VOID);
@@ -18739,6 +18780,43 @@ static const ModuleBinding *cg_find_module_binding_by_binding(const CG *cg,
     return NULL;
 }
 
+/* A qualified name may denote a binding emitted in this compilation, not
+ * just an imported package. Select the existing storage by declaration
+ * identity; only imported declarations use the package-public ABI names. */
+static bool cg_binding_access_surface_names(CG *cg,
+                                             const FengDecl *decl,
+                                             char **out_slot_name,
+                                             char **out_ensure_init_name) {
+    const ModuleBinding *binding =
+        cg_find_module_binding_by_binding(cg, &decl->as.binding);
+
+    *out_slot_name = NULL;
+    *out_ensure_init_name = NULL;
+    if (binding != NULL) {
+        *out_slot_name = strdup(binding->c_name);
+        *out_ensure_init_name = strdup(binding->c_ensure_init_name);
+        if (*out_slot_name != NULL && *out_ensure_init_name != NULL) {
+            return true;
+        }
+        free(*out_slot_name);
+        free(*out_ensure_init_name);
+        *out_slot_name = NULL;
+        *out_ensure_init_name = NULL;
+    } else {
+        const FengProgram *owner = cg_find_decl_owner_program(cg, decl);
+
+        if (owner == NULL ||
+            cg_program_origin(cg, owner) != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+            return cg_fail(cg, decl->token, "IE0002",
+                           "codegen: local module binding storage was not registered");
+        }
+        if (cg_binding_public_surface_names(cg, decl, out_slot_name, out_ensure_init_name)) {
+            return true;
+        }
+    }
+    return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+}
+
 static char *cg_module_binding_slot_expr_dup(const ModuleBinding *mb) {
     return mb != NULL && mb->c_name != NULL ? strdup(mb->c_name) : NULL;
 }
@@ -19709,8 +19787,8 @@ static bool cg_emit_imported_binding_expr(CG *cg,
         decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return false;
     }
-    if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
-        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+    if (!cg_binding_access_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
+        return false;
     }
     if (!cg_resolve_global_binding_type(cg, decl, &out->type)) {
         free(slot_name);
@@ -19746,8 +19824,8 @@ static bool cg_emit_imported_binding_assign(CG *cg,
             (int)decl->as.binding.name.length,
             decl->as.binding.name.data);
     }
-    if (!cg_binding_public_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
-        return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+    if (!cg_binding_access_surface_names(cg, decl, &slot_name, &ensure_init_name)) {
+        return false;
     }
     if (!cg_resolve_global_binding_type(cg, decl, &binding_type)) {
         free(slot_name);
@@ -28591,9 +28669,131 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
     return out->c_expr != NULL && out->type != NULL;
 }
 
+/* Emit any constructor by its resolved declaration identity. Qualified names
+ * are compile-time paths and must never be evaluated as method receivers. */
+static bool cg_emit_resolved_constructor_call(CG *cg, const FengExpr *e, ExprResult *out) {
+    const FengResolvedCallable *rc = &e->as.call.resolved_callable;
+    if (rc->owner_type_decl == NULL || rc->owner_type_decl->kind != FENG_DECL_TYPE) {
+        return cg_fail(cg, e->token, "IE0001", "codegen: constructor has no resolved owner type");
+    }
+    const FengSlice name = rc->owner_type_decl->as.type_decl.name;
+    const UserType *ut = NULL;
+    const UserMethod *ctor = NULL;
+    char *obj_name = NULL;
+    char *obj_init = NULL;
+
+    if (rc->owner_type_decl != NULL &&
+        rc->owner_type_decl->kind == FENG_DECL_TYPE &&
+        rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
+        ut = cg_find_generic_instance_user_type_with_active_context(
+            cg,
+            rc->owner_type_decl,
+            e->as.call.explicit_type_args,
+            e->as.call.explicit_type_arg_count);
+        if (ut == NULL) {
+            return cg_fail(cg, e->token,
+                "CE0167", "codegen: generic type constructor instance for '%.*s' was not registered",
+                (int)name.length, name.data);
+        }
+    } else {
+        ut = cg_find_user_type_by_decl(cg, rc->owner_type_decl);
+        if (ut == NULL) {
+            return cg_fail(cg, e->token,
+                "CE0168", "codegen: unknown type '%.*s' in constructor call",
+                (int)name.length, name.data);
+        }
+    }
+
+    if (rc->member != NULL) {
+        ctor = cg_user_type_constructor_by_member(ut, rc->member);
+        if (ctor == NULL) {
+            return cg_fail(cg, e->token,
+                "CE0169", "codegen: resolved constructor for type '%s' was not registered",
+                ut->feng_name);
+        }
+    }
+
+    /* @value type: stack-allocate, member-init, constructor-invoke. */
+    if (cg_user_type_is_value(ut)) {
+        return cg_emit_value_type_construction(cg, ut, ctor,
+                                               e->as.call.args,
+                                               e->as.call.arg_count,
+                                               e->token, out);
+    }
+
+    obj_name = cg_fresh_temp(cg, "_obj");
+
+    /* 共享体内创建依赖泛型的托管对象时，直接用具体描述符
+     * （reified_type_deps[i]）分配，避免先用擦除描述符分配
+     * 再覆写 desc 的脆弱模式。 */
+    {
+        const char *desc_expr = NULL;
+        if (cg->generic_type_method_rtd_count > 0U &&
+            ut->is_generic_instance && ut->generic_origin_decl != NULL) {
+            for (size_t ri = 0; ri < cg->generic_type_method_rtd_count; ri++) {
+                if (cg->generic_type_method_rtd_descs[ri] != NULL &&
+                    strcmp(ut->c_desc_name,
+                           cg->generic_type_method_rtd_descs[ri]) == 0) {
+                    const char *src = cg->generic_type_method_rtd_via_desc
+                                          ? "_desc" : "_td";
+                    buf_append_fmt(cg->cur_body,
+                        "    struct %s *%s = (struct %s *)feng_object_new("
+                        "%s->reified_type_deps[%zu]);\n",
+                        ut->c_struct_name, obj_name,
+                        ut->c_struct_name, src, ri);
+                    desc_expr = src;
+                    break;
+                }
+            }
+        }
+        if (desc_expr == NULL) {
+            obj_init = cg_user_type_raw_object_new_expr(ut);
+            if (obj_init == NULL) {
+                free(obj_name);
+                return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+            }
+            buf_append_fmt(cg->cur_body,
+                           "    struct %s *%s = %s;\n",
+                           ut->c_struct_name, obj_name, obj_init);
+            free(obj_init);
+        }
+    }
+
+    if (!cg_emit_construction_member_initializers(
+            cg, ut, ctor, obj_name, e->token)) {
+        free(obj_name);
+        return false;
+    }
+
+    if (!cg_emit_constructor_invoke(cg,
+                                    e->as.call.args,
+                                    e->as.call.arg_count,
+                                    ut,
+                                    ctor,
+                                    obj_name,
+                                    NULL,
+                                    e->token)) {
+        free(obj_name);
+        return false;
+    }
+
+    out->c_expr = obj_name;
+    out->type = cgtype_new(CG_TYPE_OBJECT);
+    if (!out->c_expr || !out->type) {
+        free(obj_name);
+        return false;
+    }
+    out->type->user = (UserType *)ut;
+    out->owns_ref = true;
+    return true;
+}
+
 static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     const FengResolvedCallable *rc = &e->as.call.resolved_callable;
+    if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR) {
+        return cg_emit_resolved_constructor_call(cg, e, out);
+    }
     /* Method call: callee is a member access. */
     if (e->as.call.callee->kind == FENG_EXPR_MEMBER) {
         const FengExpr *ma = e->as.call.callee;
@@ -30029,118 +30229,6 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                                    callee.type->user_spec, out);
             }
         }
-    }
-
-    if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR) {
-        const UserType *ut = NULL;
-        const UserMethod *ctor = NULL;
-        char *obj_name = NULL;
-        char *obj_init = NULL;
-
-        if (rc->owner_type_decl != NULL &&
-            rc->owner_type_decl->kind == FENG_DECL_TYPE &&
-            rc->owner_type_decl->as.type_decl.type_param_count > 0U) {
-            ut = cg_find_generic_instance_user_type_with_active_context(
-                cg,
-                rc->owner_type_decl,
-                e->as.call.explicit_type_args,
-                e->as.call.explicit_type_arg_count);
-            if (ut == NULL) {
-                return cg_fail(cg, e->token,
-                    "CE0167", "codegen: generic type constructor instance for '%.*s' was not registered",
-                    (int)name.length, name.data);
-            }
-        } else {
-            ut = cg_find_user_type(cg, name.data, name.length);
-            if (ut == NULL) {
-                return cg_fail(cg, e->token,
-                    "CE0168", "codegen: unknown type '%.*s' in constructor call",
-                    (int)name.length, name.data);
-            }
-        }
-
-        if (rc->member != NULL) {
-            ctor = cg_user_type_constructor_by_member(ut, rc->member);
-            if (ctor == NULL) {
-                return cg_fail(cg, e->token,
-                    "CE0169", "codegen: resolved constructor for type '%s' was not registered",
-                    ut->feng_name);
-            }
-        }
-
-        /* @value type: stack-allocate, member-init, constructor-invoke. */
-        if (cg_user_type_is_value(ut)) {
-            return cg_emit_value_type_construction(cg, ut, ctor,
-                                                   e->as.call.args,
-                                                   e->as.call.arg_count,
-                                                   e->token, out);
-        }
-
-        obj_name = cg_fresh_temp(cg, "_obj");
-
-        /* 共享体内创建依赖泛型的托管对象时，直接用具体描述符
-         * （reified_type_deps[i]）分配，避免先用擦除描述符分配
-         * 再覆写 desc 的脆弱模式。 */
-        {
-            const char *desc_expr = NULL;
-            if (cg->generic_type_method_rtd_count > 0U &&
-                ut->is_generic_instance && ut->generic_origin_decl != NULL) {
-                for (size_t ri = 0; ri < cg->generic_type_method_rtd_count; ri++) {
-                    if (cg->generic_type_method_rtd_descs[ri] != NULL &&
-                        strcmp(ut->c_desc_name,
-                               cg->generic_type_method_rtd_descs[ri]) == 0) {
-                        const char *src = cg->generic_type_method_rtd_via_desc
-                                              ? "_desc" : "_td";
-                        buf_append_fmt(cg->cur_body,
-                            "    struct %s *%s = (struct %s *)feng_object_new("
-                            "%s->reified_type_deps[%zu]);\n",
-                            ut->c_struct_name, obj_name,
-                            ut->c_struct_name, src, ri);
-                        desc_expr = src;
-                        break;
-                    }
-                }
-            }
-            if (desc_expr == NULL) {
-                obj_init = cg_user_type_raw_object_new_expr(ut);
-                if (obj_init == NULL) {
-                    free(obj_name);
-                    return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-                }
-                buf_append_fmt(cg->cur_body,
-                               "    struct %s *%s = %s;\n",
-                               ut->c_struct_name, obj_name, obj_init);
-                free(obj_init);
-            }
-        }
-
-        if (!cg_emit_construction_member_initializers(
-                cg, ut, ctor, obj_name, e->token)) {
-            free(obj_name);
-            return false;
-        }
-
-        if (!cg_emit_constructor_invoke(cg,
-                                        e->as.call.args,
-                                        e->as.call.arg_count,
-                                        ut,
-                                        ctor,
-                                        obj_name,
-                                        NULL,
-                                        e->token)) {
-            free(obj_name);
-            return false;
-        }
-
-        out->c_expr = obj_name;
-        out->type = cgtype_new(CG_TYPE_OBJECT);
-        if (!out->c_expr || !out->type) {
-            free(obj_name);
-            return false;
-        }
-        out->type->user = (UserType *)ut;
-        out->owns_ref = true;
-        return true;
     }
 
     const ExternFn *ext = NULL;

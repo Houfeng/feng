@@ -1,0 +1,10 @@
+open module fcts_bin.g22_binding_types;
+
+/** A closed callable argument must retain the module that declared it. */
+open spec G22Identity<T>(value: T): T;
+
+/** Payload used as both an array element and a generic callable argument. */
+open type G22Payload { open let value: i32 = 17; }
+
+/** Non-generic callable with a named return type in this declaring module. */
+open spec G22Producer(): G22Payload;

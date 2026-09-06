@@ -42,6 +42,7 @@ typedef struct FengExpr FengExpr;
 typedef struct FengStmt FengStmt;
 typedef struct FengBlock FengBlock;
 typedef struct FengDecl FengDecl;
+typedef struct FengProgram FengProgram;
 typedef struct FengTypeMember FengTypeMember;
 typedef struct FengTypeMixinDecl FengTypeMixinDecl;
 
@@ -116,6 +117,10 @@ typedef struct FengTypeParam {
 struct FengTypeRef {
     FengToken token;
     FengTypeRefKind kind;
+    /* Compiler-only name provenance for a type copied out of a declaration
+     * scope. NULL uses the current resolver scope. Copies and substitutions
+     * retain each node's source program; no source syntax or ABI is added. */
+    const FengProgram *resolution_program;
     /* Per docs/specifications/feng-builtin-type.md §5: a writable element layer is marked
      * with `[!]` on the corresponding array layer. Only meaningful when kind ==
      * FENG_TYPE_REF_ARRAY; ignored otherwise. */

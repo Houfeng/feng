@@ -1,0 +1,21 @@
+open module fcts_bin.g22_collisions;
+
+import fcts_lib.g22_collision;
+import fcts_lib.g22_second_collision;
+import fcts_lib.g22_collision as left;
+import fcts_lib.g22_second_collision as right;
+
+/** Own declarations have no precedence over imports, but unused names are legal. */
+open type G22ImportedType: fcts_bin.g22_collisions.G22ImportedSpec { var marker: i32 = 5; }
+open enum G22ImportedEnum { Only }
+open spec G22ImportedSpec { var marker: i32; }
+open func g22ImportedFunction(): i32 { return 11; }
+open let g22ImportedLet: i32 = 13;
+open var g22ImportedVar: i32 = 17;
+
+/** Aliases and full paths choose exact sources despite three-way collisions. */
+open func g22OrdinaryCollisionValue(): i32 {
+  return left.g22ImportedVar + right.g22ImportedVar +
+    fcts_bin.g22_collisions.g22ImportedVar +
+    fcts_lib.g22_collision.g22ImportedFunction() + g22OrdinarySiblingValue();
+}

@@ -1,0 +1,12 @@
+open module fcts_lib.g22_second_collision;
+
+/** Second public source for six unused ordinary-import collisions. */
+open type G22ImportedType {}
+open enum G22ImportedEnum { Only }
+open spec G22ImportedSpec {}
+open func g22ImportedFunction(): i32 { return 31; }
+open let g22ImportedLet: i32 = 32;
+open var g22ImportedVar: i32 = 33;
+
+/** This public name cannot collide in a file that does not import this module. */
+open let api: i32 = 103;

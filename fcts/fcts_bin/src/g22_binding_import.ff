@@ -1,0 +1,8 @@
+open module fcts_bin.g22_binding_import;
+
+import fcts_bin.g22_binding_types;
+
+/** Concrete implementation of an ordinarily imported callable type. */
+func identity(value: i32): i32 { return value; }
+
+open let echo: G22Identity<i32> = identity;

@@ -8762,9 +8762,13 @@ static void test_import_alias_conflicts_with_other_file_local_value(void) {
     ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_other_file_main.f") == 0);
-    ASSERT(errors[0].token.line == 2U);
-    ASSERT(strcmp(errors[0].code, "AE0906") == 0);
-    ASSERT(strstr(errors[0].message, "current module") != NULL);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(errors[0].token.column == 12U);
+    ASSERT(errors[0].token.length == 6U);
+    ASSERT(memcmp(errors[0].token.lexeme, "helper", 6U) == 0);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "demo.base") != NULL);
+    ASSERT(strstr(errors[0].message, "alias_other_file_sibling.f") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(base_program);
@@ -8801,9 +8805,13 @@ static void test_import_alias_conflicts_with_imported_short_name(void) {
     ASSERT(!feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
     ASSERT(strcmp(errors[0].path, "alias_imported_name_main.f") == 0);
-    ASSERT(errors[0].token.line == 3U);
-    ASSERT(strcmp(errors[0].code, "AE0906") == 0);
-    ASSERT(strstr(errors[0].message, "imported name already visible") != NULL);
+    ASSERT(errors[0].token.line == 5U);
+    ASSERT(errors[0].token.column == 12U);
+    ASSERT(errors[0].token.length == 6U);
+    ASSERT(memcmp(errors[0].token.lexeme, "helper", 6U) == 0);
+    ASSERT(strcmp(errors[0].code, "AE0005") == 0);
+    ASSERT(strstr(errors[0].message, "demo.a") != NULL);
+    ASSERT(strstr(errors[0].message, "demo.b") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
@@ -35261,7 +35269,11 @@ static void test_g21_imported_array_new_default_zero_semantics(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* G22 module diagnostics are kept in their own test translation unit. */
+void test_g22_module_diagnostics(void);
+
 int main(void) {
+    test_g22_module_diagnostics();
     test_g21_array_leaf_type_diagnostics();
     test_g21_array_new_length_semantics();
     test_g21_nested_empty_array_literal_semantics();

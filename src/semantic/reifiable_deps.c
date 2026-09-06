@@ -1164,6 +1164,7 @@ static FengTypeRef *rd_clone_type_ref_substituting(
     }
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
+    clone->resolution_program = type_ref->resolution_program;
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:

@@ -5481,9 +5481,287 @@ static void test_g19_enum_i32_boundaries_ft_roundtrip(void) {
     free(tmp_dir);
 }
 
+/* Analyze a consumer using only real package-public FT declarations. A local
+ * sibling optionally contributes a conflicting declaration, never provider
+ * source. Rejected programs must have one source-located semantic error. */
+static void g22_check_ft_consumer(const FengSemanticImportedModuleQuery *query,
+                                  const char *source, const char *sibling,
+                                  const char *code, const char *marker,
+                                  const char *lexeme) {
+    FengProgram *program = parse_or_die("g22_ft_consumer.ff", source);
+    FengProgram *other = sibling != NULL ? parse_or_die("g22_ft_sibling.ff", sibling) : NULL;
+    const FengProgram *programs[] = {program, other};
+    FengSemanticAnalyzeOptions options = {0};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool result;
+
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.pointer_size = feng_get_host_pointer_size();
+    options.imported_modules = query;
+    result = feng_semantic_analyze_with_options(programs, other != NULL ? 2U : 1U,
+                                               &options, &analysis, &errors, &error_count);
+    if (result != (code == NULL) || error_count != (code == NULL ? 0U : 1U) ||
+        (code != NULL && error_count == 1U && strcmp(errors[0].code, code) != 0)) {
+        fprintf(stderr, "G22 FT expected %s\n%s\n", code != NULL ? code : "success", source);
+        for (size_t index = 0U; index < error_count; ++index)
+            fprintf(stderr, "%s:%u:%u %s %s\n", errors[index].path, errors[index].token.line,
+                    errors[index].token.column, errors[index].code, errors[index].message);
+    }
+    ASSERT(result == (code == NULL));
+    ASSERT(error_count == (code == NULL ? 0U : 1U));
+    if (code != NULL) {
+        const char *at = strstr(source, marker);
+        unsigned line = 1U, column = 1U;
+        ASSERT(at != NULL);
+        for (const char *cursor = source; cursor < at; ++cursor) {
+            if (*cursor == '\n') { ++line; column = 1U; } else { ++column; }
+        }
+        ASSERT(strcmp(errors[0].code, code) == 0);
+        ASSERT(strcmp(errors[0].path, "g22_ft_consumer.ff") == 0);
+        ASSERT(errors[0].token.line == line && errors[0].token.column == column);
+        ASSERT(errors[0].token.length == strlen(lexeme));
+        ASSERT(memcmp(errors[0].token.lexeme, lexeme, strlen(lexeme)) == 0);
+        if (strcmp(code, "AE0005") == 0) ASSERT(strstr(errors[0].message, "g22.ft_api") != NULL);
+    }
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    feng_program_free(other);
+}
+
+/* MODULE03/21/22/26: provider privacy is checked after a real public export,
+ * not by making the private producer source visible to the consumer. */
+static void g22_check_ft_visibility(const FengSemanticImportedModuleQuery *query) {
+    static const char *names[] = {"HiddenType", "HiddenEnum", "HiddenSpec", "hiddenFunc", "hiddenLet", "hiddenVar"};
+    for (size_t visibility = 0U; visibility < 3U; ++visibility) {
+        for (size_t kind = 0U; kind < 6U; ++kind) {
+            for (size_t access = 0U; access < 3U; ++access) {
+                char source[1024], import[128] = "", prefix[128] = "", use[512], marker[256];
+                if (access < 2U) snprintf(import, sizeof(import), "import g22.ft_visibility%zu%s;\n",
+                                          visibility, access ? " as api" : "");
+                if (access == 1U) snprintf(prefix, sizeof(prefix), "api.");
+                if (access == 2U) snprintf(prefix, sizeof(prefix), "g22.ft_visibility%zu.", visibility);
+                if (kind < 3U) snprintf(use, sizeof(use), "func check(value: %s%s) {}\n", prefix, names[kind]);
+                else snprintf(use, sizeof(use), "func check() { let value = %s%s%s; }\n",
+                              prefix, names[kind], kind == 3U ? "()" : "");
+                snprintf(source, sizeof(source), "module consumer;\n%s%s", import, use);
+                snprintf(marker, sizeof(marker), "%s%s", kind < 3U ? prefix : "", names[kind]);
+                const char *lexeme = kind < 3U && access == 1U ? "api" :
+                                     kind < 3U && access == 2U ? "g22" : names[kind];
+                const char *code = kind < 3U ? "AE1013" : access == 0U ? "AE0001" : "AE0903";
+                g22_check_ft_consumer(query, source, NULL, visibility == 2U ? NULL : code, marker, lexeme);
+            }
+        }
+    }
+    for (size_t visibility = 0U; visibility < 3U; ++visibility) {
+        for (size_t access = 0U; access < 3U; ++access) {
+            char source[512];
+            if (access < 2U) {
+                snprintf(source, sizeof(source), "module consumer;\nimport g22.ft_scope%zu%s;\n",
+                         visibility, access ? " as api" : "");
+            } else {
+                snprintf(source, sizeof(source), "module consumer;\nfunc check(value: g22.ft_scope%zu.Exposed) {}\n", visibility);
+            }
+            g22_check_ft_consumer(query, source, NULL, visibility == 2U ? NULL : access < 2U ? "AE0902" : "AE1013",
+                                  "g22.ft_scope", "g22");
+        }
+    }
+    {
+        static const char *uses[][4] = {
+            {"let x = value.field;", "AE0308", "field;", "field"},
+            {"value.field = 1;", "AE0308", "field =", "field"},
+            {"let x = Vault { field: 1 };", "AE1007", "field: 1", "field"},
+            {"let x = Vault.shared;", "AE0305", "shared;", "shared"},
+            {"Vault.shared = 1;", "AE0305", "shared =", "shared"},
+            /* Ordinary seal methods are filtered from the public FT; fields
+             * above remain for representation and still enforce privacy. */
+            {"value.read();", "AE0306", "read()", "read"},
+            {"let x: Reader = value.read;", "AE0306", "read;", "read"},
+            {"Vault.readShared();", "AE0309", "readShared()", "readShared"},
+            {"let x: Reader = Vault.readShared;", "AE0309", "readShared;", "readShared"}
+        };
+        for (size_t visibility = 0U; visibility < 3U; ++visibility) {
+            for (size_t use = 0U; use < sizeof(uses)/sizeof(*uses); ++use) {
+                char source[512];
+                snprintf(source, sizeof(source), "module consumer;\nimport g22.ft_members%zu;\n"
+                         "spec Reader(): i32;\nfunc check(value: Vault) { %s }\n", visibility, uses[use][0]);
+                g22_check_ft_consumer(query, source, NULL, visibility == 1U ? uses[use][1] : NULL,
+                                      uses[use][2], uses[use][3]);
+            }
+        }
+    }
+}
+
+/* MODULE03/07/08/09/12/16/26/27: export, discard the producer AST, read FT
+ * through the production provider, then resolve both legal and illegal uses. */
+static void test_g22_real_ft_module_diagnostics(void) {
+    static const char *declarations[] = {
+        "type helper {}", "enum helper { Only }", "spec helper {}",
+        "func helper(): i32 { return 1; }", "let helper = 1;", "var helper = 1;"
+    };
+    static const char *uses[] = {
+        "func check() {}\n",
+        "func check(value: helper.Record) {}\n",
+        "func check() { helper.load(); }\n",
+        "func check() { helper.state = 2; }\n",
+        "func check() { let value = helper.Mode.One; }\n",
+        "func check(value: helper.Readable) {}\n"
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g22_ft_provider.ff",
+        "open module g22.ft_api;\n"
+        "open spec Readable { var value: i32; }\n"
+        "open type Record: Readable { var value: i32; seal var secret: i32; }\n"
+        "open enum Mode { One, Two }\n"
+        "open func load(): i32 { return 3; }\n"
+        "open let fixed: i32 = 4;\n"
+        "open var state: i32 = 5;\n"
+        "open spec Counter(): i32;\n"
+        "open spec Reader<T>(value: T): T;\n"
+        "open let callback: Counter = load;\n"
+        "func identity(value: i32): i32 { return value; }\n"
+        "open let echo: Reader<i32> = identity;\n"
+        "open let inferred = echo;\n"
+        "open let entries: Record[] = [Record {}];\n"
+        "type Hidden {}\n"
+        "func hidden(): i32 { return 8; }\n", public_root);
+    for (size_t kind = 0U; kind < 6U; ++kind) {
+        char source[512];
+        snprintf(source, sizeof(source), "open module g22.ft_other%zu;\nopen %s\n", kind, declarations[kind]);
+        export_public_source_or_die("g22_ft_collision.ff", source, public_root);
+    }
+    export_public_source_or_die("g22_ft_short_isolation.ff",
+        "open module g22.ft_unaliased;\nopen type Record {}\nlet helper = 1;\n", public_root);
+    for (size_t visibility = 0U; visibility < 3U; ++visibility) {
+        char source[2048];
+        const char *modifier = visibility == 0U ? "" : visibility == 1U ? "seal " : "open ";
+        snprintf(source, sizeof(source),
+                 "open module g22.ft_visibility%zu;\n"
+                 "%stype HiddenType {}\n%senum HiddenEnum { Only }\n%sspec HiddenSpec {}\n"
+                 "%sfunc hiddenFunc(): i32 { return 1; }\n%slet hiddenLet = 2;\n%svar hiddenVar = 3;\n",
+                 visibility, modifier, modifier, modifier, modifier, modifier, modifier);
+        export_public_source_or_die("g22_ft_visibility.ff", source, public_root);
+        snprintf(source, sizeof(source), "%smodule g22.ft_scope%zu;\nopen type Exposed {}\n",
+                 modifier, visibility);
+        export_public_source_or_die("g22_ft_scope.ff", source, public_root);
+        snprintf(source, sizeof(source),
+                 "open module g22.ft_members%zu;\nopen type Vault {\n"
+                 "%svar field: i32;\n%sstatic var shared: i32;\n"
+                 "%sfunc read(): i32 { return self.field; }\n"
+                 "%sstatic func readShared(): i32 { return Vault.shared; }\n"
+                 "func owner(): i32 { return self.read() + Vault.readShared(); }\n}\n",
+                 visibility, modifier, modifier, modifier, modifier);
+        export_public_source_or_die("g22_ft_members.ff", source, public_root);
+    }
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider, public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC, &error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    /* Keep a module view across cache growth, as real query consumers may. */
+    FengSlice g22_segments[] = {slice_from_cstr("g22"), slice_from_cstr("ft_api")};
+    const FengSemanticModule *g22_first = query.get_module(query.user, g22_segments, 2U);
+    ASSERT(g22_first != NULL);
+    for (size_t kind = 0U; kind < 6U; ++kind) {
+        for (size_t imported = 0U; imported < 2U; ++imported) {
+            for (size_t use = 0U; use < sizeof(uses)/sizeof(*uses); ++use) {
+                char source[1024], sibling[512], import[128] = "";
+                if (imported) snprintf(import, sizeof(import), "import g22.ft_other%zu;\n", kind);
+                snprintf(source, sizeof(source), "module g22.consumer;\nimport g22.ft_api as helper;\n%s%s",
+                         import, uses[use]);
+                snprintf(sibling, sizeof(sibling), "module g22.consumer;\n%s\n", declarations[kind]);
+                g22_check_ft_consumer(&query, source, imported ? NULL : sibling,
+                                      use == 0U ? NULL : "AE0005", "helper.", "helper");
+            }
+        }
+    }
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api;\nimport g22.ft_unaliased as second;\n"
+        "func check(a: Record, b: second.Record) { let x = load() + fixed; state = x; }\n",
+        NULL, NULL, NULL, NULL);
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_unaliased;\nimport g22.ft_api as helper;\n"
+        "func check() { helper.load(); }\n", NULL, NULL, NULL, NULL);
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nfunc check(a: g22.ft_api.Record) { g22.ft_api.state = g22.ft_api.load(); }\n",
+        NULL, NULL, NULL, NULL);
+    /* A real imported module must not make a sibling's alias file-global. */
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nfunc check() { helper.load(); }\n",
+        "module g22.consumer;\nimport g22.ft_api as helper;\n",
+        "AE0001", "helper.load", "helper");
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nfunc check(value: helper.Record) {}\n",
+        "module g22.consumer;\nimport g22.ft_api as helper;\n",
+        "AE1013", "helper.Record", "helper");
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api as helper;\nfunc check(value: Record) {}\n",
+        NULL, "AE1013", "Record", "Record");
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api as helper;\n"
+        "func check(value: helper.Record) { helper.load(); }\n",
+        "module g22.consumer;\nimport g22.ft_unaliased as helper;\n"
+        "func other(value: helper.Record) {}\n",
+        NULL, NULL, NULL);
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api as api;\nfunc check(x: api.Hidden) {}\n",
+        NULL, "AE1013", "api.Hidden", "api");
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api as api;\nfunc check() { api.hidden(); }\n",
+        NULL, "AE0903", "hidden()", "hidden");
+    g22_check_ft_consumer(&query,
+        "module g22.consumer;\nimport g22.ft_api as api;\nfunc check(value: api.Record) { let x = value.secret; }\n",
+        NULL, "AE0308", "secret;", "secret");
+    g22_check_ft_visibility(&query);
+    /* Source bodies are absent here; imported binding types must retain
+     * their provider identity despite consumer homonyms in every spelling. */
+    for (size_t form = 0U; form < 3U; ++form) {
+        const char *import = form == 0U ? "import g22.ft_api as api;\n" :
+                             form == 1U ? "" : "import g22.ft_api;\n";
+        const char *prefix = form == 0U ? "api." : form == 1U ? "g22.ft_api." : "";
+        const char *uses[][4] = {
+            {"let result: i32 = %scallback();", NULL, NULL, NULL},
+            {"let result: i32 = %secho(5);", NULL, NULL, NULL},
+            {"let result: i32 = %sinferred(7);", NULL, NULL, NULL},
+            {"let result: i32 = %sentries[0].value;", NULL, NULL, NULL},
+            {"%scallback(1);", "AE0506", "callback(1)", "callback"},
+            {"%secho(\"bad\");", "AE0506", "echo(\"bad\")", "echo"},
+            {"%sfixed();", "AE0507", "fixed()", "fixed"},
+            {"%sfixed = 2;", "AE0104", "fixed =", "fixed"}
+        };
+        for (size_t use = 0U; use < sizeof(uses) / sizeof(uses[0]); ++use) {
+            char body[512], source[1024];
+            snprintf(body, sizeof(body), uses[use][0], prefix);
+            snprintf(source, sizeof(source),
+                     "module g22.consumer;\n%stype Counter {}\ntype Reader<T> {}\n"
+                     "type Record {}\nfunc check() { %s }\n", import, body);
+            g22_check_ft_consumer(&query, source, NULL, uses[use][1], uses[use][2], uses[use][3]);
+        }
+    }
+    ASSERT(query.get_module(query.user, g22_segments, 2U) == g22_first);
+    ASSERT(g22_first->program_count == 1U && g22_first->programs[0] != NULL);
+    ASSERT(g22_first->programs[0]->declaration_count > 0U);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g22_real_ft_module_diagnostics();
 
     test_roundtrip_public_module();
     test_union_spec_ft_roundtrip_preserves_normalized_members();

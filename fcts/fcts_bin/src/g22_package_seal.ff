@@ -1,0 +1,4 @@
+seal module fcts_bin.g22_package_seal;
+
+/** Explicit-seal modules have the same package visibility as default-seal modules. */
+open func g22PackageValue(): i32 { return 109; }

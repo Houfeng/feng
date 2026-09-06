@@ -1,0 +1,147 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.g22_provider as api;
+import fcts_lib.g22_provider as second;
+import fcts_lib.g22_provider as G22LocalType;
+import fcts_lib.g22_provider as G22LocalEnum;
+import fcts_lib.g22_provider as G22LocalSpec;
+import fcts_lib.g22_provider as g22LocalFunction;
+import fcts_lib.g22_provider as g22LocalLet;
+import fcts_lib.g22_provider as g22LocalVar;
+import fcts_lib.g22_collision;
+import fcts_lib.g22_provider as G22ImportedType;
+import fcts_lib.g22_provider as G22ImportedEnum;
+import fcts_lib.g22_provider as G22ImportedSpec;
+import fcts_lib.g22_provider as g22ImportedFunction;
+import fcts_lib.g22_provider as g22ImportedLet;
+import fcts_lib.g22_provider as g22ImportedVar;
+import fcts_bin.g22_package_default as packageDefault;
+import fcts_bin.g22_package_seal as packageSeal;
+import fcts_bin.g22_storage as localState;
+import fcts_bin.g22_storage as localAgain;
+
+/** Unrelated consumer types intentionally share provider type spellings. */
+type G22Identity<T> {}
+
+/** An array's provider element type must not become this empty type. */
+type G22Payload {}
+
+/** G22 behavior across real package-public FT and separate consumer files. */
+open func test_g22_module_semantics() {
+  describe("G22 module names and visibility", () {
+    test("MODULE08 unused sibling-declaration collisions remain legal", () {
+      assert(g22SiblingValue() == 187, "sibling declarations retain their identity");
+      assert(g22PrivateSiblingAccess() == 258, "six private declaration kinds remain usable in sibling files");
+    });
+    test("MODULE09 unused imported-declaration collisions remain legal", () {
+      assert(api.g22Read() == 23, "an unrelated alias is usable alongside six collisions");
+    });
+    test("MODULE12 alias-only import does not contribute short names", () {
+      assert(g22ShortRecordValue() == 124, "short name and alias select different types");
+      assert(fcts_lib.g22_second_collision.api == 103, "unimported public api is not an alias candidate");
+      assert(api.g22Read() == 23, "private api from ordinary import is not an alias candidate");
+    });
+    test("MODULE07 short names preserve all public declaration categories", () {
+      assert(g22ShortBehavior() == 82, "short spec, function value, enum and binding");
+    });
+    test("MODULE07 alias constructs a type and calls a method", () {
+      let value: api.G22Record = api.G22Record { value: 5 };
+      assert(value.read() == 22, "private storage remains available within its owner");
+    });
+    test("MODULE07 alias enum and spec identities", () {
+      let value: api.G22Readable = api.G22Record.create(7);
+      assert(value.read() + (i32)api.G22Mode.Second == 33, "same contract and enum");
+    });
+    test("MODULE07 alias function value", () {
+      let callback: api.G22Reader = api.g22Read;
+      assert(callback() == 23, "public function value remains callable");
+    });
+    test("MODULE16 full paths select the requested source", () {
+      assert(g22FullPathBehavior() == 78, "full paths without provider import");
+      assert(fcts_lib.g22_provider.G22Record().read() == 17, "full-path ordinary constructor");
+    });
+    test("MODULE18 identical alias spellings in separate files are independent", () {
+      assert(g22OtherFileAliasValue() == 53, "other file api names the collision provider");
+      assert(api.G22Record().value == 0, "this file api names the ordinary provider");
+    });
+    test("MODULE18 two aliases share one module binding", () {
+      api.g22State = 89;
+      assert(second.g22State == 89, "second alias shares state");
+      g22ShortWrite(97);
+      assert(api.g22State == 97, "short write reaches alias");
+      assert(fcts_lib.g22_provider.g22State == 97, "full path shares the same state");
+    });
+    test("MODULE17 local let and parameter roots shadow module paths", () {
+      assert(g22LocalRoots() == 158, "lexical local member chain");
+    });
+    test("MODULE17 local var roots shadow module paths", () {
+      assert(g22MutableRoot() == 83, "mutable lexical local member chain");
+      assert(g22AliasEscape() == 38, "an unshadowed alias still reaches the module");
+    });
+    test("MODULE23 public factory can call seal constructor across package boundary", () {
+      assert(api.G22FactoryOnly.create().value == 43, "factory retains owner permission");
+    });
+    test("MODULE24 accessible instance and static overloads form method values", () {
+      let value = api.G22Overloaded();
+      let bound: api.G22Unary = value.select;
+      let direct: api.G22Unary = api.G22Overloaded.choose;
+      assert(bound(3) == 13, "instance method value selects open overload");
+      assert(direct(4) == 24, "static method value selects open overload");
+      assert(value.select(5) == 15, "instance direct call selects open overload");
+      assert(api.G22Overloaded.choose(6) == 26, "static direct call selects open overload");
+    });
+    test("MODULE04 MODULE13 MODULE16 six unused import and own-name collisions", () {
+      assert(fcts_bin.g22_collisions.g22OrdinaryCollisionValue() == 100,
+             "two imported sources and own declarations are selected explicitly");
+    });
+    test("MODULE14 MODULE16 six unused import and sibling-name collisions", () {
+      assert(fcts_bin.g22_collisions.g22SiblingCollisionValue() == 17,
+             "qualified calls select external and current-module declarations");
+    });
+    test("MODULE21 default and explicit seal modules are package-visible", () {
+      assert(packageDefault.g22PackageValue() == 107, "default seal module");
+      assert(packageSeal.g22PackageValue() == 109, "explicit seal module");
+    });
+    test("MODULE16 local bin binding aliases and paths reuse registered storage", () {
+      assert(localState.initializationCalls() == 0, "no eager initialization");
+      assert(fcts_bin.g22_storage.state == 113, "full-path first read");
+      localAgain.state = 131;
+      fcts_bin.g22_storage.state += 6;
+      assert(localState.readState() == 137, "short-name read observes qualified writes");
+      assert(&localState.state == &fcts_bin.g22_storage.state, "both paths take the same address");
+      assert(localState.callback() == 137, "alias callable binding");
+      assert(fcts_bin.g22_storage.callback() == 137, "full-path callable binding");
+      assert(localState.fixed == 127, "alias immutable binding");
+      assert(fcts_bin.g22_storage.fixed == 127, "full-path immutable binding");
+      assert(localState.initializationCalls() == 1, "initializer runs exactly once");
+    });
+    test("MODULE16 imported lib bindings retain the public storage interface", () {
+      api.g22State = 139;
+      fcts_lib.g22_provider.g22State += 10;
+      assert(second.g22State == 149, "qualified writes share imported storage");
+      assert(&api.g22State == &fcts_lib.g22_provider.g22State, "imported storage address identity");
+      assert(api.g22BoundReader() == 23, "alias imported callable binding");
+      assert(fcts_lib.g22_provider.g22BoundReader() == 23, "full-path imported callable binding");
+    });
+    test("MODULE07 binding types retain declaration-file imports and generic arguments", () {
+      assert(localState.echo(11) == 11, "alias-imported callable type in the provider");
+      assert(localState.inferred(13) == 13, "inferred binding retains the same callable type");
+      assert(localState.itemEcho(localState.items[0]).value == 17,
+             "named generic argument and array element retain their provider identity");
+      assert(localState.maker().value == 17, "callable named return type belongs to its declaration file");
+      assert(fcts_bin.g22_binding_import.echo(19) == 19, "ordinary-imported callable type in the provider");
+    });
+    test("MODULE26 exported binding types ignore consumer homonyms", () {
+      assert(api.g22GenericCallback(23) == 23, "generic callable binding through FT");
+      assert(api.g22InferredCallback(31) == 31, "inferred generic callable binding through FT");
+      assert(api.g22Payloads[0].value == 29, "named array element through FT");
+      assert(fcts_lib.g22_forwarded.g22ForwardedCallback(37) == 37,
+             "forwarded inferred callable retains its original type through FT");
+      assert(fcts_lib.g22_forwarded.g22ForwardedPayloads[0].value == 29,
+             "forwarded inferred array retains its original element type through FT");
+      assert(fcts_lib.g22_forwarded.g22ForwardedRecord.read() == 17,
+             "alias-only type homonym does not replace the ordinary import during export");
+    });
+  });
+}

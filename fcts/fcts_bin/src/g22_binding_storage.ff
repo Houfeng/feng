@@ -1,0 +1,38 @@
+open module fcts_bin.g22_storage;
+
+import fcts_bin.g22_binding_types as definitions;
+
+/** Callable binding used to verify qualified-call storage selection. */
+open spec G22SlotReader(): i32;
+
+var initializationCount: i32;
+
+/** Side effect proves both aliases and full paths initialize one shared slot. */
+func initializeState(): i32 {
+  initializationCount += 1;
+  return 113;
+}
+
+open let fixed: i32 = 127;
+open var state: i32 = initializeState();
+open let callback: G22SlotReader = readState;
+open let echo: definitions.G22Identity<i32> = identity;
+open let inferred = echo;
+open let items: definitions.G22Payload[] = [definitions.G22Payload {}];
+open let itemEcho: definitions.G22Identity<definitions.G22Payload> = keepPayload;
+open let maker: definitions.G22Producer = makePayload;
+
+/** Implement the alias-imported scalar callable shape. */
+func identity(value: i32): i32 { return value; }
+
+/** Preserve the named argument's declaration identity through substitution. */
+func keepPayload(value: definitions.G22Payload): definitions.G22Payload { return value; }
+
+/** Construct the type named by the imported callable's return signature. */
+func makePayload(): definitions.G22Payload { return definitions.G22Payload {}; }
+
+/** Short-name reads must reach the same storage as qualified accesses. */
+open func readState(): i32 { return state; }
+
+/** Observe initializer execution independently of the tested state binding. */
+open func initializationCalls(): i32 { return initializationCount; }

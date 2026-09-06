@@ -1,0 +1,15 @@
+open module fcts_lib.g22_collision;
+
+/** Names deliberately collide with aliases in one consumer file only. */
+open type G22ImportedType {}
+open enum G22ImportedEnum { Only }
+open spec G22ImportedSpec { func read(): i32; }
+open func g22ImportedFunction(): i32 { return 1; }
+open let g22ImportedLet: i32 = 2;
+open var g22ImportedVar: i32 = 3;
+
+/** A private name does not conflict with a consumer's explicit alias. */
+seal let api: i32 = 99;
+
+/** Same short name as the other provider, but aliased access stays distinct. */
+open type G22Record { var value: i32 = 53; }

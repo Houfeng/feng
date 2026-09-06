@@ -1,0 +1,4 @@
+module fcts_bin.g22_package_default;
+
+/** Public declarations in a default-seal module remain usable within the package. */
+open func g22PackageValue(): i32 { return 107; }

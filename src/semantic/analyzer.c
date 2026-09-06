@@ -2469,6 +2469,27 @@ static const FengSemanticModule *find_decl_provider_module(const FengSemanticAna
     return NULL;
 }
 
+/* Locate the lexical file environment of an already selected declaration. */
+static const FengProgram *find_decl_provider_program(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *decl) {
+    const FengSemanticModule *module = find_decl_provider_module(analysis, decl);
+
+    if (module == NULL) {
+        return NULL;
+    }
+    for (size_t index = 0U; index < module->program_count; ++index) {
+        const FengProgram *program = module->programs[index];
+
+        for (size_t item = 0U; item < program->declaration_count; ++item) {
+            if (program->declarations[item] == decl) {
+                return program;
+            }
+        }
+    }
+    return NULL;
+}
+
 /* Find a visible type entry matching (name, category, arity).
  * Used for same-category conflict detection and import deduplication.
  * NO_OVERLOADING category has no arity dimension (always 0). */
@@ -2799,6 +2820,29 @@ static bool symbol_decl_matches_lookup(const FengDecl *decl, SymbolLookupKind ki
     }
 }
 
+/* Only an unaliased import introduces a module's public short names. The
+ * broader imported-module list also carries aliased contract dependencies. */
+static bool program_imports_short_names_from(const FengProgram *program,
+                                             const FengSemanticModule *module) {
+    for (size_t index = 0U; index < program->use_count; ++index) {
+        const FengUseDecl *use_decl = &program->uses[index];
+        size_t segment;
+
+        if (use_decl->has_alias || use_decl->segment_count != module->segment_count) {
+            continue;
+        }
+        for (segment = 0U; segment < module->segment_count; ++segment) {
+            if (!slice_equals(use_decl->segments[segment], module->segments[segment])) {
+                break;
+            }
+        }
+        if (segment == module->segment_count) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* 收集当前文件作用域中名为 name 的所有候选符号,不分类别。
  * 独立遍历模块结构,不依赖 visible_types / visible_values(因为
  * import_public_names 跳过了与已有候选同名的 import 版本)。
@@ -2842,6 +2886,9 @@ static size_t collect_symbol_candidates(const ResolveContext *context,
     /* 2. 当前文件 import 的所有模块所有 program 的 declarations(仅 public)。 */
     for (import_index = 0U; import_index < context->imported_module_count; ++import_index) {
         const FengSemanticModule *target = context->imported_modules[import_index].target_module;
+        if (!program_imports_short_names_from(context->program, target)) {
+            continue;
+        }
         for (program_index = 0U; program_index < target->program_count; ++program_index) {
             const FengProgram *prog = target->programs[program_index];
             for (decl_index = 0U; decl_index < prog->declaration_count; ++decl_index) {
@@ -4303,6 +4350,7 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
 
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
+    clone->resolution_program = type_ref->resolution_program;
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             clone->as.named.segment_count = type_ref->as.named.segment_count;
@@ -4354,7 +4402,12 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
     return NULL;
 }
 
+/* Attach lexical provenance without overwriting a substituted node's source. */
+static void bind_type_ref_resolution_program(FengTypeRef *type_ref,
+                                             const FengProgram *program);
+
 static FengTypeRef *clone_type_ref_substituting_type_params(
+    const FengProgram *type_arg_program,
     const FengTypeRef *type_ref,
     const FengTypeParam *type_params,
     size_t type_param_count,
@@ -4373,7 +4426,10 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
              ++param_index) {
             if (slice_equals(type_ref->as.named.segments[0],
                              type_params[param_index].name)) {
-                return clone_type_ref_for_inference(type_args[param_index]);
+                FengTypeRef *argument = clone_type_ref_for_inference(type_args[param_index]);
+
+                bind_type_ref_resolution_program(argument, type_arg_program);
+                return argument;
             }
         }
     }
@@ -4384,6 +4440,7 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
     }
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
+    clone->resolution_program = type_ref->resolution_program;
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
@@ -4413,6 +4470,7 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
                      ++arg_index) {
                     clone->as.named.type_args[arg_index] =
                         clone_type_ref_substituting_type_params(
+                            type_arg_program,
                             type_ref->as.named.type_args[arg_index],
                             type_params,
                             type_param_count,
@@ -4429,6 +4487,7 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
         case FENG_TYPE_REF_ARRAY:
             clone->array_element_writable = type_ref->array_element_writable;
             clone->as.inner = clone_type_ref_substituting_type_params(
+                type_arg_program,
                 type_ref->as.inner,
                 type_params,
                 type_param_count,
@@ -4461,6 +4520,21 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
         return member_type_ref;
     }
 
+    /* The signature belongs to the selected declaration, not the file using
+     * its instance. This also applies while checking a binding initializer's
+     * annotated callable target, before a binding type fact exists. */
+    if (member_type_ref != NULL && member_type_ref->resolution_program == NULL) {
+        FengTypeRef *scoped = clone_type_ref_for_inference(member_type_ref);
+
+        if (scoped != NULL && analysis_track_synthetic_type_ref(context->analysis, scoped)) {
+            bind_type_ref_resolution_program(scoped,
+                                              find_decl_provider_program(context->analysis, owner_type_decl));
+            member_type_ref = scoped;
+        } else {
+            free_synthetic_type_ref(scoped);
+        }
+    }
+
     if (owner_type_decl->kind == FENG_DECL_TYPE) {
         owner_type_params = owner_type_decl->as.type_decl.type_params;
         owner_type_param_count = owner_type_decl->as.type_decl.type_param_count;
@@ -4474,15 +4548,28 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
         return member_type_ref;
     }
 
-    substituted = clone_type_ref_substituting_type_params(
-        member_type_ref,
-        owner_type_params,
-        owner_type_param_count,
-        owner_type.type_ref->as.named.type_args);
+    {
+        /* Arguments are written in the owner instance's use-site scope.
+         * Bind that scope before substitution so an unqualified argument
+         * cannot inherit the member declaration's unrelated namespace. */
+        FengTypeRef *scoped_owner = clone_type_ref_for_inference(owner_type.type_ref);
+
+        if (scoped_owner == NULL) {
+            return member_type_ref;
+        }
+        bind_type_ref_resolution_program(scoped_owner, context->program);
+        substituted = clone_type_ref_substituting_type_params(
+            context->program,
+            member_type_ref, owner_type_params, owner_type_param_count,
+            scoped_owner->as.named.type_args);
+        free_synthetic_type_ref(scoped_owner);
+    }
     if (substituted == NULL) {
         return member_type_ref;
     }
-    if (!resolver_track_synthetic_type_ref(context, substituted)) {
+    /* Member projections can be borrowed by analysis sidecars, so they must
+     * outlive the per-file resolver and remain valid through Codegen. */
+    if (!analysis_track_synthetic_type_ref(context->analysis, substituted)) {
         free_synthetic_type_ref(substituted);
         return member_type_ref;
     }
@@ -4506,6 +4593,7 @@ static const FengTypeRef *substitute_type_ref_for_explicit_callable_args(
     }
 
     substituted = clone_type_ref_substituting_type_params(
+        context->program,
         type_ref,
         callable->type_params,
         callable->type_param_count,
@@ -4571,6 +4659,7 @@ static const FengTypeRef *instantiate_parent_spec_ref_for_instance(
             spec_type_ref->as.named.type_arg_count == spec_decl->as.spec_decl.type_param_count &&
             spec_decl->as.spec_decl.type_param_count > 0U) {
             substituted = clone_type_ref_substituting_type_params(
+                context->program,
                 parent_ref,
                 spec_decl->as.spec_decl.type_params,
                 spec_decl->as.spec_decl.type_param_count,
@@ -4697,6 +4786,7 @@ static bool find_object_spec_upcast_path_recursive(
                 continue;
             }
             parent_ref = clone_type_ref_substituting_type_params(
+                context->program,
                 declared_parent_ref,
                 source_decl->as.spec_decl.type_params,
                 source_decl->as.spec_decl.type_param_count,
@@ -5155,7 +5245,7 @@ static const FengTypeRef *substitute_type_ref_for_fit_instance(
     }
 
     type_args[0] = (FengTypeRef *)owner_type.type_ref->as.inner;
-    substituted = clone_type_ref_substituting_type_params(member_type_ref,
+    substituted = clone_type_ref_substituting_type_params(context->program, member_type_ref,
                                                           &fit_local_type_param,
                                                           1U,
                                                           type_args);
@@ -5209,6 +5299,7 @@ static const FengTypeRef *instantiate_callable_constraint_for_owner_instance(
         return constraint;
     }
     substituted = clone_type_ref_substituting_type_params(
+        context->program,
         constraint,
         callable->type_params,
         callable->type_param_count,
@@ -5284,6 +5375,7 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
         call_expr->as.call.resolved_callable.callable_type_arg_count ==
             callable->type_param_count) {
         substituted = clone_type_ref_substituting_type_params(
+            context->program,
             return_type_ref,
             callable->type_params,
             callable->type_param_count,
@@ -5327,7 +5419,7 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
         }
     }
 
-    substituted = clone_type_ref_substituting_type_params(return_type_ref,
+    substituted = clone_type_ref_substituting_type_params(context->program, return_type_ref,
                                                           callable->type_params,
                                                           callable->type_param_count,
                                                           type_args);
@@ -5352,6 +5444,84 @@ cleanup:
     return return_type_ref;
 }
 
+/* Validate an alias at its actual use, before type/member/signature lookup can
+ * select a candidate. A declaration and an alias are distinct sources even
+ * when both ultimately belong to the same module. */
+static bool validate_alias_name_reference(ResolveContext *context,
+                                         FengToken token,
+                                         FengSlice name) {
+    const AliasEntry *alias = find_alias(context->aliases, context->alias_count, name);
+    SymbolCandidate inline_candidates[SYMBOL_CANDIDATE_INLINE_CAPACITY];
+    SymbolCandidate *candidates = inline_candidates;
+    size_t count;
+    char *alias_module;
+    char *message;
+
+    if (alias == NULL) {
+        return true;
+    }
+    count = collect_symbol_candidates(context, name, inline_candidates,
+                                      SYMBOL_CANDIDATE_INLINE_CAPACITY);
+    if (count == 0U) {
+        return true;
+    }
+    if (count > SYMBOL_CANDIDATE_INLINE_CAPACITY) {
+        candidates = calloc(count, sizeof(*candidates));
+        if (candidates == NULL) {
+            return false;
+        }
+        collect_symbol_candidates(context, name, candidates, count);
+    }
+    /* Several semantic passes may visit a type annotation. Deduplicate within
+     * its source file, never suppress an equal line/column in a sibling file. */
+    for (size_t index = 0U; index < *context->error_count; ++index) {
+        const FengSemanticError *error = &(*context->errors)[index];
+        if (error->token.line == token.line && error->token.column == token.column &&
+            strcmp(error->path, context->program->path) == 0 &&
+            strcmp(error->code, "AE0005") == 0) {
+            if (candidates != inline_candidates) free(candidates);
+            return false;
+        }
+    }
+    alias_module = format_module_name(alias->target_module->segments,
+                                      alias->target_module->segment_count);
+    message = format_message("'%.*s' is ambiguous: import alias for module '%s' in '%s' conflicts with",
+                             (int)name.length, name.data,
+                             alias_module != NULL ? alias_module : "<unknown>",
+                             context->program->path);
+    free(alias_module);
+    for (size_t index = 0U; message != NULL && index < count; ++index) {
+        const SymbolCandidate *candidate = &candidates[index];
+        bool duplicate = false;
+        char *module_name;
+        char *next;
+
+        for (size_t prior = 0U; prior < index; ++prior) {
+            if (candidates[prior].provider_program == candidate->provider_program) {
+                duplicate = true;
+                break;
+            }
+        }
+        if (duplicate) continue;
+        module_name = format_module_name(candidate->provider_module->segments,
+                                         candidate->provider_module->segment_count);
+        next = format_message("%s declaration from module '%s' in '%s';",
+                              message, module_name != NULL ? module_name : "<unknown>",
+                              candidate->provider_program->path);
+        free(module_name);
+        free(message);
+        message = next;
+    }
+    if (candidates != inline_candidates) free(candidates);
+    if (message == NULL) {
+        return false;
+    }
+    resolver_append_error(context, token, "AE0005", message);
+    return false;
+}
+
+/* Lexical locals retain ordinary member access; all other alias collisions
+ * are rejected by validate_alias_name_reference before resolving their use. */
 static const AliasEntry *find_unshadowed_alias(const ResolveContext *context, FengSlice alias_name) {
     if (resolver_has_local_name(context, alias_name) ||
         find_visible_value(context->visible_values, context->visible_value_count, alias_name) != NULL ||
@@ -5697,6 +5867,13 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
     return false;
 }
 
+/* Resolve closed declaration types without importing their short names into
+ * the consumer's lexical environment. Implemented with the shared file type
+ * environment builders below. */
+static const FengDecl *resolve_type_ref_decl_in_program(
+    const ResolveContext *context,
+    const FengTypeRef *type_ref);
+
 static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
                                              const FengTypeRef *type_ref) {
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED) {
@@ -5705,6 +5882,10 @@ static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
     if (type_ref->as.named.segment_count == 1U &&
         is_builtin_type_name(type_ref->as.named.segments[0])) {
         return NULL;
+    }
+    if (type_ref->resolution_program != NULL &&
+        type_ref->resolution_program != context->program) {
+        return resolve_type_ref_decl_in_program(context, type_ref);
     }
 
     return find_named_type_decl(
@@ -18547,6 +18728,7 @@ static bool validate_explicit_prepacked_variadic_argument(
     }
 
     substituted_type = clone_type_ref_substituting_type_params(
+        context->program,
         expected_type,
         callable->type_params,
         callable->type_param_count,
@@ -21167,21 +21349,57 @@ static InferredExprType resolved_type_target_owner_type(const ResolvedTypeTarget
     return inferred_expr_type_from_decl(target->type_decl);
 }
 
+/* Fill missing provenance on a closed type copy. Substituted nodes may
+ * already belong to another program and must retain that independent scope. */
+static void bind_type_ref_resolution_program(FengTypeRef *type_ref,
+                                             const FengProgram *program) {
+    if (type_ref == NULL) {
+        return;
+    }
+    if (type_ref->resolution_program == NULL) {
+        type_ref->resolution_program = program;
+    }
+    if (type_ref->kind == FENG_TYPE_REF_NAMED) {
+        for (size_t index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+            bind_type_ref_resolution_program(type_ref->as.named.type_args[index],
+                                              type_ref->resolution_program);
+        }
+    } else {
+        bind_type_ref_resolution_program(type_ref->as.inner,
+                                          type_ref->resolution_program);
+    }
+}
+
 /* Returns the semantic type of one module-level binding, including inferred
  * initializer facts recorded for bindings without an explicit type. */
 static InferredExprType infer_global_binding_decl_type(ResolveContext *context,
                                                        const FengDecl *binding_decl) {
+    InferredExprType result = inferred_expr_type_unknown();
+
     if (binding_decl == NULL || binding_decl->kind != FENG_DECL_GLOBAL_BINDING) {
         return inferred_expr_type_unknown();
     }
     if (binding_decl->as.binding.type != NULL) {
-        return inferred_expr_type_from_type_ref(binding_decl->as.binding.type);
-    }
-    if (context != NULL && context->analysis != NULL) {
-        return inferred_expr_type_from_type_fact(
+        result = inferred_expr_type_from_type_ref(binding_decl->as.binding.type);
+    } else if (context != NULL && context->analysis != NULL) {
+        result = inferred_expr_type_from_type_fact(
             feng_semantic_lookup_type_fact(context->analysis, &binding_decl->as.binding));
     }
-    return inferred_expr_type_unknown();
+    if (result.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
+        result.type_ref != NULL && result.type_ref->resolution_program == NULL) {
+        const FengProgram *program = find_decl_provider_program(context->analysis, binding_decl);
+        FengTypeRef *copy = clone_type_ref_for_inference(result.type_ref);
+
+        /* Resolved-call and member sidecars may borrow this closed type after
+         * the current file resolver is released. */
+        if (copy == NULL || !analysis_track_synthetic_type_ref(context->analysis, copy)) {
+            free_synthetic_type_ref(copy);
+            return inferred_expr_type_unknown();
+        }
+        bind_type_ref_resolution_program(copy, program);
+        result.type_ref = copy;
+    }
+    return result;
 }
 
 static InferredExprType infer_identifier_expr_type(ResolveContext *context, FengSlice name) {
@@ -24214,6 +24432,7 @@ static void materialize_intersection_constraint_member_witnesses(
             continue;
         }
         substituted_member_ref = clone_type_ref_substituting_type_params(
+            context->program,
             member_ref, type_params, type_param_count, type_args);
         if (substituted_member_ref == NULL) {
             continue;
@@ -24415,6 +24634,7 @@ static void materialize_named_type_param_constraint_witnesses(
 
         if (instantiated_constraint != NULL && type_param_count > 0U) {
             FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                context->program,
                 instantiated_constraint,
                 type_params,
                 type_param_count,
@@ -24664,6 +24884,10 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
                    receiver_type.type_decl != NULL &&
                    receiver_type.type_decl->kind == FENG_DECL_TYPE) {
             const FengDecl *receiver_decl = receiver_type.type_decl;
+            const FengSemanticModule *receiver_module =
+                find_decl_provider_module(context->analysis, receiver_decl);
+            size_t module_segment_count = receiver_module != NULL
+                                              ? receiver_module->segment_count : 0U;
             size_t type_param_count =
                 receiver_decl->as.type_decl.type_param_count;
 
@@ -24673,7 +24897,7 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
                 synthetic_receiver_type_ref->token = expr->token;
                 synthetic_receiver_type_ref->kind = FENG_TYPE_REF_NAMED;
                 synthetic_receiver_type_ref->as.named.segments =
-                    (FengSlice *)malloc(sizeof(FengSlice));
+                    (FengSlice *)malloc((module_segment_count + 1U) * sizeof(FengSlice));
                 synthetic_receiver_type_ref->as.named.type_args =
                     type_param_count > 0U
                         ? (FengTypeRef **)calloc(
@@ -24685,9 +24909,16 @@ static void record_callable_spec_coercion_site(ResolveContext *context,
                      synthetic_receiver_type_ref->as.named.type_args != NULL)) {
                     bool complete = true;
 
-                    synthetic_receiver_type_ref->as.named.segments[0] =
+                    /* This metadata outlives source lookup. Preserve owner
+                     * identity even when only an alias makes it accessible. */
+                    if (module_segment_count > 0U) {
+                        memcpy(synthetic_receiver_type_ref->as.named.segments,
+                               receiver_module->segments,
+                               module_segment_count * sizeof(FengSlice));
+                    }
+                    synthetic_receiver_type_ref->as.named.segments[module_segment_count] =
                         receiver_decl->as.type_decl.name;
-                    synthetic_receiver_type_ref->as.named.segment_count = 1U;
+                    synthetic_receiver_type_ref->as.named.segment_count = module_segment_count + 1U;
                     synthetic_receiver_type_ref->as.named.type_arg_count =
                         type_param_count;
                     for (size_t index = 0U;
@@ -29448,8 +29679,8 @@ static bool build_friend_query_visible_types(
     return true;
 }
 
-/* Build the imported-module facts used by qualified type resolution in the
- * read-only @friend tooling query. */
+/* Build the imported-module facts for read-only file type queries, including
+ * @friend tooling and closed binding types consumed from another file. */
 static bool build_friend_query_imported_modules(
     const FengSemanticAnalysis *analysis,
     const FengProgram *program,
@@ -29485,6 +29716,50 @@ static bool build_friend_query_imported_modules(
     *out_entries = entries;
     *out_count = count;
     return true;
+}
+
+/* Reconstruct only a closed type's declaring file namespace. Executable
+ * scopes and consumer type parameters cannot participate in this lookup. */
+static const FengDecl *resolve_type_ref_decl_in_program(
+    const ResolveContext *context,
+    const FengTypeRef *type_ref) {
+    const FengProgram *program = type_ref->resolution_program;
+    const FengSemanticModule *module = find_program_provider_module(context->analysis, program);
+    VisibleTypeEntry *visible_types = NULL;
+    size_t visible_type_count = 0U;
+    AliasEntry *aliases = NULL;
+    size_t alias_count = 0U;
+    size_t alias_capacity = 0U;
+    ImportedModuleEntry *imported_modules = NULL;
+    size_t imported_module_count = 0U;
+    ResolveContext source = {0};
+    const FengDecl *decl = NULL;
+
+    if (module != NULL &&
+        build_friend_query_visible_types(context->analysis, module, program,
+                                          &visible_types, &visible_type_count) &&
+        build_program_aliases(context->analysis, program, &aliases,
+                               &alias_count, &alias_capacity) &&
+        build_friend_query_imported_modules(context->analysis, program,
+                                             &imported_modules, &imported_module_count)) {
+        source.analysis = context->analysis;
+        source.module = module;
+        source.program = program;
+        source.pointer_size = context->pointer_size;
+        source.visible_types = visible_types;
+        source.visible_type_count = visible_type_count;
+        source.aliases = aliases;
+        source.alias_count = alias_count;
+        source.imported_modules = imported_modules;
+        source.imported_module_count = imported_module_count;
+        decl = find_named_type_decl(&source, type_ref->as.named.segments,
+                                     type_ref->as.named.segment_count,
+                                     type_ref->as.named.type_arg_count);
+    }
+    free(visible_types);
+    free(aliases);
+    free(imported_modules);
+    return decl;
 }
 
 /* Release scratch type references created while projecting generic parent
@@ -29644,12 +29919,9 @@ bool feng_semantic_member_has_friend_access(
     return accessible;
 }
 
-static bool validate_program_alias_conflicts(const FengSemanticModule *current_module,
-                                             const FengProgram *program,
-                                             const VisibleTypeEntry *visible_types,
-                                             size_t visible_type_count,
-                                             const VisibleValueEntry *visible_values,
-                                             size_t visible_value_count,
+/* An alias is declared by this file, so only this file's own declarations
+ * conflict eagerly. Other visible declarations are checked at each use. */
+static bool validate_program_alias_conflicts(const FengProgram *program,
                                              FengSemanticError **errors,
                                              size_t *error_count,
                                              size_t *error_capacity) {
@@ -29657,13 +29929,7 @@ static bool validate_program_alias_conflicts(const FengSemanticModule *current_m
 
     for (use_index = 0U; use_index < program->use_count; ++use_index) {
         const FengUseDecl *use_decl = &program->uses[use_index];
-        const VisibleValueEntry *value_entry = NULL;
-        const VisibleTypeEntry *type_entry = NULL;
         const FengDecl *conflict_decl = NULL;
-        const FengProgram *conflict_program = NULL;
-        const FengSemanticModule *conflict_module = NULL;
-        const char *path = program->path;
-        FengToken token;
         char *module_name;
         char *message;
 
@@ -29671,52 +29937,29 @@ static bool validate_program_alias_conflicts(const FengSemanticModule *current_m
             continue;
         }
 
-        value_entry = find_visible_value(visible_values, visible_value_count, use_decl->alias);
-        if (value_entry != NULL) {
-            conflict_decl = value_entry->decl;
-            conflict_program = value_entry->provider_program;
-            conflict_module = value_entry->provider_module;
-        } else {
-            type_entry = find_visible_type_any_arity(visible_types, visible_type_count, use_decl->alias);
-            if (type_entry == NULL) {
-                continue;
+        for (size_t index = 0U; index < program->declaration_count; ++index) {
+            FengSlice name;
+            const FengDecl *decl = program->declarations[index];
+            if (symbol_decl_name(decl, &name) && slice_equals(name, use_decl->alias)) {
+                conflict_decl = decl;
+                break;
             }
-            conflict_decl = type_entry->decl;
-            conflict_program = type_entry->provider_program;
-            conflict_module = type_entry->provider_module;
         }
-
+        if (conflict_decl == NULL) {
+            continue;
+        }
         module_name = format_module_name(use_decl->segments, use_decl->segment_count);
-        if (conflict_module == current_module && conflict_program == program && conflict_decl != NULL) {
-            path = conflict_program->path;
-            token = *decl_token(conflict_decl);
-            message = format_message(
-                "name '%.*s' is already defined in this file, conflicts with import alias from module '%s'",
-                (int)use_decl->alias.length,
-                use_decl->alias.data,
-                module_name != NULL ? module_name : "<unknown>");
-        } else if (conflict_module == current_module) {
-            token = use_decl->token;
-            message = format_message(
-                "import alias '%.*s' from module '%s' conflicts with a name already defined in the current module",
-                (int)use_decl->alias.length,
-                use_decl->alias.data,
-                module_name != NULL ? module_name : "<unknown>");
-        } else {
-            token = use_decl->token;
-            message = format_message(
-                "import alias '%.*s' from module '%s' conflicts with an imported name already visible in this file",
-                (int)use_decl->alias.length,
-                use_decl->alias.data,
-                module_name != NULL ? module_name : "<unknown>");
-        }
+        message = format_message(
+            "name '%.*s' is already defined in this file, conflicts with import alias from module '%s'",
+            (int)use_decl->alias.length, use_decl->alias.data,
+            module_name != NULL ? module_name : "<unknown>");
         free(module_name);
 
         if (!append_error(errors,
                           error_count,
                           error_capacity,
-                          path,
-                          token,
+                          program->path,
+                          *decl_token(conflict_decl),
                           "AE0906",
                           message)) {
             return false;
@@ -29764,6 +30007,9 @@ static bool resolve_named_type_ref(ResolveContext *context,
 
     /* G4-7: Type arguments present — resolve each arg and validate arity.
      * §6.4: Precise (name, arity) lookup; fallback distinguishes AE1013/1014/1015. */
+    if (!validate_alias_name_reference(context, type_ref->token, segments[0])) {
+        return false;
+    }
     if (type_arg_count > 0U) {
         const FengDecl *base_decl;
         size_t i;
@@ -30236,6 +30482,20 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         return true;
     }
 
+    /* Check the root before module/static-member shortcuts can bypass normal
+     * identifier resolution. Calls and constructors recursively resolve here. */
+    {
+        const FengExpr *root = expr;
+        while (root != NULL && root->kind == FENG_EXPR_MEMBER) {
+            root = root->as.member.object;
+        }
+        if (root != NULL && root->kind == FENG_EXPR_IDENTIFIER &&
+            !resolver_has_local_name(context, root->as.identifier) &&
+            !validate_alias_name_reference(context, root->token, root->as.identifier)) {
+            return false;
+        }
+    }
+
     switch (expr->kind) {
         case FENG_EXPR_IDENTIFIER:
             {
@@ -30474,12 +30734,21 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         }
 
         case FENG_EXPR_CALL:
-            if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
-                return false;
+            {
+                size_t errors_before = *context->error_count;
+                if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
+                    return false;
+                }
+                /* An inaccessible or invalid callee has no callable signature
+                 * to match; preserve its diagnostic without a secondary one. */
+                if (*context->error_count > errors_before) {
+                    return true;
+                }
             }
             {
                 const FengTypeRef *previous_expected =
                     context->current_expr_expected_type_ref;
+                size_t errors_before = *context->error_count;
                 bool args_ok = true;
 
                 /* A call's outer target describes its return value, not its
@@ -30500,6 +30769,11 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 context->current_expr_expected_type_ref = previous_expected;
                 if (!args_ok) {
                     return false;
+                }
+                /* Invalid arguments cannot participate in overload matching.
+                 * Keep their source errors without a derived call mismatch. */
+                if (*context->error_count > errors_before) {
+                    return true;
                 }
             }
             /* G4-13a: Resolve explicit type args (callee<T1, T2>(...) syntax). */
@@ -31555,6 +31829,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                     iter_type_ref->as.named.type_arg_count ==
                                         iter_decl->as.type_decl.type_param_count) {
                                     FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                        context->program,
                                         cursor_type_ref,
                                         iter_decl->as.type_decl.type_params,
                                         iter_decl->as.type_decl.type_param_count,
@@ -31580,6 +31855,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                         cursor_type_ref->as.named.type_arg_count ==
                                             cursor_decl->as.type_decl.type_param_count) {
                                         FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                            context->program,
                                             result_type_ref,
                                             cursor_decl->as.type_decl.type_params,
                                             cursor_decl->as.type_decl.type_param_count,
@@ -31606,6 +31882,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                             result_type_ref->as.named.type_arg_count ==
                                                 ret_tuple_decl->as.type_decl.type_param_count) {
                                             FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                                context->program,
                                                 elem_ref,
                                                 ret_tuple_decl->as.type_decl.type_params,
                                                 ret_tuple_decl->as.type_decl.type_param_count,
@@ -31658,6 +31935,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                     iter_type_ref->as.named.type_arg_count ==
                                         iter_decl->as.type_decl.type_param_count) {
                                     FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                        context->program,
                                         result_type_ref,
                                         iter_decl->as.type_decl.type_params,
                                         iter_decl->as.type_decl.type_param_count,
@@ -31684,6 +31962,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                                         result_type_ref->as.named.type_arg_count ==
                                             ret_tuple_decl->as.type_decl.type_param_count) {
                                         FengTypeRef *subst = clone_type_ref_substituting_type_params(
+                                            context->program,
                                             elem_ref,
                                             ret_tuple_decl->as.type_decl.type_params,
                                             ret_tuple_decl->as.type_decl.type_param_count,
@@ -33063,6 +33342,7 @@ static FengTypeRef *instantiate_spec_relation_template(
         if (source->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
             source->kind == FENG_SPEC_RELATION_SOURCE_FIT_PARENT) {
             closed_fit_target = clone_type_ref_substituting_type_params(
+                ctx->program,
                 source->via_fit_decl->as.fit_decl.target,
                 type_params,
                 type_param_count,
@@ -33085,7 +33365,7 @@ static FengTypeRef *instantiate_spec_relation_template(
         return NULL;
     }
 
-    return clone_type_ref_substituting_type_params(template_ref,
+    return clone_type_ref_substituting_type_params(ctx->program, template_ref,
                                                    type_params,
                                                    type_param_count,
                                                    type_args);
@@ -37229,6 +37509,7 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   size_t visible_value_count,
                                   const FunctionOverloadSetEntry *function_sets,
                                   size_t function_set_count,
+                                  bool infer_binding_types_only,
                                   CallableReturnCache *callable_return_cache,
                                   CallableExceptionEscapeCache *callable_exception_escape_cache,
                                   FengSemanticError **errors,
@@ -37309,14 +37590,28 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.imported_module_count = imported_module_count;
 
     for (decl_index = 0U; decl_index < program->declaration_count && ok; ++decl_index) {
-        ok = resolve_declaration(&context, program->declarations[decl_index]);
+        const FengDecl *decl = program->declarations[decl_index];
+
+        if (infer_binding_types_only) {
+            /* Publish available inferred binding types before consumer bodies
+             * are checked. The ordinary pass still validates every initializer
+             * and declaration; this pass neither evaluates nor accepts them. */
+            if (decl->kind == FENG_DECL_GLOBAL_BINDING && decl->as.binding.type == NULL &&
+                decl->as.binding.initializer != NULL &&
+                feng_semantic_lookup_type_fact(analysis, &decl->as.binding) == NULL) {
+                ok = record_type_fact_for_site(&context, &decl->as.binding,
+                                                infer_expr_type(&context, decl->as.binding.initializer));
+            }
+        } else {
+            ok = resolve_declaration(&context, decl);
+        }
     }
 
-    if (ok) {
+    if (ok && !infer_binding_types_only) {
         ok = validate_program_signature_visibility(&context, program);
     }
 
-    if (ok) {
+    if (ok && !infer_binding_types_only) {
         ok = validate_top_level_overload_overlap(&context, program);
     }
 
@@ -37930,6 +38225,7 @@ typedef enum SemanticModulePass {
     SEMANTIC_MODULE_PASS_MIXIN_SOURCES = 0,
     SEMANTIC_MODULE_PASS_MIXIN_STATIC_WRAPPERS,
     SEMANTIC_MODULE_PASS_FRIEND_METADATA,
+    SEMANTIC_MODULE_PASS_BINDING_TYPES,
     SEMANTIC_MODULE_PASS_FULL
 } SemanticModulePass;
 
@@ -38467,18 +38763,13 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
         }
 
         if (ok) {
-            ok = validate_program_alias_conflicts(module,
-                                                  program,
-                                                  program_visible_types,
-                                                  program_visible_type_count,
-                                                  program_visible_values,
-                                                  program_visible_value_count,
+            ok = validate_program_alias_conflicts(program,
                                                   errors,
                                                   error_count,
                                                   error_capacity);
         }
 
-        if (ok && pass == SEMANTIC_MODULE_PASS_FULL) {
+        if (ok && (pass == SEMANTIC_MODULE_PASS_FULL || pass == SEMANTIC_MODULE_PASS_BINDING_TYPES)) {
             ok = resolve_program_names(analysis,
                                        module,
                                        program,
@@ -38488,6 +38779,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                        program_visible_value_count,
                                        program_function_sets,
                                        program_function_set_count,
+                                       pass == SEMANTIC_MODULE_PASS_BINDING_TYPES,
                                        callable_return_cache,
                                        callable_exception_escape_cache,
                                        errors,
@@ -38700,6 +38992,7 @@ static FengTypeMember *create_mixed_field(const FengTypeMixinDecl *mixin,
         mixin->source_type->as.named.type_arg_count ==
             source_decl->as.type_decl.type_param_count) {
         field_type = clone_type_ref_substituting_type_params(
+            NULL,
             source_field->as.field.type,
             source_decl->as.type_decl.type_params,
             source_decl->as.type_decl.type_param_count,
@@ -38759,6 +39052,7 @@ static FengTypeRef *clone_mixin_callable_type_ref(
         source_instance->as.named.type_arg_count ==
             source_owner->as.type_decl.type_param_count) {
         return clone_type_ref_substituting_type_params(
+            NULL,
             type_ref,
             source_owner->as.type_decl.type_params,
             source_owner->as.type_decl.type_param_count,
@@ -41516,6 +41810,42 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * generic type instances whose type params have builtin constraints). */
     if (ok && error_count == 0U) {
         precompute_imported_builtin_spec_witnesses(analysis);
+    }
+
+    /* Module binding types must be available independently of file order.
+     * Propagate only known initializer types; all ordinary source validation
+     * still runs below. A dependency chain can add at most one fact per local
+     * inferred binding, so no runtime initialization or unbounded pass is used. */
+    {
+        size_t binding_pass_limit = 1U;
+
+        for (program_index = 0U; program_index < program_count; ++program_index) {
+            const FengProgram *program = programs[program_index];
+
+            for (size_t index = 0U; index < program->declaration_count; ++index) {
+                const FengDecl *decl = program->declarations[index];
+
+                if (decl->kind == FENG_DECL_GLOBAL_BINDING && decl->as.binding.type == NULL) {
+                    ++binding_pass_limit;
+                }
+            }
+        }
+        for (size_t pass = 0U; pass < binding_pass_limit && ok && error_count == 0U; ++pass) {
+            size_t facts_before = analysis->type_fact_count;
+
+            for (size_t index = 0U; index < analysis->module_count && ok && error_count == 0U; ++index) {
+                if (analysis->modules[index].origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
+                    continue;
+                }
+                ok = check_symbol_conflicts(analysis, &analysis->modules[index],
+                                             SEMANTIC_MODULE_PASS_BINDING_TYPES,
+                                             &callable_return_cache, &callable_exception_escape_cache,
+                                             NULL, &errors, &error_count, &error_capacity);
+            }
+            if (analysis->type_fact_count == facts_before) {
+                break;
+            }
+        }
     }
 
     max_iterations = count_all_callables(analysis) + 1U;

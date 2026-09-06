@@ -1,0 +1,16 @@
+open module fcts_lib.g22_forwarded;
+
+import fcts_lib.g22_collision as collision;
+import fcts_lib.g22_provider as origin;
+import fcts_lib.g22_provider;
+
+/** Local homonyms must not replace the forwarded binding's source type. */
+open type G22Identity<T> {}
+
+/** The original array element is not this unrelated local type. */
+open type G22Payload {}
+
+/** Inferred public bindings retain the original type across another module. */
+open let g22ForwardedCallback = origin.g22GenericCallback;
+open let g22ForwardedPayloads = origin.g22Payloads;
+open let g22ForwardedRecord: G22Record = G22Record {};

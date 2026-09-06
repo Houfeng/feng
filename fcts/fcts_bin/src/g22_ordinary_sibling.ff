@@ -1,0 +1,8 @@
+open module fcts_bin.g22_collisions;
+
+/** The importing sibling does not change these six current-module short-name sources. */
+func g22OrdinarySiblingValue(): i32 {
+  let value: G22ImportedSpec = G22ImportedType();
+  return value.marker + (i32)G22ImportedEnum.Only +
+    g22ImportedFunction() + g22ImportedLet + g22ImportedVar;
+}
