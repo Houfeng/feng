@@ -87,10 +87,10 @@ enum Status {
 }
 
 let status = Status.Running;
-let raw = (int)status;
+let raw = (i32)status;
 ```
 
-All enum cases must either use implicit incrementing values or specify explicit integer literals; the two forms cannot be mixed. An explicit conversion from `enum` to `int` is allowed, but a conversion from `int` to `enum` is not.
+An enum's underlying representation is always `i32`, independent of the platform width of `int`. All enum cases must either use implicit incrementing values or specify integer literals in the range `-2147483648...2147483647`; the two forms cannot be mixed. An explicit conversion from `enum` to any integer type is allowed, but an explicit conversion from an integer type to `enum` is not. Implicit conversions in either direction are not allowed.
 
 ## User-Defined and Contract Types
 

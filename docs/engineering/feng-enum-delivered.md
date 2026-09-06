@@ -5,16 +5,20 @@
 
 ## 1. 当前前提
 
-- enum 公开语义已经收敛到 [docs/specifications/feng-enum.md](../specifications/feng-enum.md)，当前阶段只支持简单的 int enum：无关联值、无字段、无方法、无泛型。
+- enum 公开语义已经收敛到 [docs/specifications/feng-enum.md](../specifications/feng-enum.md)，当前阶段
+  只支持底层表示固定为 `i32` 的简单 enum：无关联值、无字段、无方法、无泛型。
 - 当前规则已明确：只允许“全隐式取值”或“全显式取值”，禁止混合取值。
 - 当前规则已明确：允许 `enum` 显式转换到任意整数类型；不支持任何形式的整数类型到 `enum` 显式
   转换，包括整数字面量与常量表达式 cast。
 - lexer 侧已经把 `enum` 识别为关键字；首版实现不需要新增关键字扫描逻辑，但需要补回归测试。
 - parser / AST 目前没有 enum 顶层声明种类；`FengDeclKind` 只有 binding / type / spec / fit / function。
 - symbol table 目前没有 enum 声明种类；包表导入/导出、provider 查询视图和 LSP 仍只围绕 `type` / `spec` / `fit` / `func` 等已支持声明。
-- 现有值模型只有 `TRIVIAL` / `MANAGED_POINTER` / `AGGREGATE` 三类；首版 enum 应作为“具名的 `int` 标量”进入 `TRIVIAL` 路径，不新增 runtime 值模型或专用 runtime API。
-- enum 的实现目标是“语义上独立、表示上零成本”：前端保持名义类型与枚举项规则，codegen 固定降为 Feng `int` 对应的稳定标量表示，不依赖 C 原生 `enum` 宽度或 ABI 细节。
-- ABI 侧已收敛：enum 在 ABI 边界视为与 `int` 相同的 ABI 标量，可直接进入 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置。
+- 现有值模型只有 `TRIVIAL` / `MANAGED_POINTER` / `AGGREGATE` 三类；首版 enum 应作为“具名的 `i32`
+  标量”进入 `TRIVIAL` 路径，不新增 runtime 值模型或专用 runtime API。
+- enum 的实现目标是“语义上独立、表示上零成本”：前端保持名义类型与枚举项规则，Codegen 固定降为
+  Feng `i32` 对应的稳定标量表示，不依赖平台 `int` 或 C 原生 `enum` 的宽度与 ABI 细节。
+- ABI 侧已收敛：enum 在 ABI 边界固定使用与 `i32` 相同的标量表示，可直接进入 `extern func`、顶层
+  `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置。
 - 现有测试入口已经具备分层落地条件：`test_lexer`、`test_parser`、`test_semantic`、`test_codegen`、`test_symbol`、`test_cli` 以及最终 `make test`。
 
 ## 2. 分步 TODO
@@ -43,7 +47,7 @@
 ### 2.2 语义建模与值归一化
 
 - [x] 在语义层为 enum 建立独立声明语义，进入模块级命名空间与重复声明检查。
-- [x] 把 enum 类型建模为“独立命名类型，但底层存储固定为 `int`”。
+- [x] 把 enum 类型建模为“独立命名类型，但底层存储固定为 `i32`”。
 - [x] 为 enum 项建立稳定的声明顺序与底层值归一化结果。
 - [x] 对“全隐式” enum，按声明顺序计算 `0, 1, 2, ...`。
 - [x] 对“全显式” enum，直接采用字面量值。
@@ -56,7 +60,7 @@
 验收口径：
 
 - enum 在语义层是独立类型，不被当成普通 `type` 或 `int` 别名直接混用。
-- 归一化后每个枚举项都有唯一、稳定的底层 `int` 值。
+- 归一化后每个枚举项都有唯一、稳定的底层 `i32` 值。
 - 默认值所依赖的“首个枚举项”可以被稳定查询。
 
 建议验证：
@@ -76,15 +80,18 @@
 - [x] 禁止不同 enum 之间直接赋值、比较与转换。
 - [x] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为所需整数类型。
 - [x] 让 enum 能出现在变量、参数、返回值、成员、数组元素等普通类型位置，并沿用 trivial 值复制路径。
-- [x] 让 enum 能直接出现在 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
-- [x] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&int_value` 一致。
+- [x] 让 enum 能直接出现在 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type`
+  字段位置，并按 `i32` ABI 标量规则校验。
+- [x] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&i32_value`
+  一致。
 
 验收口径：
 
 - `let x: Status = Status.Ok;` 这类基本写法通过。
 - `let x: i64 = (i64)Status.Ok;` 通过；`let x: Status = (Status)1;` 报错。
 - `Status.Ok == Status.NotFound` 合法；`Status.Ok < Status.NotFound` 非法，除非先转成所需整数类型。
-- `extern func use_status(s: Status): void;`、`@abi func export_status(): Status` 与 `@abi type Box { var status: Status; }` 这类 ABI surface 合法并按 `int` 标量处理。
+- `extern func use_status(s: Status): void;`、`@abi func export_status(): Status` 与
+  `@abi type Box { var status: Status; }` 这类 ABI surface 合法并按 `i32` 标量处理。
 
 建议验证：
 
@@ -94,21 +101,23 @@
 ### 2.4 Codegen
 
 - [x] 为 enum 选择稳定的 C 落地表示。
-- [x] 不要把 Feng enum 的值存储直接依赖到 C 原生 `enum` 类型宽度；首版应固定走 `int32_t` / Feng `int` 对应的稳定表示。
+- [x] 不要把 Feng enum 的值存储直接依赖到 C 原生 `enum` 类型宽度；首版固定走 `int32_t` / Feng
+  `i32` 对应的稳定表示。
 - [x] 为 enum 声明生成稳定的 C 名称与枚举项常量符号。
 - [x] 为 `EnumName.ItemName` 发出对应常量值。
 - [x] 为 enum 默认值发出“首个枚举项底层值”。
 - [x] 让 enum 在局部变量、参数、返回值、数组、对象字段中都走 trivial copy 路径。
 - [x] 复核 enum 到各整数类型的显式转换发码，避免引入多余 runtime 调用。
-- [x] 在 ABI surface 上把 enum 按 `int32_t` / Feng `int` 的固定标量表示发码，不单独生成另一套 ABI layout。
+- [x] 在 ABI surface 上把 enum 按 `int32_t` / Feng `i32` 的固定标量表示发码，不单独生成另一套 ABI
+  layout。
 - [x] 复核 enum 进入 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置时的 C surface 一致性。
 
 验收口径：
 
 - enum 发码不新增 runtime 生命周期分支。
 - 生成的 C 表示对目标平台保持固定 32 位有符号整型语义，不依赖编译器的 C enum 实现细节。
-- enum 在复制、返回、数组存储上与 `int` 具有相同的 trivial 行为。
-- enum 在 ABI 参数、返回值、函数签名与 `@abi type` 字段位置上与 `int` 使用同一 C surface。
+- enum 在复制、返回、数组存储上与 `i32` 具有相同的 trivial 行为。
+- enum 在 ABI 参数、返回值、函数签名与 `@abi type` 字段位置上与 `i32` 使用同一 C surface。
 
 建议验证：
 
@@ -122,7 +131,8 @@
 
 - [x] 先更新 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md)，补一小段 enum item 的 `.ft` 导出与查询视图规范，不把这一步留到编码时临时决定。
 - [x] 在该小段中明确 enum item 在 `.ft` 中的稳定表达形状：是独立子声明、独立 decl kind，还是 enum 声明上的有序属性列表；若需要新增 decl kind / attr kind / relation kind，必须先写清楚。
-- [x] 在该小段中明确 enum item 至少导出的事实：所属 enum、声明顺序、枚举项名称、底层 `int` 值，以及 consumer 恢复 `Enum.Item` 解析所需的最小信息。
+- [x] 在该小段中明确 enum item 至少导出的事实：所属 enum、声明顺序、枚举项名称、底层 `i32` 值，
+  以及 consumer 恢复 `Enum.Item` 解析所需的最小信息。
 - [x] 在该小段中明确 imported-module 查询视图如何恢复 enum 类型引用、枚举项访问，以及 `Enum.` completion / hover / definition 所需的最小事实。
 - [x] 在该小段中明确公开 `.ft` 与本地缓存 `.ft` 对 enum item 的边界，避免把无关源码细节泄露到公开包表。
 
@@ -187,7 +197,7 @@
 ## 5. 交付约束
 
 - 所有实现必须以 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) 为准，不得在编码阶段临时放宽为“类 C 混合取值”。
-- enum 首版必须保持“具名的 int 标量”定位，不得偷渡成托管对象、fat value 或 ABI 特判对象。
+- enum 首版必须保持“具名的 `i32` 标量”定位，不得偷渡成托管对象、fat value 或 ABI 特判对象。
 - enum 首版必须保持“语义独立但表示零成本”的定位：不得偷渡成托管对象、fat value、反射驱动值或依赖 C 原生 `enum` 的不稳定宽度语义。
 - 进入 2.5 代码实现前，必须先在 [docs/specifications/feng-symbol-table.md](../specifications/feng-symbol-table.md) 中写清 enum item 的 `.ft` 形状与查询视图恢复规则，不得边写代码边临时决定格式。
 - 若符号表格式、导入查询模型或 LSP 展示需要新事实，先更新对应文档，再进入实现。

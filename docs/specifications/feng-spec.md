@@ -493,7 +493,7 @@ type Stream: ReadWrite {}
   同一类型的 `int(1)` 与 `double(1.0)` 不相等。普通标量表达式的静态类型检查、字面量适配与相等规则不因
   spec 装箱改变。
 - 具名 `enum` 进入 object-form 或 intersection-form `spec` 后，按其声明级唯一的箱 descriptor 保持名义
-  类型身份；只有同一具名 enum 且 enum 值相同才相等。不同具名 enum，以及 enum 与其底层 `int`，即使
+  类型身份；只有同一具名 enum 且 enum 值相同才相等。不同具名 enum，以及 enum 与其底层 `i32`，即使
   底层值相同也不相等。普通静态表达式仍只允许同一 enum 类型直接使用 `==` / `!=`。
 - `string` subject 继续按字符串内容相等语义比较；没有 descriptor `equal_fn` 的普通引用实体继续按
   subject 引用身份比较。callable-form `spec` 值上的 `==` / `!=` 比较 callable/closure 引用身份，不比较

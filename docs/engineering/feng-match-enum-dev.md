@@ -13,7 +13,7 @@
 1. **常量相等性匹配**：目标类型限定为「所有整型、`string`、`bool`」，标签为字面量或 `let` 绑定到字面量。
 2. **union-form member 匹配**：目标类型为 union-form `spec`，标签为归一化 member。
 
-`enum` 作为「具名的 `int` 标量」（见 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3）当前无法进入 `match`：
+`enum` 作为「具名的 `i32` 标量」（见 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3）当前无法进入 `match`：
 
 - 语义层 `match_target_type_is_allowed`（`src/semantic/analyzer.c:6666`）把 enum 视为不允许，触发 `AE0050`「match target type '%s' is not allowed; allowed types are integers, 'string' and 'bool'」。
 - parser 层 `parse_match_label_atom`（`src/parser/parser.c:2688`）只接受 `INTEGER / STRING / BOOL / IDENTIFIER`，无法承载 `EnumName.ItemName` 这种 member access 形式的标签。
@@ -28,9 +28,9 @@
 - 把 `enum` 类型纳入 `match` 常量相等性匹配的目标类型集合。
 - 标签仅接受 `EnumName.ItemName` 形式的 enum item 引用；标签的 enum 类型必须与 target 的 enum 类型一致。
 - 复用既有「单值」标签 AST 节点与 codegen 发码路径，不引入新的 AST kind、不新增 enum 专用 runtime 原语。
-- 不放宽既有「禁止 `int -> enum` 转换、禁止 `enum` 与 `int` 隐式比较」的语义边界（见 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3、§4）。
-- 不引入 enum 区间匹配（enum 区间在语义上无意义，与底层 int 表达不耦合）。
-- 不引入 enum 字面量与 enum item 引用混用：同一 match 体中 enum 分支只允许 enum item 引用，不允许把 `int` 字面量或别的 enum 类型标签混入。
+- 不放宽既有「禁止整数类型 `-> enum` 转换、禁止 `enum` 与整数类型隐式比较」的语义边界（见 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3、§4）。
+- 不引入 enum 区间匹配（enum 区间在语义上无意义，与底层 `i32` 表达不耦合）。
+- 不引入 enum 字面量与 enum item 引用混用：同一 match 体中 enum 分支只允许 enum item 引用，不允许把整数字面量或别的 enum 类型标签混入。
 - 不破坏既有「字面量、值列表、整数区间」三类常量相等性匹配的语义与发码。
 - 抽象驱动、面向未来可扩展：标签值路径以「值表达式」为抽象（`FENG_MATCH_LABEL_VALUE` 的 `value` 字段已为 `FengExpr*`），新增支持的 enum item 引用也是值表达式的一个合法实例，无需新增 label kind。
 
@@ -47,7 +47,7 @@
 - §3.1 标签形式列表「**单值**」一项中追加：当目标类型为 `enum` 时，单值必须写为 `EnumName.ItemName` 形式的 enum item 引用；同一 match 体中的所有 enum 标签必须引用与目标类型相同的 `enum`，不得跨 `enum`，也不得与字面量、值列表、整数区间标签混用。
 - §3.1 标签形式列表「**值列表**」一项追加：`enum` 目标类型下的值列表元素必须是同一 `enum` 的 enum item 引用，按逗号分隔，如 `HttpStatus.Ok, HttpStatus.NotFound`。
 - §3.1 标签形式列表「**整数闭区间**」一项保留「仅支持整型」描述不动，自然不覆盖 enum；在该项末尾追加一句明确「`enum` 目标类型不支持区间标签」。
-- §3.1 编译器交叉检测规则中追加：对 `enum` 目标类型，同一 enum item 在多个分支重复出现视为不可达死代码；不同 enum 的同底层 `int` 值不视为重叠。
+- §3.1 编译器交叉检测规则中追加：对 `enum` 目标类型，同一 enum item 在多个分支重复出现视为不可达死代码；不同 enum 的同底层 `i32` 值不视为重叠。
 - §3.1 给出一个 enum 匹配代码示例，仅作为语法与语义示意，不重复规范定义。
 
 ### 3.2 [docs/specifications/feng-enum.md](../specifications/feng-enum.md)
@@ -337,7 +337,7 @@ typedef struct MatchConstValue {
 `match_label_records_overlap`（`src/semantic/analyzer.c:6717`）追加 `MATCH_CONST_ENUM` case：
 
 - 两 record 必须同 enum decl（指针相等即可，类型一致是 §4.2.4 已校验的前提）且同 item name（slice 相等）才算重叠。
-- 不按底层 int 值比较：不同 enum 的同值 item 不视为重叠（§4.2.6 由 target 类型一致约束保证不会出现同 match 体中混入不同 enum 的情况）。
+- 不按底层 `i32` 值比较：不同 enum 的同值 item 不视为重叠（§4.2.6 由 target 类型一致约束保证不会出现同 match 体中混入不同 enum 的情况）。
 
 #### 4.2.6 在 `resolve_and_validate_match_common` 增加 enum 模式约束
 
@@ -570,7 +570,7 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 | ---- | ---- | -------- |
 | `parse_match_label_atom` 扩展 member access 后与既有 union member 匹配的 type label 路径冲突 | 低 | type label 路径走 `is_type_label_start_token` + `parse_type_ref`，对 `IDENTIFIER . IDENTIFIER` 形式会在 `parse_type_ref` 后判断 `parser_check(COMMA)` / `LBRACE` 不成立时回退到 atom 路径；atom 内部识别 member access 后由语义层判定 enum 还是 union，互斥分流 |
 | `MatchConstKind` 扩展后既有 int / bool / string overlap 检测受影响 | 低 | 新增 ENUM case 独立处理，既有 case 行为不变；overlap 比较仍按 kind 严格匹配，跨 kind 不重叠 |
-| enum target 与 int 字面量在同一体中混用导致底层 int 值与 enum item 引用语义冲突 | 低 | §4.2.6 在语义层禁止混用，codegen 不会收到混合标签体 |
+| enum target 与整数字面量在同一体中混用导致底层 `i32` 值与 enum item 引用语义冲突 | 低 | §4.2.6 在语义层禁止混用，codegen 不会收到混合标签体 |
 | 跨模块 enum item 引用在 match 标签位置解析失败 | 低 | enum 跨模块引用已由 enum 首版交付（见 [docs/engineering/feng-enum-delivered.md](./feng-enum-delivered.md) §2.5），match 仅消费既有查询视图 |
 | `inferred_expr_type_is_enum` 在 type_ref 形式 enum 上需要 context 解析 | 低 | 函数已存在并支持 type_ref / type_decl 两种形式（见 `src/semantic/analyzer.c:5660`），调用点已有 context 可传 |
 | 新增 AE11xx 错误码与既有错误码编号冲突 | 低 | 具体编号在 `feng-error-codes-ae.md` 中先确定再写代码，遵循既有编号区间规则 |
@@ -590,7 +590,7 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 ## 11 交付约束
 
 - 所有实现必须以 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) §3.1 与 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3 为准，不得在编码阶段临时放宽或收紧。
-- enum match 必须保持「enum item 引用为唯一合法标签形式」的定位，不得偷渡成「底层 int 值匹配」或「int 字面量与 enum item 混用」。
+- enum match 必须保持「enum item 引用为唯一合法标签形式」的定位，不得偷渡成「底层 `i32` 值匹配」或「整数字面量与 enum item 混用」。
 - 不得引入新的 runtime 对象表示、runtime API 或额外值模型分类。
 - 进入代码实现前，必须先在 [docs/specifications/feng-flow.md](../specifications/feng-flow.md) 与 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) 中写清 enum match 的语义边界与标签形式，不得边写代码边临时决定。
 - 错误码编号与文案必须先在 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md) / [feng-error-codes-ce.md](../specifications/feng-error-codes-ce.md) 中确定，再落到代码。

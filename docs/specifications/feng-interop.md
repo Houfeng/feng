@@ -78,7 +78,7 @@ open func create_point_export(x: int, y: int): Point {
 | 类别 | 是否 ABI 兼容 | 条件 |
 | --- | --- | --- |
 | 基本标量类型 | 是 | 直接按 ABI 标量规则传递 |
-| `enum` | 是 | 视为与 `int` 相同的 ABI 标量；可直接按值进入 ABI 边界 |
+| `enum` | 是 | 固定使用与 `i32` 相同的 32 位有符号 ABI 标量；可直接按值进入 ABI 边界 |
 | 指针类型 `U*` | 是 | 仅用于 ABI 边界传递; 在 Feng 表达式中不透明、不可直接操作 |
 | 函数指针类型 `Foo*` | 是 | `Foo` 必须是 callable-form `@abi spec`; `Foo*` 仅作为不透明函数指针传递 |
 | `@abi` 类型 | 有条件 | 对象形式 `@abi type` 有字段时可按值进入 ABI; 无字段时仅可作为 `T*` 的名义 pointee |
@@ -94,7 +94,8 @@ open func create_point_export(x: int, y: int): Point {
 补充规则:
 
 - ABI 兼容资格必须由声明规则静态判定,不得依赖运行时猜测或按具体 C 库名称做特判。
-- `enum` 在 ABI 边界上的按值表示与 `int` 完全一致; ABI 兼容性检查按 `int` 标量规则处理,但语言层仍保持 `enum` 是独立具名类型。
+- `enum` 在 ABI 边界上的按值表示固定与 `i32` 完全一致，不随平台 `int` 别名变化；ABI 兼容性检查按
+  `i32` 标量规则处理，但语言层仍保持 `enum` 是独立具名类型。
 - `extern func` 参数位或返回位写成 `Foo*` 时,表示开发者声明该 ABI 位承载与 `Foo` 签名兼容的原生函数指针; 编译器只检查静态类型一致。
 - `string` 与 ABI 兼容数组只在可调用 ABI 边界上定义; 它们不属于 `@abi type` 可直接内联的字段类型。
 
@@ -198,7 +199,7 @@ open func point_sum(p1: Point, p2: Point): Point {
 ### 6.2 返回指针含义
 
 1. `&scalar`: 返回该基本标量存储单元的首地址指针,类型 `T*`。
-2. `&enum_value`: 返回该 enum 值存储单元的首地址指针,类型 `T*`; 其 ABI 内存表示与 `int` 相同。
+2. `&enum_value`: 返回该 enum 值存储单元的首地址指针,类型 `T*`; 其 ABI 内存表示固定与 `i32` 相同。
 3. `&abi_value`: 返回该声明了字段的 `@abi` 值对应 ABI payload 的首地址指针,类型 `T*`。
 4. `&str`: 返回 `string` 的 ABI 兼容数据地址指针,类型 `string*`; 当前 `c` 目标下该地址为 UTF-8 数据区首地址。
 5. `&arr`: 返回 ABI 兼容数组第 `0` 个元素地址; 空数组返回 `0` 指针,类型 `T*`。
