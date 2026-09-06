@@ -111,7 +111,7 @@
 | AE0402 | 枚举项名称唯一性约束 | AE0060 | enum '%.*s' has duplicate item name '%.*s' |
 | AE0403 | 枚举项数值唯一性约束 | AE0061 | enum '%.*s' has duplicate item value %lld |
 | AE0404 | 枚举成员访问合法性 | AE0083 | enum '%.*s' has no item '%.*s' |
-| AE0405 | 枚举项 `i32` 值域约束 | (新增) | enum '%.*s' item '%.*s' value %lld is outside the 'i32' range |
+| AE0405 | 枚举项 `i32` 值域约束 | (新增) | enum '%.*s' item '%.*s' value %.*s is outside the 'i32' range |
 
 ## 05 函数/Lambda段
 
