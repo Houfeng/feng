@@ -89,7 +89,18 @@ A consumer must import `app.extensions` before using the extension.
 
 ## Avoid Name Conflicts
 
-An import alias that duplicates a declaration in the same file, including another alias, is an error even when unused. If it instead duplicates a name imported by an ordinary import or declared in another file of the same module, the conflict is reported only where the name is used, with both sources identified. This also applies to the alias in `alias.member`: aliases do not take precedence over those names. Choose a nonconflicting alias or use a full module path to resolve the conflict.
+Invalid duplicate top-level declarations in the same module are reported during declaration checking, even when unused. Valid top-level function overloads are allowed.
+
+An import alias introduces a name in its file, not a top-level module declaration. An alias that duplicates a top-level declaration or another alias in the same file is an error even when unused. This does not include local bindings in nested blocks.
+
+The following alias conflicts are reported only where the name is used; leaving the name unused is allowed:
+
+- An alias duplicates a declaration in another file of the same module.
+- An alias duplicates a public name introduced by an import without an alias.
+
+The diagnostic identifies the conflicting sources. This check also applies to the alias in `alias.member`, in both type references and ordinary expressions. Resolution does not select a source based on whether the following member exists, and aliases do not take precedence.
+
+A name introduced by an import without an alias also conflicts lazily with a top-level declaration in the same file or another file of the same module. Top-level declarations do not automatically hide imported names. The local-value precedence over module paths described above still applies.
 
 Names from multiple imports become ambiguous only when the same bare name is actually used. Use an import alias or a full module path to resolve a conflict:
 

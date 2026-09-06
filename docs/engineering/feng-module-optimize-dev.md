@@ -1,5 +1,10 @@
 # Feng 模块符号冲突规则优化 TODO
 
+> 本文记录此前 import 冲突惰性化工作的实施基线。别名部分的现行语义以
+> [模块规范 §4](../specifications/feng-module.md#4-模块导入规则) 为准；本轮两类别名冲突的
+> 惰性化由 [G22](./feng-language-conformance-coverage-hardening-pending.md#26-g22模块可见性诊断)
+> 承接，本文历史记录中的“别名急切检查保持现状”不作为 G22 的验收要求。
+
 目标:完整实现 `docs/specifications/feng-module.md` §7 规范定义的六类符号冲突规则,本次聚焦其中第 1/2/3 类(import 相关)的惰性化,使 `type / enum / spec / func / let / var` 在 import 场景下行为统一。
 
 ## 0. 规范六类冲突 vs 当前实现 vs 本次优化范围
