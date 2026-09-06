@@ -105,7 +105,7 @@
 | AE0329 | 成员展开来源构造约束 | (新增) | member mix initializer must be an object construction expression |
 | AE0330 | 成员展开依赖无环约束 | (新增) | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
 | AE0331 | object-form spec 方法级泛参禁用 | (新增) | object-form spec method '%.*s' cannot declare type parameters |
-| AE0332 | 默认零值有限性约束 | CE0226 | type '%s' has no finite default zero value; provide an initializer、construction of type '%s' requires a non-terminating default zero value for field '%.*s'; provide a field declaration initializer |
+| AE0332 | 默认零值有限性约束 | CE0226 | type '%s' has no finite default zero value; provide an initializer、construction of type '%s' requires a non-terminating default zero value for field '%.*s'; provide a field declaration initializer、array creation element type '%s' has no finite default zero value; provide explicit element values instead |
 
 ## 04 枚举段
 

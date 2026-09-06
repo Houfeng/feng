@@ -55,7 +55,9 @@ matrix[0][1] = 9;
 target type, the result is `T[]`, whose current level is read-only; that level is writable only when the explicit target
 is `T[!]`. `length` is an integer evaluated exactly once and must be between zero and the target platform's maximum
 `int` value. A statically known range error is a compile error; a dynamic range error panics before allocation and is
-never truncated or wrapped. An unrepresentable allocation size or insufficient memory also panics.
+never truncated or wrapped. An unrepresentable allocation size or insufficient memory also panics. The element type
+must statically have a finite default zero value, including for constant-zero and dynamic lengths. An array's own empty
+default value and an array literal made from explicit element values do not require an element default zero value.
 
 An array's length does not change after creation, and Feng imposes no fixed array-nesting limit. An index must be in
 the range from zero through `length - 1`; a negative or out-of-range index panics before the read or write. Use
