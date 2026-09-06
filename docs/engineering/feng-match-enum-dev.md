@@ -287,7 +287,8 @@ enum target 的区间标签 `1...10`（整数区间）能被 parser 解析为 `F
 
 `match_target_type_is_allowed`（`src/semantic/analyzer.c:6666`）追加 enum 检查：
 
-- 新增辅助 `inferred_expr_type_is_enum(context, target_type)`（函数已存在于 `src/semantic/analyzer.c:5660`，当前仅在 `enum -> int` 显式转换场景被引用），作为允许条件之一。
+- 新增辅助 `inferred_expr_type_is_enum(context, target_type)`（函数已存在于 `src/semantic/analyzer.c:5660`，
+  当前也用于 `enum` 到整数类型的显式转换判断），作为允许条件之一。
 - 函数签名需要带 `context`（已有 `ResolveContext`），需要把 `match_target_type_is_allowed` 的所有调用点同步传入 context；当前仅一处调用点（`resolve_and_validate_match_common` 中 `src/semantic/analyzer.c:7336`），改动可控。
 
 #### 4.2.2 扩展 `MatchConstKind` 与 `MatchConstValue`

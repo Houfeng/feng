@@ -7,7 +7,8 @@
 
 - enum 公开语义已经收敛到 [docs/specifications/feng-enum.md](../specifications/feng-enum.md)，当前阶段只支持简单的 int enum：无关联值、无字段、无方法、无泛型。
 - 当前规则已明确：只允许“全隐式取值”或“全显式取值”，禁止混合取值。
-- 当前规则已明确：不支持任何形式的 `int -> enum` 显式转换，包括整数字面量与常量表达式 cast。
+- 当前规则已明确：允许 `enum` 显式转换到任意整数类型；不支持任何形式的整数类型到 `enum` 显式
+  转换，包括整数字面量与常量表达式 cast。
 - lexer 侧已经把 `enum` 识别为关键字；首版实现不需要新增关键字扫描逻辑，但需要补回归测试。
 - parser / AST 目前没有 enum 顶层声明种类；`FengDeclKind` 只有 binding / type / spec / fit / function。
 - symbol table 目前没有 enum 声明种类；包表导入/导出、provider 查询视图和 LSP 仍只围绕 `type` / `spec` / `fit` / `func` 等已支持声明。
@@ -68,12 +69,12 @@
 - [x] 让类型引用解析能把 enum 名称解析为合法类型目标。
 - [x] 实现 `EnumName.ItemName` 的语义解析，保证它解析为枚举项值，而不是普通类型成员访问。
 - [x] 无初始值的 enum 绑定默认取第一个枚举项。
-- [x] 允许 `enum -> int` 的显式转换。
-- [x] 禁止 `int -> enum` 的显式转换。
-- [x] 禁止 `enum` 与 `int` 之间的隐式转换。
+- [x] 允许 `enum` 显式转换到任意整数类型。
+- [x] 禁止任何整数类型显式转换到 `enum`。
+- [x] 禁止 `enum` 与任何整数类型之间的隐式转换。
 - [x] 仅允许同一 enum 类型之间直接做 `==` / `!=`。
 - [x] 禁止不同 enum 之间直接赋值、比较与转换。
-- [x] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为 `int`。
+- [x] 禁止 enum 直接参与算术与顺序比较；需要时必须先显式转换为所需整数类型。
 - [x] 让 enum 能出现在变量、参数、返回值、成员、数组元素等普通类型位置，并沿用 trivial 值复制路径。
 - [x] 让 enum 能直接出现在 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置，并按 `int` ABI 标量规则校验。
 - [x] 若一元 `&` 已支持基础标量取址，则补 enum 取址规则，使 `&enum_value` 的 ABI 行为与 `&int_value` 一致。
@@ -81,8 +82,8 @@
 验收口径：
 
 - `let x: Status = Status.Ok;` 这类基本写法通过。
-- `let x: int = (int)Status.Ok;` 通过；`let x: Status = (Status)1;` 报错。
-- `Status.Ok == Status.NotFound` 合法；`Status.Ok < Status.NotFound` 非法，除非先转成 `int`。
+- `let x: i64 = (i64)Status.Ok;` 通过；`let x: Status = (Status)1;` 报错。
+- `Status.Ok == Status.NotFound` 合法；`Status.Ok < Status.NotFound` 非法，除非先转成所需整数类型。
 - `extern func use_status(s: Status): void;`、`@abi func export_status(): Status` 与 `@abi type Box { var status: Status; }` 这类 ABI surface 合法并按 `int` 标量处理。
 
 建议验证：
@@ -98,7 +99,7 @@
 - [x] 为 `EnumName.ItemName` 发出对应常量值。
 - [x] 为 enum 默认值发出“首个枚举项底层值”。
 - [x] 让 enum 在局部变量、参数、返回值、数组、对象字段中都走 trivial copy 路径。
-- [x] 复核 enum 到 `int` 的显式转换发码，避免引入多余 runtime 调用。
+- [x] 复核 enum 到各整数类型的显式转换发码，避免引入多余 runtime 调用。
 - [x] 在 ABI surface 上把 enum 按 `int32_t` / Feng `int` 的固定标量表示发码，不单独生成另一套 ABI layout。
 - [x] 复核 enum 进入 `extern func`、顶层 `@abi func`、callable-form `@abi spec` 与 `@abi type` 字段位置时的 C surface 一致性。
 
@@ -170,7 +171,8 @@
 - 不支持关联值、payload、字段、方法、构造函数、终结器。
 - 不支持 enum 泛型。
 - 不支持显式值与隐式值混用。
-- 不支持任何形式的 `int -> enum` 显式转换，包括整数字面量、常量表达式与运行时 `int` 值；也不支持任何 `enum <-> int` 隐式转换。
+- 不支持任何形式的整数类型到 `enum` 显式转换，包括整数字面量、常量表达式与运行时整数值；也不支持
+  `enum` 与任何整数类型之间的隐式转换。
 - 不引入新的 runtime 对象表示、runtime API 或额外值模型分类。
 
 ## 4. 建议执行顺序
