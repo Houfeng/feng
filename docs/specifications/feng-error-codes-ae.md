@@ -67,6 +67,7 @@
 | AE0201 | 数组元素类型约束 | AE0098 | array literal element at index %zu does not match expected type '%s' |
 | AE0202 | 数组尺寸表达式类型约束 | AE0172 | array size must be an integer expression |
 | AE0203 | 空数组目标类型约束 | AE0138 | empty array literal requires an explicit target array type |
+| AE0204 | 数组长度值域约束 | （新增） | array size value %s is outside the valid target 'int' range 0...%s |
 
 ## 03 类型/元组段
 

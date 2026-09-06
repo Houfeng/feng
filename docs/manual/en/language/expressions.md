@@ -20,6 +20,11 @@ let bytes: byte[!] = byte[:256];
 bytes[0] = (byte)65;
 ```
 
+`length` is an integer evaluated exactly once and must be between zero and the target platform's maximum `int` value.
+A statically known invalid value is a compile error; a dynamic invalid value panics before allocation. An array index
+is also evaluated exactly once, and a negative or out-of-range value panics before the element is read or written.
+Without an explicit array target type, `Type[:length]` produces `T[]`, whose current level is read-only.
+
 ## Arithmetic and Comparison
 
 Feng provides the usual arithmetic, relational, equality, logical, bitwise, and shift operators:

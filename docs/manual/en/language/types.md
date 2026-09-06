@@ -51,7 +51,15 @@ buffer[0] = (byte)65;
 matrix[0][1] = 9;
 ```
 
-`Type[:length]` creates a writable array of the specified length. An array's length does not change after creation. Use `std.collections.List<T>` when you need a growable collection.
+`Type[:length]` creates an array of the specified length and initializes every element to its zero value. Without a
+target type, the result is `T[]`, whose current level is read-only; that level is writable only when the explicit target
+is `T[!]`. `length` is an integer evaluated exactly once and must be between zero and the target platform's maximum
+`int` value. A statically known range error is a compile error; a dynamic range error panics before allocation and is
+never truncated or wrapped. An unrepresentable allocation size or insufficient memory also panics.
+
+An array's length does not change after creation, and Feng imposes no fixed array-nesting limit. An index must be in
+the range from zero through `length - 1`; a negative or out-of-range index panics before the read or write. Use
+`std.collections.List<T>` when you need a growable collection.
 
 Write permission can be removed only with an explicit conversion:
 
