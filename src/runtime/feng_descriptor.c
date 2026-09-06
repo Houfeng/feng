@@ -11,10 +11,20 @@ static bool feng_f64_equal(const void *left, const void *right) {
     return *(const double *)left == *(const double *)right;
 }
 
+/* Canonical policy used by every descriptor whose Feng default zero is the
+ * all-zero object representation. Keeping one shared object lets generated
+ * code test the policy without duplicating metadata or calling an initializer
+ * for ordinary scalar values. */
+const FengDefaultZeroInitDescriptor feng_default_zero_bytes_init = {
+    .kind = FENG_DEFAULT_ZERO_BYTES,
+    .init_fn = NULL,
+};
+
 #define FENG_TRIVIAL_DESCRIPTOR(symbol, runtime_name, c_type, equal) \
     const FengTrivialDescriptor symbol = { \
         .name = runtime_name, \
         .size = sizeof(c_type), \
+        .default_zero_init = &feng_default_zero_bytes_init, \
         .equal_fn = equal, \
     }
 

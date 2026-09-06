@@ -891,6 +891,12 @@ RELS
 
 - `string_ref`：逐层可写位图 `mutability_bitmap`（覆盖 `T[]`、`T[!]`、`T[!][]` 等语义）；
 - `elem_count`：数组层数 `rank`；`elem_start`：元素类型 TYPS.id；`sym_ref`、`reserved1` 为 `0`。
+- 单个 ARRAY 节点的 `mutability_bitmap` 只编码当前节点的至多 32 层，bit 0 对应该节点的最外层；
+  数组超过 32 层时，writer 必须把连续层分段写为既有 ARRAY 节点链，外段的 `elem_start` 指向内段，
+  最内段再指向叶子元素类型。consumer 必须把连续 ARRAY 节点视为同一个数组类型并按从外到内的顺序
+  拼接层数与逐层可写性；不得截断、设定固定总层数上限或把分段边界解释成额外类型构造；
+- 上述分段仅组合既有 `.ft v1` 类型节点与字段，不改变 wire 记录结构、版本或数组类型身份。32 层以内的
+  编码保持为单个 ARRAY 节点。
 
 **`FT_TYPE_KIND_C_POINTER`**（C 指针类型）:
 

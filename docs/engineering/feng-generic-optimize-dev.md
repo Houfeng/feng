@@ -470,7 +470,7 @@ void *_entry_ptr = (char *)_self + _td->reified_field_offsets[0];
 /* 方法体内局部 Boo<K>（tuple）：从该方法的函数描述符读取。 */
 const FengAggregateDescriptor *_boo_desc = _func_desc->reified_agg_deps[0];
 _Alignas(max_align_t) char _boo_mem[_boo_desc->size];
-feng_aggregate_default_init(_boo_mem, _boo_desc);
+feng_aggregate_default_zero_init(_boo_mem, _boo_desc);
 
 /* 成员字段 entry（Foo<int,V> 是 tuple）：类型结构依赖仍从 _type_desc 获取。 */
 const FengAggregateDescriptor *_entry_desc = _td->reified_agg_deps[0];
@@ -607,7 +607,7 @@ FengArray *_arr = feng_array_new_kinded(
 const FengAggregateDescriptor *_ed = _dep_desc;
 void *_mem = alloca(_ed->size);
 memset(_mem, 0, _ed->size);
-feng_aggregate_default_init(_mem, _ed);
+feng_aggregate_default_zero_init(_mem, _ed);
 ```
 
 这里的“局部变量”包括显式局部绑定、tuple 临时值，以及构造表达式产生的

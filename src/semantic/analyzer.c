@@ -204,8 +204,9 @@ typedef struct ExprNarrowingEntry {
 } ExprNarrowingEntry;
 
 /* Compile-time constant evaluation result. Used by evaluate_constant_expr to model the
- * limited set of values producible by Feng's constant-folder. INT carries arbitrary i64;
- * FLOAT carries IEEE 754 double; BOOL carries a flag. */
+ * limited set of values producible by Feng's constant-folder. INT carries one complete
+ * 64-bit pattern plus its resolved signedness; FLOAT carries IEEE 754 double; BOOL
+ * carries a flag. */
 typedef enum FengConstKind {
     FENG_CONST_NONE = 0,
     FENG_CONST_INT,
@@ -216,6 +217,7 @@ typedef enum FengConstKind {
 typedef struct FengConstValue {
     FengConstKind kind;
     int64_t i;
+    bool integer_is_unsigned;
     double f;
     bool b;
 } FengConstValue;
@@ -485,11 +487,11 @@ typedef struct ResolveContext {
      * result fitter so every value-producing branch sees the same target. */
     const FengTypeRef *current_expr_expected_type_ref;
     /* Number of call-argument resolution frames whose parameter target is not
-     * known until overload selection completes. Branch expressions resolve
-     * their contents immediately but defer a no-target mismatch diagnostic;
-     * the selected callable later validates them against its closed parameter
-     * type. */
-    size_t deferred_branch_result_validation_depth;
+     * known until overload selection completes. Target-sensitive expressions
+     * resolve their contents immediately but defer diagnostics that would
+     * otherwise assume an untyped context; overload probing then checks every
+     * candidate through the side-effect-free expected-type matcher. */
+    size_t deferred_call_argument_target_depth;
     /* When true, expr_matches_expected_type_ref must NOT set expr->type as a
      * side effect.  Set during overload-resolution candidate probing so that
      * rejected or non-winning candidates cannot corrupt the literal node's
@@ -5060,6 +5062,9 @@ static bool validate_type_param_constraints(ResolveContext *context,
 static bool resolve_block_contents(ResolveContext *context,
                                    const FengBlock *block,
                                    bool allow_self);
+static bool resolve_stmt(ResolveContext *context,
+                         const FengStmt *stmt,
+                         bool allow_self);
 static bool callable_return_inference_is_pending(ResolveContext *context,
                                                  const FengCallableSignature *callable);
 static bool expr_type_inference_is_pending(ResolveContext *context, const FengExpr *expr);
@@ -8199,7 +8204,7 @@ static bool validate_if_expr(ResolveContext *context, const FengExpr *expr) {
             return true;
         }
     }
-    if (context->deferred_branch_result_validation_depth > 0U) {
+    if (context->deferred_call_argument_target_depth > 0U) {
         return true;
     }
 
@@ -8284,7 +8289,7 @@ static bool validate_try_expr(ResolveContext *context,
     if (all_results_conform) {
         return true;
     }
-    if (context->deferred_branch_result_validation_depth > 0U) {
+    if (context->deferred_call_argument_target_depth > 0U) {
         return true;
     }
 
@@ -8759,6 +8764,7 @@ static bool persist_branch_expression_type(ResolveContext *context,
 static bool resolve_branch_result_block(ResolveContext *context,
                                         const FengBlock *block,
                                         bool allow_self) {
+    const FengExpr *yield;
     bool ok;
 
     if (block == NULL) {
@@ -8767,10 +8773,32 @@ static bool resolve_branch_result_block(ResolveContext *context,
     if (!resolver_push_scope(context)) {
         return false;
     }
-    ok = resolve_block_contents(context, block, allow_self);
-    if (ok && !block_exits_via_return_or_throw(block)) {
-        const FengExpr *yield = block_yield_expression(block);
+    yield = block_yield_expression(block);
+    ok = true;
+    for (size_t statement_index = 0U;
+         statement_index < block->statement_count;
+         ++statement_index) {
+        const FengStmt *statement = block->statements[statement_index];
+        const FengTypeRef *previous_expected =
+            context->current_expr_expected_type_ref;
+        bool is_result_statement =
+            yield != NULL && statement != NULL &&
+            statement->kind == FENG_STMT_EXPR &&
+            statement->as.expr == yield;
 
+        /* A value-expression target belongs only to the block's final result
+         * expression. Earlier statements establish locals or control flow in
+         * the same lexical block but are not themselves result candidates. */
+        if (!is_result_statement) {
+            context->current_expr_expected_type_ref = NULL;
+        }
+        ok = resolve_stmt(context, statement, allow_self);
+        context->current_expr_expected_type_ref = previous_expected;
+        if (!ok) {
+            break;
+        }
+    }
+    if (ok && !block_exits_via_return_or_throw(block)) {
         if (yield != NULL) {
             InferredExprType yield_type = infer_expr_type(context, yield);
 
@@ -9480,7 +9508,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     }
 
     if (is_expression_form && !all_results_conform &&
-        context->deferred_branch_result_validation_depth == 0U) {
+        context->deferred_call_argument_target_depth == 0U) {
         return validate_match_default_result_types(context,
                                                    match_expr,
                                                    branches,
@@ -9709,7 +9737,7 @@ static bool resolve_and_validate_enum_match_common(ResolveContext *context,
     }
 
     if (is_expression_form && !all_results_conform &&
-        context->deferred_branch_result_validation_depth == 0U) {
+        context->deferred_call_argument_target_depth == 0U) {
         ok = validate_match_default_result_types(context,
                                                  match_expr,
                                                  branches,
@@ -9911,7 +9939,7 @@ static bool resolve_and_validate_match_common(ResolveContext *context,
     }
 
     if (is_expression_form && !all_results_conform &&
-        context->deferred_branch_result_validation_depth == 0U) {
+        context->deferred_call_argument_target_depth == 0U) {
         return validate_match_default_result_types(context,
                                                    match_expr,
                                                    branches,
@@ -12598,6 +12626,47 @@ static bool validate_binding_default_zero_target(
             "AE0332",
             format_message(
                 "type '%s' has no finite default zero value; provide an initializer",
+                type_name != NULL ? type_name : "<unknown>"));
+
+        free(type_name);
+        return ok;
+    }
+    return true;
+}
+
+/* Reject an array creation whose element type cannot be initialized to a
+ * finite default zero value.  The qualification is purely static and does
+ * not depend on whether the length is constant, zero, positive, or dynamic. */
+static bool validate_array_new_default_zero_element(
+    ResolveContext *context,
+    const FengTypeRef *element_type_ref) {
+    DefaultZeroExpansionState state = {0};
+    bool finite;
+
+    if (element_type_ref == NULL) {
+        return true;
+    }
+    finite = default_zero_type_is_finite(
+        context,
+        inferred_expr_type_from_type_ref(element_type_ref),
+        &state);
+    free(state.frames);
+    if (state.out_of_memory) {
+        return resolver_append_error(
+            context,
+            element_type_ref->token,
+            "IE0001",
+            format_message(
+                "out of memory while checking array element default zero value"));
+    }
+    if (!finite) {
+        char *type_name = format_type_ref_name(element_type_ref);
+        bool ok = resolver_append_error(
+            context,
+            element_type_ref->token,
+            "AE0332",
+            format_message(
+                "array creation element type '%s' has no finite default zero value; provide explicit element values instead",
                 type_name != NULL ? type_name : "<unknown>"));
 
         free(type_name);
@@ -20370,6 +20439,26 @@ static InferredExprType infer_array_literal_expr_type(ResolveContext *context, c
                                   : inferred_expr_type_unknown();
 }
 
+/* Report the ordinary target mismatch for a target-sensitive aggregate after
+ * pure matching has rejected it. This is also the fallback when the generic
+ * validator cannot infer a complete aggregate type from an invalid value. */
+static bool append_expr_expected_type_mismatch(ResolveContext *context,
+                                               const FengExpr *expr,
+                                               const FengTypeRef *expected_type_ref) {
+    char *expr_name = format_expr_target_name(expr);
+    char *type_name = format_type_ref_name(expected_type_ref);
+    bool ok = resolver_append_error(
+        context,
+        expr->token,
+        "AE1003", format_message("expression '%s' does not match expected type '%s'",
+                       expr_name != NULL ? expr_name : "<expression>",
+                       type_name != NULL ? type_name : "<type>"));
+
+    free(expr_name);
+    free(type_name);
+    return ok;
+}
+
 static bool validate_array_literal_expr(ResolveContext *context, const FengExpr *expr) {
     size_t item_index;
     InferredExprType element_type = inferred_expr_type_unknown();
@@ -20378,33 +20467,65 @@ static bool validate_array_literal_expr(ResolveContext *context, const FengExpr 
         return true;
     }
 
-    /* Array literal element adaptation (§10.3.5):
-     *
-     * 1. Explicit array target type (from current_expr_expected_type_ref):
-     *    adapt literal elements to the target element type.
-     *
-     * 2. No explicit target: find the first non-literal element's inferred
-     *    type and use it as the target; adapt literal elements to it.
-     *
-     * 3. All elements are literals: no adaptation, each defaults.
-     *
-     * After adaptation the existing loop reads expr->type via
-     * infer_expr_type (which returns the adapted type for INTEGER/FLOAT). */
-    if (context->current_expr_expected_type_ref != NULL &&
-        context->current_expr_expected_type_ref->kind == FENG_TYPE_REF_ARRAY &&
-        context->current_expr_expected_type_ref->as.inner != NULL) {
-        InferredExprType target =
-            inferred_expr_type_from_type_ref(context->current_expr_expected_type_ref->as.inner);
-        if (inferred_expr_type_is_numeric(target)) {
-            for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
-                const FengExpr *item = expr->as.array_literal.items[item_index];
-                if (expr_is_pure_numeric_literal_expr_for_target_adaptation(item) &&
-                    numeric_literal_fits_inferred_target(context, item, target)) {
-                    fill_expr_type_from_inferred(context, (FengExpr *)item, &target);
+    /* An explicit target owns element compatibility diagnostics. Propagate its
+     * immediate element type uniformly at every nesting level, then stop after
+     * the first item that emitted a root diagnostic so an outer array cannot
+     * add a derived mismatch for the same failure. */
+    if (context->current_expr_expected_type_ref != NULL) {
+        const FengTypeRef *expected_type_ref =
+            context->current_expr_expected_type_ref;
+
+        if (expected_type_ref->kind != FENG_TYPE_REF_ARRAY ||
+            expected_type_ref->as.inner == NULL) {
+            if (expr_matches_expected_type_ref(context,
+                                               expr,
+                                               expected_type_ref)) {
+                return true;
+            }
+            return append_expr_expected_type_mismatch(context,
+                                                      expr,
+                                                      expected_type_ref);
+        }
+        for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+            size_t errors_before = context->error_count != NULL
+                                       ? *context->error_count
+                                       : 0U;
+            const FengExpr *item = expr->as.array_literal.items[item_index];
+
+            if (!expr_matches_expected_type_ref(context,
+                                                item,
+                                                expected_type_ref->as.inner)) {
+                if (!validate_expr_against_expected_type(
+                        context,
+                        item,
+                        expected_type_ref->as.inner)) {
+                    return false;
+                }
+                if (context->error_count == NULL ||
+                    *context->error_count == errors_before) {
+                    return append_expr_expected_type_mismatch(
+                        context, item, expected_type_ref->as.inner);
                 }
             }
+            if (context->error_count != NULL &&
+                *context->error_count > errors_before) {
+                return true;
+            }
         }
-    } else {
+        return true;
+    }
+
+    /* A call argument has no parameter target until overload selection. Its
+     * literal remains structurally resolved, while candidate matching decides
+     * applicability without committing this provisional no-target error. */
+    if (context->deferred_call_argument_target_depth > 0U) {
+        return true;
+    }
+
+    /* Without an explicit target, find the first non-literal element's
+     * inferred numeric type and adapt pure numeric literals to it. If every
+     * element is a literal, each retains its default inferred type. */
+    {
         InferredExprType target;
         bool found_target = false;
 
@@ -22393,15 +22514,46 @@ static FengConstValue const_int_value(int64_t v) {
     FengConstValue r;
     r.kind = FENG_CONST_INT;
     r.i = v;
+    r.integer_is_unsigned = false;
     r.f = 0.0;
     r.b = false;
     return r;
+}
+
+/* Preserve all bits of one unsigned compile-time integer without forcing the
+ * upper half of the u64 domain through signed-overflow arithmetic. */
+static FengConstValue const_uint_value(uint64_t v) {
+    FengConstValue r = const_int_value((int64_t)v);
+
+    r.integer_is_unsigned = true;
+    return r;
+}
+
+/* Refine a folded integer with an already resolved Feng integer type.  The
+ * parser stores every integer literal in one int64_t bit container, so the
+ * semantic type is the source of truth for whether the upper half of that
+ * container belongs to an unsigned value. */
+static void const_integer_apply_inferred_type(
+    const ResolveContext *context,
+    InferredExprType type,
+    FengConstValue *value) {
+    const char *canonical;
+
+    if (context == NULL || value == NULL || value->kind != FENG_CONST_INT) {
+        return;
+    }
+    canonical = inferred_expr_type_builtin_canonical_name(
+        type, context->pointer_size);
+    if (canonical_integer_bit_width(canonical) > 0) {
+        value->integer_is_unsigned = canonical[0] == 'u';
+    }
 }
 
 static FengConstValue const_float_value(double v) {
     FengConstValue r;
     r.kind = FENG_CONST_FLOAT;
     r.i = 0;
+    r.integer_is_unsigned = false;
     r.f = v;
     r.b = false;
     return r;
@@ -22411,6 +22563,7 @@ static FengConstValue const_bool_value(bool v) {
     FengConstValue r;
     r.kind = FENG_CONST_BOOL;
     r.i = 0;
+    r.integer_is_unsigned = false;
     r.f = 0.0;
     r.b = v;
     return r;
@@ -22419,9 +22572,13 @@ static FengConstValue const_bool_value(bool v) {
 /* If either operand is FLOAT, promote the other from INT to FLOAT in-place. */
 static bool promote_const_pair(FengConstValue *a, FengConstValue *b) {
     if (a->kind == FENG_CONST_FLOAT && b->kind == FENG_CONST_INT) {
-        *b = const_float_value((double)b->i);
+        *b = const_float_value(b->integer_is_unsigned
+                                   ? (double)(uint64_t)b->i
+                                   : (double)b->i);
     } else if (b->kind == FENG_CONST_FLOAT && a->kind == FENG_CONST_INT) {
-        *a = const_float_value((double)a->i);
+        *a = const_float_value(a->integer_is_unsigned
+                                   ? (double)(uint64_t)a->i
+                                   : (double)a->i);
     }
     return a->kind == b->kind;
 }
@@ -22471,10 +22628,17 @@ static bool evaluate_constant_identifier(ResolveContext *context,
     const LocalNameEntry *local = resolver_find_local_name_entry(context, name);
 
     if (local != NULL) {
+        bool evaluated;
+
         if (local->mutability != FENG_MUTABILITY_LET || local->source_expr == NULL) {
             return false;
         }
-        return evaluate_constant_expr_inner(context, local->source_expr, out, guard);
+        evaluated = evaluate_constant_expr_inner(
+            context, local->source_expr, out, guard);
+        if (evaluated) {
+            const_integer_apply_inferred_type(context, local->type, out);
+        }
+        return evaluated;
     }
 
     /* 惰性歧义检测(规范 §7.1):常量上下文中的裸名值引用,同样需要做跨来源
@@ -22496,10 +22660,21 @@ static bool evaluate_constant_identifier(ResolveContext *context,
             visible->decl->as.binding.initializer == NULL) {
             return false;
         }
-        return evaluate_constant_expr_inner(context,
-                                            visible->decl->as.binding.initializer,
-                                            out,
-                                            guard);
+        {
+            bool evaluated = evaluate_constant_expr_inner(
+                context,
+                visible->decl->as.binding.initializer,
+                out,
+                guard);
+
+            if (evaluated) {
+                const_integer_apply_inferred_type(
+                    context,
+                    infer_global_binding_decl_type(context, visible->decl),
+                    out);
+            }
+            return evaluated;
+        }
     }
 }
 
@@ -22518,7 +22693,11 @@ static bool evaluate_constant_unary(ResolveContext *context,
             if (operand.kind == FENG_CONST_INT) {
                 /* Mirror extract_constant_integer_literal: use unsigned arithmetic to
                  * avoid signed-overflow UB on INT64_MIN. */
-                *out = const_int_value((int64_t)(0U - (uint64_t)operand.i));
+                uint64_t value = (uint64_t)0U - (uint64_t)operand.i;
+
+                *out = operand.integer_is_unsigned
+                           ? const_uint_value(value)
+                           : const_int_value((int64_t)value);
                 return true;
             }
             if (operand.kind == FENG_CONST_FLOAT) {
@@ -22528,7 +22707,9 @@ static bool evaluate_constant_unary(ResolveContext *context,
             return false;
         case FENG_TOKEN_TILDE:
             if (operand.kind != FENG_CONST_INT) return false;
-            *out = const_int_value((int64_t)~(uint64_t)operand.i);
+            *out = operand.integer_is_unsigned
+                       ? const_uint_value(~(uint64_t)operand.i)
+                       : const_int_value((int64_t)~(uint64_t)operand.i);
             return true;
         case FENG_TOKEN_NOT:
             if (operand.kind != FENG_CONST_BOOL) return false;
@@ -22588,19 +22769,24 @@ static bool evaluate_constant_binary(ResolveContext *context,
         uint64_t l = (uint64_t)lhs.i;
         uint64_t r = (uint64_t)rhs.i;
         uint64_t v = op == FENG_TOKEN_AMP ? (l & r) : op == FENG_TOKEN_PIPE ? (l | r) : (l ^ r);
-        *out = const_int_value((int64_t)v);
+        *out = lhs.integer_is_unsigned || rhs.integer_is_unsigned
+                   ? const_uint_value(v)
+                   : const_int_value((int64_t)v);
         return true;
     }
     if (op == FENG_TOKEN_SHL || op == FENG_TOKEN_SHR) {
         if (lhs.kind != FENG_CONST_INT || rhs.kind != FENG_CONST_INT) return false;
         if (rhs.i < 0 || rhs.i >= 64) return false; /* type-aware diagnostic handled by validator */
         if (op == FENG_TOKEN_SHL) {
-            *out = const_int_value((int64_t)((uint64_t)lhs.i << (uint64_t)rhs.i));
+            uint64_t value = (uint64_t)lhs.i << (uint64_t)rhs.i;
+
+            *out = lhs.integer_is_unsigned
+                       ? const_uint_value(value)
+                       : const_int_value((int64_t)value);
         } else {
-            /* Arithmetic shift right preserves sign for signed values; for unsigned ones
-             * carried in i64 this is a known-loss operation but matches the bit-pattern
-             * model used elsewhere in the evaluator. */
-            *out = const_int_value(lhs.i >> rhs.i);
+            *out = lhs.integer_is_unsigned
+                       ? const_uint_value((uint64_t)lhs.i >> (uint64_t)rhs.i)
+                       : const_int_value(lhs.i >> rhs.i);
         }
         return true;
     }
@@ -22613,14 +22799,30 @@ static bool evaluate_constant_binary(ResolveContext *context,
             promote_const_pair(&lhs, &rhs);
             bool result;
             if (lhs.kind == FENG_CONST_INT) {
-                int64_t a = lhs.i, b = rhs.i;
-                switch (op) {
-                    case FENG_TOKEN_LT:     result = a < b;  break;
-                    case FENG_TOKEN_LE:     result = a <= b; break;
-                    case FENG_TOKEN_GT:     result = a > b;  break;
-                    case FENG_TOKEN_GE:     result = a >= b; break;
-                    case FENG_TOKEN_EQ:     result = a == b; break;
-                    default:                result = a != b; break;
+                if (lhs.integer_is_unsigned || rhs.integer_is_unsigned) {
+                    uint64_t a = (uint64_t)lhs.i;
+                    uint64_t b = (uint64_t)rhs.i;
+
+                    switch (op) {
+                        case FENG_TOKEN_LT:     result = a < b;  break;
+                        case FENG_TOKEN_LE:     result = a <= b; break;
+                        case FENG_TOKEN_GT:     result = a > b;  break;
+                        case FENG_TOKEN_GE:     result = a >= b; break;
+                        case FENG_TOKEN_EQ:     result = a == b; break;
+                        default:                result = a != b; break;
+                    }
+                } else {
+                    int64_t a = lhs.i;
+                    int64_t b = rhs.i;
+
+                    switch (op) {
+                        case FENG_TOKEN_LT:     result = a < b;  break;
+                        case FENG_TOKEN_LE:     result = a <= b; break;
+                        case FENG_TOKEN_GT:     result = a > b;  break;
+                        case FENG_TOKEN_GE:     result = a >= b; break;
+                        case FENG_TOKEN_EQ:     result = a == b; break;
+                        default:                result = a != b; break;
+                    }
                 }
             } else {
                 double a = lhs.f, b = rhs.f;
@@ -22653,6 +22855,62 @@ static bool evaluate_constant_binary(ResolveContext *context,
         }
         promote_const_pair(&lhs, &rhs);
         if (lhs.kind == FENG_CONST_INT) {
+            if (lhs.integer_is_unsigned || rhs.integer_is_unsigned) {
+                uint64_t left = (uint64_t)lhs.i;
+                uint64_t right = (uint64_t)rhs.i;
+                uint64_t result = 0U;
+                bool overflow = false;
+
+                switch (op) {
+                    case FENG_TOKEN_PLUS:
+                        overflow = __builtin_add_overflow(left, right, &result);
+                        break;
+                    case FENG_TOKEN_MINUS:
+                        overflow = __builtin_sub_overflow(left, right, &result);
+                        break;
+                    case FENG_TOKEN_STAR:
+                        overflow = __builtin_mul_overflow(left, right, &result);
+                        break;
+                    case FENG_TOKEN_SLASH:
+                        if (right == 0U) {
+                            report_const_eval_error(
+                                context,
+                                expr,
+                                "division by zero in compile-time '/' expression");
+                            return false;
+                        }
+                        result = left / right;
+                        break;
+                    case FENG_TOKEN_PERCENT:
+                        if (right == 0U) {
+                            report_const_eval_error(
+                                context,
+                                expr,
+                                "modulo by zero in compile-time '%' expression");
+                            return false;
+                        }
+                        result = left % right;
+                        break;
+                    default:
+                        return false;
+                }
+                if (overflow) {
+                    const char *operator_name =
+                        op == FENG_TOKEN_PLUS ? "+" :
+                        op == FENG_TOKEN_MINUS ? "-" : "*";
+                    char message[80];
+
+                    (void)snprintf(
+                        message,
+                        sizeof(message),
+                        "integer overflow in compile-time '%s' expression",
+                        operator_name);
+                    report_const_eval_error(context, expr, message);
+                    return false;
+                }
+                *out = const_uint_value(result);
+                return true;
+            }
             int64_t result = 0;
             switch (op) {
                 case FENG_TOKEN_PLUS:
@@ -22751,11 +23009,17 @@ static bool evaluate_constant_cast(ResolveContext *context,
      * static error caught by cast_expr_types_are_valid; we don't fold across that boundary. */
     if (inner.kind == FENG_CONST_INT) {
         if (strcmp(target, "f32") == 0 || strcmp(target, "f64") == 0) {
-            *out = const_float_value((double)inner.i);
+            *out = const_float_value(inner.integer_is_unsigned
+                                         ? (double)(uint64_t)inner.i
+                                         : (double)inner.i);
             return true;
         }
         if (canonical_integer_bit_width(target) > 0) {
-            *out = const_int_value(truncate_int_to_canonical(inner.i, target));
+            int64_t value = truncate_int_to_canonical(inner.i, target);
+
+            *out = target[0] == 'u'
+                       ? const_uint_value((uint64_t)value)
+                       : const_int_value(value);
             return true;
         }
         return false;
@@ -22768,7 +23032,11 @@ static bool evaluate_constant_cast(ResolveContext *context,
         if (canonical_integer_bit_width(target) > 0) {
             /* C-style truncation toward zero, then narrow to target bit width. */
             int64_t truncated = (int64_t)inner.f;
-            *out = const_int_value(truncate_int_to_canonical(truncated, target));
+            int64_t value = truncate_int_to_canonical(truncated, target);
+
+            *out = target[0] == 'u'
+                       ? const_uint_value((uint64_t)value)
+                       : const_int_value(value);
             return true;
         }
         return false;
@@ -22794,6 +23062,12 @@ static bool evaluate_constant_expr_inner(ResolveContext *context,
     switch (expr->kind) {
         case FENG_EXPR_INTEGER:
             *out = const_int_value(expr->as.integer);
+            if (expr->type != NULL) {
+                const_integer_apply_inferred_type(
+                    context,
+                    inferred_expr_type_from_type_ref(expr->type),
+                    out);
+            }
             return true;
         case FENG_EXPR_FLOAT:
             *out = const_float_value(expr->as.floating);
@@ -22818,6 +23092,77 @@ static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
                                    FengConstValue *out) {
     return evaluate_constant_expr_inner(context, expr, out, NULL);
+}
+
+/* Validate a compile-time-known array creation length against the target
+ * platform's `int` domain. The constant folder stores integer bits in i64;
+ * the resolved static type determines whether those bits are signed or
+ * unsigned. Dynamic expressions are deliberately left for the single
+ * creation-site Codegen check. */
+static bool validate_array_new_constant_size(
+    ResolveContext *context,
+    const FengExpr *size_expr,
+    InferredExprType size_type,
+    bool *out_statically_valid) {
+    FengConstValue value;
+    const char *canonical_name;
+    const uint64_t target_max = context->pointer_size >= 8U
+                                    ? (uint64_t)INT64_MAX
+                                    : (uint64_t)INT32_MAX;
+    uint64_t unsigned_value;
+    bool is_unsigned;
+    bool valid;
+    char value_text[32];
+    char max_text[32];
+
+    if (out_statically_valid != NULL) {
+        *out_statically_valid = false;
+    }
+    if (!evaluate_constant_expr(context, size_expr, &value) ||
+        value.kind != FENG_CONST_INT) {
+        return true;
+    }
+
+    canonical_name = inferred_expr_type_builtin_canonical_name(
+        size_type, context->pointer_size);
+    if (canonical_name == NULL) {
+        return true;
+    }
+    is_unsigned = canonical_name[0] == 'u';
+    unsigned_value = (uint64_t)value.i;
+    valid = is_unsigned
+                ? unsigned_value <= target_max
+                : value.i >= 0 && (uint64_t)value.i <= target_max;
+    if (valid) {
+        if (out_statically_valid != NULL) {
+            *out_statically_valid = true;
+        }
+        return true;
+    }
+
+    if (is_unsigned) {
+        (void)snprintf(value_text,
+                       sizeof(value_text),
+                       "%llu",
+                       (unsigned long long)unsigned_value);
+    } else {
+        (void)snprintf(value_text,
+                       sizeof(value_text),
+                       "%lld",
+                       (long long)value.i);
+    }
+    (void)snprintf(max_text,
+                   sizeof(max_text),
+                   "%llu",
+                   (unsigned long long)target_max);
+    return resolver_append_error(
+        context,
+        size_expr->token,
+        "AE0204",
+        format_message(
+            "array size value %s is outside the valid target 'int' range 0...%s",
+            value_text,
+            max_text));
 }
 
 static bool expr_is_pure_numeric_literal_expr_for_target_adaptation(const FengExpr *expr) {
@@ -26886,13 +27231,40 @@ static bool validate_untyped_address_of_expr(ResolveContext *context, const Feng
 }
 
 static bool validate_untyped_array_literal_expr(ResolveContext *context, const FengExpr *expr) {
-    if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL || expr->as.array_literal.count != 0U) {
+    size_t item_index;
+
+    if (expr == NULL || expr->kind != FENG_EXPR_ARRAY_LITERAL) {
         return true;
     }
 
-    return resolver_append_error(context,
-                                 expr->token,
-                                 "AE0203", format_message("empty array literal requires an explicit target array type"));
+    if (expr->as.array_literal.count == 0U) {
+        return resolver_append_error(
+            context,
+            expr->token,
+            "AE0203",
+            format_message(
+                "empty array literal requires an explicit target array type"));
+    }
+
+    /* An untyped outer array cannot supply an explicit element target to a
+     * nested empty literal.  Walk the literal tree so the diagnostic belongs
+     * to the exact inner '[' that first lacks a target. */
+    for (item_index = 0U; item_index < expr->as.array_literal.count; ++item_index) {
+        size_t errors_before = context->error_count != NULL
+                                   ? *context->error_count
+                                   : 0U;
+
+        if (!validate_untyped_array_literal_expr(
+                context, expr->as.array_literal.items[item_index])) {
+            return false;
+        }
+        if (context->error_count != NULL &&
+            *context->error_count > errors_before) {
+            return true;
+        }
+    }
+
+    return true;
 }
 
 /* Tuple literals have no anonymous type and therefore need a named target. */
@@ -29957,9 +30329,39 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             return true;
 
         case FENG_EXPR_ARRAY_LITERAL:
-            for (index = 0U; index < expr->as.array_literal.count; ++index) {
-                if (!resolve_expr(context, expr->as.array_literal.items[index], allow_self)) {
+            {
+                const FengTypeRef *previous_expected =
+                    context->current_expr_expected_type_ref;
+                const FengTypeRef *element_expected =
+                    previous_expected != NULL &&
+                            previous_expected->kind == FENG_TYPE_REF_ARRAY
+                        ? previous_expected->as.inner
+                        : NULL;
+                size_t errors_before = context->error_count != NULL
+                                           ? *context->error_count
+                                           : 0U;
+                bool items_ok = true;
+
+                context->current_expr_expected_type_ref = element_expected;
+                for (index = 0U; index < expr->as.array_literal.count; ++index) {
+                    if (!resolve_expr(context,
+                                      expr->as.array_literal.items[index],
+                                      allow_self)) {
+                        items_ok = false;
+                        break;
+                    }
+                    if (context->error_count != NULL &&
+                        *context->error_count > errors_before) {
+                        break;
+                    }
+                }
+                context->current_expr_expected_type_ref = previous_expected;
+                if (!items_ok) {
                     return false;
+                }
+                if (context->error_count != NULL &&
+                    *context->error_count > errors_before) {
+                    return true;
                 }
             }
             return validate_array_literal_expr(context, expr);
@@ -29976,6 +30378,10 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (!resolve_type_ref(context, expr->as.array_new.element_type, false)) {
                 return false;
             }
+            if (!validate_array_new_default_zero_element(
+                    context, expr->as.array_new.element_type)) {
+                return false;
+            }
             /* Validate size expression is an integer expression. */
             if (!resolve_expr(context, expr->as.array_new.size, allow_self)) {
                 return false;
@@ -29985,6 +30391,15 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 !inferred_expr_type_is_integer(size_type)) {
                 return resolver_append_error(context, expr->as.array_new.size->token,
                     "AE0202", format_message("array size must be an integer expression"));
+            }
+            ((FengExpr *)expr)->as.array_new.size_is_statically_valid = false;
+            if (inferred_expr_type_is_known(size_type) &&
+                !validate_array_new_constant_size(
+                    context,
+                    expr->as.array_new.size,
+                    size_type,
+                    &((FengExpr *)expr)->as.array_new.size_is_statically_valid)) {
+                return false;
             }
             return true;
         }
@@ -30072,7 +30487,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                  * overload selection, so branch-result mismatch checks are
                  * deferred while each argument is resolved. */
                 context->current_expr_expected_type_ref = NULL;
-                context->deferred_branch_result_validation_depth += 1U;
+                context->deferred_call_argument_target_depth += 1U;
                 for (index = 0U; index < expr->as.call.arg_count; ++index) {
                     if (!resolve_expr(context,
                                       expr->as.call.args[index],
@@ -30081,7 +30496,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                         break;
                     }
                 }
-                context->deferred_branch_result_validation_depth -= 1U;
+                context->deferred_call_argument_target_depth -= 1U;
                 context->current_expr_expected_type_ref = previous_expected;
                 if (!args_ok) {
                     return false;

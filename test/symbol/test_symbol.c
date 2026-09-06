@@ -5012,6 +5012,388 @@ static void test_signature_visibility_error_prevents_public_ft_export(void) {
     free(tmp_dir);
 }
 
+/* Build a source-level array type with a deterministic writable-layer
+ * pattern. Suffixes are appended from inner to outer, while provider layer
+ * indices are observed from outer to inner. */
+static char *g21_make_symbol_array_type(size_t rank, size_t phase) {
+    size_t capacity = sizeof("i32") + rank * sizeof("[!]");
+    char *type_text = (char *)calloc(capacity, 1U);
+    size_t length = 3U;
+
+    ASSERT(type_text != NULL);
+    memcpy(type_text, "i32", length);
+    for (size_t suffix_index = 0U; suffix_index < rank; ++suffix_index) {
+        const char *suffix = (suffix_index + phase) % 3U == 0U ? "[!]" : "[]";
+        size_t suffix_length = strlen(suffix);
+
+        memcpy(type_text + length, suffix, suffix_length);
+        length += suffix_length;
+    }
+    type_text[length] = '\0';
+    return type_text;
+}
+
+/* Return the expected writable bit for one flattened outer-to-inner layer. */
+static bool g21_symbol_array_layer_writable(size_t rank,
+                                            size_t phase,
+                                            size_t layer) {
+    size_t suffix_index = rank - layer - 1U;
+
+    return (suffix_index + phase) % 3U == 0U;
+}
+
+/* Assert that a provider-facing array type retained its full rank, every
+ * writable layer, and its canonical i32 leaf. */
+static void g21_assert_symbol_array_shape(const FengSymbolTypeView *type,
+                                          size_t rank,
+                                          size_t phase) {
+    const FengSymbolTypeView *element;
+
+    ASSERT(type != NULL);
+    ASSERT(feng_symbol_type_kind(type) == FENG_SYMBOL_TYPE_KIND_ARRAY);
+    ASSERT(feng_symbol_type_array_rank(type) == rank);
+    for (size_t layer = 0U; layer < rank; ++layer) {
+        ASSERT(feng_symbol_type_array_layer_writable(type, layer) ==
+               g21_symbol_array_layer_writable(rank, phase, layer));
+    }
+    element = feng_symbol_type_inner(type);
+    assert_builtin_type_name(element, "i32");
+}
+
+/* Assert the same complete shape after the provider synthesizes an imported
+ * AST type reference for Semantic consumers. */
+static void g21_assert_imported_array_shape(const FengTypeRef *type_ref,
+                                            size_t rank,
+                                            size_t phase) {
+    const FengTypeRef *cursor = type_ref;
+
+    for (size_t layer = 0U; layer < rank; ++layer) {
+        ASSERT(cursor != NULL);
+        ASSERT(cursor->kind == FENG_TYPE_REF_ARRAY);
+        ASSERT(cursor->array_element_writable ==
+               g21_symbol_array_layer_writable(rank, phase, layer));
+        cursor = cursor->as.inner;
+    }
+    ASSERT(cursor != NULL);
+    ASSERT(cursor->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(cursor->as.named.segment_count == 1U);
+    ASSERT(slice_equals_cstr(cursor->as.named.segments[0], "i32"));
+}
+
+/* Analyze one consumer against the real package-public provider cache. */
+static void g21_analyze_array_consumer_or_die(
+        const FengSemanticImportedModuleQuery *query,
+        const char *path,
+        const char *source) {
+    FengSemanticAnalyzeOptions options = {0};
+    FengProgram *program = parse_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = query;
+    options.pointer_size = feng_get_host_pointer_size();
+    if (!feng_semantic_analyze_with_options(programs,
+                                            1U,
+                                            &options,
+                                            &analysis,
+                                            &errors,
+                                            &error_count)) {
+        fprintf(stderr,
+                "G21 consumer analysis failed for %s with %zu error(s)\n",
+                path,
+                error_count);
+        if (errors != NULL && error_count > 0U) {
+            fprintf(stderr,
+                    "first error: %s\n",
+                    errors[0].message != NULL ? errors[0].message : "unknown");
+        }
+        ASSERT(false);
+    }
+    ASSERT(error_count == 0U);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Analyze one real-.ft consumer and require the sole array element
+ * default-zero diagnostic at the requested qualified type token. */
+static void g21_assert_array_consumer_default_zero_error(
+        const FengSemanticImportedModuleQuery *query,
+        const char *path,
+        const char *source,
+        const char *expected_lexeme) {
+    FengSemanticAnalyzeOptions options = {0};
+    FengProgram *program = parse_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = query;
+    options.pointer_size = feng_get_host_pointer_size();
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, "AE0332") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(errors[0].token.column == 16U);
+    ASSERT(errors[0].token.length == strlen(expected_lexeme));
+    ASSERT(memcmp(errors[0].token.lexeme,
+                  expected_lexeme,
+                  errors[0].token.length) == 0);
+    ASSERT(strstr(errors[0].message,
+                  "array creation element type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* ARRAY-D05: package-public .ft v1 composes existing ARRAY records to carry
+ * 33/65 layers without truncating any writable bit, then restores one
+ * flattened type identity for both provider and imported-AST consumers. */
+static void test_g21_deep_array_types_ft_roundtrip(void) {
+    char *type33 = g21_make_symbol_array_type(33U, 0U);
+    char *type65 = g21_make_symbol_array_type(65U, 1U);
+    size_t source_capacity = strlen(type33) * 2U + strlen(type65) * 2U + 512U;
+    char *source = (char *)calloc(source_capacity, 1U);
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+    FengSlice segments[4];
+    const FengSymbolImportedModule *module;
+    const FengSymbolDeclView *global_decl;
+    const FengSymbolDeclView *holder_decl;
+    const FengSymbolDeclView *field_decl;
+    const FengSymbolDeclView *carry_decl;
+    const FengSemanticModule *semantic_module;
+    const FengDecl *imported_global = NULL;
+    const FengDecl *imported_holder = NULL;
+    const FengDecl *imported_carry = NULL;
+
+    ASSERT(source != NULL);
+    ASSERT(snprintf(source,
+                    source_capacity,
+                    "open module feng.test.symbol.g21_array_layers;\n"
+                    "open let global33: %s;\n"
+                    "open type Holder { open var field65: %s; }\n"
+                    "open func carry(value: %s): %s { return global33; }\n",
+                    type33,
+                    type65,
+                    type65,
+                    type33) > 0);
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g21_array_layers.ff", source, public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    segments[0] = slice_from_cstr("feng");
+    segments[1] = slice_from_cstr("test");
+    segments[2] = slice_from_cstr("symbol");
+    segments[3] = slice_from_cstr("g21_array_layers");
+    module = feng_symbol_provider_find_module(provider, segments, 4U);
+    ASSERT(module != NULL);
+    global_decl = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("global33"));
+    holder_decl = feng_symbol_module_find_public_type(
+        module, slice_from_cstr("Holder"));
+    carry_decl = feng_symbol_module_find_public_value(
+        module, slice_from_cstr("carry"));
+    ASSERT(global_decl != NULL && holder_decl != NULL && carry_decl != NULL);
+    field_decl = feng_symbol_decl_find_public_member(
+        holder_decl, slice_from_cstr("field65"));
+    ASSERT(field_decl != NULL);
+    g21_assert_symbol_array_shape(
+        feng_symbol_decl_value_type(global_decl), 33U, 0U);
+    g21_assert_symbol_array_shape(
+        feng_symbol_decl_value_type(field_decl), 65U, 1U);
+    ASSERT(feng_symbol_decl_param_count(carry_decl) == 1U);
+    g21_assert_symbol_array_shape(
+        feng_symbol_decl_param_type(carry_decl, 0U), 65U, 1U);
+    g21_assert_symbol_array_shape(
+        feng_symbol_decl_return_type(carry_decl), 33U, 0U);
+
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+    semantic_module = query.get_module(query.user, segments, 4U);
+    ASSERT(semantic_module != NULL && semantic_module->program_count == 1U);
+    for (size_t index = 0U;
+         index < semantic_module->programs[0]->declaration_count;
+         ++index) {
+        const FengDecl *decl = semantic_module->programs[0]->declarations[index];
+
+        if (decl->kind == FENG_DECL_GLOBAL_BINDING &&
+            slice_equals_cstr(decl->as.binding.name, "global33")) {
+            imported_global = decl;
+        } else if (decl->kind == FENG_DECL_TYPE &&
+                   slice_equals_cstr(decl->as.type_decl.name, "Holder")) {
+            imported_holder = decl;
+        } else if (decl->kind == FENG_DECL_FUNCTION &&
+                   slice_equals_cstr(decl->as.function_decl.name, "carry")) {
+            imported_carry = decl;
+        }
+    }
+    ASSERT(imported_global != NULL && imported_holder != NULL && imported_carry != NULL);
+    ASSERT(imported_holder->as.type_decl.member_count == 1U);
+    g21_assert_imported_array_shape(imported_global->as.binding.type, 33U, 0U);
+    g21_assert_imported_array_shape(
+        imported_holder->as.type_decl.members[0]->as.field.type, 65U, 1U);
+    ASSERT(imported_carry->as.function_decl.params != NULL);
+    g21_assert_imported_array_shape(
+        imported_carry->as.function_decl.params[0].type, 65U, 1U);
+    g21_assert_imported_array_shape(
+        imported_carry->as.function_decl.return_type, 33U, 0U);
+    {
+        static const char *paths[] = {
+            "g21_array_short_consumer.ff",
+            "g21_array_alias_consumer.ff",
+            "g21_array_full_path_consumer.ff"
+        };
+        static const char *headers[] = {
+            "module app.g21_array_short;\n"
+            "import feng.test.symbol.g21_array_layers;\n",
+            "module app.g21_array_alias;\n"
+            "import feng.test.symbol.g21_array_layers as layers;\n",
+            "module app.g21_array_full_path;\n"
+        };
+        static const char *callees[] = {
+            "carry",
+            "layers.carry",
+            "feng.test.symbol.g21_array_layers.carry"
+        };
+
+        for (size_t index = 0U; index < 3U; ++index) {
+            size_t consumer_capacity = strlen(headers[index]) +
+                                       strlen(callees[index]) +
+                                       strlen(type33) + strlen(type65) + 128U;
+            char *consumer = (char *)calloc(consumer_capacity, 1U);
+
+            ASSERT(consumer != NULL);
+            ASSERT(snprintf(consumer,
+                            consumer_capacity,
+                            "%sfunc run(value: %s): %s { return %s(value); }\n",
+                            headers[index],
+                            type65,
+                            type33,
+                            callees[index]) > 0);
+            g21_analyze_array_consumer_or_die(&query, paths[index], consumer);
+            free(consumer);
+        }
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+    free(source);
+    free(type65);
+    free(type33);
+}
+
+/* ARRAY-D27-B: finite-default metadata is consumed only after a genuine
+ * package-public .ft write/read cycle. Short, alias, and complete type paths
+ * accept finite elements and reject direct or mutual recursive elements with
+ * the same Semantic diagnostic as source-local types. */
+static void test_g21_array_default_zero_semantics_survive_ft_roundtrip(void) {
+    static const char *provider_source =
+        "open module vendor.g21_array_defaults;\n"
+        "open type Direct { open var next: Direct; }\n"
+        "open type Left { open var right: Right; }\n"
+        "open type Right { open var left: Left; }\n"
+        "open type Finite { open var number: i32; }\n";
+    static const char *invalid_paths[] = {
+        "g21_ft_array_default_short.ff",
+        "g21_ft_array_default_alias.ff",
+        "g21_ft_array_default_full.ff"
+    };
+    static const char *invalid_sources[] = {
+        "module app.g21_ft_array_default_short;\n"
+        "import vendor.g21_array_defaults;\n"
+        "func bad(count: i32): void {\n"
+        "  let values = Direct[:0];\n"
+        "}\n",
+        "module app.g21_ft_array_default_alias;\n"
+        "import vendor.g21_array_defaults as api;\n"
+        "func bad(count: i32): void {\n"
+        "  let values = api.Left[:1];\n"
+        "}\n",
+        "module app.g21_ft_array_default_full;\n"
+        "\n"
+        "func bad(count: i32): void {\n"
+        "  let values = vendor.g21_array_defaults.Right[:count];\n"
+        "}\n"
+    };
+    static const char *invalid_tokens[] = {"Direct", "api", "vendor"};
+    static const char *valid_paths[] = {
+        "g21_ft_array_finite_short.ff",
+        "g21_ft_array_finite_alias.ff",
+        "g21_ft_array_finite_full.ff"
+    };
+    static const char *valid_sources[] = {
+        "module app.g21_ft_array_finite_short;\n"
+        "import vendor.g21_array_defaults;\n"
+        "func build(count: i32): void { let values = Finite[:count]; }\n",
+        "module app.g21_ft_array_finite_alias;\n"
+        "import vendor.g21_array_defaults as api;\n"
+        "func build(count: i32): void { let values = api.Finite[:count]; }\n",
+        "module app.g21_ft_array_finite_full;\n"
+        "func build(count: i32): void {\n"
+        "  let values = vendor.g21_array_defaults.Finite[:count];\n"
+        "}\n"
+    };
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolProvider *provider = NULL;
+    FengSymbolImportedModuleCache *cache = NULL;
+    FengSemanticImportedModuleQuery query;
+    FengSymbolError error = {0};
+
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g21_array_defaults_provider.ff",
+                                provider_source,
+                                public_root);
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider,
+                                            public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC,
+                                            &error));
+    cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    query = feng_symbol_imported_module_cache_as_query(cache);
+
+    for (size_t index = 0U; index < 3U; ++index) {
+        g21_assert_array_consumer_default_zero_error(&query,
+                                                     invalid_paths[index],
+                                                     invalid_sources[index],
+                                                     invalid_tokens[index]);
+        g21_analyze_array_consumer_or_die(&query,
+                                          valid_paths[index],
+                                          valid_sources[index]);
+    }
+
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
 /* ENUM-D11: package-public .ft preserves the fixed-i32 enum boundaries,
  * declaration order, and imported AST values without changing the format. */
 static void test_g19_enum_i32_boundaries_ft_roundtrip(void) {
@@ -5153,6 +5535,8 @@ int main(void) {
     test_fit_concrete_enum_array_target_ft_roundtrip();
     test_private_representation_dependency_closure_roundtrip();
     test_signature_visibility_error_prevents_public_ft_export();
+    test_g21_deep_array_types_ft_roundtrip();
+    test_g21_array_default_zero_semantics_survive_ft_roundtrip();
     fprintf(stdout, "symbol tests passed\n");
     return 0;
 }

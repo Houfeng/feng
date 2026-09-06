@@ -788,7 +788,7 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 - [x] `cg_emit_tuple_type_definition` 重命名为 `cg_emit_value_type_definition`，guard 扩展为 `is_tuple || is_value`；`cg_emit_user_type_forward` 分发 guard 同步扩展（§7.2 函数重命名清单）
 - [x] Trivial/Aggregate descriptor 实例生成（由 `cg_emit_value_type_definition` 统一处理，per-type，描述符类型由 `value_kind` 决定：trivial → `FengTrivialDescriptor`，aggregate → `FengAggregateDescriptor`，§5.1、§5.2）
 - [x] `equal_fn` 函数生成（`cg_emit_equal_function`，由原 `cg_emit_tuple_equal_function` 重命名 + guard 扩展，per-type，§5.1、§5.2）
-- [x] `FengAggregateDefaultInitDescriptor` 生成（由 `cg_emit_value_type_definition` 统一处理，per-type）
+- [x] `FengDefaultZeroInitDescriptor` 生成（由 `cg_emit_value_type_definition` 统一处理，per-type）
 - [x] 基本值语义：赋值、传参、内联布局（`cg_aggregate_facts` 级联 + 聚合 API，§3.2、§3.6）
 - [x] 成员访问：`cg_emit_member` tuple `.` 分支 guard 扩展为 `cg_type_is_tuple_user(t) || cg_type_is_value_user(t)`（变量/字段读取 `p.x`，§7.4.2 第 3 项关联）
 - [x] 成员赋值：`cg_emit_assign` 成员赋值路径新增 @value 分发（trivial/compound/aggregate/managed 四分支，`(recv).field` 替代 `(recv)->field`，§7.4.2 第 3 项）

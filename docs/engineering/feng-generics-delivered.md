@@ -93,7 +93,7 @@ imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consu
 本轮 Phase B 已完成的实现要点：
 
 1. object-form `spec` 的 aggregate field 已不再被 codegen 护栏拒绝；default witness、concrete witness、slot witness forwarding 均已支持 aggregate getter/setter。
-2. object literal / default subject factory 对 aggregate field 不能再使用直接结构体赋值或普通 default value expression，必须统一走 `feng_aggregate_assign` / `feng_aggregate_default_init`，否则会在运行期出现引用计数失衡。
+2. object literal / default subject factory 对 aggregate field 不能再使用直接结构体赋值或普通 default value expression，必须统一走 `feng_aggregate_assign` / `feng_aggregate_default_zero_init`，否则会在运行期出现引用计数失衡。
 3. 已补 focused codegen regression 与 smoke：既覆盖 aggregate field 自身，也覆盖 aggregate field 经 generic constrained spec value / slot witness adapter 转发的真实执行路径。
 
 #### Phase C. 全局 codegen：if/match aggregate result
@@ -104,7 +104,7 @@ imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consu
 
 本轮 Phase C 已完成的实现要点：
 
-1. if-expression / match-expression 的结果槽位在 aggregate 场景不再报 not yet supported，而是统一走 `feng_aggregate_default_init` + 分支 `feng_aggregate_assign`/`feng_aggregate_take` + scope cleanup。
+1. if-expression / match-expression 的结果槽位在 aggregate 场景不再报 not yet supported，而是统一走 `feng_aggregate_default_zero_init` + 分支 `feng_aggregate_assign`/`feng_aggregate_take` + scope cleanup。
 2. 分支表达式对 aggregate 结果的 owns/borrow 语义与既有 value-model 保持一致：borrow 走 assign，owns 走 materialize + take。
 3. 已补 focused codegen regression 与 smoke，覆盖 if/match 两条 aggregate result 路径，并通过全量回归验证。
 

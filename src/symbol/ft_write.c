@@ -273,11 +273,78 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
                                       const FengSymbolTypeView *type,
                                       const char *path,
                                       FengToken token,
+                                      FengSymbolError *out_error);
+
+/* Serialize a flattened array view as a chain of ordinary .ft v1 ARRAY
+ * records. Each record owns at most the 32 layers representable by its
+ * existing u32 bitmap; elem_start links to the next inner chunk or leaf. */
+static uint32_t writer_serialize_array_chunks(
+        WriterContext *ctx,
+        const FengSymbolTypeView *type,
+        size_t first_layer,
+        const char *path,
+        FengToken token,
+        FengSymbolError *out_error) {
+    FengSymbolFtTypeRecord record;
+    size_t remaining;
+    size_t chunk_rank;
+    size_t layer_index;
+
+    if (type == NULL || type->kind != FENG_SYMBOL_TYPE_KIND_ARRAY ||
+        first_layer >= type->as.array.rank) {
+        feng_symbol_internal_set_error(out_error,
+                                       path,
+                                       token,
+                                       "invalid empty array type while serializing .ft");
+        return 0U;
+    }
+    remaining = type->as.array.rank - first_layer;
+    chunk_rank = remaining > 32U ? 32U : remaining;
+    memset(&record, 0, sizeof(record));
+    record.kind = FENG_SYMBOL_FT_TYPE_KIND_ARRAY;
+    if (remaining > chunk_rank) {
+        record.elem_start = writer_serialize_array_chunks(ctx,
+                                                          type,
+                                                          first_layer + chunk_rank,
+                                                          path,
+                                                          token,
+                                                          out_error);
+    } else {
+        record.elem_start = writer_serialize_type(ctx,
+                                                  type->as.array.element,
+                                                  path,
+                                                  token,
+                                                  out_error);
+    }
+    if (record.elem_start == 0U) {
+        return 0U;
+    }
+    record.elem_count = (uint32_t)chunk_rank;
+    for (layer_index = 0U; layer_index < chunk_rank; ++layer_index) {
+        if (type->as.array.layer_writable[first_layer + layer_index]) {
+            record.string_ref |= (uint32_t)1U << layer_index;
+        }
+    }
+    if (!append_record((void **)&ctx->types,
+                       &ctx->type_count,
+                       sizeof(record),
+                       &record,
+                       path,
+                       token,
+                       out_error)) {
+        return 0U;
+    }
+    return (uint32_t)ctx->type_count;
+}
+
+/* Serialize one symbol type tree and return its 1-based TYPS identifier. */
+static uint32_t writer_serialize_type(WriterContext *ctx,
+                                      const FengSymbolTypeView *type,
+                                      const char *path,
+                                      FengToken token,
                                       FengSymbolError *out_error) {
     FengSymbolFtTypeRecord record;
     char *joined_name;
-    uint64_t mutability_bits;
-    size_t layer_index;
 
     if (type == NULL) {
         return 0U;
@@ -320,32 +387,12 @@ static uint32_t writer_serialize_type(WriterContext *ctx,
             break;
 
         case FENG_SYMBOL_TYPE_KIND_ARRAY:
-            if (type->as.array.rank > 32U) {
-                feng_symbol_internal_set_error(out_error,
-                                               path,
-                                               token,
-                                               "array rank %zu exceeds current .ft v1 bitmap capacity (32)",
-                                               type->as.array.rank);
-                return 0U;
-            }
-            record.kind = FENG_SYMBOL_FT_TYPE_KIND_ARRAY;
-            record.elem_start = writer_serialize_type(ctx,
-                                                      type->as.array.element,
-                                                      path,
-                                                      token,
-                                                      out_error);
-            if (type->as.array.element != NULL && record.elem_start == 0U) {
-                return 0U;
-            }
-            record.elem_count = (uint32_t)type->as.array.rank;
-            mutability_bits = 0U;
-            for (layer_index = 0U; layer_index < type->as.array.rank; ++layer_index) {
-                if (type->as.array.layer_writable[layer_index]) {
-                    mutability_bits |= (1ULL << layer_index);
-                }
-            }
-            record.string_ref = (uint32_t)(mutability_bits & 0xFFFFFFFFULL);
-            break;
+            return writer_serialize_array_chunks(ctx,
+                                                 type,
+                                                 0U,
+                                                 path,
+                                                 token,
+                                                 out_error);
 
         case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF:
             record.kind = FENG_SYMBOL_FT_TYPE_KIND_TYPE_PARAM_REF;

@@ -233,8 +233,8 @@ FengArray *feng_array_new_storage_kinded(
                            element_size,
                            element_aggregate->size);
             }
-            if (element_aggregate->default_init == NULL) {
-                feng_panic("feng_array_new_storage_kinded: aggregate descriptor missing default_init policy");
+            if (element_aggregate->default_zero_init == NULL) {
+                feng_panic("feng_array_new_storage_kinded: aggregate descriptor missing default_zero_init policy");
             }
             break;
         default:
@@ -282,15 +282,15 @@ FengArray *feng_array_new_storage_kinded(
     if (length > 0U) {
         unsigned char *base = (unsigned char *)feng_array_payload_inline(a);
 
-        /* For AGGREGATE elements, the descriptor decides whether all-zero
-         * bytes are a legal default. ZERO_BYTES is already satisfied by
-         * calloc; INIT_FN aggregates require a per-element initialiser
-         * call so the managed slots reach a properly-retained state. */
+        /* Aggregate default_zero_init owns the language-level distinction
+         * between a zero-byte default and a custom initializer. ZERO_BYTES
+         * is already satisfied by calloc; only INIT_FN needs one call per
+         * element so every managed slot starts with valid ownership. */
         if (element_kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS &&
-            element_aggregate->default_init->kind == FENG_DEFAULT_INIT_FN) {
+            element_aggregate->default_zero_init->kind == FENG_DEFAULT_INIT_FN) {
             size_t i;
             for (i = 0U; i < length; ++i) {
-                element_aggregate->default_init->init_fn(base + i * element_size);
+                element_aggregate->default_zero_init->init_fn(base + i * element_size);
             }
         }
     }

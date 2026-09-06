@@ -17900,6 +17900,165 @@ static void test_direct_module_binding_initialization_cycle_exhausts_stack(void)
     free(source_path);
 }
 
+/* Compile one Feng program below the repository-local temp/ tree, then verify
+ * its isolated process terminates through a runtime failure. Exit statuses 126
+ * and 127 are reserved for child-harness and exec failures respectively. */
+static void assert_direct_program_fails_at_runtime(const char *name,
+                                                   const char *source) {
+    char template_path[] = "temp/feng_cli_g21_array_runtime_XXXXXX";
+    char *workspace_dir;
+    char *source_path;
+    char *out_dir;
+    char *binary_relative_path;
+    char *binary_path;
+    char *out_option;
+    char *name_option;
+    char *remove_error = NULL;
+    pid_t child;
+    int status = 0;
+
+    workspace_dir = mkdtemp(template_path);
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    out_dir = path_join(workspace_dir, "build");
+    binary_relative_path = dup_printf("bin/%s", name);
+    binary_path = path_join(out_dir, binary_relative_path);
+    out_option = make_out_option(out_dir);
+    name_option = dup_printf("--name=%s", name);
+
+    write_text_file(source_path, source);
+    {
+        char *argv[] = {
+            source_path,
+            "--target=bin",
+            out_option,
+            name_option,
+        };
+        ASSERT(run_direct_for_host(4, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+
+    fflush(stdout);
+    fflush(stderr);
+    child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        struct rlimit core_limit = {0U, 0U};
+        int null_fd = open("/dev/null", O_WRONLY);
+
+        if (null_fd < 0 || dup2(null_fd, STDERR_FILENO) < 0) {
+            _exit(126);
+        }
+        close(null_fd);
+        if (setrlimit(RLIMIT_CORE, &core_limit) != 0) {
+            _exit(126);
+        }
+        execl(binary_path, binary_path, (char *)NULL);
+        _exit(127);
+    }
+
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFSIGNALED(status) ||
+           (WIFEXITED(status) &&
+            WEXITSTATUS(status) != 0 &&
+            WEXITSTATUS(status) != 126 &&
+            WEXITSTATUS(status) != 127));
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(name_option);
+    free(out_option);
+    free(binary_path);
+    free(binary_relative_path);
+    free(out_dir);
+    free(source_path);
+}
+
+/* ARRAY-D24/ARRAY-D31: invalid dynamic array lengths and indexes compile
+ * successfully, then fail in an isolated process before narrowing or memory
+ * access. Lengths flow through calls so Semantic cannot constant-fold them. */
+static void test_direct_g21_array_runtime_rejects_invalid_lengths_and_indexes(void) {
+    static const struct {
+        const char *name;
+        const char *source;
+    } cases[] = {
+        {
+            "g21_negative_length",
+            "module test.cli.g21_negative_length;\n"
+            "func invalidLength(): i64 { return -1; }\n"
+            "func main(args: string[]) {\n"
+            "  let values = i32[:invalidLength()];\n"
+            "}\n",
+        },
+        {
+            "g21_oversized_u64_length",
+            "module test.cli.g21_oversized_u64_length;\n"
+            "func invalidLength(): u64 {\n"
+            "  let maximum: i64 = 9223372036854775807;\n"
+            "  let one: u64 = 1;\n"
+            "  return (u64)maximum + one;\n"
+            "}\n"
+            "func main(args: string[]) {\n"
+            "  let values = i32[:invalidLength()];\n"
+            "}\n",
+        },
+        {
+            "g21_negative_read_index",
+            "module test.cli.g21_negative_read_index;\n"
+            "func invalidIndex(): i64 { return -1; }\n"
+            "func main(args: string[]) {\n"
+            "  let values: i32[] = [1, 2];\n"
+            "  let value = values[invalidIndex()];\n"
+            "}\n",
+        },
+        {
+            "g21_length_read_index",
+            "module test.cli.g21_length_read_index;\n"
+            "func invalidIndex(): int { return 2; }\n"
+            "func main(args: string[]) {\n"
+            "  let values: i32[] = [1, 2];\n"
+            "  let value = values[invalidIndex()];\n"
+            "}\n",
+        },
+        {
+            "g21_past_end_write_index",
+            "module test.cli.g21_past_end_write_index;\n"
+            "func invalidIndex(): int { return 3; }\n"
+            "func main(args: string[]) {\n"
+            "  let values: i32[!] = [1, 2];\n"
+            "  values[invalidIndex()] = 3;\n"
+            "}\n",
+        },
+        {
+            "g21_zero_length_read_index",
+            "module test.cli.g21_zero_length_read_index;\n"
+            "func invalidIndex(): int { return 0; }\n"
+            "func main(args: string[]) {\n"
+            "  let values: i32[] = [];\n"
+            "  let value = values[invalidIndex()];\n"
+            "}\n",
+        },
+        {
+            "g21_u64_max_write_index",
+            "module test.cli.g21_u64_max_write_index;\n"
+            "func invalidIndex(): u64 {\n"
+            "  let zero: u64 = 0;\n"
+            "  return ~zero;\n"
+            "}\n"
+            "func main(args: string[]) {\n"
+            "  let values: i32[!] = [1, 2];\n"
+            "  values[invalidIndex()] = 3;\n"
+            "}\n",
+        },
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        assert_direct_program_fails_at_runtime(cases[index].name,
+                                               cases[index].source);
+    }
+}
+
 static void test_project_build_default_uses_debug_friendly_flags(void) {
     char template_path[] = "temp/feng_cli_build_debug_flags_XXXXXX";
     char *workspace_dir;
@@ -24745,6 +24904,7 @@ int main(void) {
     test_project_build_and_pack_multiple_platforms();
     test_project_run_rejects_platform_and_sysroot_options();
     test_direct_module_binding_initialization_cycle_exhausts_stack();
+    test_direct_g21_array_runtime_rejects_invalid_lengths_and_indexes();
     test_project_build_default_uses_debug_friendly_flags();
     test_project_build_release_propagates_to_local_dependencies();
     test_project_build_bin_copies_assets_and_refreshes_existing_output();

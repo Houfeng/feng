@@ -15,19 +15,43 @@
  * `const FengSemanticAnalysis *` to match the analyzer's ResolveContext
  * shape but mutate the underlying object through a single-line cast.
  *
- * Ownership: target_spec_type_ref may be borrowed from the AST (stable for
- * the whole compile) or from the resolver's per-program synthetic type-ref
- * pool (freed by resolver_free_scopes BEFORE codegen runs). To keep the
- * sidecar safe across phases, record_* clones the type ref into
- * analysis->synthesized_type_refs (owned by analysis, freed by
- * feng_semantic_analysis_free after codegen). The clone is a compiler-time
- * cost only; no runtime overhead.
+ * Ownership: target_spec_type_ref and structured array subject keys may be
+ * borrowed from the AST or from the resolver's per-program synthetic
+ * type-ref pool (freed before codegen). Stored metadata therefore clones
+ * these refs into analysis-owned storage released after codegen. The clone
+ * is a compiler-time cost only; no runtime overhead.
  */
 
 #include "semantic.h"
 
 #include <stdlib.h>
 #include <string.h>
+
+/* Free one analysis-owned type-ref clone, including every recursively owned
+ * type argument and inner wrapper. Source token slices remain borrowed. */
+static void free_type_ref_clone_for_analysis(FengTypeRef *ref) {
+    if (ref == NULL) {
+        return;
+    }
+    switch (ref->kind) {
+        case FENG_TYPE_REF_NAMED:
+            if (ref->as.named.type_args != NULL) {
+                for (size_t index = 0U;
+                     index < ref->as.named.type_arg_count;
+                     ++index) {
+                    free_type_ref_clone_for_analysis(ref->as.named.type_args[index]);
+                }
+            }
+            free(ref->as.named.type_args);
+            free(ref->as.named.segments);
+            break;
+        case FENG_TYPE_REF_POINTER:
+        case FENG_TYPE_REF_ARRAY:
+            free_type_ref_clone_for_analysis(ref->as.inner);
+            break;
+    }
+    free(ref);
+}
 
 /* Deep-clone a FengTypeRef onto the heap. Mirrors the structure handled by
  * resolver's free_synthetic_type_ref so the clone can be freed by the same
@@ -53,7 +77,7 @@ static FengTypeRef *clone_type_ref_for_analysis(const FengTypeRef *ref) {
                 clone->as.named.segments =
                     (FengSlice *)malloc(sizeof(FengSlice) * ref->as.named.segment_count);
                 if (clone->as.named.segments == NULL) {
-                    free(clone);
+                    free_type_ref_clone_for_analysis(clone);
                     return NULL;
                 }
                 memcpy(clone->as.named.segments, ref->as.named.segments,
@@ -64,21 +88,14 @@ static FengTypeRef *clone_type_ref_for_analysis(const FengTypeRef *ref) {
                     (FengTypeRef **)calloc(ref->as.named.type_arg_count,
                                             sizeof(FengTypeRef *));
                 if (clone->as.named.type_args == NULL) {
-                    free(clone->as.named.segments);
-                    free(clone);
+                    free_type_ref_clone_for_analysis(clone);
                     return NULL;
                 }
                 for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
                     clone->as.named.type_args[i] =
                         clone_type_ref_for_analysis(ref->as.named.type_args[i]);
                     if (clone->as.named.type_args[i] == NULL) {
-                        for (size_t j = 0U; j < i; ++j) {
-                            free(clone->as.named.type_args[j]->as.named.segments);
-                            free(clone->as.named.type_args[j]);
-                        }
-                        free(clone->as.named.type_args);
-                        free(clone->as.named.segments);
-                        free(clone);
+                        free_type_ref_clone_for_analysis(clone);
                         return NULL;
                     }
                 }
@@ -88,12 +105,12 @@ static FengTypeRef *clone_type_ref_for_analysis(const FengTypeRef *ref) {
         case FENG_TYPE_REF_ARRAY:
             clone->as.inner = clone_type_ref_for_analysis(ref->as.inner);
             if (clone->as.inner == NULL) {
-                free(clone);
+                free_type_ref_clone_for_analysis(clone);
                 return NULL;
             }
             return clone;
     }
-    free(clone);
+    free_type_ref_clone_for_analysis(clone);
     return NULL;
 }
 
@@ -113,9 +130,7 @@ static bool analysis_own_type_ref(FengSemanticAnalysis *analysis, FengTypeRef *r
             analysis->coercion_owned_type_refs,
             new_capacity * sizeof(*grown));
         if (grown == NULL) {
-            free(ref->as.named.segments);
-            free(ref->as.named.type_args);
-            free(ref);
+            free_type_ref_clone_for_analysis(ref);
             return false;
         }
         analysis->coercion_owned_type_refs = grown;
@@ -138,6 +153,33 @@ static const FengTypeRef *analysis_clone_type_ref(FengSemanticAnalysis *analysis
         return NULL;
     }
     return clone;
+}
+
+/* Copy one subject key into analysis-owned storage. The complete array tree
+ * must survive resolver-local synthetic type refs because relation, witness,
+ * and coercion metadata remain observable through codegen. */
+bool feng_semantic_subject_key_copy_for_analysis(
+        const FengSemanticAnalysis *analysis_const,
+        const FengSemanticSubjectKey *source,
+        FengSemanticSubjectKey *out_key) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+
+    if (analysis == NULL || source == NULL || out_key == NULL) {
+        return false;
+    }
+    *out_key = *source;
+    if (source->kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY &&
+        source->as.array.rank > 64U) {
+        const FengTypeRef *owned_array_type_ref = analysis_clone_type_ref(
+            analysis, source->as.array.array_type_ref);
+
+        if (owned_array_type_ref == NULL) {
+            memset(out_key, 0, sizeof(*out_key));
+            return false;
+        }
+        out_key->as.array.array_type_ref = owned_array_type_ref;
+    }
+    return true;
 }
 
 static FengSpecCoercionSite *find_site_mut(FengSemanticAnalysis *analysis,
@@ -204,7 +246,12 @@ bool feng_semantic_record_object_spec_coercion_site(
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    FengSemanticSubjectKey owned_subject_key;
     if (owned_type_ref == NULL) {
+        return false;
+    }
+    if (!feng_semantic_subject_key_copy_for_analysis(
+            analysis, src_subject_key, &owned_subject_key)) {
         return false;
     }
     FengSpecCoercionSite *slot = reserve_site_slot(analysis, expr);
@@ -214,7 +261,7 @@ bool feng_semantic_record_object_spec_coercion_site(
     reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_OBJECT;
-    slot->src_subject_key = *src_subject_key;
+    slot->src_subject_key = owned_subject_key;
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = owned_type_ref;
     slot->relation = relation;
@@ -360,7 +407,12 @@ bool feng_semantic_record_intersection_spec_coercion_site(
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    FengSemanticSubjectKey owned_subject_key;
     if (owned_type_ref == NULL) {
+        return false;
+    }
+    if (!feng_semantic_subject_key_copy_for_analysis(
+            analysis, src_subject_key, &owned_subject_key)) {
         return false;
     }
     FengSpecCoercionSite *slot = reserve_site_slot(analysis, expr);
@@ -370,7 +422,7 @@ bool feng_semantic_record_intersection_spec_coercion_site(
     reset_site_payload(slot);
     slot->expr = expr;
     slot->form = FENG_SPEC_COERCION_FORM_INTERSECTION;
-    slot->src_subject_key = *src_subject_key;
+    slot->src_subject_key = owned_subject_key;
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = owned_type_ref;
     slot->relation = NULL;

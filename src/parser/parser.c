@@ -2711,6 +2711,89 @@ static bool expr_can_take_explicit_type_args(const FengExpr *expr) {
            (expr->kind == FENG_EXPR_IDENTIFIER || expr->kind == FENG_EXPR_MEMBER);
 }
 
+/* Return whether an expression is exactly an identifier/member path that can
+ * be represented by the qualified-name portion of a named type reference. */
+static bool expr_is_named_type_target(const FengExpr *expr) {
+    const FengExpr *cursor = expr;
+
+    while (cursor != NULL && cursor->kind == FENG_EXPR_MEMBER) {
+        cursor = cursor->as.member.object;
+    }
+    return cursor != NULL && cursor->kind == FENG_EXPR_IDENTIFIER;
+}
+
+/* Convert an already validated identifier/member path into a named type
+ * reference while preserving every segment in source order. */
+static FengTypeRef *new_named_type_ref_from_target_expr(Parser *parser,
+                                                        const FengExpr *target) {
+    const FengExpr *cursor = target;
+    const FengExpr *root;
+    FengTypeRef *type_ref;
+    size_t segment_count = 1U;
+    size_t segment_index;
+
+    while (cursor != NULL && cursor->kind == FENG_EXPR_MEMBER) {
+        ++segment_count;
+        cursor = cursor->as.member.object;
+    }
+    root = cursor;
+
+    type_ref = new_type_ref(parser, FENG_TYPE_REF_NAMED, root->token);
+    if (type_ref == NULL) {
+        return NULL;
+    }
+    type_ref->as.named.segments =
+        (FengSlice *)malloc(segment_count * sizeof(*type_ref->as.named.segments));
+    if (type_ref->as.named.segments == NULL) {
+        free_type_ref(type_ref);
+        (void)parser_error_current(parser, "IE0001", "out of memory");
+        return NULL;
+    }
+
+    segment_index = segment_count;
+    cursor = target;
+    while (cursor->kind == FENG_EXPR_MEMBER) {
+        type_ref->as.named.segments[--segment_index] = cursor->as.member.member;
+        cursor = cursor->as.member.object;
+    }
+    type_ref->as.named.segments[--segment_index] = cursor->as.identifier;
+    type_ref->as.named.segment_count = segment_count;
+    return type_ref;
+}
+
+/* Return whether the current postfix position starts one or more array type
+ * suffixes followed by the array-new suffix.  Empty/writable brackets that
+ * are not eventually followed by `[:` remain on the ordinary index path. */
+static bool looks_like_array_type_suffixes_before_array_new(
+    const Parser *parser) {
+    size_t index = parser->current;
+    bool saw_array_type_suffix = false;
+
+    while (index < parser->token_count &&
+           parser->tokens[index].kind == FENG_TOKEN_LBRACKET) {
+        ++index;
+        if (index >= parser->token_count) {
+            return false;
+        }
+        if (parser->tokens[index].kind == FENG_TOKEN_COLON) {
+            return saw_array_type_suffix;
+        }
+        if (parser->tokens[index].kind == FENG_TOKEN_NOT) {
+            ++index;
+            if (index >= parser->token_count) {
+                return false;
+            }
+        }
+        if (parser->tokens[index].kind != FENG_TOKEN_RBRACKET) {
+            return false;
+        }
+        saw_array_type_suffix = true;
+        ++index;
+    }
+
+    return false;
+}
+
 static bool token_can_follow_explicit_generic_target(FengTokenKind kind) {
     switch (kind) {
         case FENG_TOKEN_LPAREN:
@@ -4139,12 +4222,16 @@ static FengExpr *parse_postfix(Parser *parser) {
             continue;
         }
 
-        if (parser_match(parser, FENG_TOKEN_LBRACKET)) {
-            if (parser_match(parser, FENG_TOKEN_COLON)) {
+        if (parser_check(parser, FENG_TOKEN_LBRACKET)) {
+            bool has_array_element_type_suffixes =
+                looks_like_array_type_suffixes_before_array_new(parser);
+
+            (void)parser_advance(parser);
+            if (parser_match(parser, FENG_TOKEN_COLON) ||
+                has_array_element_type_suffixes) {
                 FengExpr *size_expr;
                 FengExpr *arr_new;
                 FengTypeRef *elem_type;
-                FengSlice *seg;
                 FengExpr *type_target = expr;
                 FengExpr *generic_target = NULL;
 
@@ -4154,12 +4241,61 @@ static FengExpr *parse_postfix(Parser *parser) {
                     type_target = expr->as.generic_target.target;
                 }
 
-                if (type_target == NULL || type_target->kind != FENG_EXPR_IDENTIFIER) {
+                if (!expr_is_named_type_target(type_target)) {
                     free_expr(expr);
                     (void)parser_error_current(
                         parser,
                         "SE0201", "array-new segment '[:expr]' requires a type name");
                     return NULL;
+                }
+
+                elem_type = new_named_type_ref_from_target_expr(parser, type_target);
+                if (elem_type == NULL) {
+                    free_expr(expr);
+                    return NULL;
+                }
+                if (generic_target != NULL) {
+                    elem_type->as.named.type_args = generic_target->as.generic_target.type_args;
+                    elem_type->as.named.type_arg_count = generic_target->as.generic_target.type_arg_count;
+                    generic_target->as.generic_target.type_args = NULL;
+                    generic_target->as.generic_target.type_arg_count = 0U;
+                }
+
+                /* The first '[' has already been consumed.  Wrap the named
+                 * base once per `[]` / `[!]`, then consume the final `[:`. */
+                while (has_array_element_type_suffixes) {
+                    bool layer_writable = parser_match(parser, FENG_TOKEN_NOT);
+                    FengTypeRef *wrapper;
+
+                    if (!parser_expect(
+                            parser,
+                            FENG_TOKEN_RBRACKET,
+                            "SE0202",
+                            layer_writable
+                                ? "expected ']' after '[!' in array type suffix"
+                                : "expected ']' to close array type suffix")) {
+                        free_type_ref(elem_type);
+                        free_expr(expr);
+                        return NULL;
+                    }
+                    wrapper = new_type_ref(parser,
+                                           FENG_TYPE_REF_ARRAY,
+                                           elem_type->token);
+                    if (wrapper == NULL) {
+                        free_type_ref(elem_type);
+                        free_expr(expr);
+                        return NULL;
+                    }
+                    wrapper->as.inner = elem_type;
+                    wrapper->array_element_writable = layer_writable;
+                    elem_type = wrapper;
+
+                    /* Lookahead proved that another bracket follows and that
+                     * the finite suffix run ends in the array-new colon. */
+                    (void)parser_advance(parser);
+                    if (parser_match(parser, FENG_TOKEN_COLON)) {
+                        break;
+                    }
                 }
 
                 {
@@ -4169,12 +4305,14 @@ static FengExpr *parse_postfix(Parser *parser) {
                     parser->suppress_object_literal_suffix = saved_suppress;
                 }
                 if (size_expr == NULL) {
+                    free_type_ref(elem_type);
                     free_expr(expr);
                     return NULL;
                 }
                 if (!parser_expect(parser,
                                    FENG_TOKEN_RBRACKET,
                                    "SE0202", "expected ']' after array size in '[:expr]'")) {
+                    free_type_ref(elem_type);
                     free_expr(size_expr);
                     free_expr(expr);
                     return NULL;
@@ -4182,34 +4320,10 @@ static FengExpr *parse_postfix(Parser *parser) {
 
                 arr_new = new_expr(parser, FENG_EXPR_ARRAY_NEW, expr->token);
                 if (arr_new == NULL) {
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-                elem_type = new_type_ref(parser, FENG_TYPE_REF_NAMED, type_target->token);
-                if (elem_type == NULL) {
-                    free_expr(arr_new);
-                    free_expr(size_expr);
-                    free_expr(expr);
-                    return NULL;
-                }
-                seg = (FengSlice *)malloc(sizeof *seg);
-                if (seg == NULL) {
                     free_type_ref(elem_type);
-                    free_expr(arr_new);
                     free_expr(size_expr);
                     free_expr(expr);
                     return NULL;
-                }
-
-                *seg = type_target->as.identifier;
-                elem_type->as.named.segments = seg;
-                elem_type->as.named.segment_count = 1U;
-                if (generic_target != NULL) {
-                    elem_type->as.named.type_args = generic_target->as.generic_target.type_args;
-                    elem_type->as.named.type_arg_count = generic_target->as.generic_target.type_arg_count;
-                    generic_target->as.generic_target.type_args = NULL;
-                    generic_target->as.generic_target.type_arg_count = 0U;
                 }
                 arr_new->as.array_new.element_type = elem_type;
                 arr_new->as.array_new.size = size_expr;

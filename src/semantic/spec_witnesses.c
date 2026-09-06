@@ -153,10 +153,16 @@ static bool subject_key_equals(const FengSemanticSubjectKey *left,
                    strcmp(left->as.builtin_canonical_name,
                           right->as.builtin_canonical_name) == 0;
         case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
-            return left->as.array.rank == right->as.array.rank &&
-                   left->as.array.writable_mask == right->as.array.writable_mask &&
-                   type_ref_subject_key_equal(left->as.array.element_type_ref,
-                                              right->as.array.element_type_ref);
+            if (left->as.array.rank != right->as.array.rank) {
+                return false;
+            }
+            if (left->as.array.rank <= 64U) {
+                return left->as.array.writable_mask == right->as.array.writable_mask &&
+                       type_ref_subject_key_equal(left->as.array.element_type_ref,
+                                                  right->as.array.element_type_ref);
+            }
+            return type_ref_subject_key_equal(left->as.array.array_type_ref,
+                                              right->as.array.array_type_ref);
         default:
             return false;
     }
@@ -199,10 +205,7 @@ bool feng_semantic_subject_key_init_array_from_type_ref(
     }
     memset(out_key, 0, sizeof(*out_key));
     while (element_type_ref != NULL && element_type_ref->kind == FENG_TYPE_REF_ARRAY) {
-        if (rank >= 64U) {
-            return false;
-        }
-        if (element_type_ref->array_element_writable) {
+        if (rank < 64U && element_type_ref->array_element_writable) {
             writable_mask |= (uint64_t)1U << rank;
         }
         ++rank;
@@ -214,7 +217,11 @@ bool feng_semantic_subject_key_init_array_from_type_ref(
     out_key->kind = FENG_SEMANTIC_SUBJECT_KEY_ARRAY;
     out_key->as.array.element_type_ref = element_type_ref;
     out_key->as.array.rank = rank;
-    out_key->as.array.writable_mask = writable_mask;
+    if (rank <= 64U) {
+        out_key->as.array.writable_mask = writable_mask;
+    } else {
+        out_key->as.array.array_type_ref = type_ref;
+    }
     return true;
 }
 
@@ -274,9 +281,13 @@ FengSpecWitness *feng_semantic_reserve_spec_witness(
         analysis->spec_witnesses = grown;
         analysis->spec_witness_capacity = new_cap;
     }
-    FengSpecWitness *slot = &analysis->spec_witnesses[analysis->spec_witness_count++];
+    FengSpecWitness *slot = &analysis->spec_witnesses[analysis->spec_witness_count];
     memset(slot, 0, sizeof(*slot));
-    slot->subject_key = *subject_key;
+    if (!feng_semantic_subject_key_copy_for_analysis(
+            analysis, subject_key, &slot->subject_key)) {
+        return NULL;
+    }
+    ++analysis->spec_witness_count;
     slot->spec_decl = spec_decl;
     slot->members = NULL;
     slot->member_count = 0U;

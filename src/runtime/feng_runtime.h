@@ -50,6 +50,33 @@ typedef void (*FengFinalizerFn)(void *self);
 typedef void (*FengReleaseChildrenFn)(void *self);
 typedef bool (*FengValueEqualFn)(const void *left, const void *right);
 
+/* Language-default-zero policy shared by descriptors whose value can be
+ * materialised either by writing zero bytes or by invoking a type-provided
+ * initializer.  The explicit policy keeps the common zero-byte path visible
+ * to array allocation so it never pays a per-element callback cost.
+ *
+ * `init_fn`, when selected, receives indeterminate storage and must produce
+ * one complete Feng default-zero value without invoking user constructors or
+ * throwing. Any managed references it stores must carry the ownership
+ * required by the descriptor that embeds this policy. */
+typedef enum FengDefaultZeroInitKind {
+    FENG_DEFAULT_ZERO_BYTES = 1,
+    FENG_DEFAULT_INIT_FN = 2
+} FengDefaultZeroInitKind;
+
+typedef void (*FengDefaultZeroInitFn)(void *value_out);
+
+typedef struct FengDefaultZeroInitDescriptor {
+    FengDefaultZeroInitKind kind;
+    /* Required only for FENG_DEFAULT_INIT_FN; ignored for ZERO_BYTES. */
+    FengDefaultZeroInitFn init_fn;
+} FengDefaultZeroInitDescriptor;
+
+/* Shared policy for types whose language default zero is exactly an all-zero
+ * object representation. Generated descriptors may reference this constant
+ * instead of emitting a duplicate policy object. */
+extern const FengDefaultZeroInitDescriptor feng_default_zero_bytes_init;
+
 /* Static description of a managed child surface inside an object. For direct
  * managed pointers, `offset` is the pointer slot byte offset and `static_desc`
  * is the descriptor the slot was declared to hold; it MAY be NULL when the
@@ -88,7 +115,12 @@ typedef void (*FengTypeDefaultZeroInitFn)(
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
-    FengTypeDefaultZeroInitFn default_zero_init; /* closed managed default-zero */
+    /* Produces one owned, valid managed value for the language default zero.
+     * Unlike a raw NULL slot, the result may be an empty string/array,
+     * callable, or recursively default-initialized object. The callback gets
+     * this closed descriptor so generic metadata remains available; NULL
+     * means the managed type has no finite default-zero value. */
+    FengTypeDefaultZeroInitFn default_zero_init;
     FengFinalizerFn finalizer;   /* optional user-defined finalizer (semantic) */
     FengReleaseChildrenFn release_children; /* codegen-emitted; see typedef */
 
@@ -158,6 +190,11 @@ typedef struct FengTypeDescriptor {
 typedef struct FengTrivialDescriptor {
     const char *name;            /* fully-qualified or builtin, debug-only */
     size_t size;                 /* sizeof(T) for the trivial value */
+    /* Defines the language default zero independently of the underlying bit
+     * pattern. Builtin zero-default scalars use the shared ZERO_BYTES policy;
+     * types such as an enum whose first member is nonzero use INIT_FN. This
+     * field is never a constructor and must not affect copy/ARC semantics. */
+    const FengDefaultZeroInitDescriptor *default_zero_init;
     FengValueEqualFn equal_fn;   /* NULL => memcmp(left, right, size) == 0 */
 } FengTrivialDescriptor;
 
@@ -359,39 +396,16 @@ typedef struct FengManagedSlotDescriptor {
     const struct FengAggregateDescriptor *nested;
 } FengManagedSlotDescriptor;
 
-/* Default-initialisation strategy for an aggregate value. Some aggregates
- * (e.g. fat object-form spec) cannot tolerate all-zero bytes as their
- * default state because their managed slots must point at retained, valid
- * objects from the very first observation. */
-typedef enum FengAggregateDefaultKind {
-    /* All-zero bytes (NULL pointers in every managed slot) is a legal
-     * default. feng_aggregate_default_init resolves to memset(0). */
-    FENG_DEFAULT_ZERO_BYTES = 1,
-    /* Type provides a custom initialiser that produces a fully-constructed
-     * value with all managed slots properly retained. */
-    FENG_DEFAULT_INIT_FN = 2
-} FengAggregateDefaultKind;
-
-/* Init function contract: on entry `value_out` points to `desc->size` bytes
- * of indeterminate content; on return, every managed slot must hold either
- * NULL or a +1 retained reference, and any non-managed bytes must hold a
- * legal value. The function MUST NOT throw a Feng exception. */
-typedef void (*FengAggregateDefaultInitFn)(void *value_out);
-
-typedef struct FengAggregateDefaultInitDescriptor {
-    FengAggregateDefaultKind kind;
-    /* Only consulted when kind == FENG_DEFAULT_INIT_FN. */
-    FengAggregateDefaultInitFn init_fn;
-} FengAggregateDefaultInitDescriptor;
-
 typedef struct FengAggregateDescriptor {
     /* Fully-qualified, debug-only. May be NULL. */
     const char *name;
     /* Total bytes the aggregate occupies. */
     size_t size;
-    /* Default-initialisation policy. MUST be non-NULL; the runtime panics
-     * on default-init of a NULL policy. */
-    const FengAggregateDefaultInitDescriptor *default_init;
+    /* Produces the aggregate's language default zero. ZERO_BYTES lets array
+     * allocation reuse calloc without per-element calls; INIT_FN must return
+     * a complete value whose managed slots own their references. It never
+     * invokes user constructors and MUST be non-NULL. */
+    const FengDefaultZeroInitDescriptor *default_zero_init;
     /* Managed slot table in declaration order. Slots that are non-managed
      * (trivial bytes) are NOT enumerated. */
     size_t managed_slot_count;
@@ -545,9 +559,10 @@ void feng_aggregate_assign(void *dst, const void *src,
 void feng_aggregate_take(void *dst, void *src,
                          const FengAggregateDescriptor *desc);
 
-/* Initialise `value_out` to the descriptor's default value. */
-void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateDescriptor *desc);
+/* Initialise `value_out` to the descriptor's language default-zero value;
+ * this never invokes a user constructor. */
+void feng_aggregate_default_zero_init(void *value_out,
+                                      const FengAggregateDescriptor *desc);
 
 /* --- String ------------------------------------------------------------ */
 

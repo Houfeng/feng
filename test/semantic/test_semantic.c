@@ -17866,6 +17866,110 @@ static void test_spec_witness_subject_key_supports_builtin_and_array(void) {
     feng_program_free(program);
 }
 
+/* Build a deep i32 array type whose only optional writable layer is the
+ * innermost layer. The shape makes two rank-65 keys identical across the
+ * former 64-bit mask boundary while remaining structurally distinct. */
+static char *g21_make_deep_array_type(size_t rank,
+                                      bool innermost_writable) {
+    size_t capacity = sizeof("i32") + rank * sizeof("[!]");
+    char *type_text = (char *)calloc(capacity, 1U);
+    size_t length = 3U;
+
+    ASSERT(type_text != NULL);
+    memcpy(type_text, "i32", length);
+    for (size_t suffix_index = 0U; suffix_index < rank; ++suffix_index) {
+        const char *suffix = innermost_writable && suffix_index == 0U
+                                 ? "[!]"
+                                 : "[]";
+        size_t suffix_length = strlen(suffix);
+
+        memcpy(type_text + length, suffix, suffix_length);
+        length += suffix_length;
+    }
+    type_text[length] = '\0';
+    return type_text;
+}
+
+/* ARRAY-D06: array fit/witness identity must retain every writable layer
+ * beyond the former uint64_t boundary instead of rejecting or merging keys. */
+static void test_g21_deep_array_witness_keys_are_structural(void) {
+    char *readonly_type = g21_make_deep_array_type(65U, false);
+    char *inner_writable_type = g21_make_deep_array_type(65U, true);
+    size_t source_capacity = strlen(readonly_type) * 2U +
+                             strlen(inner_writable_type) * 2U + 1024U;
+    char *source = (char *)calloc(source_capacity, 1U);
+    FengProgram *program;
+    const FengProgram *programs[1];
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    const FengDecl *label_spec;
+    const FengDecl *readonly_view;
+    const FengDecl *writable_view;
+    const FengTypeRef *readonly_ref;
+    const FengTypeRef *writable_ref;
+    FengSemanticSubjectKey readonly_key;
+    FengSemanticSubjectKey writable_key;
+    const FengSpecWitness *readonly_witness;
+    const FengSpecWitness *writable_witness;
+
+    ASSERT(source != NULL);
+    ASSERT(snprintf(source,
+                    source_capacity,
+                    "open module demo.g21.deep_array_witness;\n"
+                    "open spec Label { func label(): string; }\n"
+                    "open fit %s: Label {\n"
+                    "  open func label(): string { return \"readonly\"; }\n"
+                    "}\n"
+                    "open fit %s: Label {\n"
+                    "  open func label(): string { return \"inner-writable\"; }\n"
+                    "}\n"
+                    "open func readonlyView(value: %s): Label { return value; }\n"
+                    "open func writableView(value: %s): Label { return value; }\n",
+                    readonly_type,
+                    inner_writable_type,
+                    readonly_type,
+                    inner_writable_type) > 0);
+    program = parse_program_or_die("g21_deep_array_witness.ff", source);
+    programs[0] = program;
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(error_count == 0U);
+    label_spec = find_spec_decl_by_name(analysis, "Label");
+    readonly_view = find_function_decl_by_name(program, "readonlyView");
+    writable_view = find_function_decl_by_name(program, "writableView");
+    ASSERT(label_spec != NULL);
+    ASSERT(readonly_view != NULL && writable_view != NULL);
+    readonly_ref = readonly_view->as.function_decl.params[0].type;
+    writable_ref = writable_view->as.function_decl.params[0].type;
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(
+        &readonly_key, readonly_ref));
+    ASSERT(feng_semantic_subject_key_init_array_from_type_ref(
+        &writable_key, writable_ref));
+    ASSERT(readonly_key.as.array.rank == 65U);
+    ASSERT(writable_key.as.array.rank == 65U);
+    readonly_witness = feng_semantic_lookup_spec_witness(
+        analysis, &readonly_key, label_spec);
+    writable_witness = feng_semantic_lookup_spec_witness(
+        analysis, &writable_key, label_spec);
+    ASSERT(readonly_witness != NULL);
+    ASSERT(writable_witness != NULL);
+    ASSERT(readonly_witness != writable_witness);
+    ASSERT(feng_semantic_lookup_spec_witness(
+               analysis, &writable_key, label_spec) != readonly_witness);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    free(source);
+    free(inner_writable_type);
+    free(readonly_type);
+}
+
 static void test_spec_witness_multi_fit_conflict(void) {
     /* §8.1: two visible fits both provide the same (name, params, return)
      * implementation of S's method on T → conflict at first coercion. */
@@ -33958,7 +34062,1224 @@ static void test_g20_imported_tuple_construction_diagnostics(void) {
     imported_source_fixture_dispose(&fixture);
 }
 
+/* Assert one exact Semantic diagnostic for the G21 array matrix. */
+static void assert_g21_semantic_error(const char *path,
+                                      const char *source,
+                                      const char *expected_code,
+                                      unsigned int expected_line,
+                                      unsigned int expected_column,
+                                      const char *expected_lexeme,
+                                      const char *expected_message) {
+    assert_stable_semantic_error("G21",
+                                 path,
+                                 source,
+                                 expected_code,
+                                 expected_line,
+                                 expected_column,
+                                 expected_lexeme,
+                                 expected_message);
+}
+
+/* Analyze one positive source in the G21 matrix and print any unexpected
+ * Semantic diagnostics before failing the test process. */
+static void assert_g21_semantic_ok(const char *path, const char *source) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    bool ok = feng_semantic_analyze(programs,
+                                    1U,
+                                    FENG_COMPILE_TARGET_LIB,
+                                    &analysis,
+                                    &errors,
+                                    &error_count);
+
+    if (!ok || error_count != 0U) {
+        fprintf(stderr,
+                "%s: expected successful G21 semantic analysis, got %zu error(s)\n",
+                path,
+                error_count);
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "  %s:%u:%u [%s] %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(ok);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Assert one exact G21 diagnostic under an explicit target pointer width. */
+static void assert_g21_semantic_error_with_pointer_size(
+    const char *path,
+    const char *source,
+    size_t pointer_size,
+    const char *expected_code,
+    unsigned int expected_line,
+    unsigned int expected_column,
+    const char *expected_lexeme,
+    const char *expected_message) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalyzeOptions options;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.pointer_size = pointer_size;
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    if (error_count != 1U) {
+        fprintf(stderr,
+                "%s: expected exactly one G21 semantic error, got %zu\n",
+                path,
+                error_count);
+        for (size_t index = 0U; index < error_count; ++index) {
+            fprintf(stderr,
+                    "  %s:%u:%u [%s] %s\n",
+                    errors[index].path,
+                    errors[index].token.line,
+                    errors[index].token.column,
+                    errors[index].code,
+                    errors[index].message);
+        }
+    }
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, expected_code) == 0);
+    ASSERT(errors[0].token.line == expected_line);
+    ASSERT(errors[0].token.column == expected_column);
+    ASSERT(errors[0].token.length == strlen(expected_lexeme));
+    ASSERT(memcmp(errors[0].token.lexeme,
+                  expected_lexeme,
+                  errors[0].token.length) == 0);
+    ASSERT(strstr(errors[0].message, expected_message) != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Analyze one positive G21 source under an explicit target pointer width. */
+static void assert_g21_semantic_ok_with_pointer_size(const char *path,
+                                                      const char *source,
+                                                      size_t pointer_size) {
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalyzeOptions options;
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.pointer_size = pointer_size;
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* ARRAY-D03: an array wrapper does not change the ordinary leaf type-ref
+ * diagnostics; each failure remains attached to the invalid leaf token. */
+static void test_g21_array_leaf_type_diagnostics(void) {
+    assert_g21_semantic_error(
+        "g21_void_array_leaf.ff",
+        "module g21.invalid;\n"
+        "func bad(value: void[]): void {}\n",
+        "AE0502", 2U, 17U, "void",
+        "type 'void' is only valid as a function return type");
+    assert_g21_semantic_error(
+        "g21_void_writable_array_leaf.ff",
+        "module g21.invalid;\n"
+        "func bad(value: void[!]): void {}\n",
+        "AE0502", 2U, 17U, "void",
+        "type 'void' is only valid as a function return type");
+    assert_g21_semantic_error(
+        "g21_unknown_array_leaf.ff",
+        "module g21.invalid;\n"
+        "func bad(value: Missing[]): void {}\n",
+        "AE1013", 2U, 17U, "Missing", "unknown type 'Missing'");
+    assert_g21_semantic_error(
+        "g21_bare_generic_array_leaf.ff",
+        "module g21.invalid;\n"
+        "type Box<T> {}\n"
+        "func bad(value: Box[]): void {}\n",
+        "AE0006", 3U, 17U, "Box",
+        "'Box' is a generic type and requires type arguments");
+    assert_g21_semantic_error(
+        "g21_nongeneric_arguments_array_leaf.ff",
+        "module g21.invalid;\n"
+        "type Item {}\n"
+        "func bad(value: Item<int>[]): void {}\n",
+        "AE1014", 3U, 17U, "Item",
+        "'Item' is not a generic type and does not take type arguments");
+    assert_g21_semantic_error(
+        "g21_generic_arity_array_leaf.ff",
+        "module g21.invalid;\n"
+        "type Box<T> {}\n"
+        "func bad(value: Box<int, string>[]): void {}\n",
+        "AE1015", 3U, 17U, "Box",
+        "'Box' expects 1 type argument(s), but 2 were provided");
+}
+
+/* ARRAY-D21/ARRAY-D22: all integer types enter the value-domain check;
+ * non-integers retain AE0202, and compile-time-known values are checked
+ * exactly against the selected target `int` maximum. */
+static void test_g21_array_new_length_semantics(void) {
+    static const struct {
+        const char *path;
+        const char *type;
+        const char *token;
+    } non_integer_cases[] = {
+        {"g21_array_length_bool.ff", "bool", "flag"},
+        {"g21_array_length_float.ff", "f64", "value"},
+        {"g21_array_length_string.ff", "string", "value"},
+        {"g21_array_length_object.ff", "Item", "value"},
+        {"g21_array_length_array.ff", "i32[]", "value"}
+    };
+    static const char *integer_params =
+        "module g21.array_length_integer_types;\n"
+        "func ok(a: i8, b: i16, c: i32, d: i64, e: u8, f: u16, "
+        "g: u32, h: u64, i: int, j: uint, k: byte): void {\n"
+        "  let aa = i32[:a]; let ab = i32[:b]; let ac = i32[:c];\n"
+        "  let ad = i32[:d]; let ae = i32[:e]; let af = i32[:f];\n"
+        "  let ag = i32[:g]; let ah = i32[:h]; let ai = i32[:i];\n"
+        "  let aj = i32[:j]; let ak = i32[:k];\n"
+        "}\n";
+    char source[512];
+
+    for (size_t index = 0U;
+         index < sizeof(non_integer_cases) / sizeof(non_integer_cases[0]);
+         ++index) {
+        int source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g21.array_length_non_integer;\n"
+            "type Item {}\n"
+            "func bad(%s: %s): void {\n"
+            "  let result = i32[:%s];\n"
+            "}\n",
+            non_integer_cases[index].token,
+            non_integer_cases[index].type,
+            non_integer_cases[index].token);
+
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g21_semantic_error(
+            non_integer_cases[index].path,
+            source,
+            "AE0202",
+            4U,
+            21U,
+            non_integer_cases[index].token,
+            "array size must be an integer expression");
+    }
+
+    assert_g21_semantic_ok_with_pointer_size(
+        "g21_array_length_integer_types_32.ff", integer_params, 4U);
+    assert_g21_semantic_ok_with_pointer_size(
+        "g21_array_length_integer_types_64.ff", integer_params, 8U);
+    assert_g21_semantic_ok_with_pointer_size(
+        "g21_array_length_boundaries_32.ff",
+        "module g21.array_length_boundaries_32;\n"
+        "func ok(): void {\n"
+        "  let zero = i32[:0];\n"
+        "  let one = i32[:1];\n"
+        "  let maximum = i32[:2147483647];\n"
+        "  let folded = i32[:((u64)2147483646 + (u64)1)];\n"
+        "}\n",
+        4U);
+    assert_g21_semantic_ok_with_pointer_size(
+        "g21_array_length_boundaries_64.ff",
+        "module g21.array_length_boundaries_64;\n"
+        "func ok(): void {\n"
+        "  let zero = i32[:0];\n"
+        "  let one = i32[:1];\n"
+        "  let maximum = i32[:9223372036854775807];\n"
+        "}\n",
+        8U);
+
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_negative_32.ff",
+        "module g21.array_length_negative_32;\n"
+        "func bad(): void {\n"
+        "  let value = i32[:-1];\n"
+        "}\n",
+        4U,
+        "AE0204", 3U, 20U, "-",
+        "array size value -1 is outside the valid target 'int' range 0...2147483647");
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_overflow_32.ff",
+        "module g21.array_length_overflow_32;\n"
+        "func bad(): void {\n"
+        "  let value = i32[:(u64)2147483648];\n"
+        "}\n",
+        4U,
+        "AE0204", 3U, 20U, "(",
+        "array size value 2147483648 is outside the valid target 'int' range 0...2147483647");
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_binding_32.ff",
+        "module g21.array_length_binding_32;\n"
+        "func bad(): void {\n"
+        "  let tooLarge: u64 = 2147483648;\n"
+        "  let value = i32[:tooLarge];\n"
+        "}\n",
+        4U,
+        "AE0204", 4U, 20U, "tooLarge",
+        "array size value 2147483648 is outside the valid target 'int' range 0...2147483647");
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_overflow_64.ff",
+        "module g21.array_length_overflow_64;\n"
+        "func bad(): void {\n"
+        "  let value = i32[:(u64)9223372036854775808];\n"
+        "}\n",
+        8U,
+        "AE0204", 3U, 20U, "(",
+        "array size value 9223372036854775808 is outside the valid target 'int' range 0...9223372036854775807");
+}
+
+/* ARRAY-D10: an untyped literal tree diagnoses the actual nested empty
+ * literal, while explicit array targets from every ordinary value context
+ * make the same nested empty literals well typed. */
+static void test_g21_nested_empty_array_literal_semantics(void) {
+    assert_g21_semantic_error(
+        "g21_direct_empty_array.ff",
+        "module g21.direct_empty_array;\n"
+        "func bad(): void {\n"
+        "  let value = [];\n"
+        "}\n",
+        "AE0203", 3U, 15U, "[",
+        "empty array literal requires an explicit target array type");
+    assert_g21_semantic_error(
+        "g21_nested_empty_array.ff",
+        "module g21.nested_empty_array;\n"
+        "func bad(): void {\n"
+        "  let value = [[]];\n"
+        "}\n",
+        "AE0203", 3U, 16U, "[",
+        "empty array literal requires an explicit target array type");
+    assert_g21_semantic_error(
+        "g21_deeply_nested_empty_array.ff",
+        "module g21.deeply_nested_empty_array;\n"
+        "func bad(): void {\n"
+        "  let value = [[[]]];\n"
+        "}\n",
+        "AE0203", 3U, 17U, "[",
+        "empty array literal requires an explicit target array type");
+    assert_g21_semantic_error(
+        "g21_multiple_nested_empty_arrays.ff",
+        "module g21.multiple_nested_empty_arrays;\n"
+        "func bad(): void {\n"
+        "  let value = [[], []];\n"
+        "}\n",
+        "AE0203", 3U, 16U, "[",
+        "empty array literal requires an explicit target array type");
+
+    assert_single_source_semantic_ok(
+        "g21_targeted_nested_empty_arrays.ff",
+        "module g21.targeted_nested_empty_arrays;\n"
+        "type Item {}\n"
+        "type Holder { open var values: Item[][]; }\n"
+        "func take(values: Item[][]): void {}\n"
+        "func make(): Item[][] {\n"
+        "  let local: Item[][] = [[], []];\n"
+        "  var assigned: Item[][] = [[]];\n"
+        "  assigned = [[], []];\n"
+        "  take([[], []]);\n"
+        "  let holder = Holder { values: [[], []] };\n"
+        "  return [[], []];\n"
+        "}\n");
+}
+
+/* ARRAY-D09/ARRAY-D11: inferred literals own AE0201, explicit non-call
+ * targets diagnose their first incompatible element with AE1003, and call
+ * overload probing commits only the final AE0512 when no candidate fits. */
+static void test_g21_array_literal_diagnostic_contexts(void) {
+    assert_g21_semantic_error(
+        "g21_untyped_array_literal_mismatch.ff",
+        "module g21.untyped_array_literal_mismatch;\n"
+        "func bad(): void {\n"
+        "  let values = [1, true];\n"
+        "}\n",
+        "AE0201", 3U, 20U, "true",
+        "array literal element at index 1 does not match expected type");
+    assert_g21_semantic_error(
+        "g21_targeted_array_literal_mismatch.ff",
+        "module g21.targeted_array_literal_mismatch;\n"
+        "func bad(): void {\n"
+        "  let values: i32[] = [1, false];\n"
+        "}\n",
+        "AE1003", 3U, 27U, "false",
+        "does not match expected type 'i32'");
+    assert_g21_semantic_error(
+        "g21_targeted_nested_array_literal_mismatch.ff",
+        "module g21.targeted_nested_array_literal_mismatch;\n"
+        "func bad(): void {\n"
+        "  let values: i32[][] = [[1], [\"x\"]];\n"
+        "}\n",
+        "AE1003", 3U, 32U, "\"x\"",
+        "does not match expected type 'i32'");
+    assert_g21_semantic_error(
+        "g21_array_literal_call_probe_mismatch.ff",
+        "module g21.array_literal_call_probe_mismatch;\n"
+        "func take(values: i32[]): void {}\n"
+        "func bad(): void {\n"
+        "  take([1, false]);\n"
+        "}\n",
+        "AE0512", 4U, 3U, "take",
+        "top-level function 'take' has no overload accepting 1 argument(s)");
+}
+
+/* ARRAY-D20-A: array-new may use readonly/writable and multi-layer array
+ * type references as its element type, including a closed generic base. */
+static void test_g21_array_typed_array_new_semantics(void) {
+    assert_single_source_semantic_ok(
+        "g21_array_typed_array_new.ff",
+        "module g21.array_typed_array_new;\n"
+        "type Box<T> { open var value: T; }\n"
+        "func build(count: i32): void {\n"
+        "  let readonly: i32[][] = i32[][:count];\n"
+        "  let writable: i32[!][] = i32[!][:count];\n"
+        "  let innerWritable: i32[!][][] = i32[!][][:count];\n"
+        "  let outerWritable: i32[][!][] = i32[][!][:count];\n"
+        "  let generic: Box<string>[!][][] = Box<string>[!][][:count];\n"
+        "}\n");
+}
+
+/* ARRAY-D11: an explicit target rejects a literal with too few or too many
+ * array layers at the first element whose shape no longer matches. */
+static void test_g21_array_literal_rank_mismatch_diagnostics(void) {
+    assert_g21_semantic_error(
+        "g21_array_literal_missing_layer.ff",
+        "module g21.array_literal_missing_layer;\n"
+        "func bad(): void {\n"
+        "  let values: i32[][] = [1];\n"
+        "}\n",
+        "AE1003", 3U, 26U, "1", "does not match expected type 'i32[]'");
+    assert_g21_semantic_error(
+        "g21_array_literal_extra_layer.ff",
+        "module g21.array_literal_extra_layer;\n"
+        "func bad(): void {\n"
+        "  let values: i32[] = [[1]];\n"
+        "}\n",
+        "AE1003", 3U, 24U, "[", "does not match expected type 'i32'");
+}
+
+/* ISSUE-G21-014: an outer try result target belongs only to the catch block's
+ * final value; an earlier for/in source keeps its own array-literal context. */
+static void test_g21_branch_non_result_array_target_isolation(void) {
+    assert_g21_semantic_ok(
+        "g21_branch_non_result_array_target.ff",
+        "module g21.branch_non_result_array_target;\n"
+        "func fail(): int { throw \"failed\"; }\n"
+        "func sum(): int {\n"
+        "  return try fail() catch {\n"
+        "    var total = 0;\n"
+        "    for let item in [1, 2] {\n"
+        "      total += item;\n"
+        "    }\n"
+        "    total\n"
+        "  };\n"
+        "}\n");
+}
+
+/* ARRAY-D15: existing array values are invariant in their leaf type, rank,
+ * and the writable marker at every corresponding layer. */
+static void test_g21_existing_array_implicit_compatibility_diagnostics(void) {
+    assert_g21_semantic_error(
+        "g21_array_implicit_leaf_mismatch.ff",
+        "module g21.array_implicit_leaf_mismatch;\n"
+        "func bad(source: i32[]): void {\n"
+        "  let target: string[] = source;\n"
+        "}\n",
+        "AE1003", 3U, 26U, "source", "does not match expected type 'string[]'");
+    assert_g21_semantic_error(
+        "g21_array_implicit_rank_mismatch.ff",
+        "module g21.array_implicit_rank_mismatch;\n"
+        "func bad(source: i32[]): void {\n"
+        "  let target: i32[][] = source;\n"
+        "}\n",
+        "AE1003", 3U, 25U, "source", "does not match expected type 'i32[][]'");
+    assert_g21_semantic_error(
+        "g21_array_implicit_outer_writable_mismatch.ff",
+        "module g21.array_implicit_outer_writable_mismatch;\n"
+        "func bad(source: i32[!]): void {\n"
+        "  let target: i32[] = source;\n"
+        "}\n",
+        "AE1003", 3U, 23U, "source", "does not match expected type 'i32[]'");
+    assert_g21_semantic_error(
+        "g21_array_implicit_inner_writable_mismatch.ff",
+        "module g21.array_implicit_inner_writable_mismatch;\n"
+        "func bad(source: i32[][]): void {\n"
+        "  let target: i32[!][] = source;\n"
+        "}\n",
+        "AE1003", 3U, 26U, "source", "does not match expected type 'i32[]![]'");
+}
+
+/* ARRAY-D16: explicit array casts may only remove writable markers while
+ * preserving the leaf and rank exactly. */
+static void test_g21_array_cast_compatibility(void) {
+    assert_g21_semantic_ok(
+        "g21_array_cast_strip_writability.ff",
+        "module g21.array_cast_strip_writability;\n"
+        "func ok(single: i32[!], nested: i32[!][!]): void {\n"
+        "  let readonly: i32[] = (i32[])single;\n"
+        "  let stripOuter: i32[!][] = (i32[!][])nested;\n"
+        "  let stripInner: i32[][!] = (i32[][!])nested;\n"
+        "  let stripBoth: i32[][] = (i32[][])nested;\n"
+        "}\n");
+
+    assert_g21_semantic_error(
+        "g21_array_cast_add_outer_writable.ff",
+        "module g21.array_cast_add_outer_writable;\n"
+        "func bad(source: i32[]): void {\n"
+        "  let invalid = (i32[!])source;\n"
+        "}\n",
+        "AE1023", 3U, 17U, "(", "is not allowed");
+    assert_g21_semantic_error(
+        "g21_array_cast_add_inner_writable.ff",
+        "module g21.array_cast_add_inner_writable;\n"
+        "func bad(source: i32[][]): void {\n"
+        "  let invalid = (i32[!][])source;\n"
+        "}\n",
+        "AE1023", 3U, 17U, "(", "is not allowed");
+    assert_g21_semantic_error(
+        "g21_array_cast_rank_mismatch.ff",
+        "module g21.array_cast_rank_mismatch;\n"
+        "func bad(source: i32[]): void {\n"
+        "  let invalid = (i32[][])source;\n"
+        "}\n",
+        "AE1023", 3U, 17U, "(", "is not allowed");
+    assert_g21_semantic_error(
+        "g21_array_cast_leaf_mismatch.ff",
+        "module g21.array_cast_leaf_mismatch;\n"
+        "func bad(source: i32[]): void {\n"
+        "  let invalid = (string[])source;\n"
+        "}\n",
+        "AE1023", 3U, 17U, "(", "is not allowed");
+}
+
+/* ARRAY-D17: element-level object-to-spec coercion does not make arrays
+ * variant; rebuilding under an Animal[] target remains the legal boundary. */
+static void test_g21_array_spec_invariance(void) {
+    static const char *declarations =
+        "spec Animal { func sound(): string; }\n"
+        "type Dog {}\n"
+        "fit Dog: Animal { func sound(): string { return \"dog\"; } }\n";
+    char source[768];
+    int source_length;
+
+    source_length = snprintf(
+        source,
+        sizeof(source),
+        "module g21.array_spec_implicit;\n%s"
+        "func bad(source: Dog[]): void {\n"
+        "  let target: Animal[] = source;\n"
+        "}\n",
+        declarations);
+    ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+    assert_g21_semantic_error(
+        "g21_array_spec_implicit.ff", source,
+        "AE1003", 6U, 26U, "source", "does not match expected type 'Animal[]'");
+
+    source_length = snprintf(
+        source,
+        sizeof(source),
+        "module g21.array_spec_cast;\n%s"
+        "func bad(source: Dog[]): void {\n"
+        "  let target: Animal[] = (Animal[])source;\n"
+        "}\n",
+        declarations);
+    ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+    assert_g21_semantic_error(
+        "g21_array_spec_cast.ff", source,
+        "AE1023", 6U, 26U, "(", "is not allowed");
+
+    source_length = snprintf(
+        source,
+        sizeof(source),
+        "module g21.array_spec_rebuild;\n%s"
+        "func rebuild(source: Dog): Animal[] {\n"
+        "  let target: Animal[] = [source];\n"
+        "  return target;\n"
+        "}\n",
+        declarations);
+    ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+    assert_g21_semantic_ok("g21_array_spec_rebuild.ff", source);
+}
+
+/* ARRAY-D18: outer replacement and inner element mutation consult only the
+ * writable marker on the array layer actually consumed by that index. */
+static void test_g21_array_layer_writability_diagnostics(void) {
+    assert_g21_semantic_ok(
+        "g21_array_layer_writes_ok.ff",
+        "module g21.array_layer_writes_ok;\n"
+        "func ok(readonlyBoth: i32[][], outerWritable: i32[][!], "
+        "innerWritable: i32[!][], writableBoth: i32[!][!], "
+        "readonlyRow: i32[], writableRow: i32[!]): void {\n"
+        "  let first: i32 = readonlyBoth[0][0];\n"
+        "  outerWritable[0] = readonlyRow;\n"
+        "  innerWritable[0][0] = first;\n"
+        "  writableBoth[0] = writableRow;\n"
+        "  writableBoth[0][0] = first;\n"
+        "}\n");
+
+    assert_g21_semantic_error(
+        "g21_readonly_both_outer_write.ff",
+        "module g21.readonly_both_outer_write;\n"
+        "func bad(matrix: i32[][], row: i32[]): void {\n"
+        "  matrix[0] = row;\n"
+        "}\n",
+        "AE0104", 3U, 3U, "matrix", "is not writable");
+    assert_g21_semantic_error(
+        "g21_readonly_both_inner_write.ff",
+        "module g21.readonly_both_inner_write;\n"
+        "func bad(matrix: i32[][]): void {\n"
+        "  matrix[0][0] = 1;\n"
+        "}\n",
+        "AE0104", 3U, 3U, "matrix", "is not writable");
+    assert_g21_semantic_error(
+        "g21_readonly_inner_write.ff",
+        "module g21.readonly_inner_write;\n"
+        "func bad(matrix: i32[][!]): void {\n"
+        "  matrix[0][0] = 1;\n"
+        "}\n",
+        "AE0104", 3U, 3U, "matrix", "is not writable");
+    assert_g21_semantic_error(
+        "g21_readonly_outer_write.ff",
+        "module g21.readonly_outer_write;\n"
+        "func bad(matrix: i32[!][], row: i32[!]): void {\n"
+        "  matrix[0] = row;\n"
+        "}\n",
+        "AE0104", 3U, 3U, "matrix", "is not writable");
+    assert_g21_semantic_error(
+        "g21_writable_outer_value_mismatch.ff",
+        "module g21.writable_outer_value_mismatch;\n"
+        "func bad(matrix: i32[][!], row: string[]): void {\n"
+        "  matrix[0] = row;\n"
+        "}\n",
+        "AE1003", 3U, 15U, "row", "does not match expected type 'i32[]'");
+    assert_g21_semantic_error(
+        "g21_writable_inner_value_mismatch.ff",
+        "module g21.writable_inner_value_mismatch;\n"
+        "func bad(matrix: i32[!][]): void {\n"
+        "  matrix[0][0] = \"wrong\";\n"
+        "}\n",
+        "AE1003", 3U, 18U, "\"wrong\"", "does not match expected type 'i32'");
+}
+
+/* ARRAY-D22: compile-time folding cannot hide a value immediately above the
+ * selected target int maximum. */
+static void test_g21_array_new_folded_length_overflow_diagnostics(void) {
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_folded_overflow_32.ff",
+        "module g21.array_length_folded_overflow_32;\n"
+        "func bad(): void {\n"
+        "  let value = i32[:((u64)2147483647 + (u64)1)];\n"
+        "}\n",
+        4U,
+        "AE0204", 3U, 37U, "+",
+        "array size value 2147483648 is outside the valid target 'int' range 0...2147483647");
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_folded_overflow_64.ff",
+        "module g21.array_length_folded_overflow_64;\n"
+        "func bad(): void {\n"
+        "  let value = i32[:((u64)9223372036854775807 + (u64)1)];\n"
+        "}\n",
+        8U,
+        "AE0204", 3U, 46U, "+",
+        "array size value 9223372036854775808 is outside the valid target 'int' range 0...9223372036854775807");
+    assert_g21_semantic_error_with_pointer_size(
+        "g21_array_length_folded_binding_overflow_64.ff",
+        "module g21.array_length_folded_binding_overflow_64;\n"
+        "func bad(): void {\n"
+        "  let maximum: u64 = 9223372036854775807;\n"
+        "  let one: u64 = 1;\n"
+        "  let value = i32[:maximum + one];\n"
+        "}\n",
+        8U,
+        "AE0204", 5U, 28U, "+",
+        "array size value 9223372036854775808 is outside the valid target 'int' range 0...9223372036854775807");
+}
+
+/* ARRAY-D26: array-new inherits the current layer's writability from its
+ * explicit target, but every pre-existing inner layer remains invariant. */
+static void test_g21_array_new_target_compatibility(void) {
+    assert_g21_semantic_ok(
+        "g21_array_new_target_writability_ok.ff",
+        "module g21.array_new_target_writability_ok;\n"
+        "func ok(count: i32): void {\n"
+        "  let inferred = i32[:count];\n"
+        "  let readonly: i32[] = i32[:count];\n"
+        "  let writable: i32[!] = i32[:count];\n"
+        "  let first: i32 = inferred[0];\n"
+        "  writable[0] = first;\n"
+        "}\n");
+
+    assert_g21_semantic_error(
+        "g21_array_new_target_leaf_mismatch.ff",
+        "module g21.array_new_target_leaf_mismatch;\n"
+        "func bad(count: i32): void {\n"
+        "  let invalid: string[] = i32[:count];\n"
+        "}\n",
+        "AE1003", 3U, 27U, "i32", "does not match expected type 'string[]'");
+    assert_g21_semantic_error(
+        "g21_array_new_target_rank_mismatch.ff",
+        "module g21.array_new_target_rank_mismatch;\n"
+        "func bad(count: i32): void {\n"
+        "  let invalid: i32[][] = i32[:count];\n"
+        "}\n",
+        "AE1003", 3U, 26U, "i32", "does not match expected type 'i32[][]'");
+    assert_g21_semantic_error(
+        "g21_array_new_target_add_inner_writable.ff",
+        "module g21.array_new_target_add_inner_writable;\n"
+        "func bad(count: i32): void {\n"
+        "  let invalid: i32[!][] = i32[][:count];\n"
+        "}\n",
+        "AE1003", 3U, 27U, "i32", "does not match expected type 'i32[]![]'");
+    assert_g21_semantic_error(
+        "g21_array_new_target_remove_inner_writable.ff",
+        "module g21.array_new_target_remove_inner_writable;\n"
+        "func bad(count: i32): void {\n"
+        "  let invalid: i32[][] = i32[!][:count];\n"
+        "}\n",
+        "AE1003", 3U, 26U, "i32", "does not match expected type 'i32[][]'");
+}
+
+/* ARRAY-D28: every Feng integer family is valid in both index positions;
+ * non-integer families retain one AE1022 before read/write processing. */
+static void test_g21_array_index_type_matrix(void) {
+    static const struct {
+        const char *path_suffix;
+        const char *type;
+    } invalid_cases[] = {
+        {"bool", "bool"},
+        {"float", "f64"},
+        {"string", "string"},
+        {"object", "Item"},
+        {"array", "i32[]"}
+    };
+    char path[128];
+    char source[512];
+
+    assert_g21_semantic_ok(
+        "g21_array_all_integer_indices.ff",
+        "module g21.array_all_integer_indices;\n"
+        "func ok(values: i32[!], a: i8, b: i16, c: i32, d: i64, "
+        "e: u8, f: u16, g: u32, h: u64, i: int, j: uint, k: byte): i32 {\n"
+        "  var result: i32 = values[a];\n"
+        "  result = values[b]; result = values[c]; result = values[d];\n"
+        "  result = values[e]; result = values[f]; result = values[g];\n"
+        "  result = values[h]; result = values[i]; result = values[j];\n"
+        "  result = values[k];\n"
+        "  values[a] = result; values[b] = result; values[c] = result;\n"
+        "  values[d] = result; values[e] = result; values[f] = result;\n"
+        "  values[g] = result; values[h] = result; values[i] = result;\n"
+        "  values[j] = result; values[k] = result;\n"
+        "  return result;\n"
+        "}\n");
+
+    for (size_t index = 0U;
+         index < sizeof(invalid_cases) / sizeof(invalid_cases[0]);
+         ++index) {
+        int path_length = snprintf(path,
+                                   sizeof(path),
+                                   "g21_array_%s_index_read.ff",
+                                   invalid_cases[index].path_suffix);
+        int source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g21.array_invalid_index;\n"
+            "type Item {}\n"
+            "func bad(values: i32[!], index: %s): void {\n"
+            "  values[index];\n"
+            "}\n",
+            invalid_cases[index].type);
+
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g21_semantic_error(
+            path, source,
+            "AE1022", 4U, 3U, "values",
+            "index expression requires an integer operand");
+
+        path_length = snprintf(path,
+                               sizeof(path),
+                               "g21_array_%s_index_write.ff",
+                               invalid_cases[index].path_suffix);
+        source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g21.array_invalid_index;\n"
+            "type Item {}\n"
+            "func bad(values: i32[!], index: %s): void {\n"
+            "  values[index] = 1;\n"
+            "}\n",
+            invalid_cases[index].type);
+
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g21_semantic_error(
+            path, source,
+            "AE1022", 4U, 3U, "values",
+            "index expression requires an integer operand");
+    }
+}
+
+/* ARRAY-D29: non-array targets fail at the receiver in both read and write
+ * positions, before writability or right-hand value checks can add errors. */
+static void test_g21_non_array_index_target_matrix(void) {
+    static const struct {
+        const char *path_suffix;
+        const char *type;
+    } invalid_cases[] = {
+        {"scalar", "i32"},
+        {"object", "Item"},
+        {"tuple", "Pair"},
+        {"spec", "Surface"}
+    };
+    static const char *declarations =
+        "type Item {}\n"
+        "type Pair(i32, i32);\n"
+        "spec Surface {}\n";
+    char path[128];
+    char source[640];
+
+    for (size_t index = 0U;
+         index < sizeof(invalid_cases) / sizeof(invalid_cases[0]);
+         ++index) {
+        int path_length = snprintf(path,
+                                   sizeof(path),
+                                   "g21_%s_index_target_read.ff",
+                                   invalid_cases[index].path_suffix);
+        int source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g21.non_array_index_target;\n%s"
+            "func bad(value: %s): void {\n"
+            "  value[0];\n"
+            "}\n",
+            declarations,
+            invalid_cases[index].type);
+
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g21_semantic_error(
+            path, source,
+            "AE1021", 6U, 3U, "value",
+            "index expression target must have array type");
+
+        path_length = snprintf(path,
+                               sizeof(path),
+                               "g21_%s_index_target_write.ff",
+                               invalid_cases[index].path_suffix);
+        source_length = snprintf(
+            source,
+            sizeof(source),
+            "module g21.non_array_index_target;\n%s"
+            "func bad(value: %s): void {\n"
+            "  value[0] = value;\n"
+            "}\n",
+            declarations,
+            invalid_cases[index].type);
+
+        ASSERT(path_length > 0 && (size_t)path_length < sizeof(path));
+        ASSERT(source_length > 0 && (size_t)source_length < sizeof(source));
+        assert_g21_semantic_error(
+            path, source,
+            "AE1021", 6U, 3U, "value",
+            "index expression target must have array type");
+    }
+}
+
+/* ARRAY-D30: each bracket pair consumes exactly one array layer; indexing
+ * after the leaf is reached produces one ordinary non-array-target error. */
+static void test_g21_array_index_layer_consumption(void) {
+    assert_g21_semantic_ok(
+        "g21_array_index_layer_consumption_ok.ff",
+        "module g21.array_index_layer_consumption_ok;\n"
+        "func ok(matrix: i32[!][!], i: i32, j: i32): i32 {\n"
+        "  let row: i32[!] = matrix[i];\n"
+        "  let value: i32 = row[j];\n"
+        "  matrix[i][j] = value;\n"
+        "  return value;\n"
+        "}\n");
+    assert_g21_semantic_error(
+        "g21_array_index_exhausted_read.ff",
+        "module g21.array_index_exhausted_read;\n"
+        "func bad(values: i32[]): void {\n"
+        "  values[0][0];\n"
+        "}\n",
+        "AE1021", 3U, 3U, "values",
+        "index expression target must have array type");
+    assert_g21_semantic_error(
+        "g21_array_index_exhausted_write.ff",
+        "module g21.array_index_exhausted_write;\n"
+        "func bad(values: i32[!]): void {\n"
+        "  values[0][0] = 1;\n"
+        "}\n",
+        "AE1021", 3U, 3U, "values",
+        "index expression target must have array type");
+}
+
+/* ARRAY-D27/ARRAY-D27-A/ARRAY-D27-C: every array-new length form uses the
+ * same compile-time finite-default predicate.  Empty array values and array
+ * literals made from explicit existing elements do not request that default. */
+static void test_g21_array_new_default_zero_semantics(void) {
+    static const struct {
+        const char *path;
+        const char *source;
+        unsigned int line;
+        const char *token;
+    } invalid_cases[] = {
+        {
+            "g21_array_new_self_cycle_zero.ff",
+            "module g21.array_new_self_cycle_zero;\n"
+            "type Node { open var next: Node; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Node[:0];\n"
+            "}\n",
+            4U,
+            "Node"
+        },
+        {
+            "g21_array_new_self_cycle_positive.ff",
+            "module g21.array_new_self_cycle_positive;\n"
+            "type Node { open var next: Node; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Node[:1];\n"
+            "}\n",
+            4U,
+            "Node"
+        },
+        {
+            "g21_array_new_self_cycle_dynamic.ff",
+            "module g21.array_new_self_cycle_dynamic;\n"
+            "type Node { open var next: Node; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Node[:count];\n"
+            "}\n",
+            4U,
+            "Node"
+        },
+        {
+            "g21_array_new_mutual_cycle_zero.ff",
+            "module g21.array_new_mutual_cycle_zero;\n"
+            "type Left { open var right: Right; }\n"
+            "type Right { open var left: Left; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Left[:0];\n"
+            "}\n",
+            5U,
+            "Left"
+        },
+        {
+            "g21_array_new_mutual_cycle_positive.ff",
+            "module g21.array_new_mutual_cycle_positive;\n"
+            "type Left { open var right: Right; }\n"
+            "type Right { open var left: Left; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Left[:1];\n"
+            "}\n",
+            5U,
+            "Left"
+        },
+        {
+            "g21_array_new_mutual_cycle_dynamic.ff",
+            "module g21.array_new_mutual_cycle_dynamic;\n"
+            "type Left { open var right: Right; }\n"
+            "type Right { open var left: Left; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Left[:count];\n"
+            "}\n",
+            5U,
+            "Left"
+        },
+        {
+            "g21_array_new_union_cycle_zero.ff",
+            "module g21.array_new_union_cycle_zero;\n"
+            "type Empty();\n"
+            "spec Recursive<T>: T | Empty;\n"
+            "type Node { open var next: Recursive<Node>; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Recursive<Node>[:0];\n"
+            "}\n",
+            6U,
+            "Recursive"
+        },
+        {
+            "g21_array_new_union_cycle_positive.ff",
+            "module g21.array_new_union_cycle_positive;\n"
+            "type Empty();\n"
+            "spec Recursive<T>: T | Empty;\n"
+            "type Node { open var next: Recursive<Node>; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Recursive<Node>[:1];\n"
+            "}\n",
+            6U,
+            "Recursive"
+        },
+        {
+            "g21_array_new_union_cycle_dynamic.ff",
+            "module g21.array_new_union_cycle_dynamic;\n"
+            "type Empty();\n"
+            "spec Recursive<T>: T | Empty;\n"
+            "type Node { open var next: Recursive<Node>; }\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Recursive<Node>[:count];\n"
+            "}\n",
+            6U,
+            "Recursive"
+        }
+    };
+
+    for (size_t index = 0U;
+         index < sizeof(invalid_cases) / sizeof(invalid_cases[0]);
+         ++index) {
+        assert_g21_semantic_error(
+            invalid_cases[index].path,
+            invalid_cases[index].source,
+            "AE0332",
+            invalid_cases[index].line,
+            15U,
+            invalid_cases[index].token,
+            "array creation element type");
+    }
+
+    assert_single_source_semantic_ok(
+        "g21_array_new_finite_defaults.ff",
+        "module g21.array_new_finite_defaults;\n"
+        "type Item { open var number: i32; }\n"
+        "type Box<T> { open var value: T; }\n"
+        "func build(count: i32): void {\n"
+        "  let zero = i32[:0];\n"
+        "  let positive = string[:2];\n"
+        "  let dynamic = Item[:count];\n"
+        "  let generic = Box<i32>[:count];\n"
+        "}\n");
+    assert_single_source_semantic_ok(
+        "g21_recursive_array_non_default_paths.ff",
+        "module g21.recursive_array_non_default_paths;\n"
+        "type Node { open var next: Node; }\n"
+        "func retain(existing: Node): Node[] {\n"
+        "  let defaultEmpty: Node[];\n"
+        "  let explicitEmpty: Node[] = [];\n"
+        "  let explicitValue: Node[] = [existing];\n"
+        "  return explicitValue;\n"
+        "}\n");
+}
+
+/* Analyze one consumer through the imported-symbol metadata path and assert
+ * its sole array-new default-zero diagnostic. */
+static void assert_g21_imported_array_new_error(
+    const FengSemanticImportedModuleQuery *query,
+    const char *path,
+    const char *source,
+    unsigned int expected_column,
+    const char *expected_lexeme) {
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = query;
+    options.pointer_size = sizeof(void *);
+    ASSERT(!feng_semantic_analyze_with_options(programs,
+                                               1U,
+                                               &options,
+                                               &analysis,
+                                               &errors,
+                                               &error_count));
+    ASSERT(error_count == 1U);
+    ASSERT(strcmp(errors[0].path, path) == 0);
+    ASSERT(strcmp(errors[0].code, "AE0332") == 0);
+    ASSERT(errors[0].token.line == 4U);
+    ASSERT(errors[0].token.column == expected_column);
+    ASSERT(errors[0].token.length == strlen(expected_lexeme));
+    ASSERT(memcmp(errors[0].token.lexeme,
+                  expected_lexeme,
+                  errors[0].token.length) == 0);
+    ASSERT(strstr(errors[0].message,
+                  "array creation element type") != NULL);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* Analyze one imported finite-element array-new consumer without diagnostics. */
+static void assert_g21_imported_array_new_ok(
+    const FengSemanticImportedModuleQuery *query,
+    const char *path,
+    const char *source) {
+    FengSemanticAnalyzeOptions options;
+    FengProgram *program = parse_program_or_die(path, source);
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+
+    memset(&options, 0, sizeof(options));
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.imported_modules = query;
+    options.pointer_size = sizeof(void *);
+    ASSERT(feng_semantic_analyze_with_options(programs,
+                                              1U,
+                                              &options,
+                                              &analysis,
+                                              &errors,
+                                              &error_count));
+    ASSERT(error_count == 0U);
+
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* ARRAY-D27-B: imported short, alias-qualified, and complete module paths all
+ * use the same exported field metadata for the finite-default decision. */
+static void test_g21_imported_array_new_default_zero_semantics(void) {
+    static const char *provider_source =
+        "open module vendor.g21_array_zero;\n"
+        "open type Node { open var next: Node; }\n"
+        "open type Finite { open var number: i32; }\n";
+    static const struct {
+        const char *path;
+        const char *source;
+        unsigned int column;
+        const char *token;
+    } invalid_cases[] = {
+        {
+            "g21_imported_short_array_zero.ff",
+            "module app.g21_imported_short_array_zero;\n"
+            "import vendor.g21_array_zero;\n"
+            "func bad(count: i32): void {\n"
+            "  let value = Node[:0];\n"
+            "}\n",
+            15U,
+            "Node"
+        },
+        {
+            "g21_imported_alias_array_zero.ff",
+            "module app.g21_imported_alias_array_zero;\n"
+            "import vendor.g21_array_zero as vendor;\n"
+            "func bad(count: i32): void {\n"
+            "  let value = vendor.Node[:1];\n"
+            "}\n",
+            15U,
+            "vendor"
+        },
+        {
+            "g21_imported_full_array_zero.ff",
+            "module app.g21_imported_full_array_zero;\n"
+            "\n"
+            "func bad(count: i32): void {\n"
+            "  let value = vendor.g21_array_zero.Node[:count];\n"
+            "}\n",
+            15U,
+            "vendor"
+        }
+    };
+    static const struct {
+        const char *path;
+        const char *source;
+    } valid_cases[] = {
+        {
+            "g21_imported_short_array_finite.ff",
+            "module app.g21_imported_short_array_finite;\n"
+            "import vendor.g21_array_zero;\n"
+            "func build(count: i32): void {\n"
+            "  let value = Finite[:count];\n"
+            "}\n"
+        },
+        {
+            "g21_imported_alias_array_finite.ff",
+            "module app.g21_imported_alias_array_finite;\n"
+            "import vendor.g21_array_zero as vendor;\n"
+            "func build(count: i32): void {\n"
+            "  let value = vendor.Finite[:count];\n"
+            "}\n"
+        },
+        {
+            "g21_imported_full_array_finite.ff",
+            "module app.g21_imported_full_array_finite;\n"
+            "\n"
+            "func build(count: i32): void {\n"
+            "  let value = vendor.g21_array_zero.Finite[:count];\n"
+            "}\n"
+        }
+    };
+    ImportedSourceFixture fixture;
+    FengSemanticImportedModuleQuery query;
+
+    imported_source_fixture_init(&fixture,
+                                 "g21_array_zero_provider.ff",
+                                 provider_source);
+    query = feng_symbol_imported_module_cache_as_query(fixture.cache);
+    for (size_t index = 0U;
+         index < sizeof(invalid_cases) / sizeof(invalid_cases[0]);
+         ++index) {
+        assert_g21_imported_array_new_error(&query,
+                                            invalid_cases[index].path,
+                                            invalid_cases[index].source,
+                                            invalid_cases[index].column,
+                                            invalid_cases[index].token);
+    }
+    for (size_t index = 0U;
+         index < sizeof(valid_cases) / sizeof(valid_cases[0]);
+         ++index) {
+        assert_g21_imported_array_new_ok(&query,
+                                         valid_cases[index].path,
+                                         valid_cases[index].source);
+    }
+    imported_source_fixture_dispose(&fixture);
+}
+
 int main(void) {
+    test_g21_array_leaf_type_diagnostics();
+    test_g21_array_new_length_semantics();
+    test_g21_nested_empty_array_literal_semantics();
+    test_g21_array_literal_diagnostic_contexts();
+    test_g21_array_typed_array_new_semantics();
+    test_g21_array_literal_rank_mismatch_diagnostics();
+    test_g21_branch_non_result_array_target_isolation();
+    test_g21_existing_array_implicit_compatibility_diagnostics();
+    test_g21_array_cast_compatibility();
+    test_g21_array_spec_invariance();
+    test_g21_array_layer_writability_diagnostics();
+    test_g21_array_new_target_compatibility();
+    test_g21_array_index_type_matrix();
+    test_g21_non_array_index_target_matrix();
+    test_g21_array_index_layer_consumption();
+    test_g21_array_new_folded_length_overflow_diagnostics();
+    test_g21_array_new_default_zero_semantics();
+    test_g21_imported_array_new_default_zero_semantics();
     test_g20_tuple_literal_target_and_arity_diagnostics();
     test_g20_tuple_literal_element_type_diagnostics();
     test_g20_tuple_object_construction_diagnostics();
@@ -34187,6 +35508,7 @@ int main(void) {
     test_spec_witness_on_demand_only();
     test_spec_witness_via_generic_instantiation();
     test_spec_witness_subject_key_supports_builtin_and_array();
+    test_g21_deep_array_witness_keys_are_structural();
     test_spec_witness_multi_fit_conflict();
     test_spec_equality_object_eq_recorded();
     test_spec_equality_object_neq_recorded();

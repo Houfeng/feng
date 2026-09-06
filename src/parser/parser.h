@@ -326,6 +326,10 @@ struct FengExpr {
         struct {
             FengTypeRef *element_type;  /* the element type, e.g. MapEntry<K,V> */
             FengExpr    *size;          /* the size expression n */
+            /* Set by Semantic only when constant evaluation proves that the
+             * size is in the target `int` range. Codegen uses this fact to
+             * omit the dynamic creation-site range check entirely. */
+            bool size_is_statically_valid;
         } array_new;
     } as;
 };

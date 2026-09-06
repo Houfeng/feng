@@ -143,7 +143,7 @@ static const FengManagedSlotDescriptor kUnionSpecName_slots[] = {
 static const FengAggregateDescriptor kUnionSpecName_desc = {
     .name = "pkg.SpecName",
     .size = sizeof(FengUnion_SpecName),
-    .default_init = &kUnionSpecName_default_init,
+    .default_zero_init = &kUnionSpecName_default_zero_init,
     .managed_slot_count = 1,
     .managed_slots = kUnionSpecName_slots,
     .equal_fn = NULL,
@@ -171,7 +171,7 @@ static const FengAggregateDescriptor kUnionSpecName_desc = {
 - [x] 定义 `tag` 到 active member 的映射与必要的描述符元信息。
 - [x] 定义默认零值时如何初始化 `tag`、`_fwd` 与 payload。
 - [x] 明确无托管槽位的 variant 在运行时写入 `FENG_SLOT_NONE`。
-- [x] 复用 `feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take` 与 `feng_aggregate_default_init` 完成 union 生命周期；异常路径通过通用 aggregate cleanup 节点调用同一 descriptor，不新增 union 专用 API。
+- [x] 复用 `feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take` 与 `feng_aggregate_default_zero_init` 完成 union 生命周期；异常路径通过通用 aggregate cleanup 节点调用同一 descriptor，不新增 union 专用 API。
 - [x] 验证 aggregate walker 经由 `FENG_SLOT_FORWARD` 在该布局下即可正确处理复制、销毁与托管扫描。
 - [x] 验证该实现不引入第四类顶层值模型，也不需要在 `src/runtime/` 中新增 union 专用生命周期分支。
 

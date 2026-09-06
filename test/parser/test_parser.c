@@ -2313,6 +2313,268 @@ static void test_generic_array_new_uses_colon_dimension_syntax(void) {
     feng_program_free(program);
 }
 
+/* ARRAY-D01: every one- and two-layer array spelling preserves the writable
+ * bit only on its adjacent wrapper, ordered from the outer layer inward. */
+static void test_g21_array_type_layers_preserve_adjacent_writability(void) {
+    static const char *source =
+        "module g21.array_type_layers;\n"
+        "type T {}\n"
+        "func shapes(a: T[], b: T[!], c: T[][], d: T[][!], "
+        "e: T[!][], f: T[!][!]): void {}\n";
+    static const size_t expected_ranks[] = {1U, 1U, 2U, 2U, 2U, 2U};
+    static const bool expected_writable[][2] = {
+        {false, false},
+        {true, false},
+        {false, false},
+        {true, false},
+        {false, true},
+        {true, true}
+    };
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengDecl *function;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "g21_array_type_layers.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    ASSERT(program->declaration_count == 2U);
+    function = program->declarations[1];
+    ASSERT(function->kind == FENG_DECL_FUNCTION);
+    ASSERT(function->as.function_decl.param_count == 6U);
+
+    for (size_t param_index = 0U; param_index < 6U; ++param_index) {
+        const FengTypeRef *cursor =
+            function->as.function_decl.params[param_index].type;
+
+        for (size_t layer = 0U; layer < expected_ranks[param_index]; ++layer) {
+            ASSERT(cursor != NULL);
+            ASSERT(cursor->kind == FENG_TYPE_REF_ARRAY);
+            ASSERT(cursor->array_element_writable ==
+                   expected_writable[param_index][layer]);
+            cursor = cursor->as.inner;
+        }
+        ASSERT(cursor != NULL);
+        ASSERT(cursor->kind == FENG_TYPE_REF_NAMED);
+        ASSERT(cursor->as.named.segment_count == 1U);
+        assert_slice_text(cursor->as.named.segments[0], "T");
+    }
+
+    feng_program_free(program);
+}
+
+/* ARRAY-D20: every supported public type-name form must become the same
+ * ordered named-type path, with closed generic arguments kept on its leaf. */
+static void test_qualified_array_new_preserves_type_paths(void) {
+    const char *source =
+        "module demo.main;\n"
+        "import library.models;\n"
+        "import library.models as models;\n"
+        "func run(n: int) {\n"
+        "    let short_name = Item[:n];\n"
+        "    let aliased = models.Item[:n];\n"
+        "    let full_path = library.models.Item[:n];\n"
+        "    let short_generic = Box<int>[:n];\n"
+        "    let aliased_generic = models.Box<int>[:n];\n"
+        "    let full_generic = library.models.Box<int>[:n];\n"
+        "}\n";
+    static const char *const expected_segments[][3] = {
+        {"Item", NULL, NULL},
+        {"models", "Item", NULL},
+        {"library", "models", "Item"},
+        {"Box", NULL, NULL},
+        {"models", "Box", NULL},
+        {"library", "models", "Box"}
+    };
+    static const size_t expected_segment_counts[] = {1U, 2U, 3U, 1U, 2U, 3U};
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    size_t statement_index;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "qualified_array_new_paths.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body != NULL);
+    ASSERT(body->statement_count == 6U);
+
+    for (statement_index = 0U; statement_index < body->statement_count;
+         ++statement_index) {
+        const FengExpr *initializer =
+            body->statements[statement_index]->as.binding.initializer;
+        const FengTypeRef *element_type;
+        size_t segment_index;
+
+        ASSERT(initializer != NULL);
+        ASSERT(initializer->kind == FENG_EXPR_ARRAY_NEW);
+        element_type = initializer->as.array_new.element_type;
+        ASSERT(element_type != NULL);
+        ASSERT(element_type->kind == FENG_TYPE_REF_NAMED);
+        ASSERT(element_type->as.named.segment_count ==
+               expected_segment_counts[statement_index]);
+        for (segment_index = 0U;
+             segment_index < element_type->as.named.segment_count;
+             ++segment_index) {
+            assert_slice_text(element_type->as.named.segments[segment_index],
+                              expected_segments[statement_index][segment_index]);
+        }
+        ASSERT(element_type->as.named.type_arg_count ==
+               (statement_index >= 3U ? 1U : 0U));
+        if (statement_index >= 3U) {
+            const FengTypeRef *type_arg = element_type->as.named.type_args[0];
+
+            ASSERT(type_arg != NULL);
+            ASSERT(type_arg->kind == FENG_TYPE_REF_NAMED);
+            ASSERT(type_arg->as.named.segment_count == 1U);
+            assert_slice_text(type_arg->as.named.segments[0], "int");
+        }
+    }
+
+    feng_program_free(program);
+}
+
+/* ARRAY-D20-A: array-new accepts array element type references and preserves
+ * the ordering and writable marker of every inner array layer. */
+static void test_array_typed_array_new_preserves_all_inner_layers(void) {
+    const char *source =
+        "module demo.main;\n"
+        "import library.models as models;\n"
+        "func run(n: int) {\n"
+        "    let readonly = int[][:2];\n"
+        "    let writable = int[!][:n];\n"
+        "    let inner_writable = int[!][][:n];\n"
+        "    let outer_writable = int[][!][:n];\n"
+        "    let generic = models.Box<string>[!][][:n];\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengBlock *body;
+    const FengTypeRef *element_type;
+
+    ASSERT(feng_parse_source(source,
+                             strlen(source),
+                             "array_typed_array_new_layers.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    body = program->declarations[0]->as.function_decl.body;
+    ASSERT(body != NULL);
+    ASSERT(body->statement_count == 5U);
+
+    element_type = body->statements[0]->as.binding.initializer
+                       ->as.array_new.element_type;
+    ASSERT(element_type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(!element_type->array_element_writable);
+    ASSERT(element_type->as.inner->kind == FENG_TYPE_REF_NAMED);
+    assert_slice_text(element_type->as.inner->as.named.segments[0], "int");
+
+    element_type = body->statements[1]->as.binding.initializer
+                       ->as.array_new.element_type;
+    ASSERT(element_type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(element_type->array_element_writable);
+    ASSERT(element_type->as.inner->kind == FENG_TYPE_REF_NAMED);
+
+    element_type = body->statements[2]->as.binding.initializer
+                       ->as.array_new.element_type;
+    ASSERT(element_type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(!element_type->array_element_writable);
+    ASSERT(element_type->as.inner->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(element_type->as.inner->array_element_writable);
+
+    element_type = body->statements[3]->as.binding.initializer
+                       ->as.array_new.element_type;
+    ASSERT(element_type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(element_type->array_element_writable);
+    ASSERT(element_type->as.inner->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(!element_type->as.inner->array_element_writable);
+
+    element_type = body->statements[4]->as.binding.initializer
+                       ->as.array_new.element_type;
+    ASSERT(element_type->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(!element_type->array_element_writable);
+    ASSERT(element_type->as.inner->kind == FENG_TYPE_REF_ARRAY);
+    ASSERT(element_type->as.inner->array_element_writable);
+    ASSERT(element_type->as.inner->as.inner->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(element_type->as.inner->as.inner->as.named.segment_count == 2U);
+    assert_slice_text(
+        element_type->as.inner->as.inner->as.named.segments[0], "models");
+    assert_slice_text(
+        element_type->as.inner->as.inner->as.named.segments[1], "Box");
+    ASSERT(element_type->as.inner->as.inner->as.named.type_arg_count == 1U);
+    ASSERT(element_type->as.inner->as.inner->as.named.type_args[0]->kind ==
+           FENG_TYPE_REF_NAMED);
+    assert_slice_text(
+        element_type->as.inner->as.inner->as.named.type_args[0]
+            ->as.named.segments[0],
+        "string");
+
+    feng_program_free(program);
+}
+
+/* ARRAY-D20-A: the array-new type entry uses a dynamic type tree rather than
+ * imposing a fixed nesting limit of its own. */
+static void test_array_typed_array_new_preserves_sixty_five_layers(void) {
+    char source[1024];
+    const char *prefix =
+        "module demo.deep_array_new;\n"
+        "func run(n: i32) { let values = i32";
+    const char *suffix = "[:n]; }\n";
+    size_t used = strlen(prefix);
+    FengProgram *program = NULL;
+    FengParseError error;
+    const FengExpr *initializer;
+    const FengTypeRef *cursor;
+    size_t depth;
+
+    ASSERT(used < sizeof(source));
+    memcpy(source, prefix, used);
+    for (depth = 0U; depth < 65U; ++depth) {
+        const char *layer = depth % 2U == 0U ? "[!]" : "[]";
+        size_t layer_length = strlen(layer);
+
+        ASSERT(used + layer_length < sizeof(source));
+        memcpy(source + used, layer, layer_length);
+        used += layer_length;
+    }
+    ASSERT(used + strlen(suffix) + 1U <= sizeof(source));
+    memcpy(source + used, suffix, strlen(suffix) + 1U);
+    used += strlen(suffix);
+
+    ASSERT(feng_parse_source(source,
+                             used,
+                             "array_typed_array_new_65_layers.ff",
+                             &program,
+                             &error));
+    ASSERT(program != NULL);
+    initializer = program->declarations[0]
+                      ->as.function_decl.body->statements[0]
+                      ->as.binding.initializer;
+    ASSERT(initializer != NULL);
+    ASSERT(initializer->kind == FENG_EXPR_ARRAY_NEW);
+
+    cursor = initializer->as.array_new.element_type;
+    for (depth = 0U; depth < 65U; ++depth) {
+        size_t source_layer = 64U - depth;
+
+        ASSERT(cursor != NULL);
+        ASSERT(cursor->kind == FENG_TYPE_REF_ARRAY);
+        ASSERT(cursor->array_element_writable == (source_layer % 2U == 0U));
+        cursor = cursor->as.inner;
+    }
+    ASSERT(cursor != NULL);
+    ASSERT(cursor->kind == FENG_TYPE_REF_NAMED);
+    ASSERT(cursor->as.named.segment_count == 1U);
+    assert_slice_text(cursor->as.named.segments[0], "i32");
+
+    feng_program_free(program);
+}
+
 static void test_index_expression_is_unambiguous_and_remains_value_brackets(void) {
     const char *source =
         "module demo.main;\n"
@@ -4289,6 +4551,64 @@ static void assert_g12_parser_failures(const G12ParserFailureCase *cases,
     }
 }
 
+/* ARRAY-D02: misplaced, repeated, and unterminated writable markers are
+ * rejected by Parser with a complete diagnostic at the first token that
+ * cannot continue the array type. */
+static void test_g21_malformed_array_type_suffix_diagnostics(void) {
+    static const G12ParserFailureCase failure_cases[] = {
+        {
+            "g21_array_marker_before_suffix.ff",
+            "module g21.invalid;\nfunc bad(value: T![]): void {}\n",
+            "SE0515",
+            "expected ')' to close parameter list",
+            FENG_TOKEN_NOT,
+            "!",
+            1U
+        },
+        {
+            "g21_array_marker_after_suffix.ff",
+            "module g21.invalid;\nfunc bad(value: T[]!): void {}\n",
+            "SE0515",
+            "expected ')' to close parameter list",
+            FENG_TOKEN_NOT,
+            "!",
+            1U
+        },
+        {
+            "g21_array_repeated_marker.ff",
+            "module g21.invalid;\nfunc bad(value: T[!!]): void {}\n",
+            "SE0202",
+            "expected ']' after '[!' in array type suffix",
+            FENG_TOKEN_NOT,
+            "!",
+            2U
+        },
+        {
+            "g21_array_missing_suffix_close.ff",
+            "module g21.invalid;\nfunc bad(value: T[!",
+            "SE0202",
+            "expected ']' after '[!' in array type suffix",
+            FENG_TOKEN_EOF,
+            "",
+            1U
+        },
+        {
+            "g21_array_multidimensional_index_syntax.ff",
+            "module g21.invalid;\n"
+            "func bad(value: i32[][]): void { value[0, 1]; }\n",
+            "SE0202",
+            "expected ']' to close index expression",
+            FENG_TOKEN_COMMA,
+            ",",
+            1U
+        }
+    };
+
+    assert_g12_parser_failures(
+        failure_cases,
+        sizeof(failure_cases) / sizeof(failure_cases[0]));
+}
+
 /* Covers module visibility, path shapes, import aliases, and top-level
  * declaration dispatch with both legal ASTs and exact rejections. */
 static void test_g12_module_import_and_top_level_syntax(void) {
@@ -6145,6 +6465,11 @@ int main(void) {
     test_block_yield_omits_trailing_semicolon();
     test_non_generic_array_new_uses_colon_dimension_syntax();
     test_generic_array_new_uses_colon_dimension_syntax();
+    test_g21_array_type_layers_preserve_adjacent_writability();
+    test_qualified_array_new_preserves_type_paths();
+    test_array_typed_array_new_preserves_all_inner_layers();
+    test_array_typed_array_new_preserves_sixty_five_layers();
+    test_g21_malformed_array_type_suffix_diagnostics();
     test_index_expression_is_unambiguous_and_remains_value_brackets();
     test_non_generic_type_brackets_without_colon_parses_as_index();
     test_generic_type_brackets_without_colon_parses_as_index();

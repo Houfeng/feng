@@ -162,7 +162,13 @@ typedef enum FengSemanticSubjectKeyKind {
 typedef struct FengSemanticArraySubjectKey {
     const FengTypeRef *element_type_ref;
     size_t rank;
-    uint64_t writable_mask;
+    /* rank is the discriminator for this layout-preserving identity union:
+     * ranks through 64 use the exact mask; deeper keys use the complete array
+     * tree and stabilize it when copied into analysis/codegen storage. */
+    union {
+        uint64_t writable_mask;
+        const FengTypeRef *array_type_ref;
+    };
 } FengSemanticArraySubjectKey;
 
 typedef struct FengSemanticSubjectKey {
@@ -495,11 +501,10 @@ typedef struct FengSemanticAnalysis {
     FengTypeRef **reifiable_wrapper_type_refs;
     size_t reifiable_wrapper_type_ref_count;
     size_t reifiable_wrapper_type_ref_capacity;
-    /* Coercion site 拥有的 type ref 克隆（堆分配，递归包含 type_args / inner）。
-     * target_spec_type_ref 可能来自 resolver 的 per-program synthetic type-ref
-     * 池（在 resolver_free_scopes 中释放，先于 codegen），因此 record_* 入口将
-     * 其深拷贝到此数组，由 analysis 持有，在 feng_semantic_analysis_free
-     * （codegen 之后）统一递归释放。coercion site 只持有这些克隆的借用指针。 */
+    /* 跨阶段 Semantic 元数据拥有的 type ref 克隆（堆分配，递归包含
+     * type_args / inner）。coercion target 和结构化 array subject key 均可能
+     * 来自 resolver 的 per-program synthetic type-ref 池，因此写入 relation、
+     * witness 或 coercion sidecar 前深拷贝到此数组，并在 codegen 之后释放。 */
     FengTypeRef **coercion_owned_type_refs;
     size_t coercion_owned_type_ref_count;
     size_t coercion_owned_type_ref_capacity;
@@ -1004,6 +1009,14 @@ FengSemanticSubjectKey feng_semantic_subject_key_for_builtin(
 bool feng_semantic_subject_key_init_array_from_type_ref(
     FengSemanticSubjectKey *out_key,
     const FengTypeRef *type_ref);
+
+/* Copy a subject key into analysis-lifetime storage. Array keys beyond the
+ * exact 64-layer cache receive an owned deep clone of their complete type
+ * tree; other keys retain the existing shallow-copy representation. */
+bool feng_semantic_subject_key_copy_for_analysis(
+    const FengSemanticAnalysis *analysis,
+    const FengSemanticSubjectKey *source,
+    FengSemanticSubjectKey *out_key);
 
 /* Look up the witness entry for (subject_key, spec_decl). Returns NULL when
  * no coercion has yet demanded this (T, S) pair (per §8.2). */

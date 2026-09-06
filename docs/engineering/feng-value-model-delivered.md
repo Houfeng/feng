@@ -98,8 +98,8 @@ typedef struct FengAggregateDescriptor {
     const char *name;
     /* 聚合值整体大小（字节）。 */
     size_t size;
-    /* 默认初始化策略，见 §4。 */
-    const struct FengAggregateDefaultInitDescriptor *default_init;
+    /* 语言默认零值策略，见 §4；与 trivial descriptor 共用策略类型。 */
+    const struct FengDefaultZeroInitDescriptor *default_zero_init;
     /* 按声明顺序排列的托管槽位表（仅托管槽位，不含平凡字段）。 */
     size_t managed_slot_count;
     const FengManagedSlotDescriptor *managed_slots;
@@ -192,21 +192,21 @@ runtime 现有体系里已经存在两个相关结构：`FengTypeDescriptor`（�
 ### 4.2 描述
 
 ```c
-typedef enum FengAggregateDefaultKind {
+typedef enum FengDefaultZeroInitKind {
     /* 全零字节就是合法默认值。codegen 直接 memset(0)。 */
     FENG_DEFAULT_ZERO_BYTES = 1,
     /* 需要调用类型自带的初始化函数。 */
     FENG_DEFAULT_INIT_FN = 2,
-} FengAggregateDefaultKind;
+} FengDefaultZeroInitKind;
 
-typedef void (*FengAggregateDefaultInitFn)(void *value_out);
+typedef void (*FengDefaultZeroInitFn)(void *value_out);
 
-typedef struct FengAggregateDefaultInitDescriptor {
-    FengAggregateDefaultKind kind;
+typedef struct FengDefaultZeroInitDescriptor {
+    FengDefaultZeroInitKind kind;
     /* 仅当 kind == FENG_DEFAULT_INIT_FN 时使用。函数应将 value_out 初始化为
      * 一个完全合法的、所有托管槽位都已正确 retain 的实例。 */
-    FengAggregateDefaultInitFn init_fn;
-} FengAggregateDefaultInitDescriptor;
+    FengDefaultZeroInitFn init_fn;
+} FengDefaultZeroInitDescriptor;
 ```
 
 ### 4.3 选用规则
@@ -248,9 +248,9 @@ void feng_aggregate_take(void *dst, void *src,
                          const FengAggregateDescriptor *desc);
 
 /* 把 value_out 初始化为该类型的默认值。
- * 内部根据 desc->default_init 选择 memset 或调用 init_fn。 */
-void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateDescriptor *desc);
+ * 内部根据 desc->default_zero_init 选择 memset 或调用 init_fn。 */
+void feng_aggregate_default_zero_init(void *value_out,
+                                      const FengAggregateDescriptor *desc);
 ```
 
 ### 5.2 实现策略：完全复用单指针原语
@@ -425,17 +425,17 @@ static const FengManagedSlotDescriptor FengSpec__demo__Named__slots[] = {
       FENG_SLOT_POINTER, NULL },
 };
 
-static void FengSpec__demo__Named__default_init(void *out);
+static void FengSpec__demo__Named__default_zero_init(void *out);
 
-static const FengAggregateDefaultInitDescriptor FengSpec__demo__Named__default = {
+static const FengDefaultZeroInitDescriptor FengSpec__demo__Named__default = {
     .kind = FENG_DEFAULT_INIT_FN,
-    .init_fn = FengSpec__demo__Named__default_init,
+    .init_fn = FengSpec__demo__Named__default_zero_init,
 };
 
 static const FengAggregateDescriptor FengSpecAgg__demo__Named = {
     .name = "demo.Named",
     .size = sizeof(FengSpecValue__demo__Named),
-    .default_init = &FengSpec__demo__Named__default,
+    .default_zero_init = &FengSpec__demo__Named__default,
     .managed_slot_count = 1,
     .managed_slots = FengSpec__demo__Named__slots,
 };
@@ -451,7 +451,7 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 
 | 场景 | emit 调用 |
 | --- | --- |
-| 局部声明 `let s: Named` 无初值 | `feng_aggregate_default_init(&s, &FengSpecAgg__demo__Named)` |
+| 局部声明 `let s: Named` 无初值 | `feng_aggregate_default_zero_init(&s, &FengSpecAgg__demo__Named)` |
 | 拷贝 `let t = s` | `memcpy(&t, &s, ...); feng_aggregate_retain(&t, &desc)` |
 | 赋值 `t = s` | `feng_aggregate_assign(&t, &s, &desc)` |
 | 作用域退出 | `feng_aggregate_release(&s, &desc)` |
@@ -470,7 +470,7 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 任务（建议按以下顺序执行，便于每一步独立通过回归）：
 
 1. **重命名预备**：把现有 `FengManagedFieldEntry` 重命名为 `FengManagedFieldDescriptor`。涉及 [src/runtime/feng_runtime.h](../src/runtime/feng_runtime.h)、[src/codegen/codegen.c](../src/codegen/codegen.c)、[test/runtime/test_runtime.c](../test/runtime/test_runtime.c)。**已交付**。
-2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateDescriptor` / `FengAggregateDefaultInitDescriptor` 类型与五个公共 API；内部实现 walker。**已交付**（src/runtime/feng_aggregate.c + VM-1 单测）。
+2. runtime：新增 `FengManagedSlotKind` / `FengManagedSlotDescriptor` / `FengAggregateDescriptor` / `FengDefaultZeroInitDescriptor` 类型与五个公共 API；内部实现 walker。**已交付**（src/runtime/feng_aggregate.c + VM-1 单测）。
 3. runtime：单指针原语零修改；`FengManagedHeader` / `FengTypeTag` 零修改；cycle collector 数组分派按 §7.3 升级（属于本模型范围内的必要扩面，对外仍是描述符驱动）。**已交付**（VM-3）。
 4. codegen：增加值类别分派 helper；为 aggregate 类型生成描述符与 init 函数；按 §7.2 展平规则生成对象 `managed_fields`；按 §7.4 生成对象字段 release 调用。**已交付**（VM-4 / VM-5；object-form spec 自动 emit `FengSpecAgg__M__S` + slot table + 默认 init stub；helpers 已就位待引用站点接入）。
 5. codegen + runtime：数组元素分类升级（§7.3）。**已交付**（`feng_array_new_kinded` + 三分类 finalize + cycle collector 三分支）。
@@ -507,8 +507,8 @@ fat spec 作为参数 / 返回值时，使用**具名 C struct 按值传递**。
 - `FengManagedHeader` / `FengTypeTag` 零修改 ✅。
 - cycle collector **数组元素遍历**升级为按元素三分类（trivial / managed-pointer / aggregate）分派；其余 CC 路径（phase15 BFS 主框架、phase 2 free 路径、对象 `managed_fields` 通用展平）零修改 ✅。理由：数组元素的物理布局是数组本身固有信息，无法通过 §7.2 对象 `managed_fields` 方式承载，因此元素层的描述符分派必须写在 CC 数组分支里；该扩面是描述符驱动而非按 spec 写死的特殊路径，对未来新增 aggregate 元素类型零修改。
 - runtime 中**没有任何**专门为 fat spec 写的代码路径；全部通过描述符驱动 ✅。
-- 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateDescriptor` + 必要时新增 `FengAggregateDefaultInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
-- fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_init` API；spec 端默认 init 实体由 [feng-spec-codegen-delivered.md](./feng-spec-codegen-delivered.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init func，作为安全栅栏直至 4b-β 提供真实实现。
+- 新增按值聚合类型（tuple / 值语义 struct）经纸面推演，仅需新增 `FengAggregateDescriptor` + 必要时新增 `FengDefaultZeroInitFn`，无需修改 §5 API、walker、CC 数组分派、对象字段展平 ✅。
+- fat spec 默认零值机制（§6.5）：layer 已提供 `feng_aggregate_default_zero_init` API；spec 端默认 init 实体由 [feng-spec-codegen-delivered.md](./feng-spec-codegen-delivered.md) §6 跟踪生成（4b-β 范围）。当前 codegen 为每个 object-form spec emit panic stub init func，作为安全栅栏直至 4b-β 提供真实实现。
 - fat spec 数组、含 spec 字段的对象、嵌套 spec 调用链路：layer 已提供 `feng_array_new_kinded` + `feng_aggregate_release` + 对象字段展平 helper；端到端站点接入由 spec-codegen-pending §13.2 / §13.3 跟踪。
 - 所有现有 smoke 与单测零回归 ✅（11/11 smokes + 4 单元套件）。
 
@@ -546,7 +546,7 @@ layer 已覆盖：
 允许且仅允许的新增工作：
 
 - [x] 新生成一个 `FengAggregateDescriptor`
-- [x] 必要时新生成一个 `FengAggregateDefaultInitFn`
+- [x] 必要时新生成一个 `FengDefaultZeroInitFn`
 - [x] 在该类型的引用站点 emit 已有 helper 的调用
 
 任一项突破清单，则视为抽象不达标，必须先回到本草案讨论修订。

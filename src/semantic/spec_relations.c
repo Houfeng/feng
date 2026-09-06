@@ -164,10 +164,16 @@ static bool rel_subject_key_equals(
                    strcmp(left->as.builtin_canonical_name,
                           right->as.builtin_canonical_name) == 0;
         case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
-            return left->as.array.rank == right->as.array.rank &&
-                   left->as.array.writable_mask == right->as.array.writable_mask &&
-                   rel_type_ref_key_equal(left->as.array.element_type_ref,
-                                          right->as.array.element_type_ref);
+            if (left->as.array.rank != right->as.array.rank) {
+                return false;
+            }
+            if (left->as.array.rank <= 64U) {
+                return left->as.array.writable_mask == right->as.array.writable_mask &&
+                       rel_type_ref_key_equal(left->as.array.element_type_ref,
+                                              right->as.array.element_type_ref);
+            }
+            return rel_type_ref_key_equal(left->as.array.array_type_ref,
+                                          right->as.array.array_type_ref);
         default:
             return false;
     }
@@ -340,9 +346,13 @@ static FengSpecRelation *find_or_append_relation(
         analysis->spec_relation_capacity = cap;
     }
     {
-        FengSpecRelation *r = &analysis->spec_relations[analysis->spec_relation_count++];
+        FengSpecRelation *r = &analysis->spec_relations[analysis->spec_relation_count];
 
-        r->subject_key = *subject_key;
+        if (!feng_semantic_subject_key_copy_for_analysis(
+                analysis, subject_key, &r->subject_key)) {
+            return NULL;
+        }
+        ++analysis->spec_relation_count;
         r->spec_decl = spec_decl;
         r->sources = NULL;
         r->source_count = 0U;

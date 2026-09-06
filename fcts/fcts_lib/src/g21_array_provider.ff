@@ -1,0 +1,19 @@
+open module fcts_lib.g21_array_provider;
+
+/** Public generic element used to verify every package type-name path. */
+open type G21PublicBox<T> {
+  open var value: T;
+}
+
+/** Public enum whose Feng default is not represented by zero bits. */
+open enum G21PublicExplicitMode {
+  Eleven = 11,
+  Twelve = 12
+}
+
+/** Public trivial composite carrying the non-zero enum default. */
+@value
+open type G21PublicExplicitValue {
+  open var mode: G21PublicExplicitMode;
+  open var count: int;
+}

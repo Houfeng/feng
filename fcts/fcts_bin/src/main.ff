@@ -63,6 +63,7 @@ func main(args: string[]) {
       test_g17_exception_semantics();
       test_try_branch_exception_cleanup();
       test_array();
+      test_g21_array_semantics();
       test_generic();
       test_generic_static_binding();
       test_variadic();

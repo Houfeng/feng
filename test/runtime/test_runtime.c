@@ -240,6 +240,65 @@ static void test_scalar_box_runtime_contract(void) {
 
 #undef ASSERT_SCALAR_VALUE_BOX
 
+/* Test-only nonzero trivial initializer. It models the callback generated
+ * for an enum (or a trivial composite containing one) whose Feng default is
+ * not represented by all-zero bytes. */
+static void test_trivial_nonzero_default_zero_init(void *value_out) {
+    *(int32_t *)value_out = INT32_C(7);
+}
+
+/* Keep the policy separate from the value descriptor, matching the runtime
+ * contract shared by generated trivial and aggregate descriptors. */
+static const FengDefaultZeroInitDescriptor test_trivial_nonzero_policy = {
+    .kind = FENG_DEFAULT_INIT_FN,
+    .init_fn = test_trivial_nonzero_default_zero_init,
+};
+
+static const FengTrivialDescriptor test_trivial_nonzero_descriptor = {
+    .name = "test.NonzeroTrivial",
+    .size = sizeof(int32_t),
+    .default_zero_init = &test_trivial_nonzero_policy,
+    .equal_fn = NULL,
+};
+
+/* G21 ARRAY-D23-A: trivial descriptors distinguish the zero-byte fast path
+ * from a custom language default without changing copy/equality semantics. */
+static void test_trivial_descriptor_default_zero_policy(void) {
+    const FengTrivialDescriptor *const zero_descriptors[] = {
+        &feng_bool_descriptor,
+        &feng_i8_descriptor,
+        &feng_i16_descriptor,
+        &feng_i32_descriptor,
+        &feng_i64_descriptor,
+        &feng_u8_descriptor,
+        &feng_u16_descriptor,
+        &feng_u32_descriptor,
+        &feng_u64_descriptor,
+        &feng_f32_descriptor,
+        &feng_f64_descriptor,
+        &feng_pointer_descriptor,
+    };
+    int32_t value = 0;
+
+    for (size_t i = 0U;
+         i < sizeof(zero_descriptors) / sizeof(zero_descriptors[0]);
+         ++i) {
+        ASSERT(zero_descriptors[i]->default_zero_init ==
+               &feng_default_zero_bytes_init);
+        ASSERT(zero_descriptors[i]->default_zero_init->kind ==
+               FENG_DEFAULT_ZERO_BYTES);
+        ASSERT(zero_descriptors[i]->default_zero_init->init_fn == NULL);
+    }
+
+    ASSERT(test_trivial_nonzero_descriptor.default_zero_init ==
+           &test_trivial_nonzero_policy);
+    ASSERT(test_trivial_nonzero_descriptor.default_zero_init->kind ==
+           FENG_DEFAULT_INIT_FN);
+    ASSERT(test_trivial_nonzero_descriptor.default_zero_init->init_fn != NULL);
+    test_trivial_nonzero_descriptor.default_zero_init->init_fn(&value);
+    ASSERT(value == INT32_C(7));
+}
+
 static void test_string_literal_immortal(void) {
     FengString *a = feng_string_literal("hello", 5);
     FengString *b = feng_string_literal("", 0);
@@ -1977,6 +2036,18 @@ static void array_storage_capacity_overflow_body(void) {
     feng_release(array);
 }
 
+/* Child-process body for an object-total-size overflow after a valid
+ * one-byte element-size multiplication. */
+static void array_storage_total_size_overflow_body(void) {
+    FengArray *array = feng_array_new_storage_kinded(FENG_VALUE_TRIVIAL,
+                                                     NULL,
+                                                     &i32_element_descriptor,
+                                                     1U,
+                                                     0U,
+                                                     SIZE_MAX);
+    feng_release(array);
+}
+
 static void cycle_throw_body(void) {
     /* Build a 2-node cycle whose nodes carry the throwing finalizer; force
      * collection so Phase 1 invokes the finalizer through the cycle path. */
@@ -2007,6 +2078,7 @@ static void test_array_slice_out_of_range_aborts(void) {
 static void test_array_storage_invalid_shape_aborts(void) {
     assert_child_aborts(array_storage_length_exceeds_capacity_body);
     assert_child_aborts(array_storage_capacity_overflow_body);
+    assert_child_aborts(array_storage_total_size_overflow_body);
 }
 
 /* Verify storage operations reject negative values, invalid ranges, and full
@@ -2129,7 +2201,7 @@ static void test_cycle_collector_multithreaded_stress(void) {
 /* --- By-value aggregate (FengAggregateDescriptor) ----------------
  *
  * These tests exercise the five public APIs declared in feng_runtime.h
- * (retain / release / assign / take / default_init) against the existing
+ * (retain / release / assign / take / default_zero_init) against the existing
  * single-pointer primitives. The fixtures below model two shapes:
  *
  *   FatPair  — one managed pointer + one trivial int. Models a fat
@@ -2144,7 +2216,7 @@ typedef struct FatPair {
     int   tag;           /* trivial */
 } FatPair;
 
-static void fat_pair_default_init(void *out) {
+static void fat_pair_default_zero_init(void *out) {
     FatPair *p = (FatPair *)out;
     /* Default subject is a fresh +1 object so callers observe a
      * fully-constructed value (mirrors fat spec witness/subject contract).
@@ -2154,9 +2226,9 @@ static void fat_pair_default_init(void *out) {
     p->tag = -1;
 }
 
-static const FengAggregateDefaultInitDescriptor fat_pair_default = {
+static const FengDefaultZeroInitDescriptor fat_pair_default = {
     .kind = FENG_DEFAULT_INIT_FN,
-    .init_fn = fat_pair_default_init,
+    .init_fn = fat_pair_default_zero_init,
 };
 
 static const FengManagedSlotDescriptor fat_pair_slots[] = {
@@ -2166,7 +2238,7 @@ static const FengManagedSlotDescriptor fat_pair_slots[] = {
 static const FengAggregateDescriptor fat_pair_desc = {
     .name = "test.FatPair",
     .size = sizeof(FatPair),
-    .default_init = &fat_pair_default,
+    .default_zero_init = &fat_pair_default,
     .managed_slot_count = sizeof(fat_pair_slots) / sizeof(fat_pair_slots[0]),
     .managed_slots = fat_pair_slots,
 };
@@ -2241,7 +2313,7 @@ static const FengManagedSlotDescriptor outer_slots[] = {
     { offsetof(OuterAgg, tail),  FENG_SLOT_POINTER,         NULL },
 };
 
-static const FengAggregateDefaultInitDescriptor outer_default_zero = {
+static const FengDefaultZeroInitDescriptor outer_default_zero = {
     .kind = FENG_DEFAULT_ZERO_BYTES,
     .init_fn = NULL,
 };
@@ -2249,7 +2321,7 @@ static const FengAggregateDefaultInitDescriptor outer_default_zero = {
 static const FengAggregateDescriptor outer_desc = {
     .name = "test.OuterAgg",
     .size = sizeof(OuterAgg),
-    .default_init = &outer_default_zero,
+    .default_zero_init = &outer_default_zero,
     .managed_slot_count = sizeof(outer_slots) / sizeof(outer_slots[0]),
     .managed_slots = outer_slots,
 };
@@ -2277,7 +2349,7 @@ static const FengManagedSlotDescriptor forward_slots[] = {
 static const FengAggregateDescriptor forward_desc = {
     .name = "test.ForwardAgg",
     .size = sizeof(ForwardAgg),
-    .default_init = &outer_default_zero,
+    .default_zero_init = &outer_default_zero,
     .managed_slot_count = sizeof(forward_slots) / sizeof(forward_slots[0]),
     .managed_slots = forward_slots,
 };
@@ -2460,11 +2532,11 @@ static void test_aggregate_take_self(void) {
     ASSERT(g_finalize_count == 1);
 }
 
-static void test_aggregate_default_init_zero_bytes(void) {
+static void test_aggregate_default_zero_init_zero_bytes(void) {
     OuterAgg v;
     /* Stuff the struct so we can confirm memset clears it. */
     memset(&v, 0xA5, sizeof(v));
-    feng_aggregate_default_init(&v, &outer_desc);
+    feng_aggregate_default_zero_init(&v, &outer_desc);
     ASSERT(v.head == NULL);
     ASSERT(v.tail == NULL);
     ASSERT(v.inner.subject == NULL);
@@ -2473,11 +2545,11 @@ static void test_aggregate_default_init_zero_bytes(void) {
     feng_aggregate_release(&v, &outer_desc);
 }
 
-static void test_aggregate_default_init_fn(void) {
+static void test_aggregate_default_zero_init_fn(void) {
     g_finalize_count = 0;
     FatPair v;
     memset(&v, 0xCC, sizeof(v));
-    feng_aggregate_default_init(&v, &fat_pair_desc);
+    feng_aggregate_default_zero_init(&v, &fat_pair_desc);
     ASSERT(v.subject != NULL);
     ASSERT(v.tag == -1);
     ASSERT(((FengManagedHeader *)v.subject)->refcount == 1U);
@@ -2496,7 +2568,7 @@ static void test_aggregate_nested_walker(void) {
     TestObject *t = (TestObject *)feng_object_new(&test_object_descriptor);
 
     OuterAgg v;
-    feng_aggregate_default_init(&v, &outer_desc);
+    feng_aggregate_default_zero_init(&v, &outer_desc);
     /* Manually populate as if codegen had moved each owning +1 into the
      * slots. */
     v.head = h;
@@ -2977,6 +3049,7 @@ int main(void) {
     test_assign_barrier();
     test_take();
     test_scalar_box_runtime_contract();
+    test_trivial_descriptor_default_zero_policy();
     test_string_literal_immortal();
     test_string_concat();
     test_string_utf8_length_contract();
@@ -3033,8 +3106,8 @@ int main(void) {
     test_aggregate_assign_self();
     test_aggregate_take_transfers_ownership();
     test_aggregate_take_self();
-    test_aggregate_default_init_zero_bytes();
-    test_aggregate_default_init_fn();
+    test_aggregate_default_zero_init_zero_bytes();
+    test_aggregate_default_zero_init_fn();
     test_aggregate_nested_walker();
     test_aggregate_nested_assign();
     test_aggregate_forward_none_is_noop();

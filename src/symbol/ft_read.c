@@ -361,12 +361,34 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
             type->as.pointer.inner = parse_type_by_id(ctx, elem_start, path, out_error);
             break;
         case FENG_SYMBOL_FT_TYPE_KIND_ARRAY:
+        {
+            FengSymbolTypeView *element =
+                parse_type_by_id(ctx, elem_start, path, out_error);
+            size_t nested_rank = element != NULL &&
+                                         element->kind == FENG_SYMBOL_TYPE_KIND_ARRAY
+                                     ? element->as.array.rank
+                                     : 0U;
+
+            if (elem_start != 0U && element == NULL) {
+                feng_symbol_internal_type_free(type);
+                return NULL;
+            }
+            if ((size_t)elem_count > SIZE_MAX - nested_rank) {
+                feng_symbol_internal_type_free(element);
+                feng_symbol_internal_type_free(type);
+                feng_symbol_internal_set_error(out_error,
+                                               path,
+                                               (FengToken){0},
+                                               "array rank overflows host size");
+                return NULL;
+            }
             type->kind = FENG_SYMBOL_TYPE_KIND_ARRAY;
-            type->as.array.rank = elem_count;
-            type->as.array.element = parse_type_by_id(ctx, elem_start, path, out_error);
+            type->as.array.rank = (size_t)elem_count + nested_rank;
             type->as.array.layer_writable =
-                (bool *)calloc(elem_count, sizeof(*type->as.array.layer_writable));
-            if (elem_count > 0U && type->as.array.layer_writable == NULL) {
+                (bool *)calloc(type->as.array.rank,
+                               sizeof(*type->as.array.layer_writable));
+            if (type->as.array.rank > 0U && type->as.array.layer_writable == NULL) {
+                feng_symbol_internal_type_free(element);
                 feng_symbol_internal_type_free(type);
                 feng_symbol_internal_set_error(out_error,
                                                path,
@@ -374,11 +396,24 @@ static FengSymbolTypeView *parse_type_by_id(ReadContext *ctx,
                                                "out of memory loading array mutability bitmap");
                 return NULL;
             }
-            /* string_ref holds the 32-bit mutability bitmap */
+            /* Each record contributes its outer bitmap; consecutive ARRAY
+             * child records are the .ft v1 representation of deeper ranks. */
             for (layer = 0U; layer < elem_count; ++layer) {
-                type->as.array.layer_writable[layer] = (string_ref & (1U << layer)) != 0U;
+                type->as.array.layer_writable[layer] =
+                    layer < 32U && (string_ref & ((uint32_t)1U << layer)) != 0U;
+            }
+            if (nested_rank > 0U) {
+                memcpy(type->as.array.layer_writable + elem_count,
+                       element->as.array.layer_writable,
+                       nested_rank * sizeof(*type->as.array.layer_writable));
+                type->as.array.element = element->as.array.element;
+                element->as.array.element = NULL;
+                feng_symbol_internal_type_free(element);
+            } else {
+                type->as.array.element = element;
             }
             break;
+        }
         case FENG_SYMBOL_FT_TYPE_KIND_CALLABLE:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_OBJECT:
         case FENG_SYMBOL_FT_TYPE_KIND_SPEC_CALLABLE:

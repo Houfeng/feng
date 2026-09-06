@@ -190,11 +190,11 @@ typedef enum CGValueKind {
     CG_VK_AGGREGATE
 } CGValueKind;
 
-typedef enum CGAggregateDefaultInitKind {
-    CG_AGGREGATE_DEFAULT_INIT_NONE = 0,
-    CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES,
-    CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
-} CGAggregateDefaultInitKind;
+typedef enum CGAggregateDefaultZeroInitKind {
+    CG_AGGREGATE_DEFAULT_ZERO_INIT_NONE = 0,
+    CG_AGGREGATE_DEFAULT_ZERO_INIT_ZERO_BYTES,
+    CG_AGGREGATE_DEFAULT_ZERO_INIT_DESCRIPTOR
+} CGAggregateDefaultZeroInitKind;
 
 typedef void (*CGAggregateSlotRowEmitter)(Buf *out,
                                           const char *field_base_offsetof_expr,
@@ -214,7 +214,10 @@ typedef struct CGAggregateFacts {
     const char *descriptor_name;
     const char *value_struct_name;
     size_t pointer_slot_count;
-    CGAggregateDefaultInitKind default_init_kind;
+    /* Compile-time choice for producing this aggregate's language default
+     * zero; it mirrors the runtime descriptor policy without a runtime
+     * lookup on statically known values. */
+    CGAggregateDefaultZeroInitKind default_zero_init_kind;
     CGAggregateSlotRowEmitter emit_pointer_slot_rows;
     CGAggregateCleanupPushEmitter emit_cleanup_push;
     CGAggregateCleanupZeroEmitter emit_cleanup_zero;
@@ -243,6 +246,9 @@ static bool cg_type_is_value_semantics(const CGType *t);
 static bool cg_user_type_is_value_semantics(const struct UserType *t);
 static bool cg_update_value_type_descriptor_names(CG *cg);
 static bool cg_type_has_value_box(const CGType *type);
+static bool cg_type_default_zero_is_zero_bytes(const CG *cg,
+                                               const CGType *type,
+                                               size_t depth);
 static void cg_value_box_info_dispose(CGValueBoxInfo *info);
 static bool cg_value_box_info_for_type(CG *cg,
                                        const CGType *type,
@@ -2396,9 +2402,10 @@ static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
                                                      const char *cname,
                                                      const CGType *type);
 static const char *cg_aggregate_desc_name(const CGType *t);
-static bool cg_append_aggregate_default_init_call(Buf *out,
-                                                  const CGType *type,
-                                                  const char *lvalue_expr);
+static bool cg_append_aggregate_default_zero_init_call(
+    Buf *out,
+    const CGType *type,
+    const char *lvalue_expr);
 static void cg_emit_user_type_forward(CG *cg, const UserType *t);
 static void cg_emit_user_type_definition(CG *cg, UserType *t);
 static bool cg_emit_user_method(CG *cg,
@@ -2473,6 +2480,13 @@ static bool cg_scope_bind_capture_cell(CG *cg,
                                        bool source_owns_ref,
                                        bool record_debug_variable,
                                        FengCodegenMapingVariableKind debug_kind);
+static bool cg_emit_reified_default_zero_init_at_address(
+    CG *cg,
+    const char *address_expr,
+    const char *descriptor_expr,
+    FengToken blame,
+    bool zero_bytes_already,
+    bool aggregate_already_init);
 static void cg_free_cstr_array(char **items, size_t count);
 static void cg_free_const_cstr_array(const char **items, size_t count);
 static FengSlice *cg_expr_path_segments_alloc(const FengExpr *expr,
@@ -4451,7 +4465,8 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_cstr(cg->cur_body, "    ");
-        ok = cg_append_aggregate_default_init_call(cg->cur_body, value_type, lvalue.data);
+        ok = cg_append_aggregate_default_zero_init_call(
+            cg->cur_body, value_type, lvalue.data);
         buf_free(&lvalue);
         if (!ok) {
             return cg_fail(cg, blame,
@@ -4684,6 +4699,28 @@ static bool cg_scope_bind_dynamic_capture_cell(
             buf_append_cstr(cg->cur_body,
                 "            break;\n"
                 "    }\n");
+        } else {
+            Buf value_address;
+
+            /* The one-element kinded array has already applied aggregate
+             * default_zero_init and zeroed all other storage. Finish only
+             * the descriptor-dependent trivial/managed cases here. */
+            buf_init(&value_address);
+            buf_append_fmt(&value_address,
+                           "feng_array_data(%s)",
+                           cell_var);
+            if (value_address.data == NULL ||
+                !cg_emit_reified_default_zero_init_at_address(
+                    cg,
+                    value_address.data,
+                    descriptor_name,
+                    blame,
+                    true,
+                    true)) {
+                buf_free(&value_address);
+                goto cleanup;
+            }
+            buf_free(&value_address);
         }
     } else {
         buf_append_fmt(cg->cur_body,
@@ -5739,6 +5776,8 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     char *module_dot_name;
     const FengProgram *owner_program;
     size_t item_index;
+    int64_t default_value;
+    bool needs_custom_default_zero;
 
     if (cg == NULL || decl == NULL || decl->kind != FENG_DECL_ENUM) {
         return true;
@@ -5769,7 +5808,33 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
     bool ext_visible = (owner_program != NULL &&
                         owner_program->module_visibility == FENG_VISIBILITY_PUBLIC &&
                         decl->visibility == FENG_VISIBILITY_PUBLIC);
+    default_value = decl->as.enum_decl.item_count > 0U &&
+                            decl->as.enum_decl.items[0].has_explicit_value
+                        ? decl->as.enum_decl.items[0].explicit_value
+                        : 0;
+    needs_custom_default_zero = default_value != 0;
     buf_append_fmt(&cg->enum_defs, "typedef int32_t %s;\n", typedef_name);
+
+    /* An enum's language default zero is its first member, which need not
+     * have the all-zero representation. Publish that fact through the
+     * generic trivial descriptor; consumers never inspect enum names or
+     * duplicate enum-specific initialization rules. */
+    if (needs_custom_default_zero) {
+        buf_append_fmt(&cg->enum_defs,
+                       "static void %s__default_zero_init_fn(void *_value_out) {\n"
+                       "    *(%s *)_value_out = ((int32_t)%" PRId64 ");\n"
+                       "}\n"
+                       "static const FengDefaultZeroInitDescriptor "
+                       "%s__default_zero_init = {\n"
+                       "    .kind = FENG_DEFAULT_INIT_FN,\n"
+                       "    .init_fn = &%s__default_zero_init_fn,\n"
+                       "};\n",
+                       descriptor_name,
+                       typedef_name,
+                       default_value,
+                       descriptor_name,
+                       descriptor_name);
+    }
     buf_append_fmt(&cg->enum_defs,
                    ext_visible
                        ? "const FengTrivialDescriptor %s __attribute__((weak)) = {\n"
@@ -5777,13 +5842,22 @@ static bool cg_emit_enum_decl(CG *cg, const FengDecl *decl) {
                    descriptor_name);
     buf_append_fmt(&cg->enum_defs,
                    "    .name = \"%s.%.*s\",\n"
-                   "    .size = sizeof(%s),\n"
-                   "    .equal_fn = NULL,\n"
-                   "};\n",
+                   "    .size = sizeof(%s),\n",
                    module_dot_name,
                    (int)decl->as.enum_decl.name.length,
                    decl->as.enum_decl.name.data,
                    typedef_name);
+    if (needs_custom_default_zero) {
+        buf_append_fmt(&cg->enum_defs,
+                       "    .default_zero_init = &%s__default_zero_init,\n",
+                       descriptor_name);
+    } else {
+        buf_append_cstr(&cg->enum_defs,
+                        "    .default_zero_init = &feng_default_zero_bytes_init,\n");
+    }
+    buf_append_cstr(&cg->enum_defs,
+                    "    .equal_fn = NULL,\n"
+                    "};\n");
     buf_append_fmt(&cg->enum_defs,
                    "struct %s {\n"
                    "    FengManagedHeader _hdr;\n"
@@ -8138,7 +8212,7 @@ static bool cg_emit_fixed_value_callable_method_support(
                    adapter_name);
     if (receiver_pointer_slot_count > 0U) {
         buf_append_fmt(&cg->witness_defs,
-                       "    feng_aggregate_default_init(&_o->_receiver, &%s);\n"
+                       "    feng_aggregate_default_zero_init(&_o->_receiver, &%s);\n"
                        "    feng_aggregate_assign(&_o->_receiver, _self, &%s);\n",
                        owner->c_aggregate_desc_name,
                        owner->c_aggregate_desc_name);
@@ -17338,9 +17412,9 @@ static bool cg_emit_spec_default_abi_result(CG *cg,
 
         buf_init(&init_call);
         if (result_ctype == NULL ||
-            !cg_append_aggregate_default_init_call(&init_call,
-                                                   type,
-                                                   "_default_ret")) {
+            !cg_append_aggregate_default_zero_init_call(&init_call,
+                                                        type,
+                                                        "_default_ret")) {
             free(result_ctype);
             buf_free(&init_call);
             return false;
@@ -18015,7 +18089,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                 return;
             }
             buf_append_fmt(td,
-                           "    feng_aggregate_default_init(_out, &%s);\n}\n\n",
+                           "    feng_aggregate_default_zero_init(_out, &%s);\n}\n\n",
                            aggregate_descriptor);
         } else if (s->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
             char *ret_expr = NULL;
@@ -18217,7 +18291,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                     return;
                 }
                 buf_append_fmt(td,
-                    "    feng_aggregate_default_init(&_v->payload.m0, &%s);\n",
+                    "    feng_aggregate_default_zero_init(&_v->payload.m0, &%s);\n",
                     member_desc);
             } else {
                 char *default_expr = NULL;
@@ -18243,7 +18317,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_append_cstr(td, "}\n");
 
         buf_append_fmt(td,
-            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "static const FengDefaultZeroInitDescriptor %s = {\n"
             "    .kind = FENG_DEFAULT_INIT_FN,\n"
             "    .init_fn = %s,\n"
             "};\n",
@@ -18259,7 +18333,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         buf_append_fmt(td,
             "    .name = \"%s\",\n"
             "    .size = sizeof(struct %s),\n"
-            "    .default_init = &%s,\n"
+            "    .default_zero_init = &%s,\n"
             "    .managed_slot_count = 1,\n"
             "    .managed_slots = %s,\n"
             "    .equal_fn = NULL,\n"
@@ -18403,8 +18477,13 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     for (size_t i = 0; i < s->member_count; i++) {
         const UserSpecMember *sm = &s->members[i];
         if (sm->kind != USM_KIND_FIELD || sm->is_static) continue;
-        /* Trivial: feng_object_new already zeroed. */
-        if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL) continue;
+        /* calloc already satisfies only descriptors whose language default
+         * is ZERO_BYTES. A custom trivial default (for example a nonzero
+         * first enum member) must be materialized just like managed values. */
+        if (cgtype_value_kind(sm->type) == CG_VK_TRIVIAL &&
+            cg_type_default_zero_is_zero_bytes(cg, sm->type, 0U)) {
+            continue;
+        }
         if (cgtype_is_aggregate(sm->type)) {
             Buf lvalue;
             bool ok;
@@ -18414,7 +18493,8 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                 return;
             }
             buf_append_cstr(td, "    ");
-            ok = cg_append_aggregate_default_init_call(td, sm->type, lvalue.data);
+            ok = cg_append_aggregate_default_zero_init_call(
+                td, sm->type, lvalue.data);
             buf_free(&lvalue);
             if (!ok) {
                 return;
@@ -18534,7 +18614,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
         s->c_default_witness_name);
 
     buf_append_fmt(td,
-        "static const FengAggregateDefaultInitDescriptor %s = {\n"
+        "static const FengDefaultZeroInitDescriptor %s = {\n"
         "    .kind = FENG_DEFAULT_INIT_FN,\n"
         "    .init_fn = %s,\n"
         "};\n",
@@ -18562,7 +18642,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
     buf_append_fmt(td,
         "    .name = \"%s\",\n"
         "    .size = sizeof(struct %s),\n"
-        "    .default_init = &%s,\n"
+        "    .default_zero_init = &%s,\n"
         "    .managed_slot_count = 1,\n"
         "    .managed_slots = %s,\n"
         "    .equal_fn = %s__equal,\n"
@@ -19256,11 +19336,12 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
         }
         if (rad_desc_expr != NULL) {
             buf_append_fmt(cg->cur_body,
-                           "    feng_aggregate_default_init((void *)%s, %s);\n",
+                           "    feng_aggregate_default_zero_init((void *)%s, %s);\n",
                            lvalue.data, field_descriptor);
         } else {
             buf_append_cstr(cg->cur_body, "    ");
-            ok = cg_append_aggregate_default_init_call(cg->cur_body, field->type, lvalue.data);
+            ok = cg_append_aggregate_default_zero_init_call(
+                cg->cur_body, field->type, lvalue.data);
             buf_append_cstr(cg->cur_body, ";\n");
             if (!ok) {
                 buf_free(&lvalue);
@@ -19390,7 +19471,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-            "    feng_aggregate_default_init(%s, %s);\n",
+            "    feng_aggregate_default_zero_init(%s, %s);\n",
             tmp,
             descriptor_name);
 
@@ -31487,17 +31568,17 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
     size_t n = e->as.array_literal.count;
     ExprResult *items = calloc(n, sizeof *items);
     if (!items) return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-    /* When narrowing into a nested array element, recurse with the inner
-     * element type. Otherwise emit each item with the default rules. */
-    bool nested_narrow = (expected_elem != NULL &&
-                          expected_elem->kind == CG_TYPE_ARRAY &&
-                          expected_elem->element != NULL);
+    /* Preserve Semantic's resolved array-element target for every contextual
+     * literal. Nested arrays and named tuples both require that target during
+     * lowering; ordinary expressions continue through the default emitter. */
     for (size_t i = 0; i < n; i++) {
         const FengExpr *item_expr = e->as.array_literal.items[i];
         bool ok;
-        if (nested_narrow && item_expr->kind == FENG_EXPR_ARRAY_LITERAL) {
-            ok = cg_emit_array_literal_typed(cg, item_expr,
-                                             expected_elem->element, &items[i]);
+        if (expected_elem != NULL) {
+            ok = cg_emit_expr_for_expected_type(cg,
+                                                item_expr,
+                                                expected_elem,
+                                                &items[i]);
         } else {
             ok = cg_emit_expr(cg, item_expr, &items[i]);
         }
@@ -31527,13 +31608,10 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
      * (e.g. expected i32 but items are i64 numeric literals), the slot
      * uses expected_elem so that allocation size and read access agree. */
     CGType *elem;
-    if (expected_elem != NULL && !nested_narrow &&
+    if (expected_elem != NULL &&
         cgtype_is_integer(expected_elem->kind) &&
         cgtype_is_integer(items[0].type->kind)) {
         elem = cgtype_clone(expected_elem);
-    } else if (nested_narrow) {
-        /* Items already match expected_elem after recursive emit. */
-        elem = cgtype_clone(items[0].type);
     } else {
         elem = cgtype_clone(items[0].type);
     }
@@ -31567,7 +31645,7 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
     if (elem_aggregate) {
         /* Step 4b-γ §9.6 — aggregate-element arrays must use the kinded
          * factory so the cycle collector walks each element's managed
-         * slots and so default_init seeds every slot before assignment. */
+         * slots and so default_zero_init seeds every slot before assignment. */
         size_t rad_idx;
         if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
             const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
@@ -31667,26 +31745,95 @@ static bool cg_emit_array_literal(CG *cg, const FengExpr *e, ExprResult *out) {
     return cg_emit_array_literal_typed(cg, e, NULL, out);
 }
 
+/* Return whether a concrete, non-aggregate array element needs work after
+ * calloc. Managed values need their owned language default; trivial values
+ * consult the same producer-side default-zero classification used to build
+ * FengTrivialDescriptor.default_zero_init. Aggregates are initialized by
+ * feng_array_new_kinded, while erased T is handled by its reified descriptor. */
+static bool cg_array_new_needs_concrete_slot_default(const CG *cg,
+                                                     const CGType *element) {
+    if (element == NULL) {
+        return false;
+    }
+    if (element->kind == CG_TYPE_STRING ||
+        element->kind == CG_TYPE_ARRAY ||
+        element->kind == CG_TYPE_CALLABLE ||
+        (element->kind == CG_TYPE_OBJECT && cgtype_is_managed(element))) {
+        return true;
+    }
+    return cgtype_value_kind(element) == CG_VK_TRIVIAL &&
+           !cg_type_default_zero_is_zero_bytes(cg, element, 0U);
+}
+
 static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
     /* Resolve element type. */
     CGType *elem = NULL;
+    char *element_default_expr = NULL;
     if (!cg_resolve_type(cg, e->as.array_new.element_type, &e->token, &elem)) return false;
+
+    /* Semantic guarantees a finite element default. Reuse the canonical
+     * default emitter here both to materialize non-zero defaults and to keep
+     * an IE-only defense when a bypassed Semantic invariant is violated. */
+    if (cg_array_new_needs_concrete_slot_default(cg, elem) &&
+        !cg_default_value_expr(cg,
+                               elem,
+                               &e->as.array_new.element_type->token,
+                               &element_default_expr)) {
+        cgtype_free(elem);
+        return false;
+    }
 
     /* Emit size expression. */
     ExprResult size_res;
     if (!cg_emit_expr(cg, e->as.array_new.size, &size_res)) {
+        free(element_default_expr);
         cgtype_free(elem);
         return false;
     }
-    /* Materialise size into a size_t local so it is evaluated once. */
+    if (size_res.type == NULL || !cgtype_is_integer(size_res.type->kind)) {
+        er_free(&size_res);
+        free(element_default_expr);
+        cgtype_free(elem);
+        return cg_fail(cg,
+                       e->as.array_new.size->token,
+                       "IE0002",
+                       "codegen: internal: semantic analysis accepted a non-integer array size");
+    }
+    /* Materialise the size once. A Semantic-proven constant needs no runtime
+     * check; a dynamic value is checked in uint64_t before size_t narrowing. */
     char *size_tmp = cg_fresh_temp(cg, "_n");
     if (!size_tmp) {
-        er_free(&size_res); cgtype_free(elem);
+        er_free(&size_res); free(element_default_expr); cgtype_free(elem);
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
-    buf_append_fmt(cg->cur_body,
-        "    size_t %s = (size_t)(%s);\n", size_tmp, size_res.c_expr);
+    if (e->as.array_new.size_is_statically_valid) {
+        buf_append_fmt(cg->cur_body,
+            "    size_t %s = (size_t)(%s);\n", size_tmp, size_res.c_expr);
+    } else {
+        const unsigned long long target_int_max =
+            cg->analysis != NULL && cg->analysis->pointer_size < 8U
+                ? 2147483647ULL
+                : 9223372036854775807ULL;
+        char *raw_size_tmp = cg_fresh_temp(cg, "_raw_n");
+
+        if (raw_size_tmp == NULL) {
+            free(size_tmp);
+            er_free(&size_res);
+            free(element_default_expr);
+            cgtype_free(elem);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    uint64_t %s = (uint64_t)(%s);\n"
+            "    if (%s > UINT64_C(%llu)) "
+            "feng_panic(\"array size is outside the valid target int range\");\n"
+            "    size_t %s = (size_t)%s;\n",
+            raw_size_tmp, size_res.c_expr,
+            raw_size_tmp, target_int_max,
+            size_tmp, raw_size_tmp);
+        free(raw_size_tmp);
+    }
     er_free(&size_res);
 
     char *arr_tmp  = cg_fresh_temp(cg, "_arr");
@@ -31694,6 +31841,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     char *desc_expr = cg_array_element_descriptor(elem);
     if (!arr_tmp || !elem_cty || !desc_expr) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+        free(element_default_expr);
         cgtype_free(elem);
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
@@ -31706,6 +31854,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     const char *agg_desc = elem_aggregate ? cg_aggregate_desc_name(elem) : NULL;
     if (elem_aggregate && agg_desc == NULL) {
         free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+        free(element_default_expr);
         cgtype_free(elem);
         return cg_fail(cg, e->token,
             "CE0186", "codegen: missing aggregate descriptor for array-new element type");
@@ -31731,6 +31880,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
         const char *desc = cg_generic_param_desc_name(cg, gp_index);
         if (desc == NULL) {
             free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+            free(element_default_expr);
             cgtype_free(elem);
             return cg_fail(cg, e->token,
                 "CE0187", "codegen: generic array-new requires an active generic descriptor");
@@ -31739,33 +31889,6 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             "    FengArray *%s = feng_array_new_kinded("
             "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), NULL, feng_generic_value_size(%s), %s);\n",
             arr_tmp, desc, desc, desc, desc, size_tmp);
-    } else if (elem_managed && elem->kind == CG_TYPE_OBJECT && elem->user &&
-               elem->user->c_default_zero_name) {
-        /* Managed object element: allocate the array of pointers, then
-         * fill each slot with a freshly default-zero'd object so that
-         * out-of-bounds / uninitialized access fails visibly rather than
-         * silently dereferencing NULL. */
-        char *slots_tmp = cg_fresh_temp(cg, "_slots");
-        char *idx_tmp   = cg_fresh_temp(cg, "_i");
-        if (!slots_tmp || !idx_tmp) {
-            free(slots_tmp); free(idx_tmp);
-            free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
-            cgtype_free(elem);
-            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
-        }
-        buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
-            arr_tmp, desc_expr, elem_cty,
-            elem_managed ? "true" : "false", size_tmp);
-        buf_append_fmt(cg->cur_body,
-            "    %s *%s = (%s *)feng_array_data(%s);\n",
-            elem_cty, slots_tmp, elem_cty, arr_tmp);
-        buf_append_fmt(cg->cur_body,
-            "    for (size_t %s = 0; %s < %s; ++%s) "
-            "%s[%s] = %s();\n",
-            idx_tmp, idx_tmp, size_tmp, idx_tmp,
-            slots_tmp, idx_tmp, elem->user->c_default_zero_name);
-        free(slots_tmp); free(idx_tmp);
     } else {
         buf_append_fmt(cg->cur_body,
             "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
@@ -31773,7 +31896,104 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             elem_managed ? "true" : "false", size_tmp);
     }
 
+    if (elem->kind == CG_TYPE_GENERIC_PARAM) {
+        const char *generic_desc =
+            cg_generic_param_desc_name(cg, elem->generic_param_index);
+        char *trivial_desc_tmp = cg_fresh_temp(cg, "_element_trivial_desc");
+        char *managed_desc_tmp = cg_fresh_temp(cg, "_element_desc");
+        char *slots_tmp = cg_fresh_temp(cg, "_slots");
+        char *idx_tmp = cg_fresh_temp(cg, "_i");
+
+        if (generic_desc == NULL || trivial_desc_tmp == NULL ||
+            managed_desc_tmp == NULL ||
+            slots_tmp == NULL || idx_tmp == NULL) {
+            free(trivial_desc_tmp); free(managed_desc_tmp);
+            free(slots_tmp); free(idx_tmp);
+            free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+            free(element_default_expr);
+            cgtype_free(elem);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+
+        /* A generic array repeats the descriptor-defined T default zero.
+         * The policy is selected once per allocation; ZERO_BYTES remains the
+         * calloc fast path, while only custom trivial and managed values pay
+         * one callback per element. Aggregate defaults were already applied
+         * by feng_array_new_kinded. */
+        buf_append_fmt(cg->cur_body,
+            "    switch (%s->kind) {\n"
+            "        case FENG_VALUE_TRIVIAL: {\n"
+            "            const FengTrivialDescriptor *%s = "
+            "feng_generic_trivial_descriptor(%s);\n"
+            "            if (%s == NULL || %s->default_zero_init == NULL) "
+            "feng_panic(\"generic array trivial element has no default-zero policy\");\n"
+            "            if (%s->default_zero_init->kind == FENG_DEFAULT_INIT_FN) {\n"
+            "                if (%s->default_zero_init->init_fn == NULL) "
+            "feng_panic(\"generic array trivial default-zero policy has no initializer\");\n"
+            "                unsigned char *%s = "
+            "(unsigned char *)feng_array_data(%s);\n"
+            "                for (size_t %s = 0; %s < %s; ++%s) "
+            "%s->default_zero_init->init_fn(%s + %s * %s->size);\n"
+            "            } else if (%s->default_zero_init->kind != "
+            "FENG_DEFAULT_ZERO_BYTES) {\n"
+            "                feng_panic(\"generic array trivial element has an unknown default-zero policy\");\n"
+            "            }\n"
+            "            break;\n"
+            "        }\n"
+            "        case FENG_VALUE_MANAGED_POINTER: {\n"
+            "            const FengTypeDescriptor *%s = "
+            "feng_generic_type_descriptor(%s);\n"
+            "            if (%s == NULL || %s->default_zero_init == NULL) "
+            "feng_panic(\"generic array managed element has no default-zero initializer\");\n"
+            "            void **%s = (void **)feng_array_data(%s);\n"
+            "            for (size_t %s = 0; %s < %s; ++%s) "
+            "%s->default_zero_init(&%s[%s], %s);\n"
+            "            break;\n"
+            "        }\n"
+            "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
+            "            break;\n"
+            "        default:\n"
+            "            feng_panic(\"generic array element has an unknown value kind\");\n"
+            "    }\n",
+            generic_desc,
+            trivial_desc_tmp, generic_desc,
+            trivial_desc_tmp, trivial_desc_tmp,
+            trivial_desc_tmp,
+            trivial_desc_tmp,
+            slots_tmp, arr_tmp,
+            idx_tmp, idx_tmp, size_tmp, idx_tmp,
+            trivial_desc_tmp, slots_tmp, idx_tmp, trivial_desc_tmp,
+            trivial_desc_tmp,
+            managed_desc_tmp, generic_desc,
+            managed_desc_tmp, managed_desc_tmp,
+            slots_tmp, arr_tmp,
+            idx_tmp, idx_tmp, size_tmp, idx_tmp,
+            managed_desc_tmp, slots_tmp, idx_tmp, managed_desc_tmp);
+        free(trivial_desc_tmp); free(managed_desc_tmp);
+        free(slots_tmp); free(idx_tmp);
+    } else if (element_default_expr != NULL) {
+        char *slots_tmp = cg_fresh_temp(cg, "_slots");
+        char *idx_tmp = cg_fresh_temp(cg, "_i");
+
+        if (slots_tmp == NULL || idx_tmp == NULL) {
+            free(slots_tmp); free(idx_tmp);
+            free(size_tmp); free(arr_tmp); free(elem_cty); free(desc_expr);
+            free(element_default_expr);
+            cgtype_free(elem);
+            return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    %s *%s = (%s *)feng_array_data(%s);\n"
+            "    for (size_t %s = 0; %s < %s; ++%s) "
+            "%s[%s] = %s;\n",
+            elem_cty, slots_tmp, elem_cty, arr_tmp,
+            idx_tmp, idx_tmp, size_tmp, idx_tmp,
+            slots_tmp, idx_tmp, element_default_expr);
+        free(slots_tmp); free(idx_tmp);
+    }
+
     free(size_tmp); free(elem_cty); free(desc_expr);
+    free(element_default_expr);
 
     out->c_expr = strdup(arr_tmp);
     free(arr_tmp);
@@ -31781,6 +32001,55 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     if (!out->c_expr || !out->type) { cgtype_free(elem); return false; }
     out->type->element = elem;
     out->owns_ref = true;
+    return true;
+}
+
+/* Materialize and bounds-check one already-emitted integer index exactly
+ * once. On targets narrower than a 64-bit Feng index, compare the original
+ * uint64_t-domain value directly with the array length before narrowing;
+ * all other cases preserve the existing size_t/helper fast path. */
+static bool cg_emit_checked_array_index(CG *cg,
+                                        const ExprResult *index,
+                                        const char *array_expr,
+                                        FengToken blame,
+                                        char **out_index_tmp) {
+    char *index_tmp;
+
+    if (cg == NULL || index == NULL || index->type == NULL ||
+        array_expr == NULL || out_index_tmp == NULL) {
+        return false;
+    }
+    *out_index_tmp = NULL;
+    index_tmp = cg_fresh_temp(cg, "_idx");
+    if (index_tmp == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+
+    if (cg->analysis != NULL && cg->analysis->pointer_size < 8U &&
+        cgtype_int_rank(index->type->kind) >= 4) {
+        char *raw_index_tmp = cg_fresh_temp(cg, "_raw_idx");
+
+        if (raw_index_tmp == NULL) {
+            free(index_tmp);
+            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+        buf_append_fmt(cg->cur_body,
+            "    uint64_t %s = (uint64_t)(%s);\n"
+            "    if (%s >= (uint64_t)feng_array_length(%s)) "
+            "feng_panic(\"array index out of range\");\n"
+            "    size_t %s = (size_t)%s;\n",
+            raw_index_tmp, index->c_expr,
+            raw_index_tmp, array_expr,
+            index_tmp, raw_index_tmp);
+        free(raw_index_tmp);
+    } else {
+        buf_append_fmt(cg->cur_body,
+            "    size_t %s = (size_t)(%s);\n"
+            "    feng_array_check_index(%s, %s);\n",
+            index_tmp, index->c_expr,
+            array_expr, index_tmp);
+    }
+    *out_index_tmp = index_tmp;
     return true;
 }
 
@@ -31804,14 +32073,14 @@ static bool cg_emit_index(CG *cg, const FengExpr *e, ExprResult *out) {
         er_free(&idx); er_free(&recv);
         return cg_fail(cg, e->token, "CE0189", "codegen: array index must be an integer");
     }
-    /* Materialize index into a `size_t` local so we can both bounds-check
-     * and slot-load using the same value. */
-    char *idx_tmp = cg_fresh_temp(cg, "_idx");
-    if (!idx_tmp) { er_free(&idx); er_free(&recv); return false; }
-    buf_append_fmt(cg->cur_body, "    size_t %s = (size_t)(%s);\n",
-                   idx_tmp, idx.c_expr);
-    buf_append_fmt(cg->cur_body, "    feng_array_check_index(%s, %s);\n",
-                   recv.c_expr, idx_tmp);
+    char *idx_tmp = NULL;
+    if (!cg_emit_checked_array_index(cg,
+                                     &idx,
+                                     recv.c_expr,
+                                     e->as.index.index->token,
+                                     &idx_tmp)) {
+        er_free(&idx); er_free(&recv); return false;
+    }
 
     char *elem_cty = cg_ctype_dup(recv.type->element);
     if (!elem_cty) {
@@ -32114,7 +32383,7 @@ static bool cg_emit_expression_join_slot(CG *cg,
         }
         out_slot->uses_reified_storage = true;
         buf_append_fmt(cg->cur_body,
-            "    feng_aggregate_default_init(%s, %s);\n",
+            "    feng_aggregate_default_zero_init(%s, %s);\n",
             slot_name,
             out_slot->reified_descriptor_c_name);
         if (!scope_add(cg->cur_scope,
@@ -32152,7 +32421,7 @@ static bool cg_emit_expression_join_slot(CG *cg,
         }
     } else if (aggregate) {
         buf_append_fmt(cg->cur_body, "    %s %s; ", ctype, slot_name);
-        if (!cg_append_aggregate_default_init_call(
+        if (!cg_append_aggregate_default_zero_init_call(
                 cg->cur_body, result_type, slot_name)) {
             free(ctype);
             return cg_fail(cg, blame,
@@ -35088,7 +35357,49 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                     "CE0225", "codegen: cannot default-zero an unresolved object type");
             }
             if (cg_user_type_is_value_semantics(type->user)) {
-                buf_append_fmt(&b, "(struct %s){0}", type->user->c_struct_name);
+                if (cgtype_value_kind(type) == CG_VK_TRIVIAL &&
+                    !cg_type_default_zero_is_zero_bytes(cg, type, 0U)) {
+                    bool emitted_field = false;
+
+                    /* Concrete trivial values keep a pure C-expression fast
+                     * path. Only fields whose language default is not zero
+                     * bytes are designated; all omitted fields are zeroed by
+                     * the compound literal. Erased consumers use the same
+                     * producer fact through FengTrivialDescriptor's policy. */
+                    buf_append_fmt(&b, "(struct %s){", type->user->c_struct_name);
+                    for (size_t i = 0U; i < type->user->field_count; ++i) {
+                        const UserField *field = &type->user->fields[i];
+                        const FengToken *field_blame = field->member != NULL
+                                                          ? &field->member->token
+                                                          : blame;
+                        char *field_default = NULL;
+
+                        if (cg_type_default_zero_is_zero_bytes(
+                                cg, field->type, 0U)) {
+                            continue;
+                        }
+                        if (!cg_default_value_expr(cg,
+                                                   field->type,
+                                                   field_blame,
+                                                   &field_default)) {
+                            free(field_default);
+                            buf_free(&b);
+                            return false;
+                        }
+                        buf_append_fmt(&b,
+                                       "%s.%s = %s",
+                                       emitted_field ? ", " : " ",
+                                       field->c_name,
+                                       field_default);
+                        emitted_field = true;
+                        free(field_default);
+                    }
+                    buf_append_cstr(&b, emitted_field ? " }" : "0}");
+                } else {
+                    buf_append_fmt(&b,
+                                   "(struct %s){0}",
+                                   type->user->c_struct_name);
+                }
                 break;
             }
             if (!cg_user_type_is_default_zero_safe(cg, type->user)) {
@@ -35648,50 +35959,133 @@ static bool cg_emit_user_field_value_store(CG *cg,
                                                        replace_existing);
 }
 
-static bool cg_emit_generic_param_default_init(CG *cg,
-                                               const char *lvalue_expr,
-                                               const CGType *type,
-                                               FengToken blame) {
+/* Emit one descriptor-selected language default-zero operation for erased T.
+ * All shared-generic storage sites route through this helper, so arrays,
+ * captures, fields, statics, and locals cannot grow type-specific rules.
+ *
+ * `zero_bytes_already` is a storage fact, not a type exception: calloc'd or
+ * pre-zeroed storage may skip the ZERO_BYTES write. `aggregate_already_init`
+ * is used by kinded arrays, whose allocator has already applied the aggregate
+ * descriptor policy. Custom trivial and managed defaults must still run. */
+static bool cg_emit_reified_default_zero_init_at_address(
+    CG *cg,
+    const char *address_expr,
+    const char *descriptor_expr,
+    FengToken blame,
+    bool zero_bytes_already,
+    bool aggregate_already_init) {
+    char *trivial_descriptor;
     char *managed_descriptor;
 
-    if (cg == NULL || lvalue_expr == NULL || type == NULL ||
-        type->kind != CG_TYPE_GENERIC_PARAM) {
+    if (cg == NULL || address_expr == NULL || descriptor_expr == NULL) {
         return false;
     }
-
-    const char *desc = cg_generic_param_desc_name(cg, type->generic_param_index);
-    if (desc == NULL) {
-        return cg_fail(cg,
-                       blame,
-                       "CE0237", "codegen: missing generic descriptor for default value");
-    }
+    trivial_descriptor = cg_fresh_temp(cg, "_default_trivial_desc");
     managed_descriptor = cg_fresh_temp(cg, "_default_type_desc");
-    if (managed_descriptor == NULL) {
+    if (trivial_descriptor == NULL || managed_descriptor == NULL) {
+        free(trivial_descriptor);
+        free(managed_descriptor);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
     buf_append_fmt(cg->cur_body,
         "    switch (%s->kind) {\n"
-        "        case FENG_VALUE_TRIVIAL:\n"
-        "            memset(&%s, 0, feng_generic_value_size(%s));\n"
+        "        case FENG_VALUE_TRIVIAL: {\n"
+        "            const FengTrivialDescriptor *%s = "
+        "feng_generic_trivial_descriptor(%s);\n"
+        "            if (%s == NULL || %s->default_zero_init == NULL) "
+        "feng_panic(\"generic trivial value has no default-zero policy\");\n"
+        "            switch (%s->default_zero_init->kind) {\n"
+        "                case FENG_DEFAULT_ZERO_BYTES:\n",
+        descriptor_expr,
+        trivial_descriptor,
+        descriptor_expr,
+        trivial_descriptor,
+        trivial_descriptor,
+        trivial_descriptor);
+    if (!zero_bytes_already) {
+        buf_append_fmt(cg->cur_body,
+            "                    memset(%s, 0, %s->size);\n",
+            address_expr,
+            trivial_descriptor);
+    }
+    buf_append_fmt(cg->cur_body,
+        "                    break;\n"
+        "                case FENG_DEFAULT_INIT_FN:\n"
+        "                    if (%s->default_zero_init->init_fn == NULL) "
+        "feng_panic(\"generic trivial default-zero policy has no initializer\");\n"
+        "                    %s->default_zero_init->init_fn(%s);\n"
+        "                    break;\n"
+        "                default:\n"
+        "                    feng_panic(\"generic trivial value has an unknown default-zero policy\");\n"
+        "            }\n"
         "            break;\n"
+        "        }\n"
         "        case FENG_VALUE_MANAGED_POINTER: {\n"
         "            const FengTypeDescriptor *%s = "
         "feng_generic_type_descriptor(%s);\n"
-        "            %s->default_zero_init(&%s, %s);\n"
+        "            if (%s == NULL || %s->default_zero_init == NULL) "
+        "feng_panic(\"generic managed value has no default-zero initializer\");\n"
+        "            %s->default_zero_init(%s, %s);\n"
         "            break;\n"
         "        }\n"
-        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-        "            feng_aggregate_default_init(&%s, feng_generic_aggregate_descriptor(%s));\n"
+        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n",
+        trivial_descriptor,
+        trivial_descriptor,
+        address_expr,
+        managed_descriptor,
+        descriptor_expr,
+        managed_descriptor,
+        managed_descriptor,
+        managed_descriptor,
+        address_expr,
+        managed_descriptor);
+    if (!aggregate_already_init) {
+        buf_append_fmt(cg->cur_body,
+            "            feng_aggregate_default_zero_init(%s, "
+            "feng_generic_aggregate_descriptor(%s));\n",
+            address_expr,
+            descriptor_expr);
+    }
+    buf_append_cstr(cg->cur_body,
         "            break;\n"
-        "    }\n",
-        desc,
-        lvalue_expr, desc,
-        managed_descriptor, desc,
-        managed_descriptor, lvalue_expr, managed_descriptor,
-        lvalue_expr, desc);
+        "        default:\n"
+        "            feng_panic(\"generic value has an unknown value kind\");\n"
+        "    }\n");
+    free(trivial_descriptor);
     free(managed_descriptor);
     return true;
+}
+
+/* Lvalue-form wrapper used when a shared generic field has a native C lvalue
+ * in the current layout. */
+static bool cg_emit_generic_param_default_init(CG *cg,
+                                               const char *lvalue_expr,
+                                               const CGType *type,
+                                               FengToken blame) {
+    const char *descriptor;
+    Buf address;
+    bool ok;
+
+    if (cg == NULL || lvalue_expr == NULL || type == NULL ||
+        type->kind != CG_TYPE_GENERIC_PARAM) {
+        return false;
+    }
+    descriptor = cg_generic_param_desc_name(cg, type->generic_param_index);
+    if (descriptor == NULL) {
+        return cg_fail(cg,
+                       blame,
+                       "CE0237", "codegen: missing generic descriptor for default value");
+    }
+    buf_init(&address);
+    buf_append_fmt(&address, "&%s", lvalue_expr);
+    if (address.data == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    ok = cg_emit_reified_default_zero_init_at_address(
+        cg, address.data, descriptor, blame, false, false);
+    buf_free(&address);
+    return ok;
 }
 
 /* Address-form counterpart used by shared generic constructor bodies, where
@@ -35703,46 +36097,19 @@ static bool cg_emit_generic_param_default_init_at_address(
     const CGType *type,
     FengToken blame) {
     const char *descriptor;
-    char *managed_descriptor;
 
     if (cg == NULL || address_expr == NULL || type == NULL ||
         type->kind != CG_TYPE_GENERIC_PARAM) {
         return false;
     }
-    descriptor = cg_generic_param_desc_name(
-        cg, type->generic_param_index);
+    descriptor = cg_generic_param_desc_name(cg, type->generic_param_index);
     if (descriptor == NULL) {
         return cg_fail(cg,
                        blame,
                        "CE0237", "codegen: missing generic descriptor for default value");
     }
-    managed_descriptor = cg_fresh_temp(cg, "_default_type_desc");
-    if (managed_descriptor == NULL) {
-        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-    }
-    buf_append_fmt(cg->cur_body,
-        "    switch (%s->kind) {\n"
-        "        case FENG_VALUE_TRIVIAL:\n"
-        "            memset(%s, 0, feng_generic_value_size(%s));\n"
-        "            break;\n"
-        "        case FENG_VALUE_MANAGED_POINTER: {\n"
-        "            const FengTypeDescriptor *%s = "
-        "feng_generic_type_descriptor(%s);\n"
-        "            %s->default_zero_init(%s, %s);\n"
-        "            break;\n"
-        "        }\n"
-        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-        "            feng_aggregate_default_init(%s, "
-        "feng_generic_aggregate_descriptor(%s));\n"
-        "            break;\n"
-        "    }\n",
-        descriptor,
-        address_expr, descriptor,
-        managed_descriptor, descriptor,
-        managed_descriptor, address_expr, managed_descriptor,
-        address_expr, descriptor);
-    free(managed_descriptor);
-    return true;
+    return cg_emit_reified_default_zero_init_at_address(
+        cg, address_expr, descriptor, blame, false, false);
 }
 
 /* Emit the no-initializer member default for one field during object construction. */
@@ -35828,12 +36195,12 @@ static bool cg_emit_user_field_default_value(CG *cg,
                                          : "_td";
 
             buf_append_fmt(cg->cur_body,
-                "feng_aggregate_default_init(&%s, "
+                "feng_aggregate_default_zero_init(&%s, "
                 "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu])",
                 field_expr.data, rad_source, rad_index);
             ok = true;
         } else {
-            ok = cg_append_aggregate_default_init_call(
+            ok = cg_append_aggregate_default_zero_init_call(
                 cg->cur_body, uf->type, field_expr.data);
         }
         if (!ok) {
@@ -36482,22 +36849,22 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 "    }\n");
             er_free(&init);
         } else {
-            buf_append_fmt(cg->cur_body,
-                "    switch (%s->kind) {\n"
-                "        case FENG_VALUE_TRIVIAL:\n"
-                "            break;\n"
-                "        case FENG_VALUE_MANAGED_POINTER:\n"
-                "            *(void **)%s = NULL;\n"
-                "            break;\n"
-                "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
-                "            feng_aggregate_default_init(%s, "
-                "feng_generic_aggregate_descriptor(%s));\n"
-                "            break;\n"
-                "    }\n",
-                descriptor_name,
-                cname,
-                cname,
-                descriptor_name);
+            /* The erased stack allocation is already zero-filled, but a
+             * language default zero may still require a descriptor callback
+             * (nonzero trivial or any valid managed value). */
+            if (!cg_emit_reified_default_zero_init_at_address(
+                    cg,
+                    cname,
+                    descriptor_name,
+                    b->token,
+                    true,
+                    false)) {
+                free(cname);
+                free(descriptor_name);
+                free(size_name);
+                cgtype_free(decl_type);
+                return false;
+            }
         }
         if (!scope_add(cg->cur_scope,
                        "_unused_internal_name__",
@@ -36608,7 +36975,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 free(source_address);
             } else {
                 buf_append_fmt(cg->cur_body,
-                               "    feng_aggregate_default_init(%s, %s);\n",
+                               "    feng_aggregate_default_zero_init(%s, %s);\n",
                                cname,
                                descriptor_name);
             }
@@ -36717,7 +37084,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         if (cgtype_is_aggregate(decl_type)) {
             /* Aggregate default-zero is owned by the aggregate facts provider.
              * For object-form specs this routes through the descriptor's
-             * default_init function and produces an owned subject slot. */
+             * default_zero_init function and produces an owned subject slot. */
             if (cg_value_needs_reified_layout(cg, decl_type)) {
                 const char *agg_desc = cg_aggregate_desc_name(decl_type);
                 size_t rad_idx;
@@ -36731,7 +37098,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 const char *src = cg->generic_type_method_rad_via_desc
                                       ? "_desc" : "_td";
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s; feng_aggregate_default_init(&%s, "
+                    "    %s %s; feng_aggregate_default_zero_init(&%s, "
                     "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
                     cty,
                     cname,
@@ -36741,7 +37108,8 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             } else {
                 Buf init_call;
                 buf_init(&init_call);
-                if (!cg_append_aggregate_default_init_call(&init_call, decl_type, cname)) {
+                if (!cg_append_aggregate_default_zero_init_call(
+                        &init_call, decl_type, cname)) {
                     buf_free(&init_call);
                     free(cname); free(cty); cgtype_free(decl_type);
                     return cg_fail(cg, b->token,
@@ -37370,12 +37738,14 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token,
                 "CE0189", "codegen: array index must be an integer");
         }
-        char *idx_tmp = cg_fresh_temp(cg, "_idx");
-        if (!idx_tmp) { er_free(&ix); er_free(&recv); return false; }
-        buf_append_fmt(cg->cur_body, "    size_t %s = (size_t)(%s);\n",
-                       idx_tmp, ix.c_expr);
-        buf_append_fmt(cg->cur_body, "    feng_array_check_index(%s, %s);\n",
-                       recv.c_expr, idx_tmp);
+        char *idx_tmp = NULL;
+        if (!cg_emit_checked_array_index(cg,
+                                         &ix,
+                                         recv.c_expr,
+                                         target->as.index.index->token,
+                                         &idx_tmp)) {
+            er_free(&ix); er_free(&recv); return false;
+        }
         if (is_compound) {
             char *elem_cty = cg_ctype_dup(recv.type->element);
             char *old_tmp = NULL;
@@ -50141,10 +50511,16 @@ static bool cg_subject_keys_equal(const FengSemanticSubjectKey *left,
                    strcmp(left->as.builtin_canonical_name,
                           right->as.builtin_canonical_name) == 0;
         case FENG_SEMANTIC_SUBJECT_KEY_ARRAY:
-            return left->as.array.rank == right->as.array.rank &&
-                   left->as.array.writable_mask == right->as.array.writable_mask &&
-                   cg_type_ref_equal(left->as.array.element_type_ref,
-                                     right->as.array.element_type_ref);
+            if (left->as.array.rank != right->as.array.rank) {
+                return false;
+            }
+            if (left->as.array.rank <= 64U) {
+                return left->as.array.writable_mask == right->as.array.writable_mask &&
+                       cg_type_ref_equal(left->as.array.element_type_ref,
+                                         right->as.array.element_type_ref);
+            }
+            return cg_type_ref_equal(left->as.array.array_type_ref,
+                                     right->as.array.array_type_ref);
         case FENG_SEMANTIC_SUBJECT_KEY_INVALID:
             return false;
     }
@@ -50192,6 +50568,17 @@ static bool cg_subject_witness_table_add(
     }
     cg->subject_witness_tables[cg->subject_witness_table_count].subject_key =
         *subject_key;
+    if (subject_key->kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY &&
+        subject_key->as.array.rank > 64U) {
+        FengTypeRef *owned_array_type_ref =
+            cg_type_ref_clone(subject_key->as.array.array_type_ref);
+
+        if (owned_array_type_ref == NULL) {
+            return false;
+        }
+        cg->subject_witness_tables[cg->subject_witness_table_count]
+            .subject_key.as.array.array_type_ref = owned_array_type_ref;
+    }
     cg->subject_witness_tables[cg->subject_witness_table_count].storage = storage;
     cg->subject_witness_tables[cg->subject_witness_table_count].spec = spec;
     cg->subject_witness_tables[cg->subject_witness_table_count].c_var = c_var;
@@ -56531,7 +56918,8 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
          * to NULL/0 in pass 2b). */
         if (cgtype_is_aggregate(mb->type)) {
             buf_append_cstr(cg->cur_body, "    ");
-            if (!cg_append_aggregate_default_init_call(cg->cur_body, mb->type, mb->c_name)) {
+            if (!cg_append_aggregate_default_zero_init_call(
+                    cg->cur_body, mb->type, mb->c_name)) {
                 return cg_fail(cg,
                                mb->binding->token,
                                "CE0359", "codegen: missing aggregate default-init rule for module binding");
@@ -56752,7 +57140,7 @@ static bool cg_emit_type_static_binding_state_init(
                                "CE0374", "codegen: missing aggregate default-init rule for generic static binding");
             }
             buf_append_fmt(cg->cur_body,
-                "    feng_aggregate_default_init(%s->storage, &%s);\n",
+                "    feng_aggregate_default_zero_init(%s->storage, &%s);\n",
                 state_expr,
                 descriptor);
         } else {
@@ -56876,9 +57264,10 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
     if (init == NULL) {
         if (cgtype_is_aggregate(binding->type)) {
             buf_append_cstr(cg->cur_body, "    ");
-            if (!cg_append_aggregate_default_init_call(cg->cur_body,
-                                                      binding->type,
-                                                      binding->c_name)) {
+            if (!cg_append_aggregate_default_zero_init_call(
+                    cg->cur_body,
+                    binding->type,
+                    binding->c_name)) {
                 return cg_fail(cg, binding->member->token,
                     "CE0374", "codegen: missing aggregate default-init rule for type static binding");
             }
@@ -57266,7 +57655,8 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
             facts.descriptor_name = t->user_spec->c_aggregate_desc_name;
             facts.value_struct_name = t->user_spec->c_value_struct_name;
             facts.pointer_slot_count = 1U;
-            facts.default_init_kind = CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR;
+            facts.default_zero_init_kind =
+                CG_AGGREGATE_DEFAULT_ZERO_INIT_DESCRIPTOR;
             if (facts.value_struct_name != NULL) {
                 facts.emit_pointer_slot_rows = cg_spec_aggregate_emit_pointer_slot_rows;
             }
@@ -57292,9 +57682,10 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
                 facts.descriptor_name = t->user->c_aggregate_desc_name;
                 facts.value_struct_name = t->user->c_struct_name;
                 facts.pointer_slot_count = value_slot_count;
-                facts.default_init_kind = (value_slot_count > 0U || force_aggregate)
-                                              ? CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR
-                                              : CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES;
+                facts.default_zero_init_kind =
+                    (value_slot_count > 0U || force_aggregate)
+                        ? CG_AGGREGATE_DEFAULT_ZERO_INIT_DESCRIPTOR
+                        : CG_AGGREGATE_DEFAULT_ZERO_INIT_ZERO_BYTES;
                 if (facts.value_struct_name != NULL) {
                     facts.emit_pointer_slot_rows = cg_value_aggregate_emit_pointer_slot_rows;
                 }
@@ -57325,27 +57716,29 @@ static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
     return cg_aggregate_facts(t, &facts) ? facts.pointer_slot_count : 0U;
 }
 
-/* Appends the aggregate default-initialization call/expression for one
- * lvalue. The chosen strategy is owned by the aggregate facts provider. */
-static bool cg_append_aggregate_default_init_call(Buf *out,
-                                                  const CGType *type,
-                                                  const char *lvalue_expr) {
+/* Append the operation that produces one aggregate language default zero in
+ * `lvalue_expr`. The aggregate facts provider chooses either direct zero
+ * bytes or the descriptor callback; this helper never invokes constructors. */
+static bool cg_append_aggregate_default_zero_init_call(
+    Buf *out,
+    const CGType *type,
+    const char *lvalue_expr) {
     CGAggregateFacts facts;
     if (out == NULL || lvalue_expr == NULL || !cg_aggregate_facts(type, &facts)) {
         return false;
     }
-    switch (facts.default_init_kind) {
-        case CG_AGGREGATE_DEFAULT_INIT_ZERO_BYTES:
+    switch (facts.default_zero_init_kind) {
+        case CG_AGGREGATE_DEFAULT_ZERO_INIT_ZERO_BYTES:
             buf_append_fmt(out, "memset(&%s, 0, sizeof %s)", lvalue_expr, lvalue_expr);
             return true;
-        case CG_AGGREGATE_DEFAULT_INIT_DESCRIPTOR:
+        case CG_AGGREGATE_DEFAULT_ZERO_INIT_DESCRIPTOR:
             if (facts.descriptor_name == NULL) {
                 return false;
             }
-            buf_append_fmt(out, "feng_aggregate_default_init(&%s, &%s)",
+            buf_append_fmt(out, "feng_aggregate_default_zero_init(&%s, &%s)",
                            lvalue_expr, facts.descriptor_name);
             return true;
-        case CG_AGGREGATE_DEFAULT_INIT_NONE:
+        case CG_AGGREGATE_DEFAULT_ZERO_INIT_NONE:
         default:
             return false;
     }
@@ -57957,11 +58350,81 @@ static bool cg_emit_equal_function(CG *cg,
     return true;
 }
 
+/* Return whether this concrete type's Feng default zero is represented by
+ * all-zero bytes. The recursion bound derives from the registered type graph,
+ * so it is only a compiler-defense against an invalid by-value cycle and does
+ * not impose a language nesting limit. */
+static bool cg_type_default_zero_is_zero_bytes(const CG *cg,
+                                               const CGType *type,
+                                               size_t depth) {
+    const FengDecl *enum_decl;
+
+    if (type == NULL) {
+        return false;
+    }
+    switch (type->kind) {
+        case CG_TYPE_BOOL:
+        case CG_TYPE_F32:
+        case CG_TYPE_F64:
+        case CG_TYPE_POINTER:
+            return true;
+        case CG_TYPE_I8:
+        case CG_TYPE_I16:
+        case CG_TYPE_I32:
+        case CG_TYPE_I64:
+        case CG_TYPE_U8:
+        case CG_TYPE_U16:
+        case CG_TYPE_U32:
+        case CG_TYPE_U64:
+            enum_decl = type->enum_decl;
+            if (enum_decl == NULL) {
+                return true;
+            }
+            return enum_decl->kind == FENG_DECL_ENUM &&
+                   enum_decl->as.enum_decl.item_count > 0U &&
+                   (!enum_decl->as.enum_decl.items[0].has_explicit_value ||
+                    enum_decl->as.enum_decl.items[0].explicit_value == 0);
+        case CG_TYPE_OBJECT:
+            if (type->user == NULL ||
+                !cg_user_type_is_value_semantics(type->user) ||
+                cg == NULL || depth > cg->user_type_count) {
+                return false;
+            }
+            for (size_t i = 0U; i < type->user->field_count; ++i) {
+                if (!cg_type_default_zero_is_zero_bytes(
+                        cg, type->user->fields[i].type, depth + 1U)) {
+                    return false;
+                }
+            }
+            return true;
+        default:
+            return false;
+    }
+}
+
+/* A value descriptor needs a custom initializer whenever at least one field
+ * has a language default zero that cannot be obtained from memset/calloc.
+ * This covers managed/aggregate fields and recursively nested trivial values
+ * such as an enum whose first member has a nonzero representation. */
+static bool cg_value_type_needs_custom_default_zero(const CG *cg,
+                                                    const UserType *type) {
+    if (type == NULL) {
+        return false;
+    }
+    for (size_t i = 0U; i < type->field_count; ++i) {
+        if (!cg_type_default_zero_is_zero_bytes(cg, type->fields[i].type, 0U)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
     size_t slot_count = cg_aggregate_top_level_slot_count(t);
     bool needs_agg_desc = slot_count > 0U ||
         (t->is_generic_instance && t->generic_context_type_param_count == 0U);
+    bool needs_custom_default_zero;
     Buf equal_fn_name;
 
     /* Struct body already emitted in cg_emit_user_type_forward (headers). */
@@ -57979,6 +58442,8 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     if (t->c_aggregate_desc_name == NULL) {
         return;
     }
+    needs_custom_default_zero =
+        cg_value_type_needs_custom_default_zero(cg, t);
     buf_init(&equal_fn_name);
     buf_append_fmt(&equal_fn_name, "%s__equal", t->c_aggregate_desc_name);
     if (equal_fn_name.data == NULL) {
@@ -58027,7 +58492,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         buf_append_cstr(td, "};\n\n");
     }
 
-    if (slot_count > 0U) {
+    if (needs_custom_default_zero) {
         Buf init_fn_name;
 
         buf_init(&init_fn_name);
@@ -58053,8 +58518,42 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                                          : &t->decl->token;
 
             switch (cgtype_value_kind(field->type)) {
-                case CG_VK_TRIVIAL:
+                case CG_VK_TRIVIAL: {
+                    char *descriptor_expr;
+
+                    if (cg_type_default_zero_is_zero_bytes(
+                            cg, field->type, 0U)) {
+                        break;
+                    }
+                    if (field->type->enum_decl != NULL &&
+                        !cg_ensure_enum_emitted(cg,
+                                                field->type->enum_decl)) {
+                        buf_free(&init_fn_name);
+                        buf_free(&equal_fn_name);
+                        return;
+                    }
+                    descriptor_expr =
+                        cg_trivial_descriptor_expr(cg, field->type);
+                    if (descriptor_expr == NULL) {
+                        buf_free(&init_fn_name);
+                        buf_free(&equal_fn_name);
+                        (void)cg_fail(
+                            cg,
+                            *blame,
+                            "IE0002", "codegen: nonzero trivial field has no default-zero descriptor");
+                        return;
+                    }
+                    /* The producer-side zero-byte analysis proved that this
+                     * concrete trivial descriptor selects INIT_FN. Calling
+                     * its policy keeps nested values generic and avoids any
+                     * enum/type-name test at the consuming value type. */
+                    buf_append_fmt(td,
+                        "    (%s)->default_zero_init->init_fn(&_out->%s);\n",
+                        descriptor_expr,
+                        field->c_name);
+                    free(descriptor_expr);
                     break;
+                }
                 case CG_VK_MANAGED_POINTER: {
                     char *default_expr = NULL;
 
@@ -58081,9 +58580,10 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                     buf_init(&init_call);
                     buf_append_fmt(&lvalue, "_out->%s", field->c_name);
                     if (lvalue.data == NULL ||
-                        !cg_append_aggregate_default_init_call(&init_call,
-                                                               field->type,
-                                                               lvalue.data)) {
+                        !cg_append_aggregate_default_zero_init_call(
+                            &init_call,
+                            field->type,
+                            lvalue.data)) {
                         buf_free(&lvalue);
                         buf_free(&init_call);
                         buf_free(&init_fn_name);
@@ -58102,7 +58602,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         }
         buf_append_cstr(td, "}\n\n");
         buf_append_fmt(td,
-            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "static const FengDefaultZeroInitDescriptor %s = {\n"
             "    .kind = FENG_DEFAULT_INIT_FN,\n"
             "    .init_fn = &%s,\n"
             "};\n",
@@ -58111,7 +58611,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         buf_free(&init_fn_name);
     } else if (needs_agg_desc) {
         buf_append_fmt(td,
-            "static const FengAggregateDefaultInitDescriptor %s = {\n"
+            "static const FengDefaultZeroInitDescriptor %s = {\n"
             "    .kind = FENG_DEFAULT_ZERO_BYTES,\n"
             "};\n",
             t->c_aggregate_default_name);
@@ -58362,7 +58862,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
         buf_append_fmt(td,
             "    .name = \"%s.%s\",\n"
             "    .size = sizeof(struct %s),\n"
-            "    .default_init = &%s,\n"
+            "    .default_zero_init = &%s,\n"
             "    .managed_slot_count = %zu,\n",
             cg->module_dot_name,
             t->feng_name,
@@ -58435,12 +58935,21 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             t->c_aggregate_desc_name);
         buf_append_fmt(td,
             "    .name = \"%s.%s\",\n"
-            "    .size = sizeof(struct %s),\n"
-            "    .equal_fn = &%s,\n"
-            "};\n\n",
+            "    .size = sizeof(struct %s),\n",
             cg->module_dot_name,
             t->feng_name,
-            t->c_struct_name,
+            t->c_struct_name);
+        if (needs_custom_default_zero) {
+            buf_append_fmt(td,
+                "    .default_zero_init = &%s,\n",
+                t->c_aggregate_default_name);
+        } else {
+            buf_append_cstr(td,
+                "    .default_zero_init = &feng_default_zero_bytes_init,\n");
+        }
+        buf_append_fmt(td,
+            "    .equal_fn = &%s,\n"
+            "};\n\n",
             equal_fn_name.data);
     }
     buf_free(&equal_fn_name);
@@ -59109,6 +59618,36 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             t->c_struct_name, t->c_struct_name, t->c_desc_name);
         for (size_t i = 0; i < t->field_count; i++) {
             const CGType *ft = t->fields[i].type;
+
+            /* feng_object_new provides zero bytes, not necessarily the Feng
+             * language default. Concrete custom trivial fields are assigned
+             * their descriptor-equivalent expression here; ordinary zero
+             * trivial fields retain the allocation fast path with no emitted
+             * store. Open T is initialized by the shared generic factory. */
+            if (ft->kind != CG_TYPE_GENERIC_PARAM &&
+                cgtype_value_kind(ft) == CG_VK_TRIVIAL) {
+                if (!cg_type_default_zero_is_zero_bytes(cg, ft, 0U)) {
+                    const FengToken *field_token =
+                        t->fields[i].member != NULL
+                            ? &t->fields[i].member->token
+                            : &t->decl->token;
+                    char *default_expr = NULL;
+
+                    if (!cg_default_value_expr(cg,
+                                               ft,
+                                               field_token,
+                                               &default_expr)) {
+                        free(default_expr);
+                        return;
+                    }
+                    buf_append_fmt(td,
+                                   "    _o->%s = %s;\n",
+                                   t->fields[i].c_name,
+                                   default_expr);
+                    free(default_expr);
+                }
+                continue;
+            }
             switch (ft->kind) {
                 case CG_TYPE_GENERIC_PARAM:
                     break;
@@ -59175,20 +59714,52 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                 case CG_TYPE_OBJECT:
                     if (ft->user) {
                         if (cg_user_type_is_value_semantics(ft->user)) {
-                            char lvalue[512];
-                            Buf init;
+                            if (cgtype_is_aggregate(ft)) {
+                                char lvalue[512];
+                                Buf init;
 
-                            buf_init(&init);
-                            if (snprintf(lvalue, sizeof(lvalue), "_o->%s", t->fields[i].c_name) > 0 &&
-                                cg_append_aggregate_default_init_call(&init, ft, lvalue)) {
-                                buf_append_fmt(td, "    %s;\n", init.data ? init.data : "");
-                            } else {
+                                buf_init(&init);
+                                if (snprintf(lvalue,
+                                             sizeof(lvalue),
+                                             "_o->%s",
+                                             t->fields[i].c_name) <= 0 ||
+                                    !cg_append_aggregate_default_zero_init_call(
+                                        &init, ft, lvalue)) {
+                                    buf_free(&init);
+                                    (void)cg_fail(
+                                        cg,
+                                        t->fields[i].member != NULL
+                                            ? t->fields[i].member->token
+                                            : t->decl->token,
+                                        "IE0002", "codegen: value field has no aggregate default-zero policy");
+                                    return;
+                                }
                                 buf_append_fmt(td,
-                                    "    _o->%s = (struct %s){0};\n",
-                                    t->fields[i].c_name,
-                                    ft->user->c_struct_name);
+                                               "    %s;\n",
+                                               init.data != NULL
+                                                   ? init.data
+                                                   : "");
+                                buf_free(&init);
+                            } else {
+                                const FengToken *field_token =
+                                    t->fields[i].member != NULL
+                                        ? &t->fields[i].member->token
+                                        : &t->decl->token;
+                                char *default_expr = NULL;
+
+                                if (!cg_default_value_expr(cg,
+                                                           ft,
+                                                           field_token,
+                                                           &default_expr)) {
+                                    free(default_expr);
+                                    return;
+                                }
+                                buf_append_fmt(td,
+                                               "    _o->%s = %s;\n",
+                                               t->fields[i].c_name,
+                                               default_expr);
+                                free(default_expr);
                             }
-                            buf_free(&init);
                         } else {
                             buf_append_fmt(td,
                                 "    _o->%s = %s();\n",
@@ -59198,7 +59769,8 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     }
                     break;
                 default:
-                    /* Numeric/bool: feng_object_new already zeroed. */
+                    /* Remaining scalar categories are ZERO_BYTES and were
+                     * already handled by feng_object_new's allocation. */
                     break;
             }
         }
@@ -62348,6 +62920,12 @@ static void cg_dispose(CG *cg) {
     }
     free(cg->value_box_witness_tables);
     for (size_t i = 0; i < cg->subject_witness_table_count; ++i) {
+        if (cg->subject_witness_tables[i].subject_key.kind ==
+                FENG_SEMANTIC_SUBJECT_KEY_ARRAY &&
+            cg->subject_witness_tables[i].subject_key.as.array.rank > 64U) {
+            cg_type_ref_free((FengTypeRef *)cg->subject_witness_tables[i]
+                                 .subject_key.as.array.array_type_ref);
+        }
         free(cg->subject_witness_tables[i].c_var);
     }
     free(cg->subject_witness_tables);

@@ -142,7 +142,8 @@ typedef struct FengSymbolFtSymRecord {
  *   BUILTIN:       string_ref=type-name, others=0
  *   NAMED:         string_ref=fully-qualified-dot-joined-name, sym_ref=decl-sym-id (0 if unknown), others=0
  *   ARRAY:         string_ref=mutability-bitmap(u32,bit-i=layer-i-writable),
- *                  elem_start=element-TYPS.id, elem_count=rank, sym_ref/reserved1=0
+ *                  elem_start=element-TYPS.id, elem_count=rank (1..32),
+ *                  sym_ref/reserved1=0. Deeper arrays form an ARRAY-node chain.
  *   C_POINTER:     elem_start=inner-TYPS.id, others=0
  *   CALLABLE:      elem_start=TSEQ-start(0-based), elem_count=param_count+1, others=0
  *   SPEC_OBJECT:   sym_ref=spec-sym-id, others=0

@@ -86,7 +86,7 @@ FengValueEqualFn equal_fn;   /* NULL 时退回指针身份比较 */
 typedef struct FengAggregateDescriptor {
     const char *name;
     size_t size;
-    const FengAggregateDefaultInitDescriptor *default_init;
+    const FengDefaultZeroInitDescriptor *default_zero_init;
     size_t managed_slot_count;
     const FengManagedSlotDescriptor *managed_slots;
     FengValueEqualFn equal_fn;   /* 新增，支持 tuple equality */

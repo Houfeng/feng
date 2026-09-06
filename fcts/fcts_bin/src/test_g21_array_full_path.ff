@@ -1,0 +1,25 @@
+module fcts_bin;
+
+/**
+ * Create a public closed-generic element array through its complete module
+ * path. This file intentionally has no import for the provider module.
+ */
+func g21FullPathGenericArray(
+  count: int
+): fcts_lib.g21_array_provider.G21PublicBox<int>[] {
+  return fcts_lib.g21_array_provider.G21PublicBox<int>[:count];
+}
+
+/** Create a public nonzero-default enum array without importing its module. */
+func g21FullPathExplicitModeArray(
+  count: int
+): fcts_lib.g21_array_provider.G21PublicExplicitMode[] {
+  return fcts_lib.g21_array_provider.G21PublicExplicitMode[:count];
+}
+
+/** Create a public nonzero-default trivial composite by complete path. */
+func g21FullPathExplicitValueArray(
+  count: int
+): fcts_lib.g21_array_provider.G21PublicExplicitValue[] {
+  return fcts_lib.g21_array_provider.G21PublicExplicitValue[:count];
+}

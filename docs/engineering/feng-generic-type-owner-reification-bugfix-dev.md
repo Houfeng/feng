@@ -278,7 +278,7 @@ void Feng_UserType_finalizer_shared(
 
 同时为 `FengTypeDescriptor` 增加 managed 值的 `default_zero_init` 入口。具化后的普通 type、泛型 type、
 string、array 和 callable descriptor 均必须填入准确实现；`FengGenericParamDescriptor` 不重复保存该入口。
-trivial 与 aggregate 分别继续使用 `FengTrivialDescriptor.size` 和 `FengAggregateDescriptor.default_init`。
+trivial 与 aggregate 分别继续使用 `FengTrivialDescriptor.default_zero_init` 和 `FengAggregateDescriptor.default_zero_init`；两者都引用通用策略描述符，保留零字节快路径。
 
 不修改：
 

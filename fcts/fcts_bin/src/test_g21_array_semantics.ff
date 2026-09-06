@@ -1,0 +1,553 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+import fcts_lib.g02_primary;
+import fcts_lib.g02_primary as g21Types;
+import fcts_lib.g21_array_provider;
+import fcts_lib.g21_array_provider as g21Public;
+
+/** Ordinary managed element used by the G21 array behavior tests. */
+type G21ArrayObject {
+  open var number: int;
+  open var text: string;
+}
+
+/** Aggregate value element used to distinguish value copies from references. */
+@value
+type G21ArrayValue {
+  var number: int;
+  var text: string;
+}
+
+/** Named tuple element used by array creation and indexed replacement tests. */
+type G21ArrayTuple(int, string);
+
+/** Enum element whose first item is its default zero value. */
+enum G21ArrayMode {
+  Zero,
+  One
+}
+
+/** Explicit enum whose language default is deliberately not zero bits. */
+enum G21ArrayExplicitMode {
+  Seven = 7,
+  Nine = 9
+}
+
+/** Trivial composite whose default contains a non-zero enum representation. */
+@value
+type G21ArrayExplicitValue {
+  var mode: G21ArrayExplicitMode;
+  var count: int;
+}
+
+/** Generic managed element used by closed-generic array creation tests. */
+type G21ArrayBox<T> {
+  open var value: T;
+}
+
+/** Generic static binding used by the shared default-zero entry matrix. */
+type G21ArrayDefaultStatic<T> {
+  open static let value: T;
+}
+
+/** Generic callable used to make a default-initialized T escape by capture. */
+spec G21ArrayDefaultReader<T>(): T;
+
+/** Holder used to prove target propagation into object fields. */
+type G21ArrayHolder {
+  var numbers: u16[];
+  var objects: G21ArrayObject[];
+  var values: G21ArrayValue[];
+}
+
+/** Deliberately recursive type used only where no element default is requested. */
+type G21RecursiveNode {
+  open var next: G21RecursiveNode;
+}
+
+/** Object contract used to prove that arrays do not provide variance. */
+spec G21ArrayAnimal {
+  let name: string;
+}
+
+/** Concrete element that can individually adapt to G21ArrayAnimal. */
+type G21ArrayDog: G21ArrayAnimal {
+  let name: string;
+}
+
+/** Records evaluation order and call counts for literals, lengths, and indexes. */
+type G21ArrayProbe {
+  var trace: int;
+  var calls: int;
+
+  /** Append one decimal marker to the observable trace. */
+  func record(marker: int): void {
+    self.trace = self.trace * 10 + marker;
+    self.calls += 1;
+  }
+
+  /** Record one call and return the supplied integer unchanged. */
+  func integer(value: int, marker: int): int {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record one call and return the supplied managed object unchanged. */
+  func object(value: G21ArrayObject, marker: int): G21ArrayObject {
+    self.record(marker);
+    return value;
+  }
+
+  /** Record receiver evaluation and return the supplied nested array. */
+  func matrix(value: int[!][!], marker: int): int[!][!] {
+    self.record(marker);
+    return value;
+  }
+}
+
+/** Consume an inferred i16 array so its leaf type is observable to Semantic. */
+func g21ArraySumI16(values: i16[]): i16 {
+  return values[0] + values[1] + values[2];
+}
+
+/** Consume a default-inferred integer array. */
+func g21ArraySumInt(values: int[]): int {
+  var result = 0;
+  for let value in values {
+    result += value;
+  }
+  return result;
+}
+
+/** Consume an inferred floating-point array so its default leaf is visible. */
+func g21ArraySumDouble(values: double[]): double {
+  return values[0] + values[1];
+}
+
+/** Consume an explicitly targeted u16 array. */
+func g21ArraySumU16(values: u16[]): u16 {
+  return values[0] + values[1];
+}
+
+/** Return an array literal through an explicit result target. */
+func g21ArrayReturnU16(): u16[] {
+  return [12, 13];
+}
+
+/** Return aggregate values through an explicit result target. */
+func g21ArrayReturnValues(): G21ArrayValue[] {
+  return [G21ArrayValue { number: 14, text: "return" }];
+}
+
+/** Preserve a writable integer array reference across a call boundary. */
+func g21ArrayIdentityInts(values: int[!]): int[!] {
+  return values;
+}
+
+/** Preserve a writable managed-element array reference across a call boundary. */
+func g21ArrayIdentityObjects(values: G21ArrayObject[!]): G21ArrayObject[!] {
+  return values;
+}
+
+/** Rebuild a spec-element array by adapting each concrete element explicitly. */
+func g21ArrayRebuildAnimals(dogs: G21ArrayDog[]): G21ArrayAnimal[] {
+  let animals: G21ArrayAnimal[!] = G21ArrayAnimal[:dogs.length()];
+  var index = 0;
+  for let dog in dogs {
+    animals[index] = dog;
+    index += 1;
+  }
+  return (G21ArrayAnimal[])animals;
+}
+
+/** Create an array through a generic element-type parameter. */
+func g21ArrayDefaults<T>(length: int): T[] {
+  return T[:length];
+}
+
+/** Produce one default-initialized T through a shared-generic local binding. */
+func g21ArrayDefaultValue<T>(): T {
+  let value: T;
+  return value;
+}
+
+/** Produce one default-initialized T through a shared-generic capture cell. */
+func g21ArrayCapturedDefault<T>(): T {
+  let value: T;
+  let reader: G21ArrayDefaultReader<T> = () -> value;
+  return reader();
+}
+
+/** ARRAY-D04: fixed-capacity regressions must not truncate deep array types. */
+func g21ArrayDeepTypeBehavior(): void {
+  let depth32: int[!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][];
+  let depth33: int[!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!];
+  let depth64: int[!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][];
+  let depth65: int[!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!];
+  let depth65Inverse: int[][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][][!][];
+
+  assert(depth32.length() == 0 && depth33.length() == 0,
+         "ARRAY-D04 preserves the 32/33-layer boundary");
+  assert(depth64.length() == 0 && depth65.length() == 0,
+         "ARRAY-D04 preserves the 64/65-layer boundary");
+  assert(depth65Inverse.length() == 0,
+         "ARRAY-D04 preserves an independent 65-layer writable pattern");
+}
+
+/** ARRAY-D07 through D13: literal inference, target fitting, and evaluation. */
+func g21ArrayLiteralBehavior(): void {
+  let defaultNumbers = [1, 2, 3];
+  let defaultFloats = [1.5, 2.5];
+  let typed: i16 = 7;
+  let secondTyped: i16 = 8;
+  let typedFirst = [typed, 2, 3];
+  let typedMiddle = [1, typed, 3];
+  let typedLast = [1, 2, typed];
+  let allTyped = [typed, secondTyped, typed];
+
+  assert(g21ArraySumInt(defaultNumbers) == 6,
+         "ARRAY-D07 all-numeric literals infer the default integer leaf");
+  assert(g21ArraySumDouble(defaultFloats) == 4.0,
+         "ARRAY-D07 floating literals infer the default floating leaf");
+  assert(g21ArraySumI16(typedFirst) == (i16)12 &&
+         g21ArraySumI16(typedMiddle) == (i16)11 &&
+         g21ArraySumI16(typedLast) == (i16)10 &&
+         g21ArraySumI16(allTyped) == (i16)22,
+         "ARRAY-D07 a typed nonliteral drives literals from every position");
+
+  let localTarget: u16[] = [1, 2];
+  var assignmentTarget: u16[] = [];
+  assignmentTarget = [3, 4];
+  let returnedTarget = g21ArrayReturnU16();
+  let managed = G21ArrayObject { number: 9, text: "managed" };
+  let aggregate = G21ArrayValue { number: 10, text: "aggregate" };
+  let holder = G21ArrayHolder {
+    numbers: [5, 6],
+    objects: [managed],
+    values: [aggregate]
+  };
+  let returnedValues = g21ArrayReturnValues();
+
+  assert(g21ArraySumU16(localTarget) == (u16)3 &&
+         g21ArraySumU16(assignmentTarget) == (u16)7 &&
+         g21ArraySumU16([8, 9]) == (u16)17 &&
+         g21ArraySumU16(returnedTarget) == (u16)25,
+         "ARRAY-D08 propagates binding assignment parameter and return targets");
+  assert(holder.numbers[1] == (u16)6 &&
+         holder.objects[0].text == "managed" &&
+         holder.values[0].text == "aggregate" &&
+         returnedValues[0].number == 14,
+         "ARRAY-D08 propagates numeric managed and aggregate field targets");
+
+  let ragged: int[][] = [[1], [2, 3], []];
+  assert(ragged.length() == 3 && ragged[0].length() == 1 &&
+         ragged[1].length() == 2 && ragged[2].length() == 0,
+         "ARRAY-D11 nested array lengths are runtime values, not type identity");
+
+  let probe = G21ArrayProbe { trace: 0, calls: 0 };
+  let firstObject = G21ArrayObject { number: 21, text: "first" };
+  let secondObject = G21ArrayObject { number: 22, text: "second" };
+  let evaluatedNumbers = [
+    probe.integer(31, 1),
+    probe.integer(32, 2),
+    probe.integer(33, 3)
+  ];
+  let evaluatedObjects = [
+    probe.object(firstObject, 4),
+    probe.object(secondObject, 5)
+  ];
+
+  assert(probe.trace == 12345 && probe.calls == 5,
+         "ARRAY-D12 literal elements evaluate left-to-right exactly once");
+  assert(evaluatedNumbers[0] == 31 && evaluatedNumbers[2] == 33 &&
+         evaluatedObjects[0] == firstObject && evaluatedObjects[1] == secondObject,
+         "ARRAY-D12 evaluated literals preserve scalar and managed values");
+
+  var inferredReadonly = [40, 41];
+  inferredReadonly = [42];
+  let explicitWritable: int[!] = [43, 44];
+  explicitWritable[0] = 45;
+  assert(inferredReadonly.length() == 1 && inferredReadonly[0] == 42 &&
+         explicitWritable[0] == 45,
+         "ARRAY-D13 binding mutability and element writability remain independent");
+}
+
+/** ARRAY-D14 through D19: exact identity, weakening casts, and writable layers. */
+func g21ArrayCompatibilityBehavior(): void {
+  let shortInts: int[!] = [1];
+  let longInts: int[!] = [2, 3, 4];
+  var currentInts: int[!] = shortInts;
+  currentInts = longInts;
+  let passedInts = g21ArrayIdentityInts(currentInts);
+  passedInts[0] = 20;
+  assert(longInts.length() == 3 && longInts[0] == 20,
+         "ARRAY-D14 equal array types flow across lengths and call boundaries");
+
+  let firstObject = G21ArrayObject { number: 1, text: "first" };
+  let secondObject = G21ArrayObject { number: 2, text: "second" };
+  let objectValues: G21ArrayObject[!] = [firstObject];
+  let passedObjects = g21ArrayIdentityObjects(objectValues);
+  passedObjects[0] = secondObject;
+  assert(objectValues[0] == secondObject && objectValues[0].text == "second",
+         "ARRAY-D14 managed-element arrays preserve reference identity");
+
+  let fullyWritable: int[!][!] = [[5, 6], [7, 8]];
+  let readonlyOuter: int[!][] = (int[!][])fullyWritable;
+  let readonlyInner: int[][!] = (int[][!])fullyWritable;
+  let readonlyBoth: int[][] = (int[][])fullyWritable;
+  fullyWritable[0][0] = 50;
+  fullyWritable[1] = [70, 80];
+  assert(readonlyOuter[0][0] == 50 && readonlyInner[1][0] == 70 &&
+         readonlyBoth[1][1] == 80,
+         "ARRAY-D16 weakening one or more writable layers preserves the instance");
+
+  let dogs: G21ArrayDog[] = [
+    G21ArrayDog { name: "first" },
+    G21ArrayDog { name: "second" }
+  ];
+  let animals = g21ArrayRebuildAnimals(dogs);
+  assert(animals.length() == 2 && animals[0].name == "first" &&
+         animals[1].name == "second",
+         "ARRAY-D17 rebuilds a spec array by adapting individual elements");
+
+  let readonlyMatrix: int[][] = [[1], [2]];
+  let outerWritable: int[][!] = [[3], [4]];
+  let innerWritable: int[!][] = [[5], [6]];
+  let bothWritable: int[!][!] = [[7], [8]];
+  outerWritable[0] = [30, 31];
+  innerWritable[0][0] = 50;
+  bothWritable[0][0] = 70;
+  bothWritable[1] = [80, 81];
+  assert(readonlyMatrix[1][0] == 2 &&
+         outerWritable[0][1] == 31 && innerWritable[0][0] == 50 &&
+         bothWritable[0][0] == 70 && bothWritable[1][1] == 81,
+         "ARRAY-D18 each writable marker governs only its adjacent layer");
+
+  let letWritable: int[!] = [90, 91];
+  let writableAlias = letWritable;
+  letWritable[0] = 92;
+  var varReadonly: int[] = [93];
+  varReadonly = [94, 95];
+  assert(writableAlias[0] == 92 && varReadonly.length() == 2 &&
+         varReadonly[1] == 95,
+         "ARRAY-D19 let may mutate writable elements and var may rebind readonly arrays");
+}
+
+/** ARRAY-D20, D23, D26, and D27: creation paths, lengths, and default values. */
+func g21ArrayCreationBehavior(): void {
+  let probe = G21ArrayProbe { trace: 0, calls: 0 };
+  let zeroLength: int[] = int[:probe.integer(0, 1)];
+  let oneLength: bool[] = bool[:probe.integer(1, 2)];
+  let manyLength: string[] = string[:probe.integer(3, 3)];
+  assert(probe.trace == 123 && probe.calls == 3 &&
+         zeroLength.length() == 0 && oneLength.length() == 1 &&
+         manyLength.length() == 3,
+         "ARRAY-D23 dynamic legal lengths evaluate once and allocate exactly n elements");
+  assert(!oneLength[0] && manyLength[0] == "" && manyLength[2] == "",
+         "ARRAY-D23 bool and string elements receive their zero values");
+
+  let numbers: int[] = int[:2];
+  let modes: G21ArrayMode[] = G21ArrayMode[:2];
+  let explicitModes: G21ArrayExplicitMode[] = G21ArrayExplicitMode[:2];
+  let objects: G21ArrayObject[] = G21ArrayObject[:2];
+  let tuples: G21ArrayTuple[] = G21ArrayTuple[:2];
+  let values: G21ArrayValue[] = G21ArrayValue[:2];
+  let explicitValues: G21ArrayExplicitValue[] = G21ArrayExplicitValue[:2];
+  let genericExplicitModes = g21ArrayDefaults<G21ArrayExplicitMode>(2);
+  let genericExplicitValues = g21ArrayDefaults<G21ArrayExplicitValue>(2);
+  let nestedArrays: int[][] = int[][:2];
+  let boxes: G21ArrayBox<int>[] = G21ArrayBox<int>[:2];
+  assert(numbers[0] == 0 && numbers[1] == 0 &&
+         modes[0] == G21ArrayMode.Zero && modes[1] == G21ArrayMode.Zero &&
+         explicitModes[0] == G21ArrayExplicitMode.Seven &&
+         explicitModes[1] == G21ArrayExplicitMode.Seven &&
+         genericExplicitModes[0] == G21ArrayExplicitMode.Seven &&
+         genericExplicitModes[1] == G21ArrayExplicitMode.Seven,
+         "ARRAY-D23 scalar and enum elements receive their zero values");
+  assert(objects[0].number == 0 && objects[0].text == "" &&
+         objects[1].number == 0 && objects[0] != objects[1],
+         "ARRAY-D27 ordinary object elements receive independent zero values");
+  assert(tuples[0].item1 == 0 && tuples[0].item2 == "" &&
+         values[0].number == 0 && values[0].text == "" &&
+         explicitValues[0].mode == G21ArrayExplicitMode.Seven &&
+         explicitValues[0].count == 0 &&
+         genericExplicitValues[0].mode == G21ArrayExplicitMode.Seven &&
+         genericExplicitValues[1].count == 0 &&
+         nestedArrays[0].length() == 0 && nestedArrays[1].length() == 0 &&
+         boxes[0].value == 0 && boxes[1].value == 0,
+         "ARRAY-D23 tuple value nested-array and generic elements receive zero values");
+
+  let genericInts = g21ArrayDefaults<int>(2);
+  let genericStrings = g21ArrayDefaults<string>(1);
+  assert(genericInts.length() == 2 && genericInts[1] == 0 &&
+         genericStrings.length() == 1 && genericStrings[0] == "",
+         "ARRAY-D20 a type parameter can create arrays of its closed element type");
+
+  let shortGeneric: G21PublicBox<int>[] = G21PublicBox<int>[:1];
+  let aliasGeneric: g21Public.G21PublicBox<int>[] =
+    g21Public.G21PublicBox<int>[:1];
+  let fullGeneric = g21FullPathGenericArray(1);
+  assert(shortGeneric[0].value == 0 && aliasGeneric[0].value == 0 &&
+         fullGeneric[0].value == 0,
+         "ARRAY-D20 public closed generic paths share one element identity");
+
+  let shortPublicModes: G21PublicExplicitMode[] =
+    g21ArrayDefaults<G21PublicExplicitMode>(1);
+  let aliasPublicModes: g21Public.G21PublicExplicitMode[] =
+    g21ArrayDefaults<g21Public.G21PublicExplicitMode>(1);
+  let fullPublicModes = g21FullPathExplicitModeArray(1);
+  let fullPublicValues = g21FullPathExplicitValueArray(1);
+  assert(shortPublicModes[0] == G21PublicExplicitMode.Eleven &&
+         aliasPublicModes[0] == g21Public.G21PublicExplicitMode.Eleven &&
+         fullPublicModes[0] == G21PublicExplicitMode.Eleven &&
+         fullPublicValues[0].mode == G21PublicExplicitMode.Eleven &&
+         fullPublicValues[0].count == 0,
+         "ARRAY-D20/D23 imported default-zero descriptors survive every type path");
+
+  let shortPath: G02Record[] = G02Record[:1];
+  let aliasPath: g21Types.G02Record[] = g21Types.G02Record[:1];
+  let fullPath: fcts_lib.g02_primary.G02Record[] =
+    fcts_lib.g02_primary.G02Record[:1];
+  assert(shortPath[0].value == 0 && aliasPath[0].value == 0 &&
+         fullPath[0].value == 0,
+         "ARRAY-D20 short alias and full paths create the same public element type");
+
+  let inferredCreation = int[:1];
+  let readonlyCreation: int[] = int[:2];
+  let writableCreation: int[!] = int[:2];
+  writableCreation[1] = 26;
+  assert(inferredCreation[0] == 0 && readonlyCreation[1] == 0 &&
+         writableCreation[1] == 26,
+         "ARRAY-D26 the target alone controls array-new writability");
+
+  let recursiveDefaultEmpty: G21RecursiveNode[];
+  let recursiveLiteralEmpty: G21RecursiveNode[] = [];
+  assert(recursiveDefaultEmpty.length() == 0 && recursiveLiteralEmpty.length() == 0,
+         "ARRAY-D27-C empty arrays do not request recursive element zero values");
+}
+
+/** ARRAY-D23-A: every shared-generic storage entry uses the same T default. */
+func g21GenericDefaultZeroBehavior(): void {
+  let localInt = g21ArrayDefaultValue<int>();
+  let localString = g21ArrayDefaultValue<string>();
+  let localMode = g21ArrayDefaultValue<G21ArrayExplicitMode>();
+  let localValue = g21ArrayDefaultValue<G21ArrayExplicitValue>();
+  let localTuple = g21ArrayDefaultValue<G21ArrayTuple>();
+  assert(localInt == 0 && localString == "" &&
+         localMode == G21ArrayExplicitMode.Seven &&
+         localValue.mode == G21ArrayExplicitMode.Seven &&
+         localValue.count == 0 &&
+         localTuple.item1 == 0 && localTuple.item2 == "",
+         "ARRAY-D23-A generic locals use each concrete T language default");
+
+  let intBox = G21ArrayBox<int> {};
+  let stringBox = G21ArrayBox<string> {};
+  let modeBox = G21ArrayBox<G21ArrayExplicitMode> {};
+  let valueBox = G21ArrayBox<G21ArrayExplicitValue> {};
+  let tupleBox = G21ArrayBox<G21ArrayTuple> {};
+  assert(intBox.value == 0 && stringBox.value == "" &&
+         modeBox.value == G21ArrayExplicitMode.Seven &&
+         valueBox.value.mode == G21ArrayExplicitMode.Seven &&
+         valueBox.value.count == 0 &&
+         tupleBox.value.item1 == 0 && tupleBox.value.item2 == "",
+         "ARRAY-D23-A generic instance fields use each concrete T language default");
+
+  assert(G21ArrayDefaultStatic<int>.value == 0 &&
+         G21ArrayDefaultStatic<string>.value == "" &&
+         G21ArrayDefaultStatic<G21ArrayExplicitMode>.value ==
+           G21ArrayExplicitMode.Seven &&
+         G21ArrayDefaultStatic<G21ArrayExplicitValue>.value.mode ==
+           G21ArrayExplicitMode.Seven &&
+         G21ArrayDefaultStatic<G21ArrayTuple>.value.item1 == 0 &&
+         G21ArrayDefaultStatic<G21ArrayTuple>.value.item2 == "",
+         "ARRAY-D23-A generic static fields use each concrete T language default");
+
+  let capturedInt = g21ArrayCapturedDefault<int>();
+  let capturedString = g21ArrayCapturedDefault<string>();
+  let capturedMode = g21ArrayCapturedDefault<G21ArrayExplicitMode>();
+  let capturedValue = g21ArrayCapturedDefault<G21ArrayExplicitValue>();
+  let capturedTuple = g21ArrayCapturedDefault<G21ArrayTuple>();
+  assert(capturedInt == 0 && capturedString == "" &&
+         capturedMode == G21ArrayExplicitMode.Seven &&
+         capturedValue.mode == G21ArrayExplicitMode.Seven &&
+         capturedValue.count == 0 &&
+         capturedTuple.item1 == 0 && capturedTuple.item2 == "",
+         "ARRAY-D23-A generic captures use each concrete T language default");
+}
+
+/** ARRAY-D32 and D33: index evaluation and element value-model behavior. */
+func g21ArrayIndexBehavior(): void {
+  let probe = G21ArrayProbe { trace: 0, calls: 0 };
+  let matrix: int[!][!] = [[10, 11], [20, 21]];
+  let read = probe.matrix(matrix, 1)[probe.integer(1, 2)][probe.integer(0, 3)];
+  assert(probe.trace == 123 && probe.calls == 3 && read == 20,
+         "ARRAY-D32 nested reads evaluate receiver and indexes once in order");
+
+  probe.trace = 0;
+  probe.calls = 0;
+  probe.matrix(matrix, 1)[probe.integer(0, 2)][probe.integer(1, 3)] =
+    probe.integer(99, 4);
+  assert(probe.trace == 1234 && probe.calls == 4 && matrix[0][1] == 99,
+         "ARRAY-D32 writes locate receiver and indexes before evaluating the value");
+
+  matrix[0][0] = 100;
+  matrix[1][1] = 101;
+  assert(matrix[0][0] == 100 && matrix[1][1] == 101,
+         "ARRAY-D31 first and last valid indexes support reads and writes");
+
+  let object = G21ArrayObject { number: 30, text: "reference" };
+  let objectElements: G21ArrayObject[!] = [object];
+  let objectRead = objectElements[0];
+  objectRead.number = 31;
+  assert(objectElements[0].number == 31,
+         "ARRAY-D33 managed element reads preserve reference identity");
+
+  let valueElements: G21ArrayValue[!] = [
+    G21ArrayValue { number: 40, text: "value" }
+  ];
+  var valueRead = valueElements[0];
+  valueRead.number = 41;
+  assert(valueElements[0].number == 40 && valueRead.number == 41,
+         "ARRAY-D33 aggregate element reads preserve value-copy semantics");
+  valueElements[0] = G21ArrayValue { number: 42, text: "replacement" };
+
+  let tupleElements: G21ArrayTuple[!] = [(50, "tuple")];
+  tupleElements[0] = (51, "replaced");
+  let genericElements: G21ArrayBox<int>[!] = [G21ArrayBox<int> { value: 60 }];
+  genericElements[0] = G21ArrayBox<int> { value: 61 };
+  assert(valueElements[0].number == 42 && valueElements[0].text == "replacement" &&
+         tupleElements[0].item1 == 51 && tupleElements[0].item2 == "replaced" &&
+         genericElements[0].value == 61,
+         "ARRAY-D33 writable arrays replace aggregate tuple and generic elements");
+}
+
+/** Execute G21's independent array-language behavior coverage. */
+open func test_g21_array_semantics(): void {
+  describe("G21 array language semantics", () {
+    test("ARRAY-D04 deep source types", () {
+      g21ArrayDeepTypeBehavior();
+    });
+
+    test("ARRAY-D07-D13 literals and targets", () {
+      g21ArrayLiteralBehavior();
+    });
+
+    test("ARRAY-D14-D19 compatibility and writable layers", () {
+      g21ArrayCompatibilityBehavior();
+    });
+
+    test("ARRAY-D20-D27 creation and zero values", () {
+      g21ArrayCreationBehavior();
+    });
+
+    test("ARRAY-D23-A shared generic default-zero entries", () {
+      g21GenericDefaultZeroBehavior();
+    });
+
+    test("ARRAY-D31-D33 indexing and value models", () {
+      g21ArrayIndexBehavior();
+    });
+  });
+}

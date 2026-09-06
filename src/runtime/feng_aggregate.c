@@ -1,6 +1,7 @@
 /* By-value aggregate value lifecycle (docs/engineering/feng-value-model-delivered.md §5).
  *
- * The five public APIs (retain / release / assign / take / default_init) are
+ * The five public APIs (retain / release / assign / take /
+ * default_zero_init) are
  * all implemented on top of a single internal walker that recursively
  * descends FengManagedSlotDescriptor tables, dispatching only on
  * FengManagedSlotKind. Adding a new by-value aggregate type therefore
@@ -206,29 +207,33 @@ void feng_aggregate_take(void *dst, void *src,
     feng_visit_aggregate_managed_slots(src, desc, visit_null_out, NULL);
 }
 
-void feng_aggregate_default_init(void *value_out,
-                                 const FengAggregateDescriptor *desc) {
-    feng_aggregate_assert_desc(desc, "feng_aggregate_default_init");
-    feng_aggregate_assert_value(value_out, "feng_aggregate_default_init");
-    if (desc->default_init == NULL) {
-        feng_panic("feng_aggregate_default_init: '%s' has no default policy",
+/* Apply the aggregate descriptor's language-default-zero policy. This helper
+ * deliberately distinguishes the zero-byte fast path from custom aggregate
+ * initialization so callers such as array allocation can avoid unnecessary
+ * per-element callbacks. User constructors are never part of this operation. */
+void feng_aggregate_default_zero_init(void *value_out,
+                                      const FengAggregateDescriptor *desc) {
+    feng_aggregate_assert_desc(desc, "feng_aggregate_default_zero_init");
+    feng_aggregate_assert_value(value_out, "feng_aggregate_default_zero_init");
+    if (desc->default_zero_init == NULL) {
+        feng_panic("feng_aggregate_default_zero_init: '%s' has no default-zero policy",
                    desc->name != NULL ? desc->name : "<unknown>");
     }
 
-    switch (desc->default_init->kind) {
+    switch (desc->default_zero_init->kind) {
         case FENG_DEFAULT_ZERO_BYTES:
             memset(value_out, 0, desc->size);
             return;
         case FENG_DEFAULT_INIT_FN:
-            if (desc->default_init->init_fn == NULL) {
-                feng_panic("feng_aggregate_default_init: '%s' missing init_fn",
+            if (desc->default_zero_init->init_fn == NULL) {
+                feng_panic("feng_aggregate_default_zero_init: '%s' missing init_fn",
                            desc->name != NULL ? desc->name : "<unknown>");
             }
-            desc->default_init->init_fn(value_out);
+            desc->default_zero_init->init_fn(value_out);
             return;
         default:
-            feng_panic("feng_aggregate_default_init: unknown default kind %d in '%s'",
-                       (int)desc->default_init->kind,
+            feng_panic("feng_aggregate_default_zero_init: unknown default kind %d in '%s'",
+                       (int)desc->default_zero_init->kind,
                        desc->name != NULL ? desc->name : "<unknown>");
     }
 }

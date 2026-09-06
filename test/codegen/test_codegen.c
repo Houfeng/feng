@@ -2315,7 +2315,7 @@ static void test_object_spec_default_initialization_uses_fresh_subjects(void) {
     ASSERT(count_substr_in_span(
                run_start,
                run_end,
-               "feng_aggregate_default_init(") == 2U);
+               "feng_aggregate_default_zero_init(") == 2U);
     ASSERT(span_contains(
         run_start,
         run_end,
@@ -11097,7 +11097,7 @@ static void test_if_expr_aggregate_result_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_aggregate_default_init(&_ifv") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_default_zero_init(&_ifv") != NULL);
     ASSERT(strstr(out.c_source, "feng_aggregate_assign(&_ifv") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -11153,7 +11153,7 @@ static void test_match_expr_aggregate_result_codegen(void) {
         ASSERT(cg_ok);
     }
     ASSERT(out.c_source != NULL);
-    ASSERT(strstr(out.c_source, "feng_aggregate_default_init(&_ifv") != NULL);
+    ASSERT(strstr(out.c_source, "feng_aggregate_default_zero_init(&_ifv") != NULL);
     ASSERT(strstr(out.c_source, "feng_aggregate_assign(&_ifv") != NULL);
     compile_generated_c_or_die(out.c_source);
 
@@ -11288,11 +11288,11 @@ static void test_generic_expression_join_result_codegen(void) {
     }
     ASSERT(out.c_source != NULL);
     ASSERT(count_substr(out.c_source,
-                        "feng_aggregate_default_init(_ifv") >= 2U);
+                        "feng_aggregate_default_zero_init(_ifv") >= 2U);
     ASSERT(count_substr(out.c_source,
                         "feng_aggregate_assign(_ifv") >= 4U);
     ASSERT(strstr(out.c_source,
-                  "feng_aggregate_default_init(_tryv") != NULL);
+                  "feng_aggregate_default_zero_init(_tryv") != NULL);
     ASSERT(strstr(out.c_source,
                   "feng_aggregate_assign(_tryv") != NULL);
     ASSERT(strstr(out.c_source,
@@ -16730,13 +16730,13 @@ static void test_g20_tuple_value_layout_and_default_zero_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "Feng__g20__tuple_codegen__Pair__aggregate_default__init") != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_aggregate_default_init(&_l_pair_0, "
+                  "feng_aggregate_default_zero_init(&_l_pair_0, "
                   "&Feng__g20__tuple_codegen__Pair__aggregate_desc)") != NULL);
     ASSERT(strstr(out.c_source,
                   "struct Feng__g20__tuple_codegen__Unit _l_unit_1 = "
                   "(struct Feng__g20__tuple_codegen__Unit){0}") != NULL);
     ASSERT(strstr(out.c_source,
-                  "feng_aggregate_default_init(&_obj1->pair, "
+                  "feng_aggregate_default_zero_init(&_obj1->pair, "
                   "&Feng__g20__tuple_codegen__Pair__aggregate_desc)") != NULL);
     ASSERT(strstr(out.c_source,
                   "FengTypeDesc__g20__tuple_codegen__Pair") == NULL);
@@ -16751,9 +16751,431 @@ static void test_g20_tuple_value_layout_and_default_zero_codegen(void) {
     feng_program_free(program);
 }
 
+/* ARRAY-D22/ARRAY-D24/ARRAY-D28/ARRAY-D31: constant-valid lengths carry no
+ * runtime range check, dynamic lengths carry exactly one pre-narrowing check,
+ * and only wide indexes on a narrow target replace the existing helper with
+ * one pre-narrowing bounds comparison. */
+static void test_g21_array_length_and_index_codegen(void) {
+    static const char *source =
+        "module g21.array_bounds_codegen;\n"
+        "type Item { open var value: i32; }\n"
+        "func observeSize(count: u64): u64 { return count; }\n"
+        "func constantSize(): i32[] { return i32[:3]; }\n"
+        "func dynamicSize(count: u64): Item[] { return Item[:observeSize(count)]; }\n"
+        "func read(values: i32[], index: i64): i32 { return values[index]; }\n"
+        "func write(values: i32[!], index: u64): void { values[index] = 7; }\n";
+    static const size_t pointer_sizes[] = {4U, 8U};
+
+    for (size_t pointer_index = 0U;
+         pointer_index < sizeof(pointer_sizes) / sizeof(pointer_sizes[0]);
+         ++pointer_index) {
+        FengProgram *program = parse_or_die(
+            source, "tests/g21_array_bounds_codegen.ff");
+        const FengProgram *programs[] = {program};
+        FengSemanticAnalyzeOptions options;
+        FengSemanticAnalysis *analysis = NULL;
+        FengSemanticError *errors = NULL;
+        size_t error_count = 0U;
+        FengCodegenOutput output = {0};
+        FengCodegenError codegen_error = {0};
+        const char *body_start;
+        const char *body_end;
+
+        memset(&options, 0, sizeof(options));
+        options.target = FENG_COMPILE_TARGET_LIB;
+        options.pointer_size = pointer_sizes[pointer_index];
+        ASSERT(feng_semantic_analyze_with_options(programs,
+                                                  1U,
+                                                  &options,
+                                                  &analysis,
+                                                  &errors,
+                                                  &error_count));
+        ASSERT(errors == NULL);
+        ASSERT(error_count == 0U);
+        ASSERT(feng_codegen_emit_program(analysis,
+                                         FENG_COMPILE_TARGET_LIB,
+                                         NULL,
+                                         &output,
+                                         &codegen_error));
+        ASSERT(output.c_source != NULL);
+
+        ASSERT(find_generated_function_body(output.c_source,
+                                            "__constantSize__from__",
+                                            &body_start,
+                                            &body_end));
+        ASSERT(!span_contains(body_start,
+                              body_end,
+                              "array size is outside the valid target int range"));
+        ASSERT(!span_contains(body_start, body_end, "_raw_n"));
+
+        ASSERT(find_generated_function_body(output.c_source,
+                                            "__dynamicSize__from__",
+                                            &body_start,
+                                            &body_end));
+        ASSERT(count_substr_in_span(
+                   body_start,
+                   body_end,
+                   "array size is outside the valid target int range") == 1U);
+        ASSERT(count_substr_in_span(body_start, body_end, "uint64_t _raw_n") == 1U);
+        ASSERT(count_substr_in_span(body_start,
+                                    body_end,
+                                    "__observeSize__from__") == 1U);
+        ASSERT(span_contains(body_start,
+                             body_end,
+                             pointer_sizes[pointer_index] == 4U
+                                 ? "UINT64_C(2147483647)"
+                                 : "UINT64_C(9223372036854775807)"));
+        {
+            const char *range_check = strstr(
+                body_start,
+                "array size is outside the valid target int range");
+            const char *allocation = strstr(body_start, "feng_array_new(");
+            const char *element_default = strstr(
+                body_start,
+                "Feng__g21__array_bounds_codegen__Item__default_zero()");
+
+            ASSERT(range_check != NULL && range_check < body_end);
+            ASSERT(allocation != NULL && allocation < body_end);
+            ASSERT(element_default != NULL && element_default < body_end);
+            ASSERT(range_check < allocation);
+            ASSERT(allocation < element_default);
+        }
+
+        ASSERT(find_generated_function_body(output.c_source,
+                                            "__read__from__",
+                                            &body_start,
+                                            &body_end));
+        if (pointer_sizes[pointer_index] == 4U) {
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "feng_array_length(") == 1U);
+            ASSERT(!span_contains(body_start,
+                                  body_end,
+                                  "feng_array_check_index("));
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "uint64_t _raw_idx") == 1U);
+        } else {
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "feng_array_check_index(") == 1U);
+            ASSERT(!span_contains(body_start, body_end, "_raw_idx"));
+        }
+
+        ASSERT(find_generated_function_body(output.c_source,
+                                            "__write__from__",
+                                            &body_start,
+                                            &body_end));
+        if (pointer_sizes[pointer_index] == 4U) {
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "feng_array_length(") == 1U);
+            ASSERT(!span_contains(body_start,
+                                  body_end,
+                                  "feng_array_check_index("));
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "uint64_t _raw_idx") == 1U);
+        } else {
+            ASSERT(count_substr_in_span(body_start,
+                                        body_end,
+                                        "feng_array_check_index(") == 1U);
+            ASSERT(!span_contains(body_start, body_end, "_raw_idx"));
+        }
+        compile_generated_c_or_die(output.c_source);
+
+        feng_codegen_output_free(&output);
+        feng_codegen_error_free(&codegen_error);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* ARRAY-D09: an array declaration supplies the named tuple target required
+ * by every tuple-literal element; lowering materializes Pair values and uses
+ * the aggregate-element array path without asking raw tuple emission to infer
+ * an anonymous tuple type. */
+static void test_g21_tuple_literal_array_element_target_codegen(void) {
+    static const char *source =
+        "module g21.tuple_array_target_codegen;\n"
+        "type Pair(i32, string);\n"
+        "func first(): i32 {\n"
+        "  let values: Pair[!] = [(1, \"x\")];\n"
+        "  return values[0].item1;\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "tests/g21_tuple_array_target_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__first__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(span_contains(
+        body_start,
+        body_end,
+        "struct Feng__g21__tuple_array_target_codegen__Pair _tuple"));
+    ASSERT(span_contains(
+        body_start,
+        body_end,
+        "feng_array_new_kinded(FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, "
+        "&Feng__g21__tuple_array_target_codegen__Pair__aggregate_desc"));
+    ASSERT(span_contains(
+        body_start,
+        body_end,
+        "feng_aggregate_assign(&_slots"));
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* ARRAY-D23/ARRAY-D27: array-new delegates every non-zero-byte language
+ * default to the existing concrete or reified default initializer while
+ * scalar-zero and aggregate runtime paths stay specialized. */
+static void test_g21_array_new_element_defaults_codegen(void) {
+    static const char *source =
+        "module g21.array_element_defaults_codegen;\n"
+        "enum Status { Ready = 7, Waiting = 9 }\n"
+        "@value type Marker { var state: Status; var count: i32; }\n"
+        "type Item { open var name: string; }\n"
+        "type Box<T> { open var value: T; open static let shared: T; }\n"
+        "type Pair(i32, string);\n"
+        "spec Reader<T>(): T;\n"
+        "func defaults(count: i32): void {\n"
+        "  let numbers = i32[:count];\n"
+        "  let names = string[:count];\n"
+        "  let states = Status[:count];\n"
+        "  let markers = Marker[:count];\n"
+        "  let items = Item[:count];\n"
+        "  let pairs = Pair[:count];\n"
+        "}\n"
+        "func scalarDefaults(count: i32): i32[] { return i32[:count]; }\n"
+        "func genericDefaults<T>(count: i32): T[] { return T[:count]; }\n"
+        "func localDefault<T>(): T { let value: T; return value; }\n"
+        "func capturedDefault<T>(): T {\n"
+        "  let value: T;\n"
+        "  let reader: Reader<T> = () -> value;\n"
+        "  return reader();\n"
+        "}\n";
+    FengProgram *program = parse_or_die(
+        source, "tests/g21_array_element_defaults_codegen.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    const char *body_start;
+    const char *body_end;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis,
+                                     FENG_COMPILE_TARGET_LIB,
+                                     NULL,
+                                     &output,
+                                     &codegen_error));
+    ASSERT(output.c_source != NULL);
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__defaults__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(span_contains(body_start, body_end, "feng_string_default()"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "FengEnum__g21__array_element_defaults_codegen__Status__Ready"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         ".state = FengEnum__g21__array_element_defaults_codegen__Status__Ready"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "Feng__g21__array_element_defaults_codegen__Item__default_zero()"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "Feng__g21__array_element_defaults_codegen__Pair__aggregate_desc"));
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__scalarDefaults__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(!span_contains(body_start, body_end, "_slots"));
+    ASSERT(!span_contains(body_start, body_end, "default_zero_init"));
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__genericDefaults_G__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "case FENG_VALUE_TRIVIAL:") == 1U);
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "case FENG_VALUE_MANAGED_POINTER:") == 1U);
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "->default_zero_init->kind") >= 2U);
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "->default_zero_init(") == 1U);
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__localDefault_G__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(count_substr_in_span(body_start,
+                                body_end,
+                                "case FENG_VALUE_TRIVIAL:") >= 1U);
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init->init_fn"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init("));
+    ASSERT(find_generated_function_body(output.c_source,
+                                        "__capturedDefault_G__from__",
+                                        &body_start,
+                                        &body_end));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "generic trivial value has no default-zero policy"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "generic managed value has no default-zero initializer"));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "FengGenericDefaultZeroInit__g21__array_element_defaults_codegen__Box__G1",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init->init_fn"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init("));
+    ASSERT(find_generated_function_body(
+        output.c_source,
+        "FengGenericStaticEnsure__g21__array_element_defaults_codegen__Box__s0__shared",
+        &body_start,
+        &body_end));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init->init_fn"));
+    ASSERT(span_contains(body_start,
+                         body_end,
+                         "->default_zero_init("));
+    ASSERT(strstr(output.c_source,
+                  "FengTrivialDescriptor FengEnumDesc__g21__array_element_defaults_codegen__Status") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".default_zero_init = &FengEnumDesc__g21__array_element_defaults_codegen__Status__default_zero_init") != NULL);
+    ASSERT(strstr(output.c_source,
+                  "FengTrivialDescriptor Feng__g21__array_element_defaults_codegen__Marker__trivial_desc") != NULL);
+    ASSERT(strstr(output.c_source,
+                  ".default_zero_init = &Feng__g21__array_element_defaults_codegen__Marker__aggregate_default") != NULL);
+    compile_generated_c_or_die(output.c_source);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
+/* ARRAY-D27-D: a deliberately corrupted post-Semantic AST proves that the
+ * Codegen fallback is an IE at the element type, never a NULL-filled array. */
+static void test_g21_array_new_default_zero_codegen_defense(void) {
+    static const char *source =
+        "module g21.array_default_defense;\n"
+        "type Safe {}\n"
+        "type Node { open var next: Node; }\n"
+        "func make(): Safe[] { return Safe[:1]; }\n";
+    FengProgram *program = parse_or_die(
+        source, "tests/g21_array_default_defense.ff");
+    const FengProgram *programs[] = {program};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError codegen_error = {0};
+    FengExpr *array_new;
+
+    ASSERT(feng_semantic_analyze(programs,
+                                 1U,
+                                 FENG_COMPILE_TARGET_LIB,
+                                 &analysis,
+                                 &errors,
+                                 &error_count));
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
+    ASSERT(program->declaration_count == 3U);
+    ASSERT(program->declarations[2]->kind == FENG_DECL_FUNCTION);
+    ASSERT(program->declarations[2]->as.function_decl.body->statement_count == 1U);
+    array_new = program->declarations[2]
+                    ->as.function_decl.body->statements[0]
+                    ->as.return_value;
+    ASSERT(array_new != NULL && array_new->kind == FENG_EXPR_ARRAY_NEW);
+    ASSERT(array_new->as.array_new.element_type->kind == FENG_TYPE_REF_NAMED);
+    array_new->as.array_new.element_type->as.named.segments[0] =
+        program->declarations[1]->as.type_decl.name;
+
+    ASSERT(!feng_codegen_emit_program(analysis,
+                                      FENG_COMPILE_TARGET_LIB,
+                                      NULL,
+                                      &output,
+                                      &codegen_error));
+    ASSERT(codegen_error.code != NULL);
+    ASSERT(strcmp(codegen_error.code, "IE0002") == 0);
+    ASSERT(codegen_error.token.line == 4U);
+    ASSERT(codegen_error.token.column == 30U);
+    ASSERT(codegen_error.token.length == strlen("Safe"));
+    ASSERT(memcmp(codegen_error.token.lexeme,
+                  "Safe",
+                  codegen_error.token.length) == 0);
+    ASSERT(strstr(codegen_error.message,
+                  "semantic analysis accepted a default-zero request for non-terminating type 'Node'") != NULL);
+    ASSERT(output.c_source == NULL);
+
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&codegen_error);
+    feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g21_array_length_and_index_codegen();
+    test_g21_tuple_literal_array_element_target_codegen();
+    test_g21_array_new_element_defaults_codegen();
+    test_g21_array_new_default_zero_codegen_defense();
     test_g20_tuple_value_layout_and_default_zero_codegen();
     test_g19_local_enum_fixed_i32_codegen();
     test_g19_imported_enum_fixed_i32_codegen();

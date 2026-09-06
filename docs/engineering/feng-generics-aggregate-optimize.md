@@ -22,7 +22,7 @@
 
 1. `FengValueKind` 已把值模型收敛为三分类：`FENG_VALUE_TRIVIAL`、`FENG_VALUE_MANAGED_POINTER`、`FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS`。
 2. `FengGenericParamDescriptor` 已具备 generic shared body 所需的最小通用信息：`size`、`kind`、`type_kind`、`aggregate`、`witness`。
-3. aggregate 生命周期 API 已经固定为：`feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take`、`feng_aggregate_default_init`。
+3. aggregate 生命周期 API 已经固定为：`feng_aggregate_retain`、`feng_aggregate_release`、`feng_aggregate_assign`、`feng_aggregate_take`、`feng_aggregate_default_zero_init`。
 4. aggregate walker 已经只消费静态 slot 描述符，不按类型种类分派。
 5. object-form `spec` 作为 aggregate 的现有接入，已经证明 generic descriptor、aggregate return、aggregate field、if/match aggregate result 这些路径可以工作。
 

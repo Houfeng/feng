@@ -175,13 +175,13 @@ FENG_SPEC_COERCION_FORM_OBJECT  →  保持（用于 spec 贴合）
 ```c
 /* codegen 为每个具名元组实例化 emitted 的静态描述符（参照对象类型的 emit 路径）*/
 static const FengManagedSlotDescriptor MyTuple_slots[] = { ... };
-static const FengAggregateDefaultInitDescriptor MyTuple_default_init = {
+static const FengDefaultZeroInitDescriptor MyTuple_default_zero_init = {
     .kind = FENG_DEFAULT_ZERO_BYTES   /* 或 FENG_DEFAULT_INIT_FN 若含 string 元素 */
 };
 static const FengAggregateValueDescriptor MyTuple_aggregate = {
     .name              = "MyTuple",
     .size              = sizeof(MyTuple_t),
-    .default_init      = &MyTuple_default_init,
+    .default_zero_init = &MyTuple_default_zero_init,
     .managed_slot_count = ...,
     .managed_slots     = MyTuple_slots
 };
@@ -244,7 +244,7 @@ typedef struct { float item1; float item2; } Point_t;
 static const FengManagedSlotDescriptor Point_slots[] = {/* 无托管槽，float 是 trivial */};
 static const FengAggregateValueDescriptor Point_agg = {
     .name = "Point", .size = sizeof(Point_t),
-    .default_init = &(FengAggregateDefaultInitDescriptor){ .kind = FENG_DEFAULT_ZERO_BYTES },
+    .default_zero_init = &(FengDefaultZeroInitDescriptor){ .kind = FENG_DEFAULT_ZERO_BYTES },
     .managed_slot_count = 0, .managed_slots = Point_slots
 };
 ```
