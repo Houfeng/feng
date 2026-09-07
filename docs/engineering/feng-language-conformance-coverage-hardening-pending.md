@@ -3130,8 +3130,9 @@ consumer 仅通过 package-public `.ft` 读取声明，并作同等诊断检查�
 原有 SPEC01～SPEC06 保留编号并细化，新增 SPEC07～SPEC28。每项先映射已有证据；只有缺少规范边界、
 精确诊断或运行断言时才新增，不机械穷举同构排列。G12 已覆盖的 spec／fit 语法仍按 Parser 阶段
 验收，G15 的普通函数调用／重载及 G18 的普通成员访问可以映射已有证据。union／intersection 自身
-的声明、成员选择和组合规则归 G24；泛型实参数量、约束与推导专项归 G25，G23 只覆盖适配检查所需的
-合法 owner 实参替换和具体实现身份。spec 方法值按 SPEC20 映射对应专项，不重做其全部泛型组合。
+的声明、成员选择、组合及其特有的泛型约束规则归 G24；通用泛型实参数量、约束与推导专项归 G25，
+G23 只覆盖适配检查所需的合法 owner 实参替换和具体实现身份。spec 方法值按 SPEC20 映射对应专项，
+不重做其全部泛型组合。
 
 合法行为放入 `fcts/`，诊断、AST、关系／实现选择和发码结构放入 `test/`。跨包必须使用真实
 package-public `.ft` 往返及 consumer，不能仅把同一批源码拆成几个模块充当跨包证据；制品只是
@@ -3376,41 +3377,284 @@ program 实际属于同包三模块，原断言“孤儿 info + 降级”与按�
 
 ## 28 G24：复合类型诊断
 
-### 28.1 测试重点
+### 28.1 测试重点与范围
 
-验证 union 和 intersection 所构成的复合类型在声明、类型关系和成员访问中产生的稳定 Semantic 诊断。
+验证 union／intersection 的声明、类型关系、成员使用和作为泛型约束时的复合类型规则，补齐非法
+程序的前端拒绝证据与合法程序的可观察行为证据。依据为
+[`spec` 主规范](../specifications/feng-spec.md)、
+[联合类型主规范](../specifications/feng-union-type.md)、
+[泛型主规范](../specifications/feng-generics-draft.md)、
+[流程控制主规范](../specifications/feng-flow.md)、
+[函数主规范](../specifications/feng-function.md)、
+[内建类型主规范](../specifications/feng-builtin-type.md)、
+[可见性主规范](../specifications/feng-visibility.md)及
+[AE 诊断清单](../specifications/feng-error-codes-ae.md)。以下内容是测试验收条件，不另行定义语言规则。
+
+原有 COMPOSITE01～COMPOSITE06 保留编号并细化，新增 COMPOSITE07～COMPOSITE32。应区分三种
+独立测试对象：复合类型自身带泛参，例如 `Choice<T>`；复合类型被用作约束，例如 `U: Choice<T>`；
+复合类型自身的 owner 泛参带约束，例如 `Choice<T: Named>`。仅验证第一种声明能够实例化，不代表
+已经验证第二种约束的准入与泛型体内使用。
+
+G24 负责 union／intersection 特有的约束满足、收窄、合并成员和约束转传；G25 负责通用泛参声明、
+实参数量、显式实例化、推导和约束机制。G12 的语法、G13 的绑定作用域、G17 的分支结果路径、
+G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择优先映射既有证据，不重做整组。
+复合类型出现在上述入口时仍要有直接证据，不能因通用规则已有测试便省略复合类型特有分支。
+
+正向语言行为放入 `fcts/`；诊断、AST、进入路径、完整 requirement 身份、witness 与发码结构放入
+`test/`。跨包以真实 package-public `.ft` 导出、重新加载和 consumer 为证据，不以同一次分析中的
+多模块源码代替；制品只用作语言验证载体，不扩展为格式或发布专项。不增加运行时类型搜索、动态
+约束检查、额外装箱或重复分派，不借此改变默认零值、值复制、ARC、公开 ABI、runtime 私有 ABI
+或 `.ft` 格式；若补测暴露必须改变这些边界的缺陷，先记录并取得对应人工批准。
+
+#### 28.1.1 现有证据与补齐方式
+
+2026-09-07 静态盘点已确认以下测试入口；这只证明已有相关覆盖，不代表每个 TODO 已验收，也不
+代表本轮重新运行了测试。实施时须细化到具体函数或 `test(...)` 块及其断言，满足要求的格子记录
+“复用”，缺少精确诊断或运行断言的格子新增补充用例，不直接修改旧用例。
+
+- Parser：[`test_parser.c`](../../test/parser/test_parser.c) 的
+  `test_union_spec_declaration_parses`、`test_intersection_spec_declaration_parses`、
+  `test_union_spec_rejects_void_member` 和 `test_g12_enum_spec_and_fit_syntax` 已有声明形态证据。
+- Semantic：[`test_semantic.c`](../../test/semantic/test_semantic.c) 的
+  `test_union_form_spec_records_normalized_members`、`test_nested_union_leaf_assignment_records_path`、
+  `test_nested_union_ambiguous_path_rejected`、`test_nested_union_cycle_rejected`，以及
+  `test_intersection_spec_*`、`test_intersection_satisfaction_*` 已覆盖部分成员合法性、归一化、
+  路径、冲突与满足检查。部分旧例只断言消息片段或 `error_count >= 1`，不能据此勾选精确诊断验收。
+- 联合行为：[`test_union.ff`](../../fcts/fcts_bin/src/test_union.ff)、
+  [`test_nested_union.ff`](../../fcts/fcts_bin/src/test_nested_union.ff) 和
+  [`test_union_spec_leaf_coercion.ff`](../../fcts/fcts_bin/src/test_union_spec_leaf_coercion.ff)
+  已有进入、绑定收窄、链式匹配、默认值、object／callable member 与叶子转换证据。注释掉的测试
+  不计覆盖；仅在预期分支中 `assert(true)`、其他路径不失败的测试不能独立证明正确命中。
+- 交叉行为：[`test_intersection.ff`](../../fcts/fcts_bin/src/test_intersection.ff)、
+  [`test_intersection_generic.ff`](../../fcts/fcts_bin/src/test_intersection_generic.ff) 已覆盖具名
+  交叉视角、泛型约束方法／字段、多个具体 subject 和多个受约束参数；
+  [`test_intersection_static_method_call.ff`](../../fcts/fcts_bin/src/test_intersection_static_method_call.ff)、
+  [`test_intersection_spec_method_value.ff`](../../fcts/fcts_bin/src/test_intersection_spec_method_value.ff)、
+  [`test_intersection_generic_method_value.ff`](../../fcts/fcts_bin/src/test_intersection_generic_method_value.ff)及
+  [`test_intersection_static_method_value.ff`](../../fcts/fcts_bin/src/test_intersection_static_method_value.ff)
+  另有静态调用、方法值、可见性和跨包证据，应与各自 Semantic／Codegen 反例映射，不重复整套专项。
+- 泛型复合约束：[`test_generic_composition_coverage.ff`](../../fcts/fcts_bin/src/test_generic_composition_coverage.ff)、
+  [`test_generic_advanced_composition_coverage.ff`](../../fcts/fcts_bin/src/test_generic_advanced_composition_coverage.ff)
+  的 provider／consumer 已有命名交叉约束与联合约束具体成员传入、返回的行为证据，后者覆盖标量、
+  引用和含受管字段的值类型；[`test_generic_spec_owner_constraint.ff`](../../fcts/fcts_bin/src/test_generic_spec_owner_constraint.ff)
+  另有复合 spec 的 owner 约束恢复证据。不得把这些合法程序当成“不满足复合约束必被拒绝”的反向证据。
+- 编译器承载：[`test_codegen.c`](../../test/codegen/test_codegen.c) 的
+  `test_generic_union_constraint_omits_runtime_witness_codegen` 已断言 union 约束不物化 witness；
+  `test_generic_intersection_spec_codegen` 及交叉方法值专项已有 merged witness 证据。
+  [`test_symbol.c`](../../test/symbol/test_symbol.c) 的
+  `test_union_spec_ft_roundtrip_preserves_normalized_members`、
+  `test_intersection_spec_ft_roundtrip_preserves_members` 和
+  `test_constrained_generic_intersection_method_value_ft_roundtrip` 已有真实 `.ft` 恢复证据，
+  但不能代替 consumer 非法使用的精确诊断或跨包运行断言。
+
+#### 28.1.2 实施前需 Review 的事项
+
+- [ISSUE-G24-001](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-001union-泛型约束的准入边界与检查覆盖待核对)：
+  联合规范“实参必须是 member”的文字与既有整个 union 值传入测试不一致；调用约束检查的一处
+  union 分支也尚未执行实参资格校验。先确定准入边界，再以最小反例核验各入口，不能把该分支的
+  静态事实直接等同于“所有非法实参均会被接受”。COMPOSITE23／COMPOSITE27 的相关边界待决策。
+- [ISSUE-G24-002](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-002union-进入路径的固定容量与无深度上限规范不一致)：
+  已静态确认 union 进入路径最多保存 8 段并存在截断；COMPOSITE10 必须覆盖容量边界两侧并验证
+  完整路径，实施时先复现实际影响，再提交修复范围。不得自行把实现容量改写为语言深度限制。
+- [ISSUE-G24-003](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-003intersection-同名字段组合缺少明确的主规范验收依据)：
+  主规范明确了交叉方法去重及 object-form 父字段同名冲突，但没有明确两个独立 object member
+  的同名字段在交叉中如何合并／拒绝及在哪个阶段诊断。COMPOSITE20 单列该组合，先由人工确认，
+  不从历史设计笔记或 getter／setter 的实现方式推导新语言规则。
+
+本次仅细化计划和问题记录，未授权修改产品实现或既有用例。上述问题及实施期间新发现的问题均按
+第 30 节处理；涉及预期不确定的用例在决策前保持待实施，不按当前实现反推语言规则。
 
 ### 28.2 用例 TODO
 
-- [ ] COMPOSITE01：union 声明或组成类型不合法；
-- [ ] COMPOSITE02：intersection 声明或组成类型不合法；
-- [ ] COMPOSITE03：值不满足 union 类型关系；
-- [ ] COMPOSITE04：值不满足 intersection 类型关系；
-- [ ] COMPOSITE05：复合类型成员访问不合法；
-- [ ] COMPOSITE06：对应复合类型关系的最小合法邻界程序。
+#### 28.2.1 原有用例细化
+
+- [ ] COMPOSITE01：union 声明分别覆盖未知 member、`void` member 和 intersection member；
+  `void` 源码目前由 Parser 拒绝，名称／已解析 form 错误由 Semantic 拒绝，不为取得 AE 码绕过
+  Parser 人工构造非法 AST。每例只引入一个根因，并与替换为合法 member 的邻界程序配对；非法
+  声明未被使用也应失败。重复 member 由 COMPOSITE08 验证去重，不列为非法声明。
+- [ ] COMPOSITE02：intersection 的组成项分别使用普通 type、内建类型、数组、callable spec、
+  union spec 和未知名称，验证不符合 object／intersection form 要求时被前端拒绝；合法普通
+  object spec、泛型 object spec 实例及嵌套 intersection 作为邻界。块体、缺项与内联语法归
+  COMPOSITE07，不能用语法失败代替成员解析与 form 检查。
+- [ ] COMPOSITE03：源值既非目标 union 的精确 member，也不存在规范允许的进入路径时必须拒绝。
+  初始化、重新赋值、实参、返回、字段写入和数组元素写入分别建立正反例；反例只改变源类型或
+  目标 member，使失败确属进入资格，不混入绑定不可写等其他错误。泛型约束准入另见 COMPOSITE23。
+- [ ] COMPOSITE04：进入 intersection 视角必须名义满足其全部组成契约，分别覆盖全部满足、只缺
+  一个、全部不满足，以及成员结构相同但未声明名义关系。以只补齐缺失关系及必要实现后通过的程序
+  配对；覆盖初始化、赋值、参数、返回、字段／数组存储入口，不把编译某个单独 object spec 的
+  成功当成完整交叉满足证据。泛型闭合实例不得串用，见 COMPOSITE25。
+- [ ] COMPOSITE05：union 未收窄时分别拒绝字段读写、方法调用、方法值形成及 `==`／`!=`；即使
+  各 member 恰有同名成员也不放宽。intersection 值分别拒绝不存在的成员、经实例视角访问静态
+  成员及以 `match` 做 union 式收窄。每项配对合法收窄／正确成员视角；约束体中的同类检查另由
+  COMPOSITE24／COMPOSITE26 验证，不能只测试普通局部变量。
+- [ ] COMPOSITE06：在 FCTS 为两种 form 的合法声明、进入、参数传递、返回和成员使用提供最小运行
+  程序，断言选中成员、有效载荷、调用结果及可变状态。代表性 subject 覆盖内建标量、string、
+  引用 type、`@value type`、具名 tuple、enum 和数组的适用格；联合另覆盖 object／callable
+  spec member。交叉场景须先有合法名义关系，不为凑类型矩阵给不适用目标添加字段或特殊能力。
+
+#### 28.2.2 声明、归一化与联合进入路径
+
+- [ ] COMPOSITE07：声明语法分别覆盖缺失 `|`／`&` 后的项、缺少结束分号、错误块体、企图添加
+  自有成员及在类型位置内联组合；对照合法具名 form 的 AST。区分源码列表缺项和合法列表去重，
+  不把 object-form 的逗号父列表当成 union。`type`／`fit` 直接列出 union／intersection、
+  object spec 以它们作父项的拒绝证据映射 G23；完整断言不足时只新增补充测试。
+- [ ] COMPOSITE08：union 直接成员去重后保留首次出现顺序，嵌套 union 保留为一个直接 member，
+  不展平其叶子。覆盖短名／限定名指向同一声明、平台 `int` 与其规范化标量，以及重复直接项与
+  不同嵌套路径上的同一叶子的区别。泛型 member 按完整闭合类型身份区分，不能仅按声明名去重；
+  Semantic 元数据、匹配结果、默认首成员及 `.ft` 恢复后的顺序应一致。
+- [ ] COMPOSITE09：union 成员图及 intersection 组合图分别覆盖直接自循环、间接循环和合法
+  无环共享子图；同文件与跨模块引用均不能因遍历顺序不同而漏检、无限递归或误判共享节点为环。
+  仅检查复合声明自身的循环；“经普通 type 字段形成的默认零值递归”不在声明处一概拒绝，按
+  G18／COMPOSITE30 的实际默认初始化请求检查。
+- [ ] COMPOSITE10：联合进入分别验证精确直接 member、完整内层 union 进入外层及叶子沿唯一
+  嵌套路径进入；精确命中不被其他兼容候选抢占。除既有两／三层证据外，新增需要保存 8 段与
+  9 段路径的最小边界程序，验证每层 member 身份、最终 payload 和完整收窄结果，不得截断路径
+  或以默认值掩盖丢失。这是既有表示容量边界，不机械增加嵌套排列，关联 ISSUE-G24-002。
+- [ ] COMPOSITE11：不存在精确命中时，多个可接纳的 object-spec member、父／子 spec 同时可达
+  以及多个嵌套 union 路径分别构成进入歧义；交换成员声明顺序也不能变为隐式选中某项。合法的
+  重叠成员声明本身不因尚未发生的进入而失败；在实际进入点报错，并与先得到明确 spec／内层
+  union 类型值再进入的消歧正例配对。进入站点的消歧与后续 match 标签选择分开验收。
+- [ ] COMPOSITE12：字面量与纯字面量常量表达式进入 union 时按叶子目标的既有贴合规则选择资格；
+  覆盖可贴合、超出范围和没有合法叶子的情况。映射既有整数／浮点及 `if`／`match`／`try` 分支
+  目标测试，补齐未覆盖的直接／嵌套 union 入口；断言实际 active member 和数值，不接受整数
+  member 错接浮点值。保持现有分支目标选择和类型推导规则，不新增数字转换或声明顺序优先规则。
+
+#### 28.2.3 联合匹配、收窄与转换边界
+
+- [ ] COMPOSITE13：单 member 的默认／显式 `let` 绑定和 `var` 绑定取得正确 member 类型；无绑定
+  分支只判别、原值不自动获得成员访问能力。正例通过新绑定读写或调用并检查结果；反例在无绑定
+  分支访问原 union 成员，以及对 `let` 绑定重新赋值。绑定头部／body 子块及分支外不可见性映射
+  G13，引用 member 与值 member 的复制／共享观察由 COMPOSITE29 配套验证。
+- [ ] COMPOSITE14：多 member 分支绑定得到对应子集；仍有多个 member 时直接访问、调用或比较
+  必须拒绝，继续绑定收窄到单 member 后合法。`else` 的剩余集合分别覆盖一个和多个 member，
+  按主规范验收可用静态视角；`else` 不引入绑定。不得把块式 `else` 的剩余集合规则套用到
+  infix match 条件的 `else`，后者的绑定可见性由 COMPOSITE17 验证。
+- [ ] COMPOSITE15：普通 union match 标签分别覆盖非 member、未知类型、值／区间标签混入、
+  同一分支重复 member 和后续分支重复已覆盖 member，核对报错的具体标签。匹配只看已选 active
+  member：具体类型即使满足某个 spec，也不能在 match 时重新转换并命中该 spec 标签。块式
+  语句、块式表达式和 infix 标签各自有适用证据；表达式仍遵守 G17 的 `else` 与结果路径规则。
+- [ ] COMPOSITE16：嵌套绑定 match 与既有 `->` 链式匹配取得相同叶子和 payload；同首段下不同
+  叶子均须可达，覆盖绑定／无绑定及块式／infix 入口。非法路径分别只破坏首段成员关系、中间层
+  的 union 资格或末段直接成员关系，不能越级、跳到兄弟成员或从 object spec 下探具体实现。
+  链式匹配的书写顺序及重叠边界按联合主规范 §3.13 单独映射，不把普通直接标签的重复规则
+  无条件套用到共享首段的链式标签；发现规范与实现不一致先记录，不自行改变优先关系。
+- [ ] COMPOSITE17：union 的 infix match 在 `if`、`while`、`&&` 右侧及普通布尔值位置分别检查
+  命中结果与目标表达式求值次数。正例仅在规范允许的头部／body 使用收窄绑定；反例在 `||`、
+  `!`、`else`、语句后或函数边界外使用不传播的绑定。以带计数副作用的 target 验证短路与单次
+  求值，作用域和每轮重绑优先复用既有 G13／循环专项，不新增反向真值推导。
+- [ ] COMPOSITE18：union 的 object-spec 叶子进入时须先完成其既有向上转换，收窄后可按完整
+  spec 视角调用；callable 叶子收窄后可按已声明 callable 签名调用。反例覆盖未收窄直接调用、
+  从 object-spec 叶子继续向具体实现收窄，以及仍处于 union／子集视角时转换到共同 object spec；
+  正例以先收窄具体 member、再按合法名义关系转换配对。不得通过转换绕过 active member 规则。
+
+#### 28.2.4 交叉成员合并、访问与分派
+
+- [ ] COMPOSITE19：嵌套 intersection 展平并去重，包含各 object member 的传递父方法；共享父
+  requirement 不重复成歧义，完整签名相同的方法去重，同名同参数但返回不同拒绝，合法不同参数
+  重载全部保留。实例／静态方法分别验证，owner 实参先替换再比较；不能合并 `S<i32>` 与
+  `S<string>` 的不同要求，也不能只断言 Semantic 成功而不验证调用到正确实现。
+- [ ] COMPOSITE20：合并后的实例 `let`／`var` 字段和经 `T: Intersection` 访问的静态字段、
+  静态方法均保留原 requirement 的类型、可写性和 owner 实例。正例读取各组成 spec 的成员并
+  验证合法修改；反例写入 `let`、写入错误类型、漏掉一个组成契约或经实例视角访问静态成员。
+  同名实例／静态成员不得串槽。两个独立组成 spec 的同名字段分为类型与 `let`／`var` 均相同、
+  仅类型不同、仅可写性不同三类，实例／静态分别覆盖；其组合资格和报错阶段先按 ISSUE-G24-003
+  决策，再补声明未使用／实际使用对照，不能未经确认移植 object-form 父字段或方法的去重规则。
+- [ ] COMPOSITE21：intersection 值、受交叉约束的 `T` 实例以及 `T.method` 静态入口分别在明确
+  callable spec 目标下形成方法值，直接调用与方法值选择同一精确 requirement。覆盖父级／嵌套
+  来源、合法重载及不存在成员、目标签名不符、无明确 callable 目标的反例；变参形态和授权
+  `seal` 的既有专项应映射复用，不扩展匿名 callable 或方法级泛参规则。
+- [ ] COMPOSITE22：交叉成员的访问权限按 requirement 原声明 spec 判断；普通函数、无关 type／
+  fit 与合法实现域分别提供反正例。公开、`seal` 及父级传递 requirement 的直接调用、方法值、
+  静态约束访问保持一致，合法候选不被不可见候选造成伪歧义。交换组成 spec 顺序后可观察选择不变，
+  不要求生成 C 的符号名或 witness 字段书写顺序逐字相同；跨包部分由 COMPOSITE31 配套验收。
+
+#### 28.2.5 联合与交叉作为泛型约束
+
+- [ ] COMPOSITE23：对 `T: Union` 与 `T: Union<A>` 分别建立准入矩阵，区分精确具体 member、
+  嵌套 union member、整个约束 union 类型值、仅沿嵌套路径可达的叶子、仅能转换到某个 spec
+  member 的类型，以及完全无关类型。前两类合法与无关类型非法必须有直接证据；涉及“必须是
+  member”文字边界的其余项按 ISSUE-G24-001 先决策，禁止从值进入 union 的资格直接推出约束
+  准入资格。非泛型／泛型约束、显式实参与可唯一推导实参均核验，错误的闭合 member 实例不得混用。
+- [ ] COMPOSITE24：联合约束函数体内，对 `value: T` 未收窄的字段读写、方法调用、方法值、
+  `==`／`!=` 分别拒绝；即使调用点暂时只传一种具体类型也不能放宽声明体能力。合法绑定收窄
+  后按 member 类型操作并真实运行，无绑定分支及多 member 子集仍受对应限制；引用、值类型
+  和标量的合法准入实例均覆盖，另检查 `return value` 保持具体 `T` 的类型与值而非偷换为约束 union。
+- [ ] COMPOSITE25：对 `T: Intersection` 与 `T: Intersection<A>` 分别覆盖全部名义满足、
+  缺一个组成 spec、全部不满足、仅形状相同、只有另一闭合泛型实例的关系。合法关系可来自 type
+  声明头或当前可见 fit，关系未导入时不能按结构补齐。显式实参及可唯一推导实参都要检查；多
+  个受约束参数只改变其中一个为非法，验证约束不能互相代替或错误复用前一个参数的 witness。
+- [ ] COMPOSITE26：受交叉约束的泛型体通过 `T` 直接使用合并后的实例字段／方法及静态成员，
+  并与 COMPOSITE20～COMPOSITE22 的精确类型、可见性和方法值矩阵对照。同一共享泛型体至少以
+  一个引用 subject 和一个值 subject 调用，覆盖泛型 object member、传递父及独立 fit 实现；
+  不允许依赖某个调用点具体类型偶然具有、但约束未提供的额外成员。
+- [ ] COMPOSITE27：复合约束从仍开放的泛参向其他泛型函数、type／spec owner 和实例／静态方法
+  继续转传时，分别验证合法的相同／更强约束，以及无约束、较弱或无关约束的拒绝；owner 泛参与
+  方法泛参不同名且正确替换，具体闭合后不得串到另一实例。联合约束的强弱与可接纳集合先按
+  ISSUE-G24-001 确认，不能把所有结构相似的 union 视为可互换，也不新增不同泛型实例间的 variance。
+- [ ] COMPOSITE28：复合 spec 自身带泛参及 owner 约束时，分别验证成员类型正确替换、合法实例
+  进入／收窄或合并调用，以及错误 member 实例和不满足 owner 约束的实例化被拒绝。覆盖同一
+  声明的两个闭合实例同时使用，并与“该复合 spec 被另一泛参用作约束”的调用配套；泛参数量
+  错误等通用格映射 G25，不能以普通 `Choice<T>` 值测试替代 COMPOSITE23～COMPOSITE27。
+
+#### 28.2.6 值模型、跨包及开销证据
+
+- [ ] COMPOSITE29：复合值经绑定、参数、返回、字段／数组存储及收窄后，保持各具体 member／
+  subject 的既有值模型。union 切换 active member、拷贝后修改与离开源作用域分别断言 payload
+  完整和必要释放；intersection 值视角与受约束裸 `T` 分开验证，不能把已有 spec 装箱语义与
+  泛型值复制混为一类。引用身份、值副本独立、含受管字段的存活及恰当终结次数均须有运行证据；
+  intersection 相等性映射 spec 主规范及既有测试，不误套 union 未收窄禁止比较的规则。
+- [ ] COMPOSITE30：默认 union 选取去重后首个直接 member，嵌套时保留各层默认 member；显式
+  初值绑定直接进入所选 member，不先请求首成员零值。首成员会递归时，无初值请求被拒绝、有合法
+  非递归初值被接受的证据映射 G18／G21；交叉默认 witness 按既有 spec 默认值规则映射检查。
+  本组只补不足的复合类型证据，不改变三阶段构造或一般泛型默认零值实现。
+- [ ] COMPOSITE31：provider 导出真实 package-public `.ft` 后释放源码 AST，再由独立 consumer
+  恢复复合声明、泛型 member、约束和实现来源。分别覆盖 union 进入／收窄、intersection 合并
+  调用、两种泛型约束及方法值的正向运行；反例覆盖非法 member、错误闭合实例、缺失关系及越权
+  使用，定位 consumer 的真实使用点。类型名称可见性与 fit 关系可见性区分，相关 G22／G23 证据
+  优先复用；同包多文件顺序变换不得冒充跨包 `.ft` 验收。
+- [ ] COMPOSITE32：在 Codegen 测试核对 union 的完整静态进入路径、叶子转换、已绑定 member 的
+  直接访问，以及 union 泛型约束不物化 witness；intersection 调用及方法值消费已选的精确
+  requirement 和既有 merged witness 槽，不拆分成额外 spec 视角再分派。引用／trivial 值／含
+  受管字段值各取必要代表，生成 C 必须可编译，并与 FCTS 行为配对；不能只靠字符串断言宣称
+  零开销，不把既有 tag 写入、值复制或必要 ARC 误列为新增成本。
 
 ### 28.3 独立验收与交付 TODO
 
-- [ ] 建立 union 与 intersection 稳定诊断码到现有测试的映射，禁止同构排列；
-- [ ] 独立运行 G24，核对诊断码、位置、数量、阶段和复合类型上下文；
+- [ ] 先完成 §28.1.2 的决策／核验并记录获批范围；逐项列出“主规范—TODO—既有／新增测试—
+  断言”的映射，每项未新增的原因必须是已有直接证据或已批准的不适用结论，而不是仅有类似用例。
+- [ ] 建立具体诊断模板到源码可达入口的映射，优先核对 `AE0601`～`AE0608`、`AE0621`／`AE0622`
+  及相关通用类型、约束、调用、可见性错误。`AE0622` 当前同时用于非法 union member 和交叉
+  满足失败，须区分根因，不能只覆盖其一；Parser 已阻断或仅内部防御的出口不强造用户反例。
+- [ ] 非法用例核对完整诊断集合的码、文件、token、行列、数量与阶段；避免依赖错误列表顺序或
+  未承诺稳定的完整文本。所有正例检查无错误，FCTS 必须真实运行，并通过明确结果或失败分支
+  排除“没有进入断言分支也通过”；仅 Semantic 接受不能替代行为验收。
+- [ ] 既有测试默认全部保持原样；新增独立最小用例补足薄弱断言。确需修改旧例时，在问题记录
+  明列文件、函数／测试块、原断言、拟改动和原因，经人工再次批准后才能修改，不概括迁移错误码。
+- [ ] 独立执行 G24 的 Parser／Semantic／Codegen／Symbol 专项及 FCTS 行为，逐项记录同包、
+  真实跨包、合法／非法、值／引用及两类泛型约束的适用证据。补测发现编译缺陷先记录、再分析，
+  取得对应批准后修复；不合并与本组用例无关的重构。
 - [ ] 在 Codex 沙箱外为 G24 独立执行 `make test`；
-- [ ] 执行 `git diff --check`，关闭或决策 G24 问题；
-- [ ] 填写“不新增”依据或实际新增用例、专项结果和全量结果。
+- [ ] 核对运行时成本和 ABI／格式边界，执行 `git diff --check`，关闭或取得不阻塞交付的明确
+  决策；填写复用／新增用例、专项及全量结果和建议 commit message，不自动提交。
 
 ### 28.4 独立交付记录
 
-- 状态：待实施
+- 状态：待 Review；已细化 COMPOSITE01～COMPOSITE32，尚未实施
 - 稳定码映射与新增用例：—
 - 本组专项结果：—
 - 本组沙箱外 `make test`：—
-- 问题：—
-- 建议 commit message：`test: audit union and intersection diagnostics`
+- 问题：[G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md)，当前包含
+  ISSUE-G24-001～ISSUE-G24-003；静态发现与实际复验结果分别记录
+- 建议实施 commit message：`test: complete union and intersection conformance coverage`
 
 ## 29 G25：泛型诊断
 
 ### 29.1 测试重点
 
 验证泛型声明、实例化、约束和推断产生的稳定 Semantic 诊断。
+
+union／intersection 特有的约束准入、收窄、合并成员及约束转传由 G24 COMPOSITE23～COMPOSITE28
+交付；本组映射其证据，负责通用泛型机制与其他约束形式，不重复新增同构复合约束用例。
 
 ### 29.2 用例 TODO
 
