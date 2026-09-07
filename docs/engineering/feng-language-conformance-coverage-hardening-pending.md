@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G23 已交付；G24～G25 待 Review
+> 状态：G01～G23 已交付；G24 待实施，既有 spec 泛型转接层优化已批准暂缓；G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -3379,8 +3379,8 @@ program 实际属于同包三模块，原断言“孤儿 info + 降级”与按�
 
 ### 28.1 测试重点与范围
 
-验证 union／intersection 的声明、类型关系、成员使用和作为泛型约束时的复合类型规则，补齐非法
-程序的前端拒绝证据与合法程序的可观察行为证据。依据为
+验证 union／intersection 的声明、类型关系、成员使用、作为泛型约束及作为泛型类型实参时的规则，
+补齐非法程序的前端拒绝证据与合法程序的可观察行为和开销证据。依据为
 [`spec` 主规范](../specifications/feng-spec.md)、
 [联合类型主规范](../specifications/feng-union-type.md)、
 [泛型主规范](../specifications/feng-generics-draft.md)、
@@ -3390,21 +3390,27 @@ program 实际属于同包三模块，原断言“孤儿 info + 降级”与按�
 [可见性主规范](../specifications/feng-visibility.md)及
 [AE 诊断清单](../specifications/feng-error-codes-ae.md)。以下内容是测试验收条件，不另行定义语言规则。
 
-原有 COMPOSITE01～COMPOSITE06 保留编号并细化，新增 COMPOSITE07～COMPOSITE32。应区分三种
+原有 COMPOSITE01～COMPOSITE06 保留编号并细化，新增 COMPOSITE07～COMPOSITE36。应区分四种
 独立测试对象：复合类型自身带泛参，例如 `Choice<T>`；复合类型被用作约束，例如 `U: Choice<T>`；
-复合类型自身的 owner 泛参带约束，例如 `Choice<T: Named>`。仅验证第一种声明能够实例化，不代表
-已经验证第二种约束的准入与泛型体内使用。
+复合类型自身的 owner 泛参带约束，例如 `Choice<T: Named>`；复合类型被用作类型实参，例如
+`identity<Choice>(value)`、`Box<Both>`。仅验证第一种声明能够实例化，不代表已经验证约束准入、
+泛型体内使用或第四种整个 spec 值的传递与运行；实际 `T` 为裸具体类型也不能代替实际 `T` 为 spec。
 
-G24 负责 union／intersection 特有的约束满足、收窄、合并成员和约束转传；G25 负责通用泛参声明、
-实参数量、显式实例化、推导和约束机制。G12 的语法、G13 的绑定作用域、G17 的分支结果路径、
+G24 负责 union／intersection 特有的约束满足、收窄、合并成员、约束转传及类型实参的完整值承载；
+G25 负责通用泛参声明、实参数量、显式实例化、推导和约束机制。G12 的语法、G13 的绑定作用域、G17 的分支结果路径、
 G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择优先映射既有证据，不重做整组。
 复合类型出现在上述入口时仍要有直接证据，不能因通用规则已有测试便省略复合类型特有分支。
 
 正向语言行为放入 `fcts/`；诊断、AST、进入路径、完整 requirement 身份、witness 与发码结构放入
 `test/`。跨包以真实 package-public `.ft` 导出、重新加载和 consumer 为证据，不以同一次分析中的
-多模块源码代替；制品只用作语言验证载体，不扩展为格式或发布专项。不增加运行时类型搜索、动态
-约束检查、额外装箱或重复分派，不借此改变默认零值、值复制、ARC、公开 ABI、runtime 私有 ABI
-或 `.ft` 格式；若补测暴露必须改变这些边界的缺陷，先记录并取得对应人工批准。
+多模块源码代替；制品只用作语言验证载体，不扩展为格式或发布专项。约束满足关系在 Semantic
+阶段证明；不增加运行时类型搜索、动态约束检查、额外装箱或重复分派。按最新人工决定，本组不消除
+已有的 spec 泛型转接层，但不得新增其他增量运行时开销。不借此改变默认零值、值复制、ARC、公开
+ABI、runtime 私有 ABI 或 `.ft` 格式；若补测暴露必须改变这些边界的缺陷，先记录并取得对应人工批准。
+
+本组重点是语言语义与可观察行为正确，以及已定规则的完整正反例覆盖。转接层优化暂缓不减少任何
+正确性测试：参数、返回、存储、收窄、逐值分派及跨包行为仍须验收；与增补用例无关的纯重构或性能
+优化不并入本组。覆盖是否完整以逐项规范和适用边界的测试证据判断，不以用例数量或单次全量通过代替。
 
 #### 28.1.1 现有证据与补齐方式
 
@@ -3447,22 +3453,32 @@ G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择
   `test_constrained_generic_intersection_method_value_ft_roundtrip` 已有真实 `.ft` 恢复证据，
   但不能代替 consumer 非法使用的精确诊断或跨包运行断言。
 
-#### 28.1.2 实施前需 Review 的事项
+#### 28.1.2 人工 Review 结论与实施方案边界
 
-- [ISSUE-G24-001](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-001union-泛型约束的准入边界与检查覆盖待核对)：
-  联合规范“实参必须是 member”的文字与既有整个 union 值传入测试不一致；调用约束检查的一处
-  union 分支也尚未执行实参资格校验。先确定准入边界，再以最小反例核验各入口，不能把该分支的
-  静态事实直接等同于“所有非法实参均会被接受”。COMPOSITE23／COMPOSITE27 的相关边界待决策。
+- [ISSUE-G24-001](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-001union-泛型约束漏检无关类型)：
+  已批准修复；最小反例确认显式调用、推导调用及 type owner 实例化接受无关类型。联合主规范
+  已明确整个同一闭合 union 可作为类型实参，不再用“不能先进入 union 再传入”拒绝合法调用。
+  各入口须做 Semantic 证明，不能从这三个反例推断其他入口已经覆盖。
 - [ISSUE-G24-002](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-002union-进入路径的固定容量与无深度上限规范不一致)：
-  已静态确认 union 进入路径最多保存 8 段并存在截断；COMPOSITE10 必须覆盖容量边界两侧并验证
-  完整路径，实施时先复现实际影响，再提交修复范围。不得自行把实现容量改写为语言深度限制。
-- [ISSUE-G24-003](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-003intersection-同名字段组合缺少明确的主规范验收依据)：
-  主规范明确了交叉方法去重及 object-form 父字段同名冲突，但没有明确两个独立 object member
-  的同名字段在交叉中如何合并／拒绝及在哪个阶段诊断。COMPOSITE20 单列该组合，先由人工确认，
-  不从历史设计笔记或 getter／setter 的实现方式推导新语言规则。
+  已批准修复；8 段读回成功、9 段 payload 错误已复现。采用通用完整路径，不以调大固定容量、
+  增加深度限制或“第 9 层”特判掩盖问题；COMPOSITE10 覆盖元数据与实际行为。
+- [ISSUE-G24-003](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-003intersection-同名字段冲突未在-semantic-阶段拒绝)：
+  已批准同名字段不同类型或不同绑定种类（`let`／`var`）在 Semantic 阶段报错，并已收敛至
+  spec 主规范。同类型同绑定的合法合并保留；不改变 object-form 父字段规则。两个反例目前
+  均落到 Codegen 的 `IE0002`，必须前移实际检查，不能只改错误码。
+- 已确认 union／intersection 均须支持作为泛型约束和类型实参；编译期满足检查、类型保持与不新增运行时开销的要求以
+  泛型主规范为准。新增 COMPOSITE33～COMPOSITE36 专门覆盖整个 spec 为实际 `T` 的场景。
+- [ISSUE-G24-004／005](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-004union-约束泛型体的合法-match-未正确发码)：
+  union 约束体 match 发码及 spec 实参的交叉关系证明缺口仍属本组正确性修复，identity 正例
+  成功不能替代它们的修复与完整测试，不随转接层优化一起延后。
+- [ISSUE-G24-006](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-006spec-类型实参使用转接-witness不能据此宣称无额外开销)：
+  人工已明确本次保留已有 spec 泛型转接层，消除优化后续再处理，不作为 G24 开始或交付的前置
+  条件，问题保留记录而不标为已修复。COMPOSITE36 改为验证现有层之外没有新增运行时成本；
+  不得增加转接层数、把原本不需要转接的路径改为转接，或以此为由增加其他装箱、复制及运行时检查。
 
-本次仅细化计划和问题记录，未授权修改产品实现或既有用例。上述问题及实施期间新发现的问题均按
-第 30 节处理；涉及预期不确定的用例在决策前保持待实施，不按当前实现反推语言规则。
+三个既有问题的修复目标及复合 spec 泛型能力已获批准；当前只完成文档收敛，产品实现和正式测试
+尚未变更。未知的准入边界仍以具体正反例提交人工决定，不新增任意结构转换或 variance。实施中
+问题按第 30 节先记录、再分析、再解决；现有测试迁移、成本增加及 ABI／格式变更仍需独立批准。
 
 ### 28.2 用例 TODO
 
@@ -3557,8 +3573,9 @@ G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择
   静态方法均保留原 requirement 的类型、可写性和 owner 实例。正例读取各组成 spec 的成员并
   验证合法修改；反例写入 `let`、写入错误类型、漏掉一个组成契约或经实例视角访问静态成员。
   同名实例／静态成员不得串槽。两个独立组成 spec 的同名字段分为类型与 `let`／`var` 均相同、
-  仅类型不同、仅可写性不同三类，实例／静态分别覆盖；其组合资格和报错阶段先按 ISSUE-G24-003
-  决策，再补声明未使用／实际使用对照，不能未经确认移植 object-form 父字段或方法的去重规则。
+  仅类型不同、仅绑定种类不同三类：按已定主规范，第一类合法合并，后两类 Semantic 报错。
+  实例／静态、owner 类型实参替换前后、未使用声明／实际使用分别覆盖；不能等到生成 getter／
+  setter 失败才诊断，也不能移植 object-form 父列表“同名一律冲突”的规则。
 - [ ] COMPOSITE21：intersection 值、受交叉约束的 `T` 实例以及 `T.method` 静态入口分别在明确
   callable spec 目标下形成方法值，直接调用与方法值选择同一精确 requirement。覆盖父级／嵌套
   来源、合法重载及不存在成员、目标签名不符、无明确 callable 目标的反例；变参形态和授权
@@ -3572,9 +3589,10 @@ G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择
 
 - [ ] COMPOSITE23：对 `T: Union` 与 `T: Union<A>` 分别建立准入矩阵，区分精确具体 member、
   嵌套 union member、整个约束 union 类型值、仅沿嵌套路径可达的叶子、仅能转换到某个 spec
-  member 的类型，以及完全无关类型。前两类合法与无关类型非法必须有直接证据；涉及“必须是
-  member”文字边界的其余项按 ISSUE-G24-001 先决策，禁止从值进入 union 的资格直接推出约束
-  准入资格。非泛型／泛型约束、显式实参与可唯一推导实参均核验，错误的闭合 member 实例不得混用。
+  member 的类型，以及完全无关类型。精确 member、嵌套 union member、同一完整闭合 union
+  自身合法，无关类型非法；其余边界按 ISSUE-G24-001 核对主规范关系，无法确定时以具体程序
+  提交人工决定，不从值进入 union 的资格自动扩大约束准入。非泛型／泛型约束、显式实参与可唯一
+  推导实参均核验，错误的闭合 member 实例不得混用，type／spec owner 入口由 COMPOSITE28 配套。
 - [ ] COMPOSITE24：联合约束函数体内，对 `value: T` 未收窄的字段读写、方法调用、方法值、
   `==`／`!=` 分别拒绝；即使调用点暂时只传一种具体类型也不能放宽声明体能力。合法绑定收窄
   后按 member 类型操作并真实运行，无绑定分支及多 member 子集仍受对应限制；引用、值类型
@@ -3614,14 +3632,43 @@ G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择
   优先复用；同包多文件顺序变换不得冒充跨包 `.ft` 验收。
 - [ ] COMPOSITE32：在 Codegen 测试核对 union 的完整静态进入路径、叶子转换、已绑定 member 的
   直接访问，以及 union 泛型约束不物化 witness；intersection 调用及方法值消费已选的精确
-  requirement 和既有 merged witness 槽，不拆分成额外 spec 视角再分派。引用／trivial 值／含
+  requirement 和既有 merged witness 槽，不新增拆分 spec 视角的分派。实际 `T` 为 spec 时，
+  按本次批准保留已有转接层，其增量成本另由 COMPOSITE36 核对。引用／trivial 值／含
   受管字段值各取必要代表，生成 C 必须可编译，并与 FCTS 行为配对；不能只靠字符串断言宣称
-  零开销，不把既有 tag 写入、值复制或必要 ARC 误列为新增成本。
+  无新增开销，不把既有 tag 写入、值复制或必要 ARC 误列为新增成本。
+
+#### 28.2.7 联合与交叉作为泛型类型实参
+
+- [ ] COMPOSITE33：无约束 `identity<T>` 及泛型 owner 的实际 `T` 分别为完整 union、完整
+  intersection、带闭合实参的复合 spec，而非只测试它们的裸 member／subject。函数显式／推导
+  调用及 owner 显式实例化分别覆盖参数、返回 `T`、字段读写、数组存储和继续转传。union 保留
+  active member 与完整 payload；intersection 保留各值自己的 subject／witness；引用身份、
+  值副本及含受管成员的存活按既有值模型验证，不因泛型擦除丢失静态 spec 类型。
+- [ ] COMPOSITE34：对 `T: Union`，同一泛型声明同时以约束 union 自身、合法直接 member 和
+  合法嵌套 member 调用；在泛型体内完成有绑定／无绑定 match、单 member／多 member 分支及
+  继续返回 `T`。union 实参分别激活不同 member，裸 member 不被当作 union 聚合体强读；
+  路径与结果均真实断言。配对无关实参、错误闭合实例及未收窄访问的反例；身份函数通过不能替代
+  ISSUE-G24-004 的收窄发码修复，也不能为解决发码将合法 match 改成前端报错。
+- [ ] COMPOSITE35：实际 `T` 为交叉 spec 时，覆盖相同交叉约束及其组成 object spec 约束；
+  实际 `T` 为已名义包含全部组成契约的 object spec 时，覆盖交叉约束。另配缺一个要求、无关
+  同形状及错误闭合实例反例，关系证明与返回原始 `T` 配套验收。一个函数接收两个静态类型相同、
+  但实际 subject 类型不同的 spec 值，分别访问并断言各自实现，不能错误共享其中一个值的 witness。
+  泛型 owner 存储、读取和转传这些值也要验证；实例／静态入口按现有契约规则区分。
+- [ ] COMPOSITE36：在同包及真实二进制跨包中，以本组变更前的同一合法程序及同类已支持路径
+  为基线，分别核对完整值传递、union match、intersection 直接调用／方法值及多次泛型转传。
+  保留既有 `FengSpecSlotWitness` 不算本次新增成本，也不要求消除该层；但不得叠加转接、为
+  原本无需转接的路径新增转接，或引入新的装箱、重复复制、运行时约束查询等其他成本。新增合法
+  路径须与同类承载及值操作对照，不能以此前无法编译为由跳过成本核验。普通 spec 必要的
+  tag／ARC／分派单列；生成代码证据与 FCTS 行为配对，不依赖同包优化掩盖跨包新增开销。
+  ISSUE-G24-006 只延期消除优化，不豁免正确性和增量成本验收；如需 ABI／格式变更仍先 Review。
 
 ### 28.3 独立验收与交付 TODO
 
-- [ ] 先完成 §28.1.2 的决策／核验并记录获批范围；逐项列出“主规范—TODO—既有／新增测试—
+- [ ] 按 §28.1.2 的已批准范围执行，剩余不确定边界以具体程序提交人工决定；逐项列出“主规范—TODO—既有／新增测试—
   断言”的映射，每项未新增的原因必须是已有直接证据或已批准的不适用结论，而不是仅有类似用例。
+- [ ] 对 COMPOSITE01～COMPOSITE36 按各项语义的适用性核对正向／反向、声明／使用、同包／真实
+  跨包、显式／推导、实际 `T` 为具体类型／spec、引用／值及边界组合；每个适用格记录复用或新增
+  的直接证据。缺少运行断言、尚未复现或仍待决策的格子不得算完成，不以“全量通过”掩盖未覆盖规则。
 - [ ] 建立具体诊断模板到源码可达入口的映射，优先核对 `AE0601`～`AE0608`、`AE0621`／`AE0622`
   及相关通用类型、约束、调用、可见性错误。`AE0622` 当前同时用于非法 union member 和交叉
   满足失败，须区分根因，不能只覆盖其一；Parser 已阻断或仅内部防御的出口不强造用户反例。
@@ -3639,12 +3686,13 @@ G18／G21 的默认零值、G23 的 object-form 名义关系及 fit 实现选择
 
 ### 28.4 独立交付记录
 
-- 状态：待 Review；已细化 COMPOSITE01～COMPOSITE32，尚未实施
+- 状态：三个既有问题及复合 spec 泛型支持目标已批准；COMPOSITE01～COMPOSITE36 待实施，
+  ISSUE-G24-006 已批准本组暂缓消除优化，不再阻塞；语义正确性、完整覆盖及无新增运行时开销仍待验收
 - 稳定码映射与新增用例：—
 - 本组专项结果：—
 - 本组沙箱外 `make test`：—
 - 问题：[G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md)，当前包含
-  ISSUE-G24-001～ISSUE-G24-003；静态发现与实际复验结果分别记录
+  ISSUE-G24-001～ISSUE-G24-006；静态发现、最小程序实际结果及批准边界分别记录
 - 建议实施 commit message：`test: complete union and intersection conformance coverage`
 
 ## 29 G25：泛型诊断

@@ -427,7 +427,8 @@ func use<V: Value>(v: V): void { ... }
 - union-form 约束不为参数类型物化 witness；调用点只传入值本身，而不是 object-form `spec` 约束所需的「值 + witness」对。
 - 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一个类型参数。
 - 在约束链传递中（如子 `spec` 继承父 `spec` 的约束），union-form 约束遵循与 object-form `spec` 约束相同的参数传递规则：向上传递的约束不得比目标约束更宽松。
-- union-form 约束不是进入 union 的值流站点；传入泛型函数的实际实参类型必须已是该 union-form 的某个 member，而不是先进入 union 再传入。
+- union-form 约束检查不是把实参值自动转换到约束 union 的值流站点。除该 union 的 member 类型外，同一完整闭合 union 类型自身也允许作为类型实参；已经承载为该 union 的值不因其静态类型是 union 而被拒绝。不满足约束的类型必须在 Semantic 阶段拒绝，不能由当前 active member 或运行时试探决定准入。
+- union-form 作为泛型类型实参时的类型保持、值传递及开销要求，见 [泛型主规范](./feng-generics-draft.md#4-语义)；约束准入不引入任意 union 之间的结构转换或泛型实例的 variance。
 
 ### 3.13 多级 match 语法（后续增强）
 

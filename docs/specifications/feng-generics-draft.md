@@ -395,6 +395,9 @@ spec Reader<T: Bar> { ... }
 - 当前阶段每个类型参数至多声明一个泛型约束。
 - 泛型约束只能是 `spec` 引用，包括 object-form、callable-form、union-form 和
   intersection-form。
+- 已声明的 union-form 和 intersection-form `spec` 也允许作为泛型类型实参；不能仅因实参是复合 `spec` 而拒绝。无约束泛参按普通类型实参接纳；有约束泛参必须在 Semantic 阶段按该约束的类型关系证明满足，不满足则报错。union 的准入规则见 [联合类型主规范 §3.12](./feng-union-type.md#312-union-form-可作为泛型类型参数约束)，intersection 的组成要求见 [`spec` 主规范](./feng-spec.md)。
+- 类型实参为复合 `spec` 时，`T` 就是该完整的静态 `spec` 类型，不改为运行时 active member 或 subject 的具体类型。参数、返回 `T`、字段／数组存储及继续转传必须保留完整值；union 收窄或 intersection 成员调用时才按各自既有规则使用 payload 或 subject／witness。
+- 补齐 union／intersection 泛型能力不得增加既有路径的运行时开销；以相同值操作及同类已支持的共享泛型调用路径为对照，不得新增装箱、重复值复制、运行时约束搜索或额外转接分派层。既有值模型要求的 tag、值复制、ARC 及已有分派不因此取消；保留已有分派也不等于允许再增加其他成本。同包与不依赖 provider 源码的跨包消费均须核验，不能仅依赖同包内联偶然消除新增成本。
 - 当调用点省略显式类型实参时，编译器必须尝试执行泛型推导。
 - 泛型推导至少可利用三类信息：实参位置上的已知类型、方法接收者的静态类型，以及当前表达式所在位置已知的目标类型。
 - 泛型顶层函数、实例方法或具体静态方法作为 callable value 时不执行上述省略推导；

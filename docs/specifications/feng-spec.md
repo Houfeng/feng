@@ -264,6 +264,7 @@ type Stream: ReadWrite {}
 - 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form 成员; 具体 `type` 不得在声明头或 `fit` 中直接列出 intersection-form `spec`。
 - intersection-form 允许作为具名类型和泛型约束使用,但不支持内联 intersection、`match`/收窄或作为 union-form member。
 - intersection-form 的同名同参数同返回类型方法去重; 同名同参数但返回类型不同构成冲突; 参数列表不同的方法保留为重载。
+- intersection-form 合并字段时，在原有实例／静态成员分类内，先替换完整的 owner 类型实参，再比较同名字段。类型及绑定种类（`let`／`var`）均相同的要求可以合并；类型不同或绑定种类不同必须在 Semantic 阶段报错，即使该 intersection 尚未被使用也不得推迟到 Codegen。该规则不改变 object-form 父列表的同名字段冲突规则。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
 - callable-form `spec` 只描述可调用签名形状,不能作为 `type A: SpecB` 或 `fit A: SpecB` 这类声明满足关系的目标。
 - callable-form `spec` 的默认零值必须是可安全调用的零捕获空操作 callable；其实现不得捕获、绑定或读取任何变量，调用时也不得访问空指针。返回 `void` 时不执行其他行为，返回非 `void` 时返回声明返回类型的默认零值。
