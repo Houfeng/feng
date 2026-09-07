@@ -17243,9 +17243,109 @@ static void test_g22_qualified_binding_storage_codegen(void) {
     }
 }
 
+/* G23: a shared generic array method and its witness use the identical symbol
+ * and output-slot ABI for all value representations. The concrete direct call
+ * has no witness dispatch, allocation, retain or default initialization. */
+static void test_g23_generic_array_return_codegen(void) {
+    const char *elements[] = {"i32", "string", "Ref", "Value", "Aggregate", "Pair"};
+    for (size_t writable = 0U; writable < 2U; ++writable) {
+        for (size_t element = 0U; element < 6U; ++element) {
+            char source[4096], symbol[256];
+            const char *array = writable ? "[!]" : "[]";
+            snprintf(source, sizeof(source),
+                "open module g23.emission;\n"
+                "type Ref { var value: i32; }\n"
+                "@value type Value { var value: i32; }\n"
+                "@value type Aggregate { var text: string; }\n"
+                "type Pair(i32, string);\n"
+                "spec Reader<T> { func first(): T; func echo(value: T): T; }\n"
+                "fit T%s { func first(): T { return self[0]; } func echo(value: T): T { return value; } }\n"
+                "fit T%s: Reader<T>;\nfit T%s: Reader<T> {}\n"
+                "func raw(values: %s%s): %s { return values.first(); }\n"
+                "func relay<T>(values: T%s): T { return values.first(); }\n"
+                "func view(values: %s%s): %s { let reader: Reader<%s> = values; return reader.first(); }\n",
+                array, array, array, elements[element], array, elements[element], array,
+                elements[element], array, elements[element], elements[element]);
+            FengProgram *program = parse_or_die(source, "g23_return_codegen.ff");
+            const FengProgram *programs[] = {program};
+            FengSemanticAnalysis *analysis = NULL;
+            FengSemanticError *errors = NULL;
+            size_t error_count = 0U;
+            FengCodegenOutput output = {0};
+            FengCodegenError error = {0};
+            ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                         &analysis, &errors, &error_count));
+            ASSERT(error_count == 0U);
+            bool emitted = feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB,
+                                                       NULL, &output, &error);
+            if (!emitted) fprintf(stderr, "G23 codegen: %s\n", error.message);
+            ASSERT(emitted);
+            snprintf(symbol, sizeof(symbol), "FengFitBuiltin__g23__emission__%s_T__i0__first__from__void",
+                     writable ? "AW_" : "A_");
+            const char *start, *end;
+            ASSERT(find_generated_function_body(output.c_source, "__raw__from__", &start, &end));
+            ASSERT(span_contains(start, end, symbol));
+            ASSERT(span_contains(start, end, ", &_bfr"));
+            /* Existing aggregate return moves may clear their destination;
+             * the newly allocated call-result slot itself must not be zeroed. */
+            const char *forbidden[] = {".witness", "feng_alloc", "feng_retain", "feng_aggregate_retain", "default_zero", "memset(&_bfr"};
+            for (size_t i = 0U; i < sizeof(forbidden) / sizeof(forbidden[0]); ++i) {
+                if (span_contains(start, end, forbidden[i]))
+                    fprintf(stderr, "G23 %s%s unexpected %s:\n%.*s\n", elements[element], array,
+                            forbidden[i], (int)(end - start), start);
+                ASSERT(!span_contains(start, end, forbidden[i]));
+            }
+            ASSERT(find_generated_function_body(output.c_source, symbol, &start, &end));
+            ASSERT(span_contains(start, end, "memcpy(_out,"));
+            ASSERT(span_contains(start, end, "feng_retain(_mptr_)"));
+            ASSERT(span_contains(start, end, "feng_aggregate_retain"));
+            ASSERT(!span_contains(start, end, "feng_alloc"));
+            ASSERT(count_substr(output.c_source, symbol) == 5U); /* prototype, body, direct, relay, witness */
+            compile_generated_c_or_die(output.c_source);
+            feng_codegen_output_free(&output);
+            feng_codegen_error_free(&error);
+            feng_semantic_errors_free(errors, error_count);
+            feng_semantic_analysis_free(analysis);
+            feng_program_free(program);
+        }
+    }
+}
+
+/* G23-009: module qualification must preserve the resolved generic function
+ * identity instead of falling through the ordinary FreeFn-only call path. */
+static void test_g23_qualified_generic_function_codegen(void) {
+    FengProgram *owner = parse_or_die(
+        "open module g23.api; open func identity<T>(value: T): T { return value; }", "g23_api.ff");
+    FengProgram *user = parse_or_die(
+        "module g23.user; import g23.api as api;\n"
+        "func check(): i32 { return api.identity<i32>(3) + g23.api.identity<i32>(4); }\n", "g23_user.ff");
+    const FengProgram *programs[] = {owner, user};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    FengCodegenOutput output = {0};
+    FengCodegenError error = {0};
+    ASSERT(feng_semantic_analyze(programs, 2U, FENG_COMPILE_TARGET_LIB,
+                                &analysis, &errors, &error_count));
+    ASSERT(error_count == 0U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, NULL, &output, &error));
+    const char *start, *end;
+    ASSERT(find_generated_function_body(output.c_source, "__check__from__", &start, &end));
+    ASSERT(count_substr_in_span(start, end, "feng__g23__api__identity") == 2U);
+    compile_generated_c_or_die(output.c_source);
+    feng_codegen_output_free(&output);
+    feng_codegen_error_free(&error);
+    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(owner);
+    feng_program_free(user);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g23_generic_array_return_codegen();
+    test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();
     test_g21_array_length_and_index_codegen();
     test_g21_tuple_literal_array_element_target_codegen();

@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G22 已交付；G23～G25 待 Review
+> 状态：G01～G23 已交付；G24～G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -3138,134 +3138,139 @@ package-public `.ft` 往返及 consumer，不能仅把同一批源码拆成几�
 语言测试载体，不扩展为格式或发布专项。本组不改变默认零值、捕获、ARC、公开 ABI、runtime 私有
 ABI 或 `.ft` 格式，不增加运行时契约搜索、签名比较、额外装箱或调用转发。
 
-本轮仅完善实施文档供 Review；已确认缺口按 §27.3.1 纳入后续修复范围，实际实施仍待人工启动 G23。
+实施中人工批准 ISSUE-G23-008 的明确例外：泛型数组方法返回裸 `T` 时复用既有返回槽机制，
+允许相应导出方法的生成 C 返回约定调整及正确值复制／ARC；provider 与 consumer 须同时重编译。
+必须覆盖引用和值类型，不新增堆装箱，不扩展 runtime 接口、`.ft` 格式或其他泛型 ABI 重构。
+
+2026-09-07 人工已批准启动 G23；实施范围为 SPEC01～SPEC28、§27.3.1 已知缺口修复与
+§27.3.2 明列的两条反例诊断迁移。清单外既有测试及需另行决策的变更仍不得概括修改。
 
 ### 27.2 用例 TODO
 
 #### 27.2.1 原有用例细化
 
-- [ ] SPEC01：分别覆盖 object-form spec 的终结器和实例／静态方法级泛参被 Semantic 拒绝；
+- [x] SPEC01：分别覆盖 object-form spec 的终结器和实例／静态方法级泛参被 Semantic 拒绝；
   字段初始化器、方法体、缺少显式返回类型及参数 `let`／`var` 修饰按已有 Parser 诊断映射。
   fit 块中的实例／静态 `let`、`var` 字段声明分别映射或补齐 Parser 反例，不能因为目标原本
   缺少字段而允许 fit 引入存储。
   合法邻界覆盖省略修饰、显式 `open`、`seal`、方法与 spec 同名，以及泛型 spec owner 的类型参数
   用于成员签名；不得把“方法级泛参禁止”扩大为“泛型 spec 禁止”。
-- [ ] SPEC02：字段／方法、实例／静态 requirement 分别删除一个必需实现，覆盖 `type T: S`、
+- [x] SPEC02：字段／方法、实例／静态 requirement 分别删除一个必需实现，覆盖 `type T: S`、
   `fit T: S;` 和带块体 fit；直接及传递父 requirement 均须检查，程序未使用该关系也必须失败。
   内建类型、数组、enum 和 tuple 的适用格单独登记；没有对应字段存储的目标不得靠方法或默认
   witness 补齐字段。与补回唯一缺失成员后通过的正例配对，关联 ISSUE-G23-003。
-- [ ] SPEC03：方法匹配分别只改变参数数量、参数类型、参数顺序、变参形态、返回类型或实例／静态
+- [x] SPEC03：方法匹配分别只改变参数数量、参数类型、参数顺序、变参形态、返回类型或实例／静态
   归属，验证不能满足对应 requirement；同名但签名不符与完全缺少方法分别核对诊断根因。覆盖 type
   自有方法、当前 fit 方法及其他可见 fit 方法；实现参数名称与默认／显式 `let`／`var` 不改变契约
   匹配结果，实现方法自身的泛参不能由非泛型 requirement 反向推导。字段精确匹配见 SPEC09。
-- [ ] SPEC04：fit 左侧分别覆盖普通引用 type、`@value type`、具名 tuple、enum、内建标量、string、
+- [x] SPEC04：fit 左侧分别覆盖普通引用 type、`@value type`、具名 tuple、enum、内建标量、string、
   固定元素数组和引入元素类型参数的数组目标；每类至少有适配与直接调用的合法证据。未知目标、
   object／callable／union／intersection spec 目标、`void` 和 C 指针目标分别拒绝；内建别名按当前
   平台的规范化类型识别，不把 `int` 固定假设为 `i32`。数组 `[]`／`[!]`、元素类型和逐层可写性
   保持目标身份隔离，已有 G21 证据映射复用；泛型目标形状限制归 G25。
-- [ ] SPEC05：同一条 fit 的 spec 列表中重复列出同一契约必须拒绝，覆盖具名目标、内建标量、
+- [x] SPEC05：同一条 fit 的 spec 列表中重复列出同一契约必须拒绝，覆盖具名目标、内建标量、
   string、只读／可写数组，以及有无块体；短名与限定名解析到同一契约时也不能逃过重复检查。
   `type` 声明头重复项由 SPEC08 对照；多条相同关系合法与实现冲突分别由 SPEC12～SPEC14 验收，
   不把它们写成“所有重复 fit 都报错”。关联 ISSUE-G23-002。
-- [ ] SPEC06：最小合法程序分别以 type 声明头、无块体 fit、带块体 fit 和自扩展方法复用建立满足
+- [x] SPEC06：最小合法程序分别以 type 声明头、无块体 fit、带块体 fit 和自扩展方法复用建立满足
   关系，并在 FCTS 真正经 spec 视角读取字段、写入 `var` 字段、调用方法和断言结果。对值类型与
   引用类型 subject 复用已有值模型证据；空契约、只有字段、只有方法、混合成员及父契约要求均须
   有直接证据，不能仅以 Semantic 接受或 Codegen 成功代替运行验收。
 
 #### 27.2.2 声明头、完整成员面与精确满足
 
-- [ ] SPEC07：object-form spec 的父列表分别覆盖非 spec、非 object-form spec、重复父项、直接
+- [x] SPEC07：object-form spec 的父列表分别覆盖非 spec、非 object-form spec、重复父项、直接
   自循环和间接循环；合法单父、多父及传递父的完整要求必须保留。非法声明即使未作为类型使用也
   应拒绝，不能因后续只访问子级自有成员而漏检。
-- [ ] SPEC08：`type T: ...` 与 `fit T: ...` 的右侧分别覆盖未知名称、普通 type、callable、union、
+- [x] SPEC08：`type T: ...` 与 `fit T: ...` 的右侧分别覆盖未知名称、普通 type、callable、union、
   intersection 及重复 object-form spec；以只列合法 object-form spec 的邻界程序对照。具名目标与
   内建／数组目标走不同实现路径时分别提供证据，不能由只测普通 type 代替；enum 声明头的语法
   限制映射已有 Parser 用例，不新增 enum 直接声明满足的语法。
-- [ ] SPEC09：实例字段与静态字段分别覆盖 `let` 要求对应 `var`、`var` 要求对应 `let`、同名字段
+- [x] SPEC09：实例字段与静态字段分别覆盖 `let` 要求对应 `var`、`var` 要求对应 `let`、同名字段
   类型不一致、仅在另一个实例／静态成员面存在同名字段，以及精确匹配成功。即使字段类型之间存在
   名义向上 coercion，也不能代替 requirement 的精确类型匹配；泛型 owner 实参替换后执行同一检查。
-- [ ] SPEC10：spec 自身、子／父及不同父 spec 的完整成员面分别覆盖同面同名字段、同面字段／方法
+- [x] SPEC10：spec 自身、子／父及不同父 spec 的完整成员面分别覆盖同面同名字段、同面字段／方法
   名称冲突；字段类型与可写性完全相同也不把两个字段声明合并。实例与静态面允许的同名字段及
   字段／方法组合必须有 FCTS 正例，检查访问到各自成员，不因裸名称相同串用槽位。
-- [ ] SPEC11：spec 方法面分别覆盖体内完整签名重复、仅返回类型不同、变参覆盖冲突及可见契约导致
+- [x] SPEC11：spec 方法面分别覆盖体内完整签名重复、仅返回类型不同、变参覆盖冲突及可见契约导致
   的重载重叠；父成员叠加先替换 owner 实参。父／子完整签名相同的 requirement 按规范去重，合法
   非重叠重载全部保留；实例与静态面分别验收。Compiler test 核对 requirement 身份，FCTS 调用
   每个保留的合法重载并断言结果，不把父契约叠加解释为 OOP 方法覆盖。
 
 #### 27.2.3 重复关系、实现冲突与无块体适配
 
-- [ ] SPEC12：多条 `fit T: S;`、多条不添加实现的 `fit T: S {}`，以及 type 声明头与 fit 同时
+- [x] SPEC12：多条 `fit T: S;`、多条不添加实现的 `fit T: S {}`，以及 type 声明头与 fit 同时
   建立同一关系时，验证关系幂等且成员仍唯一可用。覆盖同文件、同模块多文件、多个已导入模块及
   真实跨包来源；夹具只提供一个合法实现，不混入方法重复。对内建／数组目标同时覆盖规范化别名
   指向同一目标；关系来源可保留各自可见性，不能因合并而公开原本不可见的来源。
-- [ ] SPEC13：分别覆盖单个 fit 内重复实现、两个不同可见 fit 的同签名实现、type 自有方法与 fit
+- [x] SPEC13：分别覆盖单个 fit 内重复实现、两个不同可见 fit 的同签名实现、type 自有方法与 fit
   的同签名实现，区分声明重复与可见实现冲突；即使实现体相同也不能任意选一个。反向用例配对
   “同一实现经多条关系重复可达”和“额外实现所在模块不可见”的正例；不能把同一方法声明重复
   计数为多个实现，也不能用关系幂等掩盖两个不同方法声明的冲突。
-- [ ] SPEC14：同一目标满足多个契约时，覆盖同名同参数但返回类型不同的冲突、变参冲突，以及
+- [x] SPEC14：同一目标满足多个契约时，覆盖同名同参数但返回类型不同的冲突、变参冲突，以及
   当前可见名义关系使同一实参匹配多个方法的重叠；区分 spec requirement 冲突与实现重复。
   多个兼容契约可共用同一实现，非重叠的不同签名可各自实现并调用；FCTS 断言结果不依赖 spec
   列表顺序或 fit 声明顺序，不引入“精确优先”或“第一个实现优先”。
-- [ ] SPEC15：无块体与空块体 fit 分别覆盖空契约、目标自有成员已满足、其他可见 fit 方法已满足、
+- [x] SPEC15：无块体与空块体 fit 分别覆盖空契约、目标自有成员已满足、其他可见 fit 方法已满足、
   缺失成员和签名不匹配；与带块体补齐成员的程序配对。普通／`open fit` 两种声明可见性独立覆盖，
   内建标量、string、只读／可写数组不得额外要求块体；不允许仅删除 `AE0807` 而遗漏满足检查。
   无块体合法正例在 FCTS 真实使用该契约，关联 ISSUE-G23-001、ISSUE-G23-003。
-- [ ] SPEC16：将关系声明与方法实现放在不同 fit 中，覆盖实例方法、静态方法、多个 fit 分别提供
+- [x] SPEC16：将关系声明与方法实现放在不同 fit 中，覆盖实例方法、静态方法、多个 fit 分别提供
   不同必需方法，以及目标自有成员与 fit 方法共同满足。分别验收普通 type、值类型、tuple、enum、
   内建标量、string 和数组的适用格；关系声明可有可无块体。FCTS 同时进行具体直接调用与 spec
   调用，Compiler test 核对实际实现来源，跨模块／跨包不能把实现强制限定在声明该关系的 fit 内。
   关联 ISSUE-G23-004。
-- [ ] SPEC17：在类型实参和约束均已合法的前提下，覆盖泛型 spec 自有／父 requirement、泛型 type
+- [x] SPEC17：在类型实参和约束均已合法的前提下，覆盖泛型 spec 自有／父 requirement、泛型 type
   的 fit 及数组元素类型参数的签名替换；不同闭合实例分别运行并断言实际参数／返回类型对应结果。
   替换后签名不匹配须在 Semantic 拒绝，不能依赖 C 强转或发码时重新解释类型。泛型声明、实参数量、
   目标特化和约束合法性专项只映射 G25，本项不新增泛型推导或特化规则。
 
 #### 27.2.4 契约使用、可见性及跨包边界
 
-- [ ] SPEC18：成员结构相同但未显式建立可见关系的具体类型不得隐式满足 object-form spec；增加
+- [x] SPEC18：成员结构相同但未显式建立可见关系的具体类型不得隐式满足 object-form spec；增加
   合法声明头或可见 fit 后应通过。覆盖绑定初始化、赋值、传参、返回、字段／数组元素写入及显式
   cast 的适用入口；子 spec 到已声明父 spec 的投影保持合法，父到子和无关 spec 转换仍拒绝。
   已有上下文向上 coercion 专项可直接映射，不修改表达式类型推导或重载优先规则。
-- [ ] SPEC19：分别验收 type 自有静态字段、type／fit 静态方法满足静态 requirement，并以具体
+- [x] SPEC19：分别验收 type 自有静态字段、type／fit 静态方法满足静态 requirement，并以具体
   类型直接访问与合法泛型约束 `T.member` 访问交叉验证结果；fit 不得提供存储字段，实例成员
   不能冒充静态实现。通过实例或 spec 值访问静态成员仍拒绝；G18 和既有静态 witness 专项证据
   优先复用，不为本组新增运行时静态成员查找。
-- [ ] SPEC20：映射 object-form spec 方法值的明确 callable 目标、签名／重载匹配、seal 访问过滤、
+- [x] SPEC20：映射 object-form spec 方法值的明确 callable 目标、签名／重载匹配、seal 访问过滤、
   父 requirement 身份及形成点 receiver 固定的正反向用例；在绑定、实参和返回位置形成的方法值
   均实际调用并断言结果，原 spec `var` 后续重新赋值不能重绑定已形成的方法值。intersection 和
   受约束泛型方法值只映射既有专项及 G24／G25，不借此扩大普通 callable 形成规则。
-- [ ] SPEC21：requirement 的省略／`open`／`seal` 与实现成员的公开／`seal` 按主规范兼容矩阵
+- [x] SPEC21：requirement 的省略／`open`／`seal` 与实现成员的公开／`seal` 按主规范兼容矩阵
   覆盖字段、方法、实例、静态、type 来源与 fit 方法来源；公开 requirement 不能由仅有的 seal
   实现满足，seal requirement 仍须有真实实现。对同包 fit 可使用目标 seal 成员、跨包 fit 不可
   使用目标 seal 成员分别提供正反例；私有布局元数据不得扩大满足权限。
-- [ ] SPEC22：fit 方法体直接访问目标 type 的 seal 字段／方法应按现有访问规则拒绝，不能与
+- [x] SPEC22：fit 方法体直接访问目标 type 的 seal 字段／方法应按现有访问规则拒绝，不能与
   “同包 seal requirement 可以由目标 seal 成员满足”混淆；满足对应契约的实现域经 spec 视角
   访问 seal requirement 的合法用法及普通函数中的非法用法配对。父成员保留原声明访问域，
   `@friend`／`@mixable` 授权只映射已有专项，不增设授权或放宽具体 type 访问权限。
-- [ ] SPEC23：同模块 fit、普通 import 激活的 `open fit`、alias import 激活的 `open fit` 分别
+- [x] SPEC23：同模块 fit、普通 import 激活的 `open fit`、alias import 激活的 `open fit` 分别
   验证关系和方法可用；未导入、未导出或仅在兄弟文件导入的关系不能泄漏。保持目标 type、spec
   名称均可正常解析，以隔离“关系不可见”与“名称找不到”；声明头关系与 fit 关系的导出权限
   分别验收，不能因其中一条公开而改写另一条的可见性。
-- [ ] SPEC24：通过真实 package-public `.ft` 导出／加载分别验证公开适配、纯自扩展方法复用、
+- [x] SPEC24：通过真实 package-public `.ft` 导出／加载分别验证公开适配、纯自扩展方法复用、
   同关系多来源、实例／静态方法及合法 owner 实参替换；consumer 在 FCTS 调用实际来源并断言
   结果。对应反例覆盖不可见关系、实现冲突和跨包 seal 成员不能满足；provider 的非法契约必须
   在 provider 编译阶段拒绝，不把错误元数据导出后交给 consumer 或后端发现。
-- [ ] SPEC25：孤儿适配以包而非模块判定：目标或契约由当前包拥有时，公开导出按常规规则验收；
+- [x] SPEC25：孤儿适配以包而非模块判定：目标或契约由当前包拥有时，公开导出按常规规则验收；
   二者均在外包时，适配在当前包内有效，`open fit` 仅移除导出并产生 info，不得变成错误或警告。
   覆盖内建／数组目标按外部目标判定，以及纯自扩展不适用孤儿限制的邻界；真实 consumer 验证
   未被导出的关系不会生效，不用“编译没有报错”代替导出边界断言。
-- [ ] SPEC26：在相同模块内容、相同文件级 import 和相同可见关系集合下，交换输入文件顺序及
+- [x] SPEC26：在相同模块内容、相同文件级 import 和相同可见关系集合下，交换输入文件顺序及
   独立 fit 声明顺序，满足结果、实现选择和运行结果保持一致。跨文件成员签名中的短名／alias
   保持声明来源上下文，不在 consumer 的同名类型下重新绑定；相关 G22 类型来源证据映射复用，
   不借排序用例改变初始化执行顺序或要求内部符号文本恒定。
 
 #### 27.2.5 Semantic 与发码一致性
 
-- [ ] SPEC27：对 SPEC02／SPEC03／SPEC05 的每类已确认漏检建立未使用和实际使用的配对反例；
+- [x] SPEC27：对 SPEC02／SPEC03／SPEC05 的每类已确认漏检建立未使用和实际使用的配对反例；
   声明点可确定的缺失、签名错误及列表重复均须在 Semantic 拒绝。合法关系物化的 witness 必须
   保留精确 requirement、实现方法、来源 fit／模块及闭合签名；非法关系不能留下可供 Codegen
   使用的空实现。将现有 `CE0319` 漏检复现前移为语义诊断，不以更换错误码或运行时兜底代替检查。
-- [ ] SPEC28：为本轮新支持的无块体适配和独立实现来源补发码结构断言；具体直接调用继续直接调用
+- [x] SPEC28：为本轮新支持的无块体适配和独立实现来源补发码结构断言；具体直接调用继续直接调用
   已选定方法，spec 调用只使用既有 witness 槽并转发到同一实现。不得增加运行时关系搜索、签名
   比较、候选回退、额外 wrapper／装箱／ARC 或初始化；保留原有值模型所需承载，不把既有 spec
   分派误判为新增开销。纯性能基准、泛型 ABI 重构和无关错误码迁移不纳入本组。
@@ -3274,71 +3279,100 @@ ABI 或 `.ft` 格式，不增加运行时契约搜索、签名比较、额外装
 
 #### 27.3.1 已知问题与实现边界
 
-- [ ] 按 [ISSUE-G23-001](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-001内建类型与数组的无块体契约适配被误拒绝)
+- [x] 按 [ISSUE-G23-001](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-001内建类型与数组的无块体契约适配被误拒绝)
   去除内建／数组目标额外的块体要求；无块体与带块体统一依据可见能力检查满足性。移除旧限制
   必须与满足检查补齐一起完成，不能让非法无块体声明静默通过。
-- [ ] 按 [ISSUE-G23-002](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-002内建类型与数组的单条-fit-列表重复契约漏检)
+- [x] 按 [ISSUE-G23-002](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-002内建类型与数组的单条-fit-列表重复契约漏检)
   补齐单条 spec 列表的重复检查，复用目标身份和契约解析结果；保持多条相同关系幂等，不混同
   不同方法实现的冲突，也不按目标名或测试名称特判。
-- [ ] 按 [ISSUE-G23-003](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-003内建类型与数组的契约满足检查漏过-semantic)
+- [x] 按 [ISSUE-G23-003](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-003内建类型与数组的契约满足检查漏过-semantic)
   补齐内建／数组目标的完整成员与签名检查，基于通用目标能力、requirement 和实现选择处理；
   明显缺失／不匹配必须在 Semantic 报错，不能留到 Codegen、C 编译器或运行时处理。
-- [ ] 按 [ISSUE-G23-004](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-004关系与实现分属不同-fit-时合法程序发码失败)
+- [x] 按 [ISSUE-G23-004](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-004关系与实现分属不同-fit-时合法程序发码失败)
   修复独立 fit 方法来源的发码；依据 Semantic 已验证的关系及精确实现身份发码，不要求实现方法
   所在 fit 自身也列出该 spec，不用按名称的兜底搜索代替正确的编译期选择。
-- [ ] 仅同步本组直接涉及的错误码说明：实际旧出口与错误码重排文档分清；缺少字段／方法、签名、
+- [x] 仅同步本组直接涉及的错误码说明：实际旧出口与错误码重排文档分清；缺少字段／方法、签名、
   可写性、可见性及重复列表按各自语义根因使用稳定 AE。`AE0807` 的旧块体限制随修复更新说明；
   CE 兜底只登记语义已接管或内部不变量的真实状态，不开展 AE／CE／IE 全量重排。
-- [ ] 新问题先在 G23 问题文件记录，再分析并处理；规范不能唯一确定行为、需要非通用特判、
+- [x] 新问题先在 G23 问题文件记录，再分析并处理；规范不能唯一确定行为、需要非通用特判、
   修改模块级绑定实现、增加运行时开销或改变 runtime 私有 ABI／公开 ABI／`.ft` 格式时，说明
   具体原因并交人工决策。纯重构、引入编译器对 std 的感知或绕过全量回归不属于本组授权。
 
-#### 27.3.2 既有用例迁移清单（供 Review）
+#### 27.3.2 既有用例迁移清单（已批准）
 
-以下为拟迁移的完整清单，实施前随 G23 Review 明确批准。两条均位于 `test/semantic/test_semantic.c`，
+以下为随 G23 启动批准的完整迁移清单。两条均位于 `test/semantic/test_semantic.c`，
 原 Feng 源码保持不变且仍是反向用例；只能调整错误原因、诊断断言和说明该原因的注释，不改成正例，
 不通过添加方法或块体绕开原反例。原函数名保留，新增正例使用准确的新名称。
 
-- [ ] `test_fit_builtin_target_rejects_specs_clause_without_body`：保留 `spec Named` 要求 `greet`
+- [x] `test_fit_builtin_target_rejects_specs_clause_without_body`：保留 `spec Named` 要求 `greet`
   而 `fit i32: Named;` 未提供实现的源码；原“requires a body”断言迁移为缺少必需方法的 `AE0705`，
   精确检查源文件、第 5 行第 5 列的 `i32` token、唯一语义错误及成员上下文。
-- [ ] `test_fit_array_target_rejects_specs_clause_without_body`：保留同一 requirement 与
+- [x] `test_fit_array_target_rejects_specs_clause_without_body`：保留同一 requirement 与
   `fit int[]: Named;` 的非法源码；原块体限制断言迁移为 `AE0705`，精确检查源文件、第 5 行
   第 5 列的 `int` token、唯一语义错误及成员上下文。
 
 空契约、已有可见实现的合法无块体适配，以及其他漏检／发码失败均新增用例。清单外既有测试如需
 修改，必须列出具体函数、原预期、新预期及原因，再次取得人工批准；不得批量刷新断言。
 
+#### 27.3.2.1 实施中新发现的迁移（已批准）
+
+关联 [ISSUE-G23-005](./feng-language-conformance-coverage-hardening-issues/g23.md#issue-g23-005同包跨模块的适配被按模块归属误判为孤儿适配)。
+`test/semantic/test_semantic.c` 中 `test_orphan_pu_fit_emits_info_and_downgrades` 的三个源码
+program 实际属于同包三模块，原断言“孤儿 info + 降级”与按包归属的规范不符。
+
+- [x] 已获人工批准：保留该用例源码，改为“无孤儿 info、fit 保持 public”，重命名为
+  `test_same_package_cross_module_fit_keeps_public_export` 并同步入口。真正外包的孤儿适配通过
+  新增真实 `.ft` 正反例覆盖，不移除原应保障的导出边界。
+
+人工已明确按包归属判断并批准修复及补测；本项与此前两条诊断迁移合为三条明确允许修改的旧用例。
+
 #### 27.3.3 本组独立验收
 
-- [ ] 逐项登记 SPEC01～SPEC28 的规范依据、已有测试函数／新增用例、正反向结果与测试层级；
+- [x] 逐项登记 SPEC01～SPEC28 的规范依据、已有测试函数／新增用例、正反向结果与测试层级；
   同文件、同模块多文件、同包跨模块和真实跨包的适用格须有直接证据。不适用格写明依据，
   “已经报错但未锁定根因”或“Semantic 接受但未运行”不能当作对应诊断／行为覆盖完成。
-- [ ] 建立稳定诊断映射，核对 `AE0331`、`AE0508`～`AE0514` 中相关出口、`AE0613`～`AE0616`、
+- [x] 建立稳定诊断映射，核对 `AE0331`、`AE0508`～`AE0514` 中相关出口、`AE0613`～`AE0616`、
   `AE0620`、`AE0701`～`AE0708`、`AE0801`～`AE0805`、`AE0808`～`AE0811` 的适用场景；
   未知名称、目标 callable、成员访问和 Parser 诊断按实际根因映射，不为覆盖码号构造用户不可达输入。
   每个最小反例检查码、源文件、token、行列、数量和阶段，不锁定完整文案或无语义要求的候选顺序。
-- [ ] 非法适配在 Semantic 被拒绝且不继续生成有缺口的 witness；重复分析／关系去重不重复产生
+- [x] 非法适配在 Semantic 被拒绝且不继续生成有缺口的 witness；重复分析／关系去重不重复产生
   同一个根因的诊断。合法程序同时通过 Semantic、Codegen 和 FCTS 运行，已复现的 `CE0319`、
   `CE0324` 不得作为预期结果保留下来。
-- [ ] FCTS 断言实际字段／方法结果、唯一实现来源及可见性隔离；Compiler test 断言关系、成员槽和
+- [x] FCTS 断言实际字段／方法结果、唯一实现来源及可见性隔离；Compiler test 断言关系、成员槽和
   发码结构。新增运行夹具登记到真实测试入口，不能留下未被调用的 `test(...)` 或只编译的正例。
   测试产物只在工程 `build/` 或 `temp/` 下运行。
-- [ ] 本组专项完成后，在 Codex 沙箱外独立执行完整 `make test`，记录命令、退出码、各套件及
+- [x] 本组专项完成后，在 Codex 沙箱外独立执行完整 `make test`，记录命令、退出码、各套件及
   UBSan／普通配置结果；其他组回归不能代替本组。后续继续修复实现或测试后重新执行全量回归。
-- [ ] 执行 `git diff --check`，核对只修改批准清单内的既有用例；逐个关闭问题或记录人工决定的
+- [x] 执行 `git diff --check`，核对只修改批准清单内的既有用例；逐个关闭问题或记录人工决定的
   非阻塞理由，填写交付记录，给出英文 commit message，不自动提交。
 
 ### 27.4 独立交付记录
 
-- 状态：实施文档已细化，待 Review；尚未实施。
+- 状态：已完成独立交付；SPEC01～SPEC28 覆盖、问题修复及最终沙箱外全量回归通过。
 - 准入核查基线：`4a2eb584`，最小探针已复现四项缺口；探针不计为正式补测或本组验收。
-- 稳定码映射与新增用例：—
-- 本组专项结果：—
-- 本组沙箱外 `make test`：—
-- 问题：[ISSUE-G23-001～ISSUE-G23-004](./feng-language-conformance-coverage-hardening-issues/g23.md)，
-  均待后续实施修复和验证。
-- 建议 commit message：`test: audit spec and fit diagnostics`
+- SPEC01～SPEC28 的规范依据、已有／新增用例、测试层级及稳定诊断映射统一登记在
+  [G23 覆盖证据与诊断映射](./feng-language-conformance-coverage-hardening-issues/g23.md#覆盖证据与诊断映射)，
+  不在主计划重复维护整份清单。
+- 本组专项：Parser、Semantic、Codegen、Symbol 通过；新增真实 `.ft` 孤儿归属 24 格，
+  可见性／实现冲突往返矩阵，以及泛型数组返回发码 12 格通过。FCTS 已注册并运行至 1191/1191。
+- 最终全量命令：2026-09-07 沙箱外 `make test > g23-final-regression-verified.log 2>&1`，
+  **退出码 0**。UBSan 与普通配置的编译器／runtime／CLI／Symbol、smoke、CLI 集成、
+  std（各 604/604）、FCTS（各 1191/1191）与性能约束检查全部通过；普通配置的增量构建、
+  发布／安装、macOS finalization、bundled packages 和 toolchain-prebuilt 检查也全部通过。
+- 失败经过保留：`g23-full-regression-progress.log` 的首轮 `make test` 退出码 2，
+  UBSan 在 FCTS 触发 `CE0318`，普通配置未开始；修复后的 `g23-final-regression.log` 中
+  UBSan 全部通过，但普通配置因新增 C 测试字符串拼接告警退出码 2。该夹具已修正，未关闭告警、
+  降低构建要求或改动既有测试来绕过失败；最终验收只取本条上方的新完整回归。
+- 问题记录：[ISSUE-G23-001～ISSUE-G23-010](./feng-language-conformance-coverage-hardening-issues/g23.md)。
+  001～009 为已修复产品问题，010 为已修正的新测试夹具问题，均经专项及最终全量验收关闭。
+- 既有用例仅修改批准的三条：两个无块体非法适配保留源码，诊断改为缺失成员 `AE0705`；
+  一个同包三模块孤儿用例保留源码，改为不降级并准确重命名。其他既有测试仅增加入口注册。
+- 性能与 ABI：关系、可见性、实现选择均在编译期处理；没有新增堆装箱、动态关系搜索或第二层
+  witness 分派。008 按人工批准用返回槽恢复 `T` 的正确复制与必要 ARC，引用保持身份，值保持
+  副本独立；不能把原错误的存储地址返回当作“逐指令零增量”的比较基准。导出数组 fit 方法的
+  生成 C 返回约定变化，provider／consumer 必须一起重编译；runtime 私有 ABI 和 `.ft` 格式未改。
+- `git diff --check` 及证据链接／测试名称校验通过；仅修改上述三条获批旧用例，未自动提交。
+- 建议 commit message：`fix: complete G23 spec and fit conformance coverage`
 
 ## 28 G24：复合类型诊断
 

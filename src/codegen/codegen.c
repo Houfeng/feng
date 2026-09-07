@@ -11779,6 +11779,7 @@ static CGType *cg_instantiate_builtin_fit_return_type(CG *cg,
     if (return_type->kind == CG_TYPE_ARRAY || return_type->kind == CG_TYPE_POINTER) {
         result = cgtype_new(return_type->kind);
         if (result == NULL) return NULL;
+        result->array_element_writable = return_type->array_element_writable;
         result->element = cg_instantiate_builtin_fit_return_type(cg,
                                                                  bf,
                                                                  return_type->element,
@@ -28801,10 +28802,19 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             cg_resolve_imported_module_binding_decl(cg, ma);
 
         if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION && rc->function_decl != NULL) {
+            /* Qualification changes lookup syntax, not the resolved callable's
+             * ABI. Reuse the same generic/extern paths as unqualified calls. */
+            const FengDecl *decl = rc->function_decl;
+            const ExternFn *external = decl->is_extern ? cg_find_extern_by_decl(cg, decl) : NULL;
+            if (decl->as.function_decl.type_param_count > 0U) {
+                if (external != NULL) return cg_emit_generic_extern_call(cg, e, decl, external, out);
+                const GenericFn *generic = cg_find_generic_fn_by_decl(cg, decl);
+                if (generic != NULL) return cg_emit_generic_call(cg, e, generic, out);
+            }
             return cg_emit_registered_call(cg,
                                            e,
-                                           cg_find_free_fn_by_decl(cg, rc->function_decl),
-                                           NULL,
+                                           cg_find_free_fn_by_decl(cg, decl),
+                                           external,
                                            out);
         }
 
@@ -29578,7 +29588,34 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     er_free(&recv);
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
-                if (cg_type_uses_reified_storage(cg, out->type)) {
+                if (out->type->kind == CG_TYPE_GENERIC_PARAM) {
+                    char *descriptor_name = NULL;
+                    char *size_name = NULL;
+                    if (!cg_emit_erased_generic_storage_declaration(cg, out->type,
+                            return_temp, e->token, &descriptor_name, &size_name)) {
+                        free(return_temp);
+                        buf_free(&b);
+                        er_free(&recv);
+                        return false;
+                    }
+                    buf_append_fmt(&b, ", %s)", return_temp);
+                    buf_append_fmt(cg->cur_body, "    %s;\n", b.data);
+                    if (!cg_register_erased_generic_storage_for_cleanup(cg, return_temp,
+                            out->type, descriptor_name, size_name, e->token)) {
+                        free(descriptor_name);
+                        free(size_name);
+                        free(return_temp);
+                        buf_free(&b);
+                        er_free(&recv);
+                        return false;
+                    }
+                    out->c_expr = strdup(return_temp);
+                    out->is_storage_address = true;
+                    out->is_addressable = true;
+                    out->uses_erased_generic_storage = true;
+                    out->erased_generic_descriptor_c_name = descriptor_name;
+                    out->erased_generic_size_c_name = size_name;
+                } else if (cg_type_uses_reified_storage(cg, out->type)) {
                     char *descriptor_name = NULL;
                     char *size_name = NULL;
 
@@ -44065,8 +44102,8 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
     return true;
 }
 
-/* Builtin array fits share one body across all element types.  A value-
- * semantics return whose concrete type depends on the fit target parameter
+/* Builtin array fits share one body across all element types. An erased T
+ * return or value-semantics return depending on the fit target parameter
  * cannot use a C return value: the open and concrete generic structs are
  * distinct C types and the concrete layout is described at the call site.
  * Use the same caller-provided output-slot ABI as other generic shared bodies. */
@@ -44075,9 +44112,10 @@ static bool cg_builtin_fit_return_uses_out(const BuiltinFit *bf,
     return bf != NULL && bf->target_type_param_count > 0U &&
            m != NULL && m->return_type != NULL &&
            m->return_type->kind != CG_TYPE_VOID &&
-           cg_type_is_value_semantics(m->return_type) &&
+           (m->return_type->kind == CG_TYPE_GENERIC_PARAM ||
+           (cg_type_is_value_semantics(m->return_type) &&
            m->return_type->user != NULL &&
-           m->return_type->user->generic_context_type_param_count > 0U;
+           m->return_type->user->generic_context_type_param_count > 0U));
 }
 
 static void cg_emit_builtin_fit_method_proto(Buf *out,
@@ -51166,6 +51204,34 @@ static bool cg_user_spec_reaches_ancestor(const CG *cg,
     return false;
 }
 
+/* Recover a Semantic-selected implementation even when the relation was
+ * declared in a different fit. Generic lowering still checks the closed
+ * signature; this predicate preserves the exact source method identity. */
+static bool cg_method_is_selected_spec_implementation(const CG *cg,
+                                                      const UserMethod *method,
+                                                      const UserSpecMember *slot) {
+    if (cg == NULL || cg->analysis == NULL || method == NULL || method->member == NULL) {
+        return false;
+    }
+    for (size_t i = 0U; i < cg->analysis->spec_implementation_selection_count; ++i) {
+        const FengSpecImplementationSelection *selected = &cg->analysis->spec_implementation_selections[i];
+        if (selected->impl_member == method->member &&
+            cg_user_spec_member_has_decl(slot, selected->spec_member)) {
+            return true;
+        }
+    }
+    for (size_t i = 0U; i < cg->analysis->spec_witness_count; ++i) {
+        const FengSpecWitness *witness = &cg->analysis->spec_witnesses[i];
+        for (size_t j = 0U; j < witness->member_count; ++j) {
+            if (witness->members[j].impl_member == method->member &&
+                cg_user_spec_member_has_decl(slot, witness->members[j].spec_member)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 /* Check whether a user fit's declared specs reach one witness target. */
 static bool cg_user_fit_targets_spec(const CG *cg,
                                      const UserFit *fit,
@@ -51204,15 +51270,155 @@ static bool cg_builtin_fit_matches_subject(const BuiltinFit *fit,
     return fit->target_type->enum_decl == NULL;
 }
 
+/* Restore the complete closed array identity, including every writable layer.
+ * Short keys store a mask; deeper keys already own the equivalent type tree. */
+static CGType *cg_array_type_from_subject_key(CG *cg,
+                                             const FengSemanticSubjectKey *key,
+                                             FengToken blame) {
+    CGType *type = NULL;
+    if (key == NULL || key->kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) return NULL;
+    if (key->as.array.rank > 64U) {
+        return cg_resolve_type(cg, key->as.array.array_type_ref, &blame, &type)
+            ? type : NULL;
+    }
+    if (!cg_resolve_type(cg, key->as.array.element_type_ref, &blame, &type)) return NULL;
+    for (size_t layer = key->as.array.rank; layer > 0U; --layer) {
+        CGType *outer = cgtype_new(CG_TYPE_ARRAY);
+        if (outer == NULL) {
+            cgtype_free(type);
+            return NULL;
+        }
+        outer->array_element_writable =
+            (key->as.array.writable_mask & (UINT64_C(1) << (layer - 1U))) != 0U;
+        outer->element = type;
+        type = outer;
+    }
+    return type;
+}
+
+/* Check a selected array method in its closed owner environment. Never compare
+ * an open T with a concrete slot or confuse different array element targets. */
+static bool cg_builtin_method_matches_closed_spec_slot(
+    CG *cg, const BuiltinFit *fit, const UserMethod *method,
+    const FengSemanticSubjectKey *key, const UserSpec *spec,
+    const UserSpecMember *slot) {
+    if (key == NULL || key->kind != FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+        return cg_user_method_matches_exact_spec_slot(cg, method, spec, slot);
+    }
+    if (fit == NULL || method == NULL || method->member == NULL) return false;
+    CGType *subject = cg_array_type_from_subject_key(cg, key, method->member->token);
+    if (subject == NULL) return false;
+    CGType *target = cg_instantiate_builtin_fit_return_type(
+        cg, fit, fit->target_type, subject->element, method->member->token);
+    bool matches = target != NULL && cg_types_equal(target, subject);
+    cgtype_free(target);
+    UserMethod closed = *method;
+    closed.return_type = cg_instantiate_builtin_fit_return_type(
+        cg, fit, method->return_type, subject->element, method->member->token);
+    closed.param_types = calloc(method->param_count, sizeof(*closed.param_types));
+    matches = matches && closed.return_type != NULL &&
+        (method->param_count == 0U || closed.param_types != NULL);
+    for (size_t i = 0U; matches && i < method->param_count; ++i) {
+        closed.param_types[i] = cg_instantiate_builtin_fit_return_type(
+            cg, fit, method->param_types[i], subject->element, method->member->token);
+        matches = closed.param_types[i] != NULL;
+    }
+    matches = matches && cg_user_method_matches_exact_spec_slot(cg, &closed, spec, slot);
+    if (closed.param_types != NULL) {
+        for (size_t i = 0U; i < method->param_count; ++i) cgtype_free(closed.param_types[i]);
+    }
+    free(closed.param_types);
+    cgtype_free(closed.return_type);
+    cgtype_free(subject);
+    return matches;
+}
+
+/* Adapt the existing witness slot to a generic array shared body. The closed
+ * subject determines its descriptor at compile time; return slots transfer the
+ * body's existing owned result without boxing, extra retain or runtime lookup. */
+static bool cg_emit_ref_subject_load(CG *cg, Buf *out, const CGType *subject_type,
+                                     FengToken blame, const char *name);
+
+/* Emit the descriptor-bearing adaptation for one selected shared method. */
+static bool cg_emit_generic_builtin_spec_method_thunk(
+    CG *cg, const FengSemanticSubjectKey *key, const BuiltinFit *fit,
+    const UserMethod *method, const UserSpecMember *slot,
+    const char *prefix, FengToken blame) {
+    CGType *subject = cg_array_type_from_subject_key(cg, key, blame);
+    char *descriptor = NULL, *function_descriptor = NULL;
+    bool ok = false;
+    if (subject == NULL || fit->target_type_param_count != 1U) goto cleanup;
+    if (!cg_generic_descriptor_expr(cg, subject->element, NULL, &blame, &descriptor)) goto cleanup;
+    function_descriptor = cg_builtin_fit_fdesc_expr(cg, fit, method, subject->element, &blame);
+    if (function_descriptor == NULL) goto cleanup;
+    bool provider_out = cg_builtin_fit_return_uses_out(fit, method);
+    bool slot_out = slot->value_abi_kind == CG_CALLABLE_ABI_ADDRESS;
+    bool returns_value = slot->type->kind != CG_TYPE_VOID;
+    Buf *buffers[] = {&cg->fn_protos, &cg->witness_defs};
+    for (size_t pass = 0U; pass < 2U; ++pass) {
+        Buf *out = buffers[pass];
+        buf_append_cstr(out, "static ");
+        cg_emit_callable_abi_return_type(out, slot->type, slot->value_abi_kind);
+        buf_append_fmt(out, " %s__%s(", prefix, slot->c_field_name);
+        bool has_parameter = !slot->is_static;
+        if (has_parameter) buf_append_cstr(out, "void *_subject");
+        for (size_t i = 0U; i < slot->param_count; ++i) {
+            if (has_parameter) buf_append_cstr(out, ", ");
+            cg_emit_callable_abi_param_type(out, slot->param_types[i], slot->param_abi_kinds[i]);
+            buf_append_fmt(out, " p%zu", i);
+            has_parameter = true;
+        }
+        if (slot_out) {
+            if (has_parameter) buf_append_cstr(out, ", ");
+            buf_append_cstr(out, "void *_out");
+            has_parameter = true;
+        }
+        if (!has_parameter) buf_append_cstr(out, "void");
+        buf_append_cstr(out, pass == 0U ? ");\n" : ") {\n");
+    }
+    Buf *out = &cg->witness_defs;
+    if (!slot->is_static && !cg_emit_ref_subject_load(cg, out, subject, blame, "_self_ref")) goto cleanup;
+    if (returns_value && (provider_out != slot_out)) {
+        buf_append_cstr(out, "    ");
+        cg_emit_c_type(out, slot->type);
+        buf_append_cstr(out, " _result;\n");
+    }
+    buf_append_cstr(out, "    ");
+    if (returns_value && !provider_out) buf_append_cstr(out, slot_out ? "_result = " : "return ");
+    buf_append_fmt(out, "%s(%s%s, %s", method->c_name,
+                   slot->is_static ? "" : "_self_ref, ", function_descriptor, descriptor);
+    for (size_t i = 0U; i < slot->param_count; ++i) {
+        char name[32];
+        snprintf(name, sizeof(name), "p%zu", i);
+        buf_append_cstr(out, ", ");
+        if (method->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+            buf_append_fmt(out, "%s%s", slot->param_abi_kinds[i] == CG_CALLABLE_ABI_ADDRESS ? "" : "&", name);
+        } else if (!cg_append_witness_forward_arg(cg, out, slot->param_types[i],
+                    method->param_types[i], slot->param_abi_kinds[i], name, blame)) goto cleanup;
+    }
+    if (provider_out) buf_append_cstr(out, slot_out ? ", _out" : ", &_result");
+    buf_append_cstr(out, ");\n");
+    if (provider_out && !slot_out) buf_append_cstr(out, "    return _result;\n");
+    if (!provider_out && slot_out) buf_append_cstr(out, "    memcpy(_out, &_result, sizeof _result);\n");
+    buf_append_cstr(out, "}\n\n");
+    ok = true;
+cleanup:
+    free(descriptor);
+    free(function_descriptor);
+    cgtype_free(subject);
+    return ok;
+}
+
 /* Resolve one non-user subject implementation from the exact closed spec
  * slot. This is used when multiple closed requirements share one generic AST
  * declaration and Semantic's declaration identity alone is therefore not a
  * unique key. The scan is compiler-only; emitted witnesses retain direct
  * function pointers and perform no runtime lookup. */
 static size_t cg_find_builtin_fit_method_for_spec_slot(
-    const CG *cg,
+    CG *cg,
     CGTypeKind subject_kind,
     const FengDecl *enum_decl,
+    const FengSemanticSubjectKey *subject_key,
     const UserSpec *spec,
     const UserSpecMember *slot,
     const BuiltinFit **out_fit,
@@ -51235,8 +51441,7 @@ static size_t cg_find_builtin_fit_method_for_spec_slot(
 
         if (!cg_builtin_fit_matches_subject(candidate_fit,
                                             subject_kind,
-                                            enum_decl) ||
-            !cg_builtin_fit_targets_spec(cg, candidate_fit, spec)) {
+                                            enum_decl)) {
             continue;
         }
         for (size_t method_index = 0U;
@@ -51245,12 +51450,14 @@ static size_t cg_find_builtin_fit_method_for_spec_slot(
             const UserMethod *candidate_method =
                 &candidate_fit->methods[method_index];
 
+            if (!cg_builtin_fit_targets_spec(cg, candidate_fit, spec) &&
+                !cg_method_is_selected_spec_implementation(cg, candidate_method, slot)) {
+                continue;
+            }
             if (candidate_method->member == NULL ||
                 strcmp(candidate_method->feng_name, slot->feng_name) != 0 ||
-                !cg_user_method_matches_exact_spec_slot(cg,
-                                                        candidate_method,
-                                                        spec,
-                                                        slot)) {
+                !cg_builtin_method_matches_closed_spec_slot(cg, candidate_fit,
+                    candidate_method, subject_key, spec, slot)) {
                 continue;
             }
             if (out_fit != NULL) {
@@ -51762,7 +51969,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
         for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
             const UserFit *fit = &cg->user_fits[fit_index];
 
-            if (fit->target != t || !cg_user_fit_targets_spec(cg, fit, s)) {
+            if (fit->target != t) {
                 continue;
             }
             if (cg->cur_program != NULL && fit->owner_program != NULL &&
@@ -51772,6 +51979,10 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
             for (size_t method_index = 0; method_index < fit->method_count; ++method_index) {
                 const UserMethod *candidate = &fit->methods[method_index];
 
+                if (!cg_user_fit_targets_spec(cg, fit, s) &&
+                    !cg_method_is_selected_spec_implementation(cg, candidate, sm)) {
+                    continue;
+                }
                 /* fit bodies may mix instance and static methods; only static
                  * methods can satisfy spec static method slots. */
                 if (candidate->member == NULL || !candidate->member->is_static) {
@@ -51820,7 +52031,7 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
     for (size_t fit_index = 0; fit_index < cg->user_fit_count; ++fit_index) {
         const UserFit *fit = &cg->user_fits[fit_index];
 
-        if (fit->target != t || !cg_user_fit_targets_spec(cg, fit, s)) {
+        if (fit->target != t) {
             continue;
         }
         if (cg->cur_program != NULL && fit->owner_program != NULL &&
@@ -51830,6 +52041,10 @@ static bool cg_resolve_witness_binding_fallback(CG *cg,
         for (size_t method_index = 0; method_index < fit->method_count; ++method_index) {
             const UserMethod *candidate = &fit->methods[method_index];
 
+            if (!cg_user_fit_targets_spec(cg, fit, s) &&
+                !cg_method_is_selected_spec_implementation(cg, candidate, sm)) {
+                continue;
+            }
             if (strcmp(candidate->feng_name, sm->feng_name) != 0 ||
                 !cg_user_method_matches_spec_member(cg, candidate, s, sm)) {
                 continue;
@@ -52306,6 +52521,7 @@ static bool cg_ensure_witness_instance(
                             cg,
                             CG_TYPE_I32,
                             enum_decl,
+                            subject_key,
                             s,
                             sm,
                             &bf,
@@ -52332,7 +52548,9 @@ static bool cg_ensure_witness_instance(
                             s->feng_name);
                     }
                 }
-                if (bf == NULL || !cg_builtin_fit_targets_spec(cg, bf, s) ||
+                /* Semantic selects the implementation independently of the
+                 * fit that contributes the nominal relation. */
+                if (bf == NULL ||
                     !cg_builtin_fit_matches_subject(bf, CG_TYPE_I32, enum_decl)) {
                     buf_free(&prefix);
                     free(s_san);
@@ -52665,6 +52883,7 @@ static bool cg_ensure_witness_instance(
                     cg,
                     subject_kind,
                     NULL,
+                    subject_key,
                     s,
                     sm,
                     &bf,
@@ -52726,12 +52945,13 @@ static bool cg_ensure_witness_instance(
             }
         }
         if (!witness_mapping_ambiguous &&
-            !cg_user_method_matches_exact_spec_slot(cg, fm, s, sm)) {
+            !cg_builtin_method_matches_closed_spec_slot(cg, bf, fm, subject_key, s, sm)) {
             size_t match_count =
                 cg_find_builtin_fit_method_for_spec_slot(
                     cg,
                     subject_kind,
                     NULL,
+                    subject_key,
                     s,
                     sm,
                     &bf,
@@ -52754,7 +52974,8 @@ static bool cg_ensure_witness_instance(
                     s->feng_name);
             }
         }
-        if (bf == NULL || !cg_builtin_fit_targets_spec(cg, bf, s) ||
+        /* The selected method need not redeclare the relation in its own fit. */
+        if (bf == NULL ||
             !cg_builtin_fit_matches_subject(bf, subject_kind, NULL)) {
             buf_free(&prefix);
             free(s_san);
@@ -52771,6 +52992,16 @@ static bool cg_ensure_witness_instance(
         /* D4 contract: witness thunk must forward into the same emitted fit
          * method symbol used by direct-call (fm->c_name). Do not synthesize
          * a separate box-only method implementation symbol. */
+
+        if (bf->target_type_param_count > 0U) {
+            if (!cg_emit_generic_builtin_spec_method_thunk(cg, subject_key, bf,
+                    fm, sm, prefix.data, blame)) {
+                buf_free(&prefix);
+                free(s_san);
+                return false;
+            }
+            continue;
+        }
 
         if (sm->is_static) {
             if (!cg_emit_static_spec_method_thunk(cg,
@@ -56590,6 +56821,21 @@ static bool cg_emit_all_programs(CG *cg,
      * (e.g. Named) are complete when union specs (e.g. Display) embed them
      * by value. */
     if (!cg_emit_value_and_union_struct_bodies_sorted(cg)) return false;
+    /* Box layout is needed by consumers even though the owning package
+     * supplies the descriptor. Emit it once after its embedded value layout,
+     * independently of whether descriptor definitions are emitted locally. */
+    for (size_t i = 0U; i < cg->user_type_count; ++i) {
+        const UserType *type = &cg->user_types[i];
+        if (cg_user_type_is_value_semantics(type) &&
+            (!type->is_generic_instance || type->generic_context_type_param_count == 0U)) {
+            buf_append_fmt(&cg->headers,
+                           "struct %s {\n"
+                           "    FengManagedHeader _hdr;\n"
+                           "    struct %s value;\n"
+                           "};\n\n",
+                           type->c_value_box_struct_name, type->c_struct_name);
+        }
+    }
     /* Pass 3.4: emit enum typedefs + descriptors before user type
      * definitions so that @value type equal functions referencing enum
      * descriptors find them already declared. */
@@ -59047,13 +59293,6 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
     tuple_value_type.user = t;
 
     size_t box_pointer_slot_count = cg_aggregate_pointer_slot_count(&tuple_value_type);
-    buf_append_fmt(td,
-                   "struct %s {\n"
-                   "    FengManagedHeader _hdr;\n"
-                   "    struct %s value;\n"
-                   "};\n\n",
-                   t->c_value_box_struct_name,
-                   t->c_struct_name);
     if (box_pointer_slot_count > 0U) {
         Buf value_base;
 

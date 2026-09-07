@@ -5758,10 +5758,195 @@ static void test_g22_real_ft_module_diagnostics(void) {
     free(tmp_dir);
 }
 
+/* G23: semantic analysis against production FT imports; failed consumers keep
+ * an exact source/token diagnostic and never see the producer source AST. */
+static FengSemanticAnalysis *g23_ft_analyze(const FengProgram *const *programs,
+                                            size_t count,
+                                            const FengSemanticImportedModuleQuery *query,
+                                            const char *code) {
+    FengSemanticAnalyzeOptions options = {0};
+    FengSemanticAnalysis *analysis = NULL;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U;
+    options.target = FENG_COMPILE_TARGET_LIB;
+    options.pointer_size = feng_get_host_pointer_size();
+    options.imported_modules = query;
+    bool result = feng_semantic_analyze_with_options(programs, count, &options,
+                                                     &analysis, &errors, &error_count);
+    if (result != (code == NULL) || error_count != (code == NULL ? 0U : 1U)) {
+        fprintf(stderr, "G23 FT expected %s\n", code != NULL ? code : "success");
+        for (size_t i = 0U; i < error_count; ++i)
+            fprintf(stderr, "%s:%u:%u %s %s\n", errors[i].path, errors[i].token.line,
+                    errors[i].token.column, errors[i].code, errors[i].message);
+    }
+    ASSERT(result == (code == NULL));
+    ASSERT(error_count == (code == NULL ? 0U : 1U));
+    if (code != NULL) {
+        ASSERT(strcmp(errors[0].code, code) == 0);
+        ASSERT(strcmp(errors[0].path, "g23_consumer.ff") == 0);
+        if (errors[0].token.line != 5U || errors[0].token.column != 81U)
+            fprintf(stderr, "G23 FT token %u:%u %s\n", errors[0].token.line,
+                    errors[0].token.column, errors[0].message);
+        ASSERT(errors[0].token.line == 5U && errors[0].token.column == 81U);
+        ASSERT(errors[0].token.length == 5U);
+        ASSERT(memcmp(errors[0].token.lexeme, "value", 5U) == 0);
+    }
+    feng_semantic_errors_free(errors, error_count);
+    return analysis;
+}
+
+/* SPEC23/24/25: all ownership combinations, builtin external ownership,
+ * and pure extensions, using two genuine public-FT roundtrips. */
+static void test_g23_real_ft_orphan_ownership(void) {
+    static const char *targets[] = {"Foreign", "Local", "i32", "string", "i32[]", "i32[!]"};
+    char *tmp_dir = make_temp_dir();
+    char public_root[1024];
+    FengSymbolError error = {0};
+    FengSymbolProvider *external = NULL;
+    ASSERT(snprintf(public_root, sizeof(public_root), "%s/mod", tmp_dir) > 0);
+    export_public_source_or_die("g23_external.ff",
+        "open module g23.external;\nopen type Foreign {}\nopen spec ForeignSpec {}\n", public_root);
+    ASSERT(feng_symbol_provider_create(&external, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(external, public_root,
+                                            FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC, &error));
+    FengSymbolImportedModuleCache *external_cache = feng_symbol_imported_module_cache_create(external);
+    ASSERT(external_cache != NULL);
+    FengSemanticImportedModuleQuery external_query = feng_symbol_imported_module_cache_as_query(external_cache);
+
+    for (size_t target = 0U; target < 6U; ++target) {
+        for (size_t spec = 0U; spec < 2U; ++spec) {
+            for (size_t extension = 0U; extension < 2U; ++extension) {
+                size_t id = target * 4U + spec * 2U + extension;
+                bool orphan = target != 1U && spec == 0U && extension == 0U;
+                const char *contract = spec ? "LocalSpec" : "ForeignSpec";
+                char local[256], adapter[1024], consumer[1024], relation[96];
+                snprintf(local, sizeof(local), "open module g23.local%zu;\nopen type Local {}\nopen spec LocalSpec {}\n", id);
+                snprintf(relation, sizeof(relation), "%s%s", extension ? "" : ": ", extension ? "" : contract);
+                char local_use[256] = "";
+                if (!extension) snprintf(local_use, sizeof(local_use),
+                    "func within(value: %s): %s { return value; }\n", targets[target], contract);
+                snprintf(adapter, sizeof(adapter), "open module g23.adapter%zu;\n"
+                         "import g23.external;\nimport g23.local%zu;\nopen fit %s%s {}\n"
+                         "%s", id, id, targets[target], relation, local_use);
+                FengProgram *local_program = parse_or_die("g23_local.ff", local);
+                FengProgram *adapter_program = parse_or_die("g23_adapter.ff", adapter);
+                const FengProgram *programs[] = {local_program, adapter_program};
+                FengSemanticAnalysis *analysis = g23_ft_analyze(programs, 2U, &external_query, NULL);
+                ASSERT(analysis->info_count == (orphan ? 1U : 0U));
+                ASSERT(adapter_program->declarations[0]->kind == FENG_DECL_FIT);
+                ASSERT(adapter_program->declarations[0]->visibility ==
+                       (orphan ? FENG_VISIBILITY_PRIVATE : FENG_VISIBILITY_PUBLIC));
+                if (orphan) {
+                    ASSERT(strcmp(analysis->infos[0].path, "g23_adapter.ff") == 0);
+                    ASSERT(analysis->infos[0].token.line == 4U && analysis->infos[0].token.column == 10U);
+                    ASSERT(strstr(analysis->infos[0].message, "orphan fit") != NULL);
+                }
+                FengSymbolExportOptions export_options = {0};
+                export_options.public_root = public_root;
+                ASSERT(feng_symbol_export_analysis(analysis, &export_options, &error));
+                feng_semantic_analysis_free(analysis);
+                feng_program_free(local_program);
+                feng_program_free(adapter_program);
+
+                /* Reload only FT: same-package ownership in the producer must
+                 * not be confused with imported ownership in this consumer. */
+                FengSymbolProvider *provider = NULL;
+                ASSERT(feng_symbol_provider_create(&provider, &error));
+                ASSERT(feng_symbol_provider_add_ft_root(provider, public_root,
+                                                        FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC, &error));
+                char module[32];
+                snprintf(module, sizeof(module), "adapter%zu", id);
+                FengSlice segments[] = {slice_from_cstr("g23"), slice_from_cstr(module)};
+                const FengSymbolImportedModule *imported = feng_symbol_provider_find_module(provider, segments, 2U);
+                ASSERT(imported != NULL);
+                ASSERT(feng_symbol_module_fit_count(imported) == (orphan ? 0U : 1U));
+                FengSymbolImportedModuleCache *cache = feng_symbol_imported_module_cache_create(provider);
+                ASSERT(cache != NULL);
+                FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
+                if (!extension) {
+                    /* The padding makes the value token stable across target
+                     * and contract name lengths, without deriving it from diagnostics. */
+                    char prefix[128];
+                    snprintf(prefix, sizeof(prefix), "func check(value: %s) { let view: %s =", targets[target], contract);
+                    snprintf(consumer, sizeof(consumer), "module consumer;\nimport g23.external;\n"
+                             "import g23.local%zu;\nimport g23.adapter%zu;\n%-80svalue; }\n", id, id, prefix);
+                    FengProgram *program = parse_or_die("g23_consumer.ff", consumer);
+                    const FengProgram *consumer_programs[] = {program};
+                    analysis = g23_ft_analyze(consumer_programs, 1U, &query, orphan ? "AE1003" : NULL);
+                    feng_semantic_analysis_free(analysis);
+                    feng_program_free(program);
+                }
+                feng_symbol_imported_module_cache_free(cache);
+                feng_symbol_provider_free(provider);
+            }
+        }
+    }
+    feng_symbol_imported_module_cache_free(external_cache);
+    feng_symbol_provider_free(external);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(tmp_dir);
+    free(tmp_dir);
+}
+
+/* SPEC12/13/23/24/26: serialize multiple relation and method sources, then
+ * discard provider ASTs before proving consumer import isolation and conflicts. */
+static void test_g23_real_ft_fit_visibility_and_conflicts(void) {
+    const char *sources[] = {
+        "open module g23.ft.api; open type Item {} open spec Reader { func read(): i32; }",
+        "open module g23.ft.impl; import g23.ft.api; open fit Item { func read(): i32 { return 7; } }",
+        "open module g23.ft.relation; import g23.ft.api; import g23.ft.impl; open fit Item: Reader; open fit Item: Reader {}",
+        "open module g23.ft.extra; import g23.ft.api; open fit Item { func read(): i32 { return 8; } }"
+    };
+    FengProgram *owned[4];
+    const FengProgram *programs[4];
+    char *directory = make_temp_dir();
+    char public_root[1024];
+    snprintf(public_root, sizeof(public_root), "%s/mod", directory);
+    for (size_t i = 0U; i < 4U; ++i) {
+        owned[i] = parse_or_die("g23_provider.ff", sources[i]);
+        programs[i] = owned[i];
+    }
+    FengSemanticAnalysis *analysis = g23_ft_analyze(programs, 4U, NULL, NULL);
+    FengSymbolError error = {0};
+    FengSymbolExportOptions options = {0};
+    options.public_root = public_root;
+    ASSERT(feng_symbol_export_analysis(analysis, &options, &error));
+    feng_semantic_analysis_free(analysis);
+    for (size_t i = 0U; i < 4U; ++i) feng_program_free(owned[i]);
+    FengSymbolProvider *provider = NULL;
+    ASSERT(feng_symbol_provider_create(&provider, &error));
+    ASSERT(feng_symbol_provider_add_ft_root(provider, public_root, FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC, &error));
+    FengSymbolImportedModuleCache *cache = feng_symbol_imported_module_cache_create(provider);
+    ASSERT(cache != NULL);
+    FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
+    for (size_t variant = 0U; variant < 4U; ++variant) {
+        char source[1024];
+        snprintf(source, sizeof(source), "module consumer;\nimport g23.ft.api;\nimport g23.ft.impl;\n%s%s\n%-80svalue; }\n",
+                 variant == 0U || variant == 2U ? "import g23.ft.relation as relation;" : "",
+                 variant == 2U ? "import g23.ft.extra;" : "",
+                 "func check(value: Item) { let view: Reader =");
+        FengProgram *consumer = parse_or_die("g23_consumer.ff", source);
+        FengProgram *sibling = parse_or_die("g23_sibling.ff", "module consumer; import g23.ft.relation;");
+        const FengProgram *consumer_programs[] = {consumer, sibling};
+        analysis = g23_ft_analyze(consumer_programs, variant == 3U ? 2U : 1U, &query,
+                                  variant == 0U ? NULL : variant == 2U ? "AE0804" : "AE1003");
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(consumer);
+        feng_program_free(sibling);
+    }
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+    (void)remove_dir_recursive(directory);
+    free(directory);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
     test_g22_real_ft_module_diagnostics();
+    test_g23_real_ft_orphan_ownership();
+    test_g23_real_ft_fit_visibility_and_conflicts();
 
     test_roundtrip_public_module();
     test_union_spec_ft_roundtrip_preserves_normalized_members();

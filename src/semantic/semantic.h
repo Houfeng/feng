@@ -1018,6 +1018,13 @@ bool feng_semantic_subject_key_copy_for_analysis(
     const FengSemanticSubjectKey *source,
     FengSemanticSubjectKey *out_key);
 
+/* Materialize a closed array key without borrowing resolver-owned refs.
+ * Existing exact relation keys should be reused instead when available. */
+bool feng_semantic_subject_key_from_array_instance(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeRef *array_type_ref,
+    FengSemanticSubjectKey *out_key);
+
 /* Look up the witness entry for (subject_key, spec_decl). Returns NULL when
  * no coercion has yet demanded this (T, S) pair (per §8.2). */
 const FengSpecWitness *feng_semantic_lookup_spec_witness(

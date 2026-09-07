@@ -183,6 +183,17 @@ bool feng_semantic_subject_key_copy_for_analysis(
     return true;
 }
 
+/* Own a closed array instance when no declaration-lifetime relation key can
+ * supply it. The compiler-only clone survives generic-call resolver cleanup. */
+bool feng_semantic_subject_key_from_array_instance(
+    const FengSemanticAnalysis *analysis,
+    const FengTypeRef *array_type_ref,
+    FengSemanticSubjectKey *out_key) {
+    const FengTypeRef *owned = analysis_clone_type_ref(
+        (FengSemanticAnalysis *)analysis, array_type_ref);
+    return owned != NULL && feng_semantic_subject_key_init_array_from_type_ref(out_key, owned);
+}
+
 static FengSpecCoercionSite *find_site_mut(FengSemanticAnalysis *analysis,
                                            const FengExpr *expr) {
     if (analysis == NULL || expr == NULL) {

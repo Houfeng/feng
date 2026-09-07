@@ -5208,6 +5208,11 @@ static bool spec_relation_source_visible_from_context(
 static bool type_ref_satisfies_spec_type_ref(const ResolveContext *ctx,
                                              const FengTypeRef *source_type_ref,
                                              const FengTypeRef *spec_type_ref);
+/* Find a nominal relation after closing its subject/contract templates. */
+static const FengSpecRelation *find_instantiated_spec_relation(
+    const ResolveContext *ctx, const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref, const FengSemanticSubjectKey *subject_key,
+    const FengTypeRef *spec_type_ref);
 static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    const FengCallableSignature *callable,
                                                    size_t type_param_index,
@@ -5756,6 +5761,9 @@ static bool fit_target_collect_array_local_type_param(const ResolveContext *cont
     return true;
 }
 
+/* Determine export ownership from package provenance, not module identity.
+ * Builtins and arrays have no local owner; only a locally defined spec can
+ * make their nominal relations non-orphan. Method-only fits are unaffected. */
 static bool maybe_downgrade_orphan_fit_export(ResolveContext *context,
                                               const FengDecl *fit_decl,
                                               FitTargetResolution fit_target,
@@ -5776,17 +5784,15 @@ static bool maybe_downgrade_orphan_fit_export(ResolveContext *context,
         const FengSemanticModule *target_module =
             find_decl_provider_module(context->analysis, fit_target.type_decl);
 
-        is_local = (target_module == context->module);
-    }
-
-    if (fit_target.kind == FIT_TARGET_KIND_BUILTIN) {
-        is_local = true;
+        is_local = target_module != NULL &&
+                   target_module->origin == FENG_SEMANTIC_MODULE_ORIGIN_LOCAL;
     }
 
     for (i = 0U; i < closure_count && !is_local; ++i) {
         const FengSemanticModule *spec_module =
             find_decl_provider_module(context->analysis, closure[i]);
-        if (spec_module == context->module) {
+        if (spec_module != NULL &&
+            spec_module->origin == FENG_SEMANTIC_MODULE_ORIGIN_LOCAL) {
             is_local = true;
         }
     }
@@ -24075,11 +24081,22 @@ static void record_object_spec_coercion_site_if_applicable(
                                                                    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
         return;
     }
-    relation = feng_semantic_lookup_spec_relation(context->analysis,
-                                                  &subject_key_for_coercion,
-                                                  target_decl);
+    relation = find_instantiated_spec_relation(
+        context, src_type_decl,
+        expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF ? expr_type.type_ref : NULL,
+        &subject_key_for_coercion, expected_type_ref);
     if (relation == NULL) {
         return;
+    }
+    if (subject_key_for_coercion.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+        const FengSpecRelation *exact = feng_semantic_lookup_spec_relation(
+            context->analysis, &subject_key_for_coercion, target_decl);
+        if (exact != NULL) {
+            subject_key_for_coercion = exact->subject_key;
+        } else if (!feng_semantic_subject_key_from_array_instance(
+                       context->analysis, expr_type.type_ref, &subject_key_for_coercion)) {
+            return;
+        }
     }
 
     (void)feng_semantic_record_object_spec_coercion_site(context->analysis,
@@ -32666,6 +32683,19 @@ static const FengTypeRef *close_spec_implementation_member_type_ref(
     if (source_type_ref == NULL) {
         return closed;
     }
+    /* A fit signature/head belongs to the fit's source file, not to its
+     * target type's declaration file. Preserve that lexical origin before
+     * substituting owner parameters (including forward relation checks). */
+    if (fit_decl != NULL && closed != NULL && closed->resolution_program == NULL) {
+        FengTypeRef *scoped = clone_type_ref_for_inference(closed);
+        if (scoped != NULL && analysis_track_synthetic_type_ref(ctx->analysis, scoped)) {
+            bind_type_ref_resolution_program(scoped,
+                find_decl_provider_program(ctx->analysis, fit_decl));
+            closed = scoped;
+        } else {
+            free_synthetic_type_ref(scoped);
+        }
+    }
     source_type = inferred_expr_type_from_type_ref(source_type_ref);
     closed = substitute_type_ref_for_owner_instance(
         ctx, source_type_decl, source_type, closed);
@@ -32943,15 +32973,20 @@ static const FengTypeMember *type_find_method_by_name(
     return NULL;
 }
 
+/* A visible fit candidate compared against the exact subject and spec owners. */
 typedef struct VisibleFitMethodMatchCtx {
     const ResolveContext *ctx;
+    const FengDecl *source_type_decl;
+    const FengTypeRef *source_type_ref;
     const FengDecl *spec_decl;
     const FengTypeRef *spec_type_ref;
     const FengTypeMember *spec_member;
     bool require_compatible_visibility;
+    bool require_signature_match;
     const FengTypeMember *match;
 } VisibleFitMethodMatchCtx;
 
+/* Reuse the same closed-signature comparison as witness implementation selection. */
 static bool visible_fit_matching_method_visitor(const FengTypeMember *member,
                                                 const FengSemanticModule *fit_module,
                                                 const FengDecl *fit_decl,
@@ -32959,15 +32994,18 @@ static bool visible_fit_matching_method_visitor(const FengTypeMember *member,
     VisibleFitMethodMatchCtx *st = (VisibleFitMethodMatchCtx *)userdata;
 
     (void)fit_module;
-    (void)fit_decl;
     if (st->require_compatible_visibility &&
         !spec_requirement_accepts_implementation(st->spec_member, member)) {
         return true;
     }
-    if (callable_signatures_match_for_satisfaction_in_spec_ref(
+    if (!st->require_signature_match ||
+        callable_signatures_match_for_satisfaction_instances(
             (ResolveContext *)st->ctx,
             st->spec_decl,
             st->spec_type_ref,
+            st->source_type_decl,
+            st->source_type_ref,
+            fit_decl,
             &st->spec_member->as.callable,
             &member->as.callable)) {
         st->match = member;
@@ -32976,41 +33014,53 @@ static bool visible_fit_matching_method_visitor(const FengTypeMember *member,
     return true;
 }
 
+/* Search the visible capability surface of any legal fit subject. */
 static const FengTypeMember *find_visible_fit_matching_method_in_spec_ref(
     const ResolveContext *ctx,
     const FengDecl *type_decl,
+    const FengTypeRef *source_type_ref,
     const FengDecl *spec_decl,
     const FengTypeRef *spec_type_ref,
     const FengTypeMember *spec_member,
     bool require_static,
-    bool require_compatible_visibility) {
+    bool require_compatible_visibility,
+    bool require_signature_match) {
     VisibleFitMethodMatchCtx st;
+    InferredExprType source_type = source_type_ref != NULL
+        ? inferred_expr_type_from_type_ref(source_type_ref)
+        : inferred_expr_type_from_decl(type_decl);
 
-    if (ctx == NULL || !decl_is_named_fit_target(type_decl) ||
-        spec_decl == NULL || spec_member == NULL ||
+    if (ctx == NULL || spec_decl == NULL || spec_member == NULL ||
         spec_member->kind != FENG_TYPE_MEMBER_METHOD) {
         return NULL;
     }
 
     memset(&st, 0, sizeof(st));
     st.ctx = ctx;
+    st.source_type_decl = type_decl;
+    st.source_type_ref = source_type_ref;
     st.spec_decl = spec_decl;
     st.spec_type_ref = spec_type_ref;
     st.spec_member = spec_member;
     st.require_compatible_visibility = require_compatible_visibility;
+    st.require_signature_match = require_signature_match;
 
-    (void)visit_visible_fit_methods_for_type(ctx,
-                                             type_decl,
-                                             spec_member->as.callable.name,
-                                             true,
-                                             require_static,
-                                             visible_fit_matching_method_visitor,
-                                             &st);
+    (void)visit_visible_fit_methods_for_owner_type(ctx,
+                                                   type_decl,
+                                                   source_type,
+                                                   spec_member->as.callable.name,
+                                                   true,
+                                                   require_static,
+                                                   visible_fit_matching_method_visitor,
+                                                   &st);
     return st.match;
 }
 
-static bool verify_type_satisfies_spec(ResolveContext *ctx,
+/* Validate the declared members of one spec against a real subject capability surface. */
+static bool verify_subject_satisfies_spec(ResolveContext *ctx,
                                        const FengDecl *type_decl,
+                                       const FengTypeRef *source_type_ref,
+                                       FengSlice subject_name,
                                        const FengDecl *relation_owner_decl,
                                        const FengDecl *spec_decl,
                                        const FengTypeRef *spec_type_ref,
@@ -33042,8 +33092,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     ctx, err_token,
                     "AE0701", format_message(
                         "type '%.*s' is missing field '%.*s' required by spec '%.*s'",
-                        (int)decl_typeish_name(type_decl).length,
-                        decl_typeish_name(type_decl).data,
+                        (int)subject_name.length,
+                        subject_name.data,
                         (int)spec_m->as.field.name.length, spec_m->as.field.name.data,
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data));
@@ -33055,8 +33105,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     "AE0707",
                     format_message(
                         "type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s'",
-                        (int)decl_typeish_name(type_decl).length,
-                        decl_typeish_name(type_decl).data,
+                        (int)subject_name.length,
+                        subject_name.data,
                         (int)spec_m->as.field.name.length,
                         spec_m->as.field.name.data,
                         (int)spec_decl->as.spec_decl.name.length,
@@ -33067,8 +33117,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     ctx, err_token,
                     "AE0702", format_message(
                         "type '%.*s' field '%.*s' mutability does not match spec '%.*s' (expected '%s')",
-                        (int)decl_typeish_name(type_decl).length,
-                        decl_typeish_name(type_decl).data,
+                        (int)subject_name.length,
+                        subject_name.data,
                         (int)spec_m->as.field.name.length, spec_m->as.field.name.data,
                         (int)spec_decl->as.spec_decl.name.length,
                         spec_decl->as.spec_decl.name.data,
@@ -33087,8 +33137,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                         ctx, err_token,
                         "AE0703", format_message(
                             "type '%.*s' field '%.*s' type '%s' does not match spec '%.*s' field type '%s'",
-                            (int)decl_typeish_name(type_decl).length,
-                            decl_typeish_name(type_decl).data,
+                            (int)subject_name.length,
+                            subject_name.data,
                             (int)spec_m->as.field.name.length, spec_m->as.field.name.data,
                             actual != NULL ? actual : "<unknown>",
                             (int)spec_decl->as.spec_decl.name.length,
@@ -33131,11 +33181,13 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                 match = find_visible_fit_matching_method_in_spec_ref(
                     ctx,
                     type_decl,
+                    source_type_ref,
                     spec_decl,
                     spec_type_ref,
                     spec_m,
                     spec_m->is_static,
-                    /*require_compatible_visibility=*/true);
+                    /*require_compatible_visibility=*/true,
+                    /*require_signature_match=*/true);
             }
 
             if (match == NULL) {
@@ -33156,11 +33208,13 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     incompatible = find_visible_fit_matching_method_in_spec_ref(
                         ctx,
                         type_decl,
+                        source_type_ref,
                         spec_decl,
                         spec_type_ref,
                         spec_m,
                         spec_m->is_static,
-                        /*require_compatible_visibility=*/false);
+                        /*require_compatible_visibility=*/false,
+                        /*require_signature_match=*/true);
                 }
                 if (incompatible != NULL &&
                     !spec_requirement_accepts_implementation(spec_m,
@@ -33171,8 +33225,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                         "AE0707",
                         format_message(
                             "type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s'",
-                            (int)decl_typeish_name(type_decl).length,
-                            decl_typeish_name(type_decl).data,
+                            (int)subject_name.length,
+                            subject_name.data,
                             (int)spec_m->as.callable.name.length,
                             spec_m->as.callable.name.data,
                             (int)spec_decl->as.spec_decl.name.length,
@@ -33196,16 +33250,17 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                         allow_type_private_implementations);
                 }
 
-                if (named == NULL && spec_m->is_static) {
-                    named = find_fit_static_method_member_for_type(
+                if (named == NULL) {
+                    named = find_visible_fit_matching_method_in_spec_ref(
                         ctx,
                         type_decl,
-                        spec_m->as.callable.name);
-                } else if (named == NULL) {
-                    named = find_fit_method_member_for_type(
-                        ctx,
-                        type_decl,
-                        spec_m->as.callable.name);
+                        source_type_ref,
+                        spec_decl,
+                        spec_type_ref,
+                        spec_m,
+                        spec_m->is_static,
+                        /*require_compatible_visibility=*/false,
+                        /*require_signature_match=*/false);
                 }
 
                 if (named != NULL) {
@@ -33213,8 +33268,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                         ctx, err_token,
                         "AE0704", format_message(
                             "type '%.*s' method '%.*s' signature does not match spec '%.*s'",
-                            (int)decl_typeish_name(type_decl).length,
-                            decl_typeish_name(type_decl).data,
+                            (int)subject_name.length,
+                            subject_name.data,
                             (int)spec_m->as.callable.name.length,
                             spec_m->as.callable.name.data,
                             (int)spec_decl->as.spec_decl.name.length,
@@ -33224,8 +33279,8 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
                     ctx, err_token,
                     "AE0705", format_message(
                         "type '%.*s' is missing method '%.*s' required by spec '%.*s'",
-                        (int)decl_typeish_name(type_decl).length,
-                        decl_typeish_name(type_decl).data,
+                        (int)subject_name.length,
+                        subject_name.data,
                         (int)spec_m->as.callable.name.length,
                         spec_m->as.callable.name.data,
                         (int)spec_decl->as.spec_decl.name.length,
@@ -33248,6 +33303,40 @@ static bool verify_type_satisfies_spec(ResolveContext *ctx,
         }
     }
     return true;
+}
+
+/* Preserve declaration diagnostics while supplying the real fit subject type.
+ * Builtin/array targets have no synthetic type declaration or storage members. */
+static bool verify_type_satisfies_spec(ResolveContext *ctx,
+                                       const FengDecl *type_decl,
+                                       const FengDecl *relation_owner_decl,
+                                       const FengDecl *spec_decl,
+                                       const FengTypeRef *spec_type_ref,
+                                       FengToken err_token,
+                                       const FengTypeMember *const *extra_methods,
+                                       size_t extra_count,
+                                       bool allow_type_private_implementations) {
+    const FengTypeRef *source_type_ref =
+        relation_owner_decl != NULL && relation_owner_decl->kind == FENG_DECL_FIT
+            ? relation_owner_decl->as.fit_decl.target : NULL;
+    char *formatted_name = type_decl == NULL
+        ? format_type_ref_name(source_type_ref) : NULL;
+    FengSlice subject_name = type_decl != NULL
+        ? decl_typeish_name(type_decl)
+        : (FengSlice){.data = formatted_name,
+                      .length = formatted_name != NULL ? strlen(formatted_name) : 0U};
+    bool ok;
+
+    if (type_decl == NULL && formatted_name == NULL) {
+        return resolver_append_error(ctx, err_token, "IE0001",
+            format_message("out of memory while formatting fit subject"));
+    }
+    ok = verify_subject_satisfies_spec(ctx, type_decl, source_type_ref, subject_name,
+                                       relation_owner_decl, spec_decl, spec_type_ref,
+                                       err_token, extra_methods, extra_count,
+                                       allow_type_private_implementations);
+    free(formatted_name);
+    return ok;
 }
 
 /* Return whether one closed relation head is exactly the requested spec
@@ -33295,80 +33384,46 @@ static FengTypeRef *instantiate_spec_relation_template(
     const FengTypeRef *source_type_ref,
     const FengSpecRelationSource *source,
     const FengTypeRef *template_ref) {
-    const FengTypeParam *type_params = NULL;
-    size_t type_param_count = 0U;
-    FengTypeRef *const *type_args = NULL;
+    const FengTypeParam *type_params;
+    size_t type_param_count;
 
     if (ctx == NULL || source == NULL || template_ref == NULL) {
         return NULL;
     }
-    if (source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_HEAD ||
-        source->kind == FENG_SPEC_RELATION_SOURCE_DECLARED_PARENT) {
-        if (source_type_decl == NULL ||
-            source_type_decl->kind != FENG_DECL_TYPE) {
-            return NULL;
-        }
-        type_params = source_type_decl->as.type_decl.type_params;
-        type_param_count = source_type_decl->as.type_decl.type_param_count;
-    } else {
+    if (source->via_fit_decl != NULL) {
         const FengDecl *fit_decl = source->via_fit_decl;
+        const FengTypeRef *closed_target;
+        const FengTypeRef *closed_spec;
 
-        if (fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT) {
+        /* Method signatures and relation heads close the identical owner/fit
+         * parameter environment, including structural array element owners. */
+        closed_target = close_spec_implementation_member_type_ref(
+            (ResolveContext *)ctx, source_type_decl, source_type_ref, fit_decl,
+            fit_decl->as.fit_decl.target);
+        if (source_type_ref != NULL &&
+            !type_refs_semantically_equal(ctx, closed_target, source_type_ref)) {
             return NULL;
         }
-        if (source_type_decl != NULL &&
-            source_type_decl->kind == FENG_DECL_TYPE) {
-            /* Generic fit target parameters are the target type's declared
-             * parameters; fit syntax does not introduce a parallel list. */
-            type_params = source_type_decl->as.type_decl.type_params;
-            type_param_count = source_type_decl->as.type_decl.type_param_count;
-        }
+        closed_spec = close_spec_implementation_member_type_ref(
+            (ResolveContext *)ctx, source_type_decl, source_type_ref, fit_decl,
+            template_ref);
+        return clone_type_ref_for_inference(closed_spec);
     }
-
-    if (type_param_count > 0U) {
-        FengTypeRef *closed_fit_target = NULL;
-
-        /* Open generic declaration contexts retain the relation template.
-         * Exact comparison below can prove only an equally open target; a
-         * concrete mismatched instance still fails without guessing args. */
-        if (source_type_ref == NULL) {
-            return clone_type_ref_for_inference(template_ref);
-        }
-        if (source_type_ref->kind != FENG_TYPE_REF_NAMED ||
-            source_type_ref->as.named.type_arg_count != type_param_count) {
-            return NULL;
-        }
-        type_args = source_type_ref->as.named.type_args;
-        if (source->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
-            source->kind == FENG_SPEC_RELATION_SOURCE_FIT_PARENT) {
-            closed_fit_target = clone_type_ref_substituting_type_params(
-                ctx->program,
-                source->via_fit_decl->as.fit_decl.target,
-                type_params,
-                type_param_count,
-                type_args);
-            if (closed_fit_target == NULL ||
-                !type_refs_semantically_equal(ctx,
-                                              closed_fit_target,
-                                              source_type_ref)) {
-                free_synthetic_type_ref(closed_fit_target);
-                return NULL;
-            }
-            free_synthetic_type_ref(closed_fit_target);
-        }
-    } else if ((source->kind == FENG_SPEC_RELATION_SOURCE_FIT_HEAD ||
-                source->kind == FENG_SPEC_RELATION_SOURCE_FIT_PARENT) &&
-               source_type_ref != NULL &&
-               !type_refs_semantically_equal(ctx,
-                                             source->via_fit_decl->as.fit_decl.target,
-                                             source_type_ref)) {
+    if (source_type_decl == NULL || source_type_decl->kind != FENG_DECL_TYPE) {
         return NULL;
     }
-
-    return clone_type_ref_substituting_type_params(ctx->program, template_ref,
-                                                   type_params,
-                                                   type_param_count,
-                                                   type_args);
+    type_params = source_type_decl->as.type_decl.type_params;
+    type_param_count = source_type_decl->as.type_decl.type_param_count;
+    if (type_param_count == 0U || source_type_ref == NULL) {
+        return clone_type_ref_for_inference(template_ref);
+    }
+    if (source_type_ref->kind != FENG_TYPE_REF_NAMED ||
+        source_type_ref->as.named.type_arg_count != type_param_count) {
+        return NULL;
+    }
+    return clone_type_ref_substituting_type_params(
+        ctx->program, template_ref, type_params, type_param_count,
+        source_type_ref->as.named.type_args);
 }
 
 /* Close every head template represented by one relation source and compare
@@ -33434,7 +33489,7 @@ static bool spec_relation_source_instantiates_type_ref(
 
 /* Prove one exact object-spec instance from the existing nominal relation
  * index. Structural satisfaction remains a declaration-time responsibility. */
-static bool subject_satisfies_spec_type_ref(
+static const FengSpecRelation *find_instantiated_spec_relation(
     const ResolveContext *ctx,
     const FengDecl *source_type_decl,
     const FengTypeRef *source_type_ref,
@@ -33446,40 +33501,55 @@ static bool subject_satisfies_spec_type_ref(
 
     if (ctx == NULL || ctx->analysis == NULL || subject_key == NULL ||
         spec_type_ref == NULL) {
-        return false;
+        return NULL;
     }
     spec_decl = resolve_type_ref_decl(ctx, spec_type_ref);
     if (spec_decl == NULL || spec_decl->kind != FENG_DECL_SPEC) {
-        return false;
-    }
-    if (spec_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
-        return subject_key_satisfies_spec_decl(ctx, subject_key, spec_decl);
+        return NULL;
     }
     if (spec_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
-        return false;
+        return NULL;
     }
 
     relation = feng_semantic_lookup_spec_relation(ctx->analysis,
                                                   subject_key,
                                                   spec_decl);
-    if (relation == NULL) {
-        return false;
-    }
-    for (source_index = 0U;
-         source_index < relation->source_count;
-         ++source_index) {
-        const FengSpecRelationSource *source = &relation->sources[source_index];
-
-        if (spec_relation_source_visible_from_context(ctx, source) &&
-            spec_relation_source_instantiates_type_ref(ctx,
-                                                       source_type_decl,
-                                                       source_type_ref,
-                                                       source,
-                                                       spec_type_ref)) {
-            return true;
+    /* A generic fit is indexed by its declaration template, not by every
+     * possible closed subject. Close candidate relations using the same
+     * owner environment as their methods; never infer structural satisfaction. */
+    for (size_t index = 0U; index < ctx->analysis->spec_relation_count; ++index) {
+        const FengSpecRelation *candidate = &ctx->analysis->spec_relations[index];
+        if (candidate->spec_decl != spec_decl) {
+            continue;
+        }
+        for (source_index = 0U; source_index < candidate->source_count; ++source_index) {
+            const FengSpecRelationSource *source = &candidate->sources[source_index];
+            if (candidate != relation && (source->via_fit_decl == NULL || source_type_ref == NULL)) {
+                continue;
+            }
+            if (spec_relation_source_visible_from_context(ctx, source) &&
+                spec_relation_source_instantiates_type_ref(ctx, source_type_decl,
+                                                           source_type_ref, source, spec_type_ref)) {
+                return candidate;
+            }
         }
     }
-    return false;
+    return NULL;
+}
+
+/* Object relations use the same closed-instance query as coercion recording;
+ * intersection satisfaction remains the existing per-member conjunction. */
+static bool subject_satisfies_spec_type_ref(
+    const ResolveContext *ctx, const FengDecl *source_type_decl,
+    const FengTypeRef *source_type_ref, const FengSemanticSubjectKey *subject_key,
+    const FengTypeRef *spec_type_ref) {
+    const FengDecl *spec = resolve_type_ref_decl(ctx, spec_type_ref);
+    if (spec != NULL && spec->kind == FENG_DECL_SPEC &&
+        spec->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        return subject_key_satisfies_spec_decl(ctx, subject_key, spec);
+    }
+    return find_instantiated_spec_relation(ctx, source_type_decl, source_type_ref,
+                                          subject_key, spec_type_ref) != NULL;
 }
 
 /* Declaration-only adapter for non-generic inferred subjects. Concrete
@@ -33919,19 +33989,16 @@ static void compute_spec_witness_if_absent(ResolveContext *context,
         return;
     }
     if (subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
-        const FengSpecRelation *relation =
-            feng_semantic_lookup_spec_relation(context->analysis,
-                                               &subject_key,
-                                               spec_decl);
-
-        /* Array keys created from generic-call type arguments may borrow a
-         * resolver-owned element ref. The authoritative relation key comes
-         * from the fit declaration AST and therefore remains valid for the
-         * complete analysis/codegen lifetime. */
-        if (relation == NULL) {
+        const FengSpecRelation *relation = feng_semantic_lookup_spec_relation(
+            context->analysis, &subject_key, spec_decl);
+        /* Exact relations already own stable declaration refs. Template
+         * relations require a distinct, analysis-owned closed instance key. */
+        if (relation != NULL) {
+            subject_key = relation->subject_key;
+        } else if (!feng_semantic_subject_key_from_array_instance(
+                       context->analysis, source_type.type_ref, &subject_key)) {
             return;
         }
-        subject_key = relation->subject_key;
     }
     if (feng_semantic_lookup_spec_witness(context->analysis,
                                           &subject_key, spec_decl) != NULL) {
@@ -35361,66 +35428,9 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     bool ok = true;
     bool allow_target_private_implementations = false;
 
-    if (fit_target.kind == FIT_TARGET_KIND_BUILTIN ||
-        fit_target.kind == FIT_TARGET_KIND_ARRAY) {
-        /* Builtin and array fit targets support both method-only form (no
-         * spec_count) and spec-implementation form (spec_count > 0).  Both
-         * paths share the same orphan/export downgrade logic; the spec
-         * contract validation below (closure, duplicate-spec checks, etc.)
-         * requires a user-type target decl and is intentionally skipped here.
-         */
-        size_t spec_count = fit_decl->as.fit_decl.spec_count;
-        /* Require a body when specs are listed: `fit i32: Spec;` (stub without
-         * a body) is not valid — specs must be fully implemented by the fit. */
-        if (spec_count > 0U && !fit_decl->as.fit_decl.has_body) {
-            return resolver_append_error(
-                context,
-                fit_decl->token,
-                "AE0807", format_message("fit with spec clause requires a body; "
-                               "use 'fit %s: %s { ... }' to provide the implementation",
-                               fit_target.builtin_canonical_name != NULL
-                                   ? fit_target.builtin_canonical_name
-                                   : "array",
-                               "Spec"));
-        }
-        const FengDecl **specs = spec_count > 0U
-            ? (const FengDecl **)malloc(spec_count * sizeof(const FengDecl *))
-            : NULL;
-        bool spec_ok = true;
-
-        for (size_t si = 0U; si < spec_count && spec_ok; ++si) {
-            const FengTypeRef *sr = fit_decl->as.fit_decl.specs[si];
-            const FengDecl *sd = resolve_type_ref_decl(context, sr);
-            if (sd == NULL || sd->kind != FENG_DECL_SPEC) {
-                char *sname = format_type_ref_name(sr);
-                spec_ok = resolver_append_error(
-                    context, sr != NULL ? sr->token : fit_decl->token,
-                    "AE0808", format_message("fit spec '%s' could not be resolved",
-                                   sname != NULL ? sname : "<unknown>"));
-                free(sname);
-            } else if (sd->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
-                spec_ok = resolver_append_error(
-                    context,
-                    sr != NULL ? sr->token : fit_decl->token,
-                    "AE0809", format_message("fit specs list can only contain object-form specs"));
-            } else if (specs != NULL) {
-                specs[si] = sd;
-            }
-        }
-        if (!spec_ok) {
-            free(specs);
-            return false;
-        }
-        bool result = maybe_downgrade_orphan_fit_export(context,
-                                                        fit_decl,
-                                                        fit_target,
-                                                        specs,
-                                                        spec_count);
-        free(specs);
-        return result;
-    }
-
-    if (fit_target.kind != FIT_TARGET_KIND_USER_TYPE || target == NULL) {
+    /* All concrete subjects use the same declaration-time contract checks;
+     * a relation's optional body does not determine its implementation set. */
+    if (fit_target.kind == FIT_TARGET_KIND_INVALID) {
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
             context, fit_decl->as.fit_decl.target->token,
@@ -35435,7 +35445,8 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     allow_target_private_implementations =
         fit_may_use_target_private_implementations(context, target);
 
-    if (target->kind == FENG_DECL_TYPE && target->as.type_decl.type_param_count > 0U) {
+    if (target != NULL && target->kind == FENG_DECL_TYPE &&
+        target->as.type_decl.type_param_count > 0U) {
         const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
 
         if (target_ref == NULL || target_ref->kind != FENG_TYPE_REF_NAMED ||
@@ -35466,7 +35477,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                         i + 1U));
             }
         }
-    } else if (fit_decl->as.fit_decl.target != NULL &&
+    } else if (target != NULL && fit_decl->as.fit_decl.target != NULL &&
                fit_decl->as.fit_decl.target->kind == FENG_TYPE_REF_NAMED &&
                fit_decl->as.fit_decl.target->as.named.type_arg_count > 0U) {
         FengSlice target_name = decl_typeish_name(target);

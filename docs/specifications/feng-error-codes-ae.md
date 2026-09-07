@@ -228,8 +228,8 @@
 | AE0804 | fit 可见实现冲突约束 | AE0193 | type '%.*s' has multiple visible implementations of method '%.*s' required by spec '%.*s' (one or more fits and/or the type itself) |
 | AE0804 | fit 可见实现冲突约束 | AE0194 | fit target has multiple visible implementations of method '%.*s' required by spec '%.*s' |
 | AE0805 | fit 可见关系下重载二义性约束 | AE0197 | method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s' |
-| AE0807 | fit spec 子句体约束 | AE0202 | fit with spec clause requires a body; |
-| AE0808 | fit spec 解析约束 | AE0203 | fit spec '%s' could not be resolved |
+| AE0807 | 历史 fit 块体限制，G23 移除该限制 | AE0202 | 历史文案：fit with spec clause requires a body；有无块体均按契约完整性检查，缺失／不匹配使用 AE0701～AE0705，不再以无块体为错误 |
+| AE0808 | 历史内建目标 fit spec 解析出口（已移除） | AE0203 | 目标统一验证后使用 `AE0809`；未知名称同时保留名称解析阶段的 `AE1013`，不再产生本旧码。 |
 | AE0809 | fit specs 列表成员类型约束 | AE0204 | fit specs list can only contain object-form specs |
 | AE0811 | fit 目标具体类型约束 | AE0205 | fit target must be a concrete type but found '%s' |
 | AE0812 | fit 泛型目标参数引用完整性约束 | AE0206 | fit target for generic type '%.*s' must reference all target type parameters directly |

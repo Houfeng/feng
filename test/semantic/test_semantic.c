@@ -12842,12 +12842,10 @@ static void test_fit_missing_method_rejected(void) {
     feng_program_free(program);
 }
 
-static void test_orphan_pu_fit_emits_info_and_downgrades(void) {
+static void test_same_package_cross_module_fit_keeps_public_export(void) {
     /* Module `demo.types` defines the type, `demo.specs` defines the spec,
-     * and `demo.adapter` declares a `open fit` that bridges them. Because the
-     * adapter owns neither the type nor the spec, it is an orphan and its
-     * `open` export must be downgraded to module-local visibility with an
-     * informational note. */
+     * and `demo.adapter` declares an open fit. All three source modules are
+     * in the current package, so this is not an orphan relation. */
     const char *src_types =
         "open module demo.types;\n"
         "open type User {}\n";
@@ -12874,10 +12872,9 @@ static void test_orphan_pu_fit_emits_info_and_downgrades(void) {
     ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
     ASSERT(analysis != NULL);
-    ASSERT(analysis->info_count == 1U);
-    ASSERT(strstr(analysis->infos[0].message, "orphan fit") != NULL);
-    ASSERT(strstr(analysis->infos[0].message, "downgraded to module-local") != NULL);
-    ASSERT(strcmp(analysis->infos[0].path, "adapter.f") == 0);
+    ASSERT(analysis->info_count == 0U);
+    ASSERT(p3->declarations[0]->kind == FENG_DECL_FIT);
+    ASSERT(p3->declarations[0]->visibility == FENG_VISIBILITY_PUBLIC);
 
     feng_semantic_analysis_free(analysis);
     feng_program_free(p1);
@@ -13568,8 +13565,8 @@ static void test_fit_array_method_callable_on_value(void) {
     feng_program_free(program);
 }
 
-/* C2: fit with spec clause for builtin/array targets is now valid when a body
- * is provided.  A stub without a body (';' only) must still be rejected. */
+/* G23: the no-body form is legal, but these declarations lack the required
+ * greet implementation. Keep the historical sources as missing-member cases. */
 static void test_fit_builtin_target_rejects_specs_clause_without_body(void) {
     const char *source =
         "module demo.main;\n"
@@ -13586,7 +13583,12 @@ static void test_fit_builtin_target_rejects_specs_clause_without_body(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "requires a body") != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0705") == 0);
+    ASSERT(strcmp(errors[0].path, "fit_builtin_specs_reject.f") == 0);
+    ASSERT(errors[0].token.line == 5U && errors[0].token.column == 5U);
+    ASSERT(errors[0].token.length == 3U);
+    ASSERT(strncmp(errors[0].token.lexeme, "i32", 3U) == 0);
+    ASSERT(strstr(errors[0].message, "greet") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -13607,7 +13609,12 @@ static void test_fit_array_target_rejects_specs_clause_without_body(void) {
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
                                   &analysis, &errors, &error_count));
     ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message, "requires a body") != NULL);
+    ASSERT(strcmp(errors[0].code, "AE0705") == 0);
+    ASSERT(strcmp(errors[0].path, "fit_array_specs_reject.f") == 0);
+    ASSERT(errors[0].token.line == 5U && errors[0].token.column == 5U);
+    ASSERT(errors[0].token.length == 3U);
+    ASSERT(strncmp(errors[0].token.lexeme, "int", 3U) == 0);
+    ASSERT(strstr(errors[0].message, "greet") != NULL);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -35272,8 +35279,12 @@ static void test_g21_imported_array_new_default_zero_semantics(void) {
 /* G22 module diagnostics are kept in their own test translation unit. */
 void test_g22_module_diagnostics(void);
 
+/* G23 declaration/implementation matrices live in their own translation unit. */
+void test_g23_spec_fit_diagnostics(void);
+
 int main(void) {
     test_g22_module_diagnostics();
+    test_g23_spec_fit_diagnostics();
     test_g21_array_leaf_type_diagnostics();
     test_g21_array_new_length_semantics();
     test_g21_nested_empty_array_literal_semantics();
@@ -35996,7 +36007,7 @@ int main(void) {
     test_fit_specs_rejects_duplicate();
     test_fit_body_methods_satisfy_spec();
     test_fit_missing_method_rejected();
-    test_orphan_pu_fit_emits_info_and_downgrades();
+    test_same_package_cross_module_fit_keeps_public_export();
     test_local_fit_emits_no_orphan_info();
     test_pu_fit_visible_after_use_enables_method_call();
     test_pu_fit_invisible_without_use_rejects_method_call();

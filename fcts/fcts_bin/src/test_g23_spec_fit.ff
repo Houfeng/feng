@@ -1,0 +1,244 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.g23.subjects;
+import fcts_lib.g23.methods as implementations;
+import fcts_lib.g23.relations as relations;
+
+/// Consume the same selected implementation through the existing spec slot.
+func g23_read(value: G23Read): i32 { return value.g23_read(); }
+func g23_kind<T: G23Static>(): i32 { return T.g23_kind(); }
+func g23_head<T>(value: G23Head<T>): T { return value.g23_head(); }
+func g23_copied<T>(value: G23Copies<T>): T { return value.g23_copy(); }
+func g23_echoed<T>(value: G23Copies<T>, replacement: T): T { return value.g23_echo(replacement); }
+func g23_nested<T>(value: G23Copies<T>): T { return value.g23_nested(); }
+
+/// Same-package counterpart to the imported shared methods.
+spec G23LocalHead<T> { func g23_local_head(): T; }
+fit T[] { func g23_local_head(): T { let saved: T = self[0]; return saved; } }
+fit T[!] { func g23_local_head(): T { return self[0]; } }
+fit T[]: G23LocalHead<T>;
+fit T[!]: G23LocalHead<T>;
+func g23_local_head<T>(value: G23LocalHead<T>): T { return value.g23_local_head(); }
+
+/// Observable finalization proves that results outlive their temporary arrays.
+type G23Tracked {
+    static var dropped: i32;
+    var value: i32;
+    func ~G23Tracked() { G23Tracked.dropped += 1; }
+}
+func g23_temporary_reference(): G23Tracked {
+    let values: G23Tracked[] = [G23Tracked { value: 91 }];
+    return values.g23_nested();
+}
+func g23_temporary_spec_reference(): G23Tracked {
+    let values: G23Tracked[!] = [G23Tracked { value: 92 }];
+    return g23_nested<G23Tracked>(values);
+}
+func g23_check_reference_lifetime() {
+    let direct = g23_temporary_reference();
+    let indirect = g23_temporary_spec_reference();
+    assert(G23Tracked.dropped == 0, "returned references remain owned after source arrays die");
+    assert(direct.value == 91 && indirect.value == 92, "returned objects remain readable");
+}
+
+/// Returning an aggregate must retain its managed fields after every local dies.
+func g23_temporary_aggregate(): G23Aggregate {
+    let values: G23Aggregate[!] = [G23Aggregate { number: 73, text: "owned" + "-aggregate" }];
+    return g23_copied<G23Aggregate>(values);
+}
+
+/// Callable and object-spec values exercise their existing managed carriers.
+spec G23Callback(): i32;
+func g23_temporary_callback(): G23Callback {
+    let captured = G23Reference { value: 94 };
+    let callback: G23Callback = () { return captured.value; };
+    let values: G23Callback[] = [callback];
+    return values.g23_nested();
+}
+
+spec G23LocalFields { let label: string; var count: i32; }
+spec G23LocalParent { func g23_local_read(): i32; }
+spec G23LocalMixed: G23LocalFields, G23LocalParent {}
+type G23Local: G23LocalMixed {
+    let label: string;
+    var count: i32;
+    func g23_local_read(): i32 { return self.count; }
+}
+fit G23Local: G23LocalMixed;
+fit G23Local: G23LocalMixed {}
+
+/// Compatible contracts and repeated cross-package relations share one method.
+spec G23AlternativeRead { func g23_read(): i32; }
+fit G23Reference: G23AlternativeRead, G23Read;
+
+/// Independent requirements retain their implementations under either order.
+spec G23OrderedLeft {
+    func owned(): i32;
+    func pick(value: i32): i32;
+    static func tag(): i32;
+}
+spec G23OrderedRight { func pick(value: string): string; }
+type G23OrderedFirst { func owned(): i32 { return 101; } }
+type G23OrderedSecond { func owned(): i32 { return 101; } }
+fit G23OrderedFirst: G23OrderedLeft, G23OrderedRight;
+fit G23OrderedFirst { func pick(value: i32): i32 { return value + 1; } }
+fit G23OrderedFirst { func pick(value: string): string { return value + "!"; } }
+fit G23OrderedFirst { static func tag(): i32 { return 102; } }
+fit G23OrderedSecond { static func tag(): i32 { return 102; } }
+fit G23OrderedSecond { func pick(value: string): string { return value + "!"; } }
+fit G23OrderedSecond { func pick(value: i32): i32 { return value + 1; } }
+fit G23OrderedSecond: G23OrderedRight, G23OrderedLeft {}
+/// Use the selected static slot alongside the instance slots.
+func g23_ordered_tag<T: G23OrderedLeft>(): i32 { return T.tag(); }
+
+/// SPEC06/12/15/16/17/19/23/24: actual behavior, including imported identities.
+open func test_g23_spec_fit(): void {
+    describe("G23 spec and fit conformance", () {
+        test("declared head and repeated relations retain one mixed implementation", () {
+            let value = G23Local { label: "local", count: 2 };
+            let view: G23LocalMixed = value;
+            assert(view.label == "local" && view.g23_local_read() == 2, "all parent requirements survive");
+            view.count = 9;
+            assert(value.count == 9 && view.g23_local_read() == 9, "var slot updates the original subject");
+        });
+        test("reference value tuple and enum reuse separately declared fit methods", () {
+            let reference = G23Reference { value: 11 };
+            let value = G23Value { value: 12 };
+            let tuple: G23Tuple = (13, "tuple");
+            let tone = G23Enum.Second;
+            assert(reference.g23_read() == 11 && g23_read(reference) == 11, "reference implementation");
+            let alternative: G23AlternativeRead = reference;
+            assert(alternative.g23_read() == 11, "compatible contracts reuse the same imported method");
+            assert(value.g23_read() == 12 && g23_read(value) == 12, "value implementation");
+            assert(tuple.g23_read() == 13 && g23_read(tuple) == 13, "tuple implementation");
+            assert(tone.g23_read() == 47 && g23_read(tone) == 47, "enum implementation");
+        });
+        test("builtin and arrays permit no-body relations with exact method source", () {
+            let number: i32 = 21;
+            let text = "g23";
+            let readonly: i32[] = [24, 25];
+            let writable: i32[!] = [26, 27];
+            assert(number.g23_read() == 21 && g23_read(number) == 21, "scalar implementation");
+            assert(text.g23_read() == 23 && g23_read(text) == 23, "string implementation");
+            assert(readonly.g23_read() == 24 && g23_read(readonly) == 24, "readonly array implementation");
+            assert(writable.g23_read() == 26 && g23_read(writable) == 26, "writable array implementation");
+            let marker: G23Marker = true;
+            assert(marker == marker, "an empty no-body relation needs no methods");
+        });
+        test("static methods use independent fit source", () {
+            assert(G23Reference.g23_kind() == 41 && g23_kind<G23Reference>() == 41, "type static source");
+            assert(i32.g23_kind() == 42 && g23_kind<i32>() == 42, "scalar static source");
+            assert(g23_kind<i32[]>() == 43, "array static source");
+        });
+        test("spec list and independent implementation order preserve all slots", () {
+            let first = G23OrderedFirst();
+            let second = G23OrderedSecond();
+            let leftA: G23OrderedLeft = first;
+            let rightA: G23OrderedRight = first;
+            let leftB: G23OrderedLeft = second;
+            let rightB: G23OrderedRight = second;
+            assert(leftA.owned() == 101 && leftB.owned() == 101, "type-owned method combines with fits");
+            assert(leftA.pick(10) == 11 && leftB.pick(10) == 11, "integer overload keeps its own implementation");
+            assert(rightA.pick("order") == "order!" && rightB.pick("order") == "order!", "string overload is independent");
+            assert(first.pick(10) == 11 && second.pick("order") == "order!", "direct calls share the selected methods");
+            assert(g23_ordered_tag<G23OrderedFirst>() == 102 && g23_ordered_tag<G23OrderedSecond>() == 102, "static source is order independent");
+        });
+        test("generic owner and parent requirements use closed signatures", () {
+            let number = G23Box<i32>(51);
+            let text = G23Box<string>("closed");
+            let child: G23Child<string> = text;
+            let parent: G23Head<string> = child;
+            assert(number.g23_head() == 51 && g23_head<i32>(number) == 51, "integer owner");
+            assert(text.g23_head() == "closed" && parent.g23_head() == "closed", "string owner and parent");
+            let numbers: i32[] = [52];
+            let words: string[!] = ["array"];
+            assert(numbers.g23_head() == 52 && g23_head<i32>(numbers) == 52, "readonly generic array");
+            assert(words.g23_head() == "array" && g23_head<string>(words) == "array", "writable generic array");
+        });
+        test("shared returns preserve scalar enum and nested array values", () {
+            let integers: i32[] = [61];
+            let enums: G23Enum[!] = [G23Enum.Second];
+            let nested: i32[!][] = [[62]];
+            assert(integers.g23_copy() == 61 && g23_nested<i32>(integers) == 61, "scalar local and forwarded return");
+            assert(integers.g23_echo(63) == 63 && g23_echoed<i32>(integers, 64) == 64, "scalar parameter and return slots");
+            assert(enums.g23_nested() == G23Enum.Second && g23_copied<G23Enum>(enums) == G23Enum.Second, "enum representation");
+            assert(nested.g23_head()[0] == 62 && g23_head<i32[!]>(nested)[0] == 62, "nested array element representation");
+            assert(implementations.g23_provider_head<i32>(integers) == 61, "open provider T return");
+            assert(g23_local_head<i32>(integers) == 61 && integers.g23_local_head() == 61, "same-package relation");
+        });
+        test("reference returns preserve identity through direct and spec calls", () {
+            let original = G23Reference { value: 65 };
+            let readonly: G23Reference[] = [original];
+            let writable: G23Reference[!] = [original];
+            let direct = readonly.g23_head();
+            let copied = writable.g23_copy();
+            let indirect = g23_head<G23Reference>(readonly);
+            let nested = g23_nested<G23Reference>(writable);
+            let echoed = g23_echoed<G23Reference>(readonly, original);
+            let local = g23_local_head<G23Reference>(writable);
+            let provider = implementations.g23_provider_writable_head<G23Reference>(writable);
+            original.value = 66;
+            assert(direct.value == 66 && copied.value == 66 && indirect.value == 66, "reference identity survives returns");
+            assert(nested.value == 66 && echoed.value == 66 && local.value == 66 && provider.value == 66, "all generic paths preserve identity");
+        });
+        test("trivial value returns are independent of array and result storage", () {
+            let readonly: G23Value[] = [G23Value { value: 67 }];
+            let writable: G23Value[!] = [G23Value { value: 68 }];
+            var direct = readonly.g23_copy();
+            let indirect = g23_head<G23Value>(writable);
+            let nested = g23_nested<G23Value>(readonly);
+            let local = g23_local_head<G23Value>(writable);
+            let provider = implementations.g23_provider_head<G23Value>(readonly);
+            direct.value = 69;
+            writable[0].value = 70;
+            assert(readonly[0].value == 67 && nested.value == 67 && provider.value == 67, "copies do not alias array or each other");
+            assert(indirect.value == 68 && local.value == 68 && direct.value == 69, "source mutation does not alter returned values");
+            assert(g23_echoed<G23Value>(readonly, G23Value { value: 71 }).value == 71, "value parameter return");
+        });
+        test("aggregate and tuple returns keep managed fields alive", () {
+            let aggregate = g23_temporary_aggregate();
+            let readonly: G23Aggregate[] = [aggregate];
+            let writable: G23Aggregate[!] = [aggregate];
+            var direct = readonly.g23_head();
+            let copied = g23_copied<G23Aggregate>(writable);
+            let nested = implementations.g23_provider_head<G23Aggregate>(readonly);
+            let local = g23_local_head<G23Aggregate>(readonly);
+            direct.text = "changed";
+            writable[0].text = "replaced";
+            assert(aggregate.text == "owned-aggregate" && copied.text == aggregate.text, "aggregate result owns its managed field");
+            assert(nested.number == 73 && nested.text == aggregate.text && local.text == aggregate.text, "open and local aggregate return");
+            let tuple: G23Tuple = (74, "owned" + "-tuple");
+            let tuples: G23Tuple[!] = [tuple];
+            let returned = g23_nested<G23Tuple>(tuples);
+            let echoed = tuples.g23_echo(tuple);
+            assert(returned.item1 == 74 && returned.item2 == "owned-tuple" && echoed.item2 == returned.item2, "tuple retains managed payload");
+        });
+        test("reference result has exactly one finalization after caller release", () {
+            G23Tracked.dropped = 0;
+            g23_check_reference_lifetime();
+            assert(G23Tracked.dropped == 2, "neither premature destruction nor leaked generic results");
+        });
+        test("closed generic value and reference elements retain their concrete layout", () {
+            let original = G23Reference { value: 95 };
+            let wrapped = G23Wrapped<G23Reference> { payload: original };
+            let values: G23Wrapped<G23Reference>[!] = [wrapped];
+            let returned = g23_copied<G23Wrapped<G23Reference>>(values);
+            let direct = values.g23_nested();
+            original.value = 96;
+            values[0].payload = G23Reference { value: 97 };
+            assert(returned.payload.value == 96 && direct.payload.value == 96, "value copy retains the original reference member");
+            let box = G23Box<string>("generic" + "-reference");
+            let boxes: G23Box<string>[] = [box];
+            let returnedBox = g23_nested<G23Box<string>>(boxes);
+            assert(returnedBox == box && returnedBox.value == "generic-reference", "generic reference result preserves identity");
+        });
+        test("callable and object spec carriers survive generic returns", () {
+            let callback = g23_temporary_callback();
+            assert(callback() == 94, "callable result retains its captured receiver");
+            let view: G23Read = G23Reference { value: 98 };
+            let values: G23Read[!] = [view];
+            let returned = g23_nested<G23Read>(values);
+            assert(returned.g23_read() == 98 && values.g23_copy().g23_read() == 98, "object spec result retains subject and witness");
+        });
+    });
+}

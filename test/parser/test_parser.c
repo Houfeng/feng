@@ -6415,7 +6415,28 @@ static void test_g20_destructure_separator_parser_diagnostic(void) {
         "y");
 }
 
+/* G23 SPEC01: fit is a method extension, never an instance/static storage
+ * declaration. Check every let/var face at the offending binding keyword. */
+static void test_g23_fit_field_surfaces_rejected(void) {
+    for (size_t face = 0U; face < 2U; ++face) {
+        for (size_t mutable = 0U; mutable < 2U; ++mutable) {
+            char source[160];
+            const char *binding = mutable ? "var" : "let";
+            snprintf(source, sizeof(source), "module g23;\nfit Item { %s%s value: i32; }\n",
+                     face ? "static " : "", binding);
+            FengProgram *program = NULL;
+            FengParseError error = {0};
+            ASSERT(!feng_parse_source(source, strlen(source), "g23_fit_field.ff", &program, &error));
+            ASSERT(strcmp(error.code, "SE0807") == 0);
+            ASSERT(error.token.line == 2U && error.token.column == (face ? 19U : 12U));
+            ASSERT(error.token.length == 3U && memcmp(error.token.lexeme, binding, 3U) == 0);
+            feng_program_free(program);
+        }
+    }
+}
+
 int main(void) {
+    test_g23_fit_field_surfaces_rejected();
     test_g20_tuple_declaration_and_literal_parser_diagnostics();
     test_g20_destructure_separator_parser_diagnostic();
     test_g19_enum_literal_ast_facts();

@@ -1,0 +1,28 @@
+open module fcts_lib.g23.subjects;
+
+/// Shared requirements are owned by this package, not by the adapter module.
+open spec G23Read { func g23_read(): i32; }
+open spec G23Static { static func g23_kind(): i32; }
+open spec G23Head<T> { func g23_head(): T; }
+open spec G23Child<T>: G23Head<T> {}
+open spec G23Marker {}
+open spec G23Copies<T> {
+    func g23_copy(): T;
+    func g23_echo(value: T): T;
+    func g23_nested(): T;
+}
+
+/// Concrete subject representations used through real package-public FT.
+open type G23Reference { open var value: i32; }
+@value
+open type G23Value { open var value: i32; }
+open type G23Tuple(i32, string);
+@value
+open type G23Aggregate { open var number: i32; open var text: string; }
+@value
+open type G23Wrapped<T> { open var payload: T; }
+open enum G23Enum { First = 31, Second = 47 }
+open type G23Box<T> {
+    open let value: T;
+    func G23Box(value: T) { self.value = value; }
+}

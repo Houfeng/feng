@@ -1,0 +1,24 @@
+open module fcts_lib.g23.relations;
+import fcts_lib.g23.subjects;
+import fcts_lib.g23.methods;
+
+/// Same-package cross-module relations retain their public export.
+open fit G23Reference: G23Read;
+open fit G23Reference: G23Read {}
+open fit G23Value: G23Read {}
+open fit G23Tuple: G23Read;
+open fit G23Enum: G23Read {}
+open fit i32: G23Read;
+open fit i32: G23Read {}
+open fit string: G23Read;
+open fit i32[]: G23Read;
+open fit i32[!]: G23Read {}
+open fit G23Reference: G23Static;
+open fit i32: G23Static;
+open fit i32[]: G23Static {}
+open fit G23Box<T>: G23Child<T>;
+open fit T[]: G23Head<T>;
+open fit T[!]: G23Head<T> {}
+open fit bool: G23Marker;
+open fit T[]: G23Copies<T>;
+open fit T[!]: G23Copies<T> {}

@@ -1,0 +1,36 @@
+open module fcts_lib.g23.methods;
+import fcts_lib.g23.subjects;
+
+/// Pure extensions supply the implementations; none redeclares a relation.
+open fit G23Reference { func g23_read(): i32 { return self.value; } }
+open fit G23Value { func g23_read(): i32 { return self.value; } }
+open fit G23Tuple { func g23_read(): i32 { return self.item1; } }
+open fit G23Enum { func g23_read(): i32 { return (i32)self; } }
+open fit i32 { func g23_read(): i32 { return self; } }
+open fit string { func g23_read(): i32 { return if self == "g23" { 23 } else { 0 }; } }
+open fit i32[] { func g23_read(): i32 { return self[0]; } }
+open fit i32[!] { func g23_read(): i32 { return self[0]; } }
+
+/// Static and generic owner methods follow the same source-selection rule.
+open fit G23Reference { static func g23_kind(): i32 { return 41; } }
+open fit i32 { static func g23_kind(): i32 { return 42; } }
+open fit i32[] { static func g23_kind(): i32 { return 43; } }
+open fit G23Box<T> { func g23_head(): T { return self.value; } }
+open fit T[] { func g23_head(): T { return self[0]; } }
+open fit T[!] { func g23_head(): T { return self[0]; } }
+
+/// Return borrowed elements, owned local bindings and forwarded generic results.
+open fit T[] {
+    func g23_copy(): T { let saved: T = self[0]; return saved; }
+    func g23_echo(value: T): T { let saved: T = value; return saved; }
+    func g23_nested(): T { return self.g23_copy(); }
+}
+open fit T[!] {
+    func g23_copy(): T { let saved: T = self[0]; return saved; }
+    func g23_echo(value: T): T { let saved: T = value; return saved; }
+    func g23_nested(): T { return self.g23_copy(); }
+}
+
+/// Keep T open inside a separately compiled provider and exercise its return slot.
+open func g23_provider_head<T>(values: T[]): T { return values.g23_nested(); }
+open func g23_provider_writable_head<T>(values: T[!]): T { return values.g23_nested(); }
