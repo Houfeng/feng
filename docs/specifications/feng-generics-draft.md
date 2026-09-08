@@ -290,6 +290,7 @@ let e = foo<Map:<int>>(data);
 - 调用点只传入值本身，**不传入 witness**；union-form 约束不物化 witness。
 - 在泛型声明体内，被约束参数的值处于 union 视角；**未经 `match 目标值 { ... }` 收窄时，不允许对其做成员访问、方法调用或 `==` / `!=` 比较**。
 - 参数值的单层、逐级及 `->` 链式收窄统一遵循 [联合类型主规范 §3.12](./feng-union-type.md#312-union-form-可作为泛型类型参数约束) 与 [§3.13](./feng-union-type.md#313-多级-match-语法)；本节不另行定义共享泛型体的匹配规则。
+- 约束准入与开放转传统一遵循[联合类型主规范 §3.12](./feng-union-type.md#312-union-form-可作为泛型类型参数约束)，复用普通联合绑定的编译期类型关系检查，不将类型实参自动改为约束 union。
 - 当前阶段每个类型参数至多一个 union-form 约束；不支持 union-form 约束与 object-form `spec` 约束同时修饰同一参数。
 - 约束传递规则与 object-form `spec` 约束相同：向上传递的约束不得比目标约束更宽松。
 
