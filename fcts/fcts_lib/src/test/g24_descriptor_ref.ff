@@ -1,0 +1,7 @@
+open module fcts_lib.test.g24_descriptor_ref;
+
+/** Same short name as the value type in the other module, different identity. */
+open type Token {
+    open let number: i32;
+    func Token(number: i32) { self.number = number; }
+}

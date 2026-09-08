@@ -2038,6 +2038,10 @@ typedef struct CG {
     /* True for function/member dependency sets carried by `_desc`; false
      * for owner dependency sets carried by `_td`. */
     bool         generic_callable_dep_via_desc;
+    /* Declaration-owned projection slots for the active shared body. The
+     * same dependency source selects `_desc` or `_td`, including owner T
+     * used inside a method. This is compile-time state, not a new argument. */
+    const FengReifiableDepSet *generic_union_projection_deps;
     CGClosedCallableDescriptorNode *closed_callable_descriptor_nodes;
     size_t       closed_callable_descriptor_node_count;
     size_t       closed_callable_descriptor_node_capacity;
@@ -2366,6 +2370,8 @@ static void cg_emit_cleanup_push_for_erased_generic_argument_storage(
     CG *cg,
     const char *cname,
     const char *descriptor_c_name);
+/* Map a source label to its normalized direct member. Semantic has already
+ * validated the label, including the shared constraint surface. */
 static bool cg_union_member_index_for_label(CG *cg,
                                             const UserSpec *spec,
                                             const FengMatchLabel *label,
@@ -2628,6 +2634,15 @@ static bool cg_emit_closed_callable_fdesc(
     const char *display_name,
     const CGClosedCallableValueInit *callable_value,
     char **out_expr);
+/* Emit a fixed empty descriptor through the existing static node graph. */
+static char *cg_empty_callable_fdesc(CG *cg, const char *identity,
+                                     const char *display_name, FengToken blame);
+/* Determine descriptor need at compile time, including transitive callees. */
+static bool cg_callable_dep_set_has_descriptor_data(
+    const CG *cg, const FengReifiableDepSet *dep_set);
+/* Append a borrowed static descriptor address, propagating allocation errors. */
+static bool cg_append_empty_callable_fdesc(CG *cg, Buf *out, const char *identity,
+                                            const char *display_name, FengToken blame);
 static bool cg_emit_closed_callable_dep_expr(
     CG *cg,
     const FengReifiableCallableDep *callable_dep,
@@ -3402,6 +3417,20 @@ static const UserSpec *cg_generic_param_constraint_spec(const CG *cg, size_t ind
         return NULL;
     }
     return cg->generic_fn_type_param_constraints[index];
+}
+
+/* Expose the union matching surface without changing the subject's actual
+ * representation. Concrete unions keep their existing tag/payload backend;
+ * an erased T uses the declaration-validated constraint and projections. */
+static const UserSpec *cg_union_match_view(const CG *cg, const CGType *type) {
+    const UserSpec *spec = NULL;
+
+    if (type != NULL && type->kind == CG_TYPE_SPEC) {
+        spec = type->user_spec;
+    } else if (type != NULL && type->kind == CG_TYPE_GENERIC_PARAM) {
+        spec = cg_generic_param_constraint_spec(cg, type->generic_param_index);
+    }
+    return spec != NULL && spec->form == FENG_SPEC_FORM_UNION ? spec : NULL;
 }
 
 static const char *cg_generic_param_desc_name(const CG *cg, size_t index) {
@@ -9556,6 +9585,28 @@ static void cg_type_ref_free(FengTypeRef *ref) {
     free(ref);
 }
 
+/* Reconstruct a nominal reference together with its declaration context.
+ * Keep the established spelling used by Semantic witness keys; canonical
+ * symbol/descriptor identity resolves it using this explicit provenance. */
+static FengTypeRef *cg_nominal_type_ref(const FengProgram *owner,
+                                      FengSlice name, FengToken token) {
+    FengTypeRef *ref = calloc(1U, sizeof(*ref));
+    if (ref == NULL) return NULL;
+    ref->token = token;
+    ref->kind = FENG_TYPE_REF_NAMED;
+    ref->resolution_program = owner;
+    ref->as.named.segment_count = 1U;
+    ref->as.named.segments = calloc(1U, sizeof(FengSlice));
+    if (ref->as.named.segments == NULL) {
+        free(ref);
+        return NULL;
+    }
+    ref->as.named.segments[0] = name;
+    return ref;
+}
+
+/* Rebuild the actual type, preserving nominal identity and every container
+ * layer; open parameters remain declaration-order parameter references. */
 static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
                                             const CGType *type,
                                             FengToken token) {
@@ -9592,18 +9643,8 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
      * reified generic dependencies select the enum's own witness/descriptor. */
     if (type->enum_decl != NULL &&
         type->enum_decl->kind == FENG_DECL_ENUM) {
-        ref = calloc(1U, sizeof *ref);
-        if (ref == NULL) return NULL;
-        ref->token = token;
-        ref->kind = FENG_TYPE_REF_NAMED;
-        ref->as.named.segment_count = 1U;
-        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
-        if (ref->as.named.segments == NULL) {
-            free(ref);
-            return NULL;
-        }
-        ref->as.named.segments[0] = type->enum_decl->as.enum_decl.name;
-        return ref;
+        return cg_nominal_type_ref(cg_find_decl_owner_program(cg, type->enum_decl),
+                                   type->enum_decl->as.enum_decl.name, token);
     }
 
     for (size_t i = 0; i < sizeof k_builtin_types / sizeof k_builtin_types[0]; ++i) {
@@ -9659,18 +9700,9 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
     if ((type->kind == CG_TYPE_SPEC || type->kind == CG_TYPE_CALLABLE) &&
         type->user_spec != NULL && type->user_spec->decl != NULL &&
         type->user_spec->decl->kind == FENG_DECL_SPEC) {
-        ref = calloc(1U, sizeof *ref);
-        if (ref == NULL) return NULL;
-        ref->token = token;
-        ref->kind = FENG_TYPE_REF_NAMED;
-        ref->as.named.segment_count = 1U;
-        ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
-        if (ref->as.named.segments == NULL) {
-            free(ref);
-            return NULL;
-        }
         segment = type->user_spec->decl->as.spec_decl.name;
-        ref->as.named.segments[0] = segment;
+        ref = cg_nominal_type_ref(type->user_spec->owner_program, segment, token);
+        if (ref == NULL) return NULL;
         if (type->user_spec->is_generic_instance) {
             ref->as.named.type_arg_count = type->user_spec->generic_type_arg_count;
             ref->as.named.type_args = calloc(ref->as.named.type_arg_count,
@@ -9696,18 +9728,9 @@ static FengTypeRef *cg_type_ref_from_cgtype(const CG *cg,
         return NULL;
     }
 
-    ref = calloc(1U, sizeof *ref);
-    if (ref == NULL) return NULL;
-    ref->token = token;
-    ref->kind = FENG_TYPE_REF_NAMED;
-    ref->as.named.segment_count = 1U;
-    ref->as.named.segments = calloc(1U, sizeof *ref->as.named.segments);
-    if (ref->as.named.segments == NULL) {
-        free(ref);
-        return NULL;
-    }
     segment = type->user->decl->as.type_decl.name;
-    ref->as.named.segments[0] = segment;
+    ref = cg_nominal_type_ref(type->user->owner_program, segment, token);
+    if (ref == NULL) return NULL;
     if (type->user->is_generic_instance) {
         ref->as.named.type_arg_count = type->user->generic_type_arg_count;
         ref->as.named.type_args = calloc(ref->as.named.type_arg_count,
@@ -10182,15 +10205,16 @@ static const FengProgram *cg_type_ref_decl_identity_from_program(
     return visible_enum_owner;
 }
 
-/* Resolves a named reference from the program currently being emitted. Type
- * parameters and builtins have no declaration owner and remain short names. */
+/* Resolve a reference in its recorded origin, or the current program when
+ * source-owned metadata is absent. Parameters and builtins stay short names. */
 static const FengProgram *cg_type_ref_decl_identity(const CG *cg,
                                                     const FengTypeRef *ref,
                                                     FengSlice *out_name) {
     return cg_type_ref_decl_identity_from_program(
         cg,
         ref,
-        cg != NULL ? cg->cur_program : NULL,
+        ref != NULL && ref->resolution_program != NULL
+            ? ref->resolution_program : (cg != NULL ? cg->cur_program : NULL),
         out_name);
 }
 
@@ -10892,6 +10916,10 @@ static bool cg_collect_generic_instances_from_type_params_from_program(
 static const FengReifiableDepSet *cg_callable_dep_set(
     const CG *cg,
     const FengReifiableCallableDep *dep);
+/* Resolve an implicit fit-target parameter from the existing semantic fact. */
+static bool cg_builtin_fit_target_local_type_param(CG *cg,
+                                                   const FengDecl *fit_decl,
+                                                   FengTypeParam *out_type_param);
 static bool cg_close_callable_dep_type_args(
     CG *cg,
     const FengReifiableCallableDep *dep,
@@ -10995,6 +11023,30 @@ static bool cg_collect_closed_reifiable_dep_instances_inner(
         cg_type_ref_free(closed_ref);
         if (!ok) {
             return false;
+        }
+    }
+
+    /* Projection constraints and labels can instantiate types that never
+     * otherwise need a value descriptor. Register them before emitting C
+     * layouts: closed probe offsets must name complete, exact instances. */
+    for (size_t index = 0U; index < dep_set->union_projection_count; ++index) {
+        const FengUnionProjectionDep *projection = &dep_set->union_projections[index];
+        for (size_t ref_index = 0U; ref_index < projection->path_count + 3U; ++ref_index) {
+            const FengTypeRef *open_ref = ref_index == 0U
+                ? projection->subject_type_ref : ref_index == 1U
+                ? projection->constraint_type_ref : ref_index == 2U
+                ? projection->result_type_ref : projection->path[ref_index - 3U];
+            if (open_ref == NULL) continue;
+            FengTypeRef *closed_ref = cg_type_ref_substitute(
+                open_ref, type_params, type_param_count, type_args);
+            if (closed_ref == NULL) {
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            bool ok = cg_collect_generic_instances_from_substituted_type_ref(
+                cg, open_ref, closed_ref, type_params, type_param_count,
+                caller_scope, reference_program);
+            cg_type_ref_free(closed_ref);
+            if (!ok) return false;
         }
     }
 
@@ -11195,21 +11247,34 @@ static bool cg_collect_resolved_member_call_reifiable_dep_instances(
     const FengReifiableDepSet *dep_set;
     bool ok;
 
-    if (owner_decl == NULL || owner_decl->kind != FENG_DECL_TYPE ||
-        dependency_owner_decl == NULL || member == NULL ||
+    if (dependency_owner_decl == NULL || member == NULL ||
         member->kind != FENG_TYPE_MEMBER_METHOD) {
         return true;
     }
     callable = &member->as.callable;
     owner_instance =
         call_expr->as.call.resolved_callable.owner_instance_type_ref;
-    owner_count = owner_decl->as.type_decl.type_param_count;
+    FengTypeParam implicit_fit_param;
+    const FengTypeParam *owner_params = NULL;
+    const FengTypeRef *implicit_fit_arg = NULL;
+    if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE) {
+        owner_params = owner_decl->as.type_decl.type_params;
+        owner_count = owner_decl->as.type_decl.type_param_count;
+    } else if (cg_builtin_fit_target_local_type_param(cg, dependency_owner_decl,
+                                                      &implicit_fit_param)) {
+        owner_params = &implicit_fit_param;
+        owner_count = 1U;
+        if (owner_instance != NULL && owner_instance->kind == FENG_TYPE_REF_ARRAY)
+            implicit_fit_arg = owner_instance->as.inner;
+    } else {
+        owner_count = 0U;
+    }
     method_count = callable->type_param_count;
     combined_count = owner_count + method_count;
     dep_set = feng_semantic_lookup_member_reifiable_dep_set(
         cg->analysis, dependency_owner_decl, member);
 
-    if (owner_count > 0U &&
+    if (owner_count > 0U && implicit_fit_arg == NULL &&
         (owner_instance == NULL ||
          owner_instance->kind != FENG_TYPE_REF_NAMED ||
          owner_instance->as.named.type_arg_count != owner_count)) {
@@ -11246,8 +11311,9 @@ static bool cg_collect_resolved_member_call_reifiable_dep_instances(
                        "IE0001", "codegen: out of memory");
     }
     for (size_t index = 0U; index < owner_count; ++index) {
-        combined_params[index] = owner_decl->as.type_decl.type_params[index];
-        combined_args[index] = owner_instance->as.named.type_args[index];
+        combined_params[index] = owner_params[index];
+        combined_args[index] = implicit_fit_arg != NULL
+            ? (FengTypeRef *)implicit_fit_arg : owner_instance->as.named.type_args[index];
     }
     for (size_t index = 0U; index < method_count; ++index) {
         combined_params[owner_count + index] = callable->type_params[index];
@@ -11311,7 +11377,8 @@ static bool cg_collect_resolved_call_reifiable_dep_instances(
          resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD) &&
-        resolved->owner_type_decl != NULL && resolved->member != NULL) {
+        (resolved->owner_type_decl != NULL || resolved->fit_decl != NULL) &&
+        resolved->member != NULL) {
         const FengDecl *dependency_owner =
             resolved->fit_decl != NULL
                 ? resolved->fit_decl
@@ -24716,6 +24783,7 @@ static bool cg_emit_union_spec_coercion(CG *cg,
     Buf expr;
     bool payload_owns_ref = false;
     FengUnionCoercionSite patched_site;
+    size_t single_member_index;
 
     er_init(out);
     er_init(&source);
@@ -24732,7 +24800,8 @@ static bool cg_emit_union_spec_coercion(CG *cg,
     /* Backward compatibility: if path was not set, synthesize single-level path. */
     if (site->path_length == 0U) {
         patched_site = *site;
-        patched_site.path_indices[0] = site->member_index;
+        single_member_index = site->member_index;
+        patched_site.path_indices = &single_member_index;
         patched_site.path_length = 1U;
         site = &patched_site;
     }
@@ -28639,9 +28708,12 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
 
         buf_init(&call);
         if (builtin_fit != NULL) {
-            buf_append_fmt(&call,
-                "%s(&(const FengFunctionDescriptor){.name = \"%s\"}",
-                um->c_name, um->feng_name);
+            buf_append_fmt(&call, "%s(", um->c_name);
+            if (!cg_append_empty_callable_fdesc(cg, &call, um->c_name, um->feng_name, e->token)) {
+                buf_free(&call);
+                buf_free(&args_buf);
+                return false;
+            }
             if (args_buf.data != NULL && args_buf.length > 0U) {
                 buf_append_cstr(&call, ", ");
                 buf_append_cstr(&call, args_buf.data);
@@ -29520,12 +29592,21 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 e->token);
 
             Buf b; buf_init(&b);
-            if (cg->generic_type_method_rtd_via_desc ||
-                cg->generic_type_method_rad_via_desc) {
-                /* 在 BuiltinFit 共享体内部调用同一 fit 的另一个方法
-                 * 时，直接传递 _desc（已含正确的 reified deps）。 */
-                buf_append_fmt(&b, "%s(%s, _desc",
-                               um->c_name, recv.c_expr);
+            if (cg->in_generic_fn && cg_callable_dep_set_has_descriptor_data(cg,
+                    feng_semantic_lookup_member_reifiable_dep_set(
+                        cg->analysis, bf->decl, um->member))) {
+                /* The callee owns its dependency layout. Even a call within
+                 * one fit must select the callee's slot, not reuse the caller
+                 * descriptor merely because both use the function domain. */
+                char *fdesc = cg_callable_descriptor_expr_for_call(cg, e, e->token);
+                if (fdesc == NULL) {
+                    cgtype_free(bf_ret);
+                    buf_free(&args_buf);
+                    er_free(&recv);
+                    return false;
+                }
+                buf_append_fmt(&b, "%s(%s, %s", um->c_name, recv.c_expr, fdesc);
+                free(fdesc);
             } else {
                 const CGType *elem = (recv.type != NULL &&
                                       recv.type->kind == CG_TYPE_ARRAY)
@@ -33106,12 +33187,10 @@ static bool cg_emit_match_expr_all_exit(CG *cg, const FengExpr *e,
     /* Check if target is a union spec for the union-match code path. */
     const FengExpr *target = e->as.match_expr.target;
     CGType *target_type = cg_probe_expr_type(cg, target);
-    bool is_union = target_type != NULL && target_type->kind == CG_TYPE_SPEC &&
-                    target_type->user_spec != NULL &&
-                    target_type->user_spec->form == FENG_SPEC_FORM_UNION;
+    const UserSpec *union_spec = cg_union_match_view(cg, target_type);
+    bool is_union = union_spec != NULL;
 
     if (is_union) {
-        const UserSpec *union_spec = target_type->user_spec;
         bool first_branch = true;
         bool ok = true;
 
@@ -33397,10 +33476,8 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         return false;
     }
 
-    if (tgt.type != NULL && tgt.type->kind == CG_TYPE_SPEC &&
-        tgt.type->user_spec != NULL &&
-        tgt.type->user_spec->form == FENG_SPEC_FORM_UNION) {
-        const UserSpec *union_spec = tgt.type->user_spec;
+    const UserSpec *union_spec = cg_union_match_view(cg, tgt.type);
+    if (union_spec != NULL) {
         bool first_branch = true;
         bool ok = true;
         char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_umt");
@@ -33831,10 +33908,8 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
 
     /* Capture target type info before cg_materialize_to_local transfers
      * ownership of tgt.type into the scope. */
-    bool is_union = tgt.type->kind == CG_TYPE_SPEC &&
-                    tgt.type->user_spec != NULL &&
-                    tgt.type->user_spec->form == FENG_SPEC_FORM_UNION;
-    const UserSpec *union_spec = is_union ? tgt.type->user_spec : NULL;
+    const UserSpec *union_spec = cg_union_match_view(cg, tgt.type);
+    bool is_union = union_spec != NULL;
     CGTypeKind target_kind = tgt.type->kind;
 
     char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt");
@@ -36854,6 +36929,13 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         if (!ok) {
             cgtype_free(decl_type); return false;
         }
+        if (feng_semantic_expr_exits_via_return_or_throw(b->initializer)) {
+            /* The initializer emitted its return/throw paths. There is no
+             * value and no binding lifetime to initialize or register. */
+            er_free(&init);
+            cgtype_free(decl_type);
+            return true;
+        }
         if (!decl_type) {
             decl_type = cgtype_clone(init.type);
         }
@@ -39713,6 +39795,47 @@ static bool cg_union_member_index_for_label(CG *cg,
                    "CE0268", "codegen: union-form match label is not a normalized member");
 }
 
+/* Return the descriptor expression for one declaration-validated use. There
+ * is no dynamic slot lookup and no projection argument added to the call. */
+static char *cg_union_projection_expr(CG *cg, const FengMatchLabel *label,
+                                       const FengUnionProjectionUse *use) {
+    size_t slot = feng_semantic_union_projection_slot(
+        cg->generic_union_projection_deps, &use->projection);
+    if (slot == SIZE_MAX) {
+        (void)cg_fail(cg, label->token, "IE0002",
+            "codegen: union projection use has no slot in its dependency owner");
+        return NULL;
+    }
+    Buf expression;
+    buf_init(&expression);
+    buf_append_fmt(&expression, "%s->reified_union_projections[%zu]",
+        cg->generic_callable_dep_via_desc ? "_desc" : "_td", slot);
+    return expression.data;
+}
+
+/* Generate source-length, short-circuit probes over the actual erased T.
+ * `possible` dominates every source access, and each parent's comparison
+ * dominates the next payload read. No runtime path interpreter is emitted. */
+static char *cg_union_projection_condition(CG *cg, const char *subject,
+                                            const FengMatchLabel *label,
+                                            const FengUnionProjectionUse *use) {
+    char *projection = cg_union_projection_expr(cg, label, use);
+    Buf condition;
+    buf_init(&condition);
+    if (projection == NULL) return NULL;
+    buf_append_fmt(&condition, "(%s.possible", projection);
+    for (size_t i = 0U; i < use->projection.path_count; ++i) {
+        buf_append_fmt(&condition,
+            " && (!%s.probes[%zu].required || "
+            "*(const uint32_t *)((const unsigned char *)%s + "
+            "%s.probes[%zu].source_offset) == %s.probes[%zu].expected_tag)",
+            projection, i, subject, projection, i, projection, i);
+    }
+    buf_append_cstr(&condition, ")");
+    free(projection);
+    return condition.data;
+}
+
 /* Build full match condition for a label, including nested tag checks for chain labels.
  * For a simple label `A`, generates "tmp.tag == 0U".
  * For a chain label `A -> B -> C`, generates "tmp.tag == 0U && tmp.payload.m0.tag == 1U && tmp.payload.m0.payload.m1.tag == 2U".
@@ -39725,6 +39848,12 @@ static char *cg_build_label_condition(CG *cg,
     CGType *label_type = NULL;
     size_t first_index = 0U;
     bool found = false;
+
+    const FengUnionProjectionUse *projection_use =
+        feng_semantic_lookup_union_projection_use(cg->analysis, label);
+    if (projection_use != NULL && (cg->in_generic_fn || cg->in_generic_type_method)) {
+        return cg_union_projection_condition(cg, target_tmp, label, projection_use);
+    }
 
     if (label == NULL || label->kind != FENG_MATCH_LABEL_TYPE ||
         label->type == NULL || target_tmp == NULL || root_spec == NULL) {
@@ -40075,10 +40204,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
         return false;
     }
 
-    if (target.type != NULL && target.type->kind == CG_TYPE_SPEC &&
-        target.type->user_spec != NULL &&
-        target.type->user_spec->form == FENG_SPEC_FORM_UNION) {
-        const UserSpec *union_spec = target.type->user_spec;
+    const UserSpec *union_spec = cg_union_match_view(cg, target.type);
+    if (union_spec != NULL) {
         char *target_tmp = cg_materialize_to_local(cg, &target, "_umt");
         bool first_branch = true;
         bool ok = true;
@@ -41371,11 +41498,18 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                     "IE0001", "codegen: reified iterable cursor requires an out-parameter call");
             }
-            buf_append_fmt(cg->cur_body,
-                "    %s %s = %s(%s%s, "
-                "&(const FengFunctionDescriptor){.name = \"%s\"});\n",
-                cursor_cty, cursor_var, iterable_um->c_name, src_addr, src.c_expr,
-                iterable_um->feng_name);
+            buf_append_fmt(cg->cur_body, "    %s %s = %s(%s%s, ",
+                cursor_cty, cursor_var, iterable_um->c_name, src_addr, src.c_expr);
+            if (!cg_append_empty_callable_fdesc(cg, cg->cur_body, iterable_um->c_name,
+                                                iterable_um->feng_name, stmt->token)) {
+                free(cursor_cty); free(cursor_var);
+                cgtype_free(cursor_cgtype);
+                er_free(&src);
+                cg->cur_scope = outer_scope->parent;
+                scope_pop_free(outer_scope);
+                return false;
+            }
+            buf_append_cstr(cg->cur_body, ");\n");
         } else if (cg->in_generic_fn && src_ut != NULL &&
                    src_ut->generic_context_type_param_count > 0U) {
             /* Shared body cross-type call: iter() on another generic type.
@@ -42506,6 +42640,14 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
 static bool cg_emit_block(CG *cg, const FengBlock *block) {
     for (size_t i = 0; i < block->statement_count; i++) {
         if (!cg_emit_stmt(cg, block->statements[i])) return false;
+        const FengStmt *stmt = block->statements[i];
+        if (stmt->kind == FENG_STMT_BINDING &&
+            feng_semantic_expr_exits_via_return_or_throw(stmt->as.binding.initializer)) {
+            /* A binding with no completing initializer never comes into
+             * scope at runtime. Do not emit later references to a C local
+             * that correctly has no storage; source validation is unchanged. */
+            break;
+        }
     }
     return true;
 }
@@ -44436,6 +44578,71 @@ static char *cg_reifiable_sort_key(const FengTypeRef *type_ref,
     return key.data;
 }
 
+/* Full structural identity for callable slots and closed descriptor nodes.
+ * Unlike the historical aggregate ordering label, this key must distinguish
+ * every type form and declaration. Length prefixes avoid textual collisions;
+ * declaration-order parameter ordinals make provider/consumer names irrelevant. */
+static char *cg_callable_type_identity_key(
+    const CG *cg, const FengTypeRef *ref,
+    const FengSlice *param_names, size_t param_count) {
+    Buf key;
+    buf_init(&key);
+    if (ref == NULL) return strdup("null");
+    if (ref->kind == FENG_TYPE_REF_ARRAY || ref->kind == FENG_TYPE_REF_POINTER) {
+        char *inner = cg_callable_type_identity_key(cg, ref->as.inner, param_names, param_count);
+        if (inner == NULL || !buf_reserve(&key, strlen(inner) + 8U)) {
+            free(inner);
+            return NULL;
+        }
+        const char *kind = ref->kind == FENG_TYPE_REF_POINTER ? "P"
+                            : ref->array_element_writable ? "AW" : "AR";
+        buf_append_fmt(&key, "%s(%s)", kind, inner);
+        free(inner);
+        return key.data;
+    }
+    if (ref->kind != FENG_TYPE_REF_NAMED) return NULL;
+    if (ref->as.named.segment_count == 1U && ref->as.named.type_arg_count == 0U) {
+        for (size_t i = 0U; i < param_count; ++i) {
+            if (cg_module_segments_equal(ref->as.named.segments, 1U, &param_names[i], 1U)) {
+                if (!buf_reserve(&key, 32U)) return NULL;
+                buf_append_fmt(&key, "T(%zu)", i);
+                return key.data;
+            }
+        }
+    }
+    FengSlice name = {0};
+    const FengProgram *owner = cg_type_ref_decl_identity_from_program(cg, ref,
+        ref->resolution_program != NULL ? ref->resolution_program : cg->cur_program, &name);
+    size_t segments = owner != NULL ? owner->module_segment_count + 1U : ref->as.named.segment_count;
+    if (!buf_reserve(&key, 32U)) return NULL;
+    buf_append_fmt(&key, "N(%zu:", segments);
+    for (size_t i = 0U; i < segments; ++i) {
+        FengSlice segment = owner != NULL
+            ? (i < owner->module_segment_count ? owner->module_segments[i] : name)
+            : ref->as.named.segments[i];
+        if (!buf_reserve(&key, segment.length + 32U)) goto failure;
+        buf_append_fmt(&key, "%zu:", segment.length);
+        buf_append(&key, segment.data, segment.length);
+    }
+    if (!buf_reserve(&key, 32U)) goto failure;
+    buf_append_fmt(&key, ";%zu:", ref->as.named.type_arg_count);
+    for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+        char *arg = cg_callable_type_identity_key(cg, ref->as.named.type_args[i], param_names, param_count);
+        if (arg == NULL || !buf_reserve(&key, strlen(arg) + 32U)) {
+            free(arg);
+            goto failure;
+        }
+        buf_append_fmt(&key, "%zu:%s", strlen(arg), arg);
+        free(arg);
+    }
+    if (!buf_reserve(&key, 1U)) goto failure;
+    buf_append_cstr(&key, ")");
+    return key.data;
+failure:
+    buf_free(&key);
+    return NULL;
+}
+
 /* Build a minimal synthetic FengTypeRef from a concrete CGType so it can be
  * used in cg_type_ref_substitute for reifiable dep resolution.
  * Returns a heap-allocated FengTypeRef; caller frees via cg_type_ref_free. */
@@ -44746,7 +44953,7 @@ static bool cg_callable_dep_set_has_descriptor_data_inner(
     if (dep_set == NULL) {
         return false;
     }
-    if (dep_set->dep_count > 0U) {
+    if (dep_set->dep_count > 0U || dep_set->union_projection_count > 0U) {
         return true;
     }
     for (size_t index = 0U; index < stack_count; ++index) {
@@ -44817,11 +45024,10 @@ static char *cg_callable_dep_sort_key(
     buf_append_cstr(&key, identity);
     free(identity);
     if (dep->owner_instance_type_ref != NULL) {
-        char *owner_key = cg_reifiable_sort_key(
+        char *owner_key = cg_callable_type_identity_key(cg,
             dep->owner_instance_type_ref,
             caller_type_param_names,
-            caller_type_param_count,
-            true);
+            caller_type_param_count);
 
         if (owner_key == NULL) {
             buf_free(&key);
@@ -44834,11 +45040,10 @@ static char *cg_callable_dep_sort_key(
     for (size_t index = 0U;
          index < dep->callable_type_arg_count;
          ++index) {
-        char *arg_key = cg_reifiable_sort_key(
+        char *arg_key = cg_callable_type_identity_key(cg,
             dep->callable_type_args[index],
             caller_type_param_names,
-            caller_type_param_count,
-            true);
+            caller_type_param_count);
 
         if (arg_key == NULL) {
             buf_free(&key);
@@ -44849,11 +45054,10 @@ static char *cg_callable_dep_sort_key(
         free(arg_key);
     }
     if (dep->target_callable_type_ref != NULL) {
-        char *target_key = cg_reifiable_sort_key(
+        char *target_key = cg_callable_type_identity_key(cg,
             dep->target_callable_type_ref,
             caller_type_param_names,
-            caller_type_param_count,
-            true);
+            caller_type_param_count);
 
         if (target_key == NULL) {
             buf_free(&key);
@@ -44884,6 +45088,7 @@ static bool cg_activate_callable_dep_mapping(
     cg->generic_callable_dep_count = 0U;
     cg->generic_callable_dep_via_desc =
         source == CG_REIFIED_DEP_SOURCE_FUNCTION;
+    cg->generic_union_projection_deps = dep_set;
     if (dep_set == NULL) {
         return true;
     }
@@ -45158,6 +45363,48 @@ static char *cg_try_callable_descriptor_expr_for_dep(
     return result;
 }
 
+/* Empty metadata is independent of runtime arguments. Keep its identity
+ * separate from closed nonempty/callable-value nodes, including its original
+ * diagnostic name, so later reification cannot accidentally reuse this shell. */
+static char *cg_empty_callable_fdesc(CG *cg, const char *identity,
+                                     const char *display_name, FengToken blame) {
+    Buf key;
+    char *result = NULL;
+    if (identity == NULL || display_name == NULL) {
+        (void)cg_fail(cg, blame, "IE0002", "codegen: empty descriptor has no callable identity");
+        return NULL;
+    }
+    buf_init(&key);
+    buf_append_fmt(&key, "empty:%zu:%s:%zu:%s", strlen(identity), identity,
+                   strlen(display_name), display_name);
+    if (key.data != NULL) {
+        (void)cg_emit_closed_callable_fdesc(cg, NULL, NULL, 0U, NULL, NULL,
+                                           blame, key.data, display_name, NULL, &result);
+    } else {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    buf_free(&key);
+    return result;
+}
+
+/* Emit a static address without creating a block-lifetime descriptor. */
+static bool cg_append_empty_callable_fdesc(CG *cg, Buf *out, const char *identity,
+                                            const char *display_name, FengToken blame) {
+    char *expression = cg_empty_callable_fdesc(cg, identity, display_name, blame);
+    if (expression == NULL) {
+        return false;
+    }
+    size_t length = strlen(expression);
+    bool ok = buf_reserve(out, length);
+    if (ok) {
+        buf_append_cstr(out, expression);
+    } else {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    free(expression);
+    return ok;
+}
+
 /* Resolve the function descriptor argument for one generic shared callee in
  * an active shared body. Dependency-free callees use an empty descriptor and
  * therefore add no caller slot/read. */
@@ -45172,15 +45419,9 @@ static char *cg_callable_descriptor_expr_for_dep(
     }
     if (!cg_callable_dep_requires_slot(cg, dep)) {
         char *identity = cg_callable_dep_identity_name(cg, dep);
-        Buf empty;
-
-        buf_init(&empty);
-        buf_append_fmt(
-            &empty,
-            "&(const FengFunctionDescriptor){.name = \"%s\"}",
-            identity != NULL ? identity : "generic callable");
+        char *empty = cg_empty_callable_fdesc(cg, identity, identity, blame);
         free(identity);
-        return empty.data;
+        return empty;
     }
     result = cg_try_callable_descriptor_expr_for_dep(cg, dep);
     if (result == NULL) {
@@ -45231,6 +45472,8 @@ static bool cg_close_callable_dep_type_args(
     size_t *out_count) {
     const FengTypeParam *owner_params = NULL;
     const FengTypeParam *callable_params = NULL;
+    FengTypeParam implicit_fit_param;
+    const FengTypeRef *implicit_fit_arg = NULL;
     size_t owner_count = 0U;
     size_t callable_count = 0U;
     FengTypeParam *params = NULL;
@@ -45246,6 +45489,13 @@ static bool cg_close_callable_dep_type_args(
         dep->owner_type_decl->kind == FENG_DECL_TYPE) {
         owner_params = dep->owner_type_decl->as.type_decl.type_params;
         owner_count = dep->owner_type_decl->as.type_decl.type_param_count;
+    } else if (cg_builtin_fit_target_local_type_param(cg, dep->fit_decl,
+                                                      &implicit_fit_param)) {
+        owner_params = &implicit_fit_param;
+        owner_count = 1U;
+        if (dep->owner_instance_type_ref != NULL &&
+            dep->owner_instance_type_ref->kind == FENG_TYPE_REF_ARRAY)
+            implicit_fit_arg = dep->owner_instance_type_ref->as.inner;
     }
     if (dep->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
         dep->function_decl != NULL) {
@@ -45257,7 +45507,7 @@ static bool cg_close_callable_dep_type_args(
         callable_params = dep->member->as.callable.type_params;
         callable_count = dep->member->as.callable.type_param_count;
     }
-    if (owner_count > 0U &&
+    if (owner_count > 0U && implicit_fit_arg == NULL &&
         (dep->owner_instance_type_ref == NULL ||
          dep->owner_instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
          dep->owner_instance_type_ref->as.named.type_arg_count !=
@@ -45284,7 +45534,8 @@ static bool cg_close_callable_dep_type_args(
     for (size_t index = 0U; index < owner_count; ++index) {
         params[index] = owner_params[index];
         args[index] = cg_type_ref_substitute(
-            dep->owner_instance_type_ref->as.named.type_args[index],
+            implicit_fit_arg != NULL ? implicit_fit_arg
+                : dep->owner_instance_type_ref->as.named.type_args[index],
             caller_type_params,
             caller_type_param_count,
             caller_type_args);
@@ -45318,6 +45569,277 @@ failure:
     free(params);
     return cg_fail(cg, blame,
                    "CE0294", "codegen: failed to close callable dependency type arguments");
+}
+
+/* Resolve a projection type after substitution in the declaration scope,
+ * preserving the actual argument's own nominal resolution context. */
+static bool cg_close_union_projection_type(CG *cg, const FengTypeRef *open_ref,
+                                            const FengTypeParam *params, size_t count,
+                                            FengTypeRef *const *args,
+                                            const FengProgram *reference_program,
+                                            FengToken blame, FengTypeRef **out_ref,
+                                            CGType **out_type) {
+    bool handled = false;
+    *out_ref = cg_type_ref_substitute(open_ref, params, count, args);
+    *out_type = NULL;
+    if (*out_ref == NULL) {
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    return cg_try_resolve_declared_generic_type_ref(cg, open_ref, *out_ref,
+               reference_program, &blame, out_type, &handled) &&
+           (handled || cg_resolve_type_from_program(cg, *out_ref,
+               reference_program, &blame, out_type));
+}
+
+/* Resolve a validated path component against an exact closed union layout.
+ * This maps semantic type identity to layout order; it does not select a
+ * conversion or decide constraint satisfaction. */
+static bool cg_union_projection_member(CG *cg, const UserSpec *spec,
+                                       const CGType *member, FengToken blame,
+                                       size_t *out_index) {
+    if (spec != NULL && spec->form == FENG_SPEC_FORM_UNION) {
+        for (size_t i = 0U; i < spec->union_member_count; ++i) {
+            if (cg_types_equal(member, spec->union_member_types[i])) {
+                *out_index = i;
+                return true;
+            }
+        }
+    }
+    return cg_fail(cg, blame, "IE0002",
+                   "codegen: closed union projection path has no layout member");
+}
+
+/* Construct a virtual intermediate union directly into fresh storage. The
+ * source is borrowed, so the completed value acquires its normal aggregate
+ * ownership exactly once; no default member is initialized or overwritten. */
+static bool cg_emit_union_projection_materializer(CG *cg, const char *name,
+                                                   const CGType *source,
+                                                   const CGType *result,
+                                                   const size_t *entry,
+                                                   size_t entry_count,
+                                                   FengToken blame) {
+    const CGType *leaf = result;
+    Buf expression;
+    bool owns_ref = false;
+    char *source_ctype = cg_ctype_dup(source);
+    char *result_ctype = cg_ctype_dup(result);
+    const char *descriptor = cg_aggregate_desc_name(result);
+
+    buf_init(&expression);
+    for (size_t i = 0U; i < entry_count; ++i) {
+        if (leaf == NULL || leaf->kind != CG_TYPE_SPEC ||
+            leaf->user_spec == NULL || leaf->user_spec->form != FENG_SPEC_FORM_UNION ||
+            entry[i] >= leaf->user_spec->union_member_count) {
+            leaf = NULL;
+            break;
+        }
+        leaf = leaf->user_spec->union_member_types[entry[i]];
+    }
+    if (source_ctype == NULL || result_ctype == NULL) {
+        free(source_ctype);
+        free(result_ctype);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    if (!cg_types_equal(leaf, source)) {
+        free(source_ctype);
+        free(result_ctype);
+        return cg_fail(cg, blame, "IE0002",
+                       "codegen: union projection requires closed leaf conversion facts");
+    }
+    FengUnionCoercionSite site = {0};
+    site.path_indices = (size_t *)entry;
+    site.path_length = entry_count;
+    bool ok = entry_count > 0U && descriptor != NULL &&
+        cg_append_nested_union_coercion(cg, &expression, result->user_spec,
+            &site, 0U, "_source_value", &owns_ref, blame);
+    if (ok) {
+        buf_append_fmt(&cg->headers,
+            "static void %s(const void *, void *);\n", name);
+        buf_append_fmt(&cg->witness_defs,
+            "static void %s(const void *_source, void *_result) {\n"
+            "    %s const _source_value = *(%s const *)_source;\n"
+            "    %s _value = %s;\n"
+            "    feng_aggregate_retain(&_value, &%s);\n"
+            "    memcpy(_result, &_value, sizeof(_value));\n"
+            "}\n",
+            name, source_ctype, source_ctype, result_ctype, expression.data, descriptor);
+    }
+    buf_free(&expression);
+    free(source_ctype);
+    free(result_ctype);
+    return ok;
+}
+
+/* Close one declaration-owned projection. Static layers never inspect the
+ * source; dynamic offsets are relative to real subject storage and probes
+ * remain in source path order so every parent dominates its child read. */
+static bool cg_emit_closed_union_projection(CG *cg, Buf *out, Buf *entries,
+                                             const char *table_name, size_t slot,
+                                             const FengUnionProjectionDep *projection,
+                                             const FengTypeParam *params, size_t count,
+                                             FengTypeRef *const *args,
+                                             const FengProgram *reference_program,
+                                             FengToken blame) {
+    const FengProgram *closing_program = cg->cur_program;
+    FengTypeRef *subject_ref = NULL, *constraint_ref = NULL, *result_ref = NULL;
+    CGType *subject = NULL, *constraint = NULL, *result = NULL;
+    size_t *entry = NULL;
+    size_t entry_count = 0U;
+    Buf probes, payload, offset, materializer;
+    const CGType *current = NULL;
+    bool possible = true, ok = false;
+
+    buf_init(&probes);
+    buf_init(&payload);
+    buf_init(&offset);
+    buf_init(&materializer);
+    if (!cg_close_union_projection_type(cg, projection->subject_type_ref,
+            params, count, args, reference_program, blame, &subject_ref, &subject) ||
+        !cg_close_union_projection_type(cg, projection->constraint_type_ref,
+            params, count, args, reference_program, blame, &constraint_ref, &constraint) ||
+        (projection->result_type_ref != NULL &&
+         !cg_close_union_projection_type(cg, projection->result_type_ref,
+            params, count, args, reference_program, blame, &result_ref, &result))) {
+        goto cleanup;
+    }
+    /* Canonical slot keys may qualify private declarations. They are
+     * compiler identities, not source-level public module access. Rebuild
+     * ordinary nominal refs with the exact closed declaration provenance;
+     * relation visibility still comes from the actual closing program. */
+    cg_type_ref_free(subject_ref);
+    cg_type_ref_free(constraint_ref);
+    subject_ref = cg_type_ref_from_cgtype(cg, subject, blame);
+    constraint_ref = cg_type_ref_from_cgtype(cg, constraint, blame);
+    if (subject_ref == NULL || constraint_ref == NULL) {
+        (void)cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    if (projection->path_count == 0U ||
+        !feng_semantic_query_union_entry(cg->analysis, closing_program,
+            subject_ref, constraint_ref, &entry, &entry_count)) {
+        char *subject_key = cg_callable_type_identity_key(cg, subject_ref, NULL, 0U);
+        char *constraint_key = cg_callable_type_identity_key(cg, constraint_ref, NULL, 0U);
+        (void)cg_fail(cg, blame, "IE0002",
+            "codegen: semantic union projection entry is missing at its closing point "
+            "(slot %zu, subject '%s', constraint '%s', program %s)", slot,
+            subject_key != NULL ? subject_key : "?",
+            constraint_key != NULL ? constraint_key : "?",
+            closing_program != NULL ? "present" : "missing");
+        free(subject_key);
+        free(constraint_key);
+        goto cleanup;
+    }
+    current = constraint;
+    for (size_t i = 0U; i < projection->path_count; ++i) {
+        FengTypeRef *label_ref = NULL;
+        CGType *label = NULL;
+        size_t member = 0U;
+        if (!cg_close_union_projection_type(cg, projection->path[i], params, count,
+                args, reference_program, blame, &label_ref, &label) ||
+            current == NULL || current->kind != CG_TYPE_SPEC ||
+            !cg_union_projection_member(cg, current->user_spec, label, blame, &member)) {
+            cg_type_ref_free(label_ref);
+            cgtype_free(label);
+            goto cleanup;
+        }
+        cg_type_ref_free(label_ref);
+        cgtype_free(label);
+        if (i < entry_count) {
+            possible = possible && member == entry[i];
+            buf_append_cstr(&probes, "    { .required = false },\n");
+        } else if (possible) {
+            if (subject->kind != CG_TYPE_SPEC || subject->user_spec == NULL ||
+                subject->user_spec->form != FENG_SPEC_FORM_UNION) {
+                (void)cg_fail(cg, blame, "IE0002",
+                    "codegen: dynamic union projection has no subject union layout");
+                goto cleanup;
+            }
+            buf_append_fmt(&probes,
+                "    { .required = true, .source_offset = offsetof(struct %s, %stag), "
+                ".expected_tag = %zuU },\n", subject->user_spec->c_value_struct_name,
+                payload.data != NULL ? payload.data : "", member);
+            buf_append_cstr(&payload, "payload.");
+            cg_append_union_payload_field_name(&payload, member);
+            buf_append_cstr(&payload, ".");
+        } else {
+            buf_append_cstr(&probes, "    { .required = false },\n");
+        }
+        current = current->user_spec->union_member_types[member];
+    }
+    if (!possible) {
+        buf_append_cstr(entries, "    { .possible = false },\n");
+        ok = true;
+        goto cleanup;
+    }
+    if (result != NULL && !cg_types_equal(result, subject) &&
+        !cg_types_equal(current, result)) {
+        (void)cg_fail(cg, blame, "IE0002",
+            "codegen: union projection binding result disagrees with its selected path");
+        goto cleanup;
+    }
+    bool whole_subject = result != NULL && cg_types_equal(result, subject);
+    if (result != NULL && !whole_subject && projection->path_count <= entry_count &&
+        !cg_types_equal(result, subject)) {
+        buf_append_fmt(&materializer, "%s__materialize_%zu", table_name, slot);
+        if (!cg_emit_union_projection_materializer(cg, materializer.data, subject,
+                result, entry + projection->path_count,
+                entry_count - projection->path_count, blame)) goto cleanup;
+    }
+    if (!whole_subject && payload.length > 0U) {
+        buf_append_fmt(&offset, "offsetof(struct %s, %.*s)",
+            subject->user_spec->c_value_struct_name, (int)(payload.length - 1U), payload.data);
+    } else {
+        buf_append_cstr(&offset, "0U");
+    }
+    buf_append_fmt(out, "static const FengUnionTagProbe %s__probes_%zu[] = {\n%s};\n",
+        table_name, slot, probes.data);
+    buf_append_fmt(entries,
+        "    { .possible = true, .probes = %s__probes_%zu, .result_offset = %s, "
+        ".materialize = %s },\n", table_name, slot, offset.data,
+        materializer.data != NULL ? materializer.data : "NULL");
+    ok = true;
+
+cleanup:
+    cg_type_ref_free(subject_ref);
+    cg_type_ref_free(constraint_ref);
+    cg_type_ref_free(result_ref);
+    cgtype_free(subject);
+    cgtype_free(constraint);
+    cgtype_free(result);
+    free(entry);
+    buf_free(&probes);
+    buf_free(&payload);
+    buf_free(&offset);
+    buf_free(&materializer);
+    return ok;
+}
+
+/* Emit only this owner's used projections, preserving every open slot even
+ * when closing makes it false or equal to another slot. Empty owners emit no
+ * table and their descriptor's optional field remains zero-initialized. */
+static bool cg_emit_union_projection_table(CG *cg, Buf *out,
+                                            const char *descriptor_name,
+                                            const FengReifiableDepSet *dep_set,
+                                            const FengTypeParam *params, size_t count,
+                                            FengTypeRef *const *args,
+                                            const FengProgram *reference_program,
+                                            FengToken blame) {
+    if (dep_set == NULL || dep_set->union_projection_count == 0U) return true;
+    Buf name, entries;
+    buf_init(&name);
+    buf_init(&entries);
+    buf_append_fmt(&name, "%s__projections", descriptor_name);
+    bool ok = name.data != NULL;
+    for (size_t i = 0U; ok && i < dep_set->union_projection_count; ++i) {
+        ok = cg_emit_closed_union_projection(cg, out, &entries, name.data, i,
+            &dep_set->union_projections[i], params, count, args,
+            reference_program, blame);
+    }
+    if (ok) buf_append_fmt(out,
+        "static const FengUnionProjection %s[] = {\n%s};\n", name.data, entries.data);
+    buf_free(&name);
+    buf_free(&entries);
+    return ok;
 }
 
 /* Emit one static function descriptor for a fully closed callable invocation.
@@ -45380,8 +45902,8 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
             buf_append_cstr(&key, callable_value->surface_key);
         }
         for (size_t index = 0U; index < type_param_count; ++index) {
-            char *type_key = cg_reifiable_sort_key(
-                type_args[index], NULL, 0U, true);
+            char *type_key = cg_callable_type_identity_key(cg,
+                type_args[index], NULL, 0U);
 
             if (type_key == NULL) {
                 buf_free(&key);
@@ -45709,6 +46231,10 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     if (descriptor_var == NULL) {
         goto cleanup;
     }
+    if (!cg_emit_union_projection_table(cg, &cg->statics, descriptor_var,
+            dep_set, type_params, type_param_count, type_args, reference_program, blame)) {
+        goto cleanup;
+    }
     if (aggregate_count > 0U) {
         Buf name;
         buf_init(&name);
@@ -45771,6 +46297,10 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
                    ".name = \"%s\"",
                    descriptor_var,
                    display_name != NULL ? display_name : "generic callable");
+    if (dep_set != NULL && dep_set->union_projection_count > 0U) {
+        buf_append_fmt(&cg->statics, ", .reified_union_projections = %s__projections",
+                       descriptor_var);
+    }
     if (aggregate_count > 0U) {
         buf_append_fmt(&cg->statics,
                        ", .reified_agg_deps_count = %zu, "
@@ -45900,8 +46430,8 @@ static char *cg_closed_callable_descriptor_c_name_for(
         buf_append_cstr(&key, callable_value->surface_key);
     }
     for (size_t index = 0U; index < type_param_count; ++index) {
-        char *type_key = cg_reifiable_sort_key(
-            type_args[index], NULL, 0U, true);
+        char *type_key = cg_callable_type_identity_key(cg,
+            type_args[index], NULL, 0U);
 
         if (type_key == NULL) {
             buf_free(&key);
@@ -46026,7 +46556,7 @@ static bool cg_emit_closed_callable_function_value_dep_expr(
 
         display = strndup(name.data, name.length);
     }
-    surface_key = cg_reifiable_sort_key(closed_target_ref, NULL, 0U, true);
+    surface_key = cg_callable_type_identity_key(cg, closed_target_ref, NULL, 0U);
     memset(&value_init, 0, sizeof value_init);
     value_init.surface_key = surface_key;
     descriptor_c_name = cg_closed_callable_descriptor_c_name_for(
@@ -46317,10 +46847,10 @@ static bool cg_emit_closed_callable_spec_method_value_dep_expr(
     }
 
     {
-        char *target_key = cg_reifiable_sort_key(
-            closed_target_ref, NULL, 0U, true);
-        char *receiver_key = cg_reifiable_sort_key(
-            closed_receiver_ref, NULL, 0U, true);
+        char *target_key = cg_callable_type_identity_key(cg,
+            closed_target_ref, NULL, 0U);
+        char *receiver_key = cg_callable_type_identity_key(cg,
+            closed_receiver_ref, NULL, 0U);
         Buf key;
 
         if (target_key == NULL || receiver_key == NULL) {
@@ -46568,10 +47098,10 @@ static bool cg_emit_closed_callable_spec_static_method_value_dep_expr(
     }
 
     {
-        char *target_key = cg_reifiable_sort_key(
-            closed_target_ref, NULL, 0U, true);
-        char *owner_key = cg_reifiable_sort_key(
-            closed_owner_ref, NULL, 0U, true);
+        char *target_key = cg_callable_type_identity_key(cg,
+            closed_target_ref, NULL, 0U);
+        char *owner_key = cg_callable_type_identity_key(cg,
+            closed_owner_ref, NULL, 0U);
         Buf key;
 
         if (target_key == NULL || owner_key == NULL) {
@@ -46882,8 +47412,8 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
     callee_dep_set = cg_callable_dep_set(cg, callable_dep);
     identity = cg_callable_dep_identity_name(cg, callable_dep);
     display = strdup(method->feng_name);
-    surface_key = cg_reifiable_sort_key(
-        closed_target_ref, NULL, 0U, true);
+    surface_key = cg_callable_type_identity_key(cg,
+        closed_target_ref, NULL, 0U);
     memset(&value_init, 0, sizeof(value_init));
     value_init.surface_key = surface_key;
     descriptor_c_name = cg_closed_callable_descriptor_c_name_for(
@@ -47259,8 +47789,8 @@ static bool cg_emit_closed_callable_dep_expr(
                           "codegen: closed method-value target method was not registered");
             goto method_value_cleanup;
         }
-        surface_key = cg_reifiable_sort_key(
-            closed_target_ref, NULL, 0U, true);
+        surface_key = cg_callable_type_identity_key(cg,
+            closed_target_ref, NULL, 0U);
         memset(&value_init, 0, sizeof value_init);
         value_init.surface_key = surface_key;
 
@@ -47589,6 +48119,11 @@ static bool cg_emit_owner_callable_dep_array(
     if (dep_set == NULL) {
         return true;
     }
+    if (!cg_emit_union_projection_table(cg, out, owner_descriptor_name, dep_set,
+            owner_type_params, owner_type_param_count, owner_type_args,
+            cg_find_decl_owner_program(cg, dep_set->owner_decl), blame)) {
+        return false;
+    }
     for (size_t index = 0U;
          index < dep_set->callable_dep_count;
          ++index) {
@@ -47705,216 +48240,43 @@ cleanup:
     return ok;
 }
 
-/* Resolve one descriptor family for a concrete builtin-array fit call.  The
- * result order must match the shared body's independently sorted dependency
- * map so both sides address the same descriptor index. */
-static bool cg_resolve_builtin_fit_dep_descriptor_names(
-    CG *cg,
-    const BuiltinFit *bf,
-    const FengReifiableDepSet *dep_set,
-    FengReifiableDepKind kind,
-    const CGType *element_type,
-    const FengToken *blame,
-    char ***out_names,
-    size_t *out_count) {
-    typedef struct {
-        size_t index;
-        char *key;
-    } SortedDep;
-
-    size_t count = 0U;
-    FengSlice *type_param_names = NULL;
-    SortedDep *sorted = NULL;
-    FengTypeRef *concrete_ref = NULL;
-    char **names = NULL;
-    bool ok = false;
-
-    *out_names = NULL;
-    *out_count = 0U;
-    for (size_t i = 0U; i < dep_set->dep_count; ++i) {
-        if (dep_set->deps[i].kind == kind) {
-            count++;
-        }
-    }
-    if (count == 0U) {
-        return true;
-    }
-    if (element_type == NULL || bf->target_type_param_count != 1U) {
-        return cg_fail(cg, *blame,
-            "CE0292", "codegen: builtin array fit dependency resolution requires one concrete element type");
-    }
-
-    type_param_names = calloc(bf->target_type_param_count,
-                              sizeof *type_param_names);
-    sorted = calloc(count, sizeof *sorted);
-    names = calloc(count, sizeof *names);
-    if (type_param_names == NULL || sorted == NULL || names == NULL) {
-        cg_fail(cg, *blame, "IE0001", "codegen: out of memory");
-        goto cleanup;
-    }
-    for (size_t i = 0U; i < bf->target_type_param_count; ++i) {
-        type_param_names[i] = bf->target_type_params[i].name;
-    }
-
-    size_t sorted_index = 0U;
-    for (size_t i = 0U; i < dep_set->dep_count; ++i) {
-        if (dep_set->deps[i].kind != kind) {
-            continue;
-        }
-        sorted[sorted_index].index = i;
-        sorted[sorted_index].key = cg_reifiable_sort_key(
-            dep_set->deps[i].type_ref,
-            type_param_names,
-            bf->target_type_param_count,
-            true);
-        if (sorted[sorted_index].key == NULL) {
-            cg_fail(cg, *blame, "IE0001", "codegen: out of memory");
-            goto cleanup;
-        }
-        sorted_index++;
-    }
-    for (size_t i = 1U; i < count; ++i) {
-        SortedDep current = sorted[i];
-        size_t j = i;
-        while (j > 0U && strcmp(sorted[j - 1U].key, current.key) > 0) {
-            sorted[j] = sorted[j - 1U];
-            j--;
-        }
-        sorted[j] = current;
-    }
-
-    concrete_ref = cg_type_ref_from_cgtype(cg, element_type, *blame);
-    if (concrete_ref == NULL) {
-        goto cleanup;
-    }
-    FengTypeRef *concrete_args[1] = { concrete_ref };
-    for (size_t i = 0U; i < count; ++i) {
-        names[i] = cg_resolve_dep_descriptor_name(
-            cg,
-            dep_set->deps[sorted[i].index].type_ref,
-            bf->target_type_params,
-            bf->target_type_param_count,
-            concrete_args,
-            bf->owner_program,
-            kind,
-            blame);
-        if (names[i] == NULL) {
-            goto cleanup;
-        }
-    }
-
-    *out_names = names;
-    *out_count = count;
-    names = NULL;
-    ok = true;
-
-cleanup:
-    if (names != NULL) {
-        for (size_t i = 0U; i < count; ++i) {
-            free(names[i]);
-        }
-    }
-    free(names);
-    if (sorted != NULL) {
-        for (size_t i = 0U; i < count; ++i) {
-            free(sorted[i].key);
-        }
-    }
-    free(sorted);
-    free(type_param_names);
-    cg_type_ref_free(concrete_ref);
-    return ok;
-}
-
-/* Build the function descriptor passed to a builtin-array fit shared body.
- * Managed and aggregate dependencies are both concrete at the call site. */
+/* Close builtin-fit invocation metadata in the same static descriptor graph
+ * as ordinary generic calls. Dependency arrays are emitted at file scope by
+ * the common builder, never as block-lifetime compound literals. */
 static char *cg_builtin_fit_fdesc_expr(CG *cg,
                                        const BuiltinFit *bf,
                                        const UserMethod *method,
                                        const CGType *element_type,
                                        const FengToken *blame) {
     const FengReifiableDepSet *dep_set;
-    Buf result;
-    char **managed_names = NULL;
-    char **aggregate_names = NULL;
-    size_t managed_count = 0U;
-    size_t aggregate_count = 0U;
-
-    if (bf == NULL || bf->decl == NULL || method == NULL ||
-        method->member == NULL) {
-        goto simple;
+    FengTypeRef *concrete_ref = NULL;
+    char *result = NULL;
+    if (bf == NULL || bf->decl == NULL || method == NULL || method->member == NULL) {
+        (void)cg_fail(cg, *blame, "IE0002", "codegen: builtin-fit descriptor has no callable identity");
+        return NULL;
     }
-
     dep_set = feng_semantic_lookup_member_reifiable_dep_set(
         cg->analysis, bf->decl, method->member);
-    if (dep_set == NULL || dep_set->dep_count == 0U) {
-        goto simple;
+    if (!cg_callable_dep_set_has_descriptor_data(cg, dep_set)) {
+        return cg_empty_callable_fdesc(cg, method->c_name, method->feng_name, *blame);
     }
-
-    if (!cg_resolve_builtin_fit_dep_descriptor_names(
-            cg, bf, dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED,
-            element_type, blame, &managed_names, &managed_count) ||
-        !cg_resolve_builtin_fit_dep_descriptor_names(
-            cg, bf, dep_set, FENG_REIFIABLE_DEP_KIND_AGGREGATE,
-            element_type, blame, &aggregate_names, &aggregate_count)) {
-        goto fail;
-    }
-    if (managed_count == 0U && aggregate_count == 0U) {
-        goto simple;
-    }
-
-    buf_init(&result);
-    buf_append_fmt(&result,
-                   "&(const FengFunctionDescriptor){.name = \"%s\"",
-                   method->feng_name);
-    if (managed_count > 0U) {
-        buf_append_fmt(&result,
-            ", .reified_type_deps_count = %zu, "
-            ".reified_type_deps = (const FengTypeDescriptor *[]){",
-            managed_count);
-        for (size_t i = 0U; i < managed_count; ++i) {
-            if (i > 0U) buf_append_cstr(&result, ", ");
-            buf_append_fmt(&result, "&%s", managed_names[i]);
+    if (bf->target_type_param_count > 0U) {
+        if (element_type == NULL || bf->target_type_param_count != 1U) {
+            (void)cg_fail(cg, *blame, "CE0292",
+                "codegen: builtin array fit dependency resolution requires one concrete element type");
+            return NULL;
         }
-        buf_append_cstr(&result, "}");
-    }
-    if (aggregate_count > 0U) {
-        buf_append_fmt(&result,
-            ", .reified_agg_deps_count = %zu, "
-            ".reified_agg_deps = (const FengAggregateDescriptor *[]){",
-            aggregate_count);
-        for (size_t i = 0U; i < aggregate_count; ++i) {
-            if (i > 0U) buf_append_cstr(&result, ", ");
-            buf_append_fmt(&result, "&%s", aggregate_names[i]);
+        concrete_ref = cg_type_ref_from_cgtype(cg, element_type, *blame);
+        if (concrete_ref == NULL) {
+            return NULL;
         }
-        buf_append_cstr(&result, "}");
     }
-    buf_append_cstr(&result, "}");
-    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
-    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
-    free(managed_names);
-    free(aggregate_names);
-    return result.data;
-
-simple:
-    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
-    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
-    free(managed_names);
-    free(aggregate_names);
-    buf_init(&result);
-    buf_append_fmt(&result,
-        "&(const FengFunctionDescriptor){.name = \"%s\"}",
-        method != NULL && method->feng_name != NULL
-            ? method->feng_name
-            : "builtin fit method");
-    return result.data;
-
-fail:
-    for (size_t i = 0U; i < managed_count; ++i) free(managed_names[i]);
-    for (size_t i = 0U; i < aggregate_count; ++i) free(aggregate_names[i]);
-    free(managed_names);
-    free(aggregate_names);
-    return NULL;
+    FengTypeRef *args[] = {concrete_ref};
+    (void)cg_emit_closed_callable_fdesc(cg, dep_set, bf->target_type_params,
+        bf->target_type_param_count, args, bf->owner_program, *blame,
+        method->c_name, method->feng_name, NULL, &result);
+    cg_type_ref_free(concrete_ref);
+    return result;
 }
 
 /* Return whether a generic constraint contributes a runtime witness surface.
@@ -50241,9 +50603,11 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
         buf_append_fmt(cg->cur_body, "    %s(&%s__desc",
                        gfn->c_name, gfn->c_name);
     } else {
-        buf_append_fmt(cg->cur_body,
-            "    %s(&(const FengFunctionDescriptor){.name = \"%s\"}",
-            gfn->c_name, gfn->feng_name);
+        buf_append_fmt(cg->cur_body, "    %s(", gfn->c_name);
+        if (!cg_append_empty_callable_fdesc(cg, cg->cur_body,
+                                            gfn->c_name, gfn->feng_name, e->token)) {
+            goto generic_call_result_failure;
+        }
     }
     for (size_t i = 0; i < tp_count; i++) {
         buf_append_cstr(cg->cur_body, ", ");
@@ -52617,10 +52981,12 @@ static bool cg_ensure_witness_instance(
                         free(s_san);
                         return false;
                     }
-                    buf_append_fmt(fd,
-                        "    _ret = %s(_self_value, "
-                        "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                        fm->c_name, fm->feng_name);
+                    buf_append_fmt(fd, "    _ret = %s(_self_value, ", fm->c_name);
+                    if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                        buf_free(&prefix);
+                        free(s_san);
+                        return false;
+                    }
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         char pname[32];
 
@@ -52681,15 +53047,19 @@ static bool cg_ensure_witness_instance(
                         return false;
                     }
                     if (sm->type->kind == CG_TYPE_VOID) {
-                        buf_append_fmt(fd,
-                            "    %s(_self_value, "
-                            "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                            fm->c_name, fm->feng_name);
+                        buf_append_fmt(fd, "    %s(_self_value, ", fm->c_name);
+                        if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                            buf_free(&prefix);
+                            free(s_san);
+                            return false;
+                        }
                     } else {
-                        buf_append_fmt(fd,
-                            "    return %s(_self_value, "
-                            "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                            fm->c_name, fm->feng_name);
+                        buf_append_fmt(fd, "    return %s(_self_value, ", fm->c_name);
+                        if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                            buf_free(&prefix);
+                            free(s_san);
+                            return false;
+                        }
                     }
                     for (size_t pi = 0; pi < sm->param_count; ++pi) {
                         char pname[32];
@@ -53056,10 +53426,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    _ret = %s(_self_value, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    _ret = %s(_self_value, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             } else {
                 if (!cg_emit_ref_subject_load(cg,
                                               fd,
@@ -53070,10 +53442,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    _ret = %s(_self_ref, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    _ret = %s(_self_ref, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             }
             for (size_t pi = 0; pi < sm->param_count; ++pi) {
                 char pname[32];
@@ -53133,10 +53507,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    %s(_self_value, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    %s(_self_value, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             } else {
                 if (!cg_emit_ref_subject_load(cg,
                                               fd,
@@ -53147,10 +53523,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    %s(_self_ref, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    %s(_self_ref, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             }
         } else {
             if (cg_type_kind_is_scalar_builtin(subject_kind)) {
@@ -53165,10 +53543,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    return %s(_self_value, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    return %s(_self_value, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             } else {
                 if (!cg_emit_ref_subject_load(cg,
                                               fd,
@@ -53179,10 +53559,12 @@ static bool cg_ensure_witness_instance(
                     free(s_san);
                     return false;
                 }
-                buf_append_fmt(fd,
-                    "    return %s(_self_ref, "
-                    "&(const FengFunctionDescriptor){.name = \"%s\"}",
-                    fm->c_name, fm->feng_name);
+                buf_append_fmt(fd, "    return %s(_self_ref, ", fm->c_name);
+                if (!cg_append_empty_callable_fdesc(cg, fd, fm->c_name, fm->feng_name, blame)) {
+                    buf_free(&prefix);
+                    free(s_san);
+                    return false;
+                }
             }
         }
         for (size_t pi = 0; pi < sm->param_count; ++pi) {
@@ -53319,10 +53701,9 @@ static bool cg_append_static_spec_method_invoke(
     }
     buf_append_fmt(out, "%s(", method->c_name);
     if (builtin_fit != NULL) {
-        buf_append_fmt(
-            out,
-            "&(const FengFunctionDescriptor){.name = \"%s\"}",
-            method->feng_name);
+        if (!cg_append_empty_callable_fdesc(cg, out, method->c_name, method->feng_name, blame)) {
+            return false;
+        }
         has_argument = true;
     }
     for (size_t index = 0U; index < spec_member->param_count; ++index) {
@@ -59242,6 +59623,14 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                 "    .reified_callable_deps = %s__rcd,\n",
                 value_callable_dep_count, t->c_aggregate_desc_name);
         }
+        const FengReifiableDepSet *value_projection_deps = t->is_generic_instance &&
+            t->generic_context_type_param_count == 0U
+            ? feng_semantic_lookup_reifiable_dep_set(cg->analysis, t->generic_origin_decl)
+            : NULL;
+        if (value_projection_deps != NULL && value_projection_deps->union_projection_count > 0U) {
+            buf_append_fmt(td, "    .reified_union_projections = %s__projections,\n",
+                t->c_aggregate_desc_name);
+        }
         if (cg_user_type_uses_static_binding_states(t) &&
             (cg_program_origin(cg, t->owner_program) !=
                  FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
@@ -59900,6 +60289,14 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             "    .reified_callable_deps = %s__rcd,\n",
             reified_callable_dep_count, t->c_desc_name);
     }
+    const FengReifiableDepSet *projection_deps = t->is_generic_instance &&
+        t->generic_context_type_param_count == 0U
+        ? feng_semantic_lookup_reifiable_dep_set(cg->analysis, t->generic_origin_decl)
+        : NULL;
+    if (projection_deps != NULL && projection_deps->union_projection_count > 0U) {
+        buf_append_fmt(td, "    .reified_union_projections = %s__projections,\n",
+            t->c_desc_name);
+    }
     if (cg_user_type_uses_static_binding_states(t) &&
         (cg_program_origin(cg, t->owner_program) !=
              FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
@@ -60493,6 +60890,7 @@ static void cg_clear_generic_type_context(CG *cg) {
     cg->generic_callable_dep_keys = NULL;
     cg->generic_callable_dep_count = 0U;
     cg->generic_callable_dep_via_desc = false;
+    cg->generic_union_projection_deps = NULL;
 }
 
 /* Build the nominal/type-layout view of the current owner used while emitting
@@ -62226,6 +62624,10 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     char **saved_rad_descs = cg->generic_type_method_rad_descs;
     size_t saved_rad_count = cg->generic_type_method_rad_count;
     bool saved_rad_via_desc = cg->generic_type_method_rad_via_desc;
+    char **saved_callable_keys = cg->generic_callable_dep_keys;
+    size_t saved_callable_count = cg->generic_callable_dep_count;
+    bool saved_callable_via_desc = cg->generic_callable_dep_via_desc;
+    const FengReifiableDepSet *saved_projection_deps = cg->generic_union_projection_deps;
     char **saved_ambient_tp_names = cg->ambient_type_param_names;
     bool saved_in_generic_fn = cg->in_generic_fn;
     bool saved_generic_return_uses_out = cg->generic_return_uses_out;
@@ -62246,6 +62648,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         return false;
     }
     cg->generic_function_descriptor_c_name = "_desc";
+    cg->generic_callable_dep_keys = NULL;
+    cg->generic_callable_dep_count = 0U;
+    cg->generic_callable_dep_via_desc = true;
 
     cg_emit_builtin_fit_method_proto(&cg->fn_protos, bf, m, needs_static);
 
@@ -62623,6 +63028,32 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         }
     }
 
+    /* A fit member owns its callable slots just like an ordinary generic
+     * function. Include both fit and method parameters in declaration order. */
+    {
+        const FengCallableSignature *signature = &m->member->as.callable;
+        size_t fit_count = bf->target_type_param_count;
+        size_t total_count = fit_count + signature->type_param_count;
+        FengSlice *names = total_count > 0U ? calloc(total_count, sizeof(*names)) : NULL;
+        if (total_count > 0U && names == NULL) {
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        for (size_t index = 0U; index < total_count; ++index) {
+            names[index] = index < fit_count
+                ? bf->target_type_params[index].name
+                : signature->type_params[index - fit_count].name;
+        }
+        bool mapped = cg_activate_callable_dep_mapping(cg,
+            feng_semantic_lookup_member_reifiable_dep_set(cg->analysis, bf->decl, m->member),
+            names, total_count, CG_REIFIED_DEP_SOURCE_FUNCTION);
+        free(names);
+        if (!mapped) {
+            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+    }
+
     if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,
                                                   &captured_names,
                                                   &captured_name_count,
@@ -62747,6 +63178,11 @@ cleanup:
     cg->generic_fn_type_param_descs = saved_tp_descs;
     cg->generic_function_descriptor_c_name =
         saved_function_descriptor_c_name;
+    cg_free_cstr_array(cg->generic_callable_dep_keys, cg->generic_callable_dep_count);
+    cg->generic_callable_dep_keys = saved_callable_keys;
+    cg->generic_callable_dep_count = saved_callable_count;
+    cg->generic_callable_dep_via_desc = saved_callable_via_desc;
+    cg->generic_union_projection_deps = saved_projection_deps;
     /* 清理本方法体内分配的 rtd/rad 映射，恢复先前状态。 */
     for (size_t i = 0; i < cg->generic_type_method_rtd_count; i++) {
         free(cg->generic_type_method_rtd_descs[i]);

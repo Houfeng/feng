@@ -379,7 +379,7 @@ seal 方法”只指具体 `type`/`fit` 实现方法，不包括已导出 spec
 | --- | --- | --- |
 | `FT_MAGIC_BYTES` | `46 53 54 31` | ASCII `FST1` |
 | `FT_BYTE_ORDER_LE` | `0x01` | v1 仅支持 little-endian |
-| `FT_VERSION_MAJOR` | `0x01` | 主版本 |
+| `FT_VERSION_MAJOR` | `0x02` | 主版本；包括 G24 私有描述符契约 |
 | `FT_VERSION_MINOR` | `0x00` | 次版本 |
 | `FT_PROFILE_PACKAGE_PUBLIC` | `0x01` | `.fb/mod/**/*.ft` 公开包表 |
 | `FT_PROFILE_WORKSPACE_CACHE` | `0x02` | `build/<platform>/obj/symbols/**/*.ft` 本地缓存 |
@@ -476,13 +476,14 @@ Header
 | `FT_SEC_DOCS` | `0x0006` | 可选 | 全部 | 文档注释 |
 | `FT_SEC_ATTRS` | `0x0007` | 可选 | 全部 | 扩展属性 |
 | `FT_SEC_CALLABLE_DEPS` | `0x0008` | 条件必需 | 全部 | 共享泛型 callable 的直接调用与方法值依赖 |
+| `FT_SEC_UNION_PROJECTIONS` | `0x0009` | 必需（允许空节） | 全部 | 共享体联合收窄的开放投影依赖与稳定槽号 |
 | `FT_SEC_SPNS` | `0x0010` | 可选 | workspace-cache | 源码位置 |
 | `FT_SEC_USES` | `0x0011` | 可选 | workspace-cache | 依赖模块与指纹 |
 | `FT_SEC_META` | `0x0012` | 可选 | workspace-cache | 缓存失效信息 |
 
 保留规则:
 
-- `0x0009` 至 `0x000F` 预留给未来核心节。
+- `0x000A` 至 `0x000F` 预留给未来核心节。
 - `0x0013` 至 `0x001F` 预留给未来 workspace-cache 专用节。
 - package-public profile 不得出现 `0x0010` 以上的 workspace-only 节。
 
@@ -574,6 +575,11 @@ read header
 - 新er 编译器必须能够读取并消费旧的同 major `.ft` 包; 旧编译器是否能读取较新的同 major `.ft`,取决于该包是否只使用了其可安全忽略的追加扩展。
 - 是否可链接、是否可运行,除 `.ft` 格式外还取决于对应平台库文件、运行时 ABI 和 `@abi` / bridge 规则是否兼容; 这些不由编译器版本号单独决定。
 
+G24 将契约提升为 2.0，保留 `FST1` magic、Header 与目录外壳布局。原因是类型、aggregate、
+函数描述符新增 `reified_union_projections` 指针，旧布局不可与新生成代码混用。reader 必须拒绝
+不同 major；原 1.x reader 也会拒绝 2.0。升级须一起重建 runtime、使用私有描述符的生成 C／对象／
+库、provider 与 consumer 的 `.ft`／`.fb` 及相关缓存，不能仅更新符号文件后链接旧库。
+
 #### 6.3.5 `ATRS` 扩展属性节
 
 为尽量避免“出现一个新注解或新修饰就改 core 记录布局”,v1 预留 `FT_SEC_ATTRS` 作为统一扩展槽。
@@ -618,6 +624,33 @@ attr key 常量建议如下:
 - `FT_ATTR_ENUM_ITEM_VALUE` 只出现在 `enum_item` 子符号上,记录 consumer 恢复 `Enum.Item` 所需的稳定值事实; 不再额外导出“原本是显式赋值还是隐式赋值”的源码细节。
 - `FT_ATTR_STATIC_MEMBER` 只出现在 `type` 的静态字段或静态方法符号上,表示 consumer 恢复成员时必须设置 `static` 语义。
 - 泛型第一阶段不要求新增其他 attr key。类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达,而不是把核心语义塞进 `ATRS`。
+
+#### 6.3.6 `UNION_PROJECTIONS` 开放投影依赖
+
+2.0 的两个 profile 均必须包含此固定记录节，标记 REQUIRED、FIXED_ENTRY、SORTED，
+无投影时 count 与 size 为零。单项 32 字节，按以下顺序编码八个 little-endian `u32`：
+
+- `owner_symbol_id`：拥有投影的类型、顶层函数或方法；构造／终结器依赖归类型。
+- `ordinal`：该 owner 内已按开放身份排序的零基槽号。
+- `subject_type_id`：实际泛参引用的 TYPS id，不是约束 union 的替身。
+- `constraint_type_id`：完整约束 union 的 TYPS id。
+- `path_start`、`path_count`：TSEQ 中从根标签到箭头末端的完整路径；count 必须大于零。
+- `result_type_id`：无绑定时为零，否则为正常绑定结果类型的 TYPS id。
+- `flags`：bit 0 表示 var 绑定，其余位保留为零；无绑定时必须为零。
+
+路径元素的 name、flags、reserved 均为零，type_id 必须非零且有效。记录以
+`(owner_symbol_id, ordinal)` 升序存储；每个 owner 的 ordinal 必须从零连续且不重复。
+类型泛参引用沿用 TYPS 的 TYPE_PARAM_REF 和声明归属，不以参数拼写替代归属身份。
+
+非空投影 owner 同时带 `FT_ATTR_UNION_PROJECTION_COUNT = 0x000D`：value0 为预期条目数，
+value1／value2 为零。该属性不允许重复，实际记录数须完全匹配；没有该属性的 owner 不得携带
+投影记录。reader 在恢复 Semantic 前验证必需节、owner、引用、路径、flags、槽号和数量，
+缺失、重复、越界或截断均报符号读取错误。消费时保留开放槽序，闭合后即使类型相同或路径不可能
+也不得重新去重或压缩槽位。
+
+这些类型引用参加既有私有表示依赖闭包，仍不授予源级访问权。节内不保存运行时地址、C 偏移
+或 active tag；consumer 在最终闭合点据此生成静态投影表。联合收窄的具体生成策略见
+[共享泛型联合收窄设计](../engineering/feng-generic-union-match-draft.md)。
 
 ### 6.4 `STRS` 字符串池
 

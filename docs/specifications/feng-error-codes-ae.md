@@ -205,6 +205,7 @@
 | AE0621 | intersection-form 成员形态约束 | — | intersection-form spec '%.*s' members must be spec types but found '%s' |
 | AE0621 | intersection-form 成员形态约束 | — | intersection-form spec '%.*s' members must be object-form or intersection-form specs |
 | AE0622 | union-form 成员禁止 intersection-form | — | union-form spec '%.*s' cannot have intersection-form spec '%.*s' as a member |
+| AE0623 | intersection-form 字段要求冲突 | — | intersection-form spec '%.*s' has incompatible requirements for field '%.*s'; field type and binding kind must match |
 | AE0701 | spec 字段存在性约束 | AE0188 | type '%.*s' is missing field '%.*s' required by spec '%.*s' |
 | AE0702 | spec 字段可写性一致性约束 | AE0189 | type '%.*s' field '%.*s' mutability does not match spec '%.*s' (expected '%s') |
 | AE0703 | spec 字段类型一致性约束 | AE0190 | type '%.*s' field '%.*s' type '%s' does not match spec '%.*s' field type '%s' |
@@ -217,6 +218,7 @@
 | AE0707 | spec 实现成员可见性兼容约束 | (新增) | type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s' |
 | AE0708 | spec seal 成员访问域约束 | (新增) | seal member '%.*s' of spec '%.*s' is only accessible from a type or fit implementation that satisfies that spec |
 | AE0709 | 类型参数约束形态 | AE0212 | type parameter '%.*s': constraint must be a spec, not a type |
+| AE0710 | owner 类型实参不满足约束 | — | type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s' |
 
 ## 08 Fit段
 

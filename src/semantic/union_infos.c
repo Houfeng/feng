@@ -4,6 +4,21 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Source labels are stable AST identities; no runtime lookup is generated. */
+const FengUnionProjectionUse *feng_semantic_lookup_union_projection_use(
+    const FengSemanticAnalysis *analysis,
+    const FengMatchLabel *label) {
+    if (analysis == NULL || label == NULL) {
+        return NULL;
+    }
+    for (size_t i = 0U; i < analysis->union_projection_use_count; ++i) {
+        if (analysis->union_projection_uses[i].label == label) {
+            return &analysis->union_projection_uses[i];
+        }
+    }
+    return NULL;
+}
+
 static void free_owned_type_ref(FengTypeRef *type_ref) {
     if (type_ref == NULL) {
         return;
@@ -117,6 +132,7 @@ bool feng_semantic_record_union_coercion_site(
     size_t path_length) {
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     FengUnionCoercionSite *slot = NULL;
+    size_t *owned_path = NULL;
 
     if (analysis == NULL || expr == NULL || target_union_decl == NULL ||
         target_union_decl->kind != FENG_DECL_SPEC ||
@@ -124,8 +140,16 @@ bool feng_semantic_record_union_coercion_site(
         member_type_ref == NULL) {
         return false;
     }
-    if (path_length > UNION_COERCION_MAX_PATH_DEPTH) {
+    if (path_length > SIZE_MAX / sizeof(*owned_path) ||
+        (path_length > 0U && path_indices == NULL)) {
         return false;
+    }
+    if (path_length > 0U) {
+        owned_path = malloc(path_length * sizeof(*owned_path));
+        if (owned_path == NULL) {
+            return false;
+        }
+        memcpy(owned_path, path_indices, path_length * sizeof(*owned_path));
     }
 
     for (size_t index = 0U; index < analysis->union_coercion_site_count; ++index) {
@@ -143,28 +167,30 @@ bool feng_semantic_record_union_coercion_site(
             FengUnionCoercionSite *grown;
 
             if (new_capacity > SIZE_MAX / sizeof(*grown)) {
+                free(owned_path);
                 return false;
             }
             grown = (FengUnionCoercionSite *)realloc(analysis->union_coercion_sites,
                                                      new_capacity * sizeof(*grown));
             if (grown == NULL) {
+                free(owned_path);
                 return false;
             }
             analysis->union_coercion_sites = grown;
             analysis->union_coercion_site_capacity = new_capacity;
         }
         slot = &analysis->union_coercion_sites[analysis->union_coercion_site_count++];
+        memset(slot, 0, sizeof(*slot));
     }
 
+    free(slot->path_indices);
     slot->expr = expr;
     slot->target_union_decl = target_union_decl;
     slot->target_union_type_ref = target_union_type_ref;
     slot->member_index = member_index;
     slot->member_type_ref = member_type_ref;
     slot->path_length = path_length;
-    if (path_length > 0U && path_indices != NULL) {
-        memcpy(slot->path_indices, path_indices, path_length * sizeof(size_t));
-    }
+    slot->path_indices = owned_path;
     return true;
 }
 

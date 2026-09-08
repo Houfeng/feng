@@ -217,6 +217,7 @@ typedef struct CollectContext {
     FengReifiableDepSet *dep_set;
     const FengTypeParam *type_params;
     size_t type_param_count;
+    bool failed;
 } CollectContext;
 
 /* ---- 基础工具 --------------------------------------------------------- */
@@ -279,6 +280,74 @@ static bool rd_type_ref_equals(const FengTypeRef *left,
                    rd_type_ref_equals(left->as.inner, right->as.inner);
     }
     return false;
+}
+
+/* Compare the complete open use, including predicate versus binding purpose. */
+static bool rd_union_projection_equals(const FengUnionProjectionDep *left,
+                                        const FengUnionProjectionDep *right) {
+    if (left == NULL || right == NULL || left->path_count != right->path_count ||
+        left->binding_mutability != right->binding_mutability ||
+        !rd_type_ref_equals(left->subject_type_ref, right->subject_type_ref) ||
+        !rd_type_ref_equals(left->constraint_type_ref, right->constraint_type_ref) ||
+        !rd_type_ref_equals(left->result_type_ref, right->result_type_ref)) {
+        return false;
+    }
+    for (size_t index = 0U; index < left->path_count; ++index) {
+        if (!rd_type_ref_equals(left->path[index], right->path[index])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Resolve a source use against its owner's already ordered open slots. */
+size_t feng_semantic_union_projection_slot(const FengReifiableDepSet *dep_set,
+                                            const FengUnionProjectionDep *projection) {
+    if (dep_set != NULL) {
+        for (size_t index = 0U; index < dep_set->union_projection_count; ++index) {
+            if (rd_union_projection_equals(&dep_set->union_projections[index], projection)) {
+                return index;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Preserve an independent path array while sharing analysis-owned type refs. */
+bool feng_semantic_reifiable_dep_set_append_union_projection(
+    FengReifiableDepSet *dep_set,
+    const FengUnionProjectionDep *projection) {
+    FengUnionProjectionDep *slot;
+    const FengTypeRef **path;
+
+    if (dep_set == NULL || projection == NULL || projection->path_count == 0U ||
+        projection->path_count > SIZE_MAX / sizeof(*path)) {
+        return false;
+    }
+    if (feng_semantic_union_projection_slot(dep_set, projection) != SIZE_MAX) {
+        return true;
+    }
+    path = malloc(projection->path_count * sizeof(*path));
+    if (path == NULL) {
+        return false;
+    }
+    memcpy(path, projection->path, projection->path_count * sizeof(*path));
+    if (dep_set->union_projection_count == dep_set->union_projection_capacity) {
+        size_t capacity = dep_set->union_projection_capacity == 0U
+            ? 8U : dep_set->union_projection_capacity * 2U;
+        FengUnionProjectionDep *grown = capacity > SIZE_MAX / sizeof(*grown) ? NULL :
+            realloc(dep_set->union_projections, capacity * sizeof(*grown));
+        if (grown == NULL) {
+            free(path);
+            return false;
+        }
+        dep_set->union_projections = grown;
+        dep_set->union_projection_capacity = capacity;
+    }
+    slot = &dep_set->union_projections[dep_set->union_projection_count++];
+    *slot = *projection;
+    slot->path = path;
+    return true;
 }
 
 /* 判断已解析 callable 是否使用共享 ABI。构造器继续使用 type descriptor
@@ -1036,14 +1105,22 @@ static void collect_from_match_branch_labels(CollectContext *ctx,
         if (label->kind != FENG_MATCH_LABEL_TYPE) {
             continue;
         }
+        const FengUnionProjectionUse *use =
+            feng_semantic_lookup_union_projection_use(ctx->analysis, label);
+        if (use != NULL && ctx->dep_set != NULL) {
+            if (!feng_semantic_reifiable_dep_set_append_union_projection(
+                    ctx->dep_set, &use->projection)) {
+                ctx->failed = true;
+            }
+            try_collect_type_ref(ctx, use->projection.result_type_ref);
+        }
+        try_collect_type_ref(ctx, label->type);
         if (label->type_chain_count > 0U) {
             for (chain_index = 0U;
                  chain_index < label->type_chain_count;
                  ++chain_index) {
                 try_collect_type_ref(ctx, label->type_chain[chain_index]);
             }
-        } else {
-            try_collect_type_ref(ctx, label->type);
         }
     }
 }
@@ -1581,6 +1658,15 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             collect_from_expr(ctx, expr->as.match_op.target);
             for (i = 0U; i < expr->as.match_op.label_count; ++i) {
                 const FengMatchLabel *label = &expr->as.match_op.labels[i];
+                const FengUnionProjectionUse *use =
+                    feng_semantic_lookup_union_projection_use(ctx->analysis, label);
+                if (use != NULL && ctx->dep_set != NULL) {
+                    if (!feng_semantic_reifiable_dep_set_append_union_projection(
+                            ctx->dep_set, &use->projection)) {
+                        ctx->failed = true;
+                    }
+                    try_collect_type_ref(ctx, use->projection.result_type_ref);
+                }
                 switch (label->kind) {
                     case FENG_MATCH_LABEL_VALUE:
                         collect_from_expr(ctx, label->value);
@@ -1591,6 +1677,9 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
                         break;
                     case FENG_MATCH_LABEL_TYPE:
                         try_collect_type_ref(ctx, label->type);
+                        for (size_t path = 0U; path < label->type_chain_count; ++path) {
+                            try_collect_type_ref(ctx, label->type_chain[path]);
+                        }
                         break;
                 }
             }
@@ -1788,7 +1877,7 @@ static void collect_from_callable(CollectContext *ctx,
 
 /* ---- 泛型类型的依赖收集 ------------------------------------------------ */
 
-static void collect_for_type(FengSemanticAnalysis *analysis,
+static bool collect_for_type(FengSemanticAnalysis *analysis,
                              const FengDecl *decl) {
     CollectContext ctx;
     FengReifiableDepSet *dep_set;
@@ -1802,6 +1891,9 @@ static void collect_for_type(FengSemanticAnalysis *analysis,
     dep_set = NULL;
     if (ctx.type_param_count > 0U) {
         dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
+        if (dep_set == NULL) {
+            return false;
+        }
     }
 
     /* A member mixin source constructor executes in the instance-field
@@ -1856,6 +1948,8 @@ static void collect_for_type(FengSemanticAnalysis *analysis,
                     analysis, decl, member);
             if (ctx.dep_set != NULL) {
                 collect_from_callable(&ctx, &member->as.callable);
+            } else {
+                ctx.failed = true;
             }
             continue;
         }
@@ -1866,22 +1960,23 @@ static void collect_for_type(FengSemanticAnalysis *analysis,
             collect_from_callable(&ctx, &member->as.callable);
         }
     }
+    return !ctx.failed;
 }
 
 /* ---- 独立泛型函数的依赖收集 -------------------------------------------- */
 
-static void collect_for_generic_function(FengSemanticAnalysis *analysis,
+static bool collect_for_generic_function(FengSemanticAnalysis *analysis,
                                          const FengDecl *decl) {
     CollectContext ctx;
     FengReifiableDepSet *dep_set;
 
     if (decl->as.function_decl.type_param_count == 0U) {
-        return;
+        return true;
     }
 
     dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
     if (dep_set == NULL) {
-        return;
+        return false;
     }
 
     memset(&ctx, 0, sizeof(ctx));
@@ -1891,6 +1986,7 @@ static void collect_for_generic_function(FengSemanticAnalysis *analysis,
     ctx.type_param_count = decl->as.function_decl.type_param_count;
 
     collect_from_callable(&ctx, &decl->as.function_decl);
+    return !ctx.failed;
 }
 
 /* ---- fit 泛型方法的依赖收集 -------------------------------------------- */
@@ -1966,6 +2062,9 @@ static bool extract_fit_target_implicit_type_param(
         return false;
     }
     target_ref = fit_decl->as.fit_decl.target;
+    if (target_ref == NULL) {
+        return false;
+    }
 
     /* fit T[!] 解析为 POINTER → ARRAY → inner，取 ARRAY 层的 inner。 */
     if (target_ref->kind == FENG_TYPE_REF_POINTER &&
@@ -2011,7 +2110,16 @@ static bool extract_fit_target_implicit_type_param(
     return true;
 }
 
-static void collect_for_fit(FengSemanticAnalysis *analysis,
+/* Share the declaration-owned decision with call admission and substitution.
+ * A caller's same-named generic parameter must not reinterpret a fit target. */
+bool feng_semantic_query_fit_implicit_type_param(
+    const FengSemanticAnalysis *analysis, const FengDecl *fit_decl,
+    FengTypeParam *out_param) {
+    if (analysis == NULL || out_param == NULL) return false;
+    return extract_fit_target_implicit_type_param(analysis, fit_decl, out_param);
+}
+
+static bool collect_for_fit(FengSemanticAnalysis *analysis,
                             const FengDecl *decl) {
     const FengDecl *target_type_decl;
     const FengTypeParam *type_level_params = NULL;
@@ -2052,7 +2160,7 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
         }
     }
     if (!has_generic_context) {
-        return;
+        return true;
     }
 
     memset(&ctx, 0, sizeof(ctx));
@@ -2073,9 +2181,160 @@ static void collect_for_fit(FengSemanticAnalysis *analysis,
             feng_semantic_get_or_create_member_reifiable_dep_set(
                 analysis, decl, member);
         if (ctx.dep_set == NULL) {
-            continue;
+            return false;
         }
         collect_from_callable(&ctx, &member->as.callable);
+    }
+    return !ctx.failed;
+}
+
+/* Parameter identities in one descriptor domain: owner slots precede method
+ * slots. The domain itself is fixed by the containing dependency set. */
+typedef struct ProjectionOrderContext {
+    const FengTypeParam *owner_params;
+    size_t owner_count;
+    const FengTypeParam *callable_params;
+    size_t callable_count;
+} ProjectionOrderContext;
+
+/* Compare unsigned ordinals without overflow or implementation-defined casts. */
+static int rd_compare_size(size_t left, size_t right) {
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/* Compare exact bytes, never source location or pointer allocation order. */
+static int rd_compare_slice(FengSlice left, FengSlice right) {
+    size_t length = left.length < right.length ? left.length : right.length;
+    int result = length == 0U ? 0 : memcmp(left.data, right.data, length);
+    return result != 0 ? result : rd_compare_size(left.length, right.length);
+}
+
+/* Resolve an open parameter to its declaration ordinal, independently of its
+ * spelling. Method lookup is lexical; type parameters occupy separate slots. */
+static size_t rd_projection_param_slot(const ProjectionOrderContext *context,
+                                       const FengTypeRef *ref) {
+    if (ref->kind != FENG_TYPE_REF_NAMED || ref->as.named.segment_count != 1U ||
+        ref->as.named.type_arg_count != 0U) {
+        return SIZE_MAX;
+    }
+    FengSlice name = ref->as.named.segments[0];
+    for (size_t index = 0U; index < context->callable_count; ++index) {
+        if (rd_slice_equals(name, context->callable_params[index].name)) {
+            return context->owner_count + index;
+        }
+    }
+    for (size_t index = 0U; index < context->owner_count; ++index) {
+        if (rd_slice_equals(name, context->owner_params[index].name)) {
+            return index;
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Order fully qualified open type trees; close-time equality must not affect
+ * these slots. Pointer/array structure and every generic argument participate. */
+static int rd_compare_projection_type(const ProjectionOrderContext *context,
+                                      const FengTypeRef *left,
+                                      const FengTypeRef *right) {
+    int result;
+    if (left == NULL || right == NULL) {
+        return rd_compare_size(left != NULL, right != NULL);
+    }
+    size_t left_param = rd_projection_param_slot(context, left);
+    size_t right_param = rd_projection_param_slot(context, right);
+    if (left_param != SIZE_MAX || right_param != SIZE_MAX) {
+        return rd_compare_size(left_param, right_param);
+    }
+    result = rd_compare_size(left->kind, right->kind);
+    if (result != 0) {
+        return result;
+    }
+    if (left->kind != FENG_TYPE_REF_NAMED) {
+        result = rd_compare_size(left->array_element_writable, right->array_element_writable);
+        return result != 0 ? result :
+            rd_compare_projection_type(context, left->as.inner, right->as.inner);
+    }
+    size_t count = left->as.named.segment_count < right->as.named.segment_count
+        ? left->as.named.segment_count : right->as.named.segment_count;
+    for (size_t index = 0U; index < count; ++index) {
+        result = rd_compare_slice(left->as.named.segments[index], right->as.named.segments[index]);
+        if (result != 0) {
+            return result;
+        }
+    }
+    result = rd_compare_size(left->as.named.segment_count, right->as.named.segment_count);
+    if (result == 0) {
+        result = rd_compare_size(left->as.named.type_arg_count, right->as.named.type_arg_count);
+    }
+    for (size_t index = 0U; result == 0 && index < left->as.named.type_arg_count; ++index) {
+        result = rd_compare_projection_type(context, left->as.named.type_args[index],
+                                            right->as.named.type_args[index]);
+    }
+    return result;
+}
+
+/* Compare the entire projection identity within one owner/callable domain. */
+static int rd_compare_projection(const ProjectionOrderContext *context,
+                                 const FengUnionProjectionDep *left,
+                                 const FengUnionProjectionDep *right) {
+    int result = rd_compare_projection_type(context, left->subject_type_ref, right->subject_type_ref);
+    if (result == 0) {
+        result = rd_compare_projection_type(context, left->constraint_type_ref, right->constraint_type_ref);
+    }
+    size_t count = left->path_count < right->path_count ? left->path_count : right->path_count;
+    for (size_t index = 0U; result == 0 && index < count; ++index) {
+        result = rd_compare_projection_type(context, left->path[index], right->path[index]);
+    }
+    if (result == 0) {
+        result = rd_compare_size(left->path_count, right->path_count);
+    }
+    if (result == 0) {
+        result = rd_compare_projection_type(context, left->result_type_ref, right->result_type_ref);
+    }
+    return result != 0 ? result : rd_compare_size(left->binding_mutability, right->binding_mutability);
+}
+
+/* Finalize open slots once all source declarations have been collected. The
+ * insertion sort needs no allocation and leaves imported wire slots untouched. */
+static void rd_sort_union_projections(const FengSemanticAnalysis *analysis,
+                                       FengReifiableDepSet *dep_set) {
+    ProjectionOrderContext context = {0};
+    FengTypeParam implicit_param;
+    const FengDecl *owner = dep_set->owner_decl;
+    FengSemanticModuleOrigin origin;
+    if (dep_set->union_projection_count < 2U || owner == NULL ||
+        (rd_find_decl_module_origin(analysis, owner, &origin) &&
+         origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)) {
+        return;
+    }
+    if (owner->kind == FENG_DECL_FUNCTION) {
+        context.callable_params = owner->as.function_decl.type_params;
+        context.callable_count = owner->as.function_decl.type_param_count;
+    } else {
+        const FengDecl *type = owner->kind == FENG_DECL_TYPE ? owner :
+            owner->kind == FENG_DECL_FIT ? find_fit_target_type_decl(analysis, owner) : NULL;
+        if (type != NULL) {
+            context.owner_params = type->as.type_decl.type_params;
+            context.owner_count = type->as.type_decl.type_param_count;
+        } else if (owner->kind == FENG_DECL_FIT &&
+                   extract_fit_target_implicit_type_param(analysis, owner, &implicit_param)) {
+            context.owner_params = &implicit_param;
+            context.owner_count = 1U;
+        }
+        if (dep_set->owner_member != NULL) {
+            context.callable_params = dep_set->owner_member->as.callable.type_params;
+            context.callable_count = dep_set->owner_member->as.callable.type_param_count;
+        }
+    }
+    for (size_t index = 1U; index < dep_set->union_projection_count; ++index) {
+        FengUnionProjectionDep value = dep_set->union_projections[index];
+        size_t slot = index;
+        while (slot > 0U && rd_compare_projection(&context, &value,
+                &dep_set->union_projections[slot - 1U]) < 0) {
+            dep_set->union_projections[slot] = dep_set->union_projections[slot - 1U];
+            --slot;
+        }
+        dep_set->union_projections[slot] = value;
     }
 }
 
@@ -2104,13 +2363,19 @@ bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
 
                 switch (decl->kind) {
                     case FENG_DECL_TYPE:
-                        collect_for_type(analysis, decl);
+                        if (!collect_for_type(analysis, decl)) {
+                            return false;
+                        }
                         break;
                     case FENG_DECL_FUNCTION:
-                        collect_for_generic_function(analysis, decl);
+                        if (!collect_for_generic_function(analysis, decl)) {
+                            return false;
+                        }
                         break;
                     case FENG_DECL_FIT:
-                        collect_for_fit(analysis, decl);
+                        if (!collect_for_fit(analysis, decl)) {
+                            return false;
+                        }
                         break;
                     default:
                         break;
@@ -2119,5 +2384,8 @@ bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
         }
     }
 
+    for (size_t index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
+        rd_sort_union_projections(analysis, &analysis->reifiable_dep_sets[index]);
+    }
     return true;
 }

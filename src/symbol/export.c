@@ -1555,8 +1555,47 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                   : feng_semantic_lookup_reifiable_dep_set(
                         ctx->analysis, source_decl);
     if (dep_set == NULL ||
-        (dep_set->dep_count == 0U && dep_set->callable_dep_count == 0U)) {
+        (dep_set->dep_count == 0U && dep_set->callable_dep_count == 0U &&
+         dep_set->union_projection_count == 0U)) {
         return true;
+    }
+
+    if (dep_set->union_projection_count > 0U) {
+        decl->reifiable_union_projections = calloc(dep_set->union_projection_count,
+                                                   sizeof(*decl->reifiable_union_projections));
+        if (decl->reifiable_union_projections == NULL) {
+            return feng_symbol_internal_set_error(out_error, path, token,
+                                                    "out of memory exporting union projections");
+        }
+        decl->reifiable_union_projection_count = dep_set->union_projection_count;
+        for (index = 0U; index < dep_set->union_projection_count; ++index) {
+            const FengUnionProjectionDep *source = &dep_set->union_projections[index];
+            FengSymbolUnionProjectionView *target = &decl->reifiable_union_projections[index];
+            target->binding_mutability = source->binding_mutability;
+            target->subject_type = build_type_from_type_ref_with_tparams(ctx,
+                source->subject_type_ref, type_params, type_param_count, path, token, out_error);
+            target->constraint_type = build_type_from_type_ref_with_tparams(ctx,
+                source->constraint_type_ref, type_params, type_param_count, path, token, out_error);
+            target->result_type = build_type_from_type_ref_with_tparams(ctx,
+                source->result_type_ref, type_params, type_param_count, path, token, out_error);
+            if (target->subject_type == NULL || target->constraint_type == NULL ||
+                (source->result_type_ref != NULL && target->result_type == NULL)) {
+                return false;
+            }
+            target->path = calloc(source->path_count, sizeof(*target->path));
+            if (target->path == NULL) {
+                return feng_symbol_internal_set_error(out_error, path, token,
+                                                        "out of memory exporting union projection path");
+            }
+            target->path_count = source->path_count;
+            for (size_t step = 0U; step < source->path_count; ++step) {
+                target->path[step] = build_type_from_type_ref_with_tparams(ctx,
+                    source->path[step], type_params, type_param_count, path, token, out_error);
+                if (target->path[step] == NULL) {
+                    return false;
+                }
+            }
+        }
     }
 
     for (index = 0U; index < dep_set->dep_count; ++index) {
@@ -3685,6 +3724,15 @@ static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
             bind_type_target(graph,
                              decl,
                              dependency->callable_type_args[arg_index]);
+        }
+    }
+    for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+        FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];
+        bind_type_target(graph, decl, projection->subject_type);
+        bind_type_target(graph, decl, projection->constraint_type);
+        bind_type_target(graph, decl, projection->result_type);
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            bind_type_target(graph, decl, projection->path[step]);
         }
     }
     for (index = 0U; index < decl->member_count; ++index) {

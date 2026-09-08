@@ -1,0 +1,140 @@
+open module fcts_lib.test.g24_descriptors;
+
+/** Reference dependency, closed independently for every actual T. */
+open type G24DescriptorBox<T> {
+    open let value: T;
+    func G24DescriptorBox(value: T) { self.value = value; }
+}
+
+/** Value dependency; a string/reference T keeps managed slots. */
+@value
+open type G24DescriptorCell<T> {
+    open let value: T;
+    func G24DescriptorCell(value: T) { self.value = value; }
+}
+
+/** The returned callable can outlive every creating stack frame. */
+open spec G24DescriptorReader<T>(): T;
+
+/** An empty function descriptor never stores invocation state. */
+open func g24_lib_identity<T>(value: T): T { return value; }
+
+/** A nonempty descriptor closes both managed and aggregate dependencies. */
+open func g24_lib_saved<T>(value: T): T {
+    let box = G24DescriptorBox<T>(value);
+    let cell = G24DescriptorCell<T>(box.value);
+    return g24_lib_identity<T>(cell.value);
+}
+
+/** Forward nonempty metadata through a caller without its own type storage. */
+open func g24_lib_relay<T>(value: T): T { return g24_lib_saved<T>(value); }
+
+/** Recursion closes a descriptor graph, not a per-invocation table. */
+open func g24_lib_recursive<T>(value: T, count: i32): T {
+    if count == 0 { return g24_lib_relay<T>(value); }
+    return g24_lib_recursive<T>(value, count - 1);
+}
+
+/** Capturing this call preserves T and its callee dependencies after return. */
+open func g24_lib_capture<T>(value: T): G24DescriptorReader<T> {
+    return () { return g24_lib_relay<T>(value); };
+}
+
+/** Ordinary zero initialization still uses the actual T descriptor. */
+open func g24_lib_default<T>(): T { let value: T; return value; }
+
+/** The fit's concrete call closes the same two descriptor families. */
+open fit T[] {
+    open func g24_descriptor_saved(): T {
+        let box = G24DescriptorBox<T>(self[0]);
+        let cell = G24DescriptorCell<T>(box.value);
+        return cell.value;
+    }
+}
+
+/** A shared caller must forward the fit's own closed dependency descriptor. */
+open func g24_lib_array_relay<T>(values: T[]): T {
+    return values.g24_descriptor_saved();
+}
+
+/** Different layout prevents caller/callee dependency-table reuse by accident. */
+open type G24DescriptorOther<T> {
+    open let marker: string = "other";
+    open let value: T;
+    func G24DescriptorOther(value: T) { self.value = value; }
+}
+
+/** Forwarders with distinct own, transitive, recursive and empty dependencies. */
+open fit T[] {
+    open func g24_descriptor_plain(): T { return self[0]; }
+    open func g24_descriptor_empty(): T { return self.g24_descriptor_plain(); }
+    open func g24_descriptor_sibling(): T {
+        let own = G24DescriptorOther<T>(self[0]);
+        own.marker;
+        return self.g24_descriptor_saved();
+    }
+    open func g24_descriptor_recursive(count: i32): T {
+        if count == 0 { return self.g24_descriptor_saved(); }
+        return self.g24_descriptor_recursive(count - 1);
+    }
+}
+/** A separate fit declaration must still select the same exact callee. */
+open fit T[] {
+    open func g24_descriptor_across(): T { return self.g24_descriptor_sibling(); }
+}
+
+/** Forwarders with distinct own, transitive, recursive and empty dependencies. */
+open fit T[!] {
+    open func g24_descriptor_plain(): T { return self[0]; }
+    open func g24_descriptor_empty(): T { return self.g24_descriptor_plain(); }
+    open func g24_descriptor_sibling(): T {
+        let own = G24DescriptorOther<T>(self[0]);
+        own.marker;
+        return self.g24_descriptor_saved();
+    }
+    open func g24_descriptor_recursive(count: i32): T {
+        if count == 0 { return self.g24_descriptor_saved(); }
+        return self.g24_descriptor_recursive(count - 1);
+    }
+}
+/** A separate fit declaration must still select the same exact callee. */
+open fit T[!] {
+    open func g24_descriptor_across(): T { return self.g24_descriptor_sibling(); }
+}
+
+/** Writable counterpart keeps its original element binding semantics. */
+open fit T[!] {
+    open func g24_descriptor_saved(): T {
+        let box = G24DescriptorBox<T>(self[0]);
+        let cell = G24DescriptorCell<T>(box.value);
+        return cell.value;
+    }
+}
+/** A second provider shared body tests three layers of forwarding. */
+open func g24_lib_array_outer<T>(values: T[]): T {
+    return g24_lib_array_relay<T>(values);
+}
+
+/** The same selected member must have independent slots for A[] and B[]. */
+open func g24_lib_array_pair<A, B>(first: A[], second: B[]): B {
+    first.g24_descriptor_saved();
+    return second.g24_descriptor_saved();
+}
+
+/** The captured caller descriptor remains usable after this frame returns. */
+open func g24_lib_array_capture<T>(values: T[]): G24DescriptorReader<T> {
+    return () { return values.g24_descriptor_saved(); };
+}
+
+/** Type and method contexts route the same fit dependency independently. */
+open type G24DescriptorRouter<T> {
+    open let value: T;
+    /** Constructor uses the owner descriptor domain. */
+    func G24DescriptorRouter(values: T[]) { self.value = values.g24_descriptor_saved(); }
+    /** Method uses its callable descriptor even when depending on owner T. */
+    open func own(values: T[]): T { return values.g24_descriptor_saved(); }
+    /** Method U is independent of this instance's T. */
+    open func other<U>(values: U[]): U { return values.g24_descriptor_saved(); }
+    /** A receiver-free method also has its own callable descriptor domain. */
+    open static func from<U>(values: U[]): U { return values.g24_descriptor_saved(); }
+}

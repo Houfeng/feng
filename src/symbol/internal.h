@@ -26,7 +26,8 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_REIFIABLE_AGGREGATE_DEP = 9,
     FENG_SYMBOL_ATTR_REIFIABLE_MANAGED_DEP = 10,
     FENG_SYMBOL_ATTR_ABI_FIXED_PARAM_COUNT = 11,
-    FENG_SYMBOL_ATTR_MIXABLE_METHOD = 12
+    FENG_SYMBOL_ATTR_MIXABLE_METHOD = 12,
+    FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT = 13
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -61,6 +62,17 @@ typedef struct FengSymbolCallableDepView {
     size_t callable_type_arg_count;
     FengSymbolTypeView *target_callable_type;
 } FengSymbolCallableDepView;
+
+/* One open, slot-ordered union projection. Every type view and the path array
+ * are owned by this record; no runtime offset or address crosses the FT. */
+typedef struct FengSymbolUnionProjectionView {
+    FengSymbolTypeView *subject_type;
+    FengSymbolTypeView *constraint_type;
+    FengSymbolTypeView **path;
+    size_t path_count;
+    FengSymbolTypeView *result_type;
+    FengMutability binding_mutability;
+} FengSymbolUnionProjectionView;
 
 struct FengSymbolTypeView {
     FengSymbolTypeKind kind;
@@ -144,6 +156,8 @@ struct FengSymbolDeclView {
     size_t reifiable_type_dep_count;
     FengSymbolCallableDepView *reifiable_callable_deps;
     size_t reifiable_callable_dep_count;
+    FengSymbolUnionProjectionView *reifiable_union_projections;
+    size_t reifiable_union_projection_count;
     /* Original deterministic id when this declaration came from an FT.
      * Source-built graphs assign the same stable tree id before export. */
     uint32_t ft_symbol_id;

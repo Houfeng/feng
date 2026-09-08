@@ -1,0 +1,11 @@
+module fcts_bin;
+
+// ISSUE-G24-008: the receiver compares against T, not necessarily against itself.
+func g24_gen_eq_view<T, U: GenComparable<T>>(value: U, other: T): bool {
+    return value.gen_eq(other);
+}
+
+// A distinct receiver type retains its own exact constraint witness.
+func g24_gen_compare_view<T, U: GenComparable<T>>(value: U, other: T): int {
+    return value.gen_compare(other);
+}

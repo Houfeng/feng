@@ -333,8 +333,11 @@ int feng_cli_frontend_run_with_overlays(const FengCliFrontendInput *input,
 
     /* Restore imported codegen metadata into the shared semantic side-tables. */
     if (analysis != NULL && exit_code == 0 && imported_module_cache != NULL) {
-        feng_symbol_imported_module_cache_populate_codegen_metadata(
-            imported_module_cache, analysis);
+        if (!feng_symbol_imported_module_cache_populate_codegen_metadata(
+                imported_module_cache, analysis)) {
+            fprintf(stderr, "failed to restore imported codegen metadata\n");
+            exit_code = 1;
+        }
     }
 
     if (analysis != NULL && analysis->info_count > 0U

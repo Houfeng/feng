@@ -346,16 +346,15 @@ typedef struct FengIntersectionSpecInfo {
  * matches are preferred by the analyzer before spec-satisfaction matches, so
  * codegen can trust `member_index` as the tag to emit.
  * `path_indices` records the multi-level path from the target union to the
- * source type through nested union members; `path_length` is the depth. */
-#define UNION_COERCION_MAX_PATH_DEPTH 8U
-
+ * source type through nested union members; `path_length` is the depth.
+ * The site owns this unbounded compiler-only path until analysis teardown. */
 typedef struct FengUnionCoercionSite {
     const FengExpr *expr;
     const FengDecl *target_union_decl;
     const FengTypeRef *target_union_type_ref;
     size_t member_index;
     const FengTypeRef *member_type_ref;
-    size_t path_indices[UNION_COERCION_MAX_PATH_DEPTH];
+    size_t *path_indices;
     size_t path_length;
 } FengUnionCoercionSite;
 
@@ -398,6 +397,26 @@ typedef struct FengReifiableCallableDep {
     const FengTypeRef *target_callable_type_ref;
 } FengReifiableCallableDep;
 
+/* One open union projection dependency. Type refs borrow analysis/AST data;
+ * each record owns its path array. The binding result is NULL for a predicate,
+ * a member type for one label, or the original subject type for a subset. */
+typedef struct FengUnionProjectionDep {
+    const FengTypeRef *subject_type_ref;
+    const FengTypeRef *constraint_type_ref;
+    const FengTypeRef **path;
+    size_t path_count;
+    const FengTypeRef *result_type_ref;
+    FengMutability binding_mutability;
+} FengUnionProjectionDep;
+
+/* Validated source use, recorded before lexical scopes disappear. Owner
+ * assignment happens in the existing reifiable-dependency collection pass. */
+typedef struct FengUnionProjectionUse {
+    const FengExpr *target;
+    const FengMatchLabel *label;
+    FengUnionProjectionDep projection;
+} FengUnionProjectionUse;
+
 /* 一个泛型声明或 callable 的全部具体化依赖。
  * owner_decl 标识顶层声明；owner_member 非 NULL 时标识该声明内的
  * callable member：
@@ -415,6 +434,9 @@ typedef struct FengReifiableDepSet {
     FengReifiableCallableDep *callable_deps;
     size_t callable_dep_count;
     size_t callable_dep_capacity;
+    FengUnionProjectionDep *union_projections;
+    size_t union_projection_count;
+    size_t union_projection_capacity;
 } FengReifiableDepSet;
 
 /* Stable FT identity attached to an AST declaration/member synthesized from
@@ -482,6 +504,9 @@ typedef struct FengSemanticAnalysis {
     FengReifiableDepSet *reifiable_dep_sets;
     size_t reifiable_dep_set_count;
     size_t reifiable_dep_set_capacity;
+    FengUnionProjectionUse *union_projection_uses;
+    size_t union_projection_use_count;
+    size_t union_projection_use_capacity;
     FengImportedSymbolIdentity *imported_symbol_identities;
     size_t imported_symbol_identity_count;
     size_t imported_symbol_identity_capacity;
@@ -545,6 +570,11 @@ typedef struct FengSemanticAnalyzeOptions {
  * a pure compile-time AST query and does not mutate semantic analysis state. */
 FengSemanticResultBlockFlow feng_semantic_classify_result_block(
     const FengBlock *block);
+
+/* True when evaluation exits every path through return/throw and therefore
+ * supplies no value to its consumer. Reuses the existing path analysis;
+ * this query adds neither constant evaluation nor an unreachable diagnostic. */
+bool feng_semantic_expr_exits_via_return_or_throw(const FengExpr *expr);
 
 bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         size_t program_count,
@@ -671,6 +701,17 @@ bool feng_semantic_spec_relation_source_visible_from(
     size_t consumer_import_count);
 
 /* --- SpecCoercionSite (Phase S1b, §6.2) ------------------------------ */
+
+/* Query the normal typed-union entry rule in the closing program's scope.
+ * Success returns an owned path (free by caller); identical union types have
+ * an empty path. No value coercion site is recorded and no runtime work occurs. */
+bool feng_semantic_query_union_entry(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program,
+    const FengTypeRef *actual_type_ref,
+    const FengTypeRef *union_type_ref,
+    size_t **out_indices,
+    size_t *out_count);
 
 /* Record an object-form coercion site (`expr` of concrete type
  * `src_type_decl` flowing into a slot typed as object-form spec
@@ -1182,6 +1223,28 @@ bool feng_semantic_reifiable_dep_set_append_callable_value(
     FengReifiableDepSet *dep_set,
     const FengResolvedCallable *resolved,
     const FengTypeRef *target_callable_type_ref);
+
+/* Copy one projection into an owner domain, deduplicating its full identity. */
+bool feng_semantic_reifiable_dep_set_append_union_projection(
+    FengReifiableDepSet *dep_set,
+    const FengUnionProjectionDep *projection);
+
+/* Return the matching open projection slot, or SIZE_MAX when not collected. */
+size_t feng_semantic_union_projection_slot(
+    const FengReifiableDepSet *dep_set,
+    const FengUnionProjectionDep *projection);
+
+/* Look up the declaration-validated projection for a source-written label. */
+const FengUnionProjectionUse *feng_semantic_lookup_union_projection_use(
+    const FengSemanticAnalysis *analysis,
+    const FengMatchLabel *label);
+
+/* Read the fit declaration's implicit array-element parameter independently
+ * of the caller's lexical type parameters; imported fits use restored facts. */
+bool feng_semantic_query_fit_implicit_type_param(
+    const FengSemanticAnalysis *analysis,
+    const FengDecl *fit_decl,
+    FengTypeParam *out_param);
 
 /* 查找 owner_decl 的声明级具体化依赖集，不存在时返回 NULL。 */
 const FengReifiableDepSet *feng_semantic_lookup_reifiable_dep_set(

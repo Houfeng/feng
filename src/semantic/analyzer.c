@@ -5223,6 +5223,10 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
 static bool fit_target_collect_array_local_type_param(const ResolveContext *context,
                                                       const FengTypeRef *target_ref,
                                                       FengTypeParam *out_type_param);
+/* Query a fit in its own file even before its signature pass has recorded facts. */
+static bool fit_decl_collect_array_local_type_param(const ResolveContext *context,
+                                                    const FengDecl *fit_decl,
+                                                    FengTypeParam *out_type_param);
 
 static const FengTypeRef *substitute_type_ref_for_fit_instance(
     ResolveContext *context,
@@ -5237,9 +5241,8 @@ static const FengTypeRef *substitute_type_ref_for_fit_instance(
         member_type_ref == NULL || owner_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
         owner_type.type_ref == NULL || owner_type.type_ref->kind != FENG_TYPE_REF_ARRAY ||
         owner_type.type_ref->as.inner == NULL ||
-        !fit_target_collect_array_local_type_param(context,
-                                                   fit_decl->as.fit_decl.target,
-                                                   &fit_local_type_param)) {
+        !fit_decl_collect_array_local_type_param(context, fit_decl,
+                                                  &fit_local_type_param)) {
         return member_type_ref;
     }
     if (fit_decl->as.fit_decl.target == NULL ||
@@ -5761,6 +5764,32 @@ static bool fit_target_collect_array_local_type_param(const ResolveContext *cont
     return true;
 }
 
+/* A forward call can precede the fit's signature pass. In that case resolve
+ * its target in the declaring file without executable/owner/method scopes;
+ * after collection, reuse the same persistent decision as reification. */
+static bool fit_decl_collect_array_local_type_param(const ResolveContext *context,
+                                                    const FengDecl *fit_decl,
+                                                    FengTypeParam *out_type_param) {
+    if (context == NULL || fit_decl == NULL || fit_decl->kind != FENG_DECL_FIT)
+        return false;
+    if (feng_semantic_query_fit_implicit_type_param(context->analysis, fit_decl, out_type_param))
+        return true;
+    const FengTypeRef *target = fit_decl->as.fit_decl.target;
+    if (target == NULL || target->kind != FENG_TYPE_REF_ARRAY || target->as.inner == NULL)
+        return false;
+    const FengProgram *owner = find_decl_provider_program(context->analysis, fit_decl);
+    if (owner == NULL) return false;
+    ResolveContext declaration_context = *context;
+    declaration_context.type_params = NULL;
+    declaration_context.type_param_count = 0U;
+    FengTypeRef scoped_target = *target;
+    FengTypeRef scoped_element = *target->as.inner;
+    scoped_element.resolution_program = owner;
+    scoped_target.as.inner = &scoped_element;
+    return fit_target_collect_array_local_type_param(&declaration_context,
+                                                       &scoped_target, out_type_param);
+}
+
 /* Determine export ownership from package provenance, not module identity.
  * Builtins and arrays have no local owner; only a locally defined spec can
  * make their nominal relations non-orphan. Method-only fits are unaffected. */
@@ -5851,9 +5880,8 @@ static bool fit_decl_target_matches_owner_type(const ResolveContext *context,
     if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
         owner_type.type_ref != NULL) {
         if (fit_target.kind == FIT_TARGET_KIND_ARRAY &&
-            fit_target_collect_array_local_type_param(context,
-                                                      fit_target.target_ref,
-                                                      &fit_local_type_param)) {
+            fit_decl_collect_array_local_type_param(context, fit_decl,
+                                                     &fit_local_type_param)) {
             return owner_type.type_ref->kind == FENG_TYPE_REF_ARRAY &&
                    owner_type.type_ref->array_element_writable ==
                        fit_target.target_ref->array_element_writable;
@@ -6394,6 +6422,21 @@ static const FengDecl *resolve_union_spec_type_ref_decl(const ResolveContext *co
     return NULL;
 }
 
+/* A generic subject keeps its own type, but member substitution uses the
+ * complete declared union constraint rather than the bare parameter name. */
+static const FengTypeRef *union_match_constraint_type_ref(
+    const ResolveContext *context, const FengTypeRef *subject_ref) {
+    if (subject_ref != NULL && subject_ref->kind == FENG_TYPE_REF_NAMED &&
+        subject_ref->as.named.segment_count == 1U &&
+        subject_ref->as.named.type_arg_count == 0U) {
+        const TypeParamEntry *parameter = find_type_param(context, subject_ref->as.named.segments[0]);
+        if (parameter != NULL && parameter->type_param != NULL) {
+            return parameter->type_param->constraint;
+        }
+    }
+    return subject_ref;
+}
+
 static void free_union_member_infos_local(FengUnionSpecMemberInfo *members,
                                           size_t member_count) {
     for (size_t index = 0U; index < member_count; ++index) {
@@ -6704,19 +6747,54 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
     return false;
 }
 
-#define UNION_MAX_PATH_DEPTH 8U
-
+/* One compiler-owned entry path selected by ordinary union binding rules. */
 typedef struct UnionMemberSelection {
     bool matched;
     bool ambiguous;
+    bool exact;
     size_t member_index;
     const FengTypeRef *member_type_ref;
     /* Final non-union member reached by path_indices. This can differ from
      * member_type_ref when the selected direct member is a nested union. */
     const FengTypeRef *leaf_type_ref;
-    size_t path_indices[UNION_MAX_PATH_DEPTH];
+    size_t *path_indices;
     size_t path_length;
 } UnionMemberSelection;
+
+/* Release only the temporary path; the type references borrow resolver data. */
+static void union_member_selection_free(UnionMemberSelection *selection) {
+    free(selection->path_indices);
+    selection->path_indices = NULL;
+    selection->path_length = 0U;
+}
+
+/* Preserve the complete root-to-leaf path, without a language depth limit. */
+static bool union_member_selection_set_path(const ResolveContext *context,
+                                             const FengDecl *union_decl,
+                                             UnionMemberSelection *selection,
+                                             size_t index,
+                                             const UnionMemberSelection *nested) {
+    size_t suffix_length = nested != NULL ? nested->path_length : 0U;
+    size_t *path = NULL;
+
+    if (suffix_length < SIZE_MAX / sizeof(*path)) {
+        path = malloc((suffix_length + 1U) * sizeof(*path));
+    }
+    if (path == NULL) {
+        selection->matched = false;
+        (void)resolver_append_error((ResolveContext *)context, union_decl->token,
+            "IE0001", format_message("out of memory recording union entry path"));
+        return false;
+    }
+    path[0] = index;
+    if (suffix_length > 0U) {
+        memcpy(path + 1U, nested->path_indices, suffix_length * sizeof(*path));
+    }
+    free(selection->path_indices);
+    selection->path_indices = path;
+    selection->path_length = suffix_length + 1U;
+    return true;
+}
 
 static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *context,
                                                         InferredExprType expr_type,
@@ -6746,6 +6824,9 @@ static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *co
     return false;
 }
 
+/* Select a complete entry path. Exact direct members take precedence; among
+ * nested paths, exact leaves precede conversions, and equal-rank alternatives
+ * remain ambiguous regardless of nesting depth or declaration order. */
 static UnionMemberSelection select_union_member_for_expr_type(const ResolveContext *context,
                                                               InferredExprType expr_type,
                                                               const FengDecl *union_decl,
@@ -6753,8 +6834,6 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
     const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
                                                                          union_decl);
     UnionMemberSelection result;
-    size_t match_count = 0U;
-    size_t compatible_count = 0U;
 
     memset(&result, 0, sizeof(result));
     if (info == NULL) {
@@ -6773,63 +6852,17 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
                                                         expr_type,
                                                         member_type_ref)) {
             result.matched = true;
+            result.exact = true;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
             result.leaf_type_ref = member_type_ref;
-            result.path_indices[0] = index;
-            result.path_length = 1U;
+            (void)union_member_selection_set_path(context, union_decl, &result, index, NULL);
             return result;
         }
     }
 
-    /* Pass 2: exact match through nested union members (multi-level). */
-    for (size_t index = 0U; index < info->member_count; ++index) {
-        if (!info->members[index].is_nested_union) {
-            continue;
-        }
-        const FengDecl *nested_decl = info->members[index].resolved_decl;
-        if (nested_decl == NULL) {
-            continue;
-        }
-        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            (ResolveContext *)context,
-            union_decl,
-            union_spec_type_ref,
-            info->members[index].type_ref);
-
-        UnionMemberSelection nested = select_union_member_for_expr_type(
-            context, expr_type, nested_decl, member_type_ref);
-        if (nested.matched && !nested.ambiguous) {
-            if (match_count == 0U) {
-                result.matched = true;
-                result.member_index = index;
-                result.member_type_ref = member_type_ref;
-                result.leaf_type_ref = nested.leaf_type_ref;
-                result.path_indices[0] = index;
-                size_t copy_len = nested.path_length;
-                if (copy_len + 1U > UNION_MAX_PATH_DEPTH) {
-                    copy_len = UNION_MAX_PATH_DEPTH - 1U;
-                }
-                for (size_t j = 0U; j < copy_len; ++j) {
-                    result.path_indices[j + 1U] = nested.path_indices[j];
-                }
-                result.path_length = copy_len + 1U;
-            }
-            ++match_count;
-        }
-    }
-    if (match_count > 1U) {
-        result.ambiguous = true;
-        result.matched = false;
-        result.member_type_ref = NULL;
-        result.leaf_type_ref = NULL;
-        return result;
-    }
-    if (match_count == 1U) {
-        return result;
-    }
-
-    /* Pass 3: compatibility match (non-exact). */
+    /* Keep compatibility candidates from nested unions until every sibling
+     * has been considered. A nested ambiguity is itself multiple paths. */
     for (size_t index = 0U; index < info->member_count; ++index) {
         const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
             (ResolveContext *)context,
@@ -6837,22 +6870,39 @@ static UnionMemberSelection select_union_member_for_expr_type(const ResolveConte
             union_spec_type_ref,
             info->members[index].type_ref);
 
-        if (!inferred_expr_type_matches_type_ref(context,
-                                                 expr_type,
-                                                 member_type_ref)) {
+        UnionMemberSelection candidate = {0};
+        bool nested = info->members[index].is_nested_union;
+
+        if (nested) {
+            candidate = select_union_member_for_expr_type(context, expr_type,
+                info->members[index].resolved_decl, member_type_ref);
+        } else {
+            candidate.matched = inferred_expr_type_matches_type_ref(
+                context, expr_type, member_type_ref);
+            candidate.leaf_type_ref = member_type_ref;
+        }
+        if ((!candidate.matched && !candidate.ambiguous) ||
+            ((result.matched || result.ambiguous) && result.exact && !candidate.exact)) {
+            union_member_selection_free(&candidate);
             continue;
         }
-        if (compatible_count == 0U) {
-            result.matched = true;
+        if ((!result.matched && !result.ambiguous) ||
+            (candidate.exact && !result.exact)) {
+            result.matched = candidate.matched;
+            result.ambiguous = candidate.ambiguous;
+            result.exact = candidate.exact;
             result.member_index = index;
             result.member_type_ref = member_type_ref;
-            result.leaf_type_ref = member_type_ref;
-            result.path_indices[0] = index;
-            result.path_length = 1U;
+            result.leaf_type_ref = candidate.leaf_type_ref;
+            if (candidate.matched && !union_member_selection_set_path(
+                    context, union_decl, &result, index, nested ? &candidate : NULL)) {
+                union_member_selection_free(&candidate);
+                return result;
+            }
         } else {
             result.ambiguous = true;
         }
-        ++compatible_count;
+        union_member_selection_free(&candidate);
     }
     if (result.ambiguous) {
         result.matched = false;
@@ -9423,6 +9473,120 @@ static bool validate_match_default_result_types(
     return true;
 }
 
+/* Canonicalize a projection identity while its lexical resolver is available.
+ * Source aliases and file order must not affect exported dependency slots. */
+static bool canonicalize_union_projection_type_ref(ResolveContext *context, FengTypeRef *ref) {
+    if (ref == NULL) {
+        return true;
+    }
+    if (ref->kind != FENG_TYPE_REF_NAMED) {
+        return canonicalize_union_projection_type_ref(context, ref->as.inner);
+    }
+    const FengDecl *decl = resolve_type_ref_decl(context, ref);
+    for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+        if (!canonicalize_union_projection_type_ref(context, ref->as.named.type_args[i])) {
+            return false;
+        }
+    }
+    if (decl != NULL) {
+        const FengSemanticModule *module = find_decl_provider_module(context->analysis, decl);
+        if (module == NULL || module->segment_count == SIZE_MAX) {
+            return false;
+        }
+        size_t count = module->segment_count + 1U;
+        FengSlice *segments = count > SIZE_MAX / sizeof(*segments) ? NULL :
+            malloc(count * sizeof(*segments));
+        if (segments == NULL) {
+            return false;
+        }
+        memcpy(segments, module->segments, module->segment_count * sizeof(*segments));
+        segments[count - 1U] = decl_typeish_name(decl);
+        free(ref->as.named.segments);
+        ref->as.named.segments = segments;
+        ref->as.named.segment_count = count;
+    }
+    return true;
+}
+
+/* Store an independently owned, fully qualified open type identity. */
+static const FengTypeRef *persist_union_projection_type_ref(ResolveContext *context,
+                                                            const FengTypeRef *ref) {
+    FengTypeRef *copy = clone_type_ref_for_inference(ref);
+    if (copy == NULL || !canonicalize_union_projection_type_ref(context, copy) ||
+        !analysis_track_synthetic_type_ref(context->analysis, copy)) {
+        free_synthetic_type_ref(copy);
+        return NULL;
+    }
+    return copy;
+}
+
+/* Record only generic-subject projection uses. Ordinary concrete unions keep
+ * their direct tag/payload path and do not acquire a descriptor dependency. */
+static bool record_union_projection_label(ResolveContext *context,
+                                           const FengExpr *target,
+                                           InferredExprType subject_type,
+                                           const FengTypeRef *constraint_ref,
+                                           const FengMatchLabel *label,
+                                           size_t label_count,
+                                           bool has_binding,
+                                           FengMutability mutability) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)context->analysis;
+    FengUnionProjectionUse use = {0};
+    FengUnionProjectionUse *existing = NULL;
+    const FengTypeRef *subject_ref = subject_type.type_ref;
+    if (subject_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
+        subject_ref == NULL || subject_ref->kind != FENG_TYPE_REF_NAMED ||
+        subject_ref->as.named.segment_count != 1U || subject_ref->as.named.type_arg_count != 0U ||
+        find_type_param(context, subject_ref->as.named.segments[0]) == NULL) {
+        return true;
+    }
+    use.target = target;
+    use.label = label;
+    use.projection.subject_type_ref = persist_union_projection_type_ref(context, subject_ref);
+    use.projection.constraint_type_ref = persist_union_projection_type_ref(context, constraint_ref);
+    /* Parser stores the root label separately from the arrow suffix. Keep
+     * every segment so static closure and shared probes use the same path. */
+    if (label->type_chain_count == SIZE_MAX) {
+        goto fail;
+    }
+    use.projection.path_count = label->type_chain_count + 1U;
+    use.projection.path = use.projection.path_count > SIZE_MAX / sizeof(*use.projection.path) ? NULL :
+        calloc(use.projection.path_count, sizeof(*use.projection.path));
+    if (use.projection.subject_type_ref == NULL || use.projection.constraint_type_ref == NULL ||
+        use.projection.path == NULL) {
+        goto fail;
+    }
+    for (size_t i = 0U; i < use.projection.path_count; ++i) {
+        use.projection.path[i] = persist_union_projection_type_ref(context,
+            i == 0U ? label->type : label->type_chain[i - 1U]);
+        if (use.projection.path[i] == NULL) {
+            goto fail;
+        }
+    }
+    use.projection.result_type_ref = !has_binding ? NULL : label_count == 1U
+        ? use.projection.path[use.projection.path_count - 1U] : use.projection.subject_type_ref;
+    use.projection.binding_mutability = has_binding ? mutability : FENG_MUTABILITY_LET;
+    for (size_t i = 0U; i < analysis->union_projection_use_count; ++i) {
+        if (analysis->union_projection_uses[i].label == label) {
+            existing = &analysis->union_projection_uses[i];
+            break;
+        }
+    }
+    if (existing != NULL) {
+        free(existing->projection.path);
+        *existing = use;
+        return true;
+    }
+    if (append_raw((void **)&analysis->union_projection_uses, &analysis->union_projection_use_count,
+                   &analysis->union_projection_use_capacity, sizeof(use), &use)) {
+        return true;
+    }
+fail:
+    free(use.projection.path);
+    return resolver_append_error(context, label->token, "IE0001",
+        format_message("out of memory recording union projection use"));
+}
+
 static bool resolve_and_validate_union_match_common(ResolveContext *context,
                                                     const FengExpr *match_expr,
                                                     const FengExpr *target,
@@ -9444,6 +9608,7 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
     bool ok = true;
     bool all_results_conform = false;
 
+    union_spec_type_ref = union_match_constraint_type_ref(context, union_spec_type_ref);
     if (info == NULL || info->member_count == 0U) {
         return resolver_append_error(context,
                                      target != NULL ? target->token : anchor,
@@ -9510,6 +9675,12 @@ static bool resolve_and_validate_union_match_common(ResolveContext *context,
                     context,
                     label->token,
                     "AE0607", format_message("union match label overlaps with an earlier label and is unreachable"));
+                break;
+            }
+            if (!record_union_projection_label(context, target, target_type, union_spec_type_ref,
+                    label, branches[branch_index].label_count, branches[branch_index].has_binding,
+                    branches[branch_index].binding_mutability)) {
+                ok = false;
                 break;
             }
             if (label->type_chain_count > 0U) {
@@ -10348,6 +10519,7 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
     }
 
     if (union_decl != NULL) {
+        union_spec_type_ref = union_match_constraint_type_ref(context, union_spec_type_ref);
         info = feng_semantic_lookup_union_spec_info(context->analysis, union_decl);
         if (info == NULL || info->member_count == 0U) {
             return resolver_append_error(
@@ -10380,6 +10552,11 @@ static bool resolve_and_validate_match_op(ResolveContext *context,
                 break;
             }
             if (member_index >= info->member_count) {
+                ok = false;
+                break;
+            }
+            if (!record_union_projection_label(context, target, target_type, union_spec_type_ref,
+                    label, expr->as.match_op.label_count, has_binding, expr->as.match_op.binding_mutability)) {
                 ok = false;
                 break;
             }
@@ -10659,6 +10836,7 @@ static bool register_visible_match_binding(ResolveContext *context,
         resolve_union_spec_type_ref_decl(context, union_spec_type_ref) != union_decl) {
         union_spec_type_ref = NULL;
     }
+    union_spec_type_ref = union_match_constraint_type_ref(context, union_spec_type_ref);
     info = feng_semantic_lookup_union_spec_info(context->analysis, union_decl);
     if (info == NULL || info->member_count == 0U) {
         return false;
@@ -11502,6 +11680,14 @@ FengSemanticResultBlockFlow feng_semantic_classify_result_block(
         result.kind = FENG_SEMANTIC_RESULT_BLOCK_RETURN_OR_THROW;
     }
     return result;
+}
+
+/* A non-completing expression cannot initialize a binding or supply a
+ * caller result. Keep Codegen on the same path model as branch validation. */
+bool feng_semantic_expr_exits_via_return_or_throw(const FengExpr *expr) {
+    CallableFlowOutcomes outcomes = callable_expr_flow(expr);
+    return outcomes != 0U &&
+           (outcomes & ~(CALLABLE_FLOW_RETURN | CALLABLE_FLOW_THROW)) == 0U;
 }
 
 /* Return true exactly when the callable body retains a normal path to its
@@ -23683,6 +23869,7 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
                                                           expr_type,
                                                           target_union_decl,
                                                           expected_type_ref);
+            union_member_selection_free(&selection);
             return selection.matched;
         }
     }
@@ -23920,6 +24107,7 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                   target_union_decl,
                                                   expected_type_ref);
     if (!selection.matched) {
+        union_member_selection_free(&selection);
         return;
     }
     (void)feng_semantic_record_union_coercion_site(context->analysis,
@@ -23931,6 +24119,7 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                    selection.path_indices,
                                                    selection.path_length);
     record_union_leaf_spec_coercion_if_applicable(context, expr, &selection);
+    union_member_selection_free(&selection);
 }
 
 static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *context,
@@ -24250,6 +24439,213 @@ static void record_object_arg_coercion_sites_for_resolved_call(
     }
 }
 
+/* Prove spec implication for an actual type without changing its value
+ * representation. Intersection components retain their complete owner refs;
+ * a spec value uses declared parent/component relations, never its shape. */
+static bool generic_spec_constraint_satisfied(ResolveContext *context,
+                                              const FengTypeRef *actual,
+                                              const FengTypeRef *constraint) {
+    const FengDecl *target = resolve_type_ref_decl(context, constraint);
+    const FengDecl *source = resolve_type_ref_decl(context, actual);
+
+    if (type_refs_semantically_equal(context, actual, constraint)) {
+        return true;
+    }
+    if (target == NULL || target->kind != FENG_DECL_SPEC) {
+        return false;
+    }
+    if (target->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+        UnionMemberSelection selection = select_union_member_for_expr_type(
+            context, inferred_expr_type_from_type_ref(actual), target, constraint);
+        bool result = selection.matched && !selection.ambiguous;
+        union_member_selection_free(&selection);
+        return result;
+    }
+    if (target->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        for (size_t i = 0U; i < target->as.spec_decl.as.intersection_form.member_count; ++i) {
+            const FengTypeRef *member = substitute_spec_member_type_ref_for_instance(
+                context, target, constraint, target->as.spec_decl.as.intersection_form.members[i]);
+            if (!generic_spec_constraint_satisfied(context, actual, member)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if (source != NULL && source->kind == FENG_DECL_SPEC) {
+        if (source->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+            for (size_t i = 0U; i < source->as.spec_decl.as.intersection_form.member_count; ++i) {
+                const FengTypeRef *member = substitute_spec_member_type_ref_for_instance(
+                    context, source, actual, source->as.spec_decl.as.intersection_form.members[i]);
+                if (generic_spec_constraint_satisfied(context, member, constraint)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        if (source->as.spec_decl.form == FENG_SPEC_FORM_OBJECT &&
+            target->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+            ObjectSpecUpcastPath path;
+            bool result = find_object_spec_upcast_path(context,
+                inferred_expr_type_from_type_ref(actual), constraint, &path);
+            if (result) {
+                object_spec_upcast_path_free(&path);
+            }
+            return result;
+        }
+        return inferred_expr_type_matches_type_ref(context,
+            inferred_expr_type_from_type_ref(actual), constraint);
+    }
+    return type_ref_satisfies_spec_type_ref(context, actual, constraint);
+}
+
+/* Compiler-only admission frontier: finite exact types and the spec families
+ * which may also admit not-yet-declared nominal implementers. Multiplicity of
+ * a family matters because two equal entry paths still form an ambiguity. */
+typedef struct GenericAdmissionFrontier {
+    const FengTypeRef **exact;
+    size_t exact_count;
+    size_t exact_capacity;
+    const FengTypeRef **families;
+    size_t family_count;
+    size_t family_capacity;
+} GenericAdmissionFrontier;
+
+/* Enumerate the finite union graph without flattening runtime representations.
+ * All refs are borrowed from the AST or resolver-owned substitutions. */
+static bool generic_admission_frontier_collect(ResolveContext *context,
+                                               const FengTypeRef *ref,
+                                               GenericAdmissionFrontier *frontier) {
+    const FengDecl *decl = resolve_type_ref_decl(context, ref);
+    if (!append_raw((void **)&frontier->exact, &frontier->exact_count,
+                    &frontier->exact_capacity, sizeof(ref), &ref)) {
+        return false;
+    }
+    if (decl == NULL || decl->kind != FENG_DECL_SPEC) {
+        return true;
+    }
+    if (decl->as.spec_decl.form != FENG_SPEC_FORM_UNION) {
+        return append_raw((void **)&frontier->families, &frontier->family_count,
+                          &frontier->family_capacity, sizeof(ref), &ref);
+    }
+    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis, decl);
+    if (info == NULL) {
+        return false;
+    }
+    for (size_t i = 0U; i < info->member_count; ++i) {
+        const FengTypeRef *member = substitute_spec_member_type_ref_for_instance(
+            context, decl, ref, info->members[i].type_ref);
+        if (!generic_admission_frontier_collect(context, member, frontier)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Prove open forwarding to a union, including the source constraint itself.
+ * Finite exact types use ordinary admission. Unknown nominal implementers are
+ * safe when the path-family multisets agree, or a single source family implies
+ * the single target family. Otherwise proof is unavailable; do not assume
+ * future implementations cannot satisfy an additional, ambiguous spec path. */
+static bool generic_constraint_implies_union(ResolveContext *context,
+                                             const FengTypeRef *source,
+                                             const FengTypeRef *target) {
+    GenericAdmissionFrontier from = {0}, to = {0};
+    bool *matched = NULL;
+    bool result = false;
+
+    if (type_refs_semantically_equal(context, source, target)) {
+        return true;
+    }
+    if (!generic_admission_frontier_collect(context, source, &from) ||
+        !generic_admission_frontier_collect(context, target, &to)) {
+        (void)resolver_append_error(context, source->token, "IE0001",
+            format_message("cannot collect generic constraint admission frontier"));
+        goto cleanup;
+    }
+    for (size_t i = 0U; i < from.exact_count; ++i) {
+        if (generic_spec_constraint_satisfied(context, from.exact[i], source) &&
+            !generic_spec_constraint_satisfied(context, from.exact[i], target)) {
+            goto cleanup;
+        }
+    }
+    for (size_t i = 0U; i < to.exact_count; ++i) {
+        if (generic_spec_constraint_satisfied(context, to.exact[i], source) &&
+            !generic_spec_constraint_satisfied(context, to.exact[i], target)) {
+            goto cleanup;
+        }
+    }
+    if (from.family_count == 0U) {
+        result = true;
+        goto cleanup;
+    }
+    if (from.family_count == 1U && to.family_count == 1U) {
+        result = generic_spec_constraint_satisfied(context, from.families[0], to.families[0]);
+        goto cleanup;
+    }
+    if (from.family_count != to.family_count) {
+        goto cleanup;
+    }
+    matched = calloc(to.family_count, sizeof(*matched));
+    if (matched == NULL) {
+        (void)resolver_append_error(context, source->token, "IE0001",
+            format_message("out of memory proving generic constraint implication"));
+        goto cleanup;
+    }
+    for (size_t i = 0U; i < from.family_count; ++i) {
+        size_t j = 0U;
+        for (; j < to.family_count; ++j) {
+            if (!matched[j] && type_refs_semantically_equal(
+                    context, from.families[i], to.families[j])) {
+                matched[j] = true;
+                break;
+            }
+        }
+        if (j == to.family_count) {
+            goto cleanup;
+        }
+    }
+    result = true;
+cleanup:
+    free(matched);
+    free(from.exact);
+    free(from.families);
+    free(to.exact);
+    free(to.families);
+    return result;
+}
+
+/* Shared type-level applicability gate for callable and owner arguments.
+ * Open actual parameters must carry enough evidence at the declaration site;
+ * no value conversion or runtime witness is produced by this query. */
+static bool generic_type_ref_satisfies_constraint(ResolveContext *context,
+                                                  const FengTypeRef *actual,
+                                                  const FengTypeRef *constraint) {
+    const FengDecl *target = resolve_type_ref_decl(context, constraint);
+    const FengDecl *source_constraint_decl = NULL;
+    const FengTypeRef *source_constraint = NULL;
+
+    if (actual == NULL || constraint == NULL || target == NULL ||
+        target->kind != FENG_DECL_SPEC ||
+        (target->as.spec_decl.form != FENG_SPEC_FORM_UNION &&
+         target->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION &&
+         target->as.spec_decl.form != FENG_SPEC_FORM_OBJECT)) {
+        return true;
+    }
+    if (actual->kind == FENG_TYPE_REF_NAMED && actual->as.named.segment_count == 1U &&
+        actual->as.named.type_arg_count == 0U &&
+        find_type_param(context, actual->as.named.segments[0]) != NULL) {
+        if (!resolve_generic_param_spec_constraint(context, inferred_expr_type_from_type_ref(actual),
+                &source_constraint_decl, &source_constraint)) {
+            return false;
+        }
+        if (target->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
+            return generic_constraint_implies_union(context, source_constraint, constraint);
+        }
+        return generic_spec_constraint_satisfied(context, source_constraint, constraint);
+    }
+    return generic_spec_constraint_satisfied(context, actual, constraint);
+}
+
 /* Determine whether the inferred type argument at `type_param_index` satisfies
  * the declared constraint of that type parameter. Used during overload
  * candidate filtering: a generic candidate whose type argument fails its
@@ -24258,7 +24654,7 @@ static void record_object_arg_coercion_sites_for_resolved_call(
  * (see materialize_object_spec_constraint_witness_if_applicable), but performs
  * the type-parameter substitution itself and answers a plain boolean without
  * computing any witness. Returns true when there is nothing to validate
- * (no constraint, or a non-object-form constraint, or an uninferred type
+ * (no constraint, an unrelated form, or an uninferred type
  * argument); the caller decides how to treat the uninferred case. */
 static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    const FengCallableSignature *callable,
@@ -24269,7 +24665,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
                                                    InferredExprType owner_type) {
     const FengTypeParam *type_param;
     const FengTypeRef *actual_type_ref;
-    const FengDecl *constraint_decl;
     FengTypeRef *owned_constraint = NULL;
     const FengTypeRef *constraint_ref;
     bool result = false;
@@ -24301,20 +24696,6 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
          * argument is still unknown and the constraint cannot be closed. */
         return true;
     }
-    constraint_decl = resolve_type_ref_decl(context, constraint_ref);
-    if (constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
-        free_synthetic_type_ref(owned_constraint);
-        return true;
-    }
-    if (constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
-        constraint_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) {
-        /* callable-form / union-form constraints keep the pre-existing lenient
-         * behavior; only object-form and intersection-form constraints are
-         * enforced here. */
-        free_synthetic_type_ref(owned_constraint);
-        return true;
-    }
-
     actual_type_ref = type_args[type_param_index];
     if (actual_type_ref == NULL) {
         /* The type argument could not be inferred from the call (e.g. a
@@ -24324,47 +24705,7 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
         return true;
     }
 
-    /* Reflexive case: when the inferred argument equals the required constraint
-     * structurally (e.g. `rewrite<HasChild>(...)` binds T to the spec HasChild
-     * while the constraint is also HasChild), the constraint is trivially
-     * satisfied. This covers spec-as-argument and any self-referential shape
-     * without needing full spec-implication analysis. */
-    if (type_refs_semantically_equal(context, actual_type_ref, constraint_ref)) {
-        result = true;
-    } else if (actual_type_ref->kind == FENG_TYPE_REF_NAMED &&
-               actual_type_ref->as.named.segment_count == 1U &&
-               actual_type_ref->as.named.type_arg_count == 0U &&
-               find_type_param(context, actual_type_ref->as.named.segments[0]) != NULL) {
-        /* The inferred argument is itself a reference to an enclosing type
-         * parameter (e.g. inside `assertEquals<T: Display>` we call
-         * `format<U: Display>(first: U)` with `expected: T`). Whether the
-         * candidate's constraint holds for the concrete type eventually bound
-         * to T cannot be decided in isolation; the post-selection witness
-         * materializer will finalize the answer at instantiation. Conservatively
-         * accept so transitive generic call sites remain compilable. */
-        result = true;
-    } else {
-        ObjectSpecUpcastPath upcast_path;
-
-        /* A child object-form spec remains the concrete generic argument, but
-         * its declared parent view satisfies the constraint surface. Reuse the
-         * authoritative nominal upcast query so generic parent substitution,
-         * transitive parents, and rejection of unrelated specs stay identical
-         * to ordinary expected-type coercion. */
-        if (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT &&
-            find_object_spec_upcast_path(
-                context,
-                inferred_expr_type_from_type_ref(actual_type_ref),
-                constraint_ref,
-                &upcast_path)) {
-            object_spec_upcast_path_free(&upcast_path);
-            result = true;
-        } else {
-            result = type_ref_satisfies_spec_type_ref(context,
-                                                      actual_type_ref,
-                                                      constraint_ref);
-        }
-    }
+    result = generic_type_ref_satisfies_constraint(context, actual_type_ref, constraint_ref);
 
     free_synthetic_type_ref(owned_constraint);
     return result;
@@ -24632,6 +24973,7 @@ static void materialize_object_spec_constraint_witness_if_applicable(
         err_token);
 }
 
+/* Validate an owner argument before preparing its existing witness evidence. */
 static void materialize_named_type_param_constraint_witnesses(
     ResolveContext *context,
     const FengTypeParam *type_params,
@@ -24665,6 +25007,18 @@ static void materialize_named_type_param_constraint_witnesses(
             }
         }
 
+        if (!generic_type_ref_satisfies_constraint(context, type_args[i], instantiated_constraint)) {
+            char *actual_name = format_type_ref_name(type_args[i]);
+            char *constraint_name = format_type_ref_name(instantiated_constraint);
+            (void)resolver_append_error(context, type_args[i]->token, "AE0710",
+                format_message("type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s'",
+                    actual_name != NULL ? actual_name : "<type>",
+                    constraint_name != NULL ? constraint_name : "<constraint>",
+                    (int)type_params[i].name.length, type_params[i].name.data));
+            free(actual_name);
+            free(constraint_name);
+            continue;
+        }
         materialize_object_spec_constraint_witness_if_applicable(context,
                                                                  &type_params[i],
                                                                  type_args[i],
@@ -25971,8 +26325,10 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                                                                    selection.path_length);
                     record_union_leaf_spec_coercion_if_applicable(
                         context, expr, &selection);
+                    union_member_selection_free(&selection);
                     return true;
                 }
+                union_member_selection_free(&selection);
                 if (selection.ambiguous) {
                     char *expr_name_local = format_expr_target_name(expr);
                     char *type_name_local = format_type_ref_name(expected_type_ref);
@@ -29934,6 +30290,83 @@ bool feng_semantic_member_has_friend_access(
     free(aliases);
     free(imported_modules);
     return accessible;
+}
+
+/* Close a union entry using the same selector as ordinary typed bindings.
+ * Query-owned scopes and diagnostics are temporary; synthesized type refs
+ * follow the analysis lifetime, just as substitutions during analysis do. */
+bool feng_semantic_query_union_entry(
+    const FengSemanticAnalysis *analysis,
+    const FengProgram *program,
+    const FengTypeRef *actual_type_ref,
+    const FengTypeRef *union_type_ref,
+    size_t **out_indices,
+    size_t *out_count) {
+    ResolveContext context = {0};
+    VisibleTypeEntry *visible = NULL;
+    AliasEntry *aliases = NULL;
+    ImportedModuleEntry *imports = NULL;
+    size_t visible_count = 0U, alias_count = 0U, alias_capacity = 0U, import_count = 0U;
+    FengSemanticError *errors = NULL;
+    size_t error_count = 0U, error_capacity = 0U;
+    UnionMemberSelection selection = {0};
+    bool ok = false;
+    if (out_indices == NULL || out_count == NULL) {
+        return false;
+    }
+    *out_indices = NULL;
+    *out_count = 0U;
+    const FengSemanticModule *module = find_program_provider_module(analysis, program);
+    if (analysis == NULL || program == NULL || actual_type_ref == NULL || union_type_ref == NULL ||
+        module == NULL || !build_friend_query_visible_types(analysis, module, program, &visible, &visible_count) ||
+        !build_program_aliases(analysis, program, &aliases, &alias_count, &alias_capacity) ||
+        !build_friend_query_imported_modules(analysis, program, &imports, &import_count)) {
+        goto cleanup;
+    }
+    context.analysis = analysis;
+    context.program = program;
+    context.module = module;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible;
+    context.visible_type_count = visible_count;
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imports;
+    context.imported_module_count = import_count;
+    context.errors = &errors;
+    context.error_count = &error_count;
+    context.error_capacity = &error_capacity;
+    const FengDecl *decl = resolve_union_spec_type_ref_decl(&context, union_type_ref);
+    if (decl == NULL) {
+        goto cleanup;
+    }
+    if (type_refs_semantically_equal(&context, actual_type_ref, union_type_ref)) {
+        ok = true;
+    } else {
+        selection = select_union_member_for_expr_type(&context,
+            inferred_expr_type_from_type_ref(actual_type_ref), decl, union_type_ref);
+        if (selection.matched && !selection.ambiguous && selection.path_length > 0U) {
+            *out_indices = selection.path_indices;
+            *out_count = selection.path_length;
+            selection.path_indices = NULL;
+            ok = true;
+        }
+    }
+cleanup:
+    union_member_selection_free(&selection);
+    resolver_free_scopes(&context);
+    free_friend_query_synthetic_type_refs(&context);
+    free(visible);
+    free(aliases);
+    free(imports);
+    feng_semantic_errors_free(errors, error_count);
+    if (!ok || error_count != 0U) {
+        free(*out_indices);
+        *out_indices = NULL;
+        *out_count = 0U;
+        return false;
+    }
+    return true;
 }
 
 /* An alias is declared by this file, so only this file's own declarations
@@ -35653,6 +36086,63 @@ static bool validate_type_param_constraints(ResolveContext *context,
     return true;
 }
 
+/* Compare intersection fields after projecting each object/parent owner.
+ * Unlike object-form inheritance, equivalent fields from separate components
+ * merge; instance and static requirements remain independent surfaces. */
+static bool collect_intersection_field_requirements(
+    ResolveContext *context,
+    const FengDecl *intersection_decl,
+    const FengDecl *current_decl,
+    const FengTypeRef *current_ref,
+    ObjectSpecRequirementSet *merged) {
+    if (current_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION) {
+        for (size_t i = 0U; i < current_decl->as.spec_decl.as.intersection_form.member_count; ++i) {
+            const FengTypeRef *member_ref = substitute_spec_member_type_ref_for_instance(
+                context, current_decl, current_ref,
+                current_decl->as.spec_decl.as.intersection_form.members[i]);
+            const FengDecl *member_decl = resolve_type_ref_decl(context, member_ref);
+
+            if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC ||
+                !collect_intersection_field_requirements(
+                    context, intersection_decl, member_decl, member_ref, merged)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    ObjectSpecRequirementSet current = {0};
+    bool ok = collect_object_spec_requirement_surfaces(
+        context, current_decl, current_ref, &current);
+    for (size_t i = 0U; ok && i < current.count; ++i) {
+        const ObjectSpecRequirementSurface *candidate = &current.items[i];
+        if (candidate->member->kind != FENG_TYPE_MEMBER_FIELD) {
+            continue;
+        }
+        for (size_t j = 0U; ok && j < merged->count; ++j) {
+            const ObjectSpecRequirementSurface *previous = &merged->items[j];
+            if (previous->member->is_static != candidate->member->is_static ||
+                !slice_equals(previous->member->as.field.name, candidate->member->as.field.name)) {
+                continue;
+            }
+            if (!object_spec_requirements_semantically_equivalent(context, previous, candidate)) {
+                ok = resolver_append_error(context, intersection_decl->token, "AE0623",
+                    format_message("intersection-form spec '%.*s' has incompatible requirements for field '%.*s'; field type and binding kind must match",
+                        (int)intersection_decl->as.spec_decl.name.length,
+                        intersection_decl->as.spec_decl.name.data,
+                        (int)candidate->member->as.field.name.length,
+                        candidate->member->as.field.name.data));
+            }
+        }
+        if (ok) {
+            ok = object_spec_requirement_set_add(context, merged, *candidate);
+        }
+    }
+    object_spec_requirement_set_free(&current);
+    return ok;
+}
+
+/* Validate and retain the declaration's normalized intersection surface. */
 static bool resolve_intersection_spec_form(ResolveContext *context, const FengDecl *decl) {
     const FengDecl **flattened = NULL;
     size_t flattened_count = 0U;
@@ -35736,6 +36226,12 @@ static bool resolve_intersection_spec_form(ResolveContext *context, const FengDe
     if (ok) {
         ok = feng_semantic_record_intersection_spec_info(context->analysis, decl,
                                                          flattened, flattened_count);
+        if (ok) {
+            ObjectSpecRequirementSet fields = {0};
+
+            ok = collect_intersection_field_requirements(context, decl, decl, NULL, &fields);
+            object_spec_requirement_set_free(&fields);
+        }
         if (ok && flattened_count > 1U) {
             ok = detect_cross_spec_method_conflicts(context, decl, flattened,
                                                      flattened_count, decl->token);
@@ -40930,6 +41426,28 @@ static const FengTypeRef *find_spec_type_ref_in_fit(
     return NULL;
 }
 
+/* Resolve a pre-registered member in its declaration's file, never by an
+ * analysis-wide short-name search. Generic parameters have no fixed member
+ * declaration even when another module happens to declare the same name. */
+static const FengDecl *precomputed_union_member_decl(
+    const FengSemanticAnalysis *analysis, const FengProgram *program,
+    const FengDecl *owner, const FengTypeRef *ref) {
+    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED) return NULL;
+    if (ref->as.named.segment_count == 1U && ref->as.named.type_arg_count == 0U) {
+        for (size_t i = 0U; i < owner->as.spec_decl.type_param_count; ++i) {
+            if (slice_equals(ref->as.named.segments[0], owner->as.spec_decl.type_params[i].name)) {
+                return NULL;
+            }
+        }
+    }
+    ResolveContext context = {0};
+    FengTypeRef source = *ref;
+    context.analysis = analysis;
+    context.pointer_size = analysis->pointer_size;
+    if (source.resolution_program == NULL) source.resolution_program = program;
+    return resolve_type_ref_decl_in_program(&context, &source);
+}
+
 /* Pre-register union-spec member info for all modules (both local and
  * imported-package) before the per-program resolution pass.
  *
@@ -40992,7 +41510,12 @@ static void precompute_union_spec_infos(FengSemanticAnalysis *analysis) {
                     const FengTypeRef *src = decl->as.spec_decl.as.union_form.members[member_index];
 
                     members[member_index].type_ref = clone_type_ref_for_inference(src);
-                    members[member_index].resolved_decl = NULL;
+                    const FengDecl *resolved = precomputed_union_member_decl(
+                        analysis, prog, decl, src);
+                    members[member_index].resolved_decl = resolved;
+                    members[member_index].is_nested_union = resolved != NULL &&
+                        resolved->kind == FENG_DECL_SPEC &&
+                        resolved->as.spec_decl.form == FENG_SPEC_FORM_UNION;
                     if (src != NULL && members[member_index].type_ref == NULL) {
                         oom = true;
                         break;
@@ -42004,6 +42527,9 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     free(analysis->spec_coercion_sites);
     feng_semantic_free_union_spec_infos(analysis);
     feng_semantic_free_intersection_spec_infos(analysis);
+    for (index = 0U; index < analysis->union_coercion_site_count; ++index) {
+        free(analysis->union_coercion_sites[index].path_indices);
+    }
     free(analysis->union_coercion_sites);
     free(analysis->spec_default_bindings);
     free(analysis->spec_member_accesses);
@@ -42016,8 +42542,16 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     for (index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
         free(analysis->reifiable_dep_sets[index].deps);
         free(analysis->reifiable_dep_sets[index].callable_deps);
+        for (size_t i = 0U; i < analysis->reifiable_dep_sets[index].union_projection_count; ++i) {
+            free(analysis->reifiable_dep_sets[index].union_projections[i].path);
+        }
+        free(analysis->reifiable_dep_sets[index].union_projections);
     }
     free(analysis->reifiable_dep_sets);
+    for (index = 0U; index < analysis->union_projection_use_count; ++index) {
+        free(analysis->union_projection_uses[index].projection.path);
+    }
+    free(analysis->union_projection_uses);
     for (index = 0U;
          index < analysis->imported_symbol_identity_count;
          ++index) {

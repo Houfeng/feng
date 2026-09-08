@@ -1,0 +1,250 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_descriptors;
+import fcts_lib.test.g24_descriptor_ref as descriptor_ref;
+import fcts_lib.test.g24_descriptor_value as descriptor_value;
+
+/** Track storage ownership separately from descriptor storage lifetime. */
+var g24_descriptor_finalized: i32 = 0;
+
+/** A reference payload must not be kept alive by a static descriptor. */
+type G24DescriptorLeaf {
+    open let number: i32;
+    func G24DescriptorLeaf(number: i32) { self.number = number; }
+    /** Ordinary field defaults are separate objects, not the tested payload. */
+    func ~G24DescriptorLeaf() {
+        if self.number != 0 { g24_descriptor_finalized += 1; }
+    }
+}
+
+/** Complete union actuals exercise tags and active payloads, not just leaves. */
+spec G24DescriptorUnion: i32 | string;
+
+/** Tuple actuals retain their named aggregate layout. */
+type G24DescriptorTuple(i32, string);
+
+/** A scalar-field spec actual remains a full witness-bearing value. */
+spec G24DescriptorNamed { func number(): i32; }
+
+/** Provider does not know this consumer implementation. */
+type G24DescriptorNamedImpl: G24DescriptorNamed {
+    func number(): i32 { return 123; }
+}
+
+/** Consumer-defined reference actual, absent from the provider source. */
+type G24DescriptorReference {
+    open var number: i32;
+    func G24DescriptorReference(number: i32) { self.number = number; }
+}
+
+/** Consumer-defined nontrivial value actual. */
+@value
+type G24DescriptorValue {
+    open var text: string;
+    open var reference: G24DescriptorReference;
+    func G24DescriptorValue(text: string, reference: G24DescriptorReference) {
+        self.text = text;
+        self.reference = reference;
+    }
+}
+
+/** Same-package empty descriptor forwarding. */
+func g24_local_identity<T>(value: T): T { return value; }
+
+/** Same-package nonempty descriptor and cross-package transitive dependency. */
+func g24_local_saved<T>(value: T): T {
+    let cell = G24DescriptorCell<T>(value);
+    return g24_lib_relay<T>(g24_local_identity<T>(cell.value));
+}
+
+/** Local closed and open array-fit invocation uses the same provider symbol. */
+func g24_local_array_relay<T>(values: T[]): T {
+    return values.g24_descriptor_saved();
+}
+
+/** Return/throw both release arrays, captured values and temporary wrappers. */
+func g24_descriptor_lifetime_probe(fail: bool) {
+    let before = g24_descriptor_finalized;
+    let leaf = G24DescriptorLeaf(74);
+    let values: G24DescriptorCell<G24DescriptorLeaf>[] = [G24DescriptorCell<G24DescriptorLeaf>(leaf)];
+    let reader = g24_lib_capture<G24DescriptorCell<G24DescriptorLeaf>>(values.g24_descriptor_across());
+    assert(reader().value.number == 74, "nested forwarding retains full value");
+    assert(g24_lib_array_outer<G24DescriptorCell<G24DescriptorLeaf>>(values).value.number == 74,
+           "three-layer forwarding retains full value");
+    assert(g24_descriptor_finalized == before, "payload remains alive until scope exit");
+    if fail { throw "g24-descriptor-unwind"; }
+}
+
+/** ISSUE-G24-009: compare observable values, identity, copying and lifetimes. */
+func test_g24_static_descriptors() {
+    describe("G24 immutable callable descriptors", () {
+        test("alternates scalar and string arguments without sharing state", () {
+            assert(g24_local_saved<i32>(31) == 31, "first scalar");
+            assert(g24_local_saved<string>("first") == "first", "first string");
+            assert(g24_lib_recursive<i32>(72, 3) == 72, "recursive scalar");
+            assert(g24_lib_recursive<string>("second", 4) == "second", "recursive string");
+            assert(g24_local_saved<i32>(-9) == -9, "same descriptor, new scalar");
+        });
+        test("keeps reference identity and independent value copies", () {
+            let first = G24DescriptorReference(101);
+            let second = G24DescriptorReference(202);
+            let value = G24DescriptorValue("value", first);
+            var copied = g24_lib_recursive<G24DescriptorValue>(value, 2);
+            copied.text = "copy";
+            assert(value.text == "value" && copied.text == "copy", "value storage independent");
+            first.number = 303;
+            assert(copied.reference.number == 303, "reference slot identity retained");
+            assert(g24_local_saved<G24DescriptorReference>(second).number == 202, "other instance");
+            assert(g24_local_saved<G24DescriptorReference>(first).number == 303, "original instance");
+        });
+        test("escaped closures retain separate invocation captures and descriptors", () {
+            let scalar = g24_lib_capture<i32>(43);
+            let word = g24_lib_capture<string>("escaped");
+            let object = G24DescriptorReference(57);
+            let saved = g24_lib_capture<G24DescriptorValue>(G24DescriptorValue("managed", object));
+            object.number = 68;
+            assert(scalar() == 43 && word() == "escaped", "different closed descriptors");
+            let restored = saved();
+            assert(restored.text == "managed" && restored.reference.number == 68, "complete managed value");
+            assert(scalar() == 43 && word() == "escaped", "repeated call after another instance");
+        });
+        test("default initialization follows actual scalar string reference and value", () {
+            assert(g24_lib_default<i32>() == 0, "actual scalar zero");
+            assert(g24_lib_default<string>() == "", "actual string zero");
+            assert(g24_lib_default<G24DescriptorReference>().number == 0, "actual reference default");
+            let value = g24_lib_default<G24DescriptorValue>();
+            assert(value.text == "" && value.reference.number == 0, "actual value default");
+        });
+        test("array fit closes its dependencies for alternating element representations", () {
+            let ints: i32[] = [17, 29];
+            let words: string[] = ["array", "other"];
+            let object = G24DescriptorReference(81);
+            let refs: G24DescriptorReference[] = [object];
+            let values: G24DescriptorValue[] = [G24DescriptorValue("element", object)];
+            assert(ints.g24_descriptor_saved() == 17, "direct scalar");
+            assert(words.g24_descriptor_saved() == "array", "direct string");
+            assert(refs.g24_descriptor_saved().number == 81, "direct reference");
+            assert(values.g24_descriptor_saved().text == "element", "direct managed value");
+            assert(ints.g24_descriptor_saved() == 17, "reuses original scalar metadata");
+        });
+        test("array fit metadata survives local and cross-package shared forwarders", () {
+            let ints: i32[] = [91];
+            let words: string[] = ["forward"];
+            assert(g24_local_array_relay<i32>(ints) == 91, "local scalar forwarding");
+            assert(g24_lib_array_relay<string>(words) == "forward", "imported string forwarding");
+            assert(g24_lib_array_relay<i32>(ints) == 91, "imported scalar forwarding");
+            assert(g24_local_array_relay<string>(words) == "forward", "local string forwarding");
+        });
+        test("different fit methods own distinct dependency layouts", () {
+            let ints: i32[] = [37];
+            let words: string[] = ["sibling"];
+            assert(ints.g24_descriptor_sibling() == 37, "same fit scalar");
+            assert(words.g24_descriptor_sibling() == "sibling", "same fit string");
+            assert(ints.g24_descriptor_across() == 37, "other fit scalar");
+            assert(words.g24_descriptor_across() == "sibling", "other fit string");
+            assert(ints.g24_descriptor_empty() == 37, "empty callee scalar");
+            assert(words.g24_descriptor_empty() == "sibling", "empty callee string");
+        });
+        test("recursive and three-layer calls close callee-specific descriptor graphs", () {
+            let first = G24DescriptorReference(141);
+            let second = G24DescriptorReference(252);
+            let refs: G24DescriptorReference[] = [first];
+            let values: G24DescriptorValue[] = [G24DescriptorValue("recursive", second)];
+            assert(refs.g24_descriptor_recursive(4).number == 141, "recursive reference");
+            assert(values.g24_descriptor_recursive(3).text == "recursive", "recursive managed value");
+            first.number = 363;
+            assert(g24_lib_array_outer<G24DescriptorReference>(refs).number == 363, "three-layer reference");
+            let restored = g24_lib_array_outer<G24DescriptorValue>(values);
+            assert(restored.text == "recursive" && restored.reference.number == 252, "three-layer managed value");
+        });
+        test("writable arrays preserve current values while reusing static metadata", () {
+            let ints: i32[!] = [18];
+            let words: string[!] = ["before"];
+            assert(ints.g24_descriptor_across() == 18, "writable scalar");
+            assert(words.g24_descriptor_recursive(2) == "before", "writable string");
+            ints[0] = 29;
+            words[0] = "after";
+            assert(ints.g24_descriptor_recursive(3) == 29, "same metadata new scalar");
+            assert(words.g24_descriptor_across() == "after", "same metadata new string");
+            assert(words.g24_descriptor_empty() == "after", "writable empty callee");
+        });
+        test("complete union and named tuple actuals retain representation", () {
+            let number: G24DescriptorUnion = 319;
+            let word: G24DescriptorUnion = "union";
+            let numbers: G24DescriptorUnion[] = [number];
+            let words: G24DescriptorUnion[] = [word];
+            let a = numbers.g24_descriptor_across();
+            let b = words.g24_descriptor_recursive(2);
+            assert(match a { n: i32 { n == 319 } else { false } }, "same T integer tag");
+            assert(match b { s: string { s == "union" } else { false } }, "same T string tag");
+            let pairs: G24DescriptorTuple[] = [(82, "tuple")];
+            let pair = pairs.g24_descriptor_sibling();
+            assert(pair.item1 == 82 && pair.item2 == "tuple", "complete named tuple");
+        });
+        test("spec actuals preserve their witness through array and shared calls", () {
+            let view: G24DescriptorNamed = G24DescriptorNamedImpl();
+            let views: G24DescriptorNamed[] = [view];
+            assert(views.g24_descriptor_across().number() == 123, "spec array actual");
+            assert(g24_lib_array_outer<G24DescriptorNamed>(views).number() == 123, "spec shared actual");
+        });
+        test("static metadata never retains invocation payloads after return or throw", () {
+            g24_descriptor_finalized = 0;
+            g24_descriptor_lifetime_probe(false);
+            assert(g24_descriptor_finalized == 1, "normal cleanup exactly once");
+            var caught = false;
+            try g24_descriptor_lifetime_probe(true) catch error: string {
+                caught = error == "g24-descriptor-unwind";
+            }
+            assert(caught && g24_descriptor_finalized == 2, "exception cleanup exactly once");
+        });
+        test("owner constructor instance and static method domains stay separate", () {
+            let numbers: i32[] = [64];
+            let words: string[] = ["method"];
+            let ints = G24DescriptorRouter<i32>(numbers);
+            let strings = G24DescriptorRouter<string>(words);
+            assert(ints.value == 64 && strings.value == "method", "constructor owner dependencies");
+            assert(ints.own(numbers) == 64 && strings.own(words) == "method", "instance owner T");
+            assert(ints.other<string>(words) == "method" && strings.other<i32>(numbers) == 64,
+                   "instance method U independent of T");
+            assert(G24DescriptorRouter<i32>.from<string>(words) == "method", "static method U");
+            assert(G24DescriptorRouter<string>.from<i32>(numbers) == 64, "other static method U");
+        });
+        test("array fit dependency survives an escaping generic closure", () {
+            let ints: i32[] = [76];
+            let words: string[] = ["closure-fit"];
+            let first = g24_lib_array_capture<i32>(ints);
+            let second = g24_lib_array_capture<string>(words);
+            assert(first() == 76 && second() == "closure-fit", "escaped different T");
+            assert(second() == "closure-fit" && first() == 76, "repeated reverse order");
+        });
+        test("independent parameters retain distinct callee slots in either order", () {
+            let ints: i32[] = [46];
+            let words: string[] = ["second"];
+            assert(g24_lib_array_pair<i32, string>(ints, words) == "second", "second slot string");
+            assert(g24_lib_array_pair<string, i32>(words, ints) == 46, "second slot scalar");
+            assert(g24_lib_array_pair<i32, i32>(ints, ints) == 46, "two open slots may close identically");
+        });
+        test("nested and differently writable array actuals do not share descriptor identity", () {
+            let ints: i32[][] = [[21]];
+            let words: string[][] = [["nested"]];
+            let mutable: i32[!][] = [[32]];
+            assert(ints.g24_descriptor_saved()[0] == 21, "nested scalar array");
+            assert(words.g24_descriptor_saved()[0] == "nested", "nested string array");
+            let restored = mutable.g24_descriptor_saved();
+            restored[0] = 43;
+            assert(mutable[0][0] == 43, "inner writable identity retained");
+            assert(ints.g24_descriptor_saved()[0] == 21, "original descriptor unchanged");
+        });
+        test("same short names from different modules keep complete type identity", () {
+            let refs: descriptor_ref.Token[] = [descriptor_ref.Token(152)];
+            let values: descriptor_value.Token[] = [descriptor_value.Token("different")];
+            assert(refs.g24_descriptor_saved().number == 152, "reference Token");
+            assert(values.g24_descriptor_saved().text == "different", "value Token");
+            assert(g24_lib_array_pair<descriptor_ref.Token, descriptor_value.Token>(refs, values).text == "different",
+                   "different closed nodes in one shared call");
+            assert(g24_lib_array_pair<descriptor_value.Token, descriptor_ref.Token>(values, refs).number == 152,
+                   "reversed type identities");
+        });
+    });
+}

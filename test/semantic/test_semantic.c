@@ -35282,7 +35282,11 @@ void test_g22_module_diagnostics(void);
 /* G23 declaration/implementation matrices live in their own translation unit. */
 void test_g23_spec_fit_diagnostics(void);
 
+/* Independent G24 composite-type conformance coverage. */
+void test_g24_composite_diagnostics(void);
+
 int main(void) {
+    test_g24_composite_diagnostics();
     test_g22_module_diagnostics();
     test_g23_spec_fit_diagnostics();
     test_g21_array_leaf_type_diagnostics();

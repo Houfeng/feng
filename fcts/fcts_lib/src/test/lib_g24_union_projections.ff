@@ -1,0 +1,67 @@
+open module fcts_lib.test.g24_union_projections;
+
+/** Nested actuals retain their own storage, not the outer constraint layout. */
+open spec G24ProjectionInner: i32 | string;
+open spec G24ProjectionOuter: G24ProjectionInner | bool;
+
+/** Statement entrance: neither static rejection nor a false parent reads a leaf. */
+open func g24_projection_statement<T: G24ProjectionOuter>(value: T): bool {
+    match value {
+        G24ProjectionInner -> i32 { return true; }
+        else { return false; }
+    }
+}
+
+/** Value expression entrance uses its own table, even with the same actual T. */
+open func g24_projection_expression<T: G24ProjectionOuter>(value: T): bool {
+    return match value {
+        G24ProjectionInner -> string { true }
+        else { false }
+    };
+}
+
+/** All-exit expressions produce no initializer value or subsequent binding lifetime. */
+open func g24_projection_exits<T: G24ProjectionOuter>(value: T): bool {
+    let unreachable: bool = match value {
+        G24ProjectionInner -> i32 { return true; }
+        else { return false; }
+    };
+    return unreachable;
+}
+
+/** Infix entrance reads the actual tag only when its parent has matched. */
+open func g24_projection_infix<T: G24ProjectionOuter>(value: T): bool {
+    return value match G24ProjectionInner -> i32;
+}
+
+/** Middle layer uses a different projection and calls a projection-only leaf. */
+open func g24_projection_middle<T: G24ProjectionOuter>(value: T): bool {
+    if value match bool { return false; }
+    return g24_projection_infix<T>(value);
+}
+
+/** A forwarder with no local match still carries the leaf's callable descriptor. */
+open func g24_projection_forward<T: G24ProjectionOuter>(value: T): bool {
+    return g24_projection_middle<T>(value);
+}
+
+/** Owner constructor and method projections belong to different descriptors. */
+open type G24ProjectionHost<T: G24ProjectionOuter> {
+    open let hit: bool;
+    func G24ProjectionHost(value: T) {
+        self.hit = value match G24ProjectionInner -> i32;
+    }
+    func probe<U: G24ProjectionOuter>(value: U): bool {
+        return value match G24ProjectionInner -> string;
+    }
+}
+
+/** Value owners obtain constructor projections from their aggregate descriptor. */
+@value
+open type G24ProjectionCell<T: G24ProjectionOuter> {
+    open let hit: bool;
+    func G24ProjectionCell(value: T) {
+        self.hit = g24_projection_infix<T>(value) &&
+                   (value match G24ProjectionInner -> i32);
+    }
+}

@@ -14,8 +14,8 @@
 #define FENG_SYMBOL_FT_MAGIC_3 '1'
 
 #define FENG_SYMBOL_FT_BYTE_ORDER_LE 0x01U
-#define FENG_SYMBOL_FT_VERSION_MAJOR 0x01U
-#define FENG_SYMBOL_FT_VERSION_MINOR 0x03U
+#define FENG_SYMBOL_FT_VERSION_MAJOR 0x02U
+#define FENG_SYMBOL_FT_VERSION_MINOR 0x00U
 
 #define FENG_SYMBOL_FT_HEADER_SIZE 64U
 #define FENG_SYMBOL_FT_SECTION_ENTRY_SIZE 32U
@@ -34,6 +34,7 @@
 #define FENG_SYMBOL_FT_SEC_DOCS  0x0006U
 #define FENG_SYMBOL_FT_SEC_ATTRS 0x0007U
 #define FENG_SYMBOL_FT_SEC_CALLABLE_DEPS 0x0008U
+#define FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS 0x0009U
 #define FENG_SYMBOL_FT_SEC_SPNS  0x0010U
 
 #define FENG_SYMBOL_FT_SEC_FLAG_REQUIRED 0x0001U
@@ -210,6 +211,19 @@ typedef struct FengSymbolFtCallableDepRecord {
     uint32_t callable_arg_count;
     uint32_t target_callable_type_id;
 } FengSymbolFtCallableDepRecord;
+
+/* Required FT 2.0 projection section; slots belong to the open declaration,
+ * so equal or impossible closed instances never change their ordinals. */
+typedef struct FengSymbolFtUnionProjectionRecord {
+    uint32_t owner_symbol_id;
+    uint32_t ordinal;
+    uint32_t subject_type_id;
+    uint32_t constraint_type_id;
+    uint32_t path_start;
+    uint32_t path_count;
+    uint32_t result_type_id;
+    uint32_t flags;
+} FengSymbolFtUnionProjectionRecord;
 
 typedef struct FengSymbolFtSpanRecord {
     uint32_t symbol_id;

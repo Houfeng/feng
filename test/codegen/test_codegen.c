@@ -12,6 +12,7 @@
 #include "symbol/export.h"
 #include "symbol/imported_module.h"
 #include "symbol/provider.h"
+#include "test_g24.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -9638,9 +9639,7 @@ static void test_builtin_fit_static_spec_witness_codegen(void) {
                                      NULL, &output, &codegen_error));
     ASSERT(output.c_source != NULL);
     ASSERT(strstr(output.c_source, "FengFitBuiltin_") != NULL);
-    ASSERT(strstr(output.c_source,
-                  "&(const FengFunctionDescriptor){.name = \"create\"}, p0);") !=
-           NULL);
+    ASSERT(g24_has_static_descriptor_call(output.c_source, "", "create", ", p0);"));
     ASSERT(strstr(output.c_source, "__create(void *_subject") == NULL);
     ASSERT(strstr(output.c_source, "_witness->create(_arg0)") != NULL);
     ASSERT(strstr(output.c_source,
@@ -15526,11 +15525,10 @@ static void test_generic_param_descriptor_static_storage_and_forwarding(void) {
     ASSERT(strstr(output.c_source, ".kind = _U->kind") == NULL);
     ASSERT(strstr(output.c_source, ".descriptor = _U->descriptor") == NULL);
     ASSERT(strstr(output.c_source, ".witness = _U->witness") == NULL);
-    ASSERT(strstr(output.c_source,
-                  "generic_param_descriptor_storage__useParent_G__from__X"
-                  "(&(const FengFunctionDescriptor){.name = "
-                  "\"feng__feng__codegen__generic_param_descriptor_storage__"
-                  "useParent_G__from__X\"}, _U,") != NULL);
+    ASSERT(g24_has_static_descriptor_call(
+        output.c_source, "generic_param_descriptor_storage__useParent_G__from__X",
+        "feng__feng__codegen__generic_param_descriptor_storage__useParent_G__from__X",
+        ", _U,"));
     ASSERT(strstr(output.c_source,
                   "&(const FengGenericParamDescriptor){") == NULL);
     compile_generated_c_or_die(output.c_source);
@@ -17344,6 +17342,7 @@ static void test_g23_qualified_generic_function_codegen(void) {
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g24_static_descriptors(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

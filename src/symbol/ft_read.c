@@ -17,6 +17,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *docs_section;
     const FengSymbolFtSectionEntry *attrs_section;
     const FengSymbolFtSectionEntry *callable_deps_section;
+    const FengSymbolFtSectionEntry *union_projections_section;
     const FengSymbolFtSectionEntry *spns_section;
     char **strings;
     size_t string_count;
@@ -180,10 +181,12 @@ static bool load_required_sections(ReadContext *ctx,
     ctx->attrs_section = find_section(ctx, FENG_SYMBOL_FT_SEC_ATTRS);
     ctx->callable_deps_section = find_section(
         ctx, FENG_SYMBOL_FT_SEC_CALLABLE_DEPS);
+    ctx->union_projections_section = find_section(ctx, FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
     if (ctx->strs_section == NULL || ctx->syms_section == NULL || ctx->typs_section == NULL ||
-        ctx->tseq_section == NULL || ctx->rels_section == NULL) {
+        ctx->tseq_section == NULL || ctx->rels_section == NULL ||
+        ctx->union_projections_section == NULL) {
         return feng_symbol_internal_set_error(out_error,
                                               path,
                                               (FengToken){0},
@@ -194,6 +197,31 @@ static bool load_required_sections(ReadContext *ctx,
                                               path,
                                               (FengToken){0},
                                               "symbol table declares docs payload but omits DOCS section");
+    }
+    const unsigned char *projection_section = (const unsigned char *)ctx->union_projections_section;
+    uint64_t projection_offset = read_u64_le(projection_section + 0x08);
+    uint64_t projection_size = read_u64_le(projection_section + 0x10);
+    uint32_t projection_count = read_u32_le(projection_section + 0x04);
+    uint16_t projection_flags = FENG_SYMBOL_FT_SEC_FLAG_REQUIRED |
+        FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY | FENG_SYMBOL_FT_SEC_FLAG_SORTED;
+    if (read_u16_le(projection_section + 0x02) != projection_flags ||
+        read_u32_le(projection_section + 0x18) != sizeof(FengSymbolFtUnionProjectionRecord) ||
+        read_u32_le(projection_section + 0x1C) != 0U ||
+        projection_size != (uint64_t)projection_count * sizeof(FengSymbolFtUnionProjectionRecord) ||
+        projection_offset < ctx->header.payload_offset || projection_offset % 8U != 0U ||
+        !validate_range(ctx, projection_offset, projection_size, path, out_error)) {
+        return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                               "malformed union projection section");
+    }
+    size_t occurrences = 0U;
+    for (size_t index = 0U; index < ctx->header.section_count; ++index) {
+        const unsigned char *entry = ctx->data + ctx->header.section_dir_offset +
+            index * ctx->header.section_entry_size;
+        occurrences += read_u16_le(entry) == FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS;
+    }
+    if (occurrences != 1U) {
+        return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                               "duplicate union projection section");
     }
     return true;
 }
@@ -1240,6 +1268,24 @@ static bool parse_attrs(ReadContext *ctx,
         FengSymbolDeclView *decl = decl_by_symbol_id(ctx, symbol_id);
         uint32_t attr_index;
 
+        if (kind == FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT) {
+            uint32_t total = read_u32_le((const unsigned char *)ctx->union_projections_section + 0x04);
+            if (decl == NULL || (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE &&
+                decl->kind != FENG_SYMBOL_DECL_KIND_FUNCTION && decl->kind != FENG_SYMBOL_DECL_KIND_METHOD) ||
+                decl->reifiable_union_projections != NULL || value0 == 0U || value0 > total ||
+                value1 != 0U || read_u16_le(record + 0x06) != 0U ||
+                read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "invalid union projection count attribute");
+            }
+            decl->reifiable_union_projections = calloc(value0, sizeof(*decl->reifiable_union_projections));
+            if (decl->reifiable_union_projections == NULL) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "out of memory loading union projections");
+            }
+            decl->reifiable_union_projection_count = value0;
+            continue;
+        }
         if (decl == NULL) {
             continue;
         }
@@ -1383,6 +1429,96 @@ static bool parse_spans(ReadContext *ctx, const char *path, FengSymbolError *out
     ctx->module->primary_path = ctx->module->root_decl.path != NULL
                                     ? feng_symbol_internal_dup_cstr(ctx->module->root_decl.path)
                                     : NULL;
+    return true;
+}
+
+/* Decode validated open projection slots. Missing records, malformed paths,
+ * and inconsistent binding purpose are rejected before Semantic sees them. */
+static bool parse_union_projections(ReadContext *ctx,
+                                     const char *path,
+                                     FengSymbolError *out_error) {
+    const unsigned char *section = (const unsigned char *)ctx->union_projections_section;
+    const unsigned char *base = ctx->data + read_u64_le(section + 0x08);
+    uint32_t count = read_u32_le(section + 0x04);
+    const unsigned char *tseq_section = (const unsigned char *)ctx->tseq_section;
+    uint32_t tseq_count = read_u32_le(tseq_section + 0x04);
+    uint64_t tseq_offset = read_u64_le(tseq_section + 0x08);
+    uint64_t tseq_size = read_u64_le(tseq_section + 0x10);
+    uint32_t previous_owner = 0U;
+    uint32_t previous_slot = 0U;
+    if (read_u32_le(tseq_section + 0x18) != sizeof(FengSymbolFtTseqRecord) ||
+        tseq_size != (uint64_t)tseq_count * sizeof(FengSymbolFtTseqRecord) ||
+        !validate_range(ctx, tseq_offset, tseq_size, path, out_error)) {
+        return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                               "malformed union projection type sequence section");
+    }
+    for (uint32_t index = 0U; index < count; ++index) {
+        const unsigned char *record = base + (size_t)index * sizeof(FengSymbolFtUnionProjectionRecord);
+        uint32_t owner_id = read_u32_le(record);
+        uint32_t ordinal = read_u32_le(record + 0x04);
+        uint32_t subject_id = read_u32_le(record + 0x08);
+        uint32_t constraint_id = read_u32_le(record + 0x0C);
+        uint32_t path_start = read_u32_le(record + 0x10);
+        uint32_t path_count = read_u32_le(record + 0x14);
+        uint32_t result_id = read_u32_le(record + 0x18);
+        uint32_t flags = read_u32_le(record + 0x1C);
+        FengSymbolDeclView *owner = decl_by_symbol_id(ctx, owner_id);
+        if (owner == NULL || ordinal >= owner->reifiable_union_projection_count ||
+            owner_id < previous_owner || (owner_id == previous_owner && ordinal != previous_slot + 1U) ||
+            (owner_id != previous_owner && ordinal != 0U) || subject_id == 0U || constraint_id == 0U ||
+            path_count == 0U || path_start > tseq_count || path_count > tseq_count - path_start ||
+            flags > 1U || (result_id == 0U && flags != 0U)) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                   "invalid union projection record %u", index);
+        }
+        FengSymbolUnionProjectionView *projection = &owner->reifiable_union_projections[ordinal];
+        if (projection->subject_type != NULL) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                   "duplicate union projection slot");
+        }
+        projection->subject_type = parse_type_by_id(ctx, subject_id, path, out_error);
+        projection->constraint_type = parse_type_by_id(ctx, constraint_id, path, out_error);
+        projection->result_type = parse_type_by_id(ctx, result_id, path, out_error);
+        projection->binding_mutability = flags == 1U ? FENG_MUTABILITY_VAR : FENG_MUTABILITY_LET;
+        if (projection->subject_type == NULL || projection->constraint_type == NULL ||
+            (result_id != 0U && projection->result_type == NULL)) {
+            return false;
+        }
+        if (projection->subject_type->kind != FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                   "union projection subject is not a type parameter");
+        }
+        projection->path = calloc(path_count, sizeof(*projection->path));
+        if (projection->path == NULL) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                   "out of memory loading union projection path");
+        }
+        projection->path_count = path_count;
+        for (size_t step = 0U; step < path_count; ++step) {
+            const unsigned char *element = ctx->data + tseq_offset +
+                ((size_t)path_start + step) * sizeof(FengSymbolFtTseqRecord);
+            uint32_t type_id = read_u32_le(element + 0x04);
+            if (type_id == 0U || read_u32_le(element) != 0U || read_u32_le(element + 0x08) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "invalid union projection path element");
+            }
+            projection->path[step] = parse_type_by_id(ctx, type_id, path, out_error);
+            if (projection->path[step] == NULL) {
+                return false;
+            }
+        }
+        previous_owner = owner_id;
+        previous_slot = ordinal;
+    }
+    for (size_t index = 0U; index < ctx->decl_count; ++index) {
+        const FengSymbolDeclView *decl = ctx->decls[index];
+        for (size_t slot = 0U; slot < decl->reifiable_union_projection_count; ++slot) {
+            if (decl->reifiable_union_projections[slot].subject_type == NULL) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                                                       "union projection count does not match records");
+            }
+        }
+    }
     return true;
 }
 
@@ -1619,6 +1755,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !attach_decl_hierarchy(&ctx, source_name, out_error) ||
         !parse_module_segments(&ctx, source_name, out_error) ||
         !parse_attrs(&ctx, source_name, out_error) ||
+        !parse_union_projections(&ctx, source_name, out_error) ||
         !parse_callable_dependencies(&ctx, source_name, out_error) ||
         !parse_spans(&ctx, source_name, out_error) ||
         !parse_relations(&ctx, source_name, out_error)) {

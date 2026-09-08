@@ -5941,9 +5941,13 @@ static void test_g23_real_ft_fit_visibility_and_conflicts(void) {
     free(directory);
 }
 
+/* G24 FT coverage is kept separate from the existing assertion fixtures. */
+void test_g24_union_projection_ft(void);
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_g24_union_projection_ft();
     test_g22_real_ft_module_diagnostics();
     test_g23_real_ft_orphan_ownership();
     test_g23_real_ft_fit_visibility_and_conflicts();

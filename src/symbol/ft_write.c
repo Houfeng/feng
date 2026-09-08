@@ -40,6 +40,8 @@ typedef struct WriterContext {
     size_t attr_count;
     FengSymbolFtCallableDepRecord *callable_deps;
     size_t callable_dep_count;
+    FengSymbolFtUnionProjectionRecord *union_projections;
+    size_t union_projection_count;
     FengSymbolFtSpanRecord *spans;
     size_t span_count;
     DeclIdMap *decl_ids;
@@ -148,6 +150,7 @@ static void writer_context_dispose(WriterContext *ctx) {
     free(ctx->docs);
     free(ctx->attrs);
     free(ctx->callable_deps);
+    free(ctx->union_projections);
     free(ctx->spans);
     free(ctx->decl_ids);
     memset(ctx, 0, sizeof(*ctx));
@@ -1043,6 +1046,19 @@ static bool writer_select_decl_dependencies(WriterContext *ctx,
             return false;
         }
     }
+    for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+        const FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];
+        if (!writer_select_type_dependencies(ctx, projection->subject_type, path, out_error) ||
+            !writer_select_type_dependencies(ctx, projection->constraint_type, path, out_error) ||
+            !writer_select_type_dependencies(ctx, projection->result_type, path, out_error)) {
+            return false;
+        }
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            if (!writer_select_type_dependencies(ctx, projection->path[step], path, out_error)) {
+                return false;
+            }
+        }
+    }
     for (index = 0U; index < decl->reifiable_callable_dep_count; ++index) {
         const FengSymbolCallableDepView *dependency =
             &decl->reifiable_callable_deps[index];
@@ -1631,6 +1647,91 @@ static bool writer_emit_span(WriterContext *ctx,
                          out_error);
 }
 
+/* Serialize open projection slots and their complete root-to-leaf paths.
+ * Serialize types before appending the path because generic types use TSEQ. */
+static bool writer_emit_union_projections(WriterContext *ctx,
+                                          const FengSymbolDeclView *decl,
+                                          uint32_t symbol_id,
+                                          const char *path,
+                                          FengToken token,
+                                          FengSymbolError *out_error) {
+    if (decl->reifiable_union_projection_count == 0U) {
+        return true;
+    }
+    if (decl->reifiable_union_projection_count > UINT32_MAX) {
+        return feng_symbol_internal_set_error(out_error, path, token,
+                                               "union projection count exceeds .ft range");
+    }
+    FengSymbolFtAttrRecord attr = {0};
+    attr.symbol_id = symbol_id;
+    attr.kind = FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT;
+    attr.value0 = (uint32_t)decl->reifiable_union_projection_count;
+    if (!append_record((void **)&ctx->attrs, &ctx->attr_count, sizeof(attr),
+                       &attr, path, token, out_error)) {
+        return false;
+    }
+    for (size_t index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+        const FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];
+        FengSymbolFtUnionProjectionRecord record = {0};
+        if (projection->path_count == 0U || projection->path_count > UINT32_MAX ||
+            projection->path_count > SIZE_MAX / sizeof(uint32_t)) {
+            return feng_symbol_internal_set_error(out_error, path, token,
+                                                   "invalid union projection path length");
+        }
+        record.owner_symbol_id = symbol_id;
+        record.ordinal = (uint32_t)index;
+        record.subject_type_id = writer_serialize_type(ctx, projection->subject_type, path, token, out_error);
+        record.constraint_type_id = writer_serialize_type(ctx, projection->constraint_type, path, token, out_error);
+        record.result_type_id = writer_serialize_type(ctx, projection->result_type, path, token, out_error);
+        record.flags = projection->binding_mutability == FENG_MUTABILITY_VAR ? 1U : 0U;
+        if (record.subject_type_id == 0U || record.constraint_type_id == 0U ||
+            (projection->result_type != NULL && record.result_type_id == 0U)) {
+            return false;
+        }
+        uint32_t *path_ids = calloc(projection->path_count, sizeof(*path_ids));
+        if (path_ids == NULL) {
+            return feng_symbol_internal_set_error(out_error, path, token,
+                                                   "out of memory serializing union projection path");
+        }
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            path_ids[step] = writer_serialize_type(ctx, projection->path[step], path, token, out_error);
+            if (path_ids[step] == 0U) {
+                free(path_ids);
+                return false;
+            }
+        }
+        if (ctx->tseq_count > UINT32_MAX - projection->path_count) {
+            free(path_ids);
+            return feng_symbol_internal_set_error(out_error, path, token,
+                                                   "union projection path exceeds .ft TSEQ range");
+        }
+        record.path_start = (uint32_t)ctx->tseq_count;
+        record.path_count = (uint32_t)projection->path_count;
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            if (!writer_append_tseq(ctx, 0U, path_ids[step], 0U, path, token, out_error)) {
+                free(path_ids);
+                return false;
+            }
+        }
+        free(path_ids);
+        if (!append_record((void **)&ctx->union_projections, &ctx->union_projection_count,
+                           sizeof(record), &record, path, token, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Keep section order deterministic even for graphs retaining imported ids. */
+static int compare_union_projection_records(const void *left, const void *right) {
+    const FengSymbolFtUnionProjectionRecord *a = left;
+    const FengSymbolFtUnionProjectionRecord *b = right;
+    if (a->owner_symbol_id != b->owner_symbol_id) {
+        return a->owner_symbol_id < b->owner_symbol_id ? -1 : 1;
+    }
+    return a->ordinal < b->ordinal ? -1 : a->ordinal > b->ordinal ? 1 : 0;
+}
+
 /* Serialize the fixed-slot direct callable dependencies of one symbol. */
 static bool writer_emit_callable_deps(WriterContext *ctx,
                                       const FengSymbolDeclView *decl,
@@ -1899,6 +2000,7 @@ static bool writer_collect_decl(WriterContext *ctx,
                        decl->token,
                        out_error) ||
         !writer_emit_decl_attrs(ctx, decl, symbol_id, path, decl->token, out_error) ||
+        !writer_emit_union_projections(ctx, decl, symbol_id, path, decl->token, out_error) ||
         !writer_emit_callable_deps(ctx,
                                    decl,
                                    symbol_id,
@@ -2113,9 +2215,10 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     Buffer docs = {0};
     Buffer attrs = {0};
     Buffer callable_deps = {0};
+    Buffer union_projections = {0};
     Buffer spans = {0};
     Buffer payload = {0};
-    FengSymbolFtSectionEntry sections[9];
+    FengSymbolFtSectionEntry sections[10];
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
@@ -2143,6 +2246,15 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         goto cleanup;
     }
 
+    if (ctx.union_projection_count > 1U) {
+        qsort(ctx.union_projections, ctx.union_projection_count,
+              sizeof(*ctx.union_projections), compare_union_projection_records);
+    }
+    if (!build_fixed_section(&union_projections, ctx.union_projections, ctx.union_projection_count,
+                             sizeof(*ctx.union_projections), path, module->root_decl.token, out_error)) {
+        goto cleanup;
+    }
+
     memset(&header, 0, sizeof(header));
     header.profile = (uint8_t)profile;
     header.header_size = FENG_SYMBOL_FT_HEADER_SIZE;
@@ -2157,7 +2269,8 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
 
 #define APPEND_SECTION(kind_value, flags_value, count_value, entry_size_value, buffer_ptr) \
     do { \
-        if ((buffer_ptr)->length > 0U || (kind_value) <= FENG_SYMBOL_FT_SEC_RELS) { \
+        if ((buffer_ptr)->length > 0U || (kind_value) <= FENG_SYMBOL_FT_SEC_RELS || \
+            (kind_value) == FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS) { \
             if (!buffer_align8(&payload, path, module->root_decl.token, out_error)) { \
                 goto cleanup; \
             } \
@@ -2175,10 +2288,10 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         } \
     } while (0)
 
-    /* 5 required core sections: STRS SYMS TYPS TSEQ RELS */
+    /* 6 required core sections, including the possibly empty projection table. */
     header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE +
                             (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
-                                       (5U + (ctx.doc_count > 0U ? 1U : 0U) +
+                                       (6U + (ctx.doc_count > 0U ? 1U : 0U) +
                                         (ctx.attr_count > 0U ? 1U : 0U) +
                                         (ctx.callable_dep_count > 0U ? 1U : 0U) +
                                         (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
@@ -2231,6 +2344,12 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                        (uint32_t)sizeof(FengSymbolFtCallableDepRecord),
                        &callable_deps);
     }
+    APPEND_SECTION(FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS,
+                   FENG_SYMBOL_FT_SEC_FLAG_REQUIRED | FENG_SYMBOL_FT_SEC_FLAG_FIXED_ENTRY |
+                       FENG_SYMBOL_FT_SEC_FLAG_SORTED,
+                   (uint32_t)ctx.union_projection_count,
+                   (uint32_t)sizeof(FengSymbolFtUnionProjectionRecord),
+                   &union_projections);
     if (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U) {
         header.flags |= FENG_SYMBOL_FT_FLAG_HAS_SPANS;
         APPEND_SECTION(FENG_SYMBOL_FT_SEC_SPNS,
@@ -2281,6 +2400,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     buffer_free(&docs);
     buffer_free(&attrs);
     buffer_free(&callable_deps);
+    buffer_free(&union_projections);
     buffer_free(&spans);
     buffer_free(&payload);
     return true;
@@ -2297,6 +2417,7 @@ cleanup:
     buffer_free(&rels);
     buffer_free(&attrs);
     buffer_free(&callable_deps);
+    buffer_free(&union_projections);
     buffer_free(&spans);
     buffer_free(&payload);
     return false;

@@ -244,6 +244,18 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
     }
     free(decl->reifiable_callable_deps);
 
+    for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+        FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];
+        feng_symbol_internal_type_free(projection->subject_type);
+        feng_symbol_internal_type_free(projection->constraint_type);
+        feng_symbol_internal_type_free(projection->result_type);
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            feng_symbol_internal_type_free(projection->path[step]);
+        }
+        free(projection->path);
+    }
+    free(decl->reifiable_union_projections);
+
     memset(decl, 0, sizeof(*decl));
     if (free_self) {
         free(decl);
@@ -529,6 +541,15 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
                               pair_count);
         }
     }
+    for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+        FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];
+        remap_type_target(projection->subject_type, pairs, pair_count);
+        remap_type_target(projection->constraint_type, pairs, pair_count);
+        remap_type_target(projection->result_type, pairs, pair_count);
+        for (size_t step = 0U; step < projection->path_count; ++step) {
+            remap_type_target(projection->path[step], pairs, pair_count);
+        }
+    }
     for (index = 0U; index < decl->member_count; ++index) {
         remap_decl_type_targets(decl->members[index], pairs, pair_count);
     }
@@ -572,6 +593,8 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->reifiable_type_deps = NULL;
     clone->reifiable_callable_deps = NULL;
     clone->reifiable_callable_dep_count = 0U;
+    clone->reifiable_union_projections = NULL;
+    clone->reifiable_union_projection_count = 0U;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
         (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
@@ -783,6 +806,40 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
                         decl_dispose(clone, true);
                         return NULL;
                     }
+                }
+            }
+        }
+    }
+
+    if (decl->reifiable_union_projection_count > 0U) {
+        clone->reifiable_union_projections = calloc(decl->reifiable_union_projection_count,
+                                                    sizeof(*clone->reifiable_union_projections));
+        if (clone->reifiable_union_projections == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+                                            "out of memory cloning union projections");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_union_projection_count = decl->reifiable_union_projection_count;
+        for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
+            const FengSymbolUnionProjectionView *source = &decl->reifiable_union_projections[index];
+            FengSymbolUnionProjectionView *target = &clone->reifiable_union_projections[index];
+            target->binding_mutability = source->binding_mutability;
+            target->subject_type = feng_symbol_internal_type_clone(source->subject_type, out_error);
+            target->constraint_type = feng_symbol_internal_type_clone(source->constraint_type, out_error);
+            target->result_type = feng_symbol_internal_type_clone(source->result_type, out_error);
+            target->path = calloc(source->path_count, sizeof(*target->path));
+            if (target->subject_type == NULL || target->constraint_type == NULL ||
+                (source->result_type != NULL && target->result_type == NULL) || target->path == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+            target->path_count = source->path_count;
+            for (size_t step = 0U; step < source->path_count; ++step) {
+                target->path[step] = feng_symbol_internal_type_clone(source->path[step], out_error);
+                if (target->path[step] == NULL) {
+                    decl_dispose(clone, true);
+                    return NULL;
                 }
             }
         }

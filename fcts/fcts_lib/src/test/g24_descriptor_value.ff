@@ -1,0 +1,8 @@
+open module fcts_lib.test.g24_descriptor_value;
+
+/** Managed value actual whose short name intentionally matches another type. */
+@value
+open type Token {
+    open let text: string;
+    func Token(text: string) { self.text = text; }
+}

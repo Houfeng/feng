@@ -104,7 +104,7 @@ open func test_intersection_generic() {
       let bp = GenPairView { first: 5, second: 99 };
       let bx = GenIntBox { value: 5 };
       assert(gen_eq_through(bi, bx), "generic intersection: GenIntBox accepted");
-      assert(gen_eq_through(bp, bx), "generic intersection: GenPairView accepted");
+      assert(g24_gen_eq_view(bp, bx), "generic intersection: GenPairView accepted");
     });
 
     test("generic intersection constraint with multiple type params", () {
@@ -121,7 +121,7 @@ open func test_intersection_generic() {
       let bp = GenPairView { first: 8, second: 0 };
       let bx = GenIntBox { value: 9 };
       assert(gen_compare_through(bi, bx) == 1, "generic intersection: GenIntBox compare");
-      assert(gen_compare_through(bp, bx) == -1, "generic intersection: GenPairView compare");
+      assert(g24_gen_compare_view(bp, bx) == -1, "generic intersection: GenPairView compare");
     });
   });
 }

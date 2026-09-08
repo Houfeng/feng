@@ -112,6 +112,29 @@ typedef void (*FengTypeDefaultZeroInitFn)(
     void *value_out,
     const struct FengTypeDescriptor *descriptor);
 
+/* One source-written union-match layer. Offsets refer to real subject storage;
+ * generated short-circuit code never probes a child before its parent hits. */
+typedef struct FengUnionTagProbe {
+    bool required;
+    size_t source_offset;
+    uint32_t expected_tag;
+} FengUnionTagProbe;
+
+/* Initialize fresh result storage from a borrowed subject, without a preceding
+ * default initialization. Only a hit binding that needs a missing value calls it. */
+typedef void (*FengUnionMaterializeFn)(const void *source, void *result);
+
+/* Closed compile-time projection for one match predicate/binding. The runtime
+ * does not interpret this table: generated C unrolls the source-known path.
+ * possible=false forbids all subject reads; a NULL materializer selects the
+ * complete existing value at result_offset after the probes have succeeded. */
+typedef struct FengUnionProjection {
+    bool possible;
+    const FengUnionTagProbe *probes;
+    size_t result_offset;
+    FengUnionMaterializeFn materialize;
+} FengUnionProjection;
+
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
@@ -181,6 +204,11 @@ typedef struct FengTypeDescriptor {
      * assigned once across the complete owner surface. */
     size_t reified_callable_deps_count;
     const struct FengFunctionDescriptor *const *reified_callable_deps;
+
+    /* Static projections owned by field/constructor/finalizer initialization.
+     * NULL without direct uses; method-owned uses belong to their own function
+     * descriptor, even when they reference this type's generic parameters. */
+    const FengUnionProjection *reified_union_projections;
 
     /* Per-closed-type static binding state in declaration order. Non-generic
      * types and generic types without static bindings leave this NULL. */
@@ -444,6 +472,10 @@ typedef struct FengAggregateDescriptor {
     size_t reified_callable_deps_count;
     const struct FengFunctionDescriptor *const *reified_callable_deps;
 
+    /* Static owner projections, with the same dependency ownership as on
+     * FengTypeDescriptor. NULL without direct union-match uses. */
+    const FengUnionProjection *reified_union_projections;
+
     /* Same closed generic static state carried by FengTypeDescriptor. Value
      * type shared methods receive this aggregate descriptor instead. */
     FengStaticBindingState *static_bindings;
@@ -495,6 +527,11 @@ typedef struct FengFunctionDescriptor {
     /* Static formation information when this closed callable is used as a
      * callable value. Direct-call-only descriptors leave it zeroed. */
     FengCallableValueDescriptor callable_value;
+
+    /* Static projections owned by this callable's open dependency identity.
+     * NULL without direct uses, including forwarding-only shared bodies.
+     * Slots are independent of aggregate/type/callable dependency indices. */
+    const FengUnionProjection *reified_union_projections;
 } FengFunctionDescriptor;
 
 static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(

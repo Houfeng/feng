@@ -1,0 +1,69 @@
+module fcts_bin;
+
+import std.test;
+
+spec G24Path1: i32 | string;
+spec G24Path2: G24Path1 | bool;
+spec G24Path3: G24Path2 | bool;
+spec G24Path4: G24Path3 | bool;
+spec G24Path5: G24Path4 | bool;
+spec G24Path6: G24Path5 | bool;
+spec G24Path7: G24Path6 | bool;
+spec G24Path8: G24Path7 | bool;
+spec G24Path9: G24Path8 | bool;
+spec G24Path10: G24Path9 | bool;
+spec G24Path11: G24Path10 | bool;
+spec G24Path12: G24Path11 | bool;
+spec G24Path13: G24Path12 | bool;
+spec G24Path14: G24Path13 | bool;
+spec G24Path15: G24Path14 | bool;
+spec G24Path16: G24Path15 | bool;
+spec G24Path17: G24Path16 | bool;
+
+// COMPOSITE10: entry records every level, and match reads the real payload.
+func g24_read_path8(value: G24Path8): i32 {
+    return match value {
+        leaf: G24Path7 -> G24Path6 -> G24Path5 -> G24Path4 -> G24Path3 -> G24Path2 -> G24Path1 -> i32 { leaf }
+        else { -1 }
+    };
+}
+
+// One level beyond the former compiler-only path capacity.
+func g24_read_path9(value: G24Path9): i32 {
+    return match value {
+        leaf: G24Path8 -> G24Path7 -> G24Path6 -> G24Path5 -> G24Path4 -> G24Path3 -> G24Path2 -> G24Path1 -> i32 { leaf }
+        else { -1 }
+    };
+}
+
+// A longer path rules out replacing the old limit with another small constant.
+func g24_read_path17(value: G24Path17): i32 {
+    return match value {
+        leaf: G24Path16 -> G24Path15 -> G24Path14 -> G24Path13 -> G24Path12 -> G24Path11 -> G24Path10 -> G24Path9 -> G24Path8 -> G24Path7 -> G24Path6 -> G24Path5 -> G24Path4 -> G24Path3 -> G24Path2 -> G24Path1 -> i32 { leaf }
+        else { -1 }
+    };
+}
+
+// Real execution pairs source-entry and nonmatching active-member assertions.
+func test_g24_union_entry_paths() {
+    describe("G24 complete union entry paths", () {
+        test("preserves nonzero payload at eight levels", () {
+            let value: i32 = 108;
+            let wrapped: G24Path8 = value;
+            assert(g24_read_path8(wrapped) == 108, "eight-level payload");
+            assert(g24_read_path8(true) == -1, "eight-level nonmatching member");
+        });
+        test("preserves nonzero payload at nine levels", () {
+            let value: i32 = 109;
+            let wrapped: G24Path9 = value;
+            assert(g24_read_path9(wrapped) == 109, "nine-level payload");
+            assert(g24_read_path9(false) == -1, "nine-level nonmatching member");
+        });
+        test("preserves nonzero payload at seventeen levels", () {
+            let value: i32 = 117;
+            let wrapped: G24Path17 = value;
+            assert(g24_read_path17(wrapped) == 117, "seventeen-level payload");
+            assert(g24_read_path17(true) == -1, "seventeen-level nonmatching member");
+        });
+    });
+}

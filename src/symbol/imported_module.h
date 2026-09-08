@@ -28,8 +28,9 @@ FengSemanticImportedModuleQuery feng_symbol_imported_module_cache_as_query(
     FengSymbolImportedModuleCache *cache);
 
 /* Restore imported symbol facts that codegen reads through semantic sidecars.
- * Call after semantic analysis succeeds and before codegen begins. */
-void feng_symbol_imported_module_cache_populate_codegen_metadata(
+ * Call after semantic analysis succeeds and before codegen begins. Returns
+ * false if required projection metadata cannot be restored completely. */
+bool feng_symbol_imported_module_cache_populate_codegen_metadata(
     FengSymbolImportedModuleCache *cache,
     FengSemanticAnalysis *analysis);
 

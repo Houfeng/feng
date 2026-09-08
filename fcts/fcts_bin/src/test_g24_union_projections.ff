@@ -1,0 +1,79 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_union_projections;
+
+/** Consumer shared body forwards provider metadata and uses a local path. */
+func g24_projection_consumer<T: G24ProjectionOuter>(value: T): bool {
+    return (value match G24ProjectionInner) && g24_projection_forward<T>(value);
+}
+
+/** Assert all entrances for one actual type and every supplied active value. */
+func g24_check_projection_predicates<T: G24ProjectionOuter>(value: T, integer: bool, text: bool) {
+    assert(g24_projection_statement<T>(value) == integer, "statement projection");
+    assert(g24_projection_expression<T>(value) == text, "value expression projection");
+    assert(g24_projection_exits<T>(value) == integer, "all-exit expression projection");
+    assert(g24_projection_infix<T>(value) == integer, "infix projection");
+    assert(g24_projection_middle<T>(value) == integer, "middle projection");
+    assert(g24_projection_forward<T>(value) == integer, "projection-free forwarder");
+    assert(g24_projection_consumer<T>(value) == integer, "consumer and nested provider projections");
+}
+
+/** Non-shared control for the pre-existing all-exit initializer consumer gap. */
+func g24_projection_plain_exits(value: i32): bool {
+    let unreachable: bool = match value {
+        0 { return false; }
+        else { return true; }
+    };
+    return unreachable;
+}
+
+/** A normally completing path still forms and returns the expression's value. */
+func g24_projection_plain_value(value: bool): bool {
+    let result: bool = if value { return true; } else { false };
+    return result;
+}
+
+/** COMPOSITE37–40: true package-public metadata and separately compiled bodies. */
+func test_g24_union_projection_predicates() {
+    describe("G24 shared union projection predicates", () {
+        test("naked leaves use only static path decisions", () {
+            g24_check_projection_predicates<i32>(73, true, false);
+            g24_check_projection_predicates<string>("leaf", false, true);
+            g24_check_projection_predicates<bool>(true, false, false);
+        });
+        test("same child union type distinguishes both active payloads", () {
+            let number: G24ProjectionInner = 73;
+            let text: G24ProjectionInner = "child";
+            g24_check_projection_predicates<G24ProjectionInner>(number, true, false);
+            g24_check_projection_predicates<G24ProjectionInner>(text, false, true);
+            g24_check_projection_predicates<G24ProjectionInner>(number, true, false);
+        });
+        test("whole union guards inactive nested payloads", () {
+            let leaf: i32 = 73;
+            let number: G24ProjectionOuter = leaf;
+            let text: G24ProjectionOuter = "whole";
+            let flag: G24ProjectionOuter = true;
+            g24_check_projection_predicates<G24ProjectionOuter>(number, true, false);
+            g24_check_projection_predicates<G24ProjectionOuter>(text, false, true);
+            g24_check_projection_predicates<G24ProjectionOuter>(flag, false, false);
+        });
+        test("reference and value owner descriptors remain distinct from method descriptors", () {
+            let number: G24ProjectionInner = 73;
+            let text: G24ProjectionInner = "owner";
+            let host = G24ProjectionHost<i32>(73);
+            assert(host.hit, "reference owner static projection");
+            assert(host.probe<G24ProjectionInner>(text), "method dynamic string projection");
+            assert(!host.probe<G24ProjectionInner>(number), "method dynamic nonmatch");
+            assert(!G24ProjectionHost<string>("owner").hit, "reference owner static rejection");
+            assert(G24ProjectionCell<G24ProjectionInner>(number).hit, "value owner dynamic projection");
+            assert(!G24ProjectionCell<G24ProjectionInner>(text).hit, "value owner dynamic nonmatch");
+        });
+        test("non-shared all-exit and normally completing initializer paths", () {
+            assert(g24_projection_plain_exits(73), "non-shared positive return");
+            assert(!g24_projection_plain_exits(0), "non-shared negative return");
+            assert(g24_projection_plain_value(true), "early result path");
+            assert(!g24_projection_plain_value(false), "ordinary binding result path");
+        });
+    });
+}
