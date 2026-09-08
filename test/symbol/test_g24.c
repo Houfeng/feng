@@ -427,6 +427,63 @@ static void g24_empty_projection_roundtrips(const char *directory) {
     feng_program_free(program);
 }
 
+/* Round-trip ordered members through real package-public FT, destroy the
+ * producer, then validate typed/literal/call entrances using only imports. */
+static void g24_entry_order_roundtrip(const char *directory) {
+    const char *source =
+        "open module g24.entryorder;\n"
+        "open spec L: i16 | string; open spec R: i16 | bool; open spec Both: L | R;\n"
+        "open spec Deep: i8 | string; open spec Left: Deep | bool; open spec Wide: Left | R;\n"
+        "open spec DefaultInner: int | string; open spec Default: DefaultInner | f64;\n"
+        "open spec A {} open spec B {} open type Item: A, B {} open spec AB: A | B;\n"
+        "open func take(value: Both): Both { return value; }\n";
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = g24_analyze(source, NULL, &program);
+    char root[512];
+    CHECK(snprintf(root, sizeof(root), "%s/entry-order", directory) < (int)sizeof(root));
+    FengSymbolExportOptions options = {0};
+    FengSymbolError error = {0};
+    options.public_root = root;
+    CHECK(feng_symbol_export_analysis(analysis, &options, &error));
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+
+    FengSymbolProvider *provider = NULL;
+    CHECK(feng_symbol_provider_create(&provider, &error));
+    CHECK(feng_symbol_provider_add_ft_root(provider, root,
+        FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC, &error));
+    FengSymbolImportedModuleCache *cache = feng_symbol_imported_module_cache_create(provider);
+    CHECK(cache != NULL);
+    FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
+    const char *consumer =
+        "module consumer; import g24.entryorder;\n"
+        "func typed(x: i16): Both { return x; }\n"
+        "func literal(): Both { return 7; }\n"
+        "func breadth(): Wide { return 7; }\n"
+        "func defaulted(): Default { return 7; }\n"
+        "func object(x: Item): AB { return x; }\n"
+        "func argument(): Both { return take(7); }\n";
+    analysis = g24_analyze(consumer, &query, &program);
+    const size_t expected[][2] = {{0, 0}, {0, 0}, {1, 0}, {0, 0}, {0, 0}, {0, 0}};
+    CHECK(analysis->union_coercion_site_count == 6U);
+    bool seen[6] = {false};
+    for (size_t i = 0U; i < analysis->union_coercion_site_count; ++i) {
+        const FengUnionCoercionSite *site = &analysis->union_coercion_sites[i];
+        size_t index = site->expr->token.line - 2U;
+        CHECK(index < 6U && !seen[index]);
+        seen[index] = true;
+        CHECK(site->path_length == (index == 4U ? 1U : 2U));
+        for (size_t part = 0U; part < site->path_length; ++part)
+            CHECK(site->path_indices[part] == expected[index][part]);
+        if (index != 0U && index != 4U) CHECK(site->literal_source_type_ref != NULL);
+    }
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    feng_symbol_imported_module_cache_free(cache);
+    feng_symbol_provider_free(provider);
+    feng_symbol_error_free(&error);
+}
+
 /* Public entry: isolated artifacts are ordinary test data under repo temp/. */
 void test_g24_union_projection_ft(void) {
     char directory[] = "temp/g24_projection_XXXXXX";
@@ -434,5 +491,6 @@ void test_g24_union_projection_ft(void) {
     g24_slot_roundtrip(directory);
     g24_owner_path_roundtrips(directory);
     g24_empty_projection_roundtrips(directory);
+    g24_entry_order_roundtrip(directory);
     puts("G24 union projection FT matrices passed");
 }

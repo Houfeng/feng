@@ -96,7 +96,7 @@
 | **AE0105** | 类型不匹配 | expression '%s' has multiple overloads matching expected ABI function pointer type '%s' |
 | **AE0106** | 类型不匹配 | expression '%s' has multiple overloads matching expected function type '%s' |
 | **AE0107** | 类型不匹配 | expression '%s' does not match expected function type '%s' |
-| **AE0108** | 联合类型约束违反 | expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member |
+| **AE0108** | 历史编号：迁移至 AE0608 后随联合两轮路径规则停用；不复用编号 | expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member |
 | **AE0109** | 类型不匹配 | expression '%s' does not match expected type '%s' |
 | **AE0110** | 重复定义 | duplicate method signature '%.*s' in type '%.*s' |
 | **AE0111** | 返回语句错误 | method overloads in type '%.*s' cannot differ only by return type: '%.*s' |

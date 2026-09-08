@@ -6750,8 +6750,9 @@ static bool inferred_expr_type_matches_type_ref(const ResolveContext *context,
 /* One compiler-owned entry path selected by ordinary union binding rules. */
 typedef struct UnionMemberSelection {
     bool matched;
-    bool ambiguous;
     bool exact;
+    bool numeric_literal;
+    InferredExprType source_type;
     size_t member_index;
     const FengTypeRef *member_type_ref;
     /* Final non-union member reached by path_indices. This can differ from
@@ -6768,33 +6769,27 @@ static void union_member_selection_free(UnionMemberSelection *selection) {
     selection->path_length = 0U;
 }
 
-/* Preserve the complete root-to-leaf path, without a language depth limit. */
-static bool union_member_selection_set_path(const ResolveContext *context,
-                                             const FengDecl *union_decl,
-                                             UnionMemberSelection *selection,
-                                             size_t index,
-                                             const UnionMemberSelection *nested) {
-    size_t suffix_length = nested != NULL ? nested->path_length : 0U;
-    size_t *path = NULL;
+/* One instantiated union in the breadth-first frontier. Parent indices keep
+ * paths stable when the queue grows; shared subgraphs retain separate paths. */
+typedef struct UnionEntryNode {
+    const FengDecl *decl;
+    const FengTypeRef *type_ref;
+    size_t parent;
+    size_t member_index;
+    size_t depth;
+} UnionEntryNode;
 
-    if (suffix_length < SIZE_MAX / sizeof(*path)) {
-        path = malloc((suffix_length + 1U) * sizeof(*path));
-    }
-    if (path == NULL) {
-        selection->matched = false;
-        (void)resolver_append_error((ResolveContext *)context, union_decl->token,
-            "IE0001", format_message("out of memory recording union entry path"));
-        return false;
-    }
-    path[0] = index;
-    if (suffix_length > 0U) {
-        memcpy(path + 1U, nested->path_indices, suffix_length * sizeof(*path));
-    }
-    free(selection->path_indices);
-    selection->path_indices = path;
-    selection->path_length = suffix_length + 1U;
-    return true;
-}
+/* Reuse the scalar literal predicate without duplicating conversion rules. */
+static bool numeric_const_value_adapts_to_target(const ResolveContext *context,
+                                                 FengConstValue value,
+                                                 const FengTypeRef *target);
+
+/* Commit a chosen path and any literal/leaf conversion facts together. */
+static bool commit_union_member_selection(ResolveContext *context,
+                                          const FengExpr *expr,
+                                          const FengDecl *union_decl,
+                                          const FengTypeRef *union_type_ref,
+                                          const UnionMemberSelection *selection);
 
 static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *context,
                                                         InferredExprType expr_type,
@@ -6824,92 +6819,123 @@ static bool inferred_expr_type_exactly_matches_type_ref(const ResolveContext *co
     return false;
 }
 
-/* Select a complete entry path. Exact direct members take precedence; among
- * nested paths, exact leaves precede conversions, and equal-rank alternatives
- * remain ambiguous regardless of nesting depth or declaration order. */
+/* Select the first exact BFS path across the whole graph, then the first
+ * compatible BFS path. The queue and selected indices are compiler-only;
+ * Codegen receives one fixed path, never a runtime search. */
+static UnionMemberSelection select_union_entry(const ResolveContext *context,
+                                                InferredExprType expr_type,
+                                                const FengConstValue *literal,
+                                                const FengDecl *union_decl,
+                                                const FengTypeRef *union_type_ref) {
+    UnionMemberSelection result = {0};
+    size_t count = 1U, capacity = 8U;
+    UnionEntryNode *nodes = malloc(capacity * sizeof(*nodes));
+    if (nodes == NULL) {
+        goto out_of_memory;
+    }
+    nodes[0] = (UnionEntryNode){union_decl, union_type_ref, SIZE_MAX, 0U, 0U};
+    result.source_type = expr_type;
+    result.numeric_literal = literal != NULL;
+    for (size_t round = 0U; round < 2U; ++round) {
+        for (size_t head = 0U; head < count; ++head) {
+            /* Copy before reallocating the frontier below. */
+            UnionEntryNode node = nodes[head];
+            const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(
+                context->analysis, node.decl);
+            if (info == NULL) {
+                continue;
+            }
+            for (size_t index = 0U; index < info->member_count; ++index) {
+                const FengTypeRef *member = substitute_spec_member_type_ref_for_instance(
+                    (ResolveContext *)context, node.decl, node.type_ref,
+                    info->members[index].type_ref);
+                const FengDecl *nested = resolve_union_spec_type_ref_decl(context, member);
+                bool scalar_literal = literal != NULL &&
+                    type_ref_builtin_canonical_name(member, context->pointer_size) != NULL;
+                bool fits_literal = !scalar_literal ||
+                    numeric_const_value_adapts_to_target(context, *literal, member);
+                bool matches = round == 0U
+                    ? fits_literal && inferred_expr_type_exactly_matches_type_ref(
+                        context, expr_type, member)
+                    : nested == NULL && (scalar_literal ? fits_literal :
+                        inferred_expr_type_matches_type_ref(context, expr_type, member));
+                if (matches) {
+                    if (node.depth >= SIZE_MAX / sizeof(*result.path_indices)) {
+                        goto out_of_memory;
+                    }
+                    result.path_length = node.depth + 1U;
+                    result.path_indices = malloc(result.path_length * sizeof(*result.path_indices));
+                    if (result.path_indices == NULL) {
+                        goto out_of_memory;
+                    }
+                    result.path_indices[node.depth] = index;
+                    for (size_t parent = head; nodes[parent].parent != SIZE_MAX;
+                         parent = nodes[parent].parent) {
+                        result.path_indices[nodes[parent].depth - 1U] = nodes[parent].member_index;
+                    }
+                    const FengUnionSpecInfo *root_info = feng_semantic_lookup_union_spec_info(
+                        context->analysis, union_decl);
+                    result.member_index = result.path_indices[0];
+                    result.member_type_ref = substitute_spec_member_type_ref_for_instance(
+                        (ResolveContext *)context, union_decl, union_type_ref,
+                        root_info->members[result.member_index].type_ref);
+                    result.leaf_type_ref = member;
+                    result.matched = true;
+                    result.exact = round == 0U;
+                    free(nodes);
+                    return result;
+                }
+                if (round != 0U || nested == NULL) {
+                    continue;
+                }
+                /* Invalid cyclic declarations are diagnosed separately. Do
+                 * not revisit the same instance on this path; different
+                 * closed instances and sibling paths remain distinct. */
+                bool cycle = false;
+                for (size_t parent = head; parent != SIZE_MAX; parent = nodes[parent].parent) {
+                    if (nodes[parent].decl == nested &&
+                        type_refs_semantically_equal(context, nodes[parent].type_ref, member)) {
+                        cycle = true;
+                        break;
+                    }
+                }
+                if (cycle) {
+                    continue;
+                }
+                if (count == capacity) {
+                    if (capacity > SIZE_MAX / 2U / sizeof(*nodes)) {
+                        goto out_of_memory;
+                    }
+                    size_t next_capacity = capacity * 2U;
+                    UnionEntryNode *grown = realloc(nodes, next_capacity * sizeof(*nodes));
+                    if (grown == NULL) {
+                        goto out_of_memory;
+                    }
+                    nodes = grown;
+                    capacity = next_capacity;
+                }
+                nodes[count++] = (UnionEntryNode){nested, member, head, index, node.depth + 1U};
+            }
+        }
+    }
+    free(nodes);
+    return result;
+
+out_of_memory:
+    free(nodes);
+    union_member_selection_free(&result);
+    (void)resolver_append_error((ResolveContext *)context, union_decl->token,
+        "IE0001", format_message("out of memory selecting union entry path"));
+    return result;
+}
+
+/* Type-only admission and closed projection queries do not acquire literal
+ * adaptation privileges or change the actual generic argument representation. */
 static UnionMemberSelection select_union_member_for_expr_type(const ResolveContext *context,
                                                               InferredExprType expr_type,
                                                               const FengDecl *union_decl,
-                                                              const FengTypeRef *union_spec_type_ref) {
-    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
-                                                                         union_decl);
-    UnionMemberSelection result;
-
-    memset(&result, 0, sizeof(result));
-    if (info == NULL) {
-        return result;
-    }
-
-    /* Pass 1: exact direct match. */
-    for (size_t index = 0U; index < info->member_count; ++index) {
-        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            (ResolveContext *)context,
-            union_decl,
-            union_spec_type_ref,
-            info->members[index].type_ref);
-
-        if (inferred_expr_type_exactly_matches_type_ref(context,
-                                                        expr_type,
-                                                        member_type_ref)) {
-            result.matched = true;
-            result.exact = true;
-            result.member_index = index;
-            result.member_type_ref = member_type_ref;
-            result.leaf_type_ref = member_type_ref;
-            (void)union_member_selection_set_path(context, union_decl, &result, index, NULL);
-            return result;
-        }
-    }
-
-    /* Keep compatibility candidates from nested unions until every sibling
-     * has been considered. A nested ambiguity is itself multiple paths. */
-    for (size_t index = 0U; index < info->member_count; ++index) {
-        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            (ResolveContext *)context,
-            union_decl,
-            union_spec_type_ref,
-            info->members[index].type_ref);
-
-        UnionMemberSelection candidate = {0};
-        bool nested = info->members[index].is_nested_union;
-
-        if (nested) {
-            candidate = select_union_member_for_expr_type(context, expr_type,
-                info->members[index].resolved_decl, member_type_ref);
-        } else {
-            candidate.matched = inferred_expr_type_matches_type_ref(
-                context, expr_type, member_type_ref);
-            candidate.leaf_type_ref = member_type_ref;
-        }
-        if ((!candidate.matched && !candidate.ambiguous) ||
-            ((result.matched || result.ambiguous) && result.exact && !candidate.exact)) {
-            union_member_selection_free(&candidate);
-            continue;
-        }
-        if ((!result.matched && !result.ambiguous) ||
-            (candidate.exact && !result.exact)) {
-            result.matched = candidate.matched;
-            result.ambiguous = candidate.ambiguous;
-            result.exact = candidate.exact;
-            result.member_index = index;
-            result.member_type_ref = member_type_ref;
-            result.leaf_type_ref = candidate.leaf_type_ref;
-            if (candidate.matched && !union_member_selection_set_path(
-                    context, union_decl, &result, index, nested ? &candidate : NULL)) {
-                union_member_selection_free(&candidate);
-                return result;
-            }
-        } else {
-            result.ambiguous = true;
-        }
-        union_member_selection_free(&candidate);
-    }
-    if (result.ambiguous) {
-        result.matched = false;
-        result.member_type_ref = NULL;
-        result.leaf_type_ref = NULL;
-    }
-    return result;
+                                                              const FengTypeRef *union_type_ref) {
+    return select_union_entry(context, expr_type, NULL, union_decl, union_type_ref);
 }
 
 static bool inferred_expr_type_is_union_view(const ResolveContext *context,
@@ -8241,38 +8267,32 @@ static bool numeric_const_value_adapts_to_target(const ResolveContext *context,
     return false;
 }
 
-/* Select the first union member to which a pure numeric literal can adapt.
- * The returned type ref is borrowed from declaration or resolver storage and
- * is suitable for immediate matching or persistence. */
-static const FengTypeRef *select_literal_expr_union_member_target(
+/* All expression entry points share the type-only selector, optionally adding
+ * scalar literal eligibility. Repeated checks use the pre-fitting source,
+ * not the leaf type already committed for Codegen by an earlier check. */
+static UnionMemberSelection select_union_member_for_expression(
     ResolveContext *context,
-    const FengExpr *literal_expr,
+    const FengExpr *expr,
     const FengDecl *union_decl,
     const FengTypeRef *union_type_ref) {
-    const FengUnionSpecInfo *info = feng_semantic_lookup_union_spec_info(context->analysis,
-                                                                         union_decl);
+    InferredExprType source = branch_result_inferred_type(context, expr);
     FengConstValue value;
-    bool evaluated;
-
-    if (info == NULL || literal_expr == NULL) {
-        return NULL;
-    }
-    evaluated = evaluate_constant_expr(context, literal_expr, &value);
-    if (!evaluated || (value.kind != FENG_CONST_INT && value.kind != FENG_CONST_FLOAT)) {
-        return NULL;
-    }
-    for (size_t index = 0U; index < info->member_count; ++index) {
-        const FengTypeRef *declared_member_type_ref = info->members[index].type_ref;
-        const FengTypeRef *member_type_ref = substitute_spec_member_type_ref_for_instance(
-            context, union_decl, union_type_ref, declared_member_type_ref);
-        if (!numeric_const_value_adapts_to_target(context,
-                                                  value,
-                                                  member_type_ref)) {
-            continue;
+    if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr)) {
+        const FengUnionCoercionSite *previous =
+            feng_semantic_lookup_union_coercion_site(context->analysis, expr);
+        if (previous != NULL && previous->literal_source_type_ref != NULL) {
+            source = inferred_expr_type_from_type_ref(previous->literal_source_type_ref);
         }
-        return member_type_ref;
+        size_t errors_before = *context->error_count;
+        if (evaluate_constant_expr(context, expr, &value) &&
+            (value.kind == FENG_CONST_INT || value.kind == FENG_CONST_FLOAT)) {
+            return select_union_entry(context, source, &value, union_decl, union_type_ref);
+        }
+        if (*context->error_count != errors_before) {
+            return (UnionMemberSelection){0};
+        }
     }
-    return NULL;
+    return select_union_member_for_expr_type(context, source, union_decl, union_type_ref);
 }
 
 /* Select the first non-literal branch with a known type as the implicit
@@ -23844,33 +23864,18 @@ static bool expr_matches_expected_type_ref(ResolveContext *context,
         if (target_union_decl != NULL) {
             UnionMemberSelection selection;
 
-            if (expr_is_pure_numeric_literal_expr_for_target_adaptation(expr)) {
-                const FengTypeRef *literal_member =
-                    select_literal_expr_union_member_target(context,
-                                                            expr,
-                                                            target_union_decl,
-                                                            expected_type_ref);
-
-                if (literal_member != NULL) {
-                    if (!context->suppress_literal_type_commit &&
-                        !persist_literal_type_ref(context,
-                                                  expr,
-                                                  literal_member)) {
-                        return false;
-                    }
-                    return true;
-                }
-            }
-
             if (inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
                 return true;
             }
-            selection = select_union_member_for_expr_type(context,
-                                                          expr_type,
-                                                          target_union_decl,
-                                                          expected_type_ref);
+            selection = select_union_member_for_expression(context, expr,
+                target_union_decl, expected_type_ref);
+            bool matched = selection.matched;
+            if (matched && !context->suppress_literal_type_commit) {
+                matched = commit_union_member_selection(context, expr,
+                    target_union_decl, expected_type_ref, &selection);
+            }
             union_member_selection_free(&selection);
-            return selection.matched;
+            return matched;
         }
     }
 
@@ -24063,6 +24068,48 @@ static void record_union_leaf_spec_coercion_if_applicable(
         FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
 }
 
+/* Commit the selected path, original numeric source identity and leaf
+ * conversion as one decision. Only scalar leaves retype a literal; spec
+ * leaves retain the original source for their ordinary representation change. */
+static bool commit_union_member_selection(ResolveContext *context,
+                                          const FengExpr *expr,
+                                          const FengDecl *union_decl,
+                                          const FengTypeRef *union_type_ref,
+                                          const UnionMemberSelection *selection) {
+    const FengTypeRef *literal_source = NULL;
+    if (selection->numeric_literal) {
+        const FengUnionCoercionSite *previous =
+            feng_semantic_lookup_union_coercion_site(context->analysis, expr);
+        literal_source = previous != NULL ? previous->literal_source_type_ref : NULL;
+        if (literal_source == NULL) {
+            FengTypeRef *owned_source = create_type_ref_from_inferred_type(
+                &selection->source_type, expr->token);
+            if (owned_source == NULL ||
+                !analysis_track_synthetic_type_ref(context->analysis, owned_source)) {
+                free_synthetic_type_ref(owned_source);
+                return resolver_append_error(context, expr->token, "IE0001",
+                    format_message("out of memory preserving union literal source type"));
+            }
+            literal_source = owned_source;
+        }
+    }
+    if (!feng_semantic_record_union_coercion_site(context->analysis, expr,
+            union_decl, union_type_ref, selection->member_index,
+            selection->member_type_ref, selection->path_indices, selection->path_length) ||
+        (literal_source != NULL &&
+         !feng_semantic_record_union_literal_source_type(context->analysis, expr, literal_source))) {
+        return resolver_append_error(context, expr->token, "IE0001",
+            format_message("out of memory recording union entry facts"));
+    }
+    if (selection->numeric_literal &&
+        type_ref_builtin_canonical_name(selection->leaf_type_ref, context->pointer_size) != NULL &&
+        !persist_literal_type_ref(context, expr, selection->leaf_type_ref)) {
+        return false;
+    }
+    record_union_leaf_spec_coercion_if_applicable(context, expr, selection);
+    return true;
+}
+
 static void record_union_coercion_site_if_applicable(ResolveContext *context,
                                                      const FengExpr *expr,
                                                      const FengTypeRef *expected_type_ref) {
@@ -24088,37 +24135,19 @@ static void record_union_coercion_site_if_applicable(ResolveContext *context,
     if (target_union_decl == NULL) {
         return;
     }
-    /* Target-directed literal adaptation persists the selected leaf type on
-     * the complete pure constant expression. Prefer that authoritative type
-     * over default inference so unary/binary literal expressions record the
-     * same union member as scalar literal nodes. */
-    if (expr->type != NULL &&
-        expr_is_pure_numeric_literal_expr_for_target_adaptation(expr)) {
-        expr_type = inferred_expr_type_from_type_ref(expr->type);
-    } else {
-        expr_type = infer_expr_type(context, expr);
-    }
+    expr_type = branch_result_inferred_type(context, expr);
     if (!inferred_expr_type_is_known(expr_type) ||
         inferred_expr_type_exactly_matches_type_ref(context, expr_type, expected_type_ref)) {
         return;
     }
-    selection = select_union_member_for_expr_type(context,
-                                                  expr_type,
-                                                  target_union_decl,
-                                                  expected_type_ref);
+    selection = select_union_member_for_expression(context, expr,
+        target_union_decl, expected_type_ref);
     if (!selection.matched) {
         union_member_selection_free(&selection);
         return;
     }
-    (void)feng_semantic_record_union_coercion_site(context->analysis,
-                                                   expr,
-                                                   target_union_decl,
-                                                   expected_type_ref,
-                                                   selection.member_index,
-                                                   selection.member_type_ref,
-                                                   selection.path_indices,
-                                                   selection.path_length);
-    record_union_leaf_spec_coercion_if_applicable(context, expr, &selection);
+    (void)commit_union_member_selection(context, expr,
+        target_union_decl, expected_type_ref, &selection);
     union_member_selection_free(&selection);
 }
 
@@ -24457,7 +24486,7 @@ static bool generic_spec_constraint_satisfied(ResolveContext *context,
     if (target->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
         UnionMemberSelection selection = select_union_member_for_expr_type(
             context, inferred_expr_type_from_type_ref(actual), target, constraint);
-        bool result = selection.matched && !selection.ambiguous;
+        bool result = selection.matched;
         union_member_selection_free(&selection);
         return result;
     }
@@ -24499,8 +24528,7 @@ static bool generic_spec_constraint_satisfied(ResolveContext *context,
 }
 
 /* Compiler-only admission frontier: finite exact types and the spec families
- * which may also admit not-yet-declared nominal implementers. Multiplicity of
- * a family matters because two equal entry paths still form an ambiguity. */
+ * which may also admit not-yet-declared nominal implementers. */
 typedef struct GenericAdmissionFrontier {
     const FengTypeRef **exact;
     size_t exact_count;
@@ -24541,16 +24569,14 @@ static bool generic_admission_frontier_collect(ResolveContext *context,
     return true;
 }
 
-/* Prove open forwarding to a union, including the source constraint itself.
- * Finite exact types use ordinary admission. Unknown nominal implementers are
- * safe when the path-family multisets agree, or a single source family implies
- * the single target family. Otherwise proof is unavailable; do not assume
- * future implementations cannot satisfy an additional, ambiguous spec path. */
+/* Prove open forwarding, including the source union value itself. Every
+ * source family must imply at least one target family, so future nominal
+ * implementers remain admitted without enumerating them. Extra target paths
+ * change ordering, not admission, under the two-pass union entry rule. */
 static bool generic_constraint_implies_union(ResolveContext *context,
                                              const FengTypeRef *source,
                                              const FengTypeRef *target) {
     GenericAdmissionFrontier from = {0}, to = {0};
-    bool *matched = NULL;
     bool result = false;
 
     if (type_refs_semantically_equal(context, source, target)) {
@@ -24574,29 +24600,11 @@ static bool generic_constraint_implies_union(ResolveContext *context,
             goto cleanup;
         }
     }
-    if (from.family_count == 0U) {
-        result = true;
-        goto cleanup;
-    }
-    if (from.family_count == 1U && to.family_count == 1U) {
-        result = generic_spec_constraint_satisfied(context, from.families[0], to.families[0]);
-        goto cleanup;
-    }
-    if (from.family_count != to.family_count) {
-        goto cleanup;
-    }
-    matched = calloc(to.family_count, sizeof(*matched));
-    if (matched == NULL) {
-        (void)resolver_append_error(context, source->token, "IE0001",
-            format_message("out of memory proving generic constraint implication"));
-        goto cleanup;
-    }
     for (size_t i = 0U; i < from.family_count; ++i) {
         size_t j = 0U;
         for (; j < to.family_count; ++j) {
-            if (!matched[j] && type_refs_semantically_equal(
+            if (generic_spec_constraint_satisfied(
                     context, from.families[i], to.families[j])) {
-                matched[j] = true;
                 break;
             }
         }
@@ -24606,7 +24614,6 @@ static bool generic_constraint_implies_union(ResolveContext *context,
     }
     result = true;
 cleanup:
-    free(matched);
     free(from.exact);
     free(from.families);
     free(to.exact);
@@ -26310,38 +26317,18 @@ static bool validate_expr_against_expected_type(ResolveContext *context,
                                                                    expected_type_ref)) {
                 return true;
             } else {
-                selection = select_union_member_for_expr_type(context,
-                                                              expr_type,
-                                                              target_union_decl,
-                                                              expected_type_ref);
+                size_t errors_before = *context->error_count;
+                selection = select_union_member_for_expression(context, expr,
+                    target_union_decl, expected_type_ref);
                 if (selection.matched) {
-                    (void)feng_semantic_record_union_coercion_site(context->analysis,
-                                                                   expr,
-                                                                   target_union_decl,
-                                                                   expected_type_ref,
-                                                                   selection.member_index,
-                                                                   selection.member_type_ref,
-                                                                   selection.path_indices,
-                                                                   selection.path_length);
-                    record_union_leaf_spec_coercion_if_applicable(
-                        context, expr, &selection);
+                    bool ok = commit_union_member_selection(context, expr,
+                        target_union_decl, expected_type_ref, &selection);
                     union_member_selection_free(&selection);
-                    return true;
+                    return ok;
                 }
                 union_member_selection_free(&selection);
-                if (selection.ambiguous) {
-                    char *expr_name_local = format_expr_target_name(expr);
-                    char *type_name_local = format_type_ref_name(expected_type_ref);
-                    bool ok = resolver_append_error(
-                        context,
-                        expr->token,
-                        "AE0608", format_message("expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member",
-                                       expr_name_local != NULL ? expr_name_local : "<expression>",
-                                       type_name_local != NULL ? type_name_local : "<type>"));
-
-                    free(expr_name_local);
-                    free(type_name_local);
-                    return ok;
+                if (*context->error_count != errors_before) {
+                    return true;
                 }
             }
         }
@@ -28450,24 +28437,22 @@ static void commit_literal_arg_adaptations_for_resolved_call(
         param_type = substitute_type_ref_for_fit_instance(
             context, fit_decl, owner_type, param_type);
 
+        const FengDecl *target_union_decl = resolve_union_spec_type_ref_decl(context, param_type);
+        if (target_union_decl != NULL) {
+            UnionMemberSelection selection = select_union_member_for_expression(
+                context, args[i], target_union_decl, param_type);
+            if (selection.matched) {
+                (void)commit_union_member_selection(context, args[i],
+                    target_union_decl, param_type, &selection);
+            }
+            union_member_selection_free(&selection);
+            continue;
+        }
         literal_target = param_type;
         if (!numeric_literal_adapts_to_target(context,
                                               args[i],
                                               literal_target)) {
-            const FengDecl *target_union_decl =
-                resolve_union_spec_type_ref_decl(context, param_type);
-
-            if (target_union_decl == NULL) {
-                continue;
-            }
-            literal_target = select_literal_expr_union_member_target(
-                context,
-                args[i],
-                target_union_decl,
-                param_type);
-            if (literal_target == NULL) {
-                continue;
-            }
+            continue;
         }
 
         /* Adaptation succeeded. Clone the selected scalar target or union
@@ -30345,7 +30330,7 @@ bool feng_semantic_query_union_entry(
     } else {
         selection = select_union_member_for_expr_type(&context,
             inferred_expr_type_from_type_ref(actual_type_ref), decl, union_type_ref);
-        if (selection.matched && !selection.ambiguous && selection.path_length > 0U) {
+        if (selection.matched && selection.path_length > 0U) {
             *out_indices = selection.path_indices;
             *out_count = selection.path_length;
             selection.path_indices = NULL;

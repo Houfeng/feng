@@ -4,6 +4,7 @@
 
 #include "parser/parser.h"
 #include "semantic/semantic.h"
+#include "test_union_entry_order.h"
 
 #define CHECK(condition) do { \
     if (!(condition)) { \
@@ -140,8 +141,8 @@ static void g24_complete_union_paths(void) {
     }
 }
 
-/* COMPOSITE11/23: ordinary entry and generic admission share ambiguity rules. */
-static void g24_union_ambiguity(void) {
+/* COMPOSITE11/23: approved migration to shared two-pass path selection. */
+static void g24_union_ordered_paths(void) {
     char source[1536];
     const char *forms[] = {"Inner | B", "B | Inner", "Inner | bool"};
     for (size_t shape = 0U; shape < 3U; ++shape) {
@@ -153,8 +154,12 @@ static void g24_union_ambiguity(void) {
                 "func enter(value: Item): %s { return %s; }\n",
                 shape == 2U ? "B" : "bool", forms[shape],
                 generic ? "Item" : "Outer", generic ? "take<Item>(value)" : "value");
-            g24_source(source, generic ? "AE0512" : "AE0608",
-                       generic ? "take<Item>(value)" : "value; }", generic ? "take" : "value");
+            if (generic) {
+                g24_source(source, NULL, NULL, NULL);
+            } else {
+                const size_t path[] = {shape == 0U ? 1U : 0U, 0U};
+                test_assert_union_entry_path(source, "g24.ff", path, shape == 2U ? 2U : 1U);
+            }
         }
     }
     g24_source("module g24;\nspec A {}\nspec B {}\ntype Item: A, B {}\n"
@@ -208,7 +213,7 @@ static void g24_union_constraints(void) {
         "func run(v: Item): Item { let u: Choice = v; return take(v); }\n", NULL, NULL, NULL);
     g24_source("module g24;\nspec A {}\nspec B {}\nspec Inner: A | bool;\n"
         "spec Outer: Inner | B;\nfunc take<U: Outer>(v: U): U { return v; }\n"
-        "func relay<T: Inner>(v: T): T { return take<T>(v); }\n", "AE0512", "take<T>(v)", "take");
+        "func relay<T: Inner>(v: T): T { return take<T>(v); }\n", NULL, NULL, NULL);
 }
 
 /* COMPOSITE25/35: implication keeps each generic object component instance. */
@@ -435,7 +440,7 @@ static void g24_fit_parameter_scopes(void) {
 void test_g24_composite_diagnostics(void) {
     g24_complete_union_paths();
     g24_intersection_fields();
-    g24_union_ambiguity();
+    g24_union_ordered_paths();
     g24_union_constraints();
     g24_intersection_constraints();
     g24_intersection_view_arguments();

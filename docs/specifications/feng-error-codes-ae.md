@@ -193,7 +193,7 @@
 | AE0607 | union-form match 标签冲突约束 | AE0047 | union match branch lists the same member more than once |
 | AE0604 | union-form 收窄前置约束 | AE0085 | union-form constrained value must be narrowed to a single member before accessing member '%.*s' |
 | AE0604 | union-form 收窄前置约束 | AE0087 | union-form spec '%.*s' must be narrowed to a single member before accessing member '%.*s' |
-| AE0608 | union-form 目标成员消歧约束 | AE0108 | expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member |
+| AE0608 | 历史保留：旧 union-form 多路径消歧出口；现按联合类型规范 §3.8.1 选择，不再发出，不复用编号 | AE0108 | expression '%s' matches multiple members of union-form spec '%s'; use an explicit cast to select the target member |
 | AE0613 | spec 父列表形态约束 | AE0182 | spec '%.*s' parent spec list must contain only spec types but found '%s' |
 | AE0613 | spec 父列表形态约束 | AE0183 | object-form spec parent list can only contain object-form specs |
 | AE0614 | spec 父列表唯一性与无环约束 | AE0184 | spec '%.*s' lists '%.*s' more than once in its parent spec list |

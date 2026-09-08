@@ -66,7 +66,7 @@ FengTypeDescriptor、FengAggregateDescriptor、FengFunctionDescriptor 的结构�
 ### 3.1 准入证明与匹配路径分开
 
 ISSUE-G24-001 负责实际类型是否满足约束；ISSUE-G24-004 负责合法值如何匹配和取值。
-二者复用联合主规范已有的类型关系、精确匹配优先级、合法进入路径及歧义判定，不能各自猜测。
+二者复用联合主规范 §3.8.1 的类型关系与完整进入路径选择，不能各自猜测。
 
 人工已确认准入与普通联合绑定检查一致；主规则及开放转传证明统一见联合主规范 §3.12。
 现有 select_union_member_for_expr_type 提供类型级进入路径选择，普通绑定还单独处理同类型

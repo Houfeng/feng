@@ -1,0 +1,107 @@
+open module fcts_lib.test.g24_union_order;
+
+/** The default integer has an exact nested path before a shallow float fit. */
+open spec G24OrderDefaultInner: int | string;
+open spec G24OrderDefault: G24OrderDefaultInner | f64;
+
+/** A numeric leaf requiring target fitting, with no default-int member. */
+open spec G24OrderNumber: i16 | string;
+open spec G24OrderNested: G24OrderNumber | bool;
+open spec G24OrderBox<T>: T | bool;
+
+/** Keep the two entry paths distinct even when their scalar leaves agree. */
+open spec G24OrderLeft: i16 | string;
+open spec G24OrderRight: i16 | bool;
+open spec G24OrderDuplicate: G24OrderLeft | G24OrderRight;
+open spec G24OrderReversed: G24OrderRight | G24OrderLeft;
+
+/** Distinct contracts make a selected spec's witness observable. */
+open spec G24OrderA {
+    /** First independently callable witness slot. */
+    func left(): int;
+}
+/** Second independent contract used to observe ordered conversion. */
+open spec G24OrderB {
+    /** Second independently callable witness slot. */
+    func right(): int;
+}
+/** Reference subject satisfies both contracts. */
+open type G24OrderRef: G24OrderA, G24OrderB {
+    /** Observe selection of A for a reference. */
+    func left(): int { return 37; }
+    /** Observe selection of B for the same reference. */
+    func right(): int { return 73; }
+}
+/** Value subject satisfies both contracts with distinct results. */
+@value
+open type G24OrderValue: G24OrderA, G24OrderB {
+    /** Observe selection of A for a value. */
+    func left(): int { return 41; }
+    /** Observe selection of B for the same value. */
+    func right(): int { return 83; }
+}
+open spec G24OrderAB: G24OrderA | G24OrderB;
+open spec G24OrderBA: G24OrderB | G24OrderA;
+open spec G24OrderFamily: G24OrderA | bool;
+open spec G24OrderExpanded: G24OrderFamily | G24OrderB;
+
+/** Read back the exact nested integer and distinguish all other variants. */
+open func g24_order_default_value(value: G24OrderDefault): int {
+    return match value {
+        number: G24OrderDefaultInner -> int { number }
+        else { -1 }
+    };
+}
+
+/** Read back a fitted nested numeric payload rather than checking only tags. */
+open func g24_order_nested_value(value: G24OrderNested): int {
+    return match value {
+        number: G24OrderNumber -> i16 { (int)number }
+        else { -1 }
+    };
+}
+
+/** Ordinary parameters and results share the same active member. */
+open func g24_order_take_default(value: G24OrderDefault): G24OrderDefault { return value; }
+/** Accept an independently compiled nested fitting destination. */
+open func g24_order_take_nested(value: G24OrderNested): G24OrderNested { return value; }
+/** Preserve the default-int exact path in a provider return. */
+open func g24_order_return_default(): G24OrderDefault { return 37; }
+/** Fit a provider return into the nested narrow integer leaf. */
+open func g24_order_return_nested(): G24OrderNested { return 37; }
+
+/** Exercise a nested union's substituted generic member at a call boundary. */
+open func g24_order_take_box(value: G24OrderBox<G24OrderNumber>): G24OrderBox<G24OrderNumber> {
+    return value;
+}
+
+/** Constructor, member call and public field inputs use the same target. */
+open type G24OrderCell {
+    open var value: G24OrderDefault;
+    open var nested: G24OrderNested;
+    /** Store both incoming union values without choosing a new variant. */
+    func G24OrderCell(value: G24OrderDefault, nested: G24OrderNested) {
+        self.value = value;
+        self.nested = nested;
+    }
+    /** Exercise a method argument with the same destination as the field. */
+    func accept(value: G24OrderDefault): G24OrderDefault { return value; }
+}
+
+/** Type-only constraints retain the actual reference/value representation. */
+open func g24_order_identity<T: G24OrderAB>(value: T): T { return value; }
+/** Accept an expanded family whose member paths can overlap. */
+open func g24_order_expanded<T: G24OrderExpanded>(value: T): T { return value; }
+/** Prove the still-open source family can enter the expanded constraint. */
+open func g24_order_relay<T: G24OrderFamily>(value: T): T {
+    return g24_order_expanded<T>(value);
+}
+
+/** A selected exact path reaches every shared forwarding layer unchanged. */
+open func g24_order_duplicate_hit<T: G24OrderDuplicate>(value: T): bool {
+    return value match G24OrderLeft -> i16;
+}
+/** Forward the same actual descriptor and projection dependency inward. */
+open func g24_order_duplicate_relay<T: G24OrderDuplicate>(value: T): bool {
+    return g24_order_duplicate_hit<T>(value);
+}

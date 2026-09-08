@@ -356,6 +356,10 @@ typedef struct FengUnionCoercionSite {
     const FengTypeRef *member_type_ref;
     size_t *path_indices;
     size_t path_length;
+    /* Compiler-only, analysis-owned source type before numeric target fitting.
+     * Repeated validation must not treat a committed leaf as the original
+     * source type. This is neither serialized nor part of a runtime ABI. */
+    const FengTypeRef *literal_source_type_ref;
 } FengUnionCoercionSite;
 
 /* 具体化依赖的分类：aggregate（tuple/@value by-value）或 managed（type 托管对象）。 */
@@ -831,6 +835,12 @@ bool feng_semantic_record_union_coercion_site(
 const FengUnionCoercionSite *feng_semantic_lookup_union_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr);
+
+/* Attach the analysis-owned pre-fitting type to an already recorded path. */
+bool feng_semantic_record_union_literal_source_type(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengTypeRef *source_type_ref);
 
 void feng_semantic_free_union_spec_infos(FengSemanticAnalysis *analysis);
 

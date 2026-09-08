@@ -7,6 +7,7 @@
 #include "symbol/export.h"
 #include "symbol/imported_module.h"
 #include "symbol/provider.h"
+#include "test_union_entry_order.h"
 
 #define ASSERT(expr) \
     do { \
@@ -21726,7 +21727,8 @@ static void test_union_entry_records_object_spec_leaf_coercion(void) {
     feng_program_free(program);
 }
 
-static void test_union_entry_ambiguous_spec_member_requires_explicit_cast(void) {
+/* Approved migration: overlapping specs select the first compatible path. */
+static void test_union_entry_first_satisfied_spec_member(void) {
     const char *source =
         "module demo.main;\n"
         "spec A {}\n"
@@ -21737,10 +21739,8 @@ static void test_union_entry_ambiguous_spec_member_requires_explicit_cast(void) 
         "    let value: Value = t;\n"
         "}\n";
 
-    assert_single_source_semantic_error_contains(
-        "union_ambiguous_spec_member.f",
-        source,
-        "matches multiple members of union-form spec 'Value'; use an explicit cast");
+    const size_t path[] = {0U};
+    test_assert_union_entry_path(source, "union_ambiguous_spec_member.f", path, 1U);
 }
 
 static void test_union_entry_explicit_cast_selects_spec_member(void) {
@@ -21911,7 +21911,8 @@ static void test_nested_union_direct_member_assignment_records_path(void) {
     feng_program_free(program);
 }
 
-static void test_nested_union_ambiguous_path_rejected(void) {
+/* Approved migration: equal exact paths use breadth-first declaration order. */
+static void test_nested_union_first_exact_path(void) {
     const char *source =
         "module demo.main;\n"
         "spec X {}\n"
@@ -21923,10 +21924,8 @@ static void test_nested_union_ambiguous_path_rejected(void) {
         "    let r: R = a;\n"
         "}\n";
 
-    assert_single_source_semantic_error_contains(
-        "nested_union_ambiguous.f",
-        source,
-        "matches multiple members");
+    const size_t path[] = {0U, 0U};
+    test_assert_union_entry_path(source, "nested_union_ambiguous.f", path, 2U);
 }
 
 static void test_nested_union_cycle_rejected(void) {
@@ -35974,7 +35973,8 @@ int main(void) {
     test_union_entry_float_literal_selects_compatible_float_member();
     test_union_entry_float_literal_rejects_incompatible_members_in_any_order();
     test_union_entry_records_object_spec_leaf_coercion();
-    test_union_entry_ambiguous_spec_member_requires_explicit_cast();
+    test_union_entry_first_satisfied_spec_member();
+    test_union_entry_order();
     test_union_entry_explicit_cast_selects_spec_member();
     test_union_match_accepts_type_labels();
     test_union_match_rejects_literal_label();
@@ -35984,7 +35984,7 @@ int main(void) {
     test_union_equality_requires_narrowing();
     test_nested_union_leaf_assignment_records_path();
     test_nested_union_direct_member_assignment_records_path();
-    test_nested_union_ambiguous_path_rejected();
+    test_nested_union_first_exact_path();
     test_nested_union_cycle_rejected();
     test_chain_match_non_union_rejected();
     test_chain_match_bad_member_rejected();

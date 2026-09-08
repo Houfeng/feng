@@ -257,7 +257,7 @@ type Stream: ReadWrite {}
 - union-form member 可引用基础类型、用户定义类型与其他 `spec`; `void` 不允许作为 union-form member。
 - union-form member 保持声明时的层次结构，不递归展开嵌套 union-form；成员去重作用在直接成员层面，并保持声明顺序。
 - union-form 默认零值取直接成员列表中第一个 member 的默认零值。
-- union-form 值在进入 union-form 的赋值、初始化、传参与返回等站点确定 active member；编译器在编译期通过多级链路查找，确定从源类型到目标 union-form 的完整路径（精确 member 优先，嵌套 union-form 间接匹配次之）；若存在多条可达路径则诊断为歧义；运行时仅执行路径已确定的 tag 设置与数据拷贝。
+- union-form 值在赋值、初始化、传参与返回等进入点，统一按 [联合类型规范 §3.8.1](./feng-union-type.md#381-赋值时的多级链路查找) 在编译期选择完整路径；运行时仅执行已确定的 tag 设置与数据拷贝。
 - union-form 未收窄前不允许直接做成员访问、方法调用或 `==` / `!=` 比较; 收窄通过 `match 目标值 { ... }` 的 union member 类型匹配完成,其详细规则见 [feng-union-type.md](./feng-union-type.md)。
 - intersection-form 使用 `spec Name: SpecRef ('&' SpecRef)+;` 形式定义,以分号结束,不允许 `{}` 块体或自有成员; `&` 表示值必须同时满足全部成员约束。
 - intersection-form 的直接 member 必须是 object-form 或 intersection-form `spec`; 多层 intersection-form 在编译期展平并去重,其成员方法集包含各 object-form 成员及其父 `spec` 闭包的方法集。
@@ -411,7 +411,7 @@ type Stream: ReadWrite {}
 - [必须] 对象形状 `spec` 的上下文向上 coercion 与显式 cast 资格必须仅依据当前可见契约关系在编译期确定。
 - [必须] 对象形状 `spec` 的上下文向上 coercion 或显式 cast 一旦成立,编译器必须直接构造静态已知的目标 `spec` 视角; 运行时不得再做候选搜索、试探或回退。
 - [禁止] 从父 object-form `spec` 到子 object-form `spec`、无关 object-form `spec` 之间、以及依赖运行时对象具体类型才可能成立的上下文 coercion 或显式 cast。
-- [必须] union-form 进入站点必须在编译期决定 active member; 当多个 object-form `spec` member 可同时接纳同一源值且不存在精确 member 命中时,必须诊断为歧义,不得按声明顺序兜底。
+- [必须] union-form 进入站点必须按 [联合类型规范 §3.8.1](./feng-union-type.md#381-赋值时的多级链路查找) 在编译期决定 active member。
 - [禁止] 当前阶段直接把 union-form 视角值显式转换到共同 object-form `spec`,即使该 union-form 的全部 member 都满足该共同 `spec`。
 - [必须] 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form member。
 - [必须] intersection-form 的成员方法集合并必须对完全相同的签名去重,保留参数列表不同的重载,并拒绝同名同参数但返回类型不同的冲突。
@@ -424,7 +424,7 @@ type Stream: ReadWrite {}
 - 编译器必须检查 `spec` 声明头右侧是否仅包含 `spec`。
 - 编译器必须区分 object-form、callable-form、union-form 与 intersection-form `spec`,并按各自语法形态解析。
 - 编译器必须检查 union-form member 列表是否合法,拒绝少于两个 member、`void` member 与 `{}` 块体。
-- 编译器必须保持 union-form 的声明时层次结构，不递归展开嵌套 union-form；在直接成员层面去重并保持声明顺序；在赋值等进入站点做编译期多级链路查找，确定从源类型到目标 union-form 的路径，并在存在多条可达路径时诊断为歧义。
+- 编译器必须保持 union-form 的声明时层次结构，不递归展开嵌套 union-form；在直接成员层面去重并保持声明顺序；进入路径统一遵循 [联合类型规范 §3.8.1](./feng-union-type.md#381-赋值时的多级链路查找)。
 - 编译器必须检查 intersection-form member 是否均为 object-form 或 intersection-form `spec`,在编译期展平并去重多层 intersection-form,并拒绝其使用块体、自有成员或出现在 union-form member 中。
 - 编译器必须检查 object-form `spec` 的父 `spec` 列表中每一项是否均为 object-form `spec`，并拒绝 callable-form、union-form 与 intersection-form `spec` 出现在父 `spec` 列表中。
 - 编译器必须检查 `type` 声明头与契约适配 `fit` 的右侧是否全部为 object-form `spec`,并拒绝 callable-form、union-form 与 intersection-form `spec`。
@@ -466,7 +466,7 @@ type Stream: ReadWrite {}
 - 编译器必须把实例化后签名完全一致的 callable-form `spec` 显式转换 lower 为零转发的目标视角重解释; 不得为该转换生成新的 wrapper/closure,也不得让转换后的每次调用比转换前多一层 invoke forwarding。
 - 编译器必须在语义分析阶段根据当前可见契约关系判定对象形状 `spec` 的上下文 coercion 与显式 cast 是否属于允许的向上视角投影,并拒绝父到子、无关 `spec` 或依赖运行时对象具体类型的转换。
 - 编译器必须在赋值、初始化、传参、返回、字段写入、数组元素写入及重载重叠检查中统一应用 object-form `spec` 上下文向上 coercion；若具体 `type` 与其满足的 `spec`、子 `spec` 与其父 `spec`，或其他契约关系使同一实参类型可匹配多个重载候选,必须在声明阶段诊断签名冲突。
-- 编译器必须在 union-form 进入站点按精确直接 member 优先、嵌套 union-form 多级链路间接匹配次之的规则确定 active member 路径；多条可达路径构成歧义时必须报错，不得按声明顺序兜底。
+- 编译器必须在所有 union-form 进入站点复用 [联合类型规范 §3.8.1](./feng-union-type.md#381-赋值时的多级链路查找)，完整传递所选成员路径。
 - 编译器必须在 union-form `match 目标值 { ... }` 中只接受 union 直接成员类型标签与 `else`，拒绝字面量标签和区间标签；穷尽性检查只验证直接成员是否被覆盖。
 - 编译器必须在 intersection-form 使用位置检查源类型是否名义满足展平后的全部 object-form member,并使用合并 witness 支持成员访问与泛型约束。
 - 编译器必须合并 intersection-form 全部成员及其父 `spec` 闭包的方法集,对完全相同的签名去重,保留合法重载并诊断返回类型冲突。

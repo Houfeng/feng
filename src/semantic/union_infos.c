@@ -194,6 +194,25 @@ bool feng_semantic_record_union_coercion_site(
     return true;
 }
 
+/* Preserve literal source identity independently of the currently selected
+ * destination path. The type reference is owned by the analysis type arena. */
+bool feng_semantic_record_union_literal_source_type(
+    const FengSemanticAnalysis *analysis_const,
+    const FengExpr *expr,
+    const FengTypeRef *source_type_ref) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+    if (analysis == NULL || expr == NULL || source_type_ref == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < analysis->union_coercion_site_count; ++index) {
+        if (analysis->union_coercion_sites[index].expr == expr) {
+            analysis->union_coercion_sites[index].literal_source_type_ref = source_type_ref;
+            return true;
+        }
+    }
+    return false;
+}
+
 const FengUnionCoercionSite *feng_semantic_lookup_union_coercion_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr) {

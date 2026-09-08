@@ -1,0 +1,250 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_union_order;
+
+/** Same-package controls for the independently compiled provider entrances. */
+func g24_order_local_default(value: G24OrderDefault): G24OrderDefault { return value; }
+/** Same-package nested fitting control. */
+func g24_order_local_nested(value: G24OrderNested): G24OrderNested { return value; }
+/** An inferred default integer enters a union in the return position. */
+func g24_order_local_return(): G24OrderDefault { return 37; }
+/** Reach a catch result with the default integer target. */
+func g24_order_throw(): int { throw "order"; }
+/** Reach a catch result with a fitted narrow integer target. */
+func g24_order_throw_nested(): i16 { throw "order"; }
+
+/** Both legal witnesses must stay usable after the union chooses one. */
+func g24_order_ab(value: G24OrderAB): int {
+    return match value {
+        item: G24OrderA { item.left() }
+        item: G24OrderB { item.right() }
+        else { -1 }
+    };
+}
+/** Reverse spec declaration order without changing either witness. */
+func g24_order_ba(value: G24OrderBA): int {
+    return match value {
+        item: G24OrderB { item.right() }
+        item: G24OrderA { item.left() }
+        else { -1 }
+    };
+}
+
+/** Every arm exits the function; compiler alias metadata still lives to scope exit. */
+func g24_order_ab_exit(value: G24OrderAB): int {
+    let result: int = match value {
+        item: G24OrderA { return item.left(); }
+        item: G24OrderB { return item.right(); }
+        else { return -1; }
+    };
+    return result;
+}
+
+/** A shallower candidate on the right distinguishes BFS from subtree DFS. */
+spec G24OrderDeep: i8 | string;
+spec G24OrderDeepLeft: G24OrderDeep | bool;
+spec G24OrderShallowRight: i16 | string;
+spec G24OrderBreadth: G24OrderDeepLeft | G24OrderShallowRight;
+spec G24OrderRange: u8 | i8 | i16;
+spec G24OrderFloatInner: i16 | f32;
+spec G24OrderFloatOuter: bool | G24OrderFloatInner;
+spec G24OrderExactInner: G24OrderRef | string;
+spec G24OrderExactOuter: G24OrderA | G24OrderExactInner;
+spec G24OrderArrays: i16[] | i16[!];
+enum G24OrderEnumA { First }
+enum G24OrderEnumB { First }
+spec G24OrderEnums: G24OrderEnumA | G24OrderEnumB | i32;
+
+/** Compatible matching has no extra most-specific-spec priority. */
+spec G24OrderChild: G24OrderA {}
+type G24OrderChildRef: G24OrderChild {
+    /** Make the inherited contract callable through either selected view. */
+    func left(): int { return 37; }
+}
+spec G24OrderParentFirst: G24OrderA | G24OrderChild;
+spec G24OrderChildFirst: G24OrderChild | G24OrderA;
+
+/** A candidate can fit the first argument and still fail the second one. */
+spec G24OrderProbe: f32 | i16;
+/** Put the ultimately rejected numeric candidate first. */
+func g24_order_probe_first(value: G24OrderProbe, tag: bool): int { return -1; }
+/** This candidate must still see the literal's original default-int type. */
+func g24_order_probe_first(value: G24OrderDefault, tag: string): int {
+    return g24_order_default_value(value);
+}
+/** Reverse the two candidates while retaining their signatures and behavior. */
+func g24_order_probe_last(value: G24OrderDefault, tag: string): int {
+    return g24_order_default_value(value);
+}
+/** The rejected candidate follows the selected one in this overload set. */
+func g24_order_probe_last(value: G24OrderProbe, tag: bool): int { return -1; }
+
+/** COMPOSITE11/12/23: real FT inputs and separately compiled provider bodies. */
+func test_g24_union_order() {
+    describe("G24 two-pass union entry", () {
+        test("default exact type agrees across binding call return and constructor", () {
+            let direct: G24OrderDefault = 37;
+            assert(g24_order_default_value(direct) == 37, "binding");
+            assert(g24_order_default_value(g24_order_local_default(37)) == 37, "local argument");
+            assert(g24_order_default_value(g24_order_take_default(37)) == 37, "provider argument");
+            assert(g24_order_default_value(g24_order_local_return()) == 37, "local return");
+            assert(g24_order_default_value(g24_order_return_default()) == 37, "provider return");
+            let cell = G24OrderCell(37, 37);
+            assert(g24_order_default_value(cell.value) == 37, "constructor argument");
+            assert(g24_order_default_value(cell.accept(37)) == 37, "method argument");
+        });
+        test("assignment field literal and array destinations agree", () {
+            var assigned: G24OrderDefault = 11;
+            assigned = 37;
+            assert(g24_order_default_value(assigned) == 37, "reassignment");
+            let cell = G24OrderCell(11, 11) { value: 37, nested: 37 };
+            assert(g24_order_default_value(cell.value) == 37, "literal field");
+            cell.value = 41;
+            assert(g24_order_default_value(cell.value) == 41, "field assignment");
+            let values: G24OrderDefault[!] = [37, 11];
+            values[1] = 41;
+            assert(g24_order_default_value(values[0]) == 37, "array literal");
+            assert(g24_order_default_value(values[1]) == 41, "array assignment");
+        });
+        test("if match and try result targets retain exact nested int", () {
+            let first: G24OrderDefault = if true { 37 } else { 41 };
+            let second: G24OrderDefault = match true { true { 37 } else { 41 } };
+            let third: G24OrderDefault = try g24_order_throw() catch error: string { 37 };
+            assert(g24_order_default_value(first) == 37, "if result");
+            assert(g24_order_default_value(second) == 37, "match result");
+            assert(g24_order_default_value(third) == 37, "catch result");
+        });
+        test("nested fitting agrees across all value entrances", () {
+            var value: G24OrderNested = 11;
+            value = 37;
+            assert(g24_order_nested_value(value) == 37, "binding and assignment");
+            assert(g24_order_nested_value(g24_order_local_nested(37)) == 37, "local argument");
+            assert(g24_order_nested_value(g24_order_take_nested(37)) == 37, "provider argument");
+            assert(g24_order_nested_value(g24_order_return_nested()) == 37, "provider return");
+            let cell = G24OrderCell(11, 37) { nested: 41 };
+            assert(g24_order_nested_value(cell.nested) == 41, "literal field");
+            cell.nested = 37;
+            assert(g24_order_nested_value(cell.nested) == 37, "field assignment");
+            let values: G24OrderNested[!] = [37, 11];
+            values[1] = 41;
+            assert(g24_order_nested_value(values[0]) == 37, "array literal");
+            assert(g24_order_nested_value(values[1]) == 41, "array assignment");
+            let first: G24OrderNested = if true { 37 } else { 41 };
+            let second: G24OrderNested = match true { true { 37 } else { 41 } };
+            let third: G24OrderNested = try g24_order_throw_nested() catch error: string { 37 };
+            assert(g24_order_nested_value(first) == 37, "if fitting");
+            assert(g24_order_nested_value(second) == 37, "match fitting");
+            assert(g24_order_nested_value(third) == 37, "catch fitting");
+        });
+        test("breadth first fitting does not descend the left subtree first", () {
+            let value: G24OrderBreadth = 37;
+            assert(value match G24OrderShallowRight -> i16, "shallower right path");
+            let result = match value {
+                n: G24OrderShallowRight -> i16 { (int)n }
+                else { -1 }
+            };
+            assert(result == 37, "breadth payload");
+        });
+        test("range and pure constant fitting use valid numeric leaves", () {
+            let first: G24OrderRange = -1;
+            let second: G24OrderRange = 300;
+            assert(first match i8, "skip unsigned target");
+            assert(second match i16, "skip narrow targets");
+            let folded: G24OrderNested = 30 + 7;
+            assert(g24_order_nested_value(folded) == 37, "integer constant");
+            let floating: G24OrderFloatOuter = 1.5 + 2.0;
+            let amount = match floating {
+                n: G24OrderFloatInner -> f32 { n }
+                else { -1.0 }
+            };
+            assert(amount == 3.5, "floating constant payload");
+        });
+        test("duplicate leaf paths preserve first member and explicit alternatives", () {
+            let number: i16 = 37;
+            let first: G24OrderDuplicate = number;
+            let reversed: G24OrderReversed = number;
+            let fitted: G24OrderDuplicate = 37;
+            assert(first match G24OrderLeft -> i16, "first exact path");
+            assert(reversed match G24OrderRight -> i16, "reversed exact path");
+            assert(fitted match G24OrderLeft -> i16, "first fitted path");
+            let right: G24OrderRight = number;
+            let explicit_value: G24OrderDuplicate = right;
+            let copied: G24OrderDuplicate = explicit_value;
+            assert(copied match G24OrderRight -> i16, "whole value retains variant");
+            assert(g24_order_duplicate_relay<i16>(number), "shared closed path");
+            assert(!g24_order_duplicate_relay<G24OrderDuplicate>(copied), "whole actual retains right path");
+        });
+        test("generic member substitution can expose another nested union", () {
+            let value = g24_order_take_box(37);
+            assert(value match G24OrderNumber -> i16, "substituted nested argument");
+            let repeated: G24OrderBox<G24OrderBox<i16>> = 37;
+            assert(repeated match G24OrderBox<i16> -> i16, "same generic declaration distinct instances");
+        });
+        test("satisfied spec order preserves reference and value witness behavior", () {
+            let reference = G24OrderRef();
+            let value = G24OrderValue();
+            assert(g24_order_ab(reference) == 37, "reference first A");
+            assert(g24_order_ba(reference) == 73, "reference first B");
+            assert(g24_order_ab(value) == 41, "value first A");
+            assert(g24_order_ba(value) == 83, "value first B");
+            let selected_b: G24OrderB = reference;
+            assert(g24_order_ab(selected_b) == 73, "explicit B exact member");
+            assert(g24_order_ab_exit(reference) == 37, "all-exit first spec");
+            assert(g24_order_ab_exit(selected_b) == 73, "all-exit second spec");
+            assert(g24_order_ab_exit(value) == 41, "all-exit value subject");
+            assert(g24_order_identity<G24OrderRef>(reference).left() == 37, "reference generic actual");
+            assert(g24_order_identity<G24OrderValue>(value).right() == 83, "value generic actual");
+        });
+        test("deep exact type beats shallow spec conversion", () {
+            let value: G24OrderExactOuter = G24OrderRef();
+            assert(value match G24OrderExactInner -> G24OrderRef, "exact before shallow satisfaction");
+        });
+        test("open forwarding does not reject newly overlapping target paths", () {
+            assert(g24_order_relay<G24OrderRef>(G24OrderRef()).left() == 37, "reference forwarding");
+            assert(g24_order_relay<G24OrderValue>(G24OrderValue()).right() == 83, "value forwarding");
+            assert(g24_order_relay<bool>(true), "finite leaf forwarding");
+        });
+        test("member identity preserves array writable layers and nominal enums", () {
+            let read_only: i16[] = [37];
+            let writable: i16[!] = [41];
+            let first: G24OrderArrays = read_only;
+            let second: G24OrderArrays = writable;
+            assert(first match i16[], "readonly array member");
+            assert(!(first match i16[!]), "readonly does not match writable member");
+            assert(second match i16[!], "writable array member");
+            let member: G24OrderEnums = G24OrderEnumB.First;
+            assert(member match G24OrderEnumB, "second nominal enum member");
+            assert(!(member match G24OrderEnumA), "same representation is not same enum");
+            assert(!(member match i32), "enum identity is not its underlying scalar");
+        });
+        test("parent child spec order differs from explicit child identity", () {
+            let concrete = G24OrderChildRef();
+            let parent_first: G24OrderParentFirst = concrete;
+            let child_first: G24OrderChildFirst = concrete;
+            assert(parent_first match G24OrderA, "first satisfied parent");
+            assert(!(parent_first match G24OrderChild), "no most-specific priority");
+            assert(child_first match G24OrderChild, "first satisfied child after reversal");
+            let child_view: G24OrderChild = concrete;
+            let exact: G24OrderParentFirst = child_view;
+            assert(exact match G24OrderChild, "exact child beats earlier parent conversion");
+            let parent_result = match parent_first {
+                item: G24OrderA { item.left() }
+                else { -1 }
+            };
+            let child_result = match exact {
+                item: G24OrderChild { item.left() }
+                else { -1 }
+            };
+            assert(parent_result == 37 && child_result == 37, "both inherited witness views");
+        });
+        test("rejected overload fitting cannot pollute selected or nested calls", () {
+            assert(g24_order_probe_first(37, "chosen") == 37, "rejected candidate first");
+            assert(g24_order_probe_last(37, "chosen") == 37, "rejected candidate last");
+            assert(g24_order_probe_first(37, true) == -1, "alternate candidate remains usable");
+            assert(g24_order_probe_last(37, true) == -1, "alternate after declaration reversal");
+            assert(g24_order_default_value(g24_order_take_default(
+                g24_order_probe_first(37, "chosen"))) == 37, "nested provider call");
+        });
+    });
+}

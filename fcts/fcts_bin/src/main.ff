@@ -61,6 +61,7 @@ func main(args: string[]) {
       test_nested_union();
       test_g24_union_entry_paths();
       test_g24_union_projection_predicates();
+      test_g24_union_order();
       test_union_spec_leaf_coercion();
       test_exception();
       test_exception_payload();

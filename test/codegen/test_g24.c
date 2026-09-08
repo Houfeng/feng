@@ -296,11 +296,27 @@ static void g24_projection_predicates(void (*compile_c)(const char *)) {
         false, g24_check_projection_predicates, compile_c);
 }
 
+/* ISSUE-G24-020: both nominal spec labels must resolve their own methods;
+ * statement, result, infix and all-exit paths share the same type identity. */
+static void g24_union_entry_identity(void (*compile_c)(const char *)) {
+    g24_static_source(
+        "module g24.entryidentity;\n"
+        "spec A { func left(): i32; } spec B { func right(): i32; } spec U: A | B;\n"
+        "func keep<T>(v: T): T { return v; }\n"
+        "func statement(v: U): i32 { match v { x: A { return x.left(); } x: B { return x.right(); } } return -1; }\n"
+        "func expression(v: U): i32 { return match v { x: A { x.left() } x: B { x.right() } else { -1 } }; }\n"
+        "func infix(v: U): bool { return v match B; }\n"
+        "func all_exit(v: U): i32 { let n: i32 = match v { x: A { return x.left(); } x: B { return x.right(); } else { return -1; } }; return n; }\n"
+        "func use(): i32 { return keep<i32>(7); }\n",
+        false, NULL, compile_c);
+}
+
 /* ISSUE-G24-009: empty calls, full dependencies, recursive forwarding and
  * escaped closures all share immutable descriptors, never invocation data. */
 void test_g24_static_descriptors(void (*compile_c)(const char *)) {
     g24_static_assertion_pairs();
     g24_projection_predicates(compile_c);
+    g24_union_entry_identity(compile_c);
     g24_fit_routing(compile_c);
     g24_fit_parameter_slots(compile_c);
     g24_fit_nominal_identities(compile_c);

@@ -33290,7 +33290,8 @@ static bool cg_emit_match_expr_all_exit(CG *cg, const FengExpr *e,
                         break;
                     }
                     free(alias_cstr);
-                    cgtype_free(alias_type);
+                    /* scope_add transferred alias_type to branch_scope;
+                     * keep it alive for branch emission and scope teardown. */
                     buf_free(&payload_expr);
                 }
 
@@ -39784,7 +39785,7 @@ static bool cg_union_member_index_for_label(CG *cg,
         return false;
     }
     for (size_t index = 0U; index < spec->union_member_count; ++index) {
-        if (cg_types_equal(label_type, spec->union_member_types[index])) {
+        if (cg_type_identity_equal(label_type, spec->union_member_types[index])) {
             *out_index = index;
             cgtype_free(label_type);
             return true;
@@ -39865,7 +39866,7 @@ static char *cg_build_label_condition(CG *cg,
     }
 
     for (size_t i = 0U; i < root_spec->union_member_count; ++i) {
-        if (cg_types_equal(label_type, root_spec->union_member_types[i])) {
+        if (cg_type_identity_equal(label_type, root_spec->union_member_types[i])) {
             first_index = i;
             found = true;
             break;
@@ -39914,7 +39915,7 @@ static char *cg_build_label_condition(CG *cg,
             current_spec = current_type->user_spec;
             found = false;
             for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
-                if (cg_types_equal(chain_type, current_spec->union_member_types[i])) {
+                if (cg_type_identity_equal(chain_type, current_spec->union_member_types[i])) {
                     chain_index = i;
                     found = true;
                     break;
@@ -39979,7 +39980,7 @@ static char *cg_build_chain_payload_path(CG *cg,
     size_t first_index = 0U;
     bool found = false;
     for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
-        if (cg_types_equal(first_type, current_spec->union_member_types[i])) {
+        if (cg_type_identity_equal(first_type, current_spec->union_member_types[i])) {
             first_index = i;
             found = true;
             break;
@@ -40030,7 +40031,7 @@ static char *cg_build_chain_payload_path(CG *cg,
         size_t chain_index = 0U;
         found = false;
         for (size_t i = 0U; i < current_spec->union_member_count; ++i) {
-            if (cg_types_equal(chain_type, current_spec->union_member_types[i])) {
+            if (cg_type_identity_equal(chain_type, current_spec->union_member_types[i])) {
                 chain_index = i;
                 found = true;
                 break;
@@ -45599,7 +45600,7 @@ static bool cg_union_projection_member(CG *cg, const UserSpec *spec,
                                        size_t *out_index) {
     if (spec != NULL && spec->form == FENG_SPEC_FORM_UNION) {
         for (size_t i = 0U; i < spec->union_member_count; ++i) {
-            if (cg_types_equal(member, spec->union_member_types[i])) {
+            if (cg_type_identity_equal(member, spec->union_member_types[i])) {
                 *out_index = i;
                 return true;
             }
@@ -45640,7 +45641,7 @@ static bool cg_emit_union_projection_materializer(CG *cg, const char *name,
         free(result_ctype);
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
-    if (!cg_types_equal(leaf, source)) {
+    if (!cg_type_identity_equal(leaf, source)) {
         free(source_ctype);
         free(result_ctype);
         return cg_fail(cg, blame, "IE0002",
@@ -45771,15 +45772,15 @@ static bool cg_emit_closed_union_projection(CG *cg, Buf *out, Buf *entries,
         ok = true;
         goto cleanup;
     }
-    if (result != NULL && !cg_types_equal(result, subject) &&
-        !cg_types_equal(current, result)) {
+    if (result != NULL && !cg_type_identity_equal(result, subject) &&
+        !cg_type_identity_equal(current, result)) {
         (void)cg_fail(cg, blame, "IE0002",
             "codegen: union projection binding result disagrees with its selected path");
         goto cleanup;
     }
-    bool whole_subject = result != NULL && cg_types_equal(result, subject);
+    bool whole_subject = result != NULL && cg_type_identity_equal(result, subject);
     if (result != NULL && !whole_subject && projection->path_count <= entry_count &&
-        !cg_types_equal(result, subject)) {
+        !cg_type_identity_equal(result, subject)) {
         buf_append_fmt(&materializer, "%s__materialize_%zu", table_name, slot);
         if (!cg_emit_union_projection_materializer(cg, materializer.data, subject,
                 result, entry + projection->path_count,

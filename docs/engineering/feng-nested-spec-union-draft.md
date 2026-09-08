@@ -78,30 +78,9 @@ return append_normalized_union_member(member_ref);
 
 ### 2.3 赋值校验（编译期多级链路查找）
 
-赋值校验在**编译期语义分析阶段**完成。`select_union_member_for_expr_type` 递归向下查找从源类型到目标 spec union 的完整路径，路径信息传递给代码生成阶段使用。
-
-```
-// 编译期执行：递归查找路径
-function select_union_member(source_type, target_union):
-    // 第一级：直接匹配
-    for each member in target_union.members:
-        if types_equal(source_type, member.type_ref):
-            return MatchResult(member, path=[member])
-
-    // 第二级：通过嵌套 spec union 间接匹配
-    for each member in target_union.members:
-        if member.is_nested_union:
-            nested_result = select_union_member(source_type, member.resolved_union)
-            if nested_result is MatchResult:
-                return MatchResult(member, path=[member, ...nested_result.path])
-
-    // 歧义检测：收集所有可达路径
-    paths = collect_all_reachable_paths(source_type, target_union)
-    if paths.length > 1:
-        return AmbiguousError(paths)
-
-    return NoMatch
-```
+赋值校验在**编译期语义分析阶段**完成，保存完整路径供代码生成使用。2026-09-08 人工
+批准的查找顺序与多候选规则唯一由 [联合类型主规范 §3.8.1](../specifications/feng-union-type.md#381-赋值时的多级链路查找)
+定义；本设计不再保留旧的“首个递归返回／多路径歧义”伪代码。
 
 **赋值示例**：
 
@@ -125,7 +104,7 @@ let body: LambdaBody = expr;
 // 运行时：外层 tag=Expression，内层 tag 保持 Expression 自身的 tag
 ```
 
-**歧义报错**：
+**显式选择另一条路径**：
 
 ```feng
 open spec A: X | Y;
@@ -134,8 +113,8 @@ open spec C: A | B;
 
 let x: X = ...;
 let c: C = x;
-// 错误：X 可通过 A 和 B 两条路径到达 C，需要显式转换
-// 修复：let c: C = x as A;  // 或 x as B
+// 按主规范选择 path = [A, X]
+// 如需 B 路径：let via_b: C = (B)x;
 ```
 
 ### 2.4 运行时表示与代码生成
@@ -305,7 +284,7 @@ match value {
 | 文件 | 函数 | 变更 |
 |------|------|------|
 | analyzer.c | `collect_normalized_union_member` | 移除递归展开逻辑 |
-| analyzer.c | `select_union_member_for_expr_type` | 改为多级链路查找，增加歧义检测 |
+| analyzer.c | `select_union_member_for_expr_type` | 多级路径选择；现行规则见联合主规范 §3.8.1 |
 | analyzer.c | `validate_expr_against_expected_type` | 适配新的 MatchResult（含 path 信息） |
 
 ### 3.2 模式匹配
@@ -343,9 +322,9 @@ let x: X = ...;
 let c: C = x;  // path = [B, A, X]，三级链路
 ```
 
-运行时：三级 tag 嵌套。查找递归进行，深度无硬限制。
+运行时：三级 tag 嵌套。编译期按主规范 §3.8.1 查找完整路径，深度无硬限制。
 
-### 4.2 同一类型多条路径（歧义）
+### 4.2 同一类型多条路径
 
 ```feng
 open spec A: X;
@@ -353,10 +332,10 @@ open spec B: X;
 open spec C: A | B;
 
 let x: X = ...;
-let c: C = x;  // 歧义：X → A → C 或 X → B → C
+let c: C = x;  // 按主规范选择 path = [A, X]
 ```
 
-编译器报错，要求显式转换：`let c: C = x as A;`
+路径选择规则见联合主规范 §3.8.1；可通过 `(B)x` 主动选择另一中间成员。
 
 ### 4.3 open spec 扩展
 
@@ -392,12 +371,12 @@ let r: Result<int> = none_val;
 - [x] 5.1 更新 spec union 规范文档：非展开语义、多级链路、嵌套 tag
 - [x] 5.2 `collect_normalized_union_member`：移除递归展开逻辑，保持声明时层次结构
 - [x] 5.3 `select_union_member_for_expr_type`：改为多级链路查找，返回 path 信息
-- [x] 5.4 `select_union_member_for_expr_type`：增加歧义检测（同一类型多条路径时报错）
+- [x] 5.4 旧版多路径检查已实施；后续两轮路径选择迁移见 G24 ISSUE-G24-018。
 - [x] 5.5 `validate_expr_against_expected_type`：适配新的 MatchResult（含 path）
 - [x] 5.6 代码生成：按 path 逐级设置 tag + 拷贝数据（叶子赋值、整体赋值）
 - [x] 5.7 基础 match：匹配直接成员，分支内类型收窄
 - [x] 5.8 match 穷尽性检查：改为检查直接成员覆盖
-- [x] 5.9 补充测试用例：嵌套 spec union 赋值、match、歧义报错
+- [x] 5.9 既有嵌套赋值与 match 用例；旧歧义用例的迁移见 G24 ISSUE-G24-018。
 - [x] 5.10 全量回归测试
 
 ### 二期：多级 Match 语法
