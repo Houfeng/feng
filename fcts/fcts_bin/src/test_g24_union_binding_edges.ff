@@ -1,0 +1,267 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_union_bindings;
+import fcts_lib.test.g24_binding_edges;
+import fcts_lib.test.g24_binding_owners;
+import fcts_middle;
+
+/** A named managed tuple exercises a non-object aggregate leaf. */
+type G24BindingTuple(i32, string);
+/** Enum leaves preserve their named i32 identity through an open member. */
+enum G24BindingEnum { Zero, Selected }
+
+/** A projection-free helper must preserve both T and its existing metadata. */
+func g24_binding_local_identity<T>(value: T): T { return value; }
+/** The last same-package layer independently matches a chained leaf. */
+func g24_local_last<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    trace[2] = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    return value;
+}
+/** The middle layer binds the virtual intermediate before matching its payload. */
+func g24_local_middle<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    trace[1] = match value { item: G24BindingMiddle { g24_binding_number(match item {
+        inner: G24BindingInner { inner } else { "miss" }
+    }) } else { -1 } };
+    return g24_local_last<T>(g24_binding_local_identity<T>(value), trace);
+}
+/** The first layer observes an infix match, independently of its callees. */
+func g24_local_first<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    if value match item: G24BindingMiddle -> G24BindingInner -> i32 { trace[0] = item; }
+    else { trace[0] = -1; }
+    return g24_local_middle<T>(value, trace);
+}
+/** Generic fit methods keep method projections separate from owner parameters. */
+type G24ProjectionFit<A> { open let extra: A; }
+fit G24ProjectionFit<A> {
+    /** A is unconstrained while method T participates in the union projection. */
+    func projected<T: G24BindingOuter>(value: T): i32 {
+        let copy = g24_binding_local_identity<A>(self.extra);
+        let read = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        return read;
+    }
+}
+
+/** Negation changes truth only; the enclosed match binding does not escape. */
+func g24_binding_negated<T: G24BindingOuter>(value: T, counts: i32[!]): bool {
+    if !(g24_binding_touch<T>(value, counts) match item: G24BindingMiddle -> G24BindingInner -> i32) {
+        return true;
+    }
+    return false;
+}
+
+/** The outer package proves its own match independently of both callees. */
+func g24_three_packages<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    trace[0] = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    return g24_middle<T>(value, trace);
+}
+/** Each layer must write its own observable result, including nonmatches. */
+func g24_check_layers<T: G24BindingOuter>(value: T, expected: i32) {
+    let trace: i32[!] = [0, 0, 0];
+    let returned = g24_three_packages<T>(value, trace);
+    assert(trace[0] == expected && trace[1] == expected && trace[2] == expected, "all three layers executed");
+    assert(g24_binding_chain<T>(returned) == expected, "returned actual T unchanged");
+    trace[2] = 0;
+    g24_middle_empty<T>(value, trace);
+    assert(trace[2] == expected, "empty middle descriptor forwards nonempty callee");
+}
+
+/** Count only the explicitly tracked payload, excluding ordinary field defaults. */
+var g24_binding_destroyed: i32 = 0;
+/** Consumer-only concrete actual tests cross-package ownership metadata. */
+type G24BindingTracked {
+    open let id: i32;
+    func G24BindingTracked(id: i32) { self.id = id; }
+    /** The payload must survive intermediate union materialization and copies. */
+    func ~G24BindingTracked() { if self.id != 0 { g24_binding_destroyed += 1; } }
+}
+/** Managed value copies must preserve the reference and independent text fields. */
+@value type G24BindingManaged {
+    open var text: string;
+    open let tracked: G24BindingTracked;
+}
+/** A virtual value is stored, copied, mutated and cleaned on both exit paths. */
+func g24_binding_lifetime(fail: bool) {
+    let tracked = G24BindingTracked(91);
+    let original = G24BindingManaged { text: "original", tracked: tracked };
+    let result = g24_binding_generic<G24BindingManaged, G24BindingManaged>(original);
+    let values: G24BindingChoice<G24BindingManaged>[!] = [result];
+    match values[0] {
+        var item: G24BindingManaged {
+            assert(item.tracked == tracked, "reference identity survives materialization");
+            item.text = "copy";
+            assert(original.text == "original" && item.text == "copy", "value copy independent");
+        }
+        else { throw "wrong active member"; }
+    }
+    let callback = g24_capture_open<G24BindingManaged, G24BindingManaged>(original);
+    let after = callback();
+    let text = match after { item: G24BindingManaged { item.text } else { "wrong" } };
+    assert(text == "original", "captured descriptor-sized value intact");
+    if fail { throw "expected"; }
+}
+/** Build in a nested frame; the returned closure alone must keep T alive. */
+func g24_escape_managed(): G24ResultReader<G24BindingChoice<G24BindingManaged>> {
+    let original = G24BindingManaged { text: "escaped", tracked: G24BindingTracked(92) };
+    return g24_capture_open<G24BindingManaged, G24BindingManaged>(original);
+}
+/** Escape test ends its scope before checking exact release count. */
+func g24_use_escaped() {
+    let callback = g24_escape_managed();
+    let value = callback();
+    let text = match value { item: G24BindingManaged { item.text } else { "wrong" } };
+    assert(text == "escaped", "creator scope may end before invocation");
+}
+
+/** Binding/capture/default/depth/multilayer regressions use observable payloads. */
+func test_g24_union_binding_edges() {
+    describe("G24 projection binding edges", () {
+        test("ordinary all-exit chains and multi-member bindings remain independent", () {
+            let value: G24BindingOuter = (i32)73;
+            let missed: G24BindingOuter = 2.5;
+            assert(g24_plain_exits(value) == 73 && g24_plain_exits(missed) == -1, "ordinary all-exit chain");
+            assert(g24_plain_subset(value) == 73 && g24_plain_subset(missed) == -1, "ordinary statement subset");
+            assert(g24_plain_subset_expr(value) == 73 && g24_plain_subset_expr(missed) == -1, "ordinary expression subset");
+        });
+        test("captured var mutations and infix misses follow ordinary cells", () {
+            let whole: G24BindingOuter = (i32)73;
+            assert(g24_capture_infix<i32>(73)() == 80, "naked capture sees later mutation");
+            assert(g24_capture_infix<G24BindingOuter>(whole)() == 80, "whole capture sees later mutation");
+            assert(g24_capture_ordinary(whole)() == 82, "ordinary control capture");
+            assert(g24_capture_infix<f64>(2.5)() == -1, "static miss");
+            let missed: G24BindingOuter = 2.5;
+            assert(g24_capture_infix<G24BindingOuter>(missed)() == -1, "dynamic miss");
+        });
+        test("generic aggregate closures and defaults obey their own return ABI", () {
+            let callback = g24_capture_open<string, string>("open");
+            let result = callback();
+            let text = match result { item: string { item } else { "wrong" } };
+            assert(text == "open", "open aggregate closure ABI");
+            assert(g24_binding_number(g24_default_reader()) == 0, "fixed union default callable");
+            let generic = g24_default_open_reader<i32>();
+            let number = match generic { item: i32 { item } else { -1 } };
+            assert(number == 0, "generic union default callable");
+        });
+        test("open intermediate unions support subsequent shared-body narrowing", () {
+            let inner = g24_binding_generic<string, string>("open leaf");
+            assert(g24_read_open<string>(inner, "fallback") == "open leaf", "open union leaf");
+            assert(g24_read_open_chain<string, string>("open leaf", "fallback") == "open leaf", "open chain leaf");
+            let missed: G24BindingChoice<string> = false;
+            assert(g24_read_open<string>(missed, "fallback") == "fallback", "open union miss");
+            assert(g24_read_open_chain<i32, i32>(79, -1) == 79, "distinct scalar descriptor");
+        });
+        test("tuple enum and array leaves survive materialization and open narrowing", () {
+            let original: G24BindingTuple = (31, "tuple");
+            let wrapped = g24_binding_generic<G24BindingTuple, G24BindingTuple>(original);
+            var copied = g24_read_open<G24BindingTuple>(wrapped, original);
+            assert(copied.item1 == 31 && copied.item2 == "tuple", "tuple payload returned intact");
+            copied = (47, copied.item2);
+            assert(original.item1 == 31 && copied.item1 == 47 && copied.item2 == "tuple", "tuple payload and independent copy");
+            let enumerated = g24_binding_generic<G24BindingEnum, G24BindingEnum>(G24BindingEnum.Selected);
+            assert(g24_read_open<G24BindingEnum>(enumerated, G24BindingEnum.Zero) == G24BindingEnum.Selected, "enum nominal value");
+            let array: i32[!] = [13, 17];
+            let array_union = g24_binding_generic<i32[!], i32[!]>(array);
+            let returned = g24_read_open<i32[!]>(array_union, array);
+            returned[0] = 29;
+            assert(returned == array && array[0] == 29 && returned[1] == 17, "array identity and writable layer");
+        });
+        test("fixed layout open unions cross shared parameter boundaries", () {
+            let box = G24FixedBox<i32> { value: 67 };
+            let wrapped: G24FixedChoice<i32> = box;
+            assert(g24_fixed_choice<i32>(wrapped) == box && g24_fixed_relay<i32>(wrapped).value == 67, "fixed reference carrier and forwarding");
+            let text = G24FixedBox<string> { value: "fixed" };
+            let other: G24FixedChoice<string> = text;
+            assert(g24_fixed_relay<string>(other) == text, "distinct closed fixed carrier");
+            assert(g24_fixed_choice<i32>(g24_fixed_stored<i32>(wrapped)) == box, "fixed open binding array and return");
+            assert(g24_fixed_choice<string>(g24_fixed_stored<string>(other)) == text, "managed fixed member retained");
+        });
+        test("compatible callable and nominal object upcast preserve dispatch", () {
+            let first: G24OtherReader = () { return 61; };
+            let second: G24NumberReader = () { return 72; };
+            assert(g24_callable_leaf((G24NumberReader)first) == 61 && g24_callable_leaf(second) == 72, "explicit nominal conversion and distinct values");
+            let child: G24BindingChild = G24BindingChildImpl();
+            assert(g24_binding_view(child) == "child", "parent view at leaf");
+            let wrapped = g24_binding_views(child);
+            let text = match wrapped { item: G24BindingNamed { item.text() } else { "wrong" } };
+            assert(text == "child", "parent view inside materialized union");
+        });
+        test("while targets evaluate once and short-circuit before re-evaluation", () {
+            let counts: i32[!] = [0];
+            let total = g24_binding_while<i32>(7, counts);
+            assert(total == 21, "three hits sum");
+            assert(counts[0] == 3, "three target evaluations");
+            counts[0] = 0;
+            assert(g24_binding_while<f64>(2.5, counts) == 0 && counts[0] == 1, "first miss stops");
+        });
+        test("boolean values short-circuit entire RHS preambles and bound chains", () {
+            let counts: i32[!] = [0];
+            assert(!g24_binding_boolean<i32>(7, counts, false) && counts[0] == 0, "false gate skips target");
+            assert(g24_binding_boolean<i32>(7, counts, true) && counts[0] == 1, "true gate binds leaf");
+            assert(!g24_binding_boolean<f64>(2.5, counts, true) && counts[0] == 2, "miss skips leaf use");
+            assert(g24_plain_boolean(counts, true) && counts[0] == 2, "or skips generic call");
+            assert(g24_plain_boolean(counts, false) && counts[0] == 3, "or evaluates generic call once");
+            assert(!g24_binding_negated<i32>(7, counts) && counts[0] == 4, "negated hit evaluates once");
+            assert(g24_binding_negated<f64>(2.5, counts) && counts[0] == 5, "negated miss evaluates once");
+        });
+        test("boxed value intersection setters preserve generic and managed storage", () {
+            let original = G24MutableSubject<string> { field: "before" };
+            let view = g24_mutable_view<string>(original);
+            view.field = "after";
+            assert(original.field == "before" && view.field == "after", "managed setter changes boxed copy only");
+            let pair: G24BindingTuple = (13, "pair");
+            let aggregate = G24MutableSubject<G24BindingTuple> { field: pair };
+            let aggregate_view = g24_mutable_view<G24BindingTuple>(aggregate);
+            aggregate_view.field = (17, "changed");
+            assert(aggregate.field.item1 == 13 && aggregate_view.field.item1 == 17, "aggregate setter uses closed descriptor");
+            assert(aggregate_view.field.item2 == "changed" && aggregate.field.item2 == "pair", "managed aggregate slots preserved");
+        });
+        test("eight and nine path segments preserve bound nonzero payloads", () {
+            let child: G24BindingInner = 83;
+            let whole8: G24Depth8 = child;
+            let whole9: G24Depth9 = child;
+            assert(g24_deep8<i32>(83) == 83 && g24_deep8<G24Depth8>(whole8) == 83, "eight segments");
+            assert(g24_deep9<i32>(83) == 83 && g24_deep9<G24BindingInner>(child) == 83, "naked and child");
+            assert(g24_deep9<G24Depth9>(whole9) == 83 && g24_deep9<string>("miss") == -1, "whole and inactive leaf");
+        });
+        test("every layer matches across two independent package boundaries", () {
+            let child: G24BindingInner = 41;
+            let whole: G24BindingOuter = child;
+            g24_check_layers<i32>(31, 31);
+            g24_check_layers<G24BindingInner>(child, 41);
+            g24_check_layers<G24BindingOuter>(whole, 41);
+            let other: G24BindingOuter = false;
+            g24_check_layers<G24BindingOuter>(other, -1);
+            assert(g24_middle_swap<i32, G24BindingInner>(31, child) == 4131, "swapped independent slots");
+            assert(g24_middle_swap<G24BindingInner, i32>(child, 31) == 3141, "opposite instance");
+            assert(g24_binding_recurse<G24BindingInner>(child, 4) == 41, "recursive forwarding");
+        });
+        test("same-package layers and fit methods retain independent projection domains", () {
+            let trace: i32[!] = [0, 0, 0];
+            assert(g24_local_first<i32>(37, trace) == 37, "naked T unchanged");
+            assert(trace[0] == 37 && trace[1] == 37 && trace[2] == 37, "same-package three distinct matches");
+            let inner: G24BindingInner = 43;
+            let returned = g24_local_first<G24BindingInner>(inner, trace);
+            assert(g24_binding_number(returned) == 43 && trace[0] == 43 && trace[1] == 43 && trace[2] == 43, "child union at each layer");
+            let whole: G24BindingOuter = inner;
+            g24_local_first<G24BindingOuter>(whole, trace);
+            assert(trace[0] == 43 && trace[1] == 43 && trace[2] == 43, "whole union at each layer");
+            let missed: G24BindingOuter = 2.5;
+            g24_local_first<G24BindingOuter>(missed, trace);
+            assert(trace[0] == -1 && trace[1] == -1 && trace[2] == -1, "active member miss at each layer");
+            let first = G24ProjectionFit<string> { extra: "owner" };
+            let second = G24ProjectionFit<i32> { extra: 89 };
+            assert(first.projected<i32>(53) == 53 && second.projected<G24BindingInner>(inner) == 43, "fit owner and method domains");
+            assert(first.projected<G24BindingOuter>(missed) == -1 && first.extra == "owner", "fit miss and nonunion owner preserved");
+        });
+        test("managed binding ownership survives normal exceptional and escaping paths", () {
+            g24_binding_destroyed = 0;
+            g24_binding_lifetime(false);
+            assert(g24_binding_destroyed == 1, "normal release exactly once");
+            var caught = false;
+            try g24_binding_lifetime(true) catch error: string { caught = error == "expected"; }
+            assert(caught && g24_binding_destroyed == 2, "exception release exactly once");
+            g24_use_escaped();
+            assert(g24_binding_destroyed == 3, "escaped value release exactly once");
+        });
+    });
+}

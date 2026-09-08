@@ -2339,6 +2339,25 @@ static bool restore_imported_union_projections(FengSemanticAnalysis *analysis,
     return true;
 }
 
+/* Restore canonical open view pairs in wire order, preserving stable slots. */
+static bool restore_imported_spec_view_coercions(FengSemanticAnalysis *analysis,
+    SynthDecl *storage, const FengDecl *owner, const FengTypeMember *member,
+    const FengSymbolDeclView *symbol) {
+    if (symbol->reifiable_spec_view_coercion_count == 0U) return true;
+    FengReifiableDepSet *set = feng_semantic_get_or_create_member_reifiable_dep_set(analysis, owner, member);
+    if (set == NULL) return false;
+    for (size_t i = 0U; i < symbol->reifiable_spec_view_coercion_count; ++i) {
+        const FengSymbolSpecViewCoercionView *view = &symbol->reifiable_spec_view_coercions[i];
+        FengSpecViewCoercionDep pair = {
+            restore_union_projection_type(storage, view->source_type),
+            restore_union_projection_type(storage, view->target_type)
+        };
+        if (!feng_semantic_reifiable_dep_set_append_spec_view_coercion(set, &pair) ||
+            feng_semantic_spec_view_coercion_slot(set, &pair) != i) return false;
+    }
+    return true;
+}
+
 /* Restore imported codegen facts in the semantic side-table abstraction. */
 bool feng_symbol_imported_module_cache_populate_codegen_metadata(
     FengSymbolImportedModuleCache *cache,
@@ -2376,7 +2395,8 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
                 analysis, sd, module_name);
             restore_imported_reifiable_deps(
                 cache, analysis, sd, &sd->decl, NULL, sv);
-            if (!restore_imported_union_projections(analysis, sd, &sd->decl, NULL, sv)) {
+            if (!restore_imported_union_projections(analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_spec_view_coercions(analysis, sd, &sd->decl, NULL, sv)) {
                 free(module_name);
                 return false;
             }
@@ -2418,6 +2438,8 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
                         ast_members[ast_member_index],
                         member_view);
                     if (!restore_imported_union_projections(analysis, sd, &sd->decl,
+                            ast_members[ast_member_index], member_view) ||
+                        !restore_imported_spec_view_coercions(analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view)) {
                         free(module_name);
                         return false;

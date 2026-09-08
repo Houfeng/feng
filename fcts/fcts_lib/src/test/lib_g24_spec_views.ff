@@ -1,0 +1,96 @@
+open module fcts_lib.test.g24_spec_views;
+
+/** Writable generic storage is accessed through the declaration's address ABI. */
+open spec G24ViewField<A> { var item: A; }
+/** Independent dispatch verifies that forming a view builds its complete witness. */
+open spec G24ViewTag { func tag(): i32; }
+open spec G24View<A>: G24ViewField<A> & G24ViewTag;
+open spec G24ViewReader<A>(): G24View<A>;
+
+/** Distinct surrounding fields expose placeholder-size and offset mistakes. */
+@value open type G24ViewValue<A>: G24ViewField<A>, G24ViewTag {
+    open let head: i64 = 701;
+    open var item: A;
+    open let tail: i64 = 907;
+    /** Both fixed guards must survive the complete generic payload copy. */
+    func tag(): i32 { if self.head == 701 && self.tail == 907 { return 41; } return -1; }
+}
+/** The same contracts on a reference must not introduce a box or lose identity. */
+open type G24ViewReference<A>: G24ViewField<A>, G24ViewTag {
+    open var item: A;
+    /** Reference and value witnesses have observably different dispatch. */
+    func tag(): i32 { return 53; }
+}
+/** Open value source and intersection target require the closed static pair. */
+open func g24_view_value<A>(source: G24ViewValue<A>): G24View<A> { return source; }
+/** Ordinary object-form spec uses the same general view formation mechanism. */
+open func g24_view_object<A>(source: G24ViewValue<A>): G24ViewField<A> { return source; }
+/** Open reference source retains the original object instead of creating a box. */
+open func g24_view_reference<A>(source: G24ViewReference<A>): G24View<A> { return source; }
+/** Open source with a nongeneric target must not depend on target genericity. */
+open func g24_view_tag<A>(source: G24ViewValue<A>): G24ViewTag { return source; }
+/** An owned constructor result is evaluated once and survives return cleanup. */
+open func g24_view_build<A>(item: A): G24View<A> { return G24ViewValue<A> { item: item }; }
+/** A real source operation distinguishes one evaluation from duplicate lowering. */
+func g24_view_touch_value<A>(source: G24ViewValue<A>, calls: i32[!]): G24ViewValue<A> {
+    calls[0] += 1;
+    return source;
+}
+/** Reference-returning source operations have the same single-evaluation rule. */
+func g24_view_touch_reference<A>(source: G24ViewReference<A>, calls: i32[!]): G24ViewReference<A> {
+    calls[0] += 1;
+    return source;
+}
+/** Convert an owned value result without evaluating or copying a placeholder. */
+open func g24_view_value_once<A>(source: G24ViewValue<A>, calls: i32[!]): G24View<A> {
+    return g24_view_touch_value<A>(source, calls);
+}
+/** Transfer the reference result's existing ownership into its view. */
+open func g24_view_reference_once<A>(source: G24ViewReference<A>, calls: i32[!]): G24View<A> {
+    return g24_view_touch_reference<A>(source, calls);
+}
+/** An intermediate shared body has no conversion of its own. */
+open func g24_view_relay<A>(source: G24ViewValue<A>): G24View<A> { return g24_view_value<A>(source); }
+/** Recursive forwarding must retain the leaf's static descriptor. */
+open func g24_view_recurse<A>(source: G24ViewValue<A>, depth: i32): G24View<A> {
+    if depth > 0 { return g24_view_recurse<A>(source, depth - 1); }
+    return source;
+}
+/** Conversion occurs after this function returns, inside the captured shared body. */
+open func g24_view_capture<A>(source: G24ViewValue<A>): G24ViewReader<A> {
+    return () { return source; };
+}
+
+/** Owner initialization uses the type descriptor; methods use their own descriptor. */
+open type G24ViewOwner<A> {
+    open let initial: G24View<A> = G24ViewValue<A> {};
+    open let value: G24View<A>;
+    open static let zero: G24View<A> = G24ViewValue<A> {};
+    /** Constructor conversion belongs to this closed owner's descriptor. */
+    func G24ViewOwner(source: G24ViewValue<A>) { self.value = source; }
+    /** Owner and method arguments may differ or close to the same type. */
+    func convert<B>(source: G24ViewValue<B>): G24View<B> { return source; }
+    /** A receiver-free method retains the owner argument's closed identity. */
+    open static func from(source: G24ViewValue<A>): G24View<A> { return source; }
+}
+/** Value owners carry the identical owner dependency contract on their aggregate descriptor. */
+@value open type G24ViewValueOwner<A> {
+    open let initial: G24View<A> = G24ViewValue<A> {};
+    open let value: G24View<A>;
+    /** No reference owner descriptor is available at this conversion site. */
+    func G24ViewValueOwner(source: G24ViewValue<A>) { self.value = source; }
+}
+/** Fit methods have their own dependency owner, distinct from the receiver constructor. */
+open fit G24ViewOwner<A> {
+    /** The receiver's A must remain separate from this method's B. */
+    func fitted<B>(source: G24ViewValue<B>): G24View<B> { return source; }
+}
+
+/** Private representation details may populate metadata without becoming source-visible. */
+@value type G24PrivateViewValue<A>: G24ViewField<A>, G24ViewTag {
+    open var item: A;
+    /** A distinct implementation makes the private source's selected witness observable. */
+    func tag(): i32 { return 67; }
+}
+/** Package-public FT must retain the private source needed by this shared implementation. */
+open func g24_view_private<A>(item: A): G24View<A> { return G24PrivateViewValue<A> { item: item }; }

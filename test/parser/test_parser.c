@@ -6435,7 +6435,10 @@ static void test_g23_fit_field_surfaces_rejected(void) {
     }
 }
 
+void test_g24_composite_syntax(void);
+
 int main(void) {
+    test_g24_composite_syntax();
     test_g23_fit_field_surfaces_rejected();
     test_g20_tuple_declaration_and_literal_parser_diagnostics();
     test_g20_destructure_separator_parser_diagnostic();

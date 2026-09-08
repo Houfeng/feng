@@ -2608,16 +2608,25 @@ static bool token_starts_expression(FengTokenKind kind) {
     }
 }
 
+/* A nonempty lambda starts with a parameter declaration, not merely a colon
+ * somewhere inside a grouped expression (for example an infix match label). */
 static bool looks_like_lambda(const Parser *parser) {
     size_t index;
     size_t paren_depth = 0U;
     size_t brace_depth = 0U;
     size_t bracket_depth = 0U;
-    bool saw_colon = false;
+    bool has_parameter_prefix = false;
 
     if (!parser_check(parser, FENG_TOKEN_LPAREN)) {
         return false;
     }
+
+    size_t first = parser->current + 1U;
+    if (first < parser->token_count && (parser->tokens[first].kind == FENG_TOKEN_KW_LET ||
+        parser->tokens[first].kind == FENG_TOKEN_KW_VAR)) ++first;
+    has_parameter_prefix = first + 1U < parser->token_count &&
+        parser->tokens[first].kind == FENG_TOKEN_IDENTIFIER &&
+        parser->tokens[first + 1U].kind == FENG_TOKEN_COLON;
 
     for (index = parser->current + 1U; index < parser->token_count; ++index) {
         FengTokenKind kind = parser->tokens[index].kind;
@@ -2634,10 +2643,10 @@ static bool looks_like_lambda(const Parser *parser) {
                 if (brace_depth != 0U || bracket_depth != 0U) {
                     return false;
                 }
-                if (after == FENG_TOKEN_ARROW && (saw_colon || is_empty)) {
+                if (after == FENG_TOKEN_ARROW && (has_parameter_prefix || is_empty)) {
                     return true;
                 }
-                if (after == FENG_TOKEN_LBRACE && (saw_colon || is_empty)) {
+                if (after == FENG_TOKEN_LBRACE && (has_parameter_prefix || is_empty)) {
                     return true;
                 }
                 return false;
@@ -2664,10 +2673,6 @@ static bool looks_like_lambda(const Parser *parser) {
                 --bracket_depth;
             }
             continue;
-        }
-        if (paren_depth == 0U && brace_depth == 0U &&
-            bracket_depth == 0U && kind == FENG_TOKEN_COLON) {
-            saw_colon = true;
         }
     }
 

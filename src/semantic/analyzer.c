@@ -9493,18 +9493,18 @@ static bool validate_match_default_result_types(
     return true;
 }
 
-/* Canonicalize a projection identity while its lexical resolver is available.
+/* Canonicalize a reified-use identity while its lexical resolver is available.
  * Source aliases and file order must not affect exported dependency slots. */
-static bool canonicalize_union_projection_type_ref(ResolveContext *context, FengTypeRef *ref) {
+static bool canonicalize_reified_type_ref(ResolveContext *context, FengTypeRef *ref) {
     if (ref == NULL) {
         return true;
     }
     if (ref->kind != FENG_TYPE_REF_NAMED) {
-        return canonicalize_union_projection_type_ref(context, ref->as.inner);
+        return canonicalize_reified_type_ref(context, ref->as.inner);
     }
     const FengDecl *decl = resolve_type_ref_decl(context, ref);
     for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
-        if (!canonicalize_union_projection_type_ref(context, ref->as.named.type_args[i])) {
+        if (!canonicalize_reified_type_ref(context, ref->as.named.type_args[i])) {
             return false;
         }
     }
@@ -9532,7 +9532,7 @@ static bool canonicalize_union_projection_type_ref(ResolveContext *context, Feng
 static const FengTypeRef *persist_union_projection_type_ref(ResolveContext *context,
                                                             const FengTypeRef *ref) {
     FengTypeRef *copy = clone_type_ref_for_inference(ref);
-    if (copy == NULL || !canonicalize_union_projection_type_ref(context, copy) ||
+    if (copy == NULL || !canonicalize_reified_type_ref(context, copy) ||
         !analysis_track_synthetic_type_ref(context->analysis, copy)) {
         free_synthetic_type_ref(copy);
         return NULL;
@@ -9540,7 +9540,12 @@ static const FengTypeRef *persist_union_projection_type_ref(ResolveContext *cont
     return copy;
 }
 
-/* Record only generic-subject projection uses. Ordinary concrete unions keep
+/* Shared open-type predicate used by projections and exception validation. */
+static bool type_ref_contains_open_type_param(const ResolveContext *context,
+                                             const FengTypeRef *type_ref);
+
+/* Record open-subject projection uses, including intermediate Union<A> values.
+ * Ordinary concrete unions keep
  * their direct tag/payload path and do not acquire a descriptor dependency. */
 static bool record_union_projection_label(ResolveContext *context,
                                            const FengExpr *target,
@@ -9555,9 +9560,7 @@ static bool record_union_projection_label(ResolveContext *context,
     FengUnionProjectionUse *existing = NULL;
     const FengTypeRef *subject_ref = subject_type.type_ref;
     if (subject_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF ||
-        subject_ref == NULL || subject_ref->kind != FENG_TYPE_REF_NAMED ||
-        subject_ref->as.named.segment_count != 1U || subject_ref->as.named.type_arg_count != 0U ||
-        find_type_param(context, subject_ref->as.named.segments[0]) == NULL) {
+        !type_ref_contains_open_type_param(context, subject_ref)) {
         return true;
     }
     use.target = target;
@@ -16176,8 +16179,8 @@ static bool throw_expr_is_callable_value(ResolveContext *context,
 
 /* Return whether a type reference still contains a type parameter that is
  * open in the current semantic scope. Closed generic arguments recurse to
- * false and therefore retain their concrete nominal exception identity. */
-static bool exception_type_ref_contains_open_type_param(
+ * false and therefore retain their concrete nominal identity. */
+static bool type_ref_contains_open_type_param(
     const ResolveContext *context,
     const FengTypeRef *type_ref) {
     size_t type_arg_index;
@@ -16188,7 +16191,7 @@ static bool exception_type_ref_contains_open_type_param(
     switch (type_ref->kind) {
         case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
-            return exception_type_ref_contains_open_type_param(
+            return type_ref_contains_open_type_param(
                 context, type_ref->as.inner);
 
         case FENG_TYPE_REF_NAMED:
@@ -16200,7 +16203,7 @@ static bool exception_type_ref_contains_open_type_param(
             for (type_arg_index = 0U;
                  type_arg_index < type_ref->as.named.type_arg_count;
                  ++type_arg_index) {
-                if (exception_type_ref_contains_open_type_param(
+                if (type_ref_contains_open_type_param(
                         context, type_ref->as.named.type_args[type_arg_index])) {
                     return true;
                 }
@@ -16246,7 +16249,7 @@ static bool type_ref_is_exception_payload(const ResolveContext *context,
                 }
                 return false;
             }
-            if (exception_type_ref_contains_open_type_param(context, type_ref)) {
+            if (type_ref_contains_open_type_param(context, type_ref)) {
                 if (out_reason != NULL) {
                     *out_reason = "open generic types have no concrete exception identity";
                 }
@@ -24175,6 +24178,24 @@ static const FengDecl *concrete_type_decl_of_inferred(const ResolveContext *cont
  * object-form spec and expr's static type is a concrete `type` decl that
  * satisfies it. Silent no-op for any other shape (numeric coercion, builtin
  * match, lambda body inference re-entries, etc.). */
+/* Record a validated open source/target pair before the lexical context is
+ * lost. Ordinary closed sites and parent-view paths need no reified entry. */
+static void record_open_spec_view_coercion(ResolveContext *context, const FengExpr *expr,
+    const FengTypeRef *source, const FengTypeRef *target) {
+    if (source == NULL || target == NULL ||
+        (!type_ref_contains_open_type_param(context, source) &&
+         !type_ref_contains_open_type_param(context, target))) return;
+    FengTypeRef *from = clone_type_ref_for_inference(source);
+    FengTypeRef *to = clone_type_ref_for_inference(target);
+    bool ok = from != NULL && to != NULL && canonicalize_reified_type_ref(context, from) &&
+        canonicalize_reified_type_ref(context, to) &&
+        feng_semantic_record_spec_view_coercion_use(context->analysis, expr, from, to);
+    free_synthetic_type_ref(from);
+    free_synthetic_type_ref(to);
+    if (!ok) (void)resolver_append_error(context, expr->token, "IE0001",
+        format_message("cannot preserve validated open spec view coercion"));
+}
+
 static void record_object_spec_coercion_site_if_applicable(
         ResolveContext *context,
         const FengExpr *expr,
@@ -24297,6 +24318,9 @@ static void record_object_spec_coercion_site_if_applicable(
                                                                    target_decl,
                                                                    expected_type_ref,
                                                                    FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+        record_open_spec_view_coercion(context, expr,
+            expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF ? expr_type.type_ref : NULL,
+            expected_type_ref);
         return;
     }
     relation = find_instantiated_spec_relation(
@@ -24324,6 +24348,9 @@ static void record_object_spec_coercion_site_if_applicable(
                                                           expected_type_ref,
                                                           relation,
                                                           FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+    record_open_spec_view_coercion(context, expr,
+        expr_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF ? expr_type.type_ref : NULL,
+        expected_type_ref);
 
     /* Phase S3 — materialise the (T, S) witness on first demand (§8.2). The
      * compute helper is idempotent: subsequent coercions for the same pair
@@ -30277,16 +30304,61 @@ bool feng_semantic_member_has_friend_access(
     return accessible;
 }
 
+/* Give signature and synthesized layout dependencies one lexical identity.
+ * This is a post-analysis query: it does not introduce a new source lookup or
+ * diagnostic rule. Both short/alias names and complete names use the existing
+ * resolver, with all active open parameters protected from type lookup. */
+const FengTypeRef *feng_semantic_canonical_reifiable_type_ref(
+    FengSemanticAnalysis *analysis, const FengDecl *owner_decl,
+    const FengTypeParam *type_params, size_t type_param_count,
+    const FengTypeRef *type_ref) {
+    ResolveContext context = {0};
+    VisibleTypeEntry *visible = NULL;
+    AliasEntry *aliases = NULL;
+    ImportedModuleEntry *imports = NULL;
+    size_t visible_count = 0U, alias_count = 0U, alias_capacity = 0U, import_count = 0U;
+    const TypeParamEntry *previous_params = NULL;
+    size_t previous_count = 0U;
+    const FengTypeRef *result = NULL;
+    if (analysis == NULL || owner_decl == NULL || type_ref == NULL) return NULL;
+    const FengProgram *program = find_decl_provider_program(analysis, owner_decl);
+    const FengSemanticModule *module = find_decl_provider_module(analysis, owner_decl);
+    if (program == NULL || module == NULL ||
+        !build_friend_query_visible_types(analysis, module, program, &visible, &visible_count) ||
+        !build_program_aliases(analysis, program, &aliases, &alias_count, &alias_capacity) ||
+        !build_friend_query_imported_modules(analysis, program, &imports, &import_count)) goto cleanup;
+    context.analysis = analysis;
+    context.program = program;
+    context.module = module;
+    context.pointer_size = analysis->pointer_size;
+    context.visible_types = visible;
+    context.visible_type_count = visible_count;
+    context.aliases = aliases;
+    context.alias_count = alias_count;
+    context.imported_modules = imports;
+    context.imported_module_count = import_count;
+    if (!resolver_push_type_params(&context, type_params, type_param_count,
+            &previous_params, &previous_count)) goto cleanup;
+    result = persist_union_projection_type_ref(&context, type_ref);
+    resolver_pop_type_params(&context, previous_params, previous_count);
+cleanup:
+    free(visible);
+    free(aliases);
+    free(imports);
+    return result;
+}
+
 /* Close a union entry using the same selector as ordinary typed bindings.
  * Query-owned scopes and diagnostics are temporary; synthesized type refs
  * follow the analysis lifetime, just as substitutions during analysis do. */
-bool feng_semantic_query_union_entry(
+bool feng_semantic_query_union_entry_conversion(
     const FengSemanticAnalysis *analysis,
     const FengProgram *program,
     const FengTypeRef *actual_type_ref,
     const FengTypeRef *union_type_ref,
     size_t **out_indices,
-    size_t *out_count) {
+    size_t *out_count,
+    FengSpecCoercionSite *out_conversion) {
     ResolveContext context = {0};
     VisibleTypeEntry *visible = NULL;
     AliasEntry *aliases = NULL;
@@ -30301,6 +30373,7 @@ bool feng_semantic_query_union_entry(
     }
     *out_indices = NULL;
     *out_count = 0U;
+    if (out_conversion != NULL) memset(out_conversion, 0, sizeof(*out_conversion));
     const FengSemanticModule *module = find_program_provider_module(analysis, program);
     if (analysis == NULL || program == NULL || actual_type_ref == NULL || union_type_ref == NULL ||
         module == NULL || !build_friend_query_visible_types(analysis, module, program, &visible, &visible_count) ||
@@ -30335,6 +30408,48 @@ bool feng_semantic_query_union_entry(
             *out_count = selection.path_length;
             selection.path_indices = NULL;
             ok = true;
+            if (out_conversion != NULL &&
+                !type_refs_semantically_equal(&context, actual_type_ref, selection.leaf_type_ref)) {
+                const FengTypeRef *leaf = selection.leaf_type_ref;
+                const FengDecl *target = resolve_type_ref_decl(&context, leaf);
+                InferredExprType actual = inferred_expr_type_from_type_ref(actual_type_ref);
+                ObjectSpecUpcastPath upcast = {0};
+                if (target == NULL || target->kind != FENG_DECL_SPEC) {
+                    ok = false;
+                } else {
+                    out_conversion->target_spec_decl = target;
+                    out_conversion->target_spec_type_ref =
+                        feng_semantic_clone_coercion_type_ref(analysis, leaf);
+                    out_conversion->object_subject_storage = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER;
+                    if (decl_is_function_type(target)) {
+                        out_conversion->form = FENG_SPEC_COERCION_FORM_CALLABLE;
+                        out_conversion->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
+                    } else if (target->as.spec_decl.form == FENG_SPEC_FORM_OBJECT &&
+                               find_object_spec_upcast_path(&context, actual, leaf, &upcast)) {
+                        out_conversion->form = FENG_SPEC_COERCION_FORM_OBJECT_UPCAST;
+                        out_conversion->object_upcast_parent_indices = upcast.parent_indices;
+                        out_conversion->object_upcast_parent_index_count = upcast.count;
+                    } else {
+                        const FengDecl *source_decl = concrete_type_decl_of_inferred(&context, actual);
+                        ok = init_spec_witness_subject_key(source_decl, actual_type_ref,
+                            context.pointer_size, &out_conversion->src_subject_key);
+                        out_conversion->form = target->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION
+                            ? FENG_SPEC_COERCION_FORM_INTERSECTION : FENG_SPEC_COERCION_FORM_OBJECT;
+                        if (ok && out_conversion->form == FENG_SPEC_COERCION_FORM_OBJECT) {
+                            out_conversion->relation = find_instantiated_spec_relation(&context,
+                                source_decl, actual_type_ref, &out_conversion->src_subject_key, leaf);
+                            ok = out_conversion->relation != NULL;
+                            if (ok) compute_spec_witness_if_absent(&context, source_decl, actual,
+                                actual_type_ref, target, leaf, actual_type_ref->token);
+                        }
+                        if (ok && out_conversion->src_subject_key.kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY) {
+                            ok = feng_semantic_subject_key_from_array_instance(analysis,
+                                actual_type_ref, &out_conversion->src_subject_key);
+                        }
+                    }
+                    ok = ok && out_conversion->target_spec_type_ref != NULL;
+                }
+            }
         }
     }
 cleanup:
@@ -30346,12 +30461,24 @@ cleanup:
     free(imports);
     feng_semantic_errors_free(errors, error_count);
     if (!ok || error_count != 0U) {
+        if (out_conversion != NULL) {
+            free(out_conversion->object_upcast_parent_indices);
+            memset(out_conversion, 0, sizeof(*out_conversion));
+        }
         free(*out_indices);
         *out_indices = NULL;
         *out_count = 0U;
         return false;
     }
     return true;
+}
+
+/* Predicate-only users do not request representation-changing leaf facts. */
+bool feng_semantic_query_union_entry(const FengSemanticAnalysis *analysis,
+    const FengProgram *program, const FengTypeRef *actual_type_ref,
+    const FengTypeRef *union_type_ref, size_t **out_indices, size_t *out_count) {
+    return feng_semantic_query_union_entry_conversion(analysis, program,
+        actual_type_ref, union_type_ref, out_indices, out_count, NULL);
 }
 
 /* An alias is declared by this file, so only this file's own declarations
@@ -36128,12 +36255,49 @@ static bool collect_intersection_field_requirements(
 }
 
 /* Validate and retain the declaration's normalized intersection surface. */
+/* Check the composition graph before waiting for inner metadata. Resolve each
+ * edge in its declaration's file, and visit shared subgraphs only once. */
+static bool validate_intersection_composition_cycle(ResolveContext *context, const FengDecl *root) {
+    const FengDecl **work = NULL;
+    size_t count = 0U, capacity = 0U;
+    if (!append_raw((void **)&work, &count, &capacity, sizeof(*work), &root)) return false;
+    for (size_t cursor = 0U; cursor < count; ++cursor) {
+        const FengDecl *current = work[cursor];
+        const FengProgram *program = find_decl_provider_program(context->analysis, current);
+        for (size_t i = 0U; i < current->as.spec_decl.as.intersection_form.member_count; ++i) {
+            FengTypeRef ref = *current->as.spec_decl.as.intersection_form.members[i];
+            if (ref.resolution_program == NULL) ref.resolution_program = program;
+            const FengDecl *next = resolve_type_ref_decl(context, &ref);
+            if (next == root) {
+                free(work);
+                (void)resolver_append_error(context, root->token, "AE0614",
+                    format_message("intersection-form spec '%.*s' forms a cycle through its member list",
+                        (int)root->as.spec_decl.name.length, root->as.spec_decl.name.data));
+                return false;
+            }
+            if (next == NULL || next->kind != FENG_DECL_SPEC ||
+                next->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) continue;
+            bool seen = false;
+            for (size_t j = 0U; j < count; ++j) if (work[j] == next) { seen = true; break; }
+            if (!seen && !append_raw((void **)&work, &count, &capacity, sizeof(*work), &next)) {
+                free(work);
+                return false;
+            }
+        }
+    }
+    free(work);
+    return true;
+}
+
+/* Normalize a validated intersection and check its complete member contracts. */
 static bool resolve_intersection_spec_form(ResolveContext *context, const FengDecl *decl) {
     const FengDecl **flattened = NULL;
     size_t flattened_count = 0U;
     size_t flattened_capacity = 0U;
     size_t index;
     bool ok = true;
+
+    if (!validate_intersection_composition_cycle(context, decl)) return false;
 
     for (index = 0U; ok && index < decl->as.spec_decl.as.intersection_form.member_count; ++index) {
         const FengTypeRef *member_ref = decl->as.spec_decl.as.intersection_form.members[index];
@@ -41205,29 +41369,6 @@ static const FengDecl *analysis_resolve_named_type_ref(
     return NULL;
 }
 
-/* Resolve an imported declaration's unqualified member ref in its declaring
- * module before falling back to the analysis-wide qualified-name lookup. */
-static const FengDecl *analysis_resolve_named_type_ref_from_module(
-    const FengSemanticAnalysis *analysis,
-    const FengSemanticModule *declaring_module,
-    const FengTypeRef *ref) {
-    const FengDecl *decl;
-
-    if (analysis == NULL || ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
-        ref->as.named.segment_count == 0U) {
-        return NULL;
-    }
-    if (ref->as.named.segment_count == 1U && declaring_module != NULL) {
-        decl = find_module_public_type_decl(
-            declaring_module,
-            ref->as.named.segments[0],
-            ref->as.named.type_arg_count);
-        if (decl != NULL) {
-            return decl;
-        }
-    }
-    return analysis_resolve_named_type_ref(analysis, ref);
-}
 
 /* Append one object-form leaf to an imported intersection's flattened set. */
 static bool append_unique_intersection_leaf(const FengDecl ***items,
@@ -41246,10 +41387,18 @@ static bool append_unique_intersection_leaf(const FengDecl ***items,
 
 /* Try to flatten one imported intersection. A false result with
  * `out_pending` set means that a nested intersection must be computed first. */
-static bool precompute_imported_intersection_spec_info(
+/* Resolve a raw composite member using its declaration's lexical file. */
+static const FengDecl *precomputed_union_member_decl(
+    const FengSemanticAnalysis *analysis, const FengProgram *program,
+    const FengDecl *owner, const FengTypeRef *ref);
+
+/* Prepare structural metadata only; local source legality is validated by
+ * the normal resolver, while invalid imported metadata remains an error. */
+static bool precompute_intersection_spec_info(
     FengSemanticAnalysis *analysis,
-    const FengSemanticModule *declaring_module,
+    const FengProgram *program,
     const FengDecl *decl,
+    bool imported,
     bool *out_pending) {
     const FengDecl **flattened = NULL;
     size_t flattened_count = 0U;
@@ -41262,8 +41411,8 @@ static bool precompute_imported_intersection_spec_info(
          ++member_index) {
         const FengTypeRef *member_ref =
             decl->as.spec_decl.as.intersection_form.members[member_index];
-        const FengDecl *member_decl = analysis_resolve_named_type_ref_from_module(
-            analysis, declaring_module, member_ref);
+        const FengDecl *member_decl = precomputed_union_member_decl(
+            analysis, program, decl, member_ref);
 
         if (member_decl == NULL || member_decl->kind != FENG_DECL_SPEC) {
             free(flattened);
@@ -41293,8 +41442,12 @@ static bool precompute_imported_intersection_spec_info(
             }
             continue;
         }
-        if (member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-            !append_unique_intersection_leaf(&flattened,
+        if (member_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+            free(flattened);
+            *out_pending = !imported;
+            return false;
+        }
+        if (!append_unique_intersection_leaf(&flattened,
                                              &flattened_count,
                                              &flattened_capacity,
                                              member_decl)) {
@@ -41307,10 +41460,9 @@ static bool precompute_imported_intersection_spec_info(
         analysis, decl, flattened, flattened_count);
 }
 
-/* Imported packages have already validated their declarations and are skipped
- * by the local resolve pass. Rebuild their derived intersection metadata in
- * dependency order so consumer-side constraint checks see the same surface. */
-static bool precompute_imported_intersection_spec_infos(
+/* Prepare local and imported intersections in dependency order before any
+ * source use. Cycles and malformed local forms retain normal source diagnostics. */
+static bool precompute_intersection_spec_infos(
     FengSemanticAnalysis *analysis) {
     size_t intersection_count = 0U;
     size_t iteration;
@@ -41323,9 +41475,6 @@ static bool precompute_imported_intersection_spec_infos(
          ++module_index) {
         const FengSemanticModule *module = &analysis->modules[module_index];
 
-        if (module->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            continue;
-        }
         for (size_t program_index = 0U;
              program_index < module->program_count;
              ++program_index) {
@@ -41352,9 +41501,6 @@ static bool precompute_imported_intersection_spec_infos(
              ++module_index) {
             const FengSemanticModule *module = &analysis->modules[module_index];
 
-            if (module->origin != FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-                continue;
-            }
             for (size_t program_index = 0U;
                  program_index < module->program_count;
                  ++program_index) {
@@ -41371,8 +41517,9 @@ static bool precompute_imported_intersection_spec_infos(
                         feng_semantic_lookup_intersection_spec_info(analysis, decl) != NULL) {
                         continue;
                     }
-                    if (precompute_imported_intersection_spec_info(
-                            analysis, module, decl, &pending)) {
+                    if (precompute_intersection_spec_info(
+                            analysis, program, decl,
+                            module->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE, &pending)) {
                         changed = true;
                     } else if (!pending) {
                         return false;
@@ -42282,7 +42429,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
      * sidecar after fields are expanded and before wrapper selection. */
     if (ok && error_count == 0U) {
         precompute_union_spec_infos(analysis);
-        ok = precompute_imported_intersection_spec_infos(analysis);
+        ok = precompute_intersection_spec_infos(analysis);
     }
     if (ok && error_count == 0U) {
         ok = feng_semantic_compute_spec_relations(analysis);
@@ -42531,6 +42678,7 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
             free(analysis->reifiable_dep_sets[index].union_projections[i].path);
         }
         free(analysis->reifiable_dep_sets[index].union_projections);
+        free(analysis->reifiable_dep_sets[index].spec_view_coercions);
     }
     free(analysis->reifiable_dep_sets);
     for (index = 0U; index < analysis->union_projection_use_count; ++index) {

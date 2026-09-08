@@ -1,0 +1,137 @@
+open module fcts_lib.test.g24_union_bindings;
+
+/** Three real union levels distinguish virtual prefixes from actual tags. */
+open spec G24BindingInner: i32 | string;
+open spec G24BindingMiddle: G24BindingInner | bool;
+open spec G24BindingOuter: G24BindingMiddle | f64;
+/** A closed binding result can be returned from an escaping callback. */
+open spec G24BindingReader(): G24BindingInner;
+/** The result layout depends on A, independently of the subject type T. */
+open spec G24BindingChoice<A>: A | bool;
+open spec G24BindingGenericOuter<A>: G24BindingChoice<A> | f64;
+
+/** A leaf view requires the same conversion as an ordinary union binding. */
+open spec G24BindingNamed { func text(): string; }
+/** Reference implementation exercises witness-preserving materialization. */
+open type G24BindingRef: G24BindingNamed {
+    open let value: string;
+    /** Dispatch must read the actual nondefault payload. */
+    func text(): string { return self.value; }
+}
+/** Value implementation exercises the existing stable spec owner. */
+@value open type G24BindingValue: G24BindingNamed {
+    open let value: string;
+    /** Dispatch must survive destruction of the original stack value. */
+    func text(): string { return self.value; }
+}
+open spec G24BindingViews: G24BindingNamed | i32;
+open spec G24BindingViewOuter: G24BindingViews | bool;
+/** A concrete actual can form the selected ordinary spec leaf. */
+open func g24_binding_view<T: G24BindingViewOuter>(value: T): string {
+    return match value {
+        item: G24BindingViews -> G24BindingNamed { item.text() }
+        else { "miss" }
+    };
+}
+/** A virtual intermediate includes the converted leaf and its witness. */
+open func g24_binding_views<T: G24BindingViewOuter>(value: T): G24BindingViews {
+    return match value { item: G24BindingViews { item } else { 0 } };
+}
+
+/** Ordinary control reads the same source-written leaf path. */
+open func g24_binding_plain(value: G24BindingOuter): i32 {
+    return match value {
+        item: G24BindingMiddle -> G24BindingInner -> i32 { item }
+        else { -1 }
+    };
+}
+/** Shared value-expression binding reaches the same concrete leaf. */
+open func g24_binding_chain<T: G24BindingOuter>(value: T): i32 {
+    return match value {
+        item: G24BindingMiddle -> G24BindingInner -> i32 { item }
+        else { -1 }
+    };
+}
+/** Statement binding and local mutation must leave the source T unchanged. */
+open func g24_binding_statement<T: G24BindingOuter>(value: T): i32 {
+    match value {
+        var item: G24BindingMiddle -> G24BindingInner -> i32 { item += 1; return item; }
+        else { return -1; }
+    }
+}
+/** All-exit expression bindings share ordinary result ownership. */
+open func g24_binding_exits<T: G24BindingOuter>(value: T): i32 {
+    let unreachable: i32 = match value {
+        item: G24BindingMiddle -> G24BindingInner -> i32 { return item; }
+        else { return -1; }
+    };
+    return unreachable;
+}
+/** Infix binding is valid in the right operand and body only after a hit. */
+open func g24_binding_infix<T: G24BindingOuter>(value: T): i32 {
+    if value match var item: G24BindingMiddle -> G24BindingInner -> i32 && item > 0 {
+        item += 2;
+        return item;
+    }
+    return -1;
+}
+/** Form a complete intermediate value, then narrow that value again. */
+open func g24_binding_step<T: G24BindingOuter>(value: T): G24BindingInner {
+    return match value {
+        middle: G24BindingMiddle {
+            match middle {
+                inner: G24BindingInner { inner }
+                else { "fallback" }
+            }
+        }
+        else { "fallback" }
+    };
+}
+/** The intermediate can outlive its forming function and match scope. */
+open func g24_binding_capture<T: G24BindingOuter>(value: T): G24BindingReader {
+    match value {
+        inner: G24BindingMiddle -> G24BindingInner { return () { return inner; }; }
+        else { return () { return "fallback"; }; }
+    }
+}
+/** A generic result's size comes from its own closed aggregate descriptor. */
+open func g24_binding_generic<A, T: G24BindingGenericOuter<A>>(value: T): G24BindingChoice<A> {
+    return match value {
+        inner: G24BindingChoice<A> { inner }
+        else { false }
+    };
+}
+/** A non-matching infix must not construct or clean uninitialized storage. */
+open func g24_binding_optional<T: G24BindingOuter>(value: T): G24BindingInner {
+    if value match let inner: G24BindingMiddle -> G24BindingInner {
+        return inner;
+    }
+    return "fallback";
+}
+/** A multi-member subset retains the actual T storage and nested capability. */
+open func g24_binding_subset<T: G24BindingOuter>(value: T): i32 {
+    match value {
+        item: G24BindingMiddle, f64 { return g24_binding_chain<T>(item); }
+    }
+    return -1;
+}
+
+/** Reference owner constructor and methods consume independent projection domains. */
+open type G24BindingHost<T: G24BindingOuter> {
+    open let inner: G24BindingInner;
+    /** A constructor-owned projection directly initializes its field value. */
+    func G24BindingHost(value: T) {
+        self.inner = match value {
+            item: G24BindingMiddle -> G24BindingInner { item }
+            else { "fallback" }
+        };
+    }
+    /** Method domain includes owner and method generic parameters. */
+    func pair<U: G24BindingOuter>(first: T, second: U): i32 {
+        let left = match first {
+            item: G24BindingMiddle -> G24BindingInner -> i32 { item }
+            else { -1 }
+        };
+        return left + g24_binding_chain<U>(second);
+    }
+}

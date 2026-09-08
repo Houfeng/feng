@@ -183,12 +183,19 @@ bool feng_semantic_record_union_coercion_site(
         memset(slot, 0, sizeof(*slot));
     }
 
+    const FengTypeRef *owned_target = target_union_type_ref != NULL
+        ? feng_semantic_clone_coercion_type_ref(analysis, target_union_type_ref) : NULL;
+    const FengTypeRef *owned_member = feng_semantic_clone_coercion_type_ref(analysis, member_type_ref);
+    if ((target_union_type_ref != NULL && owned_target == NULL) || owned_member == NULL) {
+        free(owned_path);
+        return false;
+    }
     free(slot->path_indices);
     slot->expr = expr;
     slot->target_union_decl = target_union_decl;
-    slot->target_union_type_ref = target_union_type_ref;
+    slot->target_union_type_ref = owned_target;
     slot->member_index = member_index;
-    slot->member_type_ref = member_type_ref;
+    slot->member_type_ref = owned_member;
     slot->path_length = path_length;
     slot->path_indices = owned_path;
     return true;

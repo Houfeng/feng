@@ -246,6 +246,13 @@ typedef enum FengSpecObjectSubjectStorageKind {
     FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER = 1
 } FengSpecObjectSubjectStorageKind;
 
+/* Complete open identity of a validated object/intersection view formation.
+ * Type refs are analysis-owned and canonicalized in the lexical resolver. */
+typedef struct FengSpecViewCoercionDep {
+    const FengTypeRef *source_type_ref;
+    const FengTypeRef *target_type_ref;
+} FengSpecViewCoercionDep;
+
 /* Per-site decision for a single coercion point. Stored in a sidecar table
  * keyed by AST FengExpr pointer to keep parser/AST free of semantic
  * back-references. Populated incrementally during resolution by the analyzer
@@ -258,6 +265,9 @@ typedef enum FengSpecObjectSubjectStorageKind {
 typedef struct FengSpecCoercionSite {
     const FengExpr *expr;
     FengSpecCoercionForm form;
+    /* Present only when view formation depends on an open generic context;
+     * closed conversions and spec-to-parent upcasts keep their old lowering. */
+    FengSpecViewCoercionDep view_coercion;
     /* OBJECT form: subject key of the concrete source type (user type decl,
      * builtin canonical name, or structured array key). Kind is never
      * INVALID for FORM_OBJECT sites. */
@@ -441,6 +451,9 @@ typedef struct FengReifiableDepSet {
     FengUnionProjectionDep *union_projections;
     size_t union_projection_count;
     size_t union_projection_capacity;
+    FengSpecViewCoercionDep *spec_view_coercions;
+    size_t spec_view_coercion_count;
+    size_t spec_view_coercion_capacity;
 } FengReifiableDepSet;
 
 /* Stable FT identity attached to an AST declaration/member synthesized from
@@ -706,6 +719,11 @@ bool feng_semantic_spec_relation_source_visible_from(
 
 /* --- SpecCoercionSite (Phase S1b, §6.2) ------------------------------ */
 
+/* Preserve a conversion type beyond temporary resolver scopes. The analysis
+ * owns this deep copy and releases it after all downstream consumers finish. */
+const FengTypeRef *feng_semantic_clone_coercion_type_ref(
+    const FengSemanticAnalysis *analysis, const FengTypeRef *ref);
+
 /* Query the normal typed-union entry rule in the closing program's scope.
  * Success returns an owned path (free by caller); identical union types have
  * an empty path. No value coercion site is recorded and no runtime work occurs. */
@@ -716,6 +734,15 @@ bool feng_semantic_query_union_entry(
     const FengTypeRef *union_type_ref,
     size_t **out_indices,
     size_t *out_count);
+
+/* Extended closed query for materialized bindings. The optional leaf decision
+ * uses ordinary spec conversions, never runtime satisfaction. A non-NULL
+ * target_spec_decl indicates conversion; free its parent-index array after
+ * use. Type references are retained by the analysis. */
+bool feng_semantic_query_union_entry_conversion(
+    const FengSemanticAnalysis *analysis, const FengProgram *program,
+    const FengTypeRef *actual_type_ref, const FengTypeRef *union_type_ref,
+    size_t **out_indices, size_t *out_count, FengSpecCoercionSite *out_conversion);
 
 /* Record an object-form coercion site (`expr` of concrete type
  * `src_type_decl` flowing into a slot typed as object-form spec
@@ -1240,6 +1267,19 @@ bool feng_semantic_reifiable_dep_set_append_union_projection(
     const FengUnionProjectionDep *projection);
 
 /* Return the matching open projection slot, or SIZE_MAX when not collected. */
+/* Record a canonical open identity on an already validated coercion site. */
+bool feng_semantic_record_spec_view_coercion_use(
+    const FengSemanticAnalysis *analysis, const FengExpr *expr,
+    const FengTypeRef *source, const FengTypeRef *target);
+
+/* Store/deduplicate a view use; records borrow analysis-owned type refs. */
+bool feng_semantic_reifiable_dep_set_append_spec_view_coercion(
+    FengReifiableDepSet *set, const FengSpecViewCoercionDep *coercion);
+
+/* Return the stable open slot, or SIZE_MAX when it is absent. */
+size_t feng_semantic_spec_view_coercion_slot(
+    const FengReifiableDepSet *set, const FengSpecViewCoercionDep *coercion);
+
 size_t feng_semantic_union_projection_slot(
     const FengReifiableDepSet *dep_set,
     const FengUnionProjectionDep *projection);
@@ -1283,6 +1323,14 @@ feng_semantic_lookup_imported_symbol_identity(
  * 依赖到 analysis->reifiable_dep_sets 侧表。
  * 在 fixpoint 循环完成后、type cyclicity 计算前调用。 */
 bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis);
+
+/* Normalize one dependency in its declaration's lexical namespace before
+ * deduplication. The returned complete type tree is owned by analysis; open
+ * parameters remain parameters, including owner/method parameter scopes. */
+const FengTypeRef *feng_semantic_canonical_reifiable_type_ref(
+    FengSemanticAnalysis *analysis, const FengDecl *owner_decl,
+    const FengTypeParam *type_params, size_t type_param_count,
+    const FengTypeRef *type_ref);
 
 #ifdef __cplusplus
 }

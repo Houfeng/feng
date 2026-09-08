@@ -1,0 +1,97 @@
+open module fcts_lib.test.g24_binding_owners;
+
+import fcts_lib.test.g24_union_bindings;
+import fcts_lib.test.g24_binding_edges;
+
+/** Observe only the reference owner's finalizer after its consumer scope ends. */
+open type G24OwnerState {
+    open static var total: i32;
+}
+
+/** Owner-level initialization and method-level projections use independent domains. */
+open type G24BoundOwner<T: G24BindingOuter> {
+    open let value: T;
+    open let initial: i32 = match G24BoundOwner<T>.zero { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    open let constructed: G24BindingInner;
+    open static let zero: T;
+    open static let selected: i32 = match G24BoundOwner<T>.zero { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+
+    /** Constructor uses both owner projection and a callee descriptor. */
+    func G24BoundOwner(value: T) {
+        self.value = value;
+        self.constructed = match value { item: G24BindingMiddle -> G24BindingInner { item } else { "miss" } };
+        g24_binding_recurse<T>(value, 2);
+    }
+    /** The receiver's T projection belongs to this method's descriptor. */
+    func read(): i32 {
+        return match self.value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    }
+    /** Owner and method parameters may close identically without merging slots. */
+    func pair<U: G24BindingOuter>(other: U): i32 {
+        let first = match self.value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        let second = match other { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        return first * 100 + second;
+    }
+    /** Static methods also forward their original T across a shared call. */
+    open static func call(value: T): i32 {
+        let first = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        return first + g24_binding_recurse<T>(value, 2);
+    }
+    /** Destruction reads the type-owned projection while fields are still live. */
+    func ~G24BoundOwner() {
+        G24OwnerState.total += match self.value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    }
+}
+
+/** Owner-level initialization and method-level projections use independent domains. */
+@value open type G24BoundValueOwner<T: G24BindingOuter> {
+    open let value: T;
+    open let initial: i32 = match G24BoundValueOwner<T>.zero { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    open let constructed: G24BindingInner;
+    open static let zero: T;
+    open static let selected: i32 = match G24BoundValueOwner<T>.zero { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+
+    /** Constructor uses both owner projection and a callee descriptor. */
+    func G24BoundValueOwner(value: T) {
+        self.value = value;
+        self.constructed = match value { item: G24BindingMiddle -> G24BindingInner { item } else { "miss" } };
+        g24_binding_recurse<T>(value, 2);
+    }
+    /** The receiver's T projection belongs to this method's descriptor. */
+    func read(): i32 {
+        return match self.value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    }
+    /** Owner and method parameters may close identically without merging slots. */
+    func pair<U: G24BindingOuter>(other: U): i32 {
+        let first = match self.value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        let second = match other { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        return first * 100 + second;
+    }
+    /** Static methods also forward their original T across a shared call. */
+    open static func call(value: T): i32 {
+        let first = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+        return first + g24_binding_recurse<T>(value, 2);
+    }
+}
+
+/** Fixed aggregate defaults cover the non-union forms sharing the same return path. */
+open spec G24DefaultA { func number(): i32; }
+open spec G24DefaultB { let text: string; }
+open spec G24DefaultBoth: G24DefaultA & G24DefaultB;
+open spec G24DefaultBothReader(): G24DefaultBoth;
+@value open type G24DefaultValue { open let text: string; }
+open spec G24DefaultValueReader(): G24DefaultValue;
+/** Default intersection callback returns the established zero subject/witness. */
+open func g24_default_both(): G24DefaultBoth { let callback: G24DefaultBothReader; return callback(); }
+/** Default nontrivial value callback initializes the returned string slot once. */
+open func g24_default_value(): G24DefaultValue { let callback: G24DefaultValueReader; return callback(); }
+
+/** Generic mutable fields retain the declaration ABI after closing their storage type. */
+open spec G24MutableField<A> { var field: A; }
+/** An independent component makes the exported view an intersection. */
+open spec G24MutableTag {}
+open spec G24MutableBoth<A>: G24MutableField<A> & G24MutableTag;
+/** A boxed value must expose a setter exactly as a reference subject does. */
+@value open type G24MutableSubject<A>: G24MutableField<A>, G24MutableTag { open var field: A; }
+/** Return the full view across .ft without changing the original value binding. */
+open func g24_mutable_view<A>(value: G24MutableSubject<A>): G24MutableBoth<A> { return value; }

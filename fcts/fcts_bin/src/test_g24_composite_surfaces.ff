@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std.test;
+
+/** One reference member has observable writable state. */
+type G24SurfaceReference { open var score: i32; }
+/** Named union sites all share the same exact member relation. */
+spec G24SurfaceUnion: G24SurfaceReference | string;
+/** The holder gives field assignment its own entry site. */
+type G24SurfaceUnionHolder { open var value: G24SurfaceUnion; }
+/** Parameter and return must each preserve the active member. */
+func g24_surface_union(value: G24SurfaceUnion): G24SurfaceUnion { return value; }
+/** Read a concrete member without implicitly changing the original union view. */
+func g24_surface_score(value: G24SurfaceUnion): i32 {
+    return match value { item: G24SurfaceReference { item.score } else { -1 } };
+}
+
+/** Separate nominal contracts make complete satisfaction observable. */
+spec G24SurfaceScore { var score: i32; }
+/** A second contract guards against constructing an incomplete witness. */
+spec G24SurfaceText { func text(): string; }
+/** Both contracts must remain usable after every value-entry operation. */
+spec G24SurfaceBoth: G24SurfaceScore & G24SurfaceText;
+/** Reference-backed intersection values must share their subject. */
+type G24SurfaceSubject: G24SurfaceScore, G24SurfaceText {
+    open var score: i32;
+    /** Distinguish dispatch from the value subject. */
+    func text(): string { return "reference"; }
+}
+/** Value-backed views box the value once, with ordinary independent value semantics. */
+@value type G24SurfaceValue: G24SurfaceScore, G24SurfaceText {
+    open var score: i32;
+    /** Distinguish dispatch from the reference subject. */
+    func text(): string { return "value"; }
+}
+/** Field storage must retain the complete merged view. */
+type G24SurfaceBothHolder { open var value: G24SurfaceBoth; }
+/** Parameter and return retain each individual view's subject and witness. */
+func g24_surface_both(value: G24SurfaceBoth): G24SurfaceBoth { return value; }
+/** No-union shared control preserves both components without adding projection reads. */
+func g24_surface_identity<T>(value: T): T { return value; }
+
+/** Six independent entry sites pair with exact negative Semantic matrices. */
+func test_g24_composite_surfaces() {
+    describe("G24 composite entry surfaces", () {
+        test("union initialization assignment parameter return field and array", () {
+            let first = G24SurfaceReference { score: 17 };
+            let second = G24SurfaceReference { score: 29 };
+            var value: G24SurfaceUnion = first;
+            assert(g24_surface_score(value) == 17, "initial member");
+            value = "different";
+            assert(g24_surface_score(value) == -1, "active member switched");
+            value = second;
+            assert(g24_surface_score(value) == 29, "assignment member");
+            assert(g24_surface_score(g24_surface_union(first)) == 17, "parameter and return");
+            let holder = G24SurfaceUnionHolder { value: first };
+            holder.value = second;
+            assert(g24_surface_score(holder.value) == 29, "field write");
+            let values: G24SurfaceUnion[!] = [first];
+            values[0] = second;
+            assert(g24_surface_score(values[0]) == 29, "array write");
+            match values[0] { item: G24SurfaceReference { item.score = 41; } else { throw "wrong member"; } }
+            assert(second.score == 41 && g24_surface_score(holder.value) == 41, "reference identity across sites");
+        });
+        test("intersection entry sites preserve all reference-backed requirements", () {
+            let first = G24SurfaceSubject { score: 19 };
+            let second = G24SurfaceSubject { score: 31 };
+            var view: G24SurfaceBoth = first;
+            assert(view.score == 19 && view.text() == "reference", "initial full witness");
+            view = second;
+            assert(view.score == 31 && view.text() == "reference", "reassigned full witness");
+            let returned = g24_surface_both(first);
+            returned.score = 43;
+            assert(first.score == 43 && returned.text() == "reference", "parameter return identity");
+            let holder = G24SurfaceBothHolder { value: first };
+            holder.value = second;
+            assert(holder.value.score == 31 && holder.value.text() == "reference", "field complete witness");
+            let values: G24SurfaceBoth[!] = [first];
+            values[0] = second;
+            values[0].score = 47;
+            assert(second.score == 47 && values[0].text() == "reference", "array complete witness");
+        });
+        test("different subjects of one intersection type dispatch independently", () {
+            let original = G24SurfaceValue { score: 23 };
+            let reference = G24SurfaceSubject { score: 37 };
+            let first: G24SurfaceBoth = original;
+            let second: G24SurfaceBoth = reference;
+            let values: G24SurfaceBoth[!] = [g24_surface_identity<G24SurfaceBoth>(first), g24_surface_identity(second)];
+            values[0].score = 59;
+            values[1].score = 61;
+            assert(original.score == 23 && first.score == 59 && first.text() == "value", "existing box semantics independent of source value");
+            assert(reference.score == 61 && second.text() == "reference", "second view uses its own witness");
+            assert(values[0].text() == "value" && values[1].text() == "reference", "no cross-value witness reuse");
+        });
+    });
+}

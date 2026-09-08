@@ -379,7 +379,7 @@ seal 方法”只指具体 `type`/`fit` 实现方法，不包括已导出 spec
 | --- | --- | --- |
 | `FT_MAGIC_BYTES` | `46 53 54 31` | ASCII `FST1` |
 | `FT_BYTE_ORDER_LE` | `0x01` | v1 仅支持 little-endian |
-| `FT_VERSION_MAJOR` | `0x02` | 主版本；包括 G24 私有描述符契约 |
+| `FT_VERSION_MAJOR` | `0x02` | 主版本；包括 G24 联合投影与 spec 视角形成私有描述符契约 |
 | `FT_VERSION_MINOR` | `0x00` | 次版本 |
 | `FT_PROFILE_PACKAGE_PUBLIC` | `0x01` | `.fb/mod/**/*.ft` 公开包表 |
 | `FT_PROFILE_WORKSPACE_CACHE` | `0x02` | `build/<platform>/obj/symbols/**/*.ft` 本地缓存 |
@@ -572,13 +572,17 @@ read header
 - 在相同 `FT_VERSION_MAJOR` 内,`FT_VERSION_MINOR` 只允许做追加式演进: 新增可选 section、新增 attr key、新增 flag bit、新增 append-only kind 常量; 不得改写既有 required section 的固定记录布局。
 - 泛型进入公开 `.ft` 时,必须优先通过“追加新的 `FT_SYM_*` / `FT_TYPE_*` / `FT_REL_*` kind 常量与追加 attr key”表达新增语义,让不理解这些语义的旧 consumer 显式拒绝; 不得把泛型结构偷偷折叠进旧 `FT_TYPE_KIND_NAMED` 的字符串文本或其他会被旧 consumer 误读的既有字段语义中。
 - 若新增语义会让旧 consumer 在“忽略后仍可能编译错误或链接错误”,则不得作为同 major 的 silently-optional 扩展发出; 此类变化必须提升 major,或通过新的 required section 让旧 consumer 明确拒绝。
-- 新er 编译器必须能够读取并消费旧的同 major `.ft` 包; 旧编译器是否能读取较新的同 major `.ft`,取决于该包是否只使用了其可安全忽略的追加扩展。
+- 同 major 的可选追加扩展不得破坏既有 core 解释；缺少当前必需信息或依赖不兼容私有 ABI 的制品不得消费。
 - 是否可链接、是否可运行,除 `.ft` 格式外还取决于对应平台库文件、运行时 ABI 和 `@abi` / bridge 规则是否兼容; 这些不由编译器版本号单独决定。
 
-G24 将契约提升为 2.0，保留 `FST1` magic、Header 与目录外壳布局。原因是类型、aggregate、
+G24 联合投影阶段将契约提升为 2.0，保留 `FST1` magic、Header 与目录外壳布局。原因是类型、aggregate、
 函数描述符新增 `reified_union_projections` 指针，旧布局不可与新生成代码混用。reader 必须拒绝
 不同 major；原 1.x reader 也会拒绝 2.0。升级须一起重建 runtime、使用私有描述符的生成 C／对象／
 库、provider 与 consumer 的 `.ft`／`.fb` 及相关缓存，不能仅更新符号文件后链接旧库。
+
+开放值形成 spec 视角阶段保持当前 2.0 版本，三个上下文描述符新增静态转换表字段，
+并新增下述必需转换依赖节。语言尚未公开发布，不提供旧制品兼容或迁移桥接；缺少该必需节
+按格式校验失败处理，继续执行上述完整制品重建要求。
 
 #### 6.3.5 `ATRS` 扩展属性节
 
@@ -627,12 +631,13 @@ attr key 常量建议如下:
 
 #### 6.3.6 `UNION_PROJECTIONS` 开放投影依赖
 
-2.0 的两个 profile 均必须包含此固定记录节，标记 REQUIRED、FIXED_ENTRY、SORTED，
+两个 profile 均必须包含此固定记录节，标记 REQUIRED、FIXED_ENTRY、SORTED，
 无投影时 count 与 size 为零。单项 32 字节，按以下顺序编码八个 little-endian `u32`：
 
 - `owner_symbol_id`：拥有投影的类型、顶层函数或方法；构造／终结器依赖归类型。
 - `ordinal`：该 owner 内已按开放身份排序的零基槽号。
-- `subject_type_id`：实际泛参引用的 TYPS id，不是约束 union 的替身。
+- `subject_type_id`：实际匹配目标的开放类型 TYPS id，可为泛参引用或含泛参的具名 union
+  实例（例如逐级收窄后的 `Choice<A>`），不是约束 union 的替身；闭合类型不记录投影依赖。
 - `constraint_type_id`：完整约束 union 的 TYPS id。
 - `path_start`、`path_count`：TSEQ 中从根标签到箭头末端的完整路径；count 必须大于零。
 - `result_type_id`：无绑定时为零，否则为正常绑定结果类型的 TYPS id。
@@ -651,6 +656,26 @@ value1／value2 为零。该属性不允许重复，实际记录数须完全匹�
 这些类型引用参加既有私有表示依赖闭包，仍不授予源级访问权。节内不保存运行时地址、C 偏移
 或 active tag；consumer 在最终闭合点据此生成静态投影表。联合收窄的具体生成策略见
 [共享泛型联合收窄设计](../engineering/feng-generic-union-match-draft.md)。
+
+#### 6.3.7 `SPEC_VIEW_COERCIONS` 开放视角形成依赖
+
+两个 profile 均须包含 `FT_SEC_SPEC_VIEW_COERCIONS = 0x000A`，标记 REQUIRED、
+FIXED_ENTRY、SORTED，允许空节。单项 16 字节，依次为四个 little-endian `u32`：
+
+- `owner_symbol_id`：归属类型、顶层函数或方法；构造与终结器依赖归类型。
+- `ordinal`：owner 内按完整开放 source／target 身份排序的连续零基槽号。
+- `source_type_id`：源类型的有效非零 TYPS id。
+- `target_type_id`：object-form／intersection 目标的有效非零 TYPS id。
+
+source／target 至少一侧须含开放泛参；两侧属于 owner 的完整泛参上下文，不使用运行时类型名。
+非空 owner 必须同时带 `FT_ATTR_SPEC_VIEW_COERCION_COUNT = 0x000E`，value0 为精确数量，
+value1／value2 为零。记录按 `(owner_symbol_id, ordinal)` 排序；属性不重复，槽号连续、
+记录与数量完全一致。缺节、重复节／属性／槽位、非法 owner／类型／目标形状、数量不符、
+截断及非法固定记录布局均须拒绝，不能按空表忽略。
+
+类型引用参与已有私有表示依赖闭包，但不授予源级访问权。此节只传递编译期身份，不保存
+box 描述符地址、witness 地址或 payload 偏移；consumer 在具化点生成这些静态信息。
+转换准入仍遵循 spec 主规范，不借此扩大允许的转换范围。
 
 ### 6.4 `STRS` 字符串池
 

@@ -1,0 +1,18 @@
+open module fcts_middle;
+
+import fcts_lib.test.g24_union_bindings;
+import fcts_lib.test.g24_binding_edges;
+
+/** An independent binary package owns the middle layer's projection table. */
+open func g24_middle<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    trace[1] = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    return g24_binding_last<T>(value, trace);
+}
+/** An empty projection table must still forward the leaf callable descriptor. */
+open func g24_middle_empty<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    return g24_binding_last<T>(value, trace);
+}
+/** Swapping actuals closes separate callee slots rather than reusing the caller table. */
+open func g24_middle_swap<T: G24BindingOuter, U: G24BindingOuter>(first: T, second: U): i32 {
+    return g24_binding_chain<U>(second) * 100 + g24_binding_chain<T>(first);
+}

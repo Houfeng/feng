@@ -1,0 +1,126 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_spec_views;
+
+/** A managed member plus scalar distinguishes a full payload from a placeholder. */
+type G24ViewPair(i32, string);
+/** Finalization detects both leaks and premature destruction through boxed values. */
+type G24ViewLife {
+    open static var destroyed: i32;
+    open let number: i32;
+    /** Count tracked payloads, not ordinary zero-valued field defaults. */
+    func ~G24ViewLife() { if self.number != 0 { G24ViewLife.destroyed += 1; } }
+}
+/** Same-package counterpart supplements the true package-public conversion. */
+func g24_view_local<A>(source: G24ViewValue<A>): G24View<A> { return source; }
+/** The conversion value is consumed at each of binding, parameter and return sites. */
+func g24_view_parameter<A>(view: G24View<A>): G24View<A> { return view; }
+/** Fixed view arrays retain each subject/witness independently. */
+func g24_view_array<A>(first: G24ViewValue<A>, second: G24ViewReference<A>): G24View<A>[!] {
+    var binding: G24View<A> = first;
+    binding = second;
+    let values: G24View<A>[!] = [first, second];
+    values[0] = g24_view_parameter<A>(first);
+    values[1] = binding;
+    return values;
+}
+/** Return/throw cleanup must release each boxed managed payload exactly once. */
+func g24_view_lifetime(fail: bool) {
+    let item = G24ViewLife { number: 89 };
+    let view = g24_view_build<G24ViewLife>(item);
+    assert(view.item.number == 89 && view.tag() == 41, "payload alive");
+    if fail { throw "view cleanup"; }
+}
+/** The captured input remains alive across the creator's return. */
+func g24_view_escaped(): G24ViewReader<G24ViewLife> {
+    return g24_view_capture<G24ViewLife>(G24ViewValue<G24ViewLife> { item: G24ViewLife { number: 97 } });
+}
+/** Nested scope makes the closure/view finalizer count observable after release. */
+func g24_view_use_escape() {
+    let reader = g24_view_escaped();
+    let view = reader();
+    assert(view.item.number == 97 && view.tag() == 41, "captured closed descriptor");
+}
+
+/** Reified spec views preserve both value semantics and ordinary reference identity. */
+func test_g24_spec_views() {
+    describe("G24 reified spec view formation", () {
+        test("scalar and managed values preserve independent boxed state", () {
+            let scalar = G24ViewValue<i32> { item: 17 };
+            let first = g24_view_value<i32>(scalar);
+            first.item = 29;
+            assert(scalar.item == 17 && first.item == 29 && first.tag() == 41, "scalar boxed copy");
+            let text = G24ViewValue<string> { item: "before" };
+            let second = g24_view_local<string>(text);
+            second.item = "after";
+            assert(text.item == "before" && second.item == "after" && second.tag() == 41, "managed boxed copy");
+            let plain = g24_view_object<string>(text);
+            plain.item = "object";
+            assert(text.item == "before" && plain.item == "object", "ordinary spec target");
+            assert(g24_view_tag<string>(text).tag() == 41, "nongeneric target");
+        });
+        test("named tuple and value payloads preserve full dynamic layout", () {
+            let pair: G24ViewPair = (31, "pair");
+            let value = G24ViewValue<G24ViewPair> { item: pair };
+            let view = g24_view_value<G24ViewPair>(value);
+            view.item = (43, "changed");
+            assert(value.item.item1 == 31 && value.item.item2 == "pair", "original aggregate unchanged");
+            assert(view.item.item1 == 43 && view.item.item2 == "changed" && view.tag() == 41, "complete aggregate");
+            let nested = g24_view_build<G24ViewValue<string>>(G24ViewValue<string> { item: "nested" });
+            assert(nested.item.item == "nested" && nested.item.tag() == 41 && nested.tag() == 41, "nested value guards");
+        });
+        test("shared conversion evaluates value and reference source exactly once", () {
+            let calls: i32[!] = [0];
+            let original = G24ViewValue<string> { item: "once" };
+            let boxed = g24_view_value_once<string>(original, calls);
+            assert(calls[0] == 1 && boxed.item == "once" && boxed.tag() == 41, "value source once");
+            let reference = G24ViewReference<string> { item: "same" };
+            let view = g24_view_reference_once<string>(reference, calls);
+            view.item = "shared";
+            assert(calls[0] == 2 && reference.item == "shared" && view.tag() == 53, "reference source once");
+        });
+        test("reference view and array entries preserve per-value witness and identity", () {
+            let value = G24ViewValue<string> { item: "copy" };
+            let reference = G24ViewReference<string> { item: "reference" };
+            let view = g24_view_reference<string>(reference);
+            view.item = "same object";
+            assert(reference.item == "same object" && view.tag() == 53, "no reference boxing");
+            let array = g24_view_array<string>(value, reference);
+            array[0].item = "boxed";
+            array[1].item = "shared";
+            assert(value.item == "copy" && reference.item == "shared", "array replacement ownership");
+            assert(array[0].tag() == 41 && array[1].tag() == 53, "distinct selected witnesses");
+        });
+        test("owner aggregate method static and fit dependency domains remain independent", () {
+            let item = G24ViewValue<string> { item: "owner" };
+            let owner = G24ViewOwner<string>(item);
+            assert(owner.initial.item == "" && owner.initial.tag() == 41 && owner.value.item == "owner", "reference owner initialization");
+            assert(G24ViewOwner<string>.zero.item == "" && G24ViewOwner<string>.zero.tag() == 41, "static initializer");
+            let aggregate = G24ViewValueOwner<string>(item);
+            assert(aggregate.initial.item == "" && aggregate.value.item == "owner", "aggregate owner initialization");
+            let number = G24ViewValue<i32> { item: 71 };
+            assert(owner.convert<i32>(number).item == 71 && owner.convert<string>(item).item == "owner", "different and identical method arguments");
+            assert(owner.fitted<i32>(number).item == 71 && G24ViewOwner<string>.from(item).item == "owner", "fit and static method");
+        });
+        test("multi-level recursive captured and private-source conversions keep closed metadata", () {
+            let source = G24ViewValue<string> { item: "forward" };
+            assert(g24_view_relay<string>(source).item == "forward", "forwarding-only body");
+            assert(g24_view_recurse<string>(source, 3).item == "forward", "recursive descriptor");
+            let reader = g24_view_capture<string>(source);
+            assert(reader().item == "forward" && reader().tag() == 41, "escaping body conversion");
+            let hidden = g24_view_private<string>("private");
+            assert(hidden.item == "private" && hidden.tag() == 67, "private representation through real FT");
+        });
+        test("normal exceptional and escaping lifetime release the managed payload once", () {
+            G24ViewLife.destroyed = 0;
+            g24_view_lifetime(false);
+            assert(G24ViewLife.destroyed == 1, "normal cleanup");
+            var caught = false;
+            try g24_view_lifetime(true) catch error: string { caught = error == "view cleanup"; }
+            assert(caught && G24ViewLife.destroyed == 2, "exception cleanup");
+            g24_view_use_escape();
+            assert(G24ViewLife.destroyed == 3, "escaping cleanup");
+        });
+    });
+}

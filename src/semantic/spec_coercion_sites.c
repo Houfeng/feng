@@ -144,8 +144,9 @@ static bool analysis_own_type_ref(FengSemanticAnalysis *analysis, FengTypeRef *r
 /* Clone `target_spec_type_ref` into analysis-owned storage so the coercion
  * site can safely reference it across the codegen pass. On allocation
  * failure returns NULL and the caller must skip recording the site. */
-static const FengTypeRef *analysis_clone_type_ref(FengSemanticAnalysis *analysis,
-                                                   const FengTypeRef *target_spec_type_ref) {
+const FengTypeRef *feng_semantic_clone_coercion_type_ref(const FengSemanticAnalysis *analysis_const,
+                                                 const FengTypeRef *target_spec_type_ref) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
     FengTypeRef *clone = clone_type_ref_for_analysis(target_spec_type_ref);
     if (clone == NULL) {
         return NULL;
@@ -171,7 +172,7 @@ bool feng_semantic_subject_key_copy_for_analysis(
     *out_key = *source;
     if (source->kind == FENG_SEMANTIC_SUBJECT_KEY_ARRAY &&
         source->as.array.rank > 64U) {
-        const FengTypeRef *owned_array_type_ref = analysis_clone_type_ref(
+        const FengTypeRef *owned_array_type_ref = feng_semantic_clone_coercion_type_ref(
             analysis, source->as.array.array_type_ref);
 
         if (owned_array_type_ref == NULL) {
@@ -189,7 +190,7 @@ bool feng_semantic_subject_key_from_array_instance(
     const FengSemanticAnalysis *analysis,
     const FengTypeRef *array_type_ref,
     FengSemanticSubjectKey *out_key) {
-    const FengTypeRef *owned = analysis_clone_type_ref(
+    const FengTypeRef *owned = feng_semantic_clone_coercion_type_ref(
         (FengSemanticAnalysis *)analysis, array_type_ref);
     return owned != NULL && feng_semantic_subject_key_init_array_from_type_ref(out_key, owned);
 }
@@ -243,6 +244,22 @@ static void reset_site_payload(FengSpecCoercionSite *slot) {
     memset(slot, 0, sizeof(*slot));
 }
 
+/* Preserve the complete source/target pair independently of resolver scratch
+ * storage. The form and proof remain on the original semantic site. */
+bool feng_semantic_record_spec_view_coercion_use(
+    const FengSemanticAnalysis *analysis_const, const FengExpr *expr,
+    const FengTypeRef *source, const FengTypeRef *target) {
+    FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
+    FengSpecCoercionSite *site = find_site_mut(analysis, expr);
+    if (site == NULL || (site->form != FENG_SPEC_COERCION_FORM_OBJECT &&
+        site->form != FENG_SPEC_COERCION_FORM_INTERSECTION)) return false;
+    const FengTypeRef *owned_source = feng_semantic_clone_coercion_type_ref(analysis, source);
+    const FengTypeRef *owned_target = feng_semantic_clone_coercion_type_ref(analysis, target);
+    if (owned_source == NULL || owned_target == NULL) return false;
+    site->view_coercion = (FengSpecViewCoercionDep){owned_source, owned_target};
+    return true;
+}
+
 bool feng_semantic_record_object_spec_coercion_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
@@ -257,7 +274,7 @@ bool feng_semantic_record_object_spec_coercion_site(
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
-    const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    const FengTypeRef *owned_type_ref = feng_semantic_clone_coercion_type_ref(analysis, target_spec_type_ref);
     FengSemanticSubjectKey owned_subject_key;
     if (owned_type_ref == NULL) {
         return false;
@@ -300,7 +317,7 @@ bool feng_semantic_record_object_spec_upcast_site(
         return false;
     }
     analysis = (FengSemanticAnalysis *)analysis_const;
-    owned_target_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    owned_target_ref = feng_semantic_clone_coercion_type_ref(analysis, target_spec_type_ref);
     if (owned_target_ref == NULL) {
         return false;
     }
@@ -347,10 +364,10 @@ bool feng_semantic_record_callable_spec_coercion_site(
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
-    const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    const FengTypeRef *owned_type_ref = feng_semantic_clone_coercion_type_ref(analysis, target_spec_type_ref);
     const FengTypeRef *owned_receiver_type_ref =
         callable_receiver_type_ref != NULL
-            ? analysis_clone_type_ref(analysis, callable_receiver_type_ref)
+            ? feng_semantic_clone_coercion_type_ref(analysis, callable_receiver_type_ref)
             : NULL;
     const FengTypeRef **owned_callable_type_args = NULL;
     if (owned_type_ref == NULL) {
@@ -373,7 +390,7 @@ bool feng_semantic_record_callable_spec_coercion_site(
              index < callable_type_arg_count;
              ++index) {
             owned_callable_type_args[index] =
-                analysis_clone_type_ref(analysis, callable_type_args[index]);
+                feng_semantic_clone_coercion_type_ref(analysis, callable_type_args[index]);
             if (owned_callable_type_args[index] == NULL) {
                 free(owned_callable_type_args);
                 return false;
@@ -418,7 +435,7 @@ bool feng_semantic_record_intersection_spec_coercion_site(
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
-    const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    const FengTypeRef *owned_type_ref = feng_semantic_clone_coercion_type_ref(analysis, target_spec_type_ref);
     FengSemanticSubjectKey owned_subject_key;
     if (owned_type_ref == NULL) {
         return false;
@@ -454,7 +471,7 @@ bool feng_semantic_record_abi_function_pointer_site(
         return false;
     }
     FengSemanticAnalysis *analysis = (FengSemanticAnalysis *)analysis_const;
-    const FengTypeRef *owned_type_ref = analysis_clone_type_ref(analysis, target_spec_type_ref);
+    const FengTypeRef *owned_type_ref = feng_semantic_clone_coercion_type_ref(analysis, target_spec_type_ref);
     if (owned_type_ref == NULL) {
         return false;
     }

@@ -1,0 +1,88 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_composite_actuals;
+
+/** COMPOSITE33/35: actual specs cross real FT, owner storage and generic calls. */
+func test_g24_composite_actuals() {
+    describe("G24 complete composite generic actuals", () {
+        test("normalized nested members keep first default and complete generic identity", () {
+            var zero: G24ActualNormalized;
+            assert(match zero { text: G24ActualChoice<string> -> string { text == "" } else { false } }, "first nested member default");
+            let payload: i32 = 73;
+            let number: G24ActualNormalized = payload;
+            assert(match number { item: G24ActualChoice<i32> -> i32 { item == 73 } else { false } }, "other closed instance remains a separate path");
+            let text: G24ActualNormalized = "later";
+            assert(match text { item: G24ActualChoice<string> -> string { item == "later" } else { false } }, "qualified duplicate does not alter first path");
+        });
+        test("closed union actual retains its active member through owner and array", () {
+            let original: G24ActualChoice<string> = "payload";
+            let other: G24ActualChoice<string> = false;
+            let store = G24ActualStore<G24ActualChoice<string>>(original);
+            let copied = g24_actual_identity(store.get());
+            assert(match copied { text: string { text == "payload" } else { false } }, "explicit owner and inferred function actual");
+            store.set(other);
+            let values = store.array();
+            assert(match values[0] { flag: bool { !flag } else { false } }, "owner write and array keep bool tag");
+            values[0] = original;
+            assert(match values[0] { text: string { text == "payload" } else { false } }, "array write preserves managed payload");
+            let number: G24ActualChoice<i32> = 73;
+            let second = G24ActualStore<G24ActualChoice<i32>>(number);
+            assert(match second.get() { item: i32 { item == 73 } else { false } }, "second closed generic spec instance");
+        });
+        test("intersection actual keeps each subject witness under both constraint forms", () {
+            let value = G24ActualValue<string> { item: "value" };
+            let reference = G24ActualReference<string> { item: "reference" };
+            let first: G24ActualView<string> = value;
+            let second: G24ActualView<string> = reference;
+            assert(g24_actual_tags<string, G24ActualView<string>>(first, second) == 1729, "same T has different per-value witnesses");
+            assert(g24_actual_tags<string, G24ActualView<string>>(second, first) == 2917, "reverse values do not reuse first witness");
+            let kept = g24_actual_keep<string, G24ActualView<string>>(first);
+            assert(g24_actual_read<string, G24ActualView<string>>(kept) == "value", "component constraint and original T return");
+            let store = G24ActualStore<G24ActualView<string>>(kept);
+            store.set(second);
+            reference.item = "changed";
+            let array = store.array();
+            assert(array[0].read() == "changed" && array[0].tag() == 29, "owner and array retain reference identity");
+            assert(first.read() == "value" && first.tag() == 17, "independent boxed subject");
+            let number: G24ActualView<i32> = G24ActualValue<i32> { item: 83 };
+            assert(g24_actual_read<i32, G24ActualView<i32>>(number) == 83, "second closed component instance");
+        });
+        test("object spec actual satisfies a full intersection without changing its type", () {
+            let reference = G24ActualReference<string> { item: "child" };
+            let child: G24ActualChild<string> = reference;
+            let returned: G24ActualChild<string> = g24_actual_keep<string, G24ActualChild<string>>(child);
+            assert(returned.read() == "child" && returned.tag() == 29, "object spec remains object spec");
+            reference.item = "alive";
+            assert(g24_actual_read<string, G24ActualChild<string>>(returned) == "alive", "parent component witness and subject identity");
+        });
+        test("spec actual constraints survive owner callable and method descriptor entrances", () {
+            let view: G24ActualView<string> = G24ActualValue<string> { item: "closed" };
+            let owner = G24ActualConstrained<string, G24ActualView<string>>(view);
+            assert(owner.read() == "closed", "owner descriptor closes component argument");
+            let callback: G24ActualReader = g24_actual_read<string, G24ActualView<string>>;
+            assert(callback(view) == "closed", "generic function value");
+            let methods = G24ActualMethods<string>{};
+            assert(methods.read<G24ActualView<string>>(view) == "closed", "instance call");
+            assert(G24ActualMethods<string>.read_static<G24ActualView<string>>(view) == "closed", "static call");
+            let instance: G24ActualReader = methods.read<G24ActualView<string>>;
+            let statically: G24ActualReader = G24ActualMethods<string>.read_static<G24ActualView<string>>;
+            assert(instance(view) == "closed" && statically(view) == "closed", "method value descriptors");
+        });
+        test("nonempty erased arrays copy each actual value and evaluate each source once", () {
+            let count: i32[!] = [0];
+            let numbers = g24_actual_array<i32>(101, 202, count);
+            assert(count[0] == 2 && numbers[0] == 101 && numbers[1] == 202, "trivial values and source count");
+            let strings = g24_actual_array<string>("first", "second", count);
+            assert(count[0] == 4 && strings[0] == "first" && strings[1] == "second", "managed pointers and source count");
+            let original = G24ActualValue<string> { item: "original" };
+            let copies = g24_actual_array(original, original, count);
+            copies[0].item = "changed";
+            assert(count[0] == 6 && copies[1].item == "original" && original.item == "original", "aggregate copy independence");
+            let reference = G24ActualReference<string> { item: "reference" };
+            let aliases = g24_actual_array(reference, reference, count);
+            aliases[0].item = "shared";
+            assert(count[0] == 8 && aliases[1].item == "shared" && reference.item == "shared", "reference identity");
+        });
+    });
+}

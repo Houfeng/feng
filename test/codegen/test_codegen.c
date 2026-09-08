@@ -14,6 +14,10 @@
 #include "symbol/provider.h"
 #include "test_g24.h"
 
+/* Independent G24 binding/cost coverage uses the existing C compiler driver. */
+void test_g24_projection_bindings(void (*compile_c)(const char *));
+void test_g24_spec_view_codegen(void (*compile_c)(const char *));
+
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17343,6 +17347,8 @@ int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
     test_g24_static_descriptors(compile_generated_c_or_die);
+    test_g24_projection_bindings(compile_generated_c_or_die);
+    test_g24_spec_view_codegen(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

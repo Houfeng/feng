@@ -1,0 +1,81 @@
+open module fcts_lib.test.g24_composite_actuals;
+
+/** A closed union, not only a naked member, is a first-class generic actual. */
+open spec G24ActualChoice<A>: A | bool;
+/** Repeated spellings deduplicate, but distinct closed instances stay nested. */
+open spec G24ActualNormalized: G24ActualChoice<string> |
+    fcts_lib.test.g24_composite_actuals.G24ActualChoice<string> |
+    G24ActualChoice<i32> | G24ActualChoice<i32> | bool;
+/** Generic object and intersection actuals retain the complete component instance. */
+open spec G24ActualRead<A> { func read(): A; }
+/** A second component identifies each actual subject independently. */
+open spec G24ActualTag { func tag(): i32; }
+open spec G24ActualView<A>: G24ActualRead<A> & G24ActualTag;
+open spec G24ActualChild<A>: G24ActualRead<A>, G24ActualTag {}
+
+/** This subject creates a value box only when an ordinary spec view is formed. */
+@value open type G24ActualValue<A>: G24ActualChild<A> {
+    open var item: A;
+    /** Return the boxed value's own payload. */
+    func read(): A { return self.item; }
+    /** Distinguish value dispatch from reference dispatch. */
+    func tag(): i32 { return 17; }
+}
+/** Reference-backed views must retain this object's distinct implementation. */
+open type G24ActualReference<A>: G24ActualChild<A> {
+    open var item: A;
+    /** Read the current shared object state. */
+    func read(): A { return self.item; }
+    /** Keep the reference's independent witness observable. */
+    func tag(): i32 { return 29; }
+}
+
+/** Both constraints and the returned T use the original actual spec identity. */
+open func g24_actual_keep<A, T: G24ActualView<A>>(value: T): T { return value; }
+/** A component constraint also accepts the complete intersection actual. */
+open func g24_actual_read<A, T: G24ActualRead<A>>(value: T): A { return value.read(); }
+/** Access both values' witnesses through the same static T and shared body. */
+open func g24_actual_tags<A, T: G24ActualView<A>>(first: T, second: T): i32 {
+    return first.tag() * 100 + second.tag();
+}
+/** Projection-free forwarding preserves union tags and fat-spec subjects alike. */
+open func g24_actual_identity<T>(value: T): T { return value; }
+/** Owner storage and its shared methods must not replace T with a constraint carrier. */
+open type G24ActualStore<T> {
+    open var value: T;
+    /** Store the actual T using its ordinary value model. */
+    func G24ActualStore(value: T) { self.value = value; }
+    /** Forward through a second shared body without losing metadata. */
+    func get(): T { return g24_actual_identity<T>(self.value); }
+    /** Replace the complete stored union or fat-spec value. */
+    func set(value: T) { self.value = value; }
+    /** Materialize ordinary T array storage using the real element descriptor. */
+    func array(): T[!] { return [self.value]; }
+}
+
+/** A callable target retains the actual spec argument, not its subject type. */
+open spec G24ActualReader(value: G24ActualView<string>): string;
+/** Constrained owner metadata uses the same closed slots as function metadata. */
+open type G24ActualConstrained<A, T: G24ActualView<A>> {
+    open let value: T;
+    /** Initialize the original T exactly once in the constructor. */
+    func G24ActualConstrained(value: T) { self.value = value; }
+    /** Read through the owner's constraint witness. */
+    func read(): A { return self.value.read(); }
+}
+/** Method-level constraints may depend on the closed owner argument. */
+open type G24ActualMethods<A> {
+    /** Instance direct and method-value calls share this body. */
+    func read<T: G24ActualView<A>>(value: T): A { return value.read(); }
+    /** Static direct and method-value calls share this body. */
+    static func read_static<T: G24ActualView<A>>(value: T): A { return value.read(); }
+}
+/** Observe left-to-right generic literal evaluation without changing T. */
+open func g24_actual_touch<T>(value: T, count: i32[!]): T {
+    count[0] += 1;
+    return value;
+}
+/** Nonempty generic arrays use descriptor-sized values, not erased pointers. */
+open func g24_actual_array<T>(first: T, second: T, count: i32[!]): T[!] {
+    return [g24_actual_touch<T>(first, count), g24_actual_touch<T>(second, count)];
+}

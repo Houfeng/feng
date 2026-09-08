@@ -1,0 +1,153 @@
+open module fcts_lib.test.g24_binding_edges;
+
+import fcts_lib.test.g24_union_bindings;
+
+/** Captured narrowed variables use the same cell as subsequent assignments. */
+open spec G24NumberReader(): i32;
+/** Generic callable return keeps the descriptor-sized return ABI. */
+open spec G24ResultReader<A>(): A;
+/** Different nominal callable with the same fixed ABI requires no adapter. */
+open spec G24OtherReader(): i32;
+open spec G24CallableUnion: G24NumberReader | bool;
+
+/** Infix capture must neither allocate nor read a payload on a miss. */
+open func g24_capture_infix<T: G24BindingOuter>(value: T): G24NumberReader {
+    if value match var item: G24BindingMiddle -> G24BindingInner -> i32 {
+        let callback: G24NumberReader = () { return item; };
+        item += 7;
+        return callback;
+    }
+    return () { return -1; };
+}
+/** Ordinary alias capture is independent of shared projection lowering. */
+open func g24_capture_ordinary(value: G24BindingOuter): G24NumberReader {
+    match value {
+        var item: G24BindingMiddle -> G24BindingInner -> i32 {
+            let callback: G24NumberReader = () { return item; };
+            item += 9;
+            return callback;
+        }
+        else { return () { return -1; }; }
+    }
+}
+/** Capturing a descriptor-sized intermediate retains its exact layout. */
+open func g24_capture_open<A, T: G24BindingGenericOuter<A>>(value: T): G24ResultReader<G24BindingChoice<A>> {
+    return match value {
+        item: G24BindingChoice<A> {
+            let callback: G24ResultReader<G24BindingChoice<A>> = () { return item; };
+            callback
+        }
+        else {
+            let callback: G24ResultReader<G24BindingChoice<A>> = () { return false; };
+            callback
+        }
+    };
+}
+/** A materialized open union must support another shared-body narrowing step. */
+open func g24_read_open<A>(value: G24BindingChoice<A>, fallback: A): A {
+    return match value { item: A { item } else { fallback } };
+}
+/** Chained narrowing returns the original open leaf without intermediate boxing. */
+open func g24_read_open_chain<A, T: G24BindingGenericOuter<A>>(value: T, fallback: A): A {
+    return match value { item: G24BindingChoice<A> -> A { item } else { fallback } };
+}
+/** Reference members keep a fixed union layout even with open member arguments. */
+open type G24FixedBox<A> { open let value: A; }
+/** The nominally open and closed carriers have the same fixed representation. */
+open spec G24FixedChoice<A>: G24FixedBox<A> | bool;
+/** Fixed-layout shared union parameters still use the established value-address ABI. */
+open func g24_fixed_choice<A>(value: G24FixedChoice<A>): G24FixedBox<A> {
+    return match value { item: G24FixedBox<A> { item } else { throw "missing box"; } };
+}
+/** Open forwarding must preserve the neutral aggregate parameter surface. */
+open func g24_fixed_relay<A>(value: G24FixedChoice<A>): G24FixedBox<A> {
+    return g24_fixed_choice<A>(value);
+}
+/** Fixed open carriers also survive ordinary binding, array storage and return. */
+open func g24_fixed_stored<A>(value: G24FixedChoice<A>): G24FixedChoice<A> {
+    let copy = value;
+    let values: G24FixedChoice<A>[!] = [copy];
+    return values[0];
+}
+/** A callable leaf uses ordinary closure view conversion. */
+open func g24_callable_leaf<T: G24CallableUnion>(value: T): i32 {
+    return match value { item: G24NumberReader { item() } else { -1 } };
+}
+/** The source operation is observable and must occur exactly once per test. */
+open func g24_binding_touch<T>(value: T, counts: i32[!]): T { counts[0] += 1; return value; }
+/** Repeated infix conditions establish and dispose independent bindings. */
+open func g24_binding_while<T: G24BindingOuter>(value: T, counts: i32[!]): i32 {
+    var total: i32 = 0;
+    while counts[0] < 3 && g24_binding_touch<T>(value, counts) match let item: G24BindingMiddle -> G24BindingInner -> i32 {
+        total += item;
+    }
+    return total;
+}
+/** Bindings inside a boolean value remain visible only along its && chain. */
+open func g24_binding_boolean<T: G24BindingOuter>(value: T, counts: i32[!], gate: bool): bool {
+    return gate && g24_binding_touch<T>(value, counts) match let item: G24BindingMiddle -> G24BindingInner -> i32 && item > 0;
+}
+/** A plain generic boolean operation also owns conditionally evaluated temporaries. */
+open func g24_plain_boolean(counts: i32[!], gate: bool): bool {
+    return gate || (g24_binding_touch<i32>(1, counts) == 1);
+}
+/** Final layer proves its own match ran before returning the unchanged T. */
+open func g24_binding_last<T: G24BindingOuter>(value: T, trace: i32[!]): T {
+    trace[2] = match value { item: G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+    return value;
+}
+/** Recursion forwards both bound and unbound projections without rebuilding tables. */
+open func g24_binding_recurse<T: G24BindingOuter>(value: T, count: i32): i32 {
+    if count == 0 { return g24_binding_chain<T>(value); }
+    let selected = value match G24BindingMiddle;
+    if selected { return g24_binding_recurse<T>(value, count - 1); }
+    return -1;
+}
+/** Default callable values exercise direct and address aggregate returns. */
+open func g24_default_reader(): G24BindingInner { let callback: G24BindingReader; return callback(); }
+/** Generic default callable entry follows its own aggregate return ABI. */
+open func g24_default_open_reader<A>(): G24BindingChoice<A> {
+    let callback: G24ResultReader<G24BindingChoice<A>>;
+    return callback();
+}
+
+/** A parent view exercises nominal upcast at a virtual union leaf. */
+open spec G24BindingChild: G24BindingNamed {}
+open type G24BindingChildImpl: G24BindingChild {
+    /** Distinct implementation guards witness provenance. */
+    func text(): string { return "child"; }
+}
+
+/** More than eight segments must preserve complete paths and result bindings. */
+open spec G24Depth4: G24BindingOuter | i8;
+open spec G24Depth5: G24Depth4 | i8;
+open spec G24Depth6: G24Depth5 | i8;
+open spec G24Depth7: G24Depth6 | i8;
+open spec G24Depth8: G24Depth7 | i8;
+open spec G24Depth9: G24Depth8 | i8;
+/** Eight-segment control. */
+open func g24_deep8<T: G24Depth8>(value: T): i32 {
+    return match value { item: G24Depth7 -> G24Depth6 -> G24Depth5 -> G24Depth4 -> G24BindingOuter -> G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+}
+/** Nine-segment projection reads the leaf without constructing intermediates. */
+open func g24_deep9<T: G24Depth9>(value: T): i32 {
+    return match value { item: G24Depth8 -> G24Depth7 -> G24Depth6 -> G24Depth5 -> G24Depth4 -> G24BindingOuter -> G24BindingMiddle -> G24BindingInner -> i32 { item } else { -1 } };
+}
+
+/** Ordinary all-exit chains must bind the deepest member, not the first. */
+open func g24_plain_exits(value: G24BindingOuter): i32 {
+    let unused: i32 = match value {
+        item: G24BindingMiddle -> G24BindingInner -> i32 { return item; }
+        else { return -1; }
+    };
+    return unused;
+}
+/** Multi-member bindings retain the original ordinary union storage. */
+open func g24_plain_subset(value: G24BindingOuter): i32 {
+    match value { item: G24BindingMiddle, f64 { return g24_binding_plain(item); } }
+    return -1;
+}
+/** The value-expression entrance must retain the same subset binding. */
+open func g24_plain_subset_expr(value: G24BindingOuter): i32 {
+    return match value { item: G24BindingMiddle, f64 { g24_binding_plain(item) } else { -1 } };
+}

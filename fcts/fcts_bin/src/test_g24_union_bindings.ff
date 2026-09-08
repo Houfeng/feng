@@ -1,0 +1,90 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.g24_union_bindings;
+
+/** Read actual payloads, never just the selected tag. */
+func g24_binding_number(value: G24BindingInner): i32 {
+    return match value { item: i32 { item } else { -1 } };
+}
+/** Cross-package shared caller checks each of the four binding entrances. */
+func g24_binding_check<T: G24BindingOuter>(value: T, expected: i32) {
+    assert(g24_binding_chain<T>(value) == expected, "chain value expression");
+    assert(g24_binding_exits<T>(value) == expected, "all-exit expression");
+    assert(g24_binding_subset<T>(value) == expected, "multi-member shared subset");
+    if expected > 0 {
+        assert(g24_binding_statement<T>(value) == expected + 1, "statement mutable copy");
+        assert(g24_binding_infix<T>(value) == expected + 2, "infix mutable copy");
+        assert(g24_binding_chain<T>(value) == expected, "source remains unchanged");
+    } else {
+        assert(g24_binding_statement<T>(value) == -1, "statement nonmatch");
+        assert(g24_binding_infix<T>(value) == -1, "infix nonmatch");
+    }
+}
+/** COMPOSITE29/31/32/34/37/39: bindings hold ordinary complete values. */
+func test_g24_union_bindings() {
+    describe("G24 shared union bindings", () {
+        test("spec leaf conversions agree for reference value and existing views", () {
+            let reference = G24BindingRef { value: "reference" };
+            let stored = G24BindingValue { value: "value" };
+            let view: G24BindingNamed = reference;
+            assert(g24_binding_view(reference) == "reference", "reference conversion");
+            assert(g24_binding_view(stored) == "value", "value conversion");
+            assert(g24_binding_view(view) == "reference", "existing view");
+            let returned = g24_binding_views(stored);
+            let text = match returned { item: G24BindingNamed { item.text() } else { "miss" } };
+            assert(text == "value", "virtual union owns its converted leaf");
+        });
+        test("naked child middle and whole actuals agree at every binding entrance", () {
+            let number: i32 = 73;
+            let child: G24BindingInner = number;
+            let middle: G24BindingMiddle = child;
+            let whole: G24BindingOuter = middle;
+            g24_binding_check<i32>(number, 73);
+            g24_binding_check<G24BindingInner>(child, 73);
+            g24_binding_check<G24BindingMiddle>(middle, 73);
+            g24_binding_check<G24BindingOuter>(whole, 73);
+            assert(g24_binding_plain(whole) == 73, "ordinary counterpart");
+        });
+        test("inactive parent and same-typed alternate payloads do not expose a leaf", () {
+            let child: G24BindingInner = "text";
+            let whole: G24BindingOuter = false;
+            g24_binding_check<string>("text", -1);
+            g24_binding_check<bool>(true, -1);
+            g24_binding_check<G24BindingInner>(child, -1);
+            g24_binding_check<G24BindingOuter>(whole, -1);
+            g24_binding_check<f64>(1.5, -1);
+        });
+        test("virtual intermediate values return store and survive capture", () {
+            let stored: G24BindingInner[] = [g24_binding_step<i32>(73)];
+            assert(g24_binding_number(stored[0]) == 73, "returned and stored virtual value");
+            let callback = g24_binding_capture<i32>(73);
+            assert(g24_binding_number(callback()) == 73, "virtual value after creator returns");
+            let text = g24_binding_capture<string>("captured");
+            let restored = text();
+            let is_text = match restored { item: string { item == "captured" } else { false } };
+            assert(is_text, "managed intermediate payload survives capture");
+        });
+        test("infix virtual result is initialized only on a successful path", () {
+            assert(g24_binding_number(g24_binding_optional<i32>(73)) == 73, "materialized hit");
+            let missed = g24_binding_optional<f64>(1.5);
+            let fallback = match missed { item: string { item == "fallback" } else { false } };
+            assert(fallback, "no read or cleanup on static miss");
+            let whole: G24BindingOuter = 1.5;
+            assert(g24_binding_number(g24_binding_optional<G24BindingOuter>(whole)) == -1, "dynamic miss");
+        });
+        test("generic intermediate layout is independent of naked subject layout", () {
+            let number = g24_binding_generic<i32, i32>(73);
+            let text = g24_binding_generic<string, string>("generic");
+            let n = match number { item: i32 { item } else { -1 } };
+            let s = match text { item: string { item } else { "wrong" } };
+            assert(n == 73 && s == "generic", "different descriptor-sized results");
+        });
+        test("owner constructor and method domains preserve both actual parameters", () {
+            let host = G24BindingHost<i32>(73);
+            assert(g24_binding_number(host.inner) == 73, "owner materializer");
+            let child: G24BindingInner = 41;
+            assert(host.pair<G24BindingInner>(73, child) == 114, "owner and method slots");
+        });
+    });
+}

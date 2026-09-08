@@ -135,6 +135,17 @@ typedef struct FengUnionProjection {
     FengUnionMaterializeFn materialize;
 } FengUnionProjection;
 
+/* Closed source-to-object/intersection view formation at one statically
+ * assigned shared-body slot. This is data, never a conversion callback or
+ * runtime satisfaction query. A value source uses the concrete box and its
+ * payload offset; a managed source has NULL/zero and keeps its own identity.
+ * Copy/retain/release continue to use the existing source/result descriptors. */
+typedef struct FengSpecCoercionDescriptor {
+    const struct FengTypeDescriptor *box_descriptor;
+    size_t payload_offset;
+    const void *witness;
+} FengSpecCoercionDescriptor;
+
 typedef struct FengTypeDescriptor {
     const char *name;            /* fully-qualified, debug-only */
     size_t size;                 /* total instance bytes incl. header (0 for variable-length) */
@@ -209,6 +220,10 @@ typedef struct FengTypeDescriptor {
      * NULL without direct uses; method-owned uses belong to their own function
      * descriptor, even when they reference this type's generic parameters. */
     const FengUnionProjection *reified_union_projections;
+
+    /* Static view-formation uses owned by initialization, not by methods.
+     * NULL without direct uses; no new hidden parameter or dynamic lookup. */
+    const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
     /* Per-closed-type static binding state in declaration order. Non-generic
      * types and generic types without static bindings leave this NULL. */
@@ -476,6 +491,9 @@ typedef struct FengAggregateDescriptor {
      * FengTypeDescriptor. NULL without direct union-match uses. */
     const FengUnionProjection *reified_union_projections;
 
+    /* Same owner-local view-formation slots as on FengTypeDescriptor. */
+    const FengSpecCoercionDescriptor *reified_spec_view_coercions;
+
     /* Same closed generic static state carried by FengTypeDescriptor. Value
      * type shared methods receive this aggregate descriptor instead. */
     FengStaticBindingState *static_bindings;
@@ -532,6 +550,10 @@ typedef struct FengFunctionDescriptor {
      * NULL without direct uses, including forwarding-only shared bodies.
      * Slots are independent of aggregate/type/callable dependency indices. */
     const FengUnionProjection *reified_union_projections;
+
+    /* Closed source/target formation information owned by this callable.
+     * Forwarding-only callables use their existing callee dependency slots. */
+    const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 } FengFunctionDescriptor;
 
 static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(

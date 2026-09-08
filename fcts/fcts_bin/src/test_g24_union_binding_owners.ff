@@ -1,0 +1,52 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.g24_union_bindings;
+import fcts_lib.test.g24_binding_edges;
+import fcts_lib.test.g24_binding_owners;
+
+/** Let the reference owner die before observing its finalizer. */
+func g24_end_owner_scope() {
+    let first = G24BoundOwner<i32>(17);
+    let second = G24BoundOwner<string>("text");
+    let method: G24NumberReader = first.read;
+    assert(method() == 17 && second.read() == -1, "escaping-capable method descriptors");
+}
+
+/** Distinct owner kinds and dependency domains keep all projection slots. */
+func test_g24_union_binding_owners() {
+    describe("G24 projection dependency owners", () {
+        test("reference owner fields constructor static initializer and finalizer", () {
+            G24OwnerState.total = 0;
+            g24_end_owner_scope();
+            assert(G24OwnerState.total == 16, "both closed finalizers read their own slot");
+            assert(G24BoundOwner<i32>.selected == 0, "static scalar default");
+            assert(G24BoundOwner<string>.selected == -1, "static string default");
+            let first = G24BoundOwner<i32>(23);
+            assert(first.initial == 0 && g24_binding_number(first.constructed) == 23, "field default then explicit constructor");
+            assert(first.pair<i32>(31) == 2331, "equal closed types keep two slots");
+            assert(first.pair<string>("miss") == 2299, "different closed types keep two slots");
+            assert(G24BoundOwner<i32>.call(43) == 86, "static method own and nested projection");
+        });
+        test("value owner uses aggregate initialization and method domains", () {
+            let first = G24BoundValueOwner<i32>(29);
+            let second = G24BoundValueOwner<string>("text");
+            assert(first.initial == 0 && second.initial == -1, "value field defaults");
+            assert(first.read() == 29 && second.read() == -1, "value receiver projections");
+            assert(g24_binding_number(first.constructed) == 29, "value constructor materialization");
+            assert(first.pair<i32>(37) == 2937 && first.pair<string>("miss") == 2899, "value method slots");
+            assert(G24BoundValueOwner<i32>.selected == 0 && G24BoundValueOwner<string>.selected == -1, "value static slots");
+            assert(G24BoundValueOwner<i32>.call(47) == 94, "value static forwarding");
+        });
+        test("default callbacks preserve intersection and nontrivial value results", () {
+            let both = g24_default_both();
+            assert(both.number() == 0 && both.text == "", "intersection default dispatch and field");
+            let value = g24_default_value();
+            assert(value.text == "", "managed aggregate direct return");
+        });
+        test("closed open-member collisions and fixed reference carriers remain correct", () {
+            let choice: G24BindingChoice<bool> = true;
+            assert(g24_read_open<bool>(choice, false), "closed member dedup retains selected leaf");
+            assert(g24_read_open_chain<bool, bool>(true, false), "open chain closes both leaves equally");
+        });
+    });
+}

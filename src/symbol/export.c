@@ -1556,10 +1556,26 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                         ctx->analysis, source_decl);
     if (dep_set == NULL ||
         (dep_set->dep_count == 0U && dep_set->callable_dep_count == 0U &&
-         dep_set->union_projection_count == 0U)) {
+         dep_set->union_projection_count == 0U && dep_set->spec_view_coercion_count == 0U)) {
         return true;
     }
 
+    if (dep_set->spec_view_coercion_count > 0U) {
+        decl->reifiable_spec_view_coercions = calloc(dep_set->spec_view_coercion_count,
+            sizeof(*decl->reifiable_spec_view_coercions));
+        if (decl->reifiable_spec_view_coercions == NULL) return feng_symbol_internal_set_error(
+            out_error, path, token, "out of memory exporting spec view coercions");
+        decl->reifiable_spec_view_coercion_count = dep_set->spec_view_coercion_count;
+        for (index = 0U; index < dep_set->spec_view_coercion_count; ++index) {
+            const FengSpecViewCoercionDep *source = &dep_set->spec_view_coercions[index];
+            FengSymbolSpecViewCoercionView *target = &decl->reifiable_spec_view_coercions[index];
+            target->source_type = build_type_from_type_ref_with_tparams(ctx,
+                source->source_type_ref, type_params, type_param_count, path, token, out_error);
+            target->target_type = build_type_from_type_ref_with_tparams(ctx,
+                source->target_type_ref, type_params, type_param_count, path, token, out_error);
+            if (target->source_type == NULL || target->target_type == NULL) return false;
+        }
+    }
     if (dep_set->union_projection_count > 0U) {
         decl->reifiable_union_projections = calloc(dep_set->union_projection_count,
                                                    sizeof(*decl->reifiable_union_projections));
@@ -2888,6 +2904,15 @@ static FengSymbolDeclView *build_member_decl(BuildContext *ctx,
         feng_semantic_member_is_package_spec_implementation_dependency(
             ctx->analysis,
             member);
+    /* A private type selected as representation metadata still needs its
+     * declaration-selected implementations to build closed witnesses. This
+     * marker only keeps members after their owner is selected; it grants no
+     * source visibility and never selects an otherwise unrelated owner. */
+    for (size_t index = 0U; !decl->is_spec_implementation_dependency &&
+         index < ctx->analysis->spec_implementation_selection_count; ++index) {
+        decl->is_spec_implementation_dependency =
+            ctx->analysis->spec_implementation_selections[index].impl_member == member;
+    }
 
     if (!register_source_decl(ctx, member, decl, path, member->token, out_error)) {
         feng_symbol_internal_decl_free_members(decl);
@@ -3725,6 +3750,10 @@ static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
                              decl,
                              dependency->callable_type_args[arg_index]);
         }
+    }
+    for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
+        bind_type_target(graph, decl, decl->reifiable_spec_view_coercions[index].source_type);
+        bind_type_target(graph, decl, decl->reifiable_spec_view_coercions[index].target_type);
     }
     for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
         FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];

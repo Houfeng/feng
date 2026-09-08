@@ -350,6 +350,38 @@ bool feng_semantic_reifiable_dep_set_append_union_projection(
     return true;
 }
 
+/* Open source/target identity, independent of source occurrence and closure. */
+size_t feng_semantic_spec_view_coercion_slot(const FengReifiableDepSet *set,
+    const FengSpecViewCoercionDep *coercion) {
+    if (set != NULL && coercion != NULL) {
+        for (size_t i = 0U; i < set->spec_view_coercion_count; ++i) {
+            const FengSpecViewCoercionDep *item = &set->spec_view_coercions[i];
+            if (rd_type_ref_equals(item->source_type_ref, coercion->source_type_ref) &&
+                rd_type_ref_equals(item->target_type_ref, coercion->target_type_ref)) return i;
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Append compiler-only metadata; type refs remain owned by the analysis. */
+bool feng_semantic_reifiable_dep_set_append_spec_view_coercion(
+    FengReifiableDepSet *set, const FengSpecViewCoercionDep *coercion) {
+    if (set == NULL || coercion == NULL || coercion->source_type_ref == NULL ||
+        coercion->target_type_ref == NULL) return false;
+    if (feng_semantic_spec_view_coercion_slot(set, coercion) != SIZE_MAX) return true;
+    if (set->spec_view_coercion_count == set->spec_view_coercion_capacity) {
+        if (set->spec_view_coercion_capacity > SIZE_MAX / 2U) return false;
+        size_t capacity = set->spec_view_coercion_capacity == 0U ? 8U : set->spec_view_coercion_capacity * 2U;
+        FengSpecViewCoercionDep *grown = capacity > SIZE_MAX / sizeof(*grown) ? NULL :
+            realloc(set->spec_view_coercions, capacity * sizeof(*grown));
+        if (grown == NULL) return false;
+        set->spec_view_coercions = grown;
+        set->spec_view_coercion_capacity = capacity;
+    }
+    set->spec_view_coercions[set->spec_view_coercion_count++] = *coercion;
+    return true;
+}
+
 /* 判断已解析 callable 是否使用共享 ABI。构造器继续使用 type descriptor
  * 路径，不属于 callable descriptor graph。 */
 static bool rd_resolved_callable_uses_shared_abi(
@@ -1145,13 +1177,23 @@ static void try_collect_type_ref(CollectContext *ctx,
                 type_ref_contains_type_param(type_ref,
                                              ctx->type_params,
                                              ctx->type_param_count)) {
+                /* The signature may use a short name while a synthesized
+                 * conversion carries the same fully-qualified type. Normalize
+                 * both before assigning slots, not after exporting to FT. */
+                const FengTypeRef *canonical = feng_semantic_canonical_reifiable_type_ref(
+                    ctx->analysis, ctx->dep_set->owner_decl, ctx->type_params,
+                    ctx->type_param_count, type_ref);
+                if (canonical == NULL) {
+                    ctx->failed = true;
+                    return;
+                }
                 const FengDecl *base_decl =
-                    find_type_decl_by_named_ref(ctx->analysis, type_ref);
+                    find_type_decl_by_named_ref(ctx->analysis, canonical);
                 FengReifiableDepKind kind;
 
                 if (determine_dep_kind(base_decl, &kind)) {
-                    feng_semantic_reifiable_dep_set_append(
-                        ctx->dep_set, kind, type_ref);
+                    if (!feng_semantic_reifiable_dep_set_append(
+                            ctx->dep_set, kind, canonical)) ctx->failed = true;
                 }
             }
             /* 递归检查 type_args 中可能嵌套的泛型实例。 */
@@ -1520,6 +1562,12 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
 
     callable_value_site = feng_semantic_lookup_spec_coercion_site(
         ctx->analysis, expr);
+    if (callable_value_site != NULL && callable_value_site->view_coercion.source_type_ref != NULL) {
+        const FengSpecViewCoercionDep *view = &callable_value_site->view_coercion;
+        if (!feng_semantic_reifiable_dep_set_append_spec_view_coercion(ctx->dep_set, view)) ctx->failed = true;
+        try_collect_type_ref(ctx, view->source_type_ref);
+        try_collect_type_ref(ctx, view->target_type_ref);
+    }
     (void)rd_append_callable_value_dep(ctx->dep_set,
                                        callable_value_site,
                                        ctx->type_params,
@@ -2296,13 +2344,13 @@ static int rd_compare_projection(const ProjectionOrderContext *context,
 
 /* Finalize open slots once all source declarations have been collected. The
  * insertion sort needs no allocation and leaves imported wire slots untouched. */
-static void rd_sort_union_projections(const FengSemanticAnalysis *analysis,
+static void rd_sort_reified_uses(const FengSemanticAnalysis *analysis,
                                        FengReifiableDepSet *dep_set) {
     ProjectionOrderContext context = {0};
     FengTypeParam implicit_param;
     const FengDecl *owner = dep_set->owner_decl;
     FengSemanticModuleOrigin origin;
-    if (dep_set->union_projection_count < 2U || owner == NULL ||
+    if ((dep_set->union_projection_count < 2U && dep_set->spec_view_coercion_count < 2U) || owner == NULL ||
         (rd_find_decl_module_origin(analysis, owner, &origin) &&
          origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)) {
         return;
@@ -2335,6 +2383,19 @@ static void rd_sort_union_projections(const FengSemanticAnalysis *analysis,
             --slot;
         }
         dep_set->union_projections[slot] = value;
+    }
+    for (size_t index = 1U; index < dep_set->spec_view_coercion_count; ++index) {
+        FengSpecViewCoercionDep value = dep_set->spec_view_coercions[index];
+        size_t slot = index;
+        while (slot > 0U) {
+            const FengSpecViewCoercionDep *previous = &dep_set->spec_view_coercions[slot - 1U];
+            int order = rd_compare_projection_type(&context, value.source_type_ref, previous->source_type_ref);
+            if (order == 0) order = rd_compare_projection_type(&context, value.target_type_ref, previous->target_type_ref);
+            if (order >= 0) break;
+            dep_set->spec_view_coercions[slot] = *previous;
+            --slot;
+        }
+        dep_set->spec_view_coercions[slot] = value;
     }
 }
 
@@ -2385,7 +2446,7 @@ bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis) {
     }
 
     for (size_t index = 0U; index < analysis->reifiable_dep_set_count; ++index) {
-        rd_sort_union_projections(analysis, &analysis->reifiable_dep_sets[index]);
+        rd_sort_reified_uses(analysis, &analysis->reifiable_dep_sets[index]);
     }
     return true;
 }

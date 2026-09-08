@@ -198,6 +198,7 @@
 | AE0613 | spec 父列表形态约束 | AE0183 | object-form spec parent list can only contain object-form specs |
 | AE0614 | spec 父列表唯一性与无环约束 | AE0184 | spec '%.*s' lists '%.*s' more than once in its parent spec list |
 | AE0614 | spec 父列表唯一性与无环约束 | AE0185 | spec '%.*s' forms a cycle through its parent spec list |
+| AE0614 | intersection-form 组成关系无环约束 | （新增模板） | intersection-form spec '%.*s' forms a cycle through its member list |
 | AE0615 | type 声明 spec 列表形态约束 | AE0199 | type '%.*s' declared spec list must contain only spec types but found '%s' |
 | AE0615 | type 声明 spec 列表形态约束 | AE0200 | type '%.*s' declared spec list can only contain object-form specs |
 | AE0616 | type 声明 spec 列表唯一性约束 | AE0201 | type '%.*s' lists '%.*s' more than once in its declared spec list |

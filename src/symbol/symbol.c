@@ -255,6 +255,11 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
         free(projection->path);
     }
     free(decl->reifiable_union_projections);
+    for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
+        feng_symbol_internal_type_free(decl->reifiable_spec_view_coercions[index].source_type);
+        feng_symbol_internal_type_free(decl->reifiable_spec_view_coercions[index].target_type);
+    }
+    free(decl->reifiable_spec_view_coercions);
 
     memset(decl, 0, sizeof(*decl));
     if (free_self) {
@@ -553,6 +558,10 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
     for (index = 0U; index < decl->member_count; ++index) {
         remap_decl_type_targets(decl->members[index], pairs, pair_count);
     }
+    for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
+        remap_type_target(decl->reifiable_spec_view_coercions[index].source_type, pairs, pair_count);
+        remap_type_target(decl->reifiable_spec_view_coercions[index].target_type, pairs, pair_count);
+    }
 }
 
 static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
@@ -595,6 +604,8 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->reifiable_callable_dep_count = 0U;
     clone->reifiable_union_projections = NULL;
     clone->reifiable_union_projection_count = 0U;
+    clone->reifiable_spec_view_coercions = NULL;
+    clone->reifiable_spec_view_coercion_count = 0U;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
         (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
@@ -811,6 +822,27 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
         }
     }
 
+    if (decl->reifiable_spec_view_coercion_count > 0U) {
+        clone->reifiable_spec_view_coercions = calloc(decl->reifiable_spec_view_coercion_count,
+            sizeof(*clone->reifiable_spec_view_coercions));
+        if (clone->reifiable_spec_view_coercions == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+                "out of memory cloning spec view coercions");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_spec_view_coercion_count = decl->reifiable_spec_view_coercion_count;
+        for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
+            const FengSymbolSpecViewCoercionView *source = &decl->reifiable_spec_view_coercions[index];
+            FengSymbolSpecViewCoercionView *target = &clone->reifiable_spec_view_coercions[index];
+            target->source_type = feng_symbol_internal_type_clone(source->source_type, out_error);
+            target->target_type = feng_symbol_internal_type_clone(source->target_type, out_error);
+            if (target->source_type == NULL || target->target_type == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
     if (decl->reifiable_union_projection_count > 0U) {
         clone->reifiable_union_projections = calloc(decl->reifiable_union_projection_count,
                                                     sizeof(*clone->reifiable_union_projections));
