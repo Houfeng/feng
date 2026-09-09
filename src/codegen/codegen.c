@@ -6426,31 +6426,6 @@ static bool cg_user_spec_constraint_indices(CG *cg,
     return true;
 }
 
-static bool cg_user_spec_constraints_from_indices(CG *cg,
-                                                  const size_t *indices,
-                                                  size_t constraint_count,
-                                                  FengToken blame,
-                                                  const UserSpec ***out_constraints) {
-    const UserSpec **constraints = NULL;
-
-    *out_constraints = NULL;
-    if (constraint_count == 0U) return true;
-    constraints = calloc(constraint_count, sizeof *constraints);
-    if (constraints == NULL) {
-        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-    }
-    for (size_t i = 0U; i < constraint_count; ++i) {
-        constraints[i] = cg_user_spec_by_index(cg, indices != NULL ? indices[i] : (size_t)-1);
-        if (indices != NULL && indices[i] != (size_t)-1 && constraints[i] == NULL) {
-            free(constraints);
-            return cg_fail(cg, blame,
-                           "CE0018", "codegen: internal: generic constraint spec index is out of range");
-        }
-    }
-    *out_constraints = constraints;
-    return true;
-}
-
 /* Finds a non-generic user type from the program that owns the reference. */
 static const UserType *cg_find_user_type_by_ref_from_program(
     const CG *cg,
@@ -11281,6 +11256,23 @@ static bool cg_collect_closed_reifiable_dep_instances_inner(
         cg_type_ref_free(closed_ref);
         if (!ok) {
             return false;
+        }
+    }
+
+    /* Generic call projections can require concrete source/constraint layouts
+     * absent from ordinary value construction in the current shared body. */
+    for (size_t index = 0U; index < dep_set->constraint_projection_count; ++index) {
+        const FengConstraintProjectionDep *dep = &dep_set->constraint_projections[index];
+        const FengTypeRef *refs[] = {dep->source_type_ref, dep->target_constraint_ref};
+        for (size_t ref_index = 0U; ref_index < 2U; ++ref_index) {
+            FengTypeRef *closed_ref = cg_type_ref_substitute(
+                refs[ref_index], type_params, type_param_count, type_args);
+            if (closed_ref == NULL) return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            bool ok = cg_collect_generic_instances_from_substituted_type_ref(
+                cg, refs[ref_index], closed_ref, type_params, type_param_count,
+                caller_scope, reference_program);
+            cg_type_ref_free(closed_ref);
+            if (!ok) return false;
         }
     }
 
@@ -27152,6 +27144,21 @@ static bool cg_selected_call_generic_descriptor(
     CGType *constraint_type = NULL;
     bool ok;
 
+    const FengConstraintProjectionUse *projection =
+        feng_semantic_lookup_constraint_projection_use(cg->analysis, call, parameter_index);
+    if (projection != NULL && cg->generic_reified_use_deps != NULL) {
+        size_t slot = feng_semantic_constraint_projection_slot(
+            cg->generic_reified_use_deps, &projection->projection);
+        if (slot == SIZE_MAX) return cg_fail(cg, call->token, "IE0002",
+            "codegen: generic constraint projection has no slot in its dependency owner");
+        Buf expression;
+        buf_init(&expression);
+        buf_append_fmt(&expression, "%s->reified_constraint_projection_descriptors[%zu]",
+            cg->generic_callable_dep_via_desc ? "_desc" : "_td", slot);
+        *out = expression.data;
+        return *out != NULL;
+    }
+
     if (actual == NULL ||
         (actual->kind != CG_TYPE_SPEC && actual->kind != CG_TYPE_CALLABLE) ||
         signature->type_params[parameter_index].constraint == NULL) {
@@ -32225,11 +32232,37 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
         if (!cg_emit_expr_for_expected_type(cg, fi->value, uf->type, &v)) {
             free(assigned); free(tmp); return false;
         }
-        if (!cg_emit_user_field_value_store(cg, tmp, uf, &v, fi->token, true)) {
+        Buf offsets;
+        CGType object_type = {.kind = CG_TYPE_OBJECT, .user = ut};
+
+        buf_init(&offsets);
+        /* Construction outside the owner's shared body still uses the
+         * closed owner's layout, including fixed fields following T.  Reuse
+         * the ordinary field store's kind/copy/ownership protocol. */
+        if (cg_reference_needs_reified_field_layout(cg, &object_type)) {
+            char *descriptor = cg_rtd_expr_for_type(cg, ut, fi->token);
+
+            if (descriptor == NULL) {
+                er_free(&v);
+                free(assigned); free(tmp);
+                return false;
+            }
+            buf_append_fmt(&offsets, "%s->reified_field_offsets", descriptor);
+            free(descriptor);
+            if (offsets.data == NULL) {
+                er_free(&v);
+                free(assigned); free(tmp);
+                return cg_fail(cg, fi->token, "IE0001", "codegen: out of memory");
+            }
+        }
+        if (!cg_emit_user_field_value_store_with_offsets(
+                cg, tmp, uf, offsets.data, idx, &v, fi->token, true)) {
+            buf_free(&offsets);
             er_free(&v);
             free(assigned); free(tmp);
             return false;
         }
+        buf_free(&offsets);
         er_free(&v);
     }
     free(assigned);
@@ -36580,9 +36613,9 @@ static bool cg_user_field_reified_index(const CG *cg,
 }
 
 /* Store a field value with an optional explicit dynamic-layout authority.
- * Reified values constructed outside their own owner method supply their
- * aggregate descriptor's offset table; owner shared bodies keep using the
- * active type descriptor selected by the existing context. */
+ * Reified instances constructed outside their own owner method supply their
+ * type/aggregate descriptor's offset table; owner shared bodies keep using
+ * the active descriptor selected by the existing context. */
 static bool cg_emit_user_field_value_store_with_offsets(
     CG *cg,
     const char *object_expr,
@@ -45917,7 +45950,7 @@ static bool cg_callable_dep_set_has_descriptor_data_inner(
         return false;
     }
     if (dep_set->dep_count > 0U || dep_set->union_projection_count > 0U ||
-        dep_set->spec_view_coercion_count > 0U) {
+        dep_set->spec_view_coercion_count > 0U || dep_set->constraint_projection_count > 0U) {
         return true;
     }
     for (size_t index = 0U; index < stack_count; ++index) {
@@ -46954,6 +46987,47 @@ static bool cg_emit_spec_view_coercion_table(CG *cg, Buf *out,
     return ok;
 }
 
+/* Generate target-constraint records at closure time using the existing
+ * three-field static cache. Preserve open slots even when closed records are
+ * shared. No value conversion, descriptor-sized stack record, or dynamic
+ * witness lookup is introduced into a shared invocation. */
+static bool cg_emit_constraint_projection_table(CG *cg, Buf *out,
+    const char *descriptor_name, const FengReifiableDepSet *set,
+    const FengTypeParam *params, size_t count, FengTypeRef *const *args,
+    const FengProgram *program, FengToken blame) {
+    if (set == NULL || set->constraint_projection_count == 0U) return true;
+    Buf entries;
+    bool ok = true;
+    buf_init(&entries);
+    for (size_t index = 0U; ok && index < set->constraint_projection_count; ++index) {
+        const FengConstraintProjectionDep *dep = &set->constraint_projections[index];
+        FengTypeRef *source_ref = NULL, *target_ref = NULL;
+        CGType *source = NULL, *target = NULL;
+        char *descriptor = NULL;
+        ok = cg_close_reified_use_type(cg, dep->source_type_ref, params, count, args,
+                program, blame, &source_ref, &source) &&
+             cg_close_reified_use_type(cg, dep->target_constraint_ref, params, count, args,
+                program, blame, &target_ref, &target);
+        if (ok && (source == NULL || target == NULL || target->user_spec == NULL ||
+                   source->kind == CG_TYPE_GENERIC_PARAM)) {
+            ok = cg_fail(cg, blame, "IE0002", "codegen: constraint projection did not close to a type and spec");
+        }
+        if (ok) ok = cg_ensure_user_spec_members_registered(cg, (UserSpec *)target->user_spec) &&
+            cg_generic_descriptor_expr(cg, source, target->user_spec, &blame, &descriptor);
+        if (ok) buf_append_fmt(&entries, "    %s,\n", descriptor);
+        free(descriptor);
+        cg_type_ref_free(source_ref);
+        cg_type_ref_free(target_ref);
+        cgtype_free(source);
+        cgtype_free(target);
+    }
+    if (ok) buf_append_fmt(out,
+        "static const FengGenericParamDescriptor *const %s__constraint_projections[] = {\n%s};\n",
+        descriptor_name, entries.data);
+    buf_free(&entries);
+    return ok;
+}
+
 /* Emit one static function descriptor for a fully closed callable invocation.
  * The dependency order is the same canonical sort used by the shared body. */
 static bool cg_emit_closed_callable_fdesc(CG *cg,
@@ -47346,6 +47420,8 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     if (!cg_emit_union_projection_table(cg, &cg->statics, descriptor_var,
             dep_set, type_params, type_param_count, type_args, reference_program, blame) ||
         !cg_emit_spec_view_coercion_table(cg, &cg->statics, descriptor_var,
+            dep_set, type_params, type_param_count, type_args, reference_program, blame) ||
+        !cg_emit_constraint_projection_table(cg, &cg->statics, descriptor_var,
             dep_set, type_params, type_param_count, type_args, reference_program, blame)) {
         goto cleanup;
     }
@@ -47418,6 +47494,10 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     if (dep_set != NULL && dep_set->spec_view_coercion_count > 0U) {
         buf_append_fmt(&cg->statics, ", .reified_spec_view_coercions = %s__spec_views",
                        descriptor_var);
+    }
+    if (dep_set != NULL && dep_set->constraint_projection_count > 0U) {
+        buf_append_fmt(&cg->statics,
+            ", .reified_constraint_projection_descriptors = %s__constraint_projections", descriptor_var);
     }
     if (aggregate_count > 0U) {
         buf_append_fmt(&cg->statics,
@@ -49245,6 +49325,9 @@ static bool cg_emit_owner_callable_dep_array(
             owner_type_params, owner_type_param_count, owner_type_args,
             cg_find_decl_owner_program(cg, dep_set->owner_decl), blame) ||
         !cg_emit_spec_view_coercion_table(cg, out, owner_descriptor_name, dep_set,
+            owner_type_params, owner_type_param_count, owner_type_args,
+            cg_find_decl_owner_program(cg, dep_set->owner_decl), blame) ||
+        !cg_emit_constraint_projection_table(cg, out, owner_descriptor_name, dep_set,
             owner_type_params, owner_type_param_count, owner_type_args,
             cg_find_decl_owner_program(cg, dep_set->owner_decl), blame)) {
         return false;
@@ -53109,7 +53192,8 @@ static bool cg_user_spec_witness_prefix_compatible(const UserSpec *src,
         return false;
     }
     for (size_t i = 0; i < dst->member_count; ++i) {
-        if (!cg_user_spec_member_compatible(&src->members[i], &dst->members[i])) {
+        if (!cg_user_spec_members_semantically_equivalent(&src->members[i], &dst->members[i]) ||
+            !cg_user_spec_member_compatible(&src->members[i], &dst->members[i])) {
             return false;
         }
     }
@@ -53651,20 +53735,34 @@ static bool cg_ensure_intersection_witness_instance(
 
     buf_init(&var);
     if (user_type != NULL) {
+        /* Witness identity belongs to the actual declarations, not the
+         * consumer currently instantiating a projection. Independent packages
+         * may legally declare same-named subjects and target constraints. */
+        const FengProgram *type_program = cg_find_decl_owner_program(cg, user_type->decl);
+        const FengProgram *spec_program = cg_find_decl_owner_program(cg, intersection_spec->decl);
+        char *type_module = type_program != NULL
+            ? cg_module_mangle(type_program->module_segments, type_program->module_segment_count) : NULL;
+        char *spec_module = spec_program != NULL
+            ? cg_module_mangle(spec_program->module_segments, spec_program->module_segment_count) : NULL;
         char *type_sanitized =
             cg_sanitize(user_type->feng_name, strlen(user_type->feng_name));
 
-        if (type_sanitized == NULL) {
+        if (type_sanitized == NULL || type_module == NULL || spec_module == NULL) {
+            free(type_sanitized);
+            free(type_module);
+            free(spec_module);
             free(spec_sanitized);
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(&var,
                        "FengSpecWitness__%s__%s__as__%s__%s",
-                       cg->module_mangle,
+                       type_module,
                        type_sanitized,
-                       cg->module_mangle,
+                       spec_module,
                        spec_sanitized);
         free(type_sanitized);
+        free(type_module);
+        free(spec_module);
     } else {
         const size_t witness_id = cg->subject_witness_counter++;
 
@@ -57271,6 +57369,19 @@ static bool cg_pass_collect_generic_type_instances(CG *cg, const FengProgram *pr
                                    cg, decl, &local_type_param)) {
                         scope.first = &local_type_param;
                         scope.first_count = 1U;
+                    }
+                    /* Imported receivers are not otherwise visited as local
+                     * declarations. Their constraints still form the shared
+                     * fit body's parameter surface, in the receiver's scope. */
+                    for (size_t parameter_index = 0U;
+                         parameter_index < scope.first_count; ++parameter_index) {
+                        if (!cg_collect_generic_instances_from_type_ref_from_program(
+                                cg, scope.first[parameter_index].constraint, scope,
+                                target_decl != NULL
+                                    ? cg_find_decl_owner_program(cg, target_decl) : prog)) {
+                            cg->cur_program = NULL;
+                            return false;
+                        }
                     }
                     if (!cg_collect_generic_instances_from_type_ref(cg, decl->as.fit_decl.target, scope)) {
                         cg->cur_program = NULL;
@@ -60879,6 +60990,10 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             buf_append_fmt(td, "    .reified_spec_view_coercions = %s__spec_views,\n",
                 t->c_aggregate_desc_name);
         }
+        if (value_projection_deps != NULL && value_projection_deps->constraint_projection_count > 0U) {
+            buf_append_fmt(td, "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
+                t->c_aggregate_desc_name);
+        }
         if (cg_user_type_uses_static_binding_states(t) &&
             (cg_program_origin(cg, t->owner_program) !=
                  FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE ||
@@ -61056,6 +61171,8 @@ static void cg_emit_user_type_forward(CG *cg, const UserType *t) {
 static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     Buf *td = &cg->type_defs;
     bool descriptor_has_default_zero;
+    const bool has_concrete_layout = !t->is_generic_instance ||
+        t->generic_context_type_param_count == 0U;
 
     if (cg_user_type_is_value_semantics(t)) {
         cg_emit_value_type_definition(cg, t);
@@ -61123,7 +61240,10 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * Per-field dispatch goes through cg_emit_field_release so the AGGREGATE
      * branch (Step 4b) can hook in without touching this driver. */
     bool any_managed = false;
-    for (size_t i = 0; i < t->field_count; i++) {
+    /* Open reference descriptors are still used as diagnostic identities by
+     * managed arrays. They cannot describe field lifetimes: their nested
+     * value layout is open. Real objects always use closed descriptors. */
+    for (size_t i = 0; has_concrete_layout && i < t->field_count; i++) {
         if (cgtype_value_kind(t->fields[i].type) != CG_VK_TRIVIAL) {
             any_managed = true;
             break;
@@ -61173,7 +61293,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
      * cg_emit_field_managed_descriptors so AGGREGATE field flattening (Step
      * 4b) can be added in one place without re-walking this driver. */
     size_t managed_count = 0U;
-    for (size_t i = 0; i < t->field_count; i++) {
+    for (size_t i = 0; has_concrete_layout && i < t->field_count; i++) {
         managed_count += cg_field_managed_descriptor_count(cg, t->fields[i].type,
                                                            t->decl->token);
     }
@@ -61550,6 +61670,10 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
     }
     if (projection_deps != NULL && projection_deps->spec_view_coercion_count > 0U) {
         buf_append_fmt(td, "    .reified_spec_view_coercions = %s__spec_views,\n",
+            t->c_desc_name);
+    }
+    if (projection_deps != NULL && projection_deps->constraint_projection_count > 0U) {
+        buf_append_fmt(td, "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
             t->c_desc_name);
     }
     if (cg_user_type_uses_static_binding_states(t) &&
@@ -63017,12 +63141,8 @@ static bool cg_emit_generic_type_method_wrapper_into(
     char **type_param_names = NULL;
     char **method_type_param_names = NULL;
     char **combined_type_param_names = NULL;
-    const char **wrapper_context_desc_names = NULL;
-    const UserSpec **wrapper_context_constraint_specs = NULL;
-    const UserSpec **constraint_specs = NULL;
     CGType **origin_param_types = NULL;
     char **origin_param_bridge_names = NULL;
-    char **desc_exprs = NULL;
     const char **method_desc_names = NULL;
     int saved_tmp_counter = cg->tmp_counter;
     int saved_local_counter = cg->local_counter;
@@ -63061,9 +63181,6 @@ static bool cg_emit_generic_type_method_wrapper_into(
     }
 
     if (!cg_generic_type_param_names(cg, decl, &type_param_names)) goto cleanup;
-    if (!cg_build_generic_param_constraints(cg, decl->as.type_decl.type_params,
-                                            tp_count, m->member->token,
-                                            &constraint_specs)) goto cleanup;
     if (method_tp_count > 0U &&
         !cg_callable_type_param_names(cg, sig, m->member->token,
                                       &method_type_param_names)) {
@@ -63086,32 +63203,6 @@ static bool cg_emit_generic_type_method_wrapper_into(
         for (size_t i = 0; i < method_tp_count; ++i) {
             combined_type_param_names[tp_count + i] = strdup(method_type_param_names[i]);
             if (combined_type_param_names[tp_count + i] == NULL) {
-                cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
-                goto cleanup;
-            }
-        }
-    }
-    if (t->generic_context_type_param_count > 0U) {
-        if (!cg_user_spec_constraints_from_indices(cg,
-                                                   t->generic_context_type_param_constraint_indices,
-                                                   t->generic_context_type_param_count,
-                                                   m->member->token,
-                                                   &wrapper_context_constraint_specs)) {
-            goto cleanup;
-        }
-        wrapper_context_desc_names = calloc(t->generic_context_type_param_count,
-                                            sizeof *wrapper_context_desc_names);
-        if (wrapper_context_desc_names == NULL) {
-            cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
-            goto cleanup;
-        }
-        for (size_t i = 0U; i < t->generic_context_type_param_count; ++i) {
-            Buf b;
-
-            buf_init(&b);
-            buf_append_fmt(&b, "_type_desc->reified_generic_params[%zu]", i);
-            wrapper_context_desc_names[i] = b.data;
-            if (wrapper_context_desc_names[i] == NULL) {
                 cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
                 goto cleanup;
             }
@@ -63140,9 +63231,7 @@ static bool cg_emit_generic_type_method_wrapper_into(
                                     ? calloc(sig->param_count,
                                              sizeof *origin_param_bridge_names)
                                     : NULL;
-    desc_exprs = tp_count ? calloc(tp_count, sizeof *desc_exprs) : NULL;
-    if ((sig->param_count && (!origin_param_types || !origin_param_bridge_names)) ||
-        (tp_count && !desc_exprs)) {
+    if (sig->param_count && (!origin_param_types || !origin_param_bridge_names)) {
         cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
@@ -63159,38 +63248,9 @@ static bool cg_emit_generic_type_method_wrapper_into(
     }
     cg_clear_generic_type_context(cg);
 
-    for (size_t i = 0; i < tp_count; ++i) {
-        CGType *arg_type = NULL;
-        if (t->generic_context_type_param_count > 0U) {
-            cg_activate_generic_type_context(cg,
-                                             t->generic_context_type_param_count,
-                                             t->generic_context_type_param_names,
-                                             wrapper_context_constraint_specs,
-                                             wrapper_context_desc_names);
-        }
-        if (i >= t->generic_type_arg_count ||
-            !cg_resolve_type(cg, t->generic_type_args[i], &m->member->token, &arg_type)) {
-            if (t->generic_context_type_param_count > 0U) {
-                cg_clear_generic_type_context(cg);
-            }
-            cgtype_free(arg_type);
-            goto cleanup;
-        }
-        if (!cg_instantiated_spec_generic_descriptor(cg, arg_type,
-                constraint_specs[i], decl->as.type_decl.type_params[i].constraint,
-                decl->as.type_decl.type_params, tp_count, t->generic_type_args,
-                t->owner_program, &m->member->token, &desc_exprs[i])) {
-            if (t->generic_context_type_param_count > 0U) {
-                cg_clear_generic_type_context(cg);
-            }
-            cgtype_free(arg_type);
-            goto cleanup;
-        }
-        if (t->generic_context_type_param_count > 0U) {
-            cg_clear_generic_type_context(cg);
-        }
-        cgtype_free(arg_type);
-    }
+    /* Type-level argument records already belong to the instance descriptor
+     * forwarded below. Do not recompute unused records under the caller's
+     * open constraints; only method-level records are separate arguments. */
 
     if (cg_program_origin(cg, t->owner_program) ==
         FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
@@ -63489,14 +63549,6 @@ cleanup:
     }
     free(origin_param_types);
     cg_free_cstr_array(origin_param_bridge_names, sig->param_count);
-    free((void *)constraint_specs);
-    if (desc_exprs) {
-        for (size_t i = 0; i < tp_count; ++i) free(desc_exprs[i]);
-    }
-    free(desc_exprs);
-    free((void *)wrapper_context_constraint_specs);
-    cg_free_const_cstr_array(wrapper_context_desc_names,
-                             t->generic_context_type_param_count);
     cg_free_const_cstr_array(method_desc_names, method_tp_count);
     cg_free_cstr_array(method_type_param_names, method_tp_count);
     cg_free_cstr_array(combined_type_param_names, combined_tp_count);

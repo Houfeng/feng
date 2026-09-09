@@ -2358,6 +2358,25 @@ static bool restore_imported_spec_view_coercions(FengSemanticAnalysis *analysis,
     return true;
 }
 
+/* Restore canonical open constraint pairs in wire order, preserving stable slots. */
+static bool restore_imported_constraint_projections(FengSemanticAnalysis *analysis,
+    SynthDecl *storage, const FengDecl *owner, const FengTypeMember *member,
+    const FengSymbolDeclView *symbol) {
+    if (symbol->reifiable_constraint_projection_count == 0U) return true;
+    FengReifiableDepSet *set = feng_semantic_get_or_create_member_reifiable_dep_set(analysis, owner, member);
+    if (set == NULL) return false;
+    for (size_t i = 0U; i < symbol->reifiable_constraint_projection_count; ++i) {
+        const FengSymbolConstraintProjectionView *view = &symbol->reifiable_constraint_projections[i];
+        FengConstraintProjectionDep pair = {
+            restore_union_projection_type(storage, view->source_type),
+            restore_union_projection_type(storage, view->target_type)
+        };
+        if (!feng_semantic_reifiable_dep_set_append_constraint_projection(set, &pair) ||
+            feng_semantic_constraint_projection_slot(set, &pair) != i) return false;
+    }
+    return true;
+}
+
 /* Restore imported codegen facts in the semantic side-table abstraction. */
 bool feng_symbol_imported_module_cache_populate_codegen_metadata(
     FengSymbolImportedModuleCache *cache,
@@ -2396,7 +2415,8 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
             restore_imported_reifiable_deps(
                 cache, analysis, sd, &sd->decl, NULL, sv);
             if (!restore_imported_union_projections(analysis, sd, &sd->decl, NULL, sv) ||
-                !restore_imported_spec_view_coercions(analysis, sd, &sd->decl, NULL, sv)) {
+                !restore_imported_spec_view_coercions(analysis, sd, &sd->decl, NULL, sv) ||
+                !restore_imported_constraint_projections(analysis, sd, &sd->decl, NULL, sv)) {
                 free(module_name);
                 return false;
             }
@@ -2440,6 +2460,8 @@ bool feng_symbol_imported_module_cache_populate_codegen_metadata(
                     if (!restore_imported_union_projections(analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view) ||
                         !restore_imported_spec_view_coercions(analysis, sd, &sd->decl,
+                            ast_members[ast_member_index], member_view) ||
+                !restore_imported_constraint_projections(analysis, sd, &sd->decl,
                             ast_members[ast_member_index], member_view)) {
                         free(module_name);
                         return false;

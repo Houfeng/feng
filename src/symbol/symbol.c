@@ -260,6 +260,11 @@ static void decl_dispose(FengSymbolDeclView *decl, bool free_self) {
         feng_symbol_internal_type_free(decl->reifiable_spec_view_coercions[index].target_type);
     }
     free(decl->reifiable_spec_view_coercions);
+    for (index = 0U; index < decl->reifiable_constraint_projection_count; ++index) {
+        feng_symbol_internal_type_free(decl->reifiable_constraint_projections[index].source_type);
+        feng_symbol_internal_type_free(decl->reifiable_constraint_projections[index].target_type);
+    }
+    free(decl->reifiable_constraint_projections);
 
     memset(decl, 0, sizeof(*decl));
     if (free_self) {
@@ -562,6 +567,11 @@ static void remap_decl_type_targets(FengSymbolDeclView *decl,
         remap_type_target(decl->reifiable_spec_view_coercions[index].source_type, pairs, pair_count);
         remap_type_target(decl->reifiable_spec_view_coercions[index].target_type, pairs, pair_count);
     }
+
+    for (index = 0U; index < decl->reifiable_constraint_projection_count; ++index) {
+        remap_type_target(decl->reifiable_constraint_projections[index].source_type, pairs, pair_count);
+        remap_type_target(decl->reifiable_constraint_projections[index].target_type, pairs, pair_count);
+    }
 }
 
 static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
@@ -606,6 +616,8 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
     clone->reifiable_union_projection_count = 0U;
     clone->reifiable_spec_view_coercions = NULL;
     clone->reifiable_spec_view_coercion_count = 0U;
+    clone->reifiable_constraint_projections = NULL;
+    clone->reifiable_constraint_projection_count = 0U;
 
     if ((decl->abi_library != NULL && clone->abi_library == NULL) ||
         (decl->abi_symbol != NULL && clone->abi_symbol == NULL) ||
@@ -835,6 +847,28 @@ static FengSymbolDeclView *clone_decl_recursive(const FengSymbolDeclView *decl,
         for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
             const FengSymbolSpecViewCoercionView *source = &decl->reifiable_spec_view_coercions[index];
             FengSymbolSpecViewCoercionView *target = &clone->reifiable_spec_view_coercions[index];
+            target->source_type = feng_symbol_internal_type_clone(source->source_type, out_error);
+            target->target_type = feng_symbol_internal_type_clone(source->target_type, out_error);
+            if (target->source_type == NULL || target->target_type == NULL) {
+                decl_dispose(clone, true);
+                return NULL;
+            }
+        }
+    }
+
+    if (decl->reifiable_constraint_projection_count > 0U) {
+        clone->reifiable_constraint_projections = calloc(decl->reifiable_constraint_projection_count,
+            sizeof(*clone->reifiable_constraint_projections));
+        if (clone->reifiable_constraint_projections == NULL) {
+            feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+                "out of memory cloning constraint projections");
+            decl_dispose(clone, true);
+            return NULL;
+        }
+        clone->reifiable_constraint_projection_count = decl->reifiable_constraint_projection_count;
+        for (index = 0U; index < decl->reifiable_constraint_projection_count; ++index) {
+            const FengSymbolConstraintProjectionView *source = &decl->reifiable_constraint_projections[index];
+            FengSymbolConstraintProjectionView *target = &clone->reifiable_constraint_projections[index];
             target->source_type = feng_symbol_internal_type_clone(source->source_type, out_error);
             target->target_type = feng_symbol_internal_type_clone(source->target_type, out_error);
             if (target->source_type == NULL || target->target_type == NULL) {

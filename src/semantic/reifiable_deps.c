@@ -382,6 +382,76 @@ bool feng_semantic_reifiable_dep_set_append_spec_view_coercion(
     return true;
 }
 
+/* Resolve a complete open source/constraint pair without closing its types. */
+size_t feng_semantic_constraint_projection_slot(const FengReifiableDepSet *set,
+    const FengConstraintProjectionDep *projection) {
+    if (set == NULL || projection == NULL) return SIZE_MAX;
+    for (size_t index = 0U; index < set->constraint_projection_count; ++index) {
+        const FengConstraintProjectionDep *item = &set->constraint_projections[index];
+        if (rd_type_ref_equals(item->source_type_ref, projection->source_type_ref) &&
+            rd_type_ref_equals(item->target_constraint_ref, projection->target_constraint_ref)) return index;
+    }
+    return SIZE_MAX;
+}
+
+/* Append a canonical dependency; referenced type trees belong to analysis. */
+bool feng_semantic_reifiable_dep_set_append_constraint_projection(
+    FengReifiableDepSet *set, const FengConstraintProjectionDep *projection) {
+    if (set == NULL || projection == NULL || projection->source_type_ref == NULL ||
+        projection->target_constraint_ref == NULL) return false;
+    if (feng_semantic_constraint_projection_slot(set, projection) != SIZE_MAX) return true;
+    if (set->constraint_projection_count == set->constraint_projection_capacity) {
+        if (set->constraint_projection_capacity > SIZE_MAX / 2U) return false;
+        size_t capacity = set->constraint_projection_capacity == 0U
+            ? 8U : set->constraint_projection_capacity * 2U;
+        FengConstraintProjectionDep *grown = capacity > SIZE_MAX / sizeof(*grown) ? NULL :
+            realloc(set->constraint_projections, capacity * sizeof(*grown));
+        if (grown == NULL) return false;
+        set->constraint_projections = grown;
+        set->constraint_projection_capacity = capacity;
+    }
+    set->constraint_projections[set->constraint_projection_count++] = *projection;
+    return true;
+}
+
+/* A call-site mapping is never exported: imported bodies use the wire slots. */
+const FengConstraintProjectionUse *feng_semantic_lookup_constraint_projection_use(
+    const FengSemanticAnalysis *analysis, const FengExpr *call, size_t parameter_index) {
+    if (analysis == NULL) return NULL;
+    for (size_t index = 0U; index < analysis->constraint_projection_use_count; ++index) {
+        const FengConstraintProjectionUse *use = &analysis->constraint_projection_uses[index];
+        if (use->call == call && use->parameter_index == parameter_index) return use;
+    }
+    return NULL;
+}
+
+/* Record one validated source argument alongside its owner-local dependency. */
+static bool rd_record_constraint_projection_use(CollectContext *ctx,
+    const FengExpr *call, size_t parameter_index, const FengConstraintProjectionDep *projection) {
+    FengSemanticAnalysis *analysis = ctx->analysis;
+    if (!feng_semantic_reifiable_dep_set_append_constraint_projection(ctx->dep_set, projection)) return false;
+    for (size_t index = 0U; index < analysis->constraint_projection_use_count; ++index) {
+        FengConstraintProjectionUse *use = &analysis->constraint_projection_uses[index];
+        if (use->call == call && use->parameter_index == parameter_index) {
+            use->projection = *projection;
+            return true;
+        }
+    }
+    if (analysis->constraint_projection_use_count == analysis->constraint_projection_use_capacity) {
+        if (analysis->constraint_projection_use_capacity > SIZE_MAX / 2U) return false;
+        size_t capacity = analysis->constraint_projection_use_capacity == 0U
+            ? 16U : analysis->constraint_projection_use_capacity * 2U;
+        FengConstraintProjectionUse *grown = capacity > SIZE_MAX / sizeof(*grown) ? NULL :
+            realloc(analysis->constraint_projection_uses, capacity * sizeof(*grown));
+        if (grown == NULL) return false;
+        analysis->constraint_projection_uses = grown;
+        analysis->constraint_projection_use_capacity = capacity;
+    }
+    analysis->constraint_projection_uses[analysis->constraint_projection_use_count++] =
+        (FengConstraintProjectionUse){call, parameter_index, *projection};
+    return true;
+}
+
 /* 判断已解析 callable 是否使用共享 ABI。构造器继续使用 type descriptor
  * 路径，不属于 callable descriptor graph。 */
 static bool rd_resolved_callable_uses_shared_abi(
@@ -1472,6 +1542,107 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
     try_collect_type_ref(ctx, owned_current);
 }
 
+/* Identify the declared spec form after canonical namespace normalization. */
+static bool rd_constraint_is_intersection(const FengSemanticAnalysis *analysis,
+    const FengTypeRef *constraint) {
+    const FengDecl *decl = find_type_decl_by_named_ref(analysis, constraint);
+    return decl != NULL && decl->kind == FENG_DECL_SPEC &&
+        decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION;
+}
+
+/* Collect generic call adaptation in the current dependency domain. Source
+ * arguments and destination constraints are persisted in the caller's OPEN
+ * scope. Simultaneous substitution prevents a caller T from being mistaken
+ * for a same-spelled parameter in a different callee scope. */
+static void rd_collect_call_constraint_projections(CollectContext *ctx,
+    const FengExpr *expr) {
+    const FengResolvedCallable *resolved = &expr->as.call.resolved_callable;
+    const FengCallableSignature *signature = resolved->function_decl != NULL
+        ? &resolved->function_decl->as.function_decl
+        : resolved->member != NULL ? &resolved->member->as.callable : NULL;
+    const FengDecl *callee_owner = resolved->function_decl != NULL ? resolved->function_decl
+        : resolved->fit_decl != NULL ? resolved->fit_decl : resolved->owner_type_decl;
+    const FengTypeParam *owner_params = NULL;
+    size_t owner_count = 0U;
+    FengTypeParam *params = NULL;
+    const FengTypeRef **args = NULL;
+    if (ctx->dep_set == NULL || signature == NULL || signature->type_param_count == 0U ||
+        !rd_resolved_callable_uses_shared_abi(ctx->analysis, resolved)) return;
+    if (resolved->callable_type_arg_count != signature->type_param_count || callee_owner == NULL) {
+        ctx->failed = true;
+        return;
+    }
+    if (resolved->owner_type_decl != NULL && resolved->owner_type_decl->kind == FENG_DECL_TYPE) {
+        owner_params = resolved->owner_type_decl->as.type_decl.type_params;
+        owner_count = resolved->owner_type_decl->as.type_decl.type_param_count;
+    }
+    if (owner_count > 0U && (resolved->owner_instance_type_ref == NULL ||
+        resolved->owner_instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
+        resolved->owner_instance_type_ref->as.named.type_arg_count != owner_count)) {
+        ctx->failed = true;
+        return;
+    }
+    size_t count = signature->type_param_count + owner_count;
+    params = calloc(count, sizeof(*params));
+    args = calloc(count, sizeof(*args));
+    if (params == NULL || args == NULL) { ctx->failed = true; goto cleanup; }
+    for (size_t index = 0U; index < signature->type_param_count; ++index) {
+        params[index] = signature->type_params[index];
+        args[index] = resolved->callable_type_args[index];
+    }
+    for (size_t index = 0U; index < owner_count; ++index) {
+        params[signature->type_param_count + index] = owner_params[index];
+        args[signature->type_param_count + index] =
+            resolved->owner_instance_type_ref->as.named.type_args[index];
+    }
+    for (size_t index = 0U; index < signature->type_param_count && !ctx->failed; ++index) {
+        const FengTypeRef *constraint = signature->type_params[index].constraint;
+        const FengTypeRef *actual = args[index];
+        if (constraint == NULL || !type_ref_contains_type_param(actual, ctx->type_params,
+                ctx->type_param_count)) continue;
+        const FengTypeRef *canonical = feng_semantic_canonical_reifiable_type_ref(
+            ctx->analysis, callee_owner, params, count, constraint);
+        FengTypeRef *substituted = canonical != NULL
+            ? rd_clone_type_ref_substituting(canonical, params, count, args) : NULL;
+        FengConstraintProjectionDep projection = {0};
+        if (substituted != NULL) {
+            projection.source_type_ref = feng_semantic_canonical_reifiable_type_ref(
+                ctx->analysis, ctx->dep_set->owner_decl, ctx->type_params, ctx->type_param_count, actual);
+            projection.target_constraint_ref = feng_semantic_canonical_reifiable_type_ref(
+                ctx->analysis, ctx->dep_set->owner_decl, ctx->type_params, ctx->type_param_count, substituted);
+        }
+        rd_free_synthesized_type_ref(substituted);
+        if (projection.source_type_ref == NULL || projection.target_constraint_ref == NULL) {
+            ctx->failed = true;
+            break;
+        }
+        const FengTypeRef *source_constraint = projection.source_type_ref;
+        bool source_is_parameter = false;
+        if (actual->kind == FENG_TYPE_REF_NAMED && actual->as.named.segment_count == 1U &&
+            actual->as.named.type_arg_count == 0U) {
+            for (size_t parameter = ctx->type_param_count; parameter > 0U; --parameter) {
+                const FengTypeParam *source = &ctx->type_params[parameter - 1U];
+                if (rd_slice_equals(actual->as.named.segments[0], source->name)) {
+                    source_is_parameter = true;
+                    source_constraint = source->constraint == NULL ? NULL :
+                        feng_semantic_canonical_reifiable_type_ref(ctx->analysis,
+                            ctx->dep_set->owner_decl, ctx->type_params, ctx->type_param_count,
+                            source->constraint);
+                    break;
+                }
+            }
+        }
+        if (source_is_parameter && rd_type_ref_equals(source_constraint,
+                projection.target_constraint_ref)) continue;
+        if (!rd_constraint_is_intersection(ctx->analysis, source_constraint) &&
+            !rd_constraint_is_intersection(ctx->analysis, projection.target_constraint_ref)) continue;
+        if (!rd_record_constraint_projection_use(ctx, expr, index, &projection)) ctx->failed = true;
+    }
+cleanup:
+    free(params);
+    free(args);
+}
+
 /* Collect the caller-view signature required to lower a lambda into its
  * resolved callable-form spec. Lambda parameter annotations alone do not
  * describe target-only result forms such as `Pair<T, string>`: the target
@@ -1641,6 +1812,7 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
                 ctx->dep_set,
                 &expr->as.call.resolved_callable);
             rd_try_collect_call_return_type_dep(ctx, expr);
+            rd_collect_call_constraint_projections(ctx, expr);
             return;
 
         case FENG_EXPR_MEMBER:
@@ -1960,6 +2132,13 @@ static bool collect_for_type(FengSemanticAnalysis *analysis,
     /* 成员字段类型 + 初始化表达式。 */
     for (i = 0U; i < decl->as.type_decl.member_count; ++i) {
         const FengTypeMember *member = decl->as.type_decl.members[i];
+
+        /* Creating a method's set may relocate the analysis-wide array.
+         * Never retain its old owner pointer for a subsequent field/ctor/dtor. */
+        if (ctx.type_param_count > 0U) {
+            dep_set = feng_semantic_get_or_create_reifiable_dep_set(analysis, decl);
+            if (dep_set == NULL) return false;
+        }
 
         if (member->kind == FENG_TYPE_MEMBER_FIELD) {
             if (dep_set == NULL) {
@@ -2350,7 +2529,8 @@ static void rd_sort_reified_uses(const FengSemanticAnalysis *analysis,
     FengTypeParam implicit_param;
     const FengDecl *owner = dep_set->owner_decl;
     FengSemanticModuleOrigin origin;
-    if ((dep_set->union_projection_count < 2U && dep_set->spec_view_coercion_count < 2U) || owner == NULL ||
+    if ((dep_set->union_projection_count < 2U && dep_set->spec_view_coercion_count < 2U &&
+         dep_set->constraint_projection_count < 2U) || owner == NULL ||
         (rd_find_decl_module_origin(analysis, owner, &origin) &&
          origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)) {
         return;
@@ -2396,6 +2576,19 @@ static void rd_sort_reified_uses(const FengSemanticAnalysis *analysis,
             --slot;
         }
         dep_set->spec_view_coercions[slot] = value;
+    }
+    for (size_t index = 1U; index < dep_set->constraint_projection_count; ++index) {
+        FengConstraintProjectionDep value = dep_set->constraint_projections[index];
+        size_t slot = index;
+        while (slot > 0U) {
+            const FengConstraintProjectionDep *previous = &dep_set->constraint_projections[slot - 1U];
+            int order = rd_compare_projection_type(&context, value.source_type_ref, previous->source_type_ref);
+            if (order == 0) order = rd_compare_projection_type(&context,
+                value.target_constraint_ref, previous->target_constraint_ref);
+            if (order >= 0) break;
+            dep_set->constraint_projections[slot--] = *previous;
+        }
+        dep_set->constraint_projections[slot] = value;
     }
 }
 

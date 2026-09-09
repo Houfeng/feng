@@ -1,0 +1,36 @@
+open module fcts_middle.constraint_projection;
+import fcts_lib.test.constraint_projection;
+
+/** A provider that knows T only through another package's constraint metadata. */
+open func cp_middle<A, T: CPAll<A>>(value: T): i32 { return cp_route<A,T>(value); }
+/** The caller and both projected inner layers are compiled in different packages. */
+open func cp_middle_escape<A, T: CPBoth<A>>(value: T): CPNumber { return cp_escape<A,T>(value); }
+/** A new target constraint known only to this provider and its consumers. */
+open spec CPMiddleLeftExtra<A>: CPLeft<A> & CPExtra;
+/** Both projections are compiled inside this independent target's shared body. */
+open func cp_middle_pair<A, T: CPMiddleLeftExtra<A>>(value: T): i32 {
+    return cp_left<A,T>(value) + cp_extra<T>(value);
+}
+/** This fit cannot know dependencies introduced by the peer package. */
+open fit CPWideOwner<A,T> {
+    /** A non-component intersection target must still be reified. */
+    func middle_projection(): i32 { return cp_middle_pair<A,T>(self.value); }
+}
+/** Aggregate owners use the same callable-owned dependency table. */
+open fit CPWideValueOwner<A,T> {
+    /** Independent value-owner projection. */
+    func middle_projection(): i32 { return cp_middle_pair<A,T>(self.value); }
+}
+/** External fit dependencies belong to this callable, not to the library owner. */
+open fit CPOwner<T> {
+    /** Its right projection coexists with the provider's left projection. */
+    func external_read(): i32 { return cp_right<T>(self.value); }
+}
+/** The peer declares this same short name with a different nominal identity. */
+open spec CPSameName: CPRight & CPExtra;
+/** Weighted results make both selected slots observable. */
+open func cp_middle_same<T: CPSameName>(value: T): i32 {
+    return cp_right<T>(value) + cp_extra<T>(value) * 10;
+}
+/** A consumer must generate a projection with this provider's full target identity. */
+open func cp_middle_same_route<A, T: CPAll<A>>(value: T): i32 { return cp_middle_same<T>(value); }

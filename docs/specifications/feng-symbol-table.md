@@ -483,7 +483,7 @@ Header
 
 保留规则:
 
-- `0x000A` 至 `0x000F` 预留给未来核心节。
+- `0x000A`、`0x000B` 分别用于下述视角形成、约束投影依赖节；`0x000C` 至 `0x000F` 预留。
 - `0x0013` 至 `0x001F` 预留给未来 workspace-cache 专用节。
 - package-public profile 不得出现 `0x0010` 以上的 workspace-only 节。
 
@@ -676,6 +676,29 @@ value1／value2 为零。记录按 `(owner_symbol_id, ordinal)` 排序；属性�
 类型引用参与已有私有表示依赖闭包，但不授予源级访问权。此节只传递编译期身份，不保存
 box 描述符地址、witness 地址或 payload 偏移；consumer 在具化点生成这些静态信息。
 转换准入仍遵循 spec 主规范，不借此扩大允许的转换范围。
+
+#### 6.3.8 `CONSTRAINT_PROJECTIONS` 开放泛参约束投影依赖
+
+两个 profile 均须包含 `FT_SEC_CONSTRAINT_PROJECTIONS = 0x000B`，标记 REQUIRED、
+FIXED_ENTRY、SORTED，允许空节。每项为四个 little-endian `u32`（共 16 字节）：
+`owner_symbol_id`、`ordinal`、`source_type_id`、`target_type_id`。分别标识依赖所属类型／
+函数／方法、owner 内固定零基槽位、实际源类型、目标约束 spec；成员初始化、构造和析构
+归类型，方法内的类型级泛参使用归方法。
+
+非空 owner 通过 `FT_ATTR_CONSTRAINT_PROJECTION_COUNT = 0x000F` 记录精确数量，保留值
+必须为零。记录按 `(owner_symbol_id, ordinal)` 排序，槽位连续；类型树包含 owner 的
+开放泛参身份，目标为 object／intersection spec。数量、归属、类型引用、固定布局、节／
+属性／槽位唯一性与完整性均须验证。缺节或非法记录必须拒绝，不当成空依赖。
+
+方法可引用自身显式泛参及其 owner 的泛参。fit 的隐式泛参由 `fit_target` 开放类型树绑定，
+不要求伪造 TYPE_PARAM 子声明；缺少声明指针的参数必须在该 fit target 中具有对应绑定。
+不属于此作用域的名称或指向其他声明的参数仍为非法。
+
+类型引用参与既有私有表示依赖闭包，不授予源级可见性。该节不含运行时地址；具化点按
+原槽位生成完整静态泛参描述符，即使闭合后类型相同也不得合并槽位。嵌套共享调用沿用
+`CALLABLE_DEPS`，无需序列化无限展开的依赖树。承载与成本契约统一见
+[泛型实现文档](../engineering/feng-generic-optimize-dev.md#g24-约束投影字段)。格式仍为 2.0，
+仅重建当前制品，不增加旧制品兼容路径。
 
 ### 6.4 `STRS` 字符串池
 

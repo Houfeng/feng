@@ -5947,6 +5947,8 @@ void test_g24_binding_ft(void);
 void test_g24_spec_view_ft(void);
 /* Independent explicit component projection tests through both real FT profiles. */
 void test_intersection_projection_ft(void);
+/* Owner-domain constraint projections use their own persisted FT records. */
+void test_constraint_projection_ft(void);
 
 int main(void) {
     (void)system("rm -rf temp");
@@ -5955,6 +5957,7 @@ int main(void) {
     test_g24_binding_ft();
     test_g24_spec_view_ft();
     test_intersection_projection_ft();
+    test_constraint_projection_ft();
     test_g22_real_ft_module_diagnostics();
     test_g23_real_ft_orphan_ownership();
     test_g23_real_ft_fit_visibility_and_conflicts();

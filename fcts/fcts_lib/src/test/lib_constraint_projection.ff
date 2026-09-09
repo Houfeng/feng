@@ -1,0 +1,172 @@
+open module fcts_lib.test.constraint_projection;
+
+/** Generic fields and methods exercise an address-form witness ABI. */
+open spec CPLeft<A> { var item: A; func left(): i32; func echo(value: A): A; }
+/** The second requirement must never dispatch through the first slot. */
+open spec CPRight { func right(): i32; }
+/** A third capability permits a target intersection absent from the source member list. */
+open spec CPExtra { func extra(): i32; }
+/** Ordinary and reversed intersection order must have the same forwarding semantics. */
+open spec CPBoth<A>: CPLeft<A> & CPRight;
+/** Reversed layout detects accidental witness-prefix reuse. */
+open spec CPReverse<A>: CPRight & CPLeft<A>;
+/** Nested source for multi-layer generic forwarding. */
+open spec CPAll<A>: CPBoth<A> & CPExtra;
+/** This target is not a declared component of CPAll. */
+open spec CPRightExtra: CPRight & CPExtra;
+/** Full spec arguments retain their original representation and subject. */
+open spec CPChild<A>: CPLeft<A>, CPRight, CPExtra {}
+/** A reference subject supplies visibly distinct requirements. */
+open type CPReference<A>: CPChild<A> {
+    open var item: A;
+    /** First reference capability. */
+    func left(): i32 { return 11; }
+    /** Second reference capability. */
+    func right(): i32 { return 23; }
+    /** Third reference capability. */
+    func extra(): i32 { return 37; }
+    /** Preserve the complete generic argument/result. */
+    func echo(value: A): A { return value; }
+}
+/** A by-value subject must preserve its own descriptor and copy protocol. */
+@value open type CPValue<A>: CPChild<A> {
+    open var item: A;
+    /** Distinguish value dispatch from reference dispatch. */
+    func left(): i32 { return 41; }
+    /** A wrong first slot would return 41, not 53. */
+    func right(): i32 { return 53; }
+    /** A wrong middle slot would return 53, not 67. */
+    func extra(): i32 { return 67; }
+    /** Exercise aggregate, managed and scalar payloads without specialization. */
+    func echo(value: A): A { return value; }
+}
+/** An escaping callback observes a projected descriptor after its caller returns. */
+open spec CPNumber(): i32;
+/** A stored generic callable takes the original actual T. */
+open spec CPReader<T>(value: T): i32;
+/** A shared callee requiring only the right surface. */
+open func cp_right<T: CPRight>(value: T): i32 { return value.right(); }
+/** A generic target constraint retains its complete instance identity. */
+open func cp_left<A, T: CPLeft<A>>(value: T): i32 { return value.left(); }
+/** A third surface makes non-prefix forwarding observable. */
+open func cp_extra<T: CPExtra>(value: T): i32 { return value.extra(); }
+/** Generic payload return must keep its original ABI after projection. */
+open func cp_echo<A, T: CPLeft<A>>(value: T, item: A): A { return value.echo(item); }
+/** Mutating a reference/spec source must preserve the existing subject. */
+open func cp_write<A, T: CPLeft<A>>(value: T, item: A) { value.item = item; }
+/** This entry has no projection dependencies and is an independent control. */
+open func cp_same<T: CPRight>(value: T): i32 { return cp_right<T>(value); }
+/** Two open slots remain distinct even when their closed records are identical. */
+open func cp_two<T: CPBoth<i32>, U: CPBoth<i32>>(first: T, second: U): i32 {
+    return cp_right<T>(first) * 10 + cp_right<U>(second);
+}
+/** Project a combined surface to a component. */
+open func cp_both<A, T: CPBoth<A>>(value: T): i32 { return cp_right<T>(value) + cp_left<A,T>(value); }
+/** Reversed member order must not change either selected implementation. */
+open func cp_reverse<A, T: CPReverse<A>>(value: T): i32 { return cp_right<T>(value) + cp_left<A,T>(value); }
+/** Project a newly combined constraint in its own shared body. */
+open func cp_right_extra<T: CPRightExtra>(value: T): i32 { return cp_extra<T>(value) + cp_right<T>(value); }
+/** Project both an intermediate member and a non-member intersection. */
+open func cp_route<A, T: CPAll<A>>(value: T): i32 { return cp_both<A,T>(value) + cp_right_extra<T>(value); }
+/** The callable graph contains a cycle, but static metadata must remain finite. */
+open func cp_recurse<A, T: CPAll<A>>(value: T, count: i32): i32 {
+    if count == 0 { return cp_route<A,T>(value); }
+    return cp_recurse<A,T>(value, count - 1);
+}
+/** A captured T uses a stable descriptor beyond the generating stack frame. */
+open func cp_capture<T: CPRight>(value: T): CPNumber { return () { return value.right(); }; }
+/** Pass a projected record into the escaping closure's shared creator. */
+open func cp_escape<A, T: CPBoth<A>>(value: T): CPNumber { return cp_capture<T>(value); }
+/** Return the untouched actual T through the destination's generic return ABI. */
+open func cp_identity<T: CPRight>(value: T): T { return value; }
+/** A projected argument must not be replaced by a CPRight fat value. */
+open func cp_keep<A, T: CPBoth<A>>(value: T): T { return cp_identity<T>(value); }
+/** A projected generic field write operates on the source's existing storage. */
+open func cp_change<A, T: CPBoth<A>>(value: T, item: A) { cp_write<A,T>(value, item); }
+/** Error exit must release the actual T with its original value kind. */
+open func cp_fail<T: CPRight>(value: T): i32 { let observed = value.right(); throw "constraint projection failure"; }
+/** Forward an exceptional call across the same constraint boundary. */
+open func cp_raise<A, T: CPBoth<A>>(value: T): i32 { return cp_fail<T>(value); }
+/** Type-default requests are independent of constraint projection. */
+open func cp_zero<T>(): T { let value: T; return value; }
+/** An open concrete actual also needs its closed record at the instantiation point. */
+open func cp_open_reference<A>(value: CPReference<A>): i32 { return cp_both<A,CPReference<A>>(value); }
+/** Open value actuals cannot be replaced by pointer-shaped temporary descriptors. */
+open func cp_open_value<A>(value: CPValue<A>): i32 { return cp_both<A,CPValue<A>>(value); }
+/** Keep all of a generic target's substituted type arguments. */
+open func cp_forward_echo<A, T: CPBoth<A>>(value: T, item: A): A { return cp_echo<A,T>(value, item); }
+/** Two independent external packages extend this same canonical owner. */
+open type CPWideOwner<A, T: CPAll<A>> { open var value: T; }
+/** The same independent-fit matrix also covers aggregate owner metadata. */
+@value open type CPWideValueOwner<A, T: CPAll<A>> { open var value: T; }
+/** Owner metadata includes member initializers, constructors and the finalizer. */
+open type CPOwner<T: CPBoth<i32>> {
+    open var value: T;
+    open let initialized: i32 = cp_right<T>(cp_zero<T>());
+    open let reader: CPReader<T> = cp_right<T>;
+    open let constructed: i32;
+    /** Constructor-side projection uses the owner dependency table. */
+    func CPOwner(value: T) { self.value = value; self.constructed = cp_right<T>(value); }
+    /** This method owns its projection of the type-level parameter. */
+    func read(): i32 { return cp_right<T>(self.value); }
+    /** Two open parameters must keep separate slots even when they close equally. */
+    func mixed<U: CPBoth<i32>>(other: U): i32 { return cp_right<U>(other) + cp_left<i32,T>(self.value); }
+    /** Static methods also have their own dependency domain. */
+    static func read_static(value: T): i32 { return cp_right<T>(value); }
+    /** A finalizer must be able to use the same owner-local projection table. */
+    func ~CPOwner() { let observed = cp_right<T>(self.value); }
+}
+/** Aggregate owners must use FengAggregateDescriptor, not a reference-owner cast. */
+@value open type CPValueOwner<T: CPBoth<i32>> {
+    open var value: T;
+    open let initialized: i32 = cp_right<T>(cp_zero<T>());
+    open let reader: CPReader<T> = cp_right<T>;
+    /** Preserve the argument as the original T in an aggregate field. */
+    func CPValueOwner(value: T) { self.value = value; }
+    /** Read the aggregate owner's generic parameter through this method's table. */
+    func read(): i32 { return cp_right<T>(self.value); }
+    /** Combine owner and method parameter identities. */
+    func mixed<U: CPBoth<i32>>(other: U): i32 { return cp_left<i32,U>(other) + cp_right<T>(self.value); }
+}
+/** A fit has an independent callable dependency domain. */
+open fit CPOwner<T> {
+    /** Project the same owner T differently from read(). */
+    func fitted(): i32 { return cp_left<i32,T>(self.value); }
+}
+
+/** A callee method constraint substitutes the receiver's independent parameter. */
+open type CPReceiver<A> {
+    /** Method-generic T is constrained by the receiver's A. */
+    func echo<T: CPLeft<A>>(value: T, item: A): A { return value.echo(item); }
+    /** Static methods need the same simultaneous owner/method substitution. */
+    static func echo_static<T: CPLeft<A>>(value: T, item: A): A { return value.echo(item); }
+}
+/** Value receivers must carry the same callable dependency identity. */
+@value open type CPValueReceiver<A> {
+    /** Do not confuse receiver A with method T. */
+    func echo<T: CPLeft<A>>(value: T, item: A): A { return value.echo(item); }
+}
+/** Both receiver forms receive a projection from an open intersection parameter. */
+open func cp_method_echo<A, T: CPAll<A>>(value: T, item: A): A {
+    let receiver = CPReceiver<A>{};
+    let first = receiver.echo<T>(value, item);
+    let aggregate = CPValueReceiver<A>{};
+    let second = aggregate.echo<T>(value, first);
+    return CPReceiver<A>.echo_static<T>(value, second);
+}
+/** A narrower owner constraint does not replace its actual stored T. */
+open type CPNarrowOwner<T: CPRight> {
+    open let value: T;
+    /** The stored type descriptor must expose this owner's declared constraint. */
+    func read(): i32 { return self.value.right(); }
+}
+/** Spec owners also validate their type parameter before any concrete closure. */
+open spec CPNarrowView<T: CPRight> { let value: T; func read(): i32; }
+/** Continue an open T through both a concrete owner and a generic spec owner. */
+open func cp_owner_forward<A, T: CPAll<A>>(value: T): i32 {
+    let owner = CPNarrowOwner<T>{value:value};
+    let view: CPNarrowView<T> = owner;
+    return owner.read() + view.read() + cp_right<T>(view.value);
+}
+/** The relationship is declared generically, never inferred from member spelling. */
+open fit CPNarrowOwner<T>: CPNarrowView<T>;

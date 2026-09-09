@@ -12,10 +12,11 @@
 Codegen 用例还会编译生成 C，FCTS 执行语言行为断言，二者不能互相替代。
 最终全量结果见第 4 节；未取得最终结果前，不把此映射当作 G24 已验收。
 
-当前状态：COMPOSITE01～42 已实施部分的全量回归通过，新增 COMPOSITE43 已独立验收通过。
-本轮 055／056／058～062 的 callable 补齐已完成第 4.5 节的独立全量验收。
-COMPOSITE27 的交叉约束开放转传仍有 ISSUE-G24-051／057，相关行为／发码／成本格尚未验收，
-G24 不标记完成。显式交叉值投影不替代开放泛参转传。
+当前状态（2026-09-09 核对）：COMPOSITE01～43 均已完成，G24 独立验收项已勾选。
+最后的 COMPOSITE27、051／057 及补测暴露的 063／064 已完成实现和验证；最终完整
+`make test` 退出 0，两阶段 FCTS 均 1356／1356，见第 4.7 节。
+显式交叉值投影与开放泛参转传仍是独立实现和用例，不相互替代。065 的一次制品读取异常
+已复验通过，但根因未确认，保留原始失败记录；不把它描述成已修复的编译器缺陷。
 
 ## 2 COMPOSITE01～43 对应证据
 
@@ -194,9 +195,14 @@ union bindings／edges 在成功绑定后使用正确 member 并返回原 T，�
 错误 member、错误闭合类型、owner／实例／静态使用；binding Semantic 记录转传后的投影。
 union binding edges 和三包路径运行多层传递，描述符 control 另验证无 union 的既有转传。
 
-未完成格：`T: Both` 向组成 object-spec `Right` 的共享函数转传。独立最小程序语义通过，
-Codegen 报 `CE0293`；见 ISSUE-G24-051。现有 union 和相同约束转传证据不能代替该格，
-需要先 Review 描述符承载及增量成本方案，再补正式运行和诊断控制。
+051 的 `T: Both` 向 `Right`／其他合法交叉约束转传，以及 057 的同签名不同 requirement
+串槽均已修复。按[主实现文档](./feng-generic-optimize-dev.md#g24-约束投影字段)在具化点
+生成静态记录，按方法或类型初始化依赖域承载，通过 `.ft` 恢复直接槽位及下层 callable 图。
+正式 Semantic／Codegen／Symbol 和 27 项约束投影 FCTS 见第 4.6 节：包含两个独立外部 fit、
+同名不同约束、类型级／方法级／混合泛参、成员初始化／构造／析构、递归／多包转传、
+owner 释放后的成员 callable 与逃逸闭包、引用／值／完整 spec，以及编译期非法反向。
+补测的无约束泛型存储修复由独立 10 项 FCTS 及 Semantic／Codegen 控制覆盖，不用隔离探针
+或相邻功能替代正式断言。最终完整回归见第 4.7 节。
 
 ### COMPOSITE28：复合 owner 与实参替换
 
@@ -324,6 +330,11 @@ let／var、带初始值／默认值八格，检查调用选择既有具化描�
 
 - 三种上下文描述符的 `reified_union_projections` 和 `reified_spec_view_coercions` 字段及实际
   使用的静态表，属于已批准增量；既有自动描述符随字段增加的字节／初始化／栈布局也已获批准。
+- 051 按批准在同三个上下文描述符增加 `reified_constraint_projection_descriptors` 指针；
+  目标泛参记录与指针表静态生成，调用点固定索引读取，不新增隐藏参数、堆分配、逐次临时
+  记录初始化或转接层。`FengGenericParamDescriptor` 保持三个字段，无投影路径不读取新表。
+  063 按批准补回正确泛型字段赋值必需的偏移／kind／复制／ARC，不能与原错误指针写入作
+  “指令数完全不增加”的比较；064 只移除开放占位的非法清理数据，实际对象清理协议不变。
 - 共享收窄读取自己的投影。仅缺少现存中间表示且实际需要绑定时调用一次静态构造入口；
   无绑定、未命中及直接链式叶子不添加该调用。
 - 开放值形成 object／intersection 视角复用普通一次 box 或引用 subject；不新增转换回调、
@@ -420,3 +431,78 @@ finalize、bundled packages 和预构建工具链检查通过，未报告 UBSan 
 因此本次关闭 055／056／058～062，不标记 G24 整组完成。
 
 建议 commit message：`fix: preserve callable identity and generic owner descriptors`。
+
+### 4.6 reified_constraint_projection_descriptors 实施与专项证据
+
+按[批准方案](./feng-generic-optimize-dev.md#g24-约束投影字段)实现函数／类型／聚合描述符
+承载，泛参描述符仍为三个字段。新增测试：
+
+- [Semantic](../../test/semantic/test_constraint_projection.c)：开放参数声明序与调用顺序
+  独立、显式／推导实参、无约束／较弱／无关／不同泛型实例反例，核对码、数量、文件及 token。
+- [Symbol](../../test/symbol/test_constraint_projection.c)：两种 profile、两种调用顺序、
+  producer 销毁后真实导入、fit 隐式参数、21 类损坏 FT 拒绝以及跨包反例。
+- [Codegen](../../test/codegen/test_constraint_projection.c)：静态记录和三字段 ABI、空依赖
+  控制、类型／方法参数、40 方法扩容、成员初始化／构造／析构、递归及逃逸闭包；两个互不
+  依赖的 fit 提供包、同名但不同身份的目标约束、两种 provider／import 顺序与两种 FT profile。
+  每个生成 C 都经严格 C 编译；无投影控制不读取字段。
+- [FCTS](../../fcts/fcts_bin/src/test_constraint_projection.ff)：
+  [基础提供包](../../fcts/fcts_lib/src/test/lib_constraint_projection.ff)、
+  [中间包](../../fcts/fcts_middle/src/constraint_projection.ff)与
+  [独立 fit 包](../../fcts/fcts_projection_peer/src/constraint_projection.ff)。
+  保留类型级／方法级、引用／值／完整 spec、泛型 payload、字段／方法／静态／fit、
+  owner 存储、多层转传、递归、捕获和正常／异常清理。
+
+最新 Codegen、Semantic、Symbol 全套均通过，日志为工程 `local/g24-delivery/` 下的
+`projection-codegen-new.log`、`projection-semantic-new.log`、`projection-symbol-new.log`。
+Codegen 额外核对 `two<T,U>`：T／U 闭合相等时表仍为两槽并复用同一静态记录，不相等时
+两槽引用各自记录。约束投影 FCTS 新增 27 项，独立存储控制新增 10 项，当前 1356／1356。
+
+已修复新增依赖收集的 owner 指针失效、外部 fit 的约束预登记与参数导出、witness 完整模块
+身份，以及 owner wrapper 无消费者的旧泛参记录计算。补测进一步修复
+[063](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-063共享体的引用对象字面量字段误写泛型参数存储地址)：
+引用对象字面量错误保存 T 参数存储地址，按人工批准复用既有通用字段写入协议，补回必要
+复制／ARC，不叠加新机制。064 移除开放引用占位类型的非法清理元数据，保留数组仍使用的
+诊断身份；闭合对象的生命周期数据保持完整。独立新增：
+
+- [Codegen 存储控制](../../test/codegen/test_generic_literal_storage.c)：无约束的函数／owner／
+  方法／重排参数、动态字段偏移、嵌套开放值字段、完整复制与引用管理，非泛型固定布局不增加读取。
+- [Semantic 存储控制](../../test/semantic/test_generic_literal_storage.c)：同包及两种真实 FT
+  profile；合法 let 初次初始化／var 构造后覆盖，与类型不符、不同泛参、let 重绑、重复字段和
+  构造外写入的五类反例配对，检查完整单诊断、阶段、文件及有效 token 位置。
+- [FCTS 存储控制](../../fcts/fcts_bin/src/test_generic_literal_storage.ff) 与
+  [独立提供包](../../fcts/fcts_lib/src/test/lib_generic_literal_storage.ff)：小／大标量、较大
+  trivial tuple、managed aggregate、引用、完整 spec／union、可写数组及逃逸 callable，
+  同包／跨包、类型级／方法级／静态／重排泛参、嵌套动态布局、默认旧值与构造值替换，
+  正常／异常退出及恰好一次释放。没有改动旧用例断言。
+
+首轮沙箱外 `make test` 退出 0，日志为 `local/g24-delivery/make-test-constraint-projection.log`，
+两阶段 std 均 604／604、FCTS 均 1354／1354，其余套件通过。
+最后的断言强度核对追加两项并已通过：析构中的约束转传用独立 left／right 调用计数验证
+确切分派，同时覆盖正常与异常退出；成员初始化保存的 callable 在所属 owner 释放后继续
+调用，且同一完整 spec 实参类型对应不同实际 subject 时均正确。不以“析构不崩溃”或
+“owner 尚存时可调用”替代上述结果，独立 FCTS 已为 1356／1356。
+
+代码和最终用例冻结后的全量日志为 `local/g24-delivery/make-test-constraint-projection-final.log`。
+该轮 UBSan 全部通过（std 604／604、FCTS 1356／1356），常规阶段因标准库 `.fd` 暂时缺失
+中止，记录为 065；不记作全量通过。没有修改产品／测试，std 单独复验通过 604／604 后
+重新执行完整沙箱外 `make test`，日志为
+`local/g24-delivery/make-test-constraint-projection-final-recheck.log`，取得完整结果后才关闭剩余项。
+
+### 4.7 最终完整交付
+
+2026-09-09，最终冻结的产品代码与全部用例在沙箱外执行完整 `make test`，退出码 0。
+日志：`local/g24-delivery/make-test-constraint-projection-final-recheck.log`。
+
+- UBSan／常规两阶段的 Archive、Lexer、Parser、Semantic、Runtime、Codegen、Debug、
+  CLI、CLI paths、Symbol 全部通过；没有 sanitizer 错误报告。
+- std 两阶段均 604／604，FCTS 两阶段均 1356／1356；本轮新增 37 项 FCTS。
+- smoke、CLI direct／project／init、性能约束、增量构建、release scripts／安装版本选择／
+  回滚、macOS finalize、bundled packages、预构建工具链全部通过。
+- `git diff --check` 通过。既有断言未修改；本轮仅新增测试文件及相应注册／测试包依赖。
+
+COMPOSITE27 和 G24 独立交付项至此完成，关闭 051／057／063／064。065 保留为一次制品
+读取异常记录：未修改 Debug／CLI 即通过标准库和完整复验，不声称已定位或修复其根因。
+ISSUE-G24-006 的既有 spec 泛型转接消除优化仍按人工决定延期，不作为本组未完成项。
+成本、字段和制品边界按第 3 节及主实现文档执行，没有自动提交代码。
+
+建议 commit message：`feat: support reified generic constraint projections across packages`。

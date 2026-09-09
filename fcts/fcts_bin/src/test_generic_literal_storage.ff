@@ -1,0 +1,152 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.generic_literal_storage;
+
+/** A fat spec actual must preserve its subject and witness together. */
+spec GLSView { var number: i32; }
+/** Count zero instances separately from explicitly supplied managed payloads. */
+type GLSLife: GLSView {
+    open static var defaults: i32;
+    open static var destroyed: i32;
+    open var number: i32;
+    /** Every actual object is released once, regardless of its generic holder. */
+    func ~GLSLife() {
+        if self.number == 0 { GLSLife.defaults += 1; }
+        else { GLSLife.destroyed += 1; }
+    }
+}
+/** This actual T is larger than the placeholder pointer and owns a reference. */
+@value type GLSManaged { open let first: i64; open let payload: GLSLife; open let last: string; }
+/** A large trivial T must copy all bytes without aggregate ARC. */
+type GLSWords(i64, i64, i64);
+/** A union actual carries its tag and complete selected payload. */
+spec GLSChoice: i32 | GLSLife;
+/** A callable actual must survive its creator's frame. */
+spec GLSRead(): i32;
+/** Same-package shared construction is independent of the imported helper. */
+func gls_local<T>(value: T): GLSStore<T> { return GLSStore<T>{before:137, value:value, after:"local"}; }
+/** Return a holder after the original source binding has been destroyed. */
+func gls_escape(): GLSStore<GLSLife> {
+    let source = GLSLife{number:139};
+    return gls_save<GLSLife>(source);
+}
+/** Observe retention while the holder is alive and cleanup after return. */
+func gls_use_escape() {
+    let stored = gls_escape();
+    assert(stored.value.number == 139 && GLSLife.destroyed == 0, "returned holder owns actual payload");
+    assert(GLSLife.defaults == 1, "replaced default object is released exactly once");
+}
+/** Both old and replacement inputs outlive construction but not this function. */
+func gls_use_replacement() {
+    let old = GLSLife{number:149};
+    let replacement = GLSLife{number:151};
+    let stored = gls_replace<GLSLife>(old, replacement);
+    assert(old.number == 149 && stored.value.number == 151, "constructor then literal");
+    assert(GLSLife.destroyed == 0, "replacing field does not destroy a still-bound source");
+}
+/** An exceptional function exit must clean up both holder and source. */
+func gls_throw_after_store() {
+    let source = GLSManaged{first:157, payload:GLSLife{number:163}, last:"exception"};
+    let stored = gls_save<GLSManaged>(source);
+    assert(stored.value.payload.number == 163 && stored.value.last == "exception", "complete aggregate stored");
+    throw "generic literal cleanup";
+}
+/** The same managed aggregate exercises normal function-return cleanup. */
+func gls_use_aggregate() {
+    let source = GLSManaged{first:167, payload:GLSLife{number:173}, last:"aggregate"};
+    let stored = gls_save<GLSManaged>(source);
+    assert(stored.before == 101 && stored.after == "after", "closed surrounding field offsets");
+    assert(stored.value.first == 167 && stored.value.payload.number == 173 && stored.value.last == "aggregate", "all aggregate fields");
+    let value_owner = gls_save_value<GLSManaged>(source);
+    assert(value_owner.before == 103 && value_owner.value.last == "aggregate", "value-owner control");
+}
+/** A returned callable holder owns its captured managed payload. */
+func gls_callable_escape(): GLSStore<GLSRead> {
+    let payload = GLSLife{number:179};
+    let read: GLSRead = () { return payload.number; };
+    return gls_save<GLSRead>(read);
+}
+/** Release a stored callback after its creating shared frame has returned. */
+func gls_use_callable() {
+    let stored = gls_callable_escape();
+    assert(stored.value() == 179 && GLSLife.destroyed == 0, "captured payload remains alive");
+}
+
+/** Unconstrained construction isolates storage correctness from projections. */
+func test_generic_literal_storage() {
+    describe("generic literal field storage", () {
+        test("scalar widths and a large trivial tuple use closed field offsets", () {
+            let small = gls_save<i8>(-7);
+            let large = gls_save<i64>(9000000001);
+            let words: GLSWords = (181, 191, 193);
+            let stored = gls_save<GLSWords>(words);
+            assert(small.value == -7 && small.before == 101 && small.after == "after", "small actual");
+            assert(large.value == 9000000001 && large.after == "after", "wide actual");
+            assert(stored.value.item1 == 181 && stored.value.item2 == 191 && stored.value.item3 == 193 && stored.after == "after", "trivial tuple bytes");
+        });
+        test("same-package and imported unconstrained literals preserve managed values", () {
+            let local = gls_local<string>("local payload");
+            let imported = gls_save<string>("imported payload");
+            assert(local.value == "local payload" && local.before == 137 && local.after == "local", "local body");
+            assert(imported.value == "imported payload" && imported.after == "after", "imported shared body");
+        });
+        test("a returned reference holder retains source and releases the old default", () {
+            GLSLife.defaults = 0; GLSLife.destroyed = 0;
+            gls_use_escape();
+            assert(GLSLife.destroyed == 1 && GLSLife.defaults == 1, "exact final ownership");
+        });
+        test("constructor then literal replacement preserves both source lifetimes", () {
+            GLSLife.defaults = 0; GLSLife.destroyed = 0;
+            gls_use_replacement();
+            assert(GLSLife.destroyed == 2 && GLSLife.defaults == 1, "old and new objects released once");
+        });
+        test("managed aggregate actuals copy all storage and clean up normally", () {
+            GLSLife.destroyed = 0;
+            gls_use_aggregate();
+            assert(GLSLife.destroyed == 1, "aggregate payload released once");
+        });
+        test("exceptional exit releases the copied aggregate payload exactly once", () {
+            GLSLife.destroyed = 0;
+            var caught = false;
+            try gls_throw_after_store() catch message: string { caught = message == "generic literal cleanup"; }
+            assert(caught && GLSLife.destroyed == 1, "exception cleanup");
+        });
+        test("complete spec and union actuals keep witness tag and subject", () {
+            let source = GLSLife{number:197};
+            let view: GLSView = source;
+            let stored = gls_save<GLSView>(view);
+            stored.value.number = 199;
+            assert(source.number == 199 && stored.after == "after", "same spec subject and correct witness");
+            let choice: GLSChoice = source;
+            let union_store = gls_save<GLSChoice>(choice);
+            let actual = match union_store.value { value: GLSLife { value.number } else { -1 } };
+            assert(actual == 199 && union_store.after == "after", "full union tag and payload");
+        });
+        test("array and escaping callable actuals retain their original objects", () {
+            let source: i32[!] = [211, 223];
+            let stored = gls_save<i32[!]>(source);
+            source[1] = 227;
+            assert(stored.value[1] == 227 && stored.after == "after", "same array identity");
+            GLSLife.destroyed = 0;
+            gls_use_callable();
+            assert(GLSLife.destroyed == 1, "callable capture released once");
+        });
+        test("owner method and reordered parameters select the actual source descriptor", () {
+            let factory = GLSFactory<string>{seed:"owner payload"};
+            let own = factory.save();
+            let mixed = factory.mixed<i64>(9000000003);
+            let static_store = GLSFactory<string>.save_static("static payload");
+            let reordered = gls_second<i8,string>(1, "second payload");
+            assert(own.value == "owner payload" && own.after == "owner", "owner parameter");
+            assert(mixed.value == 9000000003 && mixed.after == "method", "method parameter");
+            assert(static_store.value == "static payload" && static_store.before == 113, "static owner parameter");
+            assert(reordered.value == "second payload" && reordered.before == 127, "caller parameter index one");
+        });
+        test("nested open aggregate fields keep their closed size and surrounding fields", () {
+            let inner = gls_save_value<string>("nested payload");
+            let outer = gls_nested<string>(inner);
+            assert(outer.before == 131 && outer.after == "nested", "outer offsets");
+            assert(outer.value.before == 103 && outer.value.value == "nested payload" && outer.value.after == "value after", "complete nested aggregate");
+        });
+    });
+}

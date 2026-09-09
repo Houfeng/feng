@@ -1,0 +1,28 @@
+open module fcts_projection_peer;
+import fcts_lib.test.constraint_projection;
+
+/** Same short name as the middle package, but independent identity and order. */
+open spec CPSameName: CPExtra & CPRight;
+/** Different weighted slots detect accidental reuse of the middle witness. */
+open func cp_peer_same<T: CPSameName>(value: T): i32 {
+    return cp_extra<T>(value) + cp_right<T>(value) * 10;
+}
+/** This provider never imports or depends on the middle package. */
+open func cp_peer_same_route<A, T: CPAll<A>>(value: T): i32 { return cp_peer_same<T>(value); }
+
+/** The peer has no dependency on fcts_middle or its projected constraint. */
+open spec CPPeerExtraRight: CPExtra & CPRight;
+/** This provider's local indices are independent from every other provider. */
+open func cp_peer_pair<T: CPPeerExtraRight>(value: T): i32 {
+    return cp_extra<T>(value) + cp_right<T>(value);
+}
+/** Extend the same reference owner through a separately compiled dependency graph. */
+open fit CPWideOwner<A,T> {
+    /** The intermediate constraint is not a member of CPAll. */
+    func peer_projection(): i32 { return cp_peer_pair<T>(self.value); }
+}
+/** Repeat the independent-provider boundary with an aggregate owner. */
+open fit CPWideValueOwner<A,T> {
+    /** The original T's representation must stay unchanged. */
+    func peer_projection(): i32 { return cp_peer_pair<T>(self.value); }
+}

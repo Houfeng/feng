@@ -1556,7 +1556,8 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                         ctx->analysis, source_decl);
     if (dep_set == NULL ||
         (dep_set->dep_count == 0U && dep_set->callable_dep_count == 0U &&
-         dep_set->union_projection_count == 0U && dep_set->spec_view_coercion_count == 0U)) {
+         dep_set->union_projection_count == 0U && dep_set->spec_view_coercion_count == 0U &&
+         dep_set->constraint_projection_count == 0U)) {
         return true;
     }
 
@@ -1573,6 +1574,23 @@ static bool fill_reifiable_deps(const BuildContext *ctx,
                 source->source_type_ref, type_params, type_param_count, path, token, out_error);
             target->target_type = build_type_from_type_ref_with_tparams(ctx,
                 source->target_type_ref, type_params, type_param_count, path, token, out_error);
+            if (target->source_type == NULL || target->target_type == NULL) return false;
+        }
+    }
+
+    if (dep_set->constraint_projection_count > 0U) {
+        decl->reifiable_constraint_projections = calloc(dep_set->constraint_projection_count,
+            sizeof(*decl->reifiable_constraint_projections));
+        if (decl->reifiable_constraint_projections == NULL) return feng_symbol_internal_set_error(
+            out_error, path, token, "out of memory exporting constraint projections");
+        decl->reifiable_constraint_projection_count = dep_set->constraint_projection_count;
+        for (index = 0U; index < dep_set->constraint_projection_count; ++index) {
+            const FengConstraintProjectionDep *source = &dep_set->constraint_projections[index];
+            FengSymbolConstraintProjectionView *target = &decl->reifiable_constraint_projections[index];
+            target->source_type = build_type_from_type_ref_with_tparams(ctx,
+                source->source_type_ref, type_params, type_param_count, path, token, out_error);
+            target->target_type = build_type_from_type_ref_with_tparams(ctx,
+                source->target_constraint_ref, type_params, type_param_count, path, token, out_error);
             if (target->source_type == NULL || target->target_type == NULL) return false;
         }
     }
@@ -2405,30 +2423,43 @@ static FengSymbolDeclView *find_local_type_like_decl(const BuildContext *ctx,
     return NULL;
 }
 
-static const FengDecl *find_local_source_type_decl(const BuildContext *ctx,
-                                                   const FengTypeRef *type_ref) {
-    FengSlice name;
-    size_t program_index;
-
-    if (ctx == NULL || ctx->module == NULL ||
-        !named_type_targets_current_module(ctx, type_ref)) {
-        return NULL;
-    }
-    name = named_type_leaf_name(type_ref);
-    for (program_index = 0U; program_index < ctx->module->program_count; ++program_index) {
-        const FengProgram *program = ctx->module->programs[program_index];
-        size_t decl_index;
-
-        for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
-            const FengDecl *decl = program->declarations[decl_index];
-
-            if (decl->kind == FENG_DECL_TYPE &&
-                feng_symbol_internal_slice_equals(decl->as.type_decl.name, name)) {
-                return decl;
+/* A fit borrows its actual target declaration's generic parameters, including
+ * targets in other modules/packages. Resolve the complete path before lookup;
+ * unrelated declarations with the same leaf name cannot introduce parameters. */
+static const FengDecl *find_source_type_decl(const BuildContext *ctx,
+                                             const FengTypeRef *type_ref) {
+    if (ctx == NULL || ctx->analysis == NULL || type_ref == NULL ||
+        type_ref->kind != FENG_TYPE_REF_NAMED) return NULL;
+    size_t count = 0U;
+    FengSymbolError error = {0};
+    char **segments = resolve_type_ref_segments(ctx, type_ref->as.named.segments,
+        type_ref->as.named.segment_count, &count, NULL, type_ref->token, &error);
+    const FengDecl *result = NULL;
+    if (segments != NULL && count > 1U) {
+        for (size_t i = 0U; result == NULL && i < ctx->analysis->module_count; ++i) {
+            const FengSemanticModule *module = &ctx->analysis->modules[i];
+            if (module->segment_count + 1U != count) continue;
+            bool matches = true;
+            for (size_t j = 0U; j < module->segment_count; ++j)
+                if (!cstr_equals_slice(segments[j], module->segments[j])) matches = false;
+            if (!matches) continue;
+            for (size_t j = 0U; result == NULL && j < module->program_count; ++j) {
+                const FengProgram *program = module->programs[j];
+                for (size_t k = 0U; k < program->declaration_count; ++k) {
+                    const FengDecl *decl = program->declarations[k];
+                    if (decl->kind == FENG_DECL_TYPE &&
+                        cstr_equals_slice(segments[count - 1U], decl->as.type_decl.name)) {
+                        result = decl;
+                        break;
+                    }
+                }
             }
         }
     }
-    return NULL;
+    for (size_t i = 0U; i < count; ++i) free(segments[i]);
+    free(segments);
+    feng_symbol_error_free(&error);
+    return result;
 }
 
 /* For `fit T[]` / `fit T[!]` targets, infer the fit-local array element type
@@ -3226,7 +3257,7 @@ static FengSymbolDeclView *build_top_level_decl(BuildContext *ctx,
 
         case FENG_DECL_FIT: {
             char *name = fit_display_name(source_decl->as.fit_decl.target);
-            const FengDecl *fit_target_source = find_local_source_type_decl(ctx,
+            const FengDecl *fit_target_source = find_source_type_decl(ctx,
                                                                             source_decl->as.fit_decl.target);
             FengTypeParam inferred_fit_target_type_param = {0};
             FengSlice inferred_fit_target_type_param_name = {0};
@@ -3754,6 +3785,11 @@ static void bind_decl_type_targets(FengSymbolModuleGraph *graph,
     for (index = 0U; index < decl->reifiable_spec_view_coercion_count; ++index) {
         bind_type_target(graph, decl, decl->reifiable_spec_view_coercions[index].source_type);
         bind_type_target(graph, decl, decl->reifiable_spec_view_coercions[index].target_type);
+    }
+
+    for (index = 0U; index < decl->reifiable_constraint_projection_count; ++index) {
+        bind_type_target(graph, decl, decl->reifiable_constraint_projections[index].source_type);
+        bind_type_target(graph, decl, decl->reifiable_constraint_projections[index].target_type);
     }
     for (index = 0U; index < decl->reifiable_union_projection_count; ++index) {
         FengSymbolUnionProjectionView *projection = &decl->reifiable_union_projections[index];

@@ -30,6 +30,10 @@ void test_static_callable_binding(void (*compile_c)(const char *));
 void test_callable_callee_guard(void (*compile_c)(const char *));
 /* Imported shared signatures are independent of caller generic parameter names. */
 void test_imported_callable_prototype(void (*compile_c)(const char *));
+/* Constraint projections keep independent static callable and owner domains. */
+void test_constraint_projection_codegen(void (*compile_c)(const char *));
+/* Shared literals must store actual T using the closed owner's field layout. */
+void test_generic_literal_storage_codegen(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -17369,6 +17373,8 @@ int main(void) {
     test_static_callable_binding(compile_generated_c_or_die);
     test_callable_callee_guard(compile_generated_c_or_die);
     test_imported_callable_prototype(compile_generated_c_or_die);
+    test_constraint_projection_codegen(compile_generated_c_or_die);
+    test_generic_literal_storage_codegen(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

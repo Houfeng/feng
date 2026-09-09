@@ -42670,8 +42670,10 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
         }
         free(analysis->reifiable_dep_sets[index].union_projections);
         free(analysis->reifiable_dep_sets[index].spec_view_coercions);
+        free(analysis->reifiable_dep_sets[index].constraint_projections);
     }
     free(analysis->reifiable_dep_sets);
+    free(analysis->constraint_projection_uses);
     for (index = 0U; index < analysis->union_projection_use_count; ++index) {
         free(analysis->union_projection_uses[index].projection.path);
     }

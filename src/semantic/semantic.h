@@ -436,6 +436,22 @@ typedef struct FengUnionProjectionUse {
     FengUnionProjectionDep projection;
 } FengUnionProjectionUse;
 
+/* One compiler-proven generic constraint projection in the caller's open
+ * parameter scope. Type trees are analysis-owned; slots remain distinct when
+ * different open parameters happen to close to the same concrete type. */
+typedef struct FengConstraintProjectionDep {
+    const FengTypeRef *source_type_ref;
+    const FengTypeRef *target_constraint_ref;
+} FengConstraintProjectionDep;
+
+/* Source-site association; the dependency itself is serialized, not AST
+ * pointers. parameter_index is in the selected callable's own parameter list. */
+typedef struct FengConstraintProjectionUse {
+    const FengExpr *call;
+    size_t parameter_index;
+    FengConstraintProjectionDep projection;
+} FengConstraintProjectionUse;
+
 /* 一个泛型声明或 callable 的全部具体化依赖。
  * owner_decl 标识顶层声明；owner_member 非 NULL 时标识该声明内的
  * callable member：
@@ -459,6 +475,9 @@ typedef struct FengReifiableDepSet {
     FengSpecViewCoercionDep *spec_view_coercions;
     size_t spec_view_coercion_count;
     size_t spec_view_coercion_capacity;
+    FengConstraintProjectionDep *constraint_projections;
+    size_t constraint_projection_count;
+    size_t constraint_projection_capacity;
 } FengReifiableDepSet;
 
 /* Stable FT identity attached to an AST declaration/member synthesized from
@@ -473,6 +492,9 @@ typedef struct FengImportedSymbolIdentity {
 } FengImportedSymbolIdentity;
 
 typedef struct FengSemanticAnalysis {
+    FengConstraintProjectionUse *constraint_projection_uses;
+    size_t constraint_projection_use_count;
+    size_t constraint_projection_use_capacity;
     FengSemanticModule *modules;
     size_t module_count;
     size_t module_capacity;
@@ -1338,6 +1360,15 @@ feng_semantic_lookup_imported_symbol_identity(
  * 依赖到 analysis->reifiable_dep_sets 侧表。
  * 在 fixpoint 循环完成后、type cyclicity 计算前调用。 */
 bool feng_semantic_collect_reifiable_deps(FengSemanticAnalysis *analysis);
+
+/* Append/resolve an owner-local, canonical open constraint projection. */
+bool feng_semantic_reifiable_dep_set_append_constraint_projection(
+    FengReifiableDepSet *set, const FengConstraintProjectionDep *projection);
+size_t feng_semantic_constraint_projection_slot(
+    const FengReifiableDepSet *set, const FengConstraintProjectionDep *projection);
+/* Return the validated projection used by this generic call argument, if any. */
+const FengConstraintProjectionUse *feng_semantic_lookup_constraint_projection_use(
+    const FengSemanticAnalysis *analysis, const FengExpr *call, size_t parameter_index);
 
 /* Normalize one dependency in its declaration's lexical namespace before
  * deduplication. The returned complete type tree is owned by analysis; open

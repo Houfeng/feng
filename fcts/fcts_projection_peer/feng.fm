@@ -1,0 +1,9 @@
+[package]
+name: "fcts_projection_peer"
+version: "0.1.0"
+target: "lib"
+src: "src/"
+out: "build/"
+
+[dependencies]
+fcts_lib: "../fcts_lib"

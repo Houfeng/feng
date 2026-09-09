@@ -225,6 +225,14 @@ typedef struct FengTypeDescriptor {
      * NULL without direct uses; no new hidden parameter or dynamic lookup. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
+    /* NULL without constraint-projection dependencies in owner initialization,
+     * constructors, or the finalizer. Each static entry preserves the actual
+     * argument's kind/descriptor and supplies its target constraint witness.
+     * Slots belong to this owner, not to an individual generic parameter;
+     * ordinary spec-value casts do not use this table. */
+    const struct FengGenericParamDescriptor *const
+        *reified_constraint_projection_descriptors;
+
     /* Per-closed-type static binding state in declaration order. Non-generic
      * types and generic types without static bindings leave this NULL. */
     FengStaticBindingState *static_bindings;
@@ -494,6 +502,12 @@ typedef struct FengAggregateDescriptor {
     /* Same owner-local view-formation slots as on FengTypeDescriptor. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
+    /* Same static constraint-projection protocol and owner-local slot domain
+     * as FengTypeDescriptor; NULL without uses. Records remain valid after
+     * initialization, including when an inner callable captures them. */
+    const struct FengGenericParamDescriptor *const
+        *reified_constraint_projection_descriptors;
+
     /* Same closed generic static state carried by FengTypeDescriptor. Value
      * type shared methods receive this aggregate descriptor instead. */
     FengStaticBindingState *static_bindings;
@@ -554,6 +568,14 @@ typedef struct FengFunctionDescriptor {
     /* Closed source/target formation information owned by this callable.
      * Forwarding-only callables use their existing callee dependency slots. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
+
+    /* Static generic-argument records for this callable's constraint uses,
+     * including uses of type-level parameters. NULL without direct uses.
+     * Each record preserves the actual type and changes only its constraint
+     * witness; no subject pointer or per-call record construction. Descendant
+     * callables carry their own tables through reified_callable_deps. */
+    const FengGenericParamDescriptor *const
+        *reified_constraint_projection_descriptors;
 } FengFunctionDescriptor;
 
 static inline const FengTrivialDescriptor *feng_generic_trivial_descriptor(

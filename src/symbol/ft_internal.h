@@ -36,6 +36,7 @@
 #define FENG_SYMBOL_FT_SEC_CALLABLE_DEPS 0x0008U
 #define FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS 0x0009U
 #define FENG_SYMBOL_FT_SEC_SPEC_VIEW_COERCIONS 0x000AU
+#define FENG_SYMBOL_FT_SEC_CONSTRAINT_PROJECTIONS 0x000BU
 #define FENG_SYMBOL_FT_SEC_SPNS  0x0010U
 
 #define FENG_SYMBOL_FT_SEC_FLAG_REQUIRED 0x0001U
@@ -233,6 +234,15 @@ typedef struct FengSymbolFtSpecViewCoercionRecord {
     uint32_t source_type_id;
     uint32_t target_type_id;
 } FengSymbolFtSpecViewCoercionRecord;
+
+/* Required, owner-local open generic constraint dependencies. Concrete
+ * descriptors/witness pointers are generated only at consumer instantiation. */
+typedef struct FengSymbolFtConstraintProjectionRecord {
+    uint32_t owner_symbol_id;
+    uint32_t ordinal;
+    uint32_t source_type_id;
+    uint32_t target_type_id;
+} FengSymbolFtConstraintProjectionRecord;
 
 typedef struct FengSymbolFtSpanRecord {
     uint32_t symbol_id;

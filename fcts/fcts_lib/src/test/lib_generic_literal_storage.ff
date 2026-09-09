@@ -1,0 +1,60 @@
+open module fcts_lib.test.generic_literal_storage;
+
+/** Fixed fields on both sides of T must use the closed owner's offsets. */
+open type GLSStore<T> {
+    open let before: i64;
+    open let value: T;
+    open let after: string;
+}
+/** The same storage operation already works for aggregate owners. */
+@value open type GLSValueStore<T> {
+    open let before: i64;
+    open let value: T;
+    open let after: string;
+}
+/** An unconstrained shared body must copy the actual value, not its address. */
+open func gls_save<T>(value: T): GLSStore<T> {
+    return GLSStore<T>{after:"after", value:value, before:101};
+}
+/** Control the equivalent aggregate-owner literal with the same actual T. */
+open func gls_save_value<T>(value: T): GLSValueStore<T> {
+    return GLSValueStore<T>{after:"value after", value:value, before:103};
+}
+/** A mutable field may be set by the constructor and replaced by the literal. */
+open type GLSReplace<T> {
+    open var value: T;
+    /** Establish the old value whose ownership the literal must replace. */
+    func GLSReplace(value: T) { self.value = value; }
+}
+/** Literal replacement must release old storage and retain/copy the new T. */
+open func gls_replace<T>(old: T, replacement: T): GLSReplace<T> {
+    return GLSReplace<T>(old){value:replacement};
+}
+/** An owner parameter and method parameter have independent descriptor slots. */
+open type GLSFactory<A> {
+    open let seed: A;
+    /** Create a different generic owner from the type-level parameter. */
+    func save(): GLSStore<A> { return GLSStore<A>{before:107, value:self.seed, after:"owner"}; }
+    /** The stored U is not the receiver's A or the target owner's slot number. */
+    func mixed<U>(value: U): GLSStore<U> {
+        return GLSStore<U>{before:109, value:value, after:"method"};
+    }
+    /** A static shared method must also locate the target owner's descriptor. */
+    static func save_static(value: A): GLSStore<A> {
+        return GLSStore<A>{before:113, value:value, after:"static"};
+    }
+}
+/** Reversed parameter order detects using a target-local index in the caller. */
+open func gls_second<A, B>(unused: A, value: B): GLSStore<B> {
+    return GLSStore<B>{before:127, value:value, after:"second"};
+}
+/** A nested open aggregate field uses the same descriptor-aware store helper. */
+open type GLSNested<T> {
+    open let before: i64;
+    open let value: GLSValueStore<T>;
+    open let after: string;
+}
+/** Keep nested generic layout and its surrounding fixed fields observable. */
+open func gls_nested<T>(value: GLSValueStore<T>): GLSNested<T> {
+    return GLSNested<T>{after:"nested", value:value, before:131};
+}

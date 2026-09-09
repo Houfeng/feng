@@ -1,0 +1,230 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.constraint_projection;
+import fcts_middle.constraint_projection;
+import fcts_projection_peer;
+
+/** Local callee and caller independently cover the same-package shared path. */
+func cp_local_right<T: CPRight>(value: T): i32 { return value.right(); }
+/** A local projection must agree with the separately compiled provider. */
+func cp_local<T: CPBoth<i32>>(value: T): i32 { return cp_local_right<T>(value); }
+/** Named aggregate payload checks complete address-form argument/results. */
+type CPPair(i32, string);
+/** Count actual managed payload cleanup, excluding ordinary default instances. */
+type CPLife {
+    open static var destroyed: i32;
+    open let number: i32;
+    /** Positive payloads must be released exactly once. */
+    func ~CPLife() { if self.number != 0 { CPLife.destroyed += 1; } }
+}
+/** Return after the projected callee has captured an aggregate actual T. */
+func cp_lifetime_escape(): CPNumber {
+    let value = CPValue<CPLife> { item: CPLife { number: 71 } };
+    return cp_middle_escape<CPLife,CPValue<CPLife>>(value);
+}
+/** The callback's descriptor and payload both outlive the creator's frame. */
+func cp_use_lifetime_escape() {
+    let callback = cp_lifetime_escape();
+    assert(CPLife.destroyed == 0, "captured original payload is alive");
+    assert(callback() == 53, "projected captured value dispatch");
+}
+/** Exceptional exit must clean up a value-type actual's managed payload. */
+func cp_lifetime_throw() {
+    let value = CPValue<CPLife> { item: CPLife { number: 73 } };
+    cp_raise<CPLife,CPValue<CPLife>>(value);
+}
+
+/** Observe which constraint method the separately compiled finalizer selects. */
+type CPFinalSubject: CPLeft<i32>, CPRight {
+    open static var left_calls: i32;
+    open static var right_calls: i32;
+    open var item: i32;
+    /** The wrong witness-prefix slot must be observable, not just non-crashing. */
+    func left(): i32 {
+        if self.item != 0 { CPFinalSubject.left_calls += 1; }
+        return 11;
+    }
+    /** Ignore default-zero subjects used by the owner field initializer. */
+    func right(): i32 {
+        if self.item != 0 { CPFinalSubject.right_calls += 1; }
+        return 23;
+    }
+    /** Complete the generic parent contract without affecting the counters. */
+    func echo(value: i32): i32 { return value; }
+}
+/** Normal and exceptional scope exit must both dispatch the owner's finalizer. */
+func cp_finalizer_scope(fail: bool) {
+    let owner = CPOwner<CPFinalSubject>(CPFinalSubject{item:97});
+    assert(CPFinalSubject.right_calls == 1 && CPFinalSubject.left_calls == 0, "constructor dispatch only");
+    if fail { throw "projected finalizer"; }
+}
+/** The member callback must remain valid after its initializing owner dies. */
+func cp_saved_member_callback(): CPReader<CPBoth<i32>> {
+    let value: CPBoth<i32> = CPValue<i32>{item:101};
+    let owner = CPOwner<CPBoth<i32>>(value);
+    return owner.reader;
+}
+
+/** Constraint projections preserve type identity, payload, slots and lifetime. */
+func test_constraint_projection() {
+    describe("reified generic constraint projections", () {
+        test("same-package reference and value actuals select the right member", () {
+            assert(cp_local<CPReference<i32>>(CPReference<i32>{item:1}) == 23, "reference");
+            assert(cp_local<CPValue<i32>>(CPValue<i32>{item:2}) == 53, "value");
+        });
+        test("package intersection to component preserves both method slots", () {
+            assert(cp_both<i32,CPReference<i32>>(CPReference<i32>{}) == 34, "reference slots");
+            assert(cp_both<i32,CPValue<i32>>(CPValue<i32>{}) == 94, "value slots");
+        });
+        test("reversed intersection order does not change forwarding", () {
+            assert(cp_reverse<string,CPReference<string>>(CPReference<string>{}) == 34, "reverse reference");
+            assert(cp_reverse<string,CPValue<string>>(CPValue<string>{}) == 94, "reverse value");
+        });
+        test("nested and non-component constraints project at every shared layer", () {
+            assert(cp_route<i32,CPReference<i32>>(CPReference<i32>{}) == 94, "nested reference");
+            assert(cp_route<i32,CPValue<i32>>(CPValue<i32>{}) == 214, "nested value");
+        });
+        test("forwarding-only middle package transmits downstream descriptor tables", () {
+            assert(cp_middle<string,CPReference<string>>(CPReference<string>{}) == 94, "three packages");
+            assert(cp_middle<string,CPValue<string>>(CPValue<string>{}) == 214, "three package value");
+        });
+        test("recursive callable metadata is finite and preserves projection slots", () {
+            assert(cp_recurse<i32,CPReference<i32>>(CPReference<i32>{}, 4) == 94, "recursive reference");
+            assert(cp_recurse<i32,CPValue<i32>>(CPValue<i32>{}, 3) == 214, "recursive value");
+        });
+        test("open concrete generic actuals use closed static records", () {
+            assert(cp_open_reference<string>(CPReference<string>{item:"ref"}) == 34, "open reference");
+            assert(cp_open_value<string>(CPValue<string>{item:"value"}) == 94, "open value");
+        });
+        test("complete intersection arguments keep their fat-value representation", () {
+            let both: CPBoth<string> = CPReference<string>{item:"kept"};
+            let saved = cp_keep<string,CPBoth<string>>(both);
+            assert(saved.item == "kept" && saved.right() == 23, "original spec returned");
+            assert(cp_both<string,CPBoth<string>>(both) == 34, "complete intersection argument");
+        });
+        test("complete nested and object spec actuals retain their own witness views", () {
+            let all: CPAll<string> = CPValue<string>{item:"all"};
+            let child: CPChild<string> = CPReference<string>{item:"child"};
+            assert(cp_middle<string,CPAll<string>>(all) == 214, "nested spec actual");
+            assert(cp_route<string,CPChild<string>>(child) == 94, "object spec actual");
+        });
+        test("projected generic results remain the concrete reference or value", () {
+            let source = CPReference<i32>{item:31};
+            let saved = cp_keep<i32,CPReference<i32>>(source);
+            saved.item = 37;
+            assert(source.item == 37, "same reference identity");
+            let copy = cp_keep<i32,CPValue<i32>>(CPValue<i32>{item:41});
+            assert(copy.item == 41 && copy.extra() == 67, "complete value result");
+        });
+        test("projected mutable requirements reuse the reference or existing spec box", () {
+            let source = CPReference<string>{item:"before"};
+            cp_change<string,CPReference<string>>(source, "after");
+            assert(source.item == "after", "reference write");
+            let boxed: CPBoth<string> = CPValue<string>{item:"box"};
+            cp_change<string,CPBoth<string>>(boxed, "changed");
+            assert(boxed.item == "changed", "existing spec subject write");
+        });
+        test("generic constraint arguments retain scalar and managed result types", () {
+            assert(cp_forward_echo<i32,CPReference<i32>>(CPReference<i32>{}, 43) == 43, "scalar ABI");
+            assert(cp_forward_echo<string,CPValue<string>>(CPValue<string>{}, "echo") == "echo", "managed ABI");
+        });
+        test("generic constraint arguments retain an aggregate result", () {
+            let pair: CPPair = (47, "pair");
+            let result = cp_forward_echo<CPPair,CPValue<CPPair>>(CPValue<CPPair>{}, pair);
+            let (number, text) = result;
+            assert(number == 47 && text == "pair", "complete aggregate result");
+        });
+        test("owner initialization constructor stored callable and method agree", () {
+            let source = CPReference<i32>{item:53};
+            let owner = CPOwner<CPReference<i32>>(source);
+            assert(owner.initialized == 23 && owner.constructed == 23, "owner initialization domain");
+            assert(owner.reader(source) == 23 && owner.read() == 23, "stored callable and method");
+            assert(owner.fitted() == 11 && owner.external_read() == 23, "separate fit domains");
+            assert(CPOwner<CPReference<i32>>.read_static(source) == 23, "static method domain");
+        });
+        test("type and method parameter slots stay independent before and after closure", () {
+            let owner = CPOwner<CPReference<i32>>(CPReference<i32>{});
+            assert(owner.mixed<CPReference<i32>>(CPReference<i32>{}) == 34, "equal closed parameters");
+            assert(owner.mixed<CPValue<i32>>(CPValue<i32>{}) == 64, "different closed parameters");
+            assert(cp_two<CPReference<i32>,CPReference<i32>>(CPReference<i32>{}, CPReference<i32>{}) == 253, "equal closed projection records");
+            assert(cp_two<CPReference<i32>,CPValue<i32>>(CPReference<i32>{}, CPValue<i32>{}) == 283, "different closed projection records");
+        });
+        test("aggregate owner initialization and mixed parameter methods use their own tables", () {
+            let source = CPValue<i32>{item:59};
+            let owner = CPValueOwner<CPValue<i32>>(source);
+            assert(owner.initialized == 53 && owner.read() == 53, "aggregate owner descriptor");
+            assert(owner.reader(source) == 53, "aggregate owner stored callable");
+            assert(owner.mixed<CPReference<i32>>(CPReference<i32>{}) == 64, "aggregate mixed slots");
+        });
+        test("independent provider fits share a reference owner without sharing slot domains", () {
+            let owner = CPWideOwner<i32,CPReference<i32>>{value:CPReference<i32>{}};
+            assert(owner.middle_projection() == 48, "middle left plus extra");
+            assert(owner.peer_projection() == 60, "peer extra plus right");
+            assert(owner.middle_projection() == 48, "calling peer cannot change middle");
+        });
+        test("independent provider fits also preserve aggregate owner and actual value", () {
+            let owner = CPWideValueOwner<i32,CPValue<i32>>{value:CPValue<i32>{}};
+            assert(owner.peer_projection() == 120, "peer value slots");
+            assert(owner.middle_projection() == 108, "middle value slots");
+        });
+        test("projected descriptor and captured payload survive multiple package frames", () {
+            CPLife.destroyed = 0;
+            cp_use_lifetime_escape();
+            assert(CPLife.destroyed == 1, "escaped payload released exactly once");
+        });
+        test("exception cleanup preserves the projected actual's original value kind", () {
+            CPLife.destroyed = 0;
+            var caught = false;
+            try cp_lifetime_throw() catch message: string { caught = true; }
+            assert(caught && CPLife.destroyed == 1, "exception cleanup exactly once");
+        });
+        test("same-constraint forwarding remains an independent control", () {
+            assert(cp_same<CPReference<i32>>(CPReference<i32>{}) == 23, "no intersection adaptation");
+        });
+        test("generic receiver constraints substitute owner and method parameters together", () {
+            assert(cp_method_echo<i32,CPReference<i32>>(CPReference<i32>{}, 79) == 79, "scalar receiver constraint");
+            assert(cp_method_echo<string,CPValue<string>>(CPValue<string>{}, "receiver") == "receiver", "managed receiver constraint");
+            let payload: CPPair = (83, "receiver pair");
+            let result = cp_method_echo<CPPair,CPValue<CPPair>>(CPValue<CPPair>{}, payload);
+            let (number, text) = result;
+            assert(number == 83 && text == "receiver pair", "aggregate receiver constraint");
+        });
+        test("open forwarding into type and spec owners retains the actual T", () {
+            assert(cp_owner_forward<i32,CPReference<i32>>(CPReference<i32>{}) == 69, "reference owner forwarding");
+            assert(cp_owner_forward<string,CPValue<string>>(CPValue<string>{}) == 159, "value owner forwarding");
+            let all: CPAll<string> = CPValue<string>{};
+            assert(cp_owner_forward<string,CPAll<string>>(all) == 159, "complete spec owner forwarding");
+        });
+        test("member saved callbacks preserve a complete spec actual and its descriptor", () {
+            let value: CPBoth<i32> = CPValue<i32>{item:89};
+            let owner = CPOwner<CPBoth<i32>>(value);
+            let aggregate = CPValueOwner<CPBoth<i32>>(value);
+            assert(owner.reader(value) == 53 && owner.read() == 53, "reference owner full spec");
+            assert(aggregate.reader(value) == 53 && aggregate.read() == 53, "value owner full spec");
+        });
+        test("same-named target constraints in independent packages keep nominal witnesses", () {
+            let reference = CPReference<i32>{};
+            let value = CPValue<string>{};
+            assert(cp_middle_same_route<i32,CPReference<i32>>(reference) == 393, "middle reference identity");
+            assert(cp_peer_same_route<i32,CPReference<i32>>(reference) == 267, "peer reference identity");
+            assert(cp_peer_same_route<string,CPValue<string>>(value) == 597, "peer value identity");
+            assert(cp_middle_same_route<string,CPValue<string>>(value) == 723, "middle value identity");
+        });
+        test("owner finalizer projection dispatch is exact on normal and exceptional exit", () {
+            CPFinalSubject.left_calls = 0; CPFinalSubject.right_calls = 0;
+            cp_finalizer_scope(false);
+            assert(CPFinalSubject.right_calls == 2 && CPFinalSubject.left_calls == 0, "normal finalizer used right witness");
+            CPFinalSubject.left_calls = 0; CPFinalSubject.right_calls = 0;
+            var caught = false;
+            try cp_finalizer_scope(true) catch message: string { caught = message == "projected finalizer"; }
+            assert(caught && CPFinalSubject.right_calls == 2 && CPFinalSubject.left_calls == 0, "exception finalizer used right witness");
+        });
+        test("saved member callback outlives owner and preserves per-value spec witnesses", () {
+            let reader = cp_saved_member_callback();
+            let reference: CPBoth<i32> = CPReference<i32>{item:103};
+            let value: CPBoth<i32> = CPValue<i32>{item:107};
+            assert(reader(reference) == 23, "reference subject after owner release");
+            assert(reader(value) == 53, "same spec type with a different subject witness");
+        });
+    });
+}

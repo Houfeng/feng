@@ -19,6 +19,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *callable_deps_section;
     const FengSymbolFtSectionEntry *union_projections_section;
     const FengSymbolFtSectionEntry *spec_view_coercions_section;
+    const FengSymbolFtSectionEntry *constraint_projections_section;
     const FengSymbolFtSectionEntry *spns_section;
     char **strings;
     size_t string_count;
@@ -184,11 +185,13 @@ static bool load_required_sections(ReadContext *ctx,
         ctx, FENG_SYMBOL_FT_SEC_CALLABLE_DEPS);
     ctx->union_projections_section = find_section(ctx, FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS);
     ctx->spec_view_coercions_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPEC_VIEW_COERCIONS);
+    ctx->constraint_projections_section = find_section(ctx, FENG_SYMBOL_FT_SEC_CONSTRAINT_PROJECTIONS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
     if (ctx->strs_section == NULL || ctx->syms_section == NULL || ctx->typs_section == NULL ||
         ctx->tseq_section == NULL || ctx->rels_section == NULL ||
-        ctx->union_projections_section == NULL || ctx->spec_view_coercions_section == NULL) {
+        ctx->union_projections_section == NULL || ctx->spec_view_coercions_section == NULL ||
+        ctx->constraint_projections_section == NULL) {
         return feng_symbol_internal_set_error(out_error,
                                               path,
                                               (FengToken){0},
@@ -243,6 +246,24 @@ static bool load_required_sections(ReadContext *ctx,
     }
     if (occurrences != 1U) return feng_symbol_internal_set_error(
         out_error, path, (FengToken){0}, "duplicate spec view coercion section");
+    const unsigned char *constraint_section = (const unsigned char *)ctx->constraint_projections_section;
+    uint64_t constraint_offset = read_u64_le(constraint_section + 0x08);
+    uint64_t constraint_size = read_u64_le(constraint_section + 0x10);
+    uint32_t constraint_count = read_u32_le(constraint_section + 0x04);
+    if (read_u16_le(constraint_section + 0x02) != projection_flags ||
+        read_u32_le(constraint_section + 0x18) != sizeof(FengSymbolFtConstraintProjectionRecord) ||
+        read_u32_le(constraint_section + 0x1C) != 0U ||
+        constraint_size != (uint64_t)constraint_count * sizeof(FengSymbolFtConstraintProjectionRecord) ||
+        constraint_offset < ctx->header.payload_offset || constraint_offset % 8U != 0U ||
+        !validate_range(ctx, constraint_offset, constraint_size, path, out_error)) return feng_symbol_internal_set_error(
+            out_error, path, (FengToken){0}, "malformed constraint projection section");
+    occurrences = 0U;
+    for (size_t i = 0U; i < ctx->header.section_count; ++i) {
+        const unsigned char *entry = ctx->data + ctx->header.section_dir_offset + i * ctx->header.section_entry_size;
+        occurrences += read_u16_le(entry) == FENG_SYMBOL_FT_SEC_CONSTRAINT_PROJECTIONS;
+    }
+    if (occurrences != 1U) return feng_symbol_internal_set_error(
+        out_error, path, (FengToken){0}, "duplicate constraint projection section");
     return true;
 }
 
@@ -1303,6 +1324,22 @@ static bool parse_attrs(ReadContext *ctx,
             decl->reifiable_spec_view_coercion_count = value0;
             continue;
         }
+
+        if (kind == FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT) {
+            uint32_t total = read_u32_le((const unsigned char *)ctx->constraint_projections_section + 0x04);
+            if (decl == NULL || (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE &&
+                decl->kind != FENG_SYMBOL_DECL_KIND_FUNCTION && decl->kind != FENG_SYMBOL_DECL_KIND_METHOD) ||
+                decl->reifiable_constraint_projections != NULL || value0 == 0U || value0 > total ||
+                value1 != 0U || read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "invalid constraint projection count attribute");
+            }
+            decl->reifiable_constraint_projections = calloc(value0, sizeof(*decl->reifiable_constraint_projections));
+            if (decl->reifiable_constraint_projections == NULL) return feng_symbol_internal_set_error(
+                out_error, path, (FengToken){0}, "out of memory loading constraint projections");
+            decl->reifiable_constraint_projection_count = value0;
+            continue;
+        }
         if (kind == FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT) {
             uint32_t total = read_u32_le((const unsigned char *)ctx->union_projections_section + 0x04);
             if (decl == NULL || (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE &&
@@ -1582,12 +1619,38 @@ static bool parse_union_projections(ReadContext *ctx,
     return true;
 }
 
+/* A fit introduces implicit parameters through its target type tree rather
+ * than TYPE_PARAM child symbols. Match only those target-bound references;
+ * a foreign declaration pointer must never be accepted by name alone. */
+static bool fit_target_binds_parameter(const FengSymbolTypeView *target,
+    const char *name) {
+    if (target == NULL || name == NULL) return false;
+    if (target->kind == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) {
+        return target->target_decl == NULL && target->as.type_param_ref.name != NULL &&
+            strcmp(target->as.type_param_ref.name, name) == 0;
+    }
+    if (target->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) {
+        for (size_t index = 0U; index < target->as.named_generic.type_arg_count; ++index) {
+            if (fit_target_binds_parameter(target->as.named_generic.type_args[index], name)) return true;
+        }
+    } else if (target->kind == FENG_SYMBOL_TYPE_KIND_ARRAY) {
+        return fit_target_binds_parameter(target->as.array.element, name);
+    } else if (target->kind == FENG_SYMBOL_TYPE_KIND_POINTER) {
+        return fit_target_binds_parameter(target->as.pointer.inner, name);
+    }
+    return false;
+}
+
 /* Check parameter ownership recursively before importing a dependent pair.
  * A method may use its own parameters and its enclosing type/fit parameters. */
 static bool view_type_parameters_belong(const FengSymbolTypeView *type,
     const FengSymbolDeclView *owner) {
     if (type == NULL) return false;
     if (type->kind == FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF) {
+        if (type->target_decl == NULL && owner->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
+            owner->owner != NULL && owner->owner->kind == FENG_SYMBOL_DECL_KIND_FIT) {
+            return fit_target_binds_parameter(owner->owner->fit_target, type->as.type_param_ref.name);
+        }
         const FengSymbolDeclView *parameter_owner = type->target_decl != NULL ? type->target_decl->owner : NULL;
         return parameter_owner == owner || (owner->kind == FENG_SYMBOL_DECL_KIND_METHOD &&
             parameter_owner != NULL && parameter_owner == owner->owner);
@@ -1641,6 +1704,49 @@ static bool parse_spec_view_coercions(ReadContext *ctx, const char *path, FengSy
         for (size_t j = 0U; j < decl->reifiable_spec_view_coercion_count; ++j) {
             if (decl->reifiable_spec_view_coercions[j].source_type == NULL) return feng_symbol_internal_set_error(
                 out_error, path, (FengToken){0}, "spec view coercion count does not match records");
+        }
+    }
+    return true;
+}
+
+/* Decode the exact owner/slot pairs, rejecting incomplete or unrelated data. */
+static bool parse_constraint_projections(ReadContext *ctx, const char *path, FengSymbolError *out_error) {
+    const unsigned char *section = (const unsigned char *)ctx->constraint_projections_section;
+    const unsigned char *base = ctx->data + read_u64_le(section + 0x08);
+    uint32_t count = read_u32_le(section + 0x04), previous_owner = 0U, previous_slot = 0U;
+    for (uint32_t i = 0U; i < count; ++i) {
+        const unsigned char *record = base + (size_t)i * sizeof(FengSymbolFtConstraintProjectionRecord);
+        uint32_t owner_id = read_u32_le(record), slot = read_u32_le(record + 4U);
+        uint32_t source_id = read_u32_le(record + 8U), target_id = read_u32_le(record + 12U);
+        FengSymbolDeclView *owner = decl_by_symbol_id(ctx, owner_id);
+        if (owner == NULL || slot >= owner->reifiable_constraint_projection_count ||
+            source_id == 0U || target_id == 0U || owner_id < previous_owner ||
+            (owner_id == previous_owner && slot != previous_slot + 1U) ||
+            (owner_id != previous_owner && slot != 0U)) return feng_symbol_internal_set_error(
+                out_error, path, (FengToken){0}, "invalid constraint projection record %u", i);
+        FengSymbolConstraintProjectionView *view = &owner->reifiable_constraint_projections[slot];
+        if (view->source_type != NULL) return feng_symbol_internal_set_error(
+            out_error, path, (FengToken){0}, "duplicate constraint projection slot");
+        view->source_type = parse_type_by_id(ctx, source_id, path, out_error);
+        view->target_type = parse_type_by_id(ctx, target_id, path, out_error);
+        if (view->source_type == NULL || view->target_type == NULL) return false;
+        const FengSymbolTypeView *target = view->target_type;
+        if ((!projection_type_contains_parameter(view->source_type) && !projection_type_contains_parameter(target)) ||
+            !view_type_parameters_belong(view->source_type, owner) || !view_type_parameters_belong(target, owner) ||
+            (target->kind != FENG_SYMBOL_TYPE_KIND_NAMED && target->kind != FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC) ||
+            (target->target_decl != NULL && (target->target_decl->kind != FENG_SYMBOL_DECL_KIND_SPEC ||
+                (target->target_decl->spec_form != FENG_SPEC_FORM_OBJECT && target->target_decl->spec_form != FENG_SPEC_FORM_INTERSECTION)))) {
+            return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                "invalid constraint projection type pair for '%s' slot %u", owner->name, slot);
+        }
+        previous_owner = owner_id;
+        previous_slot = slot;
+    }
+    for (size_t i = 0U; i < ctx->decl_count; ++i) {
+        const FengSymbolDeclView *decl = ctx->decls[i];
+        for (size_t j = 0U; j < decl->reifiable_constraint_projection_count; ++j) {
+            if (decl->reifiable_constraint_projections[j].source_type == NULL) return feng_symbol_internal_set_error(
+                out_error, path, (FengToken){0}, "constraint projection count does not match records");
         }
     }
     return true;
@@ -1881,6 +1987,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !parse_attrs(&ctx, source_name, out_error) ||
         !parse_union_projections(&ctx, source_name, out_error) ||
         !parse_spec_view_coercions(&ctx, source_name, out_error) ||
+        !parse_constraint_projections(&ctx, source_name, out_error) ||
         !parse_callable_dependencies(&ctx, source_name, out_error) ||
         !parse_spans(&ctx, source_name, out_error) ||
         !parse_relations(&ctx, source_name, out_error)) {

@@ -28,7 +28,8 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_ABI_FIXED_PARAM_COUNT = 11,
     FENG_SYMBOL_ATTR_MIXABLE_METHOD = 12,
     FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT = 13,
-    FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT = 14
+    FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT = 14,
+    FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT = 15
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -80,6 +81,12 @@ typedef struct FengSymbolSpecViewCoercionView {
     FengSymbolTypeView *source_type;
     FengSymbolTypeView *target_type;
 } FengSymbolSpecViewCoercionView;
+
+/* Owned open actual-type / target-constraint pair, in dependency-owner order. */
+typedef struct FengSymbolConstraintProjectionView {
+    FengSymbolTypeView *source_type;
+    FengSymbolTypeView *target_type;
+} FengSymbolConstraintProjectionView;
 
 struct FengSymbolTypeView {
     FengSymbolTypeKind kind;
@@ -167,6 +174,8 @@ struct FengSymbolDeclView {
     size_t reifiable_union_projection_count;
     FengSymbolSpecViewCoercionView *reifiable_spec_view_coercions;
     size_t reifiable_spec_view_coercion_count;
+    FengSymbolConstraintProjectionView *reifiable_constraint_projections;
+    size_t reifiable_constraint_projection_count;
     /* Original deterministic id when this declaration came from an FT.
      * Source-built graphs assign the same stable tree id before export. */
     uint32_t ft_symbol_id;
