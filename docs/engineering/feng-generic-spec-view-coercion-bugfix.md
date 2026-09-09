@@ -11,6 +11,8 @@ object-form 与 intersection 复用同一通路，不针对具体类型、包或
 
 在 `FengTypeDescriptor`、`FengAggregateDescriptor`、`FengFunctionDescriptor` 各增加
 `const FengSpecCoercionDescriptor *reified_spec_view_coercions`，无直接使用时为 NULL。
+对应 `reified_spec_view_coercions_count` 的统一含义、零值和非运行时消费者边界由
+[Reified 元信息表 `_count` 补齐方案](./feng-reified-metadata-count-dev.md) 定义。
 表项包含闭合 `box_descriptor`、box 内 `payload_offset`、目标 `witness`。
 引用 subject 不装箱，box 字段为 NULL、偏移为零；发码根据已知源类别选择操作，不增加运行时
 “是否装箱”的判断。字段与条目不携带实参值或动态满足关系，不枚举全部类型／契约组合。

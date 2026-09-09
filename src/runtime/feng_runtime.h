@@ -216,15 +216,24 @@ typedef struct FengTypeDescriptor {
     size_t reified_callable_deps_count;
     const struct FengFunctionDescriptor *const *reified_callable_deps;
 
+    /* Number of owner-local union projection slots; zero when unused. The
+     * count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_union_projections_count;
     /* Static projections owned by field/constructor/finalizer initialization.
      * NULL without direct uses; method-owned uses belong to their own function
      * descriptor, even when they reference this type's generic parameters. */
     const FengUnionProjection *reified_union_projections;
 
+    /* Number of owner-local spec view formation slots; zero when unused. The
+     * count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_spec_view_coercions_count;
     /* Static view-formation uses owned by initialization, not by methods.
      * NULL without direct uses; no new hidden parameter or dynamic lookup. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
+    /* Number of owner-local constraint projection slots, including duplicate
+     * record addresses; zero when unused and not used for runtime checks. */
+    size_t reified_constraint_projection_descriptors_count;
     /* NULL without constraint-projection dependencies in owner initialization,
      * constructors, or the finalizer. Each static entry preserves the actual
      * argument's kind/descriptor and supplies its target constraint witness.
@@ -495,13 +504,22 @@ typedef struct FengAggregateDescriptor {
     size_t reified_callable_deps_count;
     const struct FengFunctionDescriptor *const *reified_callable_deps;
 
+    /* Number of owner-local union projection slots; zero when unused. The
+     * count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_union_projections_count;
     /* Static owner projections, with the same dependency ownership as on
      * FengTypeDescriptor. NULL without direct union-match uses. */
     const FengUnionProjection *reified_union_projections;
 
+    /* Number of owner-local spec view formation slots; zero when unused. The
+     * count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_spec_view_coercions_count;
     /* Same owner-local view-formation slots as on FengTypeDescriptor. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
+    /* Number of owner-local constraint projection slots, including duplicate
+     * record addresses; zero when unused and not used for runtime checks. */
+    size_t reified_constraint_projection_descriptors_count;
     /* Same static constraint-projection protocol and owner-local slot domain
      * as FengTypeDescriptor; NULL without uses. Records remain valid after
      * initialization, including when an inner callable captures them. */
@@ -560,15 +578,25 @@ typedef struct FengFunctionDescriptor {
      * callable value. Direct-call-only descriptors leave it zeroed. */
     FengCallableValueDescriptor callable_value;
 
+    /* Number of callable-local union projection slots; zero when unused. The
+     * count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_union_projections_count;
     /* Static projections owned by this callable's open dependency identity.
      * NULL without direct uses, including forwarding-only shared bodies.
      * Slots are independent of aggregate/type/callable dependency indices. */
     const FengUnionProjection *reified_union_projections;
 
+    /* Number of callable-local spec view formation slots; zero when unused.
+     * The count is descriptive metadata and is not used for runtime checks. */
+    size_t reified_spec_view_coercions_count;
     /* Closed source/target formation information owned by this callable.
      * Forwarding-only callables use their existing callee dependency slots. */
     const FengSpecCoercionDescriptor *reified_spec_view_coercions;
 
+    /* Number of callable-local constraint projection slots, including
+     * duplicate record addresses; zero when unused and not used for runtime
+     * checks. */
+    size_t reified_constraint_projection_descriptors_count;
     /* Static generic-argument records for this callable's constraint uses,
      * including uses of type-level parameters. NULL without direct uses.
      * Each record preserves the actual type and changes only its constraint

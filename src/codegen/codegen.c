@@ -47488,16 +47488,24 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
                    descriptor_var,
                    display_name != NULL ? display_name : "generic callable");
     if (dep_set != NULL && dep_set->union_projection_count > 0U) {
-        buf_append_fmt(&cg->statics, ", .reified_union_projections = %s__projections",
+        buf_append_fmt(&cg->statics,
+                       ", .reified_union_projections_count = %zu, "
+                       ".reified_union_projections = %s__projections",
+                       dep_set->union_projection_count,
                        descriptor_var);
     }
     if (dep_set != NULL && dep_set->spec_view_coercion_count > 0U) {
-        buf_append_fmt(&cg->statics, ", .reified_spec_view_coercions = %s__spec_views",
+        buf_append_fmt(&cg->statics,
+                       ", .reified_spec_view_coercions_count = %zu, "
+                       ".reified_spec_view_coercions = %s__spec_views",
+                       dep_set->spec_view_coercion_count,
                        descriptor_var);
     }
     if (dep_set != NULL && dep_set->constraint_projection_count > 0U) {
         buf_append_fmt(&cg->statics,
-            ", .reified_constraint_projection_descriptors = %s__constraint_projections", descriptor_var);
+            ", .reified_constraint_projection_descriptors_count = %zu, "
+            ".reified_constraint_projection_descriptors = %s__constraint_projections",
+            dep_set->constraint_projection_count, descriptor_var);
     }
     if (aggregate_count > 0U) {
         buf_append_fmt(&cg->statics,
@@ -60983,15 +60991,24 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             ? feng_semantic_lookup_reifiable_dep_set(cg->analysis, t->generic_origin_decl)
             : NULL;
         if (value_projection_deps != NULL && value_projection_deps->union_projection_count > 0U) {
-            buf_append_fmt(td, "    .reified_union_projections = %s__projections,\n",
+            buf_append_fmt(td,
+                "    .reified_union_projections_count = %zu,\n"
+                "    .reified_union_projections = %s__projections,\n",
+                value_projection_deps->union_projection_count,
                 t->c_aggregate_desc_name);
         }
         if (value_projection_deps != NULL && value_projection_deps->spec_view_coercion_count > 0U) {
-            buf_append_fmt(td, "    .reified_spec_view_coercions = %s__spec_views,\n",
+            buf_append_fmt(td,
+                "    .reified_spec_view_coercions_count = %zu,\n"
+                "    .reified_spec_view_coercions = %s__spec_views,\n",
+                value_projection_deps->spec_view_coercion_count,
                 t->c_aggregate_desc_name);
         }
         if (value_projection_deps != NULL && value_projection_deps->constraint_projection_count > 0U) {
-            buf_append_fmt(td, "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
+            buf_append_fmt(td,
+                "    .reified_constraint_projection_descriptors_count = %zu,\n"
+                "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
+                value_projection_deps->constraint_projection_count,
                 t->c_aggregate_desc_name);
         }
         if (cg_user_type_uses_static_binding_states(t) &&
@@ -61665,15 +61682,24 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         ? feng_semantic_lookup_reifiable_dep_set(cg->analysis, t->generic_origin_decl)
         : NULL;
     if (projection_deps != NULL && projection_deps->union_projection_count > 0U) {
-        buf_append_fmt(td, "    .reified_union_projections = %s__projections,\n",
+        buf_append_fmt(td,
+            "    .reified_union_projections_count = %zu,\n"
+            "    .reified_union_projections = %s__projections,\n",
+            projection_deps->union_projection_count,
             t->c_desc_name);
     }
     if (projection_deps != NULL && projection_deps->spec_view_coercion_count > 0U) {
-        buf_append_fmt(td, "    .reified_spec_view_coercions = %s__spec_views,\n",
+        buf_append_fmt(td,
+            "    .reified_spec_view_coercions_count = %zu,\n"
+            "    .reified_spec_view_coercions = %s__spec_views,\n",
+            projection_deps->spec_view_coercion_count,
             t->c_desc_name);
     }
     if (projection_deps != NULL && projection_deps->constraint_projection_count > 0U) {
-        buf_append_fmt(td, "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
+        buf_append_fmt(td,
+            "    .reified_constraint_projection_descriptors_count = %zu,\n"
+            "    .reified_constraint_projection_descriptors = %s__constraint_projections,\n",
+            projection_deps->constraint_projection_count,
             t->c_desc_name);
     }
     if (cg_user_type_uses_static_binding_states(t) &&

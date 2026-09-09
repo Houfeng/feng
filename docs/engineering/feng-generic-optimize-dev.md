@@ -240,6 +240,8 @@ typedef enum FengSymbolAttrKind {
 本次用于交叉约束相关的泛参投影，不扩展普通 spec 值显式转换或无关泛型路径。这里的
 “交叉”指约束投影关系，不要求实际 T 是交叉类型；普通引用类型、值类型及完整 spec 值作为
 实际 T 时仍使用同一协议。没有投影依赖的路径不新增读取或运行时分支。
+对应 `reified_constraint_projection_descriptors_count` 的统一含义、零值和非运行时消费者边界
+由 [Reified 元信息表 `_count` 补齐方案](./feng-reified-metadata-count-dev.md) 定义。
 
 ```c
 /* NULL without constraint-projection uses in this dependency owner.

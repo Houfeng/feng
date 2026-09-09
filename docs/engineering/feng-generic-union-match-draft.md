@@ -241,21 +241,21 @@ subject 先按原有规则求值一次，取得生命周期稳定的存储。
 
 ## 7. 元信息通道：描述符的 reified_union_projections
 
-### 7.1 三种上下文描述符各增加一个字段
+### 7.1 三种上下文描述符承载数量与表指针
 
-FengTypeDescriptor、FengAggregateDescriptor、FengFunctionDescriptor 各增加同名字段：
+FengTypeDescriptor、FengAggregateDescriptor、FengFunctionDescriptor 各承载同名表指针；
+对应数量字段及统一的槽位数量、零值规则由
+[Reified 元信息表 `_count` 补齐方案](./feng-reified-metadata-count-dev.md) 定义：
 
 ~~~c
-/* Closed union projections owned by this reification context; NULL if unused. */
+size_t reified_union_projections_count;
 const FengUnionProjection *reified_union_projections;
 ~~~
 
 字段指向编译期生成的 static const 表，表项结构见 §5.1。没有直接投影依赖时为 NULL；
 只有 callee 需要投影、不在本体读取投影的 caller 也可以保持 NULL。长度和槽位在编译期／
-符号记录中验证，运行时不新增 count 字段或搜索接口，也不为没有相关使用的共享体增加空指针判断。
-
-后续补齐 count 的方向见[Reified 元信息表 `_count` 补齐方案](./feng-reified-metadata-count-dev.md)，
-目前仅独立记录、尚未实施，不改变本节描述的现有布局。
+符号记录中验证；count 只描述当前依赖域的槽位数量，运行时不读取 count、不增加搜索接口，
+也不为没有相关使用的共享体增加空指针判断。
 
 只扩展上述三种上下文描述符。FengGenericParamDescriptor 的实际 T 描述及 witness 不变；
 FengTrivialDescriptor 不变。不把整个方法级泛参数组迁入 FengFunctionDescriptor，
