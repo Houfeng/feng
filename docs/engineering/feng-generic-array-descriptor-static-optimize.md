@@ -9,7 +9,8 @@ ISSUE-G24-015。本次仅将后续优化独立成文；G24 对既有字段扩展
 运行时临时描述符，也不等于批准本专项的实现与成本变化。
 
 本专项针对共享体内开放数组类型作为泛型实参时的描述符临时构造，不扩大为所有描述符的
-通用重构。不合并 `reified_spec_view_coercions` 重命名或三张 `reified_*` 元信息表的 `_count` 补齐。
+通用重构。不合并 `reified_spec_view_coercions` 重命名；三张 `reified_*` 元信息表的 `_count`
+补齐由[独立方案](./feng-reified-metadata-count-dev.md)记录，不在本专项实施。
 
 语言语义继续以 [泛型规范](../specifications/feng-generics-draft.md) 和
 [类型规范](../specifications/feng-type.md) 为准；本文不新增或重定义语言行为。

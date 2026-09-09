@@ -254,6 +254,9 @@ const FengUnionProjection *reified_union_projections;
 只有 callee 需要投影、不在本体读取投影的 caller 也可以保持 NULL。长度和槽位在编译期／
 符号记录中验证，运行时不新增 count 字段或搜索接口，也不为没有相关使用的共享体增加空指针判断。
 
+后续补齐 count 的方向见[Reified 元信息表 `_count` 补齐方案](./feng-reified-metadata-count-dev.md)，
+目前仅独立记录、尚未实施，不改变本节描述的现有布局。
+
 只扩展上述三种上下文描述符。FengGenericParamDescriptor 的实际 T 描述及 witness 不变；
 FengTrivialDescriptor 不变。不把整个方法级泛参数组迁入 FengFunctionDescriptor，
 不为投影增加独立隐藏参数，也不把表塞入 witness 或其他现有依赖数组。
