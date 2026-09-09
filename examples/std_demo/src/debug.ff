@@ -9,7 +9,7 @@ type User {
     options.message = 1;
   }
 
-  func commit(message: i32): int {
+  func commit(message: i32) {
     let x = if message > 0 { 1 } else { 2 };
     let y = match message {
       1 { "ok" }
