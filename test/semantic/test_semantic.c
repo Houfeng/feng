@@ -35285,6 +35285,9 @@ void test_g23_spec_fit_diagnostics(void);
 void test_g24_composite_diagnostics(void);
 void test_g24_binding_diagnostics(void);
 void test_g24_spec_view_semantics(void);
+/* Callable members validate generic constraints and static argument types. */
+void test_g24_callable_bindings_semantics(void);
+void test_callable_instance_arguments(void);
 /* Independent explicit-only intersection projection assertions. */
 void test_intersection_projection_semantics(void);
 void test_g24_surface_diagnostics(void);
@@ -35294,6 +35297,8 @@ int main(void) {
     test_g24_composite_diagnostics();
     test_g24_binding_diagnostics();
     test_g24_spec_view_semantics();
+    test_g24_callable_bindings_semantics();
+    test_callable_instance_arguments();
     test_intersection_projection_semantics();
     test_g24_surface_diagnostics();
     test_g24_composite_graphs();

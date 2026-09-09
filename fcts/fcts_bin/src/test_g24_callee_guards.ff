@@ -1,0 +1,163 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import std.collections;
+import fcts_lib.test.callee_guards;
+
+/** Install a closure whose payload is owned only by the callable field. */
+func g24_guard_install(owner: G24GuardOwner<i32>) { owner.callback = g24_guard_reader(31); }
+/** Replace before invocation; the old capture must remain alive during arguments. */
+func g24_guard_replace(owner: G24GuardOwner<i32>, before: i32): i32 {
+    owner.callback = g24_guard_replacement<i32>;
+    assert(G24GuardPayload.finalized == before, "old capture remains alive during argument");
+    return 0;
+}
+/** Argument exceptions must release the protective reference without invoking. */
+func g24_guard_replace_throw(owner: G24GuardOwner<i32>): i32 {
+    owner.callback = g24_guard_replacement<i32>;
+    throw "argument failed";
+}
+/** The callee may replace itself and then either return or throw. */
+func g24_guard_install_self_replacing(owner: G24GuardOwner<i32>, fails: bool) {
+    let payload = G24GuardPayload { marker: 31 };
+    owner.callback = (value: i32) {
+        owner.callback = g24_guard_replacement<i32>;
+        if fails { throw "callee failed"; }
+        return payload.marker + value;
+    };
+}
+/** A generic result exercises direct, managed, aggregate and erased return ABIs. */
+spec G24GuardResult<T>(value: i32): T;
+/** Argument mutation is a named callable value, not an anonymous lambda type. */
+spec G24GuardMutation(): i32;
+/** Mutable storage for an arbitrary result representation. */
+type G24GuardResultOwner<T> { open var callback: G24GuardResult<T>; }
+/** Replacement provides the normal generic default, not the captured result. */
+func g24_guard_default_result<T>(value: i32): T { let result: T; return result; }
+/** Return a captured value after replacing the callable in an argument. */
+func g24_guard_result<T>(value: T): T {
+    let owner = G24GuardResultOwner<T> { callback: (number: i32) -> value };
+    return owner.callback(if true { owner.callback = g24_guard_default_result<T>; 0 } else { 0 });
+}
+/** A managed member makes aggregate return ownership observable. */
+@value type G24GuardValue { open let text: string; open let number: i32; }
+/** Void and variadic invoke paths must also complete before guard release. */
+spec G24GuardAction(value: i32): void;
+/** Variadic packing can create cleanup nodes above the callee guard. */
+spec G24GuardVariadic(prefix: i32, values: i32...): i32;
+/** Non-generic static fields are independent of generic owner metadata. */
+type G24GuardStatic {
+    open static var action: G24GuardAction;
+    open static var variadic: G24GuardVariadic;
+    open static var result: i32 = 0;
+}
+/** Called only if a void callee was selected too late. */
+func g24_guard_action_replacement(value: i32) { G24GuardStatic.result = 47; }
+/** Called only if a variadic callee was selected too late. */
+func g24_guard_variadic_replacement(prefix: i32, values: i32...): i32 { return 47; }
+/** Create the old void closure without a caller-side owning temporary. */
+func g24_guard_install_action() {
+    let payload = G24GuardPayload { marker: 31 };
+    G24GuardStatic.action = (value: i32) { G24GuardStatic.result = payload.marker; };
+}
+
+/** Callee identity and lifetime are fixed before any argument side effect. */
+func test_g24_callee_guards() {
+    describe("G24 mutable callable callee guards", () {
+        test("instance field retains the old closure only through invocation", () {
+            let owner = G24GuardOwner<i32> {};
+            g24_guard_install(owner);
+            let before = G24GuardPayload.finalized;
+            assert(owner.callback(g24_guard_replace(owner, before)) == 31, "old callee result");
+            assert(G24GuardPayload.finalized == before + 1, "guard released at call completion");
+            assert(owner.callback(0) == 47, "replacement is used next time");
+        });
+        test("mutable local captured by an argument uses its previous value", () {
+            var selected: G24GuardReader<i32> = g24_guard_reader(31);
+            let replace: G24GuardMutation = () { selected = g24_guard_replacement<i32>; return 0; };
+            let before = G24GuardPayload.finalized;
+            assert(selected(replace()) == 31, "captured mutable local snapshot");
+            assert(G24GuardPayload.finalized == before + 1, "old local closure released once");
+        });
+        test("argument exceptions release the old closure without calling it", () {
+            let owner = G24GuardOwner<i32> {};
+            g24_guard_install(owner);
+            let before = G24GuardPayload.finalized;
+            var caught = false;
+            try owner.callback(g24_guard_replace_throw(owner)) catch error: string { caught = error == "argument failed"; }
+            assert(caught, "argument exception caught");
+            assert(G24GuardPayload.finalized == before + 1, "unwind releases guard exactly once");
+        });
+        test("callee can replace itself while still using captured payload", () {
+            let owner = G24GuardOwner<i32> {};
+            g24_guard_install_self_replacing(owner, false);
+            let before = G24GuardPayload.finalized;
+            assert(owner.callback(0) == 31, "old capture survives self replacement");
+            assert(G24GuardPayload.finalized == before + 1, "self-replaced closure released");
+        });
+        test("callee exceptions clean up after self replacement", () {
+            let owner = G24GuardOwner<i32> {};
+            g24_guard_install_self_replacing(owner, true);
+            let before = G24GuardPayload.finalized;
+            var caught = false;
+            try owner.callback(0) catch error: string { caught = error == "callee failed"; }
+            assert(caught && G24GuardPayload.finalized == before + 1, "callee unwind cleanup");
+        });
+        test("imported shared owner and method generic fields preserve scopes", () {
+            let owner = G24GuardOwner<i32> {};
+            g24_guard_install(owner);
+            assert(owner.invoke(g24_guard_replacement<i32>, 0) == 31, "type-level argument");
+            g24_guard_install(owner);
+            let other = G24GuardOwner<string> {};
+            assert(other.invoke_other<i32>(owner, g24_guard_replacement<i32>, 0) == 31, "method-level argument");
+        });
+        test("imported static fields are fixed before a replacing argument", () {
+            G24GuardOwner<i32>.current = g24_guard_reader(31);
+            let before = G24GuardPayload.finalized;
+            assert(G24GuardOwner<i32>.current(if true { G24GuardOwner<i32>.current = g24_guard_replacement<i32>; 0 } else { 0 }) == 31, "static old callee");
+            assert(G24GuardPayload.finalized == before + 1, "static capture released");
+            assert(G24GuardOwner<string>.stable("control") == 47, "independent immutable control");
+        });
+        test("value owner fields preserve the callable pointer during replacement", () {
+            var owner = G24GuardValueOwner<i32> { callback: g24_guard_reader(31) };
+            assert(owner.callback(if true { owner.callback = g24_guard_replacement<i32>; 0 } else { 0 }) == 31, "value owner callee");
+        });
+        test("ordinary and constrained spec field getters select old callees", () {
+            let subject = G24GuardViewOwner { callback: g24_guard_reader(31) };
+            let view: G24GuardView = subject;
+            assert(view.callback(if true { view.callback = g24_guard_replacement<i32>; 0 } else { 0 }) == 31, "ordinary spec field");
+            subject.callback = g24_guard_reader(31);
+            assert(g24_guard_view_call<G24GuardViewOwner>(subject) == 31, "constrained reference field");
+            subject.callback = g24_guard_reader(31);
+            assert(g24_guard_view_call<G24GuardView>(view) == 31, "complete spec actual field");
+        });
+        test("callable constrained generic local uses a stable pointer snapshot", () {
+            let first = g24_guard_reader(31);
+            let second: G24GuardReader<i32> = g24_guard_replacement<i32>;
+            assert(g24_guard_generic_call<G24GuardReader<i32>>(first, second) == 31, "generic var old value");
+            assert(g24_guard_generic_stable<G24GuardReader<i32>>(first) == 31, "generic let control");
+        });
+        test("return ownership survives releasing the old callable", () {
+            assert(g24_guard_result<i32>(31) == 31, "scalar result");
+            assert(g24_guard_result<string>("payload") == "payload", "managed result");
+            let payload = G24GuardPayload { marker: 61 };
+            assert(g24_guard_result<G24GuardPayload>(payload) == payload, "reference identity");
+            let value = g24_guard_result<G24GuardValue>(G24GuardValue { text: "value", number: 71 });
+            assert(value.text == "value" && value.number == 71, "managed aggregate result");
+        });
+        test("void and variadic calls execute before normal guard release", () {
+            g24_guard_install_action();
+            let before = G24GuardPayload.finalized;
+            G24GuardStatic.action(if true { G24GuardStatic.action = g24_guard_action_replacement; 0 } else { 0 });
+            assert(G24GuardStatic.result == 31, "void old callee");
+            assert(G24GuardPayload.finalized == before + 1, "void closure released");
+            G24GuardStatic.variadic = (prefix: i32, values: i32...) -> 31 + prefix + (i32)values.length();
+            assert(G24GuardStatic.variadic(if true { G24GuardStatic.variadic = g24_guard_variadic_replacement; 0 } else { 0 }, 1, 2) == 33, "variadic old callee");
+        });
+        test("array computed callees keep their existing correct evaluation", () {
+            let callbacks: G24GuardReader<i32>[!] = [g24_guard_reader(31)];
+            assert(callbacks[0](if true { callbacks[0] = g24_guard_replacement<i32>; 0 } else { 0 }) == 31, "computed array callee");
+        });
+    });
+}

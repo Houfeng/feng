@@ -1,0 +1,96 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.forward_callable;
+
+/** Consumer-owned references close provider generic functions and owner descriptors. */
+type G24ForwardReference: G24ForwardLeft, G24ForwardRight {
+    open var marker: i32;
+    /** Different slots must not be interpreted as prefix-compatible. */
+    func left(): i32 { return 11; }
+    /** Observe the exact receiver passed through the callable. */
+    func right(): i32 { return self.marker; }
+}
+
+/** Managed value payload makes the actual T representation different from a reference. */
+@value type G24ForwardValue: G24ForwardLeft, G24ForwardRight {
+    open var marker: i32;
+    open var text: string;
+    /** First-slot control. */
+    func left(): i32 { return 17; }
+    /** Read from the value's correct storage. */
+    func right(): i32 { return self.marker; }
+}
+
+/** A named aggregate tests an erased callable result's true default value. */
+type G24ForwardTuple(i32, string);
+
+/** Local open function-value formation is a same-package counterpart. */
+func g24_local_reader<T: G24ForwardBoth>(): G24ForwardReader<T> {
+    return g24_forward_inner<T>;
+}
+
+/** Form an imported method-generic callable in a short-lived owner scope. */
+func g24_escape_member_reader(): G24ForwardReader<G24ForwardValue> {
+    let owner = G24ForwardOwner<G24ForwardReference> {};
+    return owner.method_reader<G24ForwardValue>();
+}
+
+/** Member function values and closed defaults must not invoke the open defense. */
+func test_g24_forward_callable() {
+    describe("G24 constrained generic callable members", () {
+        test("type member and static bindings preserve reference T", () {
+            let value = G24ForwardReference { marker: 31 };
+            let owner = G24ForwardOwner<G24ForwardReference> {};
+            assert(owner.reader(value) == 31 && owner.fallback(value) == 0, "initialized and default callable");
+            assert(G24ForwardOwner<G24ForwardReference>.shared_reader(value) == 31, "static member binding");
+            value.marker = 37;
+            assert(owner.reader(value) == 37, "the actual reference is passed unchanged");
+        });
+        test("aggregate owners and method parameters preserve value T", () {
+            let value = G24ForwardValue { marker: 43, text: "payload" };
+            let owner = G24ForwardValueOwner<G24ForwardValue> {};
+            assert(owner.reader(value) == 43 && value.text == "payload", "value member binding");
+            let reference = G24ForwardReference { marker: 47 };
+            let method = owner.method_reader<G24ForwardReference>();
+            assert(method(reference) == 47, "method parameter differs from owner parameter");
+        });
+        test("owner and method generic slots stay distinct after formation", () {
+            let owner = G24ForwardOwner<G24ForwardReference> {};
+            let reference = G24ForwardReference { marker: 53 };
+            let value = G24ForwardValue { marker: 59, text: "method" };
+            let from_owner = owner.owner_reader<i32>();
+            let from_method = owner.method_reader<G24ForwardValue>();
+            assert(from_owner(reference) == 53 && from_method(value) == 59, "independent descriptor domains");
+        });
+        test("the same complete spec T keeps each value's own witness", () {
+            let first: G24ForwardBoth = G24ForwardReference { marker: 61 };
+            let second: G24ForwardBoth = G24ForwardValue { marker: 67, text: "boxed" };
+            let owner = G24ForwardOwner<G24ForwardBoth> {};
+            assert(owner.reader(first) == 61 && owner.reader(second) == 67, "per-value subject and witness");
+        });
+        test("function and escaped method values use stable closed metadata", () {
+            let value = G24ForwardValue { marker: 71, text: "escaped" };
+            let local = g24_local_reader<G24ForwardValue>();
+            let imported = g24_forward_factory<G24ForwardValue>();
+            let escaped = g24_escape_member_reader();
+            assert(local(value) == 71 && imported(value) == 71 && escaped(value) == 71, "stable function-value metadata");
+        });
+        test("closed fixed-result defaults return their normal zero values", () {
+            let defaults = G24ForwardDefaults<string> {};
+            assert(defaults.number("ignored") == 0 && !defaults.predicate("ignored"), "integer and boolean defaults");
+            assert(defaults.real("ignored") == 0.0 && defaults.text("ignored") == "", "floating and pointer defaults");
+            assert(defaults.same("ignored") == "", "erased managed default");
+            defaults.action("ignored");
+        });
+        test("closed erased defaults retain reference and aggregate semantics", () {
+            let references = G24ForwardDefaults<G24ForwardReference> {};
+            let reference = references.same(G24ForwardReference { marker: 73 });
+            assert(reference.marker == 0, "fresh normal reference default");
+            let tuples = G24ForwardDefaults<G24ForwardTuple> {};
+            let input: G24ForwardTuple = (79, "tuple");
+            let result = tuples.same(input);
+            assert(result.item1 == 0 && result.item2 == "", "complete tuple default");
+        });
+    });
+}

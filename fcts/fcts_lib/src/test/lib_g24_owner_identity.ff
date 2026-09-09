@@ -1,0 +1,55 @@
+open module fcts_lib.test.owner_identity;
+
+/** Reference instances with different T must use their own layout and state. */
+open type G24IdentityOwner<T> {
+    open var value: T;
+    open static var saved: T;
+    /** Read through the receiver's own closed layout. */
+    func read(): T { return self.value; }
+    /** Identity substitution is the no-extra-lookup control. */
+    func same(other: G24IdentityOwner<T>): T { return other.read(); }
+    /** Method U does not denote this owner's T. */
+    func other<U>(peer: G24IdentityOwner<U>): U { return peer.read(); }
+    /** Field writes also select the peer's layout and lifetime rules. */
+    func replace<U>(peer: G24IdentityOwner<U>, next: U): U {
+        peer.value = next;
+        return peer.value;
+    }
+    /** Static storage belongs to the full instance, not the generic origin. */
+    func store<U>(next: U): U {
+        G24IdentityOwner<U>.saved = next;
+        return G24IdentityOwner<U>.saved;
+    }
+    /** A composite actual is not the owner's identity substitution. */
+    func nested<U>(next: U[]): U[] {
+        let peer = G24IdentityOwner<U[]> { value: next };
+        return peer.read();
+    }
+}
+
+/** Value instances select FengAggregateDescriptor through the same identity rule. */
+@value open type G24IdentityValueOwner<T> {
+    open var value: T;
+    open static var saved: T;
+    /** A by-value owner read must preserve the complete payload. */
+    func read(): T { return self.value; }
+    /** Same-instance control for aggregate descriptors. */
+    func same(peer: G24IdentityValueOwner<T>): T { return peer.read(); }
+    /** Forward another actual type from an aggregate owner's shared method. */
+    func other<U>(peer: G24IdentityValueOwner<U>): U { return peer.read(); }
+    /** Aggregate owners also have instance-specific static bindings. */
+    func store<U>(next: U): U {
+        G24IdentityValueOwner<U>.saved = next;
+        return G24IdentityValueOwner<U>.saved;
+    }
+}
+
+/** Swapping two existing owner parameters still changes the full instance. */
+open type G24IdentityPair<A, B> {
+    open var first: A;
+    open var second: B;
+    /** A method with no own generics derives dependencies from owner parameters. */
+    func swapped(peer: G24IdentityPair<B, A>): B { return peer.read(); }
+    /** The first field can have a completely different physical representation. */
+    func read(): A { return self.first; }
+}

@@ -1322,6 +1322,10 @@ typedef struct Local {
     /* Optional initialization predicate for conditionally owned storage.
      * NULL keeps the existing unconditional cleanup path unchanged. */
     char     *cleanup_condition_c_expr;
+    /* An expression guard already released and cleared this pointer. Keep
+     * its cleanup node until it reaches the top of the LIFO chain, then pop
+     * it without a second release. This is a compile-time-only state. */
+    bool      cleanup_pop_only;
     /* Whether source-level mutability is known for this local. Compiler-only
      * temporaries leave this false; user bindings, parameters and `self`
      * record their declared mutability explicitly. */
@@ -1446,6 +1450,7 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->is_param = is_param;
     l->is_unknown_exception = false;
     l->cleanup_condition_c_expr = NULL;
+    l->cleanup_pop_only = false;
     l->binding_mutability_known = false;
     l->binding_is_rebindable = false;
     l->is_storage_address = false;
@@ -3582,6 +3587,42 @@ static char *cg_rtd_expr_for_managed_descriptor(CG *cg,
     return NULL;
 }
 
+/* Only the identity substitution of every owner parameter denotes the current
+ * shared-body owner. Equal generic origins alone also include other closed
+ * instances; method parameter shadowing is rejected by Semantic. */
+static bool cg_user_type_is_current_generic_owner(const CG *cg,
+                                                   const UserType *type) {
+    const FengDecl *owner;
+    const FengDecl *origin;
+
+    if (cg == NULL || type == NULL ||
+        type->generic_context_type_param_count == 0U) {
+        return false;
+    }
+    owner = cg->generic_type_method_decl;
+    origin = type->generic_origin_decl != NULL
+                 ? type->generic_origin_decl : type->decl;
+    if (owner == NULL || owner->kind != FENG_DECL_TYPE || origin != owner ||
+        type->generic_type_arg_count != owner->as.type_decl.type_param_count ||
+        type->generic_type_args == NULL) {
+        return false;
+    }
+    for (size_t index = 0U; index < type->generic_type_arg_count; ++index) {
+        const FengTypeRef *arg = type->generic_type_args[index];
+        FengSlice formal = owner->as.type_decl.type_params[index].name;
+
+        if (arg == NULL || arg->kind != FENG_TYPE_REF_NAMED ||
+            arg->as.named.segment_count != 1U ||
+            arg->as.named.type_arg_count != 0U ||
+            arg->as.named.segments[0].length != formal.length ||
+            memcmp(arg->as.named.segments[0].data, formal.data,
+                   formal.length) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Return the RTD expression string (e.g. "_td->reified_type_deps[2]") for a
  * generic UserType inside a shared body.  Caller frees.  Returns NULL and
  * emits an error on failure.
@@ -3599,8 +3640,7 @@ static char *cg_rtd_expr_for_type(CG *cg,
     /* The open instance of the current generic owner is represented by the
      * shared body's `_td` argument itself; it is not (and must not be)
      * duplicated in the owner's derived dependency slots. */
-    if (cg->generic_type_method_decl != NULL &&
-        ut->generic_origin_decl == cg->generic_type_method_decl) {
+    if (cg_user_type_is_current_generic_owner(cg, ut)) {
         return strdup("_td");
     }
 
@@ -4576,8 +4616,6 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
  * closed layout authority. */
 static bool cg_type_is_current_generic_owner(const CG *cg,
                                              const CGType *value_type) {
-    const FengDecl *origin;
-
     if (cg == NULL || value_type == NULL ||
         value_type->kind != CG_TYPE_OBJECT ||
         cg->generic_type_method_decl == NULL) {
@@ -4586,11 +4624,7 @@ static bool cg_type_is_current_generic_owner(const CG *cg,
     if (value_type->user == NULL) {
         return true;
     }
-    origin = value_type->user->generic_origin_decl != NULL
-                 ? value_type->user->generic_origin_decl
-                 : value_type->user->decl;
-    return value_type->user->generic_context_type_param_count > 0U &&
-           origin == cg->generic_type_method_decl;
+    return cg_user_type_is_current_generic_owner(cg, value_type->user);
 }
 
 /* Return whether the current erased generic-owner self has value semantics. */
@@ -9374,9 +9408,14 @@ static bool cg_register_generic_spec_decl(CG *cg, const FengDecl *decl) {
     return true;
 }
 
+/* A lexical generic scope retains original declarations through flattening. */
 typedef struct CGTypeParamScope {
     const FengTypeParam *first;
     size_t first_count;
+    /* Flattening copies parameter records, but recursive signature discovery
+     * must still recognize the same lexical declaration. NULL means first
+     * already points at the original declarations. Owned beside the prefix. */
+    const FengTypeParam *const *first_origins;
     const FengTypeParam *second;
     size_t second_count;
 } CGTypeParamScope;
@@ -9538,15 +9577,35 @@ static bool cg_type_param_scope_extend(
     if (nested_count == 0U) {
         return true;
     }
+    /* Revisiting an already-active declaration must not append its parameters
+     * again and manufacture endlessly growing open-instance context keys.
+     * Compare declaration identity, never just a same-spelled parameter name. */
+    bool already_active = true;
+    for (size_t i = 0U; already_active && i < nested_count; ++i) {
+        bool found = false;
+        for (size_t j = 0U; !found && j < out_scope->first_count; ++j) {
+            const FengTypeParam *origin = out_scope->first_origins != NULL
+                ? out_scope->first_origins[j] : &out_scope->first[j];
+            found = origin == &nested[i];
+        }
+        for (size_t j = 0U; !found && j < out_scope->second_count; ++j)
+            found = &out_scope->second[j] == &nested[i];
+        already_active = found;
+    }
+    if (already_active) return true;
     if (out_scope->second_count == 0U) {
         out_scope->second = nested;
         out_scope->second_count = nested_count;
         return true;
     }
 
+    if (out_scope->first_count > SIZE_MAX - out_scope->second_count) {
+        return false;
+    }
     prefix_count = out_scope->first_count + out_scope->second_count;
+    if (prefix_count > SIZE_MAX / (sizeof(FengTypeParam) + sizeof(const FengTypeParam *))) return false;
     FengTypeParam *prefix = prefix_count > 0U
-        ? calloc(prefix_count, sizeof(*prefix))
+        ? calloc(prefix_count, sizeof(*prefix) + sizeof(const FengTypeParam *))
         : NULL;
     if (prefix_count > 0U && prefix == NULL) {
         return false;
@@ -9561,7 +9620,14 @@ static bool cg_type_param_scope_extend(
                out_scope->second,
                out_scope->second_count * sizeof(*prefix));
     }
+    const FengTypeParam **origins = (const FengTypeParam **)(prefix + prefix_count);
+    for (size_t i = 0U; i < out_scope->first_count; ++i)
+        origins[i] = out_scope->first_origins != NULL
+            ? out_scope->first_origins[i] : &out_scope->first[i];
+    for (size_t i = 0U; i < out_scope->second_count; ++i)
+        origins[out_scope->first_count + i] = &out_scope->second[i];
     out_scope->first = prefix;
+    out_scope->first_origins = origins;
     out_scope->first_count = prefix_count;
     out_scope->second = nested;
     out_scope->second_count = nested_count;
@@ -18403,9 +18469,8 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             }
             buf_append_cstr(td,
                 "    feng_panic(\"open generic callable default invoked without a concrete descriptor\");\n");
-            if (s->callable_return_abi_kind != CG_CALLABLE_ABI_ADDRESS) {
-                buf_append_cstr(td, "    return NULL;\n");
-            }
+            /* feng_panic is noreturn. No dummy value is valid for every
+             * scalar, pointer and aggregate return ABI. */
             buf_append_cstr(td, "}\n\n");
         } else if (cgtype_is_aggregate(s->callable_return_type)) {
             const char *aggregate_descriptor =
@@ -19215,11 +19280,7 @@ static bool cg_emit_shared_static_binding_state(
         return false;
     }
     origin = target->generic_origin_decl;
-    if (origin == cg->generic_type_method_decl) {
-        descriptor_expr = strdup("_td");
-    } else {
-        descriptor_expr = cg_rtd_expr_for_type(cg, target, blame);
-    }
+    descriptor_expr = cg_rtd_expr_for_type(cg, target, blame);
     descriptor_name = cg_fresh_temp(cg, "_static_desc");
     state_name = cg_fresh_temp(cg, "_static_state");
     ensure_name = cg_generic_type_static_ensure_shared_cname(
@@ -26006,6 +26067,74 @@ static bool cg_emit_free_fn_abi_wrapper(CG *cg,
     return ok;
 }
 
+/* A borrowed callee snapshot lives across argument evaluation and invocation.
+ * Store a scope index, not a Local pointer: nested arguments may grow locals. */
+typedef struct CGCallableCalleeGuard {
+    Scope *scope;
+    size_t local_index;
+} CGCallableCalleeGuard;
+
+/* Fix unstable callable identity before any argument can replace its source.
+ * Callable constraints use the same managed-pointer representation as concrete
+ * callable values; their existing witness still performs generic invocation.
+ * Stable borrows and already-owned temporaries need no additional retain. */
+static bool cg_callable_callee_guard_begin(CG *cg, ExprResult *callee,
+                                           FengToken blame,
+                                           CGCallableCalleeGuard *guard) {
+    guard->scope = NULL;
+    guard->local_index = 0U;
+    if (callee->owns_ref || callee->managed_identity_is_stable) return true;
+
+    char *temporary = cg_fresh_temp(cg, "_callee_guard");
+    CGType *cleanup_type = cgtype_new(CG_TYPE_CALLABLE);
+    if (temporary == NULL || cleanup_type == NULL) {
+        free(temporary);
+        cgtype_free(cleanup_type);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+                   "    void *%s = %s%s%s; feng_retain(%s);\n",
+                   temporary, callee->is_storage_address ? "(*(void *const *)" : "(void *)(",
+                   callee->c_expr, ")", temporary);
+    guard->local_index = cg->cur_scope->count;
+    if (!cg_register_local_for_cleanup(cg, temporary, cleanup_type, blame)) {
+        cgtype_free(cleanup_type);
+        free(temporary);
+        return false;
+    }
+    cgtype_free(cleanup_type);
+    guard->scope = cg->cur_scope;
+    free(callee->c_expr);
+    callee->c_expr = temporary;
+    callee->is_storage_address = false;
+    callee->managed_identity_is_stable = true;
+    return true;
+}
+
+/* Drop the protective reference after the invocation has actually executed.
+ * Argument/result cleanup nodes can be above this node, so leave a cleared
+ * pop-only node in that case instead of disturbing the runtime LIFO chain.
+ * Finalizers cannot propagate exceptions across their language boundary. */
+static void cg_callable_callee_guard_end(CG *cg, CGCallableCalleeGuard *guard) {
+    if (guard->scope == NULL) return;
+    Local *local = &guard->scope->items[guard->local_index];
+    if (guard->local_index + 1U == guard->scope->count) {
+        Scope suffix = {0};
+        suffix.items = local;
+        suffix.count = 1U;
+        cg_release_scope(cg, &suffix);
+        scope_discard_suffix(guard->scope, guard->local_index);
+    } else {
+        buf_append_fmt(cg->cur_body, "    feng_release(%s); %s = NULL;\n",
+                       local->c_name, local->c_name);
+        local->cleanup_pop_only = true;
+    }
+    guard->scope = NULL;
+}
+
+/* Invoke a concrete callable with the same callee guard for every syntax
+ * entry, including locals, fields, imported bindings and computed values. */
 static bool cg_emit_callable_value_call(CG *cg,
                                         const FengExpr *e,
                                         ExprResult *callee,
@@ -26014,6 +26143,7 @@ static bool cg_emit_callable_value_call(CG *cg,
     Buf args_buf;
     bool is_variadic;
     size_t fixed_count;
+    CGCallableCalleeGuard guard = {0};
 
     er_init(out);
     if (spec == NULL || spec->form != FENG_SPEC_FORM_CALLABLE) {
@@ -26039,6 +26169,10 @@ static bool cg_emit_callable_value_call(CG *cg,
     }
     if (cgtype_is_managed(callee->type) && callee->owns_ref) {
         cg_materialize_to_local(cg, callee, "_t");
+    }
+    if (!cg_callable_callee_guard_begin(cg, callee, e->token, &guard)) {
+        er_free(callee);
+        return false;
     }
 
     buf_init(&args_buf);
@@ -26207,7 +26341,24 @@ static bool cg_emit_callable_value_call(CG *cg,
                        callee->c_expr,
                        callee->c_expr,
                        args_buf.data ? args_buf.data : "");
-        out->c_expr = invocation.data;
+        if (guard.scope != NULL) {
+            if (spec->callable_return_type->kind == CG_TYPE_VOID) {
+                buf_append_fmt(cg->cur_body, "    %s;\n", invocation.data);
+                out->c_expr = strdup("((void)0)");
+            } else {
+                char *temporary = cg_fresh_temp(cg, "_callee_result");
+                if (temporary != NULL) {
+                    buf_append_cstr(cg->cur_body, "    ");
+                    cg_emit_c_type(cg->cur_body, spec->callable_return_type);
+                    buf_append_fmt(cg->cur_body, " %s = %s;\n", temporary, invocation.data);
+                }
+                out->c_expr = temporary;
+                out->is_addressable = true;
+            }
+            buf_free(&invocation);
+        } else {
+            out->c_expr = invocation.data;
+        }
     }
     buf_free(&args_buf);
     if (out->type == NULL) {
@@ -26216,6 +26367,7 @@ static bool cg_emit_callable_value_call(CG *cg,
                         cgtype_is_aggregate(out->type);
     }
     bool ok = out->c_expr && out->type;
+    if (ok) cg_callable_callee_guard_end(cg, &guard);
     er_free(callee);
     return ok;
 }
@@ -26233,6 +26385,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     size_t fixed_count;
     size_t emitted_arg_count;
     char *callee_subject = NULL;
+    CGCallableCalleeGuard guard = {0};
 
     er_init(out);
     if (constraint == NULL || constraint->form != FENG_SPEC_FORM_CALLABLE ||
@@ -26261,6 +26414,10 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
             constraint->feng_name,
             constraint->callable_param_count,
             e->as.call.arg_count);
+    }
+    if (!cg_callable_callee_guard_begin(cg, callee, e->token, &guard)) {
+        er_free(callee);
+        return false;
     }
     if (callee->is_storage_address) {
         Buf subject;
@@ -26452,6 +26609,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
     for (size_t i = 0; i < emitted_arg_count; ++i) free(arg_addr_exprs[i]);
     free(arg_addr_exprs);
     free(callee_subject);
+    if (ok) cg_callable_callee_guard_end(cg, &guard);
     er_free(callee);
     return ok;
 }
@@ -26480,6 +26638,7 @@ static bool cg_stabilize_computed_callable_callee(CG *cg,
             }
             return false;
         }
+        callee->managed_identity_is_stable = true;
         return true;
     }
     if (callee->type->kind != CG_TYPE_CALLABLE ||
@@ -26519,6 +26678,7 @@ static bool cg_stabilize_computed_callable_callee(CG *cg,
     callee->owns_ref = false;
     callee->is_addressable = true;
     callee->is_storage_address = false;
+    callee->managed_identity_is_stable = true;
     free(temporary);
     if (callee->c_expr == NULL) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
@@ -28179,21 +28339,21 @@ static bool cg_append_static_owner_context_args(CG *cg,
  * concrete methods retain their instantiated surface. Shared type methods
  * recover imported members by declaration ordinal; shared fit methods retain
  * their own member and use the target's owner-parameter domain. */
-static bool cg_generic_static_method_param_uses_address_abi(
+static bool cg_resolve_generic_static_method_param_type(
     CG *cg,
     const UserType *owner_type,
     const UserMethod *method,
     const BuiltinFit *builtin_fit,
     const UserFit *user_fit,
     size_t param_index,
-    bool *out_uses_address) {
+    CGType **out_type) {
     const FengDecl *origin = NULL;
     const FengTypeMember *origin_member;
     size_t method_ordinal = (size_t)-1;
     size_t current_ordinal = 0U;
 
     if (cg == NULL || method == NULL || param_index >= method->param_count ||
-        out_uses_address == NULL) {
+        out_type == NULL) {
         return false;
     }
     (void)builtin_fit;
@@ -28201,9 +28361,8 @@ static bool cg_generic_static_method_param_uses_address_abi(
         (owner_type->generic_context_type_param_count == 0U &&
          cg_program_origin(cg, owner_type->owner_program) !=
              FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)) {
-        *out_uses_address = cg_shared_generic_param_uses_address(
-            method->param_types[param_index]);
-        return true;
+        *out_type = cgtype_clone(method->param_types[param_index]);
+        return *out_type != NULL;
     }
     if (user_fit != NULL) {
         const FengDecl *target_decl = user_fit->target != NULL
@@ -28215,7 +28374,6 @@ static bool cg_generic_static_method_param_uses_address_abi(
         size_t outer_param_count = 0U;
         const FengProgram *fit_program =
             cg_find_decl_owner_program(cg, user_fit->decl);
-        CGType *declared_type = NULL;
 
         if (target_decl != NULL && target_decl->kind == FENG_DECL_TYPE) {
             outer_params = target_decl->as.type_decl.type_params;
@@ -28228,12 +28386,9 @@ static bool cg_generic_static_method_param_uses_address_abi(
                 fit_program,
                 method->member,
                 param_index,
-                &declared_type)) {
+                out_type)) {
             return false;
         }
-        *out_uses_address =
-            cg_shared_generic_param_uses_address(declared_type);
-        cgtype_free(declared_type);
         return true;
     }
     origin_member = method->member;
@@ -28244,8 +28399,11 @@ static bool cg_generic_static_method_param_uses_address_abi(
         return false;
     }
     if (!owner_type->is_generic_instance) {
-        return cg_shared_method_param_uses_address_abi(
-            cg, origin, origin_member, param_index, out_uses_address);
+        return cg_resolve_shared_method_declared_param_type(
+            cg, origin->as.type_decl.type_params,
+            origin->as.type_decl.type_param_count,
+            cg_find_decl_owner_program(cg, origin), origin_member,
+            param_index, out_type);
     }
     for (size_t i = 0U; i < owner_type->static_method_count; ++i) {
         if (&owner_type->static_methods[i] == method) {
@@ -28276,8 +28434,28 @@ static bool cg_generic_static_method_param_uses_address_abi(
         return false;
     }
 
-    return cg_shared_method_param_uses_address_abi(
-        cg, origin, origin_member, param_index, out_uses_address);
+    return cg_resolve_shared_method_declared_param_type(
+        cg, origin->as.type_decl.type_params,
+        origin->as.type_decl.type_param_count,
+        cg_find_decl_owner_program(cg, origin), origin_member,
+        param_index, out_type);
+}
+
+/* Method-value adapters query the same declared slot as direct static calls. */
+static bool cg_generic_static_method_param_uses_address_abi(
+    CG *cg, const UserType *owner_type, const UserMethod *method,
+    const BuiltinFit *builtin_fit, const UserFit *user_fit,
+    size_t param_index, bool *out_uses_address) {
+    CGType *type = NULL;
+
+    if (out_uses_address == NULL ||
+        !cg_resolve_generic_static_method_param_type(
+            cg, owner_type, method, builtin_fit, user_fit, param_index, &type)) {
+        return false;
+    }
+    *out_uses_address = cg_shared_generic_param_uses_address(type);
+    cgtype_free(type);
+    return true;
 }
 
 /* Return whether a static method call must enter the exported shared body
@@ -28585,16 +28763,16 @@ static bool cg_emit_generic_static_method_call(CG *cg,
 
     /* Build arg_exprs for fixed arguments. */
     for (size_t i = 0U; i < fixed_param_count; ++i) {
-        bool uses_address_abi = false;
+        CGType *declared_type = NULL;
 
-        if (!cg_generic_static_method_param_uses_address_abi(
+        if (!cg_resolve_generic_static_method_param_type(
                 cg,
                 owner_type,
                 um,
                 builtin_fit,
                 user_fit,
                 i,
-                &uses_address_abi)) {
+                &declared_type)) {
             if (!cg->failed) {
                 cg_fail(cg,
                         e->token,
@@ -28607,9 +28785,10 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         arg_exprs[i] = cg_shared_callable_argument_for_type_expr_dup(
             cg,
             &args[i],
-            um->param_types[i],
-            uses_address_abi,
+            declared_type,
+            cg_shared_generic_param_uses_address(declared_type),
             "_gsma");
+        cgtype_free(declared_type);
         if (arg_exprs[i] == NULL) {
             cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             ok = false;
@@ -28659,16 +28838,16 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     } else {
         /* Non-variadic: build remaining arg_exprs (generic param handling). */
         for (size_t i = fixed_param_count; i < arg_count; ++i) {
-            bool uses_address_abi = false;
+            CGType *declared_type = NULL;
 
-            if (!cg_generic_static_method_param_uses_address_abi(
+            if (!cg_resolve_generic_static_method_param_type(
                     cg,
                     owner_type,
                     um,
                     builtin_fit,
                     user_fit,
                     i,
-                    &uses_address_abi)) {
+                    &declared_type)) {
                 if (!cg->failed) {
                     cg_fail(cg,
                             e->token,
@@ -28681,9 +28860,10 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             arg_exprs[i] = cg_shared_callable_argument_for_type_expr_dup(
                 cg,
                 &args[i],
-                um->param_types[i],
-                uses_address_abi,
+                declared_type,
+                cg_shared_generic_param_uses_address(declared_type),
                 "_gsma");
+            cgtype_free(declared_type);
             if (arg_exprs[i] == NULL) {
                 cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 ok = false;
@@ -29352,6 +29532,26 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 }
                 return cg_emit_static_method_call_with_user_method(
                     cg, e, ut, um, NULL, uf, out);
+            }
+        }
+
+        /* A static callable binding is a value call, not a method call.
+         * Resolve its type target before trying to evaluate it as a receiver;
+         * ordinary member emission already supplies lazy initialization and
+         * the binding's stable/mutable ownership facts. */
+        if (rc->kind == FENG_RESOLVED_CALLABLE_NONE) {
+            const UserType *owner =
+                cg_find_user_type_by_expr_path(cg, ma->as.member.object);
+            const TypeStaticBinding *binding = owner != NULL
+                ? cg_user_type_static_binding(owner,
+                      ma->as.member.member.data, ma->as.member.member.length)
+                : NULL;
+            if (binding != NULL && binding->type != NULL &&
+                binding->type->kind == CG_TYPE_CALLABLE) {
+                ExprResult callee;
+                if (!cg_emit_member(cg, ma, &callee)) return false;
+                return cg_emit_callable_value_call(cg, e, &callee,
+                                                   callee.type->user_spec, out);
             }
         }
 
@@ -30662,6 +30862,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 callee.c_expr = strdup(callee_local->c_name);
                 callee.type = cgtype_clone(callee_local->type);
                 callee.owns_ref = false;
+                callee.managed_identity_is_stable =
+                    callee_local->binding_mutability_known && !callee_local->binding_is_rebindable;
                 callee.is_addressable = true;
                 callee.is_storage_address = callee_local->is_storage_address;
                 if (callee.c_expr == NULL || callee.type == NULL) {
@@ -30680,6 +30882,8 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             callee.c_expr = strdup(callee_local->c_name);
             callee.type = cgtype_clone(callee_local->type);
             callee.owns_ref = false;
+            callee.managed_identity_is_stable =
+                callee_local->binding_mutability_known && !callee_local->binding_is_rebindable;
             if (callee.c_expr == NULL || callee.type == NULL) {
                 er_free(&callee);
                 return false;
@@ -30698,6 +30902,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             callee.c_expr = cg_module_binding_slot_expr_dup(callee_binding);
             callee.type = cgtype_clone(callee_binding->type);
             callee.owns_ref = false;
+            callee.managed_identity_is_stable = !callee_binding->is_var;
             if (callee.c_expr == NULL || callee.type == NULL) {
                 er_free(&callee);
                 return false;
@@ -35413,6 +35618,10 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
     for (size_t i = scope->count; i > 0; i--) {
         const Local *l = &scope->items[i - 1];
         if (l->is_param) continue;
+        if (l->cleanup_pop_only) {
+            buf_append_cstr(cg->cur_body, "    feng_cleanup_pop();\n");
+            continue;
+        }
         if (l->cleanup_condition_c_expr != NULL) {
             /* Reuse every existing value-category cleanup rule, including
              * its LIFO pop, only after this local was actually initialized. */
@@ -44965,24 +45174,29 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
         const FengDecl *origin_decl = type->generic_origin_decl != NULL
                                           ? type->generic_origin_decl
                                           : type->decl;
-        bool uses_address_abi = false;
+        CGType *declared_type = NULL;
 
-        if (!cg_shared_method_param_uses_address_abi(
+        /* Both the physical ABI and its C spelling belong to the provider's
+         * declaration. An open caller may name the same slot differently. */
+        if (!cg_resolve_shared_method_declared_param_type(
                 cg,
-                origin_decl,
+                origin_decl->as.type_decl.type_params,
+                origin_decl->as.type_decl.type_param_count,
+                cg_find_decl_owner_program(cg, origin_decl),
                 method->member,
                 index,
-                &uses_address_abi)) {
+                &declared_type)) {
             free(shared_name);
             return false;
         }
         buf_append_cstr(&cg->fn_protos, ", ");
-        if (uses_address_abi) {
+        if (cg_shared_generic_param_uses_address(declared_type)) {
             buf_append_fmt(&cg->fn_protos, "const void *_p%zu", index);
         } else {
-            cg_emit_c_type(&cg->fn_protos, method->param_types[index]);
+            cg_emit_c_type(&cg->fn_protos, declared_type);
             buf_append_fmt(&cg->fn_protos, " _p%zu", index);
         }
+        cgtype_free(declared_type);
     }
     if (method->return_type != NULL &&
         method->return_type->kind != CG_TYPE_VOID) {
@@ -62980,50 +63194,13 @@ static bool cg_emit_generic_type_method_wrapper_into(
 
     if (cg_program_origin(cg, t->owner_program) ==
         FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-        bool has_out_param = m->return_type->kind != CG_TYPE_VOID;
-        buf_append_fmt(&cg->fn_protos, "void %s(", shared_name);
-        bool proto_has_param = false;
-        if (!is_static_method) {
-            buf_append_fmt(&cg->fn_protos,
-                "void *_self, const %s *_type_desc", type_desc_c_type);
-            proto_has_param = true;
-        } else {
-            buf_append_fmt(&cg->fn_protos, "const %s *_type_desc", type_desc_c_type);
-            proto_has_param = true;
+        /* Open callers and concrete wrappers must share one declaration
+         * authority for the provider's fixed shared entry point. */
+        if (!cg_emit_imported_generic_method_shared_proto(
+                cg, t, m, func_desc_expr != NULL || receives_func_desc,
+                shared_name)) {
+            goto cleanup;
         }
-        if (func_desc_expr != NULL || receives_func_desc) {
-            if (proto_has_param) buf_append_cstr(&cg->fn_protos, ", ");
-            buf_append_cstr(&cg->fn_protos,
-                            "const FengFunctionDescriptor *_desc");
-            proto_has_param = true;
-        }
-        /* only method-level generic params in signature */
-        for (size_t i = 0; i < method_tp_count; ++i) {
-            if (proto_has_param) buf_append_cstr(&cg->fn_protos, ", ");
-            buf_append_fmt(&cg->fn_protos,
-                           "const FengGenericParamDescriptor *%s",
-                           method_desc_names[i]);
-            proto_has_param = true;
-        }
-        for (size_t i = 0; i < sig->param_count; ++i) {
-            if (proto_has_param) buf_append_cstr(&cg->fn_protos, ", ");
-            if (cg_shared_generic_param_uses_address(origin_param_types[i])) {
-                buf_append_fmt(&cg->fn_protos, "const void *_p%zu", i);
-            } else {
-                cg_emit_c_type(&cg->fn_protos, origin_param_types[i]);
-                buf_append_fmt(&cg->fn_protos, " _p%zu", i);
-            }
-            proto_has_param = true;
-        }
-        if (has_out_param) {
-            if (proto_has_param) buf_append_cstr(&cg->fn_protos, ", ");
-            buf_append_cstr(&cg->fn_protos, "void *_out");
-            proto_has_param = true;
-        }
-        if (!proto_has_param) {
-            buf_append_cstr(&cg->fn_protos, "void");
-        }
-        buf_append_cstr(&cg->fn_protos, ");\n");
     }
 
     Buf *body = definition_body;

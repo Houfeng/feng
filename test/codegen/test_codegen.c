@@ -23,6 +23,13 @@ void test_intersection_projection_codegen(void (*compile_c)(const char *));
 void test_local_assignment_storage_codegen(void (*compile_c)(const char *));
 /* Open object-spec capture uses the existing closed lifecycle descriptor. */
 void test_spec_capture_descriptor(void (*compile_c)(const char *));
+/* Open callable guard C validity is independent of the result ABI. */
+void test_open_callable_guard(void (*compile_c)(const char *));
+/* Static callable fields reuse ordinary binding reads and value invocation. */
+void test_static_callable_binding(void (*compile_c)(const char *));
+void test_callable_callee_guard(void (*compile_c)(const char *));
+/* Imported shared signatures are independent of caller generic parameter names. */
+void test_imported_callable_prototype(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -17358,6 +17365,10 @@ int main(void) {
     test_intersection_projection_codegen(compile_generated_c_or_die);
     test_local_assignment_storage_codegen(compile_generated_c_or_die);
     test_spec_capture_descriptor(compile_generated_c_or_die);
+    test_open_callable_guard(compile_generated_c_or_die);
+    test_static_callable_binding(compile_generated_c_or_die);
+    test_callable_callee_guard(compile_generated_c_or_die);
+    test_imported_callable_prototype(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

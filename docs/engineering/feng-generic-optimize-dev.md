@@ -68,6 +68,11 @@ fit 方法本质上是类型外部函数（类似独立函数的语法糖）。�
 
 dependency owner 按 domain 分离：`FengTypeDescriptor.reified_agg_deps[]` 和 `reified_type_deps[]` 只保存类型字段、字段初始化与布局所需的结构性依赖；每个顶层函数、静态方法和实例方法的 `FengFunctionDescriptor` 保存该 callable 自己的直接 aggregate、managed type 和 callable 依赖。三类 slot 各自使用规范化 key 静态分配，不能把方法依赖并入 owner type。
 
+共享方法只能为与当前 owner 完全相同的实例复用 `_type_desc`：泛型定义相同、全部类型实参
+逐项对应当前 owner 的泛参。仅定义相同不足以复用，例如 `Owner<T>` 方法中的 `Owner<U>`
+仍须读取对应的既有 reified 依赖槽。此实例身份规则统一用于方法调用、布局和静态绑定状态，
+不得把不同具化实例的描述符或静态存储混用；判定在编译期完成。
+
 `FengFunctionDescriptor` 描述顶层函数、静态方法和实例方法的具体化依赖（详见 §2.3）。生命周期三大类不变。Aggregate walker 不变。不新增 runtime 函数。
 
 **核心处理流程**
@@ -218,6 +223,54 @@ typedef enum FengSymbolAttrKind {
 每个泛型依赖对应一条记录，多个依赖对应多条记录。`ft_read.c` 还原 `FengSymbolDeclView` 的 aggregate、managed type 和 callable dependency 列表。Wrapper codegen 读取后使用与共享体相同的规范化 key 分配三类 slot；callable 身份不能降级为函数名字符串。
 
 ### 2.3 描述符结构
+
+#### G24 约束投影字段
+
+状态：G24／ISSUE-G24-051 的承载方向及默认值、用途边界已明确；下述字段尚未加入运行时
+结构，投影表生成与调用点读取也尚未实施。此处定义字段职责，不将设计记录视为功能验收。
+
+`FengGenericParamDescriptor` 拟增加 `constraint_projection_descriptors`，默认 `NULL`。
+本次仅用于交叉约束相关的泛参投影，不扩展普通 spec 值转换或无关泛型路径。这里的
+“交叉”指约束投影关系，不要求实际 T 是交叉类型；普通引用类型、值类型及完整 spec 值作为
+实际 T 时仍使用同一协议。没有投影依赖的记录保持 `NULL`，消费端不得为无关路径新增读取
+或运行时分支。
+
+```c
+/* Generic argument metadata. The projection field below is a pending G24 extension. */
+typedef struct FengGenericParamDescriptor {
+    FengValueKind kind;
+    const void *descriptor;
+    const void *witness;
+
+    /* Defaults to NULL when this record has no constraint-projection dependency.
+     * G24 uses this only for generic forwarding involving intersection constraints;
+     * it is not used by ordinary spec-value casts or unrelated generic paths.
+     * The actual T need not be an intersection type. Each entry describes the
+     * SAME actual T (same kind and concrete descriptor), with the witness for
+     * one compiler-proven target constraint. No subject/value pointer is stored.
+     * The table and target records are statically generated and reused. Shared
+     * calls select compiler-defined slots, without runtime satisfaction checks,
+     * name lookup, or per-call construction. Unrelated paths do not read it. */
+    const struct FengGenericParamDescriptor *const
+        *constraint_projection_descriptors;
+} FengGenericParamDescriptor;
+```
+
+投影在调用点完成：内层收到符合其声明约束的泛参描述符，实际 T、参数值和生命周期协议
+保持不变。类型级参数仍从所属类型描述符取得，方法／函数级参数仍经既有隐式参数取得；
+不向 witness 添加反向泛参描述符指针，也不因此向函数描述符增加泛参表。
+
+投影表由共享体的实际依赖决定，不由交叉类型的成员列表决定。在具化点生成当前记录时，
+同时生成共享体需要的目标约束记录，并递归生成内层共享体需要的记录；各层都描述同一个
+实际 T，仅当前约束及其后续依赖不同。目标可以是另一合法交叉约束，不要求它是原约束的
+直接或间接成员。该依赖信息必须进入 `.ft`，使跨包具化点无需原函数体也能生成完整依赖图；
+沿用既有格式版本，不增加旧制品兼容路径。递归调用形成的重复节点须静态复用，不能无限
+展开，也不能转为运行时构造。
+
+完整稳定槽位及各共享体入口的根记录选择仍须在实施中核对；生成端与消费端必须使用相同的
+开放依赖身份，不能在具化后按类型相等重新合并槽位。当前 64 位布局下，新字段使每条记录从 24 增至
+32 字节，包括字段为 `NULL` 的记录；投影调用另有固定索引读取。成本验收还须核对既有
+非封闭复合字面量分支，不把“默认 NULL”描述成记录大小没有变化。
 
 #### `FengFunctionDescriptor`（新增）
 

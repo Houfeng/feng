@@ -69,6 +69,10 @@ func main(args: string[]) {
       test_g24_spec_views();
       test_g24_composite_actuals();
       test_intersection_projection();
+      test_g24_forward_callable();
+      test_g24_static_callable();
+      test_g24_callee_guards();
+      test_g24_owner_identity();
       test_union_spec_leaf_coercion();
       test_exception();
       test_exception_payload();

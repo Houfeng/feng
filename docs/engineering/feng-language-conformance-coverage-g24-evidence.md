@@ -13,7 +13,8 @@ Codegen 用例还会编译生成 C，FCTS 执行语言行为断言，二者不�
 最终全量结果见第 4 节；未取得最终结果前，不把此映射当作 G24 已验收。
 
 当前状态：COMPOSITE01～42 已实施部分的全量回归通过，新增 COMPOSITE43 已独立验收通过。
-COMPOSITE27 的交叉约束开放转传仍有 ISSUE-G24-051，相关行为／发码／成本格尚未验收，
+本轮 055／056／058～062 的 callable 补齐已完成第 4.5 节的独立全量验收。
+COMPOSITE27 的交叉约束开放转传仍有 ISSUE-G24-051／057，相关行为／发码／成本格尚未验收，
 G24 不标记完成。显式交叉值投影不替代开放泛参转传。
 
 ## 2 COMPOSITE01～43 对应证据
@@ -377,3 +378,45 @@ ISSUE-G24-052／053／054 已完成并由该轮全量验收。两次中断的执
 不将中断运行计为通过。051 的开放泛参跨约束转传仍未完成，本次不扩大该项的描述符方案。
 
 建议 commit message：`feat: support explicit intersection component projections`。
+
+### 4.5 Callable 成员调用补齐独立交付
+
+055／056／058 的发码修复与新增覆盖已加入，补测暴露的 059～062 已实施修复。
+新增 [callee guard 发码矩阵](../../test/codegen/test_callable_callee_guard.c) 检查稳定入口不新增
+guard ARC、可变入口一次保护引用、真实调用前后顺序及清理链扩容；
+[导入原型矩阵](../../test/codegen/test_imported_callable_prototype.c) 检查引用／值 owner 和
+两种 `.ft` profile，C 原型不随调用者泛参名称变化。062 的对照检查实际调用：同一 owner
+实例仍传 `_td`，不同实例从既有依赖槽读取，不在运行期比较类型身份。新增及既有 Codegen
+全部通过，日志 `local/g24-delivery/062-codegen-verified.log`。
+
+新增 [callable 参数正反矩阵](../../test/semantic/test_callable_instance_arguments.c) 检查普通
+callable、callable 约束和 spec 字段在标量／if／match／try 参数上的闭合签名；新增及既有
+Semantic 全部通过。结合 [约束和 owner 边界矩阵](../../test/semantic/test_g24_callable_bindings.c)，
+本轮共新增 54 个 Semantic 正反场景，覆盖非法约束、实参及返回类型；专项日志为
+`local/g24-delivery/062-compiler-matrices.log`，最终结果采用下述完整 `make test` 日志。
+
+[callee guard FCTS](../../fcts/fcts_bin/src/test_g24_callee_guards.ff) 保留局部、字段、静态、
+spec、callable 约束和计算所得入口，验证正常返回、参数／callee 异常、自替换及捕获清理。
+[owner 身份 FCTS](../../fcts/fcts_bin/src/test_g24_owner_identity.ff) 验证同包／真实跨包、
+引用／受管值 owner、类型级／方法级参数、交换／嵌套实参、字段与静态状态。
+结合 [受约束 callable 成员](../../fcts/fcts_bin/src/test_g24_forward_callable.ff) 和
+[静态 callable](../../fcts/fcts_bin/src/test_g24_static_callable.ff)，本轮新增 30 项 FCTS，
+专项为 1319／1319，日志 `local/g24-delivery/062-fcts-expanded.log`。
+
+运行时增量限于已批准的两项：058 为不能证明稳定的借用 callee 增加一组保护 retain／release
+及既有清理链节点，稳定路径不新增该组 ARC；062 为不同 owner 实例读取既有静态依赖槽。
+不增加 runtime API、描述符字段、`.ft` 版本、满足检查、方法转接层或描述符构造分配。
+059～061 仅修复编译期实例替换、收集和 C 原型／参数类型一致性。
+
+最终沙箱外执行 `make test > local/g24-delivery/058-062-make-test.log 2>&1`，退出码 0。
+UBSan／常规两阶段的 Archive、Lexer、Parser、Semantic、Runtime、Codegen、Debug、CLI、
+CLI paths、Symbol 全部通过；std 均为 604／604，FCTS 均为 1319／1319，无跳过项。
+91 条 smoke、CLI direct／project／init、性能约束、增量构建、发布／安装／回滚、macOS
+finalize、bundled packages 和预构建工具链检查通过，未报告 UBSan runtime error。
+
+本轮只新增用例及注册入口，未改动既有用例断言。回归前后 `src/`、`test/`、`fcts/` 的
+源文件集合哈希一致；回归后只更新文档，`git diff --check` 通过。此前中断／失败的专项
+不计为通过，不复用 4.4 的历史结果验收本轮。051／057 的约束投影转传仍未实施，
+因此本次关闭 055／056／058～062，不标记 G24 整组完成。
+
+建议 commit message：`fix: preserve callable identity and generic owner descriptors`。

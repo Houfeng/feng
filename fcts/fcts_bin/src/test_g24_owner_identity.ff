@@ -1,0 +1,75 @@
+module fcts_bin;
+
+import std;
+import std.test;
+import fcts_lib.test.owner_identity;
+
+/** Same-package reference control, independent of imported symbols. */
+type G24LocalIdentity<T> {
+    open var value: T;
+    open static var saved: T;
+    /** Keep the receiver's own type when returning a generic field. */
+    func read(): T { return self.value; }
+    /** A method-level parameter selects another instantiation of this origin. */
+    func other<U>(peer: G24LocalIdentity<U>): U { return peer.read(); }
+    /** Closed static states must remain independent in a shared method. */
+    func store<U>(next: U): U { G24LocalIdentity<U>.saved = next; return G24LocalIdentity<U>.saved; }
+}
+
+/** A payload larger than a pointer makes an incorrect aggregate layout observable. */
+@value type G24IdentityPayload { open let text: string; open let first: i64; open let second: i64; }
+
+/** Cover complete-instance descriptor selection at local and real FT boundaries. */
+func test_g24_owner_identity() {
+    describe("G24 shared owner instance identity", () {
+        test("same-package owner and method parameters retain distinct representations", () {
+            let scalar = G24LocalIdentity<i32> { value: 31 };
+            let text = G24LocalIdentity<string> { value: "local" };
+            assert(scalar.other<string>(text) == "local", "local string peer");
+            assert(text.other<i32>(scalar) == 31, "local scalar peer");
+            G24LocalIdentity<i32>.saved = 53;
+            assert(scalar.store<string>("stored") == "stored", "local other static state");
+            assert(G24LocalIdentity<i32>.saved == 53, "local origin state untouched");
+        });
+        test("imported identity and method-parameter substitutions use exact owners", () {
+            let scalar = G24IdentityOwner<i32> { value: 31 };
+            let text = G24IdentityOwner<string> { value: "imported" };
+            assert(scalar.same(scalar) == 31 && text.same(text) == "imported", "same-instance controls");
+            assert(scalar.other<string>(text) == "imported", "imported string peer");
+            assert(text.other<i32>(scalar) == 31, "imported scalar peer");
+            assert(scalar.replace<string>(text, "changed") == "changed", "peer field assignment");
+            assert(text.value == "changed" && scalar.value == 31, "independent layouts");
+        });
+        test("imported static state stays separate for different actual types", () {
+            let owner = G24IdentityOwner<i32> {};
+            G24IdentityOwner<i32>.saved = 61;
+            assert(owner.store<string>("static") == "static", "other instantiated state");
+            assert(G24IdentityOwner<i32>.saved == 61, "current state untouched");
+            assert(owner.store<i32>(73) == 73, "same closed actual remains usable");
+            assert(G24IdentityOwner<string>.saved == "static", "string state untouched");
+        });
+        test("value owner descriptors preserve managed aggregate payloads", () {
+            let scalar = G24IdentityValueOwner<i32> { value: 31 };
+            let payload = G24IdentityPayload { text: "payload", first: 67, second: 89 };
+            let aggregate = G24IdentityValueOwner<G24IdentityPayload> { value: payload };
+            let copied = scalar.other<G24IdentityPayload>(aggregate);
+            assert(copied.text == "payload" && copied.first == 67 && copied.second == 89, "full aggregate copy");
+            assert(aggregate.other<i32>(scalar) == 31 && scalar.same(scalar) == 31, "scalar and same-instance controls");
+            G24IdentityValueOwner<i32>.saved = 41;
+            let stored = scalar.store<G24IdentityPayload>(payload);
+            assert(stored.text == "payload" && stored.second == 89, "aggregate static payload");
+            assert(G24IdentityValueOwner<i32>.saved == 41, "aggregate owner's scalar state untouched");
+        });
+        test("permuted owner parameters do not reuse the current descriptor", () {
+            let first = G24IdentityPair<i32, string> { first: 31, second: "first" };
+            let second = G24IdentityPair<string, i32> { first: "second", second: 47 };
+            assert(first.swapped(second) == "second", "B A descriptor");
+            assert(second.swapped(first) == 31, "A B descriptor");
+        });
+        test("nested actual types preserve their own managed representation", () {
+            let owner = G24IdentityOwner<i32> {};
+            let result = owner.nested<string>(["left", "right"]);
+            assert(result[0] == "left" && result[1] == "right", "array actual survives shared construction");
+        });
+    });
+}

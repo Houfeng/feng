@@ -17425,86 +17425,7 @@ static SpecMethodCallResolution resolve_spec_method_call_overload(
     return result;
 }
 
-static bool function_type_parameters_match_args(ResolveContext *context,
-                                                const FengDecl *type_decl,
-                                                FengExpr *const *args,
-                                                size_t arg_count,
-                                                bool *out_rejected_existing_array_for_variadic,
-                                                PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
-    size_t arg_index;
-    bool is_variadic;
-    size_t fixed_count;
-
-    if (out_rejected_existing_array_for_variadic != NULL) {
-        *out_rejected_existing_array_for_variadic = false;
-    }
-    if (out_prepacked_variadic_rejection != NULL) {
-        *out_prepacked_variadic_rejection = FENG_PREPACKED_VARIADIC_REJECTION_NONE;
-    }
-
-    if (!decl_is_function_type(type_decl)) {
-        return false;
-    }
-    is_variadic = type_decl->as.spec_decl.as.callable.param_count > 0U &&
-                  type_decl->as.spec_decl.as.callable
-                      .params[type_decl->as.spec_decl.as.callable.param_count - 1U]
-                      .is_variadic;
-    fixed_count = is_variadic ? type_decl->as.spec_decl.as.callable.param_count - 1U
-                              : type_decl->as.spec_decl.as.callable.param_count;
-
-    {
-        PrepackedVariadicRejection spread_rejection =
-            prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
-        if (out_prepacked_variadic_rejection != NULL) {
-            *out_prepacked_variadic_rejection = spread_rejection;
-        }
-        if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
-            return false;
-        }
-    }
-
-    if (is_variadic) {
-        if (arg_count < fixed_count) {
-            return false;
-        }
-    } else if (type_decl->as.spec_decl.as.callable.param_count != arg_count) {
-        return false;
-    }
-
-    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type =
-            arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg
-                ? type_decl->as.spec_decl.as.callable.params[arg_index].type
-                : type_decl->as.spec_decl.as.callable.params[fixed_count].type->as.inner;
-
-        if (args[arg_index] != NULL &&
-            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
-            resolve_function_type_decl(context, param_type) == NULL) {
-            return false;
-        }
-        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
-            if (out_prepacked_variadic_rejection != NULL &&
-                args[arg_index]->is_prepacked_variadic_arg) {
-                *out_prepacked_variadic_rejection =
-                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
-            }
-            if (out_rejected_existing_array_for_variadic != NULL &&
-                is_variadic &&
-                arg_count == type_decl->as.spec_decl.as.callable.param_count &&
-                arg_index == fixed_count &&
-                expr_is_existing_array_for_expected_type_ref(
-                    context,
-                    args[arg_index],
-                    type_decl->as.spec_decl.as.callable.params[fixed_count].type)) {
-                *out_rejected_existing_array_for_variadic = true;
-            }
-            return false;
-        }
-    }
-
-    return true;
-}
-
+/* Match the complete callable spec instance, including generic constraints. */
 static bool function_type_parameters_match_args_for_instance(
     ResolveContext *context,
     const FengDecl *type_decl,
@@ -19027,6 +18948,36 @@ static bool validate_explicit_prepacked_variadic_argument(
     return true;
 }
 
+/* Borrow/coercion validation must use the very same instantiated signature
+ * that admitted the callable call, including branch-expression arguments. */
+static bool validate_callable_instance_arguments(
+    ResolveContext *context, const FengExpr *callee, const FengDecl *decl,
+    const FengTypeRef *instance, FengExpr *const *args, size_t arg_count) {
+    size_t count = decl->as.spec_decl.as.callable.param_count;
+    const FengParameter *declared = decl->as.spec_decl.as.callable.params;
+    FengParameter *substituted = NULL;
+    const FengParameter *params = declared;
+    if (count > 0U && decl->as.spec_decl.type_param_count > 0U) {
+        substituted = calloc(count, sizeof(*substituted));
+        if (substituted == NULL) return resolver_append_error(context, callee->token,
+            "IE0001", format_message("out of memory while instantiating callable arguments"));
+        for (size_t index = 0U; index < count; ++index) {
+            substituted[index] = declared[index];
+            substituted[index].type = (FengTypeRef *)substitute_spec_member_type_ref_for_instance(
+                context, decl, instance, declared[index].type);
+        }
+        params = substituted;
+    }
+    bool ok = validate_borrowed_data_pointer_call_arguments(
+        context, callee, args, arg_count, params, count, false);
+    if (ok) record_object_arg_coercion_sites(context, args, arg_count, params, count,
+                                            FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
+    free(substituted);
+    return ok;
+}
+
+/* Check a callable value or callable-constrained parameter using its complete
+ * spec instance rather than the open declaration's unsubstituted parameters. */
 static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
@@ -19058,21 +19009,12 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                                              arg_count,
                                                              &rejected_existing_array_for_variadic,
                                                              &spread_rejection)) {
-            if (!validate_borrowed_data_pointer_call_arguments(
-                    context,
-                    callee,
-                    args,
-                    arg_count,
-                    callee_type_decl->as.spec_decl.as.callable.params,
-                    callee_type_decl->as.spec_decl.as.callable.param_count,
-                    false)) {
+            if (!validate_callable_instance_arguments(context, callee, callee_type_decl,
+                    callee_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF ? callee_type.type_ref : NULL,
+                    args, arg_count)) {
                 return false;
             }
             note_callable_value_expr_exception_escape(context, callee);
-            record_object_arg_coercion_sites(context, args, arg_count,
-                                             callee_type_decl->as.spec_decl.as.callable.params,
-                                             callee_type_decl->as.spec_decl.as.callable.param_count,
-                                             FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
             return validate_function_type_call_block_lambda_arguments(
                 context,
                 callee_type_decl,
@@ -19106,30 +19048,18 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
     }
 
     if (callee_constraint_decl != NULL) {
-        if (function_type_parameters_match_args(context,
+        if (function_type_parameters_match_args_for_instance(context,
                                                 callee_constraint_decl,
+                                                inferred_expr_type_from_type_ref(callee_constraint_ref),
                                                 args,
                                                 arg_count,
                                                 &rejected_existing_array_for_variadic,
                                                 &spread_rejection)) {
-            if (!validate_borrowed_data_pointer_call_arguments(
-                    context,
-                    callee,
-                    args,
-                    arg_count,
-                    callee_constraint_decl->as.spec_decl.as.callable.params,
-                    callee_constraint_decl->as.spec_decl.as.callable.param_count,
-                    false)) {
+            if (!validate_callable_instance_arguments(context, callee, callee_constraint_decl,
+                    callee_constraint_ref, args, arg_count)) {
                 return false;
             }
             note_callable_value_expr_exception_escape(context, callee);
-            record_object_arg_coercion_sites(
-                context,
-                args,
-                arg_count,
-                callee_constraint_decl->as.spec_decl.as.callable.params,
-                callee_constraint_decl->as.spec_decl.as.callable.param_count,
-                FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER);
             return validate_function_type_call_block_lambda_arguments(
                 context,
                 callee_constraint_decl,
@@ -19859,15 +19789,18 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
     }
 
     callee_type_decl = resolve_callable_constraint_type_decl(context, callee_type);
+    const FengTypeRef *callee_constraint_ref = resolve_callable_constraint_type_ref(context, callee_type);
     if (callee_type_decl != NULL &&
-        function_type_parameters_match_args(context,
+        function_type_parameters_match_args_for_instance(context,
                                             callee_type_decl,
+                                            inferred_expr_type_from_type_ref(callee_constraint_ref),
                                             expr->as.call.args,
                                             expr->as.call.arg_count,
                                             NULL,
                                             NULL)) {
         return inferred_expr_type_from_return_type_ref(
-            callee_type_decl->as.spec_decl.as.callable.return_type);
+            substitute_spec_member_type_ref_for_instance(context, callee_type_decl,
+                callee_constraint_ref, callee_type_decl->as.spec_decl.as.callable.return_type));
     }
 
     return inferred_expr_type_unknown();

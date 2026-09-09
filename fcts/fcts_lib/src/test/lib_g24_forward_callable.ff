@@ -1,0 +1,65 @@
+open module fcts_lib.test.forward_callable;
+
+/** First component makes the Right slot non-prefix. */
+open spec G24ForwardLeft { func left(): i32; }
+/** The generic function uses only this component. */
+open spec G24ForwardRight { func right(): i32; }
+/** An owner or method may promise the stronger combined constraint. */
+open spec G24ForwardBoth: G24ForwardLeft & G24ForwardRight;
+/** A callable preserves the actual parameter type rather than converting it to Right. */
+open spec G24ForwardReader<T>(value: T): i32;
+/** Fixed boolean result guards against pointer-only default emission. */
+open spec G24ForwardPredicate<T>(value: T): bool;
+/** Fixed floating-point result uses the same open guard rule. */
+open spec G24ForwardReal<T>(value: T): f64;
+/** Fixed managed-pointer result retains its normal closed default. */
+open spec G24ForwardText<T>(value: T): string;
+/** Erased result is an independent address-return control. */
+open spec G24ForwardSame<T>(value: T): T;
+/** Void result does not need an unreachable result value. */
+open spec G24ForwardAction<T>(value: T): void;
+
+/** Close the generic function over the same actual type using its Right capability. */
+open func g24_forward_inner<T: G24ForwardRight>(value: T): i32 { return value.right(); }
+/** Top-level callable formation uses the existing static callable dependency. */
+open func g24_forward_factory<T: G24ForwardBoth>(): G24ForwardReader<T> {
+    return g24_forward_inner<T>;
+}
+
+/** Member initialization uses the type owner's descriptor domain. */
+open type G24ForwardOwner<T: G24ForwardBoth> {
+    /** An initialized member must select the closed target function. */
+    open let reader: G24ForwardReader<T> = g24_forward_inner<T>;
+    /** No initializer means the callable's normal default, not the open guard. */
+    open let fallback: G24ForwardReader<T>;
+    /** Static field initialization has no instance receiver. */
+    open static let shared_reader: G24ForwardReader<T> = g24_forward_inner<T>;
+    /** Method-level U must not be confused with owner-level T. */
+    func method_reader<U: G24ForwardBoth>(): G24ForwardReader<U> { return g24_forward_inner<U>; }
+    /** A method-local parameter does not change the owner parameter's identity. */
+    func owner_reader<U>(): G24ForwardReader<T> { return g24_forward_inner<T>; }
+}
+
+/** Aggregate owners must use their own descriptor layout for the same field binding. */
+@value open type G24ForwardValueOwner<T: G24ForwardBoth> {
+    /** Store the statically formed function value without a new capture. */
+    open let reader: G24ForwardReader<T> = g24_forward_inner<T>;
+    /** Keep owner and method scopes separate for aggregate owners too. */
+    func method_reader<U: G24ForwardBoth>(): G24ForwardReader<U> { return g24_forward_inner<U>; }
+}
+
+/** Closed default entries must remain callable for every supported result representation. */
+open type G24ForwardDefaults<T> {
+    /** The bug's integer result. */
+    open let number: G24ForwardReader<T>;
+    /** Boolean ABI control. */
+    open let predicate: G24ForwardPredicate<T>;
+    /** Floating-point ABI control. */
+    open let real: G24ForwardReal<T>;
+    /** Managed-pointer ABI control. */
+    open let text: G24ForwardText<T>;
+    /** Actual T result, including reference and aggregate defaults. */
+    open let same: G24ForwardSame<T>;
+    /** Void ABI control. */
+    open let action: G24ForwardAction<T>;
+}

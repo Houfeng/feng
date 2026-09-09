@@ -1,0 +1,56 @@
+open module fcts_lib.test.callee_guards;
+
+/** An address-form argument makes callee-before-argument ordering observable. */
+open spec G24GuardReader<T>(value: T): i32;
+/** Default replacement has no captured state. */
+open func g24_guard_replacement<T>(value: T): i32 { return 47; }
+/** Observe the lifetime of the old callable's sole captured payload. */
+open type G24GuardPayload {
+    open static var finalized: i32 = 0;
+    open let marker: i32;
+    /** Default zero payloads do not participate in the explicit probe. */
+    func ~G24GuardPayload() { if self.marker != 0 { G24GuardPayload.finalized += 1; } }
+}
+/** Only the returned closure keeps this payload after the factory exits. */
+open func g24_guard_reader(marker: i32): G24GuardReader<i32> {
+    let payload = G24GuardPayload { marker: marker };
+    return (value: i32) -> payload.marker + value;
+}
+/** Reference owner exercises imported instance and static fields. */
+open type G24GuardOwner<T> {
+    open var callback: G24GuardReader<T>;
+    open static var current: G24GuardReader<T>;
+    open static let stable: G24GuardReader<T> = g24_guard_replacement<T>;
+    /** Type-level T participates in the shared callable field call. */
+    func invoke(replacement: G24GuardReader<T>, value: T): i32 {
+        return self.callback(self.replace(replacement, value));
+    }
+    /** Return the argument after rebinding the field selected by the outer call. */
+    func replace(replacement: G24GuardReader<T>, value: T): T {
+        self.callback = replacement;
+        return value;
+    }
+    /** Method-level U is distinct from the owner's T. */
+    func invoke_other<U>(owner: G24GuardOwner<U>, replacement: G24GuardReader<U>, value: U): i32 {
+        return owner.callback(owner.replace(replacement, value));
+    }
+}
+/** Value owners use the same call protocol, not the reference owner's layout. */
+@value open type G24GuardValueOwner<T> { open var callback: G24GuardReader<T>; }
+/** Interface field access has a getter rather than a direct C field expression. */
+open spec G24GuardView { var callback: G24GuardReader<i32>; }
+/** The view's subject stores a replaceable callable. */
+open type G24GuardViewOwner: G24GuardView { open var callback: G24GuardReader<i32>; }
+/** A shared generic body borrows a callable field through its constraint witness. */
+open func g24_guard_view_call<T: G24GuardView>(owner: T): i32 {
+    return owner.callback(if true { owner.callback = g24_guard_replacement<i32>; 0 } else { 0 });
+}
+/** A callable-constrained T itself can be a mutable captured binding. */
+open func g24_guard_generic_call<C: G24GuardReader<i32>>(first: C, second: C): i32 {
+    var selected: C = first;
+    return selected(if true { selected = second; 0 } else { 0 });
+}
+/** Control: immutable generic callees must not acquire a new guard retain. */
+open func g24_guard_generic_stable<C: G24GuardReader<i32>>(selected: C): i32 {
+    return selected(0);
+}
