@@ -68,6 +68,7 @@ func main(args: string[]) {
       test_g24_composite_surfaces();
       test_g24_spec_views();
       test_g24_composite_actuals();
+      test_intersection_projection();
       test_union_spec_leaf_coercion();
       test_exception();
       test_exception_payload();

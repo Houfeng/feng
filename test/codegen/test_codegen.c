@@ -17,6 +17,12 @@
 /* Independent G24 binding/cost coverage uses the existing C compiler driver. */
 void test_g24_projection_bindings(void (*compile_c)(const char *));
 void test_g24_spec_view_codegen(void (*compile_c)(const char *));
+/* Independent explicit-only intersection witness projection coverage. */
+void test_intersection_projection_codegen(void (*compile_c)(const char *));
+/* Local-table growth exposed by the new component projection scenarios. */
+void test_local_assignment_storage_codegen(void (*compile_c)(const char *));
+/* Open object-spec capture uses the existing closed lifecycle descriptor. */
+void test_spec_capture_descriptor(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -17349,6 +17355,9 @@ int main(void) {
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);
     test_g24_spec_view_codegen(compile_generated_c_or_die);
+    test_intersection_projection_codegen(compile_generated_c_or_die);
+    test_local_assignment_storage_codegen(compile_generated_c_or_die);
+    test_spec_capture_descriptor(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

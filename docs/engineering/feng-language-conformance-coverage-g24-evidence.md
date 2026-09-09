@@ -3,7 +3,7 @@
 ## 1 范围与阅读方式
 
 本文只记录 [G24 实施计划](./feng-language-conformance-coverage-hardening-pending.md#28-g24复合类型诊断)
-的测试映射，不另行定义语言规则。逐项范围以计划 COMPOSITE01～42 为准；语义来源为
+的测试映射，不另行定义语言规则。逐项范围以计划 COMPOSITE01～43 为准；语义来源为
 [联合类型](../specifications/feng-union-type.md)、[spec](../specifications/feng-spec.md)、
 [泛型](../specifications/feng-generics-draft.md)、[可见性](../specifications/feng-visibility.md)和
 [符号表](../specifications/feng-symbol-table.md)主规范。
@@ -12,10 +12,11 @@
 Codegen 用例还会编译生成 C，FCTS 执行语言行为断言，二者不能互相替代。
 最终全量结果见第 4 节；未取得最终结果前，不把此映射当作 G24 已验收。
 
-当前状态：本次实现的全量回归通过，但 COMPOSITE27 的交叉约束开放转传仍有
-ISSUE-G24-051，相关行为／发码／成本格尚未验收，G24 不标记完成。
+当前状态：COMPOSITE01～42 已实施部分的全量回归通过，新增 COMPOSITE43 已独立验收通过。
+COMPOSITE27 的交叉约束开放转传仍有 ISSUE-G24-051，相关行为／发码／成本格尚未验收，
+G24 不标记完成。显式交叉值投影不替代开放泛参转传。
 
-## 2 COMPOSITE01～42 对应证据
+## 2 COMPOSITE01～43 对应证据
 
 ### COMPOSITE01：非法 union 声明
 
@@ -292,6 +293,32 @@ descriptor 原样传递；递归、闭包和正常／异常生命周期由 descr
 类型／方法／fit、多层／递归／逃逸及生命周期；view Codegen 的 identity／普通转换不读取
 union 投影。既有 G18、G21、G23、intersection 及一般泛型全套参与最终回归。
 
+### COMPOSITE43：交叉值向组成 spec 显式投影
+
+新增 [Semantic 专项](../../test/semantic/test_intersection_projection.c) 验证左右／重复／
+嵌套组成边及 object 父边的准确索引、完整泛型实例、同类型转换和 object-spec 向上转换
+对照。反例逐一检查非法 cast、泛型实例不符、无声明路径、union，以及隐式绑定／赋值／
+参数／返回／字段／数组元素的完整诊断码、文件、token、位置、数量与 Semantic 阶段。
+
+新增 [Codegen 专项](../../test/codegen/test_intersection_projection.c) 对引用／装箱值、
+闭合／开放泛型、嵌套与连续 cast、默认／重复／空组成项编译生成 C，并断言静态 component
+指针路径及没有新增投影元数据读取、泛参临时描述符或 spec slot adapter。
+新增 [Symbol 专项](../../test/symbol/test_intersection_projection.c) 在 public／workspace
+两种真实 `.ft` 导出、销毁原 AST 与分析、重载后，重新检查合法路径和非法转换诊断。
+
+新增 [FCTS consumer](../../fcts/fcts_bin/src/test_intersection_projection.ff) 与
+[独立 provider](../../fcts/fcts_lib/src/test/lib_intersection_projection.ff)，运行同包及真实跨包、
+引用与装箱值、默认 subject、重复／菱形／空组成项、泛型 tuple／值 payload、单次求值、
+字段／数组／重赋值、owner／方法／static／fit、方法值及正常／throw／逃逸生命周期。
+对照保留 object-form 子到父的既有隐式与显式行为，不将 source 静态类型改成目标类型。
+
+补测暴露的 053 使用 [局部赋值专项](../../test/codegen/test_local_assignment_storage.c)
+覆盖 34 个局部表容量边界、普通 spec／引用／标量／泛参，以及 RHS 首次捕获后普通与复合
+赋值的存储提升；FCTS 核对实际值。054 使用
+[开放 spec 捕获专项](../../test/codegen/test_spec_capture_descriptor.c) 覆盖函数／owner 泛参、
+let／var、带初始值／默认值八格，检查调用选择既有具化描述符；FCTS 使用无 intersection
+的普通 spec 逃逸和默认值对照，检查具体 subject 与恰好一次释放。未修改任何旧用例断言。
+
 ## 3 成本与制品边界
 
 - 三种上下文描述符的 `reified_union_projections` 和 `reified_spec_view_coercions` 字段及实际
@@ -307,6 +334,11 @@ union 投影。既有 G18、G21、G23、intersection 及一般泛型全套参与
   runtime、对象文件、`.ft`／`.fb`、provider／consumer 和缓存统一重建。
 - 不能将以上结论概括成“完全零开销”；历史隔离成本结果与人工批准见 G24 问题记录
   ISSUE-G24-009／015／040／041。
+- COMPOSITE43 仅在交叉 witness 末尾增加静态组成 witness 指针。每次显式投影沿已确定
+  路径读取指针并保留同一 subject；原合并成员槽与直接调用不变，不新增装箱、堆分配、
+  运行时匹配或方法转接层。不新增任何上下文／泛参描述符字段，`.ft` 版本不变。
+  053 只快照编译器自己的局部记录；054 将捕获原有 retain／默认初始化的描述符实参改为
+  既有具化依赖读取，不增加 ARC 次数、默认初始化次数、捕获单元或闭包环境字段。
 
 ## 4 执行记录
 
@@ -316,7 +348,7 @@ Codegen 七类 spec 实参入口及独立闭合约束预登记用例通过；真
 通过。随后补充 COMPOSITE08 的真实 FT 去重身份与默认嵌套运行控制，纳入下方最终回归。
 Parser、Semantic、Symbol 的完整阶段结果以最终日志为准，不以单个探针代替全套。
 
-### 4.2 最终全量
+### 4.2 COMPOSITE01～42 已实施部分的全量
 
 沙箱外执行 `make test > local/g24-delivery/make-test.log 2>&1`，清理重建全部制品。
 退出码 0。UBSan 和常规两阶段均通过 Archive、Lexer、Parser、Semantic、Runtime、Codegen、
@@ -331,3 +363,17 @@ bundled packages 和预构建工具链测试通过。`git diff --check` 通过�
 
 发现、分析、决策和具体修复见 [G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md)。
 本次只修改新增用例和已明列获批的旧用例；不会按失败数量自动迁移其他既有断言。
+
+### 4.4 COMPOSITE43 独立交付（2026-09-09）
+
+最终在沙箱外执行 `make test > local/g24-delivery/052-make-test-verified.log 2>&1`，退出码 0。
+UBSan 与常规两阶段的编译器／运行时全部套件通过，std 均 604／604、FCTS 均 1289／1289
+（本项新增 18 项）。91 条 smoke、CLI direct／project／init、性能约束、增量构建、发布／
+安装／回滚、macOS finalize、bundled packages、预构建工具链检查全部通过。
+`git diff --check` 通过。本项只新增独立用例及注册入口，未修改任何既有用例断言。
+
+ISSUE-G24-052／053／054 已完成并由该轮全量验收。两次中断的执行原因及日志保留在
+[052 记录](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-052交叉类型值缺少向组成-spec-的显式投影)，
+不将中断运行计为通过。051 的开放泛参跨约束转传仍未完成，本次不扩大该项的描述符方案。
+
+建议 commit message：`feat: support explicit intersection component projections`。

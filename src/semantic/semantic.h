@@ -218,7 +218,11 @@ typedef enum FengSpecCoercionForm {
      * witnesses. There is no single SpecRelation justifying the coercion
      * (satisfaction is per member spec), so `relation` is NULL for this
      * form — see FengSpecCoercionSite.relation. */
-    FENG_SPEC_COERCION_FORM_INTERSECTION
+    FENG_SPEC_COERCION_FORM_INTERSECTION,
+    /* Explicit intersection value -> declared component/ancestor view.
+     * Uses the same subject-preserving witness path as OBJECT_UPCAST, but
+     * never participates in implicit coercion or overload matching. */
+    FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST
 } FengSpecCoercionForm;
 
 /* Origin of the callable value being coerced to a callable-form spec. The
@@ -283,9 +287,10 @@ typedef struct FengSpecCoercionSite {
      * stable across the entire compile regardless of whether the original
      * was an AST-owned ref or a resolver synthetic ref. */
     const FengTypeRef *target_spec_type_ref;
-    /* OBJECT_UPCAST only: ordered direct-parent declaration indices selected
-     * by semantic DFS. Each entry indexes the current spec's parent_specs;
-     * codegen advances through its exact instantiated UserSpec graph. */
+    /* OBJECT_UPCAST / INTERSECTION_UPCAST: ordered witness-parent indices
+     * selected by Semantic. At each edge the index addresses the current
+     * spec's object parent_specs or intersection_form.members, respectively;
+     * codegen follows the same exact instantiated witness graph. */
     size_t *object_upcast_parent_indices;
     size_t object_upcast_parent_index_count;
     /* OBJECT form only: the SpecRelation entry that justifies this coercion.
@@ -768,6 +773,16 @@ bool feng_semantic_record_object_spec_coercion_site(
  * `parent_indices` is the selected direct parent's declaration index at one
  * edge, in source-to-target order. */
 bool feng_semantic_record_object_spec_upcast_site(
+    const FengSemanticAnalysis *analysis,
+    const FengExpr *expr,
+    const FengDecl *target_spec_decl,
+    const FengTypeRef *target_spec_type_ref,
+    const size_t *parent_indices,
+    size_t parent_index_count);
+
+/* Record only an explicit intersection component-view projection. Indices
+ * follow declared intersection members and object parents in path order. */
+bool feng_semantic_record_intersection_spec_upcast_site(
     const FengSemanticAnalysis *analysis,
     const FengExpr *expr,
     const FengDecl *target_spec_decl,

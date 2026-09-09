@@ -207,6 +207,9 @@ FengSpecWitness__MyType__BothAnd = {
 
 ### 4.3 Coercion
 
+交叉值向组成 `spec` 的显式投影及仅显式边界，以
+[spec 主规范第 4 节](../specifications/feng-spec.md#4-语义)为准；以下是具体类型进入交叉值的既有构造路径，不代表交叉值的全部转换入口。
+
 将 X 类型的值赋给交叉类型变量时，构造 `{ subject, merged_witness }`：
 
 ```c

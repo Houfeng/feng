@@ -299,13 +299,16 @@ bool feng_semantic_record_object_spec_coercion_site(
     return true;
 }
 
-bool feng_semantic_record_object_spec_upcast_site(
+/* Own a validated witness projection path, independently of the entry's
+ * implicit/explicit admission policy. No runtime conversion search remains. */
+static bool record_spec_upcast_site(
         const FengSemanticAnalysis *analysis_const,
         const FengExpr *expr,
         const FengDecl *target_spec_decl,
         const FengTypeRef *target_spec_type_ref,
         const size_t *parent_indices,
-        size_t parent_index_count) {
+        size_t parent_index_count,
+        FengSpecCoercionForm form) {
     FengSemanticAnalysis *analysis;
     const FengTypeRef *owned_target_ref;
     size_t *owned_indices;
@@ -335,7 +338,7 @@ bool feng_semantic_record_object_spec_upcast_site(
     }
     reset_site_payload(slot);
     slot->expr = expr;
-    slot->form = FENG_SPEC_COERCION_FORM_OBJECT_UPCAST;
+    slot->form = form;
     slot->target_spec_decl = target_spec_decl;
     slot->target_spec_type_ref = owned_target_ref;
     slot->object_upcast_parent_indices = owned_indices;
@@ -343,6 +346,32 @@ bool feng_semantic_record_object_spec_upcast_site(
     slot->object_subject_storage = FENG_SPEC_OBJECT_SUBJECT_STORAGE_BOX_OWNER;
     slot->callable_source = FENG_SPEC_COERCION_CALLABLE_SOURCE_OTHER;
     return true;
+}
+
+/* Preserve the existing object-form implicit and explicit entry contract. */
+bool feng_semantic_record_object_spec_upcast_site(
+        const FengSemanticAnalysis *analysis,
+        const FengExpr *expr,
+        const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
+        const size_t *parent_indices,
+        size_t parent_index_count) {
+    return record_spec_upcast_site(analysis, expr, target_spec_decl,
+        target_spec_type_ref, parent_indices, parent_index_count,
+        FENG_SPEC_COERCION_FORM_OBJECT_UPCAST);
+}
+
+/* Intersection component projection is recorded only by cast validation. */
+bool feng_semantic_record_intersection_spec_upcast_site(
+        const FengSemanticAnalysis *analysis,
+        const FengExpr *expr,
+        const FengDecl *target_spec_decl,
+        const FengTypeRef *target_spec_type_ref,
+        const size_t *parent_indices,
+        size_t parent_index_count) {
+    return record_spec_upcast_site(analysis, expr, target_spec_decl,
+        target_spec_type_ref, parent_indices, parent_index_count,
+        FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST);
 }
 
 bool feng_semantic_record_callable_spec_coercion_site(

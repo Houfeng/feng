@@ -971,9 +971,10 @@ typedef struct UserSpec {
     char   *c_default_callable_new_name;   /* callable-form factory  (default-zero) */
     UserSpecMember *members;
     size_t          member_count;
-    /* Direct object-form parents in source declaration order. Indices remain
-     * stable when cg->user_specs reallocates and identify exact generic
-     * instances such as Parent<int>. */
+    /* Direct witness-projection parents in source order: nominal parents
+     * for object specs, declared components for intersections. This graph
+     * does not grant implicit conversions. Indices survive registry growth
+     * and identify exact generic instances such as Parent<int>. */
     size_t         *direct_parent_spec_indices;
     size_t          direct_parent_spec_count;
     bool            members_registered;
@@ -2476,6 +2477,8 @@ static bool cg_scope_add_capture_alias(Scope *scope,
                                        const char *cell_desc_name,
                                        const CGType *value_type,
                                        bool uses_dynamic_storage);
+/* Initialize a capture with its value's existing ownership; shared aggregates
+ * select the concrete descriptor through the same path as ordinary locals. */
 static bool cg_emit_capture_cell_init_from_expr(CG *cg,
                                                 const char *cell_expr,
                                                 const char *value_expr,
@@ -4489,17 +4492,17 @@ static bool cg_emit_capture_cell_init_from_expr(CG *cg,
         if (owns_ref) {
             buf_append_fmt(cg->cur_body, "    %s->value = %s;\n", cell_expr, value_expr);
         } else {
-            const char *desc = cg_aggregate_desc_name(value_type);
+            char *desc = cg_aggregate_descriptor_expr_dup(cg, value_type, blame);
             if (desc == NULL) {
-                return cg_fail(cg, blame,
-                    "CE0008", "codegen: missing aggregate descriptor for capture cell");
+                return false;
             }
             buf_append_fmt(cg->cur_body,
-                           "    %s->value = %s; feng_aggregate_retain(&%s->value, &%s);\n",
+                           "    %s->value = %s; feng_aggregate_retain(&%s->value, %s);\n",
                            cell_expr,
                            value_expr,
                            cell_expr,
                            desc);
+            free(desc);
         }
         return true;
     }
@@ -4518,6 +4521,8 @@ static bool cg_emit_capture_cell_init_from_expr(CG *cg,
     return true;
 }
 
+/* A captured default has the same concrete-type authority as an uncaptured
+ * default. Preserve the static zero-byte fast path when no reification is needed. */
 static bool cg_emit_capture_cell_default_init(CG *cg,
                                               const char *cell_expr,
                                               const CGType *value_type,
@@ -4531,8 +4536,21 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_cstr(cg->cur_body, "    ");
-        ok = cg_append_aggregate_default_zero_init_call(
-            cg->cur_body, value_type, lvalue.data);
+        if (cg_value_needs_reified_layout(cg, value_type)) {
+            char *descriptor = cg_aggregate_descriptor_expr_dup(cg, value_type, blame);
+            if (descriptor == NULL) {
+                buf_free(&lvalue);
+                return false;
+            }
+            buf_append_fmt(cg->cur_body,
+                           "feng_aggregate_default_zero_init(&%s, %s)",
+                           lvalue.data, descriptor);
+            free(descriptor);
+            ok = true;
+        } else {
+            ok = cg_append_aggregate_default_zero_init_call(
+                cg->cur_body, value_type, lvalue.data);
+        }
         buf_free(&lvalue);
         if (!ok) {
             return cg_fail(cg, blame,
@@ -6318,7 +6336,7 @@ static const UserSpec *cg_user_spec_by_index(const CG *cg, size_t index) {
     return &cg->user_specs[index];
 }
 
-/* Return one exact direct-parent spec instance in source declaration order. */
+/* Return one exact direct witness-projection target in declaration order. */
 static const UserSpec *cg_user_spec_direct_parent(const CG *cg,
                                                   const UserSpec *spec,
                                                   size_t parent_index) {
@@ -6331,15 +6349,23 @@ static const UserSpec *cg_user_spec_direct_parent(const CG *cg,
                                  spec->direct_parent_spec_indices[parent_index]);
 }
 
-/* Parent witness fields use the parent's complete stable witness-struct name,
- * which already includes module identity and instantiated generic arguments. */
+/* Object parent names retain their established identity. Intersection edges
+ * additionally include their declaration index: repeated components are
+ * legal and must not emit duplicate C fields or change semantic path slots. */
 static void cg_append_spec_parent_field_name(Buf *out,
+                                             const UserSpec *source_spec,
+                                             size_t parent_index,
                                              const UserSpec *parent_spec) {
     if (out == NULL || parent_spec == NULL ||
         parent_spec->c_witness_struct_name == NULL) {
         return;
     }
-    buf_append_fmt(out, "parent__%s", parent_spec->c_witness_struct_name);
+    if (source_spec->form == FENG_SPEC_FORM_INTERSECTION) {
+        buf_append_fmt(out, "component_%zu__%s", parent_index,
+                       parent_spec->c_witness_struct_name);
+    } else {
+        buf_append_fmt(out, "parent__%s", parent_spec->c_witness_struct_name);
+    }
 }
 
 static bool cg_user_spec_constraint_indices(CG *cg,
@@ -15828,6 +15854,45 @@ static bool cg_register_user_spec_shell(CG *cg, const FengDecl *decl) {
            s->c_default_callable_noop_name && s->c_default_callable_new_name;
 }
 
+/* Resolve the declaration's direct witness graph once. Member merging and
+ * nominal admission remain separate; every witness producer uses this same
+ * graph to supply component/parent views for its own subject representation. */
+static bool cg_register_spec_witness_parents(CG *cg, UserSpec *s) {
+    const FengDecl *decl = s->decl;
+    const bool intersection = s->form == FENG_SPEC_FORM_INTERSECTION;
+    s->direct_parent_spec_count = intersection
+        ? decl->as.spec_decl.as.intersection_form.member_count
+        : decl->as.spec_decl.parent_spec_count;
+    if (s->direct_parent_spec_count > 0U) {
+        s->direct_parent_spec_indices = calloc(s->direct_parent_spec_count,
+                                               sizeof(*s->direct_parent_spec_indices));
+        if (s->direct_parent_spec_indices == NULL) {
+            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t index = 0U; index < s->direct_parent_spec_count; ++index) {
+        const FengTypeRef *ref = intersection
+            ? decl->as.spec_decl.as.intersection_form.members[index]
+            : decl->as.spec_decl.parent_specs[index];
+        CGType *type = NULL;
+        if (!cg_resolve_type_for_user_spec_member(cg, s, ref, &decl->token, &type)) {
+            return false;
+        }
+        UserSpec *parent = type != NULL && type->kind == CG_TYPE_SPEC
+            ? (UserSpec *)type->user_spec : NULL;
+        bool ok = parent != NULL &&
+            cg_user_spec_index(cg, parent, &s->direct_parent_spec_indices[index]);
+        cgtype_free(type);
+        if (!ok) {
+            return cg_fail(cg, decl->token, "IE0002",
+                "codegen: semantic witness projection target is not registered");
+        }
+        if (!cg_ensure_user_spec_members_registered(cg, parent)) return false;
+    }
+    return true;
+}
+
+/* Register the callable, union or object/intersection member surface. */
 static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
     const FengDecl *decl = s->decl;
     if (s->form == FENG_SPEC_FORM_CALLABLE) {
@@ -15917,6 +15982,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
     if (s->form == FENG_SPEC_FORM_INTERSECTION) {
         UserSpec pending_overloads;
 
+        if (!cg_register_spec_witness_parents(cg, s)) return false;
         memset(&pending_overloads, 0, sizeof pending_overloads);
         /* Intersection members are derived from the flattened member spec
          * list computed by 9.3/9.4 (resolve_intersection_spec_form). Each
@@ -16146,47 +16212,9 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
 
     memset(&pending_overloads, 0, sizeof(pending_overloads));
     memset(&own_members, 0, sizeof(own_members));
-    s->direct_parent_spec_count = decl->as.spec_decl.parent_spec_count;
-    if (s->direct_parent_spec_count > 0U) {
-        s->direct_parent_spec_indices = (size_t *)calloc(
-            s->direct_parent_spec_count,
-            sizeof(*s->direct_parent_spec_indices));
-        if (s->direct_parent_spec_indices == NULL) {
-            cg_user_spec_members_free(&pending_overloads);
-            return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
-        }
-    }
+    if (!cg_register_spec_witness_parents(cg, s)) return false;
     for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
-        CGType *parent_type = NULL;
-        UserSpec *parent_spec = NULL;
-        size_t parent_spec_index;
-        if (!cg_resolve_type_for_user_spec_member(cg,
-                                                  s,
-                                                  decl->as.spec_decl.parent_specs[parent_index],
-                                                  &decl->token,
-                                                  &parent_type)) {
-            cg_user_spec_members_free(&pending_overloads);
-            return false;
-        }
-        if (parent_type == NULL || parent_type->kind != CG_TYPE_SPEC || parent_type->user_spec == NULL) {
-            cgtype_free(parent_type);
-            cg_user_spec_members_free(&pending_overloads);
-            return cg_fail(cg, decl->token,
-                "CE0046", "codegen: spec parent did not resolve to an object-form spec");
-        }
-        parent_spec = (UserSpec *)parent_type->user_spec;
-        if (!cg_user_spec_index(cg, parent_spec, &parent_spec_index)) {
-            cgtype_free(parent_type);
-            cg_user_spec_members_free(&pending_overloads);
-            return cg_fail(cg, decl->token,
-                "CE0046", "codegen: resolved spec parent is not registered");
-        }
-        s->direct_parent_spec_indices[parent_index] = parent_spec_index;
-        if (!cg_ensure_user_spec_members_registered(cg, parent_spec)) {
-            cgtype_free(parent_type);
-            cg_user_spec_members_free(&pending_overloads);
-            return false;
-        }
+        const UserSpec *parent_spec = cg_user_spec_direct_parent(cg, s, parent_index);
         for (size_t member_index = 0; member_index < parent_spec->member_count; ++member_index) {
             const UserSpecMember *parent_member = &parent_spec->members[member_index];
 
@@ -16195,12 +16223,10 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
                     &pending_overloads,
                     parent_member,
                     false)) {
-                cgtype_free(parent_type);
                 cg_user_spec_members_free(&pending_overloads);
                 return false;
             }
         }
-        cgtype_free(parent_type);
     }
     own_members = *s;
     own_members.members = NULL;
@@ -17686,7 +17712,7 @@ static void cg_emit_witness_struct_body(CG *cg, const UserSpec *s, Buf *out) {
         }
         buf_append_fmt(out, "    const struct %s *",
                        parent_spec->c_witness_struct_name);
-        cg_append_spec_parent_field_name(out, parent_spec);
+        cg_append_spec_parent_field_name(out, s, parent_index, parent_spec);
         buf_append_cstr(out, ";\n");
         emitted++;
     }
@@ -18279,7 +18305,7 @@ static bool cg_ensure_default_parent_witness(CG *cg,
             cg_user_spec_direct_parent(cg, target, parent_index);
 
         buf_append_cstr(&cg->type_defs, "    .");
-        cg_append_spec_parent_field_name(&cg->type_defs, parent_spec);
+        cg_append_spec_parent_field_name(&cg->type_defs, target, parent_index, parent_spec);
         buf_append_fmt(&cg->type_defs,
                        " = &%s,\n",
                        parent_witness_vars[parent_index]);
@@ -18905,7 +18931,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
             cg_user_spec_direct_parent(cg, s, parent_index);
 
         buf_append_cstr(td, "    .");
-        cg_append_spec_parent_field_name(td, parent_spec);
+        cg_append_spec_parent_field_name(td, s, parent_index, parent_spec);
         buf_append_fmt(td,
                        " = &%s,\n",
                        default_parent_witness_vars[parent_index]);
@@ -35002,7 +35028,8 @@ static bool cg_apply_object_spec_upcast(CG *cg, FengToken blame,
 
     er_init(out);
     if (cg == NULL || site == NULL ||
-        site->form != FENG_SPEC_COERCION_FORM_OBJECT_UPCAST ||
+        (site->form != FENG_SPEC_COERCION_FORM_OBJECT_UPCAST &&
+         site->form != FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST) ||
         site->object_upcast_parent_indices == NULL ||
         site->object_upcast_parent_index_count == 0U) {
         return false;
@@ -35038,7 +35065,7 @@ static bool cg_apply_object_spec_upcast(CG *cg, FengToken blame,
                            "CE0198", "codegen: semantic object-spec upcast path contains an invalid direct-parent index");
         }
         buf_append_cstr(&witness_expr, "->");
-        cg_append_spec_parent_field_name(&witness_expr, parent_spec);
+        cg_append_spec_parent_field_name(&witness_expr, current_spec, parent_index, parent_spec);
         current_spec = parent_spec;
     }
     if (!cg_resolve_type(cg,
@@ -35342,7 +35369,8 @@ static bool cg_emit_expr_with_spec_coercion(
     if (cg->failed) return false;
     bool ok;
 
-    if (cs && cs->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST) {
+    if (cs && (cs->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST ||
+               cs->form == FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST)) {
         return cg_emit_object_spec_upcast(cg, e, cs, out);
     }
     if (cs && cs->form == FENG_SPEC_COERCION_FORM_ABI_FUNCTION_POINTER) {
@@ -39735,6 +39763,18 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return false;
         }
 
+        /* RHS emission may grow the local table or promote this binding to
+         * a capture cell. Resolve its current storage after that emission,
+         * then keep a compiler-only snapshot for the remaining lowering. */
+        l = scope_lookup(cg->cur_scope, n.data, n.length);
+        if (l == NULL) {
+            er_free(&v); free(old_tmp); free(cty);
+            return cg_fail(cg, stmt->token, "IE0002",
+                           "codegen: local assignment binding disappeared");
+        }
+        Local target_local = *l;
+        l = &target_local;
+
         buf_init(&expr);
         if (!cg_append_numeric_op_expr(&expr,
                                        l->type->kind,
@@ -39763,6 +39803,18 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                         stmt->as.assign.value,
                                         l->type,
                                         &v)) return false;
+    /* Do not retain a pointer into Scope.items across user RHS emission.
+     * Materializing the store source below may grow that array once more;
+     * its owned strings/types remain stable, so this shallow snapshot is
+     * sufficient. No runtime temporary or extra ownership operation is added. */
+    l = scope_lookup(cg->cur_scope, n.data, n.length);
+    if (l == NULL) {
+        er_free(&v);
+        return cg_fail(cg, stmt->token, "IE0002",
+                       "codegen: local assignment binding disappeared");
+    }
+    Local target_local = *l;
+    l = &target_local;
     if (l->uses_erased_generic_storage) {
         if (!v.is_storage_address &&
             cg_materialize_to_local(cg, &v, "_assign_generic_source") == NULL) {
@@ -53140,7 +53192,7 @@ static bool cg_ensure_spec_slot_witness(CG *cg, const UserSpec *src,
                 cg_user_spec_direct_parent(cg, dst, parent_index);
 
             buf_append_cstr(wd, "    .");
-            cg_append_spec_parent_field_name(wd, parent_spec);
+            cg_append_spec_parent_field_name(wd, dst, parent_index, parent_spec);
             buf_append_fmt(wd, " = &%s,\n", parent_witness_vars[parent_index]);
         }
         buf_append_cstr(wd, "};\n\n");
@@ -53358,6 +53410,7 @@ static bool cg_ensure_intersection_witness_instance(
     char *spec_sanitized = NULL;
     Buf var;
     const char **member_witness_vars = NULL;
+    const char **parent_witness_vars = NULL;
     bool saved_in_generic_fn;
     size_t saved_type_param_count;
     char **saved_type_param_names;
@@ -53538,6 +53591,27 @@ static bool cg_ensure_intersection_witness_instance(
         member_witness_vars[index] = leaf_witness_var;
     }
 
+    /* Keep each declared component's witness for the identical subject
+     * representation. The flattened slots above remain the fast direct-call
+     * surface; these static links are read only by explicit projections. */
+    if (ok && intersection_spec->direct_parent_spec_count > 0U) {
+        parent_witness_vars = calloc(intersection_spec->direct_parent_spec_count,
+                                      sizeof(*parent_witness_vars));
+        if (parent_witness_vars == NULL) {
+            ok = cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+        }
+    }
+    for (size_t index = 0U;
+         ok && index < intersection_spec->direct_parent_spec_count; ++index) {
+        const UserSpec *parent = cg_user_spec_direct_parent(cg, intersection_spec, index);
+        ok = user_type != NULL
+            ? cg_ensure_witness_instance_for_type(cg, user_type, parent, blame,
+                                                  &parent_witness_vars[index])
+            : cg_ensure_witness_instance(cg, effective_subject_key, parent,
+                                          scalar_subject_storage, blame,
+                                          &parent_witness_vars[index]);
+    }
+
     if (intersection_spec->generic_context_type_param_count > 0U) {
         cg->in_generic_fn = saved_in_generic_fn;
         cg->generic_fn_type_param_count = saved_type_param_count;
@@ -53547,6 +53621,7 @@ static bool cg_ensure_intersection_witness_instance(
     }
     if (!ok) {
         free((void *)member_witness_vars);
+        free(parent_witness_vars);
         buf_free(&var);
         return false;
     }
@@ -53592,8 +53667,15 @@ static bool cg_ensure_intersection_witness_instance(
                            member->source_c_field_name);
         }
     }
+    for (size_t index = 0U; index < intersection_spec->direct_parent_spec_count; ++index) {
+        const UserSpec *parent = cg_user_spec_direct_parent(cg, intersection_spec, index);
+        buf_append_cstr(&cg->witness_defs, "    .");
+        cg_append_spec_parent_field_name(&cg->witness_defs, intersection_spec, index, parent);
+        buf_append_fmt(&cg->witness_defs, " = &%s,\n", parent_witness_vars[index]);
+    }
     buf_append_cstr(&cg->witness_defs, "};\n\n");
     free((void *)member_witness_vars);
+    free(parent_witness_vars);
 
     if (user_type != NULL) {
         if (cg->witness_table_count == cg->witness_table_capacity) {
@@ -54046,7 +54128,7 @@ static bool cg_ensure_witness_instance(
                         cg_user_spec_direct_parent(cg, s, parent_index);
 
                     buf_append_cstr(fd, "    .");
-                    cg_append_spec_parent_field_name(fd, parent_spec);
+                    cg_append_spec_parent_field_name(fd, s, parent_index, parent_spec);
                     buf_append_fmt(fd, " = &%s,\n",
                                    parent_witness_vars[parent_index]);
                 }
@@ -54547,7 +54629,7 @@ static bool cg_ensure_witness_instance(
             cg_user_spec_direct_parent(cg, s, parent_index);
 
         buf_append_cstr(fd, "    .");
-        cg_append_spec_parent_field_name(fd, parent_spec);
+        cg_append_spec_parent_field_name(fd, s, parent_index, parent_spec);
         buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
     }
     buf_append_cstr(fd, "};\n\n");
@@ -55492,7 +55574,7 @@ static bool cg_ensure_value_box_witness_instance(CG *cg,
             cg_user_spec_direct_parent(cg, s, parent_index);
 
         buf_append_cstr(fd, "    .");
-        cg_append_spec_parent_field_name(fd, parent_spec);
+        cg_append_spec_parent_field_name(fd, s, parent_index, parent_spec);
         buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
     }
     buf_append_cstr(fd, "};\n\n");
@@ -56050,7 +56132,7 @@ static bool cg_ensure_witness_instance_for_type(CG *cg, const UserType *t,
             cg_user_spec_direct_parent(cg, s, parent_index);
 
         buf_append_cstr(fd, "    .");
-        cg_append_spec_parent_field_name(fd, parent_spec);
+        cg_append_spec_parent_field_name(fd, s, parent_index, parent_spec);
         buf_append_fmt(fd, " = &%s,\n", parent_witness_vars[parent_index]);
     }
     buf_append_cstr(fd, "};\n\n");

@@ -1,0 +1,265 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+import fcts_lib.test.intersection_projection;
+
+/** Same-package declarations make the non-imported path independently observable. */
+spec LocalProjectionBase { var number: i32; }
+/** An object parent supplies an additional projection edge. */
+spec LocalProjectionLeft: LocalProjectionBase { func left(): i32; }
+/** A distinct second component detects incorrect slot selection. */
+spec LocalProjectionRight { func right(): i32; }
+/** Local intersection control requires no imported metadata. */
+spec LocalProjectionBoth: LocalProjectionLeft & LocalProjectionRight;
+/** Empty components still carry a subject view and a valid witness. */
+spec LocalProjectionEmpty {}
+/** An empty nested intersection is a legal projection target. */
+spec LocalProjectionEmptyPair: LocalProjectionEmpty & LocalProjectionEmpty;
+/** Repeated empty edges require no member implementation. */
+spec LocalProjectionEmptyOuter: LocalProjectionEmptyPair & LocalProjectionEmpty;
+/** Local reference implementation used by the ordinary, non-shared control. */
+type LocalProjectionReference: LocalProjectionLeft, LocalProjectionRight {
+    open var number: i32;
+    /** Distinct member slots catch an incorrect witness cast. */
+    func left(): i32 { return 5; }
+    /** The right component must not dispatch to left. */
+    func right(): i32 { return 9; }
+}
+/** Local boxed values must preserve one shared box across member views. */
+@value type LocalProjectionValue: LocalProjectionLeft, LocalProjectionRight {
+    open var number: i32;
+    /** Value-backed first component. */
+    func left(): i32 { return 7; }
+    /** Value-backed second component. */
+    func right(): i32 { return 13; }
+}
+
+/** A concrete field owner exercises projected assignment and construction. */
+type ProjectionHolder { open var value: ProjectionBase<string>; }
+/** A managed payload records destruction after all projected views are released. */
+type ProjectionLife {
+    open static var destroyed: i32;
+    open let number: i32;
+    /** Ignore ordinary zero-valued default instances. */
+    func ~ProjectionLife() { if self.number != 0 { ProjectionLife.destroyed += 1; } }
+}
+/** A named tuple forces full aggregate parameter and result handling. */
+type ProjectionPair(i32, string);
+
+/** RHS capture can change a local binding's storage while assigning to that binding. */
+type ProjectionCallbackHolder { open var reader: ProjectionNumber; }
+/** Store the callback so the resulting capture remains observable after assignment. */
+func projection_install_callback(holder: ProjectionCallbackHolder, reader: ProjectionNumber): i32 {
+    holder.reader = reader;
+    return 7;
+}
+
+/** Lifetime is checked by the caller after this function's cleanup. */
+func projection_lifetime(fail: bool) {
+    let source = ProjectionValue<ProjectionLife> { item: ProjectionLife { number: 83 } };
+    let view: ProjectionNested<ProjectionLife> = source;
+    let middle = (ProjectionBoth<ProjectionLife>)view;
+    let base = (ProjectionBase<ProjectionLife>)middle;
+    let from_package = projection_relay<ProjectionLife>(view);
+    assert(base.item.number == 83 && from_package.item.number == 83, "live projected payload");
+    if fail { throw "projection cleanup"; }
+}
+/** A projected subject escapes the creating function through a callable. */
+func projection_escape(): ProjectionReader<ProjectionLife> {
+    let source = ProjectionValue<ProjectionLife> { item: ProjectionLife { number: 97 } };
+    let view: ProjectionNested<ProjectionLife> = source;
+    return projection_capture<ProjectionLife>(view);
+}
+/** Keep the escaped owner live until after the callback result is released. */
+func projection_use_escape() {
+    let reader = projection_escape();
+    let view = reader();
+    assert(view.item.number == 97, "escaped projected subject alive");
+}
+/** This escape uses an ordinary object spec without any intersection or cast. */
+func projection_escape_base(): ProjectionReader<ProjectionLife> {
+    let base: ProjectionBase<ProjectionLife> = ProjectionValue<ProjectionLife> {
+        item: ProjectionLife { number: 101 }
+    };
+    return projection_capture_base<ProjectionLife>(base);
+}
+/** Verify the ordinary captured owner survives the producing frame. */
+func projection_use_escape_base() {
+    let reader = projection_escape_base();
+    let base = reader();
+    assert(base.item.number == 101, "ordinary captured spec remains live");
+}
+
+/** Explicit-only component projection preserves witness selection, values and cleanup. */
+func test_intersection_projection() {
+    describe("intersection explicit component projection", () {
+        test("same-package references preserve identity and both component slots", () {
+            let source = LocalProjectionReference { number: 17 };
+            let both: LocalProjectionBoth = source;
+            let left = (LocalProjectionLeft)both;
+            let right = (LocalProjectionRight)both;
+            let base = (LocalProjectionBase)both;
+            base.number = 19;
+            assert(source.number == 19 && left.number == 19, "same reference subject");
+            assert(left.left() == 5 && right.right() == 9, "different component slots");
+            assert(both.right() == 9, "original binding remains a complete intersection");
+        });
+        test("same-package boxed values reuse their box", () {
+            let source = LocalProjectionValue { number: 23 };
+            let both: LocalProjectionBoth = source;
+            let base = (LocalProjectionBase)both;
+            let right = (LocalProjectionRight)both;
+            base.number = 29;
+            assert(source.number == 23 && both.number == 29, "one box independent of original value");
+            assert(right.right() == 13 && both.left() == 7, "boxed witness identity");
+        });
+        test("real package members retain reference identity through nested projection", () {
+            let source = ProjectionReference<string> { item: "before" };
+            let view: ProjectionNested<string> = source;
+            let middle = (ProjectionBoth<string>)view;
+            let right = (G24ComponentRight)view;
+            let extra = (ProjectionExtra)view;
+            let base = (ProjectionBase<string>)middle;
+            let chained = (ProjectionBase<string>)(ProjectionBoth<string>)view;
+            base.item = "after";
+            assert(source.item == "after" && view.item == "after" && chained.item == "after", "reference shared across views");
+            assert(middle.left() == 11 && right.right() == 23 && extra.extra() == 37, "all exact witnesses");
+        });
+        test("real package boxed values preserve one subject across direct and staged casts", () {
+            let source = ProjectionValue<string> { item: "original" };
+            let view: ProjectionNested<string> = source;
+            let middle = projection_middle<string>(view);
+            let first = (ProjectionBase<string>)middle;
+            let second = projection_relay<string>(view);
+            first.item = "box";
+            assert(source.item == "original" && second.item == "box" && view.item == "box", "no reboxing");
+            let right = (G24ComponentRight)middle;
+            assert(right.right() == 53 && view.extra() == 67, "boxed component implementations");
+        });
+        test("component order repeated components and diamond requirements keep exact edges", () {
+            let source = ProjectionReference<i32> { item: 31 };
+            let reverse: ProjectionReverse<i32> = source;
+            let repeated: ProjectionRepeated<i32> = source;
+            let diamond: ProjectionDiamond<i32> = source;
+            let left = (G24ComponentLeft<i32>)reverse;
+            let right = (G24ComponentRight)repeated;
+            let base = (ProjectionBase<i32>)diamond;
+            base.item = 43;
+            assert(left.left() == 11 && right.right() == 23, "source order independent dispatch");
+            assert(left.item == 43 && repeated.item == 43, "duplicate requirements share the field");
+        });
+        test("empty and repeated nested components remain valid value views", () {
+            let outer: LocalProjectionEmptyOuter;
+            let middle = (LocalProjectionEmptyPair)outer;
+            let first = (LocalProjectionEmpty)middle;
+            let second = (LocalProjectionEmpty)outer;
+            let views: LocalProjectionEmpty[] = [first, second];
+            assert(views.length() == 2, "empty component views survive storage and cleanup");
+        });
+        test("default subject projections share writable state and zero behavior", () {
+            let view: ProjectionNested<string>;
+            let base = (ProjectionBase<string>)view;
+            let right = (G24ComponentRight)view;
+            assert(base.item == "" && base.echo("ignored") == "" && right.right() == 0, "default witness behavior");
+            base.item = "default-state";
+            let middle = (ProjectionBoth<string>)view;
+            assert(view.item == "default-state" && middle.item == "default-state", "no fresh member default");
+            let shared_default = projection_default<i32>();
+            assert(shared_default.item == 0 && shared_default.echo(71) == 0, "shared generic default");
+        });
+        test("generic value and tuple payloads preserve complete member method ABI", () {
+            let pair: ProjectionPair = (47, "pair");
+            let source = ProjectionValue<ProjectionPair> { item: pair };
+            let view: ProjectionNested<ProjectionPair> = source;
+            let base = projection_base<ProjectionPair>(view);
+            let result = base.echo(pair);
+            assert(result.item1 == 47 && result.item2 == "pair", "complete returned tuple");
+            base.item = (59, "changed");
+            assert(source.item.item1 == 47 && view.item.item2 == "changed", "aggregate copy and boxed mutation");
+            let nested_source = ProjectionValue<ProjectionValue<string>> { item: ProjectionValue<string> { item: "nested" } };
+            let nested_view: ProjectionNested<ProjectionValue<string>> = nested_source;
+            let nested_base = projection_base<ProjectionValue<string>>(nested_view);
+            assert(nested_base.echo(nested_base.item).item == "nested", "managed value payload");
+        });
+        test("cast source is evaluated once in local and imported shared bodies", () {
+            let calls: i32[!] = [0];
+            let view: ProjectionNested<string> = ProjectionReference<string> { item: "once" };
+            let first = (ProjectionBase<string>)projection_touch<string>(view, calls);
+            let second = projection_once<string>(view, calls);
+            assert(calls[0] == 2 && first.item == "once" && second.item == "once", "one evaluation per cast");
+        });
+        test("explicit results flow through fields arrays assignment and return", () {
+            let source = ProjectionReference<string> { item: "field" };
+            let view: ProjectionNested<string> = source;
+            let holder = ProjectionHolder { value: (ProjectionBase<string>)view };
+            let items: ProjectionBase<string>[!] = [(ProjectionBase<string>)view];
+            holder.value = projection_base<string>(view);
+            items[0] = (ProjectionBase<string>)view;
+            items[0].item = "updated";
+            assert(holder.value.item == "updated" && source.item == "updated", "stored projected subject");
+        });
+        test("owner method static fit and aggregate owner paths use the source witness", () {
+            let view: ProjectionNested<string> = ProjectionReference<string> { item: "owner" };
+            let owner = ProjectionOwner<string>(view);
+            let aggregate = ProjectionValueOwner<string>(view);
+            let number: ProjectionNested<i32> = ProjectionValue<i32> { item: 61 };
+            assert(owner.view.item == "owner" && aggregate.view.item == "owner", "constructor projections");
+            assert(owner.convert<i32>(number).item == 61 && owner.fitted<i32>(number).item == 61, "method and fit projections");
+            assert(ProjectionOwner<string>.from(view).item == "owner", "static method projection");
+        });
+        test("method values capture the projected witness and original subject", () {
+            let source = ProjectionReference<string> { item: "first" };
+            var view: ProjectionNested<string> = source;
+            let base = (ProjectionBase<string>)view;
+            let right = (G24ComponentRight)view;
+            let echo: ProjectionMethod<string> = base.echo;
+            let number: ProjectionNumber = right.right;
+            view = ProjectionValue<string> { item: "second" };
+            assert(echo("method") == "method" && number() == 23, "captured witness does not rebind");
+            assert(base.item == "first", "captured subject survives replacement");
+        });
+        test("normal return and throw cleanup destroy the subject exactly once", () {
+            let before = ProjectionLife.destroyed;
+            projection_lifetime(false);
+            assert(ProjectionLife.destroyed == before + 1, "normal cleanup");
+            var caught = false;
+            try projection_lifetime(true) catch error: string { caught = error == "projection cleanup"; }
+            assert(caught && ProjectionLife.destroyed == before + 2, "throw cleanup");
+        });
+        test("escaped projected views retain and eventually release their owner", () {
+            let before = ProjectionLife.destroyed;
+            projection_use_escape();
+            assert(ProjectionLife.destroyed == before + 1, "escaped closure cleanup");
+        });
+        test("ordinary open object specs use the same capture lifecycle", () {
+            let before = ProjectionLife.destroyed;
+            projection_use_escape_base();
+            assert(ProjectionLife.destroyed == before + 1, "ordinary captured spec cleanup");
+        });
+        test("open spec captured defaults retain their closed default subject", () {
+            let reader = projection_capture_default<string>();
+            let first = reader();
+            assert(first.item == "" && first.echo("ignored") == "", "closed default witness");
+            first.item = "saved";
+            assert(reader().item == "saved", "one captured default subject");
+        });
+        test("object-form child to parent implicit and explicit conversions remain supported", () {
+            let source = ProjectionReference<string> { item: "object" };
+            let child: ProjectionChild<string> = source;
+            let implicit: G24ComponentRight = child;
+            let explicit = (G24ComponentRight)child;
+            assert(implicit.right() == 23 && explicit.right() == 23, "unchanged object-spec projection");
+        });
+        test("assignment resolves storage after RHS promotes the binding to a capture cell", () {
+            var first: i32 = 3;
+            let first_holder = ProjectionCallbackHolder {};
+            first = projection_install_callback(first_holder, () { return first; });
+            assert(first == 7 && first_holder.reader() == 7, "ordinary assignment after first capture");
+            var second: i32 = 5;
+            let second_holder = ProjectionCallbackHolder {};
+            second += projection_install_callback(second_holder, () { return second; });
+            assert(second == 12 && second_holder.reader() == 12, "compound assignment after first capture");
+        });
+    });
+}

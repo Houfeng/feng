@@ -263,6 +263,9 @@ type Stream: ReadWrite {}
 - intersection-form 的直接 member 必须是 object-form 或 intersection-form `spec`; 多层 intersection-form 在编译期展平并去重,其成员方法集包含各 object-form 成员及其父 `spec` 闭包的方法集。
 - 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form 成员; 具体 `type` 不得在声明头或 `fit` 中直接列出 intersection-form `spec`。
 - intersection-form 允许作为具名类型和泛型约束使用,但不支持内联 intersection、`match`/收窄或作为 union-form member。
+- intersection-form 值可通过显式 `(Member)value` 转换为其组成 `spec` 视角。目标须从源的完整类型实例出发，沿已声明的 intersection member 边以及 object-form parent 边可达；包括直接成员、嵌套交叉成员及成员的父 `spec`，每条边均先替换完整泛型实参。相同类型的既有显式转换保持合法；仅成员集合相同、签名相同或运行时实际对象满足目标，均不足以建立新的转换关系。
+- 上述交叉成员投影仅允许显式转换，不增加赋值、初始化、传参、返回、字段或数组元素写入中的隐式转换，也不改变重载匹配与泛型约束满足规则。转换不改变原绑定的静态类型。
+- 交叉成员显式转换的资格与 witness 投影路径必须在 Semantic 阶段确定。结果保留源值的 subject、对象身份与当前装箱承载，仅选取与该 subject 对应的目标 witness；不得重新装箱、搜索运行时满足关系或增加方法转接层。结果的持有与清理沿用普通 spec 值规则；交叉类型原有合并成员调用路径不得因此增加间接层。
 - intersection-form 的同名同参数同返回类型方法去重; 同名同参数但返回类型不同构成冲突; 参数列表不同的方法保留为重载。
 - intersection-form 合并字段时，在原有实例／静态成员分类内，先替换完整的 owner 类型实参，再比较同名字段。类型及绑定种类（`let`／`var`）均相同的要求可以合并；类型不同或绑定种类不同必须在 Semantic 阶段报错，即使该 intersection 尚未被使用也不得推迟到 Codegen。该规则不改变 object-form 父列表的同名字段冲突规则。
 - 具体 `type` 可在声明头上直接写出其满足的一个或多个 object-form `spec`; 同一关系也可通过可见的 `fit A: SpecB` 或 `fit A: SpecB, SpecC` 显式建立。
@@ -414,6 +417,7 @@ type Stream: ReadWrite {}
 - [必须] union-form 进入站点必须按 [联合类型规范 §3.8.1](./feng-union-type.md#381-赋值时的多级链路查找) 在编译期决定 active member。
 - [禁止] 当前阶段直接把 union-form 视角值显式转换到共同 object-form `spec`,即使该 union-form 的全部 member 都满足该共同 `spec`。
 - [必须] 具体类型满足 intersection-form,当且仅当其名义满足该 intersection-form 展平后的全部 object-form member。
+- [必须] intersection-form 向组成 `spec` 的显式投影按第 4 节的独立规则检查，不得混入 object-form 的上下文向上 coercion。
 - [必须] intersection-form 的成员方法集合并必须对完全相同的签名去重,保留参数列表不同的重载,并拒绝同名同参数但返回类型不同的冲突。
 - [禁止] 内联 intersection、intersection-form `match`/收窄以及显式声明满足 intersection-form。
 - [必须] 可调用形状的 `spec` 其参数类型与返回类型必须符合 [Feng 语言 ABI 互操作规范](./feng-interop.md) 中定义的 ABI 函数签名兼容规则，才能标记为 `@abi`。

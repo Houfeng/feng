@@ -4715,8 +4715,8 @@ static const FengTypeRef *constraint_member_declaring_spec_instance(
         declaring_spec);
 }
 
-/* Compiler-owned scratch path for one object-spec upcast probe. Each entry
- * is the selected direct parent's source declaration index. */
+/* Compiler-owned scratch witness projection path. Each entry indexes an
+ * object parent's or intersection member's source declaration edge. */
 typedef struct ObjectSpecUpcastPath {
     size_t *parent_indices;
     size_t count;
@@ -4753,9 +4753,10 @@ static bool object_spec_upcast_path_append(ObjectSpecUpcastPath *path,
     return true;
 }
 
-/* Depth-first, source-order nominal parent lookup. Instantiated refs live
- * only for the recursive probe; the selected path stores declaration indices. */
-static bool find_object_spec_upcast_path_recursive(
+/* Depth-first, source-order witness projection lookup. Entry-point guards
+ * keep intersection edges exclusive to explicit casts. Instantiated refs
+ * live only for the probe; the path stores source declaration indices. */
+static bool find_spec_upcast_path_recursive(
     const ResolveContext *context,
     const FengDecl *source_decl,
     const FengTypeRef *source_type_ref,
@@ -4765,16 +4766,24 @@ static bool find_object_spec_upcast_path_recursive(
     if (context == NULL || source_decl == NULL || target_decl == NULL ||
         target_type_ref == NULL || path == NULL ||
         source_decl->kind != FENG_DECL_SPEC || target_decl->kind != FENG_DECL_SPEC ||
-        source_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
-        target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT) {
+        (source_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         source_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) ||
+        (target_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         target_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION)) {
         return false;
     }
 
+    const bool intersection =
+        source_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION;
+    const size_t parent_count = intersection
+        ? source_decl->as.spec_decl.as.intersection_form.member_count
+        : source_decl->as.spec_decl.parent_spec_count;
     for (size_t parent_index = 0U;
-         parent_index < source_decl->as.spec_decl.parent_spec_count;
+         parent_index < parent_count;
          ++parent_index) {
-        const FengTypeRef *declared_parent_ref =
-            source_decl->as.spec_decl.parent_specs[parent_index];
+        const FengTypeRef *declared_parent_ref = intersection
+            ? source_decl->as.spec_decl.as.intersection_form.members[parent_index]
+            : source_decl->as.spec_decl.parent_specs[parent_index];
         FengTypeRef *parent_ref;
         const FengDecl *parent_decl;
 
@@ -4799,7 +4808,8 @@ static bool find_object_spec_upcast_path_recursive(
         }
         parent_decl = resolve_type_ref_decl(context, parent_ref);
         if (parent_decl == NULL || parent_decl->kind != FENG_DECL_SPEC ||
-            parent_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT ||
+            (parent_decl->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+             parent_decl->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION) ||
             !object_spec_upcast_path_append(path, parent_index)) {
             free_synthetic_type_ref(parent_ref);
             continue;
@@ -4809,12 +4819,12 @@ static bool find_object_spec_upcast_path_recursive(
             free_synthetic_type_ref(parent_ref);
             return true;
         }
-        if (find_object_spec_upcast_path_recursive(context,
-                                                   parent_decl,
-                                                   parent_ref,
-                                                   target_decl,
-                                                   target_type_ref,
-                                                   path)) {
+        if (find_spec_upcast_path_recursive(context,
+                                            parent_decl,
+                                            parent_ref,
+                                            target_decl,
+                                            target_type_ref,
+                                            path)) {
             free_synthetic_type_ref(parent_ref);
             return true;
         }
@@ -4852,12 +4862,43 @@ static bool find_object_spec_upcast_path(
         (source_decl->as.spec_decl.type_param_count > 0U && source_type_ref == NULL)) {
         return false;
     }
-    if (!find_object_spec_upcast_path_recursive(context,
-                                                source_decl,
-                                                source_type_ref,
-                                                target_decl,
-                                                target_type_ref,
-                                                out_path)) {
+    if (!find_spec_upcast_path_recursive(context,
+                                         source_decl,
+                                         source_type_ref,
+                                         target_decl,
+                                         target_type_ref,
+                                         out_path)) {
+        object_spec_upcast_path_free(out_path);
+        return false;
+    }
+    return true;
+}
+
+/* Explicit-only intersection entry. This wrapper is intentionally absent
+ * from inferred matching and overload admission; their object-only guard
+ * continues to reject implicit component conversions. */
+static bool find_intersection_spec_upcast_path(
+    const ResolveContext *context,
+    InferredExprType source_type,
+    const FengTypeRef *target_type_ref,
+    ObjectSpecUpcastPath *out_path) {
+    const FengTypeRef *source_ref = source_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
+        ? source_type.type_ref : NULL;
+    const FengDecl *source = source_ref != NULL
+        ? resolve_type_ref_decl(context, source_ref)
+        : source_type.kind == FENG_INFERRED_EXPR_TYPE_DECL ? source_type.type_decl : NULL;
+    const FengDecl *target = resolve_type_ref_decl(context, target_type_ref);
+
+    memset(out_path, 0, sizeof(*out_path));
+    if (source == NULL || target == NULL ||
+        source->kind != FENG_DECL_SPEC || target->kind != FENG_DECL_SPEC ||
+        source->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION ||
+        (target->as.spec_decl.form != FENG_SPEC_FORM_OBJECT &&
+         target->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION)) {
+        return false;
+    }
+    if (!find_spec_upcast_path_recursive(context, source, source_ref,
+                                         target, target_type_ref, out_path)) {
         object_spec_upcast_path_free(out_path);
         return false;
     }
@@ -10987,6 +11028,12 @@ static bool cast_expr_types_are_valid(ResolveContext *context,
     if (inferred_expr_type_matches_type_ref(context, value_type, target_type)) {
         return true;
     }
+    ObjectSpecUpcastPath component_path;
+    if (find_intersection_spec_upcast_path(context, value_type, target_type,
+                                          &component_path)) {
+        object_spec_upcast_path_free(&component_path);
+        return true;
+    }
     if (value_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
         source_callable_spec = resolve_callable_spec_type_ref_decl(context, value_type.type_ref);
         target_callable_spec = resolve_callable_spec_type_ref_decl(context, target_type);
@@ -11044,6 +11091,17 @@ static bool validate_cast_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     value_type = infer_expr_type(context, expr->as.cast.value);
+    ObjectSpecUpcastPath component_path;
+    if (find_intersection_spec_upcast_path(context, value_type,
+                                          expr->as.cast.type, &component_path)) {
+        bool recorded = feng_semantic_record_intersection_spec_upcast_site(
+            context->analysis, expr->as.cast.value,
+            resolve_type_ref_decl(context, expr->as.cast.type),
+            expr->as.cast.type, component_path.parent_indices, component_path.count);
+        object_spec_upcast_path_free(&component_path);
+        return recorded || resolver_append_error(context, expr->token, "IE0001",
+            format_message("out of memory while recording spec component projection"));
+    }
     if (expr->as.cast.value != NULL &&
         expr->as.cast.value->kind == FENG_EXPR_TUPLE_LITERAL) {
         return validate_tuple_literal_expr_against_type(context,

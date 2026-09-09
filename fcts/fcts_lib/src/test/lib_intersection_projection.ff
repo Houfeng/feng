@@ -1,0 +1,121 @@
+open module fcts_lib.test.intersection_projection;
+
+/** A generic inherited field and method expose the complete target ABI. */
+open spec ProjectionBase<A> { var item: A; func echo(value: A): A; }
+/** The first component also contributes a nominal parent edge. */
+open spec G24ComponentLeft<A>: ProjectionBase<A> { func left(): i32; }
+/** Different return values detect reading a wrong merged witness slot. */
+open spec G24ComponentRight { func right(): i32; }
+/** A third component makes nested intersection projection observable. */
+open spec ProjectionExtra { func extra(): i32; }
+/** Direct intersection components retain their declared projection order. */
+open spec ProjectionBoth<A>: G24ComponentLeft<A> & G24ComponentRight;
+/** A nested intersection contributes both direct and multi-edge targets. */
+open spec ProjectionNested<A>: ProjectionBoth<A> & ProjectionExtra;
+/** Reversed components must not assume a merged witness prefix. */
+open spec ProjectionReverse<A>: G24ComponentRight & G24ComponentLeft<A>;
+/** Repeated members remain legal and refer to the same subject. */
+open spec ProjectionRepeated<A>: G24ComponentLeft<A> & G24ComponentLeft<A> & G24ComponentRight;
+/** Repeated inherited requirements must still point at the same subject field. */
+open spec ProjectionDiamond<A>: ProjectionBase<A> & G24ComponentLeft<A>;
+/** The existing object-form parent projection remains an independent control. */
+open spec ProjectionChild<A>: G24ComponentLeft<A>, G24ComponentRight, ProjectionExtra {}
+
+/** Reference projection must preserve this instance, not construct a new owner. */
+open type ProjectionReference<A>: ProjectionChild<A> {
+    open var item: A;
+    /** Exercise an address-form generic method slot. */
+    func echo(value: A): A { return value; }
+    /** Distinguish the first witness slot. */
+    func left(): i32 { return 11; }
+    /** Distinguish the second witness slot. */
+    func right(): i32 { return 23; }
+    /** Distinguish the nested intersection's extra component. */
+    func extra(): i32 { return 37; }
+}
+
+/** An ordinary spec conversion boxes this value once; later projections reuse that box. */
+@value open type ProjectionValue<A>: ProjectionChild<A> {
+    open var item: A;
+    /** Return the complete payload in the generic member ABI. */
+    func echo(value: A): A { return value; }
+    /** Different implementations guard per-subject dispatch. */
+    func left(): i32 { return 41; }
+    /** Keep boxed-value dispatch distinct from references. */
+    func right(): i32 { return 53; }
+    /** Exercise projection to a direct component of the outer intersection. */
+    func extra(): i32 { return 67; }
+}
+
+/** An escaping callable keeps its captured projected subject alive. */
+open spec ProjectionReader<A>(): ProjectionBase<A>;
+/** A bound generic member retains its complete argument and result ABI. */
+open spec ProjectionMethod<A>(value: A): A;
+/** A non-generic bound member makes witness slot selection observable. */
+open spec ProjectionNumber(): i32;
+
+/** The provider shared body follows a member edge and an object-parent edge. */
+open func projection_base<A>(value: ProjectionNested<A>): ProjectionBase<A> {
+    return (ProjectionBase<A>)value;
+}
+/** Project a nested intersection without flattening the value or changing its subject. */
+open func projection_middle<A>(value: ProjectionNested<A>): ProjectionBoth<A> {
+    return (ProjectionBoth<A>)value;
+}
+/** A second shared layer uses the same already-formed spec value representation. */
+open func projection_relay<A>(value: ProjectionNested<A>): ProjectionBase<A> {
+    return projection_base<A>(value);
+}
+/** Side effects in the source must happen once. */
+open func projection_touch<A>(value: ProjectionNested<A>, calls: i32[!]): ProjectionNested<A> {
+    calls[0] += 1;
+    return value;
+}
+/** This source expression is evaluated before the fixed witness path is read. */
+open func projection_once<A>(value: ProjectionNested<A>, calls: i32[!]): ProjectionBase<A> {
+    return (ProjectionBase<A>)projection_touch<A>(value, calls);
+}
+/** The projected view keeps the original subject alive after this frame returns. */
+open func projection_capture<A>(value: ProjectionNested<A>): ProjectionReader<A> {
+    let projected = (ProjectionBase<A>)value;
+    return () { return projected; };
+}
+/** Ordinary object-spec capture is independent of intersection projection. */
+open func projection_capture_base<A>(value: ProjectionBase<A>): ProjectionReader<A> {
+    let saved = value;
+    return () { return saved; };
+}
+/** Captured defaults must use the closed spec's existing default subject. */
+open func projection_capture_default<A>(): ProjectionReader<A> {
+    var saved: ProjectionBase<A>;
+    return () { return saved; };
+}
+/** Default projection must use the outer default subject, not a member's fresh default. */
+open func projection_default<A>(): ProjectionBase<A> {
+    let value: ProjectionNested<A>;
+    return (ProjectionBase<A>)value;
+}
+
+/** Owner and method generic contexts both exercise explicit projection. */
+open type ProjectionOwner<A> {
+    open let view: ProjectionBase<A>;
+    /** Constructor projection initializes the stored field once. */
+    func ProjectionOwner(value: ProjectionNested<A>) { self.view = (ProjectionBase<A>)value; }
+    /** Owner-dependent target information must remain distinct from method parameters. */
+    func convert<B>(value: ProjectionNested<B>): ProjectionBase<B> { return (ProjectionBase<B>)value; }
+    /** A static shared method has no receiver from which to infer the source witness. */
+    static func from(value: ProjectionNested<A>): ProjectionBase<A> { return (ProjectionBase<A>)value; }
+}
+
+/** Aggregate owners use the same explicit projection, without reference-owner assumptions. */
+@value open type ProjectionValueOwner<A> {
+    open let view: ProjectionBase<A>;
+    /** Preserve the source box when storing a projected view. */
+    func ProjectionValueOwner(value: ProjectionNested<A>) { self.view = (ProjectionBase<A>)value; }
+}
+
+/** A fit method is a separate callable owner but uses no new metadata channel. */
+open fit ProjectionOwner<A> {
+    /** Explicitly project a method-local generic instance. */
+    func fitted<B>(value: ProjectionNested<B>): ProjectionBase<B> { return (ProjectionBase<B>)value; }
+}
