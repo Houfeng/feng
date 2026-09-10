@@ -1709,6 +1709,12 @@ typedef struct CGClosedGenericParamDescriptorNode {
     char *c_name;
 } CGClosedGenericParamDescriptorNode;
 
+/* Compiler-owned open argument domain and closed static argument graph. Their
+ * definitions live with the generic-argument emitter, outside runtime ABI. */
+typedef struct CGGenericArgumentDomain CGGenericArgumentDomain;
+typedef struct CGClosedGenericArguments CGClosedGenericArguments;
+typedef struct CGGenericArgumentBinding CGGenericArgumentBinding;
+
 /* Generated support shared by ordinary fixed-layout binding and reified
  * method-value formation. All strings are owned by the CG registry. */
 typedef struct CGCallableMethodValueSupport {
@@ -1768,6 +1774,7 @@ typedef struct CGReifiedCallableMethodTarget {
     const char *shared_c_name;
     const char *owner_descriptor_expr;
     const char *function_descriptor_expr;
+    const char *generic_arguments_expr;
     const char *const *method_descriptor_exprs;
     size_t method_descriptor_count;
     const bool *param_uses_address;
@@ -2062,6 +2069,12 @@ typedef struct CG {
     CGClosedGenericParamDescriptorNode *closed_generic_param_descriptor_nodes;
     size_t       closed_generic_param_descriptor_node_count;
     size_t       closed_generic_param_descriptor_node_capacity;
+    CGGenericArgumentDomain **generic_argument_domains;
+    size_t generic_argument_domain_count;
+    CGClosedGenericArguments **closed_generic_arguments;
+    size_t closed_generic_argument_count;
+    CGGenericArgumentBinding *generic_argument_bindings;
+    size_t generic_argument_binding_count;
     char       **captured_binding_names;
     size_t       captured_binding_name_count;
     bool         current_callable_captures_self;
@@ -2560,6 +2573,35 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
                                        const FengToken *tok, char **out);
+/* Materialize one closed array in the common static type-dependency graph. */
+static bool cg_closed_array_descriptor_expr(CG *cg, const CGType *array_type,
+                                            const FengToken *tok, char **out);
+/* Generic argument packages are ordinary hidden C arguments, not extensions
+ * of any existing runtime descriptor. All pointed-to records are static. */
+static bool cg_generic_arguments_needed(CG *cg, const FengReifiableDepSet *set);
+static bool cg_emit_closed_generic_arguments(CG *cg, const FengReifiableDepSet *set,
+    const FengTypeParam *params, size_t count, FengTypeRef *const *args,
+    const FengProgram *program, FengToken blame, char **out);
+static bool cg_bind_generic_arguments(CG *cg, const char *descriptor,
+                                      const char *arguments, FengToken blame);
+static bool cg_append_generic_arguments(CG *cg, Buf *out,
+    const FengReifiableDepSet *set, const char *descriptor, FengToken blame);
+/* Resolve source/imported member identity independently of concrete wrappers. */
+static const FengReifiableDepSet *cg_member_argument_domain(CG *cg,
+    const FengDecl *owner, const FengTypeMember *member);
+/* Static adapters may be emitted before their associated runtime descriptor. */
+static bool cg_bind_closed_generic_arguments(CG *cg, const FengReifiableDepSet *set,
+    const FengTypeParam *params, size_t count, FengTypeRef *const *args,
+    const FengProgram *program, FengToken blame, const char *descriptor_name);
+static bool cg_append_static_generic_arguments(CG *cg, Buf *out,
+    const FengReifiableDepSet *set, const char *descriptor_name, FengToken blame);
+static char *cg_generic_arguments_for_descriptor(CG *cg, const char *descriptor);
+/* Finish a selected call after any output slot, then close its argument list. */
+static bool cg_finish_member_generic_call(CG *cg, Buf *out,
+    const FengTypeMember *member, const FengExpr *call);
+static bool cg_open_generic_argument_expr(CG *cg, const CGType *actual,
+    const UserSpec *constraint, FengToken blame, char **out);
+static void cg_free_generic_arguments(CG *cg);
 /* Close a spec-actual constraint at non-expression descriptor entrances. */
 static bool cg_instantiated_spec_generic_descriptor(
     CG *cg, const CGType *actual, const UserSpec *open_constraint,
@@ -7519,6 +7561,13 @@ static bool cg_ensure_reified_callable_function_value(
                            ? "_out"
                            : "&_result");
     }
+    if (!cg_bind_closed_generic_arguments(cg,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, function->decl),
+            signature->type_params, type_arg_count, type_args, function->owner_program,
+            blame, descriptor_c_name) ||
+        !cg_append_static_generic_arguments(cg, &cg->witness_defs,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, function->decl),
+            descriptor_c_name, blame)) goto cleanup;
     buf_append_cstr(&cg->witness_defs, ");\n");
     if (spec->callable_return_type != NULL &&
         spec->callable_return_type->kind != CG_TYPE_VOID &&
@@ -7842,6 +7891,14 @@ static bool cg_ensure_callable_static_method_value(
                     ? "_out"
                     : "&_result");
         }
+    }
+    if (passes_function_descriptor &&
+        !cg_append_static_generic_arguments(cg, &cg->witness_defs,
+            cg_member_argument_domain(cg, NULL, method->member), descriptor_c_name,
+            blame)) {
+        free(adapter_name);
+        free(var_name);
+        return false;
     }
     buf_append_cstr(&cg->witness_defs, ");\n");
     if (provider_returns_via_out &&
@@ -8194,6 +8251,9 @@ static void cg_emit_callable_method_target_invoke(
                        spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS
                            ? "_out"
                            : "&_result");
+    }
+    if (reified_target->generic_arguments_expr != NULL) {
+        buf_append_fmt(out, ", %s", reified_target->generic_arguments_expr);
     }
     buf_append_cstr(out, ");\n");
     if (returns_value &&
@@ -15506,9 +15566,12 @@ static bool cg_emit_type_static_binding_decl(CG *cg, const TypeStaticBinding *bi
         }
         buf_append_fmt(&cg->fn_protos,
             "void %s(const %s *_type_desc, "
-            "FengStaticBindingState *_state);\n",
+            "FengStaticBindingState *_state%s);\n",
             shared_ensure,
-            descriptor_type);
+            descriptor_type,
+            cg_generic_arguments_needed(cg,
+                feng_semantic_lookup_reifiable_dep_set(cg->analysis, binding->owner_type->generic_origin_decl))
+                ? ", const FengGenericArguments *_generic_args" : "");
         free(shared_ensure);
     }
     free(cty);
@@ -19215,13 +19278,17 @@ static bool cg_append_type_static_binding_ensure_init_call(
                            "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(out,
-                       "    %s(&%s, &%s);\n",
+                       "    %s(&%s, &%s",
                        ensure_name,
                        descriptor_name,
                        state_expr);
+        bool appended = cg_append_static_generic_arguments(cg, out,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, binding->owner_type->generic_origin_decl),
+            descriptor_name, binding->member->token);
+        buf_append_cstr(out, ");\n");
         free(state_expr);
         free(ensure_name);
-        return true;
+        return appended;
     }
     buf_append_fmt(out, "    %s();\n", binding->c_ensure_init_name);
     return true;
@@ -19296,7 +19363,7 @@ static bool cg_emit_shared_static_binding_state(
     buf_append_fmt(cg->cur_body,
         "    const %s *%s = %s;\n"
         "    FengStaticBindingState *%s = &%s->static_bindings[%zu];\n"
-        "    %s(%s, %s);\n",
+        "    %s(%s, %s",
         descriptor_type,
         descriptor_name,
         descriptor_expr,
@@ -19306,6 +19373,9 @@ static bool cg_emit_shared_static_binding_state(
         ensure_name,
         descriptor_name,
         state_name);
+    bool appended = cg_append_generic_arguments(cg, cg->cur_body,
+        feng_semantic_lookup_reifiable_dep_set(cg->analysis, origin), descriptor_expr, blame);
+    buf_append_cstr(cg->cur_body, ");\n");
     free(descriptor_expr);
     free(descriptor_name);
     free(ensure_name);
@@ -19314,7 +19384,7 @@ static bool cg_emit_shared_static_binding_state(
     } else {
         free(state_name);
     }
-    return true;
+    return appended;
 }
 
 /* ===================== expression emission ===================== */
@@ -21287,18 +21357,25 @@ static bool cg_emit_compiled_implicit_constructor_invoke(
          * in the provider package. */
         if (imported) {
             buf_append_fmt(&cg->fn_protos,
-                           "void %s(void *_self, const %s *_type_desc);\n",
+                           "void %s(void *_self, const %s *_type_desc%s);\n",
                            name,
-                           descriptor_type);
+                           descriptor_type,
+                           cg_generic_arguments_needed(cg,
+                               feng_semantic_lookup_reifiable_dep_set(cg->analysis, type->generic_origin_decl))
+                               ? ", const FengGenericArguments *_generic_args" : "");
         }
         buf_append_fmt(cg->cur_body,
-                       "    %s((void *)%s, %s);\n",
+                       "    %s((void *)%s, %s",
                        name,
                        self_expr,
                        descriptor_expr);
+        bool appended = cg_append_generic_arguments(cg, cg->cur_body,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, type->generic_origin_decl),
+            descriptor_expr, blame);
+        buf_append_cstr(cg->cur_body, ");\n");
         free(descriptor_expr);
         free(name);
-        return true;
+        return appended;
     }
 
     name = cg_implicit_constructor_cname(type);
@@ -21738,6 +21815,11 @@ static bool cg_emit_constructor_invoke(CG *cg,
                 buf_append_fmt(&cg->fn_protos, " _p%zu", i);
             }
         }
+        const FengReifiableDepSet *argument_domain =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, owner_type->generic_origin_decl);
+        if (cg_generic_arguments_needed(cg, argument_domain)) {
+            buf_append_cstr(&cg->fn_protos, ", const FengGenericArguments *_generic_args");
+        }
         buf_append_cstr(&cg->fn_protos, ");\n");
         buf_append_fmt(cg->cur_body,
                        "    %s((void *)%s, %s",
@@ -21747,11 +21829,13 @@ static bool cg_emit_constructor_invoke(CG *cg,
         if (args_buf.data != NULL) {
             buf_append(cg->cur_body, args_buf.data, args_buf.length);
         }
+        bool appended = cg_append_generic_arguments(cg, cg->cur_body, argument_domain,
+                                                     descriptor_expr, blame);
         buf_append_cstr(cg->cur_body, ");\n");
         free(shared_name);
         free(descriptor_expr);
         buf_free(&args_buf);
-        return true;
+        return appended;
     }
 
     buf_append_fmt(cg->cur_body,
@@ -22907,11 +22991,12 @@ typedef struct CGLambdaReificationContext {
     const FengDecl *owner_type_decl;
     size_t generic_param_count;
     const char *const *generic_param_descriptor_c_names;
+    bool has_generic_arguments;
 } CGLambdaReificationContext;
 
 /* Snapshot the active callable context before lambda emission temporarily
  * switches to the generated invoke function's local scope. */
-static CGLambdaReificationContext cg_lambda_reification_context(const CG *cg) {
+static CGLambdaReificationContext cg_lambda_reification_context(CG *cg) {
     CGLambdaReificationContext context;
 
     memset(&context, 0, sizeof(context));
@@ -22921,6 +23006,8 @@ static CGLambdaReificationContext cg_lambda_reification_context(const CG *cg) {
     context.function_descriptor_c_name =
         cg->generic_function_descriptor_c_name;
     context.owner_type_decl = cg->generic_type_method_decl;
+    context.has_generic_arguments =
+        cg->in_generic_fn && cg_generic_arguments_needed(cg, cg->generic_reified_use_deps);
     if (cg->in_generic_fn) {
         context.generic_param_count = cg->generic_fn_type_param_count;
         context.generic_param_descriptor_c_names =
@@ -22996,6 +23083,9 @@ static bool cg_emit_lambda_closure_type(CG *cg,
                        owner_descriptor_type);
     }
     if (reification != NULL) {
+        if (reification->has_generic_arguments) {
+            buf_append_cstr(td, "    const FengGenericArguments *_generic_args;\n");
+        }
         for (size_t i = 0U; i < reification->generic_param_count; ++i) {
             buf_append_fmt(td,
                 "    const FengGenericParamDescriptor *_reified_param%zu;\n",
@@ -23183,6 +23273,11 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             owner_descriptor_type);
     }
     if (reification != NULL) {
+        if (reification->has_generic_arguments) {
+            buf_append_cstr(&fn,
+                "    const FengGenericArguments *_generic_args = _lambda->_generic_args;\n"
+                "    (void)_generic_args;\n");
+        }
         for (size_t i = 0U; i < reification->generic_param_count; ++i) {
             const char *descriptor_name =
                 reification->generic_param_descriptor_c_names != NULL
@@ -23671,6 +23766,9 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         closure_var,
         closure_var,
         invoke_name);
+    if (reification.has_generic_arguments) {
+        buf_append_fmt(cg->cur_body, "    %s->_generic_args = _generic_args;\n", closure_var);
+    }
     if (reification.function_descriptor_c_name != NULL) {
         buf_append_fmt(cg->cur_body,
             "    %s->_reified_function_desc = %s;\n",
@@ -27702,6 +27800,12 @@ static bool cg_emit_generic_type_method_call(CG *cg,
                         return_uses_reified_storage) ? ", %s" : ", &%s",
                        ret_cname);
     }
+    if (func_desc_expr != NULL && !cg_append_generic_arguments(cg, cg->cur_body,
+            cg_member_argument_domain(cg, ut->decl, um->member),
+            func_desc_expr, e->token)) {
+        ok = false;
+        goto cleanup;
+    }
     buf_append_cstr(cg->cur_body, ");\n");
 
     if (ret_cname != NULL) {
@@ -28195,6 +28299,11 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                            ? ", %s"
                            : ", &%s",
                        ret_cname);
+    }
+    if (!cg_append_generic_arguments(cg, cg->cur_body,
+            cg_member_argument_domain(cg, owner, member), func_desc_expr, e->token)) {
+        ok = false;
+        goto cleanup;
     }
     buf_append_cstr(cg->cur_body, ");\n");
 
@@ -29021,6 +29130,12 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                                ? "%s"
                                : "&%s",
                            ret_cname);
+        }
+        if (func_desc_expr != NULL && !cg_append_generic_arguments(cg, cg->cur_body,
+                cg_member_argument_domain(cg, method_origin_decl, um->member),
+                func_desc_expr, e->token)) {
+            ok = false;
+            goto cleanup;
         }
         buf_append_cstr(cg->cur_body, ");\n");
     }
@@ -30268,7 +30383,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         er_free(&recv);
                         return false;
                     }
-                    buf_append_fmt(&b, ", %s)", return_temp);
+                    buf_append_fmt(&b, ", %s", return_temp);
+                    if (!cg_finish_member_generic_call(cg, &b, um->member, e)) {
+                        free(descriptor_name); free(size_name); free(return_temp);
+                        buf_free(&b); er_free(&recv); return false;
+                    }
                     buf_append_fmt(cg->cur_body, "    %s;\n", b.data);
                     if (!cg_register_erased_generic_storage_for_cleanup(cg, return_temp,
                             out->type, descriptor_name, size_name, e->token)) {
@@ -30300,7 +30419,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         er_free(&recv);
                         return false;
                     }
-                    buf_append_fmt(&b, ", %s)", return_temp);
+                    buf_append_fmt(&b, ", %s", return_temp);
+                    if (!cg_finish_member_generic_call(cg, &b, um->member, e)) {
+                        free(descriptor_name); free(size_name); free(return_temp);
+                        buf_free(&b); er_free(&recv); return false;
+                    }
                     buf_append_fmt(cg->cur_body, "    %s;\n", b.data);
                     out->c_expr = strdup(return_temp);
                     out->is_storage_address = true;
@@ -30316,7 +30439,11 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         er_free(&recv);
                         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
-                    buf_append_fmt(&b, ", &%s)", return_temp);
+                    buf_append_fmt(&b, ", &%s", return_temp);
+                    if (!cg_finish_member_generic_call(cg, &b, um->member, e)) {
+                        free(return_ctype); free(return_temp);
+                        buf_free(&b); er_free(&recv); return false;
+                    }
                     buf_append_fmt(cg->cur_body,
                                    "    %s %s;\n"
                                    "    %s;\n",
@@ -30333,7 +30460,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
             } else {
-                buf_append_cstr(&b, ")");
+                if (!cg_finish_member_generic_call(cg, &b, um->member, e)) {
+                    buf_free(&b); er_free(&recv); return false;
+                }
                 out->c_expr = b.data;
             }
             if (!cg_builtin_fit_return_uses_out(bf, um) &&
@@ -30675,7 +30804,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 }
             }
             /* Build: shared_name((void *)recv, rtd_expr, func_desc,
-             * args..., [_out]). */
+             * args..., [_out], [static generic arguments]). */
             Buf b; buf_init(&b);
             /* §9.15: ordinary value storage needs an address; address-form
              * receiver expressions already denote their exact storage. */
@@ -30697,6 +30826,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                                ret_is_storage_address ? ", %s" : ", &%s",
                                ret_tmp);
             }
+            call_ok = cg_append_generic_arguments(cg, &b,
+                cg_member_argument_domain(cg, ut->generic_origin_decl, um->member),
+                func_desc_expr, e->token);
             buf_append_cstr(&b, ");\n");
             buf_append(cg->cur_body, b.data, b.length);
             buf_free(&b);
@@ -30707,6 +30839,14 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
             free(shared_name);
             free(rtd_expr);
             free(func_desc_expr);
+            if (!call_ok) {
+                free(ret_tmp);
+                free(ret_descriptor_name);
+                free(ret_size_name);
+                cgtype_free(concrete_return);
+                er_free(&recv);
+                return false;
+            }
             if (has_return) {
                 out->c_expr = strdup(ret_tmp);
                 out->type = concrete_return;
@@ -36309,16 +36449,24 @@ static bool cg_default_value_expr(CG *cg, const CGType *type,
                 if (cg_program_origin(cg, type->user->owner_program) ==
                     FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
                     buf_append_fmt(&cg->fn_protos,
-                                   "void *%s(const FengTypeDescriptor *_type_desc);\n",
-                                   factory);
+                                   "void *%s(const FengTypeDescriptor *_type_desc%s);\n",
+                                   factory,
+                                   cg_generic_arguments_needed(cg,
+                                       feng_semantic_lookup_reifiable_dep_set(cg->analysis, type->user->generic_origin_decl))
+                                       ? ", const FengGenericArguments *_generic_args" : "");
                 }
                 buf_append_fmt(&b,
-                               "(struct %s *)%s(%s)",
+                               "(struct %s *)%s(%s",
                                type->user->c_struct_name,
                                factory,
                                descriptor);
+                bool appended = cg_append_generic_arguments(cg, &b,
+                    feng_semantic_lookup_reifiable_dep_set(cg->analysis, type->user->generic_origin_decl),
+                    descriptor, blame ? *blame : (FengToken){0});
+                buf_append_cstr(&b, ")");
                 free(descriptor);
                 free(factory);
+                if (!appended) { buf_free(&b); return false; }
                 break;
             }
             if (type->user->c_default_zero_name == NULL) {
@@ -42525,7 +42673,15 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                     ? source_fact->type_ref
                     : NULL,
                 stmt->token);
-            if (!shared_iter || !rtd_expr || !func_desc_expr) {
+            Buf argument_suffix;
+            buf_init(&argument_suffix);
+            bool arguments_ok = func_desc_expr != NULL &&
+                cg_append_generic_arguments(cg, &argument_suffix,
+                    cg_member_argument_domain(cg, src_ut->generic_origin_decl,
+                                              iterable_method),
+                    func_desc_expr, stmt->token);
+            if (!shared_iter || !rtd_expr || !arguments_ok) {
+                buf_free(&argument_suffix);
                 free(shared_iter);
                 free(rtd_expr);
                 free(func_desc_expr);
@@ -42547,6 +42703,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                         stmt->token,
                         &cursor_descriptor_name,
                         &cursor_size_name)) {
+                    buf_free(&argument_suffix);
                     free(shared_iter);
                     free(rtd_expr);
                     free(func_desc_expr);
@@ -42559,9 +42716,11 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
                 buf_append_fmt(cg->cur_body,
-                    "    %s((void *)%s%s, %s, %s, %s);\n",
+                    "    %s((void *)%s%s, %s, %s, %s%s);\n",
                     shared_iter, src_addr, src.c_expr, rtd_expr,
-                    func_desc_expr, cursor_var);
+                    func_desc_expr, cursor_var,
+                    argument_suffix.data != NULL ? argument_suffix.data : "");
+                buf_free(&argument_suffix);
                 if (!scope_add(cg->cur_scope,
                                cursor_var,
                                cursor_var,
@@ -42593,10 +42752,12 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 cursor_cgtype = NULL;
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s; %s((void *)%s%s, %s, %s, &%s);\n",
+                    "    %s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
                     cursor_cty, cursor_var,
                     shared_iter, src_addr, src.c_expr, rtd_expr,
-                    func_desc_expr, cursor_var);
+                    func_desc_expr, cursor_var,
+                    argument_suffix.data != NULL ? argument_suffix.data : "");
+                buf_free(&argument_suffix);
             }
             free(shared_iter);
             free(rtd_expr);
@@ -42850,7 +43011,15 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             iterator_method,
             stmt->as.for_stmt.iter_cursor_type_ref,
             stmt->token);
-        if (!shared_next || !rtd_expr || !func_desc_expr) {
+        Buf argument_suffix;
+        buf_init(&argument_suffix);
+        bool arguments_ok = func_desc_expr != NULL &&
+            cg_append_generic_arguments(cg, &argument_suffix,
+                cg_member_argument_domain(cg, cursor_ut->generic_origin_decl,
+                                          iterator_method),
+                func_desc_expr, stmt->token);
+        if (!shared_next || !rtd_expr || !arguments_ok) {
+            buf_free(&argument_suffix);
             free(shared_next);
             free(rtd_expr);
             free(func_desc_expr);
@@ -42872,18 +43041,21 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             buf_append_fmt(cg->cur_body,
                 "        _Alignas(max_align_t) char %s[%s];\n"
                 "        memset(%s, 0, %s);\n"
-                "        %s((void *)%s%s, %s, %s, %s);\n",
+                "        %s((void *)%s%s, %s, %s, %s%s);\n",
                 result_var, result_size_name,
                 result_var, result_size_name,
                 shared_next, cursor_addr, cursor_var, rtd_expr,
-                func_desc_expr, result_var);
+                func_desc_expr, result_var,
+                argument_suffix.data != NULL ? argument_suffix.data : "");
         } else {
             buf_append_fmt(cg->cur_body,
-                "        %s %s; %s((void *)%s%s, %s, %s, &%s);\n",
+                "        %s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
                 result_cty, result_var,
                 shared_next, cursor_addr, cursor_var, rtd_expr,
-                func_desc_expr, result_var);
+                func_desc_expr, result_var,
+                argument_suffix.data != NULL ? argument_suffix.data : "");
         }
+        buf_free(&argument_suffix);
         free(shared_next);
         free(rtd_expr);
         free(func_desc_expr);
@@ -45060,11 +45232,13 @@ static void cg_emit_free_fn_abi_proto(Buf *out, const FreeFn *fn, bool needs_sta
     buf_append_cstr(out, ");\n");
 }
 
+/* Emit a thin method ABI with optional shared reification arguments. */
 static void cg_emit_user_method_proto_ex(Buf *out,
                                          const UserType *t,
                                          const UserMethod *m,
                                          bool needs_static,
-                                         bool has_func_desc) {
+                                         bool has_func_desc,
+                                         bool has_generic_arguments) {
     bool is_static_method = m != NULL && m->member != NULL && m->member->is_static;
     bool has_param = false;
 
@@ -45106,6 +45280,11 @@ static void cg_emit_user_method_proto_ex(Buf *out,
         }
         has_param = true;
     }
+    if (has_generic_arguments) {
+        if (has_param) buf_append_cstr(out, ", ");
+        buf_append_cstr(out, "const FengGenericArguments *_generic_args");
+        has_param = true;
+    }
     if (!has_param) {
         buf_append_cstr(out, "void");
     }
@@ -45117,7 +45296,7 @@ static void cg_emit_user_method_proto(Buf *out,
                                       const UserType *t,
                                       const UserMethod *m,
                                       bool needs_static) {
-    cg_emit_user_method_proto_ex(out, t, m, needs_static, false);
+    cg_emit_user_method_proto_ex(out, t, m, needs_static, false, false);
 }
 
 /* Emit one exported shared-body ABI prototype for an imported generic-owner
@@ -45235,6 +45414,11 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
         method->return_type->kind != CG_TYPE_VOID) {
         buf_append_cstr(&cg->fn_protos, ", void *_out");
     }
+    if (cg_generic_arguments_needed(cg,
+            cg_member_argument_domain(cg, type->decl, method->member))) {
+        buf_append_cstr(&cg->fn_protos,
+                        ", const FengGenericArguments *_generic_args");
+    }
     buf_append_cstr(&cg->fn_protos, ");\n");
     free(shared_name);
     return true;
@@ -45256,7 +45440,7 @@ static bool cg_builtin_fit_return_uses_out(const BuiltinFit *bf,
            m->return_type->user->generic_context_type_param_count > 0U));
 }
 
-static void cg_emit_builtin_fit_method_proto(Buf *out,
+static void cg_emit_builtin_fit_method_proto(CG *cg, Buf *out,
                                              const BuiltinFit *bf,
                                              const UserMethod *m,
                                              bool needs_static) {
@@ -45325,6 +45509,10 @@ static void cg_emit_builtin_fit_method_proto(Buf *out,
         }
         buf_append_cstr(out, "void *_out");
         has_param = true;
+    }
+    if (cg_generic_arguments_needed(cg,
+            cg_member_argument_domain(cg, bf->decl, m->member))) {
+        buf_append_cstr(out, ", const FengGenericArguments *_generic_args");
     }
     if (!has_param) {
         buf_append_cstr(out, "void");
@@ -45476,6 +45664,11 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
                 buf_append_cstr(&cg->fn_protos, ", ");
                 buf_append_cstr(&cg->fn_protos, "void *_out");
             }
+            if (cg_generic_arguments_needed(cg,
+                    feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl))) {
+                buf_append_cstr(&cg->fn_protos,
+                                ", const FengGenericArguments *_generic_args");
+            }
         }
         buf_append_cstr(&cg->fn_protos, ");\n");
         ok = true;
@@ -45534,6 +45727,18 @@ static char *cg_reifiable_sort_key(const FengTypeRef *type_ref,
     size_t i;
 
     buf_init(&key);
+    if (type_ref != NULL && (type_ref->kind == FENG_TYPE_REF_ARRAY ||
+                             type_ref->kind == FENG_TYPE_REF_POINTER)) {
+        char *inner = cg_reifiable_sort_key(type_ref->as.inner,
+            owner_type_param_names, owner_type_param_count, false);
+        if (inner == NULL) return NULL;
+        buf_append_fmt(&key, "%s%s%s",
+            type_ref->kind == FENG_TYPE_REF_POINTER ? "@pointer" :
+                type_ref->array_element_writable ? "@array.rw" : "@array.ro",
+            is_root ? "__" : "_", inner);
+        free(inner);
+        return key.data;
+    }
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED) {
         buf_append_cstr(&key, "?");
         return key.data;
@@ -45753,7 +45958,16 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
     if (expected_kind == FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
         name = cg_aggregate_desc_name(resolved);
     } else {
-        if (resolved != NULL && resolved->kind == CG_TYPE_CALLABLE &&
+        if (resolved != NULL && resolved->kind == CG_TYPE_ARRAY) {
+            char *expression = NULL;
+            if (cg_closed_array_descriptor_expr(cg, resolved, blame, &expression)) {
+                /* Closed type dependencies always name file-scope objects. */
+                if (expression[0] == '&' && expression[1] != '(') {
+                    result = strdup(expression + 1);
+                }
+                free(expression);
+            }
+        } else if (resolved != NULL && resolved->kind == CG_TYPE_CALLABLE &&
             resolved->user_spec != NULL) {
             name = resolved->user_spec->c_closure_desc_name;
         } else if (resolved != NULL && resolved->user != NULL) {
@@ -45762,7 +45976,7 @@ static char *cg_resolve_dep_descriptor_name(CG *cg,
     }
     if (name != NULL) {
         result = strdup(name);
-    } else {
+    } else if (result == NULL) {
         (void)cg_fail(cg, *blame,
             "CE0291", "codegen: failed to resolve descriptor name for reifiable dep");
     }
@@ -46587,6 +46801,8 @@ static bool cg_close_reified_use_type(CG *cg, const FengTypeRef *open_ref,
            (handled || cg_resolve_type_from_program(cg, *out_ref,
                reference_program, &blame, out_type));
 }
+
+#include "generic_arguments.inc"
 
 /* Resolve a validated path component against an exact closed union layout.
  * This maps semantic type identity to layout order; it does not select a
@@ -47416,6 +47632,19 @@ static bool cg_emit_closed_callable_fdesc(CG *cg,
     descriptor_var = node != NULL ? strdup(node->c_name) : NULL;
     if (descriptor_var == NULL) {
         goto cleanup;
+    }
+    {
+        char *arguments = NULL;
+        Buf descriptor;
+        buf_init(&descriptor);
+        buf_append_fmt(&descriptor, "&%s", descriptor_var);
+        bool bound = descriptor.data != NULL &&
+            cg_emit_closed_generic_arguments(cg, dep_set, type_params, type_param_count,
+                type_args, reference_program, blame, &arguments) &&
+            cg_bind_generic_arguments(cg, descriptor.data, arguments, blame);
+        free(arguments);
+        buf_free(&descriptor);
+        if (!bound) goto cleanup;
     }
     if (!cg_emit_union_projection_table(cg, &cg->statics, descriptor_var,
             dep_set, type_params, type_param_count, type_args, reference_program, blame) ||
@@ -48737,7 +48966,9 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
         }
     }
 
-    if (!cg_ensure_callable_static_method_value(
+    if (!cg_bind_closed_generic_arguments(cg, callee_dep_set, callee_params,
+            callee_count, callee_args, callee_reference_program, blame, descriptor_c_name) ||
+        !cg_ensure_callable_static_method_value(
             cg,
             target_type->user_spec,
             owner,
@@ -48922,6 +49153,7 @@ static bool cg_emit_closed_callable_dep_expr(
         size_t method_type_param_count = 0U;
         bool *param_uses_address = NULL;
         char *owner_descriptor_expr = NULL;
+        char *generic_arguments_expr = NULL;
         CGReifiedCallableMethodTarget reified_target;
 
         closed_owner_ref = cg_type_ref_substitute(
@@ -49128,9 +49360,17 @@ static bool cg_emit_closed_callable_dep_expr(
                 goto method_value_cleanup;
             }
             memset(&reified_target, 0, sizeof reified_target);
+            if (cg_generic_arguments_needed(cg, callee_dep_set)) {
+                if (!cg_bind_closed_generic_arguments(cg, callee_dep_set,
+                        callee_params, callee_count, callee_args,
+                        reference_program, blame, descriptor_c_name)) goto method_value_cleanup;
+                generic_arguments_expr = cg_generic_arguments_for_descriptor(cg, descriptor_expr);
+                if (generic_arguments_expr == NULL) goto method_value_cleanup;
+            }
             reified_target.shared_c_name = callee_identity;
             reified_target.owner_descriptor_expr = owner_descriptor_expr;
             reified_target.function_descriptor_expr = descriptor_expr;
+            reified_target.generic_arguments_expr = generic_arguments_expr;
             reified_target.method_descriptor_exprs =
                 (const char *const *)method_descriptor_exprs;
             reified_target.method_descriptor_count = method_type_param_count;
@@ -49201,6 +49441,7 @@ static bool cg_emit_closed_callable_dep_expr(
             out_expr);
 
 method_value_cleanup:
+        free(generic_arguments_expr);
         free(surface_key);
         free(closure_desc_expr);
         free(aggregate_desc_expr);
@@ -49328,6 +49569,20 @@ static bool cg_emit_owner_callable_dep_array(
     *out_count = 0U;
     if (dep_set == NULL) {
         return true;
+    }
+    {
+        char *arguments = NULL;
+        Buf descriptor;
+        buf_init(&descriptor);
+        buf_append_fmt(&descriptor, "&%s", owner_descriptor_name);
+        bool bound = descriptor.data != NULL &&
+            cg_emit_closed_generic_arguments(cg, dep_set, owner_type_params,
+                owner_type_param_count, owner_type_args,
+                cg_find_decl_owner_program(cg, dep_set->owner_decl), blame, &arguments) &&
+            cg_bind_generic_arguments(cg, descriptor.data, arguments, blame);
+        free(arguments);
+        buf_free(&descriptor);
+        if (!bound) return false;
     }
     if (!cg_emit_union_projection_table(cg, out, owner_descriptor_name, dep_set,
             owner_type_params, owner_type_param_count, owner_type_args,
@@ -49532,11 +49787,9 @@ static bool cg_type_descriptor_is_statically_closed(const CGType *type) {
     }
 }
 
-/* Build the FengTypeDescriptor expression for an array used as a generic
- * argument. A statically closed array is deduplicated into file-scope const
- * data, so passing it has exactly the same runtime cost as passing the former
- * builtin descriptor address. Only an array that still contains an active
- * generic parameter uses a wrapper-scoped compound descriptor. */
+/* Intern a fully closed array descriptor and its static element-parameter
+ * table. Shared bodies obtain complete records from their hidden arguments;
+ * they never enter a runtime descriptor-construction fallback. */
 static bool cg_closed_array_descriptor_expr(CG *cg,
                                             const CGType *array_type,
                                             const FengToken *tok,
@@ -49649,20 +49902,9 @@ static bool cg_closed_array_descriptor_expr(CG *cg,
         return *out != NULL;
     }
 
-    buf_init(&expression);
-    buf_append_fmt(
-        &expression,
-        "&(const FengTypeDescriptor){"
-        ".name = \"feng.builtin.array\", "
-        ".size = 0U, "
-        ".default_zero_init = feng_array_default_zero_init, "
-        ".reified_generic_params_count = 1U, "
-        ".reified_generic_params = "
-        "(const FengGenericParamDescriptor *const[]){%s}}",
-        element_descriptor);
     free(element_descriptor);
-    *out = expression.data;
-    return *out != NULL;
+    return cg_fail(cg, *tok, "IE0002",
+        "codegen: static array descriptor requires closed element metadata");
 }
 
 /* Return a file-scope read-only generic-parameter descriptor for one fully
@@ -49788,6 +50030,10 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
     Buf b; buf_init(&b);
     const bool type_is_statically_closed =
         cg_type_descriptor_is_statically_closed(t);
+    if (!type_is_statically_closed && t != NULL && t->kind != CG_TYPE_POINTER) {
+        buf_free(&b);
+        return cg_open_generic_argument_expr(cg, t, constraint_spec, *tok, out);
+    }
     const char *witness_expr = "NULL";
     char *owned_witness_expr = NULL;
 
@@ -50383,6 +50629,8 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
     bool needs_static = !(target == FENG_COMPILE_TARGET_LIB &&
                           decl->visibility == FENG_VISIBILITY_PUBLIC);
+    bool needs_generic_arguments = cg_generic_arguments_needed(cg,
+        feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl));
 
     /* Helper: emit the parameter list (shared for proto + definition).
      * §6.7: _desc is always the first parameter. */
@@ -50408,6 +50656,9 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
             buf_append_cstr((buf_ptr), ", ");                                   \
             buf_append_cstr((buf_ptr), "void *_out");                           \
         }                                                                       \
+        if (needs_generic_arguments) {                                        \
+            buf_append_cstr((buf_ptr), ", const FengGenericArguments *_generic_args"); \
+        }                                                                       \
     } while (0)
 
     /* Forward prototype. */
@@ -50431,6 +50682,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
 
         /* Suppress unused-parameter warnings. */
         buf_append_cstr(body, "    (void)_desc;\n");
+        if (needs_generic_arguments) buf_append_cstr(body, "    (void)_generic_args;\n");
         for (size_t i = 0; i < tp_count; i++) {
             buf_append_fmt(body, "    (void)%s;\n", desc_names[i]);
         }
@@ -51839,6 +52091,9 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                         return_uses_reified_storage) ? "%s" : "&%s",
                        ret_cname);
     }
+    if (!cg_append_generic_arguments(cg, cg->cur_body,
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, gfn->decl),
+            call_func_desc_expr, e->token)) goto generic_call_result_failure;
     buf_append_cstr(cg->cur_body, ");\n");
 
     /* ---- Step 7: set out result ---- */
@@ -52976,6 +53231,9 @@ static bool cg_emit_generic_builtin_spec_method_thunk(
                     method->param_types[i], slot->param_abi_kinds[i], name, blame)) goto cleanup;
     }
     if (provider_out) buf_append_cstr(out, slot_out ? ", _out" : ", &_result");
+    if (!cg_append_generic_arguments(cg, out,
+            cg_member_argument_domain(cg, fit->decl, method->member),
+            function_descriptor, blame)) goto cleanup;
     buf_append_cstr(out, ");\n");
     if (provider_out && !slot_out) buf_append_cstr(out, "    return _result;\n");
     if (!provider_out && slot_out) buf_append_cstr(out, "    memcpy(_out, &_result, sizeof _result);\n");
@@ -57753,23 +58011,29 @@ static bool cg_emit_generic_default_zero_entry(CG *cg,
 
     exported = target == FENG_COMPILE_TARGET_LIB &&
         decl->visibility == FENG_VISIBILITY_PUBLIC;
+    const bool needs_generic_arguments = cg_generic_arguments_needed(cg,
+        feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl));
+    const char *arguments_parameter = needs_generic_arguments
+        ? ", const FengGenericArguments *_generic_args" : "";
     if (!exported) {
         buf_append_cstr(&cg->fn_protos, "static ");
     }
     buf_append_fmt(&cg->fn_protos,
-                   "void *%s(const FengTypeDescriptor *_type_desc);\n",
-                   factory_name);
+                   "void *%s(const FengTypeDescriptor *_type_desc%s);\n",
+                   factory_name, arguments_parameter);
     if (!exported) {
         buf_append_cstr(&cg->fn_defs, "static ");
     }
     buf_append_fmt(&cg->fn_defs,
-                   "void *%s(const FengTypeDescriptor *_type_desc) {\n"
+                   "void *%s(const FengTypeDescriptor *_type_desc%s) {\n"
                    "    void *_self = feng_object_new(_type_desc);\n"
-                   "    %s(_self, _type_desc);\n"
+                   "    %s(_self, _type_desc%s);\n"
                    "    return _self;\n"
                    "}\n\n",
                    factory_name,
-                   init_name);
+                   arguments_parameter,
+                   init_name,
+                   needs_generic_arguments ? ", _generic_args" : "");
     free(init_name);
     free(factory_name);
     return true;
@@ -58802,7 +59066,7 @@ static bool cg_emit_all_programs(CG *cg,
             continue;
         }
         for (size_t mi = 0; mi < bf->method_count; mi++) {
-            cg_emit_builtin_fit_method_proto(&cg->fn_protos, bf, &bf->methods[mi], false);
+            cg_emit_builtin_fit_method_proto(cg, &cg->fn_protos, bf, &bf->methods[mi], false);
         }
     }
     for (size_t i = 0; i < cg->user_type_count; i++) {
@@ -62533,20 +62797,25 @@ static bool cg_emit_generic_type_static_binding_ensure_shared(
         cg_member_uses_package_static_binding_codegen(cg,
                                                        decl,
                                                        member);
+    const char *arguments_parameter = cg_generic_arguments_needed(cg,
+        feng_semantic_lookup_reifiable_dep_set(cg->analysis, decl))
+        ? ", const FengGenericArguments *_generic_args" : "";
     buf_append_fmt(&cg->fn_protos,
                    "%svoid %s(const %s *_type_desc, "
-                   "FengStaticBindingState *_state);\n",
+                   "FengStaticBindingState *_state%s);\n",
                    exports_public_surface ? "" : "static ",
                    function_name,
-                   descriptor_type);
+                   descriptor_type,
+                   arguments_parameter);
     buf_append_fmt(&cg->fn_defs,
                    "%svoid %s(const %s *_type_desc, "
-                   "FengStaticBindingState *_state) {\n"
+                   "FengStaticBindingState *_state%s) {\n"
                    "    const %s *_td = _type_desc;\n"
                    "    (void)_type_desc; (void)_td;\n",
                    exports_public_surface ? "" : "static ",
                    function_name,
                    descriptor_type,
+                   arguments_parameter,
                    descriptor_type);
     for (size_t index = 0U; index < type_param_count; ++index) {
         buf_append_fmt(&cg->fn_defs,
@@ -62840,6 +63109,8 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
      * FengTypeDescriptor，reified_generic_params 在聚合描述符上)。 */
     const char *type_desc_c_type = cg_type_decl_is_value_semantics(decl)
         ? "FengAggregateDescriptor" : "FengTypeDescriptor";
+    const bool needs_generic_arguments =
+        cg_generic_arguments_needed(cg, cg->generic_reified_use_deps);
 
     /* Helper: emit the parameter list for proto or body. */
     #define EMIT_SHARED_PARAMS(buf_ptr, has_param_ptr)                            \
@@ -62880,6 +63151,10 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
             buf_append_cstr((buf_ptr), "void *_out");                              \
             *(has_param_ptr) = true;                                               \
         }                                                                          \
+        if (needs_generic_arguments) {                                              \
+            buf_append_cstr((buf_ptr),                                              \
+                            ", const FengGenericArguments *_generic_args");         \
+        }                                                                          \
     } while (0)
 
     Buf *proto = &cg->fn_protos;
@@ -62917,6 +63192,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     if (has_func_desc) {
         buf_append_cstr(body, "    (void)_desc;\n");
     }
+    if (needs_generic_arguments) buf_append_cstr(body, "    (void)_generic_args;\n");
     for (size_t i = 0; i < outer_tp_count; ++i) {
         buf_append_fmt(body,
             "    const FengGenericParamDescriptor *%s = "
@@ -63164,6 +63440,12 @@ static bool cg_emit_generic_type_method_wrapper_into(
         func_desc_expr == NULL &&
         (method_tp_count > 0U ||
          t->generic_context_type_param_count > 0U);
+    const FengReifiableDepSet *argument_domain = cg_member_argument_domain(
+        cg, reification_owner_decl != NULL ? reification_owner_decl : decl, m->member);
+    const bool needs_generic_arguments = cg_generic_arguments_needed(cg, argument_domain);
+    const bool receives_generic_arguments = needs_generic_arguments &&
+        (receives_func_desc || (m->member->kind != FENG_TYPE_MEMBER_METHOD &&
+                               t->generic_context_type_param_count > 0U));
     char **type_param_names = NULL;
     char **method_type_param_names = NULL;
     char **combined_type_param_names = NULL;
@@ -63293,7 +63575,7 @@ static bool cg_emit_generic_type_method_wrapper_into(
 
     if (method_tp_count == 0U) {
         cg_emit_user_method_proto_ex(&cg->fn_protos, t, m, true,
-                                     receives_func_desc);
+                                     receives_func_desc, receives_generic_arguments);
         buf_append_cstr(body, "static ");
         cg_emit_c_type(body, m->return_type);
         buf_append_fmt(body, " %s(", m->c_name);
@@ -63322,6 +63604,11 @@ static bool cg_emit_generic_type_method_wrapper_into(
                 cg_emit_c_type(body, m->param_types[i]);
                 buf_append_fmt(body, " %s", m->param_names[i] ? m->param_names[i] : "_p");
             }
+            body_has_param = true;
+        }
+        if (receives_generic_arguments) {
+            if (body_has_param) buf_append_cstr(body, ", ");
+            buf_append_cstr(body, "const FengGenericArguments *_generic_args");
             body_has_param = true;
         }
         if (!body_has_param) {
@@ -63370,6 +63657,11 @@ static bool cg_emit_generic_type_method_wrapper_into(
             buf_append_cstr(proto, "void *_out");
             proto_has_param = true;
         }
+        if (receives_generic_arguments) {
+            if (proto_has_param) buf_append_cstr(proto, ", ");
+            buf_append_cstr(proto, "const FengGenericArguments *_generic_args");
+            proto_has_param = true;
+        }
         if (!proto_has_param) {
             buf_append_cstr(proto, "void");
         }
@@ -63413,6 +63705,11 @@ static bool cg_emit_generic_type_method_wrapper_into(
         if (m->return_type->kind != CG_TYPE_VOID) {
             if (wrapper_body_has_param) buf_append_cstr(body, ", ");
             buf_append_cstr(body, "void *_out");
+            wrapper_body_has_param = true;
+        }
+        if (receives_generic_arguments) {
+            if (wrapper_body_has_param) buf_append_cstr(body, ", ");
+            buf_append_cstr(body, "const FengGenericArguments *_generic_args");
             wrapper_body_has_param = true;
         }
         if (!wrapper_body_has_param) {
@@ -63549,6 +63846,20 @@ static bool cg_emit_generic_type_method_wrapper_into(
     } else if (ret_tmp) {
         if (call_has_arg) buf_append_cstr(body, ", ");
         buf_append_fmt(body, "&%s", ret_tmp);
+    }
+    if (needs_generic_arguments) {
+        if (receives_generic_arguments) {
+            buf_append_cstr(body, ", _generic_args");
+        } else {
+            Buf descriptor;
+            buf_init(&descriptor);
+            if (func_desc_expr != NULL) buf_append_cstr(&descriptor, func_desc_expr);
+            else buf_append_fmt(&descriptor, "&%s", desc_name);
+            bool appended = cg_append_generic_arguments(cg, body, argument_domain,
+                                                         descriptor.data, m->member->token);
+            buf_free(&descriptor);
+            if (!appended) { free(ret_tmp); goto cleanup; }
+        }
     }
     buf_append_cstr(body, ");\n");
     if (method_tp_count > 0U) {
@@ -63951,7 +64262,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     cg->generic_callable_dep_count = 0U;
     cg->generic_callable_dep_via_desc = true;
 
-    cg_emit_builtin_fit_method_proto(&cg->fn_protos, bf, m, needs_static);
+    cg_emit_builtin_fit_method_proto(cg, &cg->fn_protos, bf, m, needs_static);
 
     Buf *body = &cg->fn_defs;
     cg->cur_body = body;
@@ -64033,6 +64344,10 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         }
         buf_append_cstr(body, "void *_out");
         has_param = true;
+    }
+    if (cg_generic_arguments_needed(cg,
+            cg_member_argument_domain(cg, bf->decl, m->member))) {
+        buf_append_cstr(body, ", const FengGenericArguments *_generic_args");
     }
     if (!has_param) {
         buf_append_cstr(body, "void");
@@ -64534,6 +64849,8 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     if (t->is_generic_instance && t->generic_origin_decl != NULL) {
         char *shared_name = cg_generic_type_method_shared_cname(
             cg, t->generic_origin_decl, fm);
+        const FengReifiableDepSet *argument_domain =
+            feng_semantic_lookup_reifiable_dep_set(cg->analysis, t->generic_origin_decl);
 
         if (shared_name == NULL) {
             return cg_fail(cg, fm->token,
@@ -64543,18 +64860,22 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
             FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
             buf_append_fmt(&cg->fn_protos,
                            "void %s(void *_self, const "
-                           "FengTypeDescriptor *_type_desc);\n",
-                           shared_name);
+                           "FengTypeDescriptor *_type_desc%s);\n",
+                           shared_name,
+                           cg_generic_arguments_needed(cg, argument_domain)
+                               ? ", const FengGenericArguments *_generic_args" : "");
         }
         buf_append_fmt(body,
                        "static void %s(void *_self) {\n"
-                       "    %s(_self, &%s);\n"
-                       "}\n\n",
+                       "    %s(_self, &%s",
                        t->c_finalizer_name,
                        shared_name,
                        t->c_desc_name);
+        bool appended = cg_append_static_generic_arguments(cg, body, argument_domain,
+                                                            t->c_desc_name, fm->token);
+        buf_append_cstr(body, ");\n}\n\n");
         free(shared_name);
-        return true;
+        return appended;
     }
 
     char **captured_names = NULL;
@@ -64688,6 +65009,16 @@ static char *cg_finalize(CG *cg) {
         "    FengTypeDescriptor base;\n"
         "    void (*default_invoke)(void);\n"
         "} FengCallableTypeDescriptor;\n"
+        "\n"
+        "/* Compiler-private static hidden arguments. These are passed beside\n"
+        " * existing descriptors and never interpreted by the runtime. */\n"
+        "typedef struct FengGenericArguments {\n"
+        "    const FengGenericParamDescriptor *const *params;\n"
+        "    const struct FengGenericArguments *const *callable_deps;\n"
+        "    const struct FengGenericArguments *const *type_deps;\n"
+        "    const struct FengGenericArguments *const *aggregate_deps;\n"
+        "    const struct FengGenericArguments *owner;\n"
+        "} FengGenericArguments;\n"
         "\n"
         "#if defined(__clang__)\n"
         "#pragma clang diagnostic ignored \"-Wbuiltin-requires-header\"\n"
@@ -65039,6 +65370,7 @@ static void cg_dispose(CG *cg) {
         free(cg->closed_generic_param_descriptor_nodes[i].c_name);
     }
     free(cg->closed_generic_param_descriptor_nodes);
+    cg_free_generic_arguments(cg);
     for (size_t i = 0; i < cg->expr_narrowing_count; i++) {
         free(cg->expr_narrowings[i].c_expr);
         cgtype_free(cg->expr_narrowings[i].type);

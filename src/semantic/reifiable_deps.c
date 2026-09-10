@@ -1229,9 +1229,9 @@ static void collect_from_match_branch_labels(CollectContext *ctx,
 
 /* ---- 对单个 type_ref 尝试收集 ------------------------------------------ */
 
-/* 递归扫描 type_ref 树。对每个 named type_ref（type_arg_count > 0 且含
- * type_param 引用），查找基础类型并追加为依赖。同时递归检查 type_args 中
- * 嵌套的泛型实例以及 ARRAY/POINTER 的 inner。 */
+/* Collect complete open constructed types in the existing dependency domain.
+ * Arrays are managed generic containers; their element trees remain separate
+ * dependencies so nested reification preserves every layer's identity. */
 static void try_collect_type_ref(CollectContext *ctx,
                                  const FengTypeRef *type_ref) {
     size_t i;
@@ -1272,8 +1272,22 @@ static void try_collect_type_ref(CollectContext *ctx,
             }
             break;
 
-        case FENG_TYPE_REF_POINTER:
         case FENG_TYPE_REF_ARRAY:
+            if (type_ref_contains_type_param(type_ref, ctx->type_params,
+                                            ctx->type_param_count)) {
+                const FengTypeRef *canonical = feng_semantic_canonical_reifiable_type_ref(
+                    ctx->analysis, ctx->dep_set->owner_decl, ctx->type_params,
+                    ctx->type_param_count, type_ref);
+                if (canonical == NULL || !feng_semantic_reifiable_dep_set_append(
+                        ctx->dep_set, FENG_REIFIABLE_DEP_KIND_MANAGED, canonical)) {
+                    ctx->failed = true;
+                    return;
+                }
+            }
+            try_collect_type_ref(ctx, type_ref->as.inner);
+            break;
+
+        case FENG_TYPE_REF_POINTER:
             try_collect_type_ref(ctx, type_ref->as.inner);
             break;
     }

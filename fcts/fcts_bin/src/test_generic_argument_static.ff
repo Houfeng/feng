@@ -1,0 +1,142 @@
+module fcts_bin;
+import std;
+import std.collections;
+import std.test;
+import fcts_lib.test.generic_argument_static;
+
+/** A consumer-only wide aggregate closes provider-owned metadata. */
+@value type GASWide { open var first: string; open var second: string; open var number: i64; }
+/** Trivial aggregates must preserve their layout without managed cleanup. */
+@value type GASPair { open var left: i32; open var right: i32; }
+/** A fat object spec is also a valid array element type. */
+spec GASNamed { func name(): string; }
+/** Union elements retain both their active tag and managed payload. */
+spec GASChoice: i32 | string;
+/** Track the lifecycle of the single managed payload in an escaped array. */
+type GASPayload: GASNamed {
+    open static var destroyed: i32;
+    open var text: string;
+    /** Return an observable value through the witness after forwarding. */
+    func name(): string { return self.text; }
+    /** A static descriptor must never retain the array's runtime contents. */
+    func ~GASPayload() { GASPayload.destroyed += 1; }
+}
+/** Bind a std container as a constructed actual through the same generic call. */
+func gasList<T>(value: List<T>): List<T> { return gasIdentity<List<T>>(value); }
+/** Array fit receiver arguments can themselves be constructed arrays. */
+fit T[] {
+    /** Forward the complete fitted array through an imported generic function. */
+    func gasFitCopy(): T[] { return gasIdentity<T[]>(self); }
+}
+/** Exercise ownership after both the generic producer and consumer frames return. */
+func gasLifetime(fail: bool): string {
+    let values: GASPayload[] = [GASPayload{text: "alive"}];
+    let reader = gasClose<GASPayload>(gasArray<GASPayload>(values));
+    if fail { throw "static metadata unwind"; }
+    return reader()[0].name();
+}
+/** Leaving this scope must execute the imported shared generic finalizer. */
+func gasFinalLifetime(): void { let value = GASFinal<string>{values:["final"]}; }
+
+/** Cross-package behavior complements the compiler's static-C assertions. */
+open func test_generic_argument_static(): void {
+    describe("static constructed generic arguments", () {
+        test("scalar and managed arrays preserve values and mutability", () {
+            let numbers: i32[!] = [1, 2];
+            let forwarded = gasWritable<i32>(numbers);
+            forwarded[0] = 11;
+            assert(numbers[0] == 11, "writable forwarding preserves identity");
+            let texts: string[] = ["first", "second"];
+            assert(gasArray<string>(texts)[1] == "second", "managed elements survive forwarding");
+            let readonlyNumbers: i32[] = [11, 2];
+            assert(gasReordered<i32, string>(readonlyNumbers, texts)[1] == "second",
+                   "distinct element representations select independent open slots");
+            assert(gasReordered<i32, i32>(readonlyNumbers, readonlyNumbers)[0] == 11,
+                   "equal closed types retain distinct open slots");
+        });
+        test("member bindings and methods use independent domains", () {
+            let owner = gasCreate<i32>();
+            owner.values = [17, 19];
+            assert(gasContainer<i32>(owner).chain()[1] == 19, "array field and container controls agree");
+            assert(owner.fitted()[0] == 17 && gasConstruct<i32>(owner.values).values[1] == 19,
+                   "fit methods and explicit constructors preserve their dependency domains");
+            assert(owner.other<string>(["method"])[0] == "method", "owner and method parameters differ");
+            assert(gasShared<i32>().length() == 0, "static array initialization forwards its type context");
+            assert(gasCreate<string>().copy().length() == 0, "distinct instantiations do not cache first T");
+            assert(gasZeroArray<GASWide>().length() == 0 &&
+                   gasZeroContainer<string>().values.length() == 0,
+                   "default construction consumes complete closed metadata");
+        });
+        test("function values method values and escaped lambdas bind static data", () {
+            let owner = gasCreate<string>();
+            owner.values = ["captured"];
+            let reader: GASProducer<string[]> = owner.copy;
+            let maker: GASProducer<GASContainer<string>> = gasCreate<string>;
+            let mapper: GASMapper<string[]> = GASContainer<i32>.relay<string>;
+            let lambda = gasClose<string>(mapper(reader()));
+            assert(lambda()[0] == "captured" && maker().values.length() == 0,
+                   "all adapters retain the correct closed static context");
+        });
+        test("arbitrary nested arrays and containers retain their leaves", () {
+            let owner = gasCreate<string[]>();
+            owner.values = [["leaf"]];
+            let nested: GASContainer<string[]>[][] = [[owner]];
+            assert(gasNested<string>(nested)[0][0].values[0][0] == "leaf", "mixed nesting is complete");
+            let rank: i32[][][] = [[[23]]];
+            assert(gasRank<i32>(rank)[0][0][0] == 23, "third array layer remains distinct");
+            assert(rank.gasFitCopy()[0][0][0] == 23, "array fit forwards a constructed element actual");
+            assert(gasRecursive<i32>([29], 4)[0] == 29, "recursive shared graph remains finite");
+        });
+        test("aggregate and spec element representations survive forwarding", () {
+            let pair = GASPair{left:7, right:13};
+            let pairs: GASPair[] = [pair];
+            assert(gasArray<GASPair>(pairs)[0].right == 13, "trivial aggregates preserve their layout");
+            let wide = GASWide{first:"left", second:"right", number:31};
+            let values: GASWide[] = [wide];
+            let result = gasArray<GASWide>(values)[0];
+            let container = gasValue<GASWide>(GASValue<GASWide>{value:wide});
+            assert(result.second == "right" && container.value.number == 31, "wide values preserve all fields");
+            let named: GASNamed = GASPayload{text:"witness"};
+            let specs: GASNamed[] = [named];
+            assert(gasArray<GASNamed>(specs)[0].name() == "witness", "subject and witness are preserved");
+            let choices: GASChoice[] = ["union", 37];
+            match gasArray<GASChoice>(choices)[0] {
+                text: string { assert(text == "union", "union payload survives forwarding"); }
+                else { throw "wrong union tag"; }
+            }
+            let callback: GASProducer<i32> = () -> 41;
+            let callbacks: GASProducer<i32>[] = [callback];
+            assert(gasArray<GASProducer<i32>>(callbacks)[0]() == 41,
+                   "callable elements preserve their invocation surface");
+        });
+        test("synthetic iterator calls forward static method and fit contexts", () {
+            let words = GASSequence<string>{values:["first", "last"], missing:"", total:2};
+            assert(gasIterate<string>(words) == "last", "value cursor and result preserve managed leaves");
+            var cursor = gasIterator<string>(words);
+            let (hasFirst, first) = cursor.next();
+            assert(hasFirst && first == "first", "direct open member calls forward the same static context");
+            let wide = GASWide{first:"cursor", second:"wide", number:43};
+            let values = GASSequence<GASWide>{values:[wide], missing:wide, total:1};
+            assert(gasIterate<GASWide>(values).number == 43, "descriptor-sized result is complete");
+            let refs = GASRefSequence<string>{values:["a", "b"], total:2};
+            assert(gasIterateRef<string>(refs) == 3, "iterable fit and iterator preserve fixed results");
+        });
+        test("List and arrays share constructed-actual forwarding", () {
+            let values = List<string>();
+            values.add("list");
+            assert(gasList<string>(values).get(0) == "list", "ordinary generic container remains correct");
+        });
+        test("static metadata does not capture runtime contents", () {
+            let before = GASPayload.destroyed;
+            assert(gasLifetime(false) == "alive", "escaped array remains alive through invocation");
+            assert(GASPayload.destroyed == before + 1, "payload releases exactly once after capture cleanup");
+            var caught = false;
+            try gasLifetime(true) catch error: string { caught = error == "static metadata unwind"; }
+            assert(caught && GASPayload.destroyed == before + 2,
+                   "exception cleanup releases the escaped capture exactly once");
+            let finalized = GASFinalState.count;
+            gasFinalLifetime();
+            assert(GASFinalState.count == finalized + 1, "generic finalizer forwards its owner context");
+        });
+    });
+}

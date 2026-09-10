@@ -36,6 +36,8 @@ void test_constraint_projection_codegen(void (*compile_c)(const char *));
 void test_reified_metadata_counts(void (*compile_c)(const char *));
 /* Shared literals must store actual T using the closed owner's field layout. */
 void test_generic_literal_storage_codegen(void (*compile_c)(const char *));
+/* Constructed generic actuals use static records across every shared entrance. */
+void test_generic_argument_static_codegen(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -3856,10 +3858,9 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
     feng_program_free(program);
 }
 
-/* An array descriptor that still depends on an incoming open type parameter
- * is not a compile-time constant. Keep its generic-parameter carrier scoped
- * to the shared body instead of unsafely promoting it to file-scope data. */
-static void test_open_generic_param_descriptor_remains_runtime_scoped(void) {
+/* An open provider forwards consumer-generated static records. It must neither
+ * build a local descriptor nor embed its incoming T in file-scope data. */
+static void test_open_generic_param_descriptor_forwards_static_arguments(void) {
     static const char *kSource =
         "module feng.codegen.open_generic_param_descriptor;\n"
         "func identity<U>(value: U): U { return value; }\n"
@@ -3882,12 +3883,13 @@ static void test_open_generic_param_descriptor_remains_runtime_scoped(void) {
                                      NULL, &output, &codegen_error));
     ASSERT(output.c_source != NULL);
     ASSERT(strstr(output.c_source,
-                  "&(const FengGenericParamDescriptor){"
-                  ".kind = FENG_VALUE_MANAGED_POINTER, "
-                  ".descriptor = &(const FengTypeDescriptor){") != NULL);
+                  "&(const FengGenericParamDescriptor){") == NULL);
+    ASSERT(strstr(output.c_source, "&(const FengTypeDescriptor){") == NULL);
     ASSERT(strstr(output.c_source,
                   ".reified_generic_params = "
-                  "(const FengGenericParamDescriptor *const[]){_T}") != NULL);
+                  "(const FengGenericParamDescriptor *const[]){_T}") == NULL);
+    ASSERT(strstr(output.c_source, "const FengGenericArguments *_generic_args") != NULL);
+    ASSERT(strstr(output.c_source, "_generic_args->params[0]") != NULL);
     ASSERT(strstr(output.c_source,
                   "_feng_closed_generic_param_desc_") == NULL);
     compile_generated_c_or_die(output.c_source);
@@ -17448,7 +17450,8 @@ int main(void) {
     test_array_storage_runtime_contract_codegen();
     test_generic_runtime_extern_expression_equal_codegen();
     test_generic_runtime_extern_direct_type_param_return_codegen();
-    test_open_generic_param_descriptor_remains_runtime_scoped();
+    test_open_generic_param_descriptor_forwards_static_arguments();
+    test_generic_argument_static_codegen(compile_generated_c_or_die);
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_unsupported_pointer_pointee_reports_explicit_error();
     test_generic_function_codegen_failure_propagates();

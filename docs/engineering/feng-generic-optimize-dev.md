@@ -391,6 +391,8 @@ typedef struct FengTypeDescriptor {
 - **根模式**（作为排序 key 的顶层）：`TypeName__p1__p2__...`，参数间以 `__`（双下划线）分隔
 - **参数模式**（作为另一个类型参数出现时）：`TypeName_p1_p2_...`，参数间以 `_`（单下划线）分隔
 - 每个参数 `pi` 递归以**参数模式**展开
+- 数组节点以 `@array.ro`／`@array.rw` 标识本层元素可写性，指针节点以 `@pointer` 标识，
+  再按当前模式的分隔符连接内层类型 key；每层均独立保留，不能将数组退化为元素类型。
 - **`UserType` 自身的泛型参数**（即当前类型/函数声明中的类型参数）以其在声明列表中的**0-based 索引**表示为 `T0`、`T1`、`T2`……，不使用参数名（防止仅因重命名泛型参数导致排序 key 变化而破坏兼容性）
 
 示例（`UserType<K,V>` 内，`K` 为 `T0`、`V` 为 `T1`，依赖 `Foo<int,K>`、`Bar<V>`、`Xyz<Foo<int,K>,Bar<V>>`）：
@@ -406,6 +408,10 @@ typedef struct FengTypeDescriptor {
 三者按字典序：`Bar__T1` < `Foo__int__T0` < `Xyz__Foo_int_T0__Bar_T1`，分别占 `reified_agg_deps[0]`、`reified_agg_deps[1]`、`reified_agg_deps[2]`。
 
 ### 2.4 Wrapper 静态生成具体化描述符
+
+开放构造类型作为泛型实参时的整组静态化与通用隐藏实参传递，见
+[专项实施方案](./feng-generic-array-descriptor-static-optimize.md)。该优化不修改任何现有 runtime
+描述符结构；直接声明泛参的描述符仍按既有参数传递。
 
 Wrapper 在编译时按以下步骤生成：
 

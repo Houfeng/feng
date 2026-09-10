@@ -1,0 +1,152 @@
+open module fcts_lib.test.generic_argument_static;
+
+/** Pass the existing generic value protocol through an independent package. */
+open func gasIdentity<U>(value: U): U { return value; }
+/** Default construction actually consumes the whole actual's descriptor. */
+open func gasDefault<U>(): U { var value: U; return value; }
+/** Zero arrays must use the closed array descriptor and its element metadata. */
+open func gasZeroArray<T>(): T[] { return gasDefault<T[]>(); }
+/** The same descriptor-consuming operation applies to ordinary containers. */
+open func gasZeroContainer<T>(): GASContainer<T> { return gasDefault<GASContainer<T>>(); }
+/** A callable value used after its creating generic frame has returned. */
+open spec GASProducer<T>(): T;
+/** A callable method/function binding with one array argument. */
+open spec GASMapper<T>(value: T): T;
+
+/** Ordinary generic containers and array fields share the same dependency rules. */
+open type GASContainer<T> {
+    open var values: T[] = gasIdentity<T[]>(T[:0]);
+    open static var shared: T[] = gasIdentity<T[]>(T[:0]);
+    /** Read and forward the whole array, not the descriptor of one element. */
+    func copy(): T[] { return gasIdentity<T[]>(self.values); }
+    /** Exercise a transitive method dependency with the same owner parameter. */
+    func chain(): T[] { return self.copy(); }
+    /** Method U is independent from owner T. */
+    func other<U>(value: U[]): U[] { return gasIdentity<U[]>(value); }
+    /** Static method entry and static method-value adaptation. */
+    static func relay<U>(value: U[]): U[] { return gasIdentity<U[]>(value); }
+}
+
+/** Aggregate containers use the same static argument selection. */
+@value open type GASValue<T> { open var value: T; }
+/** The owner initializer is reached through an open type dependency. */
+open func gasCreate<T>(): GASContainer<T> { return GASContainer<T>(); }
+/** Forward a constructed array actual through a shared top-level function. */
+open func gasArray<T>(value: T[]): T[] { return gasIdentity<T[]>(value); }
+/** Preserve element writability in the static array identity. */
+open func gasWritable<T>(value: T[!]): T[!] { return gasIdentity<T[!]>(value); }
+/** Reference container control for the array optimization. */
+open func gasContainer<T>(value: GASContainer<T>): GASContainer<T> {
+    return gasIdentity<GASContainer<T>>(value);
+}
+/** Aggregate container control, including managed fields and wide layouts. */
+open func gasValue<T>(value: GASValue<T>): GASValue<T> { return gasIdentity<GASValue<T>>(value); }
+/** Arrays inside containers inside arrays must retain every nesting layer. */
+open func gasNested<T>(value: GASContainer<T[]>[][]): GASContainer<T[]>[][] {
+    return gasIdentity<GASContainer<T[]>[][]>(value);
+}
+/** No fixed array-rank optimization boundary is permitted. */
+open func gasRank<T>(value: T[][][]): T[][][] { return gasIdentity<T[][][]>(value); }
+/** Distinct open slots may close to the same actual type. */
+open func gasReordered<A, B>(left: A[], right: B[]): B[] {
+    gasIdentity<A[]>(left);
+    return gasIdentity<B[]>(right);
+}
+/** Repeated recursive invocation selects the same finite static context graph. */
+open func gasRecursive<T>(value: T[], depth: i32): T[] {
+    if depth > 0 { return gasRecursive<T>(value, depth - 1); }
+    return gasIdentity<T[]>(value);
+}
+/** Lambda capture preserves static context pointers beyond the outer frame. */
+open func gasClose<T>(value: T[]): GASProducer<T[]> {
+    return () -> gasIdentity<T[]>(value);
+}
+/** Static binding initialization is type-owned, not method-owned. */
+open func gasShared<T>(): T[] { return GASContainer<T>.shared; }
+/** Observe the generic finalizer through state outside the finalized object. */
+open type GASFinalState { open static var count: i32; }
+/** Finalizer calls consume the same type-owned static argument domain. */
+open type GASFinal<T> {
+    open var values: T[];
+    /** Forward an array while its owning object's children remain alive. */
+    func ~GASFinal() { gasIdentity<T[]>(self.values); GASFinalState.count += 1; }
+}
+/** Explicit constructors carry the owner domain after their value arguments. */
+open type GASConstructed<T> {
+    open var values: T[];
+    /** Store a constructed generic actual during owner initialization. */
+    func GASConstructed(values: T[]) { self.values = gasIdentity<T[]>(values); }
+}
+/** Open constructor calls use the same closed type-dependency slot. */
+open func gasConstruct<T>(values: T[]): GASConstructed<T> { return GASConstructed<T>(values); }
+/** A fit shares the target type's initialization domain, not a new layout. */
+open fit GASContainer<T> {
+    /** Access both a callable-owned dependency and owner-owned static binding. */
+    func fitted(): T[] { gasShared<T>(); return gasIdentity<T[]>(self.chain()); }
+}
+/** A descriptor-sized iterator result carries the actual element. */
+open type GASStep<T>(bool, T);
+/** A fixed iterator result exercises the ordinary return-storage path. */
+open type GASCountStep(bool, int);
+/** Value cursors preserve both descriptor-sized and array fields. */
+@value open type GASCursor<T> {
+    open var values: T[];
+    open var missing: T;
+    open var index: int;
+    open var total: int;
+    /** Synthetic next calls must pass the method's static argument package. */
+    @iterator open func next(): GASStep<T> {
+        let values = gasIdentity<T[]>(self.values);
+        if self.index >= self.total { return (false, self.missing); }
+        let value = values[self.index];
+        self.index += 1;
+        return (true, value);
+    }
+}
+/** Ordinary iterable methods return a descriptor-sized generic cursor. */
+open type GASSequence<T> {
+    open var values: T[];
+    open var missing: T;
+    open var total: int;
+    /** Forward a complete value container through the iterable entry. */
+    @iterable open func iter(): GASCursor<T> {
+        return gasIdentity<GASCursor<T>>(GASCursor<T>{
+            values: self.values, missing: self.missing, total: self.total});
+    }
+}
+/** Consume both synthesized shared calls across the package boundary. */
+open func gasIterate<T>(values: GASSequence<T>): T {
+    var last = values.missing;
+    for let value in values { last = value; }
+    return last;
+}
+/** Direct calls on another open instance share the same method argument ABI. */
+open func gasIterator<T>(values: GASSequence<T>): GASCursor<T> { return values.iter(); }
+/** Reference cursors use a fixed-width cursor return slot. */
+open type GASRefCursor<T> {
+    open var values: T[];
+    open var total: int;
+    open var index: int;
+    /** Consume constructed metadata before returning a fixed tuple. */
+    @iterator open func next(): GASCountStep {
+        gasIdentity<T[]>(self.values);
+        if self.index >= self.total { return (false, 0); }
+        self.index += 1;
+        return (true, self.index);
+    }
+}
+/** The generic source itself has no member initializer dependency. */
+open type GASRefSequence<T> { open var values: T[]; open var total: int; }
+/** Iterable fits must select the same dependency slots as ordinary methods. */
+open fit GASRefSequence<T> {
+    /** Forward a complete reference container through the fitted entry. */
+    @iterable open func iter(): GASRefCursor<T> {
+        return gasIdentity<GASRefCursor<T>>(GASRefCursor<T>{values: self.values, total: self.total});
+    }
+}
+/** The fitted iterable and ordinary iterator have fixed-width return storage. */
+open func gasIterateRef<T>(values: GASRefSequence<T>): int {
+    var total = 0;
+    for let value in values { total += value; }
+    return total;
+}
