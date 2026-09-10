@@ -72,6 +72,7 @@ func main(args: string[]) {
       test_constraint_projection();
       test_generic_literal_storage();
       test_valid_codegen();
+      test_generic_container_static();
       test_long_if_codegen();
       test_g24_forward_callable();
       test_g24_static_callable();

@@ -1787,6 +1787,9 @@ static void collect_from_expr(CollectContext *ctx, const FengExpr *expr) {
             }
             return;
 
+        case FENG_EXPR_TYPE_TARGET:
+            try_collect_type_ref(ctx, expr->as.type_target);
+            return;
         case FENG_EXPR_GENERIC_TARGET:
             /* 合成整体 FengTypeRef（如 Helper<K>）并尝试收集为具体化依赖。 */
             rd_try_collect_generic_target(ctx, expr);

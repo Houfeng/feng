@@ -1,0 +1,187 @@
+module fcts_bin;
+import std.test;
+import std.collections;
+import fcts_lib.test.generic_container_static;
+
+/** A local relation exercises the consumer's own fit on the real List. */
+spec GCSLocalFactory<T> { static func gcsLocalEcho(value:T):T; }
+/** Local and imported fits follow the same nominal generic rules. */
+fit List<T>:GCSLocalFactory<T> {
+    /** Return the owner argument without depending on caller parameter names. */
+    static func gcsLocalEcho(value:T):T { return value; }
+    /** Expose a second independent type domain. */
+    static func gcsLocalKeep<U>(value:U):U { return value; }
+}
+/** Consumer-owned array fits must use the same shared ABI as package fits. */
+fit T[] {
+    /** Preserve a target-generic parameter. */
+    static func gcsLocalEcho(value:T):T { return value; }
+    /** Preserve a method-generic parameter. */
+    static func gcsLocalKeep<U>(value:U):U { return value; }
+}
+/** Local L01 regression, using the standard-library owner. */
+func gcsLocalListMapper<E>():GCSMap<E> { return List<E>.gcsLocalEcho; }
+/** Control for the same-name case previously covered by other containers. */
+func gcsLocalListSameName<T>():GCSMap<T> { return List<T>.gcsLocalEcho; }
+/** Local array formation preserves the caller's E. */
+func gcsLocalArrayMapper<E>():GCSMap<E> { return E[].gcsLocalEcho; }
+/** An open constructed element must retain its complete nested type. */
+func gcsNestedMapper<E>():GCSMap<GCSValue<E>[!]> { return GCSValue<E>[!][].gcsEcho; }
+/** Local witness calls use the same constraint substitution as package calls. */
+func gcsLocalSpecCall<E,A:GCSLocalFactory<E>>(value:E):E { return A.gcsLocalEcho(value); }
+/** Local witness values escape through the ordinary callable representation. */
+func gcsLocalSpecMapper<E,A:GCSLocalFactory<E>>():GCSMap<E> { return A.gcsLocalEcho; }
+/** Storage wider than a machine word exposes truncated generic copies. */
+type GCSWords(i64,i64,i64);
+/** Count calls used as variadic arguments. */
+var gcsEvaluationCount:i32=0;
+/** A repeated argument evaluation is observable before packing completes. */
+func gcsNext():i64 { gcsEvaluationCount+=1; return (i64)gcsEvaluationCount; }
+/** A concrete witness for an owner-dependent generic method constraint. */
+type GCSReading:GCSReader<i64> {
+    /** Preserve a result whose width exceeds i32. */
+    func read():i64 { return 9000000027; }
+}
+/** Count finalization independently of temporary default instances. */
+type GCSLife {
+    open static var destroyed:i32;
+    open let number:i32;
+    /** The original non-default object must finalize exactly once. */
+    func ~GCSLife() { if self.number != 0 { GCSLife.destroyed += 1; } }
+}
+/** A large managed aggregate exercises storage and ownership together. */
+@value type GCSManaged { open let words:GCSWords; open let life:GCSLife; open let text:string; }
+/** Return a managed result after the creator's local bindings are gone. */
+func gcsEscape():GCSBox<GCSLife> { return GCSLife[].gcsBox(GCSLife{number:23}); }
+/** Exercise ordinary and exceptional cleanup with several static entrances. */
+func gcsUseManaged(shouldThrow:bool) {
+    let escaped=gcsEscape();
+    let words:GCSWords=(29,31,9000000007);
+    let actual=GCSManaged{words:words,life:escaped.value,text:"managed"};
+    let mapper=gcsArrayMapper<GCSManaged>();
+    let value=gcsRelay<i8,GCSManaged>(1,mapper(actual));
+    let array=GCSManaged[].gcsArray(value.value);
+    let specMapper=gcsSpecMapper<GCSManaged,GCSManaged[]>();
+    let copied=specMapper(array[0]);
+    assert(copied.words.item3==9000000007 && copied.life.number==23 &&
+        copied.text=="managed" && GCSLife.destroyed==0, "full storage and live ownership");
+    if shouldThrow { throw "container static cleanup"; }
+}
+
+/** Permanent List and array counterparts for every reviewed static scenario. */
+func test_generic_container_static() {
+    describe("generic container static members", () {
+        test("List direct static calls, local and package fits", () {
+            assert(List<i32>.gcsLocalEcho(7)==7 && List<string>.gcsLocalEcho("local")=="local", "local owner arguments");
+            assert(List<i32>.gcsEcho(11)==11 && List<string>.gcsEcho("package")=="package", "package owner arguments");
+        });
+        test("List owner and method parameters are independent", () {
+            assert(List<i32>.gcsLocalKeep<string>("local")=="local", "local method argument");
+            assert(List<string>.gcsKeep<i64>(9000000001)==9000000001, "package method width");
+            assert(List<i8>.gcsKeep("inferred")=="inferred", "inferred method argument");
+        });
+        test("List closed ordinary and generic static method values", () {
+            let local:GCSMap<i32> =List<i32>.gcsLocalEcho;
+            let localMethod:GCSMap<string> =List<i32>.gcsLocalKeep<string>;
+            let imported:GCSMap<string> =List<string>.gcsEcho;
+            let method:GCSMap<i64> =List<string>.gcsKeep<i64>;
+            assert(local(13)==13 && localMethod("local")=="local" && imported("imported")=="imported" && method(9000000003)==9000000003, "closed values");
+        });
+        test("L01 List method values survive renamed and same-name caller parameters", () {
+            let local=gcsLocalListMapper<i64>(); let localSame=gcsLocalListSameName<string>();
+            let imported=gcsListMapper<string>(); let importedSame=gcsListSameName<i64>();
+            assert(local(9000000005)==9000000005 && localSame("same")=="same", "local L01 and control");
+            assert(imported("renamed")=="renamed" && importedSame(9000000005)==9000000005, "package L01 and control");
+        });
+        test("List static calls through local and package spec constraints", () {
+            assert(gcsLocalSpecCall<i32,List<i32>>(17)==17, "local witness");
+            assert(gcsSpecCall<string,List<string>>("spec")=="spec", "package witness");
+        });
+        test("List static method values through local and package constraints", () {
+            let local=gcsLocalSpecMapper<i32,List<i32>>(); let imported=gcsSpecMapper<string,List<string>>();
+            assert(local(19)==19 && imported("bound")=="bound", "escaping witnesses");
+            let list=List<i32>(); list.add(23); assert(list.get(0)==23, "standard storage control");
+        });
+        test("array direct static calls preserve owner and method arguments", () {
+            assert(i32[].gcsEcho(31)==31 && string[].gcsEcho("owner")=="owner", "target arguments");
+            assert(i32[].gcsKeep<string>("method")=="method" && string[].gcsKeep<i64>(9000000009)==9000000009, "method arguments");
+            assert(i8[].gcsSecond<string>(1,"second")=="second" && i8[].gcsKeep("inferred")=="inferred", "independent and inferred arguments");
+            assert(i32[].gcsLocalEcho(37)==37 && i32[].gcsLocalKeep<string>("local")=="local", "local array fit");
+        });
+        test("L02 owner and method binding never capture caller parameter names", () {
+            assert(gcsArrayOwnerShadow<i64>(9000000021)==9000000021 &&
+                gcsListOwnerShadow<string>("explicit")=="explicit", "explicit method arguments");
+            assert(gcsArrayInferredShadow<string>("inferred")=="inferred" &&
+                gcsListInferredShadow<i64>(9000000023)==9000000023, "inferred method arguments");
+            let words:GCSWords=(107,109,9000000025);
+            assert(gcsMethodOwnerName<GCSWords>(words).item3==9000000025, "method actual matches owner parameter name");
+            let reordered=gcsReorderedListMapper<i8,string>();
+            assert(reordered("second slot")=="second slot", "complete caller context order");
+        });
+        test("array closed method values bind their complete signature", () {
+            let owner:GCSMap<i64> =i64[].gcsEcho; let method:GCSMap<string> =i32[].gcsKeep<string>;
+            let local:GCSMap<i32> =i32[].gcsLocalEcho;
+            assert(owner(9000000011)==9000000011 && method("closed")=="closed" && local(41)==41, "closed method values");
+        });
+        test("array shared method values and direct calls cross package boundaries", () {
+            let owner=gcsArrayMapper<string>(); let method=gcsMethodMapper<i32,i64>(); let local=gcsLocalArrayMapper<i64>();
+            assert(owner("shared")=="shared" && method(9000000013)==9000000013 && local(43)==43, "escaping open values");
+            let value=gcsRelay<i32,string>(47,"relay");
+            assert(value.before==17 && value.value=="relay" && value.after=="static array", "shared direct result layout");
+        });
+        test("array static spec calls and method values match direct access", () {
+            assert(gcsSpecCall<i64,i64[]>(9000000015)==9000000015, "array witness call");
+            let mapper=gcsSpecMapper<string,string[]>(); assert(mapper("witness")=="witness", "array witness value");
+        });
+        test("array method constraints bind the target element type", () {
+            let reader=GCSReading();
+            let mapper:GCSReadMap<GCSReading,i64> =i64[].gcsRead<GCSReading>;
+            assert(i64[].gcsRead<GCSReading>(reader)==9000000027 &&
+                i64[].gcsRead(reader)==9000000027 && mapper(reader)==9000000027, "closed constraint witness");
+            assert(gcsReaderRelay<i64,GCSReading>(reader)==9000000027, "shared constraint witness");
+        });
+        test("writable array targets support calls values and witnesses", () {
+            assert(i32[!].gcsEcho(53)==53 && i32[!].gcsKeep<string>("write")=="write", "writable calls");
+            let closed:GCSMap<i32> =i32[!].gcsEcho; let method:GCSMap<string> =i32[!].gcsKeep<string>;
+            let shared=gcsWritableMapper<i64>(); let witness=gcsSpecMapper<string,string[!]>();
+            assert(closed(59)==59 && method("method")=="method" && shared(61)==61 && witness("spec")=="spec", "writable method values");
+            assert(gcsSpecCall<i32,i32[!]>(67)==67, "writable witness call");
+            let array=i32[!].gcsArray(71); array[0]=73; assert(array[0]==73, "writable result");
+        });
+        test("nested arrays and generic elements retain every type layer", () {
+            let value=GCSValue<i64>{before:79,value:9000000017,after:"nested"};
+            let items:GCSValue<i64>[!]=[value];
+            let mapper=gcsNestedMapper<i64>(); let copied=mapper(items);
+            assert(copied[0].value==9000000017 && copied[0].before==79, "open nested element");
+            let nested=GCSValue<i64>[!][].gcsEcho(items);
+            nested[0]=GCSValue<i64>{before:83,value:89,after:"changed"};
+            assert(items[0].value==89, "nested writable element identity");
+            let box=GCSBox<i32>{value:97};
+            assert(GCSBox<i32>[].gcsEcho(box).value==97, "constructed reference element");
+        });
+        test("array and value returns retain large actuals through method values", () {
+            let words:GCSWords=(101,103,9000000019);
+            let pack:GCSArrayMap<GCSWords> =GCSWords[].gcsArray;
+            let value:GCSValueMap<GCSWords> =i32[].gcsValue<GCSWords>;
+            assert(pack(words)[0].item3==9000000019 && value(words).value.item2==103, "closed return representations");
+            assert(GCSWords[].gcsBox(words).value.item1==101, "reference return");
+        });
+        test("L04 static variadics bind actual types and evaluate arguments once", () {
+            gcsEvaluationCount=0;
+            assert(i64[].gcsFirst(gcsNext(),gcsNext())==1 && gcsEvaluationCount==2, "single evaluation per argument");
+            assert(i32[].gcsMethodFirst<string>("first","second")=="first", "independent method variadics");
+            assert(gcsFirstRelay<string>("shared","next")=="shared", "open variadic forwarding");
+            let words:GCSWords=(113,127,9000000029);
+            assert(GCSWords[].gcsFirst(words,words).item3==9000000029, "complete aggregate packing");
+        });
+        test("static array results release each escaped managed payload once", () {
+            GCSLife.destroyed=0; gcsUseManaged(false); assert(GCSLife.destroyed==1, "ordinary finalization");
+        });
+        test("static array results retain correct ownership during unwinding", () {
+            GCSLife.destroyed=0;
+            var caught=false;
+            try gcsUseManaged(true) catch error:string { caught=error=="container static cleanup"; }
+            assert(caught && GCSLife.destroyed==1, "exceptional finalization");
+        });
+    });
+}

@@ -2797,11 +2797,10 @@ static FengTypeRef *new_named_type_ref_from_target_expr(Parser *parser,
     return type_ref;
 }
 
-/* Return whether the current postfix position starts one or more array type
- * suffixes followed by the array-new suffix.  Empty/writable brackets that
- * are not eventually followed by `[:` remain on the ordinary index path. */
-static bool looks_like_array_type_suffixes_before_array_new(
-    const Parser *parser) {
+/* Recognize a complete array type suffix run before its requested use site.
+ * The colon terminal denotes array construction; a dot denotes member access. */
+static bool looks_like_array_type_suffixes_before(
+    const Parser *parser, FengTokenKind terminal) {
     size_t index = parser->cursor.current;
     bool saw_array_type_suffix = false;
 
@@ -2816,7 +2815,7 @@ static bool looks_like_array_type_suffixes_before_array_new(
             return false;
         }
         if (parser->tokens[index].kind == FENG_TOKEN_COLON) {
-            return saw_array_type_suffix;
+            return terminal == FENG_TOKEN_COLON && saw_array_type_suffix;
         }
         if (parser->tokens[index].kind == FENG_TOKEN_NOT) {
             ++index;
@@ -2831,7 +2830,59 @@ static bool looks_like_array_type_suffixes_before_array_new(
         ++index;
     }
 
-    return false;
+    return saw_array_type_suffix && index < parser->token_count &&
+           parser->tokens[index].kind == terminal;
+}
+
+/* Move a named/generic expression target into the structural type domain. */
+static FengTypeRef *take_type_ref_from_target_expr(Parser *parser,
+                                                   FengExpr *expr) {
+    FengExpr *base = expr->kind == FENG_EXPR_GENERIC_TARGET
+                         ? expr->as.generic_target.target : expr;
+    if (!expr_is_named_type_target(base)) return NULL;
+    FengTypeRef *ref = new_named_type_ref_from_target_expr(parser, base);
+    if (ref != NULL && expr->kind == FENG_EXPR_GENERIC_TARGET) {
+        ref->as.named.type_args = expr->as.generic_target.type_args;
+        ref->as.named.type_arg_count = expr->as.generic_target.type_arg_count;
+        expr->as.generic_target.type_args = NULL;
+        expr->as.generic_target.type_arg_count = 0U;
+    }
+    return ref;
+}
+
+/* Parse structural type suffixes whose use as a member owner was established
+ * by lookahead. No value expression or array allocation is introduced. */
+static FengExpr *parse_structural_type_target(Parser *parser, FengExpr *base) {
+    FengTypeRef *ref = take_type_ref_from_target_expr(parser, base);
+    if (ref == NULL) {
+        (void)parser_error_current(parser, "SE0201",
+                                  "static member access requires a type target");
+        free_expr(base);
+        return NULL;
+    }
+    while (parser_match(parser, FENG_TOKEN_LBRACKET)) {
+        bool writable = parser_match(parser, FENG_TOKEN_NOT);
+        if (!parser_expect(parser, FENG_TOKEN_RBRACKET, "SE0202",
+                           "expected ']' to close type suffix")) {
+            free_type_ref(ref);
+            free_expr(base);
+            return NULL;
+        }
+        FengTypeRef *wrapper = new_type_ref(parser, FENG_TYPE_REF_ARRAY, ref->token);
+        if (wrapper == NULL) {
+            free_type_ref(ref);
+            free_expr(base);
+            return NULL;
+        }
+        wrapper->as.inner = ref;
+        wrapper->array_element_writable = writable;
+        ref = wrapper;
+    }
+    FengExpr *target = new_expr(parser, FENG_EXPR_TYPE_TARGET, base->token);
+    if (target != NULL) target->as.type_target = ref;
+    else free_type_ref(ref);
+    free_expr(base);
+    return target;
 }
 
 static bool token_can_follow_explicit_generic_target(FengTokenKind kind) {
@@ -4263,8 +4314,13 @@ static FengExpr *parse_postfix(Parser *parser) {
         }
 
         if (parser_check(parser, FENG_TOKEN_LBRACKET)) {
+            if (looks_like_array_type_suffixes_before(parser, FENG_TOKEN_DOT)) {
+                expr = parse_structural_type_target(parser, expr);
+                if (expr == NULL) return NULL;
+                continue;
+            }
             bool has_array_element_type_suffixes =
-                looks_like_array_type_suffixes_before_array_new(parser);
+                looks_like_array_type_suffixes_before(parser, FENG_TOKEN_COLON);
 
             (void)parser_advance(parser);
             if (parser_match(parser, FENG_TOKEN_COLON) ||
@@ -4273,11 +4329,9 @@ static FengExpr *parse_postfix(Parser *parser) {
                 FengExpr *arr_new;
                 FengTypeRef *elem_type;
                 FengExpr *type_target = expr;
-                FengExpr *generic_target = NULL;
 
                 /* Array-new now consistently uses Type[:n], including Type<Args>[:n]. */
                 if (expr->kind == FENG_EXPR_GENERIC_TARGET) {
-                    generic_target = expr;
                     type_target = expr->as.generic_target.target;
                 }
 
@@ -4289,16 +4343,10 @@ static FengExpr *parse_postfix(Parser *parser) {
                     return NULL;
                 }
 
-                elem_type = new_named_type_ref_from_target_expr(parser, type_target);
+                elem_type = take_type_ref_from_target_expr(parser, expr);
                 if (elem_type == NULL) {
                     free_expr(expr);
                     return NULL;
-                }
-                if (generic_target != NULL) {
-                    elem_type->as.named.type_args = generic_target->as.generic_target.type_args;
-                    elem_type->as.named.type_arg_count = generic_target->as.generic_target.type_arg_count;
-                    generic_target->as.generic_target.type_args = NULL;
-                    generic_target->as.generic_target.type_arg_count = 0U;
                 }
 
                 /* The first '[' has already been consumed.  Wrap the named
@@ -5393,6 +5441,9 @@ static void free_expr(FengExpr *expr) {
             free_expr(expr->as.generic_target.target);
             free_type_arg_refs(expr->as.generic_target.type_args,
                                expr->as.generic_target.type_arg_count);
+            break;
+        case FENG_EXPR_TYPE_TARGET:
+            free_type_ref(expr->as.type_target);
             break;
         case FENG_EXPR_CALL:
             free_expr(expr->as.call.callee);

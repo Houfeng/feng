@@ -182,6 +182,9 @@ static void dump_expr(FILE *stream, const FengExpr *expr, int indent) {
             }
             fputc('}', stream);
             break;
+        case FENG_EXPR_TYPE_TARGET:
+            dump_type_ref(stream, expr->as.type_target);
+            break;
         case FENG_EXPR_GENERIC_TARGET:
             dump_expr(stream, expr->as.generic_target.target, 0);
             fputc('<', stream);

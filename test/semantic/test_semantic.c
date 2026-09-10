@@ -35307,8 +35307,11 @@ void test_g24_composite_graphs(void);
 
 /* Independent G25 generic declaration, target and inference diagnostics. */
 void test_g25_generic_diagnostics(void);
+/* Structural owners retain ordinary static-member diagnostic boundaries. */
+void test_generic_container_static_semantics(void);
 
 int main(void) {
+    test_generic_container_static_semantics();
     test_g25_generic_diagnostics();
     test_g24_composite_diagnostics();
     test_g24_binding_diagnostics();

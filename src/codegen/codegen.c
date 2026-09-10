@@ -4139,6 +4139,8 @@ static bool cg_collect_capture_requirements_in_expr(const FengExpr *expr,
                                                     bool *out_captures_self) {
     if (expr == NULL) return true;
     switch (expr->kind) {
+        case FENG_EXPR_TYPE_TARGET:
+            return true;
         case FENG_EXPR_ARRAY_LITERAL:
             for (size_t i = 0; i < expr->as.array_literal.count; ++i) {
                 if (!cg_collect_capture_requirements_in_expr(expr->as.array_literal.items[i],
@@ -7649,6 +7651,9 @@ cleanup:
     return ok;
 }
 
+/* Separate arguments when constructing a shared call expression. */
+static void cg_append_call_arg_separator(Buf *buf, bool *has_arg);
+
 /* Emit or reuse the adapter and immortal closure for one fully closed static
  * method source. The adapter calls the compile-time selected thin wrapper,
  * imported shared dispatch or builtin-fit entry and binds all descriptors as
@@ -7662,6 +7667,7 @@ static bool cg_ensure_callable_static_method_value(
     const UserFit *user_fit,
     const char *callee_c_name,
     const char *owner_descriptor_expr,
+    const char *target_descriptor_expr,
     bool uses_shared_dispatch,
     const char *descriptor_c_name,
     const char *const *method_descriptor_exprs,
@@ -7707,12 +7713,12 @@ static bool cg_ensure_callable_static_method_value(
             "codegen: closed static method-value signature is inconsistent");
     }
     if (builtin_fit != NULL &&
-        builtin_fit->target_type_param_count > 0U) {
+        builtin_fit->target_type_param_count > 0U && target_descriptor_expr == NULL) {
         return cg_fail(
             cg,
             blame,
-            "CE0144",
-            "codegen: generic builtin static fit methods are not supported yet");
+            "IE0002",
+            "codegen: static method-value target descriptor is missing");
     }
     if (owner != NULL && owner->generic_context_type_param_count > 0U) {
         return cg_fail(
@@ -7845,6 +7851,10 @@ static bool cg_ensure_callable_static_method_value(
                            "&%s",
                            descriptor_c_name);
             has_argument = true;
+        }
+        if (target_descriptor_expr != NULL) {
+            cg_append_call_arg_separator(&cg->witness_defs, &has_argument);
+            buf_append_cstr(&cg->witness_defs, target_descriptor_expr);
         }
         for (size_t index = 0U;
              index < method_descriptor_count;
@@ -9461,6 +9471,39 @@ typedef struct CGTypeParamScope {
     size_t second_count;
 } CGTypeParamScope;
 
+/* Resolve substituted member surfaces in the instance's lexical context.
+ * A closed owner keeps its declared prefix for shared method ABI indices;
+ * an open owner instead carries the caller's names and their original order.
+ * The caller owns only the returned parameter records, not their names. */
+static bool cg_type_param_scope_for_user_instance(
+    CG *cg, const UserType *owner,
+    const FengTypeParam *method_params, size_t method_count,
+    CGTypeParamScope *scope, FengTypeParam **owned_params) {
+    const FengDecl *decl = owner->is_generic_instance
+                               ? owner->generic_origin_decl : owner->decl;
+    *scope = (CGTypeParamScope){.second = method_params,
+                                .second_count = method_count};
+    *owned_params = NULL;
+    if (decl != NULL && decl->kind == FENG_DECL_TYPE) {
+        scope->first = decl->as.type_decl.type_params;
+        scope->first_count = decl->as.type_decl.type_param_count;
+    }
+    if (owner->generic_context_type_param_count == 0U) return true;
+    size_t count = owner->generic_context_type_param_count;
+    FengTypeParam *params = calloc(count, sizeof(*params));
+    if (params == NULL) {
+        return cg_fail(cg, owner->decl->token, "IE0001", "codegen: out of memory");
+    }
+    for (size_t i = 0U; i < count; ++i) {
+        const char *name = owner->generic_context_type_param_names[i];
+        params[i].name = (FengSlice){name, strlen(name)};
+    }
+    scope->first = params;
+    scope->first_count = count;
+    *owned_params = params;
+    return true;
+}
+
 static bool cg_type_param_scope_copy_names(const CGTypeParamScope *scope,
                                            char ***out_names,
                                            size_t *out_count) {
@@ -9806,6 +9849,22 @@ static void cg_type_ref_free(FengTypeRef *ref) {
             break;
     }
     free(ref);
+}
+
+/* Preserve each copied argument's use-site namespace when another declaration
+ * later substitutes it into a member signature. Existing provenance wins. */
+static void cg_bind_type_ref_resolution_program(FengTypeRef *ref,
+                                                const FengProgram *program) {
+    if (ref == NULL) return;
+    if (ref->resolution_program == NULL) ref->resolution_program = program;
+    if (ref->kind == FENG_TYPE_REF_NAMED) {
+        for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+            cg_bind_type_ref_resolution_program(ref->as.named.type_args[i],
+                                                 ref->resolution_program);
+        }
+    } else {
+        cg_bind_type_ref_resolution_program(ref->as.inner, ref->resolution_program);
+    }
 }
 
 /* Reconstruct a nominal reference together with its declaration context.
@@ -10319,6 +10378,12 @@ static CGNamedGenericTarget cg_resolve_named_generic_target_from_program(
     const FengTypeRef *ref,
     const FengProgram *reference_program) {
     CGNamedGenericTarget target = {0};
+
+    /* Substituted actuals may originate in a different file from the member
+     * being collected. Registration and later resolution must use one owner. */
+    if (ref != NULL && ref->resolution_program != NULL) {
+        reference_program = ref->resolution_program;
+    }
 
     target.type =
         cg_find_generic_type_decl_from_program(cg, ref, reference_program);
@@ -11935,6 +12000,8 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
     for (size_t i = 0; i < type_arg_count; ++i) {
         t->generic_type_args[i] = cg_type_ref_clone(type_args[i]);
         if (!t->generic_type_args[i]) return false;
+        cg_bind_type_ref_resolution_program(t->generic_type_args[i],
+                                             t->instantiation_program);
     }
 
     Buf display; buf_init(&display);
@@ -12459,6 +12526,8 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
     for (size_t i = 0; i < type_arg_count; ++i) {
         s->generic_type_args[i] = cg_type_ref_clone(type_args[i]);
         if (s->generic_type_args[i] == NULL) return false;
+        cg_bind_type_ref_resolution_program(s->generic_type_args[i],
+                                             s->instantiation_program);
     }
 
     Buf display; buf_init(&display);
@@ -16831,6 +16900,7 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
         const FengTypeRef *resolved_spec_ref = spec_ref;
         FengTypeRef *substituted = NULL;
         CGTypeParamScope resolve_scope = {0};
+        FengTypeParam *context_params = NULL;
         CGType *spec_type = NULL;
         bool ok;
 
@@ -16843,12 +16913,13 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
             resolved_spec_ref = substituted;
         }
 
-        /* An open generic fit is the compile-time template used to emit the
-         * shared body. Its substituted spec still contains the target type
-         * parameters, so collect and resolve it in that declared scope. */
+        /* Substituted relations retain the target instance's caller scope. */
         if (target->generic_context_type_param_count > 0U) {
-            resolve_scope.first = type_params;
-            resolve_scope.first_count = type_param_count;
+            if (!cg_type_param_scope_for_user_instance(
+                    cg, target, NULL, 0U, &resolve_scope, &context_params)) {
+                cg_type_ref_free(substituted);
+                return false;
+            }
         }
 
         ok = cg_collect_generic_instances_from_type_ref(
@@ -16857,6 +16928,7 @@ static bool cg_register_user_fit_shell_for_target(CG *cg,
                  cg, resolved_spec_ref, &decl->token, &resolve_scope,
                  &spec_type);
         cg_type_ref_free(substituted);
+        free(context_params);
         if (!ok) return false;
         if (spec_type == NULL ||
             (spec_type->kind != CG_TYPE_SPEC && spec_type->kind != CG_TYPE_CALLABLE) ||
@@ -17221,6 +17293,9 @@ static bool cg_register_user_fit_shell(CG *cg, const FengDecl *decl) {
     return cg_register_user_fit_shell_for_target(cg, decl, target, NULL, 0U, NULL, 0U);
 }
 
+/* Open fits describe the declaration's shared ABI and have no instance wrapper.
+ * Keep that finite owner/method domain; call sites close actual types using
+ * Semantic's selected signature. Only concrete wrappers substitute the owner. */
 static bool cg_resolve_type_for_user_fit_member(CG *cg,
                                                 const UserFit *uf,
                                                 const FengCallableSignature *sig,
@@ -17240,21 +17315,17 @@ static bool cg_resolve_type_for_user_fit_member(CG *cg,
         target_decl = uf->target->generic_origin_decl;
         if (target_decl != NULL && target_decl->kind == FENG_DECL_TYPE &&
             target_decl->as.type_decl.type_param_count > 0U) {
-            substituted = cg_type_ref_substitute(
-                ref,
-                target_decl->as.type_decl.type_params,
-                target_decl->as.type_decl.type_param_count,
-                uf->target->generic_type_args);
-            if (substituted == NULL) {
-                return false;
-            }
-            effective_ref = substituted;
-            /* Keep the declared owner domain before the method domain even
-             * for a closed instance. Shared fit-method ABIs use the same
-             * owner-T / method-U descriptor indices as ordinary methods. */
             open_scope.first = target_decl->as.type_decl.type_params;
-            open_scope.first_count =
-                target_decl->as.type_decl.type_param_count;
+            open_scope.first_count = target_decl->as.type_decl.type_param_count;
+            if (uf->target->generic_context_type_param_count == 0U) {
+                substituted = cg_type_ref_substitute(
+                    ref,
+                    target_decl->as.type_decl.type_params,
+                    target_decl->as.type_decl.type_param_count,
+                    uf->target->generic_type_args);
+                if (substituted == NULL) return false;
+                effective_ref = substituted;
+            }
         }
     }
     open_scope.second = sig->type_params;
@@ -25438,6 +25509,9 @@ static bool cg_emit_expr_raw(CG *cg, const FengExpr *e, ExprResult *out) {
         case FENG_EXPR_CALL:          ok = cg_emit_call(cg, e, out); break;
         case FENG_EXPR_MEMBER:        ok = cg_emit_member(cg, e, out); break;
         case FENG_EXPR_OBJECT_LITERAL:ok = cg_emit_object_literal(cg, e, out); break;
+        case FENG_EXPR_TYPE_TARGET:
+            return cg_fail(cg, e->token, "IE0002",
+                "codegen: structural type target must be consumed before emission");
         case FENG_EXPR_GENERIC_TARGET:
             return cg_fail(cg,
                            e->token,
@@ -27092,146 +27166,85 @@ static bool cg_resolve_recorded_callable_type_args(CG *cg,
     return true;
 }
 
-/* Resolve any selected callable type surface after applying both generic
- * layers recorded by semantic analysis. Owner parameters are substituted
- * first, followed by callable-local parameters; the resulting closed (or
- * caller-relative open) type is then resolved in the declaring program. */
+/* Resolve selected type surfaces with one owner/method substitution. Actuals
+ * remain in their caller scope, and nominal nodes retain their declaration. */
 static bool cg_resolve_selected_callable_type_ref(
-    CG *cg,
-    const FengExpr *call_expr,
-    const FengCallableSignature *callable,
-    const FengTypeRef *declared_type_ref,
-    FengToken blame,
-    CGType **out_type) {
-    const FengResolvedCallable *resolved;
-    const FengTypeRef *effective_ref;
-    FengTypeRef *owner_substituted = NULL;
-    FengTypeRef *callable_substituted = NULL;
-    const FengProgram *reference_program = NULL;
-    CGTypeParamScope substituted_scope = {0};
-    FengTypeParam fit_param = {0};
-    bool ok;
-
-    if (out_type == NULL) {
-        return false;
-    }
+    CG *cg, const FengExpr *call_expr, const FengCallableSignature *callable,
+    const FengTypeRef *declared_type_ref, FengToken blame, CGType **out_type) {
+    if (out_type == NULL) return false;
     *out_type = NULL;
-    if (cg == NULL || call_expr == NULL ||
-        call_expr->kind != FENG_EXPR_CALL || callable == NULL ||
-        declared_type_ref == NULL) {
-        return false;
-    }
-
-    resolved = &call_expr->as.call.resolved_callable;
-    effective_ref = declared_type_ref;
+    if (cg == NULL || call_expr == NULL || call_expr->kind != FENG_EXPR_CALL ||
+        callable == NULL || declared_type_ref == NULL) return false;
+    const FengResolvedCallable *resolved = &call_expr->as.call.resolved_callable;
+    const FengProgram *reference_program = NULL;
+    CGTypeParamScope scope = {.second = callable->type_params,
+                              .second_count = callable->type_param_count};
+    FengTypeParam fit_param = {0};
+    FengTypeRef *array_argument = NULL;
+    FengTypeRef *const *owner_args = NULL;
     if (resolved->owner_type_decl != NULL &&
         (resolved->owner_type_decl->kind == FENG_DECL_TYPE ||
          resolved->owner_type_decl->kind == FENG_DECL_SPEC)) {
-        const FengDecl *owner_decl = resolved->owner_type_decl;
-        const FengTypeParam *owner_params =
-            owner_decl->kind == FENG_DECL_TYPE
-                ? owner_decl->as.type_decl.type_params
-                : owner_decl->as.spec_decl.type_params;
-        size_t owner_count =
-            owner_decl->kind == FENG_DECL_TYPE
-                ? owner_decl->as.type_decl.type_param_count
-                : owner_decl->as.spec_decl.type_param_count;
-
-        reference_program = cg_find_decl_owner_program(cg, owner_decl);
-        substituted_scope.first = owner_params;
-        substituted_scope.first_count = owner_count;
-        if (owner_count > 0U) {
-            if (resolved->owner_instance_type_ref == NULL ||
-                resolved->owner_instance_type_ref->kind != FENG_TYPE_REF_NAMED ||
-                resolved->owner_instance_type_ref->as.named.type_arg_count !=
-                    owner_count) {
-                return cg_fail(
-                    cg, blame, "CE0297",
+        const FengDecl *owner = resolved->owner_type_decl;
+        scope.first = owner->kind == FENG_DECL_TYPE
+            ? owner->as.type_decl.type_params : owner->as.spec_decl.type_params;
+        scope.first_count = owner->kind == FENG_DECL_TYPE
+            ? owner->as.type_decl.type_param_count : owner->as.spec_decl.type_param_count;
+        reference_program = cg_find_decl_owner_program(cg, owner);
+        if (scope.first_count > 0U) {
+            const FengTypeRef *instance = resolved->owner_instance_type_ref;
+            if (instance == NULL || instance->kind != FENG_TYPE_REF_NAMED ||
+                instance->as.named.type_arg_count != scope.first_count) {
+                return cg_fail(cg, blame, "CE0297",
                     "codegen: selected generic method return type is missing owner arguments");
             }
-            owner_substituted = cg_type_ref_substitute(
-                effective_ref,
-                owner_params,
-                owner_count,
-                resolved->owner_instance_type_ref->as.named.type_args);
-            if (owner_substituted == NULL) {
-                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-            }
-            effective_ref = owner_substituted;
+            owner_args = instance->as.named.type_args;
         }
     } else if (resolved->fit_decl != NULL) {
-        reference_program =
-            cg_find_decl_owner_program(cg, resolved->fit_decl);
-        if (feng_semantic_query_fit_implicit_type_param(
-                cg->analysis, resolved->fit_decl, &fit_param)) {
-            const FengTypeRef *owner_ref = resolved->owner_instance_type_ref;
-            if (owner_ref == NULL || owner_ref->kind != FENG_TYPE_REF_ARRAY ||
-                owner_ref->as.inner == NULL) {
+        reference_program = cg_find_decl_owner_program(cg, resolved->fit_decl);
+        if (feng_semantic_query_fit_implicit_type_param(cg->analysis, resolved->fit_decl, &fit_param)) {
+            const FengTypeRef *instance = resolved->owner_instance_type_ref;
+            if (instance == NULL || instance->kind != FENG_TYPE_REF_ARRAY || instance->as.inner == NULL) {
                 return cg_fail(cg, blame, "IE0002",
                     "codegen: selected array fit call is missing its element type");
             }
-            substituted_scope.first = &fit_param;
-            substituted_scope.first_count = 1U;
-            FengTypeRef *owner_args[] = {owner_ref->as.inner};
-            owner_substituted = cg_type_ref_substitute(
-                effective_ref, &fit_param, 1U, owner_args);
-            if (owner_substituted == NULL) {
-                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-            }
-            effective_ref = owner_substituted;
+            scope.first = &fit_param;
+            scope.first_count = 1U;
+            array_argument = instance->as.inner;
+            owner_args = &array_argument;
         }
     } else if (resolved->function_decl != NULL) {
-        reference_program =
-            cg_find_decl_owner_program(cg, resolved->function_decl);
+        reference_program = cg_find_decl_owner_program(cg, resolved->function_decl);
     }
-
-    if (callable->type_param_count > 0U) {
-        substituted_scope.second = callable->type_params;
-        substituted_scope.second_count = callable->type_param_count;
-        if (resolved->callable_type_arg_count != callable->type_param_count) {
-            cg_type_ref_free(owner_substituted);
-            return cg_fail(
-                cg, blame, "CE0298",
-                "codegen: selected generic callable return type is missing callable arguments");
-        }
-        callable_substituted = cg_type_ref_substitute(
-            effective_ref,
-            callable->type_params,
-            callable->type_param_count,
-            (FengTypeRef *const *)resolved->callable_type_args);
-        if (callable_substituted == NULL) {
-            cg_type_ref_free(owner_substituted);
-            return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
-        }
-        effective_ref = callable_substituted;
+    if (resolved->callable_type_arg_count != scope.second_count ||
+        (scope.second_count > 0U && resolved->callable_type_args == NULL)) {
+        return cg_fail(cg, blame, "CE0298",
+            "codegen: selected generic callable return type is missing callable arguments");
     }
-
-    {
-        const FengProgram *fallback_program =
-            cg_type_ref_contains_type_param(declared_type_ref,
-                                            &substituted_scope)
-                ? NULL
-                : reference_program;
-        bool handled = false;
-
-        ok = cg_try_resolve_declared_generic_type_ref(
-            cg,
-            declared_type_ref,
-            effective_ref,
-            reference_program,
-            &blame,
-            out_type,
-            &handled);
-        if (ok && !handled) {
-            ok = cg_resolve_type_from_program(cg,
-                                              effective_ref,
-                                              fallback_program,
-                                              &blame,
-                                              out_type);
-        }
+    size_t count = scope.first_count + scope.second_count;
+    FengTypeParam *params = count > 0U ? calloc(count, sizeof(*params)) : NULL;
+    FengTypeRef **args = count > 0U ? calloc(count, sizeof(*args)) : NULL;
+    if (count > 0U && (params == NULL || args == NULL)) {
+        free(params); free(args);
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
-    cg_type_ref_free(callable_substituted);
-    cg_type_ref_free(owner_substituted);
+    for (size_t i = 0U; i < count; ++i) {
+        params[i] = i < scope.first_count ? scope.first[i] : scope.second[i - scope.first_count];
+        args[i] = i < scope.first_count ? owner_args[i]
+            : (FengTypeRef *)resolved->callable_type_args[i - scope.first_count];
+    }
+    /* Substitute once so caller names inside actuals cannot be captured by
+     * another parameter of the selected owner or method declaration. */
+    FengTypeRef *effective = cg_type_ref_substitute(declared_type_ref, params, count, args);
+    free(params); free(args);
+    if (effective == NULL) return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    const FengProgram *fallback_program = cg_type_ref_contains_type_param(declared_type_ref, &scope)
+        ? NULL : reference_program;
+    bool handled = false;
+    bool ok = cg_try_resolve_declared_generic_type_ref(cg, declared_type_ref,
+        effective, reference_program, &blame, out_type, &handled);
+    if (ok && !handled) ok = cg_resolve_type_from_program(cg, effective, fallback_program, &blame, out_type);
+    cg_type_ref_free(effective);
     return ok;
 }
 
@@ -27259,10 +27272,9 @@ static bool cg_resolve_selected_callable_return_type(
         out_type);
 }
 
-/* Build a spec-value descriptor with the selected, substituted constraint.
- * Concrete subject witnesses and erased forwarding retain their own existing
- * protocols. Spec-to-spec adapters need the exact instance to select slots
- * (including overloads from different instances of one generic parent). */
+/* Every concrete argument needs the selected constraint instance before its
+ * witness is constructed. Erased forwarding reuses the supplied descriptor;
+ * semantic projection records own any change of its constraint surface. */
 static bool cg_selected_call_generic_descriptor(
     CG *cg, const FengExpr *call, const FengCallableSignature *signature,
     size_t parameter_index, const CGType *actual,
@@ -27285,8 +27297,7 @@ static bool cg_selected_call_generic_descriptor(
         return *out != NULL;
     }
 
-    if (actual == NULL ||
-        (actual->kind != CG_TYPE_SPEC && actual->kind != CG_TYPE_CALLABLE) ||
+    if (actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM ||
         signature->type_params[parameter_index].constraint == NULL) {
         return cg_generic_descriptor_expr(cg, actual, open_constraint,
                                            &call->token, out);
@@ -27306,10 +27317,8 @@ static bool cg_selected_call_generic_descriptor(
     return ok;
 }
 
-/* Owner and callable-value descriptors have explicit instantiation trees
- * rather than a selected call expression. Substitute the same complete
- * parameter domain before adapting a spec actual's witness; concrete subject
- * and erased-parameter descriptors keep their established lowering. */
+/* Owner and callable-value descriptors use explicit instantiation trees.
+ * Close the full constraint before constructing any concrete witness. */
 static bool cg_instantiated_spec_generic_descriptor(
     CG *cg, const CGType *actual, const UserSpec *open_constraint,
     const FengTypeRef *constraint_ref, const FengTypeParam *params,
@@ -27318,8 +27327,7 @@ static bool cg_instantiated_spec_generic_descriptor(
     CGType *constraint_type = NULL;
     bool handled = false;
     bool ok;
-    if (constraint_ref == NULL || actual == NULL ||
-        (actual->kind != CG_TYPE_SPEC && actual->kind != CG_TYPE_CALLABLE)) {
+    if (constraint_ref == NULL || actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM) {
         return cg_generic_descriptor_expr(cg, actual, open_constraint, blame, out);
     }
     FengTypeRef *substituted = cg_type_ref_substitute(
@@ -28630,7 +28638,7 @@ static bool cg_static_method_uses_shared_dispatch(
 }
 
 /* Emit a selected generic method with its optional builtin receiver. Static
- * nominal methods and builtin instance methods share argument, descriptor,
+ * and instance methods share argument, descriptor,
  * return-slot and cleanup handling; only the owner inputs differ. */
 static bool cg_emit_generic_method_call(CG *cg,
                                         const FengExpr *e,
@@ -28661,8 +28669,10 @@ static bool cg_emit_generic_method_call(CG *cg,
     char *ret_reified_size_name = NULL;
     char *dispatch_name = NULL;
     char *func_desc_expr = NULL;
-    char *receiver_descriptor = NULL;
-    FengTypeRef *receiver_element_ref = NULL;
+    char *target_descriptor = NULL;
+    FengTypeRef *target_element_ref = NULL;
+    CGType *static_target_type = NULL;
+    CGType *variadic_array_type = NULL;
     bool ret_is_erased = false;
     bool ret_uses_reified_storage = false;
     bool returns_directly = false;
@@ -28681,15 +28691,10 @@ static bool cg_emit_generic_method_call(CG *cg,
     er_init(out);
     if (sig == NULL ||
         (method_tp_count == 0U &&
+         (builtin_fit == NULL || builtin_fit->target_type_param_count == 0U) &&
          (owner_type == NULL || !owner_type->is_generic_instance))) {
         return cg_fail(cg, e->token,
                        "CE0143", "codegen: internal: generic static method call is missing a generic owner or method type parameters");
-    }
-    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U &&
-        receiver == NULL) {
-        return cg_fail(cg,
-                       e->token,
-                       "CE0144", "codegen: generic builtin static fit methods are not supported yet");
     }
     returns_directly = builtin_fit != NULL &&
         !cg_builtin_fit_return_uses_out(builtin_fit, um);
@@ -28725,23 +28730,33 @@ static bool cg_emit_generic_method_call(CG *cg,
             goto cleanup;
         }
         free(receiver_temp);
-        if (builtin_fit->target_type_param_count > 0U) {
-            if (builtin_fit->target_type_param_count != 1U ||
-                receiver->type == NULL || receiver->type->kind != CG_TYPE_ARRAY ||
-                receiver->type->element == NULL) {
-                cg_fail(cg, e->token, "IE0002",
-                    "codegen: generic builtin method has no array element context");
+    }
+    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
+        const CGType *target_type = receiver != NULL ? receiver->type : NULL;
+        if (receiver == NULL) {
+            if (!cg_resolve_type(cg,
+                    e->as.call.resolved_callable.owner_instance_type_ref,
+                    &e->token, &static_target_type)) {
                 ok = false;
                 goto cleanup;
             }
-            receiver_element_ref = cg_type_ref_from_cgtype(
-                cg, receiver->type->element, e->token);
-            if (receiver_element_ref == NULL ||
-                !cg_generic_descriptor_expr(cg, receiver->type->element, NULL,
-                                             &e->token, &receiver_descriptor)) {
-                ok = false;
-                goto cleanup;
-            }
+            target_type = static_target_type;
+        }
+        if (builtin_fit->target_type_param_count != 1U ||
+            target_type == NULL || target_type->kind != CG_TYPE_ARRAY ||
+            target_type->element == NULL) {
+            cg_fail(cg, e->token, "IE0002",
+                "codegen: generic builtin method has no array element context");
+            ok = false;
+            goto cleanup;
+        }
+        target_element_ref = cg_type_ref_from_cgtype(
+            cg, target_type->element, e->token);
+        if (target_element_ref == NULL ||
+            !cg_generic_descriptor_expr(cg, target_type->element, NULL,
+                                         &e->token, &target_descriptor)) {
+            ok = false;
+            goto cleanup;
         }
     }
 
@@ -28759,6 +28774,17 @@ static bool cg_emit_generic_method_call(CG *cg,
         goto cleanup;
     }
 
+    if (method_is_variadic &&
+        (!cg_resolve_selected_callable_type_ref(cg, e, sig,
+             sig->params[sig->param_count - 1U].type, e->token, &variadic_array_type) ||
+         variadic_array_type == NULL || variadic_array_type->kind != CG_TYPE_ARRAY ||
+         variadic_array_type->element == NULL)) {
+        if (!cg->failed) cg_fail(cg, e->token, "IE0002",
+            "codegen: selected variadic method parameter is not an array");
+        ok = false;
+        goto cleanup;
+    }
+
     /* Emit fixed-position arguments. */
     for (size_t i = 0U; i < fixed_param_count; ++i) {
         if (!cg_emit_expr_for_expected_type(cg,
@@ -28772,9 +28798,7 @@ static bool cg_emit_generic_method_call(CG *cg,
 
     /* For variadic methods, also emit the variadic arguments (untyped, for inference). */
     if (method_is_variadic) {
-        const CGType *variadic_elem_type = um->param_types[um->param_count - 1U] != NULL
-            ? um->param_types[um->param_count - 1U]->element
-            : NULL;
+        const CGType *variadic_elem_type = variadic_array_type->element;
         bool has_prepacked_variadic_arg =
             arg_count > 0U &&
             e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
@@ -28782,7 +28806,7 @@ static bool cg_emit_generic_method_call(CG *cg,
             if (!cg_emit_expr_for_expected_type(cg,
                                                 e->as.call.args[i],
                                                 has_prepacked_variadic_arg
-                                                    ? um->param_types[um->param_count - 1U]
+                                                    ? variadic_array_type
                                                     : variadic_elem_type,
                                                 &args[i])) {
                 ok = false;
@@ -28902,7 +28926,7 @@ static bool cg_emit_generic_method_call(CG *cg,
                 ? builtin_fit->target_type_params[index]
                 : owner_decl->as.type_decl.type_params[index];
             combined_args[index] = builtin_fit != NULL
-                ? receiver_element_ref : owner_type->generic_type_args[index];
+                ? target_element_ref : owner_type->generic_type_args[index];
         }
         for (size_t index = 0U; index < method_tp_count; ++index) {
             combined_params[owner_tp_count + index] = sig->type_params[index];
@@ -28992,14 +29016,12 @@ static bool cg_emit_generic_method_call(CG *cg,
             }
             varr = args[fixed_param_count];
             er_init(&args[fixed_param_count]);
-        } else if (!cg_pack_variadic_args(
+        } else if (!cg_pack_variadic_expr_results(
                        cg,
                        &e->token,
-                       e->as.call.args != NULL
-                           ? e->as.call.args + fixed_param_count
-                           : NULL,
+                       args != NULL ? args + fixed_param_count : NULL,
                        arg_count - fixed_param_count,
-                       um->param_types[um->param_count - 1U]->element,
+                       variadic_array_type->element,
                        &varr)) {
             ok = false;
             goto cleanup;
@@ -29174,9 +29196,9 @@ static bool cg_emit_generic_method_call(CG *cg,
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_cstr(cg->cur_body, func_desc_expr);
         }
-        if (receiver_descriptor != NULL) {
+        if (target_descriptor != NULL) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
-            buf_append_cstr(cg->cur_body, receiver_descriptor);
+            buf_append_cstr(cg->cur_body, target_descriptor);
         }
         for (size_t i = 0U; i < method_tp_count; ++i) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
@@ -29298,8 +29320,10 @@ cleanup:
     free(ret_cname);
     free(dispatch_name);
     free(func_desc_expr);
-    free(receiver_descriptor);
-    cg_type_ref_free(receiver_element_ref);
+    free(target_descriptor);
+    cg_type_ref_free(target_element_ref);
+    cgtype_free(static_target_type);
+    cgtype_free(variadic_array_type);
     return ok;
 }
 
@@ -29319,6 +29343,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
     }
     if (um->member != NULL &&
         (um->member->as.callable.type_param_count > 0U ||
+         (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) ||
          (owner_type != NULL && owner_type->is_generic_instance &&
           (owner_type->generic_context_type_param_count > 0U ||
            cg_program_origin(cg, owner_type->owner_program) ==
@@ -29331,11 +29356,6 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                                                   user_fit,
                                                   NULL,
                                                   out);
-    }
-    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
-        return cg_fail(cg,
-                       e->token,
-                       "CE0144", "codegen: generic builtin static fit methods are not supported yet");
     }
     if (e->as.call.arg_count != um->param_count) {
         if (!um->is_variadic) {
@@ -44265,6 +44285,8 @@ static bool cg_defer_collect_capture_refs_in_expr(const FengExpr *expr,
                                                   bool *out_captures_self) {
     if (expr == NULL) return true;
     switch (expr->kind) {
+        case FENG_EXPR_TYPE_TARGET:
+            return true;
         case FENG_EXPR_IDENTIFIER: {
             FengSlice id = expr->as.identifier;
             if (id.length == 0U) return true;
@@ -48695,6 +48717,7 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
     char *descriptor_c_name = NULL;
     char *shared_callee_name = NULL;
     char *owner_descriptor_expr = NULL;
+    char *target_descriptor_expr = NULL;
     char *static_value_expr = NULL;
     const char *callee_c_name = NULL;
     const char *static_value = NULL;
@@ -48822,12 +48845,17 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
     }
     if (builtin_fit != NULL &&
         builtin_fit->target_type_param_count > 0U) {
-        (void)cg_fail(
-            cg,
-            blame,
-            "CE0144",
-            "codegen: generic builtin static fit methods are not supported yet");
-        goto cleanup;
+        if (builtin_fit->target_type_param_count != 1U ||
+            owner_type == NULL || owner_type->kind != CG_TYPE_ARRAY ||
+            owner_type->element == NULL) {
+            (void)cg_fail(cg, blame, "IE0002",
+                "codegen: static method-value target has no array element context");
+            goto cleanup;
+        }
+        if (!cg_generic_descriptor_expr(cg, owner_type->element, NULL,
+                &blame, &target_descriptor_expr)) {
+            goto cleanup;
+        }
     }
 
     uses_shared_dispatch =
@@ -48901,10 +48929,11 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
         const FengCallableSignature *signature =
             &callable_dep->member->as.callable;
         size_t owner_type_param_count =
-            callable_dep->owner_type_decl != NULL &&
+            builtin_fit != NULL ? builtin_fit->target_type_param_count :
+            (callable_dep->owner_type_decl != NULL &&
                     callable_dep->owner_type_decl->kind == FENG_DECL_TYPE
                 ? callable_dep->owner_type_decl->as.type_decl.type_param_count
-                : 0U;
+                : 0U);
 
         method_type_param_count = signature->type_param_count;
         method_type_args = method_type_param_count > 0U
@@ -49006,6 +49035,7 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
             user_fit,
             callee_c_name,
             owner_descriptor_expr,
+            target_descriptor_expr,
             uses_shared_dispatch,
             descriptor_c_name,
             (const char *const *)method_descriptor_exprs,
@@ -49063,6 +49093,7 @@ cleanup:
     free(descriptor_c_name);
     free(shared_callee_name);
     free(owner_descriptor_expr);
+    free(target_descriptor_expr);
     free(static_value_expr);
     for (size_t index = 0U; index < callee_count; ++index) {
         cg_type_ref_free(callee_args[index]);
@@ -55342,8 +55373,8 @@ static bool cg_emit_static_spec_method_thunk(
         return cg_fail(
             cg,
             blame,
-            "CE0144",
-            "codegen: generic builtin static fit methods are not supported yet");
+            "IE0002",
+            "codegen: generic builtin witness requires its target context thunk");
     }
 
     if (spec_member->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
@@ -57202,6 +57233,9 @@ static bool cg_collect_generic_instances_from_expr(CG *cg, const FengExpr *expr,
                 }
             }
             return true;
+        case FENG_EXPR_TYPE_TARGET:
+            return cg_collect_generic_instances_from_type_ref(
+                cg, expr->as.type_target, scope);
         case FENG_EXPR_GENERIC_TARGET:
             {
                 size_t segment_count = 0U;

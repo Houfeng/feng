@@ -52,7 +52,7 @@
 
 | 新错误码 | 用途 | 涵盖的旧消息 |
 |----------|------|-------------|
-| SE0201 | array-new 缺少类型名 | array-new segment '[:expr]' requires a type name |
+| SE0201 | 数组构造或数组静态访问缺少类型目标 | array-new segment '[:expr]' requires a type name、static member access requires a type target |
 | SE0202 | 数组字符缺失 | expected '[' to start array literal、expected ']' to close array literal、expected ']' after array size in '[:expr]'、expected ']' to close index expression |
 
 ## SE03XX - 类型/元组段

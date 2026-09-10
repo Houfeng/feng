@@ -4380,6 +4380,9 @@ static size_t expr_end(const FengExpr *expr) {
                 }
             }
             break;
+        case FENG_EXPR_TYPE_TARGET:
+            end = type_ref_end(expr->as.type_target);
+            break;
         case FENG_EXPR_GENERIC_TARGET:
             if (expr->as.generic_target.target != NULL) {
                 size_t target_end = expr_end(expr->as.generic_target.target);
@@ -9930,6 +9933,13 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
         return false;
     }
     switch (expr->kind) {
+        case FENG_EXPR_TYPE_TARGET:
+            return resolve_type_ref_at_offset(session, program,
+                       expr->as.type_target, offset, target, owner_decl,
+                       member_type_params, member_type_param_count) ||
+                   resolve_type_ref_at_offset(session, program,
+                       expr->as.type_target, offset, target, owner_decl,
+                       owner_type_params, owner_type_param_count);
         case FENG_EXPR_GENERIC_TARGET:
             for (index = 0U; index < expr->as.generic_target.type_arg_count; ++index) {
                 if (resolve_type_ref_at_offset(session, program,
@@ -16049,6 +16059,8 @@ static bool find_object_field_syntax_hit_expr(const FengExpr *expr,
                                                      offset,
                                                      out_construction,
                                                      out_name);
+        case FENG_EXPR_TYPE_TARGET:
+            return false;
         case FENG_EXPR_ARRAY_NEW:
             return find_object_field_syntax_hit_expr(expr->as.array_new.size,
                                                      offset,
@@ -16726,6 +16738,9 @@ static bool collect_references_in_expr(const FengLspAnalysisSession *session,
                 }
             }
             return true;
+        case FENG_EXPR_TYPE_TARGET:
+            return collect_references_in_type_ref(session, program, source,
+                owner_decl, owner_member, expr->as.type_target, target, references);
         case FENG_EXPR_ARRAY_NEW:
             return collect_references_in_type_ref(session,
                                                   program,

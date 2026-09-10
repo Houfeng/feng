@@ -1,0 +1,100 @@
+open module fcts_lib.test.generic_container_static;
+import std.collections;
+
+/** Shared callable surfaces make owner and method parameters observable. */
+open spec GCSMap<T>(value:T):T;
+/** Array-producing static methods preserve their element type. */
+open spec GCSArrayMap<T>(value:T):T[];
+/** Managed references returned by generic static methods. */
+open type GCSBox<T> { open let value:T; }
+/** Value results require the concrete layout of T. */
+@value open type GCSValue<T> { open let before:i64; open let value:T; open let after:string; }
+/** Method values use the same aggregate result as direct calls. */
+open spec GCSValueMap<T>(value:T):GCSValue<T>;
+/** Static requirements apply equally to nominal and structural containers. */
+open spec GCSFactory<T> { static func gcsEcho(value:T):T; }
+/** A method constraint can depend on its container's element parameter. */
+open spec GCSReader<T> { func read():T; }
+/** A constrained method value may have different input and result types. */
+open spec GCSReadMap<T,R>(value:T):R;
+
+/** Generic arrays expose the complete static surface without a receiver. */
+open fit T[]:GCSFactory<T> {
+    /** The element parameter comes from the static owner. */
+    static func gcsEcho(value:T):T { return value; }
+    /** The method parameter is independent of the owner parameter. */
+    static func gcsKeep<U>(value:U):U { return value; }
+    /** Both parameter domains participate in one call. */
+    static func gcsSecond<U>(first:T, value:U):U { return value; }
+    /** Return the owner type while the method binds an unrelated U. */
+    static func gcsOwn<U>(value:T, unused:U):T { return value; }
+    /** Close the method constraint together with the owner type. */
+    static func gcsRead<U:GCSReader<T>>(value:U):T { return value.read(); }
+    /** Variadic packing uses the caller's concrete element descriptor. */
+    static func gcsFirst(values:T...):T { return values[0]; }
+    /** Method-generic variadics use the independent method element type. */
+    static func gcsMethodFirst<U>(values:U...):U { return values[0]; }
+    /** Build a result that depends on the owner parameter. */
+    static func gcsArray(value:T):T[] { return [value]; }
+    /** Preserve the owner parameter in a nominal reference result. */
+    static func gcsBox(value:T):GCSBox<T> { return GCSBox<T>{value:value}; }
+    /** Preserve the method parameter in a value result. */
+    static func gcsValue<U>(value:U):GCSValue<U> {
+        return GCSValue<U>{before:17, value:value, after:"static array"};
+    }
+}
+
+/** Writable arrays have a distinct fit target with the same static names. */
+open fit T[!]:GCSFactory<T> {
+    /** Match the writable target while retaining its element identity. */
+    static func gcsEcho(value:T):T { return value; }
+    /** Preserve independent method parameters on writable targets. */
+    static func gcsKeep<U>(value:U):U { return value; }
+    /** Build a writable array without weakening its result type. */
+    static func gcsArray(value:T):T[!] { return [value]; }
+}
+
+/** The actual standard List supplies the nominal comparison in a package. */
+open fit List<T>:GCSFactory<T> {
+    /** Preserve the owner parameter of an imported standard container. */
+    static func gcsEcho(value:T):T { return value; }
+    /** Preserve a separate method parameter. */
+    static func gcsKeep<U>(value:U):U { return value; }
+    /** The nominal counterpart of a two-domain owner return. */
+    static func gcsOwn<U>(value:T, unused:U):T { return value; }
+}
+
+/** L01 requires E to differ from the fit declaration's T. */
+open func gcsListMapper<E>():GCSMap<E> { return List<E>.gcsEcho; }
+/** A same-name control must behave identically. */
+open func gcsListSameName<T>():GCSMap<T> { return List<T>.gcsEcho; }
+/** Preserve E's descriptor index when the enclosing context has two slots. */
+open func gcsReorderedListMapper<A,E>():GCSMap<E> { return List<E>.gcsEcho; }
+/** The caller's U cannot be captured by the method declaration's U. */
+open func gcsArrayOwnerShadow<U>(value:U):U { return U[].gcsOwn<string>(value,"unused"); }
+/** Inference must use declaration slots before substituting caller names. */
+open func gcsArrayInferredShadow<U>(value:U):U { return U[].gcsOwn(value,"unused"); }
+/** Nominal containers have the same capture-avoidance requirement. */
+open func gcsListOwnerShadow<U>(value:U):U { return List<U>.gcsOwn<string>(value,"unused"); }
+/** Nominal inference also preserves the bound owner slot. */
+open func gcsListInferredShadow<U>(value:U):U { return List<U>.gcsOwn(value,"unused"); }
+/** A method actual named T must not be replaced again by the owner's T. */
+open func gcsMethodOwnerName<T>(value:T):T { return i32[].gcsKeep<T>(value); }
+/** Forward the same owner-dependent constraint through a package shared body. */
+open func gcsReaderRelay<X,Y:GCSReader<X>>(value:Y):X { return X[].gcsRead<Y>(value); }
+/** Shared variadic calls preserve open storage and evaluation count. */
+open func gcsFirstRelay<E>(first:E, second:E):E { return E[].gcsFirst(first,second); }
+/** Persist a structural static target inside an exported shared body. */
+open func gcsArrayMapper<E>():GCSMap<E> { return E[].gcsEcho; }
+/** Persist both owner and method arguments in a callable dependency. */
+open func gcsMethodMapper<X,Y>():GCSMap<Y> { return X[].gcsKeep<Y>; }
+/** Writable method values also escape an open shared caller. */
+open func gcsWritableMapper<E>():GCSMap<E> { return E[!].gcsEcho; }
+/** Direct shared calls bind their owner and method domains separately. */
+open func gcsRelay<X,Y>(first:X, value:Y):GCSValue<Y> {
+    return X[].gcsValue<Y>(X[].gcsSecond<Y>(first,value));
+}
+/** Static witness calls must agree for arrays and List. */
+open func gcsSpecCall<E,A:GCSFactory<E>>(value:E):E { return A.gcsEcho(value); }
+/** A bound witness remains callable after its generic creator returns. */
+open func gcsSpecMapper<E,A:GCSFactory<E>>():GCSMap<E> { return A.gcsEcho; }

@@ -225,7 +225,9 @@ typedef enum FengExprKind {
     FENG_EXPR_MATCH,
     FENG_EXPR_TRY,
     FENG_EXPR_ARRAY_NEW,
-    FENG_EXPR_MATCH_OP
+    FENG_EXPR_MATCH_OP,
+    /* A compile-time type used as the owner of a member access. */
+    FENG_EXPR_TYPE_TARGET
 } FengExprKind;
 
 struct FengExpr {
@@ -263,6 +265,8 @@ struct FengExpr {
             FengTypeRef **type_args;
             size_t type_arg_count;
         } generic_target;
+        /* Owned structural type, including every nested array layer. */
+        FengTypeRef *type_target;
         struct {
             FengExpr *callee;
             FengExpr **args;
