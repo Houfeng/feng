@@ -35309,9 +35309,12 @@ void test_g24_composite_graphs(void);
 void test_g25_generic_diagnostics(void);
 /* Structural owners retain ordinary static-member diagnostic boundaries. */
 void test_generic_container_static_semantics(void);
+/* Both array owner forms stop invalid static access at Semantic. */
+void test_array_static_parity_semantics(void);
 
 int main(void) {
     test_generic_container_static_semantics();
+    test_array_static_parity_semantics();
     test_g25_generic_diagnostics();
     test_g24_composite_diagnostics();
     test_g24_binding_diagnostics();

@@ -1,0 +1,263 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.generic_container_static;
+import fcts_lib.test.array_static_parity;
+
+/** A consumer-owned requirement exercises local fit witnesses. */
+spec ASPLocalFactory<T> { static func apsLocalEcho(value:T):T; }
+/** Count argument evaluation independently of either array target. */
+var aspEvaluations:i32=0;
+/** Return a different value whenever a source expression is evaluated. */
+func aspNext():i64 { aspEvaluations+=1; return (i64)aspEvaluations; }
+/** Local static constraints use the same protocol as package constraints. */
+func aspLocalCall<E,A:ASPLocalFactory<E>>(value:E):E { return A.apsLocalEcho(value); }
+/** A local static witness can also escape as a callable value. */
+func aspLocalMapper<E,A:ASPLocalFactory<E>>():GCSMap<E> { return A.apsLocalEcho; }
+
+/** Local [] members are independent of imported fits on the same target. */
+fit T[]:ASPLocalFactory<T> {
+    /** Preserve the local fit's target parameter. */
+    static func apsLocalEcho(value:T):T { return value; }
+    /** Preserve the local fit's method parameter. */
+    static func apsLocalKeep<U>(value:U):U { return value; }
+}
+/** Form a local value with a renamed target parameter. */
+func aspLocalReadValue<E>():GCSMap<E> { return E[].apsLocalEcho; }
+/** Form a local value with both owner and method parameters. */
+func aspLocalReadMethod<X,Y>():GCSMap<Y> { return X[].apsLocalKeep<Y>; }
+/** Retain a readonly inner array under the selected outer target. */
+func aspReadNested<E>():GCSMap<GCSValue<E>[]> { return GCSValue<E>[][].apsEcho; }
+/** Retain a writable inner array under the selected outer target. */
+func aspReadNestedWritable<E>():GCSMap<GCSValue<E>[!]> { return GCSValue<E>[!][].apsEcho; }
+/** Verify managed storage survives every entrance and both exit paths. */
+func aspReadManaged(shouldThrow:bool) {
+    let words:GCSWords=(31,37,9000000041);
+    let actual=GCSManaged{words:words,life:GCSLife{number:41},text:"parity"};
+    let array=GCSManaged[].apsArray(actual);
+    let mapper=aspReadMapper<GCSManaged>();
+    let box=GCSManaged[].apsBox(mapper(array[0]));
+    let result=aspReadRelay<i8,GCSManaged>(box.value);
+    let witness=aspSpecMapper<GCSManaged,GCSManaged[]>();
+    let copy=witness(result.value);
+    assert(copy.words.item3==9000000041 && copy.life.number==41 &&
+        copy.text=="parity" && GCSLife.destroyed==0, "live complete storage");
+    if shouldThrow { throw "array static parity"; }
+}
+
+/** Local [!] members are independent of imported fits on the same target. */
+fit T[!]:ASPLocalFactory<T> {
+    /** Preserve the local fit's target parameter. */
+    static func apsLocalEcho(value:T):T { return value; }
+    /** Preserve the local fit's method parameter. */
+    static func apsLocalKeep<U>(value:U):U { return value; }
+}
+/** Form a local value with a renamed target parameter. */
+func aspLocalWriteValue<E>():GCSMap<E> { return E[!].apsLocalEcho; }
+/** Form a local value with both owner and method parameters. */
+func aspLocalWriteMethod<X,Y>():GCSMap<Y> { return X[!].apsLocalKeep<Y>; }
+/** Retain a readonly inner array under the selected outer target. */
+func aspWriteNested<E>():GCSMap<GCSValue<E>[]> { return GCSValue<E>[][!].apsEcho; }
+/** Retain a writable inner array under the selected outer target. */
+func aspWriteNestedWritable<E>():GCSMap<GCSValue<E>[!]> { return GCSValue<E>[!][!].apsEcho; }
+/** Verify managed storage survives every entrance and both exit paths. */
+func aspWriteManaged(shouldThrow:bool) {
+    let words:GCSWords=(31,37,9000000041);
+    let actual=GCSManaged{words:words,life:GCSLife{number:41},text:"parity"};
+    let array=GCSManaged[!].apsArray(actual);
+    let mapper=aspWriteMapper<GCSManaged>();
+    let box=GCSManaged[!].apsBox(mapper(array[0]));
+    let result=aspWriteRelay<i8,GCSManaged>(box.value);
+    let witness=aspSpecMapper<GCSManaged,GCSManaged[!]>();
+    let copy=witness(result.value);
+    assert(copy.words.item3==9000000041 && copy.life.number==41 &&
+        copy.text=="parity" && GCSLife.destroyed==0, "live complete storage");
+    if shouldThrow { throw "array static parity"; }
+}
+
+/** Run each reviewed static scenario separately for both array target forms. */
+func test_array_static_parity() {
+    describe("array static parity", () {
+        test("[] local and package direct ordinary and generic calls", () {
+            assert(i32[].apsLocalEcho(7)==7 && string[].apsEcho("owner")=="owner", "owner arguments");
+            assert(i8[].apsLocalKeep<string>("local")=="local" &&
+                string[].apsKeep<i64>(9000000031)==9000000031, "method arguments");
+            assert(i8[].apsKeep("inferred")=="inferred" && i32[].apsTag()==101, "inference and exact target");
+            aspEvaluations=0; i64[].apsSink(aspNext());
+            assert(aspEvaluations==1, "void argument evaluation");
+        });
+        test("[!] local and package direct ordinary and generic calls", () {
+            assert(i32[!].apsLocalEcho(7)==7 && string[!].apsEcho("owner")=="owner", "owner arguments");
+            assert(i8[!].apsLocalKeep<string>("local")=="local" &&
+                string[!].apsKeep<i64>(9000000031)==9000000031, "method arguments");
+            assert(i8[!].apsKeep("inferred")=="inferred" && i32[!].apsTag()==103, "inference and exact target");
+            aspEvaluations=0; i64[!].apsSink(aspNext());
+            assert(aspEvaluations==1, "void argument evaluation");
+        });
+        test("[] local and package closed method values", () {
+            let local:GCSMap<i64> =i64[].apsLocalEcho;
+            let localMethod:GCSMap<string> =i8[].apsLocalKeep<string>;
+            let owner:GCSMap<string> =string[].apsEcho;
+            let method:GCSMap<i64> =i8[].apsKeep<i64>;
+            assert(local(9000000033)==9000000033 && localMethod("local")=="local" &&
+                owner("owner")=="owner" && method(9000000035)==9000000035, "closed signatures");
+        });
+        test("[!] local and package closed method values", () {
+            let local:GCSMap<i64> =i64[!].apsLocalEcho;
+            let localMethod:GCSMap<string> =i8[!].apsLocalKeep<string>;
+            let owner:GCSMap<string> =string[!].apsEcho;
+            let method:GCSMap<i64> =i8[!].apsKeep<i64>;
+            assert(local(9000000033)==9000000033 && localMethod("local")=="local" &&
+                owner("owner")=="owner" && method(9000000035)==9000000035, "closed signatures");
+        });
+        test("[] escaping method values preserve names slots and both generic domains", () {
+            let local=aspLocalReadValue<i64>(); let localMethod=aspLocalReadMethod<i8,string>();
+            let renamed=aspReadMapper<string>(); let same=aspReadSame<i64>();
+            let reordered=aspReadReordered<i8,string>(); let method=aspReadMethod<i8,i64>();
+            assert(local(9000000037)==9000000037 && localMethod("local")=="local", "local open values");
+            assert(renamed("renamed")=="renamed" && same(9000000039)==9000000039 &&
+                reordered("second")=="second" && method(9000000043)==9000000043, "package open values");
+        });
+        test("[!] escaping method values preserve names slots and both generic domains", () {
+            let local=aspLocalWriteValue<i64>(); let localMethod=aspLocalWriteMethod<i8,string>();
+            let renamed=aspWriteMapper<string>(); let same=aspWriteSame<i64>();
+            let reordered=aspWriteReordered<i8,string>(); let method=aspWriteMethod<i8,i64>();
+            assert(local(9000000037)==9000000037 && localMethod("local")=="local", "local open values");
+            assert(renamed("renamed")=="renamed" && same(9000000039)==9000000039 &&
+                reordered("second")=="second" && method(9000000043)==9000000043, "package open values");
+        });
+        test("[] owner and method substitutions do not capture caller names", () {
+            let words:GCSWords=(43,47,9000000047);
+            assert(aspReadOwn<GCSWords>(words).item3==9000000047 &&
+                aspReadInferred<GCSWords>(words).item2==47, "large owner actual");
+            assert(aspReadOwn<string>("explicit")=="explicit" &&
+                aspReadInferred<string>("inferred")=="inferred", "managed owner actual");
+        });
+        test("[!] owner and method substitutions do not capture caller names", () {
+            let words:GCSWords=(43,47,9000000047);
+            assert(aspWriteOwn<GCSWords>(words).item3==9000000047 &&
+                aspWriteInferred<GCSWords>(words).item2==47, "large owner actual");
+            assert(aspWriteOwn<string>("explicit")=="explicit" &&
+                aspWriteInferred<string>("inferred")=="inferred", "managed owner actual");
+        });
+        test("[] local and package static constraint calls and values", () {
+            assert(aspLocalCall<i64,i64[]>(9000000049)==9000000049 &&
+                aspSpecCall<string,string[]>("spec")=="spec", "witness calls");
+            let local=aspLocalMapper<i64,i64[]>(); let imported=aspSpecMapper<string,string[]>();
+            assert(local(9000000051)==9000000051 && imported("bound")=="bound", "witness values");
+        });
+        test("[!] local and package static constraint calls and values", () {
+            assert(aspLocalCall<i64,i64[!]>(9000000049)==9000000049 &&
+                aspSpecCall<string,string[!]>("spec")=="spec", "witness calls");
+            let local=aspLocalMapper<i64,i64[!]>(); let imported=aspSpecMapper<string,string[!]>();
+            assert(local(9000000051)==9000000051 && imported("bound")=="bound", "witness values");
+        });
+        test("[] owner dependent method constraints support every entrance", () {
+            let reader=GCSReading();
+            let mapper:GCSReadMap<GCSReading,i64> =i64[].apsRead<GCSReading>;
+            assert(i64[].apsRead<GCSReading>(reader)==9000000027 &&
+                i64[].apsRead(reader)==9000000027 && mapper(reader)==9000000027, "closed witnesses");
+            assert(aspReadReader<i64,GCSReading>(reader)==9000000027, "forwarded witness");
+        });
+        test("[!] owner dependent method constraints support every entrance", () {
+            let reader=GCSReading();
+            let mapper:GCSReadMap<GCSReading,i64> =i64[!].apsRead<GCSReading>;
+            assert(i64[!].apsRead<GCSReading>(reader)==9000000027 &&
+                i64[!].apsRead(reader)==9000000027 && mapper(reader)==9000000027, "closed witnesses");
+            assert(aspWriteReader<i64,GCSReading>(reader)==9000000027, "forwarded witness");
+        });
+        test("[] nested readonly and writable elements retain identity", () {
+            let value=GCSValue<i64>{before:53,value:9000000053,after:"nested"};
+            let readonly:GCSValue<i64>[]=[value]; let writable:GCSValue<i64>[!]=[value];
+            let readMapper=aspReadNested<i64>(); let writeMapper=aspReadNestedWritable<i64>();
+            assert(readMapper(readonly)[0].value==9000000053, "readonly inner layer");
+            let copied=writeMapper(writable);
+            copied[0]=GCSValue<i64>{before:59,value:9000000059,after:"changed"};
+            assert(writable[0].value==9000000059, "writable inner identity");
+            assert(GCSValue<i64>[][].apsEcho(readonly)[0].before==53 &&
+                GCSValue<i64>[!][].apsEcho(writable)[0].before==59, "closed nested targets");
+            let box=GCSBox<i64>{value:9000000061};
+            assert(GCSBox<i64>[].apsEcho(box).value==9000000061, "constructed reference element");
+        });
+        test("[!] nested readonly and writable elements retain identity", () {
+            let value=GCSValue<i64>{before:53,value:9000000053,after:"nested"};
+            let readonly:GCSValue<i64>[]=[value]; let writable:GCSValue<i64>[!]=[value];
+            let readMapper=aspWriteNested<i64>(); let writeMapper=aspWriteNestedWritable<i64>();
+            assert(readMapper(readonly)[0].value==9000000053, "readonly inner layer");
+            let copied=writeMapper(writable);
+            copied[0]=GCSValue<i64>{before:59,value:9000000059,after:"changed"};
+            assert(writable[0].value==9000000059, "writable inner identity");
+            assert(GCSValue<i64>[][!].apsEcho(readonly)[0].before==53 &&
+                GCSValue<i64>[!][!].apsEcho(writable)[0].before==59, "closed nested targets");
+            let box=GCSBox<i64>{value:9000000061};
+            assert(GCSBox<i64>[!].apsEcho(box).value==9000000061, "constructed reference element");
+        });
+        test("[] array reference and value returns preserve complete actual layouts", () {
+            let words:GCSWords=(61,67,9000000067);
+            let array:ASPReadArrayMap<GCSWords> =GCSWords[].apsArray;
+            let box:ASPBoxMap<GCSWords> =GCSWords[].apsBox;
+            let value:GCSValueMap<GCSWords> =i8[].apsValue<GCSWords>;
+            assert(array(words)[0].item3==9000000067 && box(words).value.item2==67 &&
+                value(words).value.item1==61, "closed result layouts");
+            assert(aspReadRelay<i8,GCSWords>(words).value.item3==9000000067 &&
+                GCSWords[].apsArray(words)[0].item2==67, "open and direct layouts");
+        });
+        test("[!] array reference and value returns preserve complete actual layouts", () {
+            let words:GCSWords=(61,67,9000000067);
+            let array:ASPWriteArrayMap<GCSWords> =GCSWords[!].apsArray;
+            let box:ASPBoxMap<GCSWords> =GCSWords[!].apsBox;
+            let value:GCSValueMap<GCSWords> =i8[!].apsValue<GCSWords>;
+            assert(array(words)[0].item3==9000000067 && box(words).value.item2==67 &&
+                value(words).value.item1==61, "closed result layouts");
+            assert(aspWriteRelay<i8,GCSWords>(words).value.item3==9000000067 &&
+                GCSWords[!].apsArray(words)[0].item2==67, "open and direct layouts");
+        });
+        test("[] variadics pack once and support explicit spreading and method values", () {
+            aspEvaluations=0;
+            assert(i64[].apsFirst(aspNext(),aspNext())==1 && aspEvaluations==2, "single argument evaluation");
+            let items:i64[]=[9000000071,73];
+            let words:GCSWords=(71,73,9000000073); let aggregates:GCSWords[]=[words,words];
+            let method:ASPVariadicMap<i64> =i64[].apsFirst;
+            assert(method(79,83)==79 && method(...items)==9000000071, "variadic method value");
+            assert(i64[].apsFirst(...items)==9000000071 &&
+                aspReadFirst<GCSWords>(...aggregates).item3==9000000073, "owner spreading");
+            assert(i8[].apsMethodFirst<string>("first","next")=="first" &&
+                i8[].apsMethodFirst<i64>(...items)==9000000071 &&
+                aspReadMethodFirst<i8,GCSWords>(...aggregates).item2==73, "method spreading");
+            assert(GCSWords[].apsFirst(words,words).item3==9000000073 &&
+                i64[].apsCount()==0 && i64[].apsCount(...items)==2, "large and empty packs");
+        });
+        test("[!] variadics pack once and support explicit spreading and method values", () {
+            aspEvaluations=0;
+            assert(i64[!].apsFirst(aspNext(),aspNext())==1 && aspEvaluations==2, "single argument evaluation");
+            let items:i64[]=[9000000071,73];
+            let words:GCSWords=(71,73,9000000073); let aggregates:GCSWords[]=[words,words];
+            let method:ASPVariadicMap<i64> =i64[!].apsFirst;
+            assert(method(79,83)==79 && method(...items)==9000000071, "variadic method value");
+            assert(i64[!].apsFirst(...items)==9000000071 &&
+                aspWriteFirst<GCSWords>(...aggregates).item3==9000000073, "owner spreading");
+            assert(i8[!].apsMethodFirst<string>("first","next")=="first" &&
+                i8[!].apsMethodFirst<i64>(...items)==9000000071 &&
+                aspWriteMethodFirst<i8,GCSWords>(...aggregates).item2==73, "method spreading");
+            assert(GCSWords[!].apsFirst(words,words).item3==9000000073 &&
+                i64[!].apsCount()==0 && i64[!].apsCount(...items)==2, "large and empty packs");
+        });
+        test("[] managed results release exactly once on return", () {
+            GCSLife.destroyed=0; aspReadManaged(false);
+            assert(GCSLife.destroyed==1, "ordinary cleanup");
+        });
+        test("[!] managed results release exactly once on return", () {
+            GCSLife.destroyed=0; aspWriteManaged(false);
+            assert(GCSLife.destroyed==1, "ordinary cleanup");
+        });
+        test("[] managed results release exactly once while unwinding", () {
+            GCSLife.destroyed=0; var caught=false;
+            try aspReadManaged(true) catch error:string { caught=error=="array static parity"; }
+            assert(caught && GCSLife.destroyed==1, "exception cleanup");
+        });
+        test("[!] managed results release exactly once while unwinding", () {
+            GCSLife.destroyed=0; var caught=false;
+            try aspWriteManaged(true) catch error:string { caught=error=="array static parity"; }
+            assert(caught && GCSLife.destroyed==1, "exception cleanup");
+        });
+    });
+}

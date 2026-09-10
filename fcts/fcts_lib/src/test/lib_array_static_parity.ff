@@ -1,0 +1,119 @@
+open module fcts_lib.test.array_static_parity;
+import std.collections;
+import fcts_lib.test.generic_container_static;
+
+/** Both array forms provide the same static requirement. */
+open spec ASPFactory<T> { static func apsEcho(value:T):T; }
+/** Variadic method values retain their packing contract. */
+open spec ASPVariadicMap<T>(values:T...):T;
+/** Reference results retain the complete owner element. */
+open spec ASPBoxMap<T>(value:T):GCSBox<T>;
+
+/** An array result retains this target's writability. */
+open spec ASPReadArrayMap<T>(value:T):T[];
+/** Exercise every static entrance on the [] target independently. */
+open fit T[]:ASPFactory<T> {
+    /** Distinguish selection when both fit targets have identical member names. */
+    static func apsTag():i32 { return 101; }
+    /** Preserve a target parameter. */
+    static func apsEcho(value:T):T { return value; }
+    /** Preserve an independent method parameter. */
+    static func apsKeep<U>(value:U):U { return value; }
+    /** Bind owner and method names without capturing the caller's U. */
+    static func apsOwn<U>(value:T, unused:U):T { return value; }
+    /** Instantiate a constraint that depends on the target element. */
+    static func apsRead<U:GCSReader<T>>(value:U):T { return value.read(); }
+    /** Pack target-generic variadic arguments. */
+    static func apsFirst(values:T...):T { return values[0]; }
+    /** Pack method-generic variadic arguments. */
+    static func apsMethodFirst<U>(values:U...):U { return values[0]; }
+    /** Empty packs remain valid when the target already binds T. */
+    static func apsCount(values:T...):int { return values.length(); }
+    /** A void static call still evaluates its argument exactly once. */
+    static func apsSink(value:T):void {}
+    /** Construct an array with the declared result writability. */
+    static func apsArray(value:T):T[] { return [value]; }
+    /** Preserve full storage in a reference result. */
+    static func apsBox(value:T):GCSBox<T> { return GCSBox<T>{value:value}; }
+    /** Preserve full storage in a method-generic value result. */
+    static func apsValue<U>(value:U):GCSValue<U> {
+        return GCSValue<U>{before:17,value:value,after:"array parity"};
+    }
+}
+/** Bind a renamed caller parameter in a package method value. */
+open func aspReadMapper<E>():GCSMap<E> { return E[].apsEcho; }
+/** A same-name caller must select the same method value. */
+open func aspReadSame<T>():GCSMap<T> { return T[].apsEcho; }
+/** Preserve the second slot of a multi-parameter caller. */
+open func aspReadReordered<A,E>():GCSMap<E> { return E[].apsEcho; }
+/** Bind owner and method parameters in an escaping package value. */
+open func aspReadMethod<X,Y>():GCSMap<Y> { return X[].apsKeep<Y>; }
+/** Explicit method arguments must not capture a caller's name. */
+open func aspReadOwn<U>(value:U):U { return U[].apsOwn<string>(value,"unused"); }
+/** Inferred method arguments have the same binding domains. */
+open func aspReadInferred<U>(value:U):U { return U[].apsOwn(value,"unused"); }
+/** Forward an owner-dependent witness through a package shared body. */
+open func aspReadReader<X,Y:GCSReader<X>>(value:Y):X { return X[].apsRead<Y>(value); }
+/** Forward an existing array without repeating variadic argument evaluation. */
+open func aspReadFirst<E>(values:E...):E { return E[].apsFirst(...values); }
+/** Forward the method-generic element separately from the static owner. */
+open func aspReadMethodFirst<X,Y>(values:Y...):Y { return X[].apsMethodFirst<Y>(...values); }
+/** Return a value layout determined by the package caller's actual type. */
+open func aspReadRelay<X,Y>(value:Y):GCSValue<Y> { return X[].apsValue<Y>(value); }
+
+/** An array result retains this target's writability. */
+open spec ASPWriteArrayMap<T>(value:T):T[!];
+/** Exercise every static entrance on the [!] target independently. */
+open fit T[!]:ASPFactory<T> {
+    /** Distinguish selection when both fit targets have identical member names. */
+    static func apsTag():i32 { return 103; }
+    /** Preserve a target parameter. */
+    static func apsEcho(value:T):T { return value; }
+    /** Preserve an independent method parameter. */
+    static func apsKeep<U>(value:U):U { return value; }
+    /** Bind owner and method names without capturing the caller's U. */
+    static func apsOwn<U>(value:T, unused:U):T { return value; }
+    /** Instantiate a constraint that depends on the target element. */
+    static func apsRead<U:GCSReader<T>>(value:U):T { return value.read(); }
+    /** Pack target-generic variadic arguments. */
+    static func apsFirst(values:T...):T { return values[0]; }
+    /** Pack method-generic variadic arguments. */
+    static func apsMethodFirst<U>(values:U...):U { return values[0]; }
+    /** Empty packs remain valid when the target already binds T. */
+    static func apsCount(values:T...):int { return values.length(); }
+    /** A void static call still evaluates its argument exactly once. */
+    static func apsSink(value:T):void {}
+    /** Construct an array with the declared result writability. */
+    static func apsArray(value:T):T[!] { return [value]; }
+    /** Preserve full storage in a reference result. */
+    static func apsBox(value:T):GCSBox<T> { return GCSBox<T>{value:value}; }
+    /** Preserve full storage in a method-generic value result. */
+    static func apsValue<U>(value:U):GCSValue<U> {
+        return GCSValue<U>{before:17,value:value,after:"array parity"};
+    }
+}
+/** Bind a renamed caller parameter in a package method value. */
+open func aspWriteMapper<E>():GCSMap<E> { return E[!].apsEcho; }
+/** A same-name caller must select the same method value. */
+open func aspWriteSame<T>():GCSMap<T> { return T[!].apsEcho; }
+/** Preserve the second slot of a multi-parameter caller. */
+open func aspWriteReordered<A,E>():GCSMap<E> { return E[!].apsEcho; }
+/** Bind owner and method parameters in an escaping package value. */
+open func aspWriteMethod<X,Y>():GCSMap<Y> { return X[!].apsKeep<Y>; }
+/** Explicit method arguments must not capture a caller's name. */
+open func aspWriteOwn<U>(value:U):U { return U[!].apsOwn<string>(value,"unused"); }
+/** Inferred method arguments have the same binding domains. */
+open func aspWriteInferred<U>(value:U):U { return U[!].apsOwn(value,"unused"); }
+/** Forward an owner-dependent witness through a package shared body. */
+open func aspWriteReader<X,Y:GCSReader<X>>(value:Y):X { return X[!].apsRead<Y>(value); }
+/** Forward an existing array without repeating variadic argument evaluation. */
+open func aspWriteFirst<E>(values:E...):E { return E[!].apsFirst(...values); }
+/** Forward the method-generic element separately from the static owner. */
+open func aspWriteMethodFirst<X,Y>(values:Y...):Y { return X[!].apsMethodFirst<Y>(...values); }
+/** Return a value layout determined by the package caller's actual type. */
+open func aspWriteRelay<X,Y>(value:Y):GCSValue<Y> { return X[!].apsValue<Y>(value); }
+
+/** Dispatch a static requirement on the actual array target. */
+open func aspSpecCall<E,A:ASPFactory<E>>(value:E):E { return A.apsEcho(value); }
+/** Let a constraint-bound static method value escape its creator. */
+open func aspSpecMapper<E,A:ASPFactory<E>>():GCSMap<E> { return A.apsEcho; }
