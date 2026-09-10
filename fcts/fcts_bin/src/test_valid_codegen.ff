@@ -1,0 +1,123 @@
+module fcts_bin;
+import std.test;
+import fcts_lib.test.valid_codegen;
+
+/** This trivial actual spans more than one machine word. */
+type VCGWords(i64,i64,i64);
+/** Count actual payload lifetimes independently of synthesized default values. */
+type VCGLife {
+    open static var destroyed:i32;
+    open let number:i32;
+    /** A complete call/return chain must release each supplied object once. */
+    func ~VCGLife() { if self.number != 0 { VCGLife.destroyed += 1; } }
+}
+/** Managed aggregates combine large storage with ownership-sensitive fields. */
+@value type VCGManaged { open let words:VCGWords; open let life:VCGLife; open let text:string; }
+/** A second builtin owner also exercises local shared implementation emission. */
+fit string {
+    /** Preserve a local method-generic argument. */
+    static func vcgLocalKeep<T>(value:T):T { return value; }
+    /** Local reference results use the same imported owner layout. */
+    static func vcgLocalObject<T>(value:T):VCGBox<T> {
+        return VCGBox<T>{before:37, value:value, after:"local"};
+    }
+    /** Local value results reuse the same output-slot protocol. */
+    static func vcgLocalValue<T>(value:T):VCGValue<T> {
+        return VCGValue<T>{before:41, value:value, after:"local value"};
+    }
+    /** Instance method generics also work without a target-level parameter. */
+    func vcgChoose<T>(value:T):T { return value; }
+}
+
+/** An escaping generic object must own the payload after this frame returns. */
+func vcgEscape():VCGBox<VCGLife> {
+    let life=VCGLife{number:43};
+    return i32.vcgObject<VCGLife>(life);
+}
+/** Observe escaped and copied payloads while all result kinds remain live. */
+func vcgUseManaged() {
+    let escaped=vcgEscape();
+    let value=i32.vcgValue<VCGLife>(escaped.value);
+    let copied=i32.vcgPass<VCGLife>(value);
+    let array=i32.vcgArray<VCGLife>(copied.value);
+    let mapper=vcgMapper<VCGLife>();
+    let result=mapper(array[0]);
+    assert(result.number==43 && VCGLife.destroyed==0, "all results retain the payload");
+}
+/** Exercise ordinary and exceptional cleanup of a large managed actual. */
+func vcgUseAggregate(shouldThrow:bool) {
+    let words:VCGWords=(47,53,59);
+    let actual=VCGManaged{words:words, life:VCGLife{number:61}, text:"aggregate"};
+    let preserved=i32.vcgKeep<VCGManaged>(actual);
+    let object=i32.vcgObject<VCGManaged>(preserved);
+    let value=vcgRelay<VCGManaged>(object.value);
+    let copied=i32.vcgPass<VCGManaged>(value);
+    assert(copied.value.words.item3==59 && copied.value.life.number==61 &&
+           copied.value.text=="aggregate" && copied.after=="value", "complete aggregate bytes and ownership");
+    if shouldThrow { throw "valid codegen cleanup"; }
+}
+
+/** Reviewed codegen failures must preserve language behavior across packages. */
+func test_valid_codegen() {
+    describe("legal builtin generic codegen", () {
+        test("explicit and inferred scalar calls preserve width and kind", () {
+            let small=i32.vcgKeep<i8>(-7);
+            let inferred=i32.vcgKeep(small);
+            let wide=i32.vcgKeep<i64>(9000000001);
+            assert(inferred==-7 && wide==9000000001, "scalar widths");
+            assert(i32.vcgKeep<bool>(true) && i32.vcgKeep<string>("text")=="text", "boolean and managed actuals");
+            assert(string.vcgLocalKeep<i64>(wide)==wide && "receiver".vcgChoose<i64>(wide)==wide, "other builtin owner");
+        });
+        test("array reference and value returns preserve a large trivial actual", () {
+            let words:VCGWords=(67,71,9000000003);
+            let array=i32.vcgArray<VCGWords>(words);
+            let object=i32.vcgObject<VCGWords>(words);
+            let value=i32.vcgValue<VCGWords>(words);
+            let copied=i32.vcgPass<VCGWords>(value);
+            let read=i32.vcgRead<VCGWords>(object);
+            assert(array[0].item3==9000000003 && read.item2==71 && copied.value.item1==67, "complete tuple");
+            assert(object.before==17 && object.after=="reference" && value.before==19 && value.after=="value", "surrounding field offsets");
+            let local=string.vcgLocalObject<VCGWords>(words);
+            let localValue=string.vcgLocalValue<VCGWords>(words);
+            assert(local.value.item3==9000000003 && localValue.value.item2==71, "local shared bodies");
+        });
+        test("closed method values match direct calls for every return representation", () {
+            let words:VCGWords=(73,79,83);
+            let keep:VCGMap<VCGWords> =i32.vcgKeep<VCGWords>;
+            let pack:VCGPack<VCGWords> =i32.vcgObject<VCGWords>;
+            let value:VCGPackValue<VCGWords> =i32.vcgValue<VCGWords>;
+            let array:VCGPackArray<VCGWords> =i32.vcgArray<VCGWords>;
+            let pass:VCGPassValue<VCGWords> =i32.vcgPass<VCGWords>;
+            assert(keep(words).item2==79 && pack(words).value.item3==83, "trivial and reference returns");
+            assert(pass(value(words)).value.item1==73 && array(words)[0].item2==79, "value and array returns");
+            let escaped=vcgMapper<VCGWords>();
+            assert(escaped(words).item3==83, "callable survives creator return");
+        });
+        test("target method and reordered parameter domains remain independent", () {
+            let items:i32[]=[89];
+            let picked=items.vcgPick<i64>(9000000007);
+            let inferred=items.vcgPick("inferred");
+            let head=items.vcgHeadFor<string>("unused");
+            let forwarded=vcgArrayRelay<i32,string>(items,"forwarded");
+            let second=i32.vcgSecond<i8,string>(1,"second payload");
+            assert(picked.value==9000000007 && inferred.value=="inferred" && head.value==89, "owner and method slots");
+            assert(forwarded.value=="forwarded" && second.value=="second payload" && second.before==23, "forwarding and second parameter");
+        });
+        test("returned managed payloads survive creators and release exactly once", () {
+            VCGLife.destroyed=0;
+            vcgUseManaged();
+            assert(VCGLife.destroyed==1, "one final release after all aliases");
+        });
+        test("large managed aggregates release after normal return", () {
+            VCGLife.destroyed=0;
+            vcgUseAggregate(false);
+            assert(VCGLife.destroyed==1, "aggregate normal cleanup");
+        });
+        test("large managed aggregates release during exception propagation", () {
+            VCGLife.destroyed=0;
+            var caught=false;
+            try vcgUseAggregate(true) catch message:string { caught=message=="valid codegen cleanup"; }
+            assert(caught && VCGLife.destroyed==1, "aggregate exception cleanup");
+        });
+    });
+}

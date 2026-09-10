@@ -1,0 +1,63 @@
+open module fcts_lib.test.valid_codegen;
+
+/** A reference owner must use the closed field offsets of its actual T. */
+open type VCGBox<T> { open let before:i64; open let value:T; open let after:string; }
+/** Value owners exercise layout, return slots and aggregate lifecycle. */
+@value open type VCGValue<T> { open let before:i64; open let value:T; open let after:string; }
+/** Closed callable signatures must agree with their direct-call equivalents. */
+open spec VCGMap<T>(value:T):T;
+/** A callable may return a reference instance owned by another package. */
+open spec VCGPack<T>(value:T):VCGBox<T>;
+/** A callable may return an aggregate with a descriptor-dependent layout. */
+open spec VCGPackValue<T>(value:T):VCGValue<T>;
+/** Array returns close their element type at the callable formation point. */
+open spec VCGPackArray<T>(value:T):T[];
+/** Aggregate parameters and returns must use matching shared representations. */
+open spec VCGPassValue<T>(value:VCGValue<T>):VCGValue<T>;
+
+/** These methods have method parameters even though the scalar target has none. */
+open fit i32 {
+    /** Preserve the complete actual, including values larger than a pointer. */
+    static func vcgKeep<T>(value:T):T { return value; }
+    /** Construct an array whose result element type is inferred by its caller. */
+    static func vcgArray<T>(value:T):T[] { return [value]; }
+    /** Construct and return a managed owner through its reified descriptor. */
+    static func vcgObject<T>(value:T):VCGBox<T> {
+        return VCGBox<T>{before:17, value:value, after:"reference"};
+    }
+    /** Construct an aggregate through the existing caller-provided return slot. */
+    static func vcgValue<T>(value:T):VCGValue<T> {
+        return VCGValue<T>{before:19, value:value, after:"value"};
+    }
+    /** Reuse the same address protocol for an open aggregate parameter. */
+    static func vcgPass<T>(value:VCGValue<T>):VCGValue<T> { return value; }
+    /** An open reference parameter retains the matching field descriptor. */
+    static func vcgRead<T>(value:VCGBox<T>):T { return value.value; }
+    /** A dependency on the second parameter must not resolve against the first. */
+    static func vcgSecond<A,B>(unused:A, value:B):VCGBox<B> {
+        return VCGBox<B>{before:23, value:value, after:"second"};
+    }
+}
+
+/** The target's A and method's B occupy separate descriptor slots. */
+open fit A[] {
+    /** Return a value of the method argument's type, independent of self. */
+    func vcgPick<B>(value:B):VCGValue<B> {
+        return VCGValue<B>{before:29, value:value, after:"picked"};
+    }
+    /** Use the target's element type alongside a different method argument. */
+    func vcgHeadFor<B>(unused:B):VCGBox<A> {
+        return VCGBox<A>{before:31, value:self[0], after:"head"};
+    }
+}
+
+/** Shared callers must preserve open arguments through both nested calls. */
+open func vcgRelay<U>(value:U):VCGValue<U> {
+    return i32.vcgValue<U>(i32.vcgKeep<U>(value));
+}
+/** Returning this callable keeps its descriptor alive after the creator exits. */
+open func vcgMapper<T>():VCGMap<T> { return i32.vcgKeep<T>; }
+/** Forward both target and method generic domains from an imported shared body. */
+open func vcgArrayRelay<X,Y>(items:X[], value:Y):VCGValue<Y> {
+    return items.vcgPick<Y>(value);
+}

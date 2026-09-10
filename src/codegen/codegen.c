@@ -27109,6 +27109,7 @@ static bool cg_resolve_selected_callable_type_ref(
     FengTypeRef *callable_substituted = NULL;
     const FengProgram *reference_program = NULL;
     CGTypeParamScope substituted_scope = {0};
+    FengTypeParam fit_param = {0};
     bool ok;
 
     if (out_type == NULL) {
@@ -27161,6 +27162,24 @@ static bool cg_resolve_selected_callable_type_ref(
     } else if (resolved->fit_decl != NULL) {
         reference_program =
             cg_find_decl_owner_program(cg, resolved->fit_decl);
+        if (feng_semantic_query_fit_implicit_type_param(
+                cg->analysis, resolved->fit_decl, &fit_param)) {
+            const FengTypeRef *owner_ref = resolved->owner_instance_type_ref;
+            if (owner_ref == NULL || owner_ref->kind != FENG_TYPE_REF_ARRAY ||
+                owner_ref->as.inner == NULL) {
+                return cg_fail(cg, blame, "IE0002",
+                    "codegen: selected array fit call is missing its element type");
+            }
+            substituted_scope.first = &fit_param;
+            substituted_scope.first_count = 1U;
+            FengTypeRef *owner_args[] = {owner_ref->as.inner};
+            owner_substituted = cg_type_ref_substitute(
+                effective_ref, &fit_param, 1U, owner_args);
+            if (owner_substituted == NULL) {
+                return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+            }
+            effective_ref = owner_substituted;
+        }
     } else if (resolved->function_decl != NULL) {
         reference_program =
             cg_find_decl_owner_program(cg, resolved->function_decl);
@@ -28610,13 +28629,17 @@ static bool cg_static_method_uses_shared_dispatch(
              signature->type_param_count > 0U));
 }
 
-static bool cg_emit_generic_static_method_call(CG *cg,
-                                               const FengExpr *e,
-                                               const UserType *owner_type,
-                                               const UserMethod *um,
-                                               const BuiltinFit *builtin_fit,
-                                               const UserFit *user_fit,
-                                               ExprResult *out) {
+/* Emit a selected generic method with its optional builtin receiver. Static
+ * nominal methods and builtin instance methods share argument, descriptor,
+ * return-slot and cleanup handling; only the owner inputs differ. */
+static bool cg_emit_generic_method_call(CG *cg,
+                                        const FengExpr *e,
+                                        const UserType *owner_type,
+                                        const UserMethod *um,
+                                        const BuiltinFit *builtin_fit,
+                                        const UserFit *user_fit,
+                                        ExprResult *receiver,
+                                        ExprResult *out) {
     const FengCallableSignature *sig = um != NULL && um->member != NULL
                                            ? &um->member->as.callable
                                            : NULL;
@@ -28638,6 +28661,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
     char *ret_reified_size_name = NULL;
     char *dispatch_name = NULL;
     char *func_desc_expr = NULL;
+    char *receiver_descriptor = NULL;
+    FengTypeRef *receiver_element_ref = NULL;
     bool ret_is_erased = false;
     bool ret_uses_reified_storage = false;
     bool returns_directly = false;
@@ -28660,7 +28685,8 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         return cg_fail(cg, e->token,
                        "CE0143", "codegen: internal: generic static method call is missing a generic owner or method type parameters");
     }
-    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
+    if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U &&
+        receiver == NULL) {
         return cg_fail(cg,
                        e->token,
                        "CE0144", "codegen: generic builtin static fit methods are not supported yet");
@@ -28688,6 +28714,34 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                            "CE0147", "codegen: wrong argument count for generic static method '%s' "
                            "(expected %zu, got %zu)",
                            um->feng_name, um->param_count, arg_count);
+        }
+    }
+
+    if (receiver != NULL) {
+        /* Freeze the receiver before evaluating arguments with side effects. */
+        char *receiver_temp = cg_materialize_to_local(cg, receiver, "_gmr");
+        if (receiver_temp == NULL) {
+            ok = false;
+            goto cleanup;
+        }
+        free(receiver_temp);
+        if (builtin_fit->target_type_param_count > 0U) {
+            if (builtin_fit->target_type_param_count != 1U ||
+                receiver->type == NULL || receiver->type->kind != CG_TYPE_ARRAY ||
+                receiver->type->element == NULL) {
+                cg_fail(cg, e->token, "IE0002",
+                    "codegen: generic builtin method has no array element context");
+                ok = false;
+                goto cleanup;
+            }
+            receiver_element_ref = cg_type_ref_from_cgtype(
+                cg, receiver->type->element, e->token);
+            if (receiver_element_ref == NULL ||
+                !cg_generic_descriptor_expr(cg, receiver->type->element, NULL,
+                                             &e->token, &receiver_descriptor)) {
+                ok = false;
+                goto cleanup;
+            }
         }
     }
 
@@ -28806,9 +28860,9 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                    ? owner_type->generic_origin_decl
                    : owner_type->decl)
             : NULL;
-        const size_t owner_tp_count = owner_decl != NULL
-                                          ? owner_decl->as.type_decl.type_param_count
-                                          : 0U;
+        const size_t owner_tp_count = builtin_fit != NULL
+            ? builtin_fit->target_type_param_count
+            : (owner_decl != NULL ? owner_decl->as.type_decl.type_param_count : 0U);
         const size_t combined_count = owner_tp_count + method_tp_count;
         FengTypeParam *combined_params = combined_count > 0U
                                              ? (FengTypeParam *)calloc(
@@ -28827,14 +28881,11 @@ static bool cg_emit_generic_static_method_call(CG *cg,
                                                : NULL;
         const FengDecl *dependency_owner = user_fit != NULL
             ? user_fit->decl
-            : owner_decl;
-        const FengReifiableDepSet *dep_set = user_fit != NULL
+            : (builtin_fit != NULL ? builtin_fit->decl : owner_decl);
+        const FengReifiableDepSet *dep_set = dependency_owner != NULL
             ? feng_semantic_lookup_member_reifiable_dep_set(
-                  cg->analysis, user_fit->decl, um->member)
-            : owner_decl != NULL
-                  ? feng_semantic_lookup_member_reifiable_dep_set(
-                        cg->analysis, owner_decl, um->member)
-                  : NULL;
+                  cg->analysis, dependency_owner, um->member)
+            : NULL;
 
         if ((combined_count > 0U &&
              (combined_params == NULL || combined_args == NULL)) ||
@@ -28847,8 +28898,11 @@ static bool cg_emit_generic_static_method_call(CG *cg,
             goto cleanup;
         }
         for (size_t index = 0U; index < owner_tp_count; ++index) {
-            combined_params[index] = owner_decl->as.type_decl.type_params[index];
-            combined_args[index] = owner_type->generic_type_args[index];
+            combined_params[index] = builtin_fit != NULL
+                ? builtin_fit->target_type_params[index]
+                : owner_decl->as.type_decl.type_params[index];
+            combined_args[index] = builtin_fit != NULL
+                ? receiver_element_ref : owner_type->generic_type_args[index];
         }
         for (size_t index = 0U; index < method_tp_count; ++index) {
             combined_params[owner_tp_count + index] = sig->type_params[index];
@@ -28997,15 +29051,7 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         }
     }
 
-    if (builtin_fit != NULL) {
-        concrete_return = um->return_type == NULL
-                              ? cgtype_new(CG_TYPE_VOID)
-                              : cg_instantiate_builtin_fit_return_type(cg,
-                                                                       builtin_fit,
-                                                                       um->return_type,
-                                                                       NULL,
-                                                                       e->token);
-    } else if (!cg_resolve_selected_callable_return_type(
+    if (!cg_resolve_selected_callable_return_type(
                    cg, e, sig, e->token, &concrete_return)) {
         ok = false;
         goto cleanup;
@@ -29094,6 +29140,10 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         } else {
             buf_append_fmt(cg->cur_body, "    %s(", call_name);
         }
+        if (receiver != NULL) {
+            buf_append_cstr(cg->cur_body, receiver->c_expr);
+            has_arg = true;
+        }
         if (owner_type != NULL &&
             owner_type->generic_context_type_param_count > 0U) {
             owner_descriptor_expr = cg_rtd_expr_for_type(
@@ -29123,6 +29173,10 @@ static bool cg_emit_generic_static_method_call(CG *cg,
         if (func_desc_expr != NULL) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
             buf_append_cstr(cg->cur_body, func_desc_expr);
+        }
+        if (receiver_descriptor != NULL) {
+            cg_append_call_arg_separator(cg->cur_body, &has_arg);
+            buf_append_cstr(cg->cur_body, receiver_descriptor);
         }
         for (size_t i = 0U; i < method_tp_count; ++i) {
             cg_append_call_arg_separator(cg->cur_body, &has_arg);
@@ -29244,6 +29298,8 @@ cleanup:
     free(ret_cname);
     free(dispatch_name);
     free(func_desc_expr);
+    free(receiver_descriptor);
+    cg_type_ref_free(receiver_element_ref);
     return ok;
 }
 
@@ -29267,12 +29323,13 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
           (owner_type->generic_context_type_param_count > 0U ||
            cg_program_origin(cg, owner_type->owner_program) ==
                FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE)))) {
-        return cg_emit_generic_static_method_call(cg,
+        return cg_emit_generic_method_call(cg,
                                                   e,
                                                   owner_type,
                                                   um,
                                                   builtin_fit,
                                                   user_fit,
+                                                  NULL,
                                                   out);
     }
     if (builtin_fit != NULL && builtin_fit->target_type_param_count > 0U) {
@@ -30226,6 +30283,12 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, e->token,
                     "CE0159", "codegen: builtin/array fit has no method '%.*s'",
                     (int)ma->as.member.member.length, ma->as.member.member.data);
+            }
+            if (um->member->as.callable.type_param_count > 0U) {
+                bool ok = cg_emit_generic_method_call(
+                    cg, e, NULL, um, bf, NULL, &recv, out);
+                er_free(&recv);
+                return ok;
             }
             if (e->as.call.arg_count != um->param_count) {
                 er_free(&recv);
@@ -40573,158 +40636,110 @@ static bool cg_emit_if_with_bindings(CG *cg, const FengStmt *stmt) {
     return ok;
 }
 
+/* Emit an if chain, nesting only conditions whose temporaries need a C
+ * preamble. Scope.parent already records the wrapper stack without a fixed
+ * branch limit; the same stack restores compiler state on every failure. */
 static bool cg_emit_if(CG *cg, const FengStmt *stmt) {
     for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
         if (cg_expr_has_visible_match_binding(stmt->as.if_stmt.clauses[i].condition))
             return cg_emit_if_with_bindings(cg, stmt);
     }
-    /*
-     * In C, nothing may appear between `}` and `else`.  When the condition of
-     * an `else if` clause requires preamble code (function calls producing
-     * temporaries, cleanup pushes, etc.), we rewrite:
-     *
-     *   } else if (<complex>) { body }
-     *
-     * into:
-     *
-     *   } else {                        // wrapper block
-     *       <preamble>                  // temporaries live in wrapper_scope
-     *       if (<result>) { body }
-     *       ...remaining else-if/else...
-     *       <cleanup preamble temps>    // wrapper_scope released
-     *   }
-     *
-     * Wrapper scopes nest: each one wraps all remaining clauses and the
-     * optional else block, so they are closed in reverse order at the end.
-     */
-    #define MAX_IF_WRAPPER_SCOPES 64
-    Scope  *wrapper_scopes[MAX_IF_WRAPPER_SCOPES];
-    size_t  wrapper_count = 0;
+    Scope *outer_scope = cg->cur_scope;
+    bool ok = false;
 
-    for (size_t i = 0; i < stmt->as.if_stmt.clause_count; i++) {
-        const FengIfClause *c = &stmt->as.if_stmt.clauses[i];
+    for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
+        const FengIfClause *clause = &stmt->as.if_stmt.clauses[i];
         ExprResult cond;
-        Scope *branch_scope;
+        const char *if_prefix = "    if";
+        size_t body_len_before = cg->cur_body->length;
 
-        if (i > 0) {
-            /*
-             * Push a wrapper scope *before* evaluating the condition so that
-             * any temporaries produced by cg_emit_expr are registered in this
-             * scope (and cleaned up when we close the wrapper).
-             */
-            Scope *ws = scope_push(cg->cur_scope);
-            if (!ws) return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
-            cg->cur_scope = ws;
-
-            /* Record buffer position to detect preamble. */
-            size_t body_len_before = cg->cur_body->length;
-
-            if (!cg_emit_expr(cg, c->condition, &cond)) {
-                cg->cur_scope = ws->parent;
-                scope_pop_free(ws);
-                return false;
+        /* An else-if condition's temporaries belong to its wrapper, so they
+         * are evaluated only when all preceding conditions were false. */
+        if (i > 0U) {
+            Scope *wrapper = scope_push(cg->cur_scope);
+            if (wrapper == NULL) {
+                cg_fail(cg, clause->token, "IE0001", "codegen: out of memory");
+                goto cleanup;
             }
-            if (cond.type->kind != CG_TYPE_BOOL) {
-                er_free(&cond);
-                cg->cur_scope = ws->parent;
-                scope_pop_free(ws);
-                return cg_fail(cg, c->token, "CE0266", "codegen: if condition must be bool");
-            }
-
-            bool has_preamble = (cg->cur_body->length != body_len_before);
-
-            if (has_preamble) {
-                /*
-                 * Preamble was emitted after the previous clause's `}`.
-                 * Insert `else {\n` before it and use a plain `if`.
-                 */
-                const char *else_open = "    else {\n";
-                size_t eo_len = strlen(else_open);
-                size_t pr_len = cg->cur_body->length - body_len_before;
-
-                if (!buf_reserve(cg->cur_body, eo_len)) {
-                    er_free(&cond);
-                    cg->cur_scope = ws->parent;
-                    scope_pop_free(ws);
-                    return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
-                }
-                memmove(cg->cur_body->data + body_len_before + eo_len,
-                        cg->cur_body->data + body_len_before,
-                        pr_len);
-                memcpy(cg->cur_body->data + body_len_before, else_open, eo_len);
-                cg->cur_body->length += eo_len;
-                cg->cur_body->data[cg->cur_body->length] = '\0';
-
-                buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.c_expr);
-
-                if (wrapper_count >= MAX_IF_WRAPPER_SCOPES) {
-                    er_free(&cond);
-                    cg->cur_scope = ws->parent;
-                    scope_pop_free(ws);
-                    return cg_fail(cg, c->token, "CE0267", "codegen: too many nested else-if wrappers");
-                }
-                wrapper_scopes[wrapper_count++] = ws;
-            } else {
-                /*
-                 * No preamble — the wrapper scope is empty.  Pop it and emit
-                 * a normal `else if`.
-                 */
-                cg->cur_scope = ws->parent;
-                scope_pop_free(ws);
-
-                buf_append_fmt(cg->cur_body, "    else if (%s) {\n", cond.c_expr);
-            }
-        } else {
-            /* First clause (i == 0): plain `if`. */
-            if (!cg_emit_expr(cg, c->condition, &cond)) return false;
-            if (cond.type->kind != CG_TYPE_BOOL) {
-                er_free(&cond);
-                return cg_fail(cg, c->token, "CE0266", "codegen: if condition must be bool");
-            }
-            buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond.c_expr);
+            cg->cur_scope = wrapper;
         }
-
+        if (!cg_emit_expr(cg, clause->condition, &cond)) goto cleanup;
+        if (cond.type->kind != CG_TYPE_BOOL) {
+            er_free(&cond);
+            cg_fail(cg, clause->token, "CE0266", "codegen: if condition must be bool");
+            goto cleanup;
+        }
+        if (i > 0U) {
+            if (cg->cur_body->length != body_len_before) {
+                /* C forbids a preamble between } and else. Put it inside an
+                 * else wrapper, which also owns all following clauses. */
+                const char *else_open = "    else {\n";
+                size_t opening_length = strlen(else_open);
+                size_t preamble_length = cg->cur_body->length - body_len_before;
+                if (!buf_reserve(cg->cur_body, opening_length)) {
+                    er_free(&cond);
+                    cg_fail(cg, clause->token, "IE0001", "codegen: out of memory");
+                    goto cleanup;
+                }
+                memmove(cg->cur_body->data + body_len_before + opening_length,
+                        cg->cur_body->data + body_len_before, preamble_length);
+                memcpy(cg->cur_body->data + body_len_before,
+                       else_open, opening_length);
+                cg->cur_body->length += opening_length;
+                cg->cur_body->data[cg->cur_body->length] = '\0';
+            } else {
+                /* An empty wrapper is unnecessary for an ordinary else-if. */
+                Scope *wrapper = cg->cur_scope;
+                cg->cur_scope = wrapper->parent;
+                scope_pop_free(wrapper);
+                if_prefix = "    else if";
+            }
+        }
+        buf_append_fmt(cg->cur_body, "%s (%s) {\n", if_prefix, cond.c_expr);
         er_free(&cond);
 
-        branch_scope = scope_push(cg->cur_scope);
-        if (!branch_scope) return cg_fail(cg, c->token, "IE0001", "codegen: out of memory");
-        cg->cur_scope = branch_scope;
-        if (!cg_emit_block(cg, c->block)) {
-            cg->cur_scope = branch_scope->parent;
-            scope_pop_free(branch_scope);
-            return false;
+        Scope *branch = scope_push(cg->cur_scope);
+        if (branch == NULL) {
+            cg_fail(cg, clause->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
         }
-        cg_release_scope(cg, branch_scope);
-        cg->cur_scope = branch_scope->parent;
-        scope_pop_free(branch_scope);
+        cg->cur_scope = branch;
+        if (!cg_emit_block(cg, clause->block)) goto cleanup;
+        cg_release_scope(cg, branch);
+        cg->cur_scope = branch->parent;
+        scope_pop_free(branch);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
 
-    if (stmt->as.if_stmt.else_block) {
-        Scope *else_scope = scope_push(cg->cur_scope);
-        if (!else_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
-        cg->cur_scope = else_scope;
+    if (stmt->as.if_stmt.else_block != NULL) {
+        Scope *branch = scope_push(cg->cur_scope);
+        if (branch == NULL) {
+            cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        cg->cur_scope = branch;
         buf_append_cstr(cg->cur_body, "    else {\n");
-        if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) {
-            cg->cur_scope = else_scope->parent;
-            scope_pop_free(else_scope);
-            return false;
-        }
-        cg_release_scope(cg, else_scope);
-        cg->cur_scope = else_scope->parent;
-        scope_pop_free(else_scope);
+        if (!cg_emit_block(cg, stmt->as.if_stmt.else_block)) goto cleanup;
+        cg_release_scope(cg, branch);
+        cg->cur_scope = branch->parent;
+        scope_pop_free(branch);
         buf_append_cstr(cg->cur_body, "    }\n");
     }
+    ok = true;
 
-    /* Close wrapper scopes in reverse order: release temporaries, then `}`. */
-    for (size_t d = wrapper_count; d > 0; d--) {
-        Scope *ws = wrapper_scopes[d - 1];
-        cg_release_scope(cg, ws);
-        cg->cur_scope = ws->parent;
-        scope_pop_free(ws);
-        buf_append_cstr(cg->cur_body, "    }\n");
+cleanup:
+    /* On success only wrappers remain: release their temporaries and close
+     * them from the innermost out. On failure discard all still-open scopes. */
+    while (cg->cur_scope != outer_scope) {
+        Scope *scope = cg->cur_scope;
+        if (ok) {
+            cg_release_scope(cg, scope);
+            buf_append_cstr(cg->cur_body, "    }\n");
+        }
+        cg->cur_scope = scope->parent;
+        scope_pop_free(scope);
     }
-    return true;
+    return ok;
 }
 
 static bool cg_emit_match_stmt_branch(CG *cg, const FengBlock *block, FengToken token) {
@@ -45433,20 +45448,33 @@ static bool cg_emit_imported_generic_method_shared_proto(CG *cg,
     return true;
 }
 
-/* Builtin array fits share one body across all element types. An erased T
- * return or value-semantics return depending on the fit target parameter
- * cannot use a C return value: the open and concrete generic structs are
- * distinct C types and the concrete layout is described at the call site.
- * Use the same caller-provided output-slot ABI as other generic shared bodies. */
+/* Builtin fits share one body across both target and method type arguments.
+ * Erased values and open value layouts use the same caller-provided output
+ * slot as other shared bodies. Direct calls and method-value adapters must
+ * agree with the shared implementation on this return representation. */
 static bool cg_builtin_fit_return_uses_out(const BuiltinFit *bf,
                                            const UserMethod *m) {
-    return bf != NULL && bf->target_type_param_count > 0U &&
-           m != NULL && m->return_type != NULL &&
-           m->return_type->kind != CG_TYPE_VOID &&
-           (m->return_type->kind == CG_TYPE_GENERIC_PARAM ||
-           (cg_type_is_value_semantics(m->return_type) &&
-           m->return_type->user != NULL &&
-           m->return_type->user->generic_context_type_param_count > 0U));
+    return bf != NULL && m != NULL && m->member != NULL &&
+           (bf->target_type_param_count > 0U ||
+            m->member->as.callable.type_param_count > 0U) &&
+           cg_shared_generic_param_uses_address(m->return_type);
+}
+
+/* Open reference instances retain the ordinary pointer return ABI, with a
+ * neutral C type shared by every closure. Their Feng type and lifecycle are
+ * still supplied by the substituted call result and existing descriptors. */
+static void cg_emit_builtin_fit_return_type(Buf *out, const BuiltinFit *bf,
+                                            const UserMethod *method) {
+    const CGType *type = method->return_type;
+    if (cg_builtin_fit_return_uses_out(bf, method)) {
+        buf_append_cstr(out, "void");
+    } else if (type != NULL && type->kind == CG_TYPE_OBJECT &&
+               !cg_type_is_value_semantics(type) && type->user != NULL &&
+               type->user->generic_context_type_param_count > 0U) {
+        buf_append_cstr(out, "void *");
+    } else {
+        cg_emit_c_type(out, type);
+    }
 }
 
 static void cg_emit_builtin_fit_method_proto(CG *cg, Buf *out,
@@ -45460,11 +45488,7 @@ static void cg_emit_builtin_fit_method_proto(CG *cg, Buf *out,
         buf_append_cstr(out, "static ");
     }
     const bool return_uses_out = cg_builtin_fit_return_uses_out(bf, m);
-    if (return_uses_out) {
-        buf_append_cstr(out, "void");
-    } else {
-        cg_emit_c_type(out, m->return_type);
-    }
+    cg_emit_builtin_fit_return_type(out, bf, m);
     buf_append_fmt(out, " %s(", m->c_name);
     if (!is_static_method) {
         cg_emit_c_type(out, bf->target_type);
@@ -45503,7 +45527,7 @@ static void cg_emit_builtin_fit_method_proto(CG *cg, Buf *out,
         if (has_param) {
             buf_append_cstr(out, ", ");
         }
-        if (m->param_types[i] != NULL && m->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+        if (cg_shared_generic_param_uses_address(m->param_types[i])) {
             buf_append_fmt(out, "const void *%s",
                            m->param_names[i] ? m->param_names[i] : "_p");
         } else {
@@ -48942,12 +48966,8 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
                     goto cleanup;
                 }
             } else {
-                param_uses_address[index] = builtin_fit != NULL
-                    ? method->param_types[index] != NULL &&
-                          method->param_types[index]->kind ==
-                              CG_TYPE_GENERIC_PARAM
-                    : cg_shared_generic_param_uses_address(
-                          method->param_types[index]);
+                param_uses_address[index] = cg_shared_generic_param_uses_address(
+                    method->param_types[index]);
             }
         }
         for (size_t index = 0U;
@@ -64267,6 +64287,10 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         return false;
     }
     cg->generic_function_descriptor_c_name = "_desc";
+    cg->generic_type_method_rtd_descs = NULL;
+    cg->generic_type_method_rtd_count = 0U;
+    cg->generic_type_method_rad_descs = NULL;
+    cg->generic_type_method_rad_count = 0U;
     cg->generic_callable_dep_keys = NULL;
     cg->generic_callable_dep_count = 0U;
     cg->generic_callable_dep_via_desc = true;
@@ -64280,11 +64304,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     if (needs_static) {
         buf_append_cstr(body, "static ");
     }
-    if (return_uses_out) {
-        buf_append_cstr(body, "void");
-    } else {
-        cg_emit_c_type(body, m->return_type);
-    }
+    cg_emit_builtin_fit_return_type(body, bf, m);
     buf_append_fmt(body, " %s(", m->c_name);
     if (!is_static_method) {
         cg_emit_c_type(body, bf->target_type);
@@ -64338,7 +64358,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         if (has_param) {
             buf_append_cstr(body, ", ");
         }
-        if (m->param_types[i] != NULL && m->param_types[i]->kind == CG_TYPE_GENERIC_PARAM) {
+        if (cg_shared_generic_param_uses_address(m->param_types[i])) {
             buf_append_fmt(body, "const void *%s",
                            m->param_names[i] ? m->param_names[i] : "_p");
         } else {
@@ -64490,169 +64510,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
         }
     }
 
-    if (bf->target_type_param_count > 0U) {
-        /* §2.6.6 前置：预计算 BuiltinFit 方法体的 reified_type_deps 映射。
-         * 使用 fit decl 查找已收集的 dep_set，按 cg_reifiable_sort_key
-         * 排序后记录每个 MANAGED dep 对应的擦除描述符名称。 */
-        {
-            const FengReifiableDepSet *rtd_dep_set =
-                feng_semantic_lookup_member_reifiable_dep_set(
-                    cg->analysis, bf->decl, m->member);
-            if (rtd_dep_set != NULL && rtd_dep_set->dep_count > 0U) {
-                FengSlice *tp_names = (FengSlice *)calloc(
-                    bf->target_type_param_count, sizeof(FengSlice));
-                if (tp_names != NULL) {
-                    for (size_t i = 0; i < bf->target_type_param_count; ++i) {
-                        tp_names[i] = bf->target_type_params[i].name;
-                    }
-                    typedef struct { size_t idx; char *key; } RTDSort;
-                    size_t mc = 0;
-                    for (size_t i = 0; i < rtd_dep_set->dep_count; ++i) {
-                        if (rtd_dep_set->deps[i].kind ==
-                            FENG_REIFIABLE_DEP_KIND_MANAGED) {
-                            mc++;
-                        }
-                    }
-                    if (mc > 0U) {
-                        RTDSort *sorted = (RTDSort *)calloc(mc, sizeof(RTDSort));
-                        if (sorted != NULL) {
-                            size_t si = 0;
-                            for (size_t i = 0; i < rtd_dep_set->dep_count; ++i) {
-                                if (rtd_dep_set->deps[i].kind !=
-                                    FENG_REIFIABLE_DEP_KIND_MANAGED) continue;
-                                sorted[si].idx = i;
-                                sorted[si].key = cg_reifiable_sort_key(
-                                    rtd_dep_set->deps[i].type_ref,
-                                    tp_names,
-                                    bf->target_type_param_count, true);
-                                si++;
-                            }
-                            for (size_t i = 1; i < mc; ++i) {
-                                RTDSort tmp = sorted[i];
-                                size_t j = i;
-                                while (j > 0 &&
-                                       strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                    sorted[j] = sorted[j - 1];
-                                    j--;
-                                }
-                                sorted[j] = tmp;
-                            }
-                            cg->generic_type_method_rtd_descs =
-                                (char **)calloc(mc, sizeof(char *));
-                            if (cg->generic_type_method_rtd_descs != NULL) {
-                                cg->generic_type_method_rtd_count = mc;
-                                cg->generic_type_method_rtd_via_desc = true;
-                                for (size_t i = 0; i < mc; ++i) {
-                                    const FengReifiableDep *dep =
-                                        &rtd_dep_set->deps[sorted[i].idx];
-                                    const char *descriptor_name =
-                                        cg_open_generic_managed_descriptor_name(
-                                            cg,
-                                            dep->type_ref);
-
-                                    if (descriptor_name != NULL) {
-                                        cg->generic_type_method_rtd_descs[i] =
-                                            strdup(descriptor_name);
-                                    }
-                                }
-                            }
-                            for (size_t i = 0; i < mc; ++i) free(sorted[i].key);
-                            free(sorted);
-                        }
-                    }
-                    free(tp_names);
-                }
-            }
-        }
-    }
-
-    /* §2.6.1-§2.6.4：预计算 BuiltinFit 方法体的 reified_agg_deps 映射。 */
-    {
-        const FengReifiableDepSet *rad_dep_set =
-            feng_semantic_lookup_member_reifiable_dep_set(
-                cg->analysis, bf->decl, m->member);
-        if (rad_dep_set != NULL && rad_dep_set->dep_count > 0U) {
-            FengSlice *tp_names_rad = (FengSlice *)calloc(
-                bf->target_type_param_count, sizeof(FengSlice));
-            if (tp_names_rad != NULL) {
-                for (size_t i = 0; i < bf->target_type_param_count; ++i) {
-                    tp_names_rad[i] = bf->target_type_params[i].name;
-                }
-                typedef struct { size_t idx; char *key; } RADSort;
-                size_t ac = 0;
-                for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
-                    if (rad_dep_set->deps[i].kind ==
-                        FENG_REIFIABLE_DEP_KIND_AGGREGATE) {
-                        ac++;
-                    }
-                }
-                if (ac > 0U) {
-                    RADSort *sorted = (RADSort *)calloc(ac, sizeof(RADSort));
-                    if (sorted != NULL) {
-                        size_t si = 0;
-                        for (size_t i = 0; i < rad_dep_set->dep_count; ++i) {
-                            if (rad_dep_set->deps[i].kind !=
-                                FENG_REIFIABLE_DEP_KIND_AGGREGATE) continue;
-                            sorted[si].idx = i;
-                            sorted[si].key = cg_reifiable_sort_key(
-                                rad_dep_set->deps[i].type_ref,
-                                tp_names_rad,
-                                bf->target_type_param_count, true);
-                            si++;
-                        }
-                        for (size_t i = 1; i < ac; ++i) {
-                            RADSort tmp = sorted[i];
-                            size_t j = i;
-                            while (j > 0 &&
-                                   strcmp(sorted[j - 1].key, tmp.key) > 0) {
-                                sorted[j] = sorted[j - 1];
-                                j--;
-                            }
-                            sorted[j] = tmp;
-                        }
-                        cg->generic_type_method_rad_descs =
-                            (char **)calloc(ac, sizeof(char *));
-                        if (cg->generic_type_method_rad_descs != NULL) {
-                            cg->generic_type_method_rad_count = ac;
-                            cg->generic_type_method_rad_via_desc = true;
-                            for (size_t i = 0; i < ac; ++i) {
-                                const FengReifiableDep *dep =
-                                    &rad_dep_set->deps[sorted[i].idx];
-                                const FengDecl *dep_origin = NULL;
-                                if (dep->type_ref != NULL &&
-                                    dep->type_ref->kind == FENG_TYPE_REF_NAMED &&
-                                    dep->type_ref->as.named.type_arg_count > 0U) {
-                                    const GenericTypeDecl *gtd =
-                                        cg_find_generic_type_decl(cg,
-                                            dep->type_ref);
-                                    if (gtd != NULL) dep_origin = gtd->decl;
-                                }
-                                if (dep_origin != NULL) {
-                                    const UserType *erased =
-                                        cg_find_open_generic_instance(
-                                            cg,
-                                            &(UserType){
-                                                .is_generic_instance = true,
-                                                .generic_origin_decl = dep_origin
-                                            });
-                                    if (erased != NULL) {
-                                        cg->generic_type_method_rad_descs[i] =
-                                            strdup(erased->c_aggregate_desc_name);
-                                    }
-                                }
-                            }
-                        }
-                        for (size_t i = 0; i < ac; ++i) free(sorted[i].key);
-                        free(sorted);
-                    }
-                }
-                free(tp_names_rad);
-            }
-        }
-    }
-
-    /* A fit member owns its callable slots just like an ordinary generic
-     * function. Include both fit and method parameters in declaration order. */
+    /* A fit member owns managed, aggregate and callable slots like every
+     * shared body. Include target and method parameters in declaration order
+     * so the provider mapping agrees with each closed caller descriptor. */
     {
         const FengCallableSignature *signature = &m->member->as.callable;
         size_t fit_count = bf->target_type_param_count;
@@ -64667,9 +64527,9 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 ? bf->target_type_params[index].name
                 : signature->type_params[index - fit_count].name;
         }
-        bool mapped = cg_activate_callable_dep_mapping(cg,
+        bool mapped = cg_activate_reified_dependency_mapping(cg,
             feng_semantic_lookup_member_reifiable_dep_set(cg->analysis, bf->decl, m->member),
-            names, total_count, CG_REIFIED_DEP_SOURCE_FUNCTION);
+            names, total_count, CG_REIFIED_DEP_SOURCE_FUNCTION, m->member->token);
         free(names);
         if (!mapped) {
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
@@ -64761,6 +64621,10 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 m->member->as.callable.params[i].mutability)) {
             cgtype_free(pt);
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
+            goto cleanup;
+        }
+        if (!cg_mark_last_shared_address_parameter(
+                cg, fn_scope, pt, m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
         if (!cg_debug_add_variable_record_slice_type_ref(

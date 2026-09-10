@@ -71,6 +71,8 @@ func main(args: string[]) {
       test_intersection_projection();
       test_constraint_projection();
       test_generic_literal_storage();
+      test_valid_codegen();
+      test_long_if_codegen();
       test_g24_forward_callable();
       test_g24_static_callable();
       test_g24_callee_guards();

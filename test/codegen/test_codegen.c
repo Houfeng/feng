@@ -36,6 +36,8 @@ void test_constraint_projection_codegen(void (*compile_c)(const char *));
 void test_reified_metadata_counts(void (*compile_c)(const char *));
 /* Shared literals must store actual T using the closed owner's field layout. */
 void test_generic_literal_storage_codegen(void (*compile_c)(const char *));
+/* Reviewed legal-program failures include host-C validity and long if chains. */
+void test_valid_program_codegen(void (*compile_c)(const char *));
 /* Constructed generic actuals use static records across every shared entrance. */
 void test_generic_argument_static_codegen(void (*compile_c)(const char *));
 /* G25 closed pointer values and generic identities survive FT import. */
@@ -17382,6 +17384,7 @@ int main(void) {
     test_constraint_projection_codegen(compile_generated_c_or_die);
     test_reified_metadata_counts(compile_generated_c_or_die);
     test_generic_literal_storage_codegen(compile_generated_c_or_die);
+    test_valid_program_codegen(compile_generated_c_or_die);
     test_g23_generic_array_return_codegen();
     test_g23_qualified_generic_function_codegen();
     test_g22_qualified_binding_storage_codegen();

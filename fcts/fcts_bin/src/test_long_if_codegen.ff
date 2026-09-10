@@ -1,0 +1,165 @@
+module fcts_bin;
+import std.test;
+
+/** Observe evaluation and destruction without counting synthesized defaults. */
+type VCGBranchProbe {
+    open let number:i32;
+    open static var calls:i32;
+    open static var destroyed:i32;
+    open static var expectedRelease:i32;
+    open static var ordered:bool;
+    /** Nested condition temporaries must unwind in reverse creation order. */
+    func ~VCGBranchProbe() {
+        if self.number != 0 {
+            if self.number != VCGBranchProbe.expectedRelease { VCGBranchProbe.ordered=false; }
+            VCGBranchProbe.expectedRelease-=1;
+            VCGBranchProbe.destroyed+=1;
+        }
+    }
+}
+/** The array literal argument forces a condition preamble and owns its probe. */
+func vcgBranchCondition(values:VCGBranchProbe[], target:i32, throwAt:i32):bool {
+    VCGBranchProbe.calls+=1;
+    let number=values[0].number;
+    if number != VCGBranchProbe.calls { VCGBranchProbe.ordered=false; }
+    if number == throwAt { throw "long condition"; }
+    return number == target;
+}
+/** Ninety-six else-if clauses exceed the old limit without changing semantics. */
+func vcgLongBranch(target:i32, throwAt:i32):i32 {
+    var result:i32=-1;
+    if vcgBranchCondition([VCGBranchProbe{number:1}],target,throwAt) { result=1; }
+    else if vcgBranchCondition([VCGBranchProbe{number:2}],target,throwAt) { result=2; }
+    else if vcgBranchCondition([VCGBranchProbe{number:3}],target,throwAt) { result=3; }
+    else if vcgBranchCondition([VCGBranchProbe{number:4}],target,throwAt) { result=4; }
+    else if vcgBranchCondition([VCGBranchProbe{number:5}],target,throwAt) { result=5; }
+    else if vcgBranchCondition([VCGBranchProbe{number:6}],target,throwAt) { result=6; }
+    else if vcgBranchCondition([VCGBranchProbe{number:7}],target,throwAt) { result=7; }
+    else if vcgBranchCondition([VCGBranchProbe{number:8}],target,throwAt) { result=8; }
+    else if vcgBranchCondition([VCGBranchProbe{number:9}],target,throwAt) { result=9; }
+    else if vcgBranchCondition([VCGBranchProbe{number:10}],target,throwAt) { result=10; }
+    else if vcgBranchCondition([VCGBranchProbe{number:11}],target,throwAt) { result=11; }
+    else if vcgBranchCondition([VCGBranchProbe{number:12}],target,throwAt) { result=12; }
+    else if vcgBranchCondition([VCGBranchProbe{number:13}],target,throwAt) { result=13; }
+    else if vcgBranchCondition([VCGBranchProbe{number:14}],target,throwAt) { result=14; }
+    else if vcgBranchCondition([VCGBranchProbe{number:15}],target,throwAt) { result=15; }
+    else if vcgBranchCondition([VCGBranchProbe{number:16}],target,throwAt) { result=16; }
+    else if vcgBranchCondition([VCGBranchProbe{number:17}],target,throwAt) { result=17; }
+    else if vcgBranchCondition([VCGBranchProbe{number:18}],target,throwAt) { result=18; }
+    else if vcgBranchCondition([VCGBranchProbe{number:19}],target,throwAt) { result=19; }
+    else if vcgBranchCondition([VCGBranchProbe{number:20}],target,throwAt) { result=20; }
+    else if vcgBranchCondition([VCGBranchProbe{number:21}],target,throwAt) { result=21; }
+    else if vcgBranchCondition([VCGBranchProbe{number:22}],target,throwAt) { result=22; }
+    else if vcgBranchCondition([VCGBranchProbe{number:23}],target,throwAt) { result=23; }
+    else if vcgBranchCondition([VCGBranchProbe{number:24}],target,throwAt) { result=24; }
+    else if vcgBranchCondition([VCGBranchProbe{number:25}],target,throwAt) { result=25; }
+    else if vcgBranchCondition([VCGBranchProbe{number:26}],target,throwAt) { result=26; }
+    else if vcgBranchCondition([VCGBranchProbe{number:27}],target,throwAt) { result=27; }
+    else if vcgBranchCondition([VCGBranchProbe{number:28}],target,throwAt) { result=28; }
+    else if vcgBranchCondition([VCGBranchProbe{number:29}],target,throwAt) { result=29; }
+    else if vcgBranchCondition([VCGBranchProbe{number:30}],target,throwAt) { result=30; }
+    else if vcgBranchCondition([VCGBranchProbe{number:31}],target,throwAt) { result=31; }
+    else if vcgBranchCondition([VCGBranchProbe{number:32}],target,throwAt) { result=32; }
+    else if vcgBranchCondition([VCGBranchProbe{number:33}],target,throwAt) { result=33; }
+    else if vcgBranchCondition([VCGBranchProbe{number:34}],target,throwAt) { result=34; }
+    else if vcgBranchCondition([VCGBranchProbe{number:35}],target,throwAt) { result=35; }
+    else if vcgBranchCondition([VCGBranchProbe{number:36}],target,throwAt) { result=36; }
+    else if vcgBranchCondition([VCGBranchProbe{number:37}],target,throwAt) { result=37; }
+    else if vcgBranchCondition([VCGBranchProbe{number:38}],target,throwAt) { result=38; }
+    else if vcgBranchCondition([VCGBranchProbe{number:39}],target,throwAt) { result=39; }
+    else if vcgBranchCondition([VCGBranchProbe{number:40}],target,throwAt) { result=40; }
+    else if vcgBranchCondition([VCGBranchProbe{number:41}],target,throwAt) { result=41; }
+    else if vcgBranchCondition([VCGBranchProbe{number:42}],target,throwAt) { result=42; }
+    else if vcgBranchCondition([VCGBranchProbe{number:43}],target,throwAt) { result=43; }
+    else if vcgBranchCondition([VCGBranchProbe{number:44}],target,throwAt) { result=44; }
+    else if vcgBranchCondition([VCGBranchProbe{number:45}],target,throwAt) { result=45; }
+    else if vcgBranchCondition([VCGBranchProbe{number:46}],target,throwAt) { result=46; }
+    else if vcgBranchCondition([VCGBranchProbe{number:47}],target,throwAt) { result=47; }
+    else if vcgBranchCondition([VCGBranchProbe{number:48}],target,throwAt) { result=48; }
+    else if vcgBranchCondition([VCGBranchProbe{number:49}],target,throwAt) { result=49; }
+    else if vcgBranchCondition([VCGBranchProbe{number:50}],target,throwAt) { result=50; }
+    else if vcgBranchCondition([VCGBranchProbe{number:51}],target,throwAt) { result=51; }
+    else if vcgBranchCondition([VCGBranchProbe{number:52}],target,throwAt) { result=52; }
+    else if vcgBranchCondition([VCGBranchProbe{number:53}],target,throwAt) { result=53; }
+    else if vcgBranchCondition([VCGBranchProbe{number:54}],target,throwAt) { result=54; }
+    else if vcgBranchCondition([VCGBranchProbe{number:55}],target,throwAt) { result=55; }
+    else if vcgBranchCondition([VCGBranchProbe{number:56}],target,throwAt) { result=56; }
+    else if vcgBranchCondition([VCGBranchProbe{number:57}],target,throwAt) { result=57; }
+    else if vcgBranchCondition([VCGBranchProbe{number:58}],target,throwAt) { result=58; }
+    else if vcgBranchCondition([VCGBranchProbe{number:59}],target,throwAt) { result=59; }
+    else if vcgBranchCondition([VCGBranchProbe{number:60}],target,throwAt) { result=60; }
+    else if vcgBranchCondition([VCGBranchProbe{number:61}],target,throwAt) { result=61; }
+    else if vcgBranchCondition([VCGBranchProbe{number:62}],target,throwAt) { result=62; }
+    else if vcgBranchCondition([VCGBranchProbe{number:63}],target,throwAt) { result=63; }
+    else if vcgBranchCondition([VCGBranchProbe{number:64}],target,throwAt) { result=64; }
+    else if vcgBranchCondition([VCGBranchProbe{number:65}],target,throwAt) { result=65; }
+    else if vcgBranchCondition([VCGBranchProbe{number:66}],target,throwAt) { result=66; }
+    else if vcgBranchCondition([VCGBranchProbe{number:67}],target,throwAt) { result=67; }
+    else if vcgBranchCondition([VCGBranchProbe{number:68}],target,throwAt) { result=68; }
+    else if vcgBranchCondition([VCGBranchProbe{number:69}],target,throwAt) { result=69; }
+    else if vcgBranchCondition([VCGBranchProbe{number:70}],target,throwAt) { result=70; }
+    else if vcgBranchCondition([VCGBranchProbe{number:71}],target,throwAt) { result=71; }
+    else if vcgBranchCondition([VCGBranchProbe{number:72}],target,throwAt) { result=72; }
+    else if vcgBranchCondition([VCGBranchProbe{number:73}],target,throwAt) { result=73; }
+    else if vcgBranchCondition([VCGBranchProbe{number:74}],target,throwAt) { result=74; }
+    else if vcgBranchCondition([VCGBranchProbe{number:75}],target,throwAt) { result=75; }
+    else if vcgBranchCondition([VCGBranchProbe{number:76}],target,throwAt) { result=76; }
+    else if vcgBranchCondition([VCGBranchProbe{number:77}],target,throwAt) { result=77; }
+    else if vcgBranchCondition([VCGBranchProbe{number:78}],target,throwAt) { result=78; }
+    else if vcgBranchCondition([VCGBranchProbe{number:79}],target,throwAt) { result=79; }
+    else if vcgBranchCondition([VCGBranchProbe{number:80}],target,throwAt) { result=80; }
+    else if vcgBranchCondition([VCGBranchProbe{number:81}],target,throwAt) { result=81; }
+    else if vcgBranchCondition([VCGBranchProbe{number:82}],target,throwAt) { result=82; }
+    else if vcgBranchCondition([VCGBranchProbe{number:83}],target,throwAt) { result=83; }
+    else if vcgBranchCondition([VCGBranchProbe{number:84}],target,throwAt) { result=84; }
+    else if vcgBranchCondition([VCGBranchProbe{number:85}],target,throwAt) { result=85; }
+    else if vcgBranchCondition([VCGBranchProbe{number:86}],target,throwAt) { result=86; }
+    else if vcgBranchCondition([VCGBranchProbe{number:87}],target,throwAt) { result=87; }
+    else if vcgBranchCondition([VCGBranchProbe{number:88}],target,throwAt) { result=88; }
+    else if vcgBranchCondition([VCGBranchProbe{number:89}],target,throwAt) { result=89; }
+    else if vcgBranchCondition([VCGBranchProbe{number:90}],target,throwAt) { result=90; }
+    else if vcgBranchCondition([VCGBranchProbe{number:91}],target,throwAt) { result=91; }
+    else if vcgBranchCondition([VCGBranchProbe{number:92}],target,throwAt) { result=92; }
+    else if vcgBranchCondition([VCGBranchProbe{number:93}],target,throwAt) { result=93; }
+    else if vcgBranchCondition([VCGBranchProbe{number:94}],target,throwAt) { result=94; }
+    else if vcgBranchCondition([VCGBranchProbe{number:95}],target,throwAt) { result=95; }
+    else if vcgBranchCondition([VCGBranchProbe{number:96}],target,throwAt) { result=96; }
+    else if vcgBranchCondition([VCGBranchProbe{number:97}],target,throwAt) { result=97; }
+    else { result=0; }
+    return result;
+}
+/** Reset per-invocation observations before creating any condition temporary. */
+func vcgResetBranches(count:i32) {
+    VCGBranchProbe.calls=0;
+    VCGBranchProbe.destroyed=0;
+    VCGBranchProbe.expectedRelease=count;
+    VCGBranchProbe.ordered=true;
+}
+/** Match before, at, and after the old wrapper limit, then reach the final else. */
+func test_long_if_codegen() {
+    describe("long if codegen", () {
+        test("only conditions up to the selected clause run and release in reverse order", () {
+            let targets:i32[]=[1,64,65,66,97];
+            for let target in targets {
+                vcgResetBranches(target);
+                let result=vcgLongBranch(target,0);
+                assert(result==target && VCGBranchProbe.calls==target, "ordered short circuit conditions");
+                assert(VCGBranchProbe.destroyed==target && VCGBranchProbe.expectedRelease==0 &&
+                       VCGBranchProbe.ordered, "reverse cleanup after selected branch");
+            }
+        });
+        test("the final else runs after every condition is false", () {
+            vcgResetBranches(97);
+            assert(vcgLongBranch(0,0)==0 && VCGBranchProbe.calls==97, "complete false chain");
+            assert(VCGBranchProbe.destroyed==97 && VCGBranchProbe.ordered, "complete reverse cleanup");
+        });
+        test("an exception beyond the old limit releases all evaluated temporaries", () {
+            vcgResetBranches(70);
+            var caught=false;
+            try vcgLongBranch(0,70) catch message:string { caught=message=="long condition"; }
+            assert(caught && VCGBranchProbe.calls==70, "exception stops later conditions");
+            assert(VCGBranchProbe.destroyed==70 && VCGBranchProbe.expectedRelease==0 &&
+                   VCGBranchProbe.ordered, "exception unwinds condition temporaries");
+        });
+    });
+}
