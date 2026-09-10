@@ -1,4 +1,4 @@
-open module fcts_projection_peer;
+open module fcts_lib_peer;
 import fcts_lib.test.constraint_projection;
 
 /** Same short name as the middle package, but independent identity and order. */
@@ -10,7 +10,7 @@ open func cp_peer_same<T: CPSameName>(value: T): i32 {
 /** This provider never imports or depends on the middle package. */
 open func cp_peer_same_route<A, T: CPAll<A>>(value: T): i32 { return cp_peer_same<T>(value); }
 
-/** The peer has no dependency on fcts_middle or its projected constraint. */
+/** The peer has no dependency on fcts_lib_middle or its projected constraint. */
 open spec CPPeerExtraRight: CPExtra & CPRight;
 /** This provider's local indices are independent from every other provider. */
 open func cp_peer_pair<T: CPPeerExtraRight>(value: T): i32 {

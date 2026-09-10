@@ -1,5 +1,5 @@
 [package]
-name: "fcts_projection_peer"
+name: "fcts_lib_peer"
 version: "0.1.0"
 target: "lib"
 src: "src/"

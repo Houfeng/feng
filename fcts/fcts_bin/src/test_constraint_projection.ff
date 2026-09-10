@@ -1,8 +1,8 @@
 module fcts_bin;
 import std.test;
 import fcts_lib.test.constraint_projection;
-import fcts_middle.constraint_projection;
-import fcts_projection_peer;
+import fcts_lib_middle.constraint_projection;
+import fcts_lib_peer;
 
 /** Local callee and caller independently cover the same-package shared path. */
 func cp_local_right<T: CPRight>(value: T): i32 { return value.right(); }

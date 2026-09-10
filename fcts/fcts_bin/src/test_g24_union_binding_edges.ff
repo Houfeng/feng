@@ -4,7 +4,7 @@ import std.test;
 import fcts_lib.test.g24_union_bindings;
 import fcts_lib.test.g24_binding_edges;
 import fcts_lib.test.g24_binding_owners;
-import fcts_middle;
+import fcts_lib_middle;
 
 /** A named managed tuple exercises a non-object aggregate leaf. */
 type G24BindingTuple(i32, string);

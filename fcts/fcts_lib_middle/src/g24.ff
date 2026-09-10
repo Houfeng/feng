@@ -1,4 +1,4 @@
-open module fcts_middle;
+open module fcts_lib_middle;
 
 import fcts_lib.test.g24_union_bindings;
 import fcts_lib.test.g24_binding_edges;

@@ -8,5 +8,5 @@ out: "build/"
 [dependencies]
 std: "../../std/std"
 fcts_lib: "../fcts_lib"
-fcts_middle: "../fcts_middle"
-fcts_projection_peer: "../fcts_projection_peer"
+fcts_lib_middle: "../fcts_lib_middle"
+fcts_lib_peer: "../fcts_lib_peer"

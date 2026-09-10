@@ -1,5 +1,5 @@
 [package]
-name: "fcts_middle"
+name: "fcts_lib_middle"
 version: "0.1.0"
 target: "lib"
 src: "src/"

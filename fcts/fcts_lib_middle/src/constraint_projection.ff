@@ -1,4 +1,4 @@
-open module fcts_middle.constraint_projection;
+open module fcts_lib_middle.constraint_projection;
 import fcts_lib.test.constraint_projection;
 
 /** A provider that knows T only through another package's constraint metadata. */

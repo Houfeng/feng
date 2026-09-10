@@ -284,7 +284,7 @@ spec views 的附加表同样检查静态配对、完整 source／target 和闭�
 
 ### COMPOSITE40：三层共享调用
 
-新增 [middle 包](../../fcts/fcts_middle/src/g24.ff) 与 lib／bin 的独立构建，三层分别匹配；
+新增 [中间依赖包](../../fcts/fcts_lib_middle/src/g24.ff) 与 lib／bin 的独立构建，三层分别匹配；
 同包与 fit 入口另设 FCTS control。descriptor Codegen 检查实际 callee slot，而非仅将外层
 descriptor 原样传递；递归、闭包和正常／异常生命周期由 descriptor／binding edges 组配套。
 
@@ -447,8 +447,8 @@ finalize、bundled packages 和预构建工具链检查通过，未报告 UBSan 
   每个生成 C 都经严格 C 编译；无投影控制不读取字段。
 - [FCTS](../../fcts/fcts_bin/src/test_constraint_projection.ff)：
   [基础提供包](../../fcts/fcts_lib/src/test/lib_constraint_projection.ff)、
-  [中间包](../../fcts/fcts_middle/src/constraint_projection.ff)与
-  [独立 fit 包](../../fcts/fcts_projection_peer/src/constraint_projection.ff)。
+  [中间依赖包](../../fcts/fcts_lib_middle/src/constraint_projection.ff)与
+  [独立同级包](../../fcts/fcts_lib_peer/src/constraint_projection.ff)。
   保留类型级／方法级、引用／值／完整 spec、泛型 payload、字段／方法／静态／fit、
   owner 存储、多层转传、递归、捕获和正常／异常清理。
 
