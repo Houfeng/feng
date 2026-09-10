@@ -3,6 +3,7 @@
 ## 1. 状态与范围
 
 日期：2026-09-10。状态：数组与普通泛型容器的统一静态化已完成，新增用例及沙箱外全量回归通过。
+后续文件组织调整也已完成独立全量复验，见 6.4。
 
 来源为 [G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md) 中的
 ISSUE-G24-015。2026-09-09 人工批准更新本文并开始优化，完成后补齐用例并执行全量回归；
@@ -279,7 +280,7 @@ callable 槽对应的静态包，与 self 调用和方法泛型调用保持一�
 `src/semantic/reifiable_deps.c` 将完整开放数组加入现有 managed 类型依赖，同时递归收集元素
 树；数组层次和各层可写性参与已有排序身份。普通具名容器保留原有类型依赖规则。
 
-`src/codegen/generic_arguments.inc` 实现编译器内部的开放实参槽与闭合静态图：从现有 callable
+`src/codegen/detail/generic_arguments.c` 实现编译器内部的开放实参槽与闭合静态图：从现有 callable
 依赖中的实际类型及被调声明的约束恢复槽位，不增加 `.ft` 节。需要该上下文的共享 C 入口在
 最后追加 `const FengGenericArguments *_generic_args`，声明泛参的原有描述符入参不变。
 
@@ -349,3 +350,25 @@ callable 依赖不能回退为局部描述符，以及非法泛型实参、约�
 
 本专项无未完成项。核对结果：没有修改 `src/runtime/` 或任何现有描述符结构；既有用例只迁移
 3.3 明确批准的一项，两个测试入口文件的其他变更仅注册新增用例。代码未自动提交。
+
+### 6.4 文件组织调整
+
+2026-09-10 人工明确：保留既有宏定义用途的 `.inc`，普通实现代码不使用该扩展名。本次将
+泛型实参实现迁移为 `src/codegen/detail/generic_arguments.c`，仍由 `codegen.c` 包含，保持
+同一编译单元、内部类型及 `static` 辅助函数的可见性；不拆分内部接口，不改变优化逻辑、
+描述符布局或隐藏调用协议。
+
+Makefile 显式列出 Codegen 的独立编译入口 `codegen.c` 和 `mapping.c`；`detail/` 下的实现
+不单独生成目标文件，其增量依赖沿用已有 `-MMD -MP` 跟踪。此次不修改任何测试用例。
+
+验证结果：
+
+- 迁移前后使用 `clang -E -P` 生成预处理结果，`cmp` 比较完全一致。
+- 生成的 `codegen.d` 正确包含新路径；使用
+  `make -n -W src/codegen/detail/generic_arguments.c build/obj/src/codegen/codegen.o`
+  确认该文件变更会触发所属入口重新编译，不单独编译该实现文件。
+- 沙箱外执行 `make test > codegen-source-organization-regression.log 2>&1`，退出码 **0**。
+  UBSan 与普通构建两轮均通过，每轮标准库 **604 / 604**、FCTS **1364 / 1364**，
+  编译器、runtime、CLI、符号表、smoke、性能约束、增量构建及发布相关检查全部通过。
+
+状态：文件组织调整已完成；实现逻辑、运行时及测试用例均未修改。

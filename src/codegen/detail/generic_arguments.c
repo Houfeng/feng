@@ -1,4 +1,5 @@
-/* Private implementation included after the type-reification helpers. The
+/* Private implementation included only by codegen.c, not compiled separately.
+ * It follows the type-reification helpers in that translation unit. The
  * generated argument packages are static C data passed separately from the
  * unchanged runtime descriptors. No runtime registry or allocation is used. */
 

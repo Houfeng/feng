@@ -46802,7 +46802,7 @@ static bool cg_close_reified_use_type(CG *cg, const FengTypeRef *open_ref,
                reference_program, &blame, out_type));
 }
 
-#include "generic_arguments.inc"
+#include "detail/generic_arguments.c"
 
 /* Resolve a validated path component against an exact closed union layout.
  * This maps semantic type identity to layout order; it does not select a

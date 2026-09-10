@@ -17,7 +17,8 @@ BIN_DIR := $(BUILD_DIR)/bin
 LEXER_SRCS := $(wildcard src/lexer/*.c)
 PARSER_SRCS := $(wildcard src/parser/*.c)
 SEMANTIC_SRCS := $(wildcard src/semantic/*.c)
-CODEGEN_SRCS := $(wildcard src/codegen/*.c)
+# Compile only Codegen entry points; codegen.c includes private detail/*.c.
+CODEGEN_SRCS := src/codegen/codegen.c src/codegen/mapping.c
 DEBUG_SRCS := $(wildcard src/debug/*.c)
 DAP_SRCS := $(wildcard src/dap/*.c)
 SYMBOL_SRCS := $(wildcard src/symbol/*.c)
