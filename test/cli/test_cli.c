@@ -202,6 +202,28 @@ static int count_occurrences(const char *text, const char *needle) {
     return count;
 }
 
+/* Match diagnostic headers without treating paths, messages or source as codes. */
+static bool has_diagnostic_category(const char *text, const char *category) {
+    const char *line = text;
+
+    ASSERT(strlen(category) == 2U);
+    while (*line != '\0') {
+        const char *line_end = strchr(line, '\n');
+        size_t line_len = line_end != NULL ? (size_t)(line_end - line) : strlen(line);
+
+        if (line_len >= 8U && memcmp(line, category, 2U) == 0 &&
+            strspn(line + 2U, "0123456789") == 4U &&
+            line[6] == ':' && line[7] == ' ') {
+            return true;
+        }
+        if (line_end == NULL) {
+            break;
+        }
+        line = line_end + 1;
+    }
+    return false;
+}
+
 /* Count exact command-line arguments in the one-argument-per-line compiler log. */
 static int count_logged_arguments(const char *text, const char *argument) {
     int count = 0;
@@ -4382,10 +4404,47 @@ static void test_project_check_reports_enum_semantic_error_without_unknown_type(
     free(project_dir);
 }
 
+/* Code-like paths, source and messages must not hide real diagnostic categories. */
+static void test_diagnostic_category_matching_ignores_paths_and_context(void) {
+    const char *source = "CE0002();\n";
+    FengToken token = {
+        .kind = FENG_TOKEN_IDENTIFIER,
+        .lexeme = source,
+        .length = 6U,
+        .line = 1U,
+        .column = 1U,
+    };
+    FILE *errors = temp_file();
+    char *stderr_text;
+
+    ASSERT(errors != NULL);
+    feng_cli_print_diagnostic(errors,
+                              "temp/9KCE2R/CE0001/main.ff",
+                              "AE0312",
+                              "tuple type 'CE0002' is not an object type and cannot be constructed",
+                              &token, source, strlen(source));
+    stderr_text = read_text_stream(errors);
+    ASSERT(has_diagnostic_category(stderr_text, "AE"));
+    ASSERT(!has_diagnostic_category(stderr_text, "CE"));
+    free(stderr_text);
+
+    ASSERT(fseek(errors, 0L, SEEK_END) == 0);
+    feng_cli_print_diagnostic(errors,
+                              "temp/9KCE2R/CE0001/main.ff",
+                              "CE0001",
+                              "code generation failed",
+                              &token, source, strlen(source));
+    stderr_text = read_text_stream(errors);
+    ASSERT(has_diagnostic_category(stderr_text, "AE"));
+    ASSERT(has_diagnostic_category(stderr_text, "CE"));
+    free(stderr_text);
+    fclose(errors);
+}
+
 /* ENUM-D06/D11: the CLI surfaces AE0405 at the initializer token and stops
  * the invalid public enum during Semantic analysis. */
 static void test_project_check_reports_enum_i32_range_error(void) {
-    char template_path[] = "temp/feng_cli_check_g19_enum_range_XXXXXX";
+    char template_path[] = "temp/feng_cli_check_g19_enum_range_CE_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -4424,7 +4483,7 @@ static void test_project_check_reports_enum_i32_range_error(void) {
     ASSERT(strstr(stderr_text, ":2:21\n") != NULL);
     ASSERT(strstr(stderr_text,
                   "AE0405: enum 'E' item 'Bad' value 2147483648 is outside the 'i32' range") != NULL);
-    ASSERT(strstr(stderr_text, "CE") == NULL);
+    ASSERT(!has_diagnostic_category(stderr_text, "CE"));
 
     free(stderr_text);
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
@@ -4438,7 +4497,7 @@ static void test_project_check_reports_enum_i32_range_error(void) {
 /* TUP-D12: project check reports the tuple construction error from Semantic
  * and leaves no generated C artifact for the rejected program. */
 static void test_project_check_rejects_tuple_construction_before_codegen(void) {
-    char template_path[] = "temp/feng_cli_check_g20_tuple_ctor_XXXXXX";
+    char template_path[] = "temp/feng_cli_check_g20_tuple_ctor_CE_XXXXXX";
     char *workspace_dir;
     char *project_dir;
     char *manifest_path;
@@ -4482,7 +4541,7 @@ static void test_project_check_rejects_tuple_construction_before_codegen(void) {
     ASSERT(strstr(stderr_text,
                   "AE0312: tuple type 'Pair' is not an object type and cannot be constructed") != NULL);
     ASSERT(strstr(stderr_text, "AE1004") == NULL);
-    ASSERT(strstr(stderr_text, "CE") == NULL);
+    ASSERT(!has_diagnostic_category(stderr_text, "CE"));
     ASSERT(!path_exists(generated_c_path));
 
     free(stderr_text);
@@ -24894,6 +24953,7 @@ int main(void) {
     test_pack_bundle_manifest_rewrites_local_dependency_versions();
     test_project_check_accepts_source_file_path_and_local_dependencies();
     test_project_check_reports_enum_semantic_error_without_unknown_type();
+    test_diagnostic_category_matching_ignores_paths_and_context();
     test_project_check_reports_enum_i32_range_error();
     test_project_check_rejects_tuple_construction_before_codegen();
     test_frontend_outputs_absolute_bundle_paths();
