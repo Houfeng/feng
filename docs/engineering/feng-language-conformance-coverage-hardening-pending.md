@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G23 已交付；G24 待实施，既有 spec 泛型转接层优化已批准暂缓；G25 待 Review
+> 状态：G01～G24 已交付；G25 待 Review
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -41,6 +41,7 @@ G25 在[独立实施文档](./feng-language-conformance-coverage-hardening-g25.m
 - [表达式与运算规范](../specifications/feng-expression.md)；
 - [函数规范](../specifications/feng-function.md)；
 - [函数变长参数规范](../specifications/feng-function-variadic.md)；
+- [泛型规范](../specifications/feng-generics-draft.md)；
 - [`spec` 规范](../specifications/feng-spec.md)；
 - [类型规范](../specifications/feng-type.md)；
 - [流程控制规范](../specifications/feng-flow.md)；
@@ -2310,8 +2311,8 @@ G10 已交付的解构求值顺序、G12 已交付的通用语法矩阵、G13 �
   与显式转换分别产生 `AE1003` 和 `AE1023`。裸泛型名称、类型实参数量和泛型推断只映射 G25，
   不在本项重复通用泛型矩阵；
 - [x] TUP-D16：普通具名 tuple 和已闭合泛型 tuple 用作泛型上界时，均在类型参数名称 token 产生唯一
-  `AE0304`；通过 `spec` + `fit` 表达共同能力的合法邻界只映射既有 tuple / spec 测试，不为 tuple
-  增加结构化上界特例；
+  `AE0304`；这是 G20 交付时的历史稳定码，G25 将按同根因复用规则迁移为通用 `AE0709`。通过
+  `spec` + `fit` 表达共同能力的合法邻界只映射既有 tuple / spec 测试，不为 tuple 增加结构化上界特例；
 
 #### 24.2.5 元素访问与不可变性
 
@@ -2359,7 +2360,8 @@ G10 已交付的解构求值顺序、G12 已交付的通用语法矩阵、G13 �
 - [x] 独立运行 G20 Parser 专项，核对 TUP-D01～TUP-D03 的唯一诊断、稳定码、token、行列、来源文件
   和 Parser 阶段；G12 已有完整证据可直接映射，缺失项集中新增；
 - [x] 独立运行 G20 Semantic 专项，至少覆盖 `AE0301`、`AE0302`、`AE0312`、`AE1004`、`AE1003`、
-  `AE0512`、`AE1023`、`AE0304`、`AE0306`、`AE0309`、`AE0104`、`AE0108` 与 `AE0109` 的唯一诊断、
+  `AE0512`、`AE1023`、交付时的 `AE0304`、`AE0306`、`AE0309`、`AE0104`、`AE0108` 与 `AE0109`
+  的唯一诊断、
   精确位置、来源文件和 tuple 上下文；非法 tuple 对象构造不得到达 Codegen；
 - [x] 独立运行 Symbol、Codegen 和 CLI 专项，验证导入类型仍保留 tuple 分类、合法 tuple 使用值布局和
   默认零值、没有普通对象分配，以及非法构造在 Semantic 阶段终止。不得以宿主 C 编译失败作为反向
@@ -2419,7 +2421,7 @@ G10 已交付的解构求值顺序、G12 已交付的通用语法矩阵、G13 �
 
 - 新增 `test_g20_tuple_nominal_and_conversion_diagnostics`，覆盖普通、0 元素与泛型 tuple 的同名义流转、
   不同名义隐式拒绝、等形显式转换邻界、数量 / 位置类型错误和 tuple 泛型上界；稳定码为 `AE1003`、
-  `AE1023`、`AE0302`、`AE0304`；
+  `AE1023`、`AE0302`、`AE0304`（G20 交付记录；G25 计划迁移为 `AE0709`）；
 - 新增 `test_g20_tuple_access_and_destructure_diagnostics`，覆盖 0 / 2 / 8 元素和泛型成员邻界、实例 / static
   错误访问、元素不可写、非 tuple 解构及具名 / 字面量位置数不匹配；稳定码为 `AE0306`、`AE0309`、
   `AE0104`、`AE0108`、`AE0109`；
@@ -3391,7 +3393,7 @@ program 实际属于同包三模块，原断言“孤儿 info + 降级”与按�
 [可见性主规范](../specifications/feng-visibility.md)及
 [AE 诊断清单](../specifications/feng-error-codes-ae.md)。以下内容是测试验收条件，不另行定义语言规则。
 
-原有 COMPOSITE01～COMPOSITE06 保留编号并细化，新增 COMPOSITE07～COMPOSITE42。应区分四种
+原有 COMPOSITE01～COMPOSITE06 保留编号并细化，新增 COMPOSITE07～COMPOSITE43。应区分四种
 独立测试对象：复合类型自身带泛参，例如 `Choice<T>`；复合类型被用作约束，例如 `U: Choice<T>`；
 复合类型自身的 owner 泛参带约束，例如 `Choice<T: Named>`；复合类型被用作类型实参，例如
 `identity<Choice>(value)`、`Box<Both>`。仅验证第一种声明能够实例化，不代表已经验证约束准入、
@@ -3888,102 +3890,31 @@ COMPOSITE36／39 按设计 §8.2 分别核对静态数据、运行时读取、�
 COMPOSITE01～43 的复用／新增测试、断言、成本边界及最终回归结果集中记录于
 [G24 用例与验收证据](./feng-language-conformance-coverage-g24-evidence.md)。
 
-- 2026-09-08 续作：人工要求完整交付，工作区基线为 `dba2c424` 且干净。先完成共享有绑定
-  收窄的直接取值／必要构造与四入口，再补齐存储、返回、捕获、清理和多层跨包矩阵；最后按
-  COMPOSITE01～42 建立逐项复用／新增证据并执行沙箱外完整 `make test`。未完成的格子不勾选，
-  不新增旧用例迁移或扩大既有运行时成本批准。
-- 状态：已完成（2026-09-09）；43 项用例 TODO 与独立验收项均已完成，最后的
-  COMPOSITE27、051／057／063／064 已通过最终完整回归。
-  必要构造调用按 §28.1.3.3 的限定范围验收，其他新增成本仍须另行决策。
-  ISSUE-G24-006 本组暂缓消除优化，不阻塞；已完成项的实现、语义、覆盖和成本证据见上述记录。
-- 稳定码映射与新增用例：新增 `AE0623`（交叉字段冲突）、`AE0710`（owner 实参约束不满足）；
-  [`test_g24.c`](../../test/semantic/test_g24.c) 和
-  [`test_g24_union_paths.ff`](../../fcts/fcts_bin/src/test_g24_union_paths.ff) 已加入，仍需继续补齐整组。
-- 本组专项结果：完整 Semantic 测试通过，包括新增准入、开放转传、交叉字段／完整实例矩阵。
-  加入完整约束检查后发现两处既有非法正例，见 ISSUE-G24-008；人工批准最小迁移后，
-  FCTS 已恢复为 1194／1194 通过。四种共享匹配入口的 Semantic 投影事实测试通过。
-  共享体投影、跨包及开销验收尚未完成，不能以上述部分通过代替。
-- 本组沙箱外 `make test`：变更前基线退出 0；008 最小迁移阶段的回归退出 0，FCTS 为 1194／1194。
-  009～014 当前修复链的最新全量退出 0，UBSan／常规两阶段 FCTS 均为 1211／1211，
-  其他全量测试全部通过；整组完成后的全量尚未执行。
-- 问题：[G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md)，当前包含
-  ISSUE-G24-001～ISSUE-G24-065。008 两处调用及 009 两条旧发码断言均仅按明确批准迁移。
-  Callable 成员补测 055／056／058～062 已修复并独立全量验收；062 的固定依赖读取成本已获批准。
-  UBSan／常规 std 均 604／604、FCTS 均 1319／1319，见 [本轮执行记录](./feng-language-conformance-coverage-g24-evidence.md#45-callable-成员调用补齐独立交付)。
-  051／057 的约束投影转传仍未实施，不以本轮通过替代整组验收。
-  009 静态化、010 获批的 callee 描述符槽位转传，以及补测发现的编译期作用域／身份问题
-  012／013／014 已修复；011 为已校正的新夹具误计。新增及全部 Codegen 测试通过，
-  最新 FCTS 1211／1211（新增 17 项描述符行为用例）及沙箱外全量回归通过。
-- 投影续作：Semantic 完整路径／开放槽位、`.ft` 2.0 必需投影节及损坏拒绝矩阵、
-  静态闭合表与四种无绑定匹配入口已接入；共享 callable、引用 owner、值 owner 使用独立
-  描述符归属，多层调用沿原 callable 依赖传递。新增真实跨包 FCTS 5 项已通过，当前为
-  1216／1216；新 Codegen／Symbol／Semantic 专项通过。全终止初始化结果消费缺口 016 和
-  导入嵌套联合预登记缺口 017 已修复并通过专项。当前阶段沙箱外 `make test` 退出 0，
-  UBSan／常规两阶段 FCTS 均为 1216／1216，其余全量测试通过；日志：
-  `/private/tmp/feng-g24-make-test-predicates.log`。
-  018 两轮首路径规则、019 的入口不一致、020 的发码成员身份缺口及 021 的全终止收窄别名
-  提前释放均已修复；本轮覆盖与验收证据见
-  [018 本轮覆盖证据](./feng-language-conformance-coverage-hardening-issues/g24.md#本轮覆盖证据)。
-  新增 14 项 FCTS，最终沙箱外 `make test` 退出 0：UBSan／常规 FCTS 均为 1230／1230，
-  std 均为 604／604，其他套件全部通过；日志为
-  `/private/tmp/feng-g24-union-order-make-test-final.log`。本轮仅按 018 明列清单迁移旧用例；
-  选择完全在编译期，本轮不增加 runtime／描述符 ABI／`.ft` 字段或动态选路处理。
-  有绑定投影、完整构造／生命周期／捕获及剩余矩阵尚未完成，不将当前通过记为 G24 完成交付。
-  成本审计新增 015：人工已接受仅由新增投影字段导致的已有自动描述符字节／初始化／栈占用增量；
-  保留既有路径，不追加开放数组静态依赖改造，015 不再阻塞。共享投影闭合／读取、完整 `.ft`
-  迁移和剩余覆盖尚未完成。
-- 最新续作：已补共享有绑定收窄、生命周期、捕获、多层跨包及组合边界专项，新增 Parser／
-  Semantic／Codegen 专项与各自既有套件通过；`.ft` 新专项与 Symbol 套件通过。阶段 FCTS
-  曾通过 1257／1257，但随后增加的开放 `Value<A> -> Both<A>` 用例在 provider C 编译失败，
-  记录为 [ISSUE-G24-040](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-040开放值类型进入交叉视角误生成占位布局-box)。
-  人工已批准 `reified_spec_view_coercions` 静态转换信息方案及其限定读取成本，正在实施。
-  `.ft` 保持现有版本、不兼容旧制品，完整重建；既有版本断言不改，详见 041。
-  040 的共享转换已接入，补测发现的 042～047 已修复；048 为新增夹具的默认对象误计，未改产品
-  语义。Parser／Semantic／Codegen／Symbol 专项通过，FCTS 阶段结果为 1265／1265。
-  最终全量回归与逐项验收进行中；COMPOSITE33／35 继续补独立真实跨包程序，直接以完整 union、
-  intersection 与 object spec 为实际 T，并通过两个不同 subject 的同类型视角验证各值 witness。
-  不能用普通裸 subject 的约束调用或旧的全量结果替代这些格子的证据。
-- 最新补测：049 修复完整 spec T 的已具化约束 slot 适配、七类描述符入口与闭合约束预登记；
-  050 修复非空泛型数组字面量误复制指针，复用现有泛型值／数组通路，不针对 union 特判。
-  FCTS 阶段 1270／1270 通过，另补规范化去重的 FT／默认嵌套行为控制；最终沙箱外 `make test`
-  退出 0，UBSan／常规 std 均 604／604、FCTS 均 1271／1271，其余套件全部通过。
-  日志保存在工程 `local/g24-delivery/make-test.log`，不使用会被回归清理的 build／temp。
-- 此前剩余项核对：COMPOSITE27 曾独立复现交叉约束开放转传 `CE0293`，记录为 051。
-  051／057 最新批准方案为 `reified_constraint_projection_descriptors`，按依赖归属放入
-  函数／类型／聚合描述符，泛参描述符不新增字段。具体槽位、跨包、生命周期及成本契约
-  统一见[主实现文档](./feng-generic-optimize-dev.md#g24-约束投影字段)。
-  补齐同包／真实跨包、两个独立外部 fit、类型级／方法级及混合多泛参、成员直接调用与
-  callable 保存、构造／析构、多层／递归转传、逃逸闭包、引用／值／完整 spec 实际 T，
-  并验证非法反向仍由 Semantic 拒绝、无关路径不新增读取及动态适配。
-  当时 G24 尚未完整交付，未以阶段全量通过替代该缺口；最终补齐结果见下方记录。
-- 2026-09-09 约束投影续作：已按批准方案接入三个承载描述符、Semantic 开放槽位、静态
-  目标泛参记录及 `.ft` 2.0 往返。新增 Codegen（含 40 方法压力、两个独立包同名约束和两种
-  provider 顺序）、Semantic 正反向和 Symbol 两种 profile／21 类损坏拒绝矩阵及各自完整
-  套件通过；第一轮新增 21 项 FCTS 时为 1340／1340。继续增加泛型方法和 type／spec owner
-  边界后，发现 [ISSUE-G24-063](./feng-language-conformance-coverage-hardening-issues/g24.md#issue-g24-063共享体的引用对象字面量字段误写泛型参数存储地址)：
-  普通共享体对象字面量错误保存 T 的参数存储地址，运行期非法释放。人工已批准复用既有
-  泛型字段写入协议，补回正确赋值所需的 kind／复制／ARC，不叠加新机制。新增 owner 用例保持
-  原样，未以第一轮通过替代扩展矩阵和最终全量。
-- 2026-09-09 最终交付：约束投影新增 27 项 FCTS，独立泛型存储控制新增 10 项；补测修复
-  063 的 T 字段错误指针写入和 064 的开放嵌套值字段非法清理元数据。包括析构分派的正／误槽
-  计数、正常／异常退出，以及 owner 释放后成员 callable 的完整 spec subject 分派。
-  最终沙箱外 `make test` 退出 0，UBSan／常规两阶段 std 均 604／604、FCTS 均 1356／1356，
-  其余全部套件通过；代码及既有断言在最终回归中保持不变。065 的一次标准库调试制品缺失
-  已通过独立标准库及完整复验，根因未确认，保留执行异常记录，不宣称修复了 Debug／CLI。
-  详见[最终验收证据](./feng-language-conformance-coverage-g24-evidence.md#47-最终完整交付)。
-- 2026-09-09 COMPOSITE43：人工要求交叉值向组成 spec 仅支持显式转换。已补齐 Semantic、
-  witness 固定路径投影、真实 FT 与 FCTS；补测发现的 053 局部记录失效、054 开放 spec
-  捕获描述符选取均已修复。新增 18 项 FCTS，覆盖空组成项与连续 cast 控制；最终沙箱外
-  `make test` 退出 0，UBSan／常规 std 均 604／604、FCTS 均 1289／1289，其余套件通过。
-  日志为 `local/g24-delivery/052-make-test-verified.log`。本项完成，不改变 051 的未完成状态，
-  不在此项增加泛参／函数描述符字段；只新增用例和注册入口，不修改既有断言。
-- 建议实施 commit message：`test: complete union and intersection conformance coverage`
+- 状态：已交付（2026-09-09）。COMPOSITE01～43 和 §28.3 全部完成；最后补齐的 COMPOSITE27
+  约束投影转传、ISSUE-G24-051／057／063／064 均已通过最终完整回归。
+- 稳定码：新增 `AE0623`（交叉字段冲突）和 `AE0710`（owner 类型实参不满足约束）；其余诊断按
+  既有通用码复用，完整映射见验收证据。
+- 测试与迁移：新增的 Semantic、Parser、Codegen、Symbol 和 FCTS 文件及逐项映射以验收证据为准。
+  既有用例只修改 ISSUE-G24-008 明列的两个调用和 ISSUE-G24-009 明列的两条发码断言，均已取得
+  人工批准；最终冻结轮没有继续修改既有断言。
+- 本组沙箱外 `make test`：最终退出码 `0`；UBSan／常规两阶段的 std 均为 `604/604`，FCTS 均为
+  `1356/1356`，Archive、Lexer、Parser、Semantic、Runtime、Codegen、Debug、CLI、CLI paths、
+  Symbol、smoke、性能约束及发布／安装相关套件全部通过，且没有 sanitizer 报告。
+- ABI、格式与成本：按已批准方案完成私有描述符和 `.ft` 2.0 的投影依赖迁移、静态表读取及限定场景
+  的必要构造调用；未概括批准其他运行时成本。ISSUE-G24-006 的既有 spec 泛型转接消除优化继续
+  延期，不阻塞 G24。
+- 问题：[G24 问题记录](./feng-language-conformance-coverage-hardening-issues/g24.md)共 ISSUE-G24-001～065；
+  除 006 按决定延期、065 保留为未确认根因的一次制品读取异常外，其余交付问题均已修复或确认为
+  非问题并完成验收。065 未修改 Debug／CLI 即通过独立标准库及完整复验，不声称已定位或修复根因。
+- 最终证据：[最终完整交付](./feng-language-conformance-coverage-g24-evidence.md#47-最终完整交付)。
+- 建议 commit message：`feat: support reified generic constraint projections across packages`
 
 ## 29 G25：泛型诊断
 
 G25 的测试重点、用例 TODO、独立验收与交付记录已迁至
 [G25 泛型诊断用例补齐实施文档](./feng-language-conformance-coverage-hardening-g25.md)，后续只在
-该文档维护。详细问题继续记录于 [G25 问题记录](./feng-language-conformance-coverage-hardening-issues/g25.md)。
+该文档维护。当前已完成 Review 前细化并确认不新增错误码；产品实现和三条既有错误码断言迁移仍待
+人工批准。详细问题继续记录于 [G25 问题记录](./feng-language-conformance-coverage-hardening-issues/g25.md)。
 
 ## 30 实施问题记录
 

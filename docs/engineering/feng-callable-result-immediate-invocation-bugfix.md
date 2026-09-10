@@ -254,7 +254,7 @@ func invalid(): int {
 
 1. 在 `feng-expression.md` 的调用后缀与求值顺序权威位置补充第 3 节所述规则和最小示例；
 2. 核对 `feng-function.md`、`feng-spec.md`，只保留交叉引用，不复制表达式规则；
-3. 修复完成后消解 Codegen 的 `CE0166` 触发点，并同步当前错误码总表；非法程序继续使用
+3. 修复完成后消解 Codegen 的 `CE0166` 触发点，并同步 CE 分段主规范；非法程序继续使用
    既有 Semantic 诊断，不新增替代 CE；
 4. `feng-error-codes-ce.md` 已把对应调用形态限制标记为“消解”，不得重新定义为新的用户
    约束。
@@ -343,7 +343,7 @@ selected(41);
 - [x] Review 本方案并确认范围、语义和强制边界。
 - [x] 在 `feng-expression.md` 的唯一权威位置明确 callable 结果立即调用及求值顺序。
 - [x] 核对 `feng-function.md`、`feng-spec.md`，避免重复定义。
-- [x] 同步当前错误码总表中 `CE0166` 的消解结果。
+- [x] 同步 CE 分段主规范中 `CE0166` 的消解结果。
 
 ### 7.2 实现
 
@@ -439,7 +439,7 @@ selected(41);
 
 - **规范变更**：在 `feng-expression.md` 的调用表达式权威位置明确：任意完成泛型代入后
   静态类型为 callable-form `spec`，或为受 callable-form `spec` 约束类型参数的表达式，
-  均可作为 callee；callee 只求值一次且先于全部实参。同步从当前错误码总表移除已消解的
+  均可作为 callee；callee 只求值一次且先于全部实参。同步从 CE 分段主规范移除已消解的
   `CE0166`。
 - **实现结果**：Codegen 为非 identifier、非 member 的 computed callee 增加统一表达式
   发射入口。该入口先递归求值并固定 callee，再分别复用具体 callable 与受约束泛型

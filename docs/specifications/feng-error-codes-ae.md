@@ -7,6 +7,9 @@
 - 目标是“面向用户可快速定位”，不是反映编译器内部实现模块边界。
 - 错误码完整格式固定为：`AE` + 两位段编码 + 两位段内编码（例如 `AE0001`）。
 - “同类错误共码”判定同时满足三点：冲突对象一致、冲突根因一致、建议修复动作一致；任一不一致则拆分新错误码。
+- 分配新码前必须先检索现有码；上述三点均一致时必须复用，不能仅因声明种类、语法入口、显式／推导或文案模板不同而拆码。
+- 只有现有码无法表达且上述三点至少一项确实不同，才可提出新码；新码必须先在本文件完成归属和 Review，再进入实现。
+- 历史码并入现有码后，产品代码停止产生历史码；历史交付记录可以保留原编号，但必须明确其为迁移前结果。
 - 例：`throw statement requires a non-void expression` 与 `type 'unknown' is only valid as a catch clause type` 不同类，必须拆分新错误码。
 
 ## 分段规划
@@ -45,6 +48,10 @@
 | AE0005 | import 引入名称二义/多义(惰性,使用处报错) | (新增) | '<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate |
 | AE0006 | 使用点裸名引用泛型 | (新增) | '%.*s' is a generic type and requires type arguments |
 
+`AE0213` 是当前实现和既有 type arity 规则仍在使用的过渡兼容码，用于同一 category 内具名
+`type`／`spec` 声明 identity 重复；泛型声明仍按“名称 + arity”形成 identity，并与非泛型声明复用
+该码。其未来全局符号错误码迁移不属于泛型诊断范围；在迁移前不得为泛型声明另分配专用重复码。
+
 ## 01 绑定段
 
 | 新错误码 | 用途 | 原错误码 | 原错误文案 |
@@ -80,7 +87,7 @@
 | AE0301 | 元组目标命名类型约束 | AE0016 | tuple literal requires a named tuple target type, got '%s' |
 | AE0302 | 元组元素数量匹配约束 | AE0017 | tuple literal has %zu element(s) but tuple type '%s' expects %zu |
 | AE0301 | 元组目标命名类型约束 | AE0139 | tuple literal requires an explicit named tuple target type |
-| AE0304 | 泛型约束中的元组限制 | AE0211 | type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint |
+| AE0304 | 历史：泛型约束中的元组限制（G25 后停止发码） | AE0211 | 迁移到 `AE0709`；可保留 tuple 专用消息模板，但不再保留独立错误码。 |
 | AE0305 | 静态成员 type 可见性约束 | AE0081 | static member '%.*s' of type '%.*s' is not accessible from the current type scope |
 | AE0309 | 静态成员不存在约束 | AE0082 | type '%.*s' has no static member '%.*s' |
 | AE0310 | 静态成员访问方式约束 | AE0084 | static member '%.*s' must be accessed through its type |
@@ -166,6 +173,10 @@
 | AE0524 | 预打包变参数组转发约束 | AE0524 | prepacked variadic forwarding requires a variadic call target、prepacked variadic forwarding must begin at the first variadic argument position、prepacked variadic argument must match the target readonly variadic array type |
 | AE0525 | 泛型调用类型实参推导完整性 | （新增） | cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type |
 
+泛型 callable 候选必须先完成推导和约束验证。某候选推导冲突或不满足约束时，该候选从候选集剔除；
+若没有候选存活，调用根因是“无匹配重载”，使用 `AE0512`。`AE0525` 只用于已经唯一选定的泛型
+callable 仍有类型参数没有实参、receiver 或目标类型推导来源的情况，不用于候选约束失败。
+
 `AE0521`、`AE0522` 与 `AE0523` 同样适用于 object-form/intersection-form `spec` 实例
 方法引用、受这两种 `spec` 约束的泛型值实例方法引用、`Type.method` 具体静态方法引用和
 `T: ObjectSpec` 或 `T: IntersectionSpec` 的 `T.method` 静态 requirement 引用：分别表示
@@ -218,8 +229,8 @@
 | AE0706 | object-form spec 可见关系下重载二义性 | （新增模板） | method overloads in object-form spec '%.*s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0707 | spec 实现成员可见性兼容约束 | (新增) | type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s' |
 | AE0708 | spec seal 成员访问域约束 | (新增) | seal member '%.*s' of spec '%.*s' is only accessible from a type or fit implementation that satisfies that spec |
-| AE0709 | 类型参数约束形态 | AE0212 | type parameter '%.*s': constraint must be a spec, not a type |
-| AE0710 | owner 类型实参不满足约束 | — | type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s' |
+| AE0709 | 类型参数约束目标必须为 spec（包括 tuple 等所有非 spec 类型） | AE0211、AE0212、AE0304 | type parameter '%.*s': constraint must be a spec, not a type、type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint |
+| AE0710 | 泛型 type／spec owner 类型实参不满足约束 | — | type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s'、forwarded type parameter '%.*s' does not satisfy constraint '%s' of type parameter '%.*s' |
 
 ## 08 Fit段
 
@@ -274,16 +285,22 @@
 | AE1010 | ABI 函数指针形成 | AE0137 | expression '%s' cannot form an ABI function pointer; ABI function pointers can only be formed from top-level @abi functions with an explicit Foo* target type |
 | AE1012 | 类型参数类型实参使用约束 | AE0160 | type parameter '%.*s' cannot take type arguments |
 | AE1013 | 泛型目标类型可解析性约束 | AE0161 | unknown type '%s' |
-| AE1014 | 非泛型类型实参误用约束 | AE0162 | '%.*s' is not a generic type and does not take type arguments |
-| AE1015 | 泛型类型实参数量约束 | AE0163 | '%.*s' expects %zu type argument(s), but %zu were provided |
+| AE1014 | 非泛型 target 显式类型实参误用约束 | AE0162、AE0232、AE0233 | '%.*s' is not a generic type and does not take type arguments、%s '%.*s' is not generic and does not take type arguments |
+| AE1015 | 泛型 target 类型实参数量约束 | AE0163、AE0232、AE0233 | '%.*s' expects %zu type argument(s), but %zu were provided、%s '%.*s' expects %zu type argument(s), but %zu were provided、generic callable '%.*s' has no overload accepting %zu type argument(s); available arities: %s |
 | AE1016 | 显式泛型目标值位使用约束 | AE0173 | explicit generic target '%s' cannot be used as a value expression |
-| AE1017 | 类型参数命名遮蔽约束 | AE0181 | type parameter '%.*s' shadows an outer type parameter with the same name |
+| AE1017 | 类型参数名称冲突约束 | AE0181 | duplicate type parameter '%.*s' in the same type parameter list、type parameter '%.*s' shadows an outer type parameter with the same name |
 | AE1018 | 一元运算符操作数类型约束 | AE0234、AE0235、AE0236 | unary operator '%s' requires a numeric operand, got '%s'、unary operator '%s' requires an integer operand, got '%s'、unary operator '%s' requires a bool operand, got '%s' |
 | AE1019 | 二元运算符操作数类型约束 | AE0030 | binary operator '%s' requires operands of the same numeric or string type, got '%s' and '%s'、binary operator '%s' requires operands of the same numeric type, got '%s' and '%s'、binary operator '%s' requires operands of the same type, got '%s' and '%s'、binary operator '%s' requires bool operands, got '%s' and '%s'、binary operator '%s' requires operands of the same integer type, got '%s' and '%s' |
 | AE1020 | 复合赋值操作数类型约束 | AE0023 | compound assignment operator '%s' requires operands of the same numeric type, got '%s' and '%s'、compound assignment operator '%s' requires operands of the same integer type, got '%s' and '%s' |
 | AE1021 | 索引目标数组类型约束 | AE0052 | index expression target must have array type, got '%s' |
 | AE1022 | 索引操作数整数类型约束 | AE0053 | index expression requires an integer operand, got '%s' |
 | AE1023 | 显式转换资格约束 | AE0051 | cast from '%s' to '%s' is not allowed |
+
+`AE1014` 与 `AE1015` 统一适用于 type／spec、构造目标、函数和方法：已解析目标没有类型参数时使用
+`AE1014`，目标有类型参数但显式数量不匹配时使用 `AE1015`；callable 重载集有多个泛型 arity 时，
+消息列出可用 arity，不任选某个候选作为“期望数量”。目标种类只影响消息模板，不再产生
+`AE0232`／`AE0233`。泛型 type／spec owner 的类型实参数量正确、但不满足参数约束时使用
+`AE0710`；泛型 callable 的约束失败按候选筛选规则落到 `AE0512`，不能只因都写了 `<...>` 而合并。
 
 ## 11 分支/匹配段
 

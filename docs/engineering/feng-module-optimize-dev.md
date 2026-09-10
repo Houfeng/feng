@@ -97,7 +97,9 @@ type / enum / spec / let / var 在使用点**完全没有**惰性歧义检查。
         - import vs 本模块:`'<name>' is ambiguous: defined in current module and also imported from '<module>'; use a fully-qualified path or import alias to disambiguate`
         - 多 import(≥3 个):`'<name>' is ambiguous: imported from multiple modules (<module1>, <module2>, ...); use a fully-qualified path or import alias to disambiguate`
 - [x] 1.2 `docs/specifications/feng-error-codes-ae.md` AE0906 标记为废弃(本次优化后不再产生新错误,文档保留向后兼容)。
-- [x] 1.3 ~~`docs/specifications/feng-error-codes.md` 同步新增 AE0005 条目。~~ **按人工决策跳过**:`docs/specifications/feng-error-codes.md` 索引文档滞后严重(代码已使用分段方案 AE1302/AE1303 等,索引仍写 AE0005/AE0006 等旧编号且与代码不一致),本次不参考该文档,错误码以 `docs/specifications/feng-error-codes-ae.md` 分段方案为准。
+- [x] 1.3 不在 `docs/specifications/feng-error-codes.md` 重复新增 AE0005。该文件在本任务实施时仍是
+  滞后的旧总表，因此当时按人工决定只更新 AE 分段主规范；2026-09-10 旧总表已收敛为分类索引，
+  当前及后续错误码定义仍只维护在 `docs/specifications/feng-error-codes-ae.md`。
 
 预留编号(本次不引入,scope 阶段使用):
 - AE0002:第 4 类合并,同模块符号重复定义(非 func),替代 AE0213 / AE0214 / AE0215 / AE0216。

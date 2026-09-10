@@ -60,6 +60,8 @@
 
 ### 3.3 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md) / [docs/specifications/feng-error-codes-ce.md](../specifications/feng-error-codes-ce.md) / [docs/specifications/feng-error-codes.md](../specifications/feng-error-codes.md)
 
+- `feng-error-codes.md` 当前只维护分类索引，不重复错误码条目；本节的具体 AE／CE 变更只进入对应
+  分段主规范。
 - 更新 `AE0050` 描述：允许列表从「integers, 'string' and 'bool'」改为「integers, 'string', 'bool' and enum」（保留原错误码，仅放宽允许集合）。
 - 复用 `AE1106`「match label overlaps with an earlier label and is unreachable」覆盖 enum item 重复场景；不新增重叠错误码。
 - 复用 `AE0404`「enum '%.*s' has no item '%.*s'」覆盖 enum item 引用中 item 名不存在场景；不新增该场景错误码。
@@ -433,7 +435,7 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 | `docs/specifications/feng-enum.md` | §3 / §7 文案 | +3 行 |
 | `docs/specifications/feng-error-codes-ae.md` | AE0050 文案、新增 AE11xx 条目 | +6 行 |
 | `docs/specifications/feng-error-codes-ce.md` | CE0211 / CE0270 文案 | 2 处 |
-| `docs/specifications/feng-error-codes.md` | 索引同步 | 2 处 |
+| `docs/specifications/feng-error-codes.md` | 仅核对 AE／CE 主规范链接，不重复同步条目 | 0 |
 | `src/parser/parser.c` | 不动 | 0 |
 | `src/semantic/analyzer.c` | enum 模式分支、MatchConstKind 扩展、辅助函数签名 | +270 / -20 行 |
 | `src/codegen/codegen.c` | CE0211 / CE0270 文案 + `cg_emit_match_label_cond` 新增 TYPE 分支 | +55 行 |
@@ -506,7 +508,8 @@ enum 的 `CGType` kind 为 `CG_TYPE_I32`（`cgtype_new_enum`，`src/codegen/code
 - [ ] 更新 [docs/specifications/feng-enum.md](../specifications/feng-enum.md) §3 与 §7：语义条目追加「可作为 match 常量相等性匹配目标」，关联列表追加指向 `feng-flow.md` 的链接（不在 `feng-enum.md` 中重复 match 标签规则）
 - [ ] 更新 [docs/specifications/feng-error-codes-ae.md](../specifications/feng-error-codes-ae.md)：`AE0050` 文案允许集合追加 `enum`；新增 AE11xx 条目（enum target 标签非 enum item 引用、跨 enum、区间标签、混用、type 标签、binding 前缀）；错误码编号与文案最终口径由人工审定
 - [ ] 更新 [docs/specifications/feng-error-codes-ce.md](../specifications/feng-error-codes-ce.md)：`CE0211` / `CE0270` 文案「integer, bool, or string」更新为「integer, bool, string, or enum」
-- [ ] 更新 [docs/specifications/feng-error-codes.md](../specifications/feng-error-codes.md)：索引同步
+- [x] 核对 [docs/specifications/feng-error-codes.md](../specifications/feng-error-codes.md) 仍指向 AE／CE
+  分段主规范；索引不重复错误码条目
 - [ ] 全量回归点：`make test` 通过（仅文档变更，无代码行为变化）
 
 ### 8.2 步骤 2：Parser 复用既有 type label 路径承载 enum item 引用

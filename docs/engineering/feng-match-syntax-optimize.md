@@ -230,7 +230,7 @@ C 代码各文件改动规模：
 | `feng-exception.md` | 3.6 节标题 `### 3.6 \`if\`/\`if-match\` 表达式分支中的 \`throw\`` 改为 `### 3.6 \`if\`/\`match\` 表达式分支中的 \`throw\``（第 144 行）；正文 "\`if\` 表达式和 \`if-match\`（match）表达式" 改为 "\`if\` 表达式和 \`match\` 表达式"（第 146 行） |
 | `feng-error-codes-se.md` | SE1103 描述更新（"if-match 表达式需要 else 分支" → "match 表达式需要 else 分支"）；SE1106 描述中 "expected '{' after if condition or match target" 同步更新为 "expected '{' after if condition" |
 | `feng-error-codes-ce.md` | CE1045、CE1046 描述中 "if-match" 改为 "match"（第 438、439 行） |
-| `feng-error-codes.md` | CE0269、CE0270 描述中 "if-match" 改为 "match"（第 484、485 行）；CE0196 描述保留 "if/match" 不动（第 411 行） |
+| `feng-error-codes.md` | 不修改；该文件只维护分类索引，CE 文案统一在 `feng-error-codes-ce.md` 更新 |
 | `feng-error-codes-ae.md` | 第 11 节标题 "if/match 分支完备性与标签约束" 改为 "match 分支完备性与标签约束"（第 26 行） |
 | `feng-generics-draft.md` | `if 目标值 { ... }` 引用改为 `match 目标值 { ... }`（第 282、283 行） |
 
