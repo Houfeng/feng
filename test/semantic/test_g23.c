@@ -378,8 +378,8 @@ static void g23_member_conflicts(void) {
                "AE0804", "item;", "item");
 }
 
-/* Preserve the complete existing diagnostic set for intersecting invariants
- * or unresolved types, without weakening the single-root matrix helper. */
+/* Independent invariants retain their complete diagnostic sets. Failed type
+ * references retain only their root diagnostic under the approved G25 rule. */
 static void g23_multiple_diagnostics(void) {
     const char *sources[] = {
         ("module g23;\nspec A { func read(): i32; }\nspec B { func read(): string; }\n"
@@ -390,7 +390,8 @@ static void g23_multiple_diagnostics(void) {
         "module g23;\ntype Item: Missing {}\n"
     };
     const char *codes[][2] = {{"AE0704", "AE0706"}, {"AE0614", "AE0614"},
-                             {"AE1013", "AE0811"}, {"AE1013", "AE0809"}, {"AE1013", "AE0615"}};
+                             {"AE1013", NULL}, {"AE1013", NULL}, {"AE1013", NULL}};
+    const size_t expected_counts[] = {2U, 2U, 1U, 1U, 1U};
     const unsigned lines[][2] = {{4U, 4U}, {2U, 3U}, {2U, 2U}, {2U, 2U}, {2U, 2U}};
     const unsigned columns[] = {6U, 6U, 5U, 10U, 12U};
     const char *tokens[][2] = {{"Item", "Item"}, {"A", "B"}, {"Missing", "Missing"},
@@ -407,8 +408,8 @@ static void g23_multiple_diagnostics(void) {
         options.target = FENG_COMPILE_TARGET_LIB;
         options.pointer_size = feng_get_host_pointer_size();
         CHECK(!feng_semantic_analyze_with_options(programs, 1U, &options, &analysis, &errors, &count));
-        CHECK(count == 2U);
-        for (size_t e = 0U; e < 2U; ++e) {
+        CHECK(count == expected_counts[c]);
+        for (size_t e = 0U; e < expected_counts[c]; ++e) {
             size_t matches = 0U;
             for (size_t i = 0U; i < count; ++i) {
                 if (strcmp(errors[i].code, codes[c][e]) == 0 && errors[i].token.line == lines[c][e]) {

@@ -1,0 +1,205 @@
+module fcts_bin;
+
+import std.test;
+import std.collections;
+import fcts_lib.test as g25lib;
+
+/// Local nominal wrapper for recursive argument inference.
+type G25Box<T> {
+    /// The complete remaining type is stored without a variance conversion.
+    let value: T;
+}
+
+/// Two independent slots used to separate owner and method type parameters.
+type G25Pair<A, B> {
+    /// Owner-typed payload.
+    let first: A;
+    /// Method-typed payload.
+    let second: B;
+}
+
+/// Infer an array element from a fixed ordinary parameter.
+func g25Array<T>(value: T[]): T { return value[0]; }
+
+/// Bind the entire remaining type at the first open slot.
+func g25Whole<T>(value: G25Box<T>): T { return value.value; }
+
+/// Infer through two named layers followed by an array layer.
+func g25Deep<T>(value: G25Box<G25Box<T[]>>): T { return value.value.value[0]; }
+
+/// Infer through four named layers; adjacent closing tokens are not a depth limit.
+func g25Deeper<T>(value: G25Box<G25Box<G25Box<G25Box<T[]>>>>): T {
+    return value.value.value.value.value[0];
+}
+
+/// Forward an already open leaf through the same recursive inference path.
+func g25Forward<U>(value: G25Box<G25Box<U[]>>): U { return g25Deep(value); }
+
+/// Bind an existing closed pointer as the complete T slot in its wrapper.
+func g25Pointer<T>(value: G25Box<T>): T { return value.value; }
+
+/// Explicit closed pointer membership is a legal union constraint.
+spec G25PointerChoice: int* | int;
+
+/// A union constraint admits its pointer member without changing the T value.
+func g25ConstrainedPointer<T: G25PointerChoice>(value: T): T { return value; }
+
+/// Preserve a writable array handle and its element mutability.
+func g25Writable<T>(value: T[!]): T[!] { return value; }
+
+/// Generic owner whose methods infer only their own remaining slots.
+type G25Host<T> {
+    /// Observable owner payload.
+    let owner: T;
+    /// Instance call keeps owner and method slots distinct.
+    func read<U>(value: G25Pair<T, G25Box<U[]>>): U { return value.second.value[0]; }
+    /// Static call uses an explicitly closed owner with an inferred method slot.
+    static func staticRead<U>(value: G25Pair<T, G25Box<U[]>>): U { return value.second.value[0]; }
+}
+
+/// Fit methods reuse the same structural inference and owner substitution.
+fit G25Host<T> {
+    /// Recover the method leaf through a fit-owned parameter.
+    func fitRead<U>(value: G25Pair<T, G25Box<U[]>>): U { return value.second.value[0]; }
+}
+
+/// Candidate that requires both nested leaves to bind the same type.
+func g25Choose<T>(left: G25Box<T>, right: G25Box<T>): int { return 1; }
+/// Legal fallback when the generic candidate has conflicting known leaves.
+func g25Choose(left: G25Box<int>, right: G25Box<string>): int { return 2; }
+
+/// Constraint used to exercise genuine candidate exclusion rather than priority alone.
+spec G25Readable { func read(): int; }
+/// Concrete witness for the successful constrained candidate.
+type G25Reading: G25Readable { func read(): int { return 73; } }
+/// This candidate is unavailable for an unconstrained integer.
+func g25BoundChoice<T: G25Readable>(left: T, right: int): int { return left.read(); }
+/// Another generic candidate remains available after the constrained one is excluded.
+func g25BoundChoice<T>(left: T, right: T): int { return 2; }
+
+/// Arity-zero identity declared before its generic sibling.
+type G25Order { static func tag(): int { return 10; } }
+/// Arity-one identity declared after its ordinary sibling.
+type G25Order<T> { static func tag(): int { return 11; } }
+/// The corresponding arity-one identity with reversed declaration order.
+type G25Reverse<T> { static func tag(): int { return 11; } }
+/// The corresponding arity-zero identity with reversed declaration order.
+type G25Reverse { static func tag(): int { return 10; } }
+/// First callable order, arity one.
+func g25Rank<T>(value: T): int { return 1; }
+/// First callable order, arity two.
+func g25Rank<T, U>(value: T): int { return 2; }
+/// Reversed callable order, arity two.
+func g25ReverseRank<T, U>(value: T): int { return 2; }
+/// Reversed callable order, arity one.
+func g25ReverseRank<T>(value: T): int { return 1; }
+
+/// Arity-zero spec declared first.
+spec G25View { func tag(): int; }
+/// Arity-one spec declared second.
+spec G25View<T> { func read(): T; }
+/// Arity-one spec declared first in the reversed pair.
+spec G25ReverseView<T> { func read(): T; }
+/// Arity-zero spec declared second in the reversed pair.
+spec G25ReverseView { func tag(): int; }
+/// One value exposes all four exact nominal contracts.
+type G25Views: G25View, G25View<int>, G25ReverseView, G25ReverseView<int> {
+    /// Distinguishes the arity-zero requirement surface.
+    func tag(): int { return 10; }
+    /// Distinguishes the arity-one requirement surface.
+    func read(): int { return 11; }
+}
+
+/// Explicit callable target for an imported generic source.
+spec G25ImportedReader(value: g25lib.G25ImportedBox<g25lib.G25ImportedBox<int[]>>): int;
+
+/// G25 positive boundaries use real return values, identities and shared handles.
+func test_g25_generic_boundaries(): void {
+    describe("G25 generic boundaries", () {
+        test("ordinary arrays infer the same leaf as explicit calls", () {
+            let values: int[] = [41, 42];
+            assert(g25Array(values) == 41, "inferred array leaf");
+            assert(g25Array<int>(values) == 41, "explicit array leaf");
+        });
+        test("nested named arrays and whole slots retain their complete types", () {
+            let inner = G25Box<int[]> { value: [51, 52] };
+            let outer = G25Box<G25Box<int[]>> { value: inner };
+            let retained = g25Whole(outer);
+            assert(retained.value[1] == 52, "the entire inner box is bound to T");
+            assert(g25Deep(outer) == 51, "nested inference");
+            assert(g25Deep<int>(outer) == 51, "explicit nested call");
+            assert(g25Forward(outer) == 51, "open leaf forwards recursively");
+        });
+        test("four named layers close without a fixed nesting limit", () {
+            let first = G25Box<int[]> { value: [61] };
+            let second = G25Box<G25Box<int[]>> { value: first };
+            let third = G25Box<G25Box<G25Box<int[]>>> { value: second };
+            let fourth = G25Box<G25Box<G25Box<G25Box<int[]>>>> { value: third };
+            assert(g25Deeper(fourth) == 61, "four-layer inferred leaf");
+            assert(g25Deeper<int>(fourth) == 61, "four-layer explicit leaf");
+        });
+        test("pointer and writable array inference preserves existing handles", () {
+            let pointer: int*;
+            let wrapped = G25Box<int*> { value: pointer };
+            assert(g25Pointer(wrapped) == pointer, "nested pointer handle retains identity");
+            assert(g25Pointer<int*>(wrapped) == pointer, "the explicit slot is the whole pointer");
+            assert(g25ConstrainedPointer(pointer) == pointer, "union explicitly admits pointer");
+            assert(g25ConstrainedPointer<int*>(pointer) == pointer, "explicit constrained pointer");
+            assert(g25lib.g25ImportedPointer(pointer) == pointer, "imported union pointer constraint");
+            assert(g25lib.g25ImportedPointer<int*>(pointer) == pointer, "imported explicit pointer");
+            let pointers = G25Box<int*>[:1];
+            assert(pointers.length() == 1 && pointers[0].value == pointer,
+                   "generic array-new uses the colon dimension and a closed pointer slot");
+            let values: int[!] = [81, 82];
+            let same = g25Writable(values);
+            same[0] = 83;
+            assert(values[0] == 83 && same[1] == 82, "writable array is shared, not converted");
+        });
+        test("instance static and fit methods keep owner and method slots distinct", () {
+            let host = G25Host<string> { owner: "owner" };
+            let pair = G25Pair<string, G25Box<int[]>> {
+                first: "payload", second: G25Box<int[]> { value: [91] }
+            };
+            assert(host.owner == "owner" && pair.first == "payload", "owner slot remains string");
+            assert(host.read(pair) == 91 && host.read<int>(pair) == 91, "instance method leaf");
+            assert(G25Host<string>.staticRead(pair) == 91, "static inferred method leaf");
+            assert(G25Host<string>.staticRead<int>(pair) == 91, "static explicit method leaf");
+            assert(host.fitRead(pair) == 91 && host.fitRead<int>(pair) == 91, "fit method leaf");
+        });
+        test("conflicting nested sources exclude only the conflicting candidate", () {
+            let number = G25Box<int> { value: 1 };
+            let text = G25Box<string> { value: "other" };
+            assert(g25Choose(number, text) == 2, "fallback is selected after conflict");
+            assert(g25Choose(number, number) == 1, "consistent generic candidate still works");
+        });
+        test("unsatisfied constraints leave a different generic candidate available", () {
+            assert(g25BoundChoice(1, 2) == 2, "int excludes the constrained candidate");
+            assert(g25BoundChoice(G25Reading(), 2) == 73, "a real witness selects the constrained body");
+        });
+        test("exact type and callable arity is independent of declaration order", () {
+            assert(G25Order.tag() == 10 && G25Reverse.tag() == 10, "arity-zero owners");
+            assert(G25Order<int>.tag() == 11 && G25Reverse<int>.tag() == 11, "arity-one owners");
+            assert(g25Rank<int>(1) == 1 && g25ReverseRank<int>(1) == 1, "arity-one callables");
+            assert(g25Rank<int, string>(1) == 2 && g25ReverseRank<int, string>(1) == 2,
+                   "arity-two callables");
+        });
+        test("exact spec arity is independent of declaration order", () {
+            let source = G25Views();
+            let plain: G25View = source;
+            let typed: G25View<int> = source;
+            let reversePlain: G25ReverseView = source;
+            let reverseTyped: G25ReverseView<int> = source;
+            assert(plain.tag() == 10 && reversePlain.tag() == 10, "plain spec identities");
+            assert(typed.read() == 11 && reverseTyped.read() == 11, "generic spec identities");
+        });
+        test("imported nested inference and explicit callable values agree", () {
+            let inner = g25lib.G25ImportedBox<int[]> { value: [101] };
+            let outer = g25lib.G25ImportedBox<g25lib.G25ImportedBox<int[]>> { value: inner };
+            assert(g25lib.g25ImportedKeep(outer) == 101, "inference from imported nominal types");
+            assert(g25lib.g25ImportedKeep<int>(outer) == 101, "explicit imported call");
+            let assigned: G25ImportedReader = g25lib.g25ImportedKeep<int>;
+            let casted = (G25ImportedReader)g25lib.g25ImportedKeep<int>;
+            assert(assigned(outer) == 101 && casted(outer) == 101, "both closed callable consumers");
+        });
+    });
+}

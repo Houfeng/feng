@@ -183,7 +183,7 @@ static void arguments_reject_invalid_actuals(void) {
         "module invalid.arity;func id<U>(x:U):U{return x;}"
         "func relay<T>(x:T[]):T[]{return id<T[],T[]>(x);}",
     };
-    const char *codes[] = {"AE0512", "AE0512", "AE0233"};
+    const char *codes[] = {"AE0512", "AE0512", "AE1015"};
     for (size_t i = 0U; i < sizeof sources / sizeof sources[0]; ++i) {
         FengProgram *program = NULL;
         FengParseError parse = {0};

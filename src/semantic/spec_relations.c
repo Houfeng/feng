@@ -184,7 +184,7 @@ static bool rel_subject_key_equals(
  * The post-pass runs without a ResolveContext, so we cannot reuse
  * analyzer.c's `resolve_type_ref_decl`. Resolution here mirrors the
  * simplification used by cyclic.c: scan every program in every module for
- * a decl whose name matches the (single-segment) reference. The main
+ * a decl whose name and generic arity match the reference. The main
  * resolver has already rejected ambiguous / unresolved names before we
  * run, so the first match is the intended target. Qualified multi-segment
  * names are resolved by matching the trailing segment against decls in the
@@ -241,9 +241,11 @@ static FengSlice decl_typeish_name(const FengDecl *d) {
     }
 }
 
+/* Match the same (name, arity) identity used by the main type resolver. */
 static const FengDecl *find_decl_by_name_in_module(
     const FengSemanticModule *module,
-    const FengSlice *name) {
+    const FengSlice *name,
+    size_t arity) {
     size_t pi;
 
     for (pi = 0U; pi < module->program_count; ++pi) {
@@ -265,8 +267,12 @@ static const FengDecl *find_decl_by_name_in_module(
             }
             {
                 FengSlice n = decl_typeish_name(d);
+                size_t decl_arity = d->kind == FENG_DECL_TYPE
+                    ? d->as.type_decl.type_param_count
+                    : d->kind == FENG_DECL_SPEC ? d->as.spec_decl.type_param_count : 0U;
 
-                if (n.length == name->length && memcmp(n.data, name->data, n.length) == 0) {
+                if (decl_arity == arity && n.length == name->length &&
+                    memcmp(n.data, name->data, n.length) == 0) {
                     return d;
                 }
             }
@@ -292,14 +298,16 @@ static const FengDecl *resolve_named_type_or_spec(
             return NULL;
         }
         return find_decl_by_name_in_module(
-            m, &ref->as.named.segments[ref->as.named.segment_count - 1U]);
+            m, &ref->as.named.segments[ref->as.named.segment_count - 1U],
+            ref->as.named.type_arg_count);
     }
     {
         size_t mi;
         const FengSlice *seg = &ref->as.named.segments[0];
 
         for (mi = 0U; mi < analysis->module_count; ++mi) {
-            const FengDecl *d = find_decl_by_name_in_module(&analysis->modules[mi], seg);
+            const FengDecl *d = find_decl_by_name_in_module(
+                &analysis->modules[mi], seg, ref->as.named.type_arg_count);
 
             if (d != NULL) {
                 /* Suppress the obvious `string` / builtin clash: `string`

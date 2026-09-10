@@ -12,6 +12,15 @@
 - 历史码并入现有码后，产品代码停止产生历史码；历史交付记录可以保留原编号，但必须明确其为迁移前结果。
 - 例：`throw statement requires a non-void expression` 与 `type 'unknown' is only valid as a catch clause type` 不同类，必须拆分新错误码。
 
+### 依赖性诊断
+
+- 若一项后续检查依赖已失败的解析结果，且其错误不能独立于该根因成立，只报告先前根因；不得把
+  “类型名未知”或“类型实参数量错误”产生的无效引用再次判定为目标种类、契约形态或满足关系错误。
+- 抑制范围按失败引用及其依赖确定，不以整个声明已经出现错误作为停止其他检查的条件；其他引用、
+  成员或声明中的独立错误仍需报告。
+- 类型引用已成功解析、但其种类不符合所在位置的要求时，继续使用该位置的既有错误码。
+  本规则不改变错误码分配，也不把全部多诊断程序收敛为单诊断。
+
 ## 分段规划
 
 | 段编码 | 段 | 语义域（主归属） |
@@ -117,6 +126,11 @@
 | AE0330 | 成员展开依赖无环约束 | (新增) | member mix expansion for type '%.*s' forms a cycle through source type '%.*s' |
 | AE0331 | object-form spec 方法级泛参禁用 | (新增) | object-form spec method '%.*s' cannot declare type parameters |
 | AE0332 | 默认零值有限性约束 | CE0226 | type '%s' has no finite default zero value; provide an initializer、construction of type '%s' requires a non-terminating default zero value for field '%.*s'; provide a field declaration initializer、array creation element type '%s' has no finite default zero value; provide explicit element values instead |
+| AE0333 | 开放泛型指针构造禁用 | （G25 人工批准新增） | pointer type '%s' cannot be formed from an open generic pointee; use a legal closed pointer as a complete type argument instead |
+
+`AE0333` 在声明处统一用于 pointee 仍含活动泛参的指针类型，覆盖签名、字段、局部变量和类型
+实参等类型引用位置；规则见[泛型主规范第 4 节](./feng-generics-draft.md#4-语义)。它不是取址
+表达式、特定 ABI 签名位或已有 spec 约束不满足错误。内层引用已失败时不追加外层依赖性诊断。
 
 ## 04 枚举段
 
@@ -243,7 +257,7 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE0804 | fit 可见实现冲突约束 | AE0194 | fit target has multiple visible implementations of method '%.*s' required by spec '%.*s' |
 | AE0805 | fit 可见关系下重载二义性约束 | AE0197 | method overloads in fit target '%s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0807 | 历史 fit 块体限制，G23 移除该限制 | AE0202 | 历史文案：fit with spec clause requires a body；有无块体均按契约完整性检查，缺失／不匹配使用 AE0701～AE0705，不再以无块体为错误 |
-| AE0808 | 历史内建目标 fit spec 解析出口（已移除） | AE0203 | 目标统一验证后使用 `AE0809`；未知名称同时保留名称解析阶段的 `AE1013`，不再产生本旧码。 |
+| AE0808 | 历史内建目标 fit spec 解析出口（已移除） | AE0203 | 已解析但非法的 fit spec 使用 `AE0809`；G25 前未知名称还附加 `AE0809`，现按依赖性诊断规则只保留 `AE1013`。本旧码不再产生。 |
 | AE0809 | fit specs 列表成员类型约束 | AE0204 | fit specs list can only contain object-form specs |
 | AE0811 | fit 目标具体类型约束 | AE0205 | fit target must be a concrete type but found '%s' |
 | AE0812 | fit 泛型目标参数引用完整性约束 | AE0206 | fit target for generic type '%.*s' must reference all target type parameters directly |

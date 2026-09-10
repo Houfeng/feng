@@ -38,6 +38,8 @@ void test_reified_metadata_counts(void (*compile_c)(const char *));
 void test_generic_literal_storage_codegen(void (*compile_c)(const char *));
 /* Constructed generic actuals use static records across every shared entrance. */
 void test_generic_argument_static_codegen(void (*compile_c)(const char *));
+/* G25 closed pointer values and generic identities survive FT import. */
+void test_g25_codegen(void (*compile_c)(const char *));
 
 #include <ctype.h>
 #include <stdio.h>
@@ -15551,8 +15553,8 @@ static void test_generic_param_descriptor_static_storage_and_forwarding(void) {
     ASSERT(strstr(output.c_source, ".descriptor = _U->descriptor") == NULL);
     ASSERT(strstr(output.c_source, ".witness = _U->witness") == NULL);
     ASSERT(g24_has_static_descriptor_call(
-        output.c_source, "generic_param_descriptor_storage__useParent_G__from__X",
-        "feng__feng__codegen__generic_param_descriptor_storage__useParent_G__from__X",
+        output.c_source, "generic_param_descriptor_storage__useParent_G__from__X0__arity_1",
+        "feng__feng__codegen__generic_param_descriptor_storage__useParent_G__from__X0__arity_1",
         ", _U,"));
     ASSERT(strstr(output.c_source,
                   "&(const FengGenericParamDescriptor){") == NULL);
@@ -17452,6 +17454,7 @@ int main(void) {
     test_generic_runtime_extern_direct_type_param_return_codegen();
     test_open_generic_param_descriptor_forwards_static_arguments();
     test_generic_argument_static_codegen(compile_generated_c_or_die);
+    test_g25_codegen(compile_generated_c_or_die);
     test_runtime_extern_codegen_rejects_non_contract_symbol();
     test_unsupported_pointer_pointee_reports_explicit_error();
     test_generic_function_codegen_failure_propagates();

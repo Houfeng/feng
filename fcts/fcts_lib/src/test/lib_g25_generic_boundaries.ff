@@ -1,0 +1,18 @@
+open module fcts_lib.test;
+
+/// Public generic identity used to verify nested argument inference across packages.
+open type G25ImportedBox<T> {
+    /// Payload whose exact type is preserved by the existing generic representation.
+    open let value: T;
+}
+
+/// Infer the leaf from a nested imported owner and return its first array item.
+open func g25ImportedKeep<T>(value: G25ImportedBox<G25ImportedBox<T[]>>): T {
+    return value.value.value[0];
+}
+
+/// An explicit pointer alternative does not borrow the pointee's capabilities.
+open spec G25PointerChoice: int* | int;
+
+/// Copy the complete actual value under an explicitly admitting union contract.
+open func g25ImportedPointer<T: G25PointerChoice>(value: T): T { return value; }

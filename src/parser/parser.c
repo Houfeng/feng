@@ -5,6 +5,16 @@
 
 #include "lexer/lexer.h"
 
+/* Logical token position, including a split closing delimiter. Copying this
+ * cursor makes speculative parsing restore both physical and virtual tokens. */
+typedef struct ParserCursor {
+    size_t current;
+    bool has_pending_gt;
+    bool previous_is_split_gt;
+    FengToken split_gt[2];
+} ParserCursor;
+
+/* Source parser and its logical token view; the lexer token array is immutable. */
 typedef struct Parser {
     const char *source;
     size_t length;
@@ -12,12 +22,8 @@ typedef struct Parser {
     FengToken *tokens;
     size_t token_count;
     size_t token_capacity;
-    size_t current;
+    ParserCursor cursor;
     FengParseError error;
-    /* Pending `>` count from splitting a `>>` (SHR) token while parsing
-     * nested generic type argument lists, e.g. Map<string, List<int>>.
-     * See parser_consume_gt(). */
-    int pending_gt;
     /* When true, parse_postfix skips object literal suffix detection so
      * that a `{` following an identifier is not consumed as part of an
      * object literal. Used while parsing control-flow head expressions to
@@ -115,7 +121,7 @@ static bool append_raw(Parser *parser,
             if (parser->error.message == NULL) {
                 parser->error.code = "IE0001";
                 parser->error.message = "out of memory";
-                parser->error.token = parser->tokens[parser->current];
+                parser->error.token = parser->tokens[parser->cursor.current];
             }
             return false;
         }
@@ -152,12 +158,22 @@ static FengSlice doc_comment_from_token(const FengToken *token) {
     return slice;
 }
 
+/* Expose a pending closing delimiter before any following physical token. */
 static const FengToken *parser_current(const Parser *parser) {
-    return &parser->tokens[parser->current];
+    return parser->cursor.has_pending_gt
+        ? &parser->cursor.split_gt[1]
+        : &parser->tokens[parser->cursor.current];
 }
 
+/* Look ahead in the same logical stream used by ordinary token matching. */
 static const FengToken *parser_peek(const Parser *parser, size_t lookahead) {
-    size_t index = parser->current + lookahead;
+    size_t index;
+
+    if (lookahead == 0U) {
+        return parser_current(parser);
+    }
+    index = parser->cursor.current + lookahead -
+            (parser->cursor.has_pending_gt ? 1U : 0U);
 
     if (index >= parser->token_count) {
         return &parser->tokens[parser->token_count - 1U];
@@ -166,12 +182,16 @@ static const FengToken *parser_peek(const Parser *parser, size_t lookahead) {
     return &parser->tokens[index];
 }
 
+/* Preserve the exact source span of either half of a consumed split token. */
 static const FengToken *parser_previous(const Parser *parser) {
-    if (parser->current == 0U) {
+    if (parser->cursor.previous_is_split_gt) {
+        return &parser->cursor.split_gt[parser->cursor.has_pending_gt ? 0 : 1];
+    }
+    if (parser->cursor.current == 0U) {
         return &parser->tokens[0];
     }
 
-    return &parser->tokens[parser->current - 1U];
+    return &parser->tokens[parser->cursor.current - 1U];
 }
 
 static FengToken parser_current_token(const Parser *parser) {
@@ -186,9 +206,14 @@ static bool parser_is_at_end(const Parser *parser) {
     return parser_current(parser)->kind == FENG_TOKEN_EOF;
 }
 
+/* Consume one logical token without stepping past a pending delimiter. */
 static const FengToken *parser_advance(Parser *parser) {
-    if (!parser_is_at_end(parser)) {
-        ++parser->current;
+    if (parser->cursor.has_pending_gt) {
+        parser->cursor.has_pending_gt = false;
+        parser->cursor.previous_is_split_gt = true;
+    } else if (!parser_is_at_end(parser)) {
+        ++parser->cursor.current;
+        parser->cursor.previous_is_split_gt = false;
     }
     return parser_previous(parser);
 }
@@ -202,18 +227,24 @@ static bool parser_starts_callable_signature(const Parser *parser) {
            parser_peek(parser, 1U)->kind == FENG_TOKEN_LPAREN;
 }
 
-/* Consume one `>` in a generic type argument context.  Handles the case
- * where `>>` was produced as FENG_TOKEN_SHR by the lexer: the first call
- * advances past SHR and records one pending `>`, while the second call
- * satisfies that pending entry without advancing the token stream. */
+/* Split SHR only when the grammar requires a closing generic delimiter. The
+ * remaining half stays visible to every parser consumer and lookahead. */
 static bool parser_consume_gt(Parser *parser) {
-    if (parser->pending_gt > 0) {
-        --parser->pending_gt;
-        return true;
-    }
     if (parser_check(parser, FENG_TOKEN_SHR)) {
+        FengToken first = parser_current_token(parser);
+
         (void)parser_advance(parser);
-        parser->pending_gt = 1;
+        first.kind = FENG_TOKEN_GT;
+        first.length = 1U;
+        parser->cursor.split_gt[0] = first;
+        parser->cursor.split_gt[1] = first;
+        parser->cursor.split_gt[1].lexeme += 1;
+        parser->cursor.split_gt[1].offset += 1U;
+        parser->cursor.split_gt[1].column += 1U;
+        parser->cursor.split_gt[1].leading_doc = NULL;
+        parser->cursor.split_gt[1].leading_doc_length = 0U;
+        parser->cursor.has_pending_gt = true;
+        parser->cursor.previous_is_split_gt = true;
         return true;
     }
     return parser_match(parser, FENG_TOKEN_GT);
@@ -799,7 +830,7 @@ static bool append_destructure_binding_position(Parser *parser,
             if (parser->error.message == NULL) {
                 parser->error.code = "IE0001";
                 parser->error.message = "out of memory";
-                parser->error.token = parser->tokens[parser->current];
+                parser->error.token = parser_current_token(parser);
             }
             return false;
         }
@@ -811,7 +842,7 @@ static bool append_destructure_binding_position(Parser *parser,
             if (parser->error.message == NULL) {
                 parser->error.code = "IE0001";
                 parser->error.message = "out of memory";
-                parser->error.token = parser->tokens[parser->current];
+                parser->error.token = parser_current_token(parser);
             }
             return false;
         }
@@ -2621,14 +2652,14 @@ static bool looks_like_lambda(const Parser *parser) {
         return false;
     }
 
-    size_t first = parser->current + 1U;
+    size_t first = parser->cursor.current + 1U;
     if (first < parser->token_count && (parser->tokens[first].kind == FENG_TOKEN_KW_LET ||
         parser->tokens[first].kind == FENG_TOKEN_KW_VAR)) ++first;
     has_parameter_prefix = first + 1U < parser->token_count &&
         parser->tokens[first].kind == FENG_TOKEN_IDENTIFIER &&
         parser->tokens[first + 1U].kind == FENG_TOKEN_COLON;
 
-    for (index = parser->current + 1U; index < parser->token_count; ++index) {
+    for (index = parser->cursor.current + 1U; index < parser->token_count; ++index) {
         FengTokenKind kind = parser->tokens[index].kind;
 
         if (kind == FENG_TOKEN_LPAREN) {
@@ -2637,7 +2668,7 @@ static bool looks_like_lambda(const Parser *parser) {
         }
         if (kind == FENG_TOKEN_RPAREN) {
             if (paren_depth == 0U) {
-                bool is_empty = (index == parser->current + 1U);
+                bool is_empty = (index == parser->cursor.current + 1U);
                 FengTokenKind after = parser->tokens[index + 1U].kind;
 
                 if (brace_depth != 0U || bracket_depth != 0U) {
@@ -2704,11 +2735,11 @@ static bool looks_like_object_literal(const Parser *parser) {
     if (!parser_check(parser, FENG_TOKEN_LBRACE)) {
         return false;
     }
-    if (parser->tokens[parser->current + 1U].kind == FENG_TOKEN_RBRACE) {
+    if (parser_peek(parser, 1U)->kind == FENG_TOKEN_RBRACE) {
         return true;
     }
-    return parser->tokens[parser->current + 1U].kind == FENG_TOKEN_IDENTIFIER &&
-           parser->tokens[parser->current + 2U].kind == FENG_TOKEN_COLON;
+    return parser_peek(parser, 1U)->kind == FENG_TOKEN_IDENTIFIER &&
+           parser_peek(parser, 2U)->kind == FENG_TOKEN_COLON;
 }
 
 static bool expr_can_take_explicit_type_args(const FengExpr *expr) {
@@ -2771,8 +2802,12 @@ static FengTypeRef *new_named_type_ref_from_target_expr(Parser *parser,
  * are not eventually followed by `[:` remain on the ordinary index path. */
 static bool looks_like_array_type_suffixes_before_array_new(
     const Parser *parser) {
-    size_t index = parser->current;
+    size_t index = parser->cursor.current;
     bool saw_array_type_suffix = false;
+
+    if (!parser_check(parser, FENG_TOKEN_LBRACKET)) {
+        return false;
+    }
 
     while (index < parser->token_count &&
            parser->tokens[index].kind == FENG_TOKEN_LBRACKET) {
@@ -3224,7 +3259,7 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
     out_label->type_chain_count = 0U;
 
     if (is_type_label_start_token(token.kind)) {
-        size_t before = parser->current;
+        ParserCursor before = parser->cursor;
         FengTypeRef *type_ref = parse_type_ref(parser);
 
         if (type_ref == NULL) {
@@ -3236,7 +3271,7 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
              * Block-form mode (infix_mode == false) preserves the original
              * behavior of returning false on type_ref failure. */
             if (infix_mode) {
-                parser->current = before;
+                parser->cursor = before;
                 if (parser->error.message != NULL) {
                     parser->error.message = NULL;
                     parser->error.code = NULL;
@@ -3291,7 +3326,7 @@ static bool parse_match_label(Parser *parser, FengMatchLabel *out_label, bool in
                 return parse_match_label_chain(parser, out_label);
             }
             free_type_ref(type_ref);
-            parser->current = before;
+            parser->cursor = before;
         }
     }
 
@@ -3375,7 +3410,7 @@ static bool parse_match_branch_binding_prefix(
     FengSlice *out_binding_name,
     FengToken *out_binding_token,
     FengMutability *out_mutability) {
-    size_t saved = parser->current;
+    ParserCursor saved = parser->cursor;
     FengMutability mut = FENG_MUTABILITY_LET;
 
     *out_has_binding = false;
@@ -3391,14 +3426,14 @@ static bool parse_match_branch_binding_prefix(
         }
         (void)parser_advance(parser);
         if (!parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
-            parser->current = saved;
+            parser->cursor = saved;
             return true;
         }
         *out_binding_token = *parser_current(parser);
         *out_binding_name = slice_from_token(parser_current(parser));
         (void)parser_advance(parser);
         if (!parser_check(parser, FENG_TOKEN_COLON)) {
-            parser->current = saved;
+            parser->cursor = saved;
             *out_binding_name = (FengSlice){NULL, 0U};
             memset(out_binding_token, 0, sizeof(*out_binding_token));
             return true;
@@ -3416,12 +3451,12 @@ static bool parse_match_branch_binding_prefix(
         (void)parser_advance(parser);
         /* Multi-segment name (IDENT . ...) is a qualified type reference. */
         if (parser_check(parser, FENG_TOKEN_DOT)) {
-            parser->current = saved;
+            parser->cursor = saved;
             return true;
         }
         /* Generic type reference (IDENT < ...). */
         if (parser_check(parser, FENG_TOKEN_LT)) {
-            parser->current = saved;
+            parser->cursor = saved;
             return true;
         }
         if (parser_check(parser, FENG_TOKEN_COLON)) {
@@ -3433,7 +3468,7 @@ static bool parse_match_branch_binding_prefix(
             *out_mutability = FENG_MUTABILITY_LET;
             return true;
         }
-        parser->current = saved;
+        parser->cursor = saved;
     }
 
     return true;

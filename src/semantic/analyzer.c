@@ -407,6 +407,12 @@ typedef enum ExpressionBranchBoundary {
     EXPRESSION_BRANCH_BOUNDARY_CATCH
 } ExpressionBranchBoundary;
 
+/* Query-only provenance for a callable signature; no AST or runtime state. */
+typedef struct CallableSourceEntry {
+    const FengCallableSignature *callable;
+    const FengProgram *program;
+} CallableSourceEntry;
+
 typedef struct ResolveContext {
     const FengSemanticAnalysis *analysis;
     const FengSemanticModule *module;
@@ -456,6 +462,15 @@ typedef struct ResolveContext {
     FengTypeRef **synthetic_type_refs;
     size_t synthetic_type_ref_count;
     size_t synthetic_type_ref_capacity;
+    /* Invalid source references retain their root diagnostic. Dependent
+     * checks consult this set without suppressing unrelated declarations. */
+    const FengTypeRef **failed_type_refs;
+    size_t failed_type_ref_count;
+    size_t failed_type_ref_capacity;
+    /* Cache source lookup once per consumed callable, not once per type layer. */
+    CallableSourceEntry *callable_sources;
+    size_t callable_source_count;
+    size_t callable_source_capacity;
     UnionNarrowingSet **union_narrowings;
     size_t union_narrowing_count;
     size_t union_narrowing_capacity;
@@ -486,6 +501,9 @@ typedef struct ResolveContext {
      * return value, member assignment). Used by the shared if/match/try
      * result fitter so every value-producing branch sees the same target. */
     const FengTypeRef *current_expr_expected_type_ref;
+    /* Exact direct callee currently being resolved. Nested receiver expressions
+     * are still ordinary values and must keep their own member diagnostics. */
+    const FengExpr *current_call_target_expr;
     /* Number of call-argument resolution frames whose parameter target is not
      * known until overload selection completes. Target-sensitive expressions
      * resolve their contents immediately but defer diagnostics that would
@@ -1309,17 +1327,74 @@ static bool type_ref_equals(const FengTypeRef *left, const FengTypeRef *right) {
     return false;
 }
 
-static bool return_type_equals(const FengTypeRef *left, const FengTypeRef *right) {
-    bool left_is_void = (left == NULL) || type_ref_is_void(left);
-    bool right_is_void = (right == NULL) || type_ref_is_void(right);
+/* Identify a callable-local parameter by position, never by its spelling. */
+static size_t signature_type_param_index(const FengCallableSignature *signature,
+                                         const FengTypeRef *ref) {
+    if (ref != NULL && ref->kind == FENG_TYPE_REF_NAMED &&
+        ref->as.named.segment_count == 1U && ref->as.named.type_arg_count == 0U) {
+        for (size_t i = 0U; i < signature->type_param_count; ++i) {
+            if (slice_equals(signature->type_params[i].name, ref->as.named.segments[0])) {
+                return i;
+            }
+        }
+    }
+    return SIZE_MAX;
+}
+
+/* Alpha-equivalence for signatures, including nested parameter refs.
+ * Owner parameters and concrete names retain their lexical identity. */
+static bool signature_type_refs_equal(const FengCallableSignature *left_sig,
+                                      const FengTypeRef *left,
+                                      const FengCallableSignature *right_sig,
+                                      const FengTypeRef *right) {
+    size_t left_index = signature_type_param_index(left_sig, left);
+    size_t right_index = signature_type_param_index(right_sig, right);
+    if (left_index != SIZE_MAX || right_index != SIZE_MAX) {
+        return left_index == right_index;
+    }
+    if (left == NULL || right == NULL) {
+        return left == right;
+    }
+    if (left->kind != right->kind) {
+        return false;
+    }
+    if (left->kind == FENG_TYPE_REF_POINTER || left->kind == FENG_TYPE_REF_ARRAY) {
+        return (left->kind != FENG_TYPE_REF_ARRAY ||
+                left->array_element_writable == right->array_element_writable) &&
+               signature_type_refs_equal(left_sig, left->as.inner, right_sig, right->as.inner);
+    }
+    if (left->as.named.segment_count != right->as.named.segment_count ||
+        left->as.named.type_arg_count != right->as.named.type_arg_count) {
+        return false;
+    }
+    for (size_t i = 0U; i < left->as.named.segment_count; ++i) {
+        if (!slice_equals(left->as.named.segments[i], right->as.named.segments[i])) {
+            return false;
+        }
+    }
+    for (size_t i = 0U; i < left->as.named.type_arg_count; ++i) {
+        if (!signature_type_refs_equal(left_sig, left->as.named.type_args[i],
+                                        right_sig, right->as.named.type_args[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Return-only conflicts use the same generic identity as parameter conflicts. */
+static bool signature_return_types_equal(const FengCallableSignature *left,
+                                          const FengCallableSignature *right) {
+    bool left_is_void = left->return_type == NULL || type_ref_is_void(left->return_type);
+    bool right_is_void = right->return_type == NULL || type_ref_is_void(right->return_type);
 
     if (left_is_void || right_is_void) {
         return left_is_void && right_is_void;
     }
 
-    return type_ref_equals(left, right);
+    return signature_type_refs_equal(left, left->return_type, right, right->return_type);
 }
 
+/* Compare callable parameter shapes after identifying local generic slots. */
 static bool parameters_equal(const FengCallableSignature *left, const FengCallableSignature *right) {
     size_t index;
 
@@ -1331,7 +1406,7 @@ static bool parameters_equal(const FengCallableSignature *left, const FengCallab
         if (left->params[index].is_variadic != right->params[index].is_variadic) {
             return false;
         }
-        if (!type_ref_equals(left->params[index].type, right->params[index].type)) {
+        if (!signature_type_refs_equal(left, left->params[index].type, right, right->params[index].type)) {
             return false;
         }
     }
@@ -1399,7 +1474,7 @@ static bool variadic_parameters_conflict(const FengCallableSignature *left,
     }
 
     for (i = 0U; i < n; ++i) {
-        if (!type_ref_equals(sig_param_type_at(left, i), sig_param_type_at(right, i))) {
+        if (!signature_type_refs_equal(left, sig_param_type_at(left, i), right, sig_param_type_at(right, i))) {
             return false;
         }
     }
@@ -3999,9 +4074,20 @@ static const TypeParamEntry *find_type_param(const ResolveContext *context, Feng
     return NULL;
 }
 
+/* Report the common name-conflict diagnostic for duplicate or shadowing params. */
+static bool report_type_param_name_conflict(ResolveContext *context,
+                                           const FengTypeParam *param,
+                                           bool shadows_outer) {
+    return resolver_append_error(context, param->token, "AE1017",
+        format_message(shadows_outer
+            ? "type parameter '%.*s' shadows an outer type parameter with the same name"
+            : "duplicate type parameter '%.*s' in the same type parameter list",
+            (int)param->name.length, param->name.data));
+}
+
 /* Push a new type parameter scope, merging it with the existing one.
  * Saves the previous scope into *out_prev / *out_prev_count for later pop.
- * Returns false only on allocation failure. */
+ * This also supports derived query scopes; source validation is separate. */
 static bool resolver_push_type_params(ResolveContext *context,
                                       const FengTypeParam *type_params,
                                       size_t type_param_count,
@@ -4039,6 +4125,23 @@ static bool resolver_push_type_params(ResolveContext *context,
     context->type_params       = entries;
     context->type_param_count  = total;
     return true;
+}
+
+/* Source declarations validate one list before entering the shared scope.
+ * Derived query scopes may combine domains and must not repeat this check. */
+static bool resolver_push_decl_type_params(ResolveContext *context,
+                                           const FengTypeParam *params, size_t count,
+                                           const TypeParamEntry **out_prev,
+                                           size_t *out_prev_count) {
+    for (size_t i = 0U; i < count; ++i) {
+        for (size_t previous = 0U; previous < i; ++previous) {
+            if (slice_equals(params[i].name, params[previous].name)) {
+                (void)report_type_param_name_conflict(context, &params[i], false);
+                return false;
+            }
+        }
+    }
+    return resolver_push_type_params(context, params, count, out_prev, out_prev_count);
 }
 
 /* Restore the type parameter scope saved by resolver_push_type_params. */
@@ -5093,6 +5196,15 @@ static void resolver_free_scopes(ResolveContext *context) {
     context->synthetic_type_ref_count = 0U;
     context->synthetic_type_ref_capacity = 0U;
 
+    free(context->failed_type_refs);
+    context->failed_type_refs = NULL;
+    context->failed_type_ref_count = 0U;
+    context->failed_type_ref_capacity = 0U;
+    free(context->callable_sources);
+    context->callable_sources = NULL;
+    context->callable_source_count = 0U;
+    context->callable_source_capacity = 0U;
+
     for (type_ref_index = 0U; type_ref_index < context->union_narrowing_count; ++type_ref_index) {
         if (context->union_narrowings[type_ref_index] != NULL) {
             free(context->union_narrowings[type_ref_index]->active_members);
@@ -5175,15 +5287,15 @@ static FengSpecCoercionCallableSource classify_callable_source(
     const FengExpr *expr);
 static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
                                          const FengTypeRef *type_ref);
-static bool call_expr_allows_wrapped_generic_extern_inference(const FengExpr *call_expr);
 static bool callable_type_ref_contains_type_params(const FengCallableSignature *callable,
                                                    const FengTypeRef *type_ref);
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
                                             const FengTypeRef *target_inference_return_type,
-                                            bool allow_wrapped_inference,
-                                            bool preserve_first_direct_binding,
+                                            const FengDecl *owner_type_decl,
+                                            const FengDecl *fit_decl,
+                                            InferredExprType owner_type,
                                             FengTypeRef **type_args,
                                             bool *owned_type_args);
 static void normalize_type_ref(FengTypeRef *type_ref, size_t pointer_size);
@@ -5387,14 +5499,15 @@ static const FengCallableSignature *resolved_callable_signature(
     return NULL;
 }
 
+/* Substitute a call result using the same owner and callable inference as its
+ * applicability check, or reuse the already persisted authoritative result. */
 static const FengTypeRef *substitute_callable_return_type_for_call(
     ResolveContext *context,
     const FengDecl *owner_type_decl,
     const FengDecl *fit_decl,
     InferredExprType owner_type,
     const FengExpr *call_expr,
-    const FengCallableSignature *callable,
-    bool allow_wrapped_inference) {
+    const FengCallableSignature *callable) {
     const FengTypeRef *return_type_ref;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -5446,15 +5559,13 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
         return return_type_ref;
     }
 
-    /* Only generic extern call sites pass `allow_wrapped_inference = true`.
-     * Other call kinds keep return-type substitution aligned with the narrower
-     * direct-`T` inference behavior they already had. */
     if (!callable_collect_call_type_args(context,
                                          call_expr,
                                          callable,
                                          return_type_ref,
-                                         allow_wrapped_inference,
-                                         false,
+                                         owner_type_decl,
+                                         fit_decl,
+                                         owner_type,
                                          type_args,
                                          owned_type_args)) {
         goto cleanup;
@@ -14860,24 +14971,6 @@ static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
     return false;
 }
 
-/* Policy gate for the new wrapped-shape inference path. Only top-level extern
- * calls may enable recursive matching such as `T[]` <- `int[]`; all ordinary
- * Feng call sites remain on the narrower pre-existing direct-`T` behavior. */
-static bool call_expr_allows_wrapped_generic_extern_inference(const FengExpr *call_expr) {
-    const FengResolvedCallable *resolved_callable;
-
-    if (call_expr == NULL || call_expr->kind != FENG_EXPR_CALL) {
-        return false;
-    }
-    /* Wrapped-shape inference such as `T[]` -> `int[]` is a targeted extension
-     * for top-level generic extern calls. Ordinary Feng call resolution keeps
-     * the pre-existing direct-`T` inference surface unchanged. */
-    resolved_callable = &call_expr->as.call.resolved_callable;
-    return resolved_callable->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
-           resolved_callable->function_decl != NULL &&
-           resolved_callable->function_decl->is_extern;
-}
-
 /* Resolve one of the callable's declared type parameters by name. This is a
  * small shared lookup helper used by the generic argument collectors below. */
 static bool callable_find_type_param_index(const FengCallableSignature *callable,
@@ -14929,13 +15022,8 @@ static bool callable_type_ref_contains_type_params(const FengCallableSignature *
     return false;
 }
 
-/* Policy-free helper: project an argument expression into a comparable type-ref
- * shape for generic argument collection. This was added in this change because
- * the new wrapped-shape inference path reuses a single type-ref unifier, while
- * call arguments arrive as expressions rather than ready-made type refs. This
- * helper does not decide whether wrapped inference is allowed; extern-only
- * gating happens at the callers that pass `allow_wrapped_inference` into
- * callable_collect_call_type_args / the parameter-matching helpers. */
+/* Project an argument expression into a type-ref shape for the shared generic
+ * unifier, preserving the complete static type rather than a runtime payload. */
 static const FengTypeRef *callable_arg_type_ref_from_expr(ResolveContext *context,
                                                           const FengExpr *arg_expr,
                                                           FengTypeRef **owned_type_ref) {
@@ -14983,9 +15071,82 @@ static bool expr_is_existing_array_for_expected_type_ref(ResolveContext *context
     return matches;
  }
 
-/* Structural unification helper shared by both direct-`T` inference and the
- * narrower wrapped-shape inference path. It is intentionally generic; whether
- * wrapped shapes such as `T[]` may reach here is decided before the call. */
+/* Identify the declaration containing a source signature by AST identity. */
+static bool declaration_contains_callable(const FengDecl *decl,
+                                           const FengCallableSignature *callable) {
+    FengTypeMember *const *members = NULL;
+    size_t member_count = 0U;
+
+    if (decl->kind == FENG_DECL_FUNCTION) {
+        return &decl->as.function_decl == callable;
+    }
+    if (decl->kind == FENG_DECL_TYPE) {
+        members = decl->as.type_decl.members;
+        member_count = decl->as.type_decl.member_count;
+    } else if (decl->kind == FENG_DECL_FIT) {
+        members = decl->as.fit_decl.members;
+        member_count = decl->as.fit_decl.member_count;
+    } else if (decl->kind == FENG_DECL_SPEC &&
+               decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+        members = decl->as.spec_decl.as.object.members;
+        member_count = decl->as.spec_decl.as.object.member_count;
+    }
+    for (size_t i = 0U; i < member_count; ++i) {
+        if (members[i]->kind != FENG_TYPE_MEMBER_FIELD &&
+            &members[i]->as.callable == callable) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolve declaration provenance once; synthetic signatures retain their
+ * existing caller-view refs when no source declaration owns the signature. */
+static const FengProgram *callable_source_program(ResolveContext *context,
+                                                 const FengCallableSignature *callable) {
+    CallableSourceEntry entry = {callable, NULL};
+
+    for (size_t i = 0U; i < context->callable_source_count; ++i) {
+        if (context->callable_sources[i].callable == callable) {
+            return context->callable_sources[i].program;
+        }
+    }
+    for (size_t m = 0U; m < context->analysis->module_count && entry.program == NULL; ++m) {
+        const FengSemanticModule *module = &context->analysis->modules[m];
+        for (size_t p = 0U; p < module->program_count && entry.program == NULL; ++p) {
+            const FengProgram *program = module->programs[p];
+            for (size_t d = 0U; d < program->declaration_count; ++d) {
+                if (declaration_contains_callable(program->declarations[d], callable)) {
+                    entry.program = program;
+                    break;
+                }
+            }
+        }
+    }
+    /* This optional cache cannot change the result if allocation fails. */
+    (void)append_raw((void **)&context->callable_sources,
+                     &context->callable_source_count, &context->callable_source_capacity,
+                     sizeof(entry), &entry);
+    return entry.program;
+}
+
+/* Resolve a declaration's nominal container in its own file using a borrowed
+ * query view. Never attach provenance to source AST or inferred actual slots. */
+static const FengDecl *resolve_callable_inference_type_decl(
+    ResolveContext *context, const FengCallableSignature *callable,
+    const FengTypeRef *type_ref) {
+    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->resolution_program == NULL) {
+        FengTypeRef scoped = *type_ref;
+        scoped.resolution_program = callable_source_program(context, callable);
+        return resolve_type_ref_decl(context, &scoped);
+    }
+    return resolve_type_ref_decl(context, type_ref);
+}
+
+/* Recursively unify parameter and argument shapes without variance or implicit
+ * conversions. Each generic slot binds the entire remaining actual type and
+ * every occurrence must agree with the existing binding. */
 static bool callable_collect_type_args_from_type_refs(ResolveContext *context,
                                                       const FengCallableSignature *callable,
                                                       const FengTypeRef *param_type,
@@ -15043,7 +15204,8 @@ static bool callable_collect_type_args_from_type_refs(ResolveContext *context,
                                                              owned_type_args);
 
         case FENG_TYPE_REF_NAMED: {
-            const FengDecl *param_decl = resolve_type_ref_decl(context, param_type);
+            const FengDecl *param_decl = resolve_callable_inference_type_decl(
+                context, callable, param_type);
             const FengDecl *actual_decl = resolve_type_ref_decl(context, actual_type);
             size_t i;
 
@@ -15075,9 +15237,8 @@ static bool callable_collect_type_args_from_type_refs(ResolveContext *context,
     return false;
 }
 
-/* Thin adapter: recover the argument's type-ref shape, then feed the generic
- * type-ref unifier above. Like the helpers it calls, this is not extern-only;
- * the extern-only boundary remains the wrapped-inference gate at the caller. */
+/* Recover the argument's static type and feed the shared structural unifier;
+ * tuple literals use their declared tuple fields as the structural target. */
 static bool callable_collect_type_args_from_arg_expr(ResolveContext *context,
                                                      const FengCallableSignature *callable,
                                                      const FengTypeRef *param_type,
@@ -15191,7 +15352,8 @@ static bool callable_collect_missing_type_args_from_target_refs(
                 owned_type_args);
 
         case FENG_TYPE_REF_NAMED: {
-            const FengDecl *return_decl = resolve_type_ref_decl(context, return_type);
+            const FengDecl *return_decl = resolve_callable_inference_type_decl(
+                context, callable, return_type);
             const FengDecl *target_decl = resolve_type_ref_decl(context, target_type);
             size_t index;
 
@@ -15262,23 +15424,17 @@ static bool callable_collect_type_args_from_target(
         owned_type_args);
 }
 
-/* Central type-argument collector for a call expression. It merges three
- * sources in order: explicit type args, call-argument types, and the current
- * target type. Wrapped call-argument shapes remain guarded by
- * `allow_wrapped_inference`; return-to-target inference always uses the full
- * structural shape required by the generic specification.
- *
- * During ordinary overload applicability probing, direct `T` positions keep
- * the first inferred binding and deliberately tolerate later incompatible
- * argument types; the selected-call metadata path passes
- * preserve_first_direct_binding=true to reproduce that established decision
- * exactly. Other consumers retain strict unification. */
+/* Collect the caller-view type arguments consistently with overload probing.
+ * Owner/fit parameters are substituted before callable slots are inferred;
+ * explicit and argument-derived bindings remain authoritative, and the result
+ * target only fills unbound slots. Known conflicting sources always fail. */
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
                                             const FengTypeRef *target_inference_return_type,
-                                            bool allow_wrapped_inference,
-                                            bool preserve_first_direct_binding,
+                                            const FengDecl *owner_type_decl,
+                                            const FengDecl *fit_decl,
+                                            InferredExprType owner_type,
                                             FengTypeRef **type_args,
                                             bool *owned_type_args) {
     size_t type_param_index;
@@ -15306,58 +15462,49 @@ static bool callable_collect_call_type_args(ResolveContext *context,
          arg_index < callable->param_count && arg_index < call_expr->as.call.arg_count;
          ++arg_index) {
         const FengTypeRef *param_type = callable->params[arg_index].type;
+        const FengExpr *argument = call_expr->as.call.args[arg_index];
 
-        if (param_type_is_type_param_ref(callable, param_type)) {
-            /* When explicit type args are provided, the type param already
-             * has a concrete binding.  Try to adapt literal / untyped args to
-             * the explicit type so that e.g. Util.id<i32>(41),
-             * Util.id<Pair>((1, 2)), or onclick<Func>((id: int) -> foo())
-             * works regardless of the literal's default inference.
-             * expr_matches_expected_type_ref dispatches by expression kind
-             * (numeric, tuple, lambda, array) and safely returns false for
-             * expressions that cannot be adapted.
-             *
-             * If adaptation succeeds, skip inference to avoid spurious
-             * failures (e.g. tuple literal against bare type param T).
-             * If adaptation fails, fall through to inference so that genuine
-             * type mismatches (e.g. string arg against explicit i32) are
-             * caught by the normal type-argument conflict check. */
-            if (call_expr->as.call.has_explicit_type_args &&
-                call_expr->as.call.args[arg_index] != NULL) {
-                size_t tp_index = 0U;
-                if (callable_find_type_param_index(
-                        callable,
-                        param_type->as.named.segments[0],
-                        &tp_index) &&
-                    tp_index < call_expr->as.call.explicit_type_arg_count &&
-                    type_args[tp_index] != NULL &&
-                    expr_matches_expected_type_ref(
-                        context,
-                        call_expr->as.call.args[arg_index],
-                        type_args[tp_index])) {
-                    continue;
-                }
+        if (callable->params[arg_index].is_variadic &&
+            !argument->is_prepacked_variadic_arg) {
+            /* Ordinary variadic elements are validated against their element
+             * target; only a prepacked array supplies the normalized shape. */
+            continue;
+        }
+
+        param_type = substitute_type_ref_for_owner_instance(
+            context, owner_type_decl, owner_type, param_type);
+        param_type = substitute_type_ref_for_fit_instance(
+            context, fit_decl, owner_type, param_type);
+
+        if (call_expr->as.call.has_explicit_type_args) {
+            /* A closed source can use ordinary target-driven literal and spec
+             * adaptation. Caller parameters inside explicit arguments are not
+             * new inference slots, even when their names match this callable. */
+            param_type = substitute_type_ref_for_explicit_callable_args(
+                context, callable,
+                (const FengTypeRef *const *)call_expr->as.call.explicit_type_args,
+                call_expr->as.call.explicit_type_arg_count, param_type);
+            if (!expr_matches_expected_type_ref(context, argument, param_type)) {
+                return false;
             }
+            continue;
+        }
+        if (param_type_is_type_param_ref(callable, param_type)) {
             if (!callable_collect_type_args_from_arg_expr(context,
                                                           callable,
                                                           param_type,
                                                           call_expr->as.call.args[arg_index],
                                                           type_args,
-                                                          owned_type_args)) {
-                if (!preserve_first_direct_binding) {
-                    return false;
-                }
+                                                          owned_type_args) &&
+                inferred_expr_type_is_known(
+                    infer_expr_type(context, call_expr->as.call.args[arg_index]))) {
+                return false;
             }
             continue;
         }
-        if ((!allow_wrapped_inference &&
-             !call_expr->as.call.args[arg_index]->is_prepacked_variadic_arg) ||
-            !callable_type_ref_contains_type_params(callable, param_type)) {
+        if (!callable_type_ref_contains_type_params(callable, param_type)) {
             continue;
         }
-        /* Wrapped-shape inference such as `T[]` -> `int[]` remains scoped to
-         * generic extern calls, except that explicit prepacked variadic arrays
-         * necessarily expose the normalized T[] parameter shape. */
         if (!callable_collect_type_args_from_arg_expr(context,
                                                       callable,
                                                       param_type,
@@ -15449,19 +15596,21 @@ static void merge_prepacked_variadic_rejection(
     }
 }
 
-/* Top-level callable matcher. Ordinary parameters still use the normal
- * expected-type check; only parameter shapes that mention type params may
- * divert into generic argument collection, and only when the caller has opted
- * into wrapped inference. */
-static bool callable_parameters_match_args(ResolveContext *context,
-                                           const FengCallableSignature *callable,
-                                           FengExpr *const *args,
-                                           size_t arg_count,
-                                           const FengTypeRef *const *explicit_type_args,
-                                           size_t explicit_type_arg_count,
-                                           bool allow_wrapped_inference,
-                                           bool *out_rejected_existing_array_for_variadic,
-                                           PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
+
+/* Match callable arguments after owner and fit substitution. Open shapes use
+ * recursive inference; fully concrete shapes use ordinary compatibility. */
+static bool callable_parameters_match_args_for_owner_instance(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    const FengDecl *owner_type_decl,
+    const FengDecl *fit_decl,
+    InferredExprType owner_type,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count,
+    bool *out_rejected_existing_array_for_variadic,
+    PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
     size_t arg_index;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
@@ -15486,234 +15635,7 @@ static bool callable_parameters_match_args(ResolveContext *context,
         context->suppress_literal_type_commit = saved_suppress;
         return false;
     }
-
-    if (is_variadic) {
-        if (arg_count < fixed_count) {
-            context->suppress_literal_type_commit = saved_suppress;
-            return false;
-        }
-    } else {
-        if (callable->param_count != arg_count) {
-            context->suppress_literal_type_commit = saved_suppress;
-            return false;
-        }
-    }
-    if (callable->type_param_count > 0U) {
-        type_args = calloc(callable->type_param_count, sizeof *type_args);
-        owned_type_args = calloc(callable->type_param_count, sizeof *owned_type_args);
-        if (type_args == NULL || owned_type_args == NULL) {
-            free(type_args);
-            free(owned_type_args);
-            context->suppress_literal_type_commit = saved_suppress;
-            return false;
-        }
-        if (explicit_type_args != NULL &&
-            explicit_type_arg_count == callable->type_param_count) {
-            for (arg_index = 0U;
-                 arg_index < callable->type_param_count;
-                 ++arg_index) {
-                type_args[arg_index] =
-                    clone_type_ref_for_inference(explicit_type_args[arg_index]);
-                if (type_args[arg_index] == NULL) {
-                    ok = false;
-                    break;
-                }
-                owned_type_args[arg_index] = true;
-            }
-            if (!ok) {
-                goto cleanup;
-            }
-        }
-    }
-
-    for (arg_index = 0U; arg_index < arg_count; ++arg_index) {
-        const FengTypeRef *param_type;
-
-        if (arg_index < fixed_count || args[arg_index]->is_prepacked_variadic_arg) {
-            param_type = callable->params[arg_index].type;
-        } else {
-            /* Variadic position: match against element type T (stored as T[]->inner). */
-            param_type = callable->params[fixed_count].type->as.inner;
-        }
-        param_type = substitute_type_ref_for_explicit_callable_args(
-            context,
-            callable,
-            explicit_type_args,
-            explicit_type_arg_count,
-            param_type);
-
-        /* When the param type is a bare type parameter (e.g., T), skip the
-         * lambda guard — the concrete type is not yet known at probing time
-         * and the explicit type arg (if any) will drive adaptation later in
-         * callable_collect_call_type_args. */
-        if (args[arg_index] != NULL &&
-            args[arg_index]->kind == FENG_EXPR_LAMBDA &&
-            !param_type_is_type_param_ref(callable, param_type) &&
-            resolve_function_type_decl(context, param_type) == NULL) {
-            ok = false;
-            break;
-        }
-
-        /* G4-12: a type-parameter position accepts any argument type, but the
-         * inferred type argument must still be collected so that the declared
-         * constraint (if any) can be validated after the loop. When inference
-         * fails for this argument we keep the historical accept-by-default
-         * behavior — the type argument stays NULL, the constraint check below
-         * skips it, and the final applicability decision is left to the
-         * post-selection witness materializer. */
-        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
-            (void)callable_collect_type_args_from_arg_expr(context,
-                                                          callable,
-                                                          param_type,
-                                                          args[arg_index],
-                                                          type_args,
-                                                          owned_type_args);
-            continue;
-        }
-
-        /* A prepacked variadic array provides the concrete shape of the
-         * normalized T[] parameter, so generic variadic element types can be
-         * collected without enabling wrapped inference for ordinary args. */
-        if (args[arg_index]->is_prepacked_variadic_arg &&
-            callable_type_ref_contains_type_params(callable, param_type)) {
-            ok = callable_collect_type_args_from_arg_expr(context,
-                                                          callable,
-                                                          param_type,
-                                                          args[arg_index],
-                                                          type_args,
-                                                          owned_type_args);
-            if (!ok) {
-                if (out_prepacked_variadic_rejection != NULL) {
-                    *out_prepacked_variadic_rejection =
-                        FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
-                }
-                break;
-            }
-            continue;
-        }
-
-        if (allow_wrapped_inference &&
-            arg_index < fixed_count &&
-            callable_type_ref_contains_type_params(callable, param_type)) {
-            ok = callable_collect_type_args_from_arg_expr(context,
-                                                          callable,
-                                                          param_type,
-                                                          args[arg_index],
-                                                          type_args,
-                                                          owned_type_args);
-            if (!ok) {
-                break;
-            }
-            continue;
-        }
-
-        if (!expr_matches_expected_type_ref(context, args[arg_index], param_type)) {
-            if (out_prepacked_variadic_rejection != NULL &&
-                args[arg_index]->is_prepacked_variadic_arg) {
-                *out_prepacked_variadic_rejection =
-                    FENG_PREPACKED_VARIADIC_REJECTION_TYPE_MISMATCH;
-            }
-            if (out_rejected_existing_array_for_variadic != NULL &&
-                is_variadic &&
-                arg_count == callable->param_count &&
-                arg_index == fixed_count &&
-                expr_is_existing_array_for_expected_type_ref(
-                    context,
-                    args[arg_index],
-                    callable->params[fixed_count].type)) {
-                *out_rejected_existing_array_for_variadic = true;
-            }
-            ok = false;
-            break;
-        }
-    }
-
-    if (ok && callable->type_param_count > 0U) {
-        ok = callable_collect_type_args_from_target(
-            context,
-            explicit_type_arg_count > 0U,
-            callable,
-            callable->return_type,
-            type_args,
-            owned_type_args);
-    }
-
-    /* A generic candidate is applicable only when every inferred type argument
-     * satisfies its declared constraint; otherwise the candidate is dropped so
-     * it cannot compete with non-generic overloads. */
-    if (ok && callable->type_param_count > 0U) {
-        size_t type_param_index;
-        for (type_param_index = 0U;
-             type_param_index < callable->type_param_count;
-             ++type_param_index) {
-            if (type_args[type_param_index] == NULL) {
-                continue;
-            }
-            if (!generic_type_arg_satisfies_constraint(context,
-                                                       callable,
-                                                       type_param_index,
-                                                       type_args,
-                                                       NULL,
-                                                       NULL,
-                                                       inferred_expr_type_unknown())) {
-                ok = false;
-                break;
-            }
-        }
-    }
-
-cleanup:
-    if (owned_type_args != NULL) {
-        for (arg_index = 0U; arg_index < callable->type_param_count; ++arg_index) {
-            if (owned_type_args[arg_index]) {
-                free_synthetic_type_ref(type_args[arg_index]);
-            }
-        }
-    }
-    free(type_args);
-    free(owned_type_args);
-    context->suppress_literal_type_commit = saved_suppress;
-    return ok;
-}
-
-/* Owner-instance-aware matcher for methods / fit methods. It first substitutes
- * owner type params into each parameter shape, then applies the same matching
- * policy as the top-level helper above, including the extern-only wrapped
- * inference gate carried by `allow_wrapped_inference`. */
-static bool callable_parameters_match_args_for_owner_instance(
-    ResolveContext *context,
-    const FengCallableSignature *callable,
-    const FengDecl *owner_type_decl,
-    const FengDecl *fit_decl,
-    InferredExprType owner_type,
-    FengExpr *const *args,
-    size_t arg_count,
-    const FengTypeRef *const *explicit_type_args,
-    size_t explicit_type_arg_count,
-    bool allow_wrapped_inference,
-    bool *out_rejected_existing_array_for_variadic,
-    PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
-    size_t arg_index;
-    FengTypeRef **type_args = NULL;
-    bool *owned_type_args = NULL;
-    bool ok = true;
-    bool is_variadic = callable->param_count > 0U &&
-                       callable->params[callable->param_count - 1U].is_variadic;
-    size_t fixed_count = is_variadic ? callable->param_count - 1U : callable->param_count;
-    PrepackedVariadicRejection spread_rejection =
-        prepacked_variadic_shape_rejection(args, arg_count, is_variadic, fixed_count);
-    /* Suppress literal type commit during overload candidate probing so that
-     * each candidate test does not overwrite the literal node's type field. */
-    bool saved_suppress = context->suppress_literal_type_commit;
-    context->suppress_literal_type_commit = true;
-
-    if (out_rejected_existing_array_for_variadic != NULL) {
-        *out_rejected_existing_array_for_variadic = false;
-    }
-    if (out_prepacked_variadic_rejection != NULL) {
-        *out_prepacked_variadic_rejection = spread_rejection;
-    }
-    if (spread_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+    if (explicit_type_args != NULL && explicit_type_arg_count != callable->type_param_count) {
         context->suppress_literal_type_commit = saved_suppress;
         return false;
     }
@@ -15787,13 +15709,18 @@ static bool callable_parameters_match_args_for_owner_instance(
         /* A still-open direct method type parameter accepts the argument and
          * contributes to inference. Explicit arguments have already replaced
          * this surface and therefore follow the ordinary compatibility path. */
-        if (arg_index < fixed_count && param_type_is_type_param_ref(callable, param_type)) {
-            (void)callable_collect_type_args_from_arg_expr(context,
+        if (explicit_type_args == NULL && arg_index < fixed_count &&
+            param_type_is_type_param_ref(callable, param_type)) {
+            if (!callable_collect_type_args_from_arg_expr(context,
                                                           callable,
                                                           param_type,
                                                           args[arg_index],
                                                           type_args,
-                                                          owned_type_args);
+                                                          owned_type_args) &&
+                inferred_expr_type_is_known(infer_expr_type(context, args[arg_index]))) {
+                ok = false;
+                break;
+            }
             continue;
         }
         if (args[arg_index] != NULL &&
@@ -15802,7 +15729,7 @@ static bool callable_parameters_match_args_for_owner_instance(
             ok = false;
             break;
         }
-        if (args[arg_index]->is_prepacked_variadic_arg &&
+        if (explicit_type_args == NULL && args[arg_index]->is_prepacked_variadic_arg &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
                                                           callable,
@@ -15819,8 +15746,7 @@ static bool callable_parameters_match_args_for_owner_instance(
             }
             continue;
         }
-        if (allow_wrapped_inference &&
-            arg_index < fixed_count &&
+        if (explicit_type_args == NULL && arg_index < fixed_count &&
             callable_type_ref_contains_type_params(callable, param_type)) {
             ok = callable_collect_type_args_from_arg_expr(context,
                                                           callable,
@@ -15921,6 +15847,23 @@ cleanup:
     free(owned_type_args);
     context->suppress_literal_type_commit = saved_suppress;
     return ok;
+}
+
+/* Top-level calls share the same matcher, with no owner or fit substitution. */
+static bool callable_parameters_match_args(
+    ResolveContext *context,
+    const FengCallableSignature *callable,
+    FengExpr *const *args,
+    size_t arg_count,
+    const FengTypeRef *const *explicit_type_args,
+    size_t explicit_type_arg_count,
+    bool *out_rejected_existing_array_for_variadic,
+    PrepackedVariadicRejection *out_prepacked_variadic_rejection) {
+    return callable_parameters_match_args_for_owner_instance(
+        context, callable, NULL, NULL, inferred_expr_type_unknown(),
+        args, arg_count, explicit_type_args, explicit_type_arg_count,
+        out_rejected_existing_array_for_variadic,
+        out_prepacked_variadic_rejection);
 }
 
 static bool callable_parameters_exactly_match_args(
@@ -16480,7 +16423,7 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         if (use_owner_substitution) {
             if (!callable_parameters_match_args_for_owner_instance(
                     context, &member->as.callable, type_decl, NULL, owner_type,
-                    args, arg_count, NULL, 0U, false, NULL, &spread_rejection)) {
+                    args, arg_count, NULL, 0U, NULL, &spread_rejection)) {
                 merge_prepacked_variadic_rejection(
                     &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
@@ -16488,7 +16431,7 @@ static ConstructorResolution resolve_accessible_constructor_overload(
         } else {
             if (!callable_parameters_match_args(
                     context, &member->as.callable, args, arg_count, NULL, 0U,
-                    false, NULL, &spread_rejection)) {
+                    NULL, &spread_rejection)) {
                 merge_prepacked_variadic_rejection(
                     &result.prepacked_variadic_rejection, spread_rejection);
                 continue;
@@ -16544,7 +16487,6 @@ static FunctionCallResolution resolve_top_level_function_overload(
                                             arg_count,
                                             explicit_type_args,
                                             explicit_type_arg_count,
-                                            decl->is_extern,
                                             &rejected_existing_array_for_variadic,
                                             &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
@@ -17297,7 +17239,6 @@ static bool spec_method_call_surface_visitor(
             state->arg_count,
             state->explicit_type_args,
             state->explicit_type_arg_count,
-            false,
             &rejected_existing_array_for_variadic,
             &spread_rejection)) {
         if (accessible) {
@@ -17557,7 +17498,6 @@ static FunctionCallResolution resolve_module_public_function_overload(
                                                 arg_count,
                                                 explicit_type_args,
                                                 explicit_type_arg_count,
-                                                decl->is_extern,
                                                 &rejected_existing_array_for_variadic,
                                                 &spread_rejection)) {
                 if (rejected_existing_array_for_variadic) {
@@ -18464,7 +18404,6 @@ static bool fit_overload_resolve_visitor(const FengTypeMember *member,
                 st->arg_count,
                 st->explicit_type_args,
                 st->explicit_type_arg_count,
-                false,
                 &rejected_existing_array_for_variadic,
                 &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
@@ -18595,7 +18534,6 @@ static FunctionCallResolution resolve_accessible_method_overload(
                                                                    arg_count,
                                                                    explicit_type_args,
                                                                    explicit_type_arg_count,
-                                                                   false,
                                                                    &rejected_existing_array_for_variadic,
                                                                    &spread_rejection)) {
                 if (rejected_existing_array_for_variadic) {
@@ -18721,7 +18659,6 @@ static FunctionCallResolution resolve_accessible_static_method_overload(
                                                                arg_count,
                                                                explicit_type_args,
                                                                explicit_type_arg_count,
-                                                               false,
                                                                &rejected_existing_array_for_variadic,
                                                                &spread_rejection)) {
             if (rejected_existing_array_for_variadic) {
@@ -19439,9 +19376,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                                  NULL,
                                                                  inferred_expr_type_unknown(),
                                                                  expr,
-                                                                 resolution.callable,
-                                                                 resolution.decl != NULL &&
-                                                                 resolution.decl->is_extern);
+                                                                 resolution.callable);
 
                     return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
                 } else {
@@ -19487,8 +19422,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                                      resolution.fit_decl,
                                                                      owner_type,
                                                                      expr,
-                                                                     resolution.callable,
-                                                                     false);
+                                                                     resolution.callable);
 
                         return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
                     } else {
@@ -19525,8 +19459,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                                      resolution.fit_decl,
                                                                      owner_type,
                                                                      expr,
-                                                                     resolution.callable,
-                                                                     false);
+                                                                     resolution.callable);
 
                         return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
                     } else {
@@ -19595,8 +19528,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                 NULL,
                                 declaring_owner,
                                 expr,
-                                spec_sig,
-                                false);
+                                spec_sig);
 
                         if (closed_return != NULL) {
                             return_type =
@@ -19639,9 +19571,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                 NULL,
                                 inferred_expr_type_unknown(),
                                 expr,
-                                resolution.callable,
-                                resolution.decl != NULL &&
-                                    resolution.decl->is_extern);
+                                resolution.callable);
 
                         return_type =
                             inferred_expr_type_from_return_type_ref(
@@ -19693,8 +19623,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                                  resolution.fit_decl,
                                                                  callable_owner_type,
                                                                  expr,
-                                                                 resolution.callable,
-                                                                 false);
+                                                                 resolution.callable);
 
                     return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
                 } else {
@@ -19757,8 +19686,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                 NULL,
                                 declaring_owner,
                                 expr,
-                                constrained.callable,
-                                false);
+                                constrained.callable);
 
                         if (closed_return != NULL) {
                             return inferred_expr_type_from_type_ref(
@@ -20020,6 +19948,8 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
     return false;
 }
 
+/* Validate a member against its ordinary static surface. Generic subjects use
+ * their exact constraint only for lookup; the expression remains typed as T. */
 static bool validate_instance_member_expr(ResolveContext *context, const FengExpr *expr) {
     const FengDecl *owner_type_decl = NULL;
     const FengSemanticModule *provider_module = NULL;
@@ -20095,6 +20025,18 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                                            existing_field);
                 }
             }
+            if (context->current_call_target_expr == expr) {
+                /* A direct requirement call owns overload diagnostics; a
+                 * standalone missing member is diagnosed by this value pass. */
+                return true;
+            }
+            return resolver_append_error(
+                context, expr->token, "AE1008",
+                format_message("spec '%.*s' has no static member '%.*s'",
+                    (int)type_target.constraint_spec_decl->as.spec_decl.name.length,
+                    type_target.constraint_spec_decl->as.spec_decl.name.data,
+                    (int)expr->as.member.member.length,
+                    expr->as.member.member.data));
         }
 
         if (type_target.type_decl != NULL && type_target.type_decl->kind == FENG_DECL_TYPE) {
@@ -20202,6 +20144,18 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
     }
 
     if (owner_type_decl == NULL) {
+        const FengDecl *constraint_decl = NULL;
+        const FengTypeRef *constraint_ref = NULL;
+
+        if (resolve_generic_param_spec_constraint(context, owner_type,
+                                                   &constraint_decl,
+                                                   &constraint_ref)) {
+            owner_type_decl = constraint_decl;
+            owner_type = inferred_expr_type_from_type_ref(constraint_ref);
+        }
+    }
+
+    if (owner_type_decl == NULL) {
         char *owner_name = NULL;
 
         if (find_fit_method_member_for_owner_type(context,
@@ -20225,22 +20179,6 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
 
         builtin_name = inferred_expr_type_builtin_canonical_name(owner_type, context->pointer_size);
         if (builtin_name == NULL) {
-            if (owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
-                owner_type.type_ref != NULL &&
-                owner_type.type_ref->kind == FENG_TYPE_REF_NAMED &&
-                owner_type.type_ref->as.named.segment_count == 1U &&
-                owner_type.type_ref->as.named.type_arg_count == 0U &&
-                find_type_param(context, owner_type.type_ref->as.named.segments[0]) != NULL) {
-                if (resolve_union_spec_type_ref_decl(context, owner_type.type_ref) != NULL) {
-                    return resolver_append_error(
-                        context,
-                        expr->token,
-                        "AE0604", format_message("union-form constrained value must be narrowed to a single member before accessing member '%.*s'",
-                                       (int)expr->as.member.member.length,
-                                       expr->as.member.member.data));
-                }
-                return true;
-            }
             owner_name = format_inferred_expr_type_name(owner_type, context->pointer_size);
             if (owner_name == NULL) {
                 return true;
@@ -24486,9 +24424,8 @@ static void record_object_arg_coercion_sites_for_resolved_call(
     }
 }
 
-/* Prove spec implication for an actual type without changing its value
- * representation. Intersection components retain their complete owner refs;
- * a spec value uses declared parent/component relations, never its shape. */
+/* Prove spec implication without changing the value representation. Object
+ * specs use nominal relations; callable specs use exact closed signatures. */
 static bool generic_spec_constraint_satisfied(ResolveContext *context,
                                               const FengTypeRef *actual,
                                               const FengTypeRef *constraint) {
@@ -24500,6 +24437,10 @@ static bool generic_spec_constraint_satisfied(ResolveContext *context,
     }
     if (target == NULL || target->kind != FENG_DECL_SPEC) {
         return false;
+    }
+    if (decl_is_function_type(target)) {
+        return decl_is_function_type(source) &&
+               function_type_refs_have_equal_signature(context, actual, constraint);
     }
     if (target->as.spec_decl.form == FENG_SPEC_FORM_UNION) {
         UnionMemberSelection selection = select_union_member_for_expr_type(
@@ -24650,10 +24591,7 @@ static bool generic_type_ref_satisfies_constraint(ResolveContext *context,
     const FengTypeRef *source_constraint = NULL;
 
     if (actual == NULL || constraint == NULL || target == NULL ||
-        target->kind != FENG_DECL_SPEC ||
-        (target->as.spec_decl.form != FENG_SPEC_FORM_UNION &&
-         target->as.spec_decl.form != FENG_SPEC_FORM_INTERSECTION &&
-         target->as.spec_decl.form != FENG_SPEC_FORM_OBJECT)) {
+        target->kind != FENG_DECL_SPEC) {
         return true;
     }
     if (actual->kind == FENG_TYPE_REF_NAMED && actual->as.named.segment_count == 1U &&
@@ -25093,8 +25031,9 @@ static void materialize_callable_type_param_constraint_witnesses(
                                          call_expr,
                                          callable,
                                          target_inference_return_type,
-                                         call_expr_allows_wrapped_generic_extern_inference(call_expr),
-                                         false,
+                                         owner_type_decl,
+                                         fit_decl,
+                                         owner_type,
                                          type_args,
                                          owned_type_args)) {
         goto cleanup;
@@ -26940,7 +26879,7 @@ static bool validate_declared_method_overloads(ResolveContext *context,
             if (parameters_equal(si, sj)) {
                 bool error_ok;
 
-                if (return_type_equals(si->return_type, sj->return_type)) {
+                if (signature_return_types_equal(si, sj)) {
                     error_ok = resolver_append_error(
                         context,
                         mixin_conflict_primary_token(mi, mj, si->token),
@@ -27151,7 +27090,7 @@ static bool validate_fit_member_overloads(ResolveContext *context, const FengDec
             if (parameters_equal(si, sj)) {
                 bool error_ok;
 
-                if (return_type_equals(si->return_type, sj->return_type)) {
+                if (signature_return_types_equal(si, sj)) {
                     error_ok = resolver_append_error(
                         context,
                         mixin_conflict_primary_token(mi, mj, si->token),
@@ -28285,8 +28224,9 @@ static bool record_resolved_callable_from_resolution(
                 call_expr,
                 resolution->callable,
                 target_inference_return_type,
-                resolution->decl != NULL && resolution->decl->is_extern,
-                true,
+                resolution->owner_type_decl,
+                resolution->fit_decl,
+                owner_type,
                 inferred_type_args,
                 owned_type_args);
         }
@@ -28496,6 +28436,34 @@ static void commit_literal_arg_adaptations_for_resolved_call(
             ((FengExpr *)args[i])->type = literal_target;
         }
     }
+}
+
+/* Report a failed named-method selection uniformly for concrete and constrained
+ * receivers. Callable fields have a separate consumer and do not enter here. */
+static bool report_method_call_selection_failure(
+    ResolveContext *context, const FengExpr *callee, size_t arg_count,
+    FengSlice owner_name, const FunctionCallResolution *resolution) {
+    if (resolution->kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
+        return resolver_append_error(
+            context, callee->token, "AE0511",
+            format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
+                (int)owner_name.length, owner_name.data,
+                (int)callee->as.member.member.length, callee->as.member.member.data,
+                arg_count));
+    }
+    if (resolution->prepacked_variadic_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
+        return report_prepacked_variadic_rejection(
+            context, callee, resolution->prepacked_variadic_rejection);
+    }
+    if (resolution->rejected_existing_array_for_variadic) {
+        return report_existing_array_rejected_for_variadic_call(context, callee);
+    }
+    return resolver_append_error(
+        context, callee->token, "AE0512",
+        format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
+            (int)owner_name.length, owner_name.data,
+            (int)callee->as.member.member.length, callee->as.member.member.data,
+            arg_count));
 }
 
 static bool validate_function_call_expr(ResolveContext *context, const FengExpr *expr) {
@@ -28959,35 +28927,11 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                     owner_type);
                 return true;
             }
-            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS) {
-                return resolver_append_error(
-                    context,
-                    callee->token,
-                    "AE0511", format_message("method '%.*s.%.*s' has multiple overloads matching %zu argument(s); argument types are ambiguous",
-                                   (int)owner_name.length,
-                                   owner_name.data,
-                                   (int)callee->as.member.member.length,
-                                   callee->as.member.member.data,
-                                   expr->as.call.arg_count));
-            }
-            if (resolution.prepacked_variadic_rejection !=
-                FENG_PREPACKED_VARIADIC_REJECTION_NONE) {
-                return report_prepacked_variadic_rejection(
-                    context, callee, resolution.prepacked_variadic_rejection);
-            }
-            if (resolution.rejected_existing_array_for_variadic) {
-                return report_existing_array_rejected_for_variadic_call(context, callee);
-            }
-            if (accessible_method != NULL) {
-                return resolver_append_error(
-                    context,
-                    callee->token,
-                    "AE0512", format_message("method '%.*s.%.*s' has no overload accepting %zu argument(s)",
-                                   (int)owner_name.length,
-                                   owner_name.data,
-                                   (int)callee->as.member.member.length,
-                                   callee->as.member.member.data,
-                                   expr->as.call.arg_count));
+            if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_AMBIGUOUS ||
+                resolution.prepacked_variadic_rejection != FENG_PREPACKED_VARIADIC_REJECTION_NONE ||
+                resolution.rejected_existing_array_for_variadic || accessible_method != NULL) {
+                return report_method_call_selection_failure(
+                    context, callee, expr->as.call.arg_count, owner_name, &resolution);
             }
             if (owner_type_decl->kind == FENG_DECL_TYPE &&
                 field_member != NULL && accessible_field == NULL) {
@@ -29110,6 +29054,15 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                   resolution.owner_instance_type_ref)
                             : constraint_owner);
                     return true;
+                }
+                SpecMethodAccessProbe method_probe = probe_spec_method_access(
+                    context, constraint_decl, constraint_owner,
+                    callee->as.member.member, false);
+
+                if (method_probe.has_accessible_method) {
+                    return report_method_call_selection_failure(
+                        context, callee, expr->as.call.arg_count,
+                        decl_typeish_name(constraint_decl), &resolution);
                 }
             }
         }
@@ -30529,6 +30482,96 @@ static bool resolve_block_contents(ResolveContext *context,
                                    const FengBlock *block,
                                    bool allow_self);
 
+/* Sorted, distinct declaration arities used only for explicit-target diagnostics. */
+typedef struct GenericTargetArities {
+    size_t *values;
+    size_t count;
+    size_t capacity;
+} GenericTargetArities;
+
+/* Preserve deterministic diagnostics independently of declaration/visit order. */
+static bool generic_target_add_arity(GenericTargetArities *arities, size_t arity) {
+    size_t position = 0U;
+    while (position < arities->count && arities->values[position] < arity) {
+        ++position;
+    }
+    if (position < arities->count && arities->values[position] == arity) {
+        return true;
+    }
+    if (!append_raw((void **)&arities->values, &arities->count,
+                    &arities->capacity, sizeof(arity), &arity)) {
+        return false;
+    }
+    memmove(arities->values + position + 1U, arities->values + position,
+            (arities->count - position - 1U) * sizeof(arity));
+    arities->values[position] = arity;
+    return true;
+}
+
+/* Classify the resolved target before value-argument matching can discard it. */
+static bool validate_generic_target_arities(ResolveContext *context,
+                                            FengToken token, FengSlice name,
+                                            size_t supplied, bool is_type,
+                                            const GenericTargetArities *arities) {
+    if (arities->count == 0U) {
+        return true; /* Name/access validation owns an unresolved target. */
+    }
+    for (size_t i = 0U; i < arities->count; ++i) {
+        if (arities->values[i] == supplied) {
+            return true;
+        }
+    }
+    if (arities->count == 1U && arities->values[0] == 0U) {
+        return resolver_append_error(context, token, "AE1014",
+            format_message(is_type
+                ? "'%.*s' is not a generic type and does not take type arguments"
+                : "callable '%.*s' is not generic and does not take type arguments",
+                (int)name.length, name.data));
+    }
+    size_t first = arities->values[0] == 0U ? 1U : 0U;
+    if (arities->count - first == 1U) {
+        return resolver_append_error(context, token, "AE1015",
+            format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
+                (int)name.length, name.data, arities->values[first], supplied));
+    }
+    char *available = duplicate_cstr("");
+    if (available == NULL) {
+        return false;
+    }
+    for (size_t i = first; i < arities->count; ++i) {
+        char *next = format_message("%s%s%zu", available,
+            i == first ? "" : ", ", arities->values[i]);
+        free(available);
+        if (next == NULL) {
+            return false;
+        }
+        available = next;
+    }
+    bool ok = resolver_append_error(context, token, "AE1015",
+        format_message("generic %s '%.*s' has no overload accepting %zu type argument(s); available arities: %s",
+            is_type ? "type" : "callable", (int)name.length, name.data,
+            supplied, available));
+    free(available);
+    return ok;
+}
+
+/* Collect public type identities from an already resolved module. */
+static bool collect_module_type_arities(const FengSemanticModule *module,
+                                        FengSlice name,
+                                        GenericTargetArities *arities) {
+    for (size_t p = 0U; module != NULL && p < module->program_count; ++p) {
+        const FengProgram *program = module->programs[p];
+        for (size_t d = 0U; d < program->declaration_count; ++d) {
+            const FengDecl *decl = program->declarations[d];
+            if (decl_is_public(decl) && slice_equals(decl_typeish_name(decl), name) &&
+                !generic_target_add_arity(arities, decl_type_param_count(decl))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool resolve_named_type_ref(ResolveContext *context,
                                    const FengTypeRef *type_ref,
                                    bool allow_void) {
@@ -30567,11 +30610,20 @@ static bool resolve_named_type_ref(ResolveContext *context,
         const FengDecl *base_decl;
         size_t i;
         bool ok;
+        size_t errors_before = *context->error_count;
 
         for (i = 0U; i < type_arg_count; ++i) {
             if (!resolve_type_ref(context, type_ref->as.named.type_args[i], false)) {
                 return false;
             }
+        }
+        if (*context->error_count != errors_before) {
+            return true;
+        }
+        if (segment_count == 1U && is_builtin_type_name(name)) {
+            return resolver_append_error(context, type_ref->token, "AE1014",
+                format_message("'%.*s' is not a generic type and does not take type arguments",
+                    (int)name.length, name.data));
         }
 
         /* Precise lookup: (name, type_arg_count) */
@@ -30579,7 +30631,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
         if (base_decl == NULL) {
             const VisibleTypeEntry *any_entry = NULL;
             const FengDecl *any_decl = NULL;
-            size_t expected_arity = 0U;
+            GenericTargetArities arities = {0};
 
             /* Fallback: check if same-name type exists at any arity */
             if (segment_count == 1U) {
@@ -30587,6 +30639,14 @@ static bool resolve_named_type_ref(ResolveContext *context,
                     context->visible_types, context->visible_type_count, name);
                 if (any_entry != NULL) {
                     any_decl = any_entry->decl;
+                }
+                for (size_t entry = 0U; entry < context->visible_type_count; ++entry) {
+                    const VisibleTypeEntry *candidate = &context->visible_types[entry];
+                    if (slice_equals(candidate->name, name) &&
+                        !generic_target_add_arity(&arities, decl_type_param_count(candidate->decl))) {
+                        free(arities.values);
+                        return false;
+                    }
                 }
             } else {
                 /* Cross-module: any-arity existence check for error reporting */
@@ -30609,6 +30669,10 @@ static bool resolve_named_type_ref(ResolveContext *context,
                 if (target_module != NULL) {
                     any_decl = find_module_public_type_decl_any_arity(
                         target_module, name);
+                    if (!collect_module_type_arities(target_module, name, &arities)) {
+                        free(arities.values);
+                        return false;
+                    }
                 }
             }
 
@@ -30621,26 +30685,13 @@ static bool resolve_named_type_ref(ResolveContext *context,
                     "AE1013", format_message("unknown type '%s'",
                                    qualified_name != NULL ? qualified_name : "<unknown>"));
                 free(qualified_name);
+                free(arities.values);
                 return ok;
             }
 
-            expected_arity = decl_type_param_count(any_decl);
-            if (expected_arity == 0U) {
-                /* Same-name type exists but is not generic → AE1014 */
-                ok = resolver_append_error(
-                    context,
-                    type_ref->token,
-                    "AE1014", format_message("'%.*s' is not a generic type and does not take type arguments",
-                                   (int)name.length, name.data));
-            } else {
-                /* Same-name generic type exists but arity mismatch → AE1015 */
-                ok = resolver_append_error(
-                    context,
-                    type_ref->token,
-                    "AE1015", format_message("'%.*s' expects %zu type argument(s), but %zu were provided",
-                                   (int)name.length, name.data,
-                                   expected_arity, type_arg_count));
-            }
+            ok = validate_generic_target_arities(context, type_ref->token, name,
+                                                 type_arg_count, true, &arities);
+            free(arities.values);
             free(qualified_name);
             return ok;
         }
@@ -30779,25 +30830,207 @@ static bool resolve_named_type_ref(ResolveContext *context,
     return true;
 }
 
+/* Query a source reference's resolution status, not the surrounding error
+ * count: a different reference or member may still be checked independently. */
+static bool resolver_type_ref_failed(const ResolveContext *context,
+                                     const FengTypeRef *type_ref) {
+    for (size_t index = 0U; index < context->failed_type_ref_count; ++index) {
+        if (context->failed_type_refs[index] == type_ref) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Resolve each type shape and retain the failing reference for consumers.
+ * Nested failures propagate to the containing reference without new errors. */
 static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void) {
+    size_t errors_before = context->error_count != NULL ? *context->error_count : 0U;
+    bool ok = true;
+    bool dependency_failed = false;
+
     if (type_ref == NULL) {
         return true;
     }
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
-            return resolve_named_type_ref(context, type_ref, allow_void);
+            ok = resolve_named_type_ref(context, type_ref, allow_void);
+            for (size_t index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+                dependency_failed = dependency_failed ||
+                    resolver_type_ref_failed(context, type_ref->as.named.type_args[index]);
+            }
+            break;
         case FENG_TYPE_REF_POINTER:
-            return resolve_type_ref(context, type_ref->as.inner, true);
+            ok = resolve_type_ref(context, type_ref->as.inner, true);
+            dependency_failed = resolver_type_ref_failed(context, type_ref->as.inner);
+            if (ok && !dependency_failed &&
+                type_ref_contains_open_type_param(context, type_ref->as.inner)) {
+                char *name = format_type_ref_name(type_ref);
+                ok = resolver_append_error(context, type_ref->token, "AE0333",
+                    format_message("pointer type '%s' cannot be formed from an open generic pointee; "
+                                   "use a legal closed pointer as a complete type argument instead",
+                                   name != NULL ? name : "<type>"));
+                free(name);
+            }
+            break;
         case FENG_TYPE_REF_ARRAY:
-            return resolve_type_ref(context, type_ref->as.inner, false);
+            ok = resolve_type_ref(context, type_ref->as.inner, false);
+            dependency_failed = resolver_type_ref_failed(context, type_ref->as.inner);
+            break;
     }
-
-    return true;
+    if ((dependency_failed ||
+         (context->error_count != NULL && *context->error_count != errors_before)) &&
+        !resolver_type_ref_failed(context, type_ref) &&
+        !append_raw((void **)&context->failed_type_refs,
+                    &context->failed_type_ref_count,
+                    &context->failed_type_ref_capacity,
+                    sizeof(*context->failed_type_refs), &type_ref)) {
+        return false;
+    }
+    return ok;
 }
 
-/* Validate a public top-level member reached through either an import alias or
- * a complete module path. */
+/* Access context shared by type, fit and spec method arity visitors. */
+typedef struct GenericMethodArityContext {
+    ResolveContext *context;
+    const FengDecl *owner_decl;
+    InferredExprType owner_type;
+    GenericTargetArities *arities;
+} GenericMethodArityContext;
+
+/* Use the same fit access rules as ordinary overload selection. */
+static bool collect_fit_method_arity(const FengTypeMember *member,
+                                     const FengSemanticModule *module,
+                                     const FengDecl *fit_decl, void *userdata) {
+    GenericMethodArityContext *state = userdata;
+    (void)module;
+    return !fit_member_is_accessible_from(state->context, state->owner_decl,
+                                           state->owner_type, fit_decl, member) ||
+           generic_target_add_arity(state->arities, member->as.callable.type_param_count);
+}
+
+/* Inherited requirements contribute only their accessible declaration arity. */
+static bool collect_spec_method_arity(ResolveContext *context,
+                                      const SpecMemberSurface *surface, void *userdata) {
+    GenericMethodArityContext *state = userdata;
+    return !spec_member_is_accessible_from(context, state->owner_decl,
+                surface->declaring_spec, state->owner_type, surface->member) ||
+           generic_target_add_arity(state->arities, surface->member->as.callable.type_param_count);
+}
+
+/* Enumerate the selected instance/static surface before argument matching. */
+static bool collect_method_target_arities(ResolveContext *context,
+                                          const FengExpr *target,
+                                          GenericTargetArities *arities) {
+    const FengExpr *object = target->as.member.object;
+    ResolvedTypeTarget static_target = resolve_type_target_expr(context, object, false);
+    bool is_static = static_target.type_decl != NULL || static_target.is_builtin_type_name ||
+                     static_target.is_generic_type_param;
+    const FengDecl *owner_decl = static_target.type_decl;
+    InferredExprType owner_type = resolved_type_target_owner_type(&static_target);
+    if (static_target.is_generic_type_param) {
+        owner_decl = static_target.constraint_spec_decl;
+        owner_type = inferred_expr_type_from_type_ref(static_target.constraint_spec_type_ref);
+    } else if (!is_static) {
+        owner_type = resolve_expr_owner_type(context, object, &owner_decl, NULL);
+        const FengTypeRef *constraint_ref = NULL;
+        const FengDecl *constraint_decl = NULL;
+        if (owner_decl == NULL && resolve_generic_param_spec_constraint(
+                context, owner_type, &constraint_decl, &constraint_ref)) {
+            owner_decl = constraint_decl;
+            owner_type = inferred_expr_type_from_type_ref(constraint_ref);
+        }
+    }
+    GenericMethodArityContext state = {context, owner_decl, owner_type, arities};
+    if (owner_decl != NULL && owner_decl->kind == FENG_DECL_SPEC &&
+        (owner_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ||
+         owner_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION)) {
+        return visit_spec_method_surfaces(context, owner_decl,
+            owner_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF ? owner_type.type_ref : NULL,
+            target->as.member.member, is_static, collect_spec_method_arity, &state);
+    }
+    if (owner_decl != NULL && owner_decl->kind == FENG_DECL_TYPE) {
+        for (size_t i = 0U; i < owner_decl->as.type_decl.member_count; ++i) {
+            const FengTypeMember *member = owner_decl->as.type_decl.members[i];
+            if (member->kind == FENG_TYPE_MEMBER_METHOD && member->is_static == is_static &&
+                slice_equals(member->as.callable.name, target->as.member.member) &&
+                type_member_is_accessible_from(context, owner_decl, owner_type, member) &&
+                !fit_body_blocks_private_access(context, owner_decl, member) &&
+                !generic_target_add_arity(arities, member->as.callable.type_param_count)) {
+                return false;
+            }
+        }
+    }
+    return visit_visible_fit_methods_for_owner_type(context, owner_decl, owner_type,
+        target->as.member.member, true, is_static, collect_fit_method_arity, &state);
+}
+
+/* Validate explicit arity independently of the call/value consumer. Types reuse
+ * type-reference resolution; callables retain ordinary constraint selection. */
+static bool validate_explicit_generic_target(ResolveContext *context,
+                                             const FengExpr *target,
+                                             FengTypeRef **type_args,
+                                             size_t type_arg_count) {
+    if (target == NULL) {
+        return true;
+    }
+    ResolvedTypeTarget type_target = resolve_type_target_expr(context, target, false);
+    if (type_target.type_decl != NULL || type_target.is_builtin_type_name ||
+        type_target.is_generic_type_param) {
+        FengExpr generic = {0};
+        FengTypeRef *type_ref = NULL;
+        generic.kind = FENG_EXPR_GENERIC_TARGET;
+        generic.token = target->token;
+        generic.as.generic_target.target = (FengExpr *)target;
+        generic.as.generic_target.type_args = type_args;
+        generic.as.generic_target.type_arg_count = type_arg_count;
+        return synthesize_type_ref_from_generic_target_expr(context, target, &generic, &type_ref) &&
+               (type_ref == NULL || resolve_type_ref(context, type_ref, false));
+    }
+    GenericTargetArities arities = {0};
+    FengSlice name = {0};
+    bool ok = true;
+    if (target->kind == FENG_EXPR_IDENTIFIER) {
+        name = target->as.identifier;
+        const FunctionOverloadSetEntry *set =
+            resolver_find_local_name_entry(context, name) == NULL
+                ? find_function_overload_set(context->function_sets,
+                                             context->function_set_count, name) : NULL;
+        for (size_t i = 0U; set != NULL && i < set->decl_count && ok; ++i) {
+            ok = generic_target_add_arity(&arities, set->decls[i]->as.function_decl.type_param_count);
+        }
+    } else if (target->kind == FENG_EXPR_MEMBER) {
+        name = target->as.member.member;
+        ResolvedModuleMemberTarget module_target;
+        if (resolve_module_member_target(context, target, &module_target)) {
+            for (size_t p = 0U; p < module_target.module->program_count && ok; ++p) {
+                const FengProgram *program = module_target.module->programs[p];
+                for (size_t d = 0U; d < program->declaration_count && ok; ++d) {
+                    const FengDecl *decl = program->declarations[d];
+                    if (decl->kind == FENG_DECL_FUNCTION && decl_is_public(decl) &&
+                        slice_equals(decl->as.function_decl.name, name)) {
+                        ok = generic_target_add_arity(&arities, decl->as.function_decl.type_param_count);
+                    }
+                }
+            }
+        } else {
+            ok = collect_method_target_arities(context, target, &arities);
+        }
+    }
+    if (ok && arities.count == 0U && decl_is_function_type(
+            resolve_callable_constraint_type_decl(context, infer_expr_type(context, target)))) {
+        ok = generic_target_add_arity(&arities, 0U);
+    }
+    if (ok) {
+        ok = validate_generic_target_arities(context, target->token, name,
+                                             type_arg_count, false, &arities);
+    }
+    free(arities.values);
+    return ok;
+}
+
+/* Validate a public name reached through an import alias or full module path. */
 static bool resolve_module_member_expr(ResolveContext *context,
                                        const FengExpr *expr) {
     ResolvedModuleMemberTarget target;
@@ -31271,6 +31504,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             }
 
         case FENG_EXPR_GENERIC_TARGET: {
+            size_t errors_before = *context->error_count;
             if (!resolve_expr(context, expr->as.generic_target.target, allow_self)) {
                 return false;
             }
@@ -31279,17 +31513,27 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                     return false;
                 }
             }
+            if (*context->error_count != errors_before) {
+                return true;
+            }
             /* Calls, type construction and target-typed callable values all
              * share this AST form. The surrounding semantic consumer decides
              * whether it is legal; an unconsumed value is rejected by the
              * untyped-callable validation path with AE1016. */
-            return true;
+            return validate_explicit_generic_target(context, expr->as.generic_target.target,
+                expr->as.generic_target.type_args, expr->as.generic_target.type_arg_count);
         }
 
         case FENG_EXPR_CALL:
             {
                 size_t errors_before = *context->error_count;
-                if (!resolve_expr(context, expr->as.call.callee, allow_self)) {
+                const FengExpr *previous_call_target = context->current_call_target_expr;
+                bool callee_ok;
+
+                context->current_call_target_expr = expr->as.call.callee;
+                callee_ok = resolve_expr(context, expr->as.call.callee, allow_self);
+                context->current_call_target_expr = previous_call_target;
+                if (!callee_ok) {
                     return false;
                 }
                 /* An inaccessible or invalid callee has no callable signature
@@ -31332,6 +31576,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             /* G4-13a: Resolve explicit type args (callee<T1, T2>(...) syntax). */
             if (expr->as.call.has_explicit_type_args) {
                 size_t type_arg_index;
+                size_t errors_before = *context->error_count;
                 for (type_arg_index = 0U;
                      type_arg_index < expr->as.call.explicit_type_arg_count;
                      ++type_arg_index) {
@@ -31340,6 +31585,16 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                          false)) {
                         return false;
                     }
+                }
+                if (*context->error_count != errors_before) {
+                    return true;
+                }
+                if (!validate_explicit_generic_target(context, expr->as.call.callee,
+                        expr->as.call.explicit_type_args, expr->as.call.explicit_type_arg_count)) {
+                    return false;
+                }
+                if (*context->error_count != errors_before) {
+                    return true;
                 }
             }
             if (!validate_constructor_call_expr(context, expr) ||
@@ -31351,45 +31606,6 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             }
             if (!validate_explicit_prepacked_variadic_argument(context, expr)) {
                 return false;
-            }
-            /* G4-13b: Arity check for explicit type args against resolved callable. */
-            if (expr->as.call.has_explicit_type_args &&
-                expr->as.call.resolved_callable.kind != FENG_RESOLVED_CALLABLE_NONE) {
-                const FengResolvedCallable *rc = &expr->as.call.resolved_callable;
-                size_t callable_type_param_count = 0U;
-                if (rc->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
-                    rc->function_decl != NULL) {
-                    callable_type_param_count =
-                        rc->function_decl->as.function_decl.type_param_count;
-                } else if ((rc->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
-                            rc->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
-                           rc->member != NULL) {
-                    callable_type_param_count =
-                        rc->member->as.callable.type_param_count;
-                } else if (rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR &&
-                           rc->owner_type_decl != NULL &&
-                           rc->owner_type_decl->kind == FENG_DECL_TYPE) {
-                    /* Type<T1, T2>(...) constructor syntax: validate arity
-                     * against the type declaration's type parameters. */
-                    callable_type_param_count =
-                        rc->owner_type_decl->as.type_decl.type_param_count;
-                }
-                if (expr->as.call.explicit_type_arg_count != callable_type_param_count) {
-                    return resolver_append_error(
-                        context,
-                        expr->token,
-                        rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR ? "AE0232" : "AE0233",
-                        format_message(
-                            rc->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR
-                                ? "type expects %zu type argument(s) but %zu were provided"
-                                : "function expects %zu type argument(s) but %zu were provided",
-                            callable_type_param_count,
-                            expr->as.call.explicit_type_arg_count));
-                }
             }
             return true;
 
@@ -31508,10 +31724,15 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         case FENG_EXPR_LAMBDA:
             return resolve_lambda_expr(context, expr);
 
-        case FENG_EXPR_CAST:
-            return resolve_type_ref(context, expr->as.cast.type, false) &&
-                   resolve_expr(context, expr->as.cast.value, allow_self) &&
-                   validate_cast_expr(context, expr);
+        case FENG_EXPR_CAST: {
+            size_t errors_before = *context->error_count;
+            if (!resolve_type_ref(context, expr->as.cast.type, false) ||
+                !resolve_expr(context, expr->as.cast.value, allow_self)) {
+                return false;
+            }
+            /* Invalid source/target types own their original diagnostic. */
+            return *context->error_count != errors_before || validate_cast_expr(context, expr);
+        }
 
         case FENG_EXPR_IF: {
             ExpressionBranchBoundaryState boundary_state;
@@ -32744,18 +32965,14 @@ static bool resolve_callable(ResolveContext *context,
         size_t ni;
         for (ni = 0U; ni < callable->type_param_count; ++ni) {
             if (find_type_param(context, callable->type_params[ni].name) != NULL) {
-                return resolver_append_error(
-                    context,
-                    callable->type_params[ni].token,
-                    "AE1017", format_message("type parameter '%.*s' shadows an outer type parameter with the same name",
-                                   (int)callable->type_params[ni].name.length,
-                                   callable->type_params[ni].name.data));
+                return report_type_param_name_conflict(
+                    context, &callable->type_params[ni], true);
             }
         }
     }
 
     /* Push method-level type parameters into scope. */
-    if (!resolver_push_type_params(context, callable->type_params,
+    if (!resolver_push_decl_type_params(context, callable->type_params,
                                    callable->type_param_count,
                                    &previous_type_params, &previous_type_param_count)) {
         return false;
@@ -32949,6 +33166,9 @@ static bool spec_parent_reaches_recursive(const ResolveContext *ctx,
     }
 
     for (i = 0U; i < current->as.spec_decl.parent_spec_count; ++i) {
+        if (resolver_type_ref_failed(ctx, current->as.spec_decl.parent_specs[i])) {
+            continue;
+        }
         const FengDecl *next = resolve_type_ref_decl(ctx, current->as.spec_decl.parent_specs[i]);
         size_t j;
         bool seen;
@@ -33001,6 +33221,9 @@ static bool spec_collect_closure(const ResolveContext *ctx,
      * codegen UserSpec member registration order (parents before self).
      * This keeps witness->members[] indices aligned with s->members[]. */
     for (i = 0U; i < spec_decl->as.spec_decl.parent_spec_count; ++i) {
+        if (resolver_type_ref_failed(ctx, spec_decl->as.spec_decl.parent_specs[i])) {
+            continue;
+        }
         const FengDecl *next = resolve_type_ref_decl(ctx, spec_decl->as.spec_decl.parent_specs[i]);
 
         if (next == NULL || next->kind != FENG_DECL_SPEC) {
@@ -33023,7 +33246,12 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
 
     for (i = 0U; i < spec_decl->as.spec_decl.parent_spec_count; ++i) {
         const FengTypeRef *r = spec_decl->as.spec_decl.parent_specs[i];
-        const FengDecl *resolved = resolve_type_ref_decl(context, r);
+        const FengDecl *resolved;
+
+        if (resolver_type_ref_failed(context, r)) {
+            continue;
+        }
+        resolved = resolve_type_ref_decl(context, r);
 
         if (resolved == NULL || resolved->kind != FENG_DECL_SPEC) {
             char *target_name = format_type_ref_name(r);
@@ -33045,6 +33273,9 @@ static bool validate_spec_parent_spec_list(ResolveContext *context, const FengDe
                 "AE0613", format_message("object-form spec parent list can only contain object-form specs"));
         }
         for (j = 0U; j < i; ++j) {
+            if (resolver_type_ref_failed(context, spec_decl->as.spec_decl.parent_specs[j])) {
+                continue;
+            }
             const FengDecl *prev = resolve_type_ref_decl(context, spec_decl->as.spec_decl.parent_specs[j]);
 
             if (prev == resolved) {
@@ -35831,7 +36062,12 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 
     for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
         const FengTypeRef *r = type_decl->as.type_decl.declared_specs[i];
-        const FengDecl *resolved = resolve_type_ref_decl(context, r);
+        const FengDecl *resolved;
+
+        if (resolver_type_ref_failed(context, r)) {
+            continue;
+        }
+        resolved = resolve_type_ref_decl(context, r);
 
         if (resolved == NULL || resolved->kind != FENG_DECL_SPEC) {
             char *target_name = format_type_ref_name(r);
@@ -35855,6 +36091,9 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
                                type_decl->as.type_decl.name.data));
         }
         for (j = 0U; j < i; ++j) {
+            if (resolver_type_ref_failed(context, type_decl->as.type_decl.declared_specs[j])) {
+                continue;
+            }
             const FengDecl *prev = resolve_type_ref_decl(context, type_decl->as.type_decl.declared_specs[j]);
 
             if (prev == resolved) {
@@ -35872,6 +36111,9 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 
     for (i = 0U; i < type_decl->as.type_decl.declared_spec_count; ++i) {
         const FengTypeRef *declared_spec_ref = type_decl->as.type_decl.declared_specs[i];
+        if (resolver_type_ref_failed(context, declared_spec_ref)) {
+            continue;
+        }
         const FengDecl *spec = resolve_type_ref_decl(context, type_decl->as.type_decl.declared_specs[i]);
 
         if (spec != NULL && spec->kind == FENG_DECL_SPEC &&
@@ -35954,6 +36196,7 @@ static bool validate_type_declared_specs_and_satisfaction(ResolveContext *contex
 static bool validate_fit_declaration_contracts(ResolveContext *context,
                                                const FengDecl *fit_decl) {
     const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
+    bool target_ref_failed = resolver_type_ref_failed(context, target_ref);
     FitTargetResolution fit_target = resolve_fit_target(context, target_ref);
     const FengDecl *target = fit_target.type_decl;
     size_t i;
@@ -35966,7 +36209,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
     /* All concrete subjects use the same declaration-time contract checks;
      * a relation's optional body does not determine its implementation set. */
-    if (fit_target.kind == FIT_TARGET_KIND_INVALID) {
+    if (!target_ref_failed && fit_target.kind == FIT_TARGET_KIND_INVALID) {
         char *target_name = format_type_ref_name(fit_decl->as.fit_decl.target);
         bool result = resolver_append_error(
             context, fit_decl->as.fit_decl.target->token,
@@ -35981,7 +36224,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     allow_target_private_implementations =
         fit_may_use_target_private_implementations(context, target);
 
-    if (target != NULL && target->kind == FENG_DECL_TYPE &&
+    if (!target_ref_failed && target != NULL && target->kind == FENG_DECL_TYPE &&
         target->as.type_decl.type_param_count > 0U) {
         const FengTypeRef *target_ref = fit_decl->as.fit_decl.target;
 
@@ -36013,7 +36256,7 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                         i + 1U));
             }
         }
-    } else if (target != NULL && fit_decl->as.fit_decl.target != NULL &&
+    } else if (!target_ref_failed && target != NULL && fit_decl->as.fit_decl.target != NULL &&
                fit_decl->as.fit_decl.target->kind == FENG_TYPE_REF_NAMED &&
                fit_decl->as.fit_decl.target->as.named.type_arg_count > 0U) {
         FengSlice target_name = decl_typeish_name(target);
@@ -36027,7 +36270,12 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
 
     for (i = 0U; i < fit_decl->as.fit_decl.spec_count; ++i) {
         const FengTypeRef *r = fit_decl->as.fit_decl.specs[i];
-        const FengDecl *resolved = resolve_type_ref_decl(context, r);
+        const FengDecl *resolved;
+
+        if (resolver_type_ref_failed(context, r)) {
+            continue;
+        }
+        resolved = resolve_type_ref_decl(context, r);
 
         if (resolved == NULL || resolved->kind != FENG_DECL_SPEC) {
             char *spec_name = format_type_ref_name(r);
@@ -36047,6 +36295,9 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
                 "AE0809", format_message("fit specs list can only contain object-form specs"));
         }
         for (j = 0U; j < i; ++j) {
+            if (resolver_type_ref_failed(context, fit_decl->as.fit_decl.specs[j])) {
+                continue;
+            }
             const FengDecl *prev = resolve_type_ref_decl(context, fit_decl->as.fit_decl.specs[j]);
 
             if (prev == resolved) {
@@ -36060,8 +36311,14 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
         }
     }
 
+    if (target_ref_failed) {
+        return true;
+    }
     for (i = 0U; i < fit_decl->as.fit_decl.spec_count; ++i) {
         const FengTypeRef *fit_spec_ref = fit_decl->as.fit_decl.specs[i];
+        if (resolver_type_ref_failed(context, fit_spec_ref)) {
+            continue;
+        }
         const FengDecl *spec = resolve_type_ref_decl(context, fit_decl->as.fit_decl.specs[i]);
 
         if (spec != NULL && spec->kind == FENG_DECL_SPEC &&
@@ -36158,29 +36415,28 @@ static bool validate_type_param_constraints(ResolveContext *context,
     size_t i;
 
     for (i = 0U; i < type_param_count; ++i) {
+        size_t errors_before = *context->error_count;
         if (type_params[i].constraint == NULL) {
             continue;
         }
         if (!resolve_type_ref(context, type_params[i].constraint, false)) {
             return false;
         }
+        if (*context->error_count != errors_before) {
+            continue;
+        }
         {
             const FengDecl *constraint_decl =
                 resolve_type_ref_decl(context, type_params[i].constraint);
 
-            if (decl_is_tuple_type(constraint_decl)) {
+            if (type_params[i].constraint->kind != FENG_TYPE_REF_NAMED ||
+                constraint_decl == NULL || constraint_decl->kind != FENG_DECL_SPEC) {
                 return resolver_append_error(
                     context,
                     type_params[i].token,
-                    "AE0304", format_message("type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint",
-                                   (int)type_params[i].name.length,
-                                   type_params[i].name.data));
-            }
-            if (constraint_decl != NULL && constraint_decl->kind != FENG_DECL_SPEC) {
-                return resolver_append_error(
-                    context,
-                    type_params[i].token,
-                    "AE0709", format_message("type parameter '%.*s': constraint must be a spec, not a type",
+                    "AE0709", format_message(decl_is_tuple_type(constraint_decl)
+                                   ? "type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint"
+                                   : "type parameter '%.*s': constraint must be a spec, not a type",
                                    (int)type_params[i].name.length,
                                    type_params[i].name.data));
             }
@@ -36614,7 +36870,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             size_t prev_tp_count = 0U;
             bool ok;
 
-            if (!resolver_push_type_params(context,
+            if (!resolver_push_decl_type_params(context,
                                            decl->as.type_decl.type_params,
                                            decl->as.type_decl.type_param_count,
                                            &prev_tp, &prev_tp_count)) {
@@ -36870,7 +37126,7 @@ static bool resolve_declaration(ResolveContext *context, const FengDecl *decl) {
             size_t prev_tp_count = 0U;
             bool ok;
 
-            if (!resolver_push_type_params(context,
+            if (!resolver_push_decl_type_params(context,
                                            decl->as.spec_decl.type_params,
                                            decl->as.spec_decl.type_param_count,
                                            &prev_tp, &prev_tp_count)) {
@@ -39159,7 +39415,7 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                             }
 
                             if (params_eq) {
-                                if (return_type_equals(existing->return_type, decl->as.function_decl.return_type)) {
+                                if (signature_return_types_equal(existing, &decl->as.function_decl)) {
                                     char *message = format_message("duplicate function signature '%.*s'",
                                                                    (int)decl->as.function_decl.name.length,
                                                                    decl->as.function_decl.name.data);

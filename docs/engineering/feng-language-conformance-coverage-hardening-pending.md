@@ -1,6 +1,6 @@
 # Feng 语言正确性用例补齐实施文档
 
-> 状态：G01～G24 已交付；G25 待 Review
+> 状态：G01～G25 已独立交付；各组验收记录见对应章节
 >
 > 所属总计划：[Feng 测试覆盖补齐计划](./feng-test-coverage-hardening-pending.md)
 >
@@ -3913,8 +3913,9 @@ COMPOSITE01～43 的复用／新增测试、断言、成本边界及最终回归
 
 G25 的测试重点、用例 TODO、独立验收与交付记录已迁至
 [G25 泛型诊断用例补齐实施文档](./feng-language-conformance-coverage-hardening-g25.md)，后续只在
-该文档维护。当前已完成 Review 前细化并确认不新增错误码；产品实现和三条既有错误码断言迁移仍待
-人工批准。详细问题继续记录于 [G25 问题记录](./feng-language-conformance-coverage-hardening-issues/g25.md)。
+该文档维护。2026-09-10 已按原批准范围及后续逐项人工决定交付，独立沙箱外 `make test` 通过；
+错误码复用、追加 AE0333 及既有断言精确迁移均以该文档与主规范为准。
+详细问题继续记录于 [G25 问题记录](./feng-language-conformance-coverage-hardening-issues/g25.md)。
 
 ## 30 实施问题记录
 

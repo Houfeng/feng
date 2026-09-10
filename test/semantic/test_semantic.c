@@ -4956,7 +4956,8 @@ static void test_generic_extern_call_rejects_conflicting_wrapped_array_inference
     feng_program_free(program);
 }
 
-static void test_generic_non_extern_call_does_not_expand_wrapped_array_inference(void) {
+/* Ordinary functions recursively infer array element types from arguments. */
+static void test_generic_non_extern_call_accepts_wrapped_array_inference(void) {
     const char *source =
         "module demo.main;\n"
         "func same<T>(values: T[]): T[] {\n"
@@ -4971,13 +4972,13 @@ static void test_generic_non_extern_call_does_not_expand_wrapped_array_inference
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
 
-    ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
-                                  &analysis, &errors, &error_count));
-    ASSERT(error_count == 1U);
-    ASSERT(strstr(errors[0].message,
-                  "top-level function 'same' has no overload accepting 1 argument(s)") != NULL);
+    ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB,
+                                 &analysis, &errors, &error_count));
+    ASSERT(analysis != NULL);
+    ASSERT(errors == NULL);
+    ASSERT(error_count == 0U);
 
-    feng_semantic_errors_free(errors, error_count);
+    feng_semantic_analysis_free(analysis);
     feng_program_free(program);
 }
 
@@ -16664,48 +16665,56 @@ static void test_multi_parameter_generic_callable_rejects_each_mismatch(void) {
     static const struct {
         const char *path;
         const char *body;
+        const char *code;
     } cases[] = {
         {
             "multi_callable_parameter_count_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string) -> first;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         },
         {
             "multi_callable_first_parameter_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = (first: string, middle: string, last: bool) -> 1;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         },
         {
             "multi_callable_middle_parameter_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: i64, last: bool) -> first;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         },
         {
             "multi_callable_last_parameter_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string, last: string) -> first;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         },
         {
             "multi_callable_return_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = (first: i64, middle: string, last: bool) -> middle;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         },
         {
             "multi_callable_generic_arity_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = source<i64, string>;\n"
-            "}\n"
+            "}\n",
+            "AE1015"
         },
         {
             "multi_callable_constraint_error.ff",
             "func use(): void {\n"
             "    let value: Multi<i64, string, bool, i64> = constrained<i64, string, bool>;\n"
-            "}\n"
+            "}\n",
+            "AE0522"
         }
     };
     const char *prefix =
@@ -16737,7 +16746,7 @@ static void test_multi_parameter_generic_callable_rejects_each_mismatch(void) {
                                       FENG_COMPILE_TARGET_LIB,
                                       &analysis, &errors, &error_count));
         ASSERT(error_count == 1U);
-        ASSERT(strcmp(errors[0].code, "AE0522") == 0);
+        ASSERT(strcmp(errors[0].code, cases[index].code) == 0);
 
         feng_semantic_errors_free(errors, error_count);
         feng_semantic_analysis_free(analysis);
@@ -28316,7 +28325,7 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         {
             "callable_value_wrong_arg_count.ff",
             "func use(): void { let value: IntMapper = identity<int, string>; }\n",
-            "AE0522"
+            "AE1015"
         },
         {
             "callable_value_wrong_signature.ff",
@@ -28341,7 +28350,7 @@ static void test_explicit_generic_callable_values_reject_invalid_sources(void) {
         {
             "callable_method_value_wrong_arg_count.ff",
             "func use(reader: Reader): void { let value: IntMapper = reader.identity<int, string>; }\n",
-            "AE0522"
+            "AE1015"
         },
         {
             "callable_method_value_wrong_signature.ff",
@@ -33774,13 +33783,13 @@ static void test_g20_tuple_nominal_and_conversion_diagnostics(void) {
         "module g20.tuple_constraint;\n"
         "type Pair(i32, i32);\n"
         "func bad<T: Pair>(value: T): T { return value; }\n",
-        "AE0304", 3U, 10U, "T", "tuple type cannot be used as a constraint");
+        "AE0709", 3U, 10U, "T", "tuple type cannot be used as a constraint");
     assert_g20_semantic_error(
         "g20_generic_tuple_constraint.ff",
         "module g20.generic_tuple_constraint;\n"
         "type Pair<T, U>(T, U);\n"
         "func bad<T: Pair<i32, i32>>(value: T): T { return value; }\n",
-        "AE0304", 3U, 10U, "T", "tuple type cannot be used as a constraint");
+        "AE0709", 3U, 10U, "T", "tuple type cannot be used as a constraint");
 }
 
 /* TUP-D17 through TUP-D20: item access preserves instance/static surfaces,
@@ -35296,7 +35305,11 @@ void test_generic_literal_storage_semantics(void);
 void test_g24_surface_diagnostics(void);
 void test_g24_composite_graphs(void);
 
+/* Independent G25 generic declaration, target and inference diagnostics. */
+void test_g25_generic_diagnostics(void);
+
 int main(void) {
+    test_g25_generic_diagnostics();
     test_g24_composite_diagnostics();
     test_g24_binding_diagnostics();
     test_g24_spec_view_semantics();
@@ -35744,7 +35757,7 @@ int main(void) {
     test_generic_extern_call_accepts_bare_type_param_return();
     test_fit_method_accepts_fit_type_param_argument();
     test_generic_extern_call_rejects_conflicting_wrapped_array_inference();
-    test_generic_non_extern_call_does_not_expand_wrapped_array_inference();
+    test_generic_non_extern_call_accepts_wrapped_array_inference();
     test_imported_function_call_selects_overload_by_literal_type();
     test_imported_generic_extern_call_accepts_wrapped_array_inference();
     test_alias_function_call_selects_overload_by_literal_type();

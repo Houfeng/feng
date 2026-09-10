@@ -520,6 +520,7 @@ static bool cg_array_data_pointer_type_is_lowerable(const CGType *array_type);
 
 static void cg_emit_array_data_pointer_c_type(Buf *b, const CGType *array_type);
 
+/* Require a pointee with a supported closed ABI lowering. */
 static bool cg_pointer_inner_is_lowerable(const CGType *t) {
     if (t == NULL) {
         return false;
@@ -3784,6 +3785,9 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
         case CG_TYPE_U64:    buf_append_cstr(out, "u64");    return true;
         case CG_TYPE_F32:    buf_append_cstr(out, "f32");    return true;
         case CG_TYPE_F64:    buf_append_cstr(out, "f64");    return true;
+        case CG_TYPE_GENERIC_PARAM:
+            buf_append_fmt(out, "X%zu", t->generic_param_index);
+            return true;
         case CG_TYPE_POINTER:
             buf_append_cstr(out, "P_");
             return cg_encode_type_short(t->element, out);
@@ -3814,24 +3818,22 @@ static bool cg_encode_type_short(const CGType *t, Buf *out) {
 
 /* Build the "__from__<param-types>" suffix that disambiguates overloads.
  * docs/specifications/feng-function.md §5 / docs/specifications/feng-type.md §5 require that overloads
- * differ by parameter signature, so encoding only the parameter types is
- * sufficient (return type is not part of the overload key). The suffix is
+ * differ by parameter signature and generic arity (return type is not part
+ * of the overload key). Generic parameter types encode their slot indices.
+ * The suffix is
  * applied unconditionally — even single, unambiguous declarations gain it —
  * so symbol shape stays predictable and deterministic for every callable.
  * No-arg functions encode as `__from__void`.
  *
- * When is_generic is true, the suffix is prefixed with "_G" (yielding
- * "_G__from__...") to distinguish a generic callable's shared-body symbol
- * from a non-generic overload that happens to share the same parameter
- * types (e.g. parse(json: string) vs parse<T>(json: string)).  In Feng,
- * generic arity participates in overload resolution, so these are distinct
- * callables; C however cannot distinguish them without an extra marker.
+ * Generic callables retain the "_G__from__" prefix and append their complete
+ * arity after the parameter encoding. This also distinguishes unused formal
+ * parameters, independent of declaration order or other visible overloads.
  *
  * Returns a malloc'd string; caller frees. */
 static char *cg_build_param_suffix(CGType *const *param_types, size_t count,
-                                   bool is_variadic, bool is_generic) {
+                                   bool is_variadic, size_t generic_arity) {
     Buf b; buf_init(&b);
-    if (is_generic) {
+    if (generic_arity > 0U) {
         buf_append_cstr(&b, "_G__from__");
     } else {
         buf_append_cstr(&b, "__from__");
@@ -3852,15 +3854,18 @@ static char *cg_build_param_suffix(CGType *const *param_types, size_t count,
             }
         }
     }
-    return b.data ? b.data : strdup(is_generic ? "_G__from__void" : "__from__void");
+    if (generic_arity > 0U) {
+        buf_append_fmt(&b, "__arity_%zu", generic_arity);
+    }
+    return b.data;
 }
 
 /* Append the param-type suffix to an existing c_name buffer. Frees the old
  * c_name and returns the new heap-owned string. */
 static char *cg_append_param_suffix(char *c_name, CGType *const *param_types,
                                     size_t count, bool is_variadic,
-                                    bool is_generic) {
-    char *suffix = cg_build_param_suffix(param_types, count, is_variadic, is_generic);
+                                    size_t generic_arity) {
+    char *suffix = cg_build_param_suffix(param_types, count, is_variadic, generic_arity);
     if (!suffix) { free(c_name); return NULL; }
     Buf b; buf_init(&b);
     buf_append_cstr(&b, c_name);
@@ -9383,7 +9388,7 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
             bool is_variadic = sig->params[sig->param_count - 1U].is_variadic;
             gf->c_name = cg_append_param_suffix(gf->c_name, ptypes,
                                                 sig->param_count, is_variadic,
-                                                true);
+                                                sig->type_param_count);
         }
         if (ptypes) {
             for (size_t i = 0; i < sig->param_count; i++) {
@@ -9401,7 +9406,8 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
         if (!gf->c_name) return false;
     } else {
         /* No params — append __from__void suffix for consistency. */
-        gf->c_name = cg_append_param_suffix(gf->c_name, NULL, 0U, false, true);
+        gf->c_name = cg_append_param_suffix(gf->c_name, NULL, 0U, false,
+                                           sig->type_param_count);
         if (!gf->c_name) return false;
     }
 
@@ -15161,7 +15167,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
         ef->param_types,
         ef->param_count,
         false,
-        sig->type_param_count > 0U);
+        sig->type_param_count);
     if (ef->generated_c_name == NULL) {
         cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         goto cleanup;
@@ -15322,7 +15328,7 @@ static bool cg_register_free_fn(CG *cg, const FengDecl *decl) {
     /* Append param-type suffix for overload-aware mangling. Applied
      * unconditionally so the symbol shape is the same regardless of whether
      * the function is part of an overload set today. */
-    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic, false);
+    surface_name = cg_append_param_suffix(surface_name, f->param_types, f->param_count, f->is_variadic, 0U);
     if (!surface_name) {
         cg_fail(cg, sig->token, "IE0001", "codegen: out of memory");
         goto cleanup;
@@ -15689,7 +15695,7 @@ static bool cg_register_user_type_members(CG *cg, UserType *t, FengCompileTarget
             um->c_name = cg_append_param_suffix(um->c_name,
                                                 um->param_types, um->param_count,
                                                 um->is_variadic,
-                                                sig->type_param_count > 0U);
+                                                sig->type_param_count);
             if (!um->c_name) return false;
         }
     }
@@ -17450,7 +17456,7 @@ static bool cg_register_user_fit_members(CG *cg, UserFit *uf) {
         um->c_name = cg_append_param_suffix(um->c_name,
                                             um->param_types, um->param_count,
                                             um->is_variadic,
-                                            sig->type_param_count > 0U);
+                                            sig->type_param_count);
         um->c_name = cg_disambiguate_fit_method_c_name(
             uf->methods, mi - 1U, um->c_name, m->is_static);
         if (!um->c_name) return false;
@@ -17527,7 +17533,7 @@ static bool cg_register_builtin_fit_members(CG *cg, BuiltinFit *bf) {
                                             um->param_types,
                                             um->param_count,
                                             um->is_variadic,
-                                            false);
+                                            sig->type_param_count);
         um->c_name = cg_disambiguate_fit_method_c_name(
             bf->methods, mi - 1U, um->c_name, m->is_static);
         if (um->c_name == NULL) {
@@ -22675,6 +22681,7 @@ static bool cg_expr_is_direct_lvalue(const FengExpr *expr) {
     }
 }
 
+/* Array data pointers require an ABI-compatible closed element type. */
 static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_type) {
     if (element_type == NULL) {
         return false;
@@ -22688,11 +22695,13 @@ static bool cg_array_data_pointer_element_is_lowerable(const CGType *element_typ
     return false;
 }
 
+/* Only one ABI-compatible element layer describes an array data pointer. */
 static bool cg_array_data_pointer_type_is_lowerable(const CGType *array_type) {
     return array_type != NULL && array_type->kind == CG_TYPE_ARRAY &&
            cg_array_data_pointer_element_is_lowerable(array_type->element);
 }
 
+/* Array pointers name their data elements, not Feng's managed array handle. */
 static void cg_emit_array_data_pointer_c_type(Buf *b, const CGType *array_type) {
     CGType data_pointer;
 

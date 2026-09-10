@@ -6437,7 +6437,10 @@ static void test_g23_fit_field_surfaces_rejected(void) {
 
 void test_g24_composite_syntax(void);
 
+void test_g25_nested_generic_parser(void);
+
 int main(void) {
+    test_g25_nested_generic_parser();
     test_g24_composite_syntax();
     test_g23_fit_field_surfaces_rejected();
     test_g20_tuple_declaration_and_literal_parser_diagnostics();
