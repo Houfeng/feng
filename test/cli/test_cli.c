@@ -202,6 +202,31 @@ static int count_occurrences(const char *text, const char *needle) {
     return count;
 }
 
+/* Search the complete binary, including bytes after embedded NUL characters. */
+static bool binary_file_contains_text(const char *path, const char *text) {
+    struct stat status;
+    size_t text_length = strlen(text);
+    char *bytes;
+    bool found = false;
+
+    ASSERT(stat(path, &status) == 0);
+    ASSERT(status.st_size >= 0);
+    ASSERT(text_length > 0U);
+    bytes = read_text_file(path);
+    if (text_length <= (size_t)status.st_size) {
+        for (size_t offset = 0U;
+             offset <= (size_t)status.st_size - text_length;
+             ++offset) {
+            if (memcmp(bytes + offset, text, text_length) == 0) {
+                found = true;
+                break;
+            }
+        }
+    }
+    free(bytes);
+    return found;
+}
+
 /* Match diagnostic headers without treating paths, messages or source as codes. */
 static bool has_diagnostic_category(const char *text, const char *category) {
     const char *line = text;
@@ -18191,6 +18216,132 @@ static void test_project_build_default_uses_debug_friendly_flags(void) {
     free(project_dir);
 }
 
+/* Inspect real release binaries while exercising archive calls, shared generic
+ * descriptors, dynamic imports and exception unwinding across a package. */
+static void test_project_build_release_cleans_binary_symbols(void) {
+    char template_path[] = "temp/feng_cli_release_binary_cleanup_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *dep_dir;
+    char *dep_src_dir;
+    char *dep_manifest_path;
+    char *dep_source_path;
+    char *root_dir;
+    char *root_src_dir;
+    char *root_manifest_path;
+    char *root_source_path;
+    char *binary_path;
+    char *library_dir;
+    char *library_path;
+    char *remove_error = NULL;
+
+    ASSERT(workspace_dir != NULL);
+    dep_dir = path_join(workspace_dir, "dep");
+    dep_src_dir = path_join(dep_dir, "src");
+    dep_manifest_path = path_join(dep_dir, "feng.fm");
+    dep_source_path = path_join(dep_src_dir, "lib.ff");
+    root_dir = path_join(workspace_dir, "app");
+    root_src_dir = path_join(root_dir, "src");
+    root_manifest_path = path_join(root_dir, "feng.fm");
+    root_source_path = path_join(root_src_dir, "main.ff");
+    binary_path = project_host_build_path(root_dir, "bin/release_cleanup_app");
+    library_dir = project_host_build_path(dep_dir, "lib");
+    library_path = host_static_library_path(library_dir, "release_cleanup_dep");
+    mkdir_p(dep_src_dir);
+    mkdir_p(root_src_dir);
+    write_text_file(dep_manifest_path,
+                    "[package]\n"
+                    "name: \"release_cleanup_dep\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(dep_source_path,
+                    "open module test.cli.releasecleanup;\n"
+                    "/** Write through a real dynamically imported C function. */\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "/** Share a closed generic descriptor across the package boundary. */\n"
+                    "open type Box<T> {\n"
+                    "  var value: T;\n"
+                    "  /** Read the value through the shared generic method. */\n"
+                    "  func get(): T { return self.value; }\n"
+                    "}\n"
+                    "/** Keep an archive entry live through an actual consumer call. */\n"
+                    "open func cleanupValue(box: Box<int>): int { return box.get(); }\n"
+                    "/** Unwind out of the archive while running its defer cleanup. */\n"
+                    "open func cleanupThrow(): string {\n"
+                    "  defer { puts(&\"release-cleanup-defer\"); }\n"
+                    "  throw \"release-cleanup-caught\";\n"
+                    "}\n"
+                    "/** Keep this public entry in the archive, but not in release bin. */\n"
+                    "open func cleanupUnused(): int {\n"
+                    "  puts(&\"release-cleanup-unused\");\n"
+                    "  return 0;\n"
+                    "}\n");
+    write_text_file(root_manifest_path,
+                    "[package]\n"
+                    "name: \"release_cleanup_app\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"bin\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "release_cleanup_dep: \"../dep\"\n");
+    write_text_file(root_source_path,
+                    "module test.cli.releasecleanupapp;\n"
+                    "import test.cli.releasecleanup;\n"
+                    "/** Write the observable result through the C import. */\n"
+                    "@cdecl(\"libc\")\n"
+                    "extern func puts(msg: string*): int;\n"
+                    "/** Exercise all data and call paths whose symbols may be stripped. */\n"
+                    "func main(args: string[]) {\n"
+                    "  let box = Box<int>{ value: 7 };\n"
+                    "  if cleanupValue(box) == 7 { puts(&\"release-cleanup-live\"); }\n"
+                    "  let message = try cleanupThrow() catch ex: string { ex };\n"
+                    "  puts(&message);\n"
+                    "}\n");
+
+    for (int release = 0; release < 2; ++release) {
+        char *argv[] = {root_dir, "--release"};
+        char *stdout_text;
+
+        ASSERT(feng_cli_project_build_main("feng", release ? 2 : 1, argv) == 0);
+        stdout_text = run_binary_capture_stdout_or_die(binary_path);
+        ASSERT(strcmp(stdout_text,
+                      "release-cleanup-live\n"
+                      "release-cleanup-defer\n"
+                      "release-cleanup-caught\n") == 0);
+        free(stdout_text);
+        ASSERT(binary_file_contains_text(library_path, "cleanupValue__from__"));
+        ASSERT(binary_file_contains_text(library_path, "release-cleanup-unused"));
+        ASSERT(binary_file_contains_text(binary_path, "release-cleanup-live"));
+        if (release) {
+            ASSERT(!binary_file_contains_text(binary_path, "cleanupValue__from__"));
+            ASSERT(!binary_file_contains_text(binary_path,
+                                             "FengTypeDesc__test__cli__releasecleanup__Box"));
+            ASSERT(!binary_file_contains_text(binary_path, "cleanupUnused__from__"));
+        } else {
+            ASSERT(binary_file_contains_text(binary_path, "cleanupValue__from__"));
+            ASSERT(binary_file_contains_text(binary_path,
+                                            "FengTypeDesc__test__cli__releasecleanup__Box"));
+        }
+    }
+
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(library_path);
+    free(library_dir);
+    free(binary_path);
+    free(root_source_path);
+    free(root_manifest_path);
+    free(root_src_dir);
+    free(root_dir);
+    free(dep_source_path);
+    free(dep_manifest_path);
+    free(dep_src_dir);
+    free(dep_dir);
+}
+
 static void test_project_build_release_propagates_to_local_dependencies(void) {
     char template_path[] = "temp/feng_cli_build_release_flags_XXXXXX";
     char *workspace_dir;
@@ -24966,6 +25117,7 @@ int main(void) {
     test_direct_module_binding_initialization_cycle_exhausts_stack();
     test_direct_g21_array_runtime_rejects_invalid_lengths_and_indexes();
     test_project_build_default_uses_debug_friendly_flags();
+    test_project_build_release_cleans_binary_symbols();
     test_project_build_release_propagates_to_local_dependencies();
     test_project_build_bin_copies_assets_and_refreshes_existing_output();
     test_project_build_lib_stages_assets_under_output_root();

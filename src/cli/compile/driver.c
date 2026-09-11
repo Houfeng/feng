@@ -1916,6 +1916,23 @@ static bool argv_push_mode_flags(ArgVec *av, bool release) {
     return true;
 }
 
+/* Apply the target linker's cleanup policy only to release executables. */
+static bool argv_push_release_executable_flags(ArgVec *av,
+                                               const char *target_platform) {
+    if (feng_platform_is_macos(target_platform)) {
+        return argv_push(av, "-Wl,-dead_strip") &&
+               argv_push(av, "-Wl,-no_exported_symbols") &&
+               argv_push(av, "-Wl,-S") &&
+               argv_push(av, "-Wl,-x");
+    }
+    if (feng_platform_is_linux(target_platform)) {
+        return argv_push(av, "-Wl,--gc-sections") &&
+               argv_push(av, "-Wl,--no-export-dynamic") &&
+               argv_push(av, "-Wl,--strip-all");
+    }
+    return true;
+}
+
 /* Add the explicit target and SDK/sysroot required by bundled Clang. */
 static bool argv_push_target_platform_flags(ArgVec *av,
                                             const char *target_platform,
@@ -2327,16 +2344,9 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             ok = argv_push(&av, flag);
             free(flag);
         }
-        if (ok && opts->release) {
-            if (feng_platform_is_macos(target_platform) &&
-                !argv_push(&av, "-Wl,-dead_strip")) {
-                ok = false;
-            }
-            if (feng_platform_is_linux(target_platform) &&
-                !argv_push(&av, "-Wl,--gc-sections")) {
-                ok = false;
-            }
-            if (ok && !argv_push(&av, "-Wl,-x")) { ok = false; }
+        if (ok && opts->release &&
+            !argv_push_release_executable_flags(&av, target_platform)) {
+            ok = false;
         }
         if (ok && !argv_push_env_flags(&av, getenv("FENG_CC_FLAGS"))) { ok = false; }
         if (ok && !argv_push(&av, "-o")) { ok = false; }
