@@ -35,7 +35,6 @@ extern "C" {
     X(CONTINUE, "continue") \
     X(TRY, "try") \
     X(CATCH, "catch") \
-    X(UNKNOWN, "unknown") \
     X(THROW, "throw") \
     X(RETURN, "return") \
     X(DEFER, "defer") \

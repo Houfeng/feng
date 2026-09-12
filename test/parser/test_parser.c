@@ -186,7 +186,7 @@ static void test_try_expression_with_typed_catches(void) {
     const char *source =
         "module demo.main;\n"
         "func run(): int {\n"
-        "    let value = try parse() catch err: ParseError { 8080; } catch problem: unknown { 9090; };\n"
+        "    let value = try parse() catch err: ParseError { 8080; } catch { 9090; };\n"
         "    return value;\n"
         "}\n";
     FengProgram *program = NULL;
@@ -212,10 +212,9 @@ static void test_try_expression_with_typed_catches(void) {
     assert_slice_text(try_expr->as.try_expr.clauses[0].type->as.named.segments[0], "ParseError");
     ASSERT(try_expr->as.try_expr.clauses[0].body->statement_count == 1U);
 
-    assert_slice_text(try_expr->as.try_expr.clauses[1].name, "problem");
-    ASSERT(try_expr->as.try_expr.clauses[1].type->kind == FENG_TYPE_REF_NAMED);
-    ASSERT(try_expr->as.try_expr.clauses[1].type->as.named.segment_count == 1U);
-    assert_slice_text(try_expr->as.try_expr.clauses[1].type->as.named.segments[0], "unknown");
+    ASSERT(try_expr->as.try_expr.clauses[1].name.length == 0U);
+    ASSERT(try_expr->as.try_expr.clauses[1].type == NULL);
+    ASSERT(try_expr->as.try_expr.clauses[1].body->statement_count == 1U);
 
     feng_program_free(program);
 }
@@ -319,6 +318,50 @@ static void test_expression_branch_trailing_throw_omits_semicolon(void) {
     ASSERT(try_expr->as.try_expr.clauses[0].body->statements[0]->kind == FENG_STMT_THROW);
 
     feng_program_free(program);
+}
+
+/* Bare throw has a null AST operand and keeps an explicit semicolon even in
+ * a value branch; valued throws retain their ordinary expression operand. */
+static void test_bare_throw_operand_and_terminator(void) {
+    const char *source =
+        "module bare.syntax;\n"
+        "func run() {\n"
+        "  let value = try fail() catch { throw; };\n"
+        "  throw 42;\n"
+        "}\n";
+    FengProgram *program = NULL;
+    FengParseError error;
+
+    ASSERT(feng_parse_source(source, strlen(source), "bare_throw.ff", &program, &error));
+    const FengBlock *body = program->declarations[0]->as.function_decl.body;
+    const FengExpr *try_expr = body->statements[0]->as.binding.initializer;
+    const FengStmt *rethrow = try_expr->as.try_expr.clauses[0].body->statements[0];
+    ASSERT(rethrow->kind == FENG_STMT_THROW);
+    ASSERT(rethrow->token.kind == FENG_TOKEN_KW_THROW);
+    ASSERT(rethrow->as.throw_value == NULL);
+    ASSERT(body->statements[1]->kind == FENG_STMT_THROW);
+    ASSERT(body->statements[1]->as.throw_value->kind == FENG_EXPR_INTEGER);
+    FILE *stream = tmpfile();
+    char dump[1024];
+    ASSERT(stream != NULL);
+    feng_program_dump(stream, program);
+    rewind(stream);
+    size_t count = fread(dump, 1U, sizeof(dump) - 1U, stream);
+    dump[count] = '\0';
+    ASSERT(strstr(dump, "throw;") != NULL);
+    ASSERT(strstr(dump, "throw 42;") != NULL);
+    ASSERT(strstr(dump, "<null-expr>") == NULL);
+    fclose(stream);
+    feng_program_free(program);
+
+    const char *missing_terminator =
+        "module bare.syntax;\n"
+        "func run() { let value = try fail() catch { throw }; }\n";
+    program = NULL;
+    ASSERT(!feng_parse_source(missing_terminator, strlen(missing_terminator),
+                             "bare_throw_missing_semicolon.ff", &program, &error));
+    ASSERT(program == NULL);
+    ASSERT(error.token.kind == FENG_TOKEN_RBRACE);
 }
 
 /* Ordinary statement blocks keep the general rule that throw requires `;`. */
@@ -5807,8 +5850,8 @@ static void test_g12_control_flow_and_try_syntax(void) {
             1U
         },
         {
-            "g12_throw_missing_value.ff",
-            "module g;\nfunc run() { throw; }\n",
+            "g12_throw_incomplete_operand.ff",
+            "module g;\nfunc run() { throw 1 +; }\n",
             "SE0006",
             "expected expression term: identifier, literal, call, cast, lambda, if-expression, or try-expression",
             FENG_TOKEN_SEMICOLON,
@@ -6471,6 +6514,7 @@ int main(void) {
     test_try_statement_ends_at_final_catch_brace();
     test_try_statement_rejects_trailing_semicolon();
     test_expression_branch_trailing_throw_omits_semicolon();
+    test_bare_throw_operand_and_terminator();
     test_ordinary_block_trailing_throw_requires_semicolon();
     test_try_without_catch_is_rejected();
     test_defer_block_parses();

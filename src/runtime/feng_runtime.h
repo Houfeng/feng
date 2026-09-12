@@ -782,7 +782,7 @@ void *feng_object_new(const FengTypeDescriptor *desc);
  * exceptions from foreign-language unwind payloads. */
 #define FENG_EXCEPTION_CLASS UINT64_C(0x46454E4745584E00)
 
-/* One catch clause in a generated LSDA table. A NULL type is the `unknown`
+/* One catch clause in a generated LSDA table. A NULL type is an anonymous
  * catch-all clause; otherwise matching is descriptor-pointer identity. */
 typedef struct FengCatchClause {
     const FengTypeDescriptor *type;

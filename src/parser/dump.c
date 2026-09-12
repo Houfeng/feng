@@ -534,8 +534,11 @@ static void dump_stmt(FILE *stream, const FengStmt *stmt, int indent) {
             fputs(";\n", stream);
             break;
         case FENG_STMT_THROW:
-            fputs("throw ", stream);
-            dump_expr(stream, stmt->as.throw_value, 0);
+            fputs("throw", stream);
+            if (stmt->as.throw_value != NULL) {
+                fputc(' ', stream);
+                dump_expr(stream, stmt->as.throw_value, 0);
+            }
             fputs(";\n", stream);
             break;
         case FENG_STMT_BREAK:

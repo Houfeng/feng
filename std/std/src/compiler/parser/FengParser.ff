@@ -198,7 +198,7 @@ open type FengParser {
   // ==================== 标识符与名称解析 ====================
 
   /**
-   * 检查当前 Token 是否为标识符或可作为名称的关键字（如 void、unknown）
+   * 检查当前 Token 是否为标识符或允许的 void 关键字
    * @param allowVoid 是否允许 void 关键字作为名称
    * @return 当前 Token 是否为标识符类 Token
    */
@@ -206,7 +206,7 @@ open type FengParser {
     if self.current.kind == FengTokenKind.Identifier {
       return true;
     }
-    if allowVoid && (self.current.kind == FengTokenKind.KeywordVoid || self.current.kind == FengTokenKind.KeywordUnknown) {
+    if allowVoid && self.current.kind == FengTokenKind.KeywordVoid {
       return true;
     }
     return false;
@@ -231,9 +231,9 @@ open type FengParser {
    * 解析多段命名标识符：identifier.identifier.identifier...
    *
    * 用于类型引用、模块路径、注解名称等场景。
-   * 第一段允许 void/unknown 关键字（allowVoid=true 时），后续段仅允许普通标识符。
+   * 第一段允许 void 关键字（allowVoid=true 时），后续段仅允许普通标识符。
    *
-   * @param allowVoidFirst 第一段是否允许 void/unknown 关键字
+   * @param allowVoidFirst 第一段是否允许 void 关键字
    * @param code 期望第一段时的错误码
    * @param message 期望第一段时的错误描述
    * @return SegmentedName 节点

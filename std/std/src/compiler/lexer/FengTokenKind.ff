@@ -60,7 +60,6 @@ open enum FengTokenKind {
   KeywordContinue = 422,
   KeywordTry = 423,
   KeywordCatch = 424,
-  KeywordUnknown = 425,
   KeywordThrow = 426,
   KeywordReturn = 427,
   KeywordDefer = 428,

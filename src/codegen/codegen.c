@@ -1319,7 +1319,6 @@ typedef struct Local {
     char     *c_name;   /* mangled C identifier, unique within the function */
     CGType   *type;
     bool      is_param; /* parameters are not released by the frame (caller owns) */
-    bool      is_unknown_exception;
     /* Optional initialization predicate for conditionally owned storage.
      * NULL keeps the existing unconditional cleanup path unchanged. */
     char     *cleanup_condition_c_expr;
@@ -1449,7 +1448,6 @@ static bool scope_add(Scope *s, const char *name, const char *c_name,
     l->c_name = strdup(c_name);
     l->type = type;
     l->is_param = is_param;
-    l->is_unknown_exception = false;
     l->cleanup_condition_c_expr = NULL;
     l->cleanup_pop_only = false;
     l->binding_mutability_known = false;
@@ -1575,19 +1573,6 @@ static bool scope_add_defer(Scope *s,
     return scope_add(s, defer_fn_name,
                      defer_closure_name != NULL ? defer_closure_name : "",
                      defer_type, false);
-}
-
-static bool scope_mark_unknown_exception(Scope *s, const char *name, size_t len) {
-    for (Scope *cur = s; cur; cur = cur->parent) {
-        for (size_t i = cur->count; i > 0; i--) {
-            Local *l = &cur->items[i - 1];
-            if (strlen(l->name) == len && memcmp(l->name, name, len) == 0) {
-                l->is_unknown_exception = true;
-                return true;
-            }
-        }
-    }
-    return false;
 }
 
 static const Local *scope_lookup(const Scope *s, const char *name, size_t len) {
@@ -34907,20 +34892,10 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
     return out->c_expr != NULL && out->type != NULL;
 }
 
-static bool cg_type_ref_is_unknown_catch_type(const FengTypeRef *ref) {
-    if (ref == NULL || ref->kind != FENG_TYPE_REF_NAMED ||
-        ref->as.named.segment_count != 1U) {
-        return false;
-    }
-    FengSlice name = ref->as.named.segments[0];
-    return name.length == strlen("unknown") &&
-           memcmp(name.data, "unknown", name.length) == 0;
-}
-
+/* Materialize the immutable binding of a catch with a concrete payload type. */
 static bool cg_emit_try_expr_catch_binding(CG *cg,
                                            const FengTryCatchClause *clause,
                                            const CGType *catch_type,
-                                           bool is_unknown,
                                            FengToken err_token) {
     char *feng_name = strndup(clause->name.data, clause->name.length);
     char *c_name = NULL;
@@ -34932,39 +34907,6 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
     if (c_name == NULL) {
         free(feng_name);
         return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
-    }
-
-    if (is_unknown) {
-        CGType *local_type = cgtype_new(CG_TYPE_OBJECT);
-
-        if (local_type == NULL) {
-            free(c_name);
-            free(feng_name);
-            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
-        }
-        buf_append_fmt(cg->cur_body,
-                       "        void *%s = feng_caught_value();\n",
-                       c_name);
-        if (!scope_add(cg->cur_scope,
-                       feng_name,
-                       c_name,
-                       local_type,
-                       true)) {
-            free(c_name);
-            free(feng_name);
-            return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
-        }
-        if (!scope_mark_unknown_exception(cg->cur_scope,
-                                          feng_name,
-                                          strlen(feng_name))) {
-            free(c_name);
-            free(feng_name);
-            return cg_fail(cg, err_token,
-                           "CE0212", "codegen: failed to register unknown catch binding");
-        }
-        free(c_name);
-        free(feng_name);
-        return true;
     }
 
     if (catch_type == NULL) {
@@ -35268,12 +35210,11 @@ static bool cg_emit_try_expr(CG *cg,
                    e->as.try_expr.clause_count);
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
-        bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
         bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         CGType *catch_type = NULL;
         char *desc_expr = NULL;
 
-        if (!is_unknown && !is_anonymous) {
+        if (!is_anonymous) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
                 free(slot_name);
                 free(marker_name);
@@ -35293,7 +35234,7 @@ static bool cg_emit_try_expr(CG *cg,
         }
         buf_append_fmt(cg->cur_body,
                        "        { %s },\n",
-                       (is_unknown || is_anonymous) ? "NULL" : desc_expr);
+                       is_anonymous ? "NULL" : desc_expr);
         cgtype_free(catch_type);
         free(desc_expr);
     }
@@ -35370,11 +35311,10 @@ static bool cg_emit_try_expr(CG *cg,
         bool clause_exits =
             result_required &&
             cg_branch_exits_via_return_or_throw(clause->body);
-        bool is_unknown = cg_type_ref_is_unknown_catch_type(clause->type);
         bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         CGType *catch_type = NULL;
 
-        if (!is_unknown && !is_anonymous) {
+        if (!is_anonymous) {
             if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
                 free(slot_name);
                 free(marker_name);
@@ -35402,7 +35342,6 @@ static bool cg_emit_try_expr(CG *cg,
             !cg_emit_try_expr_catch_binding(cg,
                                             clause,
                                             catch_type,
-                                            is_unknown,
                                             clause->token)) {
             cg->cur_scope = catch_scope->parent;
             scope_pop_free(catch_scope);
@@ -43703,25 +43642,12 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
     }
 }
 
-static bool cg_expr_is_unknown_exception_identifier(CG *cg, const FengExpr *expr) {
-    const Local *local;
-
-    if (expr == NULL || expr->kind != FENG_EXPR_IDENTIFIER) {
-        return false;
-    }
-    local = scope_lookup(cg->cur_scope, expr->as.identifier.data, expr->as.identifier.length);
-    return local != NULL && local->is_unknown_exception;
-}
-
 /* Emit a throw whose managed value and descriptor describe the same object.
  * Concrete value types use ValueBox<T>; string and reference-object payloads
- * retain and transfer their existing managed pointer. */
+ * retain and transfer their existing managed pointer. A semantically checked
+ * bare throw reuses the active anonymous catch exception without a payload. */
 static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
     if (stmt->as.throw_value == NULL) {
-        return cg_fail(cg, stmt->token,
-            "CE0283", "codegen: 'throw' requires a value");
-    }
-    if (cg_expr_is_unknown_exception_identifier(cg, stmt->as.throw_value)) {
         buf_append_cstr(cg->cur_body, "    feng_rethrow();\n");
         return true;
     }

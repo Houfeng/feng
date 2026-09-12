@@ -344,7 +344,7 @@
 | CE0801 | imported binding 不可变赋值约束 | CE0071 | codegen: cannot assign to immutable imported binding '%.*s' | 回到AE |
 | CE0802 | 绑定复合赋值数值类型约束 | CE0072 | codegen: compound assignment requires a numeric binding type | 回到AE |
 | CE0803 | 绑定复合赋值运算符不支持 | CE0073 | codegen: unsupported compound assignment operator | 回到AE |
-| CE0804 | unknown catch 绑定注册失败 | CE0212 | codegen: failed to register unknown catch binding | 回到IE |
+| CE0804 | 已停用：原 unknown catch 绑定注册失败 | CE0212 | codegen: failed to register unknown catch binding | 绑定已移除 |
 | CE0805 | catch 绑定类型缺失 | CE0213 | codegen: missing catch binding type | 回到IE |
 | CE0806 | scalar catch 绑定载荷字段缺失 | CE0214 | codegen: missing scalar catch binding payload field | 回到IE |
 | CE0807 | 索引赋值目标数组类型约束 | CE0237 | codegen: indexed assignment requires an array value | 回到AE |
@@ -449,7 +449,7 @@
 | CE1053 | 循环控制语句上下文约束 | CE0279 | codegen: '%s' outside of loop | 回到AE |
 | CE1054 | 异常载荷类型缺失 | CE0280 | codegen: missing exception payload type | 回到IE |
 | CE1055 | 异常载荷类型不支持 | CE0282 | codegen: unsupported exception payload type | 消解 |
-| CE1056 | throw 值缺失 | CE0283 | codegen: 'throw' requires a value | 回到AE |
+| CE1056 | 已停用：原 throw 值缺失 | CE0283 | codegen: 'throw' requires a value | 空 throw 作用域由 AE1407 检查 |
 | CE1057 | 语句 kind 暂不支持 | CE0286 | codegen: statement kind not yet supported in this iteration | 消解 |
 | CE1058 | reifiable 依赖类型参数替换失败 | CE0290 | codegen: failed to substitute type params in reifiable dep | 回到IE |
 

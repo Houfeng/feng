@@ -269,7 +269,6 @@ open type FengLexer {
       "continue" { FengTokenKind.KeywordContinue }
       "try" { FengTokenKind.KeywordTry }
       "catch" { FengTokenKind.KeywordCatch }
-      "unknown" { FengTokenKind.KeywordUnknown }
       "throw" { FengTokenKind.KeywordThrow }
       "return" { FengTokenKind.KeywordReturn }
       "defer" { FengTokenKind.KeywordDefer }

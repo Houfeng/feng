@@ -29,16 +29,16 @@ try load_config() catch error: string {
 }
 ```
 
-Multiple `catch` clauses are matched in source order. Put concrete type branches first. `catch error: unknown` and an anonymous `catch` are catch-all branches.
+Multiple `catch` clauses are matched in source order. Put concrete type branches first. An anonymous `catch` is the catch-all branch and must be last.
 A `catch` name is an immutable header binding, and the following braced body is a child block that may declare a local
 binding with the same name. Each `catch` clause has an independent header scope, so different clauses may reuse the
 same exception name.
 
-An `unknown` binding can only be rethrown; its fields and methods are not accessible:
+An anonymous `catch` has no exception binding and can rethrow the original exception with `throw;`. See [the exception specification §2](../../../specifications/feng-exception.md#2-throw-语句) for its scope rules:
 
 ```feng
-try run_task() catch error: unknown {
-  throw error;
+try run_task() catch {
+  throw;
 }
 ```
 

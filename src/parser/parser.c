@@ -323,21 +323,17 @@ static bool parser_expect(Parser *parser, FengTokenKind kind, const char *code, 
     return parser_error_current(parser, code, message);
 }
 
+/* Accept ordinary names and, in type positions, the void keyword. */
 static bool token_is_identifier_like(const FengToken *token, bool allow_void) {
     return token->kind == FENG_TOKEN_IDENTIFIER ||
-           (allow_void && (token->kind == FENG_TOKEN_KW_VOID ||
-                           token->kind == FENG_TOKEN_KW_UNKNOWN));
-}
-
-static bool token_is_member_name_like(const FengToken *token) {
-    return token->kind == FENG_TOKEN_IDENTIFIER || token->kind == FENG_TOKEN_KW_UNKNOWN;
+           (allow_void && token->kind == FENG_TOKEN_KW_VOID);
 }
 
 static bool parser_expect_member_name(Parser *parser,
                                       FengSlice *out_name,
                                       const char *code,
                                       const char *message) {
-    if (!token_is_member_name_like(parser_current(parser))) {
+    if (!parser_check(parser, FENG_TOKEN_IDENTIFIER)) {
         return parser_error_current(parser, code, message);
     }
 
@@ -3159,9 +3155,9 @@ static FengExpr *parse_empty_tuple_literal(Parser *parser, FengToken token) {
 
 /* ---------------- if / match shared helpers ---------------- */
 
+/* A match type label starts with a type name or the void keyword. */
 static bool is_type_label_start_token(FengTokenKind kind) {
-    return kind == FENG_TOKEN_IDENTIFIER || kind == FENG_TOKEN_KW_VOID ||
-           kind == FENG_TOKEN_KW_UNKNOWN;
+    return kind == FENG_TOKEN_IDENTIFIER || kind == FENG_TOKEN_KW_VOID;
 }
 
 static FengExpr *parse_match_label_atom(Parser *parser) {
@@ -5152,6 +5148,11 @@ static FengStmt *parse_statement(Parser *parser) {
         stmt = new_stmt(parser, FENG_STMT_THROW, parser_previous_token(parser));
         if (stmt == NULL) {
             return NULL;
+        }
+        /* Bare rethrow has an empty operand. Its catch scope is a semantic
+         * constraint, while the explicit semicolon completes this syntax. */
+        if (parser_match(parser, FENG_TOKEN_SEMICOLON)) {
+            return stmt;
         }
         stmt->as.throw_value = parse_expression(parser);
         if (stmt->as.throw_value == NULL) {

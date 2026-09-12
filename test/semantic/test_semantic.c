@@ -3881,14 +3881,15 @@ static void test_throw_accepts_string_and_managed_type(void) {
     feng_program_free(program);
 }
 
-static void test_catch_unknown_allows_rethrow_only(void) {
+/* An anonymous catch can propagate its original exception without a binding. */
+static void test_anonymous_catch_allows_bare_rethrow(void) {
     const char *source =
         "module demo.main;\n"
         "func parse(): int { return 1; }\n"
         "func run() {\n"
-        "    try parse() catch ex: unknown { throw ex; }\n"
+        "    try parse() catch { throw; }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("catch_unknown_rethrow_ok.f", source);
+    FengProgram *program = parse_program_or_die("anonymous_catch_rethrow_ok.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -3903,14 +3904,15 @@ static void test_catch_unknown_allows_rethrow_only(void) {
     feng_program_free(program);
 }
 
-static void test_catch_unknown_rejects_value_use(void) {
+/* Removing the binding leaves no exception identifier in an anonymous catch. */
+static void test_anonymous_catch_has_no_value_binding(void) {
     const char *source =
         "module demo.main;\n"
         "func parse(): int { return 1; }\n"
         "func run() {\n"
-        "    try parse() catch ex: unknown { ex.message; }\n"
+        "    try parse() catch { ex.message; }\n"
         "}\n";
-    FengProgram *program = parse_program_or_die("catch_unknown_value_use_error.f", source);
+    FengProgram *program = parse_program_or_die("anonymous_catch_value_use_error.f", source);
     const FengProgram *programs[] = {program};
     FengSemanticAnalysis *analysis = NULL;
     FengSemanticError *errors = NULL;
@@ -3918,8 +3920,8 @@ static void test_catch_unknown_rejects_value_use(void) {
 
     ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count >= 1U);
-    ASSERT(strcmp(errors[0].path, "catch_unknown_value_use_error.f") == 0);
-    ASSERT(strstr(errors[0].message, "unknown catch value 'ex' can only be used") != NULL);
+    ASSERT(strcmp(errors[0].path, "anonymous_catch_value_use_error.f") == 0);
+    ASSERT(strstr(errors[0].message, "undefined identifier 'ex'") != NULL);
 
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
@@ -4012,12 +4014,14 @@ static void test_try_expression_rejects_bound_value_result_mismatch(void) {
     feng_program_free(program);
 }
 
-static void test_unknown_type_is_only_valid_in_catch_clause(void) {
+/* The former keyword now follows ordinary undeclared-type diagnostics. */
+static void test_undeclared_unknown_type_uses_name_resolution(void) {
     static const char *const cases[] = {
         "module demo.main;\nfunc run(x: unknown) {}\n",
         "module demo.main;\nfunc run(): unknown { return 1; }\n",
         "module demo.main;\ntype Box { let value: unknown; }\n",
-        "module demo.main;\nfunc run() { let value: unknown = 1; }\n"
+        "module demo.main;\nfunc run() { let value: unknown = 1; }\n",
+        "module demo.main;\nfunc fail(): i32 { throw 1; }\nfunc run() { try fail() catch error: unknown {} }\n"
     };
 
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
@@ -4030,7 +4034,8 @@ static void test_unknown_type_is_only_valid_in_catch_clause(void) {
         ASSERT(!feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
         ASSERT(error_count >= 1U);
         ASSERT(strcmp(errors[0].path, "unknown_type_position_error.f") == 0);
-        ASSERT(strstr(errors[0].message, "type 'unknown' is only valid as a catch clause type") != NULL);
+        ASSERT(strcmp(errors[0].code, "AE1013") == 0);
+        ASSERT(strstr(errors[0].message, "unknown type 'unknown'") != NULL);
 
         feng_semantic_errors_free(errors, error_count);
         feng_program_free(program);
@@ -31972,18 +31977,18 @@ static void test_g16_control_flow_acceptance(void) {
         "}\n");
 }
 
-/* EXC08/EXC10: catch-all clauses are terminal, and an unknown binding is
- * usable only as the complete operand of an original rethrow. */
-static void test_g17_catch_order_and_unknown_diagnostics(void) {
+/* EXC08/EXC10: anonymous catch-all clauses are terminal and do not bind
+ * an exception value for ordinary expression use. */
+static void test_g17_catch_order_and_anonymous_binding_diagnostics(void) {
     assert_stable_semantic_error(
         "G17",
-        "g17_unknown_catch_not_last.ff",
-        "module g17.unknown_catch_not_last;\n"
+        "g17_anonymous_catch_before_anonymous.ff",
+        "module g17.anonymous_catch_before_anonymous;\n"
         "func fail(): i32 { throw 1; return 0; }\n"
         "func run(): void {\n"
         "  try fail()\n"
-        "  catch error: unknown {}\n"
-        "  catch value: i32 {}\n"
+        "  catch {}\n"
+        "  catch {}\n"
         "}\n",
         "AE1406", 5U, 3U, "catch", "must be the last catch clause");
     assert_stable_semantic_error(
@@ -32012,39 +32017,39 @@ static void test_g17_catch_order_and_unknown_diagnostics(void) {
         const char *body;
         unsigned int line;
         unsigned int column;
-    } unknown_use_cases[] = {
+    } anonymous_use_cases[] = {
         {
-            "g17_unknown_binding_initializer.ff",
+            "g17_anonymous_binding_initializer.ff",
             "    let copy = error;\n",
             7U,
             16U
         },
         {
-            "g17_unknown_argument.ff",
+            "g17_anonymous_argument.ff",
             "    consume(error);\n",
             7U,
             13U
         },
         {
-            "g17_unknown_return_value.ff",
+            "g17_anonymous_return_value.ff",
             "    return error;\n",
             7U,
             12U
         },
         {
-            "g17_unknown_member_receiver.ff",
+            "g17_anonymous_member_receiver.ff",
             "    error.message;\n",
             7U,
             5U
         },
         {
-            "g17_unknown_throw_subexpression.ff",
+            "g17_anonymous_throw_subexpression.ff",
             "    throw identity(error);\n",
             7U,
             20U
         },
         {
-            "g17_unknown_binary_operand.ff",
+            "g17_anonymous_binary_operand.ff",
             "    throw error + 1;\n",
             7U,
             11U
@@ -32052,28 +32057,28 @@ static void test_g17_catch_order_and_unknown_diagnostics(void) {
     };
 
     for (size_t index = 0U;
-         index < sizeof(unknown_use_cases) / sizeof(unknown_use_cases[0]);
+         index < sizeof(anonymous_use_cases) / sizeof(anonymous_use_cases[0]);
          ++index) {
         char source[1024];
         int written = snprintf(
             source,
             sizeof(source),
-            "module g17.unknown_use;\n"
+            "module g17.anonymous_use;\n"
             "func fail(): i32 { throw 1; return 0; }\n"
             "func consume(value: string): void {}\n"
             "func identity(value: string): string { return value; }\n"
             "func run(): string {\n"
-            "  try fail() catch error: unknown {\n"
+            "  try fail() catch {\n"
             "%s"
             "  }\n"
             "  return \"done\";\n"
             "}\n",
-            unknown_use_cases[index].body);
+            anonymous_use_cases[index].body);
 
         ASSERT(written >= 0);
         ASSERT((size_t)written < sizeof(source));
         FengProgram *program = parse_program_or_die(
-            unknown_use_cases[index].path, source);
+            anonymous_use_cases[index].path, source);
         const FengProgram *programs[] = {program};
         FengSemanticAnalysis *analysis = NULL;
         FengSemanticError *errors = NULL;
@@ -32091,15 +32096,15 @@ static void test_g17_catch_order_and_unknown_diagnostics(void) {
              ++error_index) {
             const FengSemanticError *error = &errors[error_index];
 
-            if (strcmp(error->code, "AE1404") == 0 &&
-                error->token.line == unknown_use_cases[index].line &&
-                error->token.column == unknown_use_cases[index].column &&
+            if (strcmp(error->code, "AE0001") == 0 &&
+                error->token.line == anonymous_use_cases[index].line &&
+                error->token.column == anonymous_use_cases[index].column &&
                 error->token.length == strlen("error") &&
                 memcmp(error->token.lexeme,
                        "error",
                        error->token.length) == 0 &&
                 strstr(error->message,
-                       "can only be used in 'throw error'") != NULL) {
+                       "undefined identifier 'error'") != NULL) {
                 found = true;
             }
         }
@@ -32155,7 +32160,7 @@ static void test_g17_try_result_presence_diagnostics(void) {
     }
 }
 
-/* EXC10/EXC12: a direct unknown rethrow and a terminal replacement throw are
+/* EXC10/EXC12: an anonymous bare rethrow and a terminal replacement throw are
  * valid terminating catch paths and do not need a result expression. */
 static void test_g17_rethrow_and_terminal_throw_acceptance(void) {
     assert_single_source_semantic_ok(
@@ -32163,11 +32168,101 @@ static void test_g17_rethrow_and_terminal_throw_acceptance(void) {
         "module g17.rethrow_and_terminal_throw_acceptance;\n"
         "func fail(): i32 { throw \"g17\"; return 0; }\n"
         "func rethrow(): void {\n"
-        "  try fail() catch error: unknown { throw error; }\n"
+        "  try fail() catch { throw; }\n"
         "}\n"
         "func replace(): i32 {\n"
         "  return try fail() catch { throw 42; };\n"
         "}\n");
+}
+
+/* Bare rethrow belongs to the nearest anonymous catch in the current
+ * callable. Typed catches, callable boundaries and defer remain restrictive. */
+static void test_bare_rethrow_scope_diagnostics(void) {
+    static const struct {
+        const char *path;
+        const char *body;
+        unsigned int line;
+        unsigned int column;
+        const char *code;
+    } cases[] = {
+        {"bare_throw_outside.ff", "  throw;\n", 5U, 3U, "AE1407"},
+        {"bare_throw_typed.ff",
+         "  try fail() catch error: i32 {\n    throw;\n  }\n",
+         6U, 5U, "AE1407"},
+        {"bare_throw_nested_typed.ff",
+         "  try fail() catch {\n    try fail() catch error: i32 {\n      throw;\n    }\n  }\n",
+         7U, 7U, "AE1407"},
+        {"bare_throw_lambda_boundary.ff",
+         "  try fail() catch {\n    let action: Action = () {\n      throw;\n    };\n    action();\n  }\n",
+         7U, 7U, "AE1407"},
+        {"bare_throw_after_catch.ff",
+         "  try fail() catch {}\n  throw;\n",
+         6U, 3U, "AE1407"},
+        {"bare_throw_protected_expression.ff",
+         "  let value = try if flag {\n    throw;\n  } else { 1; } catch { 2; };\n",
+         6U, 5U, "AE1407"},
+        {"bare_throw_defer.ff",
+         "  try fail() catch {\n    defer {\n      throw;\n    }\n  }\n",
+         7U, 7U, "AE1502"}
+    };
+
+    for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
+        char source[1024];
+        int written = snprintf(source, sizeof(source),
+            "module bare.scope;\n"
+            "spec Action(): void;\n"
+            "func fail(): i32 { throw (i32)42; }\n"
+            "func run(flag: bool): void {\n%s}\n", cases[index].body);
+        ASSERT(written >= 0 && (size_t)written < sizeof(source));
+        assert_stable_semantic_error(
+            "bare-rethrow", cases[index].path, source, cases[index].code,
+            cases[index].line, cases[index].column, "throw",
+            strcmp(cases[index].code, "AE1502") == 0
+                ? "defer block cannot contain 'throw'"
+                : "bare throw is only valid inside an anonymous catch clause");
+    }
+}
+
+/* Ordinary blocks preserve catch context, each callable owns its context,
+ * and the spelling unknown is available to ordinary value and type names. */
+static void test_bare_rethrow_scopes_and_unknown_identifier_acceptance(void) {
+    assert_single_source_semantic_ok(
+        "bare_throw_scopes.ff",
+        "module bare.scopes;\n"
+        "spec Action(): void;\n"
+        "func fail(): i32 { throw (i32)42; }\n"
+        "func blocks(flag: bool): void {\n"
+        "  try fail() catch {\n"
+        "    if flag { { throw; } }\n"
+        "    while flag { throw; }\n"
+        "    let action: Action = () { try fail() catch { throw; } };\n"
+        "    try 1 catch error: i32 { throw error; }\n"
+        "    throw;\n"
+        "  }\n"
+        "}\n"
+        "func result(): i32 { return try fail() catch { throw; }; }\n"
+        "func typed(): void {\n"
+        "  try fail() catch error: i32 {\n"
+        "    let action: Action = () { try fail() catch { throw; } };\n"
+        "    throw error;\n"
+        "  }\n"
+        "}\n"
+        "type Relay { func run(): i32 { return try fail() catch { throw; }; } }\n");
+    assert_single_source_semantic_ok(
+        "unknown_ordinary_names.ff",
+        "module bare.names;\n"
+        "type unknown { let code: i32; }\n"
+        "func identity(value: unknown): unknown { return value; }\n"
+        "func run(): i32 { let unknown: i32 = 42; return unknown; }\n"
+        "func typed(): void {\n"
+        "  try identity(unknown { code: 42 }) catch value: unknown { throw value; }\n"
+        "}\n");
+    assert_single_source_semantic_error_contains(
+        "bare_throw_abi_escape.ff",
+        "module bare.abi;\n"
+        "func fail(): i32 { throw (i32)42; }\n"
+        "@abi func run(): i32 { return try fail() catch { throw; }; }\n",
+        "uncaught exceptions must not cross the @abi ABI boundary");
 }
 
 /* EXC14/EXC16/EXC20-EXC22: return exits the owning callable from value
@@ -35368,9 +35463,11 @@ int main(void) {
     test_g18_explicit_cast_diagnostics();
     test_g18_construction_and_literal_type_diagnostics();
     test_g18_instance_static_surface_diagnostics();
-    test_g17_catch_order_and_unknown_diagnostics();
+    test_g17_catch_order_and_anonymous_binding_diagnostics();
     test_g17_try_result_presence_diagnostics();
     test_g17_rethrow_and_terminal_throw_acceptance();
+    test_bare_rethrow_scope_diagnostics();
+    test_bare_rethrow_scopes_and_unknown_identifier_acceptance();
     test_g17_expression_return_path_acceptance();
     test_g17_try_expression_nested_return_path_acceptance();
     test_g17_expression_result_path_diagnostics();
@@ -35717,13 +35814,13 @@ int main(void) {
     test_throw_rejects_pointer_value();
     test_throw_rejects_abi_type_value();
     test_throw_accepts_string_and_managed_type();
-    test_catch_unknown_allows_rethrow_only();
-    test_catch_unknown_rejects_value_use();
+    test_anonymous_catch_allows_bare_rethrow();
+    test_anonymous_catch_has_no_value_binding();
     test_try_expression_catch_result_can_use_bound_value();
     test_try_without_catch_is_rejected();
     test_try_catch_statement_allows_empty_catch();
     test_try_expression_rejects_bound_value_result_mismatch();
-    test_unknown_type_is_only_valid_in_catch_clause();
+    test_undeclared_unknown_type_uses_name_resolution();
     test_throw_rejects_callable_values();
     test_throw_allows_spec_values();
     test_catch_rejects_non_exception_types();

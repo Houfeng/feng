@@ -481,11 +481,9 @@ typedef struct ResolveContext {
     size_t *error_capacity;
     bool current_callable_has_escaping_exception;
     size_t exception_capture_depth;
-    size_t unknown_type_depth;
-    /* Exact identifier expression permitted as the operand of an original
-     * `throw error` rethrow. An `unknown` catch binding nested anywhere inside
-     * a larger expression remains an ordinary, and therefore invalid, use. */
-    const FengExpr *allowed_unknown_rethrow_expr;
+    /* Whether the nearest catch in this callable is anonymous. Ordinary
+     * blocks preserve it; typed catches and callable boundaries replace it. */
+    bool current_catch_is_anonymous;
     /* Number of nested `while`/`for` loop bodies currently being resolved
      * inside the active callable scope. Used to enforce that `break` and
      * `continue` can only appear inside a loop body. Reset to 0 across
@@ -652,7 +650,6 @@ static bool path_equals(const FengSlice *left,
 static char *format_module_name(const FengSlice *segments, size_t segment_count);
 static bool resolve_type_ref(ResolveContext *context, const FengTypeRef *type_ref, bool allow_void);
 static bool type_ref_is_void(const FengTypeRef *type_ref);
-static bool type_ref_is_unknown(const FengTypeRef *type_ref);
 static bool type_decl_is_abi_stable(const ResolveContext *context,
                                     const FengDecl *decl,
                                     const AbiTrace *trace);
@@ -1275,18 +1272,6 @@ static bool type_ref_is_void(const FengTypeRef *type_ref) {
            type_ref->kind == FENG_TYPE_REF_NAMED &&
            type_ref->as.named.segment_count == 1U &&
            slice_equals_cstr(type_ref->as.named.segments[0], "void");
-}
-
-static bool type_ref_is_unknown(const FengTypeRef *type_ref) {
-    return type_ref != NULL &&
-           type_ref->kind == FENG_TYPE_REF_NAMED &&
-           type_ref->as.named.segment_count == 1U &&
-           slice_equals_cstr(type_ref->as.named.segments[0], "unknown");
-}
-
-static bool inferred_expr_type_is_unknown_type_ref(InferredExprType type) {
-    return type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF &&
-           type_ref_is_unknown(type.type_ref);
 }
 
 static bool type_ref_equals(const FengTypeRef *left, const FengTypeRef *right) {
@@ -11483,13 +11468,11 @@ static bool callable_expr_is_true_literal(const FengExpr *expr) {
     return expr != NULL && expr->kind == FENG_EXPR_BOOL && expr->as.boolean;
 }
 
-/* Return true for the two catch-all forms: anonymous `catch { ... }` and
- * bound `catch error: unknown { ... }`. Semantic validation separately keeps
- * either form last in its catch sequence. */
+/* Anonymous catches match every exception. Semantic validation separately
+ * keeps the catch-all clause last in its catch sequence. */
 static bool callable_catch_clause_matches_all(
     const FengTryCatchClause *clause) {
-    return clause != NULL &&
-           (clause->type == NULL || type_ref_is_unknown(clause->type));
+    return clause != NULL && clause->type == NULL && clause->name.length == 0U;
 }
 
 /* Merge the outcomes of one expression. Calls conservatively expose both a
@@ -14663,6 +14646,7 @@ typedef struct LambdaCallableContext {
     bool saw_return;
     bool has_escaping_exception;
     size_t exception_capture_depth;
+    bool current_catch_is_anonymous;
     size_t loop_depth;
     ExpressionBranchBoundary expression_branch_boundary;
     size_t defer_depth;
@@ -14681,6 +14665,7 @@ static void lambda_enter_callable_context(ResolveContext *context,
     saved->saw_return = context->current_callable_saw_return;
     saved->has_escaping_exception = context->current_callable_has_escaping_exception;
     saved->exception_capture_depth = context->exception_capture_depth;
+    saved->current_catch_is_anonymous = context->current_catch_is_anonymous;
     saved->loop_depth = context->loop_depth;
     saved->expression_branch_boundary = context->expression_branch_boundary;
     saved->defer_depth = context->defer_depth;
@@ -14701,6 +14686,7 @@ static void lambda_enter_callable_context(ResolveContext *context,
     context->current_callable_saw_return = false;
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
+    context->current_catch_is_anonymous = false;
     context->loop_depth = 0U;
     context->expression_branch_boundary = EXPRESSION_BRANCH_BOUNDARY_NONE;
     context->defer_depth = 0U;
@@ -14715,6 +14701,7 @@ static void lambda_leave_callable_context(ResolveContext *context,
     context->current_callable_saw_return = saved->saw_return;
     context->current_callable_has_escaping_exception = saved->has_escaping_exception;
     context->exception_capture_depth = saved->exception_capture_depth;
+    context->current_catch_is_anonymous = saved->current_catch_is_anonymous;
     context->loop_depth = saved->loop_depth;
     context->expression_branch_boundary = saved->expression_branch_boundary;
     context->defer_depth = saved->defer_depth;
@@ -16220,10 +16207,6 @@ static bool type_ref_is_exception_payload(const ResolveContext *context,
     if (type_ref == NULL) {
         return true;
     }
-    if (type_ref_is_unknown(type_ref)) {
-        return true;
-    }
-
     switch (type_ref->kind) {
         case FENG_TYPE_REF_POINTER:
             if (out_reason != NULL) {
@@ -16322,9 +16305,20 @@ static bool inferred_expr_type_is_exception_payload(const ResolveContext *contex
     return true;
 }
 
+/* Validate a concrete throw payload or the lexical scope of a bare rethrow. */
 static bool validate_throw_stmt(ResolveContext *context, const FengStmt *stmt) {
     InferredExprType throw_type;
     const char *reason = NULL;
+
+    if (stmt->as.throw_value == NULL) {
+        if (!context->current_catch_is_anonymous) {
+            return resolver_append_error(
+                context,
+                stmt->token,
+                "AE1407", duplicate_cstr("bare throw is only valid inside an anonymous catch clause"));
+        }
+        return true;
+    }
 
     throw_type = infer_expr_type(context, stmt != NULL ? stmt->as.throw_value : NULL);
 
@@ -30664,16 +30658,6 @@ static bool resolve_named_type_ref(ResolveContext *context,
     /* Normal named type reference (no type arguments).
      * §6.4: Precise (name, arity=0) lookup; AE0006 if generic target exists. */
     if (segment_count == 1U) {
-        if (type_ref_is_unknown(type_ref)) {
-            if (context->unknown_type_depth > 0U) {
-                return true;
-            }
-            return resolver_append_error(
-                context,
-                type_ref->token,
-                "AE1403", format_message("type 'unknown' is only valid as a catch clause type"));
-        }
-
         if (is_builtin_type_name(name)) {
             if (!allow_void && slice_equals_cstr(name, "void")) {
                 return resolver_append_error(
@@ -31235,17 +31219,6 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                        local->mutability,
                                                        local_scope)) {
                         return false;
-                    }
-                    if (inferred_expr_type_is_unknown_type_ref(local->type) &&
-                        context->allowed_unknown_rethrow_expr != expr) {
-                        return resolver_append_error(
-                            context,
-                            expr->token,
-                            "AE1404", format_message("unknown catch value '%.*s' can only be used in 'throw %.*s'",
-                                           (int)expr->as.identifier.length,
-                                           expr->as.identifier.data,
-                                           (int)expr->as.identifier.length,
-                                           expr->as.identifier.data));
                     }
                     return true;
                 }
@@ -32055,22 +32028,7 @@ static bool resolve_block(ResolveContext *context, const FengBlock *block, bool 
     return ok;
 }
 
-static bool resolve_type_ref_with_unknown_context(ResolveContext *context,
-                                                  const FengTypeRef *type_ref) {
-    size_t previous_unknown_depth;
-    bool ok;
-
-    if (context == NULL) {
-        return true;
-    }
-
-    previous_unknown_depth = context->unknown_type_depth;
-    context->unknown_type_depth += 1U;
-    ok = resolve_type_ref(context, type_ref, false);
-    context->unknown_type_depth = previous_unknown_depth;
-    return ok;
-}
-
+/* Resolve the protected expression and each independent catch scope. */
 static bool resolve_try_expr(ResolveContext *context,
                              const FengExpr *expr,
                              bool allow_self,
@@ -32107,17 +32065,16 @@ static bool resolve_try_expr(ResolveContext *context,
         InferredExprType catch_type = inferred_expr_type_from_type_ref(clause->type);
         const char *catch_reason = NULL;
 
-        if (!resolve_type_ref_with_unknown_context(context, clause->type)) {
+        if (!resolve_type_ref(context, clause->type, false)) {
             return false;
         }
-        if ((type_ref_is_unknown(clause->type) || is_anonymous) &&
-            clause_index + 1U < expr->as.try_expr.clause_count) {
+        if (is_anonymous && clause_index + 1U < expr->as.try_expr.clause_count) {
             return resolver_append_error(
                 context,
                 clause->token,
                 "AE1406", format_message("catch clause matching any exception must be the last catch clause"));
         }
-        if (!is_anonymous && !type_ref_is_unknown(clause->type) &&
+        if (!is_anonymous &&
             !type_ref_is_exception_payload(context, clause->type, &catch_reason)) {
             char *type_name = format_type_ref_name(clause->type);
             char *message = format_message(
@@ -32133,7 +32090,9 @@ static bool resolve_try_expr(ResolveContext *context,
         }
         {
             ExpressionBranchBoundaryState boundary_state;
+            bool previous_catch_is_anonymous = context->current_catch_is_anonymous;
 
+            context->current_catch_is_anonymous = is_anonymous;
             if (result_required) {
                 enter_expression_branch_boundary(
                     context,
@@ -32168,6 +32127,7 @@ static bool resolve_try_expr(ResolveContext *context,
             if (result_required) {
                 leave_expression_branch_boundary(context, &boundary_state);
             }
+            context->current_catch_is_anonymous = previous_catch_is_anonymous;
         }
         resolver_pop_scope(context);
         if (!ok) {
@@ -32176,25 +32136,6 @@ static bool resolve_try_expr(ResolveContext *context,
     }
 
     return validate_try_expr(context, expr, result_required);
-}
-
-static bool resolve_throw_value_expr(ResolveContext *context,
-                                     const FengExpr *expr,
-                                     bool allow_self) {
-    const FengExpr *previous_allowed_unknown_rethrow_expr;
-    bool ok;
-
-    if (context == NULL) {
-        return true;
-    }
-
-    previous_allowed_unknown_rethrow_expr =
-        context->allowed_unknown_rethrow_expr;
-    context->allowed_unknown_rethrow_expr = expr;
-    ok = resolve_expr(context, expr, allow_self);
-    context->allowed_unknown_rethrow_expr =
-        previous_allowed_unknown_rethrow_expr;
-    return ok;
 }
 
 static bool resolve_block_contents(ResolveContext *context,
@@ -32806,7 +32747,7 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
                     stmt->token,
                     "AE1502", duplicate_cstr("defer block cannot contain 'throw'"));
             }
-            if (!resolve_throw_value_expr(context, stmt->as.throw_value, allow_self)) {
+            if (!resolve_expr(context, stmt->as.throw_value, allow_self)) {
                 return false;
             }
             if (!validate_throw_stmt(context, stmt)) {
@@ -32892,6 +32833,7 @@ static bool resolve_callable(ResolveContext *context,
     bool previous_callable_has_escaping_exception =
         context->current_callable_has_escaping_exception;
     size_t previous_exception_capture_depth = context->exception_capture_depth;
+    bool previous_catch_is_anonymous = context->current_catch_is_anonymous;
     size_t previous_loop_depth = context->loop_depth;
     ExpressionBranchBoundary previous_expression_branch_boundary =
         context->expression_branch_boundary;
@@ -32936,6 +32878,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = false;
     context->current_callable_has_escaping_exception = false;
     context->exception_capture_depth = 0U;
+    context->current_catch_is_anonymous = false;
     context->loop_depth = 0U;
     context->expression_branch_boundary = EXPRESSION_BRANCH_BOUNDARY_NONE;
     context->defer_depth = 0U;
@@ -32950,6 +32893,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
         context->defer_depth = previous_defer_depth;
@@ -32965,6 +32909,7 @@ static bool resolve_callable(ResolveContext *context,
             context->current_callable_saw_return = previous_callable_saw_return;
             context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
             context->exception_capture_depth = previous_exception_capture_depth;
+            context->current_catch_is_anonymous = previous_catch_is_anonymous;
             context->loop_depth = previous_loop_depth;
             context->expression_branch_boundary = previous_expression_branch_boundary;
             context->defer_depth = previous_defer_depth;
@@ -32980,6 +32925,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
         context->defer_depth = previous_defer_depth;
@@ -33001,6 +32947,7 @@ static bool resolve_callable(ResolveContext *context,
         context->current_callable_saw_return = previous_callable_saw_return;
         context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
         context->exception_capture_depth = previous_exception_capture_depth;
+        context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
         context->defer_depth = previous_defer_depth;
@@ -33080,6 +33027,7 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_saw_return = previous_callable_saw_return;
     context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
     context->exception_capture_depth = previous_exception_capture_depth;
+    context->current_catch_is_anonymous = previous_catch_is_anonymous;
     context->loop_depth = previous_loop_depth;
     context->expression_branch_boundary = previous_expression_branch_boundary;
     context->defer_depth = previous_defer_depth;

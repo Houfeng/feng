@@ -201,14 +201,14 @@ func test_multiple_catch_clauses(): bool {
   return catch_type == "int";
 }
 
-func test_catch_unknown_fallback(): bool {
-  var unknown_caught = false;
+func test_anonymous_catch_fallback(): bool {
+  var fallback_caught = false;
   try throw_error() catch ex: int {
     // 不匹配
-  } catch ex: unknown {
-    unknown_caught = true;
+  } catch {
+    fallback_caught = true;
   }
-  return unknown_caught;
+  return fallback_caught;
 }
 
 func test_anonymous_catch(): bool {
@@ -276,8 +276,8 @@ open func test_exception() {
       assert(test_multiple_catch_clauses(), "multiple catch clauses");
     });
 
-    test("catch unknown fallback", () {
-      assert(test_catch_unknown_fallback(), "catch unknown fallback");
+    test("anonymous catch fallback", () {
+      assert(test_anonymous_catch_fallback(), "anonymous catch fallback");
     });
 
     test("anonymous catch", () {

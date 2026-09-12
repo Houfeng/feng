@@ -439,7 +439,7 @@ struct FengStmt {
             const FengTypeRef *iter_result_type_ref;
         } for_stmt;
         FengExpr *return_value;
-        FengExpr *throw_value;
+        FengExpr *throw_value; /* NULL represents the explicit bare throw; form. */
         FengBlock *defer_block;  /* defer { ... } 体；复用 FengBlock 结构 */
     } as;
 };

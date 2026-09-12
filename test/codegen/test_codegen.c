@@ -12696,23 +12696,23 @@ static void test_exception_payload_descriptor_alignment_codegen(void) {
     feng_program_free(program);
 }
 
-/* An unknown binding is the original unwind object, so each direct rethrow
- * must call feng_rethrow without allocating or lowering a replacement throw. */
-static void test_unknown_original_rethrow_codegen(void) {
+/* Bare rethrows must reuse the original unwind object without creating
+ * an exception binding, allocating, or lowering a replacement throw. */
+static void test_anonymous_original_rethrow_codegen(void) {
     static const char *kSource =
         "module feng.codegen.original_rethrow;\n"
         "func throwI32() { throw (i32)42; }\n"
         "func rethrowOnce() {\n"
-        "  try throwI32() catch first: unknown { throw first; }\n"
+        "  try throwI32() catch { throw; }\n"
         "}\n"
         "func rethrowTwice() {\n"
-        "  try rethrowOnce() catch second: unknown { throw second; }\n"
+        "  try rethrowOnce() catch { throw; }\n"
         "}\n"
         "func catches() {\n"
         "  try rethrowTwice() catch ex: i32 {}\n"
         "}\n";
     FengProgram *program = parse_or_die(
-        kSource, "tests/unknown_original_rethrow.ff");
+        kSource, "tests/anonymous_original_rethrow.ff");
     const FengProgram *programs[1] = {program};
     FengSemanticError *errors = NULL;
     size_t error_count = 0U;
@@ -12735,10 +12735,10 @@ static void test_unknown_original_rethrow_codegen(void) {
                                      &cgerr));
     ASSERT(out.c_source != NULL);
 
-    ASSERT(strstr(out.c_source,
-                  "_l_first_0 = feng_caught_value();\n    feng_rethrow();") != NULL);
-    ASSERT(strstr(out.c_source,
-                  "_l_second_0 = feng_caught_value();\n    feng_rethrow();") != NULL);
+    ASSERT(count_substr(out.c_source,
+                        " == 0) {\n    feng_rethrow();") == 2U);
+    /* Only the outer concrete i32 catch reads a payload binding. */
+    ASSERT(count_substr(out.c_source, "feng_caught_value()") == 1U);
     ASSERT(count_substr(out.c_source, "feng_throw((void *)") == 1U);
     ASSERT(count_substr(out.c_source,
                         "feng_object_new(&feng_value_box_i32_descriptor)") == 1U);
@@ -17584,7 +17584,7 @@ int main(void) {
     test_try_catch_return_codegen();
     test_g17_expression_branch_exit_codegen();
     test_exception_payload_descriptor_alignment_codegen();
-    test_unknown_original_rethrow_codegen();
+    test_anonymous_original_rethrow_codegen();
     test_generic_try_body_reified_storage_codegen();
     test_generic_loop_reified_storage_codegen();
     test_generic_iterator_fixed_storage_reified_cleanup_codegen();

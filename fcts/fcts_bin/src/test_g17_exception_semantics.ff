@@ -217,10 +217,10 @@ func g17ConcreteRethrowPreservesValue(): bool {
   return caught;
 }
 
-/** Rethrow the original exception object from an unknown catch. */
+/** Rethrow the original exception object from an anonymous catch. */
 func g17RethrowOriginalException(): void {
-  try g17ExceptionFunctionMiddle() catch error: unknown {
-    throw error;
+  try g17ExceptionFunctionMiddle() catch {
+    throw;
   }
 }
 
@@ -398,6 +398,29 @@ func g17InferredValueBranchReturn(stop: bool) {
   return value;
 }
 
+/** Cleanup trace for original rethrow across nested ordinary catch blocks. */
+var g17BareRethrowCleanupLog: string = "";
+
+/** Rethrow after registering cleanup at block, catch and function scope. */
+func g17BareRethrowWithCleanup(): void {
+  defer { g17BareRethrowCleanupLog = g17BareRethrowCleanupLog + "function;"; }
+  try g17ExceptionFunctionLeaf() catch {
+    defer { g17BareRethrowCleanupLog = g17BareRethrowCleanupLog + "catch;"; }
+    {
+      defer { g17BareRethrowCleanupLog = g17BareRethrowCleanupLog + "block;"; }
+      throw;
+    }
+  }
+}
+
+/** Method boundary used to exercise a bare rethrow in a value-form catch. */
+type G17AnonymousRethrowRelay {
+  /** Preserve the original exception while the method has an int result. */
+  func run(): int {
+    return try g17ExceptionFunctionLeaf() catch { throw; };
+  }
+}
+
 /** G17 exception syntax, branch, catch, and propagation behavior coverage. */
 open func test_g17_exception_semantics(): void {
   describe("G17 exception semantics", () {
@@ -443,9 +466,36 @@ open func test_g17_exception_semantics(): void {
              "the outer string catch receives the concrete payload");
     });
 
-    test("unknown rethrow preserves the original type and value", () {
+    test("anonymous rethrow preserves the original type and value", () {
       assert(g17OriginalRethrowPreservesValue(),
              "the outer string catch receives the original payload");
+    });
+
+    test("bare rethrow runs nested cleanup exactly once in reverse order", () {
+      g17BareRethrowCleanupLog = "";
+      var caught = false;
+      try g17BareRethrowWithCleanup() catch error: string {
+        caught = error == "function-chain";
+      }
+      assert(caught && g17BareRethrowCleanupLog == "block;catch;function;",
+             "original propagation preserves the payload and drains each defer once");
+    });
+
+    test("methods and Lambdas own anonymous rethrows in value expressions", () {
+      let relay = G17AnonymousRethrowRelay {};
+      let reader: G17ExceptionReader = () {
+        return try g17ExceptionFunctionLeaf() catch { throw; };
+      };
+      var methodCaught = false;
+      var lambdaCaught = false;
+      try relay.run() catch error: string {
+        methodCaught = error == "function-chain";
+      }
+      try reader() catch error: string {
+        lambdaCaught = error == "function-chain";
+      }
+      assert(methodCaught && lambdaCaught,
+             "each callable rethrows only its own anonymous catch exception");
     });
 
     test("if-expression return exits the owning function", () {

@@ -113,7 +113,7 @@ func lexer_keywords_exception() {
   let tokens = collectNonTrivia("try catch unknown throw return defer void");
   check(tokens[0].kind == FengTokenKind.KeywordTry, "lexer/kw-try");
   check(tokens[1].kind == FengTokenKind.KeywordCatch, "lexer/kw-catch");
-  check(tokens[2].kind == FengTokenKind.KeywordUnknown, "lexer/kw-unknown");
+  check(tokens[2].kind == FengTokenKind.Identifier, "lexer/unknown-identifier");
   check(tokens[3].kind == FengTokenKind.KeywordThrow, "lexer/kw-throw");
   check(tokens[4].kind == FengTokenKind.KeywordReturn, "lexer/kw-return");
   check(tokens[5].kind == FengTokenKind.KeywordDefer, "lexer/kw-defer");

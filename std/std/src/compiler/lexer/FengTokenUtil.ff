@@ -102,7 +102,6 @@ open type FengTokenUtil {
       FengTokenKind.KeywordContinue { "KeywordContinue" }
       FengTokenKind.KeywordTry { "KeywordTry" }
       FengTokenKind.KeywordCatch { "KeywordCatch" }
-      FengTokenKind.KeywordUnknown { "KeywordUnknown" }
       FengTokenKind.KeywordThrow { "KeywordThrow" }
       FengTokenKind.KeywordReturn { "KeywordReturn" }
       FengTokenKind.KeywordDefer { "KeywordDefer" }

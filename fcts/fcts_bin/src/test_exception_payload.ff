@@ -3,7 +3,7 @@ module fcts_bin;
 import std.test;
 import fcts_lib.test;
 
-/** Callable used to drive one payload through a cross-function unknown catch. */
+/** Callable used to drive one payload through a cross-function anonymous catch. */
 spec ExceptionPayloadThrowAction(): void;
 
 /** First nominal enum exception identity. */
@@ -218,27 +218,27 @@ func throwExceptionPayloadAggregate(): void {
 }
 
 /** Rethrow the current aggregate exception without replacing its identity. */
-func rethrowUnknownExceptionPayloadAggregate(): void {
-  try throwExceptionPayloadAggregate() catch error: unknown {
-    throw error;
+func rethrowAnonymousExceptionPayloadAggregate(): void {
+  try throwExceptionPayloadAggregate() catch {
+    throw;
   }
 }
 
-/** Rethrow any concrete payload through one separate unknown-catch frame. */
-func rethrowUnknownExceptionPayload(
+/** Rethrow any concrete payload through one separate anonymous-catch frame. */
+func rethrowAnonymousExceptionPayload(
   action: ExceptionPayloadThrowAction
 ): void {
-  try action() catch error: unknown {
-    throw error;
+  try action() catch {
+    throw;
   }
 }
 
 /** Rethrow the same concrete payload through two separate catch frames. */
-func rethrowUnknownExceptionPayloadTwice(
+func rethrowAnonymousExceptionPayloadTwice(
   action: ExceptionPayloadThrowAction
 ): void {
-  try rethrowUnknownExceptionPayload(action) catch error: unknown {
-    throw error;
+  try rethrowAnonymousExceptionPayload(action) catch {
+    throw;
   }
 }
 
@@ -402,67 +402,67 @@ open func test_exception_payload(): void {
       var matched: int = 0;
       var wrong = false;
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadBool(true); }
       )
       catch error: i8 { wrong = true; }
       catch error: bool { if error { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadI8((i8)-8); }
       )
       catch error: bool { wrong = true; }
       catch error: i8 { if error == (i8)-8 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadI16((i16)-16); }
       )
       catch error: i8 { wrong = true; }
       catch error: i16 { if error == (i16)-16 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadI32((i32)-32); }
       )
       catch error: i16 { wrong = true; }
       catch error: i32 { if error == (i32)-32 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadI64((i64)-64); }
       )
       catch error: i32 { wrong = true; }
       catch error: i64 { if error == (i64)-64 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadU8((u8)8); }
       )
       catch error: i8 { wrong = true; }
       catch error: u8 { if error == (u8)8 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadU16((u16)16); }
       )
       catch error: u8 { wrong = true; }
       catch error: u16 { if error == (u16)16 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadU32((u32)32); }
       )
       catch error: u16 { wrong = true; }
       catch error: u32 { if error == (u32)32 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadU64((u64)64); }
       )
       catch error: u32 { wrong = true; }
       catch error: u64 { if error == (u64)64 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadF32((f32)3.25); }
       )
       catch error: f64 { wrong = true; }
       catch error: f32 { if error == (f32)3.25 { matched += 1; } }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadF64((f64)6.5); }
       )
       catch error: f32 { wrong = true; }
@@ -477,13 +477,13 @@ open func test_exception_payload(): void {
       var entityCaught = false;
       var wrong = false;
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadString("rethrown-string"); }
       )
       catch error: bool { wrong = true; }
       catch error: string { stringCaught = error == "rethrown-string"; }
 
-      try rethrowUnknownExceptionPayloadTwice(
+      try rethrowAnonymousExceptionPayloadTwice(
         () { throwExceptionPayloadEntity(); }
       )
       catch error: ExceptionPayloadValueA { wrong = true; }
@@ -500,7 +500,7 @@ open func test_exception_payload(): void {
       var publicCaught = false;
       var wrong = false;
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () {
           throwExceptionPayloadStatusA(ExceptionPayloadStatusA.Ready);
         }
@@ -511,7 +511,7 @@ open func test_exception_payload(): void {
         localCaught = error == ExceptionPayloadStatusA.Ready;
       }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () {
           throwLibExceptionPayloadStatus(LibExceptionPayloadStatus.Ready);
         }
@@ -532,7 +532,7 @@ open func test_exception_payload(): void {
       var abiValueCaught = false;
       var wrong = false;
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadTupleA(); }
       )
       catch error: ExceptionPayloadTupleB { wrong = true; }
@@ -540,7 +540,7 @@ open func test_exception_payload(): void {
         tupleCaught = error.item1 == (i32)20 && error.item2 == (i32)22;
       }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadValueA(); }
       )
       catch error: ExceptionPayloadValueB { wrong = true; }
@@ -548,7 +548,7 @@ open func test_exception_payload(): void {
         valueCaught = error.code == (i32)42;
       }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadGenericValue(); }
       )
       catch error: ExceptionPayloadGenericValue<i32> { wrong = true; }
@@ -556,7 +556,7 @@ open func test_exception_payload(): void {
         genericValueCaught = error.marker == 32 && error.payload == "generic";
       }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadAbiValue(); }
       )
       catch error: ExceptionPayloadAbiValueB { wrong = true; }
@@ -574,7 +574,7 @@ open func test_exception_payload(): void {
       var abiEntityCaught = false;
       var wrong = false;
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadGenericEntity(); }
       )
       catch error: ExceptionPayloadGenericEntity<i64> { wrong = true; }
@@ -582,7 +582,7 @@ open func test_exception_payload(): void {
         genericEntityCaught = error.marker == 31 && error.payload == (i32)1;
       }
 
-      try rethrowUnknownExceptionPayload(
+      try rethrowAnonymousExceptionPayload(
         () { throwExceptionPayloadAbiEntity(); }
       )
       catch error: ExceptionPayloadAbiEntityB { wrong = true; }
@@ -594,10 +594,10 @@ open func test_exception_payload(): void {
              "rethrow preserves generic and ABI managed descriptors");
     });
 
-    test("aggregate value catch and unknown rethrow release exactly once", () {
+    test("aggregate value catch and anonymous rethrow release exactly once", () {
       ExceptionPayloadResource.resetCounts();
       var caught = false;
-      try rethrowUnknownExceptionPayloadAggregate()
+      try rethrowAnonymousExceptionPayloadAggregate()
       catch error: ExceptionPayloadValueA {
         assert(false, "wrong value descriptor must not catch aggregate payload");
       }

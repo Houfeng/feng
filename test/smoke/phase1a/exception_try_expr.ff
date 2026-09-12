@@ -60,9 +60,9 @@ func catch_order(): string {
     return value;
 }
 
-func unknown_rethrow(): string {
-    let value = try (try throw_text() catch ex: unknown {
-        throw ex;
+func anonymous_rethrow(): string {
+    let value = try (try throw_text() catch {
+        throw;
     }) catch ex: string {
         "unknown-rethrown";
     };
@@ -80,6 +80,6 @@ func main(args: string[]) {
     puts(&catch_string());
     puts(&catch_scalar());
     puts(&catch_order());
-    puts(&unknown_rethrow());
+    puts(&anonymous_rethrow());
     puts(&auto_upthrow());
 }

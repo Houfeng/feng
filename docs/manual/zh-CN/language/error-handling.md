@@ -28,15 +28,15 @@ try load_config() catch error: string {
 }
 ```
 
-多个 `catch` 按书写顺序匹配。具体类型分支应写在前面，`catch error: unknown` 或匿名 `catch` 是兜底分支。
+多个 `catch` 按书写顺序匹配。具体类型分支应写在前面，匿名 `catch` 是兜底分支，必须放在最后。
 `catch` 名称是不可重新赋值的头部绑定，后面的花括号是子块；子块可以声明同名局部绑定。每个
 `catch` 子句的头部作用域彼此独立，因此不同子句可以复用同一异常名称。
 
-`unknown` 绑定只能重新抛出，不能访问字段或调用方法：
+匿名 `catch` 不绑定异常值，可以用 `throw;` 原样重抛。适用范围见[异常规范 §2](../../../specifications/feng-exception.md#2-throw-语句)：
 
 ```feng
-try run_task() catch error: unknown {
-  throw error;
+try run_task() catch {
+  throw;
 }
 ```
 

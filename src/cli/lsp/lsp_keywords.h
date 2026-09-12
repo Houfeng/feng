@@ -59,7 +59,7 @@ static const LspKwItem TOP_DECL_KWS[] = {
     { "as",            "import alias",            NULL },
 };
 
-/* TOP_BIND: top-level binding init expression (17 items). */
+/* TOP_BIND: top-level binding init expression (16 items). */
 static const LspKwItem TOP_BIND_KWS[] = {
     { "let",     "immutable binding",   "let ${1:name}: ${2:type} = ${0:value}" },
     { "var",     "mutable binding",     "var ${1:name}: ${2:type} = ${0:value}" },
@@ -76,7 +76,6 @@ static const LspKwItem TOP_BIND_KWS[] = {
     { "in",      "for/in keyword",      NULL },
     { "try",     "exception handling",  NULL },
     { "catch",   "exception handler",   NULL },
-    { "unknown", "unknown value",       NULL },
     { "void",    "void type",           NULL },
 };
 
@@ -90,7 +89,7 @@ static const LspKwItem MEMBER_KWS[] = {
     { "seal",   "visibility modifier", NULL },
 };
 
-/* BODY: inside function/method body, statement position (19 items). */
+/* BODY: inside function/method body, statement position (18 items). */
 static const LspKwItem BODY_KWS[] = {
     { "let",      "local immutable binding", "let ${1:name}: ${2:type} = ${0:value}" },
     { "var",      "local mutable binding",   "var ${1:name}: ${2:type} = ${0:value}" },
@@ -109,7 +108,6 @@ static const LspKwItem BODY_KWS[] = {
     { "try",      "exception handling",      "try {\n\t$1\n} catch ${2:err} {\n\t$0\n}" },
     { "catch",    "exception handler",       NULL },
     { "defer",    "deferred execution",      "defer {\n\t$0\n}" },
-    { "unknown",  "unknown value",           NULL },
     { "void",     "void type",               NULL },
 };
 

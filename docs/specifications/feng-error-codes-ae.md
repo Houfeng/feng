@@ -10,7 +10,7 @@
 - 分配新码前必须先检索现有码；上述三点均一致时必须复用，不能仅因声明种类、语法入口、显式／推导或文案模板不同而拆码。
 - 只有现有码无法表达且上述三点至少一项确实不同，才可提出新码；新码必须先在本文件完成归属和 Review，再进入实现。
 - 历史码并入现有码后，产品代码停止产生历史码；历史交付记录可以保留原编号，但必须明确其为迁移前结果。
-- 例：`throw statement requires a non-void expression` 与 `type 'unknown' is only valid as a catch clause type` 不同类，必须拆分新错误码。
+- 例：`throw statement requires a non-void expression` 与 `bare throw is only valid inside an anonymous catch clause` 不同类，必须拆分新错误码。
 
 ### 依赖性诊断
 
@@ -398,10 +398,11 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 |---|---|---|---|
 | AE1401 | catch 子句结果语义 | AE0035 | catch clause must produce a final result expression on every normally completing path or exit every reachable path through return/throw |
 | AE1402 | throw 表达式值约束 | AE0077 | throw statement requires a non-void expression |
-| AE1403 | catch 类型专用约束 | AE0164 | type 'unknown' is only valid as a catch clause type |
-| AE1404 | unknown catch 值重抛约束 | AE0168 | unknown catch value '%.*s' can only be used in 'throw %.*s' |
+| AE1403 | 已停用：原 unknown 类型位置约束 | AE0164 | 仅保留历史编号，不再由产品产生 |
+| AE1404 | 已停用：原 unknown catch 绑定使用约束 | AE0168 | 仅保留历史编号，不再由产品产生 |
 | AE1405 | catch 结果分支循环控制转移边界 | AE0074 | break / continue cannot target a loop outside a try expression catch result branch |
 | AE1406 | catch 分支顺序约束 | AE0178 | catch clause matching any exception must be the last catch clause |
+| AE1407 | 无参数 throw 的匿名 catch 作用域约束 | — | bare throw is only valid inside an anonymous catch clause |
 
 ## 说明
 
