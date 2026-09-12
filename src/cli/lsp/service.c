@@ -15163,11 +15163,14 @@ static bool source_member_matches_symbol_kind(
     }
 }
 
-/* Locates one direct source member inside an owner already proven by symbol
- * id and physical source location. */
+/* Locates one expanded source member by symbol location and imported shape.
+ * Generated members remain eligible until the selected source is canonicalized. */
 static const FengTypeMember *find_source_member_by_symbol_location(
+    const FengLspAnalysisSession *source_session,
     const FengDecl *owner,
-    const FengSymbolDeclView *symbol) {
+    const FengSymbolDeclView *symbol,
+    const FengLspAnalysisSession *imported_session,
+    const FengTypeMember *imported_member) {
     FengTypeMember *const *members = NULL;
     size_t member_count = 0U;
     const FengTypeMember *match = NULL;
@@ -15175,7 +15178,8 @@ static const FengTypeMember *find_source_member_by_symbol_location(
     FengToken token;
     size_t member_index;
 
-    if (owner == NULL || symbol == NULL) {
+    if (source_session == NULL || owner == NULL || symbol == NULL ||
+        imported_session == NULL || imported_member == NULL) {
         return NULL;
     }
     if (owner->kind == FENG_DECL_TYPE) {
@@ -15194,11 +15198,14 @@ static const FengTypeMember *find_source_member_by_symbol_location(
     for (member_index = 0U; member_index < member_count; ++member_index) {
         const FengTypeMember *candidate = members[member_index];
 
-        if (candidate == NULL || candidate->mixin_origin != NULL ||
-            !source_member_matches_symbol_kind(
+        if (!source_member_matches_symbol_kind(
                 candidate, feng_symbol_decl_kind(symbol)) ||
             !stable_tokens_equal(candidate->token, token) ||
-            !slice_equals(member_name_slice(candidate), name)) {
+            !slice_equals(member_name_slice(candidate), name) ||
+            !stable_member_shapes_equal(source_session,
+                                        candidate,
+                                        imported_session,
+                                        imported_member)) {
             continue;
         }
         if (match != NULL) {
@@ -15262,8 +15269,8 @@ static const FengDecl *find_source_decl_by_shape(
     return match;
 }
 
-/* Finds one direct source member with the complete imported member shape.
- * Mixin-generated wrappers are never treated as declaration identities. */
+/* Finds one expanded source member with the complete imported member shape.
+ * Its mixin source chain is followed only after the match is unique. */
 static const FengTypeMember *find_source_member_by_shape(
     const FengLspAnalysisSession *source_session,
     const FengDecl *source_owner,
@@ -15292,8 +15299,7 @@ static const FengTypeMember *find_source_member_by_shape(
     for (index = 0U; index < member_count; ++index) {
         const FengTypeMember *candidate = members[index];
 
-        if (candidate == NULL || candidate->mixin_origin != NULL ||
-            !stable_member_shapes_equal(source_session,
+        if (!stable_member_shapes_equal(source_session,
                                         candidate,
                                         imported_session,
                                         imported_member)) {
@@ -15557,15 +15563,14 @@ static bool build_source_stable_target_from_symbol_identity(
             const FengTypeMember *imported_member =
                 mixin_definition_source_member(origin_target->member);
             const FengTypeMember *source_member =
-                find_source_member_by_symbol_location(source_owner,
-                                                      source_symbol);
+                find_source_member_by_symbol_location(defining_session,
+                                                      source_owner,
+                                                      source_symbol,
+                                                      origin_session,
+                                                      imported_member);
 
             if (source_symbol == source_owner_symbol ||
-                source_member == NULL || imported_member == NULL ||
-                !stable_member_shapes_equal(defining_session,
-                                            source_member,
-                                            origin_session,
-                                            imported_member)) {
+                source_member == NULL) {
                 return false;
             }
             source_target.kind = FENG_LSP_RESOLVED_MEMBER;

@@ -23771,6 +23771,231 @@ static void test_lsp_local_dependency_mixable_member_definition(void) {
     free(dependency_dir);
 }
 
+/* Verifies imported mixed members map through expanded dependency members
+ * before following their source chains across files and multiple mixin levels. */
+static void test_lsp_local_dependency_expanded_member_definition(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"processId\":null,\"rootUri\":null,"
+        "\"capabilities\":{}}}";
+    static const char *kViewSource =
+        "open module test.lsp.expanded_dependency;\n"
+        "open spec Widget {}\n"
+        "open type StylePatch { open var backColor: int; }\n"
+        "open type View: Widget {\n"
+        "    open var state: int;\n"
+        "    @mixable\n"
+        "    open static func useStateStyle(widget: Widget, pseudo: int): StylePatch {\n"
+        "        return StylePatch();\n"
+        "    }\n"
+        "    @mixable\n"
+        "    open static func useStateStyle(widget: Widget, pseudo: string): StylePatch {\n"
+        "        return StylePatch();\n"
+        "    }\n"
+        "}\n"
+        "open func dependency_ready(): void {}\n";
+    static const char *kInputSource =
+        "open module test.lsp.expanded_dependency;\n"
+        "open spec InputWidget: Widget {}\n"
+        "open type Input: InputWidget {\n"
+        "    ...: View = View();\n"
+        "}\n"
+        "open type NestedInput: InputWidget {\n"
+        "    ...: Input = Input();\n"
+        "}\n"
+        "open type SeparateView: Widget {\n"
+        "    @mixable\n"
+        "    open static func useStateStyle(widget: Widget, pseudo: int): StylePatch {\n"
+        "        return StylePatch();\n"
+        "    }\n"
+        "}\n";
+    static const char *kConsumerSource =
+        "open module test.lsp.expanded_consumer;\n"
+        "import test.lsp.expanded_dependency;\n"
+        "open func exercise(): void {\n"
+        "    let input = Input();\n"
+        "    input.useStateStyle(1).backColor = 2;\n"
+        "    input.useStateStyle(\"focus\").backColor = 3;\n"
+        "    Input.useStateStyle(input, 1);\n"
+        "    Input.useStateStyle(input, \"focus\");\n"
+        "    input.state = 1;\n"
+        "    let nested = NestedInput();\n"
+        "    nested.useStateStyle(1).backColor = 4;\n"
+        "    nested.useStateStyle(\"focus\").backColor = 5;\n"
+        "    NestedInput.useStateStyle(nested, 1);\n"
+        "    NestedInput.useStateStyle(nested, \"focus\");\n"
+        "    nested.state = 2;\n"
+        "    let separate = SeparateView();\n"
+        "    separate.useStateStyle(1);\n"
+        "    dependency_ready();\n"
+        "}\n";
+    /* Each row identifies a queried member and its exact written declaration. */
+    static const struct {
+        const char *use_marker;
+        const char *use_prefix;
+        const char *definition_marker;
+        const char *definition_prefix;
+        bool in_input_source;
+    } kCases[] = {
+        {"input.useStateStyle(1)", "input.",
+         "func useStateStyle(widget: Widget, pseudo: int)", "func ", false},
+        {"input.useStateStyle(\"focus\")", "input.",
+         "func useStateStyle(widget: Widget, pseudo: string)", "func ", false},
+        {"Input.useStateStyle(input, 1)", "Input.",
+         "func useStateStyle(widget: Widget, pseudo: int)", "func ", false},
+        {"Input.useStateStyle(input, \"focus\")", "Input.",
+         "func useStateStyle(widget: Widget, pseudo: string)", "func ", false},
+        {"input.state", "input.", "var state", "var ", false},
+        {"nested.useStateStyle(1)", "nested.",
+         "func useStateStyle(widget: Widget, pseudo: int)", "func ", false},
+        {"nested.useStateStyle(\"focus\")", "nested.",
+         "func useStateStyle(widget: Widget, pseudo: string)", "func ", false},
+        {"NestedInput.useStateStyle(nested, 1)", "NestedInput.",
+         "func useStateStyle(widget: Widget, pseudo: int)", "func ", false},
+        {"NestedInput.useStateStyle(nested, \"focus\")", "NestedInput.",
+         "func useStateStyle(widget: Widget, pseudo: string)", "func ", false},
+        {"nested.state", "nested.", "var state", "var ", false},
+        {"input.useStateStyle(1).backColor", "input.useStateStyle(1).",
+         "var backColor", "var ", false},
+        {"separate.useStateStyle(1)", "separate.",
+         "func useStateStyle(widget: Widget, pseudo: int)", "func ", true}
+    };
+    enum { CASE_COUNT = sizeof(kCases) / sizeof(kCases[0]) };
+    char template_path[] = "temp/feng_lsp_expanded_definition_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *dependency_dir;
+    char *dependency_manifest;
+    char *dependency_src_dir;
+    char *view_path;
+    char *input_path;
+    char *consumer_dir;
+    char *consumer_manifest;
+    char *consumer_src_dir;
+    char *consumer_path;
+    char *view_uri;
+    char *input_uri;
+    char *consumer_uri;
+    char *escaped_consumer;
+    char *did_open;
+    char *owned_requests[CASE_COUNT];
+    char *expected_locations[CASE_COUNT];
+    const char *requests[CASE_COUNT + 2U];
+    char *output;
+    char *remove_error = NULL;
+    unsigned int ready_line;
+    unsigned int ready_character;
+
+    ASSERT(workspace_dir != NULL);
+    dependency_dir = path_join(workspace_dir, "dependency");
+    dependency_manifest = path_join(dependency_dir, "feng.fm");
+    dependency_src_dir = path_join(dependency_dir, "src");
+    view_path = path_join(dependency_src_dir, "view.ff");
+    input_path = path_join(dependency_src_dir, "input.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    consumer_src_dir = path_join(consumer_dir, "src");
+    consumer_path = path_join(consumer_src_dir, "main.ff");
+    mkdir_p(dependency_src_dir);
+    mkdir_p(consumer_src_dir);
+    write_text_file(dependency_manifest,
+                    "[package]\n"
+                    "name: \"lsp_expanded_dependency\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n");
+    write_text_file(view_path, kViewSource);
+    write_text_file(input_path, kInputSource);
+    write_text_file(consumer_manifest,
+                    "[package]\n"
+                    "name: \"lsp_expanded_consumer\"\n"
+                    "version: \"0.1.0\"\n"
+                    "target: \"lib\"\n"
+                    "src: \"src/\"\n"
+                    "out: \"build/\"\n"
+                    "[dependencies]\n"
+                    "lsp_expanded_dependency: \"../dependency\"\n");
+    write_text_file(consumer_path, kConsumerSource);
+    view_uri = file_uri_from_path(view_path);
+    input_uri = file_uri_from_path(input_path);
+    consumer_uri = file_uri_from_path(consumer_path);
+    escaped_consumer = json_escape_text(kConsumerSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\","
+        "\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}",
+        consumer_uri,
+        escaped_consumer);
+    for (size_t index = 0U; index < CASE_COUNT; ++index) {
+        unsigned int definition_line;
+        unsigned int definition_character;
+
+        owned_requests[index] = build_lsp_test_position_request(
+            "textDocument/definition",
+            2U + (unsigned int)index,
+            consumer_uri,
+            kConsumerSource,
+            kCases[index].use_marker,
+            strlen(kCases[index].use_prefix) + 1U);
+        requests[index] = owned_requests[index];
+        find_line_character(
+            kCases[index].in_input_source ? kInputSource : kViewSource,
+            kCases[index].definition_marker,
+            strlen(kCases[index].definition_prefix),
+            &definition_line,
+            &definition_character);
+        expected_locations[index] = build_lsp_test_location_marker(
+            kCases[index].in_input_source ? input_uri : view_uri,
+            definition_line,
+            definition_character);
+    }
+    requests[CASE_COUNT] =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    requests[CASE_COUNT + 1U] =
+        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(kConsumerSource,
+                        "dependency_ready();",
+                        1U,
+                        &ready_line,
+                        &ready_character);
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize,
+        did_open,
+        NULL,
+        "textDocument/definition",
+        consumer_uri,
+        ready_line,
+        ready_character,
+        view_uri,
+        requests,
+        CASE_COUNT + 2U,
+        NULL);
+    for (size_t index = 0U; index < CASE_COUNT; ++index) {
+        assert_lsp_test_response_contains(output,
+                                          2U + (unsigned int)index,
+                                          expected_locations[index]);
+        free(expected_locations[index]);
+        free(owned_requests[index]);
+    }
+    free(output);
+    free(did_open);
+    free(escaped_consumer);
+    free(consumer_uri);
+    free(input_uri);
+    free(view_uri);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+    free(consumer_path);
+    free(consumer_src_dir);
+    free(consumer_manifest);
+    free(consumer_dir);
+    free(input_path);
+    free(view_path);
+    free(dependency_src_dir);
+    free(dependency_manifest);
+    free(dependency_dir);
+}
+
 /* Verifies imported generic-fit members use their module-local symbol ids
  * when equal-shaped fits share one module across multiple source files. */
 static void test_lsp_local_project_dependency_generic_fit_member_identity(void) {
@@ -25019,6 +25244,7 @@ int main(void) {
     test_lsp_local_project_dependency_workspace_queries();
     test_lsp_local_dependency_definition_survives_origin_semantic_failure();
     test_lsp_local_dependency_mixable_member_definition();
+    test_lsp_local_dependency_expanded_member_definition();
     test_lsp_local_project_dependency_generic_fit_member_identity();
     test_lsp_local_project_dependency_type_name_family();
     test_lsp_local_project_dependency_cache_lifecycle();
