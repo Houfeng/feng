@@ -794,6 +794,7 @@ function isPostfixPointerStar(tokens, index, previousSignificantToken,
     return true;
 }
 
+/* Accept generic continuations, including an initializer after a type annotation. */
 function tokenCanFollowExplicitGenericTarget(token) {
     if (token == null) {
         return true;
@@ -804,7 +805,7 @@ function tokenCanFollowExplicitGenericTarget(token) {
            token.value === ')' || token.value === ']' || token.value === '}')) ||
          (token.type === 'punctuation' &&
           (token.value === ',' || token.value === ';' || token.value === ':')) ||
-         (token.type === 'operator' && token.value === '>');
+         (token.type === 'operator' && (token.value === '>' || token.value === '='));
 }
 
 function countGenericCloseOperators(token) {

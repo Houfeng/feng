@@ -257,4 +257,29 @@ runCase(
     'func main(): void {\n    let r = 1...17;\n    let m = 0, 10...18, 100;\n}\n'
 );
 
+runCase(
+    'keeps generic field annotations tight before initializers',
+    'type Future<T,E>{\nseal var _value:Option<T> =none;\nseal var _error:Option<E> =none;\n}\n',
+    'type Future<T, E> {\n  seal var _value: Option<T> = none;\n  seal var _error: Option<E> = none;\n}\n',
+    { tabSize: 2 }
+);
+
+runCase(
+    'normalizes generic local annotations with initializers regardless of nesting or name casing',
+    'func main(){\nlet value:option < int > =none;\nvar nested:Box < Map < string,int > > =make();\nlet deep:Box<Box<Option<int>>> =make();\n}\n',
+    'func main() {\n    let value: option<int> = none;\n    var nested: Box<Map<string, int>> = make();\n    let deep: Box<Box<Option<int>>> = make();\n}\n'
+);
+
+runCase(
+    'preserves comparison and shift spacing in generic binding initializers',
+    'func main(){\nlet less:Option<bool> =a<b;\nlet more:Option<bool> =a>b;\nlet atMost:Option<bool> =a<=b;\nlet atLeast:Option<bool> =a>=b;\nlet shifted:Option<int> =a>>b;\n}\n',
+    'func main() {\n    let less: Option<bool> = a < b;\n    let more: Option<bool> = a > b;\n    let atMost: Option<bool> = a <= b;\n    let atLeast: Option<bool> = a >= b;\n    let shifted: Option<int> = a >> b;\n}\n'
+);
+
+runCase(
+    'keeps formatted generic annotations with initializers stable',
+    'type Future<T, E> {\n    seal var _value: Option<T> = none;\n    seal var _error: Option<E> = none;\n    let nested: Box<Map<string, int>> = make();\n}\n',
+    'type Future<T, E> {\n    seal var _value: Option<T> = none;\n    seal var _error: Option<E> = none;\n    let nested: Box<Map<string, int>> = make();\n}\n'
+);
+
 console.log('formatter tests passed');
