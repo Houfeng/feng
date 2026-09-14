@@ -309,6 +309,7 @@ function realpathIfExists(filePath) {
     }
 }
 
+// Verify the extension configuration and a real DAP session against a temporary project.
 async function run() {
     const lldbDapPath = resolveLldbDapPath()
     const repoRoot = path.resolve(__dirname, '..', '..', '..')
@@ -329,7 +330,7 @@ async function run() {
     const sourceDir = path.join(projectRoot, 'src')
     const sourcePath = path.join(sourceDir, 'main.ff')
     const manifestPath = path.join(projectRoot, 'feng.fm')
-    const stdPath = path.join(repoRoot, 'std')
+    const stdPath = path.join(repoRoot, 'std', 'std')
     const stdRelativePath = path.relative(projectRoot, stdPath).split(path.sep).join('/')
     const wrapperDir = path.join(tempRoot, 'tool-bin')
     const wrapperPath = path.join(wrapperDir, 'lldb-dap')
@@ -340,6 +341,7 @@ async function run() {
         executablePath: fengBinary
     })
     const extension = loadExtensionModule(mockVscode)
+    const hostPlatform = extension.__test__.getHostPlatform()
     const provider = extension.__test__.createFengDebugConfigurationProvider(mockVscode)
     let child = null
     let client = null
@@ -378,7 +380,7 @@ async function run() {
         type: 'feng',
         request: 'launch',
         name: 'Debug hello_world',
-        program: path.join(projectRoot, 'build', 'bin', 'hello_world'),
+        program: path.join(projectRoot, 'build', hostPlatform, 'bin', 'hello_world'),
         cwd: projectRoot,
         preLaunchTask: 'feng: build hello_world'
     })

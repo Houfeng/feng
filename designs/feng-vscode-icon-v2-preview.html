@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feng · VS Code 插件图标设计</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 40px; background: #edece8; color: #202124; font: 14px/1.5 system-ui, sans-serif; }
+    main { max-width: 1040px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; font-weight: 650; letter-spacing: -.7px; }
+    p { margin: 0; color: #65645e; }
+    .comparison { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 26px; }
+    .surface { padding: 28px; border-radius: 16px; background: #fff; }
+    .dark { color: #f3f2ef; background: #18191b; }
+    h2 { margin: 0 0 20px; font-size: 13px; font-weight: 500; color: #797973; }
+    .dark h2, .dark figcaption { color: #a1a29e; }
+    .hero { display: block; width: 240px; height: 240px; margin: 0 auto; }
+    .sizes { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; min-height: 200px; gap: 20px 12px; }
+    figure { margin: 0; text-align: center; }
+    figure img { display: block; margin: 0 auto; }
+    figcaption { padding-top: 14px; color: #797973; font: 11px/1.4 ui-monospace, monospace; }
+    .row { display: flex; align-items: center; gap: 12px; margin-top: 24px; padding-top: 24px; border-top: 1px solid #e9e9e5; }
+    .dark .row { border-color: #333436; }
+    .row strong { font-size: 15px; font-weight: 600; }
+    .row p { margin-top: 3px; font-size: 12px; }
+    .dark .row p { color: #a1a29e; }
+    .note { margin-top: 20px; font-size: 12px; }
+    @media (max-width: 900px) { body { padding: 24px; } .comparison { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Feng · 插件图标设计</h1>
+    <p>暖金色 F 字标 · 石墨色底板 · 几何斜切</p>
+    <div class="comparison">
+      <section class="surface" aria-label="浅色背景预览">
+        <h2>浅色背景</h2>
+        <img class="hero" src="feng-vscode-icon-v2.png" alt="新版 Feng 图标">
+        <div class="sizes" aria-label="实际尺寸预览">
+          <figure><img src="feng-vscode-icon-v2-256.png" width="16" height="16" alt="16 像素图标"><figcaption>16</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="24" height="24" alt="24 像素图标"><figcaption>24</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="32" height="32" alt="32 像素图标"><figcaption>32</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="48" height="48" alt="48 像素图标"><figcaption>48</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="64" height="64" alt="64 像素图标"><figcaption>64</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="128" height="128" alt="128 像素图标"><figcaption>128</figcaption></figure>
+        </div>
+        <div class="row">
+          <img src="feng-vscode-icon-v2-256.png" width="48" height="48" alt="">
+          <div><strong>Feng Language</strong><p>Feng 语言支持</p></div>
+        </div>
+      </section>
+      <section class="surface dark" aria-label="深色背景预览">
+        <h2>深色背景</h2>
+        <img class="hero" src="feng-vscode-icon-v2.png" alt="新版 Feng 图标">
+        <div class="sizes" aria-label="实际尺寸预览">
+          <figure><img src="feng-vscode-icon-v2-256.png" width="16" height="16" alt="16 像素图标"><figcaption>16</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="24" height="24" alt="24 像素图标"><figcaption>24</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="32" height="32" alt="32 像素图标"><figcaption>32</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="48" height="48" alt="48 像素图标"><figcaption>48</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="64" height="64" alt="64 像素图标"><figcaption>64</figcaption></figure>
+          <figure><img src="feng-vscode-icon-v2-256.png" width="128" height="128" alt="128 像素图标"><figcaption>128</figcaption></figure>
+        </div>
+        <div class="row">
+          <img src="feng-vscode-icon-v2-256.png" width="48" height="48" alt="">
+          <div><strong>Feng Language</strong><p>Feng 语言支持</p></div>
+        </div>
+      </section>
+    </div>
+    <p class="note">已采用设计 · 下方数字为 CSS 像素尺寸；列表仅作视觉示意。<a href="../docs/engineering/feng-vscode-icon-design.md">设计说明</a></p>
+  </main>
+</body>
+</html>

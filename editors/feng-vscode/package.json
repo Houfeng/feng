@@ -28,6 +28,7 @@
   ],
   "scripts": {
     "test": "node ./test/formatter.test.js && node ./test/diagnostics.test.js && node ./test/debug.test.js && node ./test/debug-smoke.test.js && node ./test/icon.test.js && node ./test/syntax.test.js && node ./test/generic-syntax.test.js && node ./test/language-configuration.test.js",
+    "prepack": "npm test",
     "pack": "vsce package"
   },
   "main": "./extension.js",
