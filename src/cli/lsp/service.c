@@ -22470,7 +22470,9 @@ static bool type_member_visible_from_program(const FengLspAnalysisSession *sessi
         return owner_decl != NULL && enclosing_decl == owner_decl &&
                enclosing_member != NULL;
     }
-    if (member->visibility == FENG_VISIBILITY_PUBLIC) {
+    /* Parsed members retain DEFAULT; type/fit members are open unless seal
+     * is explicit, just as in semantic analysis and exported symbols. */
+    if (member->visibility != FENG_VISIBILITY_PRIVATE) {
         return true;
     }
     return decl_private_visible_from_program(session, program, owner_decl);
@@ -25392,6 +25394,41 @@ static bool build_single_parse_session(const FengLspDocument *document,
     return true;
 }
 
+/* Build source completion independently of symbol-cache availability. Indexed
+ * ASTs are borrowed only while the matching publication remains locked. */
+static bool build_indexed_source_completion_json(
+    FengLspService *service,
+    FengLspAnalysisSession *session,
+    const FengProgram *program,
+    const char *source_text,
+    size_t offset,
+    FengLspString *json,
+    const FengLspRequestContext *request) {
+    const FengLspModuleIndex *previous_index = session->source_module_index;
+    bool ok;
+
+    pthread_mutex_lock(&service->analysis_mutex);
+    if (module_index_matches_path(service, program->path)) {
+        session->source_module_index = &service->module_index;
+    }
+    ok = build_completion_json(session,
+                                program,
+                                source_text,
+                                offset,
+                                json,
+                                request) &&
+         append_module_index_imports(service,
+                                     program,
+                                     source_text,
+                                     offset,
+                                     json,
+                                     request);
+    session->source_module_index = previous_index;
+    pthread_mutex_unlock(&service->analysis_mutex);
+    return ok;
+}
+
+/* Repair the current completion expression and query published source data. */
 static bool build_repaired_completion_json(FengLspService *service,
                                            const FengLspDocument *document,
                                            size_t offset,
@@ -25415,22 +25452,14 @@ static bool build_repaired_completion_json(FengLspService *service,
         if (program != NULL && program->use_count > 0U) {
             wait_for_program_import_indexes(service, program);
         }
-        ok = program != NULL && build_completion_json(&session,
-                                                      program,
-                                                      repaired.text,
-                                                      offset,
-                                                      json,
-                                                      request);
-        if (ok) {
-            pthread_mutex_lock(&service->analysis_mutex);
-            ok = append_module_index_imports(service,
-                                             program,
-                                             repaired.text,
-                                             offset,
-                                             json,
-                                             request);
-            pthread_mutex_unlock(&service->analysis_mutex);
-        }
+        ok = program != NULL &&
+             build_indexed_source_completion_json(service,
+                                                   &session,
+                                                   program,
+                                                   repaired.text,
+                                                   offset,
+                                                   json,
+                                                   request);
     }
     session_dispose(&session);
     free(repaired.text);
@@ -25661,22 +25690,13 @@ static bool handle_completion_request(FengLspService *service,
         current_source.program = (FengProgram *)program;
         current_parse.sources = &current_source;
         current_parse.source_count = 1U;
-        current_parse_ok = build_completion_json(&current_parse,
-                                                 program,
-                                                 document->text,
-                                                 offset,
-                                                 &json,
-                                                 &request);
-        if (current_parse_ok) {
-            pthread_mutex_lock(&service->analysis_mutex);
-            current_parse_ok = append_module_index_imports(service,
-                                                           program,
-                                                           document->text,
-                                                           offset,
-                                                           &json,
-                                                           &request);
-            pthread_mutex_unlock(&service->analysis_mutex);
-        }
+        current_parse_ok = build_indexed_source_completion_json(service,
+                                                                &current_parse,
+                                                                program,
+                                                                document->text,
+                                                                offset,
+                                                                &json,
+                                                                &request);
         if (current_parse_ok && completion_json_has_items(&json)) {
             free(uri);
             ok = send_json_response(output, id, json.data);

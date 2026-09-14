@@ -21204,6 +21204,172 @@ static void test_lsp_imported_type_completion_survives_project_semantic_failure(
     free(remove_error);
 }
 
+/* Exercise source-only member completion with empty or invalid symbol caches,
+ * optionally placing the owner type in a local project dependency. */
+static void assert_lsp_imported_members_from_source_index(bool local_dependency,
+                                                          bool invalid_cache) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kTypesSource =
+        "open module test.lsp.member_source;\n"
+        "open type Widget {\n"
+        "    var value: int;\n"
+        "    open func read(): int { return self.value; }\n"
+        "    func update() {}\n"
+        "    seal var hidden: int;\n"
+        "    seal func hiddenMethod() {}\n"
+        "    static func create(): Widget { return Widget(); }\n"
+        "}\n";
+    static const char *kBindings[] = {
+        "let obj = Widget();",
+        "let obj = Widget();",
+        "let obj: Widget = Widget();"
+    };
+    static const char *kAccesses[] = {"obj.read();", "obj.", "obj."};
+    static const char *kExcluded[] = {
+        "hidden", "hiddenMethod", "create", "Widget", "Host", "obj", "let"
+    };
+    char template_path[] = "temp/feng_lsp_source_members_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *project_dir;
+    char *src_dir;
+    char *manifest_path;
+    char *main_path;
+    char *types_path;
+    char *main_uri;
+    char *manifest;
+    char *remove_error = NULL;
+    size_t case_index;
+
+    ASSERT(workspace_dir != NULL);
+    project_dir = path_join(workspace_dir, "app");
+    src_dir = path_join(project_dir, "src");
+    manifest_path = path_join(project_dir, "feng.fm");
+    main_path = path_join(src_dir, "main.ff");
+    mkdir_p(src_dir);
+    /* No main entry prevents a successful semantic session from masking the
+     * source-index fallback, including for the parseable access case. */
+    manifest = dup_printf(
+        "[package]\nname: \"source_members_app\"\nversion: \"0.1.0\"\n"
+        "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n%s",
+        local_dependency
+            ? "[dependencies]\nmember_lib: \"../library\"\n"
+            : "");
+    write_text_file(manifest_path, manifest);
+    free(manifest);
+    if (local_dependency) {
+        char *library_dir = path_join(workspace_dir, "library");
+        char *library_src = path_join(library_dir, "src");
+        char *library_manifest = path_join(library_dir, "feng.fm");
+
+        mkdir_p(library_src);
+        write_text_file(library_manifest,
+                        "[package]\nname: \"member_lib\"\nversion: \"0.1.0\"\n"
+                        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+        types_path = path_join(library_src, "types.ff");
+        free(library_manifest);
+        free(library_src);
+        free(library_dir);
+    } else {
+        types_path = path_join(src_dir, "types.ff");
+    }
+    write_text_file(types_path, kTypesSource);
+    if (invalid_cache) {
+        char *host_platform = NULL;
+        char *symbols_dir;
+        char *cache_path;
+
+        ASSERT(feng_platform_detect_host_platform(&host_platform, NULL));
+        symbols_dir = dup_printf("%s/build/%s/obj/symbols", project_dir, host_platform);
+        mkdir_p(symbols_dir);
+        cache_path = path_join(symbols_dir, "stale.ft");
+        write_text_file(cache_path, "invalid symbol cache\n");
+        free(cache_path);
+        free(symbols_dir);
+        free(host_platform);
+    }
+    for (case_index = 0U; case_index < sizeof(kBindings) / sizeof(kBindings[0]); ++case_index) {
+        char *source = dup_printf(
+            "module app.main;\nimport test.lsp.member_source;\n"
+            "type Host {\n    static func make(): Widget {\n"
+            "        %s\n        %s\n        return obj;\n    }\n}\n",
+            kBindings[case_index],
+            kAccesses[case_index]);
+        char *escaped_source = json_escape_text(source);
+        char *did_open;
+        char *completion;
+        char *output;
+        unsigned int ready_line;
+        unsigned int ready_character;
+        size_t excluded_index;
+
+        write_text_file(main_path, source);
+        main_uri = file_uri_from_path(main_path);
+        did_open = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+            "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+            "\"version\":1,\"text\":\"%s\"}}}",
+            main_uri,
+            escaped_source);
+        completion = build_lsp_test_position_request("textDocument/completion",
+                                                      2U,
+                                                      main_uri,
+                                                      source,
+                                                      "        obj.",
+                                                      strlen("        obj."));
+        find_line_character(source,
+                            "import test.lsp.member_source",
+                            strlen("import test.lsp."),
+                            &ready_line,
+                            &ready_character);
+        output = run_lsp_single_position_response_after_ready(
+            kInitialize,
+            did_open,
+            "textDocument/completion",
+            main_uri,
+            ready_line,
+            ready_character,
+            "\"label\":\"member_source\"",
+            completion,
+            kShutdown);
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"value\"");
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"read\"");
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"update\"");
+        assert_lsp_test_response_contains(output, 2U, "\"detail\":\"func update(): void\"");
+        for (excluded_index = 0U;
+             excluded_index < sizeof(kExcluded) / sizeof(kExcluded[0]);
+             ++excluded_index) {
+            char *label = dup_printf("\"label\":\"%s\"", kExcluded[excluded_index]);
+
+            assert_lsp_test_response_not_contains(output, 2U, label);
+            free(label);
+        }
+        free(output);
+        free(completion);
+        free(did_open);
+        free(main_uri);
+        free(escaped_source);
+        free(source);
+    }
+    free(types_path);
+    free(main_path);
+    free(manifest_path);
+    free(src_dir);
+    free(project_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Source-backed members remain available without a usable symbol provider. */
+static void test_lsp_imported_member_completion_without_symbol_cache(void) {
+    assert_lsp_imported_members_from_source_index(false, false);
+    assert_lsp_imported_members_from_source_index(false, true);
+    assert_lsp_imported_members_from_source_index(true, true);
+}
+
 /* Tests that `use foo.bar as baz;` still offers public declarations from the
  * imported module when the user is in the middle of typing `baz.`. Before the
  * fix, alias-module completion fell back to a single-file parse session and
@@ -25282,6 +25448,7 @@ int main(void) {
     test_lsp_use_path_completion_deduplicates_segments_in_project_scan();
     test_lsp_imported_type_completion_after_use();
     test_lsp_imported_type_completion_survives_project_semantic_failure();
+    test_lsp_imported_member_completion_without_symbol_cache();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_external_package_hover_docs_and_completion();
     test_lsp_package_symbol_hover_type_categories();
