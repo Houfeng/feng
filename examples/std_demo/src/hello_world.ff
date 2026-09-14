@@ -28,9 +28,9 @@ fit User {
 
 func hello_world_example(args: string[]): void {
   let user = User {
-    name: "Houfeng", 
+    name: "Houfeng",
     age: 18
-  }; 
+  };
   user.say("Hello World: " + user.name);
-  user.say2(123); 
+  user.say2(123);
 }
