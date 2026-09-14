@@ -493,214 +493,116 @@ static bool append_raw(void **items,
     return true;
 }
 
-/* Returns the first byte of the source line containing `offset`. */
-static size_t receiver_line_start(const char *text, size_t offset) {
-    while (offset > 0U && text[offset - 1U] != '\n') {
-        --offset;
-    }
-    return offset;
-}
+/* Preserve the receiver preceding one nested call or index argument list. */
+typedef struct FengLspReceiverDelimiter {
+    FengTokenKind kind;
+    size_t receiver_start;
+} FengLspReceiverDelimiter;
 
-/* Finds a line comment outside strings and same-line block comments. */
-static size_t receiver_line_comment_start(const char *text,
-                                          size_t start,
-                                          size_t end) {
-    size_t cursor = start;
-
-    while (cursor + 1U < end) {
-        if (text[cursor] == '"') {
-            ++cursor;
-            while (cursor < end) {
-                if (text[cursor] == '\\' && cursor + 1U < end) {
-                    cursor += 2U;
-                } else if (text[cursor] == '"') {
-                    ++cursor;
-                    break;
-                } else {
-                    ++cursor;
-                }
-            }
-            continue;
-        }
-        if (text[cursor] == '/' && text[cursor + 1U] == '*') {
-            cursor += 2U;
-            while (cursor + 1U < end &&
-                   !(text[cursor] == '*' && text[cursor + 1U] == '/')) {
-                ++cursor;
-            }
-            cursor = cursor + 1U < end ? cursor + 2U : end;
-            continue;
-        }
-        if (text[cursor] == '/' && text[cursor + 1U] == '/') {
-            return cursor;
-        }
-        ++cursor;
-    }
-    return end;
-}
-
-/* Finds the opening quote paired with a quote encountered while scanning
- * backward. Escaped quotes are ignored. */
-static bool receiver_string_start_backward(const char *text,
-                                           size_t quote_offset,
-                                           size_t *out_start) {
-    size_t cursor = quote_offset;
-
-    while (cursor > 0U) {
-        size_t slash_count = 0U;
-        size_t slash_cursor;
-
-        --cursor;
-        if (text[cursor] != '"') {
-            continue;
-        }
-        slash_cursor = cursor;
-        while (slash_cursor > 0U && text[slash_cursor - 1U] == '\\') {
-            --slash_cursor;
-            ++slash_count;
-        }
-        if ((slash_count % 2U) == 0U) {
-            *out_start = cursor;
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Finds the opening delimiter paired with `close_offset` while ignoring
- * strings and comments. The scan is bounded by the receiver expression. */
-static bool receiver_matching_open_backward(const char *text,
-                                            size_t close_offset,
-                                            char open,
-                                            char close,
-                                            size_t *out_open) {
-    size_t cursor = close_offset;
-    size_t line_start = receiver_line_start(text, cursor);
-    size_t depth = 1U;
-
-    while (cursor > 0U) {
-        size_t line_end;
-        size_t comment_start;
-        char ch;
-
-        if (cursor == line_start) {
-            if (line_start == 0U) {
-                break;
-            }
-            line_end = line_start - 1U;
-            line_start = receiver_line_start(text, line_end);
-            comment_start = receiver_line_comment_start(text, line_start, line_end);
-            cursor = comment_start < line_end ? comment_start : line_end;
-            continue;
-        }
-        --cursor;
-        ch = text[cursor];
-        if (ch == '"') {
-            size_t string_start;
-
-            if (!receiver_string_start_backward(text, cursor, &string_start)) {
-                return false;
-            }
-            cursor = string_start;
-            line_start = receiver_line_start(text, cursor);
-            continue;
-        }
-        if (ch == '/' && cursor > 0U && text[cursor - 1U] == '*') {
-            size_t comment_cursor = cursor - 1U;
-            bool found = false;
-
-            while (comment_cursor > 0U) {
-                if (text[comment_cursor - 1U] == '/' && text[comment_cursor] == '*') {
-                    cursor = comment_cursor - 1U;
-                    line_start = receiver_line_start(text, cursor);
-                    found = true;
-                    break;
-                }
-                --comment_cursor;
-            }
-            if (!found) {
-                return false;
-            }
-            continue;
-        }
-        if (ch == close) {
-            ++depth;
-        } else if (ch == open) {
-            --depth;
-            if (depth == 0U) {
-                *out_open = cursor;
-                return true;
-            }
-        }
-    }
-    return false;
-}
-
-/* Finds the start of a postfix receiver ending immediately before a member
- * dot. Supported postfix forms are member access, call, and index. */
-static bool receiver_text_find_start(const char *text,
+/* Find a postfix receiver using lexical tokens, so comments cannot become
+ * member separators. Scan once with storage proportional to delimiter depth;
+ * argument expressions do not replace the receiver of their enclosing call. */
+static bool receiver_text_find_range(const char *text,
                                      size_t receiver_end,
-                                     size_t *out_start) {
-    size_t cursor = receiver_end;
+                                     size_t *out_start,
+                                     size_t *out_end) {
+    FengLexer lexer;
+    FengToken token;
+    FengLspReceiverDelimiter *delimiters = NULL;
+    size_t delimiter_count = 0U;
+    size_t delimiter_capacity = 0U;
+    size_t start = SIZE_MAX;
+    size_t end = 0U;
+    bool complete = false;
+    bool after_dot = false;
 
-    if (text == NULL || out_start == NULL) {
+    if (text == NULL || out_start == NULL || out_end == NULL) {
         return false;
     }
-    while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
-        --cursor;
-    }
-    while (cursor > 0U) {
-        size_t start;
-        size_t separator;
-        char tail = text[cursor - 1U];
+    feng_lexer_init(&lexer, text, receiver_end, NULL);
+    while ((token = feng_lexer_next(&lexer)).kind != FENG_TOKEN_EOF) {
+        end = token.offset + token.length;
+        switch (token.kind) {
+            case FENG_TOKEN_IDENTIFIER:
+            case FENG_TOKEN_KW_SELF:
+            case FENG_TOKEN_INTEGER:
+            case FENG_TOKEN_FLOAT:
+            case FENG_TOKEN_STRING:
+            case FENG_TOKEN_BOOL:
+                if (!after_dot) {
+                    start = token.offset;
+                } else if (token.kind != FENG_TOKEN_IDENTIFIER) {
+                    start = SIZE_MAX;
+                }
+                complete = start != SIZE_MAX;
+                after_dot = false;
+                break;
+            case FENG_TOKEN_DOT:
+                if (!complete) {
+                    start = SIZE_MAX;
+                }
+                complete = false;
+                after_dot = true;
+                break;
+            case FENG_TOKEN_LPAREN:
+            case FENG_TOKEN_LBRACKET: {
+                FengLspReceiverDelimiter delimiter = {
+                    token.kind,
+                    complete ? start : SIZE_MAX
+                };
 
-        if (tail == ')' || tail == ']') {
-            if (!receiver_matching_open_backward(text,
-                                                 cursor - 1U,
-                                                 tail == ')' ? '(' : '[',
-                                                 tail,
-                                                 &start)) {
-                return false;
+                if (!append_raw((void **)&delimiters,
+                                &delimiter_count,
+                                &delimiter_capacity,
+                                sizeof(delimiter),
+                                &delimiter)) {
+                    free(delimiters);
+                    return false;
+                }
+                start = SIZE_MAX;
+                complete = false;
+                after_dot = false;
+                break;
             }
-            cursor = start;
-            while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
-                --cursor;
+            case FENG_TOKEN_RPAREN:
+            case FENG_TOKEN_RBRACKET: {
+                FengTokenKind opening = token.kind == FENG_TOKEN_RPAREN
+                                            ? FENG_TOKEN_LPAREN
+                                            : FENG_TOKEN_LBRACKET;
+
+                start = SIZE_MAX;
+                if (delimiter_count > 0U &&
+                    delimiters[delimiter_count - 1U].kind == opening) {
+                    start = delimiters[--delimiter_count].receiver_start;
+                }
+                complete = start != SIZE_MAX;
+                after_dot = false;
+                break;
             }
-            continue;
+            default:
+                start = SIZE_MAX;
+                complete = false;
+                after_dot = false;
+                break;
         }
-        if (completion_identifier_continue(tail)) {
-            start = cursor - 1U;
-            while (start > 0U && completion_identifier_continue(text[start - 1U])) {
-                --start;
-            }
-            if (!completion_identifier_start(text[start]) &&
-                !isdigit((unsigned char)text[start])) {
-                return false;
-            }
-            cursor = start;
-        } else if (tail == '"') {
-            if (!receiver_string_start_backward(text, cursor - 1U, &start)) {
-                return false;
-            }
-            cursor = start;
-        } else {
-            return false;
-        }
-        separator = cursor;
-        while (separator > 0U && isspace((unsigned char)text[separator - 1U])) {
-            --separator;
-        }
-        if (separator > 0U && text[separator - 1U] == '.') {
-            cursor = separator - 1U;
-            while (cursor > 0U && isspace((unsigned char)text[cursor - 1U])) {
-                --cursor;
-            }
-            continue;
-        }
-        *out_start = cursor;
-        return true;
     }
-    return false;
+    free(delimiters);
+    if (!complete) {
+        return false;
+    }
+    *out_start = start;
+    *out_end = end;
+    return true;
+}
+
+/* Locate the next token at a known receiver-token boundary, ignoring trivia. */
+static size_t receiver_skip_trivia_forward(FengSlice text, size_t offset) {
+    FengLexer lexer;
+    FengToken token;
+
+    feng_lexer_init(&lexer, text.data + offset, text.length - offset, NULL);
+    token = feng_lexer_next(&lexer);
+    return offset + token.offset;
 }
 
 /* Skips one balanced call or index suffix in a receiver chain. */
@@ -782,9 +684,7 @@ static bool receiver_chain_parse(FengSlice text, FengLspReceiverChain *chain) {
         return false;
     }
     memset(chain, 0, sizeof(*chain));
-    while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
-        ++cursor;
-    }
+    cursor = receiver_skip_trivia_forward(text, cursor);
     if (cursor >= text.length) {
         return false;
     }
@@ -845,9 +745,7 @@ static bool receiver_chain_parse(FengSlice text, FengLspReceiverChain *chain) {
     while (cursor < text.length) {
         FengLspReceiverOperation operation = {0};
 
-        while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
-            ++cursor;
-        }
+        cursor = receiver_skip_trivia_forward(text, cursor);
         if (cursor >= text.length) {
             break;
         }
@@ -855,9 +753,7 @@ static bool receiver_chain_parse(FengSlice text, FengLspReceiverChain *chain) {
             size_t start;
 
             ++cursor;
-            while (cursor < text.length && isspace((unsigned char)text.data[cursor])) {
-                ++cursor;
-            }
+            cursor = receiver_skip_trivia_forward(text, cursor);
             start = cursor;
             if (cursor >= text.length || !completion_identifier_start(text.data[cursor])) {
                 receiver_chain_dispose(chain);
@@ -21523,7 +21419,7 @@ static bool completion_context_from_text(const char *text,
         return true;
     }
     object_end = prefix_start - 1U;
-    if (!receiver_text_find_start(text, object_end, &receiver_start)) {
+    if (!receiver_text_find_range(text, object_end, &receiver_start, &object_end)) {
         return true;
     }
     context->is_member = true;
@@ -24736,6 +24632,7 @@ static bool completion_json_has_items(const FengLspString *json) {
 static bool completion_context_is_member_dot(const char *text, size_t offset) {
     size_t length;
     size_t cursor;
+    FengLspCompletionContext context = {0};
 
     if (text == NULL || offset == 0U) {
         return false;
@@ -24751,14 +24648,7 @@ static bool completion_context_is_member_dot(const char *text, size_t offset) {
     if (cursor == 0U || text[cursor - 1U] != '.') {
         return false;
     }
-    while (cursor > 1U && isspace((unsigned char)text[cursor - 2U])) {
-        --cursor;
-    }
-    if (cursor < 2U) {
-        return false;
-    }
-    return completion_identifier_continue(text[cursor - 2U]) ||
-           text[cursor - 2U] == ')' || text[cursor - 2U] == ']' || text[cursor - 2U] == '"';
+    return completion_context_from_text(text, cursor, &context) && context.is_member;
 }
 
 static bool completion_context_is_member_access(const char *text, size_t offset) {

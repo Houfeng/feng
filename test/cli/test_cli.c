@@ -11990,6 +11990,58 @@ static void test_lsp_member_completion_survives_incomplete_member_access(void) {
     assert_lsp_completion_contains_name(kInferredSource, "user.;", 5U);
 }
 
+/* Comments around a receiver must not create a false chain or hide real
+ * member/call/index suffixes, including across source lines. */
+static void test_lsp_member_completion_ignores_receiver_comments(void) {
+    static const char *kFragments[] = {
+        "// obj.\n    obj.",
+        "// unrelated.next().\n    obj.",
+        "/* fake.\n       // still a block comment.\n    */\n    obj.",
+        "/* outer /* text is not nested */\n    obj.",
+        "obj /* comment. */.",
+        "obj // unrelated.\n      .",
+        "holder /* comment. */ . /* field. */ item.",
+        "obj\n      // unrelated.\n      .next().",
+        "obj.next /* call. */ ().",
+        "obj.next(\n      // unmatched ) ].\n    ).",
+        "objects[0 /* unmatched ] ). */].",
+        "objects[\n      // unmatched ] ).\n      0\n    ].",
+        "obj.label(\"// text with \\\"quotes\\\" and /* markers */\")."
+    };
+    size_t index;
+
+    for (index = 0U; index < sizeof(kFragments) / sizeof(kFragments[0]); ++index) {
+        char *source = dup_printf(
+            "module test.lsp.receiver_comments;\n"
+            "type Item {\n"
+            "    var marker: int;\n"
+            "    func next(): Item { return self; }\n"
+            "    func label(value: string): Item { return self; }\n"
+            "}\n"
+            "type Holder { var item: Item; }\n"
+            "func main() {\n"
+            "    let obj = Item();\n"
+            "    let holder = Holder { item: obj };\n"
+            "    let objects: Item[] = [obj];\n"
+            "    %s\n"
+            "    return;\n"
+            "}\n",
+            kFragments[index]);
+        char *output = capture_lsp_completion_response(source,
+                                                       kFragments[index],
+                                                       strlen(kFragments[index]));
+
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"marker\"");
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"next\"");
+        assert_lsp_test_response_contains(output, 2U, "\"label\":\"label\"");
+        assert_lsp_test_response_not_contains(output, 2U, "\"label\":\"obj\"");
+        assert_lsp_test_response_not_contains(output, 2U, "\"label\":\"objects\"");
+        assert_lsp_test_response_not_contains(output, 2U, "\"label\":\"return\"");
+        free(output);
+        free(source);
+    }
+}
+
 /* Ordered dirty-document edits and their completion responses in one LSP
  * session whose initial source has already completed semantic analysis. */
 enum { LSP_CONTROL_HEAD_COMPLETION_CASE_COUNT = 5 };
@@ -25420,6 +25472,7 @@ int main(void) {
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_fit_member_definition_survives_project_semantic_failure();
     test_lsp_member_completion_survives_incomplete_member_access();
+    test_lsp_member_completion_ignores_receiver_comments();
     test_lsp_member_completion_repairs_control_flow_heads();
     test_lsp_member_completion_repairs_enclosing_expressions();
     test_lsp_identifier_completion_uses_last_successful_scope();
