@@ -113,10 +113,14 @@ const explicitGenericCall = findExplicitGenericCall();
 assert(explicitGenericCall, 'expected explicitGenericCall rule in grammar repository');
 const explicitPatterns = Array.isArray(explicitGenericCall.patterns) ? explicitGenericCall.patterns : [];
 const colonAnglePattern = explicitPatterns.find(
-    p => p.name === 'punctuation.definition.generic.begin.feng'
+    p => p.begin && p.end
 );
-assert(colonAnglePattern, 'expected punctuation.definition.generic.begin.feng for <...> syntax');
-const colonAngleRegex = new RegExp(colonAnglePattern.match);
+assert(colonAnglePattern, 'expected a begin/end pattern for <...> syntax');
+assert.strictEqual(colonAnglePattern.beginCaptures['1'].name,
+    'punctuation.definition.generic.begin.feng', 'generic < should have a punctuation scope');
+assert.strictEqual(colonAnglePattern.endCaptures['0'].name,
+    'punctuation.definition.generic.end.feng', 'generic > should have a punctuation scope');
+const colonAngleRegex = new RegExp(colonAnglePattern.begin);
 assert(colonAngleRegex.test('identity<int>'), 'explicit generic call pattern should match identity<int>');
 
 // 3. functionDefinitions has a begin/end pattern with type-param support

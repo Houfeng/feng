@@ -752,13 +752,15 @@ function updateDelimiterStack(delimiterStack, tokens) {
  *   1. tokens[index] is `*`.
  *   2. The previous significant token is:
  *      a. An identifier preceded by `:` or `(` — i.e. a type-annotation position, OR
- *      b. Another `*` that was itself a postfix pointer star (chained T**).
+ *      b. Another `*` that was itself a postfix pointer star (chained T**), OR
+ *      c. In a recognized generic type argument list or at its closing delimiter.
  *   3. The next token is NOT an identifier and NOT `(`.  When * is followed by a
  *      letter or `(` it is a dereference / multiplication operator, not a pointer
  *      type suffix.
  */
 function isPostfixPointerStar(tokens, index, previousSignificantToken,
-                              tokenBeforePreviousSignificant, lastEmittedWasPostfixPointer) {
+                              tokenBeforePreviousSignificant, lastEmittedWasPostfixPointer,
+                              hasGenericTypeContext) {
     const token = tokens[index];
     if (token == null || token.type !== 'operator' || token.value !== '*') {
         return false;
@@ -768,7 +770,9 @@ function isPostfixPointerStar(tokens, index, previousSignificantToken,
     if (previousSignificantToken == null) {
         return false;
     }
-    if (previousSignificantToken.type === 'identifier') {
+    if (hasGenericTypeContext) {
+        /* Reuse generic recognition for qualified, nested, and array element types. */
+    } else if (previousSignificantToken.type === 'identifier') {
         /* Must be in a type-annotation context: `:` or `(` before the identifier */
         if (tokenBeforePreviousSignificant == null) {
             return false;
@@ -805,7 +809,7 @@ function tokenCanFollowExplicitGenericTarget(token) {
            token.value === ')' || token.value === ']' || token.value === '}')) ||
          (token.type === 'punctuation' &&
           (token.value === ',' || token.value === ';' || token.value === ':')) ||
-         (token.type === 'operator' && (token.value === '>' || token.value === '='));
+         (token.type === 'operator' && (token.value === '>' || token.value === '=' || token.value === '*'));
 }
 
 function countGenericCloseOperators(token) {
@@ -920,7 +924,8 @@ function formatLineTokens(tokens, previousSignificantTokenBeforeLine) {
         const isPostfixPtr = isPostfixPointerStar(
             tokens, index,
             previousSignificantToken, tokenBeforePreviousSignificant,
-            lastEmittedWasPostfixPointer
+            lastEmittedWasPostfixPointer,
+            genericDepth > 0 || lastEmittedWasGenericClose
         );
         const tightAfterCastClose = token.type === 'operator' &&
             PREFIX_OPERATORS.has(token.value) &&

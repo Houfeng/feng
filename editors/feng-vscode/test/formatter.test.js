@@ -282,4 +282,29 @@ runCase(
     'type Future<T, E> {\n    seal var _value: Option<T> = none;\n    seal var _error: Option<E> = none;\n    let nested: Box<Map<string, int>> = make();\n}\n'
 );
 
+runCase(
+    'keeps pointer type arguments attached in field annotations and constructor calls',
+    'type Future<T,E>{\nseal let waiters:List<AsyncTaskContext *> =List<AsyncTaskContext *>();\n}\n',
+    'type Future<T, E> {\n  seal let waiters: List<AsyncTaskContext*> = List<AsyncTaskContext*>();\n}\n',
+    { tabSize: 2 }
+);
+
+runCase(
+    'normalizes qualified and composed pointer type arguments',
+    'func main(){\nlet table:Map<string,ns.Node * *> =make();\nlet arrays:List<Node * []> =make();\nlet pointers:List<Node [] *> =make();\nlet nested:Box<Inner<int> *> =make();\n}\n',
+    'func main() {\n    let table: Map<string, ns.Node**> = make();\n    let arrays: List<Node*[]> = make();\n    let pointers: List<Node[]*> = make();\n    let nested: Box<Inner<int>*> = make();\n}\n'
+);
+
+runCase(
+    'preserves arithmetic and dereference spacing after generic pointer calls',
+    'func main(){\nlet size=count<Node*>(items)*factor;\nlet node=identity<Node*>(*ptr);\nlet nested:List<List<Node*>> =make();\n}\n',
+    'func main() {\n    let size = count<Node*>(items) * factor;\n    let node = identity<Node*>(*ptr);\n    let nested: List<List<Node*>> = make();\n}\n'
+);
+
+runCase(
+    'keeps formatted generic pointer annotations stable',
+    'seal let waiters: List<AsyncTaskContext*> = List<AsyncTaskContext*>();\n',
+    'seal let waiters: List<AsyncTaskContext*> = List<AsyncTaskContext*>();\n'
+);
+
 console.log('formatter tests passed');

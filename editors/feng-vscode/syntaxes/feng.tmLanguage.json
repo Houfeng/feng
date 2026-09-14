@@ -353,6 +353,9 @@
     "genericTypeParams": {
       "patterns": [
         {
+          "include": "#explicitGenericCall"
+        },
+        {
           "match": "([A-Za-z_][A-Za-z0-9_]*)(\\s*:\\s*)([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "entity.name.type.parameter.feng" },
@@ -373,8 +376,22 @@
     "explicitGenericCall": {
       "patterns": [
         {
-          "match": "(?<=[A-Za-z0-9_])<(?=[A-Za-z_])",
-          "name": "punctuation.definition.generic.begin.feng"
+          "comment": "Recognize a complete type argument list and its continuation before opening a recursive region; comparisons and shifts stay operators.",
+          "name": "meta.type.arguments.feng",
+          "begin": "(?<=[A-Za-z0-9_])[ \\t]*(<)(?=[ \\t]*[A-Za-z_][A-Za-z0-9_.,:<>!\\[\\]* \\t]*>(?!=)[ \\t]*(?:[()\\[\\]{},;:.=>*]|$))",
+          "end": ">",
+          "beginCaptures": {
+            "1": { "name": "punctuation.definition.generic.begin.feng" }
+          },
+          "endCaptures": {
+            "0": { "name": "punctuation.definition.generic.end.feng" }
+          },
+          "patterns": [
+            { "include": "#explicitGenericCall" },
+            { "include": "#builtinTypes" },
+            { "include": "#typeNames" },
+            { "include": "#operators" }
+          ]
         }
       ]
     }

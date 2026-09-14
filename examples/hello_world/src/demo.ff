@@ -32,7 +32,7 @@ type Future<T, E> {
   func pull(ctx: AsyncTaskContext*): Option<T> {
     return match self._state {
       FutureState.Resolved { self._value }
-      FutureState.Rejected { 
+      FutureState.Rejected {
         throw "Future rejected";
         // throw self._error
       }
