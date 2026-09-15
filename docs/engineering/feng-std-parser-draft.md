@@ -625,7 +625,7 @@ open type WhileStmt {
   let body: Block;
 }
 
-open spec ForInit: SimpleBinding | AssignmentStmt;
+open spec ForInit: Binding | AssignmentStmt;
 open spec ForUpdate: Expression | AssignmentStmt;
 
 open type ForStmt {
@@ -671,7 +671,7 @@ open type DeferStmt {
 
 - ForStmt（三段式 `for init; cond; update`）和 ForEachStmt（`for x in expr`）分离为两种独立 type
 - ForStmt 的三个子句与 IfStmt/MatchStmt 的 `elseBlock` 使用 `Option` 保留语法缺省信息；IfExpr/MatchExpr 的 `elseBlock` 仍为 `Block`。对应语法规则见 [流程控制规范](../specifications/feng-flow.md)。
-- ForInit 支持 SimpleBinding（`for let i = 0`）或 AssignmentStmt（`for i = 0`）
+- ForInit 支持 Binding（SimpleBinding 或 DestructureBinding）或 AssignmentStmt
 - ForUpdate 支持 Expression（`for ...; ...; i++`）或 AssignmentStmt（`for ...; ...; i += 1`）
 - TryStmt/IfStmt/MatchStmt 的 body 均为 **Expression** 而非 Block：`try expr catch ...`、`if cond { stmts }`、`match target { case { stmts } }`
 - 语句形式不产生求值结果，各分支中的语句不能省略分号

@@ -724,9 +724,9 @@ open type WhileStmt {
 }
 
 /**
- * for 循环初始化：绑定声明或赋值语句
+ * for 循环初始化：普通绑定、解构绑定或赋值语句
  */
-open spec ForInit: SimpleBinding | AssignmentStmt;
+open spec ForInit: Binding | AssignmentStmt;
 /**
  * for 循环更新：表达式或赋值语句
  */
