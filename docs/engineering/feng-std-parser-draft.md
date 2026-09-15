@@ -91,7 +91,7 @@ C 版 AST 用 `struct + enum + union` 模式（如 `FengExpr` 有 `FengExprKind`
 open spec Expression: IdentifierExpr
   | BooleanLiteralExpr
   | IntegerLiteralExpr
-  // ... 共 23 种
+  // ... 共 24 种
   ;
 
 open type IdentifierExpr {
@@ -108,7 +108,7 @@ open type IdentifierExpr {
 4. **语义与语法分离**：Parser 只产出 AST，语义分析阶段的数据（推断类型、resolved callable 等）不进入 AST 节点
 5. **自举友好**：直接面向 Feng 类型系统，不需要做 enum+union 的二次转换
 
-**类型数量**：23 种 Expression + 15 种 Statement + 7 种 ModuleMemberBody + 2 种 TypeMember + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 3 种 ObjectSpecMemberBody + 2 种 Binding + 辅助类型 = 约 70+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
+**类型数量**：24 种 Expression + 15 种 Statement + 7 种 ModuleMemberBody + 2 种 TypeMember + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 3 种 ObjectSpecMemberBody + 2 种 Binding + 辅助类型 = 约 70+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
 
 ### 3.2 基础类型
 
@@ -254,9 +254,19 @@ open spec Binding: SimpleBinding | DestructureBinding;
 
 ### 3.6 Expression（表达式）
 
-共 23 种表达式，每种为独立 type，通过 spec union 聚合：
+共 24 种表达式，每种为独立 type，通过 spec union 聚合：
 
 `SpreadExpr` 记录 `...expr` 的语法结构，`location` 指向 `...`，`operand` 保存其后的表达式。调用实参继续使用 `CallExpr.arguments: Expression[]`，其中的转传项表示为 `SpreadExpr`。当前允许的语法位置与转传规则见[变长参数规范 §4.3](../specifications/feng-function-variadic.md#43-预打包变参数组转发)；节点不保存语义阶段的转传信息。未来若增加数组展开，可复用此节点，其具体含义由所在上下文确定。
+
+`TypeRefExpr` 承载表达式位置中语法明确的类型引用，`location` 记录类型语法的起始位置，`typeRef` 保存完整的 `TypeReference` 结构。数组静态成员访问的目标通过此节点接入 `MemberAccessExpr.target`，数组类型引用中的元素类型、数组层级和逐层可写性均予以保留；相关语言规则见[内建类型 fit 规范 §3](../specifications/feng-fit-builtin-type.md#3-语义)。类型名称解析与静态成员查找由语义阶段完成。
+
+成员访问目标的 AST 对应关系如下，普通命名目标继续按表达式语法表示：
+
+| 源码 | `MemberAccessExpr.target` |
+| --- | --- |
+| `Box.member` | `IdentifierExpr`，保存名称 `Box` |
+| `Box<T>.member` | `GenericTargetExpr`，保存目标 `Box` 与类型实参 `T` |
+| `Box<T>[!][].member` | `TypeRefExpr`，保存完整的嵌套 `ArrayTypeRef` |
 
 ```feng
 open spec Expression: IdentifierExpr
@@ -281,7 +291,8 @@ open spec Expression: IdentifierExpr
   | MatchExpr
   | TryExpr
   | RangeExpr
-  | SpreadExpr;
+  | SpreadExpr
+  | TypeRefExpr;
 ```
 
 **各 variant 定义**：
@@ -383,6 +394,16 @@ open type ArrayNewExpr {
   let location: FengLocation;
   let elementTypeRef: TypeReference;
   let size: Expression;
+}
+
+/**
+ * 表达式位置中的类型引用
+ * 如 Box<T>[!][].method 中的 Box<T>[!][]，可作为 MemberAccessExpr 的 target
+ */
+open type TypeRefExpr {
+  // 类型语法的起始位置
+  let location: FengLocation;
+  let typeRef: TypeReference;
 }
 
 /**

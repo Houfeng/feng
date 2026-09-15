@@ -347,6 +347,16 @@ open type ArrayNewExpr {
 }
 
 /**
+ * 表达式位置中的类型引用
+ * 如 Box<T>[!][].method 中的 Box<T>[!][]，可作为 MemberAccessExpr 的 target
+ */
+open type TypeRefExpr {
+  // 类型语法的起始位置
+  let location: FengLocation;
+  let typeRef: TypeReference;
+}
+
+/**
  * 泛型具化表达式：对目标显式指定类型实参
  *
  * 用途：
@@ -589,7 +599,8 @@ open spec Expression: IdentifierExpr
 | MatchExpr
 | TryExpr
 | RangeExpr
-| SpreadExpr;
+| SpreadExpr
+| TypeRefExpr;
 
 // 块结构 ----------------------------------------------------------------------
 
