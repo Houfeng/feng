@@ -380,6 +380,8 @@ typedef enum FengStmtKind {
 
 struct FengBlock {
     FengToken token;
+    /* Closing delimiter, or the source origin for a synthesized block. */
+    FengToken end_token;
     FengStmt **statements;
     size_t statement_count;
 };

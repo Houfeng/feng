@@ -1,0 +1,148 @@
+module loop_breakpoints;
+
+import std.collections;
+import std.io;
+import std.numeric;
+import std.text;
+
+// Exercise independent source breakpoints through the real debugger backend.
+func main(args: string[]) {
+    simple();
+    temporaries();
+    unreachable();
+    multiline();
+    generic<int>(0);
+    methods();
+    lambdaLoop();
+    deferLoop();
+}
+
+// The adjacent body line must be reached once per successful condition.
+func simple() {
+    for var i = 0; i < 3; i = i + 1 {
+        println("simple {0}", i); // breakpoint: simple
+    }
+}
+
+// Condition temporaries must not add stops before entering the body.
+func temporaries() {
+    for var i = 0; below(3, i); i = i + 1 {
+        println("temporaries {0}", i); // breakpoint: temporaries
+    }
+}
+
+// A loop that never enters its body must not hit that body's breakpoint.
+func unreachable() {
+    for var i = 0; i < 0; i = i + 1 {
+        println("unreachable {0}", i); // breakpoint: unreachable
+    }
+}
+
+// Header clauses on different source lines must preserve the body location.
+func multiline() {
+    for var i = 0;
+        i < 2;
+        i = i + 1 {
+        println("multiline {0}", i); // breakpoint: multiline
+    }
+}
+
+// Variadic arguments require temporary storage and cleanup in the condition.
+func below(limit: int, values: int...): bool {
+    return values[0] < limit;
+}
+
+// Shared generic functions must use the same implicit exit source mapping.
+func generic<T>(value: T) {
+    for var i = 0;
+        i < 2;
+        i = i + 1 {
+        println("generic {0}", i); // breakpoint: generic
+    }
+}
+
+// Exercise constructor, method and finalizer emission through one instance.
+type LoopRunner {
+    // Constructor fallthrough must not inherit a loop body location.
+    func LoopRunner() {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("constructor {0}", i); // breakpoint: constructor
+        }
+    }
+
+    // Ordinary methods use the common fallthrough emitter.
+    func run() {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("method {0}", i); // breakpoint: method
+        }
+    }
+
+    // Method-level generic parameters select a separate codegen entry path.
+    func runGeneric<T>(value: T) {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("generic method {0}", i); // breakpoint: generic_method
+        }
+    }
+
+    // ARC invokes this finalizer when the enclosing methods() call exits.
+    func ~LoopRunner() {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("destructor {0}", i); // breakpoint: destructor
+        }
+    }
+}
+
+// Owner-level generic parameters also share the implicit exit policy.
+type GenericLoopRunner<T> {
+    // Keep the loop counter concrete while the method parameter is erased.
+    func run(value: T) {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("generic owner {0}", i); // breakpoint: generic_owner
+        }
+    }
+}
+
+// Sequence method entry paths and release the finalizable receiver on exit.
+func methods() {
+    let runner = LoopRunner();
+    runner.run();
+    runner.runGeneric<int>(0);
+    let genericRunner = GenericLoopRunner<int>();
+    genericRunner.run(0);
+}
+
+// Give the block lambda an explicit callable type.
+spec Action(): void;
+
+// Nested callable emission must restore the containing statement's anchor.
+func lambdaLoop() {
+    let action: Action = () {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("lambda {0}", i); // breakpoint: lambda
+        }
+    };
+    action();
+}
+
+// Defer helpers exit implicitly without a separate runtime frame marker.
+func deferLoop() {
+    defer {
+        for var i = 0;
+            i < 2;
+            i = i + 1 {
+            println("defer {0}", i); // breakpoint: defer
+        }
+    }
+}

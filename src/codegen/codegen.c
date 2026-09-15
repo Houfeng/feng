@@ -2369,7 +2369,9 @@ static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_return_control_cleanup(CG *cg);
 static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count);
 static bool cg_emit_function_eh_prologue(CG *cg, FengToken token);
-static void cg_emit_function_fallthrough_cleanup(CG *cg);
+static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
+                                         FengToken token, const char *terminator);
+static void cg_emit_function_close(CG *cg);
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname);
 static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                                      const char *cname,
@@ -23589,13 +23591,11 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
 
     if (lambda_expr->as.lambda.is_block_body) {
         if (!cg_emit_block(cg, lambda_expr->as.lambda.body_block)) goto cleanup;
-        cg_release_scope(cg, fn_scope);
-        cg_emit_function_fallthrough_cleanup(cg);
-        if (spec->callable_return_type->kind == CG_TYPE_VOID) {
-            buf_append_cstr(&fn, "    return;\n");
-        } else {
-            buf_append_cstr(&fn,
-                "    feng_panic(\"lambda reached end without return\");\n");
+        if (!cg_emit_function_fallthrough(
+                cg, fn_scope, lambda_expr->as.lambda.body_block->end_token,
+                spec->callable_return_type->kind == CG_TYPE_VOID
+                    ? "return;" : "feng_panic(\"lambda reached end without return\");")) {
+            goto cleanup;
         }
     } else {
         ExprResult result;
@@ -23616,14 +23616,15 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         if (spec->callable_return_type->kind == CG_TYPE_VOID) {
             buf_append_fmt(&fn, "    %s;\n", result.c_expr);
             er_free(&result);
-            cg_release_scope(cg, fn_scope);
-            cg_emit_function_fallthrough_cleanup(cg);
-            buf_append_cstr(&fn, "    return;\n");
+            if (!cg_emit_function_fallthrough(
+                    cg, fn_scope, lambda_expr->as.lambda.body->token, "return;")) {
+                goto cleanup;
+            }
         } else if (!cg_emit_return_expr_result(cg, lambda_expr->token, &result)) {
             goto cleanup;
         }
     }
-    buf_append_cstr(&fn, "}\n\n");
+    cg_emit_function_close(cg);
     if (fn.data == NULL) {
         cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
@@ -42317,12 +42318,16 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
                 "CE0272", "codegen: for condition must be bool");
         }
         char *cond_tmp = cg_fresh_temp(cg, "_fcond");
+        /* Condition lowering and cleanup may emit several C lines. Keep
+         * both the result and the branch anchored to the loop header. */
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body, "        bool %s = %s;\n",
                        cond_tmp, cond.c_expr);
         er_free(&cond);
         cg_release_scope(cg, cond_scope);
         cg->cur_scope = cond_scope->parent;
         scope_pop_free(cond_scope);
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body, "        if (!%s) break;\n", cond_tmp);
         free(cond_tmp);
     }
@@ -44976,8 +44981,12 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             buf_free(&fn);
             goto fn_cleanup;
         }
-        cg_release_scope(cg, fn_scope);
-        buf_append_cstr(&fn, "}\n\n");
+        if (!cg_emit_function_fallthrough(
+                cg, fn_scope, stmt->as.defer_block->end_token, NULL)) {
+            buf_free(&fn);
+            goto fn_cleanup;
+        }
+        cg_emit_function_close(cg);
         if (fn.data == NULL) {
             cg_fail(cg, blame, "IE0001", "codegen: out of memory");
             buf_free(&fn);
@@ -45140,6 +45149,12 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
                     "                     \".cfi_lsda 16, feng_empty_function_lsda\\n\");\n"
                     "#endif\n"
                     "#endif\n");
+    /* The previous callable's closing source line must not flow into this
+     * callable's first executable instruction through the generated C. */
+    if (!cg_emit_line_directive_force(cg, token)) {
+        free(frame_name);
+        return false;
+    }
     buf_append_fmt(cg->cur_body,
                    "    FengFrameMarker %s; feng_frame_push(&%s);\n",
                    frame_name,
@@ -45149,9 +45164,40 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
     return true;
 }
 
-static void cg_emit_function_fallthrough_cleanup(CG *cg) {
+/* Keep implicit exits at the callable's source end, including cleanup and
+ * the following C closing brace. Preserve an enclosing statement's anchor
+ * when this callable is emitted while lowering a lambda or defer. */
+static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
+                                         FengToken token, const char *terminator) {
+    FengToken saved_anchor = cg->current_stmt_anchor_token;
+    bool saved_active = cg->current_stmt_anchor_active;
+    bool ok = false;
+
+    if (!cg_emit_line_directive_force(cg, token)) return false;
+    cg->current_stmt_anchor_token = token;
+    cg->current_stmt_anchor_active = true;
+    cg_release_scope(cg, scope);
+    cg_emit_current_stmt_line_directive_force(cg);
     if (cg->cur_function_has_frame_marker) {
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+    }
+    if (terminator != NULL) {
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_fmt(cg->cur_body, "    %s\n", terminator);
+    }
+    ok = cg_emit_line_directive_force(cg, token) && !cg->failed;
+    cg->current_stmt_anchor_token = saved_anchor;
+    cg->current_stmt_anchor_active = saved_active;
+    return ok;
+}
+
+/* End the callable's source mapping before later generated wrappers/helpers.
+ * The next source callable must establish its own logical file and line. */
+static void cg_emit_function_close(CG *cg) {
+    buf_append_cstr(cg->cur_body, "}\n\n");
+    if (cg->options != NULL && cg->options->emit_line_directives) {
+        buf_append_cstr(cg->cur_body, "#line 1 \"<feng-generated>\"\n");
+        cg->last_emitted_line_directive = 0U;
     }
 }
 
@@ -50818,15 +50864,15 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         }
 
         /* Implicit fall-off. */
-        cg_release_scope(cg, fn_scope);
-        cg_emit_function_fallthrough_cleanup(cg);
-        if (return_type->kind == CG_TYPE_VOID) {
-            buf_append_cstr(body, "    return;\n");
-        } else {
-            buf_append_cstr(body,
-                "    feng_panic(\"generic function reached end without return\");\n");
+        if (!cg_emit_function_fallthrough(
+                cg, fn_scope, sig->body->end_token,
+                return_type->kind == CG_TYPE_VOID
+                    ? "return;" : "feng_panic(\"generic function reached end without return\");")) {
+            cg->cur_scope = NULL;
+            scope_pop_free(fn_scope);
+            goto cleanup_params;
         }
-        buf_append_cstr(body, "}\n\n");
+        cg_emit_function_close(cg);
 
         cg->cur_scope = NULL;
         scope_pop_free(fn_scope);
@@ -52364,16 +52410,14 @@ static bool cg_emit_function(CG *cg,
 
     if (!cg_emit_block(cg, decl->as.function_decl.body)) goto cleanup;
 
-    cg_release_scope(cg, fn_scope);
-    cg_emit_function_fallthrough_cleanup(cg);
-    if (fn->return_type->kind == CG_TYPE_VOID) {
-        buf_append_cstr(body, "    return;\n");
-    } else if (is_main && fn->return_type->kind == CG_TYPE_I32) {
-        buf_append_cstr(body, "    return 0;\n");
-    } else {
-        buf_append_cstr(body, "    feng_panic(\"function reached end without return\");\n");
+    const char *terminator = fn->return_type->kind == CG_TYPE_VOID
+        ? "return;" : is_main && fn->return_type->kind == CG_TYPE_I32
+        ? "return 0;" : "feng_panic(\"function reached end without return\");";
+    if (!cg_emit_function_fallthrough(
+            cg, fn_scope, decl->as.function_decl.body->end_token, terminator)) {
+        goto cleanup;
     }
-    buf_append_cstr(body, "}\n\n");
+    cg_emit_function_close(cg);
     ok = true;
     if (ok && !cg_emit_free_fn_abi_wrapper(cg, fn, abi_wrapper_needs_static)) {
         ok = false;
@@ -63337,15 +63381,13 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         }
     }
     if (!cg_emit_block(cg, sig->body)) goto cleanup;
-    cg_release_scope(cg, fn_scope);
-    cg_emit_function_fallthrough_cleanup(cg);
-    if (return_type->kind == CG_TYPE_VOID) {
-        buf_append_cstr(body, "    return;\n");
-    } else {
-        buf_append_cstr(body,
-            "    feng_panic(\"generic method reached end without return\");\n");
+    if (!cg_emit_function_fallthrough(
+            cg, fn_scope, sig->body->end_token,
+            return_type->kind == CG_TYPE_VOID
+                ? "return;" : "feng_panic(\"generic method reached end without return\");")) {
+        goto cleanup;
     }
-    buf_append_cstr(body, "}\n\n");
+    cg_emit_function_close(cg);
     ok = true;
 
 cleanup:
@@ -64163,15 +64205,13 @@ static bool cg_emit_user_method(CG *cg,
         goto cleanup;
     }
     if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
-    cg_release_scope(cg, fn_scope);
-    cg_emit_function_fallthrough_cleanup(cg);
-    if (m->return_type->kind == CG_TYPE_VOID) {
-        buf_append_cstr(body, "    return;\n");
-    } else {
-        buf_append_cstr(body,
-            "    feng_panic(\"method reached end without return\");\n");
+    if (!cg_emit_function_fallthrough(
+            cg, fn_scope, m->member->as.callable.body->end_token,
+            m->return_type->kind == CG_TYPE_VOID
+                ? "return;" : "feng_panic(\"method reached end without return\");")) {
+        goto cleanup;
     }
-    buf_append_cstr(body, "}\n\n");
+    cg_emit_function_close(cg);
     ok = true;
 
 cleanup:
@@ -64600,15 +64640,13 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     }
 
     if (!cg_emit_block(cg, m->member->as.callable.body)) goto cleanup;
-    cg_release_scope(cg, fn_scope);
-    cg_emit_function_fallthrough_cleanup(cg);
-    if (m->return_type->kind == CG_TYPE_VOID) {
-        buf_append_cstr(body, "    return;\n");
-    } else {
-        buf_append_cstr(body,
-            "    feng_panic(\"method reached end without return\");\n");
+    if (!cg_emit_function_fallthrough(
+            cg, fn_scope, m->member->as.callable.body->end_token,
+            m->return_type->kind == CG_TYPE_VOID
+                ? "return;" : "feng_panic(\"method reached end without return\");")) {
+        goto cleanup;
     }
-    buf_append_cstr(body, "}\n\n");
+    cg_emit_function_close(cg);
     ok = true;
 
 cleanup:
@@ -64791,9 +64829,11 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     if (!cg_emit_block(cg, fm->as.callable.body)) {
         goto cleanup;
     }
-    cg_release_scope(cg, fn_scope);
-    cg_emit_function_fallthrough_cleanup(cg);
-    buf_append_cstr(body, "    return;\n}\n\n");
+    if (!cg_emit_function_fallthrough(
+            cg, fn_scope, fm->as.callable.body->end_token, "return;")) {
+        goto cleanup;
+    }
+    cg_emit_function_close(cg);
     ok = true;
 
 cleanup:

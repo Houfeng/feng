@@ -2610,6 +2610,7 @@ static FengBlock *new_block(Parser *parser, FengToken token) {
         (void)parser_error_current(parser, "IE0001", "out of memory");
     } else {
         block->token = token;
+        block->end_token = token;
     }
     return block;
 }
@@ -4661,6 +4662,7 @@ static bool parse_block_statements(Parser *parser,
             goto done;
         }
     }
+    block->end_token = parser_current_token(parser);
     success = true;
 
 done:

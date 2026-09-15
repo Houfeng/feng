@@ -1,6 +1,8 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
+#include <poll.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -9,6 +11,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "archive/fb.h"
@@ -8869,6 +8872,645 @@ static void test_project_build_keeps_for_body_locals_after_prefix_binding(void) 
     free(manifest_path);
     free(project_dir);
 #endif
+}
+
+/* A borrowed JSON value within an owned DAP response payload. */
+typedef struct DapTestJson {
+    const char *begin;
+    const char *end;
+} DapTestJson;
+
+/* A real adapter session with owned messages awaiting their exact consumer. */
+typedef struct DapTestSession {
+    pid_t child;
+    int input_fd;
+    int output_fd;
+    int next_seq;
+    FILE *log;
+    const char *log_path;
+    char **pending;
+    size_t pending_count;
+    void (*saved_sigpipe)(int);
+} DapTestSession;
+
+static DapTestSession *dap_test_active_session;
+
+/* Skip JSON whitespace without depending on backend formatting. */
+static const char *dap_test_json_space(const char *cursor) {
+    return cursor + strspn(cursor, " \t\r\n");
+}
+
+/* Find a complete value, respecting nested containers and escaped strings. */
+static DapTestJson dap_test_json_next(const char **cursor) {
+    const char *begin = dap_test_json_space(*cursor);
+    const char *end = begin;
+
+    ASSERT(*end != '\0');
+    if (*end == '"') {
+        ++end;
+        while (*end != '"') {
+            ASSERT(*end != '\0');
+            if (*end++ == '\\') {
+                ASSERT(*end != '\0');
+                ++end;
+            }
+        }
+        ++end;
+    } else if (*end == '{' || *end == '[') {
+        char closing = *end++ == '{' ? '}' : ']';
+        end = dap_test_json_space(end);
+        while (*end != closing) {
+            (void)dap_test_json_next(&end);
+            end = dap_test_json_space(end);
+            if (*end == ',' || *end == ':') {
+                end = dap_test_json_space(end + 1);
+            }
+        }
+        ++end;
+    } else {
+        end += strcspn(end, " \t\r\n,}]:");
+        ASSERT(end > begin);
+    }
+    *cursor = end;
+    return (DapTestJson){begin, end};
+}
+
+/* Decode one JSON Unicode escape while advancing past its four digits. */
+static unsigned int dap_test_json_hex(const char **cursor, const char *end) {
+    unsigned int value = 0U;
+    ASSERT(end - *cursor >= 4);
+    for (size_t index = 0U; index < 4U; ++index) {
+        unsigned char digit = (unsigned char)*(*cursor)++;
+        unsigned int number;
+        if (digit >= '0' && digit <= '9') number = digit - '0';
+        else if (digit >= 'a' && digit <= 'f') number = digit - 'a' + 10U;
+        else {
+            ASSERT(digit >= 'A' && digit <= 'F');
+            number = digit - 'A' + 10U;
+        }
+        value = value * 16U + number;
+    }
+    return value;
+}
+
+/* Compare decoded JSON strings, including escaped paths and UTF-8 names. */
+static int dap_test_json_string_is(DapTestJson value, const char *expected) {
+    char *decoded;
+    size_t length = 0U;
+    const char *cursor;
+    int matches;
+
+    if (value.begin == NULL || *value.begin != '"') return 0;
+    decoded = (char *)malloc((size_t)(value.end - value.begin));
+    ASSERT(decoded != NULL);
+    cursor = value.begin + 1;
+    while (cursor < value.end - 1) {
+        unsigned int codepoint = (unsigned char)*cursor++;
+        if (codepoint != '\\') {
+            decoded[length++] = (char)codepoint;
+            continue;
+        }
+        ASSERT(cursor < value.end - 1);
+        switch (*cursor++) {
+            case '"': codepoint = '"'; break;
+            case '\\': codepoint = '\\'; break;
+            case '/': codepoint = '/'; break;
+            case 'b': codepoint = '\b'; break;
+            case 'f': codepoint = '\f'; break;
+            case 'n': codepoint = '\n'; break;
+            case 'r': codepoint = '\r'; break;
+            case 't': codepoint = '\t'; break;
+            case 'u':
+                codepoint = dap_test_json_hex(&cursor, value.end - 1);
+                if (codepoint >= 0xd800U && codepoint <= 0xdbffU) {
+                    unsigned int low;
+                    ASSERT(value.end - 1 - cursor >= 6);
+                    ASSERT(cursor[0] == '\\' && cursor[1] == 'u');
+                    cursor += 2;
+                    low = dap_test_json_hex(&cursor, value.end - 1);
+                    ASSERT(low >= 0xdc00U && low <= 0xdfffU);
+                    codepoint = 0x10000U + ((codepoint - 0xd800U) << 10U) + low - 0xdc00U;
+                }
+                ASSERT(codepoint < 0xd800U || codepoint > 0xdfffU);
+                break;
+            default: ASSERT(0); break;
+        }
+        if (codepoint < 0x80U) {
+            decoded[length++] = (char)codepoint;
+        } else {
+            if (codepoint >= 0x10000U) {
+                decoded[length++] = (char)(0xf0U | (codepoint >> 18U));
+                decoded[length++] = (char)(0x80U | ((codepoint >> 12U) & 0x3fU));
+            } else if (codepoint >= 0x800U) {
+                decoded[length++] = (char)(0xe0U | (codepoint >> 12U));
+            } else {
+                decoded[length++] = (char)(0xc0U | (codepoint >> 6U));
+            }
+            if (codepoint >= 0x800U) {
+                decoded[length++] = (char)(0x80U | ((codepoint >> 6U) & 0x3fU));
+            }
+            decoded[length++] = (char)(0x80U | (codepoint & 0x3fU));
+        }
+    }
+    matches = strlen(expected) == length && memcmp(decoded, expected, length) == 0;
+    free(decoded);
+    return matches;
+}
+
+/* Look up a direct object member rather than matching nested JSON text. */
+static DapTestJson dap_test_json_get(DapTestJson object, const char *key) {
+    const char *cursor;
+    ASSERT(object.begin != NULL && *object.begin == '{');
+    cursor = dap_test_json_space(object.begin + 1);
+    while (cursor < object.end && *cursor != '}') {
+        DapTestJson name = dap_test_json_next(&cursor);
+        DapTestJson value;
+        cursor = dap_test_json_space(cursor);
+        ASSERT(*cursor++ == ':');
+        value = dap_test_json_next(&cursor);
+        if (dap_test_json_string_is(name, key)) return value;
+        cursor = dap_test_json_space(cursor);
+        if (*cursor == ',') cursor = dap_test_json_space(cursor + 1);
+        else ASSERT(*cursor == '}');
+    }
+    return (DapTestJson){0};
+}
+
+/* Return an array item, or an empty view when the index is past its end. */
+static DapTestJson dap_test_json_at(DapTestJson array, size_t index) {
+    const char *cursor;
+    ASSERT(array.begin != NULL && *array.begin == '[');
+    cursor = dap_test_json_space(array.begin + 1);
+    while (cursor < array.end && *cursor != ']') {
+        DapTestJson item = dap_test_json_next(&cursor);
+        if (index-- == 0U) return item;
+        cursor = dap_test_json_space(cursor);
+        if (*cursor == ',') cursor = dap_test_json_space(cursor + 1);
+        else ASSERT(*cursor == ']');
+    }
+    return (DapTestJson){0};
+}
+
+/* Require a complete integer token for protocol IDs and source lines. */
+static long dap_test_json_integer(DapTestJson value) {
+    char *end;
+    long number;
+    ASSERT(value.begin != NULL);
+    errno = 0;
+    number = strtol(value.begin, &end, 10);
+    ASSERT(errno != ERANGE && end == value.end && end > value.begin);
+    return number;
+}
+
+/* Require the backend to confirm a boolean property such as success. */
+static void dap_test_json_require_true(DapTestJson value) {
+    ASSERT(value.begin != NULL && value.end - value.begin == 4);
+    ASSERT(memcmp(value.begin, "true", 4U) == 0);
+}
+
+/* Use an absolute monotonic deadline across partial reads and events. */
+static long long dap_test_now_ms(void) {
+    struct timespec now;
+    ASSERT(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    return (long long)now.tv_sec * 1000LL + now.tv_nsec / 1000000L;
+}
+
+/* Preserve diagnostics and kill the entire adapter group on assertion failure. */
+static void dap_test_abort_session(void) {
+    DapTestSession *session = dap_test_active_session;
+    if (session == NULL) return;
+    (void)kill(-session->child, SIGKILL);
+    while (waitpid(session->child, NULL, 0) < 0 && errno == EINTR) {}
+    fprintf(stderr, "\nDAP session log: %s\n", session->log_path);
+    if (fseek(session->log, 0L, SEEK_END) == 0) {
+        long length = ftell(session->log);
+        char buffer[4096];
+        size_t count;
+        (void)fseek(session->log, length > 16384L ? length - 16384L : 0L, SEEK_SET);
+        while ((count = fread(buffer, 1U, sizeof(buffer), session->log)) > 0U) {
+            (void)fwrite(buffer, 1U, count, stderr);
+        }
+    }
+}
+
+/* Transfer exact bytes with a deadline; framing never consumes the next message. */
+static void dap_test_transfer(int fd, char *bytes, size_t length,
+                              int writing, long long deadline) {
+    while (length > 0U) {
+        long long remaining = deadline - dap_test_now_ms();
+        struct pollfd descriptor = {fd, writing ? POLLOUT : POLLIN, 0};
+        int ready;
+        ssize_t count;
+        ASSERT(remaining > 0 && remaining <= INT_MAX);
+        ready = poll(&descriptor, 1U, (int)remaining);
+        if (ready < 0 && errno == EINTR) continue;
+        ASSERT(ready > 0);
+        count = writing ? write(fd, bytes, length) : read(fd, bytes, length);
+        if (count < 0 && (errno == EINTR || errno == EAGAIN)) continue;
+        ASSERT(count > 0);
+        bytes += count;
+        length -= (size_t)count;
+    }
+}
+
+/* Start the real CLI adapter in a separate, recoverable process group. */
+static void dap_test_start(DapTestSession *session, const char *root,
+                           const char *backend, const char *log_path) {
+    int input[2];
+    int output[2];
+    ASSERT(dap_test_active_session == NULL);
+    memset(session, 0, sizeof(*session));
+    session->next_seq = 1;
+    session->log_path = log_path;
+    session->log = fopen(log_path, "w+b");
+    ASSERT(session->log != NULL);
+    ASSERT(setvbuf(session->log, NULL, _IONBF, 0U) == 0);
+    ASSERT(pipe(input) == 0 && pipe(output) == 0);
+    ASSERT(atexit(dap_test_abort_session) == 0);
+    fflush(NULL);
+    session->child = fork();
+    ASSERT(session->child >= 0);
+    if (session->child == 0) {
+        char *argv[] = {"--stdio"};
+        if (setpgid(0, 0) != 0 || chdir(root) != 0 ||
+            setenv("FENG_LLDB_DAP", backend, 1) != 0 ||
+            dup2(input[0], STDIN_FILENO) < 0 ||
+            dup2(output[1], STDOUT_FILENO) < 0 ||
+            dup2(fileno(session->log), STDERR_FILENO) < 0) _exit(127);
+        close(input[0]);
+        close(input[1]);
+        close(output[0]);
+        close(output[1]);
+        fclose(session->log);
+        _exit(feng_cli_dap_main("feng", 1, argv));
+    }
+    dap_test_active_session = session;
+    ASSERT(setpgid(session->child, session->child) == 0);
+    close(input[0]);
+    close(output[1]);
+    session->input_fd = input[1];
+    session->output_fd = output[0];
+    ASSERT(fcntl(session->input_fd, F_SETFL, O_NONBLOCK) == 0);
+    session->saved_sigpipe = signal(SIGPIPE, SIG_IGN);
+    ASSERT(session->saved_sigpipe != SIG_ERR);
+}
+
+/* Send one request, returning its sequence for asynchronous launch handling. */
+static int dap_test_send(DapTestSession *session, const char *command,
+                         const char *arguments) {
+    int seq = session->next_seq++;
+    char *json = dup_printf("{\"seq\":%d,\"type\":\"request\",\"command\":\"%s\",\"arguments\":%s}",
+                            seq, command, arguments);
+    char *frame = build_dap_message_text(json);
+    fprintf(session->log, "> %s\n", json);
+    dap_test_transfer(session->input_fd, frame, strlen(frame), 1, dap_test_now_ms() + 30000LL);
+    free(frame);
+    free(json);
+    return seq;
+}
+
+/* Consume only the requested response/event and retain other messages in order. */
+static char *dap_test_wait(DapTestSession *session, int request_seq,
+                           const char *event, const char *alternative_event) {
+    long long deadline = dap_test_now_ms() + 30000LL;
+    for (;;) {
+        char header[4096];
+        size_t header_length = 0U;
+        unsigned long payload_length = 0UL;
+        char *payload;
+        char **pending;
+        for (size_t index = 0U; index < session->pending_count; ++index) {
+            const char *cursor = session->pending[index];
+            DapTestJson message = dap_test_json_next(&cursor);
+            DapTestJson type = dap_test_json_get(message, "type");
+            int matches = request_seq > 0
+                ? dap_test_json_string_is(type, "response") &&
+                  dap_test_json_integer(dap_test_json_get(message, "request_seq")) == request_seq
+                : dap_test_json_string_is(type, "event") &&
+                  (dap_test_json_string_is(dap_test_json_get(message, "event"), event) ||
+                   (alternative_event != NULL && dap_test_json_string_is(
+                       dap_test_json_get(message, "event"), alternative_event)));
+            if (matches) {
+                payload = session->pending[index];
+                --session->pending_count;
+                memmove(&session->pending[index], &session->pending[index + 1U],
+                        (session->pending_count - index) * sizeof(*session->pending));
+                return payload;
+            }
+        }
+        do {
+            ASSERT(header_length + 1U < sizeof(header));
+            dap_test_transfer(session->output_fd, &header[header_length++], 1U, 0, deadline);
+            header[header_length] = '\0';
+        } while (header_length < 4U ||
+                 memcmp(header + header_length - 4U, "\r\n\r\n", 4U) != 0);
+        ASSERT(sscanf(header, "Content-Length: %lu", &payload_length) == 1);
+        ASSERT(payload_length > 0UL && payload_length <= 8UL * 1024UL * 1024UL);
+        payload = (char *)malloc((size_t)payload_length + 1U);
+        ASSERT(payload != NULL);
+        dap_test_transfer(session->output_fd, payload, (size_t)payload_length, 0, deadline);
+        payload[payload_length] = '\0';
+        fprintf(session->log, "< %s\n", payload);
+        ASSERT(session->pending_count < 1024U);
+        pending = (char **)realloc(session->pending,
+                                   (session->pending_count + 1U) * sizeof(*pending));
+        ASSERT(pending != NULL);
+        session->pending = pending;
+        session->pending[session->pending_count++] = payload;
+    }
+}
+
+/* Require a successful response while allowing events to arrive before it. */
+static char *dap_test_response(DapTestSession *session, int seq) {
+    char *payload = dap_test_wait(session, seq, NULL, NULL);
+    const char *cursor = payload;
+    DapTestJson message = dap_test_json_next(&cursor);
+    dap_test_json_require_true(dap_test_json_get(message, "success"));
+    return payload;
+}
+
+/* Execute a request and return an owned response for structured assertions. */
+static char *dap_test_request(DapTestSession *session, const char *command,
+                             const char *arguments) {
+    return dap_test_response(session, dap_test_send(session, command, arguments));
+}
+
+/* Obtain the response/event body while keeping its payload ownership explicit. */
+static DapTestJson dap_test_body(const char *payload) {
+    DapTestJson message = dap_test_json_next(&payload);
+    return dap_test_json_get(message, "body");
+}
+
+/* Disconnect, wait for the adapter to exit, and release all session resources. */
+static void dap_test_finish(DapTestSession *session) {
+    long long deadline;
+    int status;
+    pid_t result;
+    free(dap_test_request(session, "disconnect", "{\"terminateDebuggee\":true}"));
+    close(session->input_fd);
+    deadline = dap_test_now_ms() + 5000LL;
+    do {
+        const struct timespec delay = {0, 10000000L};
+        result = waitpid(session->child, &status, WNOHANG);
+        if (result == session->child) break;
+        ASSERT(result == 0 || (result < 0 && errno == EINTR));
+        ASSERT(dap_test_now_ms() < deadline);
+        (void)nanosleep(&delay, NULL);
+    } while (1);
+    ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == 0);
+    close(session->output_fd);
+    fclose(session->log);
+    for (size_t index = 0U; index < session->pending_count; ++index) free(session->pending[index]);
+    free(session->pending);
+    ASSERT(signal(SIGPIPE, session->saved_sigpipe) != SIG_ERR);
+    dap_test_active_session = NULL;
+}
+
+/* Verify the same counter through visible locals and the Feng watch path. */
+static void dap_test_expect_counter(DapTestSession *session, long frame_id,
+                                     size_t expected) {
+    char *arguments = dup_printf("{\"frameId\":%ld}", frame_id);
+    char *response = dap_test_request(session, "scopes", arguments);
+    DapTestJson scopes = dap_test_json_get(dap_test_body(response), "scopes");
+    DapTestJson variables;
+    long reference = 0;
+    size_t found = 0U;
+    char expected_text[32];
+
+    free(arguments);
+    for (size_t index = 0U;; ++index) {
+        DapTestJson scope = dap_test_json_at(scopes, index);
+        if (scope.begin == NULL) break;
+        if (dap_test_json_string_is(dap_test_json_get(scope, "name"), "Locals")) {
+            ASSERT(reference == 0);
+            reference = dap_test_json_integer(dap_test_json_get(scope, "variablesReference"));
+        }
+    }
+    ASSERT(reference > 0);
+    free(response);
+    arguments = dup_printf("{\"variablesReference\":%ld}", reference);
+    response = dap_test_request(session, "variables", arguments);
+    variables = dap_test_json_get(dap_test_body(response), "variables");
+    free(arguments);
+    snprintf(expected_text, sizeof(expected_text), "%zu", expected);
+    for (size_t index = 0U;; ++index) {
+        DapTestJson variable = dap_test_json_at(variables, index);
+        if (variable.begin == NULL) break;
+        if (dap_test_json_string_is(dap_test_json_get(variable, "name"), "i")) {
+            ++found;
+            ASSERT(dap_test_json_string_is(dap_test_json_get(variable, "value"), expected_text));
+        }
+    }
+    ASSERT(found == 1U);
+    free(response);
+    arguments = dup_printf("{\"expression\":\"i\",\"frameId\":%ld,\"context\":\"watch\"}", frame_id);
+    response = dap_test_request(session, "evaluate", arguments);
+    ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "result"), expected_text));
+    free(response);
+    free(arguments);
+}
+
+/* Locate exactly one named fixture marker without duplicating source line numbers. */
+static unsigned int dap_test_breakpoint_line(const char *source, const char *name) {
+    char *marker = dup_printf("// breakpoint: %s\n", name);
+    const char *position = strstr(source, marker);
+    unsigned int line = 1U;
+    ASSERT(position != NULL && strstr(position + strlen(marker), marker) == NULL);
+    for (const char *cursor = source; cursor < position; ++cursor) {
+        if (*cursor == '\n') ++line;
+    }
+    free(marker);
+    return line;
+}
+
+/* Existing DAP presentation: generic shared locals are absent; defer is hidden. */
+typedef enum DapTestFramePolicy {
+    DAP_TEST_FRAME_LOCALS,
+    DAP_TEST_FRAME_SOURCE,
+    DAP_TEST_FRAME_HIDDEN,
+} DapTestFramePolicy;
+
+/* One fixture breakpoint and the exact number of times its body should execute. */
+typedef struct DapTestLoopCase {
+    const char *name;
+    size_t iterations;
+    DapTestFramePolicy frame_policy;
+    unsigned int line;
+    long breakpoint_id;
+} DapTestLoopCase;
+
+/* Exercise real DAP breakpoints, source rewriting, locals, watch and termination. */
+static void test_dap_loop_breakpoints_follow_iterations(void) {
+    DapTestLoopCase cases[] = {
+        {"simple", 3U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"temporaries", 3U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"unreachable", 0U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"multiline", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"generic", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"constructor", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"method", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"generic_method", 2U, DAP_TEST_FRAME_SOURCE, 0U, 0},
+        {"generic_owner", 2U, DAP_TEST_FRAME_SOURCE, 0U, 0},
+        {"destructor", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"lambda", 2U, DAP_TEST_FRAME_LOCALS, 0U, 0},
+        {"defer", 2U, DAP_TEST_FRAME_HIDDEN, 0U, 0},
+    };
+    const size_t case_count = sizeof(cases) / sizeof(cases[0]);
+    char template_path[] = "temp/feng_cli_dap_loop_breakpoints_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *repo_root = getcwd(NULL, 0);
+    char *root;
+    char *src_dir;
+    char *source_path;
+    char *manifest_path;
+    char *manifest_text;
+    char *std_path;
+    char *binary_path;
+    char *backend_path;
+    char *log_path;
+    char *escaped_source;
+    char *escaped_binary;
+    char *escaped_root;
+    char *fixture = read_text_file("test/debug/loop_breakpoints.ff");
+    char *breakpoint_list = dup_cstr("");
+    char *arguments;
+    char *response;
+    char *remove_error = NULL;
+    DapTestSession session;
+    DapTestJson breakpoints;
+    int launch_seq;
+    size_t stops = 0U;
+
+    ASSERT(workspace_dir != NULL && repo_root != NULL);
+    root = realpath(workspace_dir, NULL);
+    ASSERT(root != NULL);
+    src_dir = path_join(root, "src");
+    source_path = path_join(src_dir, "main.ff");
+    manifest_path = path_join(root, "feng.fm");
+    std_path = path_join(repo_root, "std/std");
+    binary_path = project_host_build_path(root, "bin/loop_breakpoints");
+    backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
+    log_path = path_join(root, "dap.log");
+    manifest_text = dup_printf("[package]\nname: \"loop_breakpoints\"\nversion: \"0.1.0\"\n"
+                               "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n\n"
+                               "[dependencies]\nstd: \"%s\"\n", std_path);
+    mkdir_p(src_dir);
+    write_text_file(source_path, fixture);
+    write_text_file(manifest_path, manifest_text);
+    {
+        char *argv[] = {root};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+    ASSERT(feng_cli_path_is_executable(backend_path));
+    escaped_source = json_escape_text(source_path);
+    escaped_binary = json_escape_text(binary_path);
+    escaped_root = json_escape_text(root);
+    for (size_t index = 0U; index < case_count; ++index) {
+        char *next;
+        cases[index].line = dap_test_breakpoint_line(fixture, cases[index].name);
+        next = dup_printf("%s%s{\"line\":%u}", breakpoint_list,
+                           index == 0U ? "" : ",", cases[index].line);
+        free(breakpoint_list);
+        breakpoint_list = next;
+    }
+
+    dap_test_start(&session, root, backend_path, log_path);
+    free(dap_test_request(&session, "initialize",
+                          "{\"adapterID\":\"feng\",\"linesStartAt1\":true,"
+                          "\"columnsStartAt1\":true,\"pathFormat\":\"path\"}"));
+    arguments = dup_printf("{\"program\":\"%s\",\"cwd\":\"%s\"}", escaped_binary, escaped_root);
+    launch_seq = dap_test_send(&session, "launch", arguments);
+    free(arguments);
+    free(dap_test_wait(&session, 0, "initialized", NULL));
+    arguments = dup_printf("{\"source\":{\"name\":\"main.ff\",\"path\":\"%s\"},\"breakpoints\":[%s]}",
+                            escaped_source, breakpoint_list);
+    response = dap_test_request(&session, "setBreakpoints", arguments);
+    free(arguments);
+    breakpoints = dap_test_json_get(dap_test_body(response), "breakpoints");
+    ASSERT(dap_test_json_at(breakpoints, case_count).begin == NULL);
+    for (size_t index = 0U; index < case_count; ++index) {
+        DapTestJson breakpoint = dap_test_json_at(breakpoints, index);
+        dap_test_json_require_true(dap_test_json_get(breakpoint, "verified"));
+        ASSERT(dap_test_json_integer(dap_test_json_get(breakpoint, "line")) == cases[index].line);
+        cases[index].breakpoint_id = dap_test_json_integer(dap_test_json_get(breakpoint, "id"));
+    }
+    free(response);
+    free(dap_test_request(&session, "configurationDone", "{}"));
+    free(dap_test_response(&session, launch_seq));
+
+    for (size_t index = 0U; index < case_count; ++index) {
+        const DapTestLoopCase *test_case = &cases[index];
+        for (size_t iteration = 0U; iteration < test_case->iterations; ++iteration) {
+            const char *cursor;
+            DapTestJson event;
+            DapTestJson body;
+            DapTestJson ids;
+            long thread_id;
+            fprintf(session.log, "Checking %s, iteration %zu\n", test_case->name, iteration);
+            response = dap_test_wait(&session, 0, "stopped", "terminated");
+            cursor = response;
+            event = dap_test_json_next(&cursor);
+            ASSERT(dap_test_json_string_is(dap_test_json_get(event, "event"), "stopped"));
+            body = dap_test_json_get(event, "body");
+            ASSERT(dap_test_json_string_is(dap_test_json_get(body, "reason"), "breakpoint"));
+            ids = dap_test_json_get(body, "hitBreakpointIds");
+            ASSERT(dap_test_json_integer(dap_test_json_at(ids, 0U)) == test_case->breakpoint_id);
+            ASSERT(dap_test_json_at(ids, 1U).begin == NULL);
+            thread_id = dap_test_json_integer(dap_test_json_get(body, "threadId"));
+            free(response);
+            if (test_case->frame_policy != DAP_TEST_FRAME_HIDDEN) {
+                DapTestJson frame;
+                long frame_id;
+                arguments = dup_printf("{\"threadId\":%ld}", thread_id);
+                response = dap_test_request(&session, "stackTrace", arguments);
+                free(arguments);
+                frame = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 0U);
+                ASSERT(dap_test_json_string_is(dap_test_json_get(
+                    dap_test_json_get(frame, "source"), "path"), source_path));
+                ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == test_case->line);
+                frame_id = dap_test_json_integer(dap_test_json_get(frame, "id"));
+                free(response);
+                if (test_case->frame_policy == DAP_TEST_FRAME_LOCALS) {
+                    dap_test_expect_counter(&session, frame_id, iteration);
+                }
+            }
+            ++stops;
+            arguments = dup_printf("{\"threadId\":%ld}", thread_id);
+            free(dap_test_request(&session, "continue", arguments));
+            free(arguments);
+        }
+    }
+    response = dap_test_wait(&session, 0, "stopped", "terminated");
+    {
+        const char *cursor = response;
+        DapTestJson event = dap_test_json_next(&cursor);
+        ASSERT(dap_test_json_string_is(dap_test_json_get(event, "event"), "terminated"));
+    }
+    free(response);
+    response = dap_test_wait(&session, 0, "exited", NULL);
+    ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+    free(response);
+    dap_test_finish(&session);
+    printf("dap loop breakpoints: %zu cases, %zu stops, unreachable: 0 stops\n", case_count, stops);
+
+    free(breakpoint_list);
+    free(fixture);
+    free(escaped_source);
+    free(escaped_binary);
+    free(escaped_root);
+    free(log_path);
+    free(backend_path);
+    free(binary_path);
+    free(std_path);
+    free(manifest_text);
+    free(manifest_path);
+    free(source_path);
+    free(src_dir);
+    free(root);
+    free(repo_root);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
 }
 
 /* Ensure identifier evaluate ignores field records and rewrites Feng names to backend names. */
@@ -25789,6 +26431,7 @@ int main(void) {
     test_dap_expands_user_type_fields_with_synthetic_reference();
     test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf();
     test_project_build_keeps_for_body_locals_after_prefix_binding();
+    test_dap_loop_breakpoints_follow_iterations();
     test_dap_rewrites_identifier_evaluate_expression();
     test_dap_rewrites_phase5_evaluate_expression();
     test_dap_rejects_nonconstant_index_evaluate_expression();

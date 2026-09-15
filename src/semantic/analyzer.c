@@ -40244,6 +40244,7 @@ static FengBlock *create_mixin_wrapper_body(
         stmt->as.return_value = call;
     }
     body->token = token;
+    body->end_token = token;
     body->statements = (FengStmt **)calloc(1U, sizeof(FengStmt *));
     if (body->statements == NULL) {
         free_mixin_wrapper_expr(call);

@@ -339,6 +339,76 @@ static void test_codegen_emits_line_directives_and_debug_info(void) {
     feng_program_free(program);
 }
 
+/* Interpret emitted #line directives, including normal C line increments,
+ * and require each lowered condition result/branch to belong to its header. */
+static void test_codegen_three_clause_loop_condition_lines(void) {
+    const char *source =
+        "module feng.debug.loops;\n"
+        "func below(limit: int, values: int...): bool { return values[0] < limit; }\n"
+        "func main(args: string[]) {\n"
+        "    for var i = 0; i < 3; i = i + 1 {\n"
+        "        let seen = i;\n"
+        "    }\n"
+        "    for var j = 0; below(3, j); j = j + 1 {\n"
+        "        let seen = j;\n"
+        "    }\n"
+        "}\n";
+    const char *path = "/feng-debug-loops/src/main.ff";
+    FengCodegenMapingSourceMapping mapping = {
+        .source_path = path,
+        .package_name = "loops",
+        .package_root = "/feng-debug-loops/src",
+    };
+    FengCodegenOptions options = {
+        .emit_line_directives = true,
+        .debug_source_mappings = &mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    FengProgram *program = parse_or_die(source, path);
+    FengSemanticAnalysis *analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_BIN);
+    FengCodegenOutput out = {0};
+    FengCodegenError error = {0};
+    const unsigned int headers[] = {4U, 7U};
+    size_t result_count = 0U;
+    size_t branch_count = 0U;
+    unsigned int logical_line = 1U;
+
+    const FengBlock *body = program->declarations[1]->as.function_decl.body;
+    ASSERT(body->end_token.kind == FENG_TOKEN_RBRACE);
+    ASSERT(body->end_token.line == 10U);
+    ASSERT(body->statements[0]->as.for_stmt.body->end_token.line == 6U);
+    ASSERT(body->statements[1]->as.for_stmt.body->end_token.line == 9U);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN,
+                                    &options, &out, &error));
+    for (const char *line = out.c_source; *line != '\0';) {
+        const char *end = strchr(line, '\n');
+        unsigned int directive_line;
+        if (sscanf(line, "#line %u", &directive_line) == 1) {
+            logical_line = directive_line;
+        } else {
+            const char *content = line;
+            while (*content == ' ' || *content == '\t') ++content;
+            if (strncmp(content, "bool _fcond", 11U) == 0) {
+                ASSERT(result_count < sizeof(headers) / sizeof(headers[0]));
+                ASSERT(logical_line == headers[result_count++]);
+            } else if (strncmp(content, "if (!_fcond", 11U) == 0) {
+                ASSERT(branch_count < sizeof(headers) / sizeof(headers[0]));
+                ASSERT(logical_line == headers[branch_count++]);
+            }
+            ++logical_line;
+        }
+        if (end == NULL) break;
+        line = end + 1;
+    }
+    ASSERT(result_count == sizeof(headers) / sizeof(headers[0]));
+    ASSERT(branch_count == sizeof(headers) / sizeof(headers[0]));
+    compile_generated_c_or_die(out.c_source);
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 static void test_codegen_records_user_type_field_entities(void) {
     const char *path = "/tmp/feng-debug-fields/src/main.ff";
     FengCodegenMapingSourceMapping mappings[1] = {
@@ -984,6 +1054,7 @@ int main(void) {
     test_debug_fd_merge_rejects_conflicting_package_roots();
     test_debug_fd_merge_rejects_conflicting_variable_mappings();
     test_codegen_emits_line_directives_and_debug_info();
+    test_codegen_three_clause_loop_condition_lines();
     test_codegen_records_user_type_field_entities();
     test_codegen_records_capture_mappings();
     return 0;
