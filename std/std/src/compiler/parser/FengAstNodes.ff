@@ -691,7 +691,8 @@ open type TryStmt {
 open type IfStmt {
   let location: FengLocation;
   let clauses: IfClause[];
-  let elseBlock: Block;
+  // 区分省略 else 与显式空 else 块。
+  let elseBlock: Option<Block>;
 }
 
 /**
@@ -709,7 +710,8 @@ open type MatchStmt {
   let location: FengLocation;
   let target: Expression;
   let clauses: MatchClause[];
-  let elseBlock: Block;
+  // 区分省略 else 与显式空 else 块。
+  let elseBlock: Option<Block>;
 }
 
 /**
@@ -732,12 +734,13 @@ open spec ForUpdate: Expression | AssignmentStmt;
 
 /**
  * for 语句（三子句形式）：for init; condition; update { body }
+ * 三个子句分别使用 Option 保留缺省信息。
  */
 open type ForStmt {
   let location: FengLocation;
-  let init: ForInit;
-  let condition: Expression;
-  let update: ForUpdate;
+  let init: Option<ForInit>;
+  let condition: Option<Expression>;
+  let update: Option<ForUpdate>;
   let body: Block;
 }
 

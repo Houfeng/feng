@@ -598,7 +598,7 @@ open type TryStmt {
 open type IfStmt {
   let location: FengLocation;
   let clauses: IfClause[];
-  let elseBlock: Block;
+  let elseBlock: Option<Block>;
 }
 
 /**
@@ -616,7 +616,7 @@ open type MatchStmt {
   let location: FengLocation;
   let target: Expression;
   let clauses: MatchClause[];
-  let elseBlock: Block;
+  let elseBlock: Option<Block>;
 }
 
 open type WhileStmt {
@@ -630,9 +630,9 @@ open spec ForUpdate: Expression | AssignmentStmt;
 
 open type ForStmt {
   let location: FengLocation;
-  let init: ForInit;
-  let condition: Expression;
-  let update: ForUpdate;
+  let init: Option<ForInit>;
+  let condition: Option<Expression>;
+  let update: Option<ForUpdate>;
   let body: Block;
 }
 
@@ -670,6 +670,7 @@ open type DeferStmt {
 **设计说明**：
 
 - ForStmt（三段式 `for init; cond; update`）和 ForEachStmt（`for x in expr`）分离为两种独立 type
+- ForStmt 的三个子句与 IfStmt/MatchStmt 的 `elseBlock` 使用 `Option` 保留语法缺省信息；IfExpr/MatchExpr 的 `elseBlock` 仍为 `Block`。对应语法规则见 [流程控制规范](../specifications/feng-flow.md)。
 - ForInit 支持 SimpleBinding（`for let i = 0`）或 AssignmentStmt（`for i = 0`）
 - ForUpdate 支持 Expression（`for ...; ...; i++`）或 AssignmentStmt（`for ...; ...; i += 1`）
 - TryStmt/IfStmt/MatchStmt 的 body 均为 **Expression** 而非 Block：`try expr catch ...`、`if cond { stmts }`、`match target { case { stmts } }`
