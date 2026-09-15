@@ -9513,6 +9513,295 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     free(remove_error);
 }
 
+/* Find a successful response in captured DAP frames while checking their byte lengths. */
+static DapTestJson dap_test_captured_response_body(const char *messages, long request_seq) {
+    const char *cursor = messages;
+    while (*cursor != '\0') {
+        unsigned long length;
+        const char *separator = strstr(cursor, "\r\n\r\n");
+        const char *end;
+        DapTestJson message;
+        ASSERT(separator != NULL);
+        ASSERT(sscanf(cursor, "Content-Length: %lu", &length) == 1);
+        cursor = separator + 4;
+        ASSERT(length > 0UL && length <= strlen(cursor));
+        end = cursor + length;
+        message = dap_test_json_next(&cursor);
+        ASSERT(cursor == end);
+        if (dap_test_json_string_is(dap_test_json_get(message, "type"), "response") &&
+            dap_test_json_integer(dap_test_json_get(message, "request_seq")) == request_seq) {
+            dap_test_json_require_true(dap_test_json_get(message, "success"));
+            return dap_test_json_get(message, "body");
+        }
+    }
+    ASSERT(0);
+    return (DapTestJson){0};
+}
+
+/* Cover source-mapping provenance, missing columns, ranges and all client column bases. */
+static void test_dap_stack_trace_column_mapping(void) {
+    static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x51U};
+    static const char *kColumnArguments[] = {"", ",\"columnsStartAt1\":true", ",\"columnsStartAt1\":false"};
+    static const char *kBackendFrames =
+        "{\"seq\":2,\"type\":\"response\",\"request_seq\":3,\"success\":true,"
+        "\"command\":\"stackTrace\",\"body\":{\"totalFrames\":8,\"stackFrames\":["
+        "{\"id\":1,\"name\":\"backend_main\",\"source\":{\"path\":\"demo.pkg://main.ff\"},"
+        "\"line\":12,\"column\":20,\"endLine\":12,\"endColumn\":44},"
+        "{\"column\":0,\"id\":2,\"name\":\"unmapped_symbol\","
+        "\"source\":{\"path\":\"/build/demo.pkg:/main.ff\"},\"line\":12,\"endColumn\":22},"
+        "{\"id\":3,\"name\":\"backend_main\",\"source\":{\"path\":\"demo.pkg://main.ff\","
+        "\"adapterData\":{\"column\":92,\"endLine\":93,\"endColumn\":94}},"
+        "\"line\":12,\"endLine\":15,\"instructionPointerReference\":\"0x1234\"},"
+        "{\"id\":4,\"name\":\"backend_main\",\"source\":{\"path\":\"demo.pkg://main.ff\"},"
+        "\"line\":12,\"\\u0063olumn\":1,\"\\u0065ndColumn\":22},"
+        "{\"id\":5,\"name\":\"backend_main\",\"source\":{\"path\":\"/native/main.c\"},"
+        "\"line\":12,\"column\":11,\"endLine\":13,\"endColumn\":25},"
+        "{\"id\":6,\"name\":\"external\",\"source\":{\"path\":\"external.pkg://main.ff\"},"
+        "\"line\":12,\"column\":31,\"endLine\":13,\"endColumn\":35},"
+        "{\"id\":7,\"name\":\"reference_only\",\"source\":{\"sourceReference\":9},\"line\":12,\"column\":7},"
+        "{\"id\":8,\"name\":\"no_source\",\"line\":0,\"column\":0}]}}";
+    char template_path[] = "temp/feng_cli_dap_columns_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *root;
+    char *src_dir;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *requests_path;
+    char *backend_initialize;
+    char *backend_frames;
+    char *backend_script;
+    char *escaped_binary;
+    char *launch_json;
+    char *launch_text;
+    char *stack_text;
+    char *error = NULL;
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping source;
+
+    ASSERT(workspace_dir != NULL);
+    root = realpath(workspace_dir, NULL);
+    ASSERT(root != NULL);
+    src_dir = path_join(root, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    write_text_file(source_path, "module demo.pkg;\nfunc main(args: string[]) {}\n");
+    binary_path = path_join(root, "demo.bin");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(root, "lldb-dap");
+    requests_path = path_join(root, "requests.txt");
+    write_binary_file(binary_path, kBinaryBytes, sizeof(kBinaryBytes));
+    source = (FengCodegenMapingSourceMapping){source_path, "demo.pkg", src_dir};
+    ASSERT(feng_codegen_maping_info_add_frame(&info, "backend_main", "demo.pkg.main",
+                                              FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_debug_write_fd(fd_path, binary_path, &source, 1U, &info, &error));
+    ASSERT(error == NULL);
+    backend_initialize = build_dap_message_text(
+        "{\"seq\":1,\"type\":\"response\",\"request_seq\":1,\"success\":true,\"command\":\"initialize\",\"body\":{}}");
+    backend_frames = build_dap_message_text(kBackendFrames);
+    backend_script = dup_printf("#!/bin/sh\nprintf '%%s' '%s'\n/bin/cat > \"%s\"\nprintf '%%s' '%s'\n",
+                                 backend_initialize, requests_path, backend_frames);
+    write_executable_text_file(backend_path, backend_script);
+    escaped_binary = json_escape_text(binary_path);
+    launch_json = dup_printf("{\"seq\":2,\"type\":\"request\",\"command\":\"launch\",\"arguments\":{\"program\":\"%s\"}}",
+                              escaped_binary);
+    launch_text = build_dap_message_text(launch_json);
+    stack_text = build_dap_message_text(
+        "{\"seq\":3,\"type\":\"request\",\"command\":\"stackTrace\",\"arguments\":{\"threadId\":1}}");
+    for (size_t index = 0U; index < sizeof(kColumnArguments) / sizeof(kColumnArguments[0]); ++index) {
+        char *initialize_json = dup_printf(
+            "{\"seq\":1,\"type\":\"request\",\"command\":\"initialize\",\"arguments\":{\"adapterID\":\"feng\"%s}}",
+            kColumnArguments[index]);
+        char *initialize_text = build_dap_message_text(initialize_json);
+        char *input = dup_printf("%s%s%s", initialize_text, launch_text, stack_text);
+        char *stderr_text = NULL;
+        char *argv[] = {"--stdio"};
+        char *output;
+        char *requests;
+        DapTestJson body;
+        DapTestJson frames;
+        DapTestJson frame;
+        DapTestJson metadata;
+        int rc;
+        output = run_dap_capture_stdout_with_path(1, argv, input, getenv("PATH"),
+                                                  backend_path, &rc, &stderr_text);
+        ASSERT(rc == 0 && stderr_text[0] == '\0');
+        requests = read_text_file(requests_path);
+        ASSERT(strstr(requests, initialize_json) != NULL);
+        body = dap_test_captured_response_body(output, 3);
+        frames = dap_test_json_get(body, "stackFrames");
+        ASSERT(dap_test_json_integer(dap_test_json_get(body, "totalFrames")) == 8);
+        ASSERT(dap_test_json_at(frames, 8U).begin == NULL);
+        for (size_t mapped = 0U; mapped < 4U; ++mapped) {
+            frame = dap_test_json_at(frames, mapped);
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "id")) == (long)mapped + 1);
+            ASSERT(dap_test_json_string_is(dap_test_json_get(
+                dap_test_json_get(frame, "source"), "path"), source_path));
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == 12);
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == (index == 2U ? 0 : 1));
+            ASSERT(dap_test_json_get(frame, "endLine").begin == NULL);
+            ASSERT(dap_test_json_get(frame, "endColumn").begin == NULL);
+        }
+        frame = dap_test_json_at(frames, 2U);
+        ASSERT(dap_test_json_string_is(dap_test_json_get(frame, "instructionPointerReference"), "0x1234"));
+        metadata = dap_test_json_get(dap_test_json_get(frame, "source"), "adapterData");
+        ASSERT(dap_test_json_integer(dap_test_json_get(metadata, "column")) == 92);
+        ASSERT(dap_test_json_integer(dap_test_json_get(metadata, "endLine")) == 93);
+        ASSERT(dap_test_json_integer(dap_test_json_get(metadata, "endColumn")) == 94);
+        for (size_t native = 4U; native < 6U; ++native) {
+            frame = dap_test_json_at(frames, native);
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"),
+                                            native == 4U ? "/native/main.c" : "external.pkg://main.ff"));
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == 12);
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == (native == 4U ? 11 : 31));
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "endLine")) == 13);
+            ASSERT(dap_test_json_integer(dap_test_json_get(frame, "endColumn")) == (native == 4U ? 25 : 35));
+        }
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_at(frames, 4U), "name"), "demo.pkg.main"));
+        frame = dap_test_json_at(frames, 6U);
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == 7);
+        ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_json_get(frame, "source"), "sourceReference")) == 9);
+        frame = dap_test_json_at(frames, 7U);
+        ASSERT(dap_test_json_get(frame, "source").begin == NULL);
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == 0);
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == 0);
+        free(requests);
+        free(output);
+        free(stderr_text);
+        free(input);
+        free(initialize_text);
+        free(initialize_json);
+    }
+    printf("dap stack columns: 3 client conventions, 8 frame variants\n");
+    free(stack_text);
+    free(launch_text);
+    free(launch_json);
+    free(escaped_binary);
+    free(backend_script);
+    free(backend_frames);
+    free(backend_initialize);
+    free(requests_path);
+    free(backend_path);
+    free(fd_path);
+    free(binary_path);
+    free(source_path);
+    free(src_dir);
+    free(root);
+    feng_codegen_maping_info_dispose(&info);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &error));
+    free(error);
+}
+
+/* Check real generated-C columns become line starts across repeated Feng stops. */
+static void test_dap_reports_line_start_for_feng_frames(void) {
+    static const char *kSource =
+        "module stack_columns;\nimport std.io;\nimport std.numeric;\n"
+        "func main(args: string[]) {\n"
+        "    for var i = 0; i < 3; i = i + 1 {\n"
+        "        println(\"Iteration {0}\", i); // breakpoint: column\n"
+        "    }\n}\n";
+    char template_path[] = "temp/feng_cli_dap_real_columns_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *repo_root = getcwd(NULL, 0);
+    char *root;
+    char *source_path;
+    char *src_dir;
+    char *manifest_path;
+    char *manifest;
+    char *binary_path;
+    char *backend_path;
+    char *log_path;
+    char *escaped_source;
+    char *escaped_binary;
+    char *arguments;
+    char *response;
+    char *error = NULL;
+    unsigned int line = dap_test_breakpoint_line(kSource, "column");
+    DapTestSession session;
+    int launch_seq;
+
+    ASSERT(workspace_dir != NULL && repo_root != NULL);
+    root = realpath(workspace_dir, NULL);
+    ASSERT(root != NULL);
+    src_dir = path_join(root, "src");
+    mkdir_p(src_dir);
+    source_path = path_join(src_dir, "main.ff");
+    manifest_path = path_join(root, "feng.fm");
+    manifest = dup_printf("[package]\nname: \"stack_columns\"\nversion: \"0.1.0\"\n"
+                           "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n"
+                           "[dependencies]\nstd: \"%s/std/std\"\n", repo_root);
+    write_text_file(source_path, kSource);
+    write_text_file(manifest_path, manifest);
+    {
+        char *argv[] = {root};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    binary_path = project_host_build_path(root, "bin/stack_columns");
+    backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
+    log_path = path_join(root, "dap.log");
+    escaped_source = json_escape_text(source_path);
+    escaped_binary = json_escape_text(binary_path);
+    dap_test_start(&session, root, backend_path, log_path);
+    free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\",\"columnsStartAt1\":true}"));
+    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
+    launch_seq = dap_test_send(&session, "launch", arguments);
+    free(arguments);
+    free(dap_test_wait(&session, 0, "initialized", NULL));
+    arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}]}", escaped_source, line);
+    response = dap_test_request(&session, "setBreakpoints", arguments);
+    dap_test_json_require_true(dap_test_json_get(
+        dap_test_json_at(dap_test_json_get(dap_test_body(response), "breakpoints"), 0U), "verified"));
+    free(response);
+    free(arguments);
+    free(dap_test_request(&session, "configurationDone", "{}"));
+    free(dap_test_response(&session, launch_seq));
+    for (size_t iteration = 0U; iteration < 3U; ++iteration) {
+        DapTestJson frame;
+        long thread_id;
+        response = dap_test_wait(&session, 0, "stopped", "terminated");
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "reason"), "breakpoint"));
+        thread_id = dap_test_json_integer(dap_test_json_get(dap_test_body(response), "threadId"));
+        free(response);
+        arguments = dup_printf("{\"threadId\":%ld}", thread_id);
+        response = dap_test_request(&session, "stackTrace", arguments);
+        frame = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 0U);
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), source_path));
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == line);
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == 1);
+        ASSERT(dap_test_json_get(frame, "endLine").begin == NULL);
+        ASSERT(dap_test_json_get(frame, "endColumn").begin == NULL);
+        dap_test_expect_counter(&session, dap_test_json_integer(dap_test_json_get(frame, "id")), iteration);
+        free(response);
+        free(dap_test_request(&session, "continue", arguments));
+        free(arguments);
+    }
+    response = dap_test_wait(&session, 0, "terminated", "stopped");
+    {
+        const char *cursor = response;
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+    }
+    free(response);
+    response = dap_test_wait(&session, 0, "exited", NULL);
+    ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+    free(response);
+    dap_test_finish(&session);
+    printf("dap real stack columns: 3 stops at column 1\n");
+    free(escaped_binary);
+    free(escaped_source);
+    free(log_path);
+    free(backend_path);
+    free(binary_path);
+    free(manifest);
+    free(manifest_path);
+    free(source_path);
+    free(src_dir);
+    free(root);
+    free(repo_root);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &error));
+    free(error);
+}
+
 /* Ensure identifier evaluate ignores field records and rewrites Feng names to backend names. */
 static void test_dap_rewrites_identifier_evaluate_expression(void) {
     static const unsigned char kBinaryBytes[] = {0x7fU, 'F', 'E', 'N', 'G', 0x46U};
@@ -26432,6 +26721,8 @@ int main(void) {
     test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf();
     test_project_build_keeps_for_body_locals_after_prefix_binding();
     test_dap_loop_breakpoints_follow_iterations();
+    test_dap_stack_trace_column_mapping();
+    test_dap_reports_line_start_for_feng_frames();
     test_dap_rewrites_identifier_evaluate_expression();
     test_dap_rewrites_phase5_evaluate_expression();
     test_dap_rejects_nonconstant_index_evaluate_expression();

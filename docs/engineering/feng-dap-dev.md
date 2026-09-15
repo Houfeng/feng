@@ -811,13 +811,14 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 7. 生成的原生调试信息中，`#line` 文件名使用 `PKG_NAME://<package-relative path>` 逻辑 URI，而不是宿主磁盘路径；同时编辑器对本地文件下的断点仍能正常命中。
 8. release 构建行为不受影响，不额外产出 `.fd`。
 
-### 9.1 循环断点回归
+### 9.1 循环断点与源码位置回归
 
-- 源码行归属以 [feng-cli.md 的 DAP 说明](../specifications/feng-cli.md#22-feng-dap) 为准。
+- 源码行归属及列位置规则以 [feng-cli.md 的 DAP 说明](../specifications/feng-cli.md#22-feng-dap) 为准。
 - 在现有 `test/cli/test_cli.c` 中使用 C 驱动真实 DAP 会话，连接仓库工具链的 `lldb-dap`，由原有 `test_cli` 入口随 `make test` 的 UBSan 和常规阶段执行。
 - 保留 `test/debug/loop_breakpoints.ff` 中普通循环、条件临时值、初始条件为假、跨行循环头、泛型函数、构造函数、普通方法、泛型方法、泛型类型方法、析构函数、lambda 和 defer 共 12 个场景。
 - 校验断点确认、命中 ID、顺序、次数、可见栈帧的源码位置，以及可见局部变量和 watch 中的 `i`。共享泛型方法当前未导出局部变量记录，defer 栈帧按既有规则隐藏；这些场景保留对应的断点及可见源码检查。
 - 校验正常退出及退出前无额外停顿；协议等待必须有超时，失败时保留会话诊断并回收调试进程。测试产物在工程内的 `temp/` 目录构建和运行。
+- 源码列位置在现有 C 测试入口中覆盖客户端默认、从 1 开始和从 0 开始的列约定，包 URI 及编译器规范化路径，后端列存在、为零或缺失，以及范围字段和原生栈帧位置的处理；真实 DAP 会话同时验证 Feng 停顿位置的列号。
 
 ## 10. 风险与缓解
 

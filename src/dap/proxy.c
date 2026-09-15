@@ -126,6 +126,7 @@ typedef struct FengDapSyntheticRef {
 
 /* Session-scoped relay state used by stack/variables rewrites. */
 typedef struct FengDapRelayState {
+    bool columns_start_at_1;
     FengDapFrameBinding *frame_bindings;
     size_t frame_binding_count;
     size_t frame_binding_capacity;
@@ -3315,10 +3316,90 @@ cleanup:
     return ok;
 }
 
-/* Rewrite one stackTrace frame payload using .fd name/path mappings. */
+/* Project a line-only source mapping to the client's first column without a guessed range. */
+static bool proxy_rewrite_line_only_source_position(char **json,
+                                                     bool columns_start_at_1,
+                                                     int error_fd) {
+    const char *end = *json + strlen(*json);
+    const char *cursor = proxy_json_skip_whitespace(*json, end);
+    const char *prefix = columns_start_at_1 ? "{\"column\":1" : "{\"column\":0";
+    const char *error_detail = "invalid JSON source position";
+    char *rewritten = NULL;
+    char *member_key = NULL;
+    size_t length = 0U;
+    size_t capacity = 0U;
+
+    if (cursor >= end || *cursor != '{') {
+        goto cleanup;
+    }
+    if (!proxy_append_bytes(&rewritten, &length, &capacity, prefix, strlen(prefix))) {
+        goto out_of_memory;
+    }
+    cursor = proxy_json_skip_whitespace(cursor + 1, end);
+    while (cursor < end && *cursor != '}') {
+        const char *member_start = cursor;
+        const char *after_key;
+        const char *value_start;
+        const char *value_end;
+        bool keep_member;
+
+        if (!proxy_json_parse_string_copy(cursor, end, &member_key, &after_key)) {
+            goto cleanup;
+        }
+        after_key = proxy_json_skip_whitespace(after_key, end);
+        if (after_key >= end || *after_key != ':') {
+            goto cleanup;
+        }
+        value_start = proxy_json_skip_whitespace(after_key + 1, end);
+        if (!proxy_json_skip_value(value_start, end, &value_end) || value_end == value_start) {
+            goto cleanup;
+        }
+        keep_member = strcmp(member_key, "column") != 0 &&
+                      strcmp(member_key, "endLine") != 0 &&
+                      strcmp(member_key, "endColumn") != 0;
+        free(member_key);
+        member_key = NULL;
+        if (keep_member &&
+            (!proxy_append_byte(&rewritten, &length, &capacity, ',') ||
+             !proxy_append_bytes(&rewritten, &length, &capacity,
+                                  member_start, (size_t)(value_end - member_start)))) {
+            goto out_of_memory;
+        }
+        cursor = proxy_json_skip_whitespace(value_end, end);
+        if (cursor < end && *cursor == ',') {
+            cursor = proxy_json_skip_whitespace(cursor + 1, end);
+            if (cursor >= end || *cursor == '}') {
+                goto cleanup;
+            }
+        } else if (cursor >= end || *cursor != '}') {
+            goto cleanup;
+        }
+    }
+    if (cursor >= end || proxy_json_skip_whitespace(cursor + 1, end) != end) {
+        goto cleanup;
+    }
+    if (!proxy_append_byte(&rewritten, &length, &capacity, '}') ||
+        !proxy_append_byte(&rewritten, &length, &capacity, '\0')) {
+        goto out_of_memory;
+    }
+    free(*json);
+    *json = rewritten;
+    return true;
+
+out_of_memory:
+    error_detail = "out of memory";
+cleanup:
+    free(member_key);
+    free(rewritten);
+    proxy_report_error(error_fd, "failed to rewrite source position", error_detail);
+    return false;
+}
+
+/* Rewrite one stackTrace frame using .fd names and line-only source mappings. */
 static bool proxy_rewrite_stack_trace_frame_payload(const char *frame_json,
                                                     size_t frame_length,
                                                     const FengDebugArtifact *artifact,
+                                                    bool columns_start_at_1,
                                                     const FengCodegenMapingFrameRecord **out_frame_record,
                                                     char **out_json,
                                                     int error_fd) {
@@ -3336,6 +3417,7 @@ static bool proxy_rewrite_stack_trace_frame_payload(const char *frame_json,
     char *backend_symbol = NULL;
     char *package_uri = NULL;
     char *local_path = NULL;
+    bool source_mapped = false;
     bool ok = false;
 
     *out_json = NULL;
@@ -3402,6 +3484,7 @@ static bool proxy_rewrite_stack_trace_frame_payload(const char *frame_json,
             goto cleanup;
         }
         local_path = NULL;
+        source_mapped = true;
     }
     if (!proxy_apply_json_string_replacements(frame_json,
                                               frame_length,
@@ -3410,6 +3493,10 @@ static bool proxy_rewrite_stack_trace_frame_payload(const char *frame_json,
                                               out_json,
                                               error_fd,
                                               "failed to rewrite stackTrace frame")) {
+        goto cleanup;
+    }
+    if (source_mapped &&
+        !proxy_rewrite_line_only_source_position(out_json, columns_start_at_1, error_fd)) {
         goto cleanup;
     }
     ok = true;
@@ -3505,6 +3592,7 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
             !proxy_rewrite_stack_trace_frame_payload(frame_json,
                                                      frame_json_length,
                                                      artifact,
+                                                     state->columns_start_at_1,
                                                      &frame_record,
                                                      &rewritten_frame_json,
                                                      error_fd)) {
@@ -6613,7 +6701,7 @@ static int proxy_run_session(FengDapBackendResolver backend_resolver,
     FengDapMessage initialize_request = {0};
     FengDapMessage request = {0};
     FengDebugArtifact launch_artifact = {0};
-    FengDapRelayState relay_state = {0};
+    FengDapRelayState relay_state = {.columns_start_at_1 = true};
     bool have_initialize = false;
     uint64_t next_seq = 1U;
 
@@ -6667,6 +6755,9 @@ static int proxy_run_session(FengDapBackendResolver backend_resolver,
         }
 
         if (strcmp(command, "initialize") == 0) {
+            const char *arguments_start;
+            const char *arguments_end;
+
             free(type);
             free(command);
             if (have_initialize) {
@@ -6683,6 +6774,16 @@ static int proxy_run_session(FengDapBackendResolver backend_resolver,
                 feng_debug_artifact_dispose(&launch_artifact);
                 proxy_relay_state_dispose(&relay_state);
                 return 1;
+            }
+            if (proxy_json_find_object_member(request.payload,
+                                               request.payload_length,
+                                               "arguments",
+                                               &arguments_start,
+                                               &arguments_end)) {
+                proxy_json_get_bool_member(arguments_start,
+                                           (size_t)(arguments_end - arguments_start),
+                                           "columnsStartAt1",
+                                           &relay_state.columns_start_at_1);
             }
             if (!proxy_send_initialize_response(output_fd,
                                                 request_seq,
