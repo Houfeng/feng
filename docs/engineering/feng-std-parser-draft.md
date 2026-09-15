@@ -91,7 +91,7 @@ C 版 AST 用 `struct + enum + union` 模式（如 `FengExpr` 有 `FengExprKind`
 open spec Expression: IdentifierExpr
   | BooleanLiteralExpr
   | IntegerLiteralExpr
-  // ... 共 22 种
+  // ... 共 23 种
   ;
 
 open type IdentifierExpr {
@@ -108,7 +108,7 @@ open type IdentifierExpr {
 4. **语义与语法分离**：Parser 只产出 AST，语义分析阶段的数据（推断类型、resolved callable 等）不进入 AST 节点
 5. **自举友好**：直接面向 Feng 类型系统，不需要做 enum+union 的二次转换
 
-**类型数量**：22 种 Expression + 15 种 Statement + 7 种 ModuleMemberBody + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 3 种 ObjectSpecMemberBody + 2 种 Binding + 辅助类型 = 约 70+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
+**类型数量**：23 种 Expression + 15 种 Statement + 7 种 ModuleMemberBody + 2 种 TypeMember + 4 种 TypeMemberBody + 3 种 TypeReference + 3 种 SpecBody + 3 种 ObjectSpecMemberBody + 2 种 Binding + 辅助类型 = 约 70+ 个 type/spec 定义。每个定义 5-15 行，可读性和可维护性均可接受。
 
 ### 3.2 基础类型
 
@@ -254,7 +254,9 @@ open spec Binding: SimpleBinding | DestructureBinding;
 
 ### 3.6 Expression（表达式）
 
-共 22 种表达式，每种为独立 type，通过 spec union 聚合：
+共 23 种表达式，每种为独立 type，通过 spec union 聚合：
+
+`SpreadExpr` 记录 `...expr` 的语法结构，`location` 指向 `...`，`operand` 保存其后的表达式。调用实参继续使用 `CallExpr.arguments: Expression[]`，其中的转传项表示为 `SpreadExpr`。当前允许的语法位置与转传规则见[变长参数规范 §4.3](../specifications/feng-function-variadic.md#43-预打包变参数组转发)；节点不保存语义阶段的转传信息。未来若增加数组展开，可复用此节点，其具体含义由所在上下文确定。
 
 ```feng
 open spec Expression: IdentifierExpr
@@ -278,7 +280,8 @@ open spec Expression: IdentifierExpr
   | IfExpr
   | MatchExpr
   | TryExpr
-  | RangeExpr;
+  | RangeExpr
+  | SpreadExpr;
 ```
 
 **各 variant 定义**：
@@ -328,6 +331,13 @@ open type BinaryExpr {
   let operator: FengTokenKind;
   let left: Expression;
   let right: Expression;
+}
+
+/** 展开表达式：...expr，具体含义由所在上下文确定。 */
+open type SpreadExpr {
+  // 记录 ... 的 token 位置
+  let location: FengLocation;
+  let operand: Expression;
 }
 
 /**
@@ -765,17 +775,28 @@ open spec TypeMemberBody: TypeField
   | TypeFinalizer;
 
 /**
- * 结构对应语法的层次关系：
+ * 普通类型成员的语法层次：
  * [open|seal] [static] <declaration>
  * ─────────  ──────── ────────────
  * visibility isStatic   body
  */
-open type TypeMember {
+open type TypeRegularMember {
   let location: FengLocation;
   let visibility: Visibility;
   let isStatic: bool;
   let body: TypeMemberBody;
 }
+
+/** 类型体中的混入成员声明。 */
+open type TypeMixinMember {
+  // 记录 ... 的 token 位置
+  let location: FengLocation;
+  let sourceTypeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
+}
+
+/** 类型成员联合类型：普通成员或混入成员。 */
+open spec TypeMember: TypeRegularMember | TypeMixinMember;
 
 open type Type {
   let location: FengLocation;
@@ -792,11 +813,21 @@ open type Type {
 
 **设计说明**：
 
-- `TypeMember` 是 wrapper，承载 visibility、isStatic 等修饰符
+- `TypeMember` 是普通成员与混入成员的统一入口，`Type.members` 使用 `TypeMember[]` 保留两类成员的源码顺序
+- `TypeRegularMember` 是普通成员的 wrapper，承载 visibility、isStatic 等修饰符
 - `TypeMemberBody` 是 spec union，区分 Field/Method/Constructor/Finalizer
+- `TypeMixinMember` 保存可选的来源类型引用与初始化表达式，`location` 指向 `...`；语法与语义规则见[类型规范 §4.2](../specifications/feng-type.md#42-成员展开)。节点保留源码结构，来源类型解析和成员展开在语义阶段完成
 - `TypeField` 复用 `SimpleBinding`，字段声明即绑定
 - `TypeMethod`/`TypeConstructor`/`TypeFinalizer` 均复用 `Function`，仅语义不同
-- `docComment: StringSpan` 放在 `Type` 而非 `TypeMember` 上，文档注释关联的是声明整体而非单个成员
+- `docComment: StringSpan` 放在 `Type` 而非 `TypeRegularMember` 上，文档注释关联的是声明整体而非单个成员
+
+`TypeMixinMember` 的字段对应关系如下，`sourceTypeRef` 与 `initializer` 至少存在一个：
+
+| 源码形式 | `sourceTypeRef` | `initializer` |
+| --- | --- | --- |
+| `...: Source;` | `Source` 的类型引用 | 无 |
+| `...: Source = Source();` | `Source` 的类型引用 | `Source()` 的表达式 |
+| `... = Source();` | 无 | `Source()` 的表达式 |
 
 ### 3.11 Enum（枚举声明）
 
@@ -891,7 +922,7 @@ open type Spec {
 
 **设计说明**：
 
-- Spec 成员使用独立的 `ObjectSpecMember` 体系，不复用 `TypeMember`
+- Spec 成员使用独立的 `ObjectSpecMember` 体系，不复用 `TypeRegularMember`
 - `ObjectSpecField` 使用 `SimpleBindingSignature`（无 initializer），因为 spec 字段只有声明没有初始值
 - `ObjectSpecMethod` 使用 `FunctionSignature`（无函数体），因为 spec 方法只有签名没有实现
 - `SimpleBindingSignature` 同时被 `Parameter`（函数参数）和 `ObjectSpecField`（契约字段）复用
@@ -912,13 +943,13 @@ open type Fit {
   let location: FengLocation;
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
-  let members: Option<TypeMember[]>;
+  let members: Option<TypeRegularMember[]>;
 }
 ```
 
 **设计说明**：
 
-- 使用 `Option<TypeMember[]>` 替代 `hasBody: bool` + `members: TypeMember[]`
+- 使用 `Option<TypeRegularMember[]>` 替代 `hasBody: bool` + `members: TypeRegularMember[]`
 
 ### 3.14 ModuleDeclare / ModuleFile（模块声明与模块文件，Parser 输出）
 

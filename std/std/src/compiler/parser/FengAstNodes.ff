@@ -263,6 +263,15 @@ open type BinaryExpr {
 }
 
 /**
+ * 展开表达式：...expr，具体含义由所在上下文确定
+ */
+open type SpreadExpr {
+  // 记录 ... 的 token 位置
+  let location: FengLocation;
+  let operand: Expression;
+}
+
+/**
  * 函数/方法调用表达式
  *
  * 泛型具化调用：
@@ -276,6 +285,8 @@ open type BinaryExpr {
  * 方法调用：
  * - 语法：`obj.method(arg1)`
  * - 表示：callee 为 MemberAccessExpr
+ *
+ * 转传实参以 SpreadExpr 存入 arguments
  */
 open type CallExpr {
   let location: FengLocation;
@@ -577,7 +588,8 @@ open spec Expression: IdentifierExpr
 | IfExpr
 | MatchExpr
 | TryExpr
-| RangeExpr;
+| RangeExpr
+| SpreadExpr;
 
 // 块结构 ----------------------------------------------------------------------
 
@@ -716,7 +728,7 @@ open type ForEachStmt {
  */
 open type ReturnStmt {
   let location: FengLocation;
-  let value: Expression;
+  let value: Option<Expression>;
 }
 
 /**
@@ -724,7 +736,7 @@ open type ReturnStmt {
  */
 open type ThrowStmt {
   let location: FengLocation;
-  let value: Expression;
+  let value: Option<Expression>;
 }
 
 /**
@@ -813,12 +825,12 @@ open spec TypeMemberBody: TypeField
 | TypeFinalizer;
 
 /**
- * 结构对应语法的层次关系：
+ * 普通类型成员的语法层次：
  * [open|seal] [static] <declaration>
  * ─────────  ──────── ────────────
  * visibility isStatic   body
  */
-open type TypeMember {
+open type TypeRegularMember {
   // 第一个修饰符的 token 位置
   let location: FengLocation;
   let visibility: Visibility;
@@ -827,8 +839,25 @@ open type TypeMember {
 }
 
 /**
+ * 类型体中的混入成员声明
+ * sourceTypeRef 与 initializer 至少存在一个
+ */
+open type TypeMixinMember {
+  // 记录 ... 的 token 位置
+  let location: FengLocation;
+  let sourceTypeRef: Option<TypeReference>;
+  let initializer: Option<Expression>;
+}
+
+/**
+ * 类型成员联合类型：普通成员或混入成员
+ */
+open spec TypeMember: TypeRegularMember | TypeMixinMember;
+
+/**
  * 结构类型声明：[open|seal] type Name<T> : Spec1, Spec2 { members }
  *
+ * members: 按源码顺序保存普通成员与混入成员
  * isTuple: 是否为元组类型（成员按位置访问）
  * isValue: 是否为值类型（@value 注解标记）
  */
@@ -900,12 +929,13 @@ open spec ObjectSpecMemberBody: ObjectSpecField | ObjectSpecMethod;
 /**
  * 对象契约成员：[static] field | method
  *
- * 与 TypeMember 的区别：契约成员不含函数体和初始化表达式
+ * 与 TypeRegularMember 的区别：契约成员不含函数体和初始化表达式
  */
 open type ObjectSpecMember {
   // 第一个修饰符的 token 位置
   let location: FengLocation;
   let isStatic: bool;
+  let visibility: Visibility;
   let body: ObjectSpecMemberBody;
 }
 
@@ -983,7 +1013,7 @@ open type Fit {
   let location: FengLocation;
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
-  let members: Option<TypeMember[]>;
+  let members: Option<TypeRegularMember[]>;
 }
 
 // 注解 (annotation) -----------------------------------------------------------
