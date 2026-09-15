@@ -426,14 +426,28 @@ open type LambdaExpr {
 }
 
 /**
- * 范围表达式：start..end
- * 目前仅用于 match 匹配
+ * 匹配字面量单值表达式，可以是整数、字符串、布尔值或标识符 (源码可见的字面量绑定)
  */
-open type RangeExpr {
+open spec MatchSingleValue: IntegerLiteralExpr
+| StringLiteralExpr
+| BooleanLiteralExpr
+| IdentifierExpr
+| UnaryExpr;
+
+/**
+ * 范围表达式：start..end
+ * 用于 match 匹配
+ */
+open type MatchRangeExpr {
   let location: FengLocation;
-  let start: Expression;
-  let end: Expression;
+  let start: MatchSingleValue;
+  let end: MatchSingleValue;
 }
+
+/**
+ * 匹配值的表达式，可以是字面量或范围表达式
+ */
+open spec MatchValue: MatchSingleValue | MatchRangeExpr;
 
 /**
  * match 链式匹配, 用嵌套联合类型多级匹配
@@ -469,6 +483,10 @@ open type MatchBinding {
   let location: FengLocation;
   let name: StringSpan;
   let mutability: Mutability;
+  // 是否为多级匹配
+  //   1. true，typeRefs 表示多级匹配的类型链
+  //   2. false，typeRefs 表示收窄子集合，当绑定还是原始类型
+  let isChain: bool;
   let typeRefs: TypeReference[];
 }
 
@@ -477,14 +495,15 @@ open type MatchBinding {
  *
  * 支持字面量、成员访问（枚举值/常量）、类型引用、绑定声明等模式
  */
-open spec MatchTarget: IntegerLiteralExpr[]
-| StringLiteralExpr[]
-| BooleanLiteralExpr[]
+open spec MatchTarget: MatchValue[]
+// 用于 enum 成员的匹配
 | MemberAccessExpr[]
+// 用于 union 类型的匹配
 | TypeReference[]
-| RangeExpr[]
-| MatchChain[] // 多级匹配，也支持逻列多个件，匹配其一，即可进入分支
-| MatchBinding; // 一个分支仅支持一个绑定声明, 避免多条件满足其一，无法保证绑定的安全可用
+// 用于嵌套 union 类型多级匹配，也支持逻列多个件，匹配其一，即可进入分支，无绑定
+| MatchChain[]
+// 一个分支仅支持一个绑定声明, 避免多条件满足其一，无法保证绑定的安全可用，有绑定
+| MatchBinding;
 
 /**
  * 匹配运算符表达式：value match pattern1 | pattern2 | ...
@@ -598,7 +617,7 @@ open spec Expression: IdentifierExpr
 | IfExpr
 | MatchExpr
 | TryExpr
-| RangeExpr
+| MatchRangeExpr
 | SpreadExpr
 | TypeRefExpr;
 
