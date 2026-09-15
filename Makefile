@@ -184,7 +184,7 @@ endef
 $(foreach platform,$(RUNTIME_PLATFORMS),$(eval $(call DEFINE_RUNTIME_PLATFORM,$(platform))))
 RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_$(platform)))
 
-.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests lsp-match-bindings-test perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test test-sanitize clean
+.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test test-sanitize clean
 
 all: cli runtime
 
@@ -201,7 +201,6 @@ test:
 test-normal:
 	$(MAKE) clean
 	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test
-	$(MAKE) lsp-match-bindings-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -244,11 +243,6 @@ test-sanitize:
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
 	FENG_CC=$(CC) FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
-	$(MAKE) lsp-match-bindings-test
-
-# Exercise match bindings through the real LSP transport in both test phases.
-lsp-match-bindings-test: cli
-	python3 scripts/test/test_lsp_match_bindings.py --server $(BIN_DIR)/feng
 
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh

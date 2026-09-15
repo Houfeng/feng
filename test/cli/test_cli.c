@@ -10797,6 +10797,363 @@ static void test_lsp_hover_infix_match_binding(void) {
     free(output);
 }
 
+/* One binding occurrence and its expected signature and declaration. */
+typedef struct LspBindingQueryCase {
+    const char *needle;
+    const char *name;
+    const char *signature;
+    const char *declaration;
+} LspBindingQueryCase;
+
+/* Query expectations shared by a cold document and its later overlays. */
+typedef struct LspBindingQueryFixture {
+    const char *uri;
+    const char *source;
+    const char *dirty_source;
+    const LspBindingQueryCase *bindings;
+    size_t binding_count;
+    const char *const *receivers;
+    size_t receiver_count;
+    const char *const *members;
+    size_t member_count;
+} LspBindingQueryFixture;
+
+/* Build the complete identifier range, including its exclusive end. */
+static char *build_lsp_binding_query_location(
+    const LspBindingQueryFixture *fixture,
+    const LspBindingQueryCase *binding) {
+    const char *name = strstr(binding->declaration, binding->name);
+    unsigned int line;
+    unsigned int character;
+
+    ASSERT(name != NULL);
+    find_line_character(fixture->source, binding->declaration,
+                        (size_t)(name - binding->declaration), &line, &character);
+    return dup_printf(
+        "\"result\":{\"uri\":\"%s\",\"range\":{"
+        "\"start\":{\"line\":%u,\"character\":%u},"
+        "\"end\":{\"line\":%u,\"character\":%u}}}",
+        fixture->uri, line, character, line,
+        character + (unsigned int)strlen(binding->name));
+}
+
+/* Queue all binding and receiver queries through the existing LSP framing. */
+static void write_lsp_binding_queries(FILE *input,
+                                       const LspBindingQueryFixture *fixture,
+                                       unsigned int first_id) {
+    static const char *kMethods[] = {"textDocument/hover", "textDocument/definition"};
+    unsigned int id = first_id;
+
+    for (size_t index = 0U; index < fixture->binding_count; ++index) {
+        const LspBindingQueryCase *binding = &fixture->bindings[index];
+        const char *name = strstr(binding->needle, binding->name);
+
+        ASSERT(name != NULL);
+        for (size_t method = 0U; method < 2U; ++method) {
+            char *request = build_lsp_test_position_request(
+                kMethods[method], id++, fixture->uri, fixture->source,
+                binding->needle, (size_t)(name - binding->needle));
+
+            write_lsp_message(input, request);
+            free(request);
+        }
+    }
+    for (size_t index = 0U; index < fixture->receiver_count; ++index) {
+        const char *receiver = fixture->receivers[index];
+        const char *dot = strchr(receiver, '.');
+        char *request;
+
+        ASSERT(dot != NULL);
+        request = build_lsp_test_position_request(
+            "textDocument/completion", id++, fixture->uri, fixture->source,
+            receiver, (size_t)(dot - receiver) + 1U);
+        write_lsp_message(input, request);
+        free(request);
+    }
+}
+
+/* Validate each response independently, including type and scope boundaries. */
+static void assert_lsp_binding_query_responses(
+    const char *output,
+    const LspBindingQueryFixture *fixture,
+    unsigned int first_id) {
+    static const char *kUnrelated[] = {"Choice", "Empty", "break", "match"};
+    unsigned int id = first_id;
+
+    for (size_t index = 0U; index < fixture->binding_count; ++index) {
+        const LspBindingQueryCase *binding = &fixture->bindings[index];
+        char *location = build_lsp_binding_query_location(fixture, binding);
+
+        assert_lsp_test_response_contains(output, id++, binding->signature);
+        assert_lsp_test_response_contains(output, id++, location);
+        free(location);
+    }
+    for (size_t index = 0U; index < fixture->receiver_count; ++index, ++id) {
+        for (size_t member = 0U; member < fixture->member_count; ++member) {
+            char *label = dup_printf("\"label\":\"%s\"", fixture->members[member]);
+
+            assert_lsp_test_response_contains(output, id, label);
+            free(label);
+        }
+        for (size_t member = 0U; member < sizeof(kUnrelated) / sizeof(kUnrelated[0]); ++member) {
+            char *label = dup_printf("\"label\":\"%s\"", kUnrelated[member]);
+
+            assert_lsp_test_response_not_contains(output, id, label);
+            free(label);
+        }
+    }
+}
+
+/* Check a ready document, then an optional shifted overlay in the same server.
+ * The existing readiness barrier drains each batch before a document change. */
+static void run_lsp_binding_query_action(FILE *input, int output_fd, void *user) {
+    const LspBindingQueryFixture *fixture = (const LspBindingQueryFixture *)user;
+    LspBindingQueryFixture current = *fixture;
+    unsigned int query_count = (unsigned int)(2U * fixture->binding_count + fixture->receiver_count);
+
+    for (unsigned int stage = 0U; stage < (fixture->dirty_source != NULL ? 2U : 1U); ++stage) {
+        unsigned int first_id = 3000U + stage * (query_count + 1U);
+        unsigned int barrier_id = first_id + query_count;
+        char *barrier;
+        char *output;
+
+        if (stage > 0U) {
+            char *escaped;
+            char *did_change;
+
+            current.source = fixture->dirty_source;
+            escaped = json_escape_text(current.source);
+            did_change = dup_printf(
+                "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+                "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},"
+                "\"contentChanges\":[{\"text\":\"%s\"}]}}", current.uri, escaped);
+            write_lsp_message(input, did_change);
+            free(did_change);
+            free(escaped);
+        }
+        write_lsp_binding_queries(input, &current, first_id);
+        barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", barrier_id);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, barrier_id);
+        assert_lsp_binding_query_responses(output, &current, first_id);
+        free(output);
+        free(barrier);
+    }
+}
+
+/* Match bindings keep the same identity across cold, ready, and shifted
+ * document states, including nested scopes and both match expression forms. */
+static void test_lsp_match_binding_queries_and_edits(void) {
+    static const char *kSource =
+        "module test.lsp.match_bindings;\n"
+        "type Box<T> {\n"
+        "  let value: T;\n"
+        "  func clear() {}\n"
+        "}\n"
+        "type Empty {}\n"
+        "spec Choice: Box<string> | string | i32 | Empty;\n"
+        "spec Outer: Choice | bool;\n"
+        "\n"
+        "func statement(choice: Choice, output: i32) {\n"
+        "  match choice {\n"
+        "    output: Box<string> {\n"
+        "      output.clear();\n"
+        "      match choice {\n"
+        "        var output: string { let nested = output; }\n"
+        "        else { let outer = output; }\n"
+        "      }\n"
+        "      {\n"
+        "        let output: i32 = 3;\n"
+        "        let shadow = output;\n"
+        "      }\n"
+        "      let restored = output;\n"
+        "    }\n"
+        "    output: string { let sibling = output; }\n"
+        "    else { let fallback = output; }\n"
+        "  }\n"
+        "  let after = output;\n"
+        "}\n"
+        "\n"
+        "func expression(choice: Choice): i32 {\n"
+        "  return match choice {\n"
+        "    var item: Box<string> { item.clear(); 1; }\n"
+        "    item: string { let text = item; 2; }\n"
+        "    else { 0; }\n"
+        "  };\n"
+        "}\n"
+        "\n"
+        "func patterns(choice: Choice, outer: Outer) {\n"
+        "  match choice {\n"
+        "    let subset: Box<string>, string { let selected = subset; }\n"
+        "    else {}\n"
+        "  }\n"
+        "  match outer {\n"
+        "    leaf: Choice -> Box<string> { leaf.clear(); }\n"
+        "    else {}\n"
+        "  }\n"
+        "  if choice match var selected: Box<string> { selected.clear(); }\n"
+        "}\n"
+        "\n"
+        "func makeBox(): Box<string> { return Box<string> { value: \"ok\" }; }\n"
+        "func inferredProbe() { return makeBox(); }\n";
+    static const LspBindingQueryCase kBindings[] = {
+        {"output: Box<string>", "output", "let output: Box<string>", "output: Box<string>"},
+        {"output.clear()", "output", "let output: Box<string>", "output: Box<string>"},
+        {"var output: string", "output", "var output: string", "var output: string"},
+        {"nested = output", "output", "var output: string", "var output: string"},
+        {"outer = output", "output", "let output: Box<string>", "output: Box<string>"},
+        {"shadow = output", "output", "let output: i32", "let output: i32 = 3"},
+        {"restored = output", "output", "let output: Box<string>", "output: Box<string>"},
+        {"sibling = output", "output", "let output: string", "output: string { let sibling"},
+        {"fallback = output", "output", "param let output: i32", "output: i32)"},
+        {"after = output", "output", "param let output: i32", "output: i32)"},
+        {"var item: Box<string>", "item", "var item: Box<string>", "var item: Box<string>"},
+        {"item.clear()", "item", "var item: Box<string>", "var item: Box<string>"},
+        {"text = item", "item", "let item: string", "item: string"},
+        {"let subset: Box<string>, string", "subset", "let subset: Box<string> | string", "let subset: Box<string>, string"},
+        {"selected = subset", "subset", "let subset: Box<string> | string", "let subset: Box<string>, string"},
+        {"leaf: Choice -> Box<string>", "leaf", "let leaf: Box<string>", "leaf: Choice -> Box<string>"},
+        {"leaf.clear()", "leaf", "let leaf: Box<string>", "leaf: Choice -> Box<string>"},
+        {"var selected: Box<string>", "selected", "var selected: Box<string>", "var selected: Box<string>"},
+        {"selected.clear()", "selected", "var selected: Box<string>", "var selected: Box<string>"},
+    };
+    static const char *kReceivers[] = {
+        "output.clear()", "item.clear()", "leaf.clear()", "selected.clear()"
+    };
+    static const char *kMembers[] = {"value", "clear"};
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kExit = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    char template_path[] = "temp/feng_lsp_match_queries_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *source_path;
+    char *uri;
+    char *escaped_source;
+    char *did_open;
+    char *dirty_source;
+    char *output;
+    char *remove_error = NULL;
+    FILE *input;
+    const char *requests[] = {kShutdown, kExit};
+    LspBindingQueryFixture fixture;
+    unsigned int ready_line;
+    unsigned int ready_character;
+
+    ASSERT(workspace_dir != NULL);
+    source_path = path_join(workspace_dir, "main.ff");
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    escaped_source = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped_source);
+    dirty_source = dup_printf("// shifted overlay\n%s\nfunc unfinished() { missing(); }\n", kSource);
+    fixture = (LspBindingQueryFixture){
+        uri, kSource, dirty_source,
+        kBindings, sizeof(kBindings) / sizeof(kBindings[0]),
+        kReceivers, sizeof(kReceivers) / sizeof(kReceivers[0]),
+        kMembers, sizeof(kMembers) / sizeof(kMembers[0])
+    };
+
+    input = temp_file();
+    ASSERT(input != NULL);
+    write_lsp_message(input, kInitialize);
+    write_lsp_message(input, did_open);
+    write_lsp_binding_queries(input, &fixture, 3000U);
+    write_lsp_message(input, kShutdown);
+    write_lsp_message(input, kExit);
+    output = run_lsp_server_capture(input);
+    assert_lsp_binding_query_responses(output, &fixture, 3000U);
+    free(output);
+    fclose(input);
+
+    find_line_character(kSource, "func inferredProbe()", strlen("func "),
+                        &ready_line, &ready_character);
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, "textDocument/hover", uri,
+        ready_line, ready_character, "inferredProbe(): Box<string>",
+        run_lsp_binding_query_action, &fixture, requests, 2U, NULL);
+    free(output);
+    free(dirty_source);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    free(source_path);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Repeated Command-hover/definition requests on the original nested-loop
+ * receiver must preserve its exact declaration and keep the server alive. */
+static void test_lsp_match_binding_repeated_test_context_queries(void) {
+    enum { QUERY_COUNT = 64 };
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{\"textDocument\":{\"hover\":{"
+        "\"contentFormat\":[\"markdown\"]}}}}}";
+    static const LspBindingQueryCase kBindings[] = {
+        {"output: List<string> {", "output", "let output: List<string>", "output: List<string> {"},
+        {"i < output.size(); i += 1 {\n              println", "output", "let output: List<string>", "output: List<string> {"},
+        {"p.add(output.get(i))", "output", "let output: List<string>", "output: List<string> {"},
+        {"println(output.get(i))", "output", "let output: List<string>", "output: List<string> {"},
+        {"output.clear()", "output", "let output: List<string>", "output: List<string> {"}
+    };
+    static const char *kReceivers[] = {"output.clear()"};
+    static const char *kMembers[] = {"size", "get", "clear", "add"};
+    char *source = read_text_file("std/std/src/test/TestContext.ff");
+    char *uri = file_uri_from_path("std/std/src/test/TestContext.ff");
+    char *escaped_source = json_escape_text(source);
+    char *did_open;
+    char *queries[QUERY_COUNT];
+    const char *requests[QUERY_COUNT + 2U];
+    char *location;
+    char *output;
+    unsigned int ready_line;
+    unsigned int ready_character;
+    LspBindingQueryFixture fixture = {
+        uri, source, NULL,
+        kBindings, sizeof(kBindings) / sizeof(kBindings[0]),
+        kReceivers, sizeof(kReceivers) / sizeof(kReceivers[0]),
+        kMembers, sizeof(kMembers) / sizeof(kMembers[0])
+    };
+
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped_source);
+    for (unsigned int index = 0U; index < QUERY_COUNT; ++index) {
+        queries[index] = build_lsp_test_position_request(
+            index % 2U == 0U ? "textDocument/hover" : "textDocument/definition",
+            5000U + index, uri, source, "println(output.get(i))", strlen("println("));
+        requests[index] = queries[index];
+    }
+    requests[QUERY_COUNT] = "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    requests[QUERY_COUNT + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(source, "output.clear()", strlen("output."),
+                        &ready_line, &ready_character);
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, "textDocument/completion", uri,
+        ready_line, ready_character, "\"label\":\"clear\"",
+        run_lsp_binding_query_action, &fixture, requests, QUERY_COUNT + 2U, NULL);
+    location = build_lsp_binding_query_location(&fixture, &kBindings[0]);
+    for (unsigned int index = 0U; index < QUERY_COUNT; ++index) {
+        assert_lsp_test_response_contains(output, 5000U + index,
+                                         index % 2U == 0U ? "let output: List<string>" : location);
+        free(queries[index]);
+    }
+    free(location);
+    free(output);
+    free(did_open);
+    free(escaped_source);
+    free(uri);
+    free(source);
+}
+
 /* Typed catch headers must expose both their immutable binding and ordinary
  * type reference to Hover and Definition. The catch binding must also shadow
  * an outer local throughout its own body. */
@@ -25449,6 +25806,8 @@ int main(void) {
     test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
     test_lsp_hover_type_category_survives_failed_edit();
     test_lsp_hover_infix_match_binding();
+    test_lsp_match_binding_queries_and_edits();
+    test_lsp_match_binding_repeated_test_context_queries();
     test_lsp_hover_and_definition_typed_catch_header();
     test_lsp_hover_type_param();
     test_lsp_hover_type_param_extended();
