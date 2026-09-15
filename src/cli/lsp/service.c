@@ -248,16 +248,26 @@ static bool service_handle_payload_unlocked(FengLspService *service,
 typedef enum FengLspLocalKind {
     FENG_LSP_LOCAL_PARAM = 0,
     FENG_LSP_LOCAL_BINDING,
+    FENG_LSP_LOCAL_MATCH_BINDING,
     FENG_LSP_LOCAL_CATCH_BINDING,
     FENG_LSP_LOCAL_SELF
 } FengLspLocalKind;
+
+/* Borrow the declaration and narrowing labels shared by both match forms.
+ * The identifier token is also the stable identity of the binding. */
+typedef struct FengLspMatchBinding {
+    const FengToken *token;
+    FengMutability mutability;
+    const FengMatchLabel *labels;
+    size_t label_count;
+} FengLspMatchBinding;
 
 typedef struct FengLspLocal {
     FengLspLocalKind kind;
     FengSlice name;
     const FengParameter *parameter;
     const FengBinding *binding;
-    const FengExpr *match_op;
+    FengLspMatchBinding match_binding;
     const FengTryCatchClause *catch_clause;
     const FengDecl *self_owner_decl;
 } FengLspLocal;
@@ -319,7 +329,7 @@ typedef struct FengLspResolvedTarget {
     const FengEnumItem *enum_item;
     const FengParameter *parameter;
     const FengBinding *binding;
-    const FengExpr *match_op;
+    FengLspMatchBinding match_binding;
     const FengTryCatchClause *catch_clause;
     const FengDecl *self_owner_decl;
     const FengTypeParam *type_param;       /* resolved type parameter */
@@ -332,6 +342,7 @@ typedef struct FengLspCacheResolvedTarget {
     const FengSymbolDeclView *member;
     const FengParameter *parameter;
     const FengBinding *binding;
+    FengLspMatchBinding match_binding;
     const FengTryCatchClause *catch_clause;
     const FengSymbolDeclView *self_owner_decl;
     const FengTypeParam *type_param;
@@ -5346,7 +5357,7 @@ static bool local_list_push(FengLspLocalList *locals,
         .name = name,
         .parameter = parameter,
         .binding = binding,
-        .match_op = NULL,
+        .match_binding = {0},
         .catch_clause = NULL,
         .self_owner_decl = self_owner_decl
     };
@@ -5381,21 +5392,69 @@ static bool local_list_push_catch_binding(
                       &local);
 }
 
-/* Append a local introduced by an infix match expression. It has no
- * FengBinding AST node, so the owning match-op expression carries the binding
- * name, mutability, and narrowed type labels used by Hover. */
-static bool local_list_push_match_binding(FengLspLocalList *locals,
-                                          const FengExpr *match_op) {
-    FengLspLocal local;
+/* Borrow one block-match branch binding without inventing a FengBinding. */
+static FengLspMatchBinding match_binding_from_branch(const FengMatchBranch *branch) {
+    return branch != NULL && branch->has_binding
+               ? (FengLspMatchBinding){&branch->binding_token,
+                                       branch->binding_mutability,
+                                       branch->labels,
+                                       branch->label_count}
+               : (FengLspMatchBinding){0};
+}
 
-    if (match_op == NULL || match_op->kind != FENG_EXPR_MATCH_OP ||
-        !match_op->as.match_op.has_binding) {
+/* Borrow an infix-match binding using the same representation as a branch. */
+static FengLspMatchBinding match_binding_from_op(const FengExpr *expr) {
+    return expr != NULL && expr->kind == FENG_EXPR_MATCH_OP &&
+                   expr->as.match_op.has_binding
+               ? (FengLspMatchBinding){&expr->as.match_op.binding_token,
+                                       expr->as.match_op.binding_mutability,
+                                       expr->as.match_op.labels,
+                                       expr->as.match_op.label_count}
+               : (FengLspMatchBinding){0};
+}
+
+/* Return the concrete type of one label, including the end of a type chain. */
+static const FengTypeRef *match_label_binding_type(const FengMatchLabel *label) {
+    if (label == NULL || label->kind != FENG_MATCH_LABEL_TYPE) {
+        return NULL;
+    }
+    return label->type_chain_count > 0U
+               ? label->type_chain[label->type_chain_count - 1U]
+               : label->type;
+}
+
+/* A multi-label binding remains a union and has no single member receiver. */
+static const FengTypeRef *match_binding_single_type(const FengLspMatchBinding *binding) {
+    return binding->label_count == 1U
+               ? match_label_binding_type(binding->labels)
+               : NULL;
+}
+
+/* Read receiver types carried by parameters and narrowed pattern bindings. */
+static const FengTypeRef *local_receiver_type(const FengLspLocal *local) {
+    if (local == NULL) {
+        return NULL;
+    }
+    if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+        return local->parameter->type;
+    }
+    if (local->kind == FENG_LSP_LOCAL_MATCH_BINDING) {
+        return match_binding_single_type(&local->match_binding);
+    }
+    return NULL;
+}
+
+/* Append only match bindings with an actual declaration token. */
+static bool local_list_push_match_binding(FengLspLocalList *locals,
+                                          FengLspMatchBinding binding) {
+    FengLspLocal local = {0};
+
+    if (binding.token == NULL) {
         return true;
     }
-    memset(&local, 0, sizeof(local));
-    local.kind = FENG_LSP_LOCAL_BINDING;
-    local.name = match_op->as.match_op.binding_name;
-    local.match_op = match_op;
+    local.kind = FENG_LSP_LOCAL_MATCH_BINDING;
+    local.name = (FengSlice){binding.token->lexeme, binding.token->length};
+    local.match_binding = binding;
     return append_raw((void **)&locals->items,
                       &locals->count,
                       &locals->capacity,
@@ -5416,7 +5475,7 @@ static bool collect_visible_match_op_bindings(const FengExpr *expr,
                collect_visible_match_op_bindings(expr->as.binary.right, locals);
     }
     if (expr->kind == FENG_EXPR_MATCH_OP) {
-        return local_list_push_match_binding(locals, expr);
+        return local_list_push_match_binding(locals, match_binding_from_op(expr));
     }
     return true;
 }
@@ -5435,6 +5494,21 @@ static const FengLspLocal *find_local(const FengLspLocalList *locals, FengSlice 
         --index;
         if (slice_equals(locals->items[index].name, name)) {
             return &locals->items[index];
+        }
+    }
+    return NULL;
+}
+
+/* Locate a match declaration in the same lexical walk used for references. */
+static const FengLspMatchBinding *find_match_binding_at(
+    const FengLspLocalList *locals,
+    size_t offset) {
+    for (size_t index = locals->count; index > 0U; --index) {
+        const FengLspLocal *local = &locals->items[index - 1U];
+
+        if (local->kind == FENG_LSP_LOCAL_MATCH_BINDING &&
+            offset_in_token(*local->match_binding.token, offset)) {
+            return &local->match_binding;
         }
     }
     return NULL;
@@ -5599,14 +5673,24 @@ static bool collect_expr_locals(const FengExpr *expr,
                 return collect_expr_locals(expr->as.match_expr.target, offset, locals);
             }
             for (index = 0U; index < expr->as.match_expr.branch_count; ++index) {
-                const FengBlock *body = expr->as.match_expr.branches[index].body;
+                const FengMatchBranch *branch = &expr->as.match_expr.branches[index];
+                const FengBlock *body = branch->body;
 
-                if (body != NULL && offset <= block_end(body)) {
+                if (body != NULL && offset >= branch->token.offset &&
+                    offset <= block_end(body)) {
+                    if (!local_list_push_match_binding(locals,
+                                                        match_binding_from_branch(branch))) {
+                        return false;
+                    }
                     return collect_block_locals(body, offset, locals);
                 }
             }
             return collect_block_locals(expr->as.match_expr.else_block, offset, locals);
         case FENG_EXPR_MATCH_OP:
+            if (expr->as.match_op.has_binding &&
+                offset_in_token(expr->as.match_op.binding_token, offset)) {
+                return local_list_push_match_binding(locals, match_binding_from_op(expr));
+            }
             return collect_expr_locals(expr->as.match_op.target, offset, locals);
         case FENG_EXPR_TRY:
             if (expr->as.try_expr.body != NULL && offset <= expr_end(expr->as.try_expr.body)) {
@@ -5681,18 +5765,14 @@ static bool collect_stmt_locals(const FengStmt *stmt,
                 return true;
             }
             for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
-                if (offset <= block_end(stmt->as.match_stmt.branches[index].body)) {
-                    if (stmt->as.match_stmt.branches[index].has_binding) {
-                        if (!local_list_push(locals,
-                                             FENG_LSP_LOCAL_BINDING,
-                                             stmt->as.match_stmt.branches[index].binding_name,
-                                             NULL,
-                                             NULL,
-                                             NULL)) {
-                            return false;
-                        }
+                const FengMatchBranch *branch = &stmt->as.match_stmt.branches[index];
+
+                if (offset >= branch->token.offset && offset <= block_end(branch->body)) {
+                    if (!local_list_push_match_binding(locals,
+                                                        match_binding_from_branch(branch))) {
+                        return false;
                     }
-                    return collect_block_locals(stmt->as.match_stmt.branches[index].body, offset, locals);
+                    return collect_block_locals(branch->body, offset, locals);
                 }
             }
             return stmt->as.match_stmt.else_block != NULL
@@ -5848,6 +5928,12 @@ static bool collect_visible_locals(const FengDecl *decl,
                    ? collect_block_locals(decl->as.function_decl.body, offset, locals)
                    : true;
     }
+    if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+        return collect_expr_locals(member->as.field.initializer, offset, locals);
+    }
+    if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        return collect_expr_locals(decl->as.binding.initializer, offset, locals);
+    }
     return true;
 }
 
@@ -5911,6 +5997,9 @@ static bool collect_stmt_locals_for_completion(const char *source,
                     return true;
                 }
                 if (block_contains_offset_for_completion(source, stmt->as.if_stmt.clauses[index].block, offset)) {
+                    if (!collect_visible_match_op_bindings(stmt->as.if_stmt.clauses[index].condition, locals)) {
+                        return false;
+                    }
                     return collect_block_locals_for_completion(source,
                                                                stmt->as.if_stmt.clauses[index].block,
                                                                offset,
@@ -5926,15 +6015,9 @@ static bool collect_stmt_locals_for_completion(const char *source,
             }
             for (index = 0U; index < stmt->as.match_stmt.branch_count; ++index) {
                 if (block_contains_offset_for_completion(source, stmt->as.match_stmt.branches[index].body, offset)) {
-                    if (stmt->as.match_stmt.branches[index].has_binding) {
-                        if (!local_list_push(locals,
-                                             FENG_LSP_LOCAL_BINDING,
-                                             stmt->as.match_stmt.branches[index].binding_name,
-                                             NULL,
-                                             NULL,
-                                             NULL)) {
-                            return false;
-                        }
+                    if (!local_list_push_match_binding(
+                            locals, match_binding_from_branch(&stmt->as.match_stmt.branches[index]))) {
+                        return false;
                     }
                     return collect_block_locals_for_completion(source,
                                                                stmt->as.match_stmt.branches[index].body,
@@ -5948,6 +6031,9 @@ static bool collect_stmt_locals_for_completion(const char *source,
         case FENG_STMT_WHILE:
             if (stmt->as.while_stmt.condition != NULL && offset <= expr_end(stmt->as.while_stmt.condition)) {
                 return true;
+            }
+            if (!collect_visible_match_op_bindings(stmt->as.while_stmt.condition, locals)) {
+                return false;
             }
             return collect_block_locals_for_completion(source, stmt->as.while_stmt.body, offset, locals);
         case FENG_STMT_FOR:
@@ -5985,7 +6071,7 @@ static bool collect_stmt_locals_for_completion(const char *source,
             }
             return collect_block_locals_for_completion(source, stmt->as.for_stmt.body, offset, locals);
         default:
-            return true;
+            return collect_stmt_locals(stmt, offset, locals);
     }
 }
 
@@ -6060,6 +6146,12 @@ static bool collect_visible_locals_for_completion(const char *source,
             return false;
         }
         return collect_block_locals_for_completion(source, decl->as.function_decl.body, offset, locals);
+    }
+    if (member != NULL && member->kind == FENG_TYPE_MEMBER_FIELD) {
+        return collect_expr_locals(member->as.field.initializer, offset, locals);
+    }
+    if (decl != NULL && decl->kind == FENG_DECL_GLOBAL_BINDING) {
+        return collect_expr_locals(decl->as.binding.initializer, offset, locals);
     }
     return true;
 }
@@ -7054,11 +7146,11 @@ static const FengSymbolDeclView *resolve_symbol_owner_decl_from_object_expr(cons
         const FengLspLocal *local = find_local(locals, object->as.identifier);
 
         if (local != NULL) {
-            if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            if (local_receiver_type(local) != NULL) {
                 return resolve_symbol_named_type_ref(context->provider,
                                                      context->current_module,
                                                      context->program,
-                                                     local->parameter->type);
+                                                     local_receiver_type(local));
             }
             if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
                 return local->binding->type != NULL
@@ -7625,8 +7717,8 @@ static bool resolve_owner_builtin_name_from_object_expr(const FengLspAnalysisSes
     }
     local = find_local(locals, object->as.identifier);
     if (local != NULL) {
-        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            const char *builtin = builtin_name_for_single_segment_type_ref(local->parameter->type);
+        if (local_receiver_type(local) != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local_receiver_type(local));
 
             if (builtin != NULL) {
                 *out_name = slice_from_cstr(builtin);
@@ -8292,8 +8384,8 @@ static const FengDecl *resolve_owner_decl_from_object_expr(const FengLspAnalysis
         const FengLspLocal *local = find_local(locals, object->as.identifier);
 
         if (local != NULL) {
-            if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-                return resolve_named_type_ref(session, program, local->parameter->type);
+            if (local_receiver_type(local) != NULL) {
+                return resolve_named_type_ref(session, program, local_receiver_type(local));
             }
             if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
                 return owner_decl_from_binding(session, program, local->binding);
@@ -8363,9 +8455,8 @@ static const FengTypeRef *resolve_owner_type_ref_from_object_expr(
         const FengLspLocal *local = find_local(locals, object->as.identifier);
         const FengDecl *decl;
 
-        if (local != NULL && local->kind == FENG_LSP_LOCAL_PARAM &&
-            local->parameter != NULL) {
-            return local->parameter->type;
+        if (local_receiver_type(local) != NULL) {
+            return local_receiver_type(local);
         }
         if (local != NULL && local->kind == FENG_LSP_LOCAL_BINDING &&
             local->binding != NULL) {
@@ -8516,8 +8607,8 @@ static bool ast_receiver_state_from_root(const FengLspAnalysisSession *session,
     }
     local = find_local(locals, chain->root);
     if (local != NULL) {
-        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            ast_receiver_state_set_type(session, program, local->parameter->type, state);
+        if (local_receiver_type(local) != NULL) {
+            ast_receiver_state_set_type(session, program, local_receiver_type(local), state);
             return state->owner_decl != NULL || state->type_ref != NULL ||
                    state->builtin_name.length > 0U;
         }
@@ -8990,8 +9081,8 @@ static bool symbol_receiver_state_from_root(
     }
     local = find_local(locals, chain->root);
     if (local != NULL) {
-        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            symbol_receiver_state_set_ast_type(context, local->parameter->type, state);
+        if (local_receiver_type(local) != NULL) {
+            symbol_receiver_state_set_ast_type(context, local_receiver_type(local), state);
             return state->owner_decl != NULL || state->ast_type_ref != NULL ||
                    state->builtin_name.length > 0U;
         }
@@ -9168,13 +9259,11 @@ static FengSlice resolve_symbol_builtin_name_from_expr(
                 }
             }
         }
-        if (local != NULL && local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            if (local->parameter->type != NULL) {
-                const char *name = builtin_name_for_single_segment_type_ref(local->parameter->type);
+        if (local_receiver_type(local) != NULL) {
+            const char *name = builtin_name_for_single_segment_type_ref(local_receiver_type(local));
 
-                if (name != NULL) {
-                    return slice_from_cstr(name);
-                }
+            if (name != NULL) {
+                return slice_from_cstr(name);
             }
         }
         /* Bare builtin type identifiers: string., i32., etc. */
@@ -9986,7 +10075,7 @@ static bool find_type_ref_in_expr(const FengExpr *expr,
                                             expr->as.match_op.binding_name,
                                             offset)) {
                 target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
-                target->match_op = expr;
+                target->match_binding = match_binding_from_op(expr);
                 return true;
             }
             if (find_type_ref_in_expr(expr->as.match_op.target,
@@ -11378,40 +11467,26 @@ static bool binding_signature_to_string_with_style(
             string_append_cstr(buffer, literal_type));
 }
 
-/* Format the narrowed static type of an infix-match binding from its validated
- * type labels. Chain patterns bind to their deepest type; multiple labels form
- * the subset union described by docs/specifications/feng-flow.md. */
+/* Format either match form from its source labels. A chain binds its deepest
+ * type; multiple labels retain the subset union defined by feng-flow.md. */
 static bool match_binding_signature_to_string_with_style(
     FengLspString *buffer,
-    const FengExpr *match_op,
+    const FengLspMatchBinding *binding,
     FengLspTypeNameStyle style) {
-    size_t index;
-
-    if (match_op == NULL || match_op->kind != FENG_EXPR_MATCH_OP ||
-        !match_op->as.match_op.has_binding || match_op->as.match_op.label_count == 0U) {
+    if (binding->token == NULL || binding->label_count == 0U) {
         return false;
     }
     if (!string_append_cstr(buffer,
-                            match_op->as.match_op.binding_mutability == FENG_MUTABILITY_VAR
-                                ? "var "
-                                : "let ") ||
-        !string_append_bytes(buffer,
-                             match_op->as.match_op.binding_name.data,
-                             match_op->as.match_op.binding_name.length) ||
+                            binding->mutability == FENG_MUTABILITY_VAR ? "var " : "let ") ||
+        !string_append_bytes(buffer, binding->token->lexeme, binding->token->length) ||
         !string_append_cstr(buffer, ": ")) {
         return false;
     }
-    for (index = 0U; index < match_op->as.match_op.label_count; ++index) {
-        const FengMatchLabel *label = &match_op->as.match_op.labels[index];
-        const FengTypeRef *type_ref;
+    for (size_t index = 0U; index < binding->label_count; ++index) {
+        const FengTypeRef *type_ref = match_label_binding_type(&binding->labels[index]);
 
-        if (label->kind != FENG_MATCH_LABEL_TYPE) {
-            return false;
-        }
-        type_ref = label->type_chain_count > 0U
-                       ? label->type_chain[label->type_chain_count - 1U]
-                       : label->type;
-        if ((index > 0U && !string_append_cstr(buffer, " | ")) ||
+        if (type_ref == NULL ||
+            (index > 0U && !string_append_cstr(buffer, " | ")) ||
             !type_ref_to_string_with_style(buffer, type_ref, style)) {
             return false;
         }
@@ -12349,22 +12424,15 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
         case FENG_LSP_RESOLVED_MATCH_BINDING:
             if (!match_binding_signature_to_string_with_style(
                     &presentation->signature,
-                    target->match_op,
+                    &target->match_binding,
                     FENG_LSP_TYPE_NAME_SHORT)) {
                 return false;
             }
-            if (target->match_op->as.match_op.label_count == 1U) {
-                const FengMatchLabel *label = &target->match_op->as.match_op.labels[0];
-                const FengTypeRef *type_ref = label->type_chain_count > 0U
-                                                  ? label->type_chain[
-                                                        label->type_chain_count - 1U]
-                                                  : label->type;
-
-                hover_presentation_set_category(
-                    presentation,
-                    "Kind",
-                    hover_category_from_type_ref(session, program, type_ref));
-            }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_type_ref(session, program,
+                                             match_binding_single_type(&target->match_binding)));
             break;
         case FENG_LSP_RESOLVED_CATCH_BINDING:
             if (!catch_binding_signature_to_string_with_style(
@@ -13581,14 +13649,14 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 target->parameter = local->parameter;
                 return NULL;
             }
-            if (local->kind == FENG_LSP_LOCAL_BINDING) {
-                if (local->match_op != NULL) {
-                    target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
-                    target->match_op = local->match_op;
-                } else {
-                    target->kind = FENG_LSP_RESOLVED_BINDING;
-                    target->binding = local->binding;
-                }
+            if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
+                target->kind = FENG_LSP_RESOLVED_BINDING;
+                target->binding = local->binding;
+                return NULL;
+            }
+            if (local->kind == FENG_LSP_LOCAL_MATCH_BINDING) {
+                target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+                target->match_binding = local->match_binding;
                 return NULL;
             }
             if (local->kind == FENG_LSP_LOCAL_CATCH_BINDING) {
@@ -13833,6 +13901,13 @@ static bool resolve_target_at(const FengLspAnalysisSession *session,
         local_list_dispose(&locals);
         return false;
     }
+    const FengLspMatchBinding *match_binding = find_match_binding_at(&locals, offset);
+    if (match_binding != NULL) {
+        target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+        target->match_binding = *match_binding;
+        local_list_dispose(&locals);
+        return true;
+    }
     source = find_source(session, program->path);
     source_text = source != NULL ? source->source : NULL;
     for (decl_index = 0U; decl_index < program->declaration_count; ++decl_index) {
@@ -13903,7 +13978,7 @@ static bool resolved_targets_equal(const FengLspResolvedTarget *lhs,
         case FENG_LSP_RESOLVED_BINDING:
             return lhs->binding == rhs->binding;
         case FENG_LSP_RESOLVED_MATCH_BINDING:
-            return lhs->match_op == rhs->match_op;
+            return lhs->match_binding.token == rhs->match_binding.token;
         case FENG_LSP_RESOLVED_CATCH_BINDING:
             return lhs->catch_clause == rhs->catch_clause;
         case FENG_LSP_RESOLVED_SELF:
@@ -19297,9 +19372,14 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                 target->parameter = local->parameter;
                 return NULL;
             }
-            if (local->kind == FENG_LSP_LOCAL_BINDING) {
+            if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
                 target->kind = FENG_LSP_RESOLVED_BINDING;
                 target->binding = local->binding;
+                return NULL;
+            }
+            if (local->kind == FENG_LSP_LOCAL_MATCH_BINDING) {
+                target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+                target->match_binding = local->match_binding;
                 return NULL;
             }
             if (local->kind == FENG_LSP_LOCAL_CATCH_BINDING) {
@@ -19485,6 +19565,13 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
     if (!collect_visible_locals(enclosing_decl, enclosing_member, offset, &locals)) {
         local_list_dispose(&locals);
         return false;
+    }
+    const FengLspMatchBinding *match_binding = find_match_binding_at(&locals, offset);
+    if (match_binding != NULL) {
+        target->kind = FENG_LSP_RESOLVED_MATCH_BINDING;
+        target->match_binding = *match_binding;
+        local_list_dispose(&locals);
+        return true;
     }
     for (decl_index = 0U; decl_index < context->program->declaration_count; ++decl_index) {
         if (find_symbol_type_ref_hit(context,
@@ -19967,6 +20054,19 @@ static bool hover_presentation_for_cache_target(
                 "Kind",
                 hover_category_from_cache_type_ref(context, target->binding->type));
             break;
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            if (!match_binding_signature_to_string_with_style(
+                    &presentation->signature,
+                    &target->match_binding,
+                    FENG_LSP_TYPE_NAME_SHORT)) {
+                return false;
+            }
+            hover_presentation_set_category(
+                presentation,
+                "Kind",
+                hover_category_from_cache_type_ref(
+                    context, match_binding_single_type(&target->match_binding)));
+            break;
         case FENG_LSP_RESOLVED_CATCH_BINDING:
             if (!catch_binding_signature_to_string_with_style(
                     &presentation->signature,
@@ -20348,7 +20448,11 @@ static bool definition_location_from_analysis(const FengLspAnalysisSession *sess
         case FENG_LSP_RESOLVED_PARAM:
             return location_json(result, program->path, target->parameter->token);
         case FENG_LSP_RESOLVED_BINDING:
-            return location_json(result, program->path, target->binding->token);
+            return target->binding != NULL &&
+                   location_json(result, program->path, target->binding->token);
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            return target->match_binding.token != NULL &&
+                   location_json(result, program->path, *target->match_binding.token);
         case FENG_LSP_RESOLVED_CATCH_BINDING:
             return location_json(result,
                                  program->path,
@@ -20388,7 +20492,11 @@ static bool definition_location_from_cache(const FengLspCacheQueryContext *cache
         case FENG_LSP_RESOLVED_PARAM:
             return location_json(result, cache->program->path, target->parameter->token);
         case FENG_LSP_RESOLVED_BINDING:
-            return location_json(result, cache->program->path, target->binding->token);
+            return target->binding != NULL &&
+                   location_json(result, cache->program->path, target->binding->token);
+        case FENG_LSP_RESOLVED_MATCH_BINDING:
+            return target->match_binding.token != NULL &&
+                   location_json(result, cache->program->path, *target->match_binding.token);
         case FENG_LSP_RESOLVED_CATCH_BINDING:
             return location_json(result,
                                  cache->program->path,
@@ -23592,8 +23700,8 @@ static const FengDecl *resolve_owner_decl_from_object_name(const FengLspAnalysis
     }
     local = find_local(locals, object_name);
     if (local != NULL) {
-        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            return resolve_named_type_ref(session, program, local->parameter->type);
+        if (local_receiver_type(local) != NULL) {
+            return resolve_named_type_ref(session, program, local_receiver_type(local));
         }
         if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
             return owner_decl_from_binding(session, program, local->binding);
@@ -23639,9 +23747,8 @@ static const FengTypeRef *resolve_owner_type_ref_from_object_name(
                    : NULL;
     }
     local = find_local(locals, object_name);
-    if (local != NULL && local->kind == FENG_LSP_LOCAL_PARAM &&
-        local->parameter != NULL) {
-        return local->parameter->type;
+    if (local_receiver_type(local) != NULL) {
+        return local_receiver_type(local);
     }
     if (local != NULL && local->kind == FENG_LSP_LOCAL_BINDING &&
         local->binding != NULL) {
@@ -23680,8 +23787,8 @@ static bool resolve_owner_builtin_name_from_object_name(const FengLspAnalysisSes
     }
     local = find_local(locals, object_name);
     if (local != NULL) {
-        if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
-            const char *builtin = builtin_name_for_single_segment_type_ref(local->parameter->type);
+        if (local_receiver_type(local) != NULL) {
+            const char *builtin = builtin_name_for_single_segment_type_ref(local_receiver_type(local));
 
             if (builtin != NULL) {
                 *out_name = slice_from_cstr(builtin);
@@ -26330,9 +26437,9 @@ static bool build_signature_help_json(const FengLspCacheQueryContext *context,
                     ? resolve_symbol_named_type_ref(context->provider, context->current_module,
                                                     context->program, local->binding->type)
                     : resolve_symbol_owner_decl_from_initializer_expr(context, local->binding->initializer);
-            } else if (local->kind == FENG_LSP_LOCAL_PARAM && local->parameter != NULL) {
+            } else if (local_receiver_type(local) != NULL) {
                 owner_decl = resolve_symbol_named_type_ref(context->provider, context->current_module,
-                                                           context->program, local->parameter->type);
+                                                           context->program, local_receiver_type(local));
             }
         }
         if (owner_decl == NULL) {
