@@ -724,9 +724,9 @@ open type WhileStmt {
 }
 
 /**
- * for 循环初始化：普通绑定、解构绑定或赋值语句
+ * for 循环初始化：普通绑定、解构绑定、赋值语句或表达式
  */
-open spec ForInit: Binding | AssignmentStmt;
+open spec ForInit: Binding | AssignmentStmt | Expression;
 /**
  * for 循环更新：表达式或赋值语句
  */
@@ -1047,6 +1047,7 @@ open type Fit {
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
   let members: Option<TypeRegularMember[]>;
+  let docComment: StringSpan;
 }
 
 // 注解 (annotation) -----------------------------------------------------------
@@ -1154,8 +1155,8 @@ open type ModuleImport {
 open type ModuleFile {
   // 当前文件的路径
   let path: string;
-  // 模块定义声明：module std.text;
-  let declare: ModuleDeclare;
+  // 模块定义声明；空文件、纯空白或纯注释文件可没有声明
+  let declare: Option<ModuleDeclare>;
   // import 作用于文件，而非整个模块
   let imports: ModuleImport[];
   // 当前文件的所有顶层成员声明

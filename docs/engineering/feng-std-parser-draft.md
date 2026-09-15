@@ -60,7 +60,7 @@ C 版 LE0005（`expected annotation name after '@'`）原由 Lexer 在扫描 `@`
 
 Lexer 将空白和注释作为独立 Token 发射（`WhitespaceSpace`、`WhitespaceNewline`、`CommentLine`、`CommentBlock`、`CommentDoc`）。Parser 在构建 AST 时跳过 trivia Token。
 
-文档注释关联由 Lexer 处理（`CommentDoc` Token 的 `leadingDoc` 字段），Parser 可直接使用。
+文档注释的词法输出与关联职责见 [Lexer 设计 §4.3](./feng-std-lexer-dev.md)。当前 Parser 的 trivia 过滤尚未收集文档注释，`FengToken` 也没有 `leadingDoc` 字段。普通注释及未关联声明的文档注释当前不进入 AST，原文仍保存在 `FengSource` 中。
 
 ---
 
@@ -625,7 +625,7 @@ open type WhileStmt {
   let body: Block;
 }
 
-open spec ForInit: Binding | AssignmentStmt;
+open spec ForInit: Binding | AssignmentStmt | Expression;
 open spec ForUpdate: Expression | AssignmentStmt;
 
 open type ForStmt {
@@ -671,7 +671,7 @@ open type DeferStmt {
 
 - ForStmt（三段式 `for init; cond; update`）和 ForEachStmt（`for x in expr`）分离为两种独立 type
 - ForStmt 的三个子句与 IfStmt/MatchStmt 的 `elseBlock` 使用 `Option` 保留语法缺省信息；IfExpr/MatchExpr 的 `elseBlock` 仍为 `Block`。对应语法规则见 [流程控制规范](../specifications/feng-flow.md)。
-- ForInit 支持 Binding（SimpleBinding 或 DestructureBinding）或 AssignmentStmt
+- ForInit 使用 Binding（SimpleBinding 或 DestructureBinding）、AssignmentStmt 或 Expression 表示初始化子句
 - ForUpdate 支持 Expression（`for ...; ...; i++`）或 AssignmentStmt（`for ...; ...; i += 1`）
 - TryStmt/IfStmt/MatchStmt 的 body 均为 **Expression** 而非 Block：`try expr catch ...`、`if cond { stmts }`、`match target { case { stmts } }`
 - 语句形式不产生求值结果，各分支中的语句不能省略分号
@@ -966,12 +966,14 @@ open type Fit {
   let targetTypeRef: TypeReference;
   let specTypeRefs: TypeReference[];
   let members: Option<TypeRegularMember[]>;
+  let docComment: StringSpan;
 }
 ```
 
 **设计说明**：
 
 - 使用 `Option<TypeRegularMember[]>` 替代 `hasBody: bool` + `members: TypeRegularMember[]`
+- `docComment` 承载 fit 声明的前置文档注释，与其他顶层声明一致
 
 ### 3.14 ModuleDeclare / ModuleFile（模块声明与模块文件，Parser 输出）
 
@@ -1036,8 +1038,8 @@ open type ModuleDeclare {
 open type ModuleFile {
   /** 当前文件的路径 */
   let path: string;
-  /** 模块定义声明：module std.text; */
-  let declare: ModuleDeclare;
+  /** 模块定义声明；空文件、纯空白或纯注释文件可没有声明 */
+  let declare: Option<ModuleDeclare>;
   /** import 作用于文件，而非整个模块 */
   let imports: ModuleImport[];
   /** 当前文件的所有顶层成员声明 */
@@ -1049,6 +1051,7 @@ open type ModuleFile {
 
 - `ModuleFile` 是 Parser 的直接输出，对应单个 `.ff` 文件
 - `ModuleDeclare` 是独立的模块声明节点，持有 `location`、`visibility`、`name`
+- `ModuleFile.declare` 使用 `Option<ModuleDeclare>` 区分有模块声明与空文件中没有声明；没有声明时，`imports` 与 `members` 均为空数组
 - `ModuleMember` 是 wrapper，承载 visibility 修饰符
 - `ModuleMemberBody` 包含 7 种成员：ModuleBinding、ModuleFunction、ModuleExternalFunction、Type、Enum、Spec、Fit
 - `ModuleFunction` 包装有函数体的函数声明

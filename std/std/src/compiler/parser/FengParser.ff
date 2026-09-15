@@ -428,20 +428,9 @@ open type FengParser {
    * @return 空壳 ModuleFile
    */
   seal func parseModuleFile(): ModuleFile {
-    let emptySpan = self.lexer.source.slice(0, 0);
-    let emptySegmentedName = SegmentedName {
-      fullName: emptySpan,
-      segments: StringSpan[:0]
-    };
-    let emptyModuleDeclare = ModuleDeclare {
-      location: self.current.location,
-      visibility: Visibility.Default,
-      name: emptySegmentedName,
-      docComment: emptySpan
-    };
     return ModuleFile {
       path: self.lexer.source.path,
-      declare: emptyModuleDeclare,
+      declare: none,
       imports: [],
       members: []
     };
