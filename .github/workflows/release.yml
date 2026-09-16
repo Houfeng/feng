@@ -73,7 +73,10 @@ jobs:
           --path-output="${GITHUB_PATH}"
 
       - name: Run full regression
-        run: make test
+        run: |
+          export LLDB_DEBUGSERVER_PATH="${DEVELOPER_DIR%/Developer}/SharedFrameworks/LLDB.framework/Versions/A/Resources/debugserver"
+          test -x "$LLDB_DEBUGSERVER_PATH"
+          make test
 
       - name: Create native release component
         if: needs.prepare.outputs.release == 'true' || github.event_name == 'workflow_dispatch'
