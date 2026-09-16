@@ -23,7 +23,8 @@ typedef struct {
 /* Single type alias completion/hover item. */
 typedef struct {
     const char *label;     /* alias name, e.g. "int" */
-    const char *canonical; /* target type name, e.g. "i32" */
+    const char *canonical32; /* target type name on 32-bit platforms */
+    const char *canonical64; /* target type name on 64-bit platforms */
     const char *detail;    /* human-readable description */
 } LspBuiltinTypeAliasItem;
 
@@ -46,16 +47,14 @@ static const LspBuiltinTypeItem BUILTIN_TYPES[] = {
 static const size_t BUILTIN_TYPE_COUNT =
     sizeof(BUILTIN_TYPES) / sizeof(BUILTIN_TYPES[0]);
 
-/* Builtin type alias table (5 items).
- * int is platform-dependent: canonical == NULL signals target resolution
- * based on sizeof(void *) (i32 on 32-bit, i64 on 64-bit platforms).
- * long, byte, float, double are fixed aliases with static canonical names. */
+/* Builtin type aliases follow the language specification. Both target columns
+ * are equal for fixed aliases; int and uint follow the platform pointer size. */
 static const LspBuiltinTypeAliasItem BUILTIN_TYPE_ALIASES[] = {
-    { "int",    NULL,   "platform-dependent integer alias (i32 or i64)" },
-    { "long",   "i64", "alias for i64" },
-    { "byte",   "u8",  "alias for u8" },
-    { "float",  "f32", "alias for f32" },
-    { "double", "f64", "alias for f64" },
+    { "int",    "i32", "i64", "platform-dependent integer alias (i32 or i64)" },
+    { "uint",   "u32", "u64", "platform-dependent unsigned integer alias (u32 or u64)" },
+    { "byte",   "u8",  "u8",  "alias for u8" },
+    { "float",  "f32", "f32", "alias for f32" },
+    { "double", "f64", "f64", "alias for f64" },
 };
 
 static const size_t BUILTIN_TYPE_ALIAS_COUNT =

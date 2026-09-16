@@ -23623,6 +23623,275 @@ static void test_lsp_package_symbol_hover_type_categories(void) {
     free(remove_error);
 }
 
+/* Independent expected language surface, including the current five aliases. */
+static const char *const kLspBuiltinNames[] = {
+    "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+    "f32", "f64", "string", "int", "uint", "byte", "float", "double"
+};
+
+/* Assert the complete builtin subset, its prefix filter, and item deduplication. */
+static void assert_lsp_builtin_name_items(const char *output,
+                                          unsigned int id,
+                                          const char *prefix) {
+    assert_lsp_test_response_contains(output, id, "\"result\":[");
+    for (size_t index = 0U; index < sizeof(kLspBuiltinNames) / sizeof(kLspBuiltinNames[0]); ++index) {
+        const char *name = kLspBuiltinNames[index];
+        bool expected = prefix != NULL && strncmp(name, prefix, strlen(prefix)) == 0;
+        char *label = dup_printf("{\"label\":\"%s\"", name);
+        size_t count = count_lsp_test_response_occurrences(output, id, label);
+
+        if (count != (expected ? 1U : 0U)) {
+            fprintf(stderr, "builtin name %s, prefix %s: %s\n",
+                    name, prefix != NULL ? prefix : "<excluded>", output);
+        }
+        ASSERT(count == (expected ? 1U : 0U));
+        free(label);
+        if (expected) {
+            char *item = dup_printf("{\"label\":\"%s\",\"kind\":14", name);
+            assert_lsp_test_response_contains(output, id, item);
+            free(item);
+        }
+    }
+    assert_lsp_test_response_not_contains(output, id, "{\"label\":\"long\"");
+}
+
+/* State shared by the successful-analysis and source-only name query sessions. */
+typedef struct {
+    const char *uri;
+    const char *prefix;
+    const char *initial_source;
+    bool warm;
+} LspBuiltinNameFixture;
+
+/* Send a completion query and drain the response through the protocol barrier. */
+static char *query_lsp_builtin_names(FILE *input,
+                                     int output_fd,
+                                     const char *uri,
+                                     unsigned int id,
+                                     const char *source,
+                                     const char *needle,
+                                     size_t char_offset,
+                                     const char *expected_prefix) {
+    char *request = build_lsp_test_position_request("textDocument/completion", id,
+                                                    uri, source, needle, char_offset);
+    char *barrier = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+        "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+    char *output;
+
+    write_lsp_message(input, request);
+    output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+    assert_lsp_builtin_name_items(output, id, expected_prefix);
+    free(barrier);
+    free(request);
+    return output;
+}
+
+/* Exercise exact analysis first, then actual range edits in the same document. */
+static void run_lsp_builtin_name_edits(FILE *input, int output_fd, void *user) {
+    const LspBuiltinNameFixture *fixture = (const LspBuiltinNameFixture *)user;
+    /* Additional syntax positions and isolated completion domains. */
+    static const struct {
+        const char *before;
+        const char *typed;
+        const char *after;
+        bool top_level;
+        const char *expected_prefix;
+    } kContexts[] = {
+        {"let value = ", "str", ";", false, "str"},
+        {"let value = (", "ui", ")0;", false, "ui"},
+        {"let value: Box<", "str", ">;", false, "str"},
+        {"identity<", "in", ">(0);", false, "in"},
+        {"let value: ", "", ";", false, ""},
+        {"let user = User(); user.", "str", ";", false, NULL},
+        {"import ", "str", ";", true, NULL},
+        {"import std.", "in", ";", true, NULL},
+        {"@", "str", "", true, NULL},
+        {"", "long", ";", false, "long"},
+        {"func broken(;\n", "str", "", true, "str"}
+    };
+    char *previous = dup_cstr(fixture->initial_source);
+    unsigned int id = 3000U;
+    unsigned int version = 1U;
+
+    for (size_t index = 0U; index < sizeof(kLspBuiltinNames) / sizeof(kLspBuiltinNames[0]); ++index) {
+        const char *name = kLspBuiltinNames[index];
+        char *needle = dup_printf("= %s[:1]", name);
+        char *output = query_lsp_builtin_names(input, output_fd, fixture->uri, id,
+                          previous, needle, strlen(name) + 2U, name);
+
+        if (fixture->warm) {
+            assert_lsp_test_response_contains(output, id, "{\"label\":\"User\"");
+        }
+        free(output);
+        free(needle);
+        id += 2U;
+    }
+    for (size_t context = 0U; context < 2U; ++context) {
+        for (size_t index = 0U; index < sizeof(kLspBuiltinNames) / sizeof(kLspBuiltinNames[0]); ++index) {
+            const char *name = kLspBuiltinNames[index];
+            for (size_t partial = 0U; partial < 2U; ++partial) {
+                size_t length = partial == 0U ? strlen(name) : strlen(name) - 1U;
+                char *prefix = dup_printf("%.*s", (int)length, name);
+                char *line = dup_printf("  /* query */ %s%s",
+                                        context == 0U ? "" : "let value: ", prefix);
+                char *source = dup_printf("%s%s;\n}\n", fixture->prefix, line);
+                char *output;
+
+                write_lsp_ascii_incremental_change(input, fixture->uri, ++version, previous, source);
+                output = query_lsp_builtin_names(input, output_fd, fixture->uri, id,
+                             source, line, strlen(line), prefix);
+                free(output);
+                free(previous);
+                previous = source;
+                free(line);
+                free(prefix);
+                id += 2U;
+            }
+        }
+    }
+    for (size_t index = 0U; index < sizeof(kContexts) / sizeof(kContexts[0]); ++index) {
+        char *line = dup_printf("%s%s", kContexts[index].before, kContexts[index].typed);
+        const char *prefix = kContexts[index].top_level
+                                 ? "module test.lsp.builtin_names;\n" : fixture->prefix;
+        char *source = dup_printf("%s%s%s\n%s", prefix, line, kContexts[index].after,
+                                  kContexts[index].top_level ? "" : "}\n");
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri, ++version, previous, source);
+        output = query_lsp_builtin_names(input, output_fd, fixture->uri, id,
+                     source, line, strlen(line), kContexts[index].expected_prefix);
+        free(output);
+        free(previous);
+        previous = source;
+        free(line);
+        id += 2U;
+    }
+    free(previous);
+}
+
+/* A missing main prevents a successful snapshot in the source-only variant. */
+static void assert_lsp_builtin_name_completion(bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    char template_path[] = "temp/feng_lsp_builtin_names_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *src_dir;
+    char *manifest;
+    char *source_path;
+    char *prefix;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *ready_text;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspBuiltinNameFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace_dir != NULL);
+    src_dir = path_join(workspace_dir, "src");
+    manifest = path_join(workspace_dir, "feng.fm");
+    source_path = path_join(src_dir, "main.ff");
+    mkdir_p(src_dir);
+    write_text_file(manifest,
+        "[package]\nname: \"builtin_names\"\nversion: \"0.1.0\"\n"
+        "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    prefix = dup_printf(
+        "module test.lsp.builtin_names;\n"
+        "type User { let stringField: int; }\n"
+        "type Box<T> { let value: T; }\n"
+        "func identity<T>(value: T): T { return value; }\n"
+        "func %s(args: string[]) {\n  let anchor = 1 + 2;\n", warm ? "main" : "probe");
+    source = dup_cstr(prefix);
+    for (size_t index = 0U; index < sizeof(kLspBuiltinNames) / sizeof(kLspBuiltinNames[0]); ++index) {
+        char *next = dup_printf("%s  let sample%zu = %s[:1];\n", source, index, kLspBuiltinNames[index]);
+        free(source);
+        source = next;
+    }
+    {
+        char *next = dup_printf("%s}\n", source);
+        free(source);
+        source = next;
+    }
+    write_text_file(source_path, source);
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, "anchor", warm ? 1U : 0U, &line, &character);
+    ready_text = warm ? dup_cstr("let anchor: int")
+                      : dup_cstr("\"label\":\"User\"");
+    fixture = (LspBuiltinNameFixture){uri, prefix, source, warm};
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, warm ? "textDocument/hover" : "textDocument/completion",
+        uri, line, character, ready_text, run_lsp_builtin_name_edits, &fixture,
+        requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(ready_text);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(prefix);
+    free(source_path);
+    free(manifest);
+    free(src_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* All builtin names work before and after incomplete edits, with or without analysis. */
+static void test_lsp_builtin_type_names_across_completion_contexts(void) {
+    assert_lsp_builtin_name_completion(false);
+    assert_lsp_builtin_name_completion(true);
+}
+
+/* Matching a builtin prefix must not suppress keyword snippets in text fallback. */
+static void test_lsp_builtin_names_preserve_keyword_completion(void) {
+    static const char *kSource =
+        "module test.lsp.builtin_keyword_fallback;\n"
+        "func broken(;\n"
+        "func probe() {\n  i\n}\n";
+    char *output = capture_lsp_completion_response(kSource, "  i\n", 3U);
+
+    assert_lsp_builtin_name_items(output, 2U, "i");
+    assert_lsp_test_response_contains(output, 2U, "{\"label\":\"if\"");
+    assert_lsp_test_response_contains(output, 2U, "\"insertText\":\"if ${1:condition}");
+    free(output);
+}
+
+/* Alias metadata shares the signed/unsigned platform mapping used by completion. */
+static void test_lsp_builtin_alias_hover_matches_language_types(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    const char *aliases[] = {"int", "uint", "byte", "float", "double"};
+    const char *targets[] = {sizeof(void *) >= 8U ? "i64" : "i32",
+                             sizeof(void *) >= 8U ? "u64" : "u32", "u8", "f32", "f64"};
+
+    for (size_t index = 0U; index < sizeof(aliases) / sizeof(aliases[0]); ++index) {
+        char *source = dup_printf("module test.lsp.alias_hover;\nfunc probe() {\n  %s\n}\n", aliases[index]);
+        char *needle = dup_printf("  %s\n", aliases[index]);
+        char *output = capture_lsp_hover_response(source, kInitialize, needle, 3U);
+        char *expected = dup_printf("%s → %s", aliases[index], targets[index]);
+
+        assert_lsp_test_response_contains(output, 2U, expected);
+        free(expected);
+        free(output);
+        free(needle);
+        free(source);
+    }
+}
+
 /* §1.8 keyword completion regression tests.
  * Each test verifies that context-aware keywords appear (or do not
  * appear) at the expected grammar position. */
@@ -27080,6 +27349,9 @@ int main(void) {
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_external_package_hover_docs_and_completion();
     test_lsp_package_symbol_hover_type_categories();
+    test_lsp_builtin_type_names_across_completion_contexts();
+    test_lsp_builtin_names_preserve_keyword_completion();
+    test_lsp_builtin_alias_hover_matches_language_types();
     test_lsp_keyword_completion_top_decl_position();
     test_lsp_keyword_completion_body_position();
     test_lsp_keyword_completion_member_position();

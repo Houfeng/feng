@@ -733,41 +733,16 @@ Feng 的 `FengLspPosition` 作为 `FengLspCompletionContext.position` 字段，�
 
 ### 9.1 目标
 
-当前 LSP 已支持关键字和内建注解的自动完成和 Hover 提示，但内建类型及其别名尚无专门支持：
+内建类型及其别名需要同时支持 Hover 和名称补全：
 
-1. **Hover**：光标悬停在 `i32`、`string`、`int` 等内建类型名上时，不显示类型说明。
-2. **补全**：在类型注解位置（`:` 后）不提示内建类型和别名。
+1. **Hover**：光标悬停在 `i32`、`string`、`int` 等内建类型名上时，显示类型说明及别名映射。
+2. **补全**：直接输入类型名或其前缀时提供候选，覆盖类型注解、普通表达式、显式转换和泛型实参等名称输入位置。
 
 ### 9.2 内建类型与别名清单
 
-**内建类型（12 个）**：
-
-| 类型名   | 说明                  |
-| -------- | --------------------- |
-| `bool`   | 布尔类型              |
-| `i8`     | 8 位有符号整数        |
-| `i16`    | 16 位有符号整数       |
-| `i32`    | 32 位有符号整数       |
-| `i64`    | 64 位有符号整数       |
-| `u8`     | 8 位无符号整数        |
-| `u16`    | 16 位无符号整数       |
-| `u32`    | 32 位无符号整数       |
-| `u64`    | 64 位无符号整数       |
-| `f32`    | 32 位浮点数           |
-| `f64`    | 64 位浮点数           |
-| `string` | 字符串类型            |
+候选表与 [内建类型规范](../specifications/feng-builtin-type.md) §3 保持一致，包含全部 12 个基础类型和 5 个别名；别名迁移见 [标量类型别名优化](feng-scalar-alias-optimize.md) §4。LSP 不单独定义类型名称或别名映射。
 
 > 注：`void` 是表示空无的关键字（已在关键字表中提供），不是类型。
-
-**类型别名（5 个）**：
-
-| 别名     | 目标类型 | 说明                                     |
-| -------- | -------- | ---------------------------------------- |
-| `int`    | `i32`    | 平台位宽相关别名（32 位 → i32，64 位 → i64） |
-| `long`   | `i64`    | 固定别名，映射到 i64                     |
-| `byte`   | `u8`     | 固定别名，映射到 u8                      |
-| `float`  | `f32`    | 固定别名，映射到 f32                     |
-| `double` | `f64`    | 固定别名，映射到 f64                     |
 
 ### 9.3 数据头文件 `lsp_builtin_types.h`
 
@@ -783,7 +758,8 @@ typedef struct {
 
 typedef struct {
     const char *label;     /* 别名，如 "int" */
-    const char *canonical; /* 目标类型名，如 "i32" */
+    const char *canonical32; /* 32 位平台目标类型名 */
+    const char *canonical64; /* 64 位平台目标类型名；固定别名两列相同 */
     const char *detail;    /* 说明 */
 } LspBuiltinTypeAliasItem;
 ```
@@ -796,7 +772,7 @@ typedef struct {
 
 - 从 offset 展开提取标识符
 - 在 `BUILTIN_TYPES` 表中查找 → 返回 `"i32\n\n32-bit signed integer"`
-- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回 `"int → i64\n\nplatform-dependent integer alias (i32 or i64)"`（`canonical == NULL` 时根据 `sizeof(void *)` 动态解析为 i32 或 i64）
+- 在 `BUILTIN_TYPE_ALIASES` 表中查找 → 返回别名及目标类型说明，例如 `"int → i64\n\nplatform-dependent integer alias (i32 or i64)"`。Hover 与成员接收者解析共用按平台位宽选择目标类型的逻辑，同时支持有符号与无符号别名。
 
 注入位置：在 `handle_hover_request` 的 annotation fallback 之后、返回 `null` 之前。
 
@@ -807,18 +783,17 @@ analysis path → cache path → keyword fallback → annotation fallback → bu
 
 ### 9.5 补全支持
 
-采用与关键字补全相同的**追加策略**（非互斥），因为类型位置除内建类型外还可能有用户自定义类型需要补全。
+采用与关键字补全相同的**追加策略**（非互斥），在普通标识符补全结果中合并内建类型及别名，保留局部变量、用户类型和导入声明等已有候选。
 
-#### 9.5.1 类型位置检测
+#### 9.5.1 名称前缀检测
 
-新增 `completion_context_is_type_position(const char *text, size_t offset, FengSlice *out_prefix)`：
+源码、缓存、冷启动与最终回退共用 `completion_context_builtin_type_prefix(const char *text, size_t offset, FengSlice *out_prefix)`：
 
-1. 从 offset 向前跳过标识符字符，得到 prefix
-2. 从 prefix_start 向前跳过空白
-3. 检查前一个字符是否为 `:`（且不是 `::` 的一部分）
-4. 若是则返回 true，设置 out_prefix
+1. 从 offset 向前扫描当前标识符，得到 prefix；非空且首字符合法时，按该前缀提供候选，不要求前面有 `:`。
+2. prefix 为空时，仅保留 `:` 后的完整类型列表补全，排除 `::`。
+3. 成员访问、import 路径与注解保留各自候选域，不混入内建类型名称。
 
-> 覆盖最常见场景：`let x: i32`、`func foo(): void`、`var field: string`。泛型参数 `<T>` 等暂不处理，与现有 heuristic 风格一致。
+例如函数体中的 `str`、`let x = in`、`(ui`、`Box<str` 与 `let x: str` 均可补全对应类型或别名。候选只按当前前缀过滤，不依赖文档语法完整、语义分析成功或磁盘符号缓存存在。
 
 #### 9.5.2 补全项追加
 
@@ -832,7 +807,10 @@ analysis path → cache path → keyword fallback → annotation fallback → bu
 | --- | --- |
 | `build_completion_json` 非成员分支末尾 | AST 路径，关键字追加之后 |
 | `build_cached_completion_json` 非成员分支末尾 | 缓存路径，关键字追加之后 |
-| `handle_completion_request` 兜底路径 | literal builtin fallback 之后、keyword fallback 之前 |
+| `handle_completion_request` 冷启动路径 | 索引未就绪时合并内存中的名称表与当前位置关键字 |
+| `handle_completion_request` 兜底路径 | literal builtin fallback 之后，内建名称与当前位置关键字合并返回 |
+
+回归沿用 [LSP 验收流程](feng-lsp-delivered.md#10-验收口径)，在现有 C 测试入口覆盖全部名称与前缀、增量编辑、语义成功与失败、类型注解以外的位置，以及成员/import/注解候选隔离；同时验证平台别名的有符号和无符号映射。
 
 ### 9.6 字面量 Hover 支持
 

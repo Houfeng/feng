@@ -7583,8 +7583,8 @@ static const char *builtin_name_for_identifier(FengSlice name) {
     for (size_t index = 0U; index < BUILTIN_TYPE_ALIAS_COUNT; ++index) {
         const LspBuiltinTypeAliasItem *alias = &BUILTIN_TYPE_ALIASES[index];
         if (slice_equals_cstr(name, alias->label)) {
-            return alias->canonical != NULL ? alias->canonical
-                       : feng_get_host_pointer_size() >= 8U ? "i64" : "i32";
+            return feng_get_host_pointer_size() >= 8U
+                       ? alias->canonical64 : alias->canonical32;
         }
     }
     return slice_equals_cstr(name, "void") ? "void" : NULL;
@@ -19563,9 +19563,9 @@ static bool resolve_symbol_target_at(const FengLspCacheQueryContext *context,
 
 /* Forward declarations for builtin type completion helpers defined later
  * in the completion engine. */
-static bool completion_context_is_type_position(const char *text,
-                                                 size_t offset,
-                                                 FengSlice *out_prefix);
+static bool completion_context_builtin_type_prefix(const char *text,
+                                                    size_t offset,
+                                                    FengSlice *out_prefix);
 static bool append_builtin_type_items(FengLspString *json,
                                        bool *first,
                                        FengSlice prefix);
@@ -19749,12 +19749,7 @@ static bool hover_presentation_for_builtin_type(
 
         if (label_len == end - start &&
             memcmp(alias->label, text + start, label_len) == 0) {
-            /* Resolve platform-dependent canonical (NULL → i32/i64 by pointer size). */
-            const char *resolved = alias->canonical;
-
-            if (resolved == NULL) {
-                resolved = (sizeof(void *) == 4U) ? "i32" : "i64";
-            }
+            const char *resolved = builtin_name_for_identifier(slice_from_cstr(alias->label));
             if (!string_append_bytes(&presentation->signature,
                                      text + start,
                                      end - start) ||
@@ -24079,12 +24074,11 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 return false;
             }
         }
-        /* Builtin type completion: offer builtin types and aliases in type
-         * annotation positions (after ':'). */
+        /* Builtin names share the ordinary identifier candidate domain. */
         {
             FengSlice type_prefix = {0};
 
-            if (completion_context_is_type_position(source_text, offset, &type_prefix)) {
+            if (completion_context_builtin_type_prefix(source_text, offset, &type_prefix)) {
                 if (!append_builtin_type_items(json, &first, type_prefix)) {
                     local_list_dispose(&locals);
                     return false;
@@ -24626,12 +24620,11 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                 return false;
             }
         }
-        /* Builtin type completion: offer builtin types and aliases in type
-         * annotation positions (after ':'). */
+        /* Keep builtin names available even when only a parsed/cache view exists. */
         {
             FengSlice type_prefix = {0};
 
-            if (completion_context_is_type_position(context->source_text, offset, &type_prefix)) {
+            if (completion_context_builtin_type_prefix(context->source_text, offset, &type_prefix)) {
                 if (!append_builtin_type_items(json, &first, type_prefix)) {
                     local_list_dispose(&locals);
                     return false;
@@ -24722,14 +24715,12 @@ static bool completion_context_is_annotation(const char *text,
     return true;
 }
 
-/* Detect whether `offset` in `text` is in a type annotation position
- * (immediately after ':' in a type annotation context like `let x: `,
- * `func foo(): `, `var field: `).  Returns true and sets `out_prefix`
- * to the partially-typed identifier when the cursor follows ':'.
- * The ':' must not be part of '::' (scope resolution). */
-static bool completion_context_is_type_position(const char *text,
-                                                 size_t offset,
-                                                 FengSlice *out_prefix) {
+/* Extract a builtin name prefix in the ordinary identifier candidate domain.
+ * Callers keep member, import and annotation domains separate. Empty prefixes
+ * retain the existing type-annotation behavior without adding global noise. */
+static bool completion_context_builtin_type_prefix(const char *text,
+                                                    size_t offset,
+                                                    FengSlice *out_prefix) {
     size_t length;
     size_t prefix_end;
     size_t prefix_start;
@@ -24747,6 +24738,14 @@ static bool completion_context_is_type_position(const char *text,
     prefix_start = offset;
     while (prefix_start > 0U && completion_identifier_continue(text[prefix_start - 1U])) {
         --prefix_start;
+    }
+    if (prefix_start < prefix_end) {
+        if (!completion_identifier_start(text[prefix_start])) {
+            return false;
+        }
+        out_prefix->data = text + prefix_start;
+        out_prefix->length = prefix_end - prefix_start;
+        return true;
     }
     /* Skip whitespace between the identifier and the preceding token. */
     colon_pos = prefix_start;
@@ -25470,7 +25469,7 @@ static bool handle_completion_request(FengLspService *service,
     request.document = document;
     /* A cold workspace must not parse a large document on the request path.
      * Return exact text-only candidates until a published index is ready. */
-    if (!is_member_completion) {
+    if (!is_member_completion && !is_use_path_completion) {
         bool published_query_ready;
 
         pthread_mutex_lock(&service->analysis_mutex);
@@ -25483,9 +25482,12 @@ static bool handle_completion_request(FengLspService *service,
             FengSlice type_prefix = {0};
             bool first = true;
 
-            if (completion_context_is_type_position(document->text, offset, &type_prefix) &&
+            if (completion_context_builtin_type_prefix(document->text, offset, &type_prefix) &&
                 string_append_cstr(&json, "[") &&
                 append_builtin_type_items(&json, &first, type_prefix) &&
+                completion_json_item_count(&json) > 0U &&
+                append_context_keyword_items(&json, &first,
+                    completion_position_from_text(document->text, offset)) &&
                 string_append_cstr(&json, "]") &&
                 completion_json_has_items(&json)) {
                 free(uri);
@@ -25679,16 +25681,20 @@ static bool handle_completion_request(FengLspService *service,
         return ok;
     }
     string_dispose(&json);
-    /* Builtin type annotation fallback: when in a type position (after ':')
-     * and no other path produced results, offer builtin types and aliases. */
+    /* Builtin names remain available when syntax repair and indexes yield no
+     * candidates, while other completion domains retain their own results. */
     {
         FengSlice type_prefix = {0};
 
-        if (completion_context_is_type_position(document->text, offset, &type_prefix)) {
+        if (!is_member_completion && !is_use_path_completion &&
+            completion_context_builtin_type_prefix(document->text, offset, &type_prefix)) {
             bool first = true;
 
             if (string_append_cstr(&json, "[") &&
                 append_builtin_type_items(&json, &first, type_prefix) &&
+                completion_json_item_count(&json) > 0U &&
+                append_context_keyword_items(&json, &first,
+                    completion_position_from_text(document->text, offset)) &&
                 string_append_cstr(&json, "]") &&
                 completion_json_has_items(&json)) {
                 free(uri);
