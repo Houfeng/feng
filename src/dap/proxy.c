@@ -155,6 +155,7 @@ typedef struct FengDapRelayState {
 
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
 static char *proxy_dup_printf(const char *fmt, ...);
+static const char *proxy_variable_read_expression(const FengCodegenMapingVariableRecord *record);
 static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                                                 FengDapMessageReader *backend_reader,
                                                 int backend_stdin_fd,
@@ -3197,7 +3198,7 @@ static bool proxy_resolve_evaluate_identifier(const FengDebugArtifact *artifact,
             strcmp(record->display_name, identifier) != 0) {
             continue;
         }
-        candidate_expression = record->backend_name != NULL ? record->backend_name : record->read_expr;
+        candidate_expression = proxy_variable_read_expression(record);
         if (candidate_expression == NULL || candidate_expression[0] == '\0') {
             continue;
         }
@@ -3251,7 +3252,10 @@ static bool proxy_rewrite_evaluate_request_payload(const char *json,
     uint64_t frame_id = 0U;
     char *expression = NULL;
     char *backend_expression = NULL;
-    FengDapJsonStringReplacement replacement = {0};
+    FengDapJsonStringReplacement *replacements = NULL;
+    size_t replacement_count = 0U;
+    size_t replacement_capacity = 0U;
+    char *context = NULL;
     bool ok = false;
 
     *out_json = NULL;
@@ -3290,18 +3294,53 @@ static bool proxy_rewrite_evaluate_request_payload(const char *json,
                                            out_error_detail)) {
         goto cleanup;
     }
-    if (backend_expression == NULL || strcmp(backend_expression, expression) == 0) {
+    if (backend_expression != NULL && strcmp(backend_expression, expression) != 0) {
+        if (!proxy_insert_json_string_replacement(&replacements,
+                                                   &replacement_count,
+                                                   &replacement_capacity,
+                                                   (size_t)(expression_start - json),
+                                                   (size_t)(expression_end - json),
+                                                   backend_expression)) {
+            proxy_set_error_detail_printf(out_error_detail, "out of memory rewriting evaluate expression");
+            goto cleanup;
+        }
+        backend_expression = NULL;
+    }
+    /* LLDB hover accepts variable paths only. The Feng parser above has
+     * already rejected side effects, so use its expression evaluator for
+     * typed parameter/capture reads and the same read-only watch subset. */
+    if (proxy_find_frame_record(artifact, frame_backend_symbol) != NULL &&
+        proxy_json_get_request_argument_string_range(json, json_length, "context",
+                                                     &expression_start, &expression_end)) {
+        if (!proxy_json_parse_string_copy(expression_start, expression_end, &context, &after_string) ||
+            proxy_json_skip_whitespace(after_string, expression_end) != expression_end) {
+            proxy_set_error_detail_printf(out_error_detail, "evaluate arguments.context must be a string");
+            goto cleanup;
+        }
+        if (strcmp(context, "hover") == 0) {
+            free(context);
+            context = proxy_dup_printf("watch");
+            if (context == NULL ||
+                !proxy_insert_json_string_replacement(&replacements,
+                                                       &replacement_count,
+                                                       &replacement_capacity,
+                                                       (size_t)(expression_start - json),
+                                                       (size_t)(expression_end - json),
+                                                       context)) {
+                proxy_set_error_detail_printf(out_error_detail, "out of memory rewriting evaluate context");
+                goto cleanup;
+            }
+            context = NULL;
+        }
+    }
+    if (replacement_count == 0U) {
         ok = true;
         goto cleanup;
     }
-    replacement.start_offset = (size_t)(expression_start - json);
-    replacement.end_offset = (size_t)(expression_end - json);
-    replacement.replacement = backend_expression;
-    backend_expression = NULL;
     if (!proxy_apply_json_string_replacements(json,
                                               json_length,
-                                              &replacement,
-                                              1U,
+                                              replacements,
+                                              replacement_count,
                                               out_json,
                                               error_fd,
                                               "failed to rewrite evaluate expression")) {
@@ -3312,7 +3351,8 @@ static bool proxy_rewrite_evaluate_request_payload(const char *json,
 cleanup:
     free(expression);
     free(backend_expression);
-    proxy_json_string_replacement_dispose(&replacement);
+    free(context);
+    proxy_json_string_replacements_dispose(replacements, replacement_count);
     return ok;
 }
 
@@ -4406,6 +4446,7 @@ static bool proxy_collect_internal_read_memory_response(
     }
 }
 
+/* Use the compiler's logical value accessor before the backend ABI carrier. */
 static const char *proxy_variable_read_expression(const FengCodegenMapingVariableRecord *record) {
     if (record == NULL) {
         return NULL;

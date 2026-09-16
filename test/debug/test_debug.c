@@ -1043,6 +1043,162 @@ static void test_codegen_records_capture_mappings(void) {
     feng_program_free(program);
 }
 
+/* Lambda records must describe the same storage the lowered body uses, rather
+ * than exposing ABI carriers or stale input values after parameter mutation. */
+static void test_codegen_lambda_parameter_value_accessors(void) {
+    const char *source =
+        "module feng.debug.lambda_values;\n"
+        "spec Direct(direct: int): int;\n"
+        "spec Address<T>(address: T): T;\n"
+        "type Box<T> { let value: T; }\n"
+        "spec Reference<T>(reference: Box<T>): int;\n"
+        "spec Reader(): int;\n"
+        "func use_it(): int {\n"
+        "    let first: Direct = (direct: int) -> direct;\n"
+        "    let second: Address<int> = (var address: int) {\n"
+        "        address += 1;\n"
+        "        return address;\n"
+        "    };\n"
+        "    let third: Reference<int> = (reference: Box<int>) -> reference.value;\n"
+        "    let outer: Address<int> = (var held: int) {\n"
+        "        let inner: Reader = () -> held;\n"
+        "        held += 1;\n"
+        "        return inner();\n"
+        "    };\n"
+        "    return first(1) + second(2) + third(Box<int>{value: 3}) + outer(4);\n"
+        "}\n";
+    const char *path = "/debug-values/src/main.ff";
+    FengCodegenMapingSourceMapping mapping = {
+        .source_path = path,
+        .package_name = "debug_values",
+        .package_root = "/debug-values/src",
+    };
+    FengCodegenOptions options = {
+        .emit_line_directives = true,
+        .debug_source_mappings = &mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    FengProgram *program = parse_or_die(source, path);
+    FengSemanticAnalysis *analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_LIB);
+    FengCodegenOutput out = {0};
+    FengCodegenError error = {0};
+    const FengCodegenMapingVariableRecord *direct;
+    const FengCodegenMapingVariableRecord *address;
+    const FengCodegenMapingVariableRecord *reference;
+
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, &options, &out, &error));
+    compile_generated_c_or_die(out.c_source);
+    direct = find_variable(&out.debug_info, "direct", FENG_CODEGEN_MAPING_VARIABLE_PARAM, "_arg0");
+    address = find_variable(&out.debug_info, "address", FENG_CODEGEN_MAPING_VARIABLE_PARAM, "_call_arg");
+    reference = find_variable(&out.debug_info, "reference", FENG_CODEGEN_MAPING_VARIABLE_PARAM, "_arg0");
+    ASSERT(direct != NULL && address != NULL && reference != NULL);
+    ASSERT(strcmp(direct->read_expr, direct->backend_name) == 0);
+    ASSERT(strcmp(address->backend_name, "_arg0") == 0);
+    ASSERT(strcmp(address->read_expr, address->backend_name) != 0);
+    ASSERT(strcmp(reference->backend_name, "_arg0") == 0);
+    ASSERT(strncmp(reference->read_expr, "((", 2U) == 0);
+    ASSERT(strstr(reference->read_expr, "_arg0") != NULL);
+    ASSERT(find_variable(&out.debug_info, "held", FENG_CODEGEN_MAPING_VARIABLE_PARAM, "->value") != NULL);
+    ASSERT(find_variable(&out.debug_info, "held", FENG_CODEGEN_MAPING_VARIABLE_CAPTURE, "_lambda->") != NULL);
+
+    feng_codegen_output_free(&out);
+    feng_codegen_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
+/* All integer widths share metadata-only hiding of overflow-result temporaries;
+ * user bindings and the existing overflow intrinsics remain intact. */
+static void test_codegen_integer_temporaries_are_not_debug_bindings(void) {
+    static const char *kTypes[] = {"i8", "u8", "i16", "u16", "i32", "u32", "i64", "u64"};
+    const char *path = "/debug-values/src/integers.ff";
+    FengCodegenMapingSourceMapping mapping = {
+        .source_path = path,
+        .package_name = "debug_values",
+        .package_root = "/debug-values/src",
+    };
+    FengCodegenOptions options = {
+        .emit_line_directives = true,
+        .debug_source_mappings = &mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    for (size_t index = 0U; index < sizeof(kTypes) / sizeof(kTypes[0]); ++index) {
+        char source[1024];
+        int length = snprintf(source, sizeof(source),
+            "module feng.debug.integers;\n"
+            "func calculate(var left: %s, right: %s): %s {\n"
+            "    left += right;\n"
+            "    left -= right;\n"
+            "    let result = (left + right) * (left - right);\n"
+            "    return result;\n"
+            "}\n", kTypes[index], kTypes[index], kTypes[index]);
+        FengProgram *program;
+        FengSemanticAnalysis *analysis;
+        FengCodegenOutput out = {0};
+        FengCodegenError error = {0};
+        size_t temporaries = 0U;
+        const char *cursor;
+
+        ASSERT(length > 0 && (size_t)length < sizeof(source));
+        program = parse_or_die(source, path);
+        analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_LIB);
+        ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, &options, &out, &error));
+        ASSERT(strstr(out.c_source, "#define FENG_CODEGEN_NODEBUG __attribute__((nodebug))") != NULL);
+        ASSERT(strstr(out.c_source, "__builtin_add_overflow") != NULL);
+        ASSERT(strstr(out.c_source, "__builtin_sub_overflow") != NULL);
+        ASSERT(strstr(out.c_source, "__builtin_mul_overflow") != NULL);
+        cursor = out.c_source;
+        while ((cursor = strstr(cursor, "_wrap_result FENG_CODEGEN_NODEBUG;")) != NULL) {
+            ++temporaries;
+            ++cursor;
+        }
+        ASSERT(temporaries == 5U);
+        ASSERT(find_variable(&out.debug_info, "left", FENG_CODEGEN_MAPING_VARIABLE_PARAM, NULL) != NULL);
+        ASSERT(find_variable(&out.debug_info, "result", FENG_CODEGEN_MAPING_VARIABLE_BINDING, NULL) != NULL);
+        compile_generated_c_or_die(out.c_source);
+
+        feng_codegen_output_free(&out);
+        feng_codegen_error_free(&error);
+        feng_semantic_analysis_free(analysis);
+        feng_program_free(program);
+    }
+}
+
+/* Metadata must not turn a pure short-circuit RHS into a preamble with a
+ * runtime result temporary; both debug and ordinary lowering stay direct. */
+static void test_codegen_debug_mapping_keeps_pure_short_circuit(void) {
+    const char *source =
+        "module feng.debug.conditions;\n"
+        "func below(flag: bool, value: int): bool {\n"
+        "    return flag && (value + 1 > 0);\n"
+        "}\n";
+    const char *path = "/debug-values/src/conditions.ff";
+    FengCodegenMapingSourceMapping mapping = {
+        .source_path = path,
+        .package_name = "debug_values",
+        .package_root = "/debug-values/src",
+    };
+    FengProgram *program = parse_or_die(source, path);
+    FengSemanticAnalysis *analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_LIB);
+    for (size_t mode = 0U; mode < 2U; ++mode) {
+        FengCodegenOptions options = {
+            .emit_line_directives = mode != 0U,
+            .debug_source_mappings = &mapping,
+            .debug_source_mapping_count = 1U,
+        };
+        FengCodegenOutput out = {0};
+        FengCodegenError error = {0};
+        ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_LIB, &options, &out, &error));
+        ASSERT(strstr(out.c_source, "&&") != NULL);
+        ASSERT(strstr(out.c_source, "_logical") == NULL);
+        compile_generated_c_or_die(out.c_source);
+        feng_codegen_output_free(&out);
+        feng_codegen_error_free(&error);
+    }
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -1057,5 +1213,8 @@ int main(void) {
     test_codegen_three_clause_loop_condition_lines();
     test_codegen_records_user_type_field_entities();
     test_codegen_records_capture_mappings();
+    test_codegen_lambda_parameter_value_accessors();
+    test_codegen_integer_temporaries_are_not_debug_bindings();
+    test_codegen_debug_mapping_keeps_pure_short_circuit();
     return 0;
 }

@@ -22502,7 +22502,7 @@ static bool cg_append_numeric_op_expr(Buf *b,
     if (wrapping_builtin != NULL) {
         buf_append_fmt(
             b,
-            "(__extension__ ({ %s _wrap_result; "
+            "(__extension__ ({ %s _wrap_result FENG_CODEGEN_NODEBUG; "
             "(void)%s((%s)(%s), (%s)(%s), &_wrap_result); "
             "_wrap_result; }))",
             cty,
@@ -23552,6 +23552,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             cg_fail(cg, param->token, "CE0098", "codegen: lambda argument name overflow");
             goto cleanup;
         }
+        if (!cg_emit_line_directive_force(cg, param->token)) goto cleanup;
         buf_append_fmt(&fn, "    (void)%s;\n", arg_name);
         if (abi_kind == CG_CALLABLE_ABI_ERASED_POINTER) {
             char *ctype = cg_ctype_dup(spec->callable_param_types[i]);
@@ -23579,6 +23580,11 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                 free(ctype);
                 free(value_name);
                 cg_fail(cg, param->token, "IE0001", "codegen: out of memory");
+                goto cleanup;
+            }
+            if (!cg_emit_line_directive_force(cg, param->token)) {
+                free(ctype);
+                free(value_name);
                 goto cleanup;
             }
             buf_append_fmt(&fn,
@@ -23643,7 +23649,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         if (!cg_debug_add_variable_record_slice_cgtype(cg,
                                                        arg_name,
                                                        param->name,
-                                                       NULL,
+                                                       param_expr,
                                                        spec->callable_param_types[i],
                                                        FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                        param->token)) {
@@ -33724,6 +33730,8 @@ static bool cg_assign_expr_result_to_join_slot(
     return true;
 }
 
+/* Emit source statements and the branch's result under their own anchors,
+ * then associate cleanup and the branch edge with the source closing token. */
 static bool cg_emit_branch_into_slot(CG *cg,
                                      const FengBlock *block,
                                      const char *ifv_name,
@@ -33743,10 +33751,15 @@ static bool cg_emit_branch_into_slot(CG *cg,
     }
 
     if (ok) {
-        const FengExpr *yield =
-            block->statements[block->statement_count - 1]->as.expr;
+        const FengStmt *yield_stmt = block->statements[block->statement_count - 1];
+        const FengExpr *yield = yield_stmt->as.expr;
+        FengToken saved_anchor_token = cg->current_stmt_anchor_token;
+        bool saved_anchor_active = cg->current_stmt_anchor_active;
         ExprResult r;
-        if (!cg_emit_expr(cg, yield, &r)) {
+        cg->current_stmt_anchor_token = yield_stmt->token;
+        cg->current_stmt_anchor_active = true;
+        if (!cg_emit_line_directive_force(cg, yield_stmt->token) ||
+            !cg_emit_expr(cg, yield, &r)) {
             ok = false;
         } else {
             ok = cg_assign_expr_result_to_join_slot(
@@ -33762,8 +33775,11 @@ static bool cg_emit_branch_into_slot(CG *cg,
                 "codegen: if-expression branches yield mismatched types");
             er_free(&r);
         }
+        cg->current_stmt_anchor_token = saved_anchor_token;
+        cg->current_stmt_anchor_active = saved_anchor_active;
     }
 
+    if (ok) ok = cg_emit_line_directive_force(cg, block->end_token);
     if (ok) {
         cg_release_scope(cg, bsc);
     }
@@ -35872,12 +35888,16 @@ static bool cg_emit_expr_with_spec_coercion(
     return cg_apply_object_spec_value(cg, e->token, cs, out);
 }
 
-/* Emits the complete conversion pipeline for one expression. A union entry
- * first converts to its selected leaf member and only then constructs the
- * outer tagged-union representation. */
+/* Emit the conversion pipeline, then restore the caller's source anchor.
+ * A union entry converts to its selected leaf member before constructing the
+ * outer representation. Nested source branches must not own the caller's
+ * subsequent result materialization or assignment. */
 static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     const FengSpecCoercionSite *spec_site;
     const FengUnionCoercionSite *union_site;
+    FengToken anchor = cg->current_stmt_anchor_active ? cg->current_stmt_anchor_token : e->token;
+    size_t body_start = cg->cur_body != NULL ? cg->cur_body->length : 0U;
+    bool ok;
 
     if (cg->failed) {
         return false;
@@ -35885,9 +35905,19 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     spec_site = feng_semantic_lookup_spec_coercion_site(cg->analysis, e);
     union_site = feng_semantic_lookup_union_coercion_site(cg->analysis, e);
     if (union_site != NULL) {
-        return cg_emit_union_spec_coercion(cg, e, union_site, out);
+        ok = cg_emit_union_spec_coercion(cg, e, union_site, out);
+    } else {
+        ok = cg_emit_expr_with_spec_coercion(cg, e, spec_site, out);
     }
-    return cg_emit_expr_with_spec_coercion(cg, e, spec_site, out);
+    /* A pure expression has no preamble. Adding even a line directive to
+     * an empty buffer would make short-circuit lowering allocate a result
+     * temporary, so restore the anchor only after actual body emission. */
+    if (ok && cg->cur_body != NULL && cg->cur_body->length > body_start &&
+        !cg_emit_line_directive_force(cg, anchor)) {
+        er_free(out);
+        return false;
+    }
+    return ok;
 }
 
 /* ===================== statement emission ===================== */
@@ -43860,6 +43890,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
     return ok;
 }
 
+/* Keep block-exit scaffolding separate from the last executable statement. */
 static bool cg_emit_block(CG *cg, const FengBlock *block) {
     for (size_t i = 0; i < block->statement_count; i++) {
         if (!cg_emit_stmt(cg, block->statements[i])) return false;
@@ -43872,7 +43903,7 @@ static bool cg_emit_block(CG *cg, const FengBlock *block) {
             break;
         }
     }
-    return true;
+    return cg_emit_line_directive_force(cg, block->end_token);
 }
 
 /* ---- defer capture analysis ------------------------------------------------
@@ -64953,12 +64984,62 @@ static const FreeFn *cg_lookup_main(const CG *cg) {
     return NULL;
 }
 
+/* Serialize explicit source anchors as stable logical lines. C physical
+ * newlines are formatting, not Feng source progress. Preserve nested anchors
+ * and backslash continuations instead of flattening user statement ranges. */
+static bool cg_stabilize_source_lines(Buf *source) {
+    Buf anchored;
+    const char *cursor = source->data;
+    const char *anchor = NULL;
+    size_t anchor_length = 0U;
+    bool continued = false;
+    bool follows_anchor = false;
+
+    buf_init(&anchored);
+    while (cursor != NULL && *cursor != '\0') {
+        const char *newline = strchr(cursor, '\n');
+        size_t length = newline != NULL ? (size_t)(newline - cursor) + 1U : strlen(cursor);
+        bool is_anchor = !continued && strncmp(cursor, "#line ", 6U) == 0;
+        size_t prefix_length = !is_anchor && !continued && !follows_anchor ? anchor_length : 0U;
+
+        if (length > SIZE_MAX - prefix_length ||
+            !buf_reserve(&anchored, length + prefix_length)) {
+            buf_free(&anchored);
+            return false;
+        }
+        if (prefix_length != 0U) buf_append(&anchored, anchor, prefix_length);
+        buf_append(&anchored, cursor, length);
+        if (is_anchor) {
+            anchor = cursor;
+            anchor_length = length;
+        }
+        follows_anchor = is_anchor;
+        continued = newline != NULL && length >= 2U && cursor[length - 2U] == '\\';
+        cursor += length;
+    }
+    buf_free(source);
+    *source = anchored;
+    return true;
+}
+
+/* Assemble the translation unit and finalize its optional source mapping. */
 static char *cg_finalize(CG *cg) {
     Buf out; buf_init(&out);
     buf_append_cstr(&out,
         "/* Feng generated code — do not edit. */\n"
         "#include \"feng_generated.h\"\n"
         "#include \"feng_runtime.h\"\n"
+        "\n"
+        "/* Internal expression storage must not introduce debugger-visible\n"
+        " * lexical blocks. This attribute changes debug metadata only. */\n"
+        "#if defined(__has_attribute)\n"
+        "#if __has_attribute(nodebug)\n"
+        "#define FENG_CODEGEN_NODEBUG __attribute__((nodebug))\n"
+        "#endif\n"
+        "#endif\n"
+        "#ifndef FENG_CODEGEN_NODEBUG\n"
+        "#define FENG_CODEGEN_NODEBUG\n"
+        "#endif\n"
         "\n"
         "/* Codegen-private callable descriptor extension. The runtime reads\n"
         " * only the FengTypeDescriptor prefix; generic default factories use\n"
@@ -65011,6 +65092,12 @@ static char *cg_finalize(CG *cg) {
     buf_append_cstr(&out, "\n");
     if (cg->fn_defs.length) buf_append(&out, cg->fn_defs.data, cg->fn_defs.length);
     if (cg->witness_defs.length) buf_append(&out, cg->witness_defs.data, cg->witness_defs.length);
+    if (cg->options != NULL && cg->options->emit_line_directives &&
+        !cg_stabilize_source_lines(&out)) {
+        buf_free(&out);
+        cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory");
+        return NULL;
+    }
     return out.data;
 }
 

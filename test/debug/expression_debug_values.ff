@@ -1,0 +1,145 @@
+module expression_debug_values;
+
+import std.io;
+import std.numeric;
+
+// Exercise the direct, address and erased-reference callable parameter ABIs.
+spec Scalar(value: int): int;
+spec Mapper<T>(value: T): T;
+spec PairAction<A, B>(x: A, y: B): void;
+spec Action(): void;
+spec BoxAction<T>(box: Box<T>): void;
+
+// A concrete reference type keeps the erased-pointer parameter observable.
+type Box<T> {
+    let value: T;
+}
+
+// Internal overflow-result storage must not split one return into two stops.
+func add(value: int): int {
+    return value + 1; // breakpoint: add
+}
+
+// Subtraction uses the same integer lowering as addition.
+func subtract(value: int): int {
+    return value - 1; // breakpoint: subtract
+}
+
+// Multiplication uses the same integer lowering as addition.
+func multiply(value: int): int {
+    return value * 2; // breakpoint: multiply
+}
+
+// Nested statement expressions must not introduce visible lexical blocks.
+func nested(value: int): int {
+    return (value + 1) * (value - 1); // breakpoint: nested
+}
+
+// Retain explicit source anchors inside an assignment's expression branches.
+func branches(flag: bool) {
+    var result = 0;
+    result = if flag {
+        let first = result + 1; // breakpoint: branch_true
+        first + 1
+    } else {
+        let second = result + 2; // breakpoint: branch_false
+        second + 1
+    };
+    println("branch {0}", result.toString()); // breakpoint: branch_after
+}
+
+// Compound assignments retain the current value until the statement executes.
+func compounds() {
+    var value = 3;
+    value += 2; // breakpoint: compound_add
+    value -= 1; // breakpoint: compound_subtract
+    value *= 4; // breakpoint: compound_multiply
+    println("compound {0}", value.toString()); // breakpoint: compound_after
+}
+
+// Both short-circuit paths must stop once while preserving lazy evaluation.
+func shortCircuit(flag: bool, value: int): bool {
+    return flag && (value + 1 > 0); // breakpoint: short_circuit
+}
+
+// Real repeated execution of the same line must remain observable.
+func loop() {
+    for var i = 0; i < 3; i = i + 1 {
+        let result = i + 1; // breakpoint: loop
+        println("loop {0}", result.toString());
+    }
+}
+
+// Recursive calls must each hit the same return line without a second stop.
+func recursive(depth: int): int {
+    if depth == 0 {
+        return 0;
+    }
+    return recursive(depth - 1) + 1; // breakpoint: recursive
+}
+
+// Read actual lambda values, including mutations and outer-name shadowing.
+func parameters() {
+    let x: int[] = [9];
+    let pair: PairAction<int, int> = (var x: int, y: int) { // breakpoint: pair_create
+        x += y; // breakpoint: pair_first
+        println("pair {0} {1}", x.toString(), y.toString()); // breakpoint: pair_mutated
+    };
+    println("before pair"); // breakpoint: pair_before
+    pair(1, 2);
+    let direct: Scalar = (var value: int) { // breakpoint: direct_create
+        value += 1; // breakpoint: direct_first
+        return value + 1; // breakpoint: direct_return
+    };
+    let first = direct(4);
+    let indirect: Mapper<int> = (var value: int) { // breakpoint: address_create
+        value += 1; // breakpoint: address_first
+        return value + 1; // breakpoint: address_return
+    };
+    let second = indirect(6);
+    let boxer: BoxAction<int> = (box: Box<int>) { // breakpoint: reference_create
+        println("box {0}", box.value.toString()); // breakpoint: reference
+    };
+    boxer(Box<int>{value: 42});
+    println("results {0} {1}", first.toString(), second.toString()); // breakpoint: parameter_results
+}
+
+// Captured values and captured parameters are read through their shared cells.
+func captures() {
+    var base = 10;
+    let action: Scalar = (value: int) { // breakpoint: capture_create
+        base += value; // breakpoint: capture_first
+        return base; // breakpoint: capture_after
+    };
+    action(3);
+    base = 20;
+    action(4);
+    let outer: Mapper<int> = (var value: int) { // breakpoint: outer_create
+        let inner: Action = () { // breakpoint: inner_create
+            println("captured parameter {0}", value.toString()); // breakpoint: inner
+        };
+        println("before inner"); // breakpoint: inner_before
+        inner();
+        value += 2;
+        inner();
+        return value; // breakpoint: outer_return
+    };
+    outer(12);
+}
+
+// Keep independent scenarios in a deterministic execution order for DAP.
+func main(args: string[]) {
+    add(7);
+    subtract(7);
+    multiply(7);
+    nested(7);
+    branches(true);
+    branches(false);
+    compounds();
+    shortCircuit(false, 10);
+    shortCircuit(true, 20);
+    loop();
+    recursive(3);
+    parameters();
+    captures();
+}

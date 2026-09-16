@@ -9703,6 +9703,298 @@ static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
     free(remove_error);
 }
 
+/* One logical value with optional Locals type and scalar expression checks. */
+typedef struct DapTestExpectedValue {
+    const char *expression;
+    const char *value;
+    const char *local_type;
+    bool evaluate;
+} DapTestExpectedValue;
+
+/* One ordered stop with its source frame and logical variable values. */
+typedef struct DapTestValueStop {
+    const char *marker;
+    const char *frame_name;
+    const char *lambda_marker;
+    DapTestExpectedValue values[4];
+} DapTestValueStop;
+
+/* Check locals and both JSON field orders in hover/watch requests. */
+static void dap_test_expect_values(DapTestSession *session, long frame_id,
+                                    const DapTestExpectedValue *expected, size_t count) {
+    char *arguments = dup_printf("{\"frameId\":%ld}", frame_id);
+    char *response = dap_test_request(session, "scopes", arguments);
+    DapTestJson scopes = dap_test_json_get(dap_test_body(response), "scopes");
+    long reference = 0;
+    char *locals_response;
+    DapTestJson variables;
+
+    free(arguments);
+    for (size_t index = 0U;; ++index) {
+        DapTestJson scope = dap_test_json_at(scopes, index);
+        if (scope.begin == NULL) break;
+        if (dap_test_json_string_is(dap_test_json_get(scope, "name"), "Locals")) {
+            ASSERT(reference == 0);
+            reference = dap_test_json_integer(dap_test_json_get(scope, "variablesReference"));
+        }
+    }
+    ASSERT(reference > 0);
+    free(response);
+    arguments = dup_printf("{\"variablesReference\":%ld}", reference);
+    locals_response = dap_test_request(session, "variables", arguments);
+    variables = dap_test_json_get(dap_test_body(locals_response), "variables");
+    free(arguments);
+
+    for (size_t index = 0U; index < count && expected[index].expression != NULL; ++index) {
+        const DapTestExpectedValue *value = &expected[index];
+        size_t found = 0U;
+        if (value->local_type != NULL) {
+            for (size_t local = 0U;; ++local) {
+                DapTestJson variable = dap_test_json_at(variables, local);
+                if (variable.begin == NULL) break;
+                if (dap_test_json_string_is(dap_test_json_get(variable, "name"), value->expression)) {
+                    ++found;
+                    ASSERT(dap_test_json_string_is(dap_test_json_get(variable, "value"), value->value));
+                    ASSERT(dap_test_json_string_is(dap_test_json_get(variable, "type"), value->local_type));
+                }
+            }
+            ASSERT(found == 1U);
+        }
+        if (!value->evaluate) continue;
+        for (size_t order = 0U; order < 2U; ++order) {
+            for (size_t context = 0U; context < 2U; ++context) {
+                const char *mode = context == 0U ? "hover" : "watch";
+                arguments = order == 0U
+                    ? dup_printf("{\"expression\":\"%s\",\"context\":\"%s\",\"frameId\":%ld}",
+                                 value->expression, mode, frame_id)
+                    : dup_printf("{\"context\":\"%s\",\"frameId\":%ld,\"expression\":\"%s\"}",
+                                 mode, frame_id, value->expression);
+                response = dap_test_request(session, "evaluate", arguments);
+                ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "result"), value->value));
+                ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "type"), "int64_t"));
+                free(response);
+                free(arguments);
+            }
+        }
+    }
+    free(locals_response);
+}
+
+/* Hover expression mode must never permit user assignments or calls. */
+static void dap_test_reject_side_effects(DapTestSession *session, long frame_id) {
+    static const char *kExpressions[] = {"x = 99", "x++", "x.toString()"};
+    static const char *kContexts[] = {"hover", "watch", "repl"};
+    for (size_t context = 0U; context < sizeof(kContexts) / sizeof(kContexts[0]); ++context) {
+        for (size_t index = 0U; index < sizeof(kExpressions) / sizeof(kExpressions[0]); ++index) {
+            char *arguments = dup_printf("{\"context\":\"%s\",\"expression\":\"%s\",\"frameId\":%ld}",
+                                         kContexts[context], kExpressions[index], frame_id);
+            char *response = dap_test_wait(session, dap_test_send(session, "evaluate", arguments), NULL, NULL);
+            const char *cursor = response;
+            DapTestJson success = dap_test_json_get(dap_test_json_next(&cursor), "success");
+            ASSERT(success.begin != NULL && success.end - success.begin == 5 &&
+                   memcmp(success.begin, "false", 5U) == 0);
+            free(response);
+            free(arguments);
+        }
+    }
+}
+
+/* Exercise real integer-expression stops and lambda values without suppressing
+ * legitimate loop/recursive stops or relying on generated C variable names. */
+static void test_dap_expression_breakpoints_and_lambda_values(void) {
+    static const DapTestValueStop kStops[] = {
+        {"add", "add", NULL, {{"value", "7", "int64_t", true}}},
+        {"subtract", "subtract", NULL, {{"value", "7", "int64_t", true}}},
+        {"multiply", "multiply", NULL, {{"value", "7", "int64_t", true}}},
+        {"nested", "nested", NULL, {{"value", "7", "int64_t", true}}},
+        {"branch_true", "branches", NULL, {{"result", "0", "int64_t", true}}},
+        {"branch_after", "branches", NULL, {{"result", "2", "int64_t", true}}},
+        {"branch_false", "branches", NULL, {{"result", "0", "int64_t", true}}},
+        {"branch_after", "branches", NULL, {{"result", "3", "int64_t", true}}},
+        {"compound_add", "compounds", NULL, {{"value", "3", "int64_t", true}}},
+        {"compound_subtract", "compounds", NULL, {{"value", "5", "int64_t", true}}},
+        {"compound_multiply", "compounds", NULL, {{"value", "4", "int64_t", true}}},
+        {"compound_after", "compounds", NULL, {{"value", "16", "int64_t", true}}},
+        {"short_circuit", "shortCircuit", NULL, {{"value", "10", "int64_t", true}}},
+        {"short_circuit", "shortCircuit", NULL, {{"value", "20", "int64_t", true}}},
+        {"loop", "loop", NULL, {{"i", "0", "int64_t", true}}},
+        {"loop", "loop", NULL, {{"i", "1", "int64_t", true}}},
+        {"loop", "loop", NULL, {{"i", "2", "int64_t", true}}},
+        {"recursive", "recursive", NULL, {{"depth", "3", "int64_t", true}}},
+        {"recursive", "recursive", NULL, {{"depth", "2", "int64_t", true}}},
+        {"recursive", "recursive", NULL, {{"depth", "1", "int64_t", true}}},
+        {"pair_before", "parameters", NULL, {{"x", "i64[length=1]", "FengArray *", false}}},
+        {"pair_first", NULL, "pair_create", {{"x", "1", "int64_t", true}, {"y", "2", "int64_t", true}, {"x + y", "3", NULL, true}}},
+        {"pair_mutated", NULL, "pair_create", {{"x", "3", "int64_t", true}, {"y", "2", "int64_t", true}, {"x + y", "5", NULL, true}}},
+        {"direct_first", NULL, "direct_create", {{"value", "4", "int64_t", true}}},
+        {"direct_return", NULL, "direct_create", {{"value", "5", "int64_t", true}}},
+        {"address_first", NULL, "address_create", {{"value", "6", "int64_t", true}}},
+        {"address_return", NULL, "address_create", {{"value", "7", "int64_t", true}}},
+        {"reference", NULL, "reference_create", {{"box.value", "42", NULL, true}}},
+        {"parameter_results", "parameters", NULL, {{"first", "6", "int64_t", true}, {"second", "8", "int64_t", true}}},
+        /* Captures have read expressions but no standalone backend local. */
+        {"capture_first", NULL, "capture_create", {{"base", "10", NULL, true}, {"value", "3", "int64_t", true}, {"base + value", "13", NULL, true}}},
+        {"capture_after", NULL, "capture_create", {{"base", "13", NULL, true}}},
+        {"capture_first", NULL, "capture_create", {{"base", "20", NULL, true}, {"value", "4", "int64_t", true}, {"base + value", "24", NULL, true}}},
+        {"capture_after", NULL, "capture_create", {{"base", "24", NULL, true}}},
+        {"inner_before", NULL, "outer_create", {{"value", "12", "int64_t", true}}},
+        {"inner", NULL, "inner_create", {{"value", "12", NULL, true}, {"value + 1", "13", NULL, true}}},
+        {"inner", NULL, "inner_create", {{"value", "14", NULL, true}, {"value + 1", "15", NULL, true}}},
+        {"outer_return", NULL, "outer_create", {{"value", "14", "int64_t", true}}},
+    };
+    char template_path[] = "temp/feng_cli_dap_expression_values_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *repo_root = getcwd(NULL, 0);
+    char *root;
+    char *src_dir;
+    char *source_path;
+    char *manifest_path;
+    char *manifest;
+    char *binary_path;
+    char *backend_path;
+    char *log_path;
+    char *escaped_source;
+    char *escaped_binary;
+    char *fixture = read_text_file("test/debug/expression_debug_values.ff");
+    char *breakpoint_list = dup_cstr("");
+    char *arguments;
+    char *response;
+    char *remove_error = NULL;
+    unsigned int lines[sizeof(kStops) / sizeof(kStops[0])];
+    long ids[sizeof(kStops) / sizeof(kStops[0])];
+    size_t breakpoint_count = 0U;
+    DapTestSession session;
+    int launch_seq;
+
+    ASSERT(workspace_dir != NULL && repo_root != NULL);
+    root = realpath(workspace_dir, NULL);
+    ASSERT(root != NULL);
+    src_dir = path_join(root, "src");
+    source_path = path_join(src_dir, "main.ff");
+    manifest_path = path_join(root, "feng.fm");
+    binary_path = project_host_build_path(root, "bin/expression_debug_values");
+    backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
+    log_path = path_join(root, "dap.log");
+    manifest = dup_printf(
+        "[package]\nname: \"expression_debug_values\"\nversion: \"0.1.0\"\n"
+        "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nstd: \"%s/std/std\"\n", repo_root);
+    mkdir_p(src_dir);
+    write_text_file(source_path, fixture);
+    write_text_file(manifest_path, manifest);
+    {
+        char *argv[] = {root};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+    ASSERT(feng_cli_path_is_executable(backend_path));
+    escaped_source = json_escape_text(source_path);
+    escaped_binary = json_escape_text(binary_path);
+    for (size_t index = 0U; index < sizeof(kStops) / sizeof(kStops[0]); ++index) {
+        unsigned int line = dap_test_breakpoint_line(fixture, kStops[index].marker);
+        size_t prior = 0U;
+        char *next;
+        while (prior < breakpoint_count && lines[prior] != line) ++prior;
+        if (prior < breakpoint_count) continue;
+        next = dup_printf("%s%s{\"line\":%u}", breakpoint_list,
+                          breakpoint_count == 0U ? "" : ",", line);
+        lines[breakpoint_count++] = line;
+        free(breakpoint_list);
+        breakpoint_list = next;
+    }
+
+    dap_test_start(&session, root, backend_path, log_path);
+    free(dap_test_request(&session, "initialize",
+        "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
+    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
+    launch_seq = dap_test_send(&session, "launch", arguments);
+    free(arguments);
+    free(dap_test_wait(&session, 0, "initialized", NULL));
+    arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}",
+                          escaped_source, breakpoint_list);
+    response = dap_test_request(&session, "setBreakpoints", arguments);
+    for (size_t index = 0U; index < breakpoint_count; ++index) {
+        DapTestJson breakpoint = dap_test_json_at(
+            dap_test_json_get(dap_test_body(response), "breakpoints"), index);
+        dap_test_json_require_true(dap_test_json_get(breakpoint, "verified"));
+        ASSERT(dap_test_json_integer(dap_test_json_get(breakpoint, "line")) == lines[index]);
+        ids[index] = dap_test_json_integer(dap_test_json_get(breakpoint, "id"));
+    }
+    free(response);
+    free(arguments);
+    free(dap_test_request(&session, "configurationDone", "{}"));
+    free(dap_test_response(&session, launch_seq));
+
+    for (size_t index = 0U; index < sizeof(kStops) / sizeof(kStops[0]); ++index) {
+        const DapTestValueStop *stop = &kStops[index];
+        unsigned int line = dap_test_breakpoint_line(fixture, stop->marker);
+        char *frame_name = stop->lambda_marker != NULL
+            ? dup_printf("lambda@%u", dap_test_breakpoint_line(fixture, stop->lambda_marker))
+            : dup_cstr(stop->frame_name);
+        size_t breakpoint_index = 0U;
+        long thread_id;
+        long frame_id;
+        DapTestJson hit_ids;
+        DapTestJson frame;
+
+        while (breakpoint_index < breakpoint_count && lines[breakpoint_index] != line) ++breakpoint_index;
+        ASSERT(breakpoint_index < breakpoint_count);
+        fprintf(session.log, "Expecting stop %zu: %s in %s\n", index + 1U, stop->marker, frame_name);
+        response = dap_test_wait(&session, 0, "stopped", "terminated");
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "reason"), "breakpoint"));
+        hit_ids = dap_test_json_get(dap_test_body(response), "hitBreakpointIds");
+        ASSERT(dap_test_json_integer(dap_test_json_at(hit_ids, 0U)) == ids[breakpoint_index]);
+        ASSERT(dap_test_json_at(hit_ids, 1U).begin == NULL);
+        thread_id = dap_test_json_integer(dap_test_json_get(dap_test_body(response), "threadId"));
+        free(response);
+        arguments = dup_printf("{\"threadId\":%ld}", thread_id);
+        response = dap_test_request(&session, "stackTrace", arguments);
+        frame = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 0U);
+        ASSERT(dap_test_json_string_is(dap_test_json_get(frame, "name"), frame_name));
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), source_path));
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == line);
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "column")) == 1);
+        frame_id = dap_test_json_integer(dap_test_json_get(frame, "id"));
+        free(response);
+        if (strcmp(stop->marker, "pair_mutated") == 0) {
+            dap_test_reject_side_effects(&session, frame_id);
+        }
+        dap_test_expect_values(&session, frame_id, stop->values,
+                               sizeof(stop->values) / sizeof(stop->values[0]));
+        free(dap_test_request(&session, "continue", arguments));
+        free(arguments);
+        free(frame_name);
+    }
+    response = dap_test_wait(&session, 0, "terminated", "stopped");
+    {
+        const char *cursor = response;
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+    }
+    free(response);
+    response = dap_test_wait(&session, 0, "exited", NULL);
+    ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+    free(response);
+    dap_test_finish(&session);
+    printf("dap expression values: %zu ordered stops, locals/hover/watch verified\n",
+           sizeof(kStops) / sizeof(kStops[0]));
+
+    free(breakpoint_list);
+    free(fixture);
+    free(escaped_source);
+    free(escaped_binary);
+    free(log_path);
+    free(backend_path);
+    free(binary_path);
+    free(manifest);
+    free(manifest_path);
+    free(source_path);
+    free(src_dir);
+    free(root);
+    free(repo_root);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Find a successful response in captured DAP frames while checking their byte lengths. */
 static DapTestJson dap_test_captured_response_body(const char *messages, long request_seq) {
     const char *cursor = messages;
@@ -27655,6 +27947,7 @@ int main(void) {
     test_project_build_keeps_for_body_locals_after_prefix_binding();
     test_dap_loop_breakpoints_follow_iterations();
     test_dap_lambda_creation_breakpoints_follow_calls();
+    test_dap_expression_breakpoints_and_lambda_values();
     test_dap_stack_trace_column_mapping();
     test_dap_reports_line_start_for_feng_frames();
     test_dap_rewrites_identifier_evaluate_expression();
