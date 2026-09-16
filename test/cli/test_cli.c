@@ -24488,6 +24488,243 @@ static void test_lsp_module_root_completion_across_indexes_and_edits(void) {
     assert_lsp_module_root_completion(true, true);
 }
 
+/* One edit and its exact overload set, using distinctive parameter names. */
+typedef struct LspModuleSignatureCase {
+    const char *imports;
+    const char *declarations;
+    const char *body;
+    const char *cursor;
+    size_t count;
+    size_t active_parameter;
+    const char *parameter;
+} LspModuleSignatureCase;
+
+/* Keep module identity, scope and argument position stable through real edits. */
+static void run_lsp_module_signature_edits(FILE *input, int output_fd, void *user) {
+    static const LspModuleSignatureCase kCases[] = {
+        {"", NULL, "func probe() { signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"ready\"); }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"ready\", }", "\"ready\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"ready\", ) }", "\"ready\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"ready\", \"value\", }", "\"value\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"ready\", \"a\", \"b\", \"c\", }", "\"c\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { if signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { if (signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { consume(signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { consume([signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(signature.provider.wrap(\"a,b\", \"c\"), }", "\"c\"),", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"a,(b)\", }", "\"a,(b)\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"a\\\",(b)\", }", "(b)\",", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"a\" /* , ( ) */, }", "*/,", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit(\"a\", // , (\n }", "// , (\n", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature.provider.emit([1, 2], }", "[1, 2],", 2, 1, "fmt"},
+        {"", NULL, "func probe() { signature /* . ignored */ . provider . emit ( }", "emit (", 2, 0, "fmt"},
+        {"import signature.provider;\n", NULL, "func probe() { emit( }", "{ emit(", 2, 0, "fmt"},
+        {"import signature.provider;\n", NULL, "func probe() { signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"import signature.provider;\n", NULL, "func probe() { provider.emit( }", "emit(", 0, 0, NULL},
+        {"import signature.provider as api;\n", NULL, "func probe() { api.emit( }", "emit(", 2, 0, "fmt"},
+        {"import signature.provider as api;\n", NULL, "func probe() { api.emit(\"a\", }", "\"a\",", 2, 1, "fmt"},
+        {"import signature.provider as renamed;\n", NULL, "func probe() { renamed.emit( }", "emit(", 2, 0, "fmt"},
+        {"import signature.provider as renamed;\n", NULL, "func probe() { api.emit( }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe() { renamed.emit( }", "emit(", 0, 0, NULL},
+        {"import signature.provider as api;\n", NULL, "func probe() { emit( }", "{ emit(", 0, 0, NULL},
+        {"", NULL, "func probe() { emit( }", "{ emit(", 0, 0, NULL},
+        {"import signature.provider as api;\n", NULL, "func probe() { api.child.emit( }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe() { signature.provider.child.emit( }", "emit(", 1, 0, "childOnly"},
+        {"", NULL, "func probe() { collision.provider.emit( }", "emit(", 1, 0, "unrelated"},
+        {"", NULL, "func probe() { secret.provider.emit( }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe() { scope_internal.emit( }", "emit(", 1, 0, "internal"},
+        {"", NULL, "func probe(signature: Missing) { signature.provider.emit( }", "emit(", 0, 0, NULL},
+        {"import signature.provider as api;\n", NULL, "func probe(api: Missing) { api.emit( }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe<signature>() { signature.provider.emit( }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe(value: Missing) { { let signature = value; signature.provider.emit( } }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe(value: Missing) { { let signature = value; } signature.provider.emit( }", "emit(", 2, 0, "fmt"},
+        {"import signature.provider;\n", "func emit(own: i32): i32 { return own; }\n", "func probe() { emit( }", "{ emit(", 1, 0, "own"},
+        {"import signature.provider;\n", "func emit(own: i32): i32 { return own; }\n", "func probe() { signature.provider.emit( }", "provider.emit(", 2, 0, "fmt"},
+        {"", "open func local(fresh: string): string { return fresh; }\n", "func probe() { signature_consumer.local( }", "signature_consumer.local(", 1, 0, "fresh"},
+        {"", "open func local(fresh: string): string { return fresh; }\nopen func local(updated: i32): i32 { return updated; }\n", "func probe() { local( }", "{ local(", 2, 0, "fresh"},
+        {"", "", "func probe() { signature_consumer.local( }", "signature_consumer.local(", 0, 0, NULL},
+        {"", NULL, "func probe() { // signature.provider.emit(\n }", "emit(", 0, 0, NULL},
+        {"", NULL, "func probe() { let text = \"signature.provider.emit(\"; }", "emit(", 0, 0, NULL}
+    };
+    const LspModuleCompletionFixture *fixture = (const LspModuleCompletionFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const LspModuleSignatureCase *item = &kCases[index];
+        unsigned int id = 6000U + (unsigned int)index * 2U;
+        char *source = dup_printf("module signature_consumer;\n%s%s%s\n", item->imports,
+            item->declarations != NULL ? item->declarations : fixture->declarations, item->body);
+        char *request = build_lsp_test_position_request("textDocument/signatureHelp", id,
+            fixture->uri, source, item->cursor, strlen(item->cursor));
+        char *barrier = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testSignatureBarrier\",\"params\":null}", id + 1U);
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri, (unsigned int)index + 2U, previous, source);
+        write_lsp_message(input, request);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        if (count_lsp_test_response_occurrences(output, id, "\"label\":\"func ") != item->count) {
+            fprintf(stderr, "module signature case %zu: %s\n%s\n", index, source, output);
+        }
+        ASSERT(count_lsp_test_response_occurrences(output, id, "\"label\":\"func ") == item->count);
+        if (item->count == 0U) {
+            assert_lsp_test_response_contains(output, id, "\"result\":null");
+        } else {
+            char *parameter = dup_printf("\"label\":\"%s\"", item->parameter);
+            char *active = dup_printf("\"activeSignature\":0,\"activeParameter\":%zu}", item->active_parameter);
+
+            assert_lsp_test_response_contains(output, id, parameter);
+            assert_lsp_test_response_contains(output, id, active);
+            assert_lsp_test_response_not_contains(output, id, "\"label\":\"hidden\"");
+            assert_lsp_test_response_not_contains(output, id, "\"label\":\"stale\"");
+            if (strcmp(item->parameter, "fmt") == 0) {
+                assert_lsp_test_response_contains(output, id, "\"label\":\"first\"");
+                assert_lsp_test_response_contains(output, id, "args: string...");
+                assert_lsp_test_response_contains(output, id, "args: T...");
+                assert_lsp_test_response_not_contains(output, id, "\"label\":\"unrelated\"");
+                if (strcmp(item->cursor, "\"value\",") == 0 || strcmp(item->cursor, "\"c\",") == 0) {
+                    assert_lsp_test_response_contains(output, id, "],\"activeParameter\":2}");
+                }
+            }
+            free(active);
+            free(parameter);
+        }
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Source-only and package consumers must return identical overload identities
+ * before a successful analysis and after a warm cache, including dirty edits. */
+static void assert_lsp_module_function_signature_help(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kDeclarations =
+        "open func local(stale: i32): i32 { return stale; }\n"
+        "fit int { open func readyMember(): int { return 1; } }\n";
+    static const struct {
+        const char *file;
+        const char *source;
+    } kModules[] = {
+        {"provider.ff", "open module signature.provider;\n"
+         "open func emit(fmt: string, args: string...): int { return 1; }\n"
+         "func emit(hidden: bool): bool { return hidden; }\n"
+         "open func wrap(a: string, b: string): string { return a; }\n"},
+        {"provider_more.ff", "open module signature.provider;\n"
+         "open func emit<T>(fmt: string, first: T, args: T...): int { return 2; }\n"},
+        {"collision.ff", "open module collision.provider;\nopen func emit(unrelated: bool): bool { return unrelated; }\n"},
+        {"hidden.ff", "module secret.provider;\nopen func emit(secret: bool): bool { return secret; }\n"},
+        {"child.ff", "open module signature.provider.child;\nopen func emit(childOnly: string): string { return childOnly; }\n"}
+    };
+    char template_path[] = "temp/feng_lsp_module_signatures_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library;
+    char *library_src;
+    char *library_manifest;
+    char *consumer;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspModuleCompletionFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace != NULL);
+    library = path_join(workspace, "library");
+    library_src = path_join(library, "src");
+    library_manifest = path_join(library, "feng.fm");
+    consumer = path_join(workspace, "consumer");
+    consumer_src = path_join(consumer, "src");
+    consumer_manifest = path_join(consumer, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"signature_library\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    for (size_t index = 0U; index < sizeof(kModules) / sizeof(kModules[0]); ++index) {
+        char *path = path_join(library_src, kModules[index].file);
+
+        write_text_file(path, kModules[index].source);
+        free(path);
+    }
+    if (packaged) {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf("[package]\nname: \"signature_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nsignature_library: \"%s\"\n",
+        packaged ? "../library/build/pkg/signature_library-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    {
+        char *internal = path_join(consumer_src, "internal.ff");
+
+        write_text_file(internal, "module scope_internal;\nopen func emit(internal: i32): i32 { return internal; }\n");
+        free(internal);
+    }
+    source = dup_printf("module signature_consumer;\n%s%s\n", kDeclarations,
+        warm ? "func probe() { let ready = 1 + 2; ready.readyMember(); signature.provider.emit(\"ready\"); }"
+             : "func probe() { signature.provider. }");
+    write_text_file(source_path, source);
+    if (warm) {
+        char *argv[] = {consumer};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "ready.readyMember" : "signature.provider.",
+        strlen(warm ? "ready." : "signature.provider."), &line, &character);
+    fixture = (LspModuleCompletionFixture){uri, kDeclarations, source};
+    output = run_lsp_server_capture_after_position_ready_action(kInitialize, did_open, NULL,
+        "textDocument/completion", uri, line, character,
+        warm ? "\"label\":\"readyMember\"" : "\"label\":\"emit\"",
+        run_lsp_module_signature_edits, &fixture, requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Cover unbuilt sources, packaged dependencies and published semantic caches. */
+static void test_lsp_module_function_signature_help(void) {
+    assert_lsp_module_function_signature_help(false, false);
+    assert_lsp_module_function_signature_help(true, false);
+    assert_lsp_module_function_signature_help(false, true);
+    assert_lsp_module_function_signature_help(true, true);
+}
+
 /* One edit checks a type's member surface and a token's Hover together. */
 typedef struct LspQualifiedTypeCase {
     const char *imports;
@@ -28985,6 +29222,7 @@ int main(void) {
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_signature_help_repairs_enclosing_expressions();
     test_lsp_signature_help_collects_imported_function_overloads();
+    test_lsp_module_function_signature_help();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_fit_member_definition_survives_project_semantic_failure();
     test_lsp_member_completion_survives_incomplete_member_access();
