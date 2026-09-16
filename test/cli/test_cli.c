@@ -11547,6 +11547,200 @@ static void test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation(v
     free(source_path);
 }
 
+/* Imported fit calls inside lambdas retain their exact semantic target,
+ * including overloads and parameters that shadow outer bindings. */
+static void assert_lsp_lambda_fit_call_navigation(bool packaged) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kProvider =
+        "open module test.lsp.lambda_extensions;\n"
+        "open fit int {\n"
+        "  /** Integer description. */\n"
+        "  open func toString(): string { return \"integer\"; }\n"
+        "  /** Integer description with radix. */\n"
+        "  open func toString(radix: i32): string { return \"radix\"; }\n"
+        "}\n"
+        "open fit string {\n"
+        "  /** Text description. */\n"
+        "  open func toString(): string { return self; }\n"
+        "}\n";
+    static const char *kSource =
+        "module test.lsp.lambda_consumer;\n"
+        "import test.lsp.lambda_extensions;\n"
+        "spec PairAction<A, B>(x: A, y: B): void;\n"
+        "spec Text<T>(value: T): string;\n"
+        "func consume(left: string, right: string): void {}\n"
+        "func apply(mapper: Text<int>): string { return mapper(1); }\n"
+        "func exercise(): void {\n"
+        "  let ready = 1;\n"
+        "  ready.toString();\n"
+        "  let x: int[] = [];\n"
+        "  let y = \"outer\";\n"
+        "  let action: PairAction<int, int> = (x: int, y: int) {\n"
+        "    consume(x.toString(), y.toString());\n"
+        "    let alias = y;\n"
+        "    alias.toString(10);\n"
+        "    let nested: Text<string> = (x: string) -> x.toString();\n"
+        "    let deep: Text<int> = (value: int) {\n"
+        "      return value.toString();\n"
+        "    };\n"
+        "  };\n"
+        "  let expression: Text<int> = (item: int) -> item.toString();\n"
+        "  apply((arg: int) -> arg.toString());\n"
+        "  y.toString();\n"
+        "}\n";
+    /* Each call has a distinct declaration location and documentation oracle. */
+    static const struct {
+        const char *needle;
+        size_t offset;
+        const char *signature;
+        const char *documentation;
+        unsigned int declaration_line;
+    } kCases[] = {
+        {"ready.toString()", 7U, "func toString(): string",
+         "Integer description.", 3U},
+        {"consume(x.toString()", 11U, "func toString(): string",
+         "Integer description.", 3U},
+        {"y.toString());", 3U, "func toString(): string",
+         "Integer description.", 3U},
+        {"alias.toString(10)", 7U, "func toString(radix: i32): string",
+         "Integer description with radix.", 5U},
+        {"-> x.toString()", 6U, "func toString(): string",
+         "Text description.", 9U},
+        {"value.toString()", 7U, "func toString(): string",
+         "Integer description.", 3U},
+        {"item.toString()", 6U, "func toString(): string",
+         "Integer description.", 3U},
+        {"arg.toString()", 5U, "func toString(): string",
+         "Integer description.", 3U},
+        {"  y.toString();", 5U, "func toString(): string",
+         "Text description.", 9U},
+        {"consume(x.toString()", 11U, "func toString(): string",
+         "Integer description.", 3U}
+    };
+    char template_path[] = "temp/feng_lsp_lambda_fit_calls_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *library_dir;
+    char *library_src;
+    char *library_manifest;
+    char *provider_path;
+    char *provider_uri;
+    char *consumer_dir;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *manifest;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    char *owned_requests[2U * sizeof(kCases) / sizeof(kCases[0])];
+    const char *requests[2U * sizeof(kCases) / sizeof(kCases[0]) + 2U];
+    unsigned int ready_line;
+    unsigned int ready_character;
+    size_t index;
+
+    ASSERT(workspace_dir != NULL);
+    library_dir = path_join(workspace_dir, "library");
+    library_src = path_join(library_dir, "src");
+    library_manifest = path_join(library_dir, "feng.fm");
+    provider_path = path_join(library_src, "extensions.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_src = path_join(consumer_dir, "src");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"lambda_lib\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(provider_path, kProvider);
+    provider_uri = file_uri_from_path(provider_path);
+    if (packaged) {
+        char *argv[] = {library_dir};
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+        /* The package must supply its own symbols and source locations. */
+        ASSERT(unlink(provider_path) == 0);
+    }
+    manifest = dup_printf(
+        "[package]\nname: \"lambda_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nlambda_lib: \"%s\"\n",
+        packaged ? "../library/build/pkg/lambda_lib-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    write_text_file(source_path, kSource);
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(kSource);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        owned_requests[2U * index] = build_lsp_test_position_request(
+            "textDocument/hover", 10U + (unsigned int)(2U * index),
+            uri, kSource, kCases[index].needle, kCases[index].offset);
+        owned_requests[2U * index + 1U] = build_lsp_test_position_request(
+            "textDocument/definition", 11U + (unsigned int)(2U * index),
+            uri, kSource, kCases[index].needle, kCases[index].offset);
+        requests[2U * index] = owned_requests[2U * index];
+        requests[2U * index + 1U] = owned_requests[2U * index + 1U];
+    }
+    requests[2U * index] =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    requests[2U * index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(kSource, "ready.toString()", strlen("ready."),
+                        &ready_line, &ready_character);
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize, did_open, NULL, "textDocument/hover", uri,
+        ready_line, ready_character, "Integer description.",
+        requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        unsigned int hover_id = 10U + (unsigned int)(2U * index);
+        char *location = dup_printf(
+            "\"range\":{\"start\":{\"line\":%u,\"character\":%u}",
+            packaged ? 0U : kCases[index].declaration_line,
+            packaged ? 0U : 12U);
+
+        assert_lsp_test_response_contains(output, hover_id, kCases[index].signature);
+        assert_lsp_test_response_contains(output, hover_id, kCases[index].documentation);
+        assert_lsp_test_response_contains(output, hover_id + 1U, "\"result\":{\"uri\":\"file://");
+        assert_lsp_test_response_contains(output, hover_id + 1U, location);
+        if (packaged) {
+            assert_lsp_test_response_contains(output, hover_id + 1U,
+                "lambda_lib-0.1.0.fb%21mod/test/lsp/lambda_extensions.ft");
+        } else {
+            assert_lsp_test_response_contains(output, hover_id + 1U, provider_uri);
+        }
+        free(location);
+        free(owned_requests[2U * index]);
+        free(owned_requests[2U * index + 1U]);
+    }
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer_dir);
+    free(provider_uri);
+    free(provider_path);
+    free(library_manifest);
+    free(library_src);
+    free(library_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Source and package dependencies share lambda call Hover and Definition. */
+static void test_lsp_lambda_fit_call_hover_and_definition(void) {
+    assert_lsp_lambda_fit_call_navigation(false);
+    assert_lsp_lambda_fit_call_navigation(true);
+}
+
 /* A failed edit never removes the last successful Hover type category. */
 static void test_lsp_hover_type_category_survives_failed_edit(void) {
     static const char *kSourceBefore =
@@ -27287,6 +27481,7 @@ int main(void) {
     test_lsp_hover_type_categories_and_declaration_shapes();
     test_lsp_hover_lambda_scope_and_chained_members();
     test_lsp_hover_lambda_parameter_declaration_and_cache_invalidation();
+    test_lsp_lambda_fit_call_hover_and_definition();
     test_lsp_hover_type_category_survives_failed_edit();
     test_lsp_hover_infix_match_binding();
     test_lsp_match_binding_queries_and_edits();

@@ -13303,6 +13303,10 @@ static bool resolve_callable_target(const FengResolvedCallable *callable,
     return false;
 }
 
+/* Call lookup crosses lambda expression and block bodies recursively. */
+static const FengExpr *find_call_hit_in_block(const FengBlock *block, size_t offset);
+
+/* Locate the call whose callee contains the requested source position. */
 static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
     size_t index;
 
@@ -13371,6 +13375,10 @@ static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
         }
         case FENG_EXPR_CAST:
             return find_call_hit_expr(expr->as.cast.value, offset);
+        case FENG_EXPR_LAMBDA:
+            return expr->as.lambda.is_block_body
+                       ? find_call_hit_in_block(expr->as.lambda.body_block, offset)
+                       : find_call_hit_expr(expr->as.lambda.body, offset);
         case FENG_EXPR_IF: {
             const FengExpr *hit = find_call_hit_expr(expr->as.if_expr.condition, offset);
             if (hit != NULL) {
