@@ -3,10 +3,12 @@
 #include <limits.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -1188,6 +1190,9 @@ static char *read_fd_until_contains(int fd, const char *needle) {
     return content;
 }
 
+/* Read complete LSP messages through one numeric response ID. */
+static char *read_lsp_test_response(int fd, unsigned int id);
+
 /* Run `feng dap` with redirected stdio and temporary backend lookup overrides. */
 static char *run_dap_capture_stdout_with_path(int argc,
                                               char **argv,
@@ -1746,18 +1751,12 @@ static char *run_lsp_server_capture_after_position_ready_action(
             "{\"jsonrpc\":\"2.0\",\"id\":%u,"
             "\"method\":\"feng/testReadinessBarrier\",\"params\":null}",
             barrier_id);
-        char *barrier_response = dup_printf(
-            "\"id\":%u,\"error\":{\"code\":-32601,"
-            "\"message\":\"Method not found\"}}",
-            barrier_id);
-
         write_lsp_message(input, probe);
         write_lsp_message(input, barrier);
         free(probe);
         free(barrier);
         ASSERT(fflush(input) == 0);
-        readiness_output = read_fd_until_contains(output_pipe[0], barrier_response);
-        free(barrier_response);
+        readiness_output = read_lsp_test_response(output_pipe[0], barrier_id);
         ready = strstr(readiness_output, ready_text) != NULL;
         if (ready && out_ready_output != NULL) {
             *out_ready_output = readiness_output;
@@ -11437,20 +11436,265 @@ static size_t count_lsp_test_response_occurrences(const char *output,
     return count;
 }
 
-/* Sends one request and reads through its framed response. */
+/* Injectable byte source lets framing tests control every short read. */
+typedef ssize_t (*LspTestRead)(void *user, char *buffer, size_t length);
+
+/* Fill only the requested span, retrying interrupted and partial reads. */
+static void lsp_test_read_exact(LspTestRead reader,
+                                void *user,
+                                char *buffer,
+                                size_t length) {
+    size_t offset = 0U;
+
+    while (offset < length) {
+        ssize_t count = reader(user, buffer + offset, length - offset);
+
+        if (count < 0 && errno == EINTR) {
+            continue;
+        }
+        ASSERT(count > 0 && (size_t)count <= length - offset);
+        offset += (size_t)count;
+    }
+}
+
+/* Read one Content-Length frame without consuming any following message. */
+static char *lsp_test_read_frame(LspTestRead reader,
+                                void *user,
+                                size_t *out_header_length) {
+    size_t capacity = 128U;
+    size_t header_length = 0U;
+    size_t payload_length = 0U;
+    bool has_length = false;
+    char *frame = (char *)malloc(capacity);
+    const char *line;
+
+    ASSERT(frame != NULL);
+    while (header_length < 4U ||
+           memcmp(frame + header_length - 4U, "\r\n\r\n", 4U) != 0) {
+        if (header_length + 1U == capacity) {
+            ASSERT(capacity <= SIZE_MAX / 2U);
+            capacity *= 2U;
+            frame = (char *)realloc(frame, capacity);
+            ASSERT(frame != NULL);
+        }
+        lsp_test_read_exact(reader, user, frame + header_length, 1U);
+        ++header_length;
+    }
+    frame[header_length] = '\0';
+    for (line = frame; line < frame + header_length - 2U;) {
+        const char *end = strstr(line, "\r\n");
+
+        ASSERT(end != NULL);
+        if ((size_t)(end - line) >= 15U &&
+            strncasecmp(line, "Content-Length:", 15U) == 0) {
+            const char *number = line + 15U;
+            char *number_end;
+            unsigned long long value;
+
+            ASSERT(!has_length);
+            number += strspn(number, " \t");
+            ASSERT(number < end && *number >= '0' && *number <= '9');
+            errno = 0;
+            value = strtoull(number, &number_end, 10);
+            ASSERT(errno != ERANGE && value <= SIZE_MAX - header_length - 1U);
+            number_end += strspn(number_end, " \t");
+            ASSERT(number_end == end);
+            payload_length = (size_t)value;
+            has_length = true;
+        }
+        line = end + 2U;
+    }
+    ASSERT(has_length);
+    frame = (char *)realloc(frame, header_length + payload_length + 1U);
+    ASSERT(frame != NULL);
+    lsp_test_read_exact(reader, user, frame + header_length, payload_length);
+    ASSERT(memchr(frame + header_length, '\0', payload_length) == NULL);
+    frame[header_length + payload_length] = '\0';
+    *out_header_length = header_length;
+    return frame;
+}
+
+/* Match the top-level response ID only after its complete JSON has arrived. */
+static char *lsp_test_read_through_response(LspTestRead reader,
+                                           void *user,
+                                           unsigned int id) {
+    char *output = NULL;
+
+    for (;;) {
+        size_t header_length;
+        char *frame = lsp_test_read_frame(reader, user, &header_length);
+        const char *cursor = frame + header_length;
+        DapTestJson message = dap_test_json_next(&cursor);
+        DapTestJson response_id = dap_test_json_get(message, "id");
+        bool is_response = dap_test_json_get(message, "result").begin != NULL ||
+                           dap_test_json_get(message, "error").begin != NULL;
+        bool matches = is_response && response_id.begin != NULL &&
+                       *response_id.begin >= '0' && *response_id.begin <= '9' &&
+                       dap_test_json_integer(response_id) == (long)id;
+
+        ASSERT(*dap_test_json_space(cursor) == '\0');
+        output = concat_owned_strings(output, frame);
+        if (matches) {
+            return output;
+        }
+    }
+}
+
+/* Adapt a pipe descriptor to the same byte reader used by framing tests. */
+static ssize_t lsp_test_read_fd(void *user, char *buffer, size_t length) {
+    return read(*(const int *)user, buffer, length);
+}
+
+/* Preserve preceding notifications and leave later frames for the next wait. */
+static char *read_lsp_test_response(int fd, unsigned int id) {
+    return lsp_test_read_through_response(lsp_test_read_fd, &fd, id);
+}
+
+/* Sends one request and reads through its complete framed response. */
 static char *send_lsp_test_request_and_wait(FILE *input,
                                             int output_fd,
                                             const char *request,
                                             unsigned int id) {
-    char *response_marker = dup_printf("\"id\":%u,", id);
-    char *output;
-
-    ASSERT(response_marker != NULL);
     write_lsp_message(input, request);
     ASSERT(fflush(input) == 0);
-    output = read_fd_until_contains(output_fd, response_marker);
-    free(response_marker);
-    return output;
+    return read_lsp_test_response(output_fd, id);
+}
+
+/* A deterministic byte stream with a split boundary and one interrupted read. */
+typedef struct LspTestFragmentedInput {
+    const char *bytes;
+    size_t length;
+    size_t offset;
+    size_t split;
+    size_t max_read;
+    bool interrupted;
+} LspTestFragmentedInput;
+
+/* Model short reads and EINTR without relying on sleeps or pipe scheduling. */
+static ssize_t lsp_test_read_fragment(void *user, char *buffer, size_t length) {
+    LspTestFragmentedInput *input = (LspTestFragmentedInput *)user;
+    size_t available = input->length - input->offset;
+
+    if (!input->interrupted && input->offset >= input->split) {
+        input->interrupted = true;
+        errno = EINTR;
+        return -1;
+    }
+    if (input->offset < input->split && available > input->split - input->offset) {
+        available = input->split - input->offset;
+    }
+    if (length > available) length = available;
+    if (length > input->max_read) length = input->max_read;
+    memcpy(buffer, input->bytes + input->offset, length);
+    input->offset += length;
+    return (ssize_t)length;
+}
+
+/* Every header/body boundary must tolerate short reads and a signal interruption. */
+static void test_lsp_response_reader_handles_fragmentation(void) {
+    static const char *kPayload =
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"result\":{"
+        "\"uri\":\"file:///workspace/中文/lib.ff\","
+        "\"text\":\"Content-Length: 999\\r\\n\\r\\n\","
+        "\"range\":{\"start\":{\"line\":2,\"character\":0}}}}";
+    char *frame = dup_printf(
+        "Content-Type: application/vscode-jsonrpc; charset=utf-8\r\n"
+        "content-length:\t%zu \r\n\r\n%s", strlen(kPayload), kPayload);
+    size_t length = strlen(frame);
+
+    for (size_t split = 0U; split < length; ++split) {
+        LspTestFragmentedInput input = {frame, length, 0U, split, 7U, false};
+        char *output = lsp_test_read_through_response(lsp_test_read_fragment,
+                                                      &input,
+                                                      24U);
+
+        ASSERT(input.interrupted);
+        ASSERT(input.offset == length);
+        ASSERT(strcmp(output, frame) == 0);
+        free(output);
+    }
+    free(frame);
+}
+
+/* Coalesced notifications, other IDs and later responses must keep their boundaries. */
+static void test_lsp_response_reader_preserves_message_boundaries(void) {
+    static const char *kMessages[] = {
+        "{\"jsonrpc\":\"2.0\",\"method\":\"test/notification\",\"params\":{\"id\":24,\"result\":null}}",
+        "{\"jsonrpc\":\"2.0\",\"id\":\"24\",\"result\":null}",
+        "{\"jsonrpc\":\"2.0\",\"id\":240,\"result\":null}",
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"test/serverRequest\"}",
+        "{\"jsonrpc\":\"2.0\",\"error\":{\"code\":-32601,\"message\":\"Method not found\"},\"id\" : 24}",
+        "{\"jsonrpc\":\"2.0\",\"id\":25,\"result\":null}"
+    };
+    int descriptors[2];
+    FILE *writer;
+    char *expected = NULL;
+    char *last = NULL;
+    char *output;
+    char tail;
+
+    ASSERT(pipe(descriptors) == 0);
+    writer = fdopen(descriptors[1], "wb");
+    ASSERT(writer != NULL);
+    for (size_t index = 0U; index < sizeof(kMessages) / sizeof(kMessages[0]); ++index) {
+        char *frame = build_dap_message_text(kMessages[index]);
+
+        write_lsp_message(writer, kMessages[index]);
+        if (index + 1U == sizeof(kMessages) / sizeof(kMessages[0])) {
+            last = frame;
+        } else {
+            expected = concat_owned_strings(expected, frame);
+        }
+    }
+    ASSERT(fclose(writer) == 0);
+    output = read_lsp_test_response(descriptors[0], 24U);
+    ASSERT(strcmp(output, expected) == 0);
+    free(output);
+    output = read_lsp_test_response(descriptors[0], 25U);
+    ASSERT(strcmp(output, last) == 0);
+    ASSERT(read(descriptors[0], &tail, 1U) == 0);
+    ASSERT(close(descriptors[0]) == 0);
+    free(output);
+    free(expected);
+    free(last);
+}
+
+/* A real pipe response with a long URI must include fields beyond the old 255-byte read. */
+static void test_lsp_request_wait_reads_complete_long_response(void) {
+    static const char *kRequest =
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"textDocument/definition\",\"params\":null}";
+    char path[2048];
+    int descriptors[2];
+    FILE *request_input = temp_file();
+    FILE *writer;
+    char *payload;
+    char *expected;
+    char *output;
+    char tail;
+
+    memset(path, 'a', sizeof(path) - 1U);
+    path[sizeof(path) - 1U] = '\0';
+    payload = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"id\":24,\"result\":{"
+        "\"uri\":\"file:///workspace/%s/中文/lib.ff\","
+        "\"range\":{\"start\":{\"line\":2,\"character\":0},"
+        "\"end\":{\"line\":2,\"character\":15}}}}", path);
+    expected = build_dap_message_text(payload);
+    ASSERT(request_input != NULL);
+    ASSERT(pipe(descriptors) == 0);
+    writer = fdopen(descriptors[1], "wb");
+    ASSERT(writer != NULL);
+    write_lsp_message(writer, payload);
+    ASSERT(fclose(writer) == 0);
+    output = send_lsp_test_request_and_wait(request_input, descriptors[0], kRequest, 24U);
+    ASSERT(strcmp(output, expected) == 0);
+    assert_lsp_test_response_contains(output, 24U, "\"start\":{\"line\":2,");
+    ASSERT(read(descriptors[0], &tail, 1U) == 0);
+    ASSERT(close(descriptors[0]) == 0);
+    ASSERT(fclose(request_input) == 0);
+    free(output);
+    free(expected);
+    free(payload);
 }
 
 /* Wait until asynchronous semantic analysis exposes one expected completion
@@ -13194,19 +13438,12 @@ static void run_lsp_signature_repair_action(FILE *input,
             "{\"jsonrpc\":\"2.0\",\"id\":%u,"
             "\"method\":\"feng/testSignatureBarrier\",\"params\":null}",
             barrier_id);
-        char *barrier_response = dup_printf(
-            "\"id\":%u,\"error\":{\"code\":-32601,"
-            "\"message\":\"Method not found\"}}",
-            barrier_id);
-
-        ASSERT(barrier != NULL && barrier_response != NULL);
+        ASSERT(barrier != NULL);
         write_lsp_message(input, action->did_changes[index]);
         write_lsp_message(input, action->signature_requests[index]);
         write_lsp_message(input, barrier);
         ASSERT(fflush(input) == 0);
-        action->responses[index] = read_fd_until_contains(output_fd,
-                                                          barrier_response);
-        free(barrier_response);
+        action->responses[index] = read_lsp_test_response(output_fd, barrier_id);
         free(barrier);
     }
 }
@@ -14034,19 +14271,12 @@ static void run_lsp_control_head_completion_action(FILE *input,
             "{\"jsonrpc\":\"2.0\",\"id\":%u,"
             "\"method\":\"feng/testCompletionBarrier\",\"params\":null}",
             barrier_id);
-        char *barrier_response = dup_printf(
-            "\"id\":%u,\"error\":{\"code\":-32601,"
-            "\"message\":\"Method not found\"}}",
-            barrier_id);
-
-        ASSERT(barrier != NULL && barrier_response != NULL);
+        ASSERT(barrier != NULL);
         write_lsp_message(input, action->did_changes[index]);
         write_lsp_message(input, action->completion_requests[index]);
         write_lsp_message(input, barrier);
         ASSERT(fflush(input) == 0);
-        action->responses[index] = read_fd_until_contains(output_fd,
-                                                          barrier_response);
-        free(barrier_response);
+        action->responses[index] = read_lsp_test_response(output_fd, barrier_id);
         free(barrier);
     }
 }
@@ -14245,19 +14475,12 @@ static void run_lsp_enclosing_expression_completion_action(FILE *input,
             "{\"jsonrpc\":\"2.0\",\"id\":%u,"
             "\"method\":\"feng/testCompletionBarrier\",\"params\":null}",
             barrier_id);
-        char *barrier_response = dup_printf(
-            "\"id\":%u,\"error\":{\"code\":-32601,"
-            "\"message\":\"Method not found\"}}",
-            barrier_id);
-
-        ASSERT(barrier != NULL && barrier_response != NULL);
+        ASSERT(barrier != NULL);
         write_lsp_message(input, action->did_changes[index]);
         write_lsp_message(input, action->completion_requests[index]);
         write_lsp_message(input, barrier);
         ASSERT(fflush(input) == 0);
-        action->responses[index] = read_fd_until_contains(output_fd,
-                                                          barrier_response);
-        free(barrier_response);
+        action->responses[index] = read_lsp_test_response(output_fd, barrier_id);
         free(barrier);
     }
 }
@@ -14471,19 +14694,12 @@ static void run_lsp_identifier_prefix_completion_action(FILE *input,
             "{\"jsonrpc\":\"2.0\",\"id\":%u,"
             "\"method\":\"feng/testCompletionBarrier\",\"params\":null}",
             barrier_id);
-        char *barrier_response = dup_printf(
-            "\"id\":%u,\"error\":{\"code\":-32601,"
-            "\"message\":\"Method not found\"}}",
-            barrier_id);
-
-        ASSERT(barrier != NULL && barrier_response != NULL);
+        ASSERT(barrier != NULL);
         write_lsp_message(input, action->did_changes[index]);
         write_lsp_message(input, action->completion_requests[index]);
         write_lsp_message(input, barrier);
         ASSERT(fflush(input) == 0);
-        action->responses[index] = read_fd_until_contains(output_fd,
-                                                          barrier_response);
-        free(barrier_response);
+        action->responses[index] = read_lsp_test_response(output_fd, barrier_id);
         free(barrier);
     }
 }
@@ -27871,6 +28087,31 @@ static void test_lsp_local_project_dependency_cache_lifecycle(void) {
     free(dependency_dir);
 }
 
+/* Run the existing dependency lifecycle against a long real workspace path. */
+static void test_lsp_cache_lifecycle_with_long_workspace_path(void) {
+    static const char *kComponent =
+        "long_workspace_component_abcdefghijklmnopqrstuvwxyz_0123456789";
+    char template_path[] = "temp/feng_lsp_long_workspace_XXXXXX";
+    char *root = mkdtemp(template_path);
+    char *directory;
+    char *remove_error = NULL;
+    int saved_cwd = open(".", O_RDONLY);
+
+    ASSERT(root != NULL && saved_cwd >= 0);
+    directory = dup_printf("%s/%s/%s/%s/%s", root,
+                           kComponent, kComponent, kComponent, kComponent);
+    ASSERT(strlen(directory) > 255U);
+    mkdir_p(directory);
+    ASSERT(chdir(directory) == 0);
+    ASSERT(mkdir("temp", 0755) == 0);
+    test_lsp_local_project_dependency_cache_lifecycle();
+    ASSERT(fchdir(saved_cwd) == 0);
+    ASSERT(close(saved_cwd) == 0);
+    ASSERT(feng_cli_project_remove_tree(root, &remove_error));
+    free(remove_error);
+    free(directory);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -27924,6 +28165,9 @@ int main(void) {
     test_lsp_help_writes_stdout_not_stderr();
     test_lsp_rejects_unknown_option();
     test_lsp_unknown_option_stays_on_stderr();
+    test_lsp_request_wait_reads_complete_long_response();
+    test_lsp_response_reader_handles_fragmentation();
+    test_lsp_response_reader_preserves_message_boundaries();
     test_dap_help_returns_success();
     test_dap_help_writes_stdout_not_stderr();
     test_dap_rejects_unknown_option();
@@ -27987,6 +28231,7 @@ int main(void) {
     test_lsp_local_project_dependency_generic_fit_member_identity();
     test_lsp_local_project_dependency_type_name_family();
     test_lsp_local_project_dependency_cache_lifecycle();
+    test_lsp_cache_lifecycle_with_long_workspace_path();
     test_lsp_signature_displays_variadic_parameter_syntax();
     test_lsp_signature_help_repairs_enclosing_expressions();
     test_lsp_signature_help_collects_imported_function_overloads();
