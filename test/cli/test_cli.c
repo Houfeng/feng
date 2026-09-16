@@ -24255,6 +24255,260 @@ static void test_lsp_module_path_completion_across_indexes_and_edits(void) {
     assert_lsp_module_path_completion(true, true);
 }
 
+/* One edit checks a type's member surface and a token's Hover together. */
+typedef struct LspQualifiedTypeCase {
+    const char *imports;
+    const char *body;
+    const char *completion;
+    const char *labels[4];
+    const char *hover;
+    const char *documentation;
+} LspQualifiedTypeCase;
+
+/* Exercise dirty and complete qualified names without waiting for reanalysis. */
+static void run_lsp_qualified_type_edits(FILE *input, int output_fd, void *user) {
+    static const LspQualifiedTypeCase kCases[] = {
+        {"", "func probe() { qualified_lib.tools.Widget. }", "Widget.",
+         {"create", "constant"}, "qualified_lib.tools.Widget", "Qualified widget docs."},
+        {"", "func probe() { qualified_lib.tools.Widget.cr }", "Widget.cr",
+         {"create", "constant"}, "qualified_lib.tools.Widget", "Qualified widget docs."},
+        {"", "func probe() { qualified_lib.tools.Widget.create(); }", "Widget.",
+         {"create", "constant"}, "qualified_lib.tools.Widget", "Qualified widget docs."},
+        {"", "func probe() { qualified_lib.tools.Widget.create(); }", "Widget.",
+         {"create", "constant"}, "qualified_lib.tools.Widget.create", "Create docs."},
+        {"import qualified_lib.tools;\n", "func probe() { Widget. }", "Widget.",
+         {"create", "constant"}, "{ Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools;\n", "func probe() { Widget.cr }", "Widget.cr",
+         {"create", "constant"}, "{ Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools;\n", "func probe() { Widget.create(); }", "Widget.",
+         {"create", "constant"}, "{ Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools;\n", "func probe() { qualified_lib.tools.Widget. }", "Widget.",
+         {"create", "constant"}, "qualified_lib.tools.Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools as q;\n", "func probe() { q.Widget. }", "Widget.",
+         {"create", "constant"}, "q.Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools as q;\n", "func probe() { q.Widget.cr }", "Widget.cr",
+         {"create", "constant"}, "q.Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools as q;\n", "func probe() { q.Widget.create(); }", "Widget.",
+         {"create", "constant"}, "q.Widget.create", "Create docs."},
+        {"", "func probe() { qualified_lib.tools.Status. }", "Status.",
+         {"Ready", "Done"}, "qualified_lib.tools.Status", "Qualified status docs."},
+        {"import qualified_lib.tools as q;\n", "func probe() { q.Status. }", "Status.",
+         {"Ready", "Done"}, "q.Status", "Qualified status docs."},
+        {"", "func probe() { qualified_lib.tools.Factory. }", "Factory.",
+         {"make"}, "qualified_lib.tools.Factory", "Qualified factory docs."},
+        {"", "func probe(value: qualified_lib.tools.Widget) { value.instanceOnly(); }", "value.",
+         {"instanceValue", "instanceOnly"}, "qualified_lib.tools.Widget", "Qualified widget docs."},
+        {"import qualified_lib.tools as q;\n", "func probe(value: q.Widget) { value.instanceOnly(); }", "value.",
+         {"instanceValue", "instanceOnly"}, "value: q.Widget", "Qualified widget docs."},
+        {"", "func probe() { qualified_lib.tools.Hidden. }", "Hidden.",
+         {NULL}, "qualified_lib.tools.Hidden", NULL},
+        {"", "func probe() { qualified_lib.private_area.Secret. }", "Secret.",
+         {NULL}, "qualified_lib.private_area.Secret", NULL},
+        {"import qualified_lib as q;\n", "func probe() { q.tools.Widget. }", "Widget.",
+         {NULL}, "q.tools.Widget", NULL},
+        {"import qualified_lib.tools as q;\n", "func probe() { Widget. }", "Widget.",
+         {NULL}, "{ Widget", NULL},
+        {"", "func probe(qualified_lib: LocalRoot) { qualified_lib.tools.Widget. }", "Widget.",
+         {"localOnly"}, "qualified_lib.tools.Widget", "let Widget: LocalLeaf"},
+        {"import qualified_lib.tools as q;\n", "func probe(q: LocalTools) { q.Widget. }", "Widget.",
+         {"localOnly"}, "q.Widget", "let Widget: LocalLeaf"},
+        {"", "func probe<qualified_lib>() { qualified_lib.tools.Widget. }", "Widget.",
+         {NULL}, "qualified_lib.tools.Widget", NULL},
+        {"", "func probe() { qualified_lib /* gap */ . tools . Widget. }", "Widget.",
+         {"create", "constant"}, "tools . Widget", "Qualified widget docs."},
+        {"", "func probe() { qualified_internal.Internal. }", "Internal.",
+         {"inside"}, "qualified_internal.Internal", "Package internal docs."},
+        {"", "/** Current live docs. */\nopen type Live { open static func fresh(): int { return 2; } }\n"
+         "func probe() { qualified_app.Live. }", "Live.", {"fresh"}, "qualified_app.Live", "Current live docs."},
+        {"", "func probe() { qualified_app.Live. }", "Live.",
+         {NULL}, "qualified_app.Live", NULL}
+    };
+    const LspModuleCompletionFixture *fixture = (const LspModuleCompletionFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const LspQualifiedTypeCase *item = &kCases[index];
+        unsigned int id = 4000U + (unsigned int)index * 3U;
+        char *source = dup_printf("module qualified_app;\n%s%s%s\n",
+                                  item->imports, fixture->declarations, item->body);
+        char *completion = build_lsp_test_position_request("textDocument/completion", id,
+            fixture->uri, source, item->completion, strlen(item->completion));
+        char *hover = build_lsp_test_position_request("textDocument/hover", id + 1U,
+            fixture->uri, source, item->hover, strlen(item->hover) - 1U);
+        char *barrier = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 2U);
+        char *output;
+        size_t count = 0U;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri,
+            (unsigned int)index + 2U, previous, source);
+        write_lsp_message(input, completion);
+        write_lsp_message(input, hover);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 2U);
+        for (; count < sizeof(item->labels) / sizeof(item->labels[0]) &&
+               item->labels[count] != NULL; ++count) {
+            char *label = dup_printf("{\"label\":\"%s\"", item->labels[count]);
+
+            if (count_lsp_test_response_occurrences(output, id, label) != 1U) {
+                fprintf(stderr, "qualified type case %zu: %s\n%s\n", index, source, output);
+            }
+            ASSERT(count_lsp_test_response_occurrences(output, id, label) == 1U);
+            free(label);
+        }
+        if (count_lsp_test_response_occurrences(output, id, "{\"label\":") != count ||
+            (item->documentation != NULL && strstr(output, item->documentation) == NULL)) {
+            fprintf(stderr, "qualified type case %zu: %s\n%s\n", index, source, output);
+        }
+        ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":") == count);
+        assert_lsp_test_response_contains(output, id + 1U,
+            item->documentation != NULL ? item->documentation : "\"result\":null");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"secret\"");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"oldMember\"");
+        free(output);
+        free(barrier);
+        free(hover);
+        free(completion);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Source and archive indexes must agree before and after a semantic snapshot. */
+static void assert_lsp_qualified_type_queries(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kDeclarations =
+        "type LocalLeaf { open let localOnly: int; }\n"
+        "type LocalTools { open let Widget: LocalLeaf; }\n"
+        "type LocalRoot { open let tools: LocalTools; }\n"
+        "fit int { open func readyMember(): int { return 1; } }\n";
+    static const char *kLibrary =
+        "open module qualified_lib.tools;\n"
+        "/** Qualified widget docs. */\nopen type Widget {\n"
+        "  open let instanceValue: int;\n"
+        "  open static let constant: int = 1;\n"
+        "  /** Create docs. */\n  open static func create(): int { return 1; }\n"
+        "  open static func create(value: int): int { return value; }\n"
+        "  seal static func secret(): int { return 3; }\n"
+        "  open func instanceOnly(): int { return 4; }\n}\n"
+        "/** Qualified status docs. */\nopen enum Status { Ready = 1, Done = 2 }\n"
+        "/** Qualified factory docs. */\nopen spec Factory { static func make(): int; }\n"
+        "type Hidden { open static func secret(): int { return 1; } }\n";
+    char template_path[] = "temp/feng_lsp_qualified_type_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library;
+    char *library_source;
+    char *library_manifest;
+    char *hidden_source;
+    char *consumer;
+    char *source_path;
+    char *consumer_manifest;
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspModuleCompletionFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace != NULL);
+    library = path_join(workspace, "library");
+    library_source = path_join(library, "src/main.ff");
+    hidden_source = path_join(library, "src/hidden.ff");
+    library_manifest = path_join(library, "feng.fm");
+    consumer = path_join(workspace, "consumer");
+    source_path = path_join(consumer, "src/main.ff");
+    consumer_manifest = path_join(consumer, "feng.fm");
+    {
+        char *library_dir = path_join(library, "src");
+        char *consumer_dir = path_join(consumer, "src");
+
+        mkdir_p(library_dir);
+        mkdir_p(consumer_dir);
+        {
+            char *internal = path_join(consumer_dir, "internal.ff");
+
+            write_text_file(internal, "module qualified_internal;\n"
+                "/** Package internal docs. */\nopen type Internal {\n"
+                "  open static func inside(): int { return 1; }\n}\n");
+            free(internal);
+        }
+        free(consumer_dir);
+        free(library_dir);
+    }
+    write_text_file(library_manifest,
+        "[package]\nname: \"qualified_lib\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(library_source, kLibrary);
+    write_text_file(hidden_source, "module qualified_lib.private_area;\n"
+        "open type Secret { open static func secret(): int { return 1; } }\n");
+    if (packaged) {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf(
+        "[package]\nname: \"qualified_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nqualified_lib: \"%s\"\n",
+        packaged ? "../library/build/pkg/qualified_lib-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    source = dup_printf("module qualified_app;\n%s"
+        "open type Live { open static func oldMember(): int { return 1; } }\n%s\n",
+        kDeclarations, warm
+            ? "func probe() { let ready = 1 + 2; ready.readyMember(); qualified_lib.tools.Widget.create(); }"
+            : "func probe() { qualified_lib.tools. }");
+    write_text_file(source_path, source);
+    if (warm) {
+        char *argv[] = {consumer};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "ready.readyMember" : "qualified_lib.tools.",
+        strlen(warm ? "ready." : "qualified_lib.tools."), &line, &character);
+    fixture = (LspModuleCompletionFixture){uri, kDeclarations, source};
+    output = run_lsp_server_capture_after_position_ready_action(kInitialize, did_open, NULL,
+        "textDocument/completion", uri, line, character,
+        warm ? "\"label\":\"readyMember\"" : "\"label\":\"Widget\"",
+        run_lsp_qualified_type_edits, &fixture, requests,
+        sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(consumer_manifest);
+    free(source_path);
+    free(consumer);
+    free(library_manifest);
+    free(hidden_source);
+    free(library_source);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Cover qualified, imported and alias types through both LSP query backends. */
+static void test_lsp_qualified_type_completion_and_hover(void) {
+    assert_lsp_qualified_type_queries(false, false);
+    assert_lsp_qualified_type_queries(true, false);
+    assert_lsp_qualified_type_queries(false, true);
+    assert_lsp_qualified_type_queries(true, true);
+}
+
 static void test_lsp_external_package_hover_docs_and_completion(void) {
     static const char *kPackageSource =
         "open module test.lsp.pkg.collections;\n"
@@ -28535,6 +28789,7 @@ int main(void) {
     test_lsp_imported_member_completion_without_symbol_cache();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_module_path_completion_across_indexes_and_edits();
+    test_lsp_qualified_type_completion_and_hover();
     test_lsp_external_package_hover_docs_and_completion();
     test_lsp_package_symbol_hover_type_categories();
     test_lsp_builtin_type_names_across_completion_contexts();
