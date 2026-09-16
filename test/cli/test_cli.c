@@ -24255,6 +24255,239 @@ static void test_lsp_module_path_completion_across_indexes_and_edits(void) {
     assert_lsp_module_path_completion(true, true);
 }
 
+/* Expected completion identity; a negative kind matches the label alone. */
+typedef struct LspRootCompletionItem {
+    const char *name;
+    int kind;
+} LspRootCompletionItem;
+
+/* One incremental edit keeps ordinary and module candidates in the same list. */
+typedef struct LspRootCompletionCase {
+    const char *imports;
+    const char *body;
+    const char *cursor;
+    LspRootCompletionItem expected[5];
+    LspRootCompletionItem excluded[3];
+} LspRootCompletionCase;
+
+/* Match the top-level item prefix, independently of its optional resolve data. */
+static char *lsp_root_completion_item_prefix(LspRootCompletionItem item) {
+    return item.kind < 0 ? dup_printf("{\"label\":\"%s\"", item.name)
+                        : dup_printf("{\"label\":\"%s\",\"kind\":%d", item.name, item.kind);
+}
+
+/* Cover the whole typing sequence using real didChange ranges and current scope. */
+static void run_lsp_module_root_edits(FILE *input, int output_fd, void *user) {
+    static const LspRootCompletionCase kCases[] = {
+        {"", "func probe(scalar: int) { s }", "{ s",
+         {{"sample", 9}, {"sibling", 9}, {"scope_internal", 9}, {"scalar", 6}, {"string", 14}}, {{"secret", 9}, {"unrelated", 9}}},
+        {"", "func probe() { sa }", "{ sa", {{"sample", 9}}, {{"sibling", 9}, {"scope_internal", 9}}},
+        {"", "func probe() { sam }", "{ sam", {{"sample", 9}}, {{"sibling", 9}}},
+        {"", "func probe() { sample }", "{ sample", {{"sample", 9}}, {{"sibling", 9}}},
+        {"", "func probe() { sample. }", "{ sample.", {{"tools", 9}}, {{"sample", 9}, {"sibling", 9}}},
+        {"", "func probe() { sample.tools. }", "{ sample.tools.", {{"Widget", -1}, {"send", -1}, {"seek", -1}}, {{"sample", 9}}},
+        {"", "func probe() { sample.tools.Widget. }", "Widget.", {{"create", -1}}, {{"sample", 9}, {"send", -1}}},
+        {"", "func probe() { sample }", "{ sample", {{"sample", 9}}, {{"sibling", 9}}},
+        {"", "func probe() { s }", "{ s", {{"sample", 9}, {"sibling", 9}}, {{"secret", 9}}},
+        {"import sample.tools;\n", "func probe() { s }", "{ s", {{"sample", 9}, {"send", -1}, {"seek", -1}}, {{"secret", 9}}},
+        {"import sample.tools as shortcut;\n", "func probe() { s }", "{ s", {{"sample", 9}, {"shortcut", 9}}, {{"send", -1}}},
+        {"import sample.tools as sunny;\n", "func probe() { s }", "{ s", {{"sample", 9}, {"sunny", 9}}, {{"shortcut", -1}, {"send", -1}}},
+        {"", "func probe() { s }", "{ s", {{"sample", 9}}, {{"shortcut", -1}, {"sunny", -1}}},
+        {"", "func probe(sample: Local) { s }", "{ s", {{"sample", 6}, {"sibling", 9}}, {{"sample", 9}}},
+        {"", "func probe(sample: Missing) { s }", "{ s", {{"sample", 6}}, {{"sample", 9}}},
+        {"", "func probe<sample>() { s }", "{ s", {{"sibling", 9}}, {{"sample", 9}}},
+        {"", "func probe(value: Local) { { let sample: Local = value; s } }", "value; s", {{"sample", 6}}, {{"sample", 9}}},
+        {"", "func probe(value: Local) { { let sample: Local = value; } s }", "} s", {{"sample", 9}}, {{"sample", 6}}},
+        {"", "func probe() { let action = (sample: Local) { s }; }", "{ s", {{"sample", 6}}, {{"sample", 9}}},
+        {"", "func probe() { for var sample = 0; sample < 1; sample = sample + 1 { s } }", "{ s", {{"sample", 6}}, {{"sample", 9}}},
+        {"", "func probe(value: s) {}", "value: s", {{"sample", 9}, {"sibling", 9}}, {{"secret", 9}}},
+        {"", "func probe() { let value: sample.tools.Widget; }", "value: sa", {{"sample", 9}}, {{"sibling", 9}}},
+        {"", "func probe(value: Local) { let converted = (sample.tools.Widget)value; }", "(s", {{"sample", 9}}, {{"secret", 9}}},
+        {"", "func probe() { // s\n }", "// s", {{NULL, 0}}, {{"sample", 9}, {"sibling", 9}, {"scope_internal", 9}}},
+        {"", "func probe() { /* s */ }", "/* s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func probe() { let text = \"s\"; }", "\"s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func s() {}", "func s", {{NULL, 0}}, {{"sample", 9}, {"sibling", 9}}},
+        {"", "type s {}", "type s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func probe() { let s = 1; }", "let s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func probe(s: int) {}", "probe(s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func probe() { let action = (s: int) { return s; }; }", "(s", {{NULL, 0}}, {{"sample", 9}}},
+        {"import sample.tools as s;\n", "func probe() {}", "as s", {{NULL, 0}}, {{"sample", 9}}},
+        {"", "func probe() { zzz }", "{ zzz", {{NULL, 0}}, {{"sample", 9}, {"sibling", 9}}},
+        {"", "func probe(value: Local) { value.s }", "value.s", {{"size", -1}}, {{"sample", 9}, {"sibling", 9}}},
+        {"", "func probe() { sample.tools.send(); }", "{ s", {{"sample", 9}}, {{"secret", 9}}},
+        {"", "func probe() { scope_internal. }", "scope_internal.", {{"Internal", -1}}, {{"sample", 9}}}
+    };
+    const LspModuleCompletionFixture *fixture = (const LspModuleCompletionFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const LspRootCompletionCase *item = &kCases[index];
+        unsigned int id = 5000U + (unsigned int)index * 2U;
+        char *source = dup_printf("module root_app;\n%s%s%s\n",
+            item->imports, fixture->declarations, item->body);
+        char *request = build_lsp_test_position_request("textDocument/completion", id,
+            fixture->uri, source, item->cursor, strlen(item->cursor));
+        char *barrier = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri,
+            (unsigned int)index + 2U, previous, source);
+        write_lsp_message(input, request);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        for (size_t expected = 0U; expected < sizeof(item->expected) / sizeof(item->expected[0]) &&
+             item->expected[expected].name != NULL; ++expected) {
+            char *prefix = lsp_root_completion_item_prefix(item->expected[expected]);
+
+            if (count_lsp_test_response_occurrences(output, id, prefix) != 1U) {
+                fprintf(stderr, "root completion case %zu: %s\n%s\n", index, source, output);
+            }
+            ASSERT(count_lsp_test_response_occurrences(output, id, prefix) == 1U);
+            free(prefix);
+        }
+        for (size_t excluded = 0U; excluded < sizeof(item->excluded) / sizeof(item->excluded[0]) &&
+             item->excluded[excluded].name != NULL; ++excluded) {
+            char *prefix = lsp_root_completion_item_prefix(item->excluded[excluded]);
+
+            if (count_lsp_test_response_occurrences(output, id, prefix) != 0U) {
+                fprintf(stderr, "unexpected root completion case %zu: %s\n%s\n", index, source, output);
+            }
+            assert_lsp_test_response_not_contains(output, id, prefix);
+            free(prefix);
+        }
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Root modules come from both source projects and package metadata, including
+ * multi-file and implicit namespace roots; current package modules stay visible. */
+static void assert_lsp_module_root_completion(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kDeclarations =
+        "type Local { open let size: int; }\n"
+        "fit int { open func readyMember(): int { return 1; } }\n";
+    static const struct {
+        const char *file;
+        const char *source;
+    } kModules[] = {
+        {"tools.ff", "open module sample.tools;\n"
+         "open type Widget { open static func create(): int { return 1; } }\n"
+         "open func send(): int { return 1; }\n"},
+        {"tools_more.ff", "open module sample.tools;\nopen func seek(): int { return 2; }\n"},
+        {"sibling.ff", "open module sibling.api;\nopen type Peer {}\n"},
+        {"hidden.ff", "module secret.api;\nopen type Hidden {}\n"},
+        {"unrelated.ff", "open module unrelated;\nopen type Other {}\n"}
+    };
+    char template_path[] = "temp/feng_lsp_module_root_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library;
+    char *library_src;
+    char *library_manifest;
+    char *consumer;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspModuleCompletionFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace != NULL);
+    library = path_join(workspace, "library");
+    library_src = path_join(library, "src");
+    library_manifest = path_join(library, "feng.fm");
+    consumer = path_join(workspace, "consumer");
+    consumer_src = path_join(consumer, "src");
+    consumer_manifest = path_join(consumer, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"root_library\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    for (size_t index = 0U; index < sizeof(kModules) / sizeof(kModules[0]); ++index) {
+        char *path = path_join(library_src, kModules[index].file);
+
+        write_text_file(path, kModules[index].source);
+        free(path);
+    }
+    if (packaged) {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf("[package]\nname: \"root_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nroot_library: \"%s\"\n",
+        packaged ? "../library/build/pkg/root_library-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    {
+        char *internal = path_join(consumer_src, "internal.ff");
+
+        write_text_file(internal, "module scope_internal;\nopen type Internal {}\n");
+        free(internal);
+    }
+    source = dup_printf("module root_app;\n%s%s\n", kDeclarations,
+        warm ? "func probe() { let ready = 1 + 2; ready.readyMember(); sample.tools.send(); }"
+             : "func probe() { sample.tools. }");
+    write_text_file(source_path, source);
+    if (warm) {
+        char *argv[] = {consumer};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "ready.readyMember" : "sample.tools.",
+        strlen(warm ? "ready." : "sample.tools."), &line, &character);
+    fixture = (LspModuleCompletionFixture){uri, kDeclarations, source};
+    output = run_lsp_server_capture_after_position_ready_action(kInitialize, did_open, NULL,
+        "textDocument/completion", uri, line, character,
+        warm ? "\"label\":\"readyMember\"" : "\"label\":\"Widget\"",
+        run_lsp_module_root_edits, &fixture, requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Root-prefix completion must agree across dirty/cached and semantic queries. */
+static void test_lsp_module_root_completion_across_indexes_and_edits(void) {
+    assert_lsp_module_root_completion(false, false);
+    assert_lsp_module_root_completion(true, false);
+    assert_lsp_module_root_completion(false, true);
+    assert_lsp_module_root_completion(true, true);
+}
+
 /* One edit checks a type's member surface and a token's Hover together. */
 typedef struct LspQualifiedTypeCase {
     const char *imports;
@@ -28789,6 +29022,7 @@ int main(void) {
     test_lsp_imported_member_completion_without_symbol_cache();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
     test_lsp_module_path_completion_across_indexes_and_edits();
+    test_lsp_module_root_completion_across_indexes_and_edits();
     test_lsp_qualified_type_completion_and_hover();
     test_lsp_external_package_hover_docs_and_completion();
     test_lsp_package_symbol_hover_type_categories();

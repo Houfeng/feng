@@ -21607,6 +21607,8 @@ static bool completion_context_from_text(const char *text,
     while (prefix_start > 0U && completion_identifier_continue(text[prefix_start - 1U])) {
         --prefix_start;
     }
+    context->prefix.data = text + prefix_start;
+    context->prefix.length = offset - prefix_start;
     if (prefix_start == 0U || text[prefix_start - 1U] != '.') {
         context->position = completion_position_from_text(text, offset);
         return true;
@@ -21618,8 +21620,6 @@ static bool completion_context_from_text(const char *text,
     context->is_member = true;
     context->receiver.data = text + receiver_start;
     context->receiver.length = object_end - receiver_start;
-    context->prefix.data = text + prefix_start;
-    context->prefix.length = offset - prefix_start;
     object_start = object_end;
     while (object_start > 0U && completion_identifier_continue(text[object_start - 1U])) {
         --object_start;
@@ -23249,12 +23249,17 @@ static bool append_owner_member_completion_items(FengLspString *json,
     return true;
 }
 
-/* A qualified module receiver owns its parsed chain and borrows any import alias. */
+/* A module query owns its receiver chain and borrows the current lexical scope. */
 typedef struct FengLspModuleCompletionPath {
     FengLspReceiverChain receiver;
     const FengUseDecl *alias;
     size_t segment_count;
     FengSlice partial;
+    const FengLspAnalysisSession *session;
+    const FengLspModuleIndex *source_index;
+    const FengLspLocalList *locals;
+    const FengDecl *enclosing_decl;
+    const FengTypeMember *enclosing_member;
 } FengLspModuleCompletionPath;
 
 /* Read-only module metadata backed by either source AST or provider symbols. */
@@ -23263,7 +23268,7 @@ typedef struct FengLspModuleCompletionView {
     const FengSymbolImportedModule *symbols;
 } FengLspModuleCompletionView;
 
-/* Compare a candidate's base name with the text typed after the final dot. */
+/* Compare a module or declaration name with the current identifier prefix. */
 static bool module_completion_name_matches(FengSlice name, FengSlice partial) {
     return name.length >= partial.length &&
            (partial.length == 0U || memcmp(name.data, partial.data, partial.length) == 0);
@@ -23311,7 +23316,17 @@ static bool append_module_view_completion_items(
                                    current_program->module_segments[index]);
     }
     if (!same_module && visibility != FENG_VISIBILITY_PUBLIC) {
-        return true;
+        const FengSemanticModule *semantic_module =
+            path->session != NULL && module->program != NULL
+                ? find_program_module(path->session, module->program) : NULL;
+        bool same_package =
+            (semantic_module != NULL &&
+             semantic_module->origin == FENG_SEMANTIC_MODULE_ORIGIN_LOCAL) ||
+            indexed_programs_share_package(path->source_index, current_program, module->program);
+
+        if (!same_package) {
+            return true;
+        }
     }
     for (index = 0U; index < path->segment_count; ++index) {
         FengSlice segment = path->alias != NULL ? path->alias->segments[index]
@@ -23326,6 +23341,11 @@ static bool append_module_view_completion_items(
     if (segment_count > path->segment_count) {
         FengSlice next = module_completion_segment(module, path->segment_count);
 
+        if (path->segment_count == 0U &&
+            (find_local(path->locals, next) != NULL ||
+             find_scoped_type_param(path->enclosing_decl, path->enclosing_member, next) != NULL)) {
+            return true;
+        }
         return !module_completion_name_matches(next, path->partial) ||
                append_completion_item(json, first, next, "module", 9);
     }
@@ -23370,6 +23390,87 @@ static bool append_module_view_completion_items(
     return true;
 }
 
+/* Admit name-use tokens only: trivia, literals and declaration identifiers do
+ * not gain module candidates merely because their spelling shares a prefix. */
+static bool module_root_completion_context(const char *source_text,
+                                           const FengProgram *program,
+                                           FengSlice prefix,
+                                           const FengDecl *enclosing_decl,
+                                           const FengLspLocalList *locals) {
+    FengLexer lexer;
+    FengToken previous = {0};
+    FengToken token;
+    FengLspResolvedTarget target = {0};
+    size_t start;
+
+    if (prefix.length == 0U || !completion_identifier_start(prefix.data[0])) {
+        return false;
+    }
+    start = (size_t)(prefix.data - source_text);
+    feng_lexer_init(&lexer, source_text, strlen(source_text), program->path);
+    for (;;) {
+        token = feng_lexer_next(&lexer);
+        if (token.kind == FENG_TOKEN_EOF || token.kind == FENG_TOKEN_ERROR || token.offset > start) {
+            return false;
+        }
+        if (token.offset == start) {
+            break;
+        }
+        previous = token;
+    }
+    if (token.kind != FENG_TOKEN_IDENTIFIER) {
+        return false;
+    }
+    switch (previous.kind) {
+        case FENG_TOKEN_DOT:
+        case FENG_TOKEN_KW_MODULE:
+        case FENG_TOKEN_KW_FUNC:
+        case FENG_TOKEN_KW_TYPE:
+        case FENG_TOKEN_KW_SPEC:
+        case FENG_TOKEN_KW_ENUM:
+        case FENG_TOKEN_KW_LET:
+        case FENG_TOKEN_KW_VAR:
+            return false;
+        default:
+            break;
+    }
+    if (enclosing_decl != NULL) {
+        FengCliLoadedSource source = {0};
+        FengLspAnalysisSession syntax = {0};
+
+        if (find_decl_token_hit(source_text, enclosing_decl, start, &target)) {
+            return false;
+        }
+        /* Reuse the syntax walker for nested callable parameter declarations;
+         * visible locals intentionally exclude parameters before their body. */
+        source.path = program->path;
+        source.source = (char *)source_text;
+        source.source_length = strlen(source_text);
+        source.program = (FengProgram *)program;
+        syntax.sources = &source;
+        syntax.source_count = 1U;
+        if (find_type_ref_hit(enclosing_decl, program, &syntax, start, &target) &&
+            target.kind == FENG_LSP_RESOLVED_PARAM) {
+            return false;
+        }
+    }
+    for (size_t index = 0U; index < program->use_count; ++index) {
+        const FengUseDecl *use = &program->uses[index];
+
+        if (use->has_alias && offset_in_slice_from_source(source_text, use->alias, start)) {
+            return false;
+        }
+    }
+    for (size_t index = 0U; index < locals->count; ++index) {
+        const FengLspLocal *local = &locals->items[index];
+
+        if (offset_in_slice_from_source(source_text, local->name, start)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /* Resolve full module paths and file-local aliases through the same in-memory
  * query for semantic, parsed-source and symbol-cache completion. Callers hold
  * analysis_mutex while borrowing published indexes. Ordinary receiver chains
@@ -23380,6 +23481,7 @@ static bool append_module_path_completion_items(
     const FengLspAnalysisSession *session,
     const FengLspCacheQueryContext *cache,
     const FengProgram *program,
+    const char *source_text,
     const FengLspCompletionContext *context,
     const FengLspLocalList *locals,
     const FengDecl *enclosing_decl,
@@ -23396,35 +23498,44 @@ static bool append_module_path_completion_items(
     size_t index;
 
     *handled = false;
-    if (!context->is_member || context->literal_builtin_name.length > 0U ||
-        !receiver_chain_parse(context->receiver, &path.receiver)) {
+    if (context->literal_builtin_name.length > 0U) {
         return true;
     }
-    if (path.receiver.root_kind != FENG_LSP_RECEIVER_ROOT_IDENTIFIER ||
-        find_local(locals, path.receiver.root) != NULL ||
-        find_scoped_type_param(enclosing_decl, enclosing_member, path.receiver.root) != NULL) {
-        goto cleanup;
-    }
-    for (index = 0U; index < path.receiver.operation_count; ++index) {
-        if (path.receiver.operations[index].kind != FENG_LSP_RECEIVER_MEMBER) {
+    if (!context->is_member) {
+        if (!module_root_completion_context(source_text, program, context->prefix,
+                                             enclosing_decl, locals)) {
+            return true;
+        }
+    } else {
+        if (!receiver_chain_parse(context->receiver, &path.receiver)) {
+            return true;
+        }
+        if (path.receiver.root_kind != FENG_LSP_RECEIVER_ROOT_IDENTIFIER ||
+            find_local(locals, path.receiver.root) != NULL ||
+            find_scoped_type_param(enclosing_decl, enclosing_member, path.receiver.root) != NULL) {
             goto cleanup;
         }
-    }
-    for (index = 0U; index < program->use_count; ++index) {
-        const FengUseDecl *use_decl = &program->uses[index];
-
-        if (use_decl->has_alias && slice_equals(use_decl->alias, path.receiver.root)) {
-            /* An alias names one module, not a namespace containing its descendants. */
-            if (path.receiver.operation_count > 0U) {
+        for (index = 0U; index < path.receiver.operation_count; ++index) {
+            if (path.receiver.operations[index].kind != FENG_LSP_RECEIVER_MEMBER) {
                 goto cleanup;
             }
-            path.alias = use_decl;
-            *handled = true;
-            break;
         }
+        for (index = 0U; index < program->use_count; ++index) {
+            const FengUseDecl *use_decl = &program->uses[index];
+
+            if (use_decl->has_alias && slice_equals(use_decl->alias, path.receiver.root)) {
+                /* An alias names one module, not a namespace containing its descendants. */
+                if (path.receiver.operation_count > 0U) {
+                    goto cleanup;
+                }
+                path.alias = use_decl;
+                *handled = true;
+                break;
+            }
+        }
+        path.segment_count = path.alias != NULL ? path.alias->segment_count
+                                                : path.receiver.operation_count + 1U;
     }
-    path.segment_count = path.alias != NULL ? path.alias->segment_count
-                                            : path.receiver.operation_count + 1U;
     path.partial = context->prefix;
     if (provider == NULL && symbol_index_matches_path(service, program->path)) {
         provider = service->symbol_index;
@@ -23432,6 +23543,11 @@ static bool append_module_path_completion_items(
     if (source_index == NULL && module_index_matches_path(service, program->path)) {
         source_index = &service->module_index;
     }
+    path.session = session;
+    path.source_index = source_index;
+    path.locals = locals;
+    path.enclosing_decl = enclosing_decl;
+    path.enclosing_member = enclosing_member;
     ok = append_module_view_completion_items(json, first, &path, &view, program, handled, request);
     if (session != NULL && session->analysis != NULL) {
         for (index = 0U; ok && index < session->analysis->module_count; ++index) {
@@ -24188,11 +24304,11 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
             return ok && string_append_cstr(json, "]");
         }
     }
-    {
+    if (completion_context.is_member) {
         bool module_handled = false;
 
         if (!append_module_path_completion_items(json, &first, session, NULL, program,
-                                                 &completion_context, &locals, enclosing_decl,
+                                                 source_text, &completion_context, &locals, enclosing_decl,
                                                  enclosing_member, &module_handled, request)) {
             local_list_dispose(&locals);
             return false;
@@ -24462,6 +24578,16 @@ static bool build_completion_json(const FengLspAnalysisSession *session,
                 }
             }
         }
+        {
+            bool module_handled = false;
+
+            if (!append_module_path_completion_items(json, &first, session, NULL, program,
+                    source_text, &completion_context, &locals, enclosing_decl,
+                    enclosing_member, &module_handled, request)) {
+                local_list_dispose(&locals);
+                return false;
+            }
+        }
     }
     local_list_dispose(&locals);
     return string_append_cstr(json, "]");
@@ -24585,11 +24711,11 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
             return true;
         }
     }
-    {
+    if (completion_context.is_member) {
         bool module_handled = false;
 
         if (!append_module_path_completion_items(json, &first, NULL, context, context->program,
-                                                 &completion_context, &locals, enclosing_decl,
+                                                 context->source_text, &completion_context, &locals, enclosing_decl,
                                                  enclosing_member, &module_handled, request)) {
             local_list_dispose(&locals);
             return false;
@@ -25035,6 +25161,16 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
                     local_list_dispose(&locals);
                     return false;
                 }
+            }
+        }
+        {
+            bool module_handled = false;
+
+            if (!append_module_path_completion_items(json, &first, NULL, context, context->program,
+                    context->source_text, &completion_context, &locals, enclosing_decl,
+                    enclosing_member, &module_handled, request)) {
+                local_list_dispose(&locals);
+                return false;
             }
         }
     }
@@ -25882,7 +26018,8 @@ static bool handle_completion_request(FengLspService *service,
         published_query_ready =
             find_workspace_analysis_by_source_path(service,
                                                    document->path) != NULL ||
-            symbol_index_matches_path(service, document->path);
+            symbol_index_matches_path(service, document->path) ||
+            module_index_matches_path(service, document->path);
         pthread_mutex_unlock(&service->analysis_mutex);
         if (!published_query_ready) {
             FengSlice type_prefix = {0};
