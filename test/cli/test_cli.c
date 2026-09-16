@@ -14369,6 +14369,286 @@ static void test_lsp_fit_extension_member_completion_on_builtin_string(void) {
     assert_lsp_completion_contains_labels(kLiteralSource, "\"123\".;", 6U, labels, 1U);
 }
 
+/* One edit and its complete expected member set in the builtin fixture. */
+typedef struct {
+    const char *body;
+    const char *cursor;
+    const char *labels[3];
+} LspInferredBuiltinCase;
+
+/* A protocol session shares indexes and optionally a successful semantic snapshot. */
+typedef struct {
+    const char *uri;
+    const char *prefix;
+    const char *initial_source;
+    const LspInferredBuiltinCase *cases;
+    size_t case_count;
+} LspInferredBuiltinFixture;
+
+/* Send the smallest ASCII range edit between two fixture versions. This exercises
+ * the same incremental didChange path used when deleting or typing a member name. */
+static void write_lsp_ascii_incremental_change(FILE *input,
+                                               const char *uri,
+                                               unsigned int version,
+                                               const char *before,
+                                               const char *after) {
+    size_t start = 0U;
+    size_t before_end = strlen(before);
+    size_t after_end = strlen(after);
+    unsigned int start_line;
+    unsigned int start_character;
+    unsigned int end_line;
+    unsigned int end_character;
+    char *replacement;
+    char *escaped;
+    char *change;
+
+    while (start < before_end && start < after_end && before[start] == after[start]) {
+        ++start;
+    }
+    while (before_end > start && after_end > start &&
+           before[before_end - 1U] == after[after_end - 1U]) {
+        --before_end;
+        --after_end;
+    }
+    find_line_character(before, before, start, &start_line, &start_character);
+    find_line_character(before, before, before_end, &end_line, &end_character);
+    replacement = dup_printf("%.*s", (int)(after_end - start), after + start);
+    escaped = json_escape_text(replacement);
+    change = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":%u},"
+        "\"contentChanges\":[{\"range\":{\"start\":{\"line\":%u,\"character\":%u},"
+        "\"end\":{\"line\":%u,\"character\":%u}},\"text\":\"%s\"}]}}",
+        uri, version, start_line, start_character, end_line, end_character, escaped);
+    write_lsp_message(input, change);
+    free(change);
+    free(escaped);
+    free(replacement);
+}
+
+/* Check every intermediate edit immediately, without waiting for a new analysis. */
+static void run_lsp_inferred_builtin_edits(FILE *input, int output_fd, void *user) {
+    const LspInferredBuiltinFixture *fixture = (const LspInferredBuiltinFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < fixture->case_count; ++index) {
+        const LspInferredBuiltinCase *item = &fixture->cases[index];
+        unsigned int id = 3000U + (unsigned int)index * 2U;
+        size_t expected_count = 0U;
+        char *source = dup_printf("%s%s\n}\n", fixture->prefix, item->body);
+        char *request;
+        char *barrier;
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri,
+                                           (unsigned int)index + 2U, previous, source);
+        request = build_lsp_test_position_request("textDocument/completion", id,
+                    fixture->uri, source, item->cursor, strlen(item->cursor));
+        write_lsp_message(input, request);
+        barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        while (expected_count < sizeof(item->labels) / sizeof(item->labels[0]) &&
+               item->labels[expected_count] != NULL) {
+            char *label = dup_printf("{\"label\":\"%s\"", item->labels[expected_count]);
+
+            if (count_lsp_test_response_occurrences(output, id, label) != 1U) {
+                fprintf(stderr, "builtin completion case %zu: %s\n%s\n", index, source, output);
+            }
+            ASSERT(count_lsp_test_response_occurrences(output, id, label) == 1U);
+            free(label);
+            ++expected_count;
+        }
+        if (count_lsp_test_response_occurrences(output, id, "{\"label\":") != expected_count) {
+            fprintf(stderr, "unexpected builtin completion case %zu: %s\n%s\n", index, source, output);
+        }
+        /* Exact membership also checks visibility, static/instance filtering,
+         * stale type rejection, unrelated scope items, and deduplication. */
+        ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":") == expected_count);
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Run source-only or packaged imports, with optional reusable semantic facts.
+ * A bin project without main deliberately prevents successful analysis in cold
+ * cases, so source-index and package fallbacks cannot be masked by a warm cache. */
+static void assert_lsp_inferred_builtin_completion(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kExtensions =
+        "open module test.lsp.inferred_extensions;\n"
+        "open fit string {\n"
+        "  open func textMember(): int { return 1; }\n"
+        "  seal func hiddenText(): int { return 2; }\n"
+        "  open static func textStatic(): int { return 3; }\n"
+        "}\n"
+        "fit string { open func privateFit(): int { return 4; } }\n"
+        "open fit i64 { open func wideMember(): int { return 5; } }\n"
+        "open fit i32 { open func narrowMember(): int { return 6; } }\n"
+        "open fit bool { open func boolMember(): int { return 7; } }\n"
+        "open fit f64 { open func floatMember(): int { return 8; } }\n";
+    static const char *kUnimported =
+        "open module test.lsp.unimported_extensions;\n"
+        "open fit string { open func notImported(): int { return 9; } }\n";
+    static const char *kPrefix =
+        "module test.lsp.inferred_consumer;\n"
+        "import test.lsp.inferred_extensions;\n"
+        "fit string { open func localText(): int { return 10; } }\n"
+        "func probe() {\n";
+    const char *integer_member = sizeof(void *) >= 8U ? "wideMember" : "narrowMember";
+    const LspInferredBuiltinCase cold_cases[] = {
+        {"  let value = \"Feng\"; value.", "value.", {"textMember", "localText"}},
+        {"  let value = \"Feng\"; value.te", "value.te", {"textMember", "localText"}},
+        {"  let value: string = \"Feng\"; value.", "value.", {"textMember", "localText"}},
+        {"  let value = 0; value.", "value.", {integer_member}},
+        {"  let value: int = 0; value.", "value.", {integer_member}},
+        {"  for var i = 0; i < 3; i = i + 1 { i. }", "i.", {integer_member}},
+        {"  for var i = 0; i < 3; i = i + 1 { i.w }", "i.w", {integer_member}},
+        {"  let value = (i32)0; value.", "value.", {"narrowMember"}},
+        {"  let value = true; value.", "value.", {"boolMember"}},
+        {"  let value = 1.5; value.", "value.", {"floatMember"}},
+        {"  let text = \"Feng\"; let value = text; value.", "value.", {"textMember", "localText"}},
+        {"  let value = 1; { let value = \"Feng\"; value. }", "value.", {"textMember", "localText"}},
+        {"  let value = \"Feng\"; { let value = value; value. }", "value.", {"textMember", "localText"}},
+        {"  let value = missing; value.", "value.", {NULL}},
+        {"  let value: Missing = \"Feng\"; value.", "value.", {NULL}},
+        {"  let value = value; value.", "value.", {NULL}},
+        {"  let value = later; let later = \"Feng\"; value.", "value.", {NULL}},
+        {"  string.", "string.", {"textStatic"}},
+        {"  \"Feng\".", "\"Feng\".", {"textMember", "localText"}}
+    };
+    const LspInferredBuiltinCase warm_cases[] = {
+        {"  let value = 1 + 2; value.", "value.", {integer_member}},
+        {"  let value = 1 + 2; value.w", "value.w", {integer_member}},
+        {"  let value = \"Feng\"; value.", "value.", {"textMember", "localText"}},
+        {"  let value = true; value.", "value.", {"boolMember"}},
+        {"  let value = 1 + 2; { let value = \"Feng\"; value. }", "value.", {"textMember", "localText"}},
+        {"  let value: Missing = \"Feng\"; value.", "value.", {NULL}},
+        {"  let value = missing; value.", "value.", {NULL}}
+    };
+    char template_path[] = "temp/feng_lsp_inferred_builtin_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *library_dir;
+    char *library_src;
+    char *library_manifest;
+    char *extensions_path;
+    char *unimported_path;
+    char *consumer_dir;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *main_path;
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *ready_text;
+    char *remove_error = NULL;
+    unsigned int ready_line;
+    unsigned int ready_character;
+    LspInferredBuiltinFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace_dir != NULL);
+    library_dir = path_join(workspace_dir, "library");
+    library_src = path_join(library_dir, "src");
+    library_manifest = path_join(library_dir, "feng.fm");
+    extensions_path = path_join(library_src, "extensions.ff");
+    unimported_path = path_join(library_src, "unimported.ff");
+    consumer_dir = path_join(workspace_dir, "consumer");
+    consumer_src = path_join(consumer_dir, "src");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    main_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"inferred_lib\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(extensions_path, kExtensions);
+    write_text_file(unimported_path, kUnimported);
+    if (packaged) {
+        char *argv[] = {library_dir};
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf(
+        "[package]\nname: \"inferred_app\"\nversion: \"0.1.0\"\n"
+        "target: \"%s\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\ninferred_lib: \"%s\"\n",
+        warm ? "lib" : "bin",
+        packaged ? "../library/build/pkg/inferred_lib-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    source = warm ? dup_printf("%s  let value = 1 + 2; value.%s();\n}\n", kPrefix, integer_member)
+                  : dup_printf("%s%s\n}\n", kPrefix, cold_cases[0].body);
+    write_text_file(main_path, source);
+    uri = file_uri_from_path(main_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    if (warm) {
+        /* A binary initializer has no syntax-only fallback; this member proves
+         * that a successful semantic snapshot exists before its name is deleted. */
+        find_line_character(source, "value.", strlen("value."), &ready_line, &ready_character);
+        ready_text = dup_printf("\"label\":\"%s\"", integer_member);
+    } else {
+        find_line_character(source, "import test.lsp.", strlen("import test.lsp."),
+                            &ready_line, &ready_character);
+        ready_text = dup_cstr("\"label\":\"inferred_extensions\"");
+    }
+    fixture = (LspInferredBuiltinFixture){
+        .uri = uri, .prefix = kPrefix, .initial_source = source,
+        .cases = warm ? warm_cases : cold_cases,
+        .case_count = warm ? sizeof(warm_cases) / sizeof(warm_cases[0])
+                          : sizeof(cold_cases) / sizeof(cold_cases[0])
+    };
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, "textDocument/completion", uri,
+        ready_line, ready_character, ready_text, run_lsp_inferred_builtin_edits,
+        &fixture, requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(ready_text);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(main_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer_dir);
+    free(unimported_path);
+    free(extensions_path);
+    free(library_manifest);
+    free(library_src);
+    free(library_dir);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
+/* Both import providers retain builtin extensions through incomplete edits. */
+static void test_lsp_inferred_builtin_completion_from_imports(void) {
+    assert_lsp_inferred_builtin_completion(false, false);
+    assert_lsp_inferred_builtin_completion(true, false);
+}
+
+/* Semantic facts survive member edits but cannot escape their unchanged binding. */
+static void test_lsp_inferred_builtin_completion_reuses_safe_semantic_facts(void) {
+    assert_lsp_inferred_builtin_completion(false, true);
+    assert_lsp_inferred_builtin_completion(true, true);
+}
+
 static void test_lsp_enum_member_completion_survives_incomplete_member_access(void) {
     static const char *kDotSource =
         "module test.lsp.enumcompletiondot;\n"
@@ -26773,6 +27053,8 @@ int main(void) {
     test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_friend_completion_parsed_only_fails_closed();
     test_lsp_fit_extension_member_completion_on_builtin_string();
+    test_lsp_inferred_builtin_completion_from_imports();
+    test_lsp_inferred_builtin_completion_reuses_safe_semantic_facts();
     test_lsp_enum_member_completion_survives_incomplete_member_access();
     test_lsp_completion_uses_source_scoped_edit_context();
     test_lsp_member_completion_infers_constructor_call_overloads();
