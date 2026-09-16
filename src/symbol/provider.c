@@ -916,6 +916,12 @@ FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, 
     return slice_from_cstr(module->module->segments[index]);
 }
 
+/* Missing module metadata cannot establish public visibility. */
+FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *module) {
+    return module != NULL && module->module != NULL
+               ? module->module->visibility : FENG_VISIBILITY_PRIVATE;
+}
+
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->kind : FENG_SYMBOL_DECL_KIND_MODULE;
 }

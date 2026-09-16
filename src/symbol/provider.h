@@ -101,6 +101,9 @@ const FengSymbolFitView *feng_symbol_module_fit_at(const FengSymbolImportedModul
 size_t feng_symbol_module_segment_count(const FengSymbolImportedModule *module);
 FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, size_t index);
 
+/* Read module visibility without exposing the provider's storage layout. */
+FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *module);
+
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl);

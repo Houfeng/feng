@@ -23992,6 +23992,269 @@ static void test_lsp_alias_module_completion_survives_incomplete_member_access(v
     free(remove_error);
 }
 
+/* One independently specified module completion surface after an editor edit. */
+typedef struct LspModuleCompletionCase {
+    const char *imports;
+    const char *body;
+    const char *cursor;
+    const char *labels[12];
+    bool allow_other_items;
+    const char *excluded;
+} LspModuleCompletionCase;
+
+/* An index-ready session keeps the same document and dependency identity. */
+typedef struct LspModuleCompletionFixture {
+    const char *uri;
+    const char *declarations;
+    const char *initial_source;
+} LspModuleCompletionFixture;
+
+/* Verify actual incremental edits without waiting for another successful parse
+ * or analysis; exact candidate sets also assert visibility and deduplication. */
+static void run_lsp_module_completion_edits(FILE *input, int output_fd, void *user) {
+    static const LspModuleCompletionCase kCases[] = {
+        {"", "func probe() {\n  completion_lib.io.println(1);\n}\n", "  completion_lib.io.",
+         {"Widget", "Box<T>", "Callback", "Status", "constant", "mutable", "println", "extra", "child"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.\n}\n", "  completion_lib.",
+         {"RootType", "rootBinding", "rootValue", "io", "net"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.i\n}\n", "  completion_lib.i", {"io"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.\n}\n", "  completion_lib.io.",
+         {"Widget", "Box<T>", "Callback", "Status", "constant", "mutable", "println", "extra", "child"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.p\n}\n", "  completion_lib.io.p", {"println"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.pr\n}\n", "  completion_lib.io.pr", {"println"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.\n}\n", "  completion_lib.io.",
+         {"Widget", "Box<T>", "Callback", "Status", "constant", "mutable", "println", "extra", "child"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.c\n}\n", "  completion_lib.io.c", {"constant", "child"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.io.child.\n}\n", "  completion_lib.io.child.", {"nested"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.net.\n}\n", "  completion_lib.net.", {"deep"}, false, NULL},
+        {"", "func probe() {\n  completion_lib.missing.\n}\n", "  completion_lib.missing.", {NULL}, false, NULL},
+        {"", "func probe() {\n  completion_lib.hidden.\n}\n", "  completion_lib.hidden.", {NULL}, false, NULL},
+        {"", "func probe() {\n  completion_lib.h\n}\n", "  completion_lib.h", {NULL}, false, NULL},
+        {"import completion_lib.io;\n", "func probe() {\n  completion_lib.io.pr\n}\n", "  completion_lib.io.pr", {"println"}, false, NULL},
+        {"import completion_lib.io;\n", "func probe() {\n  pri\n}\n", "  pri", {"println"}, true, NULL},
+        {"import completion_lib.io as lp;\n", "func probe() {\n  lp.\n}\n", "  lp.",
+         {"Widget", "Box<T>", "Callback", "Status", "constant", "mutable", "println", "extra"}, false, NULL},
+        {"import completion_lib.io as lp;\n", "func probe() {\n  lp.pr\n}\n", "  lp.pr", {"println"}, false, NULL},
+        {"import completion_lib.io as lp;\n", "func probe() {\n  pri\n}\n", "  pri", {NULL}, true, "println"},
+        {"import completion_lib as cl;\n", "func probe() {\n  cl.\n}\n", "  cl.",
+         {"RootType", "rootBinding", "rootValue"}, false, NULL},
+        {"import completion_lib.hidden as hp;\n", "func probe() {\n  hp.\n}\n", "  hp.", {NULL}, false, NULL},
+        {"", "func probe(value: completion_lib.io.) {}\n", "value: completion_lib.io.",
+         {"Widget", "Box<T>", "Callback", "Status", "constant", "mutable", "println", "extra", "child"}, false, NULL},
+        {"import completion_lib.io as lp;\n", "func probe(value: lp.W) {}\n", "value: lp.W", {"Widget"}, false, NULL},
+        {"", "func probe() {\n  let value: completion_lib.io.B\n}\n", "value: completion_lib.io.B", {"Box<T>"}, false, NULL},
+        {"", "func probe(completion_lib: Local) {\n  completion_lib.\n}\n", "  completion_lib.", {"own", "nested"}, false, NULL},
+        {"", "func probe(completion_lib: Local) {\n  completion_lib.nested.\n}\n", "  completion_lib.nested.", {"leaf"}, false, NULL},
+        {"import completion_lib.io as lp;\n", "func probe(lp: Local) {\n  lp.\n}\n", "  lp.", {"own", "nested"}, false, NULL},
+        {"import completion_lib.io as lp;\n", "func probe(lp: Missing) {\n  lp.\n}\n", "  lp.", {NULL}, false, NULL},
+        {"", "func probe(value: Local) {\n  { let completion_lib: Local = value; completion_lib. }\n}\n", "value; completion_lib.", {"own", "nested"}, false, NULL},
+        {"", "func probe() {\n  let action = (completion_lib: Local) { completion_lib. };\n}\n", "{ completion_lib.", {"own", "nested"}, false, NULL},
+        {"", "func probe<completion_lib>() {\n  completion_lib.\n}\n", "  completion_lib.", {NULL}, false, NULL},
+        {"", "func probe() {\n  for var i = 0; i < 1; i = i + 1 { completion_lib. }\n}\n", "{ completion_lib.",
+         {"RootType", "rootBinding", "rootValue", "io", "net"}, false, NULL},
+        {"", "func probe() {\n  deep.a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.\n}\n",
+         "  deep.a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t.", {"deepValue"}, false, NULL},
+        {"", "open func replacement(): int { return 1; }\nfunc probe() {\n  module_completion_app.\n}\n",
+         "  module_completion_app.", {"replacement"}, false, "initialOnly"},
+        {"", "func probe() {\n  module_completion_app.\n}\n",
+         "  module_completion_app.", {NULL}, false, "initialOnly"}
+    };
+    const LspModuleCompletionFixture *fixture = (const LspModuleCompletionFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+    size_t index;
+
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const LspModuleCompletionCase *item = &kCases[index];
+        unsigned int id = 3000U + (unsigned int)index * 2U;
+        char *source = dup_printf("module module_completion_app;\n%s%s%s",
+                                  item->imports, fixture->declarations, item->body);
+        char *request;
+        char *barrier;
+        char *output;
+        size_t expected_count = 0U;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri,
+                                           (unsigned int)index + 2U, previous, source);
+        request = build_lsp_test_position_request("textDocument/completion", id,
+            fixture->uri, source, item->cursor, strlen(item->cursor));
+        write_lsp_message(input, request);
+        barrier = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        while (expected_count < sizeof(item->labels) / sizeof(item->labels[0]) &&
+               item->labels[expected_count] != NULL) {
+            char *label = dup_printf("{\"label\":\"%s\"", item->labels[expected_count]);
+
+            if (count_lsp_test_response_occurrences(output, id, label) != 1U) {
+                fprintf(stderr, "module completion case %zu: %s\n%s\n", index, source, output);
+            }
+            ASSERT(count_lsp_test_response_occurrences(output, id, label) == 1U);
+            free(label);
+            ++expected_count;
+        }
+        if (!item->allow_other_items) {
+            if (count_lsp_test_response_occurrences(output, id, "{\"label\":") != expected_count) {
+                fprintf(stderr, "unexpected module completion case %zu: %s\n%s\n", index, source, output);
+            }
+            ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":") == expected_count);
+        }
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"hiddenValue\"");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"hiddenRoot\"");
+        assert_lsp_test_response_not_contains(output, id, "\"label\":\"secret\"");
+        if (item->excluded != NULL) {
+            char *excluded = dup_printf("\"label\":\"%s\"", item->excluded);
+
+            assert_lsp_test_response_not_contains(output, id, excluded);
+            free(excluded);
+        }
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Source-only and packaged dependencies must expose the same module surface,
+ * both after a valid semantic snapshot and when opening incomplete source. */
+static void assert_lsp_module_path_completion(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kDeclarations =
+        "type Leaf { open let leaf: int; }\n"
+        "type Local { open let own: int; open let nested: Leaf; }\n"
+        "fit int { open func readyMember(): int { return 1; } }\n";
+    static const struct {
+        const char *file;
+        const char *source;
+    } kModules[] = {
+        {"root.ff", "open module completion_lib;\n"
+         "open type RootType {}\nopen let rootBinding: int = 1;\n"
+         "open func rootValue(): int { return 1; }\n"
+         "func hiddenRoot(): int { return 0; }\n"},
+        {"io.ff", "open module completion_lib.io;\n"
+         "open type Widget {}\nopen type Box<T> { open let value: T; }\n"
+         "open spec Callback(): int;\nopen enum Status { Ready = 1 }\n"
+         "open let constant: int = 1;\nopen var mutable: int = 2;\n"
+         "open func println(value: int): int { return value; }\n"
+         "func hiddenValue(): int { return 0; }\n"},
+        {"io_more.ff", "open module completion_lib.io;\n"
+         "open func println(value: string): int { return 2; }\n"
+         "open func extra(): int { return 3; }\n"},
+        {"child.ff", "open module completion_lib.io.child;\nopen func nested(): int { return 1; }\n"},
+        {"net.ff", "open module completion_lib.net.deep;\nopen func connect(): int { return 1; }\n"},
+        {"hidden.ff", "module completion_lib.hidden;\nopen func secret(): int { return 1; }\n"},
+        {"boundary.ff", "open module completion_libish;\nopen func boundary(): int { return 1; }\n"},
+        {"deep.ff", "open module deep.a.b.c.d.e.f.g.h.i.j.k.l.m.n.o.p.q.r.s.t;\n"
+         "open func deepValue(): int { return 1; }\n"}
+    };
+    char template_path[] = "temp/feng_lsp_module_path_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library;
+    char *library_src;
+    char *library_manifest;
+    char *consumer;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int ready_line;
+    unsigned int ready_character;
+    LspModuleCompletionFixture fixture;
+    const char *requests[] = {kShutdown};
+    size_t index;
+
+    ASSERT(workspace != NULL);
+    library = path_join(workspace, "library");
+    library_src = path_join(library, "src");
+    library_manifest = path_join(library, "feng.fm");
+    consumer = path_join(workspace, "consumer");
+    consumer_src = path_join(consumer, "src");
+    consumer_manifest = path_join(consumer, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"module_completion_lib\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    for (index = 0U; index < sizeof(kModules) / sizeof(kModules[0]); ++index) {
+        char *path = path_join(library_src, kModules[index].file);
+
+        write_text_file(path, kModules[index].source);
+        free(path);
+    }
+    if (packaged) {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf(
+        "[package]\nname: \"module_completion_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nmodule_completion_lib: \"%s\"\n",
+        packaged ? "../library/build/pkg/module_completion_lib-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    source = dup_printf("module module_completion_app;\n%s"
+        "open func initialOnly(): int { return 1; }\n%s", kDeclarations,
+        warm ? "func probe() {\n  let ready = 1 + 2; ready.readyMember();\n  completion_lib.io.println(1);\n}\n"
+             : "func probe() {\n  completion_lib.io.\n}\n");
+    write_text_file(source_path, source);
+    if (warm) {
+        char *argv[] = {consumer};
+
+        /* Workspace FT entries retain the old file while overlays rename and
+         * remove its public declarations in the same indexed session. */
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "ready.readyMember" : "  completion_lib.io.",
+        strlen(warm ? "ready." : "  completion_lib.io."), &ready_line, &ready_character);
+    fixture = (LspModuleCompletionFixture){uri, kDeclarations, source};
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, "textDocument/completion", uri,
+        ready_line, ready_character, warm ? "\"label\":\"readyMember\"" : "\"label\":\"Widget\"",
+        run_lsp_module_completion_edits, &fixture, requests,
+        sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Exercise full paths, bare imports, aliases and lexical scope in both indexes. */
+static void test_lsp_module_path_completion_across_indexes_and_edits(void) {
+    assert_lsp_module_path_completion(false, false);
+    assert_lsp_module_path_completion(true, false);
+    assert_lsp_module_path_completion(false, true);
+    assert_lsp_module_path_completion(true, true);
+}
+
 static void test_lsp_external_package_hover_docs_and_completion(void) {
     static const char *kPackageSource =
         "open module test.lsp.pkg.collections;\n"
@@ -28271,6 +28534,7 @@ int main(void) {
     test_lsp_imported_type_completion_survives_project_semantic_failure();
     test_lsp_imported_member_completion_without_symbol_cache();
     test_lsp_alias_module_completion_survives_incomplete_member_access();
+    test_lsp_module_path_completion_across_indexes_and_edits();
     test_lsp_external_package_hover_docs_and_completion();
     test_lsp_package_symbol_hover_type_categories();
     test_lsp_builtin_type_names_across_completion_contexts();
