@@ -3367,6 +3367,48 @@ static void cg_emit_current_stmt_line_directive_force(CG *cg) {
     (void)cg_emit_line_directive_force(cg, cg->current_stmt_anchor_token);
 }
 
+/* Map a completed compiler-generated suffix to one source anchor. This is
+ * for scaffolding without user statement blocks (capture storage/ABI copies),
+ * including multi-line switches. Preserve C text and continued logical lines;
+ * only replace its line directives. */
+static bool cg_anchor_generated_suffix(CG *cg, size_t start, FengToken token) {
+    char *generated;
+    const char *cursor;
+    bool continued = false;
+    bool ok = true;
+
+    if (cg->options == NULL || !cg->options->emit_line_directives ||
+        token.line == 0U || cg->cur_body->length == start) {
+        return true;
+    }
+    generated = strdup(cg->cur_body->data + start);
+    if (generated == NULL) {
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+    }
+    cg->cur_body->length = start;
+    cg->cur_body->data[start] = '\0';
+    cursor = generated;
+    while (*cursor != '\0') {
+        const char *newline = strchr(cursor, '\n');
+        size_t length = newline != NULL ? (size_t)(newline - cursor) + 1U
+                                        : strlen(cursor);
+
+        if (!continued && strncmp(cursor, "#line ", 6U) == 0) {
+            cursor += length;
+            continue;
+        }
+        if (!continued && !cg_emit_line_directive_force(cg, token)) {
+            ok = false;
+            break;
+        }
+        buf_append(cg->cur_body, cursor, length);
+        continued = newline != NULL && length >= 2U && cursor[length - 2U] == '\\';
+        cursor += length;
+    }
+    free(generated);
+    return ok && cg_emit_line_directive_force(cg, token);
+}
+
 /* ===================== mangling ===================== */
 
 static bool cg_build_generic_param_constraints(CG *cg,
@@ -4694,11 +4736,13 @@ static bool cg_emit_dynamic_capture_storage_metadata(
     char **out_size_c_name) {
     char *descriptor_name = NULL;
     char *size_name = NULL;
+    size_t body_start;
 
     if (cg == NULL || value_type == NULL || out_descriptor_c_name == NULL ||
         out_size_c_name == NULL) {
         return false;
     }
+    body_start = cg->cur_body->length;
     if (value_type->kind == CG_TYPE_GENERIC_PARAM) {
         const char *descriptor = cg_generic_param_desc_name(
             cg, value_type->generic_param_index);
@@ -4748,6 +4792,11 @@ static bool cg_emit_dynamic_capture_storage_metadata(
         free(descriptor_expr);
     }
 
+    if (!cg_anchor_generated_suffix(cg, body_start, blame)) {
+        free(descriptor_name);
+        free(size_name);
+        return false;
+    }
     *out_descriptor_c_name = descriptor_name;
     *out_size_c_name = size_name;
     return true;
@@ -4973,7 +5022,7 @@ cleanup:
 /* A conditional binding allocates and initializes its cell only on the hit
  * path. The nullable owner and cleanup node still live in the enclosing scope,
  * so existing cleanup handles short-circuit misses and exceptions uniformly. */
-static bool cg_scope_bind_capture_cell_conditionally(CG *cg,
+static bool cg_scope_bind_capture_cell_conditionally_impl(CG *cg,
                                        Scope *scope,
                                        FengSlice name,
                                        const CGType *value_type,
@@ -5090,6 +5139,20 @@ cleanup:
     free(value_expr);
     cgtype_free(cell_type);
     return ok;
+}
+
+/* Capture storage is preparation for the binding, including parameter cells
+ * created before the first body statement and descriptor-dependent branches. */
+static bool cg_scope_bind_capture_cell_conditionally(CG *cg, Scope *scope,
+    FengSlice name, const CGType *value_type, FengToken blame,
+    const char *source_expr, bool has_source, bool source_owns_ref,
+    bool record_debug_variable, FengCodegenMapingVariableKind debug_kind,
+    const char *condition) {
+    size_t body_start = cg->cur_body->length;
+    return cg_scope_bind_capture_cell_conditionally_impl(cg, scope, name,
+               value_type, blame, source_expr, has_source, source_owns_ref,
+               record_debug_variable, debug_kind, condition) &&
+           cg_anchor_generated_suffix(cg, body_start, blame);
 }
 
 /* Ordinary bindings are unconditional; preserve their existing lowering. */
@@ -21500,6 +21563,9 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
         return cg_fail(cg, blame,
                        "CE0075", "codegen: callable out return has no value type");
     }
+    size_t body_start = cg->cur_body->length;
+    FengToken return_token = cg->current_stmt_anchor_active
+                                ? cg->current_stmt_anchor_token : blame;
 
     if (result->type->kind == CG_TYPE_GENERIC_PARAM) {
         const char *descriptor = cg_generic_param_desc_name(
@@ -21681,7 +21747,7 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
     cg_emit_return_control_cleanup(cg);
     buf_append_cstr(cg->cur_body, "    return;\n");
     er_free(result);
-    return true;
+    return cg_anchor_generated_suffix(cg, body_start, return_token);
 }
 
 static bool cg_emit_return_expr_result(CG *cg,
@@ -23657,6 +23723,7 @@ cleanup:
     return ok;
 }
 
+/* Emit the invoke helper and initialize its closure at the creation site. */
 static bool cg_emit_callable_lambda_coercion(CG *cg,
                                              const FengExpr *e,
                                              const FengExpr *lambda_expr,
@@ -23678,6 +23745,8 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
     const char *owner_descriptor_type =
         cg_lambda_owner_descriptor_c_type(&reification);
     FengToken blame = e ? e->token : (lambda_expr ? lambda_expr->token : (FengToken){0});
+    FengToken creation_token = cg->current_stmt_anchor_active
+                                  ? cg->current_stmt_anchor_token : blame;
 
     er_init(out);
     if (lambda_expr == NULL || lambda_expr->kind != FENG_EXPR_LAMBDA) {
@@ -23819,6 +23888,9 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         goto cleanup;
     }
+    /* Every generated line belongs to the creating expression, even after
+     * emitting a nested callable into a separate body buffer. */
+    size_t creation_start = cg->cur_body->length;
     buf_append_fmt(cg->cur_body,
         "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n"
         "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
@@ -23873,6 +23945,7 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
             capture_field_names[i],
             captures[i]->capture_cell_c_name);
     }
+    if (!cg_anchor_generated_suffix(cg, creation_start, creation_token)) goto cleanup;
 
     {
         Buf expr;
@@ -26285,6 +26358,7 @@ static void cg_callable_callee_guard_end(CG *cg, CGCallableCalleeGuard *guard) {
         cg_release_scope(cg, &suffix);
         scope_discard_suffix(guard->scope, guard->local_index);
     } else {
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body, "    feng_release(%s); %s = NULL;\n",
                        local->c_name, local->c_name);
         local->cleanup_pop_only = true;
@@ -26438,6 +26512,7 @@ static bool cg_emit_callable_value_call(CG *cg,
                 er_free(callee);
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
+            cg_emit_current_stmt_line_directive_force(cg);
             buf_append_fmt(cg->cur_body,
                            "    %s %s;\n",
                            result_ctype,
@@ -26454,6 +26529,7 @@ static bool cg_emit_callable_value_call(CG *cg,
             er_free(callee);
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body,
                        "    ((struct %s *)%s)->invoke(%s%s, %s%s);\n",
                        spec->c_closure_struct_name,
@@ -26501,6 +26577,7 @@ static bool cg_emit_callable_value_call(CG *cg,
                        callee->c_expr,
                        args_buf.data ? args_buf.data : "");
         if (guard.scope != NULL) {
+            cg_emit_current_stmt_line_directive_force(cg);
             if (spec->callable_return_type->kind == CG_TYPE_VOID) {
                 buf_append_fmt(cg->cur_body, "    %s;\n", invocation.data);
                 out->c_expr = strdup("((void)0)");
@@ -35968,10 +36045,12 @@ static void cg_release_through(CG *cg, const Scope *stop) {
     }
 }
 
+/* Keep control-flow cleanup at the statement which exits the protected scope. */
 static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count) {
     int pop_count;
 
     if (cg->active_caught_unwind_count > 0) {
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_release_unwind_exception();\n");
     }
     pop_count = cg->active_exception_frame_count - keep_exception_frame_count;
@@ -35979,15 +36058,19 @@ static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_fram
         pop_count = 0;
     }
     for (int i = 0; i < pop_count; ++i) {
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
     }
 }
 
+/* Anchor frame teardown and leave the following return at the same statement. */
 static void cg_emit_return_control_cleanup(CG *cg) {
     cg_emit_control_cleanup_to_try_depth(cg, 0);
     if (cg->cur_function_has_frame_marker) {
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
     }
+    cg_emit_current_stmt_line_directive_force(cg);
 }
 
 /* Register a managed local on the per-thread cleanup chain so a throw passing
@@ -43569,6 +43652,7 @@ static bool cg_emit_try_stmt(CG *cg, const FengStmt *stmt) {
     return true;
 }
 
+/* Keep the final expression at its statement after lowering any temporaries. */
 static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     /* Open a fresh inner scope so any +1 temporaries from the expression
      * are released at the statement boundary. */
@@ -43588,6 +43672,7 @@ static bool cg_emit_expr_stmt(CG *cg, const FengStmt *stmt) {
     } else if (cgtype_is_aggregate(r.type) && r.owns_ref) {
         cg_materialize_to_local(cg, &r, "_t");
     } else {
+        cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body, "    (void)(%s);\n", r.c_expr);
     }
     er_free(&r);

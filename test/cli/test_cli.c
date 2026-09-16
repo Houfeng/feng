@@ -9513,6 +9513,196 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     free(remove_error);
 }
 
+/* Each expected stop identifies the source line and the callable owning it.
+ * Unused body breakpoints remain registered but absent from this sequence. */
+typedef struct DapTestLambdaStop {
+    const char *marker;
+    const char *frame_name;
+    const char *lambda_marker;
+    int counter;
+} DapTestLambdaStop;
+
+/* Verify closure creation never claims body/following-line breakpoints in a
+ * real debugger, including captures, nested helpers and generic descriptors. */
+static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
+    static const char *kBreakpoints[] = {
+        "plain_body", "plain_before", "captured_body", "captured_before",
+        "captured_between", "unused_body", "unused_after", "inner_body",
+        "inner_before", "outer_before", "generic_body", "generic_before",
+        "owner_body", "owner_before", "direct_body", "direct_before",
+        "direct_after", "address_body", "address_before", "address_after"
+    };
+    static const DapTestLambdaStop kStops[] = {
+        {"plain_before", "plain", NULL, 0},
+        {"plain_body", NULL, "plain_create", -1},
+        {"plain_before", "plain", NULL, 1},
+        {"plain_body", NULL, "plain_create", -1},
+        {"captured_before", "captured", NULL, -1},
+        {"captured_body", NULL, "captured_create", -1},
+        {"captured_between", "captured", NULL, -1},
+        {"captured_body", NULL, "captured_create", -1},
+        {"unused_after", "unused", NULL, -1},
+        {"outer_before", "nested", NULL, -1},
+        {"inner_before", NULL, "outer_create", -1},
+        {"inner_body", NULL, "inner_create", -1},
+        {"direct_before", "directResult", NULL, -1},
+        {"direct_body", NULL, "direct_create", -1},
+        {"direct_after", "directResult", NULL, -1},
+        {"address_before", "addressResult", NULL, -1},
+        {"address_body", NULL, "address_create", -1},
+        {"address_after", "addressResult", NULL, -1},
+        {"generic_before", "generic", NULL, -1},
+        {"generic_body", NULL, "generic_create", -1},
+        /* Shared generic methods currently expose their backend frame name. */
+        {"owner_before", "FengGenericMethod__lambda_creation_breakpoints__Factory__i0__run", NULL, -1},
+        {"owner_body", NULL, "owner_create", -1}
+    };
+    char template_path[] = "temp/feng_cli_dap_lambda_creation_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *repo_root = getcwd(NULL, 0);
+    char *root;
+    char *src_dir;
+    char *source_path;
+    char *manifest_path;
+    char *manifest;
+    char *binary_path;
+    char *backend_path;
+    char *log_path;
+    char *escaped_source;
+    char *escaped_binary;
+    char *fixture = read_text_file("test/debug/lambda_creation_breakpoints.ff");
+    char *breakpoint_list = dup_cstr("");
+    char *arguments;
+    char *response;
+    char *remove_error = NULL;
+    unsigned int lines[sizeof(kBreakpoints) / sizeof(kBreakpoints[0])];
+    long ids[sizeof(kBreakpoints) / sizeof(kBreakpoints[0])];
+    DapTestSession session;
+    int launch_seq;
+
+    ASSERT(workspace_dir != NULL && repo_root != NULL);
+    root = realpath(workspace_dir, NULL);
+    ASSERT(root != NULL);
+    src_dir = path_join(root, "src");
+    source_path = path_join(src_dir, "main.ff");
+    manifest_path = path_join(root, "feng.fm");
+    binary_path = project_host_build_path(root, "bin/lambda_creation_breakpoints");
+    backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
+    log_path = path_join(root, "dap.log");
+    manifest = dup_printf(
+        "[package]\nname: \"lambda_creation_breakpoints\"\nversion: \"0.1.0\"\n"
+        "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nstd: \"%s/std/std\"\n", repo_root);
+    mkdir_p(src_dir);
+    write_text_file(source_path, fixture);
+    write_text_file(manifest_path, manifest);
+    {
+        char *argv[] = {root};
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    ASSERT(path_exists(binary_path));
+    ASSERT(feng_cli_path_is_executable(backend_path));
+    escaped_source = json_escape_text(source_path);
+    escaped_binary = json_escape_text(binary_path);
+    for (size_t index = 0U; index < sizeof(lines) / sizeof(lines[0]); ++index) {
+        char *next;
+        lines[index] = dap_test_breakpoint_line(fixture, kBreakpoints[index]);
+        next = dup_printf("%s%s{\"line\":%u}", breakpoint_list,
+                          index == 0U ? "" : ",", lines[index]);
+        free(breakpoint_list);
+        breakpoint_list = next;
+    }
+
+    dap_test_start(&session, root, backend_path, log_path);
+    free(dap_test_request(&session, "initialize",
+        "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
+    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
+    launch_seq = dap_test_send(&session, "launch", arguments);
+    free(arguments);
+    free(dap_test_wait(&session, 0, "initialized", NULL));
+    arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}",
+                          escaped_source, breakpoint_list);
+    response = dap_test_request(&session, "setBreakpoints", arguments);
+    for (size_t index = 0U; index < sizeof(lines) / sizeof(lines[0]); ++index) {
+        DapTestJson breakpoint = dap_test_json_at(
+            dap_test_json_get(dap_test_body(response), "breakpoints"), index);
+        dap_test_json_require_true(dap_test_json_get(breakpoint, "verified"));
+        ASSERT(dap_test_json_integer(dap_test_json_get(breakpoint, "line")) == lines[index]);
+        ids[index] = dap_test_json_integer(dap_test_json_get(breakpoint, "id"));
+    }
+    free(response);
+    free(arguments);
+    free(dap_test_request(&session, "configurationDone", "{}"));
+    free(dap_test_response(&session, launch_seq));
+
+    for (size_t index = 0U; index < sizeof(kStops) / sizeof(kStops[0]); ++index) {
+        const DapTestLambdaStop *stop = &kStops[index];
+        unsigned int line = dap_test_breakpoint_line(fixture, stop->marker);
+        char *frame_name = stop->lambda_marker != NULL
+            ? dup_printf("lambda@%u", dap_test_breakpoint_line(fixture, stop->lambda_marker))
+            : dup_cstr(stop->frame_name);
+        size_t breakpoint_index = 0U;
+        long thread_id;
+        long frame_id;
+        DapTestJson hit_ids;
+        DapTestJson frame;
+
+        while (breakpoint_index < sizeof(lines) / sizeof(lines[0]) &&
+               lines[breakpoint_index] != line) ++breakpoint_index;
+        ASSERT(breakpoint_index < sizeof(lines) / sizeof(lines[0]));
+        fprintf(session.log, "Expecting %s in %s\n", stop->marker, frame_name);
+        response = dap_test_wait(&session, 0, "stopped", "terminated");
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "reason"), "breakpoint"));
+        hit_ids = dap_test_json_get(dap_test_body(response), "hitBreakpointIds");
+        ASSERT(dap_test_json_integer(dap_test_json_at(hit_ids, 0U)) == ids[breakpoint_index]);
+        ASSERT(dap_test_json_at(hit_ids, 1U).begin == NULL);
+        thread_id = dap_test_json_integer(dap_test_json_get(dap_test_body(response), "threadId"));
+        free(response);
+        arguments = dup_printf("{\"threadId\":%ld}", thread_id);
+        response = dap_test_request(&session, "stackTrace", arguments);
+        frame = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 0U);
+        ASSERT(dap_test_json_string_is(dap_test_json_get(frame, "name"), frame_name));
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), source_path));
+        ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) == line);
+        frame_id = dap_test_json_integer(dap_test_json_get(frame, "id"));
+        free(response);
+        if (stop->counter >= 0) {
+            dap_test_expect_counter(&session, frame_id, (size_t)stop->counter);
+        }
+        free(dap_test_request(&session, "continue", arguments));
+        free(arguments);
+        free(frame_name);
+    }
+    response = dap_test_wait(&session, 0, "terminated", "stopped");
+    {
+        const char *cursor = response;
+        ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+    }
+    free(response);
+    response = dap_test_wait(&session, 0, "exited", NULL);
+    ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
+    free(response);
+    dap_test_finish(&session);
+    printf("dap lambda creation: 8 scenarios, %zu ordered stops, unused body: 0 stops\n",
+           sizeof(kStops) / sizeof(kStops[0]));
+
+    free(breakpoint_list);
+    free(fixture);
+    free(escaped_source);
+    free(escaped_binary);
+    free(log_path);
+    free(backend_path);
+    free(binary_path);
+    free(manifest);
+    free(manifest_path);
+    free(source_path);
+    free(src_dir);
+    free(root);
+    free(repo_root);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+    free(remove_error);
+}
+
 /* Find a successful response in captured DAP frames while checking their byte lengths. */
 static DapTestJson dap_test_captured_response_body(const char *messages, long request_seq) {
     const char *cursor = messages;
@@ -27464,6 +27654,7 @@ int main(void) {
     test_project_build_keeps_for_body_breakpoint_after_init_in_dwarf();
     test_project_build_keeps_for_body_locals_after_prefix_binding();
     test_dap_loop_breakpoints_follow_iterations();
+    test_dap_lambda_creation_breakpoints_follow_calls();
     test_dap_stack_trace_column_mapping();
     test_dap_reports_line_start_for_feng_frames();
     test_dap_rewrites_identifier_evaluate_expression();

@@ -1,0 +1,112 @@
+module lambda_creation_breakpoints;
+
+import std.io;
+import std.numeric;
+
+// Exercise the same address-based parameter ABI as a generic Action<int, int>.
+spec PairAction<A, B>(i: A, y: B): void;
+spec Action(): void;
+spec Scalar(value: int): int;
+spec Mapper<T>(value: T): T;
+
+// Repeat the outer stop followed by the lambda body's first source line.
+func plain() {
+    for var i = 0; i < 2; i = i + 1 {
+        let action: PairAction<int, int> = (i: int, y: int) { // breakpoint: plain_create
+            println("plain {0} {1}", i.toString(), y.toString()); // breakpoint: plain_body
+        };
+        println("before plain"); // breakpoint: plain_before
+        action(i, 2);
+    }
+}
+
+// Captured fields and their ownership setup still belong to the creation line.
+func captured() {
+    var i = 0;
+    let action: Action = () { // breakpoint: captured_create
+        println("captured {0}", i.toString()); // breakpoint: captured_body
+        i = i + 1;
+    };
+    println("before captured"); // breakpoint: captured_before
+    action();
+    println("between calls"); // breakpoint: captured_between
+    action();
+}
+
+// A registered breakpoint in an unused lambda must never stop at creation.
+func unused() {
+    let action: Action = () { // breakpoint: unused_create
+        println("unreachable"); // breakpoint: unused_body
+    };
+    println("unused closure created"); // breakpoint: unused_after
+}
+
+// Emitting the inner invoke helper must retain each enclosing creation anchor.
+func nested() {
+    let outer: Action = () { // breakpoint: outer_create
+        let inner: Action = () { // breakpoint: inner_create
+            println("inner"); // breakpoint: inner_body
+        };
+        println("before inner"); // breakpoint: inner_before
+        inner();
+    };
+    println("before outer"); // breakpoint: outer_before
+    outer();
+}
+
+// Direct-return calls retain the caller line through result materialization.
+func directResult() {
+    let mapper: Scalar = (value: int) { // breakpoint: direct_create
+        return value; // breakpoint: direct_body
+    };
+    println("before direct result"); // breakpoint: direct_before
+    let result = mapper(3);
+    println("direct result ready"); // breakpoint: direct_after
+}
+
+// Generic callable results use caller-owned address storage.
+func addressResult() {
+    let mapper: Mapper<int> = (value: int) { // breakpoint: address_create
+        return value; // breakpoint: address_body
+    };
+    println("before address result"); // breakpoint: address_before
+    let result = mapper(4);
+    println("address result ready"); // breakpoint: address_after
+}
+
+// Generic function metadata writes must not become body or following-line stops.
+func generic<T>(value: T) {
+    let action: Action = () { // breakpoint: generic_create
+        println("generic"); // breakpoint: generic_body
+        value;
+    };
+    println("before generic"); // breakpoint: generic_before
+    action();
+}
+
+// Combine owner and method descriptors with self and local captures.
+type Factory<T> {
+    // Keep both generic domains alive while constructing the closure.
+    func run<V>(other: V) {
+        let action: Action = () { // breakpoint: owner_create
+            println("owner"); // breakpoint: owner_body
+            self;
+            other;
+        };
+        println("before owner"); // breakpoint: owner_before
+        action();
+    }
+}
+
+// Run each scenario once except the deliberately repeated plain/captured calls.
+func main(args: string[]) {
+    plain();
+    captured();
+    unused();
+    nested();
+    directResult();
+    addressResult();
+    generic<int>(3);
+    let factory = Factory<int>();
+    factory.run<string>("value");
+}
