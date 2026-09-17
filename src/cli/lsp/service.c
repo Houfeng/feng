@@ -4783,6 +4783,7 @@ static size_t member_end(const FengTypeMember *member) {
     return end;
 }
 
+/* Cover declaration headers and contents independently of member presence. */
 static size_t decl_end(const FengDecl *decl) {
     size_t end;
     size_t index;
@@ -4885,7 +4886,19 @@ static size_t decl_end(const FengDecl *decl) {
                 }
             }
             break;
-        case FENG_DECL_FIT:
+        case FENG_DECL_FIT: {
+            size_t target_end = type_ref_end(decl->as.fit_decl.target);
+
+            if (target_end > end) {
+                end = target_end;
+            }
+            for (index = 0U; index < decl->as.fit_decl.spec_count; ++index) {
+                size_t spec_end = type_ref_end(decl->as.fit_decl.specs[index]);
+
+                if (spec_end > end) {
+                    end = spec_end;
+                }
+            }
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
                 size_t limit = member_end(decl->as.fit_decl.members[index]);
                 if (limit > end) {
@@ -4893,6 +4906,7 @@ static size_t decl_end(const FengDecl *decl) {
                 }
             }
             break;
+        }
         case FENG_DECL_FUNCTION:
             for (index = 0U; index < decl->as.function_decl.param_count; ++index) {
                 size_t param_end = token_end_offset(decl->as.function_decl.params[index].token);
@@ -25149,12 +25163,26 @@ static bool build_cached_completion_json(const FengLspCacheQueryContext *context
             }
             ++item_count;
         }
+        /* The current AST owns this file's candidates, including unsaved
+         * declarations absent from the published symbol index. */
+        if (!append_program_decl_completion_items(json,
+                                                  &first,
+                                                  context->program,
+                                                  false,
+                                                  NULL,
+                                                  -1,
+                                                  request)) {
+            local_list_dispose(&locals);
+            return false;
+        }
         if (context->current_module != NULL) {
             for (index = 0U; index < feng_symbol_module_decl_count(context->current_module); ++index) {
                 const FengSymbolDeclView *decl = feng_symbol_module_decl_at(context->current_module, index);
                 FengSlice label;
 
-                if (!symbol_decl_is_completion_decl(decl)) {
+                if (!symbol_decl_is_completion_decl(decl) ||
+                    (context->program->path != NULL &&
+                     slice_equals_cstr(feng_symbol_decl_path(decl), context->program->path))) {
                     continue;
                 }
                 label = build_symbol_decl_completion_label(decl);

@@ -29876,6 +29876,316 @@ static void test_lsp_cache_lifecycle_with_long_workspace_path(void) {
     free(directory);
 }
 
+/* Keep the edited document and cache mode for ordinary-name completion checks. */
+typedef struct LspCurrentDeclarationFixture {
+    const char *uri;
+    const char *initial_source;
+    bool workspace_cache;
+} LspCurrentDeclarationFixture;
+
+/* Build current declarations with an independently editable fit and loop binding. */
+static char *lsp_current_declaration_source(const char *spec_name,
+                                           const char *fit,
+                                           const char *binding) {
+    char *spec = spec_name != NULL
+        ? dup_printf("/** Current spec documentation. */\nopen spec %s {}\n", spec_name)
+        : dup_cstr("");
+    char *source = dup_printf(
+        "module current_declarations;\nimport completion_dependency;\n%s"
+        "open type TestType {}\n"
+        "open spec TestGeneric<T> {}\n"
+        "open spec TestAction(): int;\n"
+        "open enum TestState { Ready = 0 }\n"
+        "open func testFunction(): int { return 1; }\n"
+        "open let testGlobal: int = 1;\n"
+        "spec PrivateSpec {}\n%s\n"
+        "func probe() {\n"
+        "  let anchor = 1 + 2;\n"
+        "  for var i = 0; i < 1; i = i + 1 {\n"
+        "    %s\n"
+        "  }\n}\n", spec, fit, binding);
+
+    free(spec);
+    return source;
+}
+
+/* Query each real range edit after index readiness, including deletion and recovery. */
+static void run_lsp_current_declaration_edits(FILE *input, int output_fd, void *user) {
+    const LspCurrentDeclarationFixture *fixture =
+        (const LspCurrentDeclarationFixture *)user;
+    static const struct {
+        const char *spec_name;
+        const char *fit;
+        const char *binding;
+        const char *cursor;
+    } kCases[] = {
+        {"TestSpec", "fit int: Te {}", "let t: TestSpec = 1;", "fit int: Te"},
+        {"TestSpec", "fit int: Tes {}", "let t: TestSpec = 1;", "fit int: Tes"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: TestSpec = 1;", "fit int: TestSpec"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: Te", "let t: Te"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: Tes", "let t: Tes"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: TestSpec = 1;", "let t: TestSpec"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: Tes = 1;", "let t: Tes"},
+        {"RenamedSpec", "fit int: RenamedSpec {}", "let t: Tes", "let t: Tes"},
+        {NULL, "", "let t: Tes", "let t: Tes"},
+        {"TestSpec", "fit int: TestSpec {}", "let t: TestSpec = 1;", "let t: TestSpec"}
+    };
+    static const char *kExpected[] = {
+        "TestType", "TestGeneric<T>", "TestAction", "TestState",
+        "testFunction", "testGlobal", "PrivateSpec", "ImportedSpec"
+    };
+    static const char *kStale[] = {
+        "OldSpec", "OldType", "OldGeneric<T>", "OldAction", "OldState",
+        "oldFunction", "oldGlobal"
+    };
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        unsigned int id = 5000U + (unsigned int)index * 2U;
+        char *source = lsp_current_declaration_source(
+            kCases[index].spec_name, kCases[index].fit, kCases[index].binding);
+        char *request = build_lsp_test_position_request("textDocument/completion", id,
+            fixture->uri, source, kCases[index].cursor, strlen(kCases[index].cursor));
+        char *barrier = dup_printf("{\"jsonrpc\":\"2.0\",\"id\":%u,"
+            "\"method\":\"feng/testReadinessBarrier\",\"params\":null}", id + 1U);
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri,
+            (unsigned int)index + 2U, previous, source);
+        write_lsp_message(input, request);
+        output = send_lsp_test_request_and_wait(input, output_fd, barrier, id + 1U);
+        for (size_t item = 0U; item < sizeof(kExpected) / sizeof(kExpected[0]); ++item) {
+            char *label = dup_printf("{\"label\":\"%s\"", kExpected[item]);
+
+            ASSERT(count_lsp_test_response_occurrences(output, id, label) == 1U);
+            free(label);
+        }
+        for (size_t item = 0U; item < sizeof(kStale) / sizeof(kStale[0]); ++item) {
+            char *label = dup_printf("{\"label\":\"%s\"", kStale[item]);
+
+            assert_lsp_test_response_not_contains(output, id, label);
+            free(label);
+        }
+        ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":\"TestSpec\"") ==
+            (kCases[index].spec_name != NULL && strcmp(kCases[index].spec_name, "TestSpec") == 0 ? 1U : 0U));
+        ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":\"RenamedSpec\"") ==
+            (kCases[index].spec_name != NULL && strcmp(kCases[index].spec_name, "RenamedSpec") == 0 ? 1U : 0U));
+        if (fixture->workspace_cache) {
+            ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":\"Neighbor\"") == 1U);
+        }
+        free(output);
+        free(barrier);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Exercise a published dependency index with absent or stale workspace symbols. */
+static void assert_lsp_current_declaration_completion(bool workspace_cache, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kSavedSource =
+        "module current_declarations;\nimport completion_dependency;\n"
+        "open spec OldSpec {}\nopen type OldType {}\nopen spec OldGeneric<T> {}\n"
+        "open spec OldAction(): int;\nopen enum OldState { Ready = 0 }\n"
+        "open func oldFunction(): int { return 1; }\nopen let oldGlobal: int = 1;\n"
+        "fit int: OldSpec {}\nfunc probe() { let anchor = 1 + 2; }\n";
+    char template_path[] = "temp/feng_lsp_current_declarations_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library;
+    char *library_src;
+    char *library_manifest;
+    char *library_source;
+    char *consumer;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *neighbor_path;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspCurrentDeclarationFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace != NULL);
+    library = path_join(workspace, "library");
+    library_src = path_join(library, "src");
+    library_manifest = path_join(library, "feng.fm");
+    library_source = path_join(library_src, "lib.ff");
+    consumer = path_join(workspace, "consumer");
+    consumer_src = path_join(consumer, "src");
+    consumer_manifest = path_join(consumer, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    neighbor_path = path_join(consumer_src, "neighbor.ff");
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"completion_dependency\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(library_source,
+        "open module completion_dependency;\nopen spec ImportedSpec {}\n");
+    {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    write_text_file(consumer_manifest,
+        "[package]\nname: \"current_declarations\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\n"
+        "completion_dependency: \"../library/build/pkg/completion_dependency-0.1.0.fb\"\n");
+    write_text_file(source_path, kSavedSource);
+    write_text_file(neighbor_path, "module current_declarations;\nopen type Neighbor {}\n");
+    if (workspace_cache) {
+        char *argv[] = {consumer};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    source = warm ? dup_cstr(kSavedSource)
+                  : lsp_current_declaration_source("TestSpec", "fit int: Tes {}", "let t: TestSpec = 1;");
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{"
+        "\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "anchor" : "fit int: Tes",
+        warm ? 1U : strlen("fit int: Tes"), &line, &character);
+    fixture = (LspCurrentDeclarationFixture){uri, source, workspace_cache};
+    output = run_lsp_server_capture_after_position_ready_action(
+        kInitialize, did_open, NULL, warm ? "textDocument/hover" : "textDocument/completion",
+        uri, line, character, warm ? "let anchor: int" : "\"label\":\"ImportedSpec\"",
+        run_lsp_current_declaration_edits, &fixture, requests, 1U, NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(neighbor_path);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_source);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Current declarations remain candidates independently of successful-analysis history. */
+static void test_lsp_current_declarations_survive_cached_completion(void) {
+    assert_lsp_current_declaration_completion(false, false);
+    assert_lsp_current_declaration_completion(false, true);
+    assert_lsp_current_declaration_completion(true, false);
+    assert_lsp_current_declaration_completion(true, true);
+}
+
+/* Empty and bodyless fits retain all header references in semantic and parsed queries. */
+static void test_lsp_empty_fit_header_hover_and_definition(void) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const struct {
+        const char *needle;
+        size_t offset;
+        const char *declaration;
+        size_t declaration_offset;
+        const char *hover;
+    } kQueries[] = {
+        {"fit int: TestSpec", 9U, "spec TestSpec", 5U, "spec TestSpec {}"},
+        {"fit Subject:", 5U, "type Subject", 5U, "type Subject"},
+        {"fit Subject: TestSpec", 14U, "spec TestSpec", 5U, "Current fit spec documentation."},
+        {"GenericSpec<Item>", 2U, "spec GenericSpec", 5U, "GenericSpec<T>"},
+        {"GenericSpec<Item>", 13U, "type Item", 5U, "type Item"},
+        {"fit Item {}", 5U, "type Item", 5U, "type Item"}
+    };
+
+    for (size_t mode = 0U; mode < 2U; ++mode) {
+        char template_path[] = "temp/feng_lsp_fit_header_XXXXXX";
+        char *workspace = mkdtemp(template_path);
+        char *src_dir;
+        char *manifest;
+        char *path;
+        char *source;
+        char *uri;
+        char *escaped;
+        char *did_open;
+        char *request_storage[sizeof(kQueries) / sizeof(kQueries[0]) * 2U];
+        const char *requests[sizeof(kQueries) / sizeof(kQueries[0]) * 2U + 1U];
+        char *output;
+        char *remove_error = NULL;
+        unsigned int line;
+        unsigned int character;
+
+        ASSERT(workspace != NULL);
+        src_dir = path_join(workspace, "src");
+        manifest = path_join(workspace, "feng.fm");
+        path = path_join(src_dir, "main.ff");
+        mkdir_p(src_dir);
+        write_text_file(manifest,
+            "[package]\nname: \"fit_header\"\nversion: \"0.1.0\"\n"
+            "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+        source = dup_printf("module fit_header;\n"
+            "/** Current fit spec documentation. */\nspec TestSpec {}\n"
+            "spec GenericSpec<T> {}\ntype Subject {}\ntype Item {}\n"
+            "fit int: TestSpec {}\nfit Subject: TestSpec, GenericSpec<Item>%s\n"
+            "fit Item {}\nfunc probe() { let anchor = 1 + 2; }\n%s",
+            mode == 0U ? " {}" : ";",
+            mode == 0U ? "" : "func unresolved(value: MissingType) {}\n");
+        write_text_file(path, source);
+        uri = file_uri_from_path(path);
+        escaped = json_escape_text(source);
+        did_open = dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{"
+            "\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+        for (size_t index = 0U; index < sizeof(kQueries) / sizeof(kQueries[0]); ++index) {
+            request_storage[index * 2U] = build_lsp_test_position_request("textDocument/hover",
+                10U + (unsigned int)index * 2U, uri, source, kQueries[index].needle, kQueries[index].offset);
+            request_storage[index * 2U + 1U] = build_lsp_test_position_request("textDocument/definition",
+                11U + (unsigned int)index * 2U, uri, source, kQueries[index].needle, kQueries[index].offset);
+            requests[index * 2U] = request_storage[index * 2U];
+            requests[index * 2U + 1U] = request_storage[index * 2U + 1U];
+        }
+        requests[sizeof(requests) / sizeof(requests[0]) - 1U] =
+            "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+        find_line_character(source, "anchor", 1U, &line, &character);
+        output = run_lsp_server_capture_after_position_ready(kInitialize, did_open, NULL,
+            mode == 0U ? "textDocument/hover" : "textDocument/completion", uri, line, character,
+            mode == 0U ? "let anchor: int" : "\"label\":\"TestSpec\"",
+            requests, sizeof(requests) / sizeof(requests[0]), NULL);
+        for (size_t index = 0U; index < sizeof(kQueries) / sizeof(kQueries[0]); ++index) {
+            char *location;
+
+            find_line_character(source, kQueries[index].declaration,
+                kQueries[index].declaration_offset, &line, &character);
+            location = build_lsp_test_location_marker(uri, line, character);
+            assert_lsp_test_response_contains(output, 10U + (unsigned int)index * 2U, kQueries[index].hover);
+            assert_lsp_test_response_contains(output, 11U + (unsigned int)index * 2U, location);
+            free(location);
+            free(request_storage[index * 2U]);
+            free(request_storage[index * 2U + 1U]);
+        }
+        free(output);
+        free(did_open);
+        free(escaped);
+        free(uri);
+        free(source);
+        free(path);
+        free(manifest);
+        free(src_dir);
+        ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+        free(remove_error);
+    }
+}
+
 #include "dap_callable.inc"
 #include "dap_union.inc"
 
@@ -29977,6 +30287,8 @@ int main(void) {
     test_dap_reports_missing_backend_after_launch_validation();
     test_lsp_publish_diagnostics_for_open_change_and_close();
     test_lsp_hover_definition_and_completion();
+    test_lsp_empty_fit_header_hover_and_definition();
+    test_lsp_current_declarations_survive_cached_completion();
     test_lsp_hover_bool_literals_across_expression_contexts();
     test_lsp_hover_uses_markdown_when_supported();
     test_lsp_hover_falls_back_to_plaintext_without_markdown_capability();
