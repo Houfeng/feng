@@ -25268,6 +25268,240 @@ static void test_lsp_module_function_signature_help(void) {
     assert_lsp_module_function_signature_help(true, true);
 }
 
+/* One current source and its exact local callable signature after an edit. */
+typedef struct LspLocalSignatureCase {
+    const char *declarations;
+    const char *body;
+    const char *cursor;
+    const char *label;
+    const char *parameters;
+    size_t active_parameter;
+} LspLocalSignatureCase;
+
+/* Exercise local signatures through real incremental changes, including edits
+ * that cannot produce a new successful semantic snapshot. */
+static void run_lsp_local_signature_edits(FILE *input, int output_fd, void *user) {
+    static const LspLocalSignatureCase kCases[] = {
+        {NULL, "func probe() { for var i = 0; i < 1; i = i + 1 { var log: Pair<int, int> = (x: int, y: int) {}; log( } }",
+         "log(", "func log(first: int, second: int): void", "{\"label\":\"first\"},{\"label\":\"second\"}", 0},
+        {NULL, "func probe() { var log: Pair<int, int> = (x: int, y: int) {}; log(1, 2); }",
+         "log(", "func log(first: int, second: int): void", NULL, 0},
+        {NULL, "func probe() { var log: Pair<int, string> = (x: int, y: string) {}; log(1, }",
+         "log(1,", "func log(first: int, second: string): void", NULL, 1},
+        {NULL, "func probe() { var log: Pair<int, int> = (x: int, y: int) {}; log(1, ) }",
+         "log(1,", "func log(first: int, second: int): void", NULL, 1},
+        {NULL, "func probe(log: Pair<string, int>) { log(\"a,(\", /* ,( */ }",
+         "/* ,( */", "func log(first: string, second: int): void", NULL, 1},
+        {NULL, "func probe(log: Pair<int, int>) { log(wrap(1, 2), }",
+         "wrap(1, 2),", "func log(first: int, second: int): void", NULL, 1},
+        {NULL, "func probe(log: Pair<int, int>) { consume(values[log( }",
+         "log(", "func log(first: int, second: int): void", NULL, 0},
+        {NULL, "func probe(log: Apply<int, bool>) { if (log( }",
+         "log(", "func log(value: int): bool", NULL, 0},
+        {NULL, "func probe(log: Many<string>) { log(\"a\", \"b\", \"c\", }",
+         "\"c\",", "func log(head: string, tail: string...): string", "{\"label\":\"head\"},{\"label\":\"tail\"}", 1},
+        {NULL, "func probe(log: Wrapped<int>) { log( }",
+         "log(", "func log(values: int[!], rest: int[]...): int[]", NULL, 0},
+        {NULL, "func probe(log: Apply<int*, string>) { log( }",
+         "log(", "func log(value: int*): string", NULL, 0},
+        {NULL, "func probe(log: Apply<Envelope<int[]>, string[!]>) { log( }",
+         "log(", "func log(value: Envelope<int[]>): string[!]", NULL, 0},
+        {NULL, "func probe(log: Zero) { log( }",
+         "log(", "func log(): void", "", 0},
+        {NULL, "func probe<T>(log: Apply<T, T>) { log( }",
+         "log(", "func log(value: T): T", NULL, 0},
+        {NULL, "func probe(log: signature.callbacks.Pair<int, string>) { log( }",
+         "log(", "func log(first: int, second: string): void", NULL, 0},
+        {"import signature.callbacks as cb;\n", "func probe(log: cb.Apply<int, bool>) { log( }",
+         "log(", "func log(value: int): bool", NULL, 0},
+        {NULL, "func probe() { let log = (left: int, right: string) {}; log( }",
+         "log(", "func log(left: int, right: string)", "{\"label\":\"left\"},{\"label\":\"right\"}", 0},
+        {NULL, "func probe() { let log = (fresh: bool) -> fresh; log( }",
+         "log(", "func log(fresh: bool)", NULL, 0},
+        {NULL, "func probe() { let log = () {}; log( }",
+         "log(", "func log()", "", 0},
+        {NULL, "func probe() { let log = (items: int...) {}; log(1, 2, }",
+         "log(1, 2,", "func log(items: int...)", "{\"label\":\"items\"}", 0},
+        {NULL, "func probe() { let run = (log: Pair<int, string>) { log( }; }",
+         "log(", "func log(first: int, second: string): void", NULL, 0},
+        {NULL, "func probe() { let run = (log: Apply<int, bool>) -> log( }",
+         "log(", "func log(value: int): bool", NULL, 0},
+        {NULL, "func probe(log: Pair<int, int>) { let run = () { { let log = (inner: bool) {}; log( } }; }",
+         "log(", "func log(inner: bool)", NULL, 0},
+        {NULL, "func probe(log: Pair<int, int>) { { let log = (inner: bool) {}; } log( }",
+         "log(", "func log(first: int, second: int): void", NULL, 0},
+        {"spec Local<T, R>(old: T): R;\n", "func probe(log: Local<int, string>) { log( }",
+         "log(", "func log(old: int): string", NULL, 0},
+        {"spec Local<T, R>(updated: R, added: T[]): T;\n", "func probe(log: Local<int, string>) { log(\"x\", }",
+         "log(\"x\",", "func log(updated: string, added: int[]): int", NULL, 1},
+        {"spec Local<T>(single: T): void;\nspec Local<T, R>(exact: T): R;\n",
+         "func probe(log: Local<int, bool>) { log( }", "log(", "func log(exact: int): bool", NULL, 0},
+        {"spec Local<T>(single: T): void;\n", "func probe(log: Local<int, bool>) { log( }",
+         "log(", NULL, NULL, 0},
+        {"", "func probe(log: Local<int, string>) { log( }", "log(", NULL, NULL, 0},
+        {"type Local {}\n", "func probe(log: Local) { log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe<Pair>(log: Pair<int, int>) { log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { let log: Missing = (x: int) {}; log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { let log: int = (x: int) {}; log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { let log = 1; log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { let log = unknown; log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { let log = (x) -> x; log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { { let log = (inner: int) {}; } log( }", "log(", NULL, NULL, 0},
+        {NULL, "func probe() { log(\n let log = (later: int) {}; }", "log(", NULL, NULL, 0},
+        {"func log(moduleOnly: string): void {}\n", "func probe(log: int) { log( }",
+         "{ log(", NULL, NULL, 0},
+        {"func log(moduleOnly: string): void {}\n", "func probe() { let log = (localOnly: bool) {}; log( }",
+         "{}; log(", "func log(localOnly: bool)", NULL, 0},
+        {"func log(moduleOnly: string): void {}\n", "func probe() { log( }",
+         "{ log(", "func log(moduleOnly: string): void", NULL, 0}
+    };
+    const LspModuleCompletionFixture *fixture = (const LspModuleCompletionFixture *)user;
+    char *previous = dup_cstr(fixture->initial_source);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const LspLocalSignatureCase *item = &kCases[index];
+        unsigned int id = 6600U + (unsigned int)index * 2U;
+        char *source = dup_printf("module local_signature_consumer;\nimport signature.callbacks;\n%s%s\n",
+            item->declarations != NULL ? item->declarations : fixture->declarations, item->body);
+        char *request = build_lsp_test_position_request("textDocument/signatureHelp", id,
+            fixture->uri, source, item->cursor, strlen(item->cursor));
+        char *output;
+
+        write_lsp_ascii_incremental_change(input, fixture->uri, (unsigned int)index + 2U, previous, source);
+        output = send_lsp_test_request_and_wait(input, output_fd, request, id);
+        if (count_lsp_test_response_occurrences(output, id,
+                item->label != NULL ? item->label : "\"result\":null") == 0U) {
+            fprintf(stderr, "local signature case %zu: %s\n%s\n", index, source, output);
+        }
+        if (item->label == NULL) {
+            assert_lsp_test_response_contains(output, id, "\"result\":null");
+        } else {
+            char *label = dup_printf("\"label\":\"%s\"", item->label);
+            char *active = dup_printf("\"activeParameter\":%zu", item->active_parameter);
+
+            assert_lsp_test_response_contains(output, id, label);
+            ASSERT(count_lsp_test_response_occurrences(output, id, "\"label\":\"func ") == 1U);
+            ASSERT(count_lsp_test_response_occurrences(output, id, active) == 2U);
+            if (item->parameters != NULL) {
+                char *parameters = dup_printf("\"parameters\":[%s]", item->parameters);
+
+                assert_lsp_test_response_contains(output, id, parameters);
+                free(parameters);
+            }
+            free(active);
+            free(label);
+        }
+        free(output);
+        free(request);
+        free(previous);
+        previous = source;
+    }
+    free(previous);
+}
+
+/* Source/package and cold/warm fixtures share the same lexical call queries. */
+static void assert_lsp_local_callable_signature_help(bool packaged, bool warm) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    static const char *kShutdown =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    static const char *kDeclarations =
+        "spec Local<T, R>(stale: T): R;\n"
+        "type Envelope<T> {}\n"
+        "fit int { open func readyMember(): int { return 1; } }\n";
+    char template_path[] = "temp/feng_lsp_local_signatures_XXXXXX";
+    char *workspace = mkdtemp(template_path);
+    char *library = path_join(workspace, "library");
+    char *library_src = path_join(library, "src");
+    char *library_manifest = path_join(library, "feng.fm");
+    char *library_source = path_join(library_src, "callbacks.ff");
+    char *consumer = path_join(workspace, "consumer");
+    char *consumer_src = path_join(consumer, "src");
+    char *consumer_manifest = path_join(consumer, "feng.fm");
+    char *source_path = path_join(consumer_src, "main.ff");
+    char *manifest;
+    char *source;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *output;
+    char *remove_error = NULL;
+    unsigned int line;
+    unsigned int character;
+    LspModuleCompletionFixture fixture;
+    const char *requests[] = {kShutdown};
+
+    ASSERT(workspace != NULL);
+    mkdir_p(library_src);
+    mkdir_p(consumer_src);
+    write_text_file(library_manifest,
+        "[package]\nname: \"local_signature_library\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(library_source,
+        "open module signature.callbacks;\n"
+        "open spec Pair<A, B>(first: A, second: B): void;\n"
+        "open spec Apply<T, R>(value: T): R;\n"
+        "open spec Many<T>(head: T, tail: T...): T;\n"
+        "open spec Wrapped<T>(values: T[!], rest: T[]...): T[];\n"
+        "open spec Zero(): void;\n");
+    if (packaged) {
+        char *argv[] = {library};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    }
+    manifest = dup_printf("[package]\nname: \"local_signature_app\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nlocal_signature_library: \"%s\"\n",
+        packaged ? "../library/build/pkg/local_signature_library-0.1.0.fb" : "../library");
+    write_text_file(consumer_manifest, manifest);
+    source = dup_printf("module local_signature_consumer;\nimport signature.callbacks;\n%s%s\n",
+        kDeclarations, warm
+            ? "func probe() { let ready = 1 + 2; ready.readyMember(); }"
+            : "func probe() { signature.callbacks. }");
+    write_text_file(source_path, source);
+    if (warm) {
+        char *argv[] = {consumer};
+
+        ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    }
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    find_line_character(source, warm ? "ready.readyMember" : "signature.callbacks.",
+        strlen(warm ? "ready." : "signature.callbacks."), &line, &character);
+    fixture = (LspModuleCompletionFixture){uri, kDeclarations, source};
+    output = run_lsp_server_capture_after_position_ready_action(kInitialize, did_open, NULL,
+        "textDocument/completion", uri, line, character,
+        warm ? "\"label\":\"readyMember\"" : "\"label\":\"Zero\"",
+        run_lsp_local_signature_edits, &fixture, requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(output);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(source);
+    free(manifest);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer);
+    free(library_source);
+    free(library_manifest);
+    free(library_src);
+    free(library);
+    ASSERT(feng_cli_project_remove_tree(workspace, &remove_error));
+    free(remove_error);
+}
+
+/* Keep local Lambda and callable-spec signatures covered in every index mode. */
+static void test_lsp_local_callable_signature_help(void) {
+    assert_lsp_local_callable_signature_help(false, false);
+    assert_lsp_local_callable_signature_help(true, false);
+    assert_lsp_local_callable_signature_help(false, true);
+    assert_lsp_local_callable_signature_help(true, true);
+}
+
 /* One edit checks a type's member surface and a token's Hover together. */
 typedef struct LspQualifiedTypeCase {
     const char *imports;
@@ -29769,6 +30003,7 @@ int main(void) {
     test_lsp_signature_help_repairs_enclosing_expressions();
     test_lsp_signature_help_collects_imported_function_overloads();
     test_lsp_module_function_signature_help();
+    test_lsp_local_callable_signature_help();
     test_lsp_fit_member_name_param_mutability_and_return_type_navigation();
     test_lsp_fit_member_definition_survives_project_semantic_failure();
     test_lsp_member_completion_survives_incomplete_member_access();

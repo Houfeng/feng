@@ -11343,11 +11343,50 @@ typedef enum FengLspTypeNameStyle {
     FENG_LSP_TYPE_NAME_SHORT
 } FengLspTypeNameStyle;
 
+/* Borrow a declaration's generic parameters and the use-site type arguments. */
+typedef struct FengLspTypeArguments {
+    const FengTypeParam *parameters;
+    const FengSymbolDeclView *symbol_decl;
+    FengTypeRef *const *arguments;
+    size_t count;
+} FengLspTypeArguments;
+
+/* Map one declared type parameter without substituting inside its argument. */
+static const FengTypeRef *find_type_argument(const FengLspTypeArguments *arguments,
+                                             FengSlice name) {
+    if (arguments == NULL) {
+        return NULL;
+    }
+    if (arguments->parameters != NULL) {
+        for (size_t index = 0U; index < arguments->count; ++index) {
+            if (slice_equals(arguments->parameters[index].name, name)) {
+                return arguments->arguments[index];
+            }
+        }
+    } else if (arguments->symbol_decl != NULL) {
+        size_t parameter = 0U;
+
+        for (size_t index = 0U; index < feng_symbol_decl_member_count(arguments->symbol_decl); ++index) {
+            const FengSymbolDeclView *member = feng_symbol_decl_member_at(arguments->symbol_decl, index);
+
+            if (feng_symbol_decl_kind(member) != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+                continue;
+            }
+            if (parameter < arguments->count && slice_equals(feng_symbol_decl_name(member), name)) {
+                return arguments->arguments[parameter];
+            }
+            ++parameter;
+        }
+    }
+    return NULL;
+}
+
 /* Format an AST type reference with either its complete path or only its
- * final path segment. Nested type arguments inherit the same presentation. */
-static bool type_ref_to_string_with_style(FengLspString *buffer,
-                                          const FengTypeRef *type_ref,
-                                          FengLspTypeNameStyle style) {
+ * final path segment, optionally instantiating declaration type parameters. */
+static bool type_ref_to_string_with_arguments(FengLspString *buffer,
+                                              const FengTypeRef *type_ref,
+                                              FengLspTypeNameStyle style,
+                                              const FengLspTypeArguments *arguments) {
     size_t index;
 
     if (type_ref == NULL) {
@@ -11355,11 +11394,17 @@ static bool type_ref_to_string_with_style(FengLspString *buffer,
     }
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED: {
+            const FengTypeRef *argument = type_ref->as.named.segment_count == 1U &&
+                type_ref->as.named.type_arg_count == 0U
+                    ? find_type_argument(arguments, type_ref->as.named.segments[0]) : NULL;
             size_t segment_start = style == FENG_LSP_TYPE_NAME_SHORT &&
                                    type_ref->as.named.segment_count > 0U
                                        ? type_ref->as.named.segment_count - 1U
                                        : 0U;
 
+            if (argument != NULL) {
+                return type_ref_to_string_with_arguments(buffer, argument, style, NULL);
+            }
             for (index = segment_start;
                  index < type_ref->as.named.segment_count;
                  ++index) {
@@ -11380,9 +11425,9 @@ static bool type_ref_to_string_with_style(FengLspString *buffer,
                     if (index > 0U && !string_append_cstr(buffer, ", ")) {
                         return false;
                     }
-                    if (!type_ref_to_string_with_style(buffer,
-                                                       type_ref->as.named.type_args[index],
-                                                       style)) {
+                    if (!type_ref_to_string_with_arguments(buffer,
+                                                           type_ref->as.named.type_args[index],
+                                                           style, arguments)) {
                         return false;
                     }
                 }
@@ -11393,13 +11438,20 @@ static bool type_ref_to_string_with_style(FengLspString *buffer,
             return true;
         }
         case FENG_TYPE_REF_POINTER:
-            return type_ref_to_string_with_style(buffer, type_ref->as.inner, style) &&
+            return type_ref_to_string_with_arguments(buffer, type_ref->as.inner, style, arguments) &&
                    string_append_cstr(buffer, "*");
         case FENG_TYPE_REF_ARRAY:
-            return type_ref_to_string_with_style(buffer, type_ref->as.inner, style) &&
+            return type_ref_to_string_with_arguments(buffer, type_ref->as.inner, style, arguments) &&
                    string_append_cstr(buffer, type_ref->array_element_writable ? "[!]" : "[]");
     }
     return false;
+}
+
+/* Preserve declaration spelling when no use-site generic arguments apply. */
+static bool type_ref_to_string_with_style(FengLspString *buffer,
+                                          const FengTypeRef *type_ref,
+                                          FengLspTypeNameStyle style) {
+    return type_ref_to_string_with_arguments(buffer, type_ref, style, NULL);
 }
 
 /* Hover deliberately presents only the final segment of named type paths. */
@@ -12525,10 +12577,11 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
     return presentation->signature.data != NULL;
 }
 
-/* Format a persistent symbol type without changing its stored qualified name. */
-static bool symbol_type_to_string_with_style(FengLspString *buffer,
-                                             const FengSymbolTypeView *type,
-                                             FengLspTypeNameStyle style) {
+/* Format immutable symbol types with optional use-site generic arguments. */
+static bool symbol_type_to_string_with_arguments(FengLspString *buffer,
+                                                 const FengSymbolTypeView *type,
+                                                 FengLspTypeNameStyle style,
+                                                 const FengLspTypeArguments *arguments) {
     size_t index;
 
     if (type == NULL) {
@@ -12558,14 +12611,14 @@ static bool symbol_type_to_string_with_style(FengLspString *buffer,
             return true;
         }
         case FENG_SYMBOL_TYPE_KIND_POINTER:
-            return symbol_type_to_string_with_style(buffer,
-                                                    feng_symbol_type_inner(type),
-                                                    style) &&
+            return symbol_type_to_string_with_arguments(buffer,
+                                                        feng_symbol_type_inner(type),
+                                                        style, arguments) &&
                    string_append_cstr(buffer, "*");
         case FENG_SYMBOL_TYPE_KIND_ARRAY:
-            if (!symbol_type_to_string_with_style(buffer,
-                                                  feng_symbol_type_inner(type),
-                                                  style)) {
+            if (!symbol_type_to_string_with_arguments(buffer,
+                                                      feng_symbol_type_inner(type),
+                                                      style, arguments)) {
                 return false;
             }
             for (index = 0U; index < feng_symbol_type_array_rank(type); ++index) {
@@ -12579,6 +12632,11 @@ static bool symbol_type_to_string_with_style(FengLspString *buffer,
             return true;
         case FENG_SYMBOL_TYPE_KIND_TYPE_PARAM_REF: {
             FengSlice pname = feng_symbol_type_type_param_ref_name(type);
+            const FengTypeRef *argument = find_type_argument(arguments, pname);
+
+            if (argument != NULL) {
+                return type_ref_to_string_with_style(buffer, argument, style);
+            }
             return string_append_bytes(buffer, pname.data, pname.length);
         }
         case FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC: {
@@ -12607,10 +12665,10 @@ static bool symbol_type_to_string_with_style(FengLspString *buffer,
                     if (index > 0U && !string_append_cstr(buffer, ", ")) {
                         return false;
                     }
-                    if (!symbol_type_to_string_with_style(
+                    if (!symbol_type_to_string_with_arguments(
                             buffer,
                             feng_symbol_type_generic_arg_at(type, index),
-                            style)) {
+                            style, arguments)) {
                         return false;
                     }
                 }
@@ -12624,6 +12682,13 @@ static bool symbol_type_to_string_with_style(FengLspString *buffer,
             return false;
     }
     return false;
+}
+
+/* Format a persistent symbol type without changing its stored qualified name. */
+static bool symbol_type_to_string_with_style(FengLspString *buffer,
+                                             const FengSymbolTypeView *type,
+                                             FengLspTypeNameStyle style) {
+    return symbol_type_to_string_with_arguments(buffer, type, style, NULL);
 }
 
 /* Keep qualified symbol names for non-Hover LSP features. */
@@ -12642,11 +12707,13 @@ static bool symbol_hover_type_to_string(FengLspString *buffer,
                                             FENG_LSP_TYPE_NAME_SHORT);
 }
 
-static bool symbol_param_type_to_string_with_style(
+/* Instantiate a parameter while preserving its variadic array-layer syntax. */
+static bool symbol_param_type_to_string_with_arguments(
     FengLspString *buffer,
     const FengSymbolDeclView *decl,
     size_t param_index,
-    FengLspTypeNameStyle style) {
+    FengLspTypeNameStyle style,
+    const FengLspTypeArguments *arguments) {
     const FengSymbolTypeView *type = feng_symbol_decl_param_type(decl, param_index);
 
     if (feng_symbol_decl_param_is_variadic(decl, param_index)) {
@@ -12655,9 +12722,9 @@ static bool symbol_param_type_to_string_with_style(
             size_t layer_index;
 
             if (rank > 0U) {
-                if (!symbol_type_to_string_with_style(buffer,
-                                                      feng_symbol_type_inner(type),
-                                                      style)) {
+                if (!symbol_type_to_string_with_arguments(buffer,
+                                                          feng_symbol_type_inner(type),
+                                                          style, arguments)) {
                     return false;
                 }
                 for (layer_index = 1U; layer_index < rank; ++layer_index) {
@@ -12671,10 +12738,19 @@ static bool symbol_param_type_to_string_with_style(
                 return string_append_cstr(buffer, "...");
             }
         }
-        return symbol_type_to_string_with_style(buffer, type, style) &&
+        return symbol_type_to_string_with_arguments(buffer, type, style, arguments) &&
                string_append_cstr(buffer, "...");
     }
-    return symbol_type_to_string_with_style(buffer, type, style);
+    return symbol_type_to_string_with_arguments(buffer, type, style, arguments);
+}
+
+/* Retain existing parameter formatting for unspecialized symbol declarations. */
+static bool symbol_param_type_to_string_with_style(
+    FengLspString *buffer,
+    const FengSymbolDeclView *decl,
+    size_t param_index,
+    FengLspTypeNameStyle style) {
+    return symbol_param_type_to_string_with_arguments(buffer, decl, param_index, style, NULL);
 }
 
 static bool symbol_param_type_to_string(FengLspString *buffer,
@@ -26728,7 +26804,8 @@ cleanup:
 static bool resolve_signature_callee(const char *text,
                                      size_t open_paren,
                                      char **out_method_name,
-                                     char **out_owner_name) {
+                                     char **out_owner_name,
+                                     size_t *out_callee_offset) {
     size_t end;
     size_t start;
     FengLspReceiverChain chain = {0};
@@ -26754,6 +26831,7 @@ static bool resolve_signature_callee(const char *text,
     }
     name = chain.operation_count == 0U ? chain.root
         : chain.operations[chain.operation_count - 1U].member;
+    *out_callee_offset = (size_t)(name.data - text);
     *out_method_name = dup_range(name.data, name.data + name.length);
     receiver_chain_dispose(&chain);
     if (*out_method_name == NULL) {
@@ -26966,6 +27044,166 @@ static bool append_signature_function_module(const FengLspCacheQueryContext *con
     return true;
 }
 
+/* One local callable signature borrows current syntax or immutable symbols. */
+typedef struct FengLspLocalSignature {
+    const FengParameter *parameters;
+    size_t parameter_count;
+    const FengTypeRef *return_type;
+    bool has_return_type;
+    const FengSymbolDeclView *symbol_decl;
+    FengLspTypeArguments type_arguments;
+} FengLspLocalSignature;
+
+/* Resolve the binding's declared callable type before considering its literal
+ * initializer. Current syntax replaces the indexed copy of the same file. */
+static bool resolve_local_signature(const FengLspCacheQueryContext *context,
+                                     const FengLspLocal *local,
+                                     const FengDecl *enclosing_decl,
+                                     const FengTypeMember *enclosing_member,
+                                     FengLspLocalSignature *signature) {
+    const FengTypeRef *type = local->binding != NULL
+        ? local->binding->type : local_receiver_type(local);
+
+    if (type != NULL) {
+        FengCliLoadedSource current_source = {.path = context->program->path, .program = context->program};
+        FengLspAnalysisSession session = {0};
+        const FengDecl *decl;
+        const FengSymbolDeclView *symbol;
+
+        if (type->kind != FENG_TYPE_REF_NAMED || type->as.named.segment_count == 0U ||
+            find_scoped_type_param(enclosing_decl, enclosing_member, type->as.named.segments[0]) != NULL) {
+            return false;
+        }
+        session.sources = &current_source;
+        session.source_count = 1U;
+        session.source_module_index = context->source_module_index;
+        decl = resolve_named_type_ref(&session, context->program, type);
+        signature->type_arguments.arguments = type->as.named.type_args;
+        signature->type_arguments.count = type->as.named.type_arg_count;
+        signature->has_return_type = true;
+        if (decl != NULL) {
+            if (decl->kind != FENG_DECL_SPEC || decl->as.spec_decl.form != FENG_SPEC_FORM_CALLABLE ||
+                decl->as.spec_decl.type_param_count != type->as.named.type_arg_count) {
+                return false;
+            }
+            signature->parameters = decl->as.spec_decl.as.callable.params;
+            signature->parameter_count = decl->as.spec_decl.as.callable.param_count;
+            signature->return_type = decl->as.spec_decl.as.callable.return_type;
+            signature->type_arguments.parameters = decl->as.spec_decl.type_params;
+            return true;
+        }
+        symbol = resolve_symbol_named_type_ref(context->provider, context->current_module,
+                                                context->program, type);
+        if (symbol == NULL || signature_symbol_has_source(context, symbol) ||
+            feng_symbol_decl_kind(symbol) != FENG_SYMBOL_DECL_KIND_SPEC ||
+            feng_symbol_decl_spec_form(symbol) != FENG_SPEC_FORM_CALLABLE ||
+            feng_symbol_decl_type_param_count(symbol) != type->as.named.type_arg_count) {
+            return false;
+        }
+        signature->symbol_decl = symbol;
+        signature->parameter_count = feng_symbol_decl_param_count(symbol);
+        signature->type_arguments.symbol_decl = symbol;
+        return true;
+    }
+    if (local->binding != NULL && local->binding->initializer != NULL &&
+        local->binding->initializer->kind == FENG_EXPR_LAMBDA) {
+        const FengExpr *lambda = local->binding->initializer;
+
+        for (size_t index = 0U; index < lambda->as.lambda.param_count; ++index) {
+            if (lambda->as.lambda.params[index].type == NULL) {
+                return false;
+            }
+        }
+        signature->parameters = lambda->as.lambda.params;
+        signature->parameter_count = lambda->as.lambda.param_count;
+        return true;
+    }
+    return false;
+}
+
+/* Read the parameter name from either source or package signature metadata. */
+static FengSlice local_signature_parameter_name(const FengLspLocalSignature *signature,
+                                                 size_t index) {
+    return signature->symbol_decl != NULL
+        ? feng_symbol_decl_param_name(signature->symbol_decl, index)
+        : signature->parameters[index].name;
+}
+
+/* Format one instantiated parameter through the shared type presentation. */
+static bool append_local_signature_parameter_type(FengLspString *label,
+                                                   const FengLspLocalSignature *signature,
+                                                   size_t index) {
+    const FengParameter *parameter;
+    const FengTypeRef *type;
+
+    if (signature->symbol_decl != NULL) {
+        return symbol_param_type_to_string_with_arguments(label, signature->symbol_decl,
+            index, FENG_LSP_TYPE_NAME_QUALIFIED, &signature->type_arguments);
+    }
+    parameter = &signature->parameters[index];
+    type = parameter->type;
+    if (parameter->is_variadic && type != NULL && type->kind == FENG_TYPE_REF_ARRAY) {
+        type = type->as.inner;
+    }
+    return type_ref_to_string_with_arguments(label, type, FENG_LSP_TYPE_NAME_QUALIFIED,
+                                             &signature->type_arguments) &&
+           (!parameter->is_variadic || string_append_cstr(label, "..."));
+}
+
+/* Append the lexical value's signature without falling through to a same-name
+ * module function when the value is not provably callable. */
+static bool append_signature_help_local(const FengLspCacheQueryContext *context,
+                                         const FengLspLocal *local,
+                                         const FengDecl *enclosing_decl,
+                                         const FengTypeMember *enclosing_member,
+                                         FengLspString *json,
+                                         FengLspSignatureHelpSet *set) {
+    FengLspLocalSignature signature = {0};
+    FengLspString label = {0};
+    bool ok;
+
+    if (!resolve_local_signature(context, local, enclosing_decl, enclosing_member, &signature)) {
+        return true;
+    }
+    ok = string_append_cstr(&label, "func ") &&
+        string_append_bytes(&label, local->name.data, local->name.length) &&
+        string_append_cstr(&label, "(");
+    for (size_t index = 0U; ok && index < signature.parameter_count; ++index) {
+        FengSlice name = local_signature_parameter_name(&signature, index);
+
+        ok = (index == 0U || string_append_cstr(&label, ", ")) &&
+            string_append_bytes(&label, name.data, name.length) &&
+            string_append_cstr(&label, ": ") &&
+            append_local_signature_parameter_type(&label, &signature, index);
+    }
+    ok = ok && string_append_cstr(&label, ")");
+    if (ok && signature.has_return_type) {
+        ok = string_append_cstr(&label, ": ") &&
+            (signature.symbol_decl != NULL
+                ? symbol_type_to_string_with_arguments(&label,
+                    feng_symbol_decl_return_type(signature.symbol_decl),
+                    FENG_LSP_TYPE_NAME_QUALIFIED, &signature.type_arguments)
+                : type_ref_to_string_with_arguments(&label, signature.return_type,
+                    FENG_LSP_TYPE_NAME_QUALIFIED, &signature.type_arguments));
+    }
+    ok = ok && string_append_cstr(json, "{\"label\":") &&
+        string_append_json_string(json, label.data) && string_append_cstr(json, ",\"parameters\":[");
+    for (size_t index = 0U; ok && index < signature.parameter_count; ++index) {
+        FengSlice name = local_signature_parameter_name(&signature, index);
+
+        ok = (index == 0U || string_append_cstr(json, ",")) &&
+            string_append_cstr(json, "{\"label\":\"") &&
+            string_append_bytes(json, name.data, name.length) && string_append_cstr(json, "\"}");
+    }
+    set->active_parameter = signature_active_parameter(signature.parameter_count, set->active_argument);
+    ok = ok && string_append_format(json, "],\"activeParameter\":%zu}", set->active_parameter);
+    if (ok) {
+        ++set->count;
+    }
+    string_dispose(&label);
+    return ok;
+}
+
 /* Select a lexical/module namespace before collecting its overload set.
  * A receiver that denotes a value or type remains in the member pipeline. */
 static bool build_function_signature_help_json(const FengLspCacheQueryContext *context,
@@ -26990,8 +27228,13 @@ static bool build_function_signature_help_json(const FengLspCacheQueryContext *c
         return false;
     }
     if (receiver == NULL) {
-        if (find_local(locals, name) != NULL ||
-            find_scoped_type_param(enclosing_decl, enclosing_member, name) != NULL) {
+        const FengLspLocal *local = find_local(locals, name);
+
+        if (local != NULL) {
+            ok = append_signature_help_local(context, local, enclosing_decl, enclosing_member, json, &set);
+            goto cleanup;
+        }
+        if (find_scoped_type_param(enclosing_decl, enclosing_member, name) != NULL) {
             goto cleanup;
         }
         ok = append_signature_function_module(context, context->program->module_segments,
@@ -27403,6 +27646,7 @@ static bool handle_signature_help_request(FengLspService *service,
     FengLspDocument *document;
     size_t offset;
     size_t open_paren;
+    size_t callee_offset;
     size_t active_param;
     char *method_name = NULL;
     char *owner_name_str = NULL;
@@ -27433,19 +27677,22 @@ static bool handle_signature_help_request(FengLspService *service,
         return send_json_response(output, id, "null");
     }
     active_param = count_commas_at_level(document->text, open_paren, offset);
-    if (!resolve_signature_callee(document->text, open_paren, &method_name, &owner_name_str)) {
+    if (!resolve_signature_callee(document->text, open_paren, &method_name, &owner_name_str,
+                                  &callee_offset)) {
         free(uri);
         return send_json_response(output, id, "null");
     }
     wait_for_initial_query_state(service, document->path);
-    ok = build_current_signature_help_json(service, document, document->text, offset,
+    /* Scope belongs to the callee, which remains inside AST ranges even when
+     * the cursor follows an empty argument list or a repaired delimiter. */
+    ok = build_current_signature_help_json(service, document, document->text, callee_offset,
         method_name, owner_name_str, active_param, &json);
     if (!ok) {
         char *repaired_text = dup_text_with_signature_repair(document->text, offset);
 
         if (repaired_text != NULL) {
             string_dispose(&json);
-            ok = build_current_signature_help_json(service, document, repaired_text, offset,
+            ok = build_current_signature_help_json(service, document, repaired_text, callee_offset,
                 method_name, owner_name_str, active_param, &json);
             free(repaired_text);
         }
