@@ -31,6 +31,7 @@
 - [流程控制](./language/control-flow.md)
 - [模式匹配](./language/pattern-matching.md)
 - [自定义类型](./language/user-defined-types.md)
+- [成员展开（mixin）](./language/mixins.md)
 - [契约与 fit](./language/contracts-and-fit.md)
 - [泛型](./language/generics.md)
 - [异常处理](./language/error-handling.md)
@@ -69,6 +70,7 @@ zh-CN/
 │   ├── control-flow.md
 │   ├── pattern-matching.md
 │   ├── user-defined-types.md
+│   ├── mixins.md
 │   ├── contracts-and-fit.md
 │   ├── generics.md
 │   ├── error-handling.md

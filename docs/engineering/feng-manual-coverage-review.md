@@ -6,6 +6,7 @@
 `docs/manual/en/`、`docs/manual/zh-CN/`，依据为当前规范、源码与已有兼容性用例。
 第 3、4 节的 16 项语言主题已同步补齐到中英文手册，第 6 节的标准库教程仍待安排。
 链接修复见第 1 节，已有内容问题的处理结果见第 5 节，补写中确认的实现限制见第 9 节。
+独立 mixin 章节、spec seal 可见性及 fit 孤儿规则的后续补充见第 10 节。
 
 ## 1 发布链接核查
 
@@ -28,9 +29,10 @@
 
 ## 2 覆盖结论
 
-中英文各有 30 个页面，其中语言指南各有 11 章。基础绑定、数组、元组、枚举、函数、流程控制、
-四种 spec 形式、泛型、异常和模块原本已有介绍。本轮针对缺少教程的完整特性，以及既有特性的
-进阶用法和必要边界扩充了 10 对现有页面；没有新增页面，也没有改变语言行为。
+当前中英文各有 31 个页面，其中语言指南各有 12 章。基础绑定、数组、元组、枚举、函数、流程控制、
+四种 spec 形式、泛型、异常和模块原本已有介绍。首轮针对缺少教程的完整特性，以及既有特性的
+进阶用法和必要边界扩充了 10 对现有页面；后续将 mixin 拆为独立章节，并补充 spec seal 可见性
+及 fit 孤儿规则。上述调整没有改变语言行为。
 
 下面以中文章节定位已补内容，英文对应路径已同步更新。规范与源码链接仅用于本工程核查记录；
 发布到手册的正文直接解释用法，并只链接手册内的关联章节。
@@ -39,7 +41,7 @@
 
 | 主题 | 补充前情况 | 已补内容 | 手册位置与依据 |
 | --- | --- | --- | --- |
-| 成员展开与 `@mixable` | 全文未介绍 | `...: Source;`、`...: Source = Source(...);`、`... = Source(...);` 三种形式；字段初始化差异；行为复用；显式成员与冲突；`@mixable seal` 字段和方法的访问边界 | [自定义类型](../manual/zh-CN/language/user-defined-types.md)“成员展开与 @mixable”。依据：[类型规范 §4.2](../specifications/feng-type.md)、[函数规范 §4.3](../specifications/feng-function.md)、[成员展开用例](../../fcts/fcts_bin/src/test_mixin.ff)、[seal 展开用例](../../fcts/fcts_bin/src/test_mixable_seal.ff) |
+| 成员展开与 `@mixable` | 全文未介绍 | 三种展开形式与初始化差异；纯字段混入；行为复用；显式成员与冲突；`@mixable seal` 字段和方法的直接授权；TUI 中的实际复用方式 | [成员展开（mixin）](../manual/zh-CN/language/mixins.md)独立章节。依据：[类型规范 §4.2](../specifications/feng-type.md)、[函数规范 §4.3](../specifications/feng-function.md)、[成员展开用例](../../fcts/fcts_bin/src/test_mixin.ff)、[seal 展开用例](../../fcts/fcts_bin/src/test_mixable_seal.ff) |
 | `@value` 值类型 | 自定义类型末尾只有一句介绍，没有声明或行为示例 | 普通对象与值类型的赋值、传参、返回差异；引用字段仍共享所指对象；实例方法的 `self`；形成方法值时的值捕获；与 tuple、`@abi` 的区别 | [自定义类型](../manual/zh-CN/language/user-defined-types.md)“值类型与方法值捕获”。依据：[类型规范 §4.1](../specifications/feng-type.md)、[值类型用例](../../fcts/fcts_bin/src/test_value_type.ff)、[方法值捕获用例](../../fcts/fcts_bin/src/test_value_method_capture.ff) |
 | 自定义迭代器 | 流程控制只提到 `@iterable` / `@iterator` 名称 | 完整的容器与游标示例；返回具名 `(bool, E)` 元组；直接遍历游标；通过 fit 接入；每次遍历的状态与结束条件 | [流程控制](../manual/zh-CN/language/control-flow.md)“编写自定义迭代器”。依据：[迭代器规范](../specifications/feng-iterator.md)、[迭代器用例](../../fcts/fcts_bin/src/test_iterator.ff) |
 | `@friend` 定向访问 | 全文未介绍 | 为指定 type 开放 seal 字段、实例方法与静态方法；同包 fit 的使用；授权不穿透模块和类型可见性；受限工厂的例子 | [模块与可见性](../manual/zh-CN/language/modules-and-visibility.md)“用 @friend 定向开放 seal 成员”。依据：[可见性规范 §10.3](../specifications/feng-visibility.md)、[friend 用例](../../fcts/fcts_bin/src/test_friend.ff) |
@@ -79,7 +81,7 @@
    [值类型用例](../../fcts/fcts_bin/src/test_value_type.ff) 与
    [方法值捕获用例](../../fcts/fcts_bin/src/test_value_method_capture.ff)。第 3 节的 @value 使用教程本轮已补齐；
    其他草案的状态仍应按其具体实现分别核对。
-4. **中英文结构与覆盖面对齐。** 已核对两种语言的 30 对页面及各级标题、示例、关联链接和说明。
+4. **中英文结构与覆盖面对齐。** 首轮已核对两种语言的 30 对页面及各级标题、示例、关联链接和说明。
    英文补齐了元组创建与默认值、解构类型标注限制、普通构造不适用于 tuple、泛型语法高亮、
    格式化范围和指针后缀风格；中文补齐了异常载荷中的 @abi / @value 说明及分支表达式的关联入口。
    两种语言同步修订本节涉及的语义说明。后续同步要求统一记录在
@@ -116,7 +118,7 @@
   自定义迭代协议可以补教程，不能顺带宣称 `Iterator<T>.map/filter/take` 已可用。
 - `@runtime` 是私有运行时接口，不应纳入面向普通开发者的公开功能教程。
 
-## 7 本轮交付与后续
+## 7 首轮交付与后续
 
 1. 第 3、4 节的 16 项主题已覆盖，集中扩充现有 10 对中英文页面。生命周期说明放在自定义类型
    章节，并与异常处理、C 互操作互链；页面路径与两种语言的导航保持对应。
@@ -126,7 +128,7 @@
    已有测试用例。
 4. 第 6 节的标准库任务教程仍待单独安排，未纳入本轮完成范围。
 
-## 8 本次验证
+## 8 首轮验证（独立 mixin 章节补充前）
 
 - `npm run docs:build` 成功，中英文共生成 60 个手册页面。
 - 30 对页面的标题层级、代码块顺序与关联链接一致；每种语言各有 215 个标题、190 个代码块。
@@ -179,3 +181,32 @@ func main(args: string[]) { cleanup(); }
 教程将这两类 C 调用留在声明 `Point` 的绑定包中，向应用公开普通 Feng 函数 `shift_value` 和
 `shift_in_place`。该项目已经完成打包和跨包运行，按值副本、普通引用共享与借址修改结果均符合
 手册列出的输出。这是当前可用的包装方式，不表示已修复直接跨包 ABI 调用。
+
+## 10 mixin、seal 可见性与孤儿规则的后续补充
+
+- [成员展开（mixin）](../manual/zh-CN/language/mixins.md)独立成章，依次介绍纯字段混入、
+  `@mixable` 方法、直接 mix 授权、显式成员与多层展开，以及 TUI 用法。自定义类型章节保留
+  简要入口；中英文首页、目录树和官网导航已同步更新。
+- TUI 说明依据 [Button](../../std/std/src/tui/widgets/Button.ff)、
+  [View](../../std/std/src/tui/widgets/View.ff)、[Container](../../std/std/src/tui/widgets/Container.ff)
+  与 [VStack](../../std/std/src/tui/widgets/VStack.ff) 的现有实现。示例使用实际 TUI 类型，
+  按 VStack 的方式定制样式准备，并区分直接 mix 方法授权与 Widget 契约的 seal 访问权限；
+  这不是第 6 节所列的完整 TUI 应用教程。
+- [模块与可见性](../manual/zh-CN/language/modules-and-visibility.md)新增 spec seal 专节，说明
+  实现类型之间通过契约协作、fit 实现上下文、成员原声明 spec，以及具体类型和契约视角各自的
+  可见性。[契约与 fit](../manual/zh-CN/language/contracts-and-fit.md)保留契约满足方面的说明，
+  并区分同包 fit 选用 seal 实现与通过 spec 视角访问成员的不同条件。
+- fit 章节单列孤儿规则，说明包内可用、包外不导出、`open fit` 的提示，以及纯方法扩展不受
+  孤儿规则限制。示例为标准库 Rect 适配 Display，同时提供可按普通规则导出的 area 扩展。
+- 同一特性在关联章节中可以按不同重点介绍，并保持必要解释与链接；这项编写约定已记录到
+  [手册内容边界](../manual/README.md#内容边界)。
+
+本次验证结果：
+
+- 新增 6 个完整示例（mixin 4 个、spec seal 1 个、孤儿规则 1 个）均在 `macos-arm64` 上通过
+  当前本地编译器的编译、链接和运行，输出符合手册。孤儿适配构建输出取消导出的 info 提示。
+- 31 对页面的标题层级、代码块顺序及本地链接顺序一致；每种语言各有 223 个标题、195 个代码块。
+  新增 6 个示例的中英文代码与实际验证输入逐一一致。
+- `npm run docs:build` 成功，生成 62 个手册页面。手册 Markdown 的 158 个链接及图片引用、
+  生成站点的本地链接与锚点检查通过；手册链接未越过发布边界。
+- 仅修改 docs 和 website 导航配置，未修改编译器、运行时或已有测试，按仓库规则未运行全量回归。

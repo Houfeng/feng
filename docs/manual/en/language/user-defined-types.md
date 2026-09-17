@@ -162,70 +162,9 @@ The output is `1 3 6`, then `9`, then `3 4 1`. A direct instance call makes `sel
 
 See [Types](./types.md) for tuple construction and [C Interoperability](../interop/c-interop.md) for ABI arguments.
 
-## Member Expansion and @mixable
+## Member Expansion (mixin)
 
-Member expansion adds source fields and reusable behavior to a target type. It does not establish inheritance or a conversion between the source and target. The target declares its own contract conformance. The three forms differ in whether they construct a source value first:
-
-```feng
-module manual_mixin;
-import std.io;
-import std.numeric;
-
-spec Counted { var value: int; }
-
-/** Supplies reusable fields and behavior. */
-type CounterPart: Counted {
-  var value: int = 4;
-  @mixable
-  seal var hidden: int = 5;
-
-  /** Initializes the source instance. */
-  func CounterPart(seed: int) { self.value = seed; }
-
-  /** Becomes a callable instance operation on each participating type. */
-  @mixable
-  static func bump(target: Counted): int {
-    target.value += 1;
-    return target.value;
-  }
-
-  /** Supplies a restricted reusable operation. */
-  @mixable
-  seal static func secret(target: Counted): int { return target.value + 100; }
-}
-
-/** Expands fields with their type defaults. */
-type ZeroCounter: Counted { ...: CounterPart; }
-
-/** Constructs one source value before copying its selected fields. */
-type SeededCounter: Counted {
-  ...: CounterPart = CounterPart(10);
-
-  /** Reads the generated seal field from its owning type. */
-  func hidden_value(): int { return self.hidden; }
-
-  /** Uses the generated seal method inside its owning type. */
-  func secret_value(): int { return self.secret(); }
-}
-
-/** Infers the source type from its construction expression. */
-type InferredCounter: Counted { ... = CounterPart(20); }
-
-/** Compares all three initialization forms. */
-func main(args: string[]) {
-  let zero = ZeroCounter {};
-  let seeded = SeededCounter {};
-  let inferred = InferredCounter {};
-  println<int>("{0} {1} {2}", zero.value, seeded.value, inferred.value);
-  println<int>("{0} {1} {2}", zero.bump(), seeded.hidden_value(), seeded.secret_value());
-}
-```
-
-The output is `0 10 20` and `1 5 110`. `...: Source;` initializes each generated field with its type default and does not run source field initializers or constructors. Both forms with `= Source(...)` construct one source per target construction and use its final field values. The right side must be an object construction expression, not an arbitrary variable or factory call. Reference fields copy references; generated slots do not stay synchronized with source slots.
-
-Public instance fields participate automatically; ordinary instance methods, static fields and unmarked methods do not. A reusable `@mixable` static method must take an object contract as its first parameter, with conformance declared by both source and target. It also supplies an instance call form that omits that parameter. Explicit target members take precedence. Separate expansion sources have no priority: ordinary member conflicts and expansion cycles are errors.
-
-Expanded `@mixable seal` fields and methods remain `seal`. The direct target’s own instance and static methods may use the corresponding restricted source capabilities. This permission does not extend to top-level functions, other types or indirect targets. Source-field permission does not apply to target `fit` methods, constructors or ordinary field initializers; generated expansion initialization is handled by the compiler. Method permission covers only marked seal static methods, not other seal members.
+Inside a type body, `...` expands source fields and reuses eligible `@mixable` methods. The target receives its own members and explicitly declares any required spec relationships. See [Member Expansion (mixin)](./mixins.md) for field-only examples, the three initialization forms, method reuse, direct mix permissions and TUI usage.
 
 ## Defaults and Initialization Order
 

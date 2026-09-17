@@ -72,6 +72,75 @@ open type User {
 
 公开 API 的签名不能泄漏可见范围更窄的类型。
 
+## spec 成员的 seal 可见性
+
+object-form `spec` 的字段与方法默认公开；显式写 `seal` 可以声明供实现类型协作使用的受限契约成员。它仍属于完整契约，实现类型必须提供对应成员。实例成员和静态成员都可以使用这一访问控制。
+
+下面两个类型满足同一个契约。`Reader` 通过契约视角使用 `Counter` 的受限成员，普通调用方只使用公开入口：
+
+```feng
+module manual_spec_visibility;
+import std.io;
+import std.numeric;
+
+/** Keeps internal operations in the complete contract. */
+spec InternalCounter {
+  seal var value: int;
+
+  seal func current(): int;
+}
+
+/** Implements the contract with private concrete members. */
+type Counter: InternalCounter {
+  seal var value: int;
+
+  /** Sets the private counter value. */
+  func Counter(value: int) { self.value = value; }
+
+  /** Supplies the restricted contract operation. */
+  seal func current(): int { return self.value; }
+}
+
+/** Implements the same contract with public concrete members. */
+type Reader: InternalCounter {
+  var value: int;
+
+  /** Remains public when called through the concrete Reader type. */
+  func current(): int { return self.value; }
+
+  /** Uses the contract view of another implementing type. */
+  func inspect(other: InternalCounter): int {
+    return other.value + other.current();
+  }
+}
+
+fit Reader {
+  /** Uses the target type's contract implementation context. */
+  func inspect_from_fit(other: InternalCounter): int {
+    return other.current();
+  }
+}
+
+/** Calls public entry points without accessing sealed contract members. */
+func main(args: string[]) {
+  let counter = Counter(21);
+  let view: InternalCounter = counter;
+  let reader = Reader {};
+  println<int>("{0} {1} {2}", reader.inspect(view), reader.inspect_from_fit(view),
+    reader.current());
+}
+```
+
+输出为 `42 21 0`。`Reader` 满足 `InternalCounter`，因此它的实例方法、静态方法和以它为目标的 `fit` 方法可以通过相应契约视角访问这些 seal 成员。权限由访问点所属的实现类型与成员原声明的 spec 决定；只在同一模块或包中，并不会取得该权限。父契约中的 seal 成员仍按原声明契约判断，满足子契约的类型也满足其父契约。
+
+在普通顶层函数 `main` 中，`view.value` 和 `view.current()` 都会被拒绝，即使 `view` 指向一个合法实现。`counter.current()` 同样不可访问，因为具体类型 `Counter` 把该方法声明为 seal；`Reader.inspect` 也不能改用具体 `Counter` 视角绕过这一限制。
+
+相反，`reader.current()` 合法，因为 `Reader` 自己的实现方法是公开的；把它放入 `InternalCounter` 视角后，普通调用方仍不能通过该视角调用 `current()`。契约视角和具体类型各自保留自己的成员可见性。实现成员怎样满足公开或 seal 要求，见[契约与 fit](./contracts-and-fit.md)。
+
+若要向未实现该 spec 的某个具体类型开放成员，可在 spec 的 seal 成员上标注 `@friend`，按本章后文的定向授权规则使用。它只授权对应契约视角，不会顺带开放具体实现类型的 seal 成员。
+
+直接 mix 也能为目标类型的方法授予受限来源成员的访问权，但它依据的是直接展开关系及来源成员的 `@mixable` 标注，与这里的 spec 视角权限不同。示例与边界见[成员展开（mixin）](./mixins.md#mix-带来的-seal-授权)。
+
 ## 公开 fit
 
 `fit` 不是可命名声明。只有位于公开模块中的 `open fit` 才能作为包外公开扩展；其他 `fit` 只在声明模块内生效。
@@ -86,7 +155,7 @@ open fit User {
 }
 ```
 
-使用方需要导入 `app.extensions` 才能使用该扩展。
+使用方需要导入 `app.extensions` 才能使用该扩展。适配外部类型与外部契约时，还须遵守[孤儿规则](./contracts-and-fit.md#孤儿规则与包外导出)：关系可在包内使用，但不能因 `open fit` 而导出到其他包。
 
 ## 避免名称冲突
 

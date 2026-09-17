@@ -213,7 +213,9 @@ func main(args: string[]) {
 
 输出为 `device` 和 `48 9 16`。多父契约会合并各父契约的要求；同名签名必须满足一致性要求，不能借父列表隐藏不兼容的成员。交叉投影保持原对象身份，嵌套交叉成员及成员的父契约也可沿声明关系显式投影；只是拥有相同成员集合的另一交叉契约不自动成为可转换目标。
 
-公开 requirement 必须由公开成员满足；seal requirement 可以由符合规则的公开或 seal 成员满足。它不会自动改变具体实现成员的可见性。普通外部调用不能通过契约视角访问 seal requirement；实现类型以及符合条件的同包 fit 可按其权限访问。静态字段只能由类型自身提供，fit 可提供静态方法。更多泛型组合见[泛型](./generics.md)，定向开放 seal 能力见[模块与可见性](./modules-and-visibility.md)。
+公开 requirement 必须由公开成员满足；seal requirement 可以由符合规则的公开或 seal 成员满足。具体类型的 seal 成员只有在满足关系由类型声明头或与该类型同包的 fit 建立时，才能被选为实现；跨包 fit 可以使用目标类型的公开成员或自己提供的方法，不能选用目标类型的 seal 成员。
+
+seal 成员仍是必须满足的契约要求，普通调用方不能通过契约视角访问；具体实现成员自身的可见性保持不变。实现类型怎样通过契约视角协作，见[spec 成员的 seal 可见性](./modules-and-visibility.md#spec-成员的-seal-可见性)。静态字段只能由类型自身提供，fit 可提供静态方法。更多泛型组合见[泛型](./generics.md)，定向开放 seal 能力见[模块与可见性](./modules-and-visibility.md)。
 
 ## 泛型与其他类型的 fit
 
@@ -295,4 +297,47 @@ func main(args: string[]) {
 
 输出依次为 `3 6 7`、`5`、`[fit]`、`record`、`ready`。`fit Box<T>` 的 `T` 引用目标类型已有的泛参，不能改名、换序、增减或改成 `fit Box<int>` 来特化；每个闭合实例按自己的实参使用这些方法。无块体的 `fit NamedRecord: HasName;` 只声明已有成员满足契约。
 
-可见性由 fit 所在模块和 `open fit` 决定，使用方需要导入相应扩展模块。若适配双方的实现都来自其他包，属于孤儿适配：关系只在当前包生效，即使写 `open fit` 也不会导出这条关系。无契约目标的纯方法扩展不受这条孤儿关系限制。fit 不能因位于同包就直接访问目标类型的 seal 成员；定向授权见[模块与可见性](./modules-and-visibility.md)。
+可见性由 fit 所在模块和 `open fit` 决定，使用方需要导入相应扩展模块；包外导出还要遵守下面的孤儿规则。fit 不能因位于同包就直接访问目标类型的 seal 成员；定向授权与 spec 视角的访问权限见[模块与可见性](./modules-and-visibility.md)。
+
+## 孤儿规则与包外导出
+
+对于 `fit A: B`，如果目标类型 `A` 和契约 `B` 的实现源码都不在当前包中，这条关系就是孤儿适配。判断边界是包，不是文件或模块；`A` 和 `B` 来自同一个外部包还是两个不同的外部包，都不影响判断。
+
+孤儿适配可以在当前包中正常使用，但仍须遵守模块和 import 的可见性规则。它不能把这条满足关系继续导出给其他包；即使写了 `open fit`，编译器也会移除其导出并给出提示，提示不是错误或警告。
+
+| `fit A: B` 的定义归属 | 是否受孤儿规则限制 |
+| --- | --- |
+| `A` 在当前包，`B` 在当前包或外部包 | 否，可按普通可见性规则导出 |
+| `A` 在外部包，`B` 在当前包 | 否，可按普通可见性规则导出 |
+| `A` 和 `B` 都在外部包 | 是，适配关系仅在当前包生效 |
+
+下面应用为标准库的 `Rect` 补上标准库 `Display` 契约。双方都来自 `std` 包，因此即使使用公开模块和 `open fit`，适配关系也只在当前应用包中生效：
+
+```feng
+open module manual_orphan;
+import std;
+import std.io;
+import std.numeric;
+import std.tui.common;
+
+open fit Rect: Display {
+  /** Supplies an application-local display policy for a library type. */
+  func toString(): string { return "rectangle"; }
+}
+
+open fit Rect {
+  /** Adds a pure extension without a contract relationship. */
+  func area(): int { return self.width * self.height; }
+}
+
+/** Uses both extensions inside the declaring package. */
+func main(args: string[]) {
+  let rect = Rect { width: 3, height: 4 };
+  println<Rect>("{0}", rect);
+  println<int>("{0}", rect.area());
+}
+```
+
+程序输出 `rectangle` 和 `12`，构建时会提示孤儿适配仅在当前包生效。这里 `println<Rect>` 能使用包内建立的 `Display` 关系，但其他包导入该模块后，不会因此获得 `Rect: Display`。
+
+没有右侧契约的 `fit A { ... }` 是纯方法扩展，不受孤儿规则限制。因此示例中的 `open fit Rect` 可以按普通规则导出 `area()`。如果需要向其他包提供可见的适配关系，可使用当前包定义的类型或契约作为适配的一方。公开模块和扩展的可见性见[模块与可见性](./modules-and-visibility.md#公开-fit)。

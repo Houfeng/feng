@@ -216,7 +216,9 @@ func main(args: string[]) {
 
 The output is `device` and `48 9 16`. Multiple parents combine requirements; same-name signatures must remain compatible, and a parent list cannot hide incompatible members. Intersection projection preserves object identity. Nested intersection members and their object-contract parents can also be reached by explicit projection along declared relationships. Another intersection with merely the same member set is not automatically a conversion target.
 
-A public requirement needs a public implementation. A seal requirement may use a public or seal implementation when the access rules permit it; this does not change the concrete member’s visibility. Ordinary external callers cannot use seal requirements through a contract view. Implementing types and qualifying same-package fits can access them under their permissions. Static fields must come from the type itself; fit can supply static methods. See [Generics](./generics.md) for combinations and [Modules and Visibility](./modules-and-visibility.md) for targeted seal access.
+A public requirement needs a public implementation. A seal requirement may use a public or seal implementation when the rules permit it. A concrete type's seal members may be selected as implementations only when conformance is declared in the type header or by a fit in the same package as that type. A fit in another package can use the target's public members or its own methods, but cannot select the target's seal members.
+
+Seal members remain required parts of the contract, but ordinary callers cannot access them through that view. The concrete implementation members retain their own visibility. See [Seal Members in Object Contracts](./modules-and-visibility.md#seal-members-in-object-contracts) for cooperation between implementing types through contract views. Static fields must come from the type itself; fit can supply static methods. See [Generics](./generics.md) for combinations and [Modules and Visibility](./modules-and-visibility.md) for targeted seal access.
 
 ## Generic Fits and Other Target Types
 
@@ -298,4 +300,47 @@ func main(args: string[]) {
 
 The output is `3 6 7`, `5`, `[fit]`, `record`, and `ready`. The `T` in `fit Box<T>` refers to the target’s existing parameter. It cannot be renamed, reordered, added, removed or replaced with `fit Box<int>` as a specialization. Each closed instance uses its own arguments. The bodyless `fit NamedRecord: HasName;` only declares conformance using existing members.
 
-Visibility depends on the declaring module and `open fit`; consumers import the extension module. When both sides of an adaptation are implemented in other packages, it is an orphan adaptation: the relationship applies only inside the current package and is not exported even with `open fit`. Pure method extensions without a contract target are not subject to that orphan-relationship restriction. Being in the same package does not by itself let fit access the target’s seal members. See [Modules and Visibility](./modules-and-visibility.md) for targeted permissions.
+Visibility depends on the declaring module and `open fit`; consumers import the extension module. Export to other packages also follows the orphan rule below. Being in the same package does not by itself let fit access the target's seal members. See [Modules and Visibility](./modules-and-visibility.md) for targeted permissions and access through spec views.
+
+## The Orphan Rule and Package Exports
+
+For `fit A: B`, the relationship is an orphan adaptation when the implementation sources of both the target type `A` and the contract `B` are outside the current package. The boundary is the package, not the file or module. It does not matter whether `A` and `B` come from the same external package or two different external packages.
+
+An orphan adaptation works inside the current package, subject to ordinary module and import visibility. It cannot export the satisfaction relationship to other packages. Even with `open fit`, the compiler removes its export and emits an informational note, not an error or warning.
+
+| Where `A` and `B` in `fit A: B` are defined | Restricted by the orphan rule? |
+| --- | --- |
+| `A` is in the current package; `B` is local or external | No; ordinary visibility rules govern export |
+| `A` is external; `B` is in the current package | No; ordinary visibility rules govern export |
+| Both `A` and `B` are external | Yes; the relationship applies only inside the current package |
+
+This application adapts the standard library's `Rect` to its `Display` contract. Both come from the `std` package, so the relationship remains inside the application package despite the public module and `open fit`:
+
+```feng
+open module manual_orphan;
+import std;
+import std.io;
+import std.numeric;
+import std.tui.common;
+
+open fit Rect: Display {
+  /** Supplies an application-local display policy for a library type. */
+  func toString(): string { return "rectangle"; }
+}
+
+open fit Rect {
+  /** Adds a pure extension without a contract relationship. */
+  func area(): int { return self.width * self.height; }
+}
+
+/** Uses both extensions inside the declaring package. */
+func main(args: string[]) {
+  let rect = Rect { width: 3, height: 4 };
+  println<Rect>("{0}", rect);
+  println<int>("{0}", rect.area());
+}
+```
+
+The program prints `rectangle` and `12`. During the build, an informational note explains that the orphan adaptation applies only inside the current package. Here `println<Rect>` can use the local `Display` relationship, but another package importing this module does not acquire `Rect: Display`.
+
+A `fit A { ... }` without a contract on the right is a pure method extension and is not subject to the orphan rule. Therefore, the example's `open fit Rect` can export `area()` under ordinary rules. To provide a relationship that other packages can use, define the target type or contract in the current package. See [Modules and Visibility](./modules-and-visibility.md#public-fit-declarations) for public modules and extension visibility.

@@ -161,70 +161,9 @@ func main(args: string[]) {
 
 具名 tuple 的创建方式见[类型](./types.md)，ABI 传参方式见[C 互操作](../interop/c-interop.md)。
 
-## 成员展开与 @mixable
+## 成员展开（mixin）
 
-成员展开把来源的字段和允许复用的行为加入目标类型，不建立来源到目标的继承或转换关系。目标需要自己声明所满足的契约。三种形式的差别在于是否先构造来源值：
-
-```feng
-module manual_mixin;
-import std.io;
-import std.numeric;
-
-spec Counted { var value: int; }
-
-/** Supplies reusable fields and behavior. */
-type CounterPart: Counted {
-  var value: int = 4;
-  @mixable
-  seal var hidden: int = 5;
-
-  /** Initializes the source instance. */
-  func CounterPart(seed: int) { self.value = seed; }
-
-  /** Becomes a callable instance operation on each participating type. */
-  @mixable
-  static func bump(target: Counted): int {
-    target.value += 1;
-    return target.value;
-  }
-
-  /** Supplies a restricted reusable operation. */
-  @mixable
-  seal static func secret(target: Counted): int { return target.value + 100; }
-}
-
-/** Expands fields with their type defaults. */
-type ZeroCounter: Counted { ...: CounterPart; }
-
-/** Constructs one source value before copying its selected fields. */
-type SeededCounter: Counted {
-  ...: CounterPart = CounterPart(10);
-
-  /** Reads the generated seal field from its owning type. */
-  func hidden_value(): int { return self.hidden; }
-
-  /** Uses the generated seal method inside its owning type. */
-  func secret_value(): int { return self.secret(); }
-}
-
-/** Infers the source type from its construction expression. */
-type InferredCounter: Counted { ... = CounterPart(20); }
-
-/** Compares all three initialization forms. */
-func main(args: string[]) {
-  let zero = ZeroCounter {};
-  let seeded = SeededCounter {};
-  let inferred = InferredCounter {};
-  println<int>("{0} {1} {2}", zero.value, seeded.value, inferred.value);
-  println<int>("{0} {1} {2}", zero.bump(), seeded.hidden_value(), seeded.secret_value());
-}
-```
-
-输出为 `0 10 20` 和 `1 5 110`。`...: Source;` 按生成字段各自的类型取零值，不执行来源字段初值或构造函数；带 `= Source(...)` 的两种形式每次构造目标时只构造一次来源，再使用其最终字段值。右侧必须是对象构造表达式，不能替换成任意变量或工厂函数调用。引用字段复制引用，生成字段与来源字段不保持后续同步。
-
-公开实例字段自动参与展开；普通实例方法、静态字段和未标注的方法不参与。复用行为时，`@mixable` 静态方法的首参数必须是来源和目标都已声明满足的对象契约；它同时提供省略首参数的实例调用形式。目标显式成员优先；不同展开来源之间没有优先级，无法按普通成员规则共存的冲突会报错，循环展开也会报错。
-
-`@mixable seal` 字段和方法展开后仍是 `seal`。直接展开目标的自身实例／静态方法可使用对应来源的受限能力，但授权不会传给顶层函数、其他类型或间接展开目标。来源字段授权不适用于目标的 `fit` 方法、构造函数或普通字段初始化器；自动生成的展开初始化由编译器处理。方法授权仅覆盖标注过的 seal 静态方法，不开放其他 seal 成员。
+类型体中的 `...` 可以展开来源字段，并复用标注 `@mixable` 的方法。目标得到自己的成员，需要的 spec 满足关系仍由目标显式声明。纯字段示例、三种初始化形式、方法复用、直接 mix 授权与 TUI 用法见[成员展开（mixin）](./mixins.md)。
 
 ## 默认值与初始化顺序
 

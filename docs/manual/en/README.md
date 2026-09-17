@@ -31,6 +31,7 @@ The user manual focuses on tasks, examples, and usage rather than compiler inter
 - [Control Flow](./language/control-flow.md)
 - [Pattern Matching](./language/pattern-matching.md)
 - [User-Defined Types](./language/user-defined-types.md)
+- [Member Expansion (mixin)](./language/mixins.md)
 - [Contracts and `fit`](./language/contracts-and-fit.md)
 - [Generics](./language/generics.md)
 - [Error Handling](./language/error-handling.md)
@@ -69,6 +70,7 @@ en/
 │   ├── control-flow.md
 │   ├── pattern-matching.md
 │   ├── user-defined-types.md
+│   ├── mixins.md
 │   ├── contracts-and-fit.md
 │   ├── generics.md
 │   ├── error-handling.md

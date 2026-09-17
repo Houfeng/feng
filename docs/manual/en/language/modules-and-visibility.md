@@ -71,6 +71,75 @@ open type User {
 
 The signature of a public API cannot expose a type with narrower visibility.
 
+## Seal Members in Object Contracts
+
+Fields and methods in an object-form `spec` are public by default. An explicit `seal` declares a restricted contract member for cooperation between implementing types. It remains part of the complete contract and must be implemented. Both instance and static members support this access control.
+
+These two types satisfy the same contract. `Reader` uses the restricted members of `Counter` through a contract view, while ordinary callers use public entry points:
+
+```feng
+module manual_spec_visibility;
+import std.io;
+import std.numeric;
+
+/** Keeps internal operations in the complete contract. */
+spec InternalCounter {
+  seal var value: int;
+
+  seal func current(): int;
+}
+
+/** Implements the contract with private concrete members. */
+type Counter: InternalCounter {
+  seal var value: int;
+
+  /** Sets the private counter value. */
+  func Counter(value: int) { self.value = value; }
+
+  /** Supplies the restricted contract operation. */
+  seal func current(): int { return self.value; }
+}
+
+/** Implements the same contract with public concrete members. */
+type Reader: InternalCounter {
+  var value: int;
+
+  /** Remains public when called through the concrete Reader type. */
+  func current(): int { return self.value; }
+
+  /** Uses the contract view of another implementing type. */
+  func inspect(other: InternalCounter): int {
+    return other.value + other.current();
+  }
+}
+
+fit Reader {
+  /** Uses the target type's contract implementation context. */
+  func inspect_from_fit(other: InternalCounter): int {
+    return other.current();
+  }
+}
+
+/** Calls public entry points without accessing sealed contract members. */
+func main(args: string[]) {
+  let counter = Counter(21);
+  let view: InternalCounter = counter;
+  let reader = Reader {};
+  println<int>("{0} {1} {2}", reader.inspect(view), reader.inspect_from_fit(view),
+    reader.current());
+}
+```
+
+The output is `42 21 0`. Because `Reader` satisfies `InternalCounter`, its instance methods, static methods and fit methods targeting `Reader` may access these seal members through the corresponding contract view. Permission depends on the implementing type at the access site and the spec that originally declared the member. Sharing a module or package alone grants no permission. Inherited seal members retain their original declaring contract; a type satisfying a child contract also satisfies its parents.
+
+In the ordinary top-level function `main`, both `view.value` and `view.current()` are rejected, even when `view` holds a valid implementation. `counter.current()` is also inaccessible because the concrete type `Counter` declares that method seal. `Reader.inspect` cannot bypass that restriction by switching to a concrete `Counter` view either.
+
+By contrast, `reader.current()` is valid because the implementation method on `Reader` is public. After putting that value into an `InternalCounter` view, an ordinary caller still cannot invoke `current()` through that view. The contract view and the concrete type retain their own member visibility. See [Contracts and fit](./contracts-and-fit.md) for how implementation members satisfy public or seal requirements.
+
+To grant access to a concrete type that does not implement the spec, annotate the seal member in the spec with `@friend` and follow the targeted-access rules later in this chapter. That permission applies to the contract view and does not also expose seal members of the concrete implementation.
+
+Direct expansion can also grant a target type's methods access to restricted source members. That permission depends on a direct expansion relationship and the source members' `@mixable` annotations, separately from spec-view access. See [Member Expansion (mixin)](./mixins.md#seal-access-granted-by-direct-expansion) for examples and boundaries.
+
 ## Public fit Declarations
 
 `fit` is not a named declaration. Only an `open fit` in a public module can be exported outside its package; any other `fit` applies only within its declaring module.
@@ -85,7 +154,7 @@ open fit User {
 }
 ```
 
-A consumer must import `app.extensions` before using the extension.
+A consumer must import `app.extensions` before using the extension. Adapting an external type to an external contract also follows [the orphan rule](./contracts-and-fit.md#the-orphan-rule-and-package-exports): the relationship works within the package, but `open fit` cannot export it to other packages.
 
 ## Avoid Name Conflicts
 

@@ -44,6 +44,7 @@ const NAVIGATION = [
       "language/control-flow",
       "language/pattern-matching",
       "language/user-defined-types",
+      "language/mixins",
       "language/contracts-and-fit",
       "language/generics",
       "language/error-handling",
