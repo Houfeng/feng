@@ -2,7 +2,7 @@
 
 **English** · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
-Feng is a statically typed, compiled programming language with concise syntax, explicit contracts, and automatic memory management.
+Feng is a statically typed, compiled programming language with concise syntax, explicit contracts, and automatic memory management. Its name comes from the Chinese character “锋”, meaning “sharp”.
 
 [Website](https://feng-lang.com) · [User manual](docs/manual/en/README.md) · [Releases](https://github.com/Houfeng/feng/releases)
 

@@ -2,7 +2,7 @@
 
 [English](README.md) · [简体中文](README.zh-CN.md) · [Español](README.es.md) · [Português](README.pt-BR.md) · **日本語** · [Русский](README.ru.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
-Feng は、簡潔な構文、明示的な契約、自動メモリ管理を備えた静的型付けのコンパイル型プログラミング言語です。
+Feng は、簡潔な構文、明示的な契約、自動メモリ管理を備えた静的型付けのコンパイル型プログラミング言語です。名前は「鋭い」を意味する中国語の「锋」に由来します。
 
 [公式サイト](https://feng-lang.com/index-ja.html) · [ユーザーマニュアル](docs/manual/en/README.md) · [リリース](https://github.com/Houfeng/feng/releases)
 

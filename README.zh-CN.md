@@ -2,7 +2,7 @@
 
 [English](README.md) · **简体中文** · [Español](README.es.md) · [Português](README.pt-BR.md) · [日本語](README.ja.md) · [Русский](README.ru.md) · [Deutsch](README.de.md) · [Français](README.fr.md)
 
-Feng 是一门语法简洁的静态类型编译型语言，提供显式契约与自动内存管理。
+Feng 是一门语法简洁的静态类型编译型语言，提供显式契约与自动内存管理。名称取自中文「锋」，意为「锋利」。
 
 [官网](https://feng-lang.com/index-zh.html) · [用户手册](docs/manual/zh-CN/README.md) · [下载发行版](https://github.com/Houfeng/feng/releases)
 
