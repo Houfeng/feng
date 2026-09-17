@@ -510,7 +510,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 
 - 代理层在 `FengDapRelayState` 中维护 `synthetic_refs[]` 动态数组（session 生命周期）。
 - Synthetic ref ID 从 `0x40000000` 起分配，远超 LLDB 顺序 ID 范围，避免冲突。宏 `PROXY_IS_SYNTHETIC_REF(r)` 判断 `r >= 0x40000000`。
-- 注册两种 kind：`FENG_DAP_SYNTHETIC_ARRAY`（数组）和 `FENG_DAP_SYNTHETIC_TYPE`（用户类型）。
+- 注册三种 kind：`FENG_DAP_SYNTHETIC_ARRAY`（数组）、`FENG_DAP_SYNTHETIC_TYPE`（用户类型）和 `FENG_DAP_SYNTHETIC_CARRIER`（按展示模板展开的载体）。
 - 每条记录存储：`{ref_id, kind, frame_id, parent_read_expr, element_display_type, element_count}`（数组）或 `{ref_id, kind, frame_id, parent_read_expr, type_display_name}`（用户类型）。
 - 当 `proxy_rewrite_one_variable_payload` 发现变量可展开时，分配 synthetic ref 并写回 JSON 的 `variablesReference` 字段。
 - 当 client 发送 `variables` 请求且 `variablesReference` 命中 synthetic ref 时，`proxy_process_client_relay_message` 拦截该请求并直接合成响应，不转发给 LLDB。
@@ -652,9 +652,9 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - builtin 标量：直接复用 `lldb-dap` 原始值。
 - string：顶层显示优先回读实际 UTF-8 字符串值，不展开子字符。代理先以整数结果读取 `feng_string_length` 和 `feng_string_data`，再通过 DAP `readMemory` 按确切长度读取字符串字节；单次值回读上限为 1 MiB，超过上限时不得发送无界 `readMemory` 请求，而应回退到稳定类型摘要，避免尚未初始化或已损坏的运行时载体拖垮调试后端；不得让 `lldb-dap` 直接格式化 `const char *` 或字符数组结果。
 - array：顶层显示格式为 `元素类型[length=N]`；`variablesReference` 替换为 synthetic ref，支持按索引展开每个元素；元素展开通过 `feng_array_data` 系列 evaluate 表达式实现（见 §5.10.3）。
-- 用户类型（spec / object）：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
+- 用户对象类型：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则退回原始整数值。
-- callable / spec 顶层：必要时只提供稳定标签重命名。
+- callable / spec：显示规则见 [feng-cli.md §2.2](../specifications/feng-cli.md#22-feng-dap)。代理以统一载体展示模板描述后端类型族、字段访问和占位项,复用 synthetic ref 展开。`FengClosure__… *` 使用指针成员访问; `FengSpecValue__…` 使用值成员访问,并通过不求值的 `sizeof` 成员检查区分共享类型名前缀的 union 布局。指针通过整数读取统一格式化,占位项由代理直接生成; 变量、字段及 watch/hover 共用模板。内部读取表达式保持原值语义,投影仅用于最终展示。
 - 合成 children 展开约束：数组元素上限 256，嵌套深度上限 3 层；超限时追加截断提示项。
 
 ## 7. 必须改动的代码边界

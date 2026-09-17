@@ -1,0 +1,54 @@
+module callable_debug_values;
+
+import std.io;
+import std.numeric;
+
+spec Action(value: int): int;
+spec Mapper<T>(value: T): T;
+spec Applicable { func apply(value: int): int; }
+spec Identified { func identify(): int; }
+spec Combined: Applicable & Identified;
+spec Choice: int | string;
+
+// A bound method shares the callable carrier with lambdas and function values.
+type Worker: Applicable, Identified {
+    let offset: int;
+    // Keep a bound receiver observable in the callable's self pointer.
+    func apply(value: int): int { return value + self.offset; }
+    // Supply the second contract required by the intersection view.
+    func identify(): int { return self.offset; }
+}
+
+// A callable field must use the same leaf presentation as a local variable.
+type Holder {
+    let callback: Action;
+    let view: Applicable;
+}
+
+// Provide a named function value with a generated callable adapter.
+func named(value: int): int { return value + 1; }
+
+// Stop after every callable has been initialized, then verify normal execution.
+func inspect(parameter: Action) {
+    let base = 7;
+    var calls = 0;
+    let plain: Action = (value: int) -> value + 2;
+    let captured: Action = (value: int) {
+        calls += 1;
+        return value + base;
+    };
+    let generic: Mapper<int> = (value: int) -> value + 3;
+    let functionValue: Action = named;
+    let worker = Worker{offset: 4};
+    let methodValue: Action = worker.apply;
+    let view: Applicable = worker;
+    let combined: Combined = worker;
+    let choice: Choice = 42;
+    let holder = Holder{callback: captured, view: view};
+    println("ready"); // breakpoint: ready
+    let total = parameter(1) + plain(1) + captured(1) + generic(1) + functionValue(1) + methodValue(1);
+    println("total {0}", total.toString());
+}
+
+// Keep the fixture self-contained for a real LLDB session.
+func main(args: string[]) { inspect(named); }

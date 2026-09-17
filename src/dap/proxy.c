@@ -83,6 +83,15 @@ typedef struct FengDapPendingVariablesRequest {
     uint64_t variables_reference;
 } FengDapPendingVariablesRequest;
 
+/* Retains the read context needed to present a client evaluate result. */
+typedef struct FengDapPendingEvaluateRequest {
+    uint64_t request_seq;
+    uint64_t frame_id;
+    char *read_expression;
+    const char *display_type; /* Borrowed from the session's debug artifact. */
+    struct FengDapPendingEvaluateRequest *next;
+} FengDapPendingEvaluateRequest;
+
 /* One internally-evaluated user variable value override. */
 typedef struct FengDapEvaluatedVariable {
     char *result;
@@ -110,7 +119,32 @@ typedef struct FengDapCachedInternalEvaluateResponse {
 typedef enum FengDapSyntheticRefKind {
     FENG_DAP_SYNTHETIC_ARRAY = 1,
     FENG_DAP_SYNTHETIC_TYPE = 2,
+    FENG_DAP_SYNTHETIC_CARRIER = 3,
 } FengDapSyntheticRefKind;
+
+/* One scalar member or opaque placeholder in a carrier presentation. */
+typedef struct FengDapCarrierField {
+    const char *name;
+    const char *backend_member;
+    const char *placeholder;
+} FengDapCarrierField;
+
+/* A shared presentation schema for one codegen carrier family. */
+typedef struct FengDapCarrierPresentation {
+    const char *backend_prefix;
+    bool is_pointer;
+    const char *fallback_type;
+    const char *shape_expression;
+    FengDapCarrierField fields[2];
+} FengDapCarrierPresentation;
+
+static const FengDapCarrierPresentation kCarrierPresentations[] = {
+    {"FengClosure__", true, "callable", NULL,
+     {{"self", "_self", NULL}, {"invoke", "invoke", NULL}}},
+    {"FengSpecValue__", false, "spec",
+     "(unsigned int)(sizeof((%s).subject) + sizeof((%s).witness))",
+     {{"subject", "subject", NULL}, {"witness", NULL, "<shadow>"}}}
+};
 
 /* One proxy-owned variablesReference that expands Feng semantic children. */
 typedef struct FengDapSyntheticRef {
@@ -122,6 +156,7 @@ typedef struct FengDapSyntheticRef {
     char *type_display_name;
     uint64_t element_count;
     unsigned depth;
+    const FengDapCarrierPresentation *carrier; /* Borrowed immutable schema. */
 } FengDapSyntheticRef;
 
 /* Native requests used to finish one source step across hidden frames. */
@@ -156,6 +191,7 @@ typedef struct FengDapRelayState {
     FengDapPendingVariablesRequest *pending_variables_requests;
     size_t pending_variables_request_count;
     size_t pending_variables_request_capacity;
+    FengDapPendingEvaluateRequest *pending_evaluate_requests;
     uint64_t *stale_variables_response_seqs;
     size_t stale_variables_response_seq_count;
     size_t stale_variables_response_seq_capacity;
@@ -215,6 +251,13 @@ static void proxy_synthetic_ref_dispose(FengDapSyntheticRef *ref) {
     memset(ref, 0, sizeof(*ref));
 }
 
+/* Release one pending client evaluate context. */
+static void proxy_pending_evaluate_dispose(FengDapPendingEvaluateRequest *request) {
+    if (request == NULL) return;
+    free(request->read_expression);
+    free(request);
+}
+
 static void proxy_relay_state_dispose(FengDapRelayState *state) {
     size_t index;
 
@@ -237,6 +280,11 @@ static void proxy_relay_state_dispose(FengDapRelayState *state) {
     free(state->stale_variables_response_seqs);
     free(state->cached_internal_evaluate_responses);
     free(state->synthetic_refs);
+    while (state->pending_evaluate_requests != NULL) {
+        FengDapPendingEvaluateRequest *request = state->pending_evaluate_requests;
+        state->pending_evaluate_requests = request->next;
+        proxy_pending_evaluate_dispose(request);
+    }
     while (state->pending_step_requests != NULL) {
         FengDapPendingStepRequest *request = state->pending_step_requests;
         state->pending_step_requests = request->next;
@@ -264,6 +312,10 @@ static void proxy_relay_state_clear_stopped_context(FengDapRelayState *state) {
     state->scope_binding_count = 0U;
     state->pending_variables_request_count = 0U;
     state->synthetic_ref_count = 0U;
+    for (FengDapPendingEvaluateRequest *request = state->pending_evaluate_requests;
+         request != NULL; request = request->next) {
+        request->frame_id = 0U;
+    }
     state->reject_stale_variables_until_scopes = true;
 }
 
@@ -3385,6 +3437,87 @@ cleanup:
     return ok;
 }
 
+/* Match a backend value expression, allowing the watch parser's grouping. */
+static bool proxy_evaluate_expression_matches(const char *expression, const char *candidate) {
+    size_t length;
+    size_t candidate_length;
+
+    if (expression == NULL || candidate == NULL) return false;
+    length = strlen(expression);
+    candidate_length = strlen(candidate);
+    while (length > candidate_length) {
+        if (isspace((unsigned char)*expression)) {
+            ++expression;
+            --length;
+        } else if (isspace((unsigned char)expression[length - 1U])) {
+            --length;
+        } else if (length >= 2U && *expression == '(' && expression[length - 1U] == ')') {
+            ++expression;
+            length -= 2U;
+        } else {
+            break;
+        }
+    }
+    return length == candidate_length && memcmp(expression, candidate, length) == 0;
+}
+
+/* Retain only validated Feng requests; internal reads are never registered. */
+static bool proxy_record_evaluate_request(const char *json, size_t json_length,
+                                          const FengDebugArtifact *artifact,
+                                          FengDapRelayState *state) {
+    uint64_t frame_id = 0U;
+    uint64_t request_seq = 0U;
+    const char *frame_symbol;
+    const char *start;
+    const char *end;
+    const char *after;
+    FengDapPendingEvaluateRequest *request;
+
+    if (!proxy_json_get_request_argument_u64_member(json, json_length, "frameId", &frame_id) ||
+        (frame_symbol = proxy_relay_state_find_frame_binding(state, frame_id)) == NULL ||
+        proxy_find_frame_record(artifact, frame_symbol) == NULL ||
+        !proxy_json_get_u64_member(json, json_length, "seq", &request_seq) ||
+        !proxy_json_get_request_argument_string_range(json, json_length, "expression", &start, &end)) {
+        return true;
+    }
+    request = calloc(1U, sizeof(*request));
+    if (request == NULL) return false;
+    if (!proxy_json_parse_string_copy(start, end, &request->read_expression, &after)) {
+        proxy_pending_evaluate_dispose(request);
+        return false;
+    }
+    request->request_seq = request_seq;
+    request->frame_id = frame_id;
+    for (size_t index = 0U; index < artifact->info.variable_count; ++index) {
+        const FengCodegenMapingVariableRecord *record = &artifact->info.variables[index];
+        if (record->frame_backend_symbol != NULL &&
+            strcmp(record->frame_backend_symbol, frame_symbol) == 0 &&
+            proxy_evaluate_expression_matches(request->read_expression,
+                                               proxy_variable_read_expression(record))) {
+            request->display_type = record->display_type;
+            break;
+        }
+    }
+    request->next = state->pending_evaluate_requests;
+    state->pending_evaluate_requests = request;
+    return true;
+}
+
+/* Detach a request before any nested backend reads can re-enter the relay. */
+static FengDapPendingEvaluateRequest *proxy_take_evaluate_request(FengDapRelayState *state,
+                                                                 uint64_t request_seq) {
+    FengDapPendingEvaluateRequest **link = &state->pending_evaluate_requests;
+    while (*link != NULL) {
+        FengDapPendingEvaluateRequest *request = *link;
+        if (request->request_seq == request_seq) {
+            *link = request->next;
+            return request;
+        }
+        link = &request->next;
+    }
+    return NULL;
+}
+
 /* Project a line-only source mapping to the client's first column without a guessed range. */
 static bool proxy_rewrite_line_only_source_position(char **json,
                                                      bool columns_start_at_1,
@@ -4756,6 +4889,170 @@ static bool proxy_type_is_exact(const char *type_text, const char *expected) {
     return type_text != NULL && expected != NULL && strcmp(type_text, expected) == 0;
 }
 
+/* Recognize a named C family with its exact value or pointer representation. */
+static bool proxy_type_is_family(const char *type_text, const char *prefix, bool is_pointer) {
+    const char *cursor = type_text;
+    size_t prefix_length = strlen(prefix);
+
+    if (cursor == NULL) return false;
+    for (;;) {
+        while (isspace((unsigned char)*cursor)) ++cursor;
+        if (strncmp(cursor, "const ", 6U) == 0) cursor += 6U;
+        else if (strncmp(cursor, "volatile ", 9U) == 0) cursor += 9U;
+        else if (strncmp(cursor, "struct ", 7U) == 0) cursor += 7U;
+        else break;
+    }
+    if (strncmp(cursor, prefix, prefix_length) != 0) return false;
+    cursor += prefix_length;
+    if (!(isalnum((unsigned char)*cursor) || *cursor == '_')) return false;
+    while (isalnum((unsigned char)*cursor) || *cursor == '_') ++cursor;
+    while (isspace((unsigned char)*cursor)) ++cursor;
+    if (is_pointer && *cursor++ != '*') return false;
+    while (isspace((unsigned char)*cursor)) ++cursor;
+    return *cursor == '\0';
+}
+
+/* Select a presentation schema without decoding user-specific mangled names. */
+static const FengDapCarrierPresentation *proxy_find_carrier_presentation(const char *backend_type) {
+    for (size_t index = 0U; index < sizeof(kCarrierPresentations) / sizeof(kCarrierPresentations[0]); ++index) {
+        const FengDapCarrierPresentation *candidate = &kCarrierPresentations[index];
+        if (proxy_type_is_family(backend_type, candidate->backend_prefix, candidate->is_pointer)) {
+            return candidate;
+        }
+    }
+    return NULL;
+}
+
+/* Read a scalar address as an integer so LLDB cannot expose C symbols. */
+static bool proxy_read_address_summary(FengDapMessageReader *backend_reader,
+                                        int backend_stdin_fd, int output_fd,
+                                        const FengDebugArtifact *artifact,
+                                        FengDapRelayState *state, uint64_t frame_id,
+                                        const char *expression, char **out_summary,
+                                        int error_fd) {
+    FengDapEvaluatedVariable evaluated = {0};
+    uint64_t request_seq = 0U;
+    uint64_t address = 0U;
+    bool ok = false;
+
+    *out_summary = NULL;
+    if (frame_id != 0U && expression != NULL && expression[0] != '\0') {
+        if (!proxy_send_internal_evaluate_request(backend_stdin_fd, state, frame_id,
+                                                   expression, &request_seq, error_fd) ||
+            !proxy_collect_internal_evaluate_response(backend_reader, backend_stdin_fd,
+                                                       output_fd, artifact, state,
+                                                       request_seq, &evaluated, error_fd)) {
+            goto cleanup;
+        }
+    }
+    if (evaluated.has_result && evaluated.result != NULL &&
+        isdigit((unsigned char)evaluated.result[0]) &&
+        proxy_parse_u64_cstr(evaluated.result, &address)) {
+        *out_summary = proxy_dup_printf("0x%llx", (unsigned long long)address);
+    } else {
+        *out_summary = proxy_dup_printf("<unavailable>");
+    }
+    ok = *out_summary != NULL;
+
+cleanup:
+    proxy_evaluated_variable_dispose(&evaluated);
+    return ok;
+}
+
+/* Resolve a carrier schema and register its lazy, source-facing children. */
+static bool proxy_present_carrier_value(const char *backend_type, const char *read_expression,
+                                         const char *display_type,
+                                         FengDapMessageReader *backend_reader,
+                                         int backend_stdin_fd, int output_fd,
+                                         const FengDebugArtifact *artifact,
+                                         FengDapRelayState *state, uint64_t frame_id,
+                                         unsigned depth, char **out_summary,
+                                         uint64_t *out_reference, int error_fd) {
+    const FengDapCarrierPresentation *carrier = proxy_find_carrier_presentation(backend_type);
+
+    *out_summary = NULL;
+    *out_reference = 0U;
+    if (carrier == NULL) return true;
+    if (frame_id == 0U || read_expression == NULL || read_expression[0] == '\0') {
+        *out_summary = proxy_dup_printf("<unavailable>");
+        return *out_summary != NULL;
+    }
+    if (carrier->shape_expression != NULL) {
+        FengDapEvaluatedVariable shape = {0};
+        uint64_t sequence = 0U;
+        uint64_t size = 0U;
+        char *expression = proxy_dup_printf(carrier->shape_expression, read_expression, read_expression);
+        bool ok = expression != NULL &&
+            proxy_send_internal_evaluate_request(backend_stdin_fd, state, frame_id,
+                                                   expression, &sequence, error_fd) &&
+            proxy_collect_internal_evaluate_response(backend_reader, backend_stdin_fd,
+                                                       output_fd, artifact, state,
+                                                       sequence, &shape, error_fd);
+        bool matches = shape.has_result && proxy_parse_u64_cstr(shape.result, &size) && size > 0U;
+        free(expression);
+        proxy_evaluated_variable_dispose(&shape);
+        if (!ok || !matches) return ok;
+    }
+    if (display_type == NULL) display_type = carrier->fallback_type;
+    *out_summary = proxy_dup_printf("%s", display_type);
+    if (*out_summary == NULL) return false;
+    if (!proxy_relay_state_register_synthetic_type(state, frame_id, read_expression,
+                                                   display_type, depth, out_reference)) {
+        free(*out_summary);
+        *out_summary = NULL;
+        return false;
+    }
+    state->synthetic_refs[state->synthetic_ref_count - 1U].kind = FENG_DAP_SYNTHETIC_CARRIER;
+    state->synthetic_refs[state->synthetic_ref_count - 1U].carrier = carrier;
+    return true;
+}
+
+/* Present a carrier consistently in variables and watch/hover response bodies. */
+static bool proxy_rewrite_carrier_payload(char **json, const char *value_key,
+                                           const char *read_expression,
+                                           const char *display_type,
+                                           FengDapMessageReader *backend_reader,
+                                           int backend_stdin_fd, int output_fd,
+                                           const FengDebugArtifact *artifact,
+                                           FengDapRelayState *state, uint64_t frame_id,
+                                           bool *out_changed, int error_fd) {
+    char *backend_type = NULL;
+    char *summary = NULL;
+    uint64_t reference = 0U;
+    bool replaced = false;
+    bool ok = true;
+    const char *context = "failed to present carrier value";
+
+    *out_changed = false;
+    if (!proxy_json_get_string_member_loose(*json, strlen(*json), "type", &backend_type)) goto cleanup;
+    if (!proxy_present_carrier_value(backend_type, read_expression, display_type,
+                                      backend_reader, backend_stdin_fd, output_fd,
+                                      artifact, state, frame_id, 0U, &summary, &reference,
+                                      error_fd)) {
+        ok = false;
+        goto cleanup;
+    }
+    if (summary == NULL) goto cleanup;
+    if (display_type == NULL) display_type = proxy_find_carrier_presentation(backend_type)->fallback_type;
+    if (!proxy_replace_object_string_member(json, value_key, summary, &replaced, error_fd, context) ||
+        !proxy_replace_object_string_member(json, "type",
+            display_type, &replaced, error_fd, context) ||
+        !proxy_replace_object_u64_member(json, "variablesReference", reference, &replaced, error_fd, context) ||
+        !proxy_replace_object_u64_member(json, "namedVariables", reference != 0U ? 2U : 0U,
+                                          &replaced, error_fd, context) ||
+        !proxy_replace_object_u64_member(json, "indexedVariables", 0U, &replaced, error_fd, context)) {
+        ok = false;
+        goto cleanup;
+    }
+    *out_changed = true;
+
+cleanup:
+    free(backend_type);
+    free(summary);
+    if (!ok) proxy_report_error(error_fd, context, "failed to register or format carrier value");
+    return ok;
+}
+
 static char *proxy_runtime_pointer_fallback_value(const char *type_text) {
     size_t length;
 
@@ -5324,6 +5621,66 @@ static bool proxy_append_synthetic_variable_json(char **buffer,
     return ok;
 }
 
+/* Expand a carrier schema; opaque fields never produce backend reads. */
+static bool proxy_send_synthetic_carrier_variables_response(FengDapMessageReader *backend_reader,
+                                                            int backend_stdin_fd, int output_fd,
+                                                            const FengDebugArtifact *artifact,
+                                                            FengDapRelayState *state,
+                                                            const FengDapSyntheticRef *ref,
+                                                            uint64_t request_seq, uint64_t *next_seq,
+                                                            int error_fd) {
+    const FengDapCarrierPresentation *carrier = ref->carrier;
+    uint64_t frame_id = ref->frame_id;
+    char *parent = proxy_dup_printf("%s", ref->parent_read_expr);
+    char *variables = NULL;
+    char *payload = NULL;
+    size_t length = 0U;
+    size_t capacity = 0U;
+    bool ok = false;
+
+    if (parent == NULL || !proxy_append_byte(&variables, &length, &capacity, '[')) goto cleanup;
+    for (size_t index = 0U; index < sizeof(carrier->fields) / sizeof(carrier->fields[0]); ++index) {
+        const FengDapCarrierField *field = &carrier->fields[index];
+        char *value = NULL;
+        char *expression = NULL;
+        if (field->placeholder != NULL) {
+            value = proxy_dup_printf("%s", field->placeholder);
+        } else {
+            expression = carrier->is_pointer
+                ? proxy_dup_printf("(uintptr_t)((%s) ? (%s)->%s : 0)", parent, parent, field->backend_member)
+                : proxy_dup_printf("(uintptr_t)((%s).%s)", parent, field->backend_member);
+            if (expression == NULL ||
+                !proxy_read_address_summary(backend_reader, backend_stdin_fd, output_fd,
+                                             artifact, state, frame_id, expression, &value, error_fd)) {
+                free(expression);
+                goto cleanup;
+            }
+        }
+        ok = value != NULL &&
+            (index == 0U || proxy_append_byte(&variables, &length, &capacity, ',')) &&
+            proxy_append_synthetic_variable_json(&variables, &length, &capacity,
+                field->name, value, field->placeholder != NULL ? "" : "pointer", "", 0U);
+        free(expression);
+        free(value);
+        if (!ok) goto cleanup;
+    }
+    ok = false;
+    if (!proxy_append_cstr(&variables, &length, &capacity, "]") ||
+        !proxy_append_byte(&variables, &length, &capacity, '\0')) goto cleanup;
+    payload = proxy_dup_printf(
+        "{\"seq\":%llu,\"type\":\"response\",\"request_seq\":%llu,\"success\":true,\"command\":\"variables\",\"body\":{\"variables\":%s}}",
+        (unsigned long long)(*next_seq)++, (unsigned long long)request_seq, variables);
+    if (payload != NULL) {
+        ok = proxy_write_message(output_fd, payload, error_fd, "failed to expand carrier variables");
+    }
+
+cleanup:
+    free(parent);
+    free(variables);
+    free(payload);
+    return ok;
+}
+
 static bool proxy_send_synthetic_array_variables_response(FengDapMessageReader *backend_reader,
                                                           int backend_stdin_fd,
                                                           int output_fd,
@@ -5664,7 +6021,22 @@ static bool proxy_send_synthetic_type_variables_response(FengDapMessageReader *b
             proxy_report_error(error_fd, "failed to expand synthetic type variables", "out of memory");
             goto cleanup;
         }
-        if (field->display_type != NULL && strcmp(field->display_type, "string") == 0) {
+        if (!proxy_present_carrier_value(evaluated.type, field_expr, field->display_type,
+                                          backend_reader, backend_stdin_fd, output_fd,
+                                          artifact, state, synthetic_ref->frame_id,
+                                          synthetic_ref->depth + 1U, &summary_text, &child_ref,
+                                          error_fd)) {
+            free(field_expr);
+            free(field_type);
+            free(field_value);
+            proxy_evaluated_variable_dispose(&evaluated);
+            goto cleanup;
+        }
+        if (summary_text != NULL) {
+            free(field_value);
+            field_value = summary_text;
+            summary_text = NULL;
+        } else if (field->display_type != NULL && strcmp(field->display_type, "string") == 0) {
             char *string_value = NULL;
 
             if (!proxy_try_read_runtime_string_value(backend_reader,
@@ -5946,6 +6318,17 @@ static bool proxy_rewrite_one_variable_payload(const char *variable_json,
             }
             changed = changed || replaced;
         }
+    }
+
+    if (!proxy_rewrite_carrier_payload(&current_json, "value", read_expression,
+                                        record != NULL ? record->display_type : NULL,
+                                        backend_reader, backend_stdin_fd, output_fd,
+                                        artifact, state, frame_id, &replaced, error_fd)) {
+        goto cleanup;
+    }
+    if (replaced) {
+        changed = true;
+        goto finish_pointer_summary;
     }
 
     if (record != NULL &&
@@ -6432,8 +6815,19 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
             PROXY_IS_SYNTHETIC_REF(variables_reference)) {
             const FengDapSyntheticRef *synthetic_ref = proxy_relay_state_find_synthetic_ref(state,
                                                                                            variables_reference);
+            FengDapSyntheticRef snapshot;
 
-            if (synthetic_ref != NULL && synthetic_ref->kind == FENG_DAP_SYNTHETIC_TYPE) {
+            /* Nested presentations may grow the registry while this request is read. */
+            if (synthetic_ref != NULL) {
+                snapshot = *synthetic_ref;
+                synthetic_ref = &snapshot;
+            }
+
+            if (synthetic_ref != NULL && synthetic_ref->kind == FENG_DAP_SYNTHETIC_CARRIER) {
+                ok = proxy_send_synthetic_carrier_variables_response(backend_reader,
+                        backend_stdin_fd, output_fd, artifact, state, synthetic_ref,
+                        request_seq, next_seq, error_fd);
+            } else if (synthetic_ref != NULL && synthetic_ref->kind == FENG_DAP_SYNTHETIC_TYPE) {
                 ok = proxy_send_synthetic_type_variables_response(backend_reader,
                                                                   backend_stdin_fd,
                                                                   output_fd,
@@ -6592,6 +6986,17 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
             free(command);
             return false;
         }
+        {
+            const char *payload = rewritten_payload != NULL ? rewritten_payload : message->payload;
+            if (!proxy_record_evaluate_request(payload, strlen(payload), artifact, state)) {
+                free(type);
+                free(command);
+                free(error_detail);
+                free(rewritten_payload);
+                proxy_report_error(error_fd, "failed to record evaluate request", "out of memory");
+                return false;
+            }
+        }
         if (rewritten_payload != NULL) {
             ok = proxy_write_message(backend_stdin_fd,
                                      rewritten_payload,
@@ -6613,6 +7018,38 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
     free(command);
     free(error_detail);
     free(rewritten_payload);
+    return ok;
+}
+
+/* Apply the same carrier presentation to watch and hover response bodies. */
+static bool proxy_rewrite_evaluate_response(const FengDapMessage *message,
+                                             const FengDapPendingEvaluateRequest *request,
+                                             FengDapMessageReader *backend_reader,
+                                             int backend_stdin_fd, int output_fd,
+                                             const FengDebugArtifact *artifact,
+                                             FengDapRelayState *state, char **out_json,
+                                             int error_fd) {
+    const char *start;
+    const char *end;
+    char *body;
+    bool changed = false;
+    bool ok;
+
+    if (!proxy_json_find_object_member_loose(message->payload, message->payload_length,
+                                             "body", &start, &end)) return true;
+    body = proxy_dup_bytes((const unsigned char *)start, (size_t)(end - start));
+    if (body == NULL) return false;
+    ok = proxy_rewrite_carrier_payload(&body, "result", request->read_expression,
+                                        request->display_type, backend_reader,
+                                        backend_stdin_fd, output_fd, artifact, state,
+                                        request->frame_id, &changed, error_fd);
+    if (ok && changed) {
+        ok = proxy_replace_json_span(message->payload, message->payload_length,
+                                     (size_t)(start - message->payload),
+                                     (size_t)(end - message->payload), body, out_json,
+                                     error_fd, "failed to present evaluate result");
+    }
+    free(body);
     return ok;
 }
 
@@ -6687,6 +7124,23 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                                          rewritten_payload,
                                          error_fd,
                                          "failed to forward rewritten stackTrace response to editor");
+                free(type);
+                free(command);
+                free(rewritten_payload);
+                return ok;
+            }
+        } else if (strcmp(command, "evaluate") == 0) {
+            FengDapPendingEvaluateRequest *request = proxy_take_evaluate_request(state, request_seq);
+            ok = request == NULL || !success ||
+                proxy_rewrite_evaluate_response(message, request, backend_reader,
+                                                 backend_stdin_fd, output_fd, artifact,
+                                                 state, &rewritten_payload, error_fd);
+            proxy_pending_evaluate_dispose(request);
+            if (ok && rewritten_payload != NULL) {
+                ok = proxy_write_message(output_fd, rewritten_payload, error_fd,
+                                         "failed to forward rewritten evaluate response");
+            }
+            if (!ok || rewritten_payload != NULL) {
                 free(type);
                 free(command);
                 free(rewritten_payload);
@@ -6809,7 +7263,8 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
             }
             if (!backend_stdin_closed &&
                 client_reader->reached_eof &&
-                (state == NULL || state->pending_variables_request_count == 0U)) {
+                (state == NULL || (state->pending_variables_request_count == 0U &&
+                                   state->pending_evaluate_requests == NULL))) {
                 close(backend_stdin_fd);
                 backend_stdin_closed = true;
             }
@@ -6849,7 +7304,8 @@ static bool proxy_relay_messages(FengDapMessageReader *client_reader,
         }
         if (client_status == FENG_DAP_READ_EOF &&
             !backend_stdin_closed &&
-            (state == NULL || state->pending_variables_request_count == 0U)) {
+            (state == NULL || (state->pending_variables_request_count == 0U &&
+                               state->pending_evaluate_requests == NULL))) {
             close(backend_stdin_fd);
             backend_stdin_closed = true;
         }
