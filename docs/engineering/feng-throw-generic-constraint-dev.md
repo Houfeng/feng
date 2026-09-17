@@ -168,9 +168,33 @@ AST 的创建、复制、释放、遍历、打印与序列化须同步保留约�
 
 约束判定只在编译期完成，不增加运行时约束查询。本次禁止修改 runtime 实现，禁止变更 ABI，包括私有 runtime ABI、泛型共享实现的调用约定及运行时描述符布局。编译器发码必须复用既有泛型重化、异常表示与调用接口，不增加额外运行时开销。
 
-实现前须核实既有通路如何向共享泛型体提供实际异常类型描述信息及载荷构造能力；不能预先假定元数据已足够。若发现无法在上述边界内完成的具体缺口，应如实记录，不得通过修改 runtime 或 ABI 解决，也不得仅放宽语义检查后宣称功能已交付。
-
 保留具体异常类型匹配及 C ABI 异常边界。不能将 `E: throw` 理解为允许异常越过 C ABI，或允许 E 构成原本不合法的开放指针。
+
+#### 当前代码核查结论
+
+**未发现“构造成异常载荷”必须修改 runtime 或 ABI 的障碍，可以按既有通路实施编译器接入。** 类型级泛参和函数／方法级泛参均已有描述符来源；现有代码也已具备具体异常载荷的装箱布局、分配、复制和释放能力。需要补齐的是内建约束的静态信息绑定及泛型 throw 发码，不能把尚未接入解释为需要新增 runtime 能力。
+
+| 核查项 | 当前代码依据与结论 |
+| --- | --- |
+| 函数／方法级泛参 | [codegen.c](../../src/codegen/codegen.c) 的 `cg_emit_generic_function` 及泛型方法共享体参数生成，已通过隐式参数传入 `const FengGenericParamDescriptor *`；直接泛参值按存储地址传递 |
+| 类型级泛参 | 同文件中泛型方法共享体已从 `_td->reified_generic_params[i]` 取得泛参描述符；引用类型 owner 使用 `FengTypeDescriptor`，`@value` owner 使用 `FengAggregateDescriptor` |
+| 静态信息承载 | [feng_runtime.h](../../src/runtime/feng_runtime.h) 的 `FengGenericParamDescriptor` 已有 `kind`、`descriptor` 和约束表面的 `witness` 指针；`FengSpecCoercionDescriptor` 已有 `box_descriptor`、`payload_offset`，可承载现有装箱所需的静态信息 |
+| 具体装箱信息 | `cg_value_box_info_for_type` 已统一取得标量、枚举、tuple 和 `@value` 的具体 box 符号；`cg_emit_closed_spec_view_coercion` 已示范在闭合处生成 box 描述符和 `offsetof(..., value)`，共享体按静态信息装箱的路径见 `cg_apply_reified_spec_view` |
+| 复制与所有权 | `cg_emit_generic_value_store` 已按泛参 `kind` 生成字节复制、引用持有或聚合复制／转移；[feng_object.c](../../src/runtime/feng_object.c) 的 `feng_object_new` 按既有 box 描述符分配并清零对象，足以作为这些操作的目标 |
+| 异常接收与匹配 | [feng_exception.c](../../src/runtime/feng_exception.c) 的 `feng_throw` 接收托管载荷和 `FengTypeDescriptor *`，catch 通过描述符指针精确匹配，异常清理通过 `feng_release` 释放载荷；均不要求新增泛型专用入口 |
+| 跨包装箱布局 | `codegen.c` 已为导入的闭合值类型生成 box 结构布局，并引用所属包提供的 box 描述符；不需要 provider 源码才能计算载荷偏移或保留异常类型身份 |
+
+#### 编译器接入要求
+
+泛参描述符的 `descriptor` 指向与 `kind` 对应的原值描述符；对值类型而言，它不是异常所需的 box 描述符，不能统一强转为 `FengTypeDescriptor *` 后直接抛出。所需信息可在现有表示内接入：
+
+1. **闭合处绑定静态装箱信息**：对满足 `throw` 约束的值类型，复用具体类型的 box 符号和布局，将已有 `FengSpecCoercionDescriptor` 的 `box_descriptor`、`payload_offset` 填为编译期确定的值，其内部 spec `witness` 置空；通过泛参描述符既有的 `witness` 槽引用该静态记录。泛参的 `kind`、`descriptor` 继续描述原值，不改变复制与释放依据。约束种类决定编译器如何使用该槽，既有 spec 约束的解释不变，也不把 `throw` 建模为 spec。
+2. **共享体形成载荷**：引用类型从泛参存储中取出原托管指针，按所有权状态持有或转移，并使用原类型描述符；值类型按静态装箱信息分配一次既有 `ValueBox<T>`，在载荷偏移处按原值描述符完成字节复制或聚合复制／转移，再将该 box 及其具体描述符传给 `feng_throw`。表达式只求值一次，临时值清理与所有权转移沿用现有规则。
+3. **沿用传递与导出链路**：闭合泛参描述符继续由 `cg_closed_generic_param_descriptor_expr` 生成静态常量；同约束开放泛参转传继续传递已有描述符，类型级泛参继续保存在 owner 描述符上。消费侧根据导入的内建约束事实执行同样的闭合绑定，无需新增共享体隐式参数或描述符字段。
+
+上述装箱信息只指导已通过编译期检查的值如何形成载荷，不承担运行时可抛性判断，也不引入转换回调、描述符搜索、逐次元数据构造或额外装箱。共享体读取描述符并执行必要的复制／持有属于该语句的发码，不能表述为完全没有执行成本。异常必须复用普通具体 throw 使用的描述符身份，不能另建公共异常 box 或克隆描述符，否则会破坏既有精确 catch。
+
+当前 `cg_emit_throw` 尚未接入直接泛参，以上为基于代码的可实施性结论，不代表功能已经实现或测试通过。实施时应复用装箱信息生成与泛型值操作的公共逻辑，并按第 8 节验证完整链路。
 
 ### 5.4 跨包与兼容性
 
@@ -193,7 +217,7 @@ runtime 与 ABI 的硬边界及发码核查要求见第 5.3 节；既有 `.ft` �
 2. 更新 [异常主规范](../specifications/feng-exception.md)：明确有可抛约束的直接泛参可用于 throw，保留无约束泛参与不合法载荷的限制，并落实第 6 节的既有边界；将 throw 与 typed catch 的共同准入规则明确限定于具体载荷类型。
 3. 在 [符号表主规范](../specifications/feng-symbol-table.md) 中补充既有泛型约束链路对内建约束的记录与恢复要求。
 4. 按实际新增诊断更新错误码规范；相关总览仅引用主规范，不复制规则。
-5. 在第 5.3 节硬边界内完成发码通路核查，再实施约束表示、解析、语义、泛型发码及跨包约束同步。
+5. 按第 5.3 节已核实的通路及硬边界，实施约束表示、解析、语义、泛型发码及跨包约束同步。
 6. 新增编译器测试和语言行为测试，完成全量回归。
 
 本次仅更新开发文档，不修改正式规范、实现或既有测试。既有测试若需调整，应先列出具体清单取得批准。
