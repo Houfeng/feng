@@ -52,7 +52,8 @@ useParent(child);
 return child; // 当前函数返回 Parent
 ```
 
-该行为是沿 `spec Child: Parent` 已声明名义关系进行的契约视角投影，不是无名义关系类型之间的一般隐式转换。
+自动父视角投影在语言层的分类与边界统一见 [Feng 语言 `spec` 规范](../specifications/feng-spec.md) 第 4 节。
+本文使用 coercion 描述编译器建立该视角的实现过程，不另行定义隐式类型转换规则。
 
 ### 2.2 显式 Cast
 

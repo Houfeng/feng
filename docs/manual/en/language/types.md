@@ -1,9 +1,10 @@
 # Types
 
-Feng is statically typed. Types are determined at compile time, and converting values that already have different
-numeric types requires an explicit conversion. Numeric literals can fit a target numeric type. A concrete type with
-declared conformance can be used directly as an object contract, and a child object contract can be used directly as
-its parent contract, without writing a cast. See [Contracts and fit](./contracts-and-fit.md) for examples of contract views.
+Feng is statically typed. Types are determined at compile time, and conversions between distinct, already determined
+types must be written explicitly. Numeric literals can fit a target numeric type. Using an object contract through
+declared conformance, or automatically projecting to a parent contract through a declared parent relationship,
+establishes a contract view and is not considered an implicit type conversion. See [Contracts and fit](./contracts-and-fit.md)
+for explanations and examples.
 
 ## Built-in Scalar Types
 

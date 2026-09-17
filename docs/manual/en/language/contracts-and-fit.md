@@ -28,9 +28,10 @@ A field must match in name, type, and `let`/`var` form. A method must match in n
 ## Contract Views
 
 Once conformance is declared in a `type` header or a currently visible `fit`, a concrete value can be used directly
-where that object contract is expected. A child object contract can also be used directly as its direct or transitive
-parent contract. Bindings, assignments, arguments, returns, fields, and array element writes can use the target type
-to perform this adaptation:
+where that object contract is expected. For an object-form `spec`, the parent relationship is explicitly declared in
+its definition, so a child contract can automatically project to its direct or transitive parent view. Establishing
+contract views through these declared relationships is not considered an implicit type conversion. Bindings,
+assignments, arguments, returns, fields, and array element writes can use the target type to establish the appropriate view:
 
 ```feng
 spec Profile: Named {}
@@ -58,9 +59,10 @@ print_name(member);
 print_name(profile);
 ```
 
-No explicit `(Named)` cast is needed here. Adaptation follows conformance and parent-contract relationships declared
-at compile time. Matching fields or methods alone do not establish conformance, and a runtime object's ability to
-satisfy another contract does not automatically make that target type acceptable.
+`spec Profile: Named {}` explicitly declares the parent relationship, so `profile` can automatically project to the
+`Named` view without writing `(Named)profile`. Writing that cast explicitly establishes the same parent view.
+Matching fields or methods alone do not establish conformance, and a runtime object's ability to satisfy another
+contract does not automatically make that target type acceptable.
 
 ## Callable Contracts
 
@@ -103,6 +105,10 @@ spec ReadWrite: Readable & Writable;
 ```
 
 The intersection form combines multiple object contracts and can be used in type positions or generic constraints. A concrete type should declare conformance to each constituent object contract rather than directly declaring conformance to the intersection contract.
+
+Projection from an intersection contract to a constituent contract still requires an explicit cast. For a `ReadWrite`
+value named `value`, write `(Readable)value` to obtain the `Readable` view; assigning `value` directly to a `Readable`
+binding is not allowed.
 
 ## Satisfy a Contract with fit
 
