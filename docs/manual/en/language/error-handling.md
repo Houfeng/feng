@@ -34,13 +34,17 @@ A `catch` name is an immutable header binding, and the following braced body is 
 binding with the same name. Each `catch` clause has an independent header scope, so different clauses may reuse the
 same exception name.
 
-An anonymous `catch` has no exception binding and can rethrow the original exception with `throw;`. See [the exception specification §2](../../../specifications/feng-exception.md#2-throw-语句) for its scope rules:
+An anonymous `catch` has no exception binding and can rethrow the original exception with `throw;`:
 
 ```feng
 try run_task() catch {
   throw;
 }
 ```
+
+The nearest enclosing `catch` for `throw;` must be an anonymous `catch` in the current function, method, or lambda.
+Ordinary nested blocks can still rethrow; a nested typed `catch` or a new function, method, or lambda cannot reuse
+the enclosing anonymous `catch`'s rethrow context. `throw;` is not allowed inside a `defer` block.
 
 ## try/catch Expressions
 

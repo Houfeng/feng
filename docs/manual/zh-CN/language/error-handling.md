@@ -32,13 +32,17 @@ try load_config() catch error: string {
 `catch` 名称是不可重新赋值的头部绑定，后面的花括号是子块；子块可以声明同名局部绑定。每个
 `catch` 子句的头部作用域彼此独立，因此不同子句可以复用同一异常名称。
 
-匿名 `catch` 不绑定异常值，可以用 `throw;` 原样重抛。适用范围见[异常规范 §2](../../../specifications/feng-exception.md#2-throw-语句)：
+匿名 `catch` 不绑定异常值，可以用 `throw;` 原样重抛：
 
 ```feng
 try run_task() catch {
   throw;
 }
 ```
+
+`throw;` 所在的最近一层 `catch` 必须是当前函数、方法或 Lambda 内的匿名 `catch`。普通嵌套块
+仍可重抛；嵌套的具名 `catch` 或新函数、方法、Lambda 不能沿用外层匿名 `catch` 的重抛权限。
+`defer` 块内不能使用 `throw;`。
 
 ## try/catch 表达式
 
