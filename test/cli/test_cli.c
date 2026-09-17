@@ -10208,6 +10208,335 @@ static void test_dap_lambda_stepping_stays_in_source(void) {
     free(remove_error);
 }
 
+/* Step through program completion using the real backend, including a normal
+ * caller return, post-main finalization breakpoints and nonzero exit status. */
+static void test_dap_program_exit_stepping(void) {
+    static const char *kFixtures[] = {
+        "test/debug/program_exit_stepping.ff", "test/debug/program_return_stepping.ff"
+    };
+    static const char *kCommands[] = {"next", "stepIn", "stepOut"};
+    for (size_t variant = 0U; variant < 2U; ++variant) {
+        char template_path[] = "temp/feng_cli_dap_exit_step_XXXXXX";
+        char *workspace_dir = mkdtemp(template_path);
+        char *root = workspace_dir != NULL ? realpath(workspace_dir, NULL) : NULL;
+        char *repo_root = getcwd(NULL, 0);
+        char *fixture = read_text_file(kFixtures[variant]);
+        char *source_path;
+        char *binary_path;
+        char *backend_path;
+        char *manifest_path;
+        char *escaped_source;
+        char *escaped_binary;
+        char *remove_error = NULL;
+        unsigned int end_line = dap_test_breakpoint_line(fixture, "main_end");
+
+        ASSERT(root != NULL && repo_root != NULL);
+        source_path = path_join(root, "main.ff");
+        binary_path = project_host_build_path(root, "bin/exit_stepping");
+        backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
+        manifest_path = path_join(root, "feng.fm");
+        write_text_file(source_path, fixture);
+        write_text_file(manifest_path,
+            "[package]\nname: \"exit_stepping\"\nversion: \"0.1.0\"\n"
+            "target: \"bin\"\nsrc: \".\"\nout: \"build/\"\n");
+        {
+            char *argv[] = {root};
+            ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+        }
+        escaped_source = json_escape_text(source_path);
+        escaped_binary = json_escape_text(binary_path);
+        for (size_t mode = 0U; mode < (variant == 0U ? 6U : 3U); ++mode) {
+            DapTestSession session;
+            DapTestStepLocation location;
+            bool cleanup_breakpoint = mode >= 3U;
+            bool cleanup_hit = false;
+            bool terminated = false;
+            char *log_path = dup_printf("%s/exit-%zu.log", root, mode);
+            char *extra = variant == 0U
+                ? dup_printf(",{\"line\":%u}", dap_test_breakpoint_line(fixture, "helper_return"))
+                : dup_cstr("");
+            char *cleanup = cleanup_breakpoint
+                ? dup_printf(",{\"line\":%u}", dap_test_breakpoint_line(fixture, "cleanup"))
+                : dup_cstr("");
+            char *arguments;
+            char *response;
+            int launch_seq;
+
+            dap_test_start(&session, root, backend_path, log_path);
+            free(dap_test_request(&session, "initialize",
+                "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
+            arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
+            launch_seq = dap_test_send(&session, "launch", arguments);
+            free(arguments);
+            free(dap_test_wait(&session, 0, "initialized", NULL));
+            arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}%s%s]}",
+                                   escaped_source, end_line, extra, cleanup);
+            response = dap_test_request(&session, "setBreakpoints", arguments);
+            for (size_t index = 0U; index < 1U + (variant == 0U) + cleanup_breakpoint; ++index) {
+                DapTestJson breakpoint = dap_test_json_at(dap_test_json_get(dap_test_body(response), "breakpoints"), index);
+                dap_test_json_require_true(dap_test_json_get(breakpoint, "verified"));
+            }
+            free(response);
+            free(arguments);
+            free(dap_test_request(&session, "configurationDone", "{}"));
+            free(dap_test_response(&session, launch_seq));
+            if (variant == 0U) {
+                location = dap_test_step_location(&session, "breakpoint", source_path, "helper");
+                ASSERT(location.line == dap_test_breakpoint_line(fixture, "helper_return"));
+                arguments = dup_printf("{\"threadId\":%ld}", location.thread_id);
+                free(dap_test_request(&session, "stepOut", arguments));
+                location = dap_test_step_location(&session, "step", source_path, "main");
+                ASSERT(location.line == dap_test_breakpoint_line(fixture, "helper_call"));
+                free(dap_test_request(&session, "continue", arguments));
+                free(arguments);
+            }
+            location = dap_test_step_location(&session, "breakpoint", source_path, "main");
+            ASSERT(location.line == end_line);
+            arguments = dup_printf("{\"threadId\":%ld}", location.thread_id);
+            for (size_t step = 0U; step < 12U; ++step) {
+                const char *cursor;
+                DapTestJson event;
+                DapTestJson frame;
+                bool is_breakpoint;
+                free(dap_test_request(&session, cleanup_hit ? "continue" : kCommands[mode % 3U], arguments));
+                response = dap_test_wait(&session, 0, "stopped", "terminated");
+                cursor = response;
+                event = dap_test_json_next(&cursor);
+                terminated = dap_test_json_string_is(dap_test_json_get(event, "event"), "terminated");
+                if (terminated) {
+                    free(response);
+                    break;
+                }
+                ASSERT(!cleanup_hit);
+                is_breakpoint = dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "reason"), "breakpoint");
+                ASSERT(is_breakpoint || dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "reason"), "step"));
+                free(response);
+                response = dap_test_request(&session, "stackTrace", arguments);
+                frame = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 0U);
+                if (!dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), source_path)) {
+                    /* Sanitized runtimes carry native debug information. A
+                     * genuine step-in remains visible while its Feng caller
+                     * is active; step out before checking entry completion. */
+                    DapTestJson native_source = dap_test_json_get(frame, "source");
+                    DapTestJson reference = dap_test_json_get(native_source, "sourceReference");
+                    DapTestJson caller = dap_test_json_at(dap_test_json_get(dap_test_body(response), "stackFrames"), 1U);
+                    ASSERT(mode % 3U == 1U && !is_breakpoint);
+                    ASSERT(reference.begin == NULL || dap_test_json_integer(reference) == 0);
+                    ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(caller, "source"), "path"), source_path));
+                    ASSERT(dap_test_json_string_is(dap_test_json_get(caller, "name"), "main"));
+                    ASSERT(dap_test_json_integer(dap_test_json_get(caller, "line")) == end_line);
+                    free(response);
+                    free(dap_test_request(&session, "stepOut", arguments));
+                    location = dap_test_step_location(&session, "step", source_path, "main");
+                    ASSERT(location.line == end_line);
+                    continue;
+                }
+                ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_get(frame, "source"), "path"), source_path));
+                ASSERT(dap_test_json_string_is(dap_test_json_get(frame, "name"), is_breakpoint ? "~ExitProbe" : "main"));
+                ASSERT(dap_test_json_integer(dap_test_json_get(frame, "line")) ==
+                       (is_breakpoint ? dap_test_breakpoint_line(fixture, "cleanup") : end_line));
+                location.frame_id = dap_test_json_integer(dap_test_json_get(frame, "id"));
+                free(response);
+                if (is_breakpoint) {
+                    DapTestExpectedValue expected = {"cleanupCount", "1", NULL, true};
+                    ASSERT(cleanup_breakpoint);
+                    cleanup_hit = true;
+                    dap_test_expect_values(&session, location.frame_id, &expected, 1U);
+                }
+            }
+            ASSERT(terminated && cleanup_hit == cleanup_breakpoint);
+            free(arguments);
+            response = dap_test_wait(&session, 0, "exited", NULL);
+            ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == (variant == 0U ? 0 : 7));
+            free(response);
+            dap_test_finish(&session);
+            free(log_path);
+            free(extra);
+            free(cleanup);
+        }
+        free(escaped_source);
+        free(escaped_binary);
+        free(manifest_path);
+        free(source_path);
+        free(binary_path);
+        free(backend_path);
+        free(fixture);
+        free(root);
+        free(repo_root);
+        ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
+        free(remove_error);
+    }
+    printf("dap program exit: 9 sessions, source steps, caller returns, finalizer breakpoints and exit codes verified\n");
+}
+
+/* Check the original stop identity without invoking presentation rewrites. */
+static void dap_test_expect_stop_event(DapTestSession *session, const char *reason,
+                                       const char *description, long thread_id) {
+    char *response = dap_test_wait(session, 0, "stopped", "terminated");
+    DapTestJson body = dap_test_body(response);
+    ASSERT(dap_test_json_string_is(dap_test_json_get(body, "reason"), reason));
+    ASSERT(dap_test_json_string_is(dap_test_json_get(body, "description"), description));
+    ASSERT(dap_test_json_integer(dap_test_json_get(body, "threadId")) == thread_id);
+    free(response);
+}
+
+/* One deterministic backend scenario and its final externally visible stop. */
+typedef struct DapTestStepProtocolCase {
+    const char *name;
+    const char *reason;
+    const char *description;
+} DapTestStepProtocolCase;
+
+/* Cover incomplete stacks, native stops, failures and asynchronous interruption
+ * with exact backend request assertions and no platform-specific frame names. */
+static void test_dap_hidden_step_protocol(void) {
+    static const DapTestStepProtocolCase kCases[] = {
+        {"exit", NULL, NULL},
+        {"caller", "step", "returned"},
+        {"mapped_caller", "step", "returned"},
+        {"hidden_chain", "step", "returned"},
+        {"visible_top", "step", "hidden"},
+        {"native_top", "step", "hidden"},
+        {"truncated", "step", "hidden"},
+        {"empty", "step", "hidden"},
+        {"invalid_stack", "step", "hidden"},
+        {"stack_failure", "step", "hidden"},
+        {"continue_failure", "step", "hidden"},
+        {"stepout_failure", "step", "hidden"},
+        {"breakpoint", "breakpoint", "hidden"},
+        {"exception", "exception", "hidden"},
+        {"pause", "pause", "hidden"},
+        {"other_thread", "step", "hidden"},
+        {"instruction", "step", "hidden"},
+        {"event_before_response", NULL, NULL},
+        {"pause_cancels_query", "pause", "cancelled"},
+        {"continue_cancels_query", NULL, NULL},
+        {"breakpoint_cancels_query", "breakpoint", "interrupt"},
+        {"client_step_failure", "step", "hidden"},
+        {"interrupted_continue", NULL, NULL},
+        {"single_thread_false", NULL, NULL},
+        {"late_failure", "breakpoint", "interrupt"},
+        {"query_continued", NULL, NULL},
+        {"invalid_total", "step", "hidden"},
+        {"missing_total", NULL, NULL},
+        {"step_event_first", NULL, NULL},
+        {"late_client_failure", "step", "hidden"},
+        {"stepout_event_first", "step", "returned"},
+    };
+    static const unsigned char kBinary[] = {'F', 'E', 'N', 'G', 'S', 'T', 'E', 'P'};
+    char template_path[] = "temp/feng_cli_dap_step_protocol_XXXXXX";
+    char *workspace_dir = mkdtemp(template_path);
+    char *root = workspace_dir != NULL ? realpath(workspace_dir, NULL) : NULL;
+    char *source_path;
+    char *binary_path;
+    char *fd_path;
+    char *backend_path;
+    char *script = read_text_file("test/debug/step_backend.js");
+    char *escaped_binary;
+    char *error = NULL;
+    FengCodegenMapingInfo info = {0};
+    FengCodegenMapingSourceMapping mapping;
+
+    ASSERT(root != NULL);
+    source_path = path_join(root, "main.ff");
+    binary_path = path_join(root, "program");
+    fd_path = dup_printf("%s.fd", binary_path);
+    backend_path = path_join(root, "backend");
+    write_text_file(source_path, "module step_test;\nfunc main(args: string[]) {}\n");
+    write_binary_file(binary_path, kBinary, sizeof(kBinary));
+    write_text_file(backend_path, script);
+    ASSERT(chmod(backend_path, 0755) == 0);
+    mapping = (FengCodegenMapingSourceMapping){source_path, "step_test", root};
+    feng_codegen_maping_info_init(&info);
+    ASSERT(feng_codegen_maping_info_add_frame(&info, "entry_thunk", "entry", FENG_CODEGEN_MAPING_FRAME_HIDDEN));
+    ASSERT(feng_codegen_maping_info_add_frame(&info, "user_function", "user", FENG_CODEGEN_MAPING_FRAME_VISIBLE));
+    ASSERT(feng_debug_write_fd(fd_path, binary_path, &mapping, 1U, &info, &error));
+    ASSERT(error == NULL);
+    escaped_binary = json_escape_text(binary_path);
+
+    for (size_t index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        const DapTestStepProtocolCase *test = &kCases[index];
+        DapTestSession session;
+        char *log_path = dup_printf("%s/%s.log", root, test->name);
+        char *arguments;
+        char *response;
+        int launch_seq;
+        int step_seq;
+
+        dap_test_start(&session, root, backend_path, log_path);
+        free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\"}"));
+        arguments = dup_printf("{\"program\":\"%s\",\"stepScenario\":\"%s\"}", escaped_binary, test->name);
+        launch_seq = dap_test_send(&session, "launch", arguments);
+        free(arguments);
+        free(dap_test_wait(&session, 0, "initialized", NULL));
+        free(dap_test_request(&session, "configurationDone", "{}"));
+        free(dap_test_response(&session, launch_seq));
+        dap_test_expect_stop_event(&session, "breakpoint", "initial", 1);
+        arguments = dup_printf("{\"threadId\":1,\"singleThread\":%s,\"granularity\":\"%s\"}",
+            strcmp(test->name, "single_thread_false") == 0 ? "false" : "true",
+            strcmp(test->name, "instruction") == 0 ? "instruction" : "line");
+        step_seq = dap_test_send(&session, "next", arguments);
+        free(arguments);
+        if (strcmp(test->name, "client_step_failure") == 0 || strcmp(test->name, "late_client_failure") == 0) {
+            const char *cursor;
+            DapTestJson success;
+            response = dap_test_wait(&session, step_seq, NULL, NULL);
+            cursor = response;
+            success = dap_test_json_get(dap_test_json_next(&cursor), "success");
+            ASSERT(success.begin != NULL && success.end - success.begin == 5 && memcmp(success.begin, "false", 5U) == 0);
+            free(response);
+        } else free(dap_test_response(&session, step_seq));
+        if (strcmp(test->name, "pause_cancels_query") == 0 || strcmp(test->name, "continue_cancels_query") == 0) {
+            response = dap_test_wait(&session, 0, "output", NULL);
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_body(response), "output"), "query pending"));
+            free(response);
+            free(dap_test_request(&session, strcmp(test->name, "pause_cancels_query") == 0 ? "pause" : "continue",
+                                  "{\"threadId\":1,\"singleThread\":true}"));
+            dap_test_expect_stop_event(&session, "step", "hidden", 1);
+        }
+        if (strcmp(test->name, "interrupted_continue") == 0) {
+            dap_test_expect_stop_event(&session, "breakpoint", "interrupt", 1);
+            free(dap_test_request(&session, "continue", "{\"threadId\":1,\"singleThread\":true}"));
+        }
+        if (test->reason != NULL) {
+            dap_test_expect_stop_event(&session, test->reason, test->description,
+                                        strcmp(test->name, "other_thread") == 0 ? 2 : 1);
+        } else {
+            const char *cursor;
+            response = dap_test_wait(&session, 0, "terminated", "stopped");
+            cursor = response;
+            ASSERT(dap_test_json_string_is(dap_test_json_get(dap_test_json_next(&cursor), "event"), "terminated"));
+            free(response);
+            response = dap_test_wait(&session, 0, "exited", NULL);
+            ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 7);
+            free(response);
+        }
+        /* A barrier delivers late internal responses before checking for leaks. */
+        free(dap_test_request(&session, "threads", "{}"));
+        for (size_t pending = 0U; pending < session.pending_count; ++pending) {
+            const char *cursor = session.pending[pending];
+            DapTestJson message = dap_test_json_next(&cursor);
+            ASSERT(!dap_test_json_string_is(dap_test_json_get(message, "event"), "stopped"));
+            if (dap_test_json_string_is(dap_test_json_get(message, "type"), "response")) {
+                ASSERT(dap_test_json_integer(dap_test_json_get(message, "request_seq")) < 1000000);
+            }
+        }
+        dap_test_finish(&session);
+        free(log_path);
+    }
+    printf("dap hidden step protocol: %zu scenarios, failures and cancellation verified\n", sizeof(kCases) / sizeof(kCases[0]));
+    feng_codegen_maping_info_dispose(&info);
+    free(source_path);
+    free(binary_path);
+    free(fd_path);
+    free(backend_path);
+    free(script);
+    free(escaped_binary);
+    free(root);
+    ASSERT(feng_cli_project_remove_tree(workspace_dir, &error));
+    free(error);
+}
+
 /* Find a successful response in captured DAP frames while checking their byte lengths. */
 static DapTestJson dap_test_captured_response_body(const char *messages, long request_seq) {
     const char *cursor = messages;
@@ -29394,6 +29723,8 @@ int main(void) {
     test_dap_lambda_creation_breakpoints_follow_calls();
     test_dap_expression_breakpoints_and_lambda_values();
     test_dap_lambda_stepping_stays_in_source();
+    test_dap_program_exit_stepping();
+    test_dap_hidden_step_protocol();
     test_dap_stack_trace_column_mapping();
     test_dap_reports_line_start_for_feng_frames();
     test_dap_rewrites_identifier_evaluate_expression();

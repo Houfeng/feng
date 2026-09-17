@@ -124,6 +124,23 @@ typedef struct FengDapSyntheticRef {
     unsigned depth;
 } FengDapSyntheticRef;
 
+/* Native requests used to finish one source step across hidden frames. */
+typedef enum FengDapStepRequestKind {
+    FENG_DAP_STEP_STACK,
+    FENG_DAP_STEP_OUT,
+    FENG_DAP_STEP_CONTINUE,
+} FengDapStepRequestKind;
+
+/* Own an internal request and the stop it may restore on failure. Generation
+ * checks prevent late responses from resuming a newer stopped context. */
+typedef struct FengDapPendingStepRequest {
+    uint64_t seq;
+    uint64_t generation;
+    FengDapStepRequestKind kind;
+    char *stopped_payload;
+    struct FengDapPendingStepRequest *next;
+} FengDapPendingStepRequest;
+
 /* Session-scoped relay state used by stack/variables rewrites. */
 typedef struct FengDapRelayState {
     bool columns_start_at_1;
@@ -151,6 +168,12 @@ typedef struct FengDapRelayState {
     uint64_t next_synthetic_ref;
     uint64_t next_internal_request_seq;
     bool reject_stale_variables_until_scopes;
+    uint64_t source_step_thread_id;
+    uint64_t source_step_client_seq;
+    uint64_t source_step_generation;
+    uint64_t interrupted_source_step_thread_id;
+    bool source_step_single_thread;
+    FengDapPendingStepRequest *pending_step_requests;
 } FengDapRelayState;
 
 static const char *proxy_json_skip_whitespace(const char *cursor, const char *end);
@@ -214,6 +237,12 @@ static void proxy_relay_state_dispose(FengDapRelayState *state) {
     free(state->stale_variables_response_seqs);
     free(state->cached_internal_evaluate_responses);
     free(state->synthetic_refs);
+    while (state->pending_step_requests != NULL) {
+        FengDapPendingStepRequest *request = state->pending_step_requests;
+        state->pending_step_requests = request->next;
+        free(request->stopped_payload);
+        free(request);
+    }
     memset(state, 0, sizeof(*state));
 }
 
@@ -3790,6 +3819,269 @@ cleanup:
     return ok;
 }
 
+/* Invalidate held stops while retaining request IDs to consume late replies. */
+static void proxy_source_step_advance_generation(FengDapRelayState *state) {
+    ++state->source_step_generation;
+    for (FengDapPendingStepRequest *request = state->pending_step_requests;
+         request != NULL; request = request->next) {
+        free(request->stopped_payload);
+        request->stopped_payload = NULL;
+    }
+}
+
+/* Cancel source-step automation, optionally restoring a still-valid stop
+ * before forwarding a new client command such as pause or continue. */
+static bool proxy_cancel_source_step(FengDapRelayState *state, bool publish_stop,
+                                      int output_fd, int error_fd) {
+    bool ok = true;
+    for (FengDapPendingStepRequest *request = state->pending_step_requests;
+         request != NULL; request = request->next) {
+        if (publish_stop && request->generation == state->source_step_generation &&
+            request->stopped_payload != NULL) {
+            ok = proxy_write_message(output_fd, request->stopped_payload, error_fd,
+                                      "failed to restore source step stop") && ok;
+        }
+    }
+    proxy_source_step_advance_generation(state);
+    state->source_step_thread_id = 0U;
+    state->source_step_client_seq = 0U;
+    state->interrupted_source_step_thread_id = 0U;
+    state->source_step_single_thread = false;
+    return ok;
+}
+
+/* Track only forward source steps; native instruction stepping stays literal. */
+static bool proxy_track_source_step(const FengDapMessage *message, const char *command,
+                                     uint64_t request_seq, FengDapRelayState *state,
+                                     int output_fd, int error_fd) {
+    const char *arguments;
+    const char *end;
+    char *granularity = NULL;
+    uint64_t thread_id = 0U;
+    uint64_t interrupted_thread = state->source_step_thread_id != 0U
+        ? state->source_step_thread_id : state->interrupted_source_step_thread_id;
+    bool source_step;
+
+    if (!proxy_command_resumes_execution(command) && strcmp(command, "pause") != 0 &&
+        strcmp(command, "disconnect") != 0 && strcmp(command, "terminate") != 0 &&
+        strcmp(command, "restart") != 0) return true;
+    if (!proxy_cancel_source_step(state, true, output_fd, error_fd)) return false;
+    if (strcmp(command, "pause") == 0) state->interrupted_source_step_thread_id = interrupted_thread;
+    source_step = strcmp(command, "next") == 0 || strcmp(command, "stepIn") == 0 ||
+                  strcmp(command, "stepOut") == 0;
+    if ((!source_step && strcmp(command, "continue") != 0) ||
+        !proxy_json_find_object_member_loose(message->payload, message->payload_length,
+                                             "arguments", &arguments, &end) ||
+        !proxy_json_get_u64_member_loose(arguments, (size_t)(end - arguments),
+                                         "threadId", &thread_id) || thread_id == 0U) return true;
+    if (strcmp(command, "continue") == 0) source_step = thread_id == interrupted_thread;
+    if (proxy_json_get_string_member_loose(arguments, (size_t)(end - arguments),
+                                            "granularity", &granularity)) {
+        source_step = source_step && (strcmp(granularity, "line") == 0 || strcmp(granularity, "statement") == 0);
+    }
+    free(granularity);
+    if (source_step) {
+        state->source_step_thread_id = thread_id;
+        state->source_step_client_seq = request_seq;
+        (void)proxy_json_get_bool_member(arguments, (size_t)(end - arguments),
+                                          "singleThread", &state->source_step_single_thread);
+    }
+    return true;
+}
+
+/* Send a nonblocking native request and retain its stop for failure recovery. */
+static bool proxy_send_source_step_request(FengDapRelayState *state,
+                                            FengDapStepRequestKind kind,
+                                            const char *stopped_payload,
+                                            int backend_stdin_fd, int error_fd) {
+    FengDapPendingStepRequest *request = calloc(1U, sizeof(*request));
+    char *payload;
+    const char *command = kind == FENG_DAP_STEP_STACK ? "stackTrace" :
+                          kind == FENG_DAP_STEP_OUT ? "stepOut" : "continue";
+    bool ok;
+    if (request == NULL) return false;
+    request->seq = proxy_relay_state_next_internal_request_seq(state);
+    request->generation = state->source_step_generation;
+    request->kind = kind;
+    request->stopped_payload = proxy_dup_printf("%s", stopped_payload);
+    payload = proxy_dup_printf(
+        "{\"seq\":%llu,\"type\":\"request\",\"command\":\"%s\",\"arguments\":{\"threadId\":%llu,%s}}",
+        (unsigned long long)request->seq, command,
+        (unsigned long long)state->source_step_thread_id,
+        kind == FENG_DAP_STEP_STACK ? "\"startFrame\":0,\"levels\":0" :
+        state->source_step_single_thread ? "\"singleThread\":true" : "\"singleThread\":false");
+    ok = request->stopped_payload != NULL && payload != NULL &&
+         proxy_write_message(backend_stdin_fd, payload, error_fd,
+                              "failed to send source step request");
+    free(payload);
+    if (!ok) {
+        free(request->stopped_payload);
+        free(request);
+        return false;
+    }
+    request->next = state->pending_step_requests;
+    state->pending_step_requests = request;
+    return true;
+}
+
+/* Only a known hidden top frame and a complete native stack justify resuming.
+ * Source mappings also identify Feng callers without a frame-name record. */
+static bool proxy_hidden_step_action(const FengDapMessage *message,
+                                      const FengDebugArtifact *artifact,
+                                      FengDapStepRequestKind *action) {
+    const char *body;
+    const char *body_end;
+    const char *frames;
+    const char *frames_end;
+    const char *total_start;
+    const char *total_end;
+    const char *cursor;
+    uint64_t count = 0U;
+    uint64_t total = 0U;
+    bool has_feng_caller = false;
+
+    if (!proxy_json_find_object_member_loose(message->payload, message->payload_length,
+                                             "body", &body, &body_end) ||
+        !proxy_json_find_object_member_loose(body, (size_t)(body_end - body),
+                                             "stackFrames", &frames, &frames_end)) return false;
+    cursor = proxy_json_skip_whitespace(frames, frames_end);
+    if (cursor == frames_end || *cursor++ != '[') return false;
+    cursor = proxy_json_skip_whitespace(cursor, frames_end);
+    while (cursor < frames_end && *cursor != ']') {
+        const char *end;
+        const char *source;
+        const char *source_end;
+        char *name = NULL;
+        char *path = NULL;
+        char *local_path = NULL;
+        const FengCodegenMapingFrameRecord *record;
+        if (*cursor != '{' || !proxy_json_skip_value(cursor, frames_end, &end) ||
+            !proxy_json_get_string_member_loose(cursor, (size_t)(end - cursor), "name", &name)) return false;
+        record = proxy_find_frame_record(artifact, name);
+        free(name);
+        if (count == 0U && (record == NULL || record->policy != FENG_CODEGEN_MAPING_FRAME_HIDDEN)) return false;
+        if (record == NULL || record->policy != FENG_CODEGEN_MAPING_FRAME_HIDDEN) {
+            if (record != NULL) has_feng_caller = true;
+            if (proxy_json_find_object_member_loose(cursor, (size_t)(end - cursor),
+                                                     "source", &source, &source_end) &&
+                proxy_json_get_string_member_loose(source, (size_t)(source_end - source), "path", &path) &&
+                proxy_package_uri_to_local_path(artifact, path, &local_path)) has_feng_caller = true;
+        }
+        free(path);
+        free(local_path);
+        ++count;
+        cursor = proxy_json_skip_whitespace(end, frames_end);
+        if (cursor < frames_end && *cursor == ',') {
+            cursor = proxy_json_skip_whitespace(cursor + 1, frames_end);
+            if (cursor == frames_end || *cursor == ']') return false;
+        } else if (cursor == frames_end || *cursor != ']') return false;
+    }
+    if (count == 0U || cursor == frames_end ||
+        proxy_json_skip_whitespace(cursor + 1, frames_end) != frames_end) return false;
+    if (proxy_json_find_object_member_loose(body, (size_t)(body_end - body),
+                                             "totalFrames", &total_start, &total_end) &&
+        (!proxy_json_parse_u64_range(total_start, total_end, &total) || total != count)) return false;
+    *action = has_feng_caller ? FENG_DAP_STEP_OUT : FENG_DAP_STEP_CONTINUE;
+    return true;
+}
+
+/* Consume matching internal replies without exposing their IDs or stack
+ * bindings. Failed or uncertain decisions restore the original stop. */
+static bool proxy_process_source_step_response(const FengDapMessage *message,
+                                                uint64_t request_seq,
+                                                const FengDebugArtifact *artifact,
+                                                FengDapRelayState *state,
+                                                int backend_stdin_fd, int output_fd,
+                                                int error_fd, bool *handled) {
+    FengDapPendingStepRequest **slot = &state->pending_step_requests;
+    FengDapPendingStepRequest *request;
+    FengDapStepRequestKind action;
+    bool success = false;
+    bool ok = true;
+    *handled = false;
+    while (*slot != NULL && (*slot)->seq != request_seq) slot = &(*slot)->next;
+    if (*slot == NULL) return true;
+    request = *slot;
+    *slot = request->next;
+    *handled = true;
+    if (request->generation != state->source_step_generation) goto cleanup;
+    (void)proxy_json_get_bool_member(message->payload, message->payload_length, "success", &success);
+    if (success && request->kind == FENG_DAP_STEP_STACK &&
+        proxy_hidden_step_action(message, artifact, &action)) {
+        ok = proxy_send_source_step_request(state, action, request->stopped_payload,
+                                              backend_stdin_fd, error_fd);
+        if (ok) proxy_relay_state_clear_stopped_context(state);
+    } else if (success && request->kind == FENG_DAP_STEP_OUT) {
+        /* Keep tracking the next native stop, even if it precedes this reply. */
+    } else {
+        if ((!success || request->kind == FENG_DAP_STEP_STACK) && request->stopped_payload != NULL) {
+            ok = proxy_write_message(output_fd, request->stopped_payload, error_fd,
+                                       "failed to forward source step stop");
+        }
+        ok = proxy_cancel_source_step(state, false, output_fd, error_fd) && ok;
+    }
+cleanup:
+    free(request->stopped_payload);
+    free(request);
+    return ok;
+}
+
+/* Inspect only stops caused by the tracked source step. Other stop reasons
+ * and threads cancel automatic continuation and remain observable. */
+static bool proxy_process_source_step_event(const FengDapMessage *message,
+                                             FengDapRelayState *state,
+                                             int backend_stdin_fd, int output_fd,
+                                             int error_fd, bool *handled) {
+    char *event = NULL;
+    char *reason = NULL;
+    const char *body;
+    const char *end;
+    uint64_t thread_id = 0U;
+    bool ok = true;
+    *handled = false;
+    if (!proxy_json_get_string_member(message->payload, message->payload_length, "event", &event)) return true;
+    if (strcmp(event, "exited") == 0 || strcmp(event, "terminated") == 0) {
+        ok = proxy_cancel_source_step(state, false, output_fd, error_fd);
+    } else if (proxy_json_find_object_member_loose(message->payload, message->payload_length,
+                                                   "body", &body, &end)) {
+        (void)proxy_json_get_u64_member_loose(body, (size_t)(end - body), "threadId", &thread_id);
+        if (strcmp(event, "stopped") == 0) {
+            (void)proxy_json_get_string_member_loose(body, (size_t)(end - body), "reason", &reason);
+            if (state->source_step_thread_id != 0U && thread_id == state->source_step_thread_id &&
+                reason != NULL && strcmp(reason, "step") == 0) {
+                proxy_source_step_advance_generation(state);
+                ok = proxy_send_source_step_request(state, FENG_DAP_STEP_STACK, message->payload,
+                                                      backend_stdin_fd, error_fd);
+                *handled = true;
+            } else {
+                uint64_t interrupted = reason != NULL && strcmp(reason, "step") != 0 &&
+                    (thread_id == state->source_step_thread_id ||
+                     thread_id == state->interrupted_source_step_thread_id) ? thread_id : 0U;
+                ok = proxy_cancel_source_step(state, false, output_fd, error_fd);
+                state->interrupted_source_step_thread_id = interrupted;
+            }
+        } else if (strcmp(event, "continued") == 0) {
+            bool all_threads = false;
+            (void)proxy_json_get_bool_member(body, (size_t)(end - body), "allThreadsContinued", &all_threads);
+            if (all_threads || thread_id == state->source_step_thread_id) {
+                for (FengDapPendingStepRequest *request = state->pending_step_requests;
+                     request != NULL; request = request->next) {
+                    if (request->generation != state->source_step_generation) continue;
+                    if (request->kind == FENG_DAP_STEP_STACK) {
+                        ok = proxy_cancel_source_step(state, false, output_fd, error_fd);
+                        break;
+                    }
+                    free(request->stopped_payload);
+                    request->stopped_payload = NULL;
+                }
+            }
+        }
+    }
+    free(reason);
+    free(event);
+    return ok;
+}
+
 /* Record scope variablesReference bindings for one scopes response. */
 static bool proxy_record_scopes_response_bindings(const char *json,
                                                   size_t json_length,
@@ -6103,6 +6395,11 @@ static bool proxy_process_client_relay_message(const FengDapMessage *message,
                                   message->payload_length,
                                   "seq",
                                   &request_seq)) {
+        if (!proxy_track_source_step(message, command, request_seq, state, output_fd, error_fd)) {
+            free(type);
+            free(command);
+            return false;
+        }
         if (proxy_command_resumes_execution(command)) {
             if (!proxy_fail_pending_variables_requests_for_resume(state,
                                                                   output_fd,
@@ -6335,6 +6632,7 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
     uint64_t variables_reference = 0U;
     bool success = true;
     bool ok;
+    bool step_handled = false;
 
     if (proxy_json_get_string_member(message->payload,
                                      message->payload_length,
@@ -6353,6 +6651,20 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                                    message->payload_length,
                                    "success",
                                    &success);
+        ok = proxy_process_source_step_response(message, request_seq, artifact, state,
+                                                  backend_stdin_fd, output_fd, error_fd,
+                                                  &step_handled);
+        if (!ok || step_handled) {
+            free(type);
+            free(command);
+            return ok;
+        }
+        if (!success && request_seq == state->source_step_client_seq &&
+            !proxy_cancel_source_step(state, true, output_fd, error_fd)) {
+            free(type);
+            free(command);
+            return false;
+        }
         if (strcmp(command, "variables") == 0 &&
             proxy_relay_state_take_stale_variables_response(state, request_seq)) {
             free(type);
@@ -6435,6 +6747,14 @@ static bool proxy_process_backend_relay_message(const FengDapMessage *message,
                 free(rewritten_payload);
                 return ok;
             }
+        }
+    } else if (type != NULL && strcmp(type, "event") == 0) {
+        ok = proxy_process_source_step_event(message, state, backend_stdin_fd,
+                                               output_fd, error_fd, &step_handled);
+        if (!ok || step_handled) {
+            free(type);
+            free(command);
+            return ok;
         }
     }
 

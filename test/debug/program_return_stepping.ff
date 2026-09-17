@@ -1,0 +1,21 @@
+module program_return_stepping;
+
+// Use the public C ABI to observe a nonzero status during wrapper cleanup.
+@cdecl("libc", "_exit")
+extern func process_exit(status: i32): void;
+
+// The generated entry wrapper releases this global after main returns.
+type ExitStatus {
+    // Exit from cleanup so the adapter must preserve the backend's real code.
+    func ~ExitStatus() {
+        process_exit(7);
+    }
+}
+
+let status = ExitStatus();
+
+// Preserve the actual status when stepping across an explicit void return.
+func main(args: string[]) {
+    status;
+    return; // breakpoint: main_end
+}

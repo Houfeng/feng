@@ -1,0 +1,26 @@
+module program_exit_stepping;
+
+var cleanupCount = 0;
+
+// Keep one user finalizer pending until the generated entry wrapper shuts down.
+type ExitProbe {
+    // A breakpoint here must still interrupt the wrapper's automatic continue.
+    func ~ExitProbe() {
+        cleanupCount += 1;
+        let observed = cleanupCount; // breakpoint: cleanup
+    }
+}
+
+let probe = ExitProbe();
+
+// Returning from a normal Feng function must stop in its Feng caller.
+func helper(): int {
+    return 42; // breakpoint: helper_return
+}
+
+// The last source line is executable cleanup followed by an implicit return.
+func main(args: string[]) {
+    probe;
+    let value = helper(); // breakpoint: helper_call
+    let done = value;
+} // breakpoint: main_end
