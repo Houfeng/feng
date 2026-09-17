@@ -1,0 +1,22 @@
+module union_debug_values;
+
+import std.io;
+
+spec Choice: int | string;
+spec Result<T>: T | string;
+
+// Exercise a union stored in an ordinary object's source-facing field list.
+type Holder {
+    let choice: Choice;
+    let result: Result<int>;
+}
+
+// Stop with primitive, reference and generic union values all initialized.
+func main(args: string[]) {
+    let number: Choice = 42;
+    let text: Choice = "hello";
+    let result: Result<int> = 7;
+    let holder = Holder{choice: number, result: result};
+    println("ready"); // breakpoint: ready
+    println("done");
+}

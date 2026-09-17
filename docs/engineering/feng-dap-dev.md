@@ -654,7 +654,7 @@ LLDB 对 `FengArray *` / `FengString *` 等 runtime 载体只理解 C struct 内
 - array：顶层显示格式为 `元素类型[length=N]`；`variablesReference` 替换为 synthetic ref，支持按索引展开每个元素；元素展开通过 `feng_array_data` 系列 evaluate 表达式实现（见 §5.10.3）。
 - 用户对象类型：`variablesReference` 替换为 synthetic ref，支持按字段名展开；字段列表来自 `ENTS` 中 `parent_strid` 匹配的字段模板记录（见 §5.10.4）；字段本身若为数组或用户类型，递归触发展开。
 - enum：若能从现有类型信息稳定恢复展示名，则做轻量重写；否则退回原始整数值。
-- callable / spec：显示规则见 [feng-cli.md §2.2](../specifications/feng-cli.md#22-feng-dap)。代理以统一载体展示模板描述后端类型族、字段访问和占位项,复用 synthetic ref 展开。`FengClosure__… *` 使用指针成员访问; `FengSpecValue__…` 使用值成员访问,并通过不求值的 `sizeof` 成员检查区分共享类型名前缀的 union 布局。指针通过整数读取统一格式化,占位项由代理直接生成; 变量、字段及 watch/hover 共用模板。内部读取表达式保持原值语义,投影仅用于最终展示。
+- callable / spec：显示规则见 [feng-cli.md §2.2](../specifications/feng-cli.md#22-feng-dap)。代理以统一载体展示模板描述后端类型族、字段访问、占位项及原生子项的隐藏规则。`FengClosure__… *` 使用指针成员访问; `FengSpecValue__…` 使用值成员访问,并通过不求值的 `sizeof` 成员检查识别适用 synthetic ref 的布局。其他布局保留原生引用并按模板过滤内部字段,子项分页在过滤后应用; 引用映射随 stopped 上下文失效。指针通过整数读取统一格式化,占位项由代理直接生成; 变量、字段及 watch/hover 共用模板和 Feng 类型名映射。内部读取表达式保持原值语义,投影仅用于最终展示。
 - 合成 children 展开约束：数组元素上限 256，嵌套深度上限 3 层；超限时追加截断提示项。
 
 ## 7. 必须改动的代码边界

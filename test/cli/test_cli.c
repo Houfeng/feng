@@ -29877,6 +29877,7 @@ static void test_lsp_cache_lifecycle_with_long_workspace_path(void) {
 }
 
 #include "dap_callable.inc"
+#include "dap_union.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
@@ -29960,6 +29961,8 @@ int main(void) {
     test_dap_expression_breakpoints_and_lambda_values();
     test_dap_callable_display_protocol();
     test_dap_callable_display_real_backend();
+    test_dap_union_display_protocol();
+    test_dap_union_display_real_backend();
     test_dap_lambda_stepping_stays_in_source();
     test_dap_program_exit_stepping();
     test_dap_hidden_step_protocol();
