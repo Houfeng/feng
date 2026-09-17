@@ -1199,6 +1199,122 @@ static void test_codegen_debug_mapping_keeps_pure_short_circuit(void) {
     feng_program_free(program);
 }
 
+/* Remove only line directives to compare executable C across debug modes. */
+static char *debug_test_without_line_directives(const char *source) {
+    char *copy = (char *)malloc(strlen(source) + 1U);
+    size_t length = 0U;
+    ASSERT(copy != NULL);
+    while (*source != '\0') {
+        const char *newline = strchr(source, '\n');
+        size_t count = newline != NULL ? (size_t)(newline - source) + 1U : strlen(source);
+        if (strncmp(source, "#line ", 6U) != 0) {
+            memcpy(copy + length, source, count);
+            length += count;
+        }
+        source += count;
+    }
+    copy[length] = '\0';
+    return copy;
+}
+
+/* Interpret real C line increments across every lambda's complete entry
+ * prefix, including signatures and restored generic context. */
+static void test_codegen_lambda_entry_source_mapping(void) {
+    size_t length;
+    unsigned char *bytes = read_binary_file_or_die("test/debug/lambda_stepping.ff", &length);
+    char *source = (char *)realloc(bytes, length + 1U);
+    const char *path = "/lambda-stepping/src/main.ff";
+    FengCodegenMapingSourceMapping mapping = {
+        .source_path = path,
+        .package_name = "lambda_stepping",
+        .package_root = "/lambda-stepping",
+    };
+    FengCodegenOptions options = {
+        .emit_line_directives = true,
+        .debug_source_mappings = &mapping,
+        .debug_source_mapping_count = 1U,
+    };
+    FengProgram *program;
+    FengSemanticAnalysis *analysis;
+    FengCodegenOutput debug = {0};
+    FengCodegenOutput plain = {0};
+    FengCodegenError error = {0};
+    size_t lambda_count = 0U;
+    char *debug_c;
+    char *plain_c;
+
+    ASSERT(source != NULL);
+    source[length] = '\0';
+    program = parse_or_die(source, path);
+    analysis = analyze_single_or_die(program, FENG_COMPILE_TARGET_BIN);
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN, &options, &debug, &error));
+    for (size_t index = 0U; index < debug.debug_info.frame_count; ++index) {
+        const FengCodegenMapingFrameRecord *frame = &debug.debug_info.frames[index];
+        char signature[512];
+        unsigned int expected;
+        unsigned int logical_line = 1U;
+        char logical_file[512] = "";
+        const char *begin;
+        const char *end;
+        size_t prefix_lines = 0U;
+
+        if (sscanf(frame->display_name, "lambda@%u", &expected) != 1) continue;
+        ASSERT(frame->policy == FENG_CODEGEN_MAPING_FRAME_VISIBLE);
+        ASSERT(snprintf(signature, sizeof(signature), "%s(void *_closure", frame->backend_symbol) > 0);
+        begin = debug.c_source;
+        do {
+            const char *newline;
+            const char *brace;
+            begin = strstr(begin, signature);
+            ASSERT(begin != NULL);
+            newline = strchr(begin, '\n');
+            brace = strstr(begin, ") {");
+            ASSERT(newline != NULL);
+            if (brace != NULL && brace < newline) break;
+            begin = newline + 1;
+        } while (true);
+        while (begin > debug.c_source && begin[-1] != '\n') --begin;
+        end = strstr(begin, "#if !defined(_WIN32)");
+        ASSERT(end != NULL);
+        for (const char *cursor = debug.c_source; cursor < end;) {
+            const char *newline = strchr(cursor, '\n');
+            ASSERT(newline != NULL);
+            if (strncmp(cursor, "#line ", 6U) == 0) {
+                ASSERT(sscanf(cursor, "#line %u \"%511[^\"]\"", &logical_line, logical_file) == 2);
+            } else {
+                if (cursor >= begin && *cursor != '\n') {
+                    ASSERT(strcmp(logical_file, "lambda_stepping://src/main.ff") == 0);
+                    ASSERT(logical_line == expected);
+                    ++prefix_lines;
+                }
+                ++logical_line;
+            }
+            cursor = newline + 1;
+        }
+        ASSERT(prefix_lines >= 3U);
+        ++lambda_count;
+    }
+    ASSERT(lambda_count == 10U);
+    ASSERT(strstr(debug.c_source, "_lambda->_reified_function_desc") != NULL);
+    ASSERT(strstr(debug.c_source, "_lambda->_reified_owner_desc") != NULL);
+    compile_generated_c_or_die(debug.c_source);
+    options.emit_line_directives = false;
+    ASSERT(feng_codegen_emit_program(analysis, FENG_COMPILE_TARGET_BIN, &options, &plain, &error));
+    ASSERT(strstr(plain.c_source, "#line ") == NULL);
+    debug_c = debug_test_without_line_directives(debug.c_source);
+    plain_c = debug_test_without_line_directives(plain.c_source);
+    ASSERT(strcmp(debug_c, plain_c) == 0);
+
+    free(debug_c);
+    free(plain_c);
+    feng_codegen_output_free(&debug);
+    feng_codegen_output_free(&plain);
+    feng_codegen_error_free(&error);
+    feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
+    free(source);
+}
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -1216,5 +1332,6 @@ int main(void) {
     test_codegen_lambda_parameter_value_accessors();
     test_codegen_integer_temporaries_are_not_debug_bindings();
     test_codegen_debug_mapping_keeps_pure_short_circuit();
+    test_codegen_lambda_entry_source_mapping();
     return 0;
 }

@@ -23431,7 +23431,12 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                 descriptor_name);
         }
     }
-    if (!cg_emit_function_eh_prologue(cg, lambda_expr->token)) {
+    /* The complete entry prefix belongs to the lambda definition, including
+     * closure casts and restored generic descriptors before the EH prologue.
+     * Anchor each generated line so native step-in cannot inherit a helper's
+     * synthetic file or drift into unrelated source lines. */
+    if (!cg_anchor_generated_suffix(cg, 0U, lambda_expr->token) ||
+        !cg_emit_function_eh_prologue(cg, lambda_expr->token)) {
         goto cleanup;
     }
     {

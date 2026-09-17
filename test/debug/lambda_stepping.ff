@@ -1,0 +1,112 @@
+module lambda_stepping;
+
+// Cover direct and address-based callable arguments and return storage.
+spec Scalar(value: int): int;
+spec Mapper<T>(value: T): T;
+spec PairAction<A, B>(x: A, y: B): void;
+spec Reader(): int;
+spec Action(): void;
+
+// Match the reported call, including an outer binding named x.
+func pair() {
+    var x: int[] = [];
+    let log: PairAction<int, int> = (x: int, y: int) { // breakpoint: pair_create
+        let sum = x + y; // breakpoint: pair_body
+    };
+    log(1, 2); // breakpoint: pair_call
+    let done = 1; // breakpoint: pair_after
+}
+
+// A direct argument and return use the same source-entry rule.
+func direct() {
+    let action: Scalar = (value: int) { // breakpoint: direct_create
+        return value + 1; // breakpoint: direct_body
+    };
+    let result = action(3); // breakpoint: direct_call
+    let done = result; // breakpoint: direct_after
+}
+
+// Address-based return materialization must retain the caller's source line.
+func address() {
+    let action: Mapper<int> = (value: int) { // breakpoint: address_create
+        return value + 1; // breakpoint: address_body
+    };
+    let result = action(4); // breakpoint: address_call
+    let done = result; // breakpoint: address_after
+}
+
+// Expression bodies may share the definition line with their entry prefix.
+func expression() {
+    let action: Scalar = (value: int) -> value + 1; // breakpoint: expression_create
+    let result = action(5); // breakpoint: expression_call
+    let done = result; // breakpoint: expression_after
+}
+
+// Parameterless lambdas still execute a closure conversion at entry.
+func parameterless() {
+    let action: Reader = () { // breakpoint: parameterless_create
+        return 6; // breakpoint: parameterless_body
+    };
+    let result = action(); // breakpoint: parameterless_call
+    let done = result; // breakpoint: parameterless_after
+}
+
+// Captured values become readable after the mapped entry prefix executes.
+func captured() {
+    var base = 7;
+    let action: Reader = () { // breakpoint: captured_create
+        return base; // breakpoint: captured_body
+    };
+    let result = action(); // breakpoint: captured_call
+    let done = result; // breakpoint: captured_after
+}
+
+// An inner invoke helper must establish its own mapping after the outer one.
+func nested() {
+    let outer: Scalar = (value: int) { // breakpoint: outer_create
+        let inner: Scalar = (value: int) { // breakpoint: nested_create
+            return value + 1; // breakpoint: nested_body
+        };
+        let result = inner(value); // breakpoint: nested_call
+        return result; // breakpoint: nested_after
+    };
+    outer(8);
+}
+
+// Restore function descriptors and captured generic storage before the body.
+func generic<T>(value: T) {
+    let action: Action = () { // breakpoint: generic_create
+        let current = 9; // breakpoint: generic_body
+        value;
+    };
+    action(); // breakpoint: generic_call
+    let done = 9; // breakpoint: generic_after
+}
+
+// Restore both owner and method descriptors together with self and captures.
+type Factory<T> {
+    // Both generic domains are needed by the lambda's captured environment.
+    func run<V>(other: V) {
+        let action: Action = () { // breakpoint: owner_create
+            let current = 10; // breakpoint: owner_body
+            self;
+            other;
+        };
+        action(); // breakpoint: owner_call
+        let done = 10; // breakpoint: owner_after
+    }
+}
+
+// Keep all call-site breakpoints in a deterministic order for real DAP tests.
+func main(args: string[]) {
+    pair();
+    direct();
+    address();
+    expression();
+    parameterless();
+    captured();
+    nested();
+    generic<int>(9);
+    let factory = Factory<int>();
+    factory.run<string>("value");
+}
