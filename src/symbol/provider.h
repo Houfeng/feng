@@ -144,6 +144,8 @@ bool feng_symbol_decl_is_tuple(const FengSymbolDeclView *decl);
 /* Return whether a symbol declaration is an @value type. */
 bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl);
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl);
+/* Return the declared bound kind without treating builtin bounds as types. */
+FengConstraintKind feng_symbol_decl_constraint_kind(const FengSymbolDeclView *decl);
 bool feng_symbol_decl_has_enum_item_value(const FengSymbolDeclView *decl);
 int64_t feng_symbol_decl_enum_item_value(const FengSymbolDeclView *decl);
 size_t feng_symbol_decl_enum_item_ordinal(const FengSymbolDeclView *decl);

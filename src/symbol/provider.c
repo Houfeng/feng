@@ -1072,6 +1072,14 @@ bool feng_symbol_decl_is_value_type(const FengSymbolDeclView *decl) {
     return decl != NULL && decl->kind == FENG_SYMBOL_DECL_KIND_TYPE && decl->is_value;
 }
 
+/* Expose a parameter's independent builtin/spec constraint surface. */
+FengConstraintKind feng_symbol_decl_constraint_kind(const FengSymbolDeclView *decl) {
+    if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM) {
+        return FENG_CONSTRAINT_NONE;
+    }
+    return decl->value_type != NULL ? FENG_CONSTRAINT_SPEC : decl->constraint_kind;
+}
+
 size_t feng_symbol_decl_type_param_count(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->type_param_count : 0U;
 }

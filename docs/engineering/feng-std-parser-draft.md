@@ -60,6 +60,8 @@ C 版 LE0005（`expected annotation name after '@'`）原由 Lexer 在扫描 `@`
 
 Lexer 将空白和注释作为独立 Token 发射（`WhitespaceSpace`、`WhitespaceNewline`、`CommentLine`、`CommentBlock`、`CommentDoc`）。Parser 在构建 AST 时跳过 trivia Token。
 
+Parser 的推进与前瞻必须保留 `SpecialEndOfFile` 作为流终止标记。Lexer 的 `isTrivia` 按编号包含 EOF，Parser 不能据此反复跳过 EOF；空流、仅含 trivia 的流，以及消费末尾 Token 后的推进或前瞻均须终止。
+
 文档注释的词法输出与关联职责见 [Lexer 设计 §4.3](./feng-std-lexer-dev.md)。当前 Parser 的 trivia 过滤尚未收集文档注释，`FengToken` 也没有 `leadingDoc` 字段。普通注释及未关联声明的文档注释当前不进入 AST，原文仍保存在 `FengSource` 中。
 
 ---
@@ -680,10 +682,14 @@ open type DeferStmt {
 ### 3.9 辅助 AST 类型
 
 ```feng
-/** 泛型参数节点，类型约束可省略 */
+/** 约束语义见泛型主规范；内建约束不表示类型引用。 */
+open enum GenericConstraintKind { None = 0, Spec = 1, Throw = 2 }
+
+/** 泛型参数节点；仅 Spec 使用 constraintTypeRef。 */
 open type GenericParameter {
   let location: FengLocation;
   let name: StringSpan;
+  let constraintKind: GenericConstraintKind;
   let constraintTypeRef: Option<TypeReference>;
 }
 

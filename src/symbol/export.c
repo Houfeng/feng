@@ -1925,6 +1925,7 @@ static bool emit_type_param_children(const BuildContext *ctx,
         if (tp_decl == NULL) {
             return false;
         }
+        tp_decl->constraint_kind = type_params[index].constraint_kind;
         if (type_params[index].constraint != NULL) {
             tp_decl->value_type = build_type_from_type_ref_with_tparams(ctx,
                                                                         type_params[index].constraint,

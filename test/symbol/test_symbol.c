@@ -5949,10 +5949,13 @@ void test_g24_spec_view_ft(void);
 void test_intersection_projection_ft(void);
 /* Owner-domain constraint projections use their own persisted FT records. */
 void test_constraint_projection_ft(void);
+/* Builtin bounds persist beside legacy constraints in both FT profiles. */
+void test_throw_constraint_ft(void);
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_throw_constraint_ft();
     test_g24_union_projection_ft();
     test_g24_binding_ft();
     test_g24_spec_view_ft();

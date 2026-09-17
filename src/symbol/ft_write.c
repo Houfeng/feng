@@ -1374,6 +1374,22 @@ static bool writer_emit_decl_attrs(WriterContext *ctx,
                                    const char *path,
                                    FengToken token,
                                    FengSymbolError *out_error) {
+    if (decl->constraint_kind != FENG_CONSTRAINT_NONE &&
+        decl->constraint_kind != FENG_CONSTRAINT_SPEC) {
+        if (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM ||
+            decl->constraint_kind != FENG_CONSTRAINT_THROW || decl->value_type != NULL) {
+            return feng_symbol_internal_set_error(out_error, path, token,
+                "invalid builtin generic constraint");
+        }
+        FengSymbolFtAttrRecord attr = {0};
+        attr.symbol_id = symbol_id;
+        attr.kind = FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT;
+        attr.value0 = FENG_SYMBOL_FT_BUILTIN_CONSTRAINT_THROW;
+        if (!append_record((void **)&ctx->attrs, &ctx->attr_count,
+                           sizeof(attr), &attr, path, token, out_error)) {
+            return false;
+        }
+    }
     if (decl->declared_spec_count > 0U) {
         size_t index;
 

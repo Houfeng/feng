@@ -24,6 +24,12 @@
 #include "lexer/token.h"
 #include "parser/parser.h"
 
+/* Compiler-only bound surface; builtin constraints never masquerade as specs. */
+typedef struct CGGenericConstraint {
+    FengConstraintKind kind;
+    const struct UserSpec *spec;
+} CGGenericConstraint;
+
 /* ===================== string buffer ===================== */
 
 typedef struct Buf {
@@ -2001,7 +2007,7 @@ typedef struct CG {
     char       **generic_fn_type_param_names;   /* borrowed — do NOT free */
     size_t       ambient_type_param_count;
     char       **ambient_type_param_names;      /* borrowed — do NOT free */
-    const struct UserSpec **generic_fn_type_param_constraints; /* borrowed */
+    CGGenericConstraint *generic_fn_type_param_constraints; /* borrowed */
     /* Concrete type-arg substitution scope: when emitting field initializers
      * for a concrete generic instance (e.g. Holder<i32>), the origin decl's
      * type parameters (e.g. T) must be substituted with the instance's
@@ -2561,6 +2567,9 @@ static bool cg_ensure_callable_function_value(CG *cg, const UserSpec *spec,
 static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
                                        const FengToken *tok, char **out);
+/* Build the descriptor for either a spec or builtin bound. */
+static bool cg_constraint_descriptor_expr(CG *cg, const CGType *type,
+    CGGenericConstraint constraint, const FengToken *token, char **out);
 /* Materialize one closed array in the common static type-dependency graph. */
 static bool cg_closed_array_descriptor_expr(CG *cg, const CGType *array_type,
                                             const FengToken *tok, char **out);
@@ -2590,9 +2599,9 @@ static bool cg_finish_member_generic_call(CG *cg, Buf *out,
 static bool cg_open_generic_argument_expr(CG *cg, const CGType *actual,
     const UserSpec *constraint, FengToken blame, char **out);
 static void cg_free_generic_arguments(CG *cg);
-/* Close a spec-actual constraint at non-expression descriptor entrances. */
-static bool cg_instantiated_spec_generic_descriptor(
-    CG *cg, const CGType *actual, const UserSpec *open_constraint,
+/* Bind a spec or builtin constraint at non-expression descriptor entrances. */
+static bool cg_instantiated_generic_descriptor(
+    CG *cg, const CGType *actual, CGGenericConstraint open_constraint,
     const FengTypeRef *constraint_ref, const FengTypeParam *params,
     size_t count, FengTypeRef *const *args, const FengProgram *program,
     const FengToken *blame, char **out);
@@ -3415,11 +3424,11 @@ static bool cg_build_generic_param_constraints(CG *cg,
                                                const FengTypeParam *type_params,
                                                size_t type_param_count,
                                                FengToken blame,
-                                               const UserSpec ***out_constraints) {
+                                               CGGenericConstraint **out_constraints) {
     *out_constraints = NULL;
     if (type_param_count == 0) return true;
 
-    const UserSpec **constraints = calloc(type_param_count, sizeof *constraints);
+    CGGenericConstraint *constraints = calloc(type_param_count, sizeof *constraints);
     if (!constraints) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
@@ -3452,7 +3461,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
 
     cg->in_generic_fn = true;
@@ -3462,6 +3471,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
     cg->generic_fn_type_param_descs = NULL;
 
     for (size_t i = 0; i < type_param_count; ++i) {
+        constraints[i].kind = type_params[i].constraint_kind;
         if (!type_params[i].constraint) continue;
 
         CGType *constraint_type = NULL;
@@ -3521,7 +3531,7 @@ static bool cg_build_generic_param_constraints(CG *cg,
     cg_free_cstr_array(type_param_names, type_param_count);
 
     for (size_t i = 0; i < type_param_count; ++i) {
-        constraints[i] = cg_user_spec_by_index(cg, constraint_indices[i]);
+        constraints[i].spec = cg_user_spec_by_index(cg, constraint_indices[i]);
     }
     free(constraint_indices);
     *out_constraints = constraints;
@@ -3533,7 +3543,7 @@ static const UserSpec *cg_generic_param_constraint_spec(const CG *cg, size_t ind
         index >= cg->generic_fn_type_param_count) {
         return NULL;
     }
-    return cg->generic_fn_type_param_constraints[index];
+    return cg->generic_fn_type_param_constraints[index].spec;
 }
 
 /* Expose the union matching surface without changing the subject's actual
@@ -6502,7 +6512,7 @@ static void cg_append_spec_parent_field_name(Buf *out,
 }
 
 static bool cg_user_spec_constraint_indices(CG *cg,
-                                            const UserSpec **constraints,
+                                            CGGenericConstraint *constraints,
                                             size_t constraint_count,
                                             FengToken blame,
                                             size_t **out_indices) {
@@ -6515,7 +6525,7 @@ static bool cg_user_spec_constraint_indices(CG *cg,
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     for (size_t i = 0U; i < constraint_count; ++i) {
-        if (!cg_user_spec_index(cg, constraints != NULL ? constraints[i] : NULL, &indices[i])) {
+        if (!cg_user_spec_index(cg, constraints != NULL ? constraints[i].spec : NULL, &indices[i])) {
             free(indices);
             return cg_fail(cg, blame,
                            "CE0017", "codegen: internal: generic constraint spec moved before it could be indexed");
@@ -7439,7 +7449,7 @@ static bool cg_ensure_reified_callable_function_value(
     const char **out_var,
     const char **out_adapter) {
     const FengCallableSignature *signature;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     CGType **resolved_type_args = NULL;
     char **descriptor_exprs = NULL;
     bool *param_uses_address = NULL;
@@ -7507,7 +7517,7 @@ static bool cg_ensure_reified_callable_function_value(
                              type_args[index],
                              &blame,
                              &resolved_type_args[index]) ||
-            !cg_instantiated_spec_generic_descriptor(cg,
+            !cg_instantiated_generic_descriptor(cg,
                 resolved_type_args[index], constraint_specs[index],
                 signature->type_params[index].constraint,
                 signature->type_params, type_arg_count, type_args,
@@ -9424,7 +9434,7 @@ static bool cg_register_generic_fn(CG *cg, const FengDecl *decl) {
         bool saved_in_generic_fn = cg->in_generic_fn;
         size_t saved_tp_count = cg->generic_fn_type_param_count;
         char **saved_tp_names = cg->generic_fn_type_param_names;
-        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
         const char **saved_tp_descs = cg->generic_fn_type_param_descs;
 
         cg->in_generic_fn = true;
@@ -9593,7 +9603,7 @@ static bool cg_type_param_scope_copy_names(const CGTypeParamScope *scope,
 static bool cg_type_param_scope_build_constraints(CG *cg,
                                                   const CGTypeParamScope *scope,
                                                   FengToken blame,
-                                                  const UserSpec ***out_constraints) {
+                                                  CGGenericConstraint **out_constraints) {
     FengTypeParam *combined_params = NULL;
     size_t count = 0U;
     bool ok;
@@ -11970,7 +11980,7 @@ static bool cg_register_generic_type_instance_shell(CG *cg,
                        type_arg_count);
     }
     char **context_names = NULL;
-    const UserSpec **context_constraints = NULL;
+    CGGenericConstraint *context_constraints = NULL;
     size_t *context_constraint_indices = NULL;
     size_t context_count = 0U;
     bool has_open_type_arg = false;
@@ -13133,7 +13143,7 @@ static bool cg_resolve_type_with_open_scope(CG *cg,
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     FengToken blame = fallback != NULL ? *fallback : (ref != NULL ? ref->token : (FengToken){0});
     bool ok;
@@ -13253,7 +13263,7 @@ static bool cg_build_shared_callable_param_address_flags(
     bool saved_in_generic_fn;
     size_t saved_type_param_count;
     char **saved_type_param_names;
-    const UserSpec **saved_constraints;
+    CGGenericConstraint *saved_constraints;
     const char **saved_descriptors;
     bool ok = false;
 
@@ -13498,7 +13508,7 @@ static bool cg_resolve_type_for_user_type_member(CG *cg,
         bool saved_in_generic_fn = cg->in_generic_fn;
         size_t saved_tp_count = cg->generic_fn_type_param_count;
         char **saved_tp_names = cg->generic_fn_type_param_names;
-        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
         const char **saved_tp_descs = cg->generic_fn_type_param_descs;
         bool ok;
 
@@ -13585,7 +13595,7 @@ static bool cg_resolve_type_for_user_type_member(CG *cg,
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     bool ok;
     if (owner->generic_context_type_param_count > 0U) {
@@ -13863,7 +13873,7 @@ static bool cg_resolve_callable_type_template(
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     bool ok;
 
@@ -13991,7 +14001,7 @@ static bool cg_resolve_type_for_user_method_member(CG *cg,
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     bool ok;
 
@@ -14149,7 +14159,7 @@ static bool cg_resolve_shared_method_declared_param_type(
     bool saved_in_generic_fn;
     size_t saved_tp_count;
     char **saved_tp_names;
-    const UserSpec **saved_tp_constraints;
+    CGGenericConstraint *saved_tp_constraints;
     const char **saved_tp_descs;
     bool ok;
 
@@ -14252,7 +14262,7 @@ static bool cg_resolve_type_for_user_spec_member(CG *cg,
         bool saved_in_generic_fn = cg->in_generic_fn;
         size_t saved_tp_count = cg->generic_fn_type_param_count;
         char **saved_tp_names = cg->generic_fn_type_param_names;
-        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
         const char **saved_tp_descs = cg->generic_fn_type_param_descs;
         bool ok;
 
@@ -14341,7 +14351,7 @@ static bool cg_resolve_type_for_user_spec_member(CG *cg,
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     if (owner->generic_context_type_param_count > 0U) {
         cg->in_generic_fn = true;
@@ -15152,7 +15162,7 @@ static bool cg_register_extern(CG *cg, const FengDecl *decl) {
     bool saved_in_generic_fn = cg->in_generic_fn;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     bool ok = false;
 
@@ -16272,7 +16282,7 @@ static bool cg_register_user_spec_members(CG *cg, UserSpec *s) {
             bool saved_in_generic_fn = cg->in_generic_fn;
             size_t saved_tp_count = cg->generic_fn_type_param_count;
             char **saved_tp_names = cg->generic_fn_type_param_names;
-            const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+            CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
             const char **saved_tp_descs = cg->generic_fn_type_param_descs;
             if (s->generic_context_type_param_count > 0U) {
                 cg->in_generic_fn = true;
@@ -19673,91 +19683,74 @@ static char *cg_shared_callable_argument_for_type_expr_dup(
     return bridged;
 }
 
-/** Store one erased generic-parameter value into caller-provided storage. */
-static bool cg_emit_generic_value_store(
-    CG *cg,
-    const char *storage_expr,
-    const CGType *target_type,
-    ExprResult *value,
-    FengToken blame,
-    bool replace_existing) {
-    const char *descriptor;
-    char *source_name;
+/* Emit the existing copy/transfer operation for one already-selected ARC kind.
+ * Callers own the switch and any allocation, so payload formation needs no
+ * second kind dispatch and shares the same ownership rules as assignment. */
+static void cg_emit_generic_value_store_kind(CG *cg, CGValueKind kind,
+    const char *storage, const char *source, const char *descriptor,
+    bool owns_ref, bool replace_existing) {
+    switch (kind) {
+        case CG_VK_TRIVIAL:
+            buf_append_fmt(cg->cur_body,
+                "            memcpy(%s, %s, feng_generic_value_size(%s));\n",
+                storage, source, descriptor);
+            break;
+        case CG_VK_MANAGED_POINTER:
+            buf_append_fmt(cg->cur_body,
+                "            void *_new_value = *(void *const *)%s;\n", source);
+            if (!owns_ref) buf_append_cstr(cg->cur_body, "            feng_retain(_new_value);\n");
+            if (replace_existing) {
+                buf_append_fmt(cg->cur_body,
+                    "            void *_old_value = *(void **)%s;\n"
+                    "            *(void **)%s = _new_value;\n"
+                    "            feng_release(_old_value);\n", storage, storage);
+            } else {
+                buf_append_fmt(cg->cur_body, "            *(void **)%s = _new_value;\n", storage);
+            }
+            break;
+        case CG_VK_AGGREGATE:
+            buf_append_fmt(cg->cur_body,
+                owns_ref
+                    ? "            feng_aggregate_take(%s, (void *)%s, feng_generic_aggregate_descriptor(%s));\n"
+                    : "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n",
+                storage, source, descriptor);
+            break;
+    }
+}
 
+/** Store one erased generic-parameter value into caller-provided storage. */
+static bool cg_emit_generic_value_store(CG *cg, const char *storage_expr,
+    const CGType *target_type, ExprResult *value, FengToken blame,
+    bool replace_existing) {
     if (cg == NULL || storage_expr == NULL || target_type == NULL ||
         target_type->kind != CG_TYPE_GENERIC_PARAM || value == NULL ||
         value->type == NULL || value->type->kind != CG_TYPE_GENERIC_PARAM ||
         value->type->generic_param_index != target_type->generic_param_index) {
-        return cg_fail(cg, blame,
-                       "CE0248", "codegen: generic assignment requires a value with the same generic type parameter");
+        return cg_fail(cg, blame, "CE0248",
+            "codegen: generic assignment requires a value with the same generic type parameter");
     }
-    descriptor = cg_generic_param_desc_name(
-        cg,
-        target_type->generic_param_index);
-    source_name = cg_fresh_temp(cg, "_static_source");
-    if (descriptor == NULL || source_name == NULL) {
-        free(source_name);
-        return cg_fail(cg,
-                       blame,
-                       descriptor == NULL ? "CE0237" : "IE0001",
-                       descriptor == NULL
-                           ? "codegen: missing generic descriptor for assignment"
-                           : "codegen: out of memory");
+    const char *descriptor = cg_generic_param_desc_name(cg, target_type->generic_param_index);
+    char *source = cg_fresh_temp(cg, "_static_source");
+    if (descriptor == NULL || source == NULL) {
+        free(source);
+        return cg_fail(cg, blame, descriptor == NULL ? "CE0237" : "IE0001",
+            descriptor == NULL ? "codegen: missing generic descriptor for assignment" : "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
-        "    const void *%s = %s;\n"
-        "    switch (%s->kind) {\n"
-        "        case FENG_VALUE_TRIVIAL:\n"
-        "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
-        "            break;\n"
-        "        case FENG_VALUE_MANAGED_POINTER: {\n"
-        "            void *_new_value = *(void *const *)%s;\n",
-        source_name,
-        value->c_expr,
-        descriptor,
-        storage_expr,
-        source_name,
-        descriptor,
-        source_name);
-    if (!value->owns_ref) {
-        buf_append_cstr(cg->cur_body,
-                        "            feng_retain(_new_value);\n");
-    }
-    if (replace_existing) {
-        buf_append_fmt(cg->cur_body,
-            "            void *_old_value = *(void **)%s;\n"
-            "            *(void **)%s = _new_value;\n"
-            "            feng_release(_old_value);\n",
-            storage_expr,
-            storage_expr);
-    } else {
-        buf_append_fmt(cg->cur_body,
-            "            *(void **)%s = _new_value;\n",
-            storage_expr);
-    }
+        "    const void *%s = %s;\n    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n", source, value->c_expr, descriptor);
+    cg_emit_generic_value_store_kind(cg, CG_VK_TRIVIAL, storage_expr, source,
+        descriptor, value->owns_ref, replace_existing);
     buf_append_cstr(cg->cur_body,
-        "            break;\n"
-        "        }\n"
-        "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
-    if (value->owns_ref) {
-        buf_append_fmt(cg->cur_body,
-            "            feng_aggregate_take(%s, (void *)%s, "
-            "feng_generic_aggregate_descriptor(%s));\n",
-            storage_expr,
-            source_name,
-            descriptor);
-    } else {
-        buf_append_fmt(cg->cur_body,
-            "            feng_aggregate_assign(%s, %s, "
-            "feng_generic_aggregate_descriptor(%s));\n",
-            storage_expr,
-            source_name,
-            descriptor);
-    }
+        "            break;\n        case FENG_VALUE_MANAGED_POINTER: {\n");
+    cg_emit_generic_value_store_kind(cg, CG_VK_MANAGED_POINTER, storage_expr, source,
+        descriptor, value->owns_ref, replace_existing);
     buf_append_cstr(cg->cur_body,
-        "            break;\n"
-        "    }\n");
-    free(source_name);
+        "            break;\n        }\n        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n");
+    cg_emit_generic_value_store_kind(cg, CG_VK_AGGREGATE, storage_expr, source,
+        descriptor, value->owns_ref, replace_existing);
+    buf_append_cstr(cg->cur_body, "            break;\n    }\n");
+    free(source);
     return true;
 }
 
@@ -26991,9 +26984,9 @@ static bool cg_build_method_type_param_constraints(CG *cg,
                                                    const UserType *owner,
                                                    const FengCallableSignature *sig,
                                                    FengToken blame,
-                                                   const UserSpec ***out_constraints) {
+                                                   CGGenericConstraint **out_constraints) {
     size_t count = sig ? sig->type_param_count : 0U;
-    const UserSpec **constraints = count ? calloc(count, sizeof *constraints) : NULL;
+    CGGenericConstraint *constraints = count ? calloc(count, sizeof *constraints) : NULL;
     size_t *constraint_indices = count ? calloc(count, sizeof *constraint_indices) : NULL;
     CGTypeParamScope scope = {0};
     char **context_names = NULL;
@@ -27001,7 +26994,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
     bool saved_in_generic_fn;
     size_t saved_tp_count;
     char **saved_tp_names;
-    const UserSpec **saved_tp_constraints;
+    CGGenericConstraint *saved_tp_constraints;
     const char **saved_tp_descs;
     bool ok = false;
 
@@ -27047,6 +27040,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
     cg->generic_fn_type_param_descs = NULL;
 
     for (size_t i = 0; i < count; ++i) {
+        constraints[i].kind = sig->type_params[i].constraint_kind;
         const FengTypeRef *constraint_ref = sig->type_params[i].constraint;
         FengTypeRef *substituted = NULL;
         CGType *constraint_type = NULL;
@@ -27100,7 +27094,7 @@ static bool cg_build_method_type_param_constraints(CG *cg,
     }
 
     for (size_t i = 0U; i < count; ++i) {
-        constraints[i] = cg_user_spec_by_index(cg, constraint_indices[i]);
+        constraints[i].spec = cg_user_spec_by_index(cg, constraint_indices[i]);
     }
     ok = true;
 
@@ -27352,7 +27346,7 @@ static bool cg_resolve_selected_callable_return_type(
 static bool cg_selected_call_generic_descriptor(
     CG *cg, const FengExpr *call, const FengCallableSignature *signature,
     size_t parameter_index, const CGType *actual,
-    const UserSpec *open_constraint, char **out) {
+    CGGenericConstraint open_constraint, char **out) {
     CGType *constraint_type = NULL;
     bool ok;
 
@@ -27373,7 +27367,7 @@ static bool cg_selected_call_generic_descriptor(
 
     if (actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM ||
         signature->type_params[parameter_index].constraint == NULL) {
-        return cg_generic_descriptor_expr(cg, actual, open_constraint,
+        return cg_constraint_descriptor_expr(cg, actual, open_constraint,
                                            &call->token, out);
     }
     if (!cg_resolve_selected_callable_type_ref(
@@ -27393,8 +27387,8 @@ static bool cg_selected_call_generic_descriptor(
 
 /* Owner and callable-value descriptors use explicit instantiation trees.
  * Close the full constraint before constructing any concrete witness. */
-static bool cg_instantiated_spec_generic_descriptor(
-    CG *cg, const CGType *actual, const UserSpec *open_constraint,
+static bool cg_instantiated_generic_descriptor(
+    CG *cg, const CGType *actual, CGGenericConstraint open_constraint,
     const FengTypeRef *constraint_ref, const FengTypeParam *params,
     size_t count, FengTypeRef *const *args, const FengProgram *program,
     const FengToken *blame, char **out) {
@@ -27402,7 +27396,7 @@ static bool cg_instantiated_spec_generic_descriptor(
     bool handled = false;
     bool ok;
     if (constraint_ref == NULL || actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM) {
-        return cg_generic_descriptor_expr(cg, actual, open_constraint, blame, out);
+        return cg_constraint_descriptor_expr(cg, actual, open_constraint, blame, out);
     }
     FengTypeRef *substituted = cg_type_ref_substitute(
         constraint_ref, params, count, args);
@@ -27450,7 +27444,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
         e->as.call.args[arg_count - 1U]->is_prepacked_variadic_arg;
     ExprResult *args = NULL;
     CGType **type_args = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     char **desc_exprs = NULL;
     char **arg_exprs = NULL;
     char *func_desc_expr = NULL;
@@ -28077,7 +28071,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
     CGType **param_types = NULL;
     ExprResult *args = NULL;
     CGType **type_args = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     char **desc_exprs = NULL;
     char **arg_exprs = NULL;
     CGType *variadic_array_type = NULL;
@@ -28731,7 +28725,7 @@ static bool cg_emit_generic_method_call(CG *cg,
     size_t fixed_param_count = method_is_variadic ? um->param_count - 1U : um->param_count;
     ExprResult *args = NULL;
     CGType **type_args = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     char **desc_exprs = NULL;
     char **arg_exprs = NULL;
     size_t emitted_arg_count = 0U;
@@ -43767,6 +43761,64 @@ static bool cg_exception_descriptor_expr_for_type(CG *cg,
     }
 }
 
+/* Form an exception with the existing erased-value ABI and exact concrete
+ * box identity. The builtin witness is static data, never a runtime query. */
+static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
+    size_t index = value->type->generic_param_index;
+    const char *descriptor = cg_generic_param_desc_name(cg, index);
+    if (descriptor == NULL || cg->generic_fn_type_param_constraints == NULL ||
+        index >= cg->generic_fn_type_param_count ||
+        cg->generic_fn_type_param_constraints[index].kind != FENG_CONSTRAINT_THROW) {
+        return cg_fail(cg, blame, "IE0002", "codegen: generic throw lacks a proven throw constraint");
+    }
+    char *source = cg_fresh_temp(cg, "_throw_source");
+    char *payload = cg_fresh_temp(cg, "_throw_payload");
+    char *exception_descriptor = cg_fresh_temp(cg, "_throw_descriptor");
+    Buf target;
+    buf_init(&target);
+    bool ok = source != NULL && payload != NULL && exception_descriptor != NULL;
+    if (!ok) goto cleanup;
+    buf_append_fmt(cg->cur_body,
+        "    const void *%s = %s;\n"
+        "    void *%s = NULL;\n"
+        "    const FengTypeDescriptor *%s = NULL;\n"
+        "    switch (%s->kind) {\n",
+        source, value->c_expr, payload, exception_descriptor, descriptor);
+    const char *kinds[] = {"FENG_VALUE_TRIVIAL", "FENG_VALUE_MANAGED_POINTER",
+                          "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS"};
+    for (size_t kind = 0U; kind < sizeof(kinds) / sizeof(kinds[0]); ++kind) {
+        buf_append_fmt(cg->cur_body, "        case %s: {\n", kinds[kind]);
+        if (kind == CG_VK_MANAGED_POINTER) {
+            buf_append_fmt(cg->cur_body,
+                "            %s = (const FengTypeDescriptor *)%s->descriptor;\n",
+                exception_descriptor, descriptor);
+            buf_append_fmt(&target, "(&%s)", payload);
+        } else {
+            buf_append_fmt(cg->cur_body,
+                "            const FengSpecCoercionDescriptor *_formation = "
+                "(const FengSpecCoercionDescriptor *)%s->witness;\n"
+                "            %s = _formation->box_descriptor;\n"
+                "            %s = feng_object_new(%s);\n",
+                descriptor, exception_descriptor, payload, exception_descriptor);
+            buf_append_fmt(&target, "((unsigned char *)%s + _formation->payload_offset)", payload);
+        }
+        if (target.data == NULL) { ok = false; goto cleanup; }
+        cg_emit_generic_value_store_kind(cg, (CGValueKind)kind, target.data,
+            source, descriptor, value->owns_ref, false);
+        buf_free(&target);
+        buf_append_cstr(cg->cur_body, "            break;\n        }\n");
+    }
+    buf_append_fmt(cg->cur_body, "    }\n    feng_throw(%s, %s);\n",
+        payload, exception_descriptor);
+cleanup:
+    free(source);
+    free(payload);
+    free(exception_descriptor);
+    buf_free(&target);
+    if (!ok) return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    return true;
+}
+
 /* Emit a throw whose managed value and descriptor describe the same object.
  * Concrete value types use ValueBox<T>; string and reference-object payloads
  * retain and transfer their existing managed pointer. A semantically checked
@@ -43785,6 +43837,12 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
         er_free(&r);
         return cg_fail(cg, stmt->token,
                        "CE0284", "codegen: spec is not a supported exception payload type");
+    }
+
+    if (r.type->kind == CG_TYPE_GENERIC_PARAM) {
+        bool ok = cg_emit_generic_throw(cg, &r, stmt->token);
+        er_free(&r);
+        return ok;
     }
 
     if (cg_type_has_value_box(r.type)) {
@@ -45734,7 +45792,7 @@ static bool cg_emit_imported_function_decl(CG *cg, const FengDecl *decl) {
         bool saved_in_generic_fn = cg->in_generic_fn;
         size_t saved_tp_count = cg->generic_fn_type_param_count;
         char **saved_tp_names = cg->generic_fn_type_param_names;
-        const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+        CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
         const char **saved_tp_descs = cg->generic_fn_type_param_descs;
 
         if (!cg_find_generic_fn_by_decl(cg, decl) && !cg_register_generic_fn(cg, decl)) {
@@ -48799,7 +48857,7 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
     FengTypeParam *callee_params = NULL;
     FengTypeRef **callee_args = NULL;
     size_t callee_count = 0U;
-    const UserSpec **method_constraint_specs = NULL;
+    CGGenericConstraint *method_constraint_specs = NULL;
     CGType **method_type_args = NULL;
     char **method_descriptor_exprs = NULL;
     size_t method_type_param_count = 0U;
@@ -49104,7 +49162,7 @@ static bool cg_emit_closed_callable_static_method_value_dep_expr(
                     caller_reference_program,
                     &blame,
                     &method_type_args[index]) ||
-                !cg_instantiated_spec_generic_descriptor(
+                !cg_instantiated_generic_descriptor(
                     cg, method_type_args[index], method_constraint_specs[index],
                     signature->type_params[index].constraint,
                     callee_params, callee_count, callee_args,
@@ -49300,7 +49358,7 @@ static bool cg_emit_closed_callable_dep_expr(
         char *descriptor_c_name = NULL;
         char *descriptor_expr = NULL;
         char *target_fn_name = NULL;
-        const UserSpec **method_constraint_specs = NULL;
+        CGGenericConstraint *method_constraint_specs = NULL;
         CGType **method_type_args = NULL;
         char **method_descriptor_exprs = NULL;
         size_t method_type_param_count = 0U;
@@ -49482,7 +49540,7 @@ static bool cg_emit_closed_callable_dep_expr(
                                      callee_args[closed_index],
                                      &blame,
                                      &method_type_args[index]) ||
-                    !cg_instantiated_spec_generic_descriptor(
+                    !cg_instantiated_generic_descriptor(
                         cg, method_type_args[index], method_constraint_specs[index],
                         signature->type_params[index].constraint,
                         callee_params, callee_count, callee_args,
@@ -50157,8 +50215,10 @@ static bool cg_closed_generic_param_descriptor_expr(
     return *out != NULL;
 }
 
-static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
+/* Build an erased descriptor with an optional compile-time witness initializer. */
+static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                                        const UserSpec *constraint_spec,
+                                       const char *static_witness,
                                        const FengToken *tok, char **out) {
     if (t && t->kind == CG_TYPE_GENERIC_PARAM) {
         const char *desc = cg_generic_param_desc_name(cg, t->generic_param_index);
@@ -50187,7 +50247,7 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
         buf_free(&b);
         return cg_open_generic_argument_expr(cg, t, constraint_spec, *tok, out);
     }
-    const char *witness_expr = "NULL";
+    const char *witness_expr = static_witness != NULL ? static_witness : "NULL";
     char *owned_witness_expr = NULL;
 
     if (cg_generic_constraint_requires_witness(constraint_spec)) {
@@ -50443,6 +50503,45 @@ static bool cg_generic_descriptor_expr(CG *cg, const CGType *t,
     free(owned_witness_expr);
     *out = b.data;
     return *out != NULL;
+}
+
+/* Preserve the existing spec/unconstrained descriptor construction path. */
+static bool cg_generic_descriptor_expr(CG *cg, const CGType *type,
+    const UserSpec *constraint, const FengToken *token, char **out) {
+    return cg_generic_descriptor_with_witness(cg, type, constraint, NULL, token, out);
+}
+
+/* Bind a builtin surface at the closed call site. The compound literal is
+ * emitted only inside an interned file-scope descriptor initializer, so it
+ * has static storage and never creates per-call metadata. */
+static bool cg_constraint_descriptor_expr(CG *cg, const CGType *type,
+    CGGenericConstraint constraint, const FengToken *token, char **out) {
+    if (constraint.kind != FENG_CONSTRAINT_THROW) {
+        return cg_generic_descriptor_expr(cg, type, constraint.spec, token, out);
+    }
+    if (type != NULL && type->kind == CG_TYPE_GENERIC_PARAM) {
+        return cg_generic_descriptor_expr(cg, type, NULL, token, out);
+    }
+    if (!cg_type_descriptor_is_statically_closed(type)) {
+        return cg_fail(cg, *token, "IE0002", "codegen: throw constraint requires a closed actual or direct parameter");
+    }
+    if (!cg_type_has_value_box(type)) {
+        return cg_generic_descriptor_expr(cg, type, NULL, token, out);
+    }
+    CGValueBoxInfo box = {0};
+    Buf formation;
+    buf_init(&formation);
+    if (!cg_value_box_info_for_type(cg, type, *token, &box)) return false;
+    buf_append_fmt(&formation,
+        "&(const FengSpecCoercionDescriptor){.box_descriptor = &%s, "
+        ".payload_offset = offsetof(struct %s, value), .witness = NULL}",
+        box.descriptor_name, box.struct_name);
+    bool ok = formation.data != NULL && cg_generic_descriptor_with_witness(
+        cg, type, NULL, formation.data, token, out);
+    cg_value_box_info_dispose(&box);
+    buf_free(&formation);
+    if (!ok && !cg->failed) return cg_fail(cg, *token, "IE0001", "codegen: out of memory");
+    return ok;
 }
 
 /* Emit the return statement body when inside a generic function.
@@ -50703,7 +50802,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
     /* Allocate descriptor arg names: "_T", "_U", ... */
     size_t tp_count = sig->type_param_count;
     const char **desc_names = calloc(tp_count, sizeof *desc_names);
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     if (!desc_names) return cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
     for (size_t i = 0; i < tp_count; i++) {
         Buf b; buf_init(&b);
@@ -51222,7 +51321,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
     bool *param_is_direct_type_param = sig->param_count ? calloc(sig->param_count, sizeof *param_is_direct_type_param) : NULL;
     CGType **type_args = sig->type_param_count ? calloc(sig->type_param_count, sizeof *type_args) : NULL;
     CGType *return_type = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     char **desc_exprs = NULL;
     ExternFn concrete = {
         .feng_name = ext != NULL ? ext->feng_name : NULL,
@@ -51406,9 +51505,9 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
             goto cleanup;
         }
         for (size_t i = 0; i < sig->type_param_count; ++i) {
-            if (!cg_generic_descriptor_expr(cg,
+            if (!cg_constraint_descriptor_expr(cg,
                                             type_args[i],
-                                            constraint_specs ? constraint_specs[i] : NULL,
+                                            constraint_specs ? constraint_specs[i] : (CGGenericConstraint){0},
                                             &e->token,
                                             &desc_exprs[i])) {
                 goto cleanup;
@@ -51733,10 +51832,10 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     bool saved_constraint_in_generic_fn = cg->in_generic_fn;
     size_t saved_constraint_tp_count = cg->generic_fn_type_param_count;
     char **saved_constraint_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_constraint_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_constraint_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_constraint_tp_descs = cg->generic_fn_type_param_descs;
     for (size_t i = 0; i < tp_count && ok; i++) {
-        const UserSpec *constraint_spec = NULL;
+        CGGenericConstraint constraint = {.kind = sig->type_params[i].constraint_kind};
         if (i < sig->type_param_count && sig->type_params[i].constraint) {
             CGType *constraint_type = NULL;
             cg->in_generic_fn = true;
@@ -51748,7 +51847,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                                  &sig->type_params[i].token, &constraint_type)) {
                 ok = false;
             } else {
-                constraint_spec = constraint_type ? constraint_type->user_spec : NULL;
+                constraint.spec = constraint_type ? constraint_type->user_spec : NULL;
                 cgtype_free(constraint_type);
             }
             cg->in_generic_fn = saved_constraint_in_generic_fn;
@@ -51758,7 +51857,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
             cg->generic_fn_type_param_descs = saved_constraint_tp_descs;
         }
         if (ok && !cg_selected_call_generic_descriptor(cg, e, sig, i,
-                type_args[i], constraint_spec, &desc_exprs[i])) {
+                type_args[i], constraint, &desc_exprs[i])) {
             ok = false;
         }
     }
@@ -51775,7 +51874,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
     bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
 
     cg->in_generic_fn = true;
@@ -54129,7 +54228,7 @@ static bool cg_ensure_intersection_witness_instance(
     bool saved_in_generic_fn;
     size_t saved_type_param_count;
     char **saved_type_param_names;
-    const UserSpec **saved_type_param_constraints;
+    CGGenericConstraint *saved_type_param_constraints;
     const char **saved_type_param_descriptors;
     const FengSemanticSubjectKey *effective_subject_key = subject_key;
     bool ok = true;
@@ -61121,7 +61220,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             t->generic_context_type_param_count == 0U &&
             t->generic_type_arg_count > 0U) {
             const FengDecl *origin = t->generic_origin_decl;
-            const UserSpec **rgp_constraints = NULL;
+            CGGenericConstraint *rgp_constraints = NULL;
             if (origin != NULL &&
                 !cg_build_generic_param_constraints(
                     cg, origin->as.type_decl.type_params,
@@ -61141,9 +61240,9 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
             for (size_t gi = 0; gi < t->generic_type_arg_count; ++gi) {
                 CGType *arg_type = NULL;
                 char *desc_expr = NULL;
-                const UserSpec *cs = (rgp_constraints != NULL &&
+                CGGenericConstraint cs = (rgp_constraints != NULL &&
                                      gi < (origin ? origin->as.type_decl.type_param_count : 0U))
-                    ? rgp_constraints[gi] : NULL;
+                    ? rgp_constraints[gi] : (CGGenericConstraint){0};
 
                 if (!cg_resolve_type(cg, t->generic_type_args[gi],
                                      &t->decl->token, &arg_type)) {
@@ -61152,7 +61251,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                     buf_free(&equal_fn_name);
                     return;
                 }
-                if (!cg_instantiated_spec_generic_descriptor(cg, arg_type, cs,
+                if (!cg_instantiated_generic_descriptor(cg, arg_type, cs,
                         origin->as.type_decl.type_params[gi].constraint,
                         origin->as.type_decl.type_params,
                         origin->as.type_decl.type_param_count,
@@ -61777,7 +61876,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
         reified_generic_param_count = t->generic_type_arg_count;
         if (reified_generic_param_count > 0U) {
             const FengDecl *origin = t->generic_origin_decl;
-            const UserSpec **rgp_constraints = NULL;
+            CGGenericConstraint *rgp_constraints = NULL;
             if (!cg_build_generic_param_constraints(
                     cg, origin->as.type_decl.type_params,
                     origin->as.type_decl.type_param_count,
@@ -61791,9 +61890,9 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
             for (size_t i = 0; i < t->generic_type_arg_count; ++i) {
                 CGType *arg_type = NULL;
                 char *desc_expr = NULL;
-                const UserSpec *cs = (rgp_constraints != NULL &&
+                CGGenericConstraint cs = (rgp_constraints != NULL &&
                                      i < origin->as.type_decl.type_param_count)
-                    ? rgp_constraints[i] : NULL;
+                    ? rgp_constraints[i] : (CGGenericConstraint){0};
 
                 if (!cg_resolve_type(cg, t->generic_type_args[i],
                                      &t->decl->token, &arg_type)) {
@@ -61801,7 +61900,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                     cg->cur_program = saved_program;
                     return;
                 }
-                if (!cg_instantiated_spec_generic_descriptor(cg, arg_type, cs,
+                if (!cg_instantiated_generic_descriptor(cg, arg_type, cs,
                         origin->as.type_decl.type_params[i].constraint,
                         origin->as.type_decl.type_params,
                         origin->as.type_decl.type_param_count,
@@ -62673,7 +62772,7 @@ static char *cg_fit_method_shared_cname(CG *cg,
 static bool cg_activate_generic_type_context(CG *cg,
                                              size_t type_param_count,
                                              char **type_param_names,
-                                             const UserSpec **constraint_specs,
+                                             CGGenericConstraint *constraint_specs,
                                              const char **desc_names) {
     cg->in_generic_fn = true;
     cg->generic_fn_type_param_count = type_param_count;
@@ -62876,7 +62975,7 @@ static bool cg_emit_generic_type_static_binding_ensure_shared(
     size_t type_param_count;
     char **type_param_names = NULL;
     const char **descriptor_names = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     char *function_name = NULL;
     Scope *function_scope = NULL;
     const char *descriptor_type;
@@ -63097,7 +63196,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     size_t method_tp_count = sig->type_param_count;
     size_t tp_count = outer_tp_count + method_tp_count;
     char **type_param_names = NULL;
-    const UserSpec **constraint_specs = NULL;
+    CGGenericConstraint *constraint_specs = NULL;
     const char **desc_names = NULL;
     CGType *return_type = NULL;
     CGType **param_types = NULL;
@@ -64137,7 +64236,7 @@ static bool cg_emit_user_method(CG *cg,
     bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     Scope *fn_scope = NULL;
     bool ok = false;
@@ -64372,7 +64471,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     const char **method_desc_names = NULL;
     char **combined_type_param_names = NULL;
     const char **combined_desc_names = NULL;
-    const UserSpec **combined_constraints_alloc = NULL;
+    CGGenericConstraint *combined_constraints_alloc = NULL;
     char **saved_captured_names = cg->captured_binding_names;
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
@@ -64393,7 +64492,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     size_t saved_tp_count = cg->generic_fn_type_param_count;
     char **saved_tp_names = cg->generic_fn_type_param_names;
-    const UserSpec **saved_tp_constraints = cg->generic_fn_type_param_constraints;
+    CGGenericConstraint *saved_tp_constraints = cg->generic_fn_type_param_constraints;
     const char **saved_tp_descs = cg->generic_fn_type_param_descs;
     const char *saved_function_descriptor_c_name =
         cg->generic_function_descriptor_c_name;

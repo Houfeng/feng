@@ -30188,10 +30188,14 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 
 #include "dap_callable.inc"
 #include "dap_union.inc"
+#include "throw_constraint.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+
+    test_lsp_throw_constraint_source();
+    test_throw_constraint_source_hidden_bundle();
 
     test_platform_detects_complete_native_platform();
     test_manifest_defaults();

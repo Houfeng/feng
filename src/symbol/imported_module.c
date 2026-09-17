@@ -778,6 +778,8 @@ static FengTypeParam *synthesize_type_params(const FengSymbolDeclView *symbol_de
             break;
         }
         params[fill].token = member->token;
+        params[fill].constraint_kind = member->value_type != NULL
+            ? FENG_CONSTRAINT_SPEC : member->constraint_kind;
         if (!clone_cstr_as_slice(member->name, &params[fill].name)) {
             free_synthetic_type_params(params, fill);
             return NULL;

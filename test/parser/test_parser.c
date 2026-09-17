@@ -6486,7 +6486,11 @@ void test_structural_type_target_parser(void);
 /* Both array owner forms preserve every nested type layer. */
 void test_array_static_parity_parser(void);
 
+/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+void test_throw_constraint_parser(void);
+
 int main(void) {
+    test_throw_constraint_parser();
     test_structural_type_target_parser();
     test_array_static_parity_parser();
     test_g25_nested_generic_parser();

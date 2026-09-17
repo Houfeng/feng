@@ -16259,9 +16259,31 @@ static bool type_ref_is_exception_payload(const ResolveContext *context,
     return false;
 }
 
-/* Classify one inferred throw operand through the same concrete payload gate
- * used by typed catch clauses. Callable expressions with no representable
- * type reference are rejected here or by throw_expr_is_callable_value. */
+/* Prove a direct parameter from its declaration; closed values use the same
+ * concrete classifier as catch. Composite open types gain no extra ability. */
+static bool type_ref_satisfies_throw_constraint(const ResolveContext *context,
+                                               const FengTypeRef *type_ref,
+                                               const char **out_reason) {
+    if (type_ref != NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
+        type_ref->as.named.segment_count == 1U &&
+        type_ref->as.named.type_arg_count == 0U) {
+        const TypeParamEntry *entry = find_type_param(context, type_ref->as.named.segments[0]);
+        if (entry != NULL) {
+            if (entry->type_param != NULL &&
+                entry->type_param->constraint_kind == FENG_CONSTRAINT_THROW) {
+                return true;
+            }
+            if (out_reason != NULL) {
+                *out_reason = "open generic types have no concrete exception identity; type parameter requires a throw constraint";
+            }
+            return false;
+        }
+    }
+    return type_ref_is_exception_payload(context, type_ref, out_reason);
+}
+
+/* Classify a throw operand, including declaration-proven direct parameters.
+ * Typed catch deliberately continues to use the concrete classifier. */
 static bool inferred_expr_type_is_exception_payload(const ResolveContext *context,
                                                     InferredExprType type,
                                                     const char **out_reason) {
@@ -16281,7 +16303,7 @@ static bool inferred_expr_type_is_exception_payload(const ResolveContext *contex
             return false;
 
         case FENG_INFERRED_EXPR_TYPE_TYPE_REF:
-            return type_ref_is_exception_payload(context, type.type_ref, out_reason);
+            return type_ref_satisfies_throw_constraint(context, type.type_ref, out_reason);
 
         case FENG_INFERRED_EXPR_TYPE_DECL:
             if (type.type_decl != NULL && type.type_decl->kind == FENG_DECL_SPEC) {
@@ -24585,6 +24607,10 @@ static bool generic_type_arg_satisfies_constraint(ResolveContext *context,
     }
 
     type_param = &callable->type_params[type_param_index];
+    if (type_param->constraint_kind == FENG_CONSTRAINT_THROW) {
+        return type_args[type_param_index] == NULL ||
+               type_ref_satisfies_throw_constraint(context, type_args[type_param_index], NULL);
+    }
     if (type_param->constraint == NULL) {
         return true;
     }
@@ -24917,9 +24943,13 @@ static void materialize_named_type_param_constraint_witnesses(
             }
         }
 
-        if (!generic_type_ref_satisfies_constraint(context, type_args[i], instantiated_constraint)) {
+        bool satisfies = type_params[i].constraint_kind == FENG_CONSTRAINT_THROW
+            ? type_ref_satisfies_throw_constraint(context, type_args[i], NULL)
+            : generic_type_ref_satisfies_constraint(context, type_args[i], instantiated_constraint);
+        if (!satisfies) {
             char *actual_name = format_type_ref_name(type_args[i]);
-            char *constraint_name = format_type_ref_name(instantiated_constraint);
+            char *constraint_name = type_params[i].constraint_kind == FENG_CONSTRAINT_THROW
+                ? duplicate_cstr("throw") : format_type_ref_name(instantiated_constraint);
             (void)resolver_append_error(context, type_args[i]->token, "AE0710",
                 format_message("type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s'",
                     actual_name != NULL ? actual_name : "<type>",
@@ -36297,8 +36327,8 @@ static bool validate_fit_declaration_contracts(ResolveContext *context,
     return ok;
 }
 
-/* G4-3: Validate the constraints on a list of type parameters.
- * Each constraint (if present) must resolve to a spec declaration. */
+/* Validate type-reference bounds as specs; builtin bounds have no type name
+ * to resolve and are checked when their actual arguments are selected. */
 static bool validate_type_param_constraints(ResolveContext *context,
                                             const FengTypeParam *type_params,
                                             size_t type_param_count) {
@@ -40072,6 +40102,7 @@ static bool clone_mixin_wrapper_type_params(
     for (size_t index = 0U; index < source->type_param_count; ++index) {
         target->type_params[index].token = source->type_params[index].token;
         target->type_params[index].name = source->type_params[index].name;
+        target->type_params[index].constraint_kind = source->type_params[index].constraint_kind;
         target->type_params[index].constraint = clone_mixin_callable_type_ref(
             source->type_params[index].constraint,
             source_owner,

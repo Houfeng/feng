@@ -584,6 +584,10 @@ G24 联合投影阶段将契约提升为 2.0，保留 `FST1` magic、Header 与�
 并新增下述必需转换依赖节。语言尚未公开发布，不提供旧制品兼容或迁移桥接；缺少该必需节
 按格式校验失败处理，继续执行上述完整制品重建要求。
 
+内建泛型约束阶段保持 2.0，使用下节的独立约束属性；更新编译器后重编 provider、
+consumer 的 `.ft`／`.fb` 与缓存，不提供旧编译器消费新约束制品的兼容承诺，也不要求旧 reader
+能识别并拒绝该新属性。此次仅增加编译期约束事实，runtime、私有描述符布局与共享体调用 ABI 均不变。
+
 #### 6.3.5 `ATRS` 扩展属性节
 
 为尽量避免“出现一个新注解或新修饰就改 core 记录布局”,v1 预留 `FT_SEC_ATTRS` 作为统一扩展槽。
@@ -620,6 +624,7 @@ attr key 常量建议如下:
 | `FT_ATTR_ABI_LIBRARY` | `0x0003` | `extern_fn` | ABI 库名字符串；`value0` = `STRS.id` |
 | `FT_ATTR_ENUM_ITEM_VALUE` | `0x0004` | `enum_item` | 归一化后的枚举项底层值；`value0` = 按二补码解释的 `int32` 原始位模式 |
 | `FT_ATTR_STATIC_MEMBER` | `0x0005` | `field` / `method` | `type` 静态成员标记 |
+| `FT_ATTR_BUILTIN_CONSTRAINT` | `0x0010` | `type_param` | 独立内建约束；`value0 = 1` 表示 `throw`，`reserved0`、`value1`、`value2` 为零 |
 
 补充规则:
 
@@ -627,7 +632,8 @@ attr key 常量建议如下:
 - `FT_ATTR_CALL_CONV` 与 `FT_ATTR_ABI_LIBRARY` 仅出现在 `extern_fn` 符号上; 普通函数与方法无需这两个 attr。
 - `FT_ATTR_ENUM_ITEM_VALUE` 只出现在 `enum_item` 子符号上,记录 consumer 恢复 `Enum.Item` 所需的稳定值事实; 不再额外导出“原本是显式赋值还是隐式赋值”的源码细节。
 - `FT_ATTR_STATIC_MEMBER` 只出现在 `type` 的静态字段或静态方法符号上,表示 consumer 恢复成员时必须设置 `static` 语义。
-- 泛型第一阶段不要求新增其他 attr key。类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达,而不是把核心语义塞进 `ATRS`。
+- 类型参数声明、类型参数引用、泛型类型实参与泛型 callable 骨架通过 `SYMS` / `TYPS` / `TSEQ` 表达。`FT_ATTR_BUILTIN_CONSTRAINT` 仅补充内建约束事实，不创建伪类型或伪 spec。
+- 内建约束属性每个 `type_param` 至多一条，且该符号的 `type_ref` 必须为 `0`；reader 必须拒绝重复属性、未知内建约束值、错误 owner、与 spec 约束并存及非零保留字段。两个 profile 都必须保存并恢复相同约束种类；语言准入及转传语义引用[泛型主规范 §4.3](./feng-generics-draft.md#43-内建-throw-约束)。无约束与既有 spec 约束的编码不变。
 
 #### 6.3.6 `UNION_PROJECTIONS` 开放投影依赖
 
@@ -856,7 +862,7 @@ enum item 的 `.ft` 形状在 v1 中固定为“**顶层 `enum` 符号 + 子符�
 针对泛型,`SYMS` 还必须满足以下规则:
 
 - 泛型声明的类型参数必须作为独立符号导出,并使用 `FT_SYM_KIND_TYPE_PARAM`; 其 `owner_id` 指向所属声明符号。合法 owner 仅包括 `type`、`spec`、`top_fn` 与 `method`; `fit` 不定义新的类型参数,因此不得拥有 `type_param` 子符号。
-- `type_param` 符号的 `name_str` 表达参数名,`extra_ref` 固定表达其在声明头中的 0-based 有序位置,`type_ref` 在有约束时指向约束目标对应的 `TYPS.id`,无约束时为 `0`,`doc_ref` 固定为 `0`。
+- `type_param` 符号的 `name_str` 表达参数名,`extra_ref` 固定表达其在声明头中的 0-based 有序位置,`type_ref` 在有 spec 约束时指向约束目标对应的 `TYPS.id`,无约束或内建约束时为 `0`,`doc_ref` 固定为 `0`；内建约束使用 §6.3.5 的独立属性。
 - `type_param` 是导出辅助符号,用于恢复泛型声明头; consumer 不得把它当作普通可枚举成员方法、字段或顶层声明对外展示。
 - consumer 必须按 `owner_id + extra_ref` 恢复类型参数顺序; 不得按名称重排或重编号。
 - 具名泛型声明在跨包查询时的 identity 仍按“名称 + 泛型参数数量”判断; `.ft` 读取器不得仅因参数名或约束目标不同就把同名同参数数量声明视为不同实体。

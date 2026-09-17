@@ -74,6 +74,9 @@
 #define FENG_SYMBOL_FT_SYM_KIND_ENUM_ITEM  14U
 #define FENG_SYMBOL_FT_SYM_KIND_TYPE_PARAM 15U
 
+/* Stable wire IDs for builtin bounds, independent of the compiler AST enum. */
+#define FENG_SYMBOL_FT_BUILTIN_CONSTRAINT_THROW 1U
+
 #define FENG_SYMBOL_FT_TYPE_KIND_BUILTIN       1U
 #define FENG_SYMBOL_FT_TYPE_KIND_NAMED         2U
 #define FENG_SYMBOL_FT_TYPE_KIND_ARRAY         3U

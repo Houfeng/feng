@@ -1,0 +1,59 @@
+open module fcts_lib.test;
+
+/** Shared provider body for every permitted exception payload type. */
+open func libRaiseConstrained<E: throw>(error: E): void {
+  throw error;
+}
+
+/** Forward the same capability under a different parameter identity. */
+open func libForwardConstrained<T: throw>(value: T): void {
+  libRaiseConstrained<T>(value);
+}
+
+/** Reference owner obtains E from its existing type descriptor. */
+open type LibThrowOwner<E: throw> {
+  open let error: E;
+
+  /** Throw the owner field through its shared member body. */
+  open func raise(): void { throw self.error; }
+
+  /** Mix the owner and method descriptor domains in one shared body. */
+  open func method<U: throw>(value: U): void { libRaiseConstrained<U>(value); }
+
+  /** A static method has the same method-level evidence. */
+  open static func send<U: throw>(value: U): void { throw value; }
+}
+
+/** Value owners obtain E through their aggregate descriptor. */
+@value open type LibThrowValueOwner<E: throw> {
+  open let error: E;
+
+  /** Throw a value owner's field without changing its representation. */
+  open func raise(): void { throw self.error; }
+}
+
+/** Preserve metadata when an open owner is closed by the consumer. */
+open func libRaiseViaOwner<E: throw>(value: E): void {
+  let owner = LibThrowOwner<E> { error: value };
+  owner.raise();
+}
+
+/** Public nominal enum identity must survive the package boundary. */
+open enum LibThrowStatus { Failed = 37 }
+
+/** Public aggregate exercises provider-owned box layout and cleanup. */
+@value open type LibThrowValue {
+  open let message: string;
+  open let status: i32;
+}
+
+/** Mixin source surface used to validate synthesized method bounds. */
+open spec LibThrowSurface {}
+
+/** Generated wrappers must preserve the builtin method constraint. */
+open type LibThrowMixin: LibThrowSurface {
+  /** Throw through the ordinary mixable static-to-instance wrapper. */
+  @mixable open static func raise<E: throw>(target: LibThrowSurface, error: E): void {
+    throw error;
+  }
+}

@@ -1,0 +1,40 @@
+module std_test;
+
+import std.test;
+import std.collections;
+import std.compiler.common;
+import std.compiler.lexer;
+import std.compiler.parser;
+
+/** Verify the std compiler's existing parser mirrors the host AST distinction. */
+open func run_throw_constraint_parser_tests(): void {
+  describe("builtin throw constraint parser", () {
+    test("mixed parameter bounds keep distinct kinds", () {
+      let parser = FengParser(FengLexer(FengSource("E: throw, S: Named, T>", "throw-bound.ff")));
+      let parameters = parser.parseTypeParameters();
+      check(parameters.length() == 3, "three generic parameters");
+      check(parameters[0].constraintKind == GenericConstraintKind.Throw, "builtin bound");
+      check(parameters[1].constraintKind == GenericConstraintKind.Spec, "spec bound");
+      check(parameters[2].constraintKind == GenericConstraintKind.None, "unconstrained parameter");
+      check(parser.check(FengTokenKind.SpecialEndOfFile), "list ends at EOF");
+      check(parser.peek().kind == FengTokenKind.SpecialEndOfFile, "peek preserves EOF");
+      check(parser.advance().kind == FengTokenKind.SpecialEndOfFile, "advance preserves EOF");
+    });
+    test("throw remains invalid as an ordinary type", () {
+      let parser = FengParser(FengLexer(FengSource("throw", "throw-type.ff")));
+      var rejected = false;
+      try parser.parseTypeReference() catch error: FengCompileError { rejected = true; }
+      check(rejected, "keyword rejected outside bounds");
+    });
+    test("token filtering terminates on empty and trivia-only input", () {
+      let empty = FengParser(FengLexer(FengSource("", "empty.ff")));
+      check(empty.check(FengTokenKind.SpecialEndOfFile), "empty EOF");
+      let trivia = FengParser(FengLexer(FengSource(" /* comment */ \n", "trivia.ff")));
+      check(trivia.check(FengTokenKind.SpecialEndOfFile), "trivia EOF");
+      let tail = FengParser(FengLexer(FengSource("name /* tail */", "tail.ff")));
+      check(tail.peek().kind == FengTokenKind.SpecialEndOfFile, "peek skips trivia then stops");
+      tail.advance();
+      check(tail.check(FengTokenKind.SpecialEndOfFile), "advance stops after trivia");
+    });
+  });
+}

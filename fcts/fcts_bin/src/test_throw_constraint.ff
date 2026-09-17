@@ -1,0 +1,281 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+/** Shared local throw, including caller-owned and temporary values. */
+func raiseConstrained<E: throw>(error: E): void { throw error; }
+
+/** Generic return preserves the descriptor while transferring a value. */
+func keepThrowValue<T>(value: T): T { return value; }
+
+/** Throw an owned generic result using the same cleanup authority. */
+func raiseReturned<E: throw>(value: E): void { throw keepThrowValue<E>(value); }
+
+/** Callable surface used to exercise generic function and method values. */
+spec ThrowAction<T>(value: T): void;
+/** A capture must keep its generic descriptor after its creator returns. */
+spec ThrowClosure(): void;
+
+/** Capture the value and its existing bound descriptor together. */
+func captureThrow<E: throw>(value: E): ThrowClosure {
+  return () { throw value; };
+}
+
+/** Array storage still yields a direct E operand. */
+func raiseFirst<E: throw>(values: E[]): void { throw values[0]; }
+
+/** Variadic packing must preserve the same element descriptor. */
+func raiseFirstVariadic<E: throw>(first: E, values: E...): void {
+  throw values[0];
+}
+
+/** Distinct enum identities with an identical representation. */
+enum ThrowStatusA { Failed = 7 }
+/** Different nominal identity must not catch ThrowStatusA. */
+enum ThrowStatusB { Failed = 7 }
+/** Tuple payload retains its managed field. */
+type ThrowPair(string, i32);
+/** Same-layout tuple must not match ThrowPair. */
+type ThrowOtherPair(string, i32);
+/** A tuple without managed fields exercises trivial ValueBox copying. */
+type ThrowNumbers(i32, i64);
+/** Concrete generic reference payload. */
+type ThrowReference<T> { let value: T; }
+/** Concrete generic value payload. */
+@value type ThrowValue<T> { let value: T; }
+/** ABI layout does not erase its Feng exception identity. */
+@abi type ThrowAbiReference { let code: i32; }
+/** ABI value layout uses its existing concrete ValueBox. */
+@value @abi type ThrowAbiValue { let code: i32; }
+
+/** Local owner tests both implicit descriptor entrances. */
+type ThrowOwner<E: throw> {
+  let error: E;
+  /** The field's E descriptor is obtained from the owner. */
+  func raise(): void { throw self.error; }
+  /** Method-level U is independent of E. */
+  func method<U: throw>(value: U): void { throw value; }
+  /** Static method descriptors use the existing calling convention. */
+  static func send<U: throw>(value: U): void { throw value; }
+}
+
+/** An extension shares the original owner's bound and descriptor domain. */
+fit ThrowOwner<E> {
+  /** Throw a field through the generic fit member path. */
+  func raiseFromFit(): void { throw self.error; }
+}
+
+/** Constructor bodies use the owner descriptor before returning an object. */
+type ThrowConstructor<E: throw> {
+  /** A failed construction propagates the exact E payload. */
+  func ThrowConstructor(error: E) { throw error; }
+}
+
+/** Consumer-owned wrapper synthesized from an imported constrained method. */
+type ThrowMixed: LibThrowSurface { ...: LibThrowMixin; }
+
+/** Recursive calls forward the descriptor without reconstructing metadata. */
+func recursiveRaise<E: throw>(error: E, depth: i32): void {
+  if depth == 0 { throw error; }
+  recursiveRaise<E>(error, depth - 1);
+}
+
+/** Observable resource state for exceptional ARC cleanup. */
+type ThrowTracker {
+  static var alive: int = 0;
+  static var destroyed: int = 0;
+  static var evaluated: int = 0;
+  static var deferred: int = 0;
+  let code: i32;
+  let tracked: bool;
+  /** Construction records a live instance. */
+  func ThrowTracker(code: i32) {
+    self.code = code;
+    self.tracked = true;
+    ThrowTracker.alive += 1;
+  }
+  /** Destruction must happen exactly once after all owners release. */
+  func ~ThrowTracker() {
+    if self.tracked {
+      ThrowTracker.alive -= 1;
+      ThrowTracker.destroyed += 1;
+    }
+  }
+}
+
+/** A managed aggregate exercises retain and move paths in ValueBox. */
+@value type ThrowTrackedValue { let tracker: ThrowTracker; let label: string; }
+
+/** Observe operand evaluation independently from catch execution. */
+func makeTrackedThrowValue(): ThrowTrackedValue {
+  ThrowTracker.evaluated += 1;
+  return ThrowTrackedValue { tracker: ThrowTracker(19), label: "owned" };
+}
+
+/** Existing defer and anonymous-rethrow semantics must compose with E. */
+func deferredConstrained<E: throw>(value: E): void {
+  defer { ThrowTracker.deferred += 1; }
+  try raiseConstrained<E>(value) catch { throw; }
+}
+
+/** Locals remain valid after the exception's own ownership is released. */
+func checkBorrowedThrowCleanup(): void {
+  let tracker = ThrowTracker(11);
+  let payload = ThrowTrackedValue { tracker: tracker, label: "borrowed" };
+  try raiseConstrained(payload) catch error: ThrowTrackedValue {
+    assert(error.tracker.code == 11 && error.label == "borrowed", "borrowed payload value");
+  }
+  assert(tracker.code == 11 && ThrowTracker.alive == 1, "borrowed source survives catch");
+  try raiseReturned(payload) catch error: ThrowTrackedValue {
+    assert(error.tracker.code == 11, "owned generic return preserves child");
+  }
+  assert(payload.tracker.code == 11 && ThrowTracker.alive == 1, "aggregate move leaves source owner valid");
+}
+
+/** Reference operands retain the caller's owner through both return paths. */
+func checkReferenceThrowCleanup(): void {
+  let source = ThrowTracker(29);
+  try raiseConstrained(source) catch e: ThrowTracker {
+    assert(e == source && e.code == 29, "borrowed reference identity");
+  }
+  try raiseReturned(source) catch e: ThrowTracker {
+    assert(e == source && e.code == 29, "returned reference identity");
+  }
+  assert(ThrowTracker.alive == 1 && ThrowTracker.destroyed == 0, "source reference remains owned");
+}
+
+/** New builtin constraint runtime behavior, locally and across an FB provider. */
+open func test_throw_constraint(): void {
+  describe("throw generic constraint", () {
+    test("all builtin payloads keep exact types and values", () {
+      var caught: int = 0;
+      try raiseConstrained(true) catch e: bool { if e { caught += 1; } }
+      try libRaiseConstrained<i8>((i8)-8) catch e: i8 { if e == (i8)-8 { caught += 1; } }
+      try raiseConstrained<i16>((i16)-16) catch e: i16 { if e == (i16)-16 { caught += 1; } }
+      try libForwardConstrained<i32>(-32) catch e: i32 { if e == -32 { caught += 1; } }
+      try raiseConstrained<i64>(-64) catch e: i64 { if e == -64 { caught += 1; } }
+      try libRaiseConstrained<u8>((u8)8) catch e: u8 { if e == (u8)8 { caught += 1; } }
+      try raiseConstrained<u16>((u16)16) catch e: u16 { if e == (u16)16 { caught += 1; } }
+      try libRaiseConstrained<u32>((u32)32) catch e: u32 { if e == (u32)32 { caught += 1; } }
+      try raiseConstrained<u64>((u64)64) catch e: u64 { if e == (u64)64 { caught += 1; } }
+      try libRaiseConstrained<f32>((f32)1.5) catch e: f32 { if e == (f32)1.5 { caught += 1; } }
+      try raiseConstrained<f64>(2.5) catch e: f64 { if e == 2.5 { caught += 1; } }
+      try libForwardConstrained<string>("message") catch e: string { if e == "message" { caught += 1; } }
+      assert(caught == 12, "every scalar and string caught");
+    });
+    test("nominal boxes stay distinct across packages", () {
+      var wrong = false;
+      var caught: int = 0;
+      try libRaiseConstrained(ThrowStatusA.Failed)
+      catch e: i32 { wrong = true; }
+      catch e: ThrowStatusB { wrong = true; }
+      catch e: ThrowStatusA { if e == ThrowStatusA.Failed { caught += 1; } }
+      let pair: ThrowPair = ("pair", 9);
+      try libRaiseConstrained(pair)
+      catch e: ThrowOtherPair { wrong = true; }
+      catch e: ThrowPair { if e.item1 == "pair" && e.item2 == 9 { caught += 1; } }
+      try raiseConstrained(LibThrowStatus.Failed) catch e: LibThrowStatus {
+        if e == LibThrowStatus.Failed { caught += 1; }
+      }
+      let value = LibThrowValue { message: "provider", status: 37 };
+      try libRaiseConstrained(value) catch e: LibThrowValue {
+        if e.message == "provider" && e.status == 37 { caught += 1; }
+      }
+      assert(!wrong && caught == 4, "exact enum and aggregate descriptors");
+    });
+    test("closed generic and ABI payloads retain their identities", () {
+      var caught: int = 0;
+      var wrong = false;
+      try libRaiseConstrained(ThrowReference<string> { value: "reference" })
+      catch e: ThrowReference<i32> { wrong = true; }
+      catch e: ThrowReference<string> { if e.value == "reference" { caught += 1; } }
+      try libRaiseConstrained(ThrowValue<string> { value: "value" })
+      catch e: ThrowValue<i32> { wrong = true; }
+      catch e: ThrowValue<string> { if e.value == "value" { caught += 1; } }
+      try raiseConstrained(ThrowAbiReference { code: 21 })
+      catch e: ThrowAbiReference { if e.code == 21 { caught += 1; } }
+      try libRaiseConstrained(ThrowAbiValue { code: 22 })
+      catch e: ThrowAbiValue { if e.code == 22 { caught += 1; } }
+      assert(!wrong && caught == 4, "closed and ABI payloads");
+    });
+    test("owner method and callable descriptor entrances", () {
+      var caught: int = 0;
+      let local = ThrowOwner<i32> { error: 3 };
+      let remote = LibThrowOwner<string> { error: "owner" };
+      let valueOwner = LibThrowValueOwner<i32> { error: 5 };
+      try local.raise() catch e: i32 { if e == 3 { caught += 1; } }
+      try remote.raise() catch e: string { if e == "owner" { caught += 1; } }
+      try valueOwner.raise() catch e: i32 { if e == 5 { caught += 1; } }
+      try remote.method<i32>(7) catch e: i32 { if e == 7 { caught += 1; } }
+      try LibThrowOwner<i32>.send<string>("static") catch e: string {
+        if e == "static" { caught += 1; }
+      }
+      try libRaiseViaOwner<string>("forwarded") catch e: string {
+        if e == "forwarded" { caught += 1; }
+      }
+      let function: ThrowAction<i32> = libRaiseConstrained<i32>;
+      let method: ThrowAction<string> = local.method<string>;
+      let staticMethod: ThrowAction<i32> = ThrowOwner<string>.send<i32>;
+      try function(11) catch e: i32 { if e == 11 { caught += 1; } }
+      try method("method") catch e: string { if e == "method" { caught += 1; } }
+      try staticMethod(13) catch e: i32 { if e == 13 { caught += 1; } }
+      assert(caught == 9, "all descriptor entrances");
+    });
+    test("captured descriptors array elements and trivial tuples", () {
+      var caught: int = 0;
+      let numbers: ThrowNumbers = (17, 41);
+      try raiseConstrained(numbers) catch e: ThrowNumbers {
+        if e.item1 == 17 && e.item2 == 41 { caught += 1; }
+      }
+      let action = captureThrow(LibThrowValue { message: "capture", status: 43 });
+      try action() catch e: LibThrowValue {
+        if e.message == "capture" && e.status == 43 { caught += 1; }
+      }
+      let values: string[] = ["element"];
+      try raiseFirst(values) catch e: string { if e == "element" { caught += 1; } }
+      try raiseFirstVariadic<i32>(1, 47, 53) catch e: i32 { if e == 47 { caught += 1; } }
+      assert(caught == 4, "captured and container descriptor paths");
+    });
+    test("constructors generic fits imported mixins and recursion", () {
+      var caught: int = 0;
+      try ThrowConstructor<string>("constructor") catch e: string {
+        if e == "constructor" { caught += 1; }
+      }
+      let owner = ThrowOwner<i32> { error: 59 };
+      try owner.raiseFromFit() catch e: i32 { if e == 59 { caught += 1; } }
+      let mixed = ThrowMixed();
+      try mixed.raise<i32>(61) catch e: i32 { if e == 61 { caught += 1; } }
+      try recursiveRaise<string>("recursive", 3) catch e: string {
+        if e == "recursive" { caught += 1; }
+      }
+      assert(caught == 4, "synthesized and lifecycle descriptor paths");
+    });
+    test("borrowed and owned references release exactly once", () {
+      ThrowTracker.alive = 0;
+      ThrowTracker.destroyed = 0;
+      checkReferenceThrowCleanup();
+      assert(ThrowTracker.alive == 0 && ThrowTracker.destroyed == 1, "borrowed reference cleanup");
+      try raiseReturned(ThrowTracker(31)) catch e: ThrowTracker {
+        assert(e.code == 31 && ThrowTracker.alive == 1, "owned reference survives catch");
+      }
+      assert(ThrowTracker.alive == 0 && ThrowTracker.destroyed == 2, "owned reference cleanup");
+    });
+    test("borrowed owned aggregate and exceptional cleanup", () {
+      ThrowTracker.alive = 0;
+      ThrowTracker.destroyed = 0;
+      ThrowTracker.evaluated = 0;
+      ThrowTracker.deferred = 0;
+      checkBorrowedThrowCleanup();
+      assert(ThrowTracker.alive == 0 && ThrowTracker.destroyed == 1, "borrowed and returned cleanup");
+      var caught = false;
+      try deferredConstrained(makeTrackedThrowValue()) catch e: ThrowTrackedValue {
+        caught = e.tracker.code == 19 && e.label == "owned";
+        assert(ThrowTracker.alive == 1, "temporary survives until catch");
+      }
+      assert(caught && ThrowTracker.evaluated == 1, "single evaluation and preserved temporary");
+      assert(ThrowTracker.deferred == 1, "defer executes once across rethrow");
+      assert(ThrowTracker.alive == 0 && ThrowTracker.destroyed == 2, "temporary released exactly once");
+    });
+  });
+}

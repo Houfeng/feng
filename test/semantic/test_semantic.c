@@ -35407,7 +35407,11 @@ void test_generic_container_static_semantics(void);
 /* Both array owner forms stop invalid static access at Semantic. */
 void test_array_static_parity_semantics(void);
 
+/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+void test_throw_constraint_semantics(void);
+
 int main(void) {
+    test_throw_constraint_semantics();
     test_generic_container_static_semantics();
     test_array_static_parity_semantics();
     test_g25_generic_diagnostics();

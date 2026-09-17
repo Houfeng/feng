@@ -243,7 +243,7 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE0706 | object-form spec 可见关系下重载二义性 | （新增模板） | method overloads in object-form spec '%.*s' may both match the same arguments under visible contract relations: '%.*s' |
 | AE0707 | spec 实现成员可见性兼容约束 | (新增) | type '%.*s' member '%.*s' has visibility 'seal' and cannot satisfy public member required by spec '%.*s' |
 | AE0708 | spec seal 成员访问域约束 | (新增) | seal member '%.*s' of spec '%.*s' is only accessible from a type or fit implementation that satisfies that spec |
-| AE0709 | 类型参数约束目标必须为 spec（包括 tuple 等所有非 spec 类型） | AE0211、AE0212、AE0304 | type parameter '%.*s': constraint must be a spec, not a type、type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint |
+| AE0709 | 类型引用形式的泛型约束必须为 spec（包括 tuple 等所有非 spec 类型）；内建 `throw` 约束独立处理 | AE0211、AE0212、AE0304 | type parameter '%.*s': constraint must be a spec, not a type、type parameter '%.*s': tuple type cannot be used as a constraint; use a spec constraint |
 | AE0710 | 泛型 type／spec owner 类型实参不满足约束 | — | type argument '%s' does not satisfy constraint '%s' of type parameter '%.*s'、forwarded type parameter '%.*s' does not satisfy constraint '%s' of type parameter '%.*s' |
 
 ## 08 Fit段

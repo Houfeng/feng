@@ -107,11 +107,19 @@ typedef struct FengAnnotation {
     size_t arg_count;
 } FengAnnotation;
 
-/* A single type parameter definition, e.g. <T> or <T: Named>. */
+/* Generic bounds are declaration facts, not synthetic type references. */
+typedef enum FengConstraintKind {
+    FENG_CONSTRAINT_NONE = 0,
+    FENG_CONSTRAINT_SPEC,
+    FENG_CONSTRAINT_THROW
+} FengConstraintKind;
+
+/* A single type parameter definition, e.g. <T>, <T: Named>, or <T: throw>. */
 typedef struct FengTypeParam {
     FengToken token;
     FengSlice name;          /* parameter name (e.g. "T") */
-    FengTypeRef *constraint; /* NULL = unconstrained */
+    FengConstraintKind constraint_kind;
+    FengTypeRef *constraint; /* Owned spec reference; NULL for none/builtin. */
 } FengTypeParam;
 
 struct FengTypeRef {

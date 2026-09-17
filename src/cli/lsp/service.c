@@ -11660,7 +11660,9 @@ static bool append_decl_type_params_with_style(FengLspString *buffer,
         if (!string_append_bytes(buffer, params[i].name.data, params[i].name.length)) {
             return false;
         }
-        if (params[i].constraint != NULL) {
+        if (params[i].constraint_kind == FENG_CONSTRAINT_THROW) {
+            if (!string_append_cstr(buffer, ": throw")) return false;
+        } else if (params[i].constraint != NULL) {
             if (!string_append_cstr(buffer, ": ") ||
                 !type_ref_to_string_with_style(buffer, params[i].constraint, style)) {
                 return false;
@@ -12577,7 +12579,9 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
                                      target->type_param->name.length)) {
                 return false;
             }
-            if (target->type_param->constraint != NULL) {
+            if (target->type_param->constraint_kind == FENG_CONSTRAINT_THROW) {
+                if (!string_append_cstr(&presentation->signature, ": throw")) return false;
+            } else if (target->type_param->constraint != NULL) {
                 if (!string_append_cstr(&presentation->signature, ": ") ||
                     !hover_type_ref_to_string(&presentation->signature,
                                               target->type_param->constraint)) {
@@ -12844,6 +12848,10 @@ static bool append_symbol_decl_type_params(FengLspString *buffer,
             return false;
         }
         constraint = feng_symbol_decl_value_type(member);
+        if (feng_symbol_decl_constraint_kind(member) == FENG_CONSTRAINT_THROW &&
+            !string_append_cstr(buffer, ": throw")) {
+            return false;
+        }
         if (constraint != NULL &&
             (!string_append_cstr(buffer, ": ") ||
              !symbol_hover_type_to_string(buffer, constraint))) {
@@ -14693,6 +14701,7 @@ static bool stable_type_params_equal(
     }
     for (index = 0U; index < lhs_count; ++index) {
         if (!slice_equals(lhs[index].name, rhs[index].name) ||
+            lhs[index].constraint_kind != rhs[index].constraint_kind ||
             !stable_type_refs_equal(lhs_session,
                                     lhs_program,
                                     lhs[index].constraint,
@@ -20254,6 +20263,10 @@ static bool hover_presentation_for_cache_target(
                                      target->type_param->name.length)) {
                 return false;
             }
+            if (target->type_param->constraint_kind == FENG_CONSTRAINT_THROW &&
+                !string_append_cstr(&presentation->signature, ": throw")) {
+                return false;
+            }
             if (target->type_param->constraint != NULL &&
                 (!string_append_cstr(&presentation->signature, ": ") ||
                  !hover_type_ref_to_string(&presentation->signature,
@@ -20859,6 +20872,8 @@ static bool cache_symbol_type_params_equal(const FengSymbolDeclView *lhs,
         }
         if (!slice_equals(feng_symbol_decl_name(lhs_param),
                           feng_symbol_decl_name(rhs_param)) ||
+            feng_symbol_decl_constraint_kind(lhs_param) !=
+                feng_symbol_decl_constraint_kind(rhs_param) ||
             !cache_symbol_types_equal(feng_symbol_decl_value_type(lhs_param),
                                       feng_symbol_decl_value_type(rhs_param))) {
             return false;

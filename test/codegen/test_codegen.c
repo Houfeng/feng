@@ -17372,9 +17372,13 @@ static void test_g23_qualified_generic_function_codegen(void) {
     feng_program_free(user);
 }
 
+/* Additional builtin-constraint coverage; existing cases remain unchanged. */
+void test_throw_constraint_codegen(void (*compile_c)(const char *));
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);
     test_g24_spec_view_codegen(compile_generated_c_or_die);

@@ -1309,6 +1309,18 @@ static bool parse_attrs(ReadContext *ctx,
         FengSymbolDeclView *decl = decl_by_symbol_id(ctx, symbol_id);
         uint32_t attr_index;
 
+        if (kind == FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT) {
+            if (decl == NULL || decl->kind != FENG_SYMBOL_DECL_KIND_TYPE_PARAM ||
+                decl->constraint_kind != FENG_CONSTRAINT_NONE || decl->value_type != NULL ||
+                value0 != FENG_SYMBOL_FT_BUILTIN_CONSTRAINT_THROW || value1 != 0U ||
+                read_u16_le(record + 0x06) != 0U || read_u32_le(record + 0x10) != 0U) {
+                return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+                    "invalid builtin generic constraint attribute");
+            }
+            decl->constraint_kind = FENG_CONSTRAINT_THROW;
+            continue;
+        }
+
         if (kind == FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT) {
             uint32_t total = read_u32_le((const unsigned char *)ctx->spec_view_coercions_section + 0x04);
             if (decl == NULL || (decl->kind != FENG_SYMBOL_DECL_KIND_TYPE &&

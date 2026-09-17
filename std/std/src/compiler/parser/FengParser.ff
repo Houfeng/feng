@@ -145,7 +145,7 @@ open type FengParser {
    */
   seal func nextToken(): FengToken {
     var token = self.lexer.next();
-    while FengTokenUtil.isTrivia(token.kind) {
+    while token.kind != FengTokenKind.SpecialEndOfFile && FengTokenUtil.isTrivia(token.kind) {
       token = self.lexer.next();
     }
     return token;
@@ -157,7 +157,7 @@ open type FengParser {
    */
   seal func peekToken(): FengToken {
     var token = self.lexer.peek();
-    while FengTokenUtil.isTrivia(token.kind) {
+    while token.kind != FengTokenKind.SpecialEndOfFile && FengTokenUtil.isTrivia(token.kind) {
       self.lexer.next();
       token = self.lexer.peek();
     }
@@ -321,24 +321,38 @@ open type FengParser {
 
     let nameToken = self.expectIdentifierLike(false, "PE0004", "expected a type parameter name");
     var constraint: Option<TypeReference> = none;
+    var constraintKind = GenericConstraintKind.None;
     if self.matchToken(FengTokenKind.PunctuationColon) {
-      constraint = self.parseTypeReference();
+      if self.matchToken(FengTokenKind.KeywordThrow) {
+        constraintKind = GenericConstraintKind.Throw;
+      } else {
+        constraintKind = GenericConstraintKind.Spec;
+        constraint = self.parseTypeReference();
+      }
     }
     params.add(GenericParameter {
       location: nameToken.location,
       name: nameToken.value,
+      constraintKind: constraintKind,
       constraintTypeRef: constraint
     });
 
     while self.matchToken(FengTokenKind.PunctuationComma) {
       let paramToken = self.expectIdentifierLike(false, "PE0004", "expected a type parameter name");
       var paramConstraint: Option<TypeReference> = none;
+      var paramConstraintKind = GenericConstraintKind.None;
       if self.matchToken(FengTokenKind.PunctuationColon) {
-        paramConstraint = self.parseTypeReference();
+        if self.matchToken(FengTokenKind.KeywordThrow) {
+          paramConstraintKind = GenericConstraintKind.Throw;
+        } else {
+          paramConstraintKind = GenericConstraintKind.Spec;
+          paramConstraint = self.parseTypeReference();
+        }
       }
       params.add(GenericParameter {
         location: paramToken.location,
         name: paramToken.value,
+        constraintKind: paramConstraintKind,
         constraintTypeRef: paramConstraint
       });
     }

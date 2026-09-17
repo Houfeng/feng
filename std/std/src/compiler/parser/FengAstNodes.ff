@@ -136,12 +136,18 @@ open spec Binding: SimpleBinding | DestructureBinding;
 
 // 泛型参数 ---------------------------------------------------------------------
 
-/**
- * 泛型参数节点，类型约束可省略
- */
+/** 泛型约束种类；内建约束不创建伪类型引用。 */
+open enum GenericConstraintKind {
+  None = 0,
+  Spec = 1,
+  Throw = 2
+}
+
+/** 泛型参数节点；只有 Spec 约束使用 constraintTypeRef。 */
 open type GenericParameter {
   let location: FengLocation;
   let name: StringSpan;
+  let constraintKind: GenericConstraintKind;
   let constraintTypeRef: Option<TypeReference>;
 }
 

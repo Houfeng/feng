@@ -29,7 +29,8 @@ typedef enum FengSymbolAttrKind {
     FENG_SYMBOL_ATTR_MIXABLE_METHOD = 12,
     FENG_SYMBOL_ATTR_UNION_PROJECTION_COUNT = 13,
     FENG_SYMBOL_ATTR_SPEC_VIEW_COERCION_COUNT = 14,
-    FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT = 15
+    FENG_SYMBOL_ATTR_CONSTRAINT_PROJECTION_COUNT = 15,
+    FENG_SYMBOL_ATTR_BUILTIN_CONSTRAINT = 16
 } FengSymbolAttrKind;
 
 typedef struct FengSymbolParamView {
@@ -133,6 +134,8 @@ struct FengSymbolDeclView {
     bool is_iterable;
     bool is_iterator;
     bool is_mixable;
+    /* Generic declaration fact; builtin bounds have no value_type node. */
+    FengConstraintKind constraint_kind;
     /* Compile-time provider marker used only by package-public selection.
      * It is intentionally not serialized as an FT attribute. */
     bool is_spec_implementation_dependency;
