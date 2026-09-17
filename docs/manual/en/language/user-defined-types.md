@@ -1,6 +1,6 @@
 # User-Defined Types
 
-`type` organizes data and behavior into a named type. Object types are managed reference types; named tuples are value types.
+`type` organizes data and behavior into a named type. Regular object types are managed reference types; named tuples and object types marked with `@value` are value types.
 
 ## Fields and Object Literals
 
@@ -41,7 +41,9 @@ let user = User(1, "Alice");
 let renamed = User(2, "Bob") { name: "Carol" };
 ```
 
-When no constructor is declared explicitly, the default parameterless constructor and object literals are available. An object literal can also override members after construction while those members remain bindable or writable.
+For a braced object type with no explicitly declared constructor, the default parameterless constructor and object
+literals are available. An object literal can also override members after construction while those members remain
+bindable or writable. This rule does not apply to parenthesized named tuples, which have no ordinary constructor.
 
 ## Methods
 

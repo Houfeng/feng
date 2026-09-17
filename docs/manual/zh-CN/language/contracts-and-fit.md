@@ -25,6 +25,41 @@ func print_name(value: Named) {
 
 字段必须在名称、类型和 `let`/`var` 方式上匹配；方法必须在名称、参数与返回类型上匹配。声明头中的关系表示类型定义者主动承诺满足契约。
 
+## 契约视角
+
+已经通过 `type` 声明头或当前可见的 `fit` 建立满足关系后，具体值可以直接进入对应的对象契约位置。
+子对象契约也可以直接用作其直接或间接父契约。绑定、赋值、传参、返回、字段和数组元素写入都可以
+根据目标类型完成这种适配：
+
+```feng
+spec Profile: Named {}
+
+/** 同时满足 Profile 及其父契约 Named。 */
+type Member: Profile {
+  let name: string;
+
+  /** 返回成员名称。 */
+  func display(): string {
+    return self.name;
+  }
+}
+
+/** 返回同一值的父契约视角。 */
+func as_named(value: Profile): Named {
+  return value;
+}
+
+let member = Member { name: "Alice" };
+let profile: Profile = member;
+let named: Named = profile;
+let parent = as_named(profile);
+print_name(member);
+print_name(profile);
+```
+
+这里无需手写 `(Named)` 转换；适配依据编译期已声明的满足关系与父契约关系。仅有相同字段或方法
+不会自动建立满足关系，也不会因为运行时对象恰好满足某个契约而自动接受该目标类型。
+
 ## 可调用契约
 
 ```feng
@@ -45,6 +80,7 @@ let id: Identifier = "user-42";
 let label = match id {
   number: int { "numeric" }
   text: string { text }
+  else { "unknown" }
 };
 ```
 

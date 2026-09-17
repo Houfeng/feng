@@ -25,6 +25,8 @@ The Feng source formatter handles:
 - Trailing whitespace and line endings.
 - Spacing around binary, compound-assignment, and shift operators.
 - Common spacing for parameters, arguments, type annotations, commas, and object literals.
+- Generic spacing follows section 5.2, “Keep Generic Angle Brackets Adjacent,” of the [Feng Style Guide](../feng-style.md), including field and variable type annotations with initializers.
+- Pointers and combined type suffixes in generic arguments follow section 5.1, “Keep Type Suffixes Adjacent,” of the [Feng Style Guide](../feng-style.md).
 - Tight spacing for variadic parameters `T...` and prepacked forwarding `...expr`, while preserving one space after a preceding argument comma.
 
 The manifest formatter handles:

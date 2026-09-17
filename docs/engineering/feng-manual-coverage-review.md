@@ -4,7 +4,7 @@
 
 本文记录用户手册的发布链接问题与内容缺口，不定义新的语言规则。核查对象为
 `docs/manual/en/`、`docs/manual/zh-CN/`，依据为当前规范、源码与已有兼容性用例。
-下列补充内容是建议，尚未作为新教程写入手册；链接修复见第 1 节。
+第 3、4、6 节记录尚待补写的内容建议；链接修复见第 1 节，现有内容问题的处理结果见第 5 节。
 
 ## 1 发布链接核查
 
@@ -43,7 +43,7 @@
 | 自定义迭代器 | 流程控制只提到 `@iterable` / `@iterator` 名称 | 完整的容器与游标示例；返回具名 `(bool, E)` 元组；直接遍历游标；通过 fit 接入；每次遍历的状态与结束条件 | 扩充流程控制或单列迭代器教程。依据：[迭代器规范](../specifications/feng-iterator.md)、[迭代器用例](../../fcts/fcts_bin/src/test_iterator.ff) |
 | `@friend` 定向访问 | 全文未介绍 | 为指定 type 开放 seal 字段、实例方法与静态方法；同包 fit 的使用；授权不穿透模块和类型可见性；受限工厂的例子 | 模块与可见性。依据：[可见性规范 §10.3](../specifications/feng-visibility.md)、[friend 用例](../../fcts/fcts_bin/src/test_friend.ff) |
 | 内存与资源生命周期 | 分散提到自动管理、闭包捕获、终结器和 defer，缺少连贯说明 | 托管对象与外部资源的区别；强引用与闭包保活；循环引用回收；终结器的使用限制；显式关闭与 defer 的配合；C 指针 owner 保活 | 建议独立生命周期教程，与异常处理、C 互操作互链。依据：[生命周期规范](../specifications/feng-lifetime.md)、[终结器捕获用例](../../fcts/fcts_bin/src/test_finalizer_capture.ff) |
-| 对象契约与交叉契约进阶 | 已有基本声明、满足关系和交叉声明 | 父 spec 与多父契约；子契约到父契约视角；交叉契约到成员视角的显式转换；static / seal requirement；通过约束类型参数访问静态能力 | 契约与 fit；泛型章节引用相关用法。依据：[spec 规范 §4](../specifications/feng-spec.md)、[父视角用例](../../fcts/fcts_bin/src/test_spec_upcast.ff)、[交叉视角用例](../../fcts/fcts_bin/src/test_intersection_projection.ff)、[静态契约用例](../../fcts/fcts_bin/src/test_spec_static_method_value.ff) |
+| 对象契约与交叉契约进阶 | 已有基本声明、满足关系、父契约视角与交叉声明 | 多父契约；交叉契约到成员视角的显式转换；static / seal requirement；通过约束类型参数访问静态能力 | 契约与 fit；泛型章节引用相关用法。依据：[spec 规范 §4](../specifications/feng-spec.md)、[父视角用例](../../fcts/fcts_bin/src/test_spec_upcast.ff)、[交叉视角用例](../../fcts/fcts_bin/src/test_intersection_projection.ff)、[静态契约用例](../../fcts/fcts_bin/src/test_spec_static_method_value.ff) |
 | 联合类型与多级匹配 | 主要是 `int` / `string` 两成员示例 | 嵌套联合；`A -> B` 多级模式；多个成员的子集绑定；显式 let / var 匹配绑定；首成员默认值；进入联合时的路径选择与歧义；以对象契约或可调用契约为成员 | 模式匹配。依据：[联合类型规范 §3](../specifications/feng-union-type.md)、[流程控制规范 §3](../specifications/feng-flow.md)、[嵌套联合用例](../../fcts/fcts_bin/src/test_nested_union.ff) |
 | fit 的完整使用面 | 只有普通对象适配和实例扩展方法 | 泛型 `fit Box<T>`；静态扩展；标量、string、数组、tuple、enum 的扩展示例；无块体适配；不能添加字段；孤儿适配的包内边界 | 契约与 fit。依据：[fit 规范](../specifications/feng-fit.md)、[tuple 规范 §9](../specifications/feng-tuple.md)、[数组实际扩展](../../std/std/src/collections/Array.ff)、[字符串实际扩展](../../std/std/src/text/String.ff) |
 | 变长参数转发与函数值 | 已有 `T...`、Lambda 和普通对象方法值；`...expr` 仅在格式化器页提到 | `f(...items)` 预打包转发及位置、数组可写性限制；变参 callable spec；顶层函数、静态方法、spec 方法形成函数值；泛型函数值显式闭合；不同 callable spec 的显式转换；可调用零值 | 函数为主，契约章节互链。依据：[变长参数规范 §4.3](../specifications/feng-function-variadic.md)、[函数规范 §4.1](../specifications/feng-function.md)、[spec 规范](../specifications/feng-spec.md)、[变参用例](../../fcts/fcts_bin/src/test_variadic.ff)、[静态方法值用例](../../fcts/fcts_bin/src/test_static_method_value.ff) |
@@ -60,22 +60,27 @@
 | 异常与清理边界 | 已有基本 throw / catch / defer；应补具体类型精确匹配、panic 与可捕获异常的区别、defer 内控制转移限制、嵌套作用域清理顺序及清理函数抛错的处理 | [异常规范](../specifications/feng-exception.md)、[defer 规范](../specifications/feng-defer.md)、[defer 用例](../../fcts/fcts_bin/src/test_defer.ff) |
 | C 互操作完整流程 | 已有函数、指针、数组、回调片段；应补可运行的 C + Feng 最小项目、原生库配置、`@abi` 不改变普通对象引用语义、按值与借址的对照、opaque 指针及受限泛型 extern 的用法 | [互操作规范](../specifications/feng-interop.md)、[函数规范](../specifications/feng-function.md)、[构建规范](../specifications/feng-build.md) |
 
-## 5 补写前应先处理的现有内容问题
+## 5 现有内容问题的处理结果
 
-1. **联合 match 表达式示例缺少 else。** 中英文的“模式匹配”和“契约与 fit”各有一个
-   `let … = match …` 示例没有 else。手册自己的结果说明与
-   [流程控制规范 §3.4](../specifications/feng-flow.md) 都要求表达式形式包含 else；
-   [当前语义检查](../../src/semantic/analyzer.c) 在缺失时报告 `AE1108`。
-   后续补写应先修正这四处示例。本次只记录，没有扩展为整本手册的示例修订。
-2. **“跨类型转换必须显式”需要讲清契约视角的语境。** 类型章开头的概括没有交代
-   [spec 规范](../specifications/feng-spec.md) 已允许的具体类型进入已满足契约、子 spec 进入父 spec
-   的上下文适配。应与契约章节的实际赋值、参数例子一起说明，避免读者误以为都必须手写 cast。
-3. **文档状态不能替代实现核查。** [@value 开发记录](./feng-value-type-dev.md) 仍写“尚未实现”，
-   但当前 [Parser](../../src/parser/parser.c) 已识别 `FENG_ANNOTATION_VALUE`，并已有值类型
-   FCTS。泛型规范文件也仍带草案状态。补写应按具体特性的当前规则与源码核对，不能把整份草案
-   一律当成已交付或未交付；需要补齐的权威规则应先在其主规范收敛。
-4. **中英文需要检查内容同步。** 两种语言的页面路径一致，但中文格式化器页的泛型间距、类型后缀
-   两条说明在英文对应页中没有体现。新增教程及现有说明修订应同步，而不只是维持目录一致。
+1. **match 按实际实现说明。** [当前语法检查](../../src/parser/parser.c) 对表达式形式始终要求
+   else，即使已列出联合类型的全部成员；缺失时报告 `SE1103`。独立语句形式可省略 else。
+   中英文“模式匹配”和“契约与 fit”的四处表达式示例已补齐 else，模式匹配章节同步明确这一边界。
+2. **类型适配按实际实现说明。** [当前语义检查](../../src/semantic/analyzer.c) 与
+   [已有父契约视角用例](../../fcts/fcts_bin/src/test_spec_upcast.ff) 支持具体类型进入已声明满足的
+   对象契约位置，以及子对象契约进入直接或间接父契约位置。中英文类型章已区分数值显式转换、
+   字面量贴合与契约视角适配；契约章节已增加绑定、传参和返回示例，并说明仅有相同结构不足以
+   建立满足关系。该修订不改变语言行为。
+3. **@value 已实现。** [@value 开发记录](./feng-value-type-dev.md) 的标题、状态、历史背景和
+   §9.17 已修正，不再把已交付能力标为尚未实现。值类型方法值捕获的实施记录见
+   [对应开发文档](./feng-value-type-method-value-capture-dev.md)，行为证据见
+   [值类型用例](../../fcts/fcts_bin/src/test_value_type.ff) 与
+   [方法值捕获用例](../../fcts/fcts_bin/src/test_value_method_capture.ff)。第 3 节的 @value 项仅表示
+   使用教程仍需扩充；其他草案的状态仍应按其具体实现分别核对。
+4. **中英文结构与覆盖面对齐。** 已核对两种语言的 30 对页面及各级标题、示例、关联链接和说明。
+   英文补齐了元组创建与默认值、解构类型标注限制、普通构造不适用于 tuple、泛型语法高亮、
+   格式化范围和指针后缀风格；中文补齐了异常载荷中的 @abi / @value 说明及分支表达式的关联入口。
+   两种语言同步修订本节涉及的语义说明。后续同步要求统一记录在
+   [手册多语言规则](../manual/README.md#多语言规则)。
 
 ## 6 标准库层面的补充
 
@@ -110,19 +115,23 @@
 
 ## 7 建议执行顺序
 
-1. 先修正第 5 节中现有示例和表述问题，明确教程依据。
+1. 第 5 节问题已处理；后续补写继续按实际实现核对示例与说明，并同步中英文结构和覆盖面。
 2. 补成员展开、值类型、迭代器、friend 与生命周期，使主要特性都有可跟随的入口。
 3. 扩充 spec / fit、联合、泛型、函数值，再补基础边界和标准库任务教程。
 4. 新增独立页面时，同步中英文手册导航与官网导航；完整示例给出必要 import、入口和预期结果，
    并验证示例及构建后的站内文件与锚点链接。
 
-以上是补写顺序建议，不表示本次已新增这些教程，也不涉及语言行为、编译器或运行时修改。
+以上是剩余内容的补写顺序建议，不表示第 3、4、6 节教程已全部补齐，也不涉及语言行为、编译器或运行时修改。
 
 ## 8 本次验证
 
 - `npm run docs:build` 成功，中英文共生成 60 个手册页面。
-- 61 个手册 Markdown 文件的 91 个链接及图片引用检查通过；本地目标存在，语言页面的本地链接
+- 30 对语言页面的标题层级、代码块顺序与关联链接一致；每种语言各有 193 个标题、164 个代码块。
+  已逐页核对两种语言的说明，并补齐第 5 节列出的内容差异。
+- 修订的 match 表达式和契约视角示例按语言分别通过本地编译器的语法与语义检查；缺少 else 的
+  match 表达式、仅有相同结构但未声明满足关系的契约赋值均按预期被拒绝。
+- 61 个手册 Markdown 文件的 98 个链接及图片引用检查通过；本地目标存在，语言页面的本地链接
   均保留在各自的发布目录内。
-- 生成页面中共检查 5,047 处站内链接，未发现缺失文件或缺失锚点。
+- 生成页面中共检查 5,060 处站内链接，其中 832 处带锚点，未发现缺失文件或缺失锚点。
 - 本文和文档总入口中的本地链接目标均存在。
 - 本次仅修改文档，未运行编译器全量回归，也未修改已有测试用例。

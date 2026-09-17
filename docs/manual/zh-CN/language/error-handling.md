@@ -12,9 +12,9 @@ func require_positive(value: int) {
 }
 ```
 
-可以抛出数值标量、`bool`、`string`、具名 enum、具名 tuple 和允许的具体闭合用户类型。不能抛出
-array、`spec` 视角值、开放泛型、pointer、`void`、函数、Lambda 或方法值。具名 `catch` 使用相同的
-类型集合。
+可以抛出数值标量、`bool`、`string`、具名 enum、具名 tuple 和具体闭合用户类型，包括这些用户类型
+支持的 `@abi` 和 `@value` 形式。具名 `catch` 使用相同的具体类型集合。array、任何 `spec` 视角值、
+开放泛型、pointer、`void` 以及函数、Lambda、方法值等可调用值或类型，均不能用于抛出或具名 `catch`。
 
 ## 捕获异常
 

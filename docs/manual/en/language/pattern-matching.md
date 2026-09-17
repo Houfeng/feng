@@ -49,6 +49,7 @@ Before narrowing, a union value cannot access members directly or be compared fo
 let message = match result {
   value: int { "code" }
   text: string { text }
+  else { "unknown" }
 };
 ```
 
@@ -95,7 +96,8 @@ bindings propagated by one `&&` condition must use distinct names.
 ## Expression Results
 
 When `match` is an expression, every normally completing path must reach the final result expression of its branch.
-A path that returns from the current function, method, or lambda, or escapes through `throw`, produces no result and
-does not participate in result-type checking. The expression form always requires an `else` branch. When the context
+A path that uses `return` to leave the current function, method, or lambda, or escapes through `throw`, produces no result and
+does not participate in result-type checking. The expression form always requires an `else` branch, even when all union
+members are listed. A standalone `match` statement may omit `else`. When the context
 provides a target type, every normal result must fit that type. Without a contextual target, Feng determines a target
 type from the normal results and requires the remaining normal results to fit it.

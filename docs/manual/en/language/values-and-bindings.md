@@ -105,4 +105,7 @@ let (, only_text) = pair;
 ```
 
 An empty position discards the corresponding value and creates no binding. Nonempty positions in one destructuring
-pattern must use distinct names. Feng currently supports only one level of destructuring.
+pattern must use distinct names. Feng currently supports only one level of destructuring. A type annotation after
+the whole pattern is invalid, so `let (x, y): Pair = value;` is not allowed; each position's type is inferred from the
+corresponding element on the right. To constrain the right-hand side first, write `let value: Pair = source;` and then
+`let (x, y) = value;`.

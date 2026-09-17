@@ -49,6 +49,7 @@ let result: Result = "ready";
 let message = match result {
   value: int { "code" }
   text: string { text }
+  else { "unknown" }
 };
 ```
 
@@ -94,5 +95,6 @@ if result match text: string && !text.isEmpty() {
 
 `match` 作为表达式时，每条正常完成路径都必须到达所在分支块的最后一个结果表达式；通过当前函数、
 方法或 Lambda 的 `return` 返回，或者通过 `throw` 逃逸的路径不产生结果，也不参与结果类型检查。
-表达式形式必须包含 `else`。上下文提供目标类型时，每个正常结果都必须能够贴合该类型；没有目标
+表达式形式必须包含 `else`，即使已经列出联合类型的全部成员。独立语句形式的 `match` 可以省略
+`else`。上下文提供目标类型时，每个正常结果都必须能够贴合该类型；没有目标
 类型时，Feng 从正常结果确定目标类型，并要求其余正常结果能够贴合。

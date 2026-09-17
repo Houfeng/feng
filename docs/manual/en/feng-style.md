@@ -184,6 +184,7 @@ if ready {
 
 - Write the array type suffix `[]` immediately after the preceding type, without a space between the type and the brackets.
 - Apply the same rule after a generic type instance. Prefer `string[]` and `Map<K, V>[]` over `string []` and `Map<K, V> []`.
+- Write the pointer type suffix `*` immediately after the preceding type, including pointers and combined suffixes in generic type arguments, such as `List<Node*>`, `Map<string, Node**>`, and `List<Node*[]>`.
 
 ### 5.2 Keep Generic Angle Brackets Adjacent
 

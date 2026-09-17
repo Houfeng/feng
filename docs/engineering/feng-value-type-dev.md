@@ -1,9 +1,9 @@
-# Feng `@value` 内建注解开发草案
+# Feng `@value` 内建注解开发记录
 
-> 本文档记录 `@value` 内建注解的设计方案。
-> **状态**：草案阶段，尚未实现，仅讨论。
-> 本文档是 [feng-value-model-delivered.md](./feng-value-model-delivered.md) 的 Phase 3（值语义 struct）落地方案。
-> 本文档不修改任何语言权威规范（`docs/`），待方案确认后迁入规范。
+> 本文档记录 `@value` 内建注解的设计与实施结果。
+> **状态**：已实现；值类型方法值接收者捕获也已完成，见 §9.17。
+> 本文档记录了 [feng-value-model-delivered.md](./feng-value-model-delivered.md) 中 Phase 3（值语义 struct）的落地过程。
+> 本文属于工程记录，不另行定义语言规则；权威语义见对应的类型、函数、spec 等规范。
 >
 > **后续演进**：本文中关于 `FengScalarBox` 与 per-type value box 不统一的历史结论，已由
 > [统一 ValueBox 与异常开发方案](./feng-unified-value-box-and-exception-dev.md) 替代。本文只保留
@@ -13,16 +13,16 @@
 
 ## 0 背景
 
-### 现状
+### 引入前的状态
 
-Feng 当前有两种具名类型声明形式：
+引入 `@value` 前，Feng 有两种具名类型声明形式：
 
 - **`type`**（对象类型）：堆分配，`FengManagedHeader`，引用语义，赋值复制引用。
 - **`tuple`**（元组类型）：栈/内联分配，无托管头，值语义，赋值复制值。
 
-两者之间存在一个明显的空白：用户想要「具名花括号字段 + 值语义 + 可带方法 + 无元素数量限制」的类型时，只能选择堆分配的 `type`。
+当时两者之间存在一个空白：用户想要「具名花括号字段 + 值语义 + 可带方法 + 无元素数量限制」的类型时，只能选择堆分配的 `type`。
 
-值模型文档（`feng-value-model-delivered.md` §9.3）已预留 Phase 3 位置：
+值模型文档（`feng-value-model-delivered.md` §9.3）当时预留了 Phase 3 位置，以下为历史背景：
 
 > Phase 3：值语义 struct（未来特性）
 > 同 Phase 2，仅当语言规范引入后启动；runtime 同样应零修改。
@@ -1017,16 +1017,16 @@ codegen 中 `CG_TYPE_OBJECT` 出现 62 处、`cgtype_is_managed` 116 处，部�
 
 ### 9.17 值类型方法值的接收者捕获【独立后续 TODO】
 
-**状态**：待实施 ｜ **依赖**：§9.6、§9.15 ｜ **范围**：[Feng 语言类型规范](../specifications/feng-type.md) 的方法值与 `self` 规则
+**状态**：已完成 ｜ **依赖**：§9.6、§9.15 ｜ **范围**：[Feng 语言类型规范](../specifications/feng-type.md) 的方法值与 `self` 规则
 
 方法值形成属于接收者捕获边界，不是实例方法调用本身。值类型接收者在方法值形成时复制当前值，方法值
 后续调用中的 `self` 引用其保存的接收者存储，不再次复制接收者；引用类型方法值继续只复制对象引用。
-当前 callable method-value lowering 仍按普通托管对象接收者组织，尚未完整覆盖 `@value`/tuple 接收者，
-需要在后续实现中统一补齐并增加 FCTS；本次仅明确语义，不修改实现。
+`@value`/tuple 接收者捕获及相关泛型、跨包和生命周期 FCTS 已补齐，实施与验证记录见
+[值类型方法值接收者捕获开发文档](./feng-value-type-method-value-capture-dev.md)。
 
 **注意**
 
 - 每项任务完成并全量回归通过后，将相应任务标记为完成，输出 commit message，停下来等人工 Review 和下一步指令
 - 如果遇到不确认的问题由人工决策
 
-> **后续**：全量交付并通过回归后，将本草案迁入语言权威规范（`docs/`），按 CLAUDE.md「先文档」原则启动；迁入前本草案为唯一设计来源。
+> 本文保留设计与实施过程；语言规则以关联的主规范为准，后续变更仍按先规范、再实现、后测试的顺序推进。

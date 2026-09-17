@@ -13,6 +13,12 @@ The extension recognizes:
 - `.fb`: Feng Bundles.
 - `.ft`: Feng symbol tables.
 
+## Syntax Highlighting
+
+The `<` and `>` delimiters in generic parameter and type-argument lists are highlighted as paired generic punctuation.
+This includes type annotations with initializers, explicit generic calls, nested generics, and pointer type arguments.
+Comparison and shift operators in expressions are highlighted as operators.
+
 ## Documentation Comments
 
 When you type `/**` in a Feng source file, the extension automatically inserts a documentation-comment closing delimiter with a leading space. Pressing Enter then expands and aligns the standard multiline documentation-comment structure:

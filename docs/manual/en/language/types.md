@@ -1,6 +1,9 @@
 # Types
 
-Feng is statically typed. Types are determined at compile time, and conversions between types must be written explicitly.
+Feng is statically typed. Types are determined at compile time, and converting values that already have different
+numeric types requires an explicit conversion. Numeric literals can fit a target numeric type. A concrete type with
+declared conformance can be used directly as an object contract, and a child object contract can be used directly as
+its parent contract, without writing a cast. See [Contracts and fit](./contracts-and-fit.md) for examples of contract views.
 
 ## Built-in Scalar Types
 
@@ -36,7 +39,7 @@ let path = `C:\data\feng`;
 let message = "Hello, " + "Feng";
 ```
 
-After importing `std.text`, methods for length, searching, splitting, and case conversion are available. String length is measured in UTF-8 bytes. Use the standard library's rune or grapheme APIs when you need a Unicode code-point or grapheme-cluster view.
+After importing `std.text`, methods such as `length()`, searching, splitting, and case conversion are available. String length is measured in UTF-8 bytes. Use the standard library's rune or grapheme APIs when you need a Unicode code-point or grapheme-cluster view.
 
 ## Arrays
 
@@ -83,7 +86,10 @@ let item: Pair<int, string> = (1, "one");
 println("{0}", origin.item1);
 ```
 
-Named tuples are value types, and their elements are always immutable. A `var` binding can replace the entire tuple but cannot modify an individual element in place.
+Named tuples are value types, and their elements are always immutable. A `var` binding can replace the entire tuple
+but cannot modify an individual element in place. A new tuple literal must fit a named target type. An existing tuple
+value can be copied by value, and a tuple binding without an initializer uses the default zero value of each element.
+A tuple is not an object type and has no ordinary constructor; `Pair()`, `Pair { ... }`, and `Pair() { ... }` are invalid.
 
 ## Enumerations
 

@@ -25,6 +25,43 @@ func print_name(value: Named) {
 
 A field must match in name, type, and `let`/`var` form. A method must match in name, parameters, and return type. A relationship in the declaration header states that the type author explicitly promises conformance to the contract.
 
+## Contract Views
+
+Once conformance is declared in a `type` header or a currently visible `fit`, a concrete value can be used directly
+where that object contract is expected. A child object contract can also be used directly as its direct or transitive
+parent contract. Bindings, assignments, arguments, returns, fields, and array element writes can use the target type
+to perform this adaptation:
+
+```feng
+spec Profile: Named {}
+
+/** Satisfies both Profile and its parent contract Named. */
+type Member: Profile {
+  let name: string;
+
+  /** Returns the member's name. */
+  func display(): string {
+    return self.name;
+  }
+}
+
+/** Returns the parent contract view of the same value. */
+func as_named(value: Profile): Named {
+  return value;
+}
+
+let member = Member { name: "Alice" };
+let profile: Profile = member;
+let named: Named = profile;
+let parent = as_named(profile);
+print_name(member);
+print_name(profile);
+```
+
+No explicit `(Named)` cast is needed here. Adaptation follows conformance and parent-contract relationships declared
+at compile time. Matching fields or methods alone do not establish conformance, and a runtime object's ability to
+satisfy another contract does not automatically make that target type acceptable.
+
 ## Callable Contracts
 
 ```feng
@@ -45,6 +82,7 @@ let id: Identifier = "user-42";
 let label = match id {
   number: int { "numeric" }
   text: string { text }
+  else { "unknown" }
 };
 ```
 
