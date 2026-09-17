@@ -80,3 +80,60 @@ Multiple `defer` blocks in one scope run in last-in, first-out order. Normal exi
 ## C Boundaries
 
 An exception cannot cross a C ABI boundary. An ABI function must internally handle every exception that could propagate to the boundary. A C function should report errors through return values, error codes, or callback conventions.
+
+## Exact Matching and Cleanup Boundaries
+
+A named catch matches the exact concrete type. An enum is not its underlying integer, and distinct named types do not match merely because their layouts agree. This complete program also shows defer order during nested unwinding and handling an exception from a cleanup function:
+
+```feng
+module manual_cleanup;
+import std.io;
+
+enum CodeA { Failure = 1 }
+
+enum CodeB { Failure = 1 }
+
+/** Throws one exact named enum type. */
+func fail_exact() { throw CodeA.Failure; }
+
+/** Registers cleanups in nested scopes before throwing. */
+func work() {
+  defer { println("outer"); }
+  if true {
+    defer { println("inner"); }
+    throw "work failed";
+  }
+}
+
+/** Models a cleanup operation that can fail. */
+func close_resource() { throw "close failed"; }
+
+/** Handles a possible close failure before returning to defer. */
+func close_safely() {
+  try close_resource() catch error: string { println(error); }
+}
+
+/** Calls a cleanup helper that handles its own exceptions. */
+func cleanup_safely() {
+  defer { close_safely(); }
+}
+
+/** Observes exact matching and cleanup order. */
+func main(args: string[]) {
+  try fail_exact() catch error: i32 {
+    println("integer");
+  } catch error: CodeB {
+    println("other enum");
+  } catch error: CodeA {
+    println("exact");
+  }
+  try work() catch error: string { println("caught"); }
+  cleanup_safely();
+}
+```
+
+The output is `exact`, `inner`, `outer`, `caught`, and `close failed`. Inner scopes leave before outer scopes. Registered defers run in reverse order within each scope, and managed locals follow normal exit cleanup. A defer that execution never reaches is never registered.
+
+No part of a defer block may directly contain `return`, `throw` or another `defer`. It cannot break or continue an outer loop, although loops created inside it may use their own break or continue. A function called during cleanup can still throw. An exception not handled inside that function interrupts the remaining cleanup statements. The current implementation has an exception-catching limitation for try/catch written directly inside defer. Handle recoverable cleanup failures inside a helper such as `close_safely()` and call that helper from defer, as above.
+
+A runtime panic terminates the process; it is not a Feng exception that catch can handle, and it is not a reliable way to run every defer. See [User-Defined Types](./user-defined-types.md) for resource ownership and finalizer limits.

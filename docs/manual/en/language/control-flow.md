@@ -93,6 +93,7 @@ When each element is a named tuple, the loop can destructure it directly:
 
 ```feng
 type Entry(string, int);
+
 let apples: Entry = ("apples", 2);
 let pears: Entry = ("pears", 3);
 let entries: Entry[] = [apples, pears];
@@ -139,3 +140,59 @@ same constructs do not impose this additional boundary when used as statements.
 A result branch may use `return` to exit the current function, method, or lambda. Only paths that continue normally
 must reach the block's final result expression; a return path produces no branch value and does not participate in
 branch-result type inference. A `return` inside a nested lambda returns only from that lambda.
+
+## Writing a Custom Iterator
+
+A container creates a cursor, and the cursor stores the current position. This example uses `fit` to add an `@iterable` entry to a container and a named `(bool, int)` tuple for each step result:
+
+```feng
+module manual_iterator;
+import std.io;
+import std.numeric;
+
+/** Half-open range with reusable traversal state. */
+type NumberRange { let start: int; let end: int; }
+
+/** Indicates whether an element was produced. */
+type RangeStep(bool, int);
+
+/** Mutable state for one traversal. */
+type RangeCursor {
+  var current: int;
+  let end: int;
+
+  /** Produces an element or the end marker. */
+  @iterator
+  func next(): RangeStep {
+    if self.current >= self.end { return (false, 0); }
+    let value = self.current;
+    self.current += 1;
+    return (true, value);
+  }
+}
+
+fit NumberRange {
+  /** Creates a new cursor for each traversal. */
+  @iterable
+  func cursor(): RangeCursor {
+    return RangeCursor { current: self.start, end: self.end };
+  }
+}
+
+/** Compares container traversal and direct cursor traversal. */
+func main(args: string[]) {
+  let range = NumberRange { start: 0, end: 3 };
+  var total = 0;
+  for let value in range { total += value; }
+  let cursor = range.cursor();
+  var direct = 0;
+  for let value in cursor { direct += value; }
+  var remaining = 0;
+  for let value in cursor { remaining += 1; }
+  println<int>("{0} {1} {2}", total, direct, remaining);
+}
+```
+
+The output is `3 3 0`. Each container traversal calls `@iterable` once. Returning a new cursor here makes repeated or nested traversals independent. Direct cursor traversal uses its current state, and an exhausted cursor is not automatically reset.
+
+Both annotations mark instance methods with no explicit parameters, declared either in the type or in a visible `fit`. A type’s visible member surface cannot contain both kinds of entry or multiple entries of one kind. `@iterable` must return a type with a valid `@iterator`; `@iterator` must return a named two-element tuple whose first element is `bool`. When returning `false`, provide the default second element; the loop does not consume it. Method names are your choice.

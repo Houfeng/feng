@@ -91,6 +91,7 @@ for let value in values {
 
 ```feng
 type Entry(string, int);
+
 let apples: Entry = ("苹果", 2);
 let pears: Entry = ("梨", 3);
 let entries: Entry[] = [apples, pears];
@@ -132,3 +133,59 @@ Feng 的 `break` 和 `continue` 不携带标签或层数参数。循环可以嵌
 结果分支可以使用 `return` 退出当前函数、方法或 Lambda。只有能够继续正常执行的路径才必须到达
 块末结果表达式；`return` 路径不产生分支值，也不参与分支结果类型推导。嵌套 Lambda 中的 `return`
 只返回该 Lambda，不退出外围 callable。
+
+## 编写自定义迭代器
+
+容器负责创建游标，游标负责保存当前位置。下面通过 `fit` 为容器提供 `@iterable` 入口，并用具名 `(bool, int)` tuple 表达一次推进结果：
+
+```feng
+module manual_iterator;
+import std.io;
+import std.numeric;
+
+/** Half-open range with reusable traversal state. */
+type NumberRange { let start: int; let end: int; }
+
+/** Indicates whether an element was produced. */
+type RangeStep(bool, int);
+
+/** Mutable state for one traversal. */
+type RangeCursor {
+  var current: int;
+  let end: int;
+
+  /** Produces an element or the end marker. */
+  @iterator
+  func next(): RangeStep {
+    if self.current >= self.end { return (false, 0); }
+    let value = self.current;
+    self.current += 1;
+    return (true, value);
+  }
+}
+
+fit NumberRange {
+  /** Creates a new cursor for each traversal. */
+  @iterable
+  func cursor(): RangeCursor {
+    return RangeCursor { current: self.start, end: self.end };
+  }
+}
+
+/** Compares container traversal and direct cursor traversal. */
+func main(args: string[]) {
+  let range = NumberRange { start: 0, end: 3 };
+  var total = 0;
+  for let value in range { total += value; }
+  let cursor = range.cursor();
+  var direct = 0;
+  for let value in cursor { direct += value; }
+  var remaining = 0;
+  for let value in cursor { remaining += 1; }
+  println<int>("{0} {1} {2}", total, direct, remaining);
+}
+```
+
+输出为 `3 3 0`。每次遍历容器都会调用一次 `@iterable`，这里返回新游标，因此重复或嵌套遍历互不影响；直接遍历游标则继续使用其当前状态，耗尽的游标不会自动重置。
+
+两种注解都标在无显式参数的实例方法上，可声明在类型体或可见的 `fit` 中。同一类型的可见成员面不能同时有两种入口，也不能有多个同种入口。`@iterable` 必须返回具有合法 `@iterator` 的类型；`@iterator` 必须返回具名二元组，首元素为 `bool`。返回 `false` 时第二元素应取默认值，循环不会消费它。方法名可以自行选择。

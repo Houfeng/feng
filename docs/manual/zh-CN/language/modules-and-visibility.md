@@ -112,3 +112,92 @@ import app.second as second;
 let a = first.User {};
 let b = app.second.User {};
 ```
+
+## 用 @friend 定向开放 seal 成员
+
+`@friend(Type, ...)` 把指定的 `seal` 成员开放给列出的具体类型，适合受限工厂和协作类型。下面同时使用字段、实例方法、静态工厂和同包 `fit` 的定向授权：
+
+```feng
+module manual_friend;
+import std.io;
+import std.numeric;
+
+/** Restricts creation and sensitive state to an auditor. */
+type Vault {
+  @friend(Auditor)
+  seal var code: int;
+
+  /** Initializes the private state. */
+  seal func Vault(code: int) { self.code = code; }
+
+  /** Exposes one private operation to the friend. */
+  @friend(Auditor)
+  seal func read(): int { return self.code; }
+
+  /** Supplies the authorized construction entry. */
+  @friend(Auditor)
+  seal static func create(code: int): Vault { return Vault(code); }
+}
+
+/** Receives member-specific permission. */
+type Auditor {
+  /** Uses the restricted factory. */
+  static func create_vault(): Vault { return Vault.create(41); }
+
+  /** Uses the authorized field and method. */
+  func inspect(vault: Vault): int {
+    vault.code += 1;
+    return vault.read();
+  }
+}
+
+fit Auditor {
+  /** Uses the same friend identity within this package. */
+  func snapshot(vault: Vault): int { return vault.code; }
+}
+
+/** Uses only the public auditor interface. */
+func main(args: string[]) {
+  let auditor = Auditor {};
+  let vault = Auditor.create_vault();
+  println<int>("{0} {1}", auditor.inspect(vault), auditor.snapshot(vault));
+}
+```
+
+输出为 `42 42`。顶层 `main` 不能直接读取 `vault.code` 或调用 `Vault.create`。注解也可用于 seal 静态字段和 `spec`／`fit` 中允许声明的 seal 成员；不能用于构造函数或终结器，所以受限创建使用上例的静态工厂。
+
+授权只针对被标注的成员，不自动传递给 friend 的 friend；同包且目标正是 friend 类型的 `fit` 可使用该权限，其他包的 `fit` 不可。模块和所属类型必须仍然可见，`let` 可变性、泛型实参身份和其他访问规则仍要满足，不能用 friend 穿透这些边界。
+
+## 模块绑定与静态初始化
+
+初始化按绑定延迟执行。导入模块只影响名称可见性，不会执行该模块所有初始化器；某个模块绑定首次被读取或写入时才初始化一次：
+
+```feng
+module manual_lazy_init;
+import std.io;
+import std.numeric;
+
+var calls: int;
+
+/** Counts evaluation of a module initializer. */
+func load(): int { calls += 1; return 10; }
+
+let cached: int = load();
+
+/** Owns separate static storage for each closed type. */
+type Cache<T> { static var count: int = 0; }
+
+/** Observes lazy initialization and closed generic static state. */
+func main(args: string[]) {
+  println<int>("{0}", calls);
+  let first = cached;
+  let second = cached;
+  Cache<int>.count = 2;
+  println<int>("{0} {1} {2}", first, second, calls);
+  println<int>("{0} {1}", Cache<int>.count, Cache<string>.count);
+}
+```
+
+输出为 `0`、`10 10 1`、`2 0`。初始化器访问其他绑定时，会按访问路径触发那些绑定的初始化；文件排列、声明顺序和 import 顺序不规定初始化顺序。
+
+必须避免实际执行的循环依赖：若 A 的初始化读取 B，B 又读取尚在初始化的 A，当前行为等同无限递归，最终耗尽调用栈，不会自动检测、打断或恢复。类型静态绑定遵循相同的延迟规则；同一闭合泛型类型共享同一静态存储，不同完整类型实参拥有独立存储和初始化状态。

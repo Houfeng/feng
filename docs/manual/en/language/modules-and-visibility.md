@@ -111,3 +111,92 @@ import app.second as second;
 let a = first.User {};
 let b = app.second.User {};
 ```
+
+## Granting Access with @friend
+
+`@friend(Type, ...)` grants listed concrete types access to a particular `seal` member. It is useful for restricted factories and collaborating types. This example covers a field, an instance method, a static factory and a same-package `fit`:
+
+```feng
+module manual_friend;
+import std.io;
+import std.numeric;
+
+/** Restricts creation and sensitive state to an auditor. */
+type Vault {
+  @friend(Auditor)
+  seal var code: int;
+
+  /** Initializes the private state. */
+  seal func Vault(code: int) { self.code = code; }
+
+  /** Exposes one private operation to the friend. */
+  @friend(Auditor)
+  seal func read(): int { return self.code; }
+
+  /** Supplies the authorized construction entry. */
+  @friend(Auditor)
+  seal static func create(code: int): Vault { return Vault(code); }
+}
+
+/** Receives member-specific permission. */
+type Auditor {
+  /** Uses the restricted factory. */
+  static func create_vault(): Vault { return Vault.create(41); }
+
+  /** Uses the authorized field and method. */
+  func inspect(vault: Vault): int {
+    vault.code += 1;
+    return vault.read();
+  }
+}
+
+fit Auditor {
+  /** Uses the same friend identity within this package. */
+  func snapshot(vault: Vault): int { return vault.code; }
+}
+
+/** Uses only the public auditor interface. */
+func main(args: string[]) {
+  let auditor = Auditor {};
+  let vault = Auditor.create_vault();
+  println<int>("{0} {1}", auditor.inspect(vault), auditor.snapshot(vault));
+}
+```
+
+The output is `42 42`. Top-level `main` cannot directly read `vault.code` or call `Vault.create`. The annotation also applies to seal static fields and permitted seal members in `spec` or `fit`. Constructors and finalizers cannot carry it, which is why restricted creation uses the static factory above.
+
+Permission belongs to the marked member and does not transitively extend to a friend’s friends. A same-package `fit` targeting the exact friend type can use it; a fit from another package cannot. Modules and owner types must remain visible, and binding mutability, generic argument identity and other access rules still apply. Friend permission cannot bypass those boundaries.
+
+## Module Bindings and Static Initialization
+
+Initialization is lazy per binding. Importing a module changes name visibility without running all its initializers. Each module binding initializes once when first read or written:
+
+```feng
+module manual_lazy_init;
+import std.io;
+import std.numeric;
+
+var calls: int;
+
+/** Counts evaluation of a module initializer. */
+func load(): int { calls += 1; return 10; }
+
+let cached: int = load();
+
+/** Owns separate static storage for each closed type. */
+type Cache<T> { static var count: int = 0; }
+
+/** Observes lazy initialization and closed generic static state. */
+func main(args: string[]) {
+  println<int>("{0}", calls);
+  let first = cached;
+  let second = cached;
+  Cache<int>.count = 2;
+  println<int>("{0} {1} {2}", first, second, calls);
+  println<int>("{0} {1}", Cache<int>.count, Cache<string>.count);
+}
+```
+
+The output is `0`, `10 10 1`, and `2 0`. Reading another binding from an initializer triggers that binding along the access path. File order, declaration order and import order do not define initialization order.
+
+Avoid executed dependency cycles. If initializing A reads B and initializing B reads the still-initializing A, current behavior is equivalent to unbounded recursion and eventually exhausts the stack; it does not automatically detect, break or recover from the cycle. Type static bindings follow the same lazy rules. One closed generic type shares one static storage instance, while distinct complete type arguments have independent storage and initialization state.

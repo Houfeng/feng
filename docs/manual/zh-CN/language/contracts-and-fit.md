@@ -7,6 +7,7 @@
 ```feng
 spec Named {
   let name: string;
+
   func display(): string;
 }
 
@@ -147,3 +148,151 @@ fit Account {
 - 第三方适配或按模块启用的能力使用 `fit`。
 - 不要把 `spec` 当作实现继承；它只描述可见契约。
 - 不要依赖隐式结构匹配；满足关系必须显式声明。
+
+## 多父契约、静态能力与 seal requirement
+
+对象契约用逗号列出多个父契约，交叉契约用 `&` 组合已有契约。静态能力通过类型名或受约束类型参数访问；`seal` requirement 限制的是契约视角上的访问：
+
+```feng
+module manual_contract_advanced;
+import std.io;
+import std.numeric;
+
+spec NamedDevice { func name(): string; }
+
+spec Capacity {
+  static let maximum: int;
+
+  static func hint(): int;
+}
+
+spec InternalDevice { seal func secret(): int; }
+
+spec DeviceContract: NamedDevice, Capacity, InternalDevice {}
+
+spec DeviceView: NamedDevice & Capacity;
+
+spec Query(): int;
+
+/** Implements all parents and exposes a controlled internal operation. */
+type Device: DeviceContract {
+  static let maximum: int = 32;
+
+  /** Supplies a static contract requirement. */
+  static func hint(): int { return 16; }
+
+  /** Supplies the public name. */
+  func name(): string { return "device"; }
+
+  /** Implements a restricted requirement. */
+  seal func secret(): int { return 9; }
+
+  /** The implementing type can use its restricted contract view. */
+  func inspect(): int {
+    let view: InternalDevice = self;
+    return view.secret();
+  }
+}
+
+/** Uses the static capability of a constrained type argument. */
+func capacity<T: Capacity>(): int { return T.maximum + T.hint(); }
+
+/** Forms a static method value from the same constrained surface. */
+func query<T: Capacity>(): Query { return T.hint; }
+
+/** Projects an intersection member explicitly. */
+func main(args: string[]) {
+  let device = Device {};
+  let view: DeviceView = device;
+  let named = (NamedDevice)view;
+  let get_hint = query<Device>();
+  println(named.name());
+  println<int>("{0} {1} {2}", capacity<Device>(), device.inspect(), get_hint());
+}
+```
+
+输出为 `device` 和 `48 9 16`。多父契约会合并各父契约的要求；同名签名必须满足一致性要求，不能借父列表隐藏不兼容的成员。交叉投影保持原对象身份，嵌套交叉成员及成员的父契约也可沿声明关系显式投影；只是拥有相同成员集合的另一交叉契约不自动成为可转换目标。
+
+公开 requirement 必须由公开成员满足；seal requirement 可以由符合规则的公开或 seal 成员满足。它不会自动改变具体实现成员的可见性。普通外部调用不能通过契约视角访问 seal requirement；实现类型以及符合条件的同包 fit 可按其权限访问。静态字段只能由类型自身提供，fit 可提供静态方法。更多泛型组合见[泛型](./generics.md)，定向开放 seal 能力见[模块与可见性](./modules-and-visibility.md)。
+
+## 泛型与其他类型的 fit
+
+fit 可以适配泛型对象，也可以扩展标量、字符串、数组、具名 tuple 和 enum。它只补方法和满足关系，不能添加实例字段或静态绑定：
+
+```feng
+module manual_fit;
+import std.io;
+import std.numeric;
+
+spec Reader<T> { func read(): T; }
+
+/** A generic payload container. */
+type Box<T> { let value: T; }
+
+fit Box<T>: Reader<T> {
+  /** Reads the closed payload type. */
+  func read(): T { return self.value; }
+
+  /** Adds a static factory without adding storage. */
+  static func wrap(value: T): Box<T> { return Box<T> { value: value }; }
+}
+
+fit i32 {
+  /** Adds one to the scalar receiver. */
+  func plus_one(): i32 { return self + 1; }
+}
+
+fit string {
+  /** Surrounds text with brackets. */
+  func tagged(): string { return "[" + self + "]"; }
+}
+
+fit int[] {
+  /** Adds the array elements. */
+  func total(): int {
+    var result = 0;
+    for let value in self { result += value; }
+    return result;
+  }
+}
+
+/** A named tuple with extension behavior. */
+type Coordinates(int, int);
+
+fit Coordinates {
+  /** Adds the two tuple elements. */
+  func sum(): int { return self.item1 + self.item2; }
+}
+
+enum Stage { Idle, Ready }
+
+fit Stage {
+  /** Tests one named enum case. */
+  func is_ready(): bool { return self == Stage.Ready; }
+}
+
+spec HasName { let name: string; }
+
+/** Already provides the required field. */
+type NamedRecord { let name: string; }
+
+fit NamedRecord: HasName;
+
+/** Uses each extension through its normal receiver. */
+func main(args: string[]) {
+  let box = Box<int>.wrap(3);
+  let number: i32 = 4;
+  let values: int[] = [1, 2, 3];
+  let point: Coordinates = (3, 4);
+  let named: HasName = NamedRecord { name: "record" };
+  println<int>("{0} {1} {2}", box.read(), values.total(), point.sum());
+  println<i32>("{0}", number.plus_one());
+  println("fit".tagged());
+  println(named.name);
+  if Stage.Ready.is_ready() { println("ready"); }
+}
+```
+
+输出依次为 `3 6 7`、`5`、`[fit]`、`record`、`ready`。`fit Box<T>` 的 `T` 引用目标类型已有的泛参，不能改名、换序、增减或改成 `fit Box<int>` 来特化；每个闭合实例按自己的实参使用这些方法。无块体的 `fit NamedRecord: HasName;` 只声明已有成员满足契约。
+
+可见性由 fit 所在模块和 `open fit` 决定，使用方需要导入相应扩展模块。若适配双方的实现都来自其他包，属于孤儿适配：关系只在当前包生效，即使写 `open fit` 也不会导出这条关系。无契约目标的纯方法扩展不受这条孤儿关系限制。fit 不能因位于同包就直接访问目标类型的 seal 成员；定向授权见[模块与可见性](./modules-and-visibility.md)。

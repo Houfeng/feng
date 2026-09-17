@@ -112,3 +112,91 @@ action();
 ```
 
 方法值会保留原对象作为 `self`。若方法有重载，显式目标 `spec` 必须能够唯一确定所选重载。
+
+## 转发变长参数
+
+已有数组作为整个变参数组传递时写 `...items`。下面同时演示普通打包、预打包转发和变参可调用契约：
+
+```feng
+module manual_variadic;
+import std.io;
+import std.numeric;
+
+spec Sum(values: int...): int;
+
+/** Adds an ordinary variadic argument array. */
+func sum(values: int...): int {
+  var total = 0;
+  for let value in values { total += value; }
+  return total;
+}
+
+/** Forwards the existing array without packing another one. */
+func forward(values: int...): int { return sum(...values); }
+
+/** Uses direct calls and a variadic callable value. */
+func main(args: string[]) {
+  let items: int[] = [1, 2, 3];
+  let writable: int[!] = [7, 8];
+  let readonly = (int[])writable;
+  let operation: Sum = sum;
+  println<int>("{0} {1} {2}", sum(...items), forward(4, 5), operation(...readonly));
+}
+```
+
+输出为 `6 9 15`。`...items` 必须是最后一个实参，且恰好占据整个变参部分；前面只能有固定参数，不能写成 `sum(1, ...items)`。它不是通用数组展开操作。
+
+转发目标必须有变参声明，数组必须匹配其只读 `T[]` 形状。`T[!]` 不能直接转发；上例先显式移除写权限。转发保留同一个数组，不复制或重新打包元素。可调用契约的 `T...` 与普通 `T[]` 参数不是同一签名，绑定或显式转换时也不能互换。
+
+## 函数值的来源、转换与零值
+
+可调用值可以来自顶层函数、具体类型的静态／实例方法和对象契约视角的方法。泛型函数或方法形成值时，必须先写完整类型实参：
+
+```feng
+module manual_callable;
+import std.io;
+import std.numeric;
+
+spec Calculate(value: int): int;
+
+spec OtherCalculate(value: int): int;
+
+spec Read(): int;
+
+spec Readable { func read(): int; }
+
+/** Supplies instance and static callable sources. */
+type Reader: Readable {
+  let value: int;
+
+  /** Reads the retained receiver. */
+  func read(): int { return self.value; }
+
+  /** Doubles a value without capturing an instance. */
+  static func twice(value: int): int { return value * 2; }
+}
+
+/** Supplies a top-level callable source. */
+func increment(value: int): int { return value + 1; }
+
+/** Must be explicitly closed before it becomes a callable value. */
+func identity<T>(value: T): T { return value; }
+
+/** Exercises each source and a default callable. */
+func main(args: string[]) {
+  let top: Calculate = increment;
+  let generic: Calculate = identity<int>;
+  let method: Calculate = Reader.twice;
+  let receiver: Readable = Reader { value: 7 };
+  let read: Read = receiver.read;
+  let converted = (OtherCalculate)method;
+  let empty: Calculate;
+  println<int>("{0} {1} {2} {3} {4}", top(1), generic(3), read(), converted(4), empty(9));
+}
+```
+
+输出为 `2 3 7 8 0`。不同 callable spec 即使签名完全相同，也不能直接互相赋值；完整参数顺序、类型、变参形态与返回类型一致时可显式转换。可调用零值可安全调用：无返回值时不做任何事，有返回值时产生返回类型默认值。
+
+泛型来源应写 `identity<int>`、`object.method<int>` 或 `Type.method<int>`；目标 callable 不会反向推导来源的泛参。泛型 owner 也必须闭合，例如 `Box<int>.method<string>`。存在重载时，目标 callable 的签名必须能够唯一选定来源。
+
+实例方法值保留形成点的接收者；值类型会复制接收者，引用类型保留同一对象。示例与连续调用的状态变化见[自定义类型](./user-defined-types.md)。

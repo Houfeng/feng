@@ -80,6 +80,7 @@ Feng has no anonymous tuple types. Declare a named tuple with the parenthesized 
 
 ```feng
 type Point(f64, f64);
+
 type Pair<T, U>(T, U);
 
 let origin: Point = (0.0, 0.0);
@@ -112,3 +113,145 @@ An enum's underlying representation is always `i32`, independent of the platform
 ## User-Defined and Contract Types
 
 Object types, `spec` contracts, union types, and generics are covered in [User-Defined Types](./user-defined-types.md), [Contracts and `fit`](./contracts-and-fit.md), [Pattern Matching](./pattern-matching.md), and [Generics](./generics.md).
+
+## Numeric Literals and Explicit Conversions
+
+Integers support decimal, hexadecimal `0x`, binary `0b` and octal `0o` notation, with `_` separators between digits. Floating-point literals support an `e` exponent. Numeric suffixes such as `L`, `U` and `F` are unavailable; use a type annotation to select a type.
+
+```feng
+module manual_numeric;
+import std.io;
+import std.numeric;
+
+/** Shows literal notation, conversions and grouping. */
+func main(args: string[]) {
+  let binary = 0b1111_1111;
+  let octal = 0o377;
+  let hex = 0xFF;
+  let million = 1_000_000;
+  let scientific = 1.5e3;
+  let fraction = 2.0e-1;
+  println<int>("{0} {1} {2} {3}", binary, octal, hex, million);
+  println<int>("{0}", (int)scientific);
+  let wide: u16 = 300;
+  let low = (u8)wide;
+  let truncated = (i32)-3.9;
+  println<int>("{0} {1}", (int)low, (int)truncated);
+  let precise: i32 = 16_777_217;
+  let rounded = (f32)precise;
+  println<i32>("{0}", (i32)rounded);
+  println<int>("{0} {1}", 2 + 3 * 4, (2 + 3) * 4);
+  let small: i32 = 7;
+  let large: i64 = 7;
+  if (i64)small == large { println("same"); }
+}
+```
+
+The output is `255 255 255 1000000`, `1500`, `44 -3`, `16777216`, `14 20`, then `same`. Narrowing an integer discards high bits; converting a floating-point value to an integer truncates its fractional part. Integer-to-float conversions and floating-point narrowing may lose precision. Writing a cast does not make it lossless. A separator cannot start or end a literal or immediately follow a base prefix.
+
+`bool` is not numeric. Use a Boolean expression such as `value != 0` instead of converting between numbers and bool. To compare values of different established numeric types, explicitly convert to a chosen common type as above. Other named types cannot be compared across types merely because their shapes match; use a supported explicit conversion before comparing values of the same type.
+
+## Operator Precedence
+
+The table runs from highest to lowest precedence. Unary operators associate right to left; the other listed operations associate left to right. Use parentheses to make grouping explicit.
+
+| Precedence | Forms |
+| --- | --- |
+| 1 | Calls `f(...)`, members `value.member`, indexing `value[index]` |
+| 2 | `~x`, `-x`, `!x` |
+| 3 | `*`, `/`, `%` |
+| 4 | `+`, `-` |
+| 5 | `<<`, `>>` |
+| 6 | `&` |
+| 7 | `^` |
+| 8 | `\|` |
+| 9 | `<`, `<=`, `>`, `>=` |
+| 10 | `==`, `!=` |
+| 11 | `&&` |
+| 12 | `\|\|` |
+
+Assignment is a statement and does not participate in this expression table. Feng has no `++`, `--` or comma expression. `&&` and `||` short-circuit: the right side runs only when needed.
+
+## Write Permissions at Each Array Layer
+
+Read array suffixes from the inside out. The rightmost suffix controls whether the outer array can replace a row; the preceding suffix controls whether a row can replace an element. `let` only restricts the binding itself.
+
+```feng
+module manual_array_layers;
+import std.io;
+import std.numeric;
+
+/** Modifies independent layers through their declared permissions. */
+func main(args: string[]) {
+  let rows: int[!][] = [[1, 2], [3, 4]];
+  rows[0][0] = 9;
+  let slots: int[][!] = [[1, 2], [3, 4]];
+  slots[0] = [8, 9];
+  let both: int[!][!] = [[1, 2]];
+  let readonly_outer = (int[!][])both;
+  readonly_outer[0][0] = 7;
+  println<int>("{0} {1} {2}", rows[0][0], slots[0][0], both[0][0]);
+}
+```
+
+The output is `9 8 7`. The cast does not copy the array; both views still share its data.
+
+| Type | Replace a row `a[0] = ...` | Replace an element `a[0][0] = ...` |
+| --- | --- | --- |
+| `int[][]` | No | No |
+| `int[!][]` | No | Yes |
+| `int[][!]` | Yes | No |
+| `int[!][!]` | Yes | Yes |
+
+Explicit casts can only remove existing write permissions, not grant stronger ones. If an element is an ordinary object, a read-only array element does not freeze that object; its `var` fields remain usable according to their access permissions.
+
+## Empty Tuples, Named Conversions and Enum Behavior
+
+Declare an empty tuple with `type Unit();` and create it with `()` in a target type context. Distinct named tuples allow an explicit cast only when their element counts and positional types match exactly. Both tuples and enums can gain methods through fit:
+
+```feng
+module manual_tuple_enum;
+import std.io;
+import std.numeric;
+
+/** An empty named tuple. */
+type Unit();
+
+/** Two distinct named tuples with identical element types. */
+type Position(int, int);
+
+type Dimensions(int, int);
+
+/** Adds behavior without adding tuple elements. */
+fit Position {
+  /** Adds the two coordinates. */
+  func total(): int { return self.item1 + self.item2; }
+}
+
+/** Uses an explicit value for every member. */
+enum Status { Pending = 7, Done = 12 }
+
+/** Adds behavior to the named enum. */
+fit Status {
+  /** Describes the current enum value. */
+  func label(): string {
+    if self == Status.Done { return "done"; }
+    return "pending";
+  }
+}
+
+/** Demonstrates construction, conversion and the first-member default. */
+func main(args: string[]) {
+  let unit: Unit = ();
+  let default_unit: Unit;
+  let position: Position = (2, 3);
+  let dimensions = (Dimensions)position;
+  let pending: Status;
+  println<int>("{0} {1} {2}", position.total(), dimensions.item1, (int)pending);
+  println(Status.Done.label());
+}
+```
+
+The output is `5 2 7`, then `done`. The default of `Status` is its first member, `Pending`, even though that member's underlying value is nonzero. Explicit enum values must be integer literals in range and cannot be mixed with automatically incremented members. Matching element shapes do not merge the identities of `Position` and `Dimensions` or share their extension methods.
+
+Tuples support zero or two through eight elements, not one; `(value)` is a grouped expression. An empty tuple still has no `Unit()` constructor. See [contracts and fit](./contracts-and-fit.md) for more extension examples.

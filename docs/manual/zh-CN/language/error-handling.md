@@ -78,3 +78,60 @@ let content = file.readText();
 ## C 边界
 
 异常不能跨越 C ABI 边界。ABI 函数必须在内部处理所有可能传播到边界的异常；C 函数的错误应通过返回值、错误码或回调约定表达。
+
+## 精确匹配与清理边界
+
+具名 catch 按精确具体类型匹配：enum 不等于底层整数，不同具名类型也不会因为布局相同而互相匹配。下面的完整程序还演示异常离开嵌套作用域时的 defer 顺序，以及清理函数自身抛错时的处理：
+
+```feng
+module manual_cleanup;
+import std.io;
+
+enum CodeA { Failure = 1 }
+
+enum CodeB { Failure = 1 }
+
+/** Throws one exact named enum type. */
+func fail_exact() { throw CodeA.Failure; }
+
+/** Registers cleanups in nested scopes before throwing. */
+func work() {
+  defer { println("outer"); }
+  if true {
+    defer { println("inner"); }
+    throw "work failed";
+  }
+}
+
+/** Models a cleanup operation that can fail. */
+func close_resource() { throw "close failed"; }
+
+/** Handles a possible close failure before returning to defer. */
+func close_safely() {
+  try close_resource() catch error: string { println(error); }
+}
+
+/** Calls a cleanup helper that handles its own exceptions. */
+func cleanup_safely() {
+  defer { close_safely(); }
+}
+
+/** Observes exact matching and cleanup order. */
+func main(args: string[]) {
+  try fail_exact() catch error: i32 {
+    println("integer");
+  } catch error: CodeB {
+    println("other enum");
+  } catch error: CodeA {
+    println("exact");
+  }
+  try work() catch error: string { println("caught"); }
+  cleanup_safely();
+}
+```
+
+输出依次为 `exact`、`inner`、`outer`、`caught`、`close failed`。先离开内层作用域，再离开外层；每层已注册的 defer 按逆序执行，托管局部也按其正常退出规则释放。没有执行到的 defer 不会被登记。
+
+`defer` 内任何位置都不能直接写 `return`、`throw` 或新的 `defer`；不能用 `break`／`continue` 跳向外层循环，但其内部新建循环可以使用自己的 break／continue。清理块调用的函数仍可能抛错；未在被调用函数内部处理的异常会中断该清理块的后续语句。当前实现对直接写在 defer 块中的 try/catch 存在异常捕获限制，请像上例一样在 `close_safely()` 内处理可恢复的清理失败，再由 defer 调用该辅助函数。
+
+运行时 panic 会终止进程，不是可以由 `catch` 接住的 Feng 异常，也不能把它当作可靠执行全部 defer 的退出方式。资源持有与终结器的限制见[自定义类型](./user-defined-types.md)。

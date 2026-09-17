@@ -7,6 +7,7 @@
 ```feng
 spec Named {
   let name: string;
+
   func display(): string;
 }
 
@@ -150,3 +151,151 @@ Whether an extension can be used across modules is determined by the visibility 
 - Use `fit` for third-party adaptations or capabilities enabled by importing a module.
 - Do not treat `spec` as implementation inheritance; it describes only a visible contract.
 - Do not rely on implicit structural matching; conformance must be declared explicitly.
+
+## Multiple Parents, Static Capabilities and Seal Requirements
+
+An object contract lists multiple parents with commas; an intersection combines existing contracts with `&`. Access static capabilities through a type name or a constrained type parameter. A `seal` requirement restricts access through the contract view:
+
+```feng
+module manual_contract_advanced;
+import std.io;
+import std.numeric;
+
+spec NamedDevice { func name(): string; }
+
+spec Capacity {
+  static let maximum: int;
+
+  static func hint(): int;
+}
+
+spec InternalDevice { seal func secret(): int; }
+
+spec DeviceContract: NamedDevice, Capacity, InternalDevice {}
+
+spec DeviceView: NamedDevice & Capacity;
+
+spec Query(): int;
+
+/** Implements all parents and exposes a controlled internal operation. */
+type Device: DeviceContract {
+  static let maximum: int = 32;
+
+  /** Supplies a static contract requirement. */
+  static func hint(): int { return 16; }
+
+  /** Supplies the public name. */
+  func name(): string { return "device"; }
+
+  /** Implements a restricted requirement. */
+  seal func secret(): int { return 9; }
+
+  /** The implementing type can use its restricted contract view. */
+  func inspect(): int {
+    let view: InternalDevice = self;
+    return view.secret();
+  }
+}
+
+/** Uses the static capability of a constrained type argument. */
+func capacity<T: Capacity>(): int { return T.maximum + T.hint(); }
+
+/** Forms a static method value from the same constrained surface. */
+func query<T: Capacity>(): Query { return T.hint; }
+
+/** Projects an intersection member explicitly. */
+func main(args: string[]) {
+  let device = Device {};
+  let view: DeviceView = device;
+  let named = (NamedDevice)view;
+  let get_hint = query<Device>();
+  println(named.name());
+  println<int>("{0} {1} {2}", capacity<Device>(), device.inspect(), get_hint());
+}
+```
+
+The output is `device` and `48 9 16`. Multiple parents combine requirements; same-name signatures must remain compatible, and a parent list cannot hide incompatible members. Intersection projection preserves object identity. Nested intersection members and their object-contract parents can also be reached by explicit projection along declared relationships. Another intersection with merely the same member set is not automatically a conversion target.
+
+A public requirement needs a public implementation. A seal requirement may use a public or seal implementation when the access rules permit it; this does not change the concrete member’s visibility. Ordinary external callers cannot use seal requirements through a contract view. Implementing types and qualifying same-package fits can access them under their permissions. Static fields must come from the type itself; fit can supply static methods. See [Generics](./generics.md) for combinations and [Modules and Visibility](./modules-and-visibility.md) for targeted seal access.
+
+## Generic Fits and Other Target Types
+
+Fit can adapt generic objects and extend scalars, strings, arrays, named tuples and enums. It adds methods and conformance, not instance fields or static bindings:
+
+```feng
+module manual_fit;
+import std.io;
+import std.numeric;
+
+spec Reader<T> { func read(): T; }
+
+/** A generic payload container. */
+type Box<T> { let value: T; }
+
+fit Box<T>: Reader<T> {
+  /** Reads the closed payload type. */
+  func read(): T { return self.value; }
+
+  /** Adds a static factory without adding storage. */
+  static func wrap(value: T): Box<T> { return Box<T> { value: value }; }
+}
+
+fit i32 {
+  /** Adds one to the scalar receiver. */
+  func plus_one(): i32 { return self + 1; }
+}
+
+fit string {
+  /** Surrounds text with brackets. */
+  func tagged(): string { return "[" + self + "]"; }
+}
+
+fit int[] {
+  /** Adds the array elements. */
+  func total(): int {
+    var result = 0;
+    for let value in self { result += value; }
+    return result;
+  }
+}
+
+/** A named tuple with extension behavior. */
+type Coordinates(int, int);
+
+fit Coordinates {
+  /** Adds the two tuple elements. */
+  func sum(): int { return self.item1 + self.item2; }
+}
+
+enum Stage { Idle, Ready }
+
+fit Stage {
+  /** Tests one named enum case. */
+  func is_ready(): bool { return self == Stage.Ready; }
+}
+
+spec HasName { let name: string; }
+
+/** Already provides the required field. */
+type NamedRecord { let name: string; }
+
+fit NamedRecord: HasName;
+
+/** Uses each extension through its normal receiver. */
+func main(args: string[]) {
+  let box = Box<int>.wrap(3);
+  let number: i32 = 4;
+  let values: int[] = [1, 2, 3];
+  let point: Coordinates = (3, 4);
+  let named: HasName = NamedRecord { name: "record" };
+  println<int>("{0} {1} {2}", box.read(), values.total(), point.sum());
+  println<i32>("{0}", number.plus_one());
+  println("fit".tagged());
+  println(named.name);
+  if Stage.Ready.is_ready() { println("ready"); }
+}
+```
+
+The output is `3 6 7`, `5`, `[fit]`, `record`, and `ready`. The `T` in `fit Box<T>` refers to the target’s existing parameter. It cannot be renamed, reordered, added, removed or replaced with `fit Box<int>` as a specialization. Each closed instance uses its own arguments. The bodyless `fit NamedRecord: HasName;` only declares conformance using existing members.
+
+Visibility depends on the declaring module and `open fit`; consumers import the extension module. When both sides of an adaptation are implemented in other packages, it is an orphan adaptation: the relationship applies only inside the current package and is not exported even with `open fit`. Pure method extensions without a contract target are not subject to that orphan-relationship restriction. Being in the same package does not by itself let fit access the target’s seal members. See [Modules and Visibility](./modules-and-visibility.md) for targeted permissions.
