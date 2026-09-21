@@ -17378,9 +17378,13 @@ void test_throw_constraint_codegen(void (*compile_c)(const char *));
 /* Independent nested exception scope and capture ownership checks. */
 void test_nested_exception_codegen(void (*compile_c)(const char *));
 
+/* Cleanup helpers preserve all generic descriptor domains across FT imports. */
+void test_defer_generic_context_codegen(void (*compile_c)(const char *));
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);

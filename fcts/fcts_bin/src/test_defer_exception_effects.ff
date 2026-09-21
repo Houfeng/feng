@@ -1,0 +1,317 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test;
+
+var deferBoundaryDrops: int = 0;
+var deferBoundaryOrder: int = 0;
+var deferBoundarySeen: int = 0;
+
+/** Track the ownership of each error used during cleanup. */
+type DeferBoundaryError {
+  let code: int;
+  /** Record finalization after the last owner leaves its scope. */
+  func ~DeferBoundaryError() {
+    deferBoundaryDrops += 1;
+    deferBoundaryOrder = deferBoundaryOrder * 10 + self.code;
+  }
+}
+
+/** A dynamic callback has no declaration-level exception restriction. */
+spec DeferBoundaryAction(): void;
+
+/** A value wider than one pointer also contains a managed field. */
+type DeferBoundaryWords(i64, i64, string);
+
+/** Exercise a descriptor-only cleanup with no ordinary local capture. */
+spec DeferBoundaryFactory { static func finish(): void; }
+
+/** Record a statically selected witness invocation. */
+type DeferBoundaryMaker: DeferBoundaryFactory {
+  /** Increment only when the generic cleanup actually invokes the witness. */
+  static func finish(): void { deferBoundarySeen += 1; }
+}
+
+/** The generic descriptor remains necessary when there are no value captures. */
+func factoryDeferBoundary<T: DeferBoundaryFactory>(): void {
+  defer { try T.finish() catch { deferBoundarySeen = -100; } }
+}
+
+/** Reset after all owners from the preceding scenario have been released. */
+func resetDeferBoundary(): void {
+  deferBoundaryDrops = 0;
+  deferBoundaryOrder = 0;
+  deferBoundarySeen = 0;
+}
+
+/** Throw a fresh reference payload with no other owners. */
+func raiseDeferBoundary(code: int): void {
+  throw DeferBoundaryError { code: code };
+}
+
+/** Handle the complete exception inside the called cleanup helper. */
+func handleDeferBoundary(code: int): void {
+  try raiseDeferBoundary(code) catch error: DeferBoundaryError {
+    deferBoundarySeen = deferBoundarySeen * 10 + error.code;
+  }
+}
+
+/** Normal return evaluates its result before running cleanup. */
+func returnDeferBoundary(): int {
+  defer { handleDeferBoundary(2); }
+  return 7;
+}
+
+/** Function unwind runs cleanup without replacing the in-flight error. */
+func unwindDeferBoundary(): void {
+  defer { handleDeferBoundary(2); }
+  raiseDeferBoundary(1);
+}
+
+/** A catch binding stays valid throughout the catch's own return cleanup. */
+func returnCaughtDeferBoundary(): int {
+  try raiseDeferBoundary(1) catch original: DeferBoundaryError {
+    defer {
+      handleDeferBoundary(2);
+      deferBoundarySeen = deferBoundarySeen * 10 + original.code;
+    }
+    return original.code;
+  }
+  return 0;
+}
+
+/** Catch-all closes the cleanup boundary for an arbitrary callback. */
+func invokeDeferBoundary(action: DeferBoundaryAction): void {
+  defer {
+    try action() catch { deferBoundarySeen += 1; }
+  }
+}
+
+/** Internal catches also run while the caller already has an in-flight error. */
+func unwindCallbackDeferBoundary(action: DeferBoundaryAction): void {
+  defer { try action() catch { deferBoundarySeen += 1; } }
+  raiseDeferBoundary(1);
+}
+
+/** Open payload types can be handled without a concrete catch type. */
+func genericDeferBoundary<T: throw>(value: T): void {
+  defer {
+    try raiseDeferBoundaryValue(value) catch { deferBoundarySeen += 1; }
+  }
+}
+
+/** Keep generic throwing outside the direct-throw-forbidden cleanup block. */
+func raiseDeferBoundaryValue<T: throw>(value: T): void { throw value; }
+
+/** Exercise owner and method type parameters in the same cleanup. */
+type DeferBoundaryBox<T: throw> {
+  let value: T;
+  /** Each generic domain is caught before this cleanup exits. */
+  func finish<U: throw>(other: U): void {
+    defer {
+      try raiseDeferBoundaryValue(self.value) catch { deferBoundarySeen += 1; }
+      try raiseDeferBoundaryValue(other) catch { deferBoundarySeen += 1; }
+    }
+  }
+}
+
+/** Verify accepted programs across all exit paths and nested exception owners. */
+open func test_defer_exception_effects(): void {
+  describe("defer exception boundaries", () {
+    test("normal cleanup handles errors in LIFO order", () {
+      resetDeferBoundary();
+      {
+        defer { handleDeferBoundary(1); }
+        defer { handleDeferBoundary(2); }
+      }
+      assert(deferBoundarySeen == 21 && deferBoundaryOrder == 21, "cleanup and drops follow LIFO");
+      assert(deferBoundaryDrops == 2, "both cleanup errors finalized once");
+    });
+    test("return preserves its value while cleanup handles errors", () {
+      resetDeferBoundary();
+      assert(returnDeferBoundary() == 7, "return result preserved");
+      assert(deferBoundarySeen == 2 && deferBoundaryDrops == 1, "cleanup completed before caller resumed");
+    });
+    test("break and continue run their iteration cleanup", () {
+      resetDeferBoundary();
+      for var i = 0; i < 3; i += 1 {
+        defer { handleDeferBoundary(i + 1); }
+        if i == 0 { continue; }
+        break;
+      }
+      assert(deferBoundarySeen == 12 && deferBoundaryDrops == 2, "both loop exit paths clean up");
+    });
+    test("whole-function unwind retains the original exception", () {
+      resetDeferBoundary();
+      var originalSeen = false;
+      try unwindDeferBoundary() catch original: DeferBoundaryError {
+        originalSeen = original.code == 1;
+        assert(deferBoundaryDrops == 1 && deferBoundaryOrder == 2, "only inner error finalized before outer catch");
+      }
+      assert(originalSeen && deferBoundaryDrops == 2 && deferBoundaryOrder == 21, "both owners released exactly once");
+    });
+    test("landing cleanup handles an error before the local catch", () {
+      resetDeferBoundary();
+      let code = try (if true {
+        defer { handleDeferBoundary(2); }
+        raiseDeferBoundary(1);
+        0;
+      } else { 0; }) catch original: DeferBoundaryError { original.code; };
+      assert(code == 1 && deferBoundaryOrder == 21 && deferBoundaryDrops == 2, "landing cleanup preserves pending identity");
+    });
+    test("catch return cleanup can still read its original binding", () {
+      resetDeferBoundary();
+      assert(returnCaughtDeferBoundary() == 1, "catch return value survives cleanup");
+      assert(deferBoundarySeen == 21 && deferBoundaryOrder == 21, "borrow remains valid after nested catch");
+    });
+    test("anonymous rethrow survives handled cleanup errors", () {
+      resetDeferBoundary();
+      var code = 0;
+      let ignored = try (if true {
+        try raiseDeferBoundary(1) catch {
+          defer { handleDeferBoundary(2); }
+          throw;
+        }
+        0;
+      } else { 0; }) catch original: DeferBoundaryError { code = original.code; 0; };
+      assert(code == 1 && deferBoundaryDrops == 2 && deferBoundaryOrder == 21, "rethrow keeps the original payload");
+    });
+    test("dynamic callback errors are caught inside cleanup", () {
+      resetDeferBoundary();
+      invokeDeferBoundary(() { raiseDeferBoundary(3); });
+      assert(deferBoundarySeen == 1 && deferBoundaryDrops == 1, "unknown callback is handled");
+    });
+    test("nonthrowing dynamic callback still runs", () {
+      resetDeferBoundary();
+      invokeDeferBoundary(() { deferBoundaryOrder = 8; });
+      assert(deferBoundaryOrder == 8 && deferBoundarySeen == 0, "no catch runs on normal return");
+    });
+    test("cleanup catches a dynamic callback during whole-function unwind", () {
+      resetDeferBoundary();
+      try unwindCallbackDeferBoundary(() { raiseDeferBoundary(2); }) catch original: DeferBoundaryError {
+        assert(original.code == 1 && deferBoundarySeen == 1, "original error survives the internal callback catch");
+        assert(deferBoundaryDrops == 1 && deferBoundaryOrder == 2, "only the cleanup error has been released");
+      }
+      assert(deferBoundaryDrops == 2 && deferBoundaryOrder == 21, "both payloads finalized once");
+    });
+    test("landing cleanup catches locally before entering the original handler", () {
+      resetDeferBoundary();
+      let code = try (if true {
+        defer {
+          try raiseDeferBoundary(2) catch inner: DeferBoundaryError { deferBoundarySeen = inner.code; }
+        }
+        raiseDeferBoundary(1);
+        0;
+      } else { 0; }) catch original: DeferBoundaryError { original.code; };
+      assert(code == 1 && deferBoundarySeen == 2, "both local handlers received their own payload");
+      assert(deferBoundaryDrops == 2 && deferBoundaryOrder == 21, "landing cleanup retains exception ownership");
+    });
+    test("cleanup internal catches preserve an enclosing catch for rethrow", () {
+      resetDeferBoundary();
+      let code = try (if true {
+        try raiseDeferBoundary(1) catch {
+          defer { try raiseDeferBoundary(2) catch { deferBoundarySeen += 1; } }
+          throw;
+        }
+        0;
+      } else { 0; }) catch original: DeferBoundaryError { original.code; };
+      assert(code == 1 && deferBoundarySeen == 1, "anonymous rethrow keeps its original record");
+      assert(deferBoundaryDrops == 2 && deferBoundaryOrder == 21, "nested cleanup catch releases only its own record");
+    });
+    test("cleanup handler failures are caught by a surrounding internal try", () {
+      resetDeferBoundary();
+      {
+        defer {
+          let ignored = try (if true {
+            try raiseDeferBoundary(2) catch inner: DeferBoundaryError {
+              deferBoundarySeen = inner.code;
+              raiseDeferBoundaryValue(true);
+            }
+            0;
+          } else { 0; }) catch flag: bool { deferBoundarySeen += 10; 0; };
+        }
+      }
+      assert(deferBoundarySeen == 12 && deferBoundaryDrops == 1, "nested handlers finish before cleanup exits");
+    });
+    test("generic cleanup accepts different concrete payloads", () {
+      resetDeferBoundary();
+      genericDeferBoundary("text");
+      genericDeferBoundary(true);
+      genericDeferBoundary((i32)7);
+      assert(deferBoundarySeen == 3, "each instantiation handles its own payload");
+    });
+    test("owner and method generic cleanup stays independent", () {
+      resetDeferBoundary();
+      let box = DeferBoundaryBox<string> { value: "owner" };
+      box.finish(true);
+      assert(deferBoundarySeen == 2, "both type parameter domains were handled");
+    });
+    test("creating a throwing closure inside cleanup does not invoke it", () {
+      resetDeferBoundary();
+      {
+        defer {
+          let unused: DeferBoundaryAction = () { raiseDeferBoundary(9); };
+          deferBoundarySeen += 1;
+        }
+      }
+      assert(deferBoundarySeen == 1 && deferBoundaryDrops == 0, "closure creation is not a call");
+    });
+    test("internal typed catches can cover several exception types", () {
+      resetDeferBoundary();
+      {
+        defer {
+          try raiseDeferBoundaryValue("text") catch error: string { deferBoundarySeen += 1; }
+          try raiseDeferBoundaryValue(true) catch error: bool { deferBoundarySeen += 1; }
+        }
+      }
+      assert(deferBoundarySeen == 2, "concrete catches handled both calls");
+    });
+    test("cleanup observes current mutable values", () {
+      resetDeferBoundary();
+      var code = 1;
+      {
+        defer { handleDeferBoundary(code); }
+        code = 4;
+      }
+      assert(deferBoundarySeen == 4 && deferBoundaryOrder == 4, "no registration-time snapshot introduced");
+    });
+    test("nested lexical blocks retain independent cleanup ordering", () {
+      resetDeferBoundary();
+      {
+        defer { handleDeferBoundary(1); }
+        { defer { handleDeferBoundary(2); } }
+        deferBoundarySeen = deferBoundarySeen * 10 + 3;
+      }
+      assert(deferBoundarySeen == 231 && deferBoundaryOrder == 21, "each boundary exits in lexical order");
+    });
+    test("cross-package generic cleanup forwards complete values", () {
+      let before: DeferBoundaryWords = (1, 2, "before");
+      let after: DeferBoundaryWords = (10000000001, 20000000002, "after");
+      let result = libDeferCopy(before, after);
+      assert(result.item1 == after.item1 && result.item2 == after.item2 && result.item3 == "after", "aggregate bytes and managed slot survive cleanup forwarding");
+      assert(libDeferCopy((i64)1, (i64)40000000004) == (i64)40000000004, "wide scalar preserved");
+      assert(libDeferCopy("before", "after") == "after", "managed pointer preserved");
+    });
+    test("cross-package generic cleanup constructs an owning array", () {
+      resetDeferBoundary();
+      {
+        let values = libDeferArray(DeferBoundaryError { code: 7 });
+        assert(values[0].code == 7 && deferBoundaryDrops == 0, "array owns the forwarded object after the helper returns");
+      }
+      assert(deferBoundaryDrops == 1, "captured and constructed owners release exactly once");
+    });
+    test("generic cleanup and lambda nesting preserves current values", () {
+      let before: DeferBoundaryWords = (1, 2, "before");
+      let after: DeferBoundaryWords = (3, 4, "after");
+      let inside = libDeferNestedClosure(before, after);
+      let outside = libDeferInClosure(before, after);
+      assert(inside.item1 == 3 && inside.item2 == 4 && inside.item3 == "after", "lambda inside defer forwards the aggregate");
+      assert(outside.item1 == 3 && outside.item2 == 4 && outside.item3 == "after", "defer inside lambda forwards the aggregate");
+    });
+    test("generic cleanup without value captures restores its witness", () {
+      resetDeferBoundary();
+      factoryDeferBoundary<DeferBoundaryMaker>();
+      assert(deferBoundarySeen == 1, "descriptor-only cleanup invoked the concrete method");
+    });
+  });
+}

@@ -51,7 +51,10 @@ static void effects_control_flow(void) {
                    "run", "none");
     effects_expect("func fail(){throw \"x\";}func run(){try fail() catch ex:string{} fail();}", "run",
                    "string");
-    effects_expect("func fail(){throw \"x\";}func run(){defer{fail();}}", "run", "string");
+    /* Phase two rejects the original escaping cleanup at its own boundary. */
+    ThrowConstraintUnit defer_rejected = throw_constraint_analyze(
+        "module effects;func fail(){throw \"x\";}func run(){defer{fail();}}", NULL, "AE1507");
+    throw_constraint_dispose(&defer_rejected);
     effects_expect("func run(){if false{throw \"x\";}else{throw true;}throw \"duplicate\";}", "run",
                    "bool, string");
     effects_expect("func fail(){throw \"x\";}func run(){try fail() catch e:string{throw e;} catch{}}", "run",

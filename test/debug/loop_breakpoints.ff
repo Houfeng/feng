@@ -3,6 +3,7 @@ module loop_breakpoints;
 import std.collections;
 import std.io;
 import std.numeric;
+import std.process;
 import std.text;
 
 // Exercise independent source breakpoints through the real debugger backend.
@@ -142,7 +143,9 @@ func deferLoop() {
         for var i = 0;
             i < 2;
             i = i + 1 {
-            println("defer {0}", i); // breakpoint: defer
+            try println("defer {0}", i) catch { // breakpoint: defer
+                Process.exit(1);
+            }
         }
     }
 }

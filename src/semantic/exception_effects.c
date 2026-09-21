@@ -37,6 +37,21 @@ typedef struct ExceptionCallSite {
     uint32_t effects, escaping_effects;
 } ExceptionCallSite;
 
+/* A call's propagation root at a cleanup boundary, before outer catches. */
+typedef struct ExceptionBoundaryCall {
+    const FengExpr *expression;
+    uint32_t root, effects;
+} ExceptionBoundaryCall;
+
+/* Declaration-local cleanup facts share the ordinary callable solver. */
+typedef struct ExceptionDeferSite {
+    const FengStmt *statement;
+    ExceptionSource *source;
+    uint32_t root, effects;
+    ExceptionBoundaryCall *calls;
+    size_t call_count;
+} ExceptionDeferSite;
+
 /* Import each provider graph once, preserving recursive/shared identities. */
 typedef struct ExceptionImportedGraph {
     const FengExceptionGraph *source;
@@ -53,6 +68,8 @@ typedef struct FengExceptionAnalysis {
     size_t origin_count, origin_capacity;
     ExceptionCallSite *calls;
     size_t call_count, call_capacity;
+    ExceptionDeferSite *defers;
+    size_t defer_count, defer_capacity;
     ExceptionImportedGraph *imports;
     size_t import_count, import_capacity;
 } FengExceptionAnalysis;
@@ -1084,8 +1101,36 @@ static uint32_t ee_stmt(ExceptionBuilder *b, const FengStmt *stmt) {
                                      : feng_exception_unknown(g);
         return feng_exception_union(g, value.effects, thrown);
     }
-    case FENG_STMT_DEFER:
-        return ee_block(b, stmt->as.defer_block).effects;
+    case FENG_STMT_DEFER: {
+        FengExceptionAnalysis *data = b->data;
+        size_t first_call = data->call_count;
+        uint32_t effects = ee_block(b, stmt->as.defer_block).effects;
+        if (!ee_grow((void **)&data->defers, &data->defer_capacity, data->defer_count + 1U,
+                     sizeof(*data->defers))) {
+            g->failed = true;
+            return effects;
+        }
+        ExceptionDeferSite *site = &data->defers[data->defer_count++];
+        *site = (ExceptionDeferSite){.statement = stmt, .source = b->source, .root = effects};
+        for (size_t i = first_call; i < data->call_count; ++i)
+            if (data->calls[i].source == b->source)
+                ++site->call_count;
+        if (site->call_count != 0U) {
+            site->calls = calloc(site->call_count, sizeof(*site->calls));
+            if (site->calls == NULL) {
+                g->failed = true;
+                return effects;
+            }
+            size_t next = 0U;
+            for (size_t i = first_call; i < data->call_count; ++i) {
+                const ExceptionCallSite *call = &data->calls[i];
+                if (call->source == b->source)
+                    site->calls[next++] = (ExceptionBoundaryCall){
+                        .expression = call->expr, .root = call->escaping};
+            }
+        }
+        return effects;
+    }
     case FENG_STMT_IF:
         for (size_t i = 0U; i < stmt->as.if_stmt.clause_count; ++i) {
             result =
@@ -1403,6 +1448,14 @@ bool feng_semantic_collect_exception_effects(FengSemanticAnalysis *analysis) {
         (void)feng_exception_solver_term(solver, site->source->instance, site->invocation);
         (void)feng_exception_solver_term(solver, site->source->instance, site->escaping);
     }
+    /* Cleanup roots must be demanded even when an outer catch erases the
+     * enclosing function's effects. Never apply that outer catch here. */
+    for (size_t i = 0U; i < data->defer_count && ok; ++i) {
+        const ExceptionDeferSite *site = &data->defers[i];
+        (void)feng_exception_solver_term(solver, site->source->instance, site->root);
+        for (size_t j = 0U; j < site->call_count; ++j)
+            (void)feng_exception_solver_term(solver, site->source->instance, site->calls[j].root);
+    }
     ok = ok && feng_exception_solver_run(solver);
     for (size_t i = 0U; i < data->source_count && ok; ++i) {
         ExceptionSource *source = data->sources[i];
@@ -1415,6 +1468,13 @@ bool feng_semantic_collect_exception_effects(FengSemanticAnalysis *analysis) {
         ExceptionCallSite *site = &data->calls[i];
         site->effects = feng_exception_solver_term(solver, site->source->instance, site->invocation);
         site->escaping_effects = feng_exception_solver_term(solver, site->source->instance, site->escaping);
+    }
+    for (size_t i = 0U; i < data->defer_count && ok; ++i) {
+        ExceptionDeferSite *site = &data->defers[i];
+        site->effects = feng_exception_solver_term(solver, site->source->instance, site->root);
+        for (size_t j = 0U; j < site->call_count; ++j)
+            site->calls[j].effects =
+                feng_exception_solver_term(solver, site->source->instance, site->calls[j].root);
     }
     ok = ok && !data->graph->failed;
     feng_exception_solver_free(solver);
@@ -1443,6 +1503,70 @@ bool feng_semantic_validate_abi_exception_effects(const FengSemanticAnalysis *an
         bool ok = types != NULL && ee_abi_error(source, errors, error_count, error_capacity, types);
         free(types);
         if (!ok)
+            return false;
+    }
+    return true;
+}
+
+/* Convert cleanup facts to one error per boundary and source-related calls.
+ * Diagnostic strings belong only to the error objects, never the graph. */
+static bool ee_defer_error(const FengExceptionAnalysis *data, const ExceptionDeferSite *site,
+                            FengSemanticError **errors, size_t *count, size_t *capacity) {
+    if (!ee_grow((void **)errors, capacity, *count + 1U, sizeof(**errors)))
+        return false;
+    char *types = feng_exception_format(data->graph, site->effects);
+    if (types == NULL)
+        return false;
+    const char *prefix = "exceptions must not escape the defer block; cannot prove an empty exception set: ";
+    size_t length = strlen(types) + strlen(prefix) + 1U;
+    FengSemanticError error = {.token = site->statement->token, .code = "AE1507",
+                               .path = site->source->program->path};
+    error.message = malloc(length);
+    if (error.message != NULL)
+        snprintf(error.message, length, "%s%s", prefix, types);
+    free(types);
+    if (error.message == NULL)
+        return false;
+    size_t related_count = 0U;
+    for (size_t i = 0U; i < site->call_count; ++i)
+        if (site->calls[i].effects != 0U)
+            ++related_count;
+    if (related_count != 0U) {
+        error.related_locations = calloc(related_count, sizeof(*error.related_locations));
+        if (error.related_locations == NULL) {
+            free(error.message);
+            return false;
+        }
+        const char message[] = "this call can propagate an exception out of the defer block";
+        for (size_t i = 0U; i < site->call_count; ++i) {
+            const ExceptionBoundaryCall *call = &site->calls[i];
+            if (call->effects == 0U)
+                continue;
+            char *text = ee_slice((FengSlice){message, sizeof(message) - 1U});
+            if (text == NULL) {
+                for (size_t j = 0U; j < error.related_location_count; ++j)
+                    free(error.related_locations[j].message);
+                free(error.related_locations);
+                free(error.message);
+                return false;
+            }
+            error.related_locations[error.related_location_count++] = (FengSemanticRelatedLocation){
+                .token = call->expression->token, .path = error.path, .message = text};
+        }
+    }
+    (*errors)[(*count)++] = error;
+    return true;
+}
+
+bool feng_semantic_validate_defer_exception_effects(const FengSemanticAnalysis *analysis,
+                                                   FengSemanticError **errors, size_t *error_count,
+                                                   size_t *error_capacity) {
+    if (analysis == NULL || analysis->exception_analysis == NULL)
+        return false;
+    const FengExceptionAnalysis *data = analysis->exception_analysis;
+    for (size_t i = 0U; i < data->defer_count; ++i) {
+        const ExceptionDeferSite *site = &data->defers[i];
+        if (site->effects != 0U && !ee_defer_error(data, site, errors, error_count, error_capacity))
             return false;
     }
     return true;
@@ -1501,6 +1625,9 @@ void feng_semantic_exception_analysis_free(FengExceptionAnalysis *data) {
     free(data->sources);
     free(data->origins);
     free(data->calls);
+    for (size_t i = 0U; i < data->defer_count; ++i)
+        free(data->defers[i].calls);
+    free(data->defers);
     free(data->imports);
     feng_exception_graph_release(data->graph);
     free(data);

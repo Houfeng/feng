@@ -30482,11 +30482,21 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 #include "dap_union.inc"
 #include "throw_constraint.inc"
 #include "exception_info_routing.inc"
+#include "defer_exception_effects.inc"
+#include "try_breakpoints.inc"
+#include "source_breakpoints.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_dap_try_breakpoints_once_per_evaluation();
+    test_dap_singleline_source_positions();
+    test_dap_multiline_source_positions();
+    test_dap_source_binding_storage();
+    test_defer_exception_cli();
+    test_defer_exception_lsp();
+    test_defer_exception_lsp_packages();
     test_exception_info_routing();
     test_lsp_exception_effects();
     test_lsp_exception_effects_diagnostics();

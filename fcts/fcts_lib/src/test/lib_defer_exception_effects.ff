@@ -1,0 +1,48 @@
+open module fcts_lib.test;
+
+/** Forward a complete value through the ordinary shared callable protocol. */
+func libDeferIdentity<T>(value: T): T { return value; }
+
+/** Cleanup writes the current generic destination before returning it. */
+open func libDeferCopy<T>(initial: T, replacement: T): T {
+  var result = initial;
+  { defer { result = libDeferIdentity(replacement); } }
+  return result;
+}
+
+/** Constructed generic arguments need the enclosing descriptor environment. */
+open func libDeferArray<T>(value: T): T[] {
+  var result: T[] = [];
+  {
+    defer {
+      let values: T[] = [value];
+      result = libDeferIdentity<T[]>(values);
+    }
+  }
+  return result;
+}
+
+/** Name the closure used inside a generated cleanup helper. */
+spec LibDeferAction(): void;
+
+/** Both nested helper boundaries preserve the same generic value authorities. */
+open func libDeferNestedClosure<T>(initial: T, replacement: T): T {
+  var result = initial;
+  {
+    defer {
+      let action: LibDeferAction = () { result = libDeferIdentity(replacement); };
+      action();
+    }
+  }
+  return result;
+}
+
+/** A callable's cleanup restores the descriptors captured by that callable. */
+open func libDeferInClosure<T>(initial: T, replacement: T): T {
+  var result = initial;
+  let action: LibDeferAction = () {
+    defer { result = libDeferIdentity(replacement); }
+  };
+  action();
+  return result;
+}

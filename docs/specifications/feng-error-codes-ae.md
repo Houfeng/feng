@@ -39,6 +39,7 @@
 | 12 | 循环段 | 循环上下文语义限制 |
 | 13 | 注解/ABI段 | 注解适用域、ABI 稳定性与边界 |
 | 14 | 异常处理段 | try/catch/throw 语义 |
+| 15 | 清理段 | defer 上下文及异常逃逸限制 |
 
 ## 00 通用段
 
@@ -403,6 +404,15 @@ callable 仍有类型参数没有实参、receiver 或目标类型推导来源�
 | AE1405 | catch 结果分支循环控制转移边界 | AE0074 | break / continue cannot target a loop outside a try expression catch result branch |
 | AE1406 | catch 分支顺序约束 | AE0178 | catch clause matching any exception must be the last catch clause |
 | AE1407 | 无参数 throw 的匿名 catch 作用域约束 | — | bare throw is only valid inside an anonymous catch clause |
+
+## 15 清理段新增诊断
+
+| 错误码 | 用途 | 错误文案 |
+|---|---|---|
+| AE1507 | defer 逃逸异常集合无法证明为空 | exceptions must not escape the defer block; cannot prove an empty exception set: %s |
+
+该码用于消费异常元信息后的边界检查,不同于既有 `AE1502` 的直接 `throw` 语句禁令。
+定义和定位规则见 [defer 规范 §6](./feng-defer.md#6-与异常模型的关系)。
 
 ## 说明
 

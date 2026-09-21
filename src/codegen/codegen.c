@@ -1804,6 +1804,15 @@ typedef enum CGGenericConstructorInitMode {
     CG_GENERIC_CONSTRUCTOR_INIT_DEFAULT_ZERO
 } CGGenericConstructorInitMode;
 
+/* One emitted local whose debug visibility is resolved after source bindings
+ * have adopted their final storage. Attribute strings remain stable while the
+ * record array grows; no declaration or value storage is rewritten. */
+typedef struct CGDebugLocal {
+    char *frame;
+    char *name;
+    char *attribute;
+} CGDebugLocal;
+
 typedef struct CG {
     /* Output sections concatenated at the end. */
     Buf headers;        /* #include / extern decls / forward decls */
@@ -1835,6 +1844,10 @@ typedef struct CG {
     CGType   *cur_return_type;
     bool      cur_fn_is_main;
     bool      cur_function_has_frame_marker;
+    bool      cur_function_has_catch_regions; /* excludes nested callables */
+    CGDebugLocal *debug_locals;
+    size_t debug_local_count;
+    size_t debug_local_capacity;
 
     /* Module info. */
     char     *module_mangle;     /* e.g., "feng__examples" */
@@ -2373,6 +2386,7 @@ static bool cg_types_equal(const CGType *a, const CGType *b);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_return_control_cleanup(CG *cg);
+static void cg_emit_function_eh_metadata(Buf *out);
 static bool cg_emit_function_eh_prologue(CG *cg, FengToken token);
 static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
                                          FengToken token, const char *terminator);
@@ -2947,6 +2961,135 @@ static bool cg_debug_enabled(const CG *cg) {
            cg->options != NULL &&
            cg->options->debug_source_mappings != NULL &&
            cg->options->debug_source_mapping_count > 0U;
+}
+
+/* Defer local-variable debug attributes until all source-variable mappings
+ * exist. A result slot may later become a binding without another C copy. */
+static const char *cg_debug_local_attribute(CG *cg, const char *name) {
+    CGDebugLocal record = {0};
+    char attribute[64];
+    if (!cg_debug_enabled(cg) || cg->current_frame_backend_symbol == NULL)
+        return "";
+    if (cg->debug_local_count == cg->debug_local_capacity) {
+        size_t capacity = cg->debug_local_capacity ? cg->debug_local_capacity * 2U : 64U;
+        CGDebugLocal *locals;
+        if (capacity < cg->debug_local_capacity || capacity > SIZE_MAX / sizeof(*locals))
+            goto failure;
+        locals = realloc(cg->debug_locals, capacity * sizeof(*locals));
+        if (locals == NULL) goto failure;
+        cg->debug_locals = locals;
+        cg->debug_local_capacity = capacity;
+    }
+    snprintf(attribute, sizeof attribute, "FENG_LOCAL_DEBUG_%zu ", cg->debug_local_count);
+    record.frame = strdup(cg->current_frame_backend_symbol);
+    record.name = strdup(name);
+    record.attribute = strdup(attribute);
+    if (record.frame == NULL || record.name == NULL || record.attribute == NULL)
+        goto failure;
+    cg->debug_locals[cg->debug_local_count++] = record;
+    return record.attribute;
+failure:
+    free(record.frame);
+    free(record.name);
+    free(record.attribute);
+    cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory recording local debug storage");
+    return "";
+}
+
+/* Emit a scalar or fixed-layout local with the same debug ownership rule used
+ * by descriptor-sized storage and compound declaration emitters. */
+static void cg_emit_local_storage(CG *cg, const char *type, const char *name,
+                                  const char *initializer) {
+    buf_append_fmt(cg->cur_body, "    %s%s %s",
+                   cg_debug_local_attribute(cg, name), type, name);
+    if (initializer != NULL) buf_append_fmt(cg->cur_body, " = %s", initializer);
+    buf_append_cstr(cg->cur_body, ";\n");
+}
+
+/* An identifier referenced by a user-variable read expression in one frame.
+ * The frame is borrowed from debug_info; the identifier is owned here. */
+typedef struct CGDebugStorageUse {
+    const char *frame;
+    char *name;
+} CGDebugStorageUse;
+
+/* Keep lookups independent of the number of temporary declarations per body. */
+static int cg_debug_storage_use_compare(const void *left, const void *right) {
+    const CGDebugStorageUse *a = left, *b = right;
+    int frame = strcmp(a->frame, b->frame);
+    return frame != 0 ? frame : strcmp(a->name, b->name);
+}
+
+/* Collect identifiers from compiler-authored read expressions. Retaining all
+ * referenced names is conservative, including carrier roots behind casts or
+ * member access; it never guesses storage roles from generated name prefixes. */
+static bool cg_debug_collect_storage_uses(CGDebugStorageUse **uses, size_t *count,
+                                         size_t *capacity, const char *frame,
+                                         const char *expression) {
+    const unsigned char *cursor = (const unsigned char *)expression;
+    if (frame == NULL || cursor == NULL) return true;
+    while (*cursor != '\0') {
+        if (*cursor == '\'' || *cursor == '"') {
+            unsigned char quote = *cursor++;
+            while (*cursor != '\0' && *cursor != quote) {
+                if (*cursor == '\\' && cursor[1] != '\0') ++cursor;
+                ++cursor;
+            }
+            if (*cursor != '\0') ++cursor;
+        } else if (isalpha(*cursor) || *cursor == '_') {
+            const unsigned char *start = cursor++;
+            while (isalnum(*cursor) || *cursor == '_') ++cursor;
+            if (*count == *capacity) {
+                size_t next = *capacity ? *capacity * 2U : 64U;
+                CGDebugStorageUse *grown;
+                if (next < *capacity || next > SIZE_MAX / sizeof(*grown)) return false;
+                grown = realloc(*uses, next * sizeof(*grown));
+                if (grown == NULL) return false;
+                *uses = grown;
+                *capacity = next;
+            }
+            char *name = strndup((const char *)start, (size_t)(cursor - start));
+            if (name == NULL) return false;
+            (*uses)[(*count)++] = (CGDebugStorageUse){frame, name};
+        } else {
+            ++cursor;
+        }
+    }
+    return true;
+}
+
+/* Source-variable mappings are authoritative for native storage visibility.
+ * Resolve attributes in O(U log U + L log U), with U referenced identifiers
+ * and L emitted locals, while preserving the original C declarations. */
+static bool cg_emit_debug_local_attributes(CG *cg, Buf *out) {
+    CGDebugStorageUse *uses = NULL;
+    size_t count = 0U, capacity = 0U;
+    bool ok = false;
+    if (cg->failed) return false;
+    if (cg->debug_local_count == 0U) return true;
+    for (size_t i = 0U; i < cg->debug_info.variable_count; ++i) {
+        const FengCodegenMapingVariableRecord *variable = &cg->debug_info.variables[i];
+        if (!cg_debug_collect_storage_uses(&uses, &count, &capacity,
+                variable->frame_backend_symbol, variable->backend_name) ||
+            !cg_debug_collect_storage_uses(&uses, &count, &capacity,
+                variable->frame_backend_symbol, variable->read_expr)) goto cleanup;
+    }
+    if (count != 0U) qsort(uses, count, sizeof(*uses), cg_debug_storage_use_compare);
+    for (size_t i = 0U; i < cg->debug_local_count; ++i) {
+        const CGDebugLocal *local = &cg->debug_locals[i];
+        CGDebugStorageUse key = {local->frame, local->name};
+        bool visible = count != 0U &&
+            bsearch(&key, uses, count, sizeof(*uses), cg_debug_storage_use_compare) != NULL;
+        const char *value = visible ? "" : "FENG_CODEGEN_NODEBUG";
+        if (!buf_reserve(out, strlen(local->attribute) + strlen(value) + 10U)) goto cleanup;
+        buf_append_fmt(out, "#define %s%s\n", local->attribute, value);
+    }
+    ok = true;
+cleanup:
+    for (size_t i = 0U; i < count; ++i) free(uses[i].name);
+    free(uses);
+    if (!ok) cg_fail(cg, (FengToken){0}, "IE0001", "codegen: out of memory resolving local debug storage");
+    return ok;
 }
 
 /* Duplicates one Feng identifier slice into a temporary C string. */
@@ -4769,7 +4912,8 @@ static bool cg_emit_dynamic_capture_storage_metadata(
                                : "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-                       "    const size_t %s = feng_generic_value_size(%s);\n",
+                       "    %sconst size_t %s = feng_generic_value_size(%s);\n",
+                       cg_debug_local_attribute(cg, size_name),
                        size_name,
                        descriptor_name);
     } else {
@@ -4792,10 +4936,12 @@ static bool cg_emit_dynamic_capture_storage_metadata(
             return false;
         }
         buf_append_fmt(cg->cur_body,
-                       "    const FengAggregateDescriptor *%s = %s;\n"
-                       "    const size_t %s = %s->size;\n",
+                       "    %sconst FengAggregateDescriptor *%s = %s;\n"
+                       "    %sconst size_t %s = %s->size;\n",
+                       cg_debug_local_attribute(cg, descriptor_name),
                        descriptor_name,
                        descriptor_expr,
+                       cg_debug_local_attribute(cg, size_name),
                        size_name,
                        descriptor_name);
         free(descriptor_expr);
@@ -4849,13 +4995,14 @@ static bool cg_scope_bind_dynamic_capture_cell(
 
     if (value_type->kind == CG_TYPE_GENERIC_PARAM) {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = %s%sfeng_array_new_kinded("
+            "    %sFengArray *%s = %s%sfeng_array_new_kinded("
             "%s->kind, "
             "%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS "
             "? (const FengAggregateDescriptor *)%s->descriptor : NULL, "
             "%s->kind == FENG_VALUE_MANAGED_POINTER "
             "? (const FengTypeDescriptor *)%s->descriptor : NULL, "
             "%s, (size_t)1)%s;\n",
+            cg_debug_local_attribute(cg, cell_var),
             cell_var,
             condition != NULL ? condition : "",
             condition != NULL ? " ? " : "",
@@ -4942,9 +5089,10 @@ static bool cg_scope_bind_dynamic_capture_cell(
         if (condition != NULL) buf_append_cstr(cg->cur_body, "    }\n");
     } else {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = %s%sfeng_array_new_kinded("
+            "    %sFengArray *%s = %s%sfeng_array_new_kinded("
             "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s, NULL, %s, "
             "(size_t)1)%s;\n",
+            cg_debug_local_attribute(cg, cell_var),
             cell_var,
             condition != NULL ? condition : "",
             condition != NULL ? " ? " : "",
@@ -5077,7 +5225,8 @@ static bool cg_scope_bind_capture_cell_conditionally_impl(CG *cg,
     }
 
     buf_append_fmt(cg->cur_body,
-                   "    struct %s *%s = %s%s(struct %s *)feng_object_new(&%s)%s;\n",
+                   "    %sstruct %s *%s = %s%s(struct %s *)feng_object_new(&%s)%s;\n",
+                   cg_debug_local_attribute(cg, cell_var),
                    cell_struct_name,
                    cell_var,
                    condition != NULL ? condition : "",
@@ -19497,12 +19646,14 @@ static bool cg_emit_shared_static_binding_state(
                           ? "FengAggregateDescriptor"
                           : "FengTypeDescriptor";
     buf_append_fmt(cg->cur_body,
-        "    const %s *%s = %s;\n"
-        "    FengStaticBindingState *%s = &%s->static_bindings[%zu];\n"
+        "    %sconst %s *%s = %s;\n"
+        "    %sFengStaticBindingState *%s = &%s->static_bindings[%zu];\n"
         "    %s(%s, %s",
+        cg_debug_local_attribute(cg, descriptor_name),
         descriptor_type,
         descriptor_name,
         descriptor_expr,
+        cg_debug_local_attribute(cg, state_name),
         state_name,
         descriptor_name,
         binding_index,
@@ -19696,11 +19847,11 @@ static void cg_emit_generic_value_store_kind(CG *cg, CGValueKind kind,
             break;
         case CG_VK_MANAGED_POINTER:
             buf_append_fmt(cg->cur_body,
-                "            void *_new_value = *(void *const *)%s;\n", source);
+                "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n", source);
             if (!owns_ref) buf_append_cstr(cg->cur_body, "            feng_retain(_new_value);\n");
             if (replace_existing) {
                 buf_append_fmt(cg->cur_body,
-                    "            void *_old_value = *(void **)%s;\n"
+                    "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                     "            *(void **)%s = _new_value;\n"
                     "            feng_release(_old_value);\n", storage, storage);
             } else {
@@ -19736,8 +19887,8 @@ static bool cg_emit_generic_value_store(CG *cg, const char *storage_expr,
             descriptor == NULL ? "codegen: missing generic descriptor for assignment" : "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
-        "    const void *%s = %s;\n    switch (%s->kind) {\n"
-        "        case FENG_VALUE_TRIVIAL:\n", source, value->c_expr, descriptor);
+        "    %sconst void *%s = %s;\n    switch (%s->kind) {\n"
+        "        case FENG_VALUE_TRIVIAL:\n", cg_debug_local_attribute(cg, source), source, value->c_expr, descriptor);
     cg_emit_generic_value_store_kind(cg, CG_VK_TRIVIAL, storage_expr, source,
         descriptor, value->owns_ref, replace_existing);
     buf_append_cstr(cg->cur_body,
@@ -19813,14 +19964,14 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
 
         if (rad_desc_expr != NULL) {
             buf_append_fmt(cg->cur_body,
-                           "    void *%s = (void *)((char *)%s + %s->reified_field_offsets[%zu]);\n"
-                           "    const void *%s = %s;\n"
+                           "    %svoid *%s = (void *)((char *)%s + %s->reified_field_offsets[%zu]);\n"
+                           "    %sconst void *%s = %s;\n"
                            "    switch (%s->kind) {\n"
                            "        case FENG_VALUE_TRIVIAL:\n"
                            "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                            "            break;\n"
                            "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                           "            void *_new_value = *(void *const *)%s;\n"
+                           "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                            "            if (!%s) {\n"
                            "                feng_retain(_new_value);\n"
                            "            }\n"
@@ -19831,10 +19982,12 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                            "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                            "            break;\n"
                            "    }\n",
+                           cg_debug_local_attribute(cg, slot_tmp),
                            slot_tmp,
                            tuple_expr,
                            rad_desc_expr,
                            field_index,
+                           cg_debug_local_attribute(cg, src_tmp),
                            src_tmp,
                            value->c_expr,
                            desc,
@@ -19849,14 +20002,14 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                            desc);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "    void *%s = (void *)&%s.%s;\n"
-                           "    const void *%s = %s;\n"
+                           "    %svoid *%s = (void *)&%s.%s;\n"
+                           "    %sconst void *%s = %s;\n"
                            "    switch (%s->kind) {\n"
                            "        case FENG_VALUE_TRIVIAL:\n"
                            "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                            "            break;\n"
                            "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                           "            void *_new_value = *(void *const *)%s;\n"
+                           "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                            "            if (!%s) {\n"
                            "                feng_retain(_new_value);\n"
                            "            }\n"
@@ -19867,9 +20020,11 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                            "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                            "            break;\n"
                            "    }\n",
+                           cg_debug_local_attribute(cg, slot_tmp),
                            slot_tmp,
                            tuple_expr,
                            field->c_name,
+                           cg_debug_local_attribute(cg, src_tmp),
                            src_tmp,
                            value->c_expr,
                            desc,
@@ -20137,7 +20292,7 @@ static bool cg_emit_tuple_literal_typed(CG *cg,
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
+    cg_emit_local_storage(cg, cty, tmp, NULL);
     free(cty);
     buf_append_fmt(cg->cur_body, "    memset(&%s, 0, sizeof %s);\n", tmp, tmp);
 
@@ -20196,7 +20351,8 @@ static bool cg_emit_value_box_subject(CG *cg,
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     buf_append_fmt(cg->cur_body,
-                   "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+                   "    %sstruct %s *%s = (struct %s *)feng_object_new(&%s);\n",
+                   cg_debug_local_attribute(cg, box_tmp),
                    box_info.struct_name,
                    box_tmp,
                    box_info.struct_name,
@@ -20269,7 +20425,7 @@ static bool cg_emit_tuple_cast_to_type(CG *cg,
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, tmp);
+    cg_emit_local_storage(cg, cty, tmp, NULL);
     free(cty);
 
     if (target->user->field_count == 0U) {
@@ -20400,7 +20556,7 @@ static bool cg_emit_imported_binding_assign(CG *cg,
             return false;
         }
 
-        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, slot_name);
+        cg_emit_local_storage(cg, cty, old_tmp, slot_name);
         if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
             free(old_tmp);
             free(cty);
@@ -20598,14 +20754,17 @@ static bool cg_emit_reified_storage_declaration(CG *cg,
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    const FengAggregateDescriptor *%s = %s;\n"
-                   "    const size_t %s = %s->size;\n"
-                   "    _Alignas(max_align_t) char %s[%s];\n"
+                   "    %sconst FengAggregateDescriptor *%s = %s;\n"
+                   "    %sconst size_t %s = %s->size;\n"
+                   "    %s_Alignas(max_align_t) char %s[%s];\n"
                    "    memset(%s, 0, %s);\n",
+                   cg_debug_local_attribute(cg, descriptor_name),
                    descriptor_name,
                    descriptor_expr,
+                   cg_debug_local_attribute(cg, size_name),
                    size_name,
                    descriptor_name,
+                   cg_debug_local_attribute(cg, storage_c_name),
                    storage_c_name,
                    size_name,
                    storage_c_name,
@@ -20644,23 +20803,27 @@ static bool cg_emit_erased_generic_storage_declaration_from_descriptor(
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    const FengGenericParamDescriptor *%s = %s;\n",
+                   "    %sconst FengGenericParamDescriptor *%s = %s;\n",
+                   cg_debug_local_attribute(cg, descriptor_name),
                    descriptor_name,
                    descriptor_c_expr);
     if (size_c_expr != NULL) {
         buf_append_fmt(cg->cur_body,
-                       "    const size_t %s = %s;\n",
+                       "    %sconst size_t %s = %s;\n",
+                       cg_debug_local_attribute(cg, size_name),
                        size_name,
                        size_c_expr);
     } else {
         buf_append_fmt(cg->cur_body,
-                       "    const size_t %s = feng_generic_value_size(%s);\n",
+                       "    %sconst size_t %s = feng_generic_value_size(%s);\n",
+                       cg_debug_local_attribute(cg, size_name),
                        size_name,
                        descriptor_name);
     }
     buf_append_fmt(cg->cur_body,
-                   "    _Alignas(max_align_t) char %s[%s];\n"
+                   "    %s_Alignas(max_align_t) char %s[%s];\n"
                    "    memset(%s, 0, %s);\n",
+                   cg_debug_local_attribute(cg, storage_c_name),
                    storage_c_name,
                    size_name,
                    storage_c_name,
@@ -20726,7 +20889,8 @@ static bool cg_emit_reified_parameter_descriptor(CG *cg,
         return false;
     }
     buf_append_fmt(cg->cur_body,
-                   "    const FengAggregateDescriptor *%s = %s;\n",
+                   "    %sconst FengAggregateDescriptor *%s = %s;\n",
+                   cg_debug_local_attribute(cg, descriptor_name),
                    descriptor_name,
                    descriptor_expr);
     free(descriptor_expr);
@@ -20805,11 +20969,7 @@ static bool cg_materialize_ownership_alias(CG *cg,
         return false;
     }
     cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body,
-                   "    %s %s = %s;\n",
-                   ctype,
-                   temporary,
-                   result->c_expr);
+    cg_emit_local_storage(cg, ctype, temporary, result->c_expr);
     free(ctype);
     free(result->c_expr);
     result->c_expr = temporary;
@@ -20852,7 +21012,7 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
             "            memcpy(%s, %s, %s);\n"
             "            break;\n"
             "        case FENG_VALUE_MANAGED_POINTER: {\n"
-            "            void *_generic_value = *(void *const *)%s;\n",
+            "            FENG_CODEGEN_NODEBUG void *_generic_value = *(void *const *)%s;\n",
             descriptor_name,
             storage_name,
             r->c_expr,
@@ -21066,10 +21226,11 @@ static char *cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) 
     if (r->is_storage_address) {
         /* Fixed-layout shared aggregate parameters have a neutral pointer
          * ABI. Copy bytes into the nominal local without aliasing C tags. */
-        buf_append_fmt(cg->cur_body, "    %s %s;\n    memcpy(&%s, %s, sizeof(%s));\n",
-            cty, tmp, tmp, r->c_expr, tmp);
+        cg_emit_local_storage(cg, cty, tmp, NULL);
+        buf_append_fmt(cg->cur_body, "    memcpy(&%s, %s, sizeof(%s));\n",
+            tmp, r->c_expr, tmp);
     } else {
-        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
+        cg_emit_local_storage(cg, cty, tmp, r->c_expr);
     }
     free(cty);
     if (cgtype_is_managed(r->type) && r->owns_ref) {
@@ -21288,11 +21449,7 @@ static bool cg_prepare_aggregate_assign_source(CG *cg,
         return false;
     }
     cg_emit_current_stmt_line_directive_force(cg);
-    buf_append_fmt(cg->cur_body,
-                   "    %s %s = %s;\n",
-                   ctype,
-                   tmp,
-                   source->c_expr);
+    cg_emit_local_storage(cg, ctype, tmp, source->c_expr);
     free(ctype);
     free(source->c_expr);
     source->c_expr = tmp;
@@ -21590,7 +21747,7 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_returned = *(void *const *)%s;\n"
+                "            %svoid *_returned = *(void *const *)%s;\n"
                 "            feng_retain(_returned); *(void **)_out = _returned; break;\n"
                 "        }\n"
                 "        case FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS:\n"
@@ -21599,6 +21756,7 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
                 "    }\n",
                 descriptor,
                 result->c_expr, descriptor,
+                cg_debug_local_attribute(cg, "_returned"),
                 result->c_expr,
                 result->c_expr, descriptor,
                 descriptor);
@@ -21656,12 +21814,11 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (result->owns_ref) {
-            buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s;\n",
-                           ctype, temporary, result->c_expr);
+            cg_emit_local_storage(cg, ctype, temporary, result->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s; feng_retain(%s);\n",
+                           "    %s%s %s = %s; feng_retain(%s);\n",
+                           cg_debug_local_attribute(cg, temporary),
                            ctype, temporary, result->c_expr, temporary);
         }
         buf_append_fmt(cg->cur_body,
@@ -21694,13 +21851,15 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
                 return false;
             }
             buf_append_fmt(cg->cur_body,
-                "    %s %s; memset(&%s, 0, sizeof %s);"
+                "    %s%s %s; memset(&%s, 0, sizeof %s);"
                 " feng_aggregate_take(&%s, &%s, %s);\n",
+                cg_debug_local_attribute(cg, temporary),
                 ctype, temporary, temporary, temporary,
                 temporary, result->c_expr, descriptor);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = %s; feng_aggregate_retain(&%s, %s);\n",
+                "    %s%s %s = %s; feng_aggregate_retain(&%s, %s);\n",
+                cg_debug_local_attribute(cg, temporary),
                 ctype, temporary, result->c_expr, temporary, descriptor);
         }
         buf_append_fmt(cg->cur_body,
@@ -21720,12 +21879,11 @@ static bool cg_emit_callable_out_return_expr_result(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(result->type)) {
-            buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s;\n",
-                           ctype, temporary, result->c_expr);
+            cg_emit_local_storage(cg, ctype, temporary, result->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "    %s %s = (%s)(%s);\n",
+                           "    %s%s %s = (%s)(%s);\n",
+                           cg_debug_local_attribute(cg, temporary),
                            ctype, temporary, ctype, result->c_expr);
         }
         buf_append_fmt(cg->cur_body,
@@ -21758,10 +21916,11 @@ static bool cg_emit_return_expr_result(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (!r->owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = %s; feng_retain(%s);\n",
+                           cg_debug_local_attribute(cg, tmp),
                            cty, tmp, r->c_expr, tmp);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r->c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r->c_expr);
         }
         free(cty);
         cg_release_through(cg, NULL);
@@ -21785,13 +21944,15 @@ static bool cg_emit_return_expr_result(CG *cg,
         }
         if (!r->owns_ref) {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                "    %s%s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, r->c_expr, tmp, desc);
         } else {
             cg_materialize_to_local(cg, r, "_t");
             buf_append_fmt(cg->cur_body,
-                "    %s %s; memset(&%s, 0, sizeof %s);"
+                "    %s%s %s; memset(&%s, 0, sizeof %s);"
                 " feng_aggregate_take(&%s, &%s, &%s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, tmp, tmp, tmp, r->c_expr, desc);
         }
         free(cty);
@@ -21809,10 +21970,10 @@ static bool cg_emit_return_expr_result(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         if (cgtype_is_by_value_struct(r->type)) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                           cty, tmp, r->c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r->c_expr);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = (%s)(%s);\n",
+                           cg_debug_local_attribute(cg, tmp),
                            cty, tmp, cty, r->c_expr);
         }
         free(cty);
@@ -22043,7 +22204,8 @@ static bool cg_emit_value_type_construction(CG *cg,
         }
     } else {
         buf_append_fmt(cg->cur_body,
-                       "    struct %s %s = {0};\n",
+                       "    %sstruct %s %s = {0};\n",
+                       cg_debug_local_attribute(cg, val_name),
                        ut->c_struct_name, val_name);
     }
 
@@ -22597,7 +22759,7 @@ static bool cg_emit_logical_binary(CG *cg, const FengExpr *e, ExprResult *out) {
     } else {
         char *value = cg_fresh_temp(cg, "_logical");
         if (value == NULL) goto cleanup;
-        buf_append_fmt(&rhs, "    const bool %s = %s;\n", value, right.c_expr);
+        buf_append_fmt(&rhs, "    %sconst bool %s = %s;\n", cg_debug_local_attribute(cg, value), value, right.c_expr);
         cg_release_scope(cg, scope);
         buf_append_fmt(&expression, "(__extension__ ({\n%s    %s;\n}))", rhs.data, value);
         free(value);
@@ -23108,21 +23270,20 @@ static bool cg_emit_unary(CG *cg, const FengExpr *e, ExprResult *out) {
 }
 
 /* Borrowed compile-time description of the reification context that a
- * generated lambda invoke body must recover from its closure environment.
+ * generated callable or cleanup must recover from its closure environment.
  * Descriptor objects themselves are static read-only data and therefore do
  * not participate in ARC or the closure's managed-field metadata. */
-typedef struct CGLambdaReificationContext {
+typedef struct CGReificationContext {
     const char *function_descriptor_c_name;
     const FengDecl *owner_type_decl;
     size_t generic_param_count;
     const char *const *generic_param_descriptor_c_names;
     bool has_generic_arguments;
-} CGLambdaReificationContext;
+} CGReificationContext;
 
-/* Snapshot the active callable context before lambda emission temporarily
- * switches to the generated invoke function's local scope. */
-static CGLambdaReificationContext cg_lambda_reification_context(CG *cg) {
-    CGLambdaReificationContext context;
+/* Snapshot the active callable context before emitting a separate helper. */
+static CGReificationContext cg_reification_context(CG *cg) {
+    CGReificationContext context;
 
     memset(&context, 0, sizeof(context));
     if (cg == NULL) {
@@ -23142,8 +23303,8 @@ static CGLambdaReificationContext cg_lambda_reification_context(CG *cg) {
 }
 
 /* Return the C descriptor type used by a generic owner. */
-static const char *cg_lambda_owner_descriptor_c_type(
-    const CGLambdaReificationContext *context) {
+static const char *cg_reification_owner_descriptor_c_type(
+    const CGReificationContext *context) {
     if (context == NULL || context->owner_type_decl == NULL ||
         context->owner_type_decl->kind != FENG_DECL_TYPE) {
         return NULL;
@@ -23153,6 +23314,85 @@ static const char *cg_lambda_owner_descriptor_c_type(
                : "FengTypeDescriptor";
 }
 
+/* A generic helper needs an environment even without ordinary value captures. */
+static bool cg_reification_has_fields(const CGReificationContext *context) {
+    return context != NULL &&
+        (context->function_descriptor_c_name != NULL ||
+         cg_reification_owner_descriptor_c_type(context) != NULL ||
+         context->has_generic_arguments || context->generic_param_count != 0U);
+}
+
+/* Describe borrowed, non-ARC generic authorities in either kind of closure. */
+static void cg_emit_reification_fields(Buf *out, const CGReificationContext *context) {
+    const char *owner_type = cg_reification_owner_descriptor_c_type(context);
+    if (context == NULL) return;
+    if (context->function_descriptor_c_name != NULL)
+        buf_append_cstr(out, "    const FengFunctionDescriptor *_reified_function_desc;\n");
+    if (owner_type != NULL)
+        buf_append_fmt(out, "    const %s *_reified_owner_desc;\n", owner_type);
+    if (context->has_generic_arguments)
+        buf_append_cstr(out, "    const FengGenericArguments *_generic_args;\n");
+    for (size_t i = 0U; i < context->generic_param_count; ++i)
+        buf_append_fmt(out, "    const FengGenericParamDescriptor *_reified_param%zu;\n", i);
+}
+
+/* Restore the enclosing descriptor names without changing type/slot identities. */
+static bool cg_emit_reification_restore(CG *cg, Buf *out,
+                                        const CGReificationContext *context,
+                                        const char *environment, FengToken blame) {
+    const char *owner_type = cg_reification_owner_descriptor_c_type(context);
+    if (context == NULL) return true;
+    if (context->function_descriptor_c_name != NULL)
+        buf_append_fmt(out,
+            "    const FengFunctionDescriptor *%s = %s->_reified_function_desc;\n"
+            "    (void)%s;\n", context->function_descriptor_c_name, environment,
+            context->function_descriptor_c_name);
+    if (owner_type != NULL)
+        buf_append_fmt(out,
+            "    const %s *_type_desc = %s->_reified_owner_desc;\n"
+            "    const %s *_td = _type_desc;\n"
+            "    (void)_type_desc; (void)_td;\n", owner_type, environment, owner_type);
+    if (context->has_generic_arguments)
+        buf_append_fmt(out,
+            "    const FengGenericArguments *_generic_args = %s->_generic_args;\n"
+            "    (void)_generic_args;\n", environment);
+    for (size_t i = 0U; i < context->generic_param_count; ++i) {
+        const char *name = context->generic_param_descriptor_c_names != NULL
+            ? context->generic_param_descriptor_c_names[i] : NULL;
+        if (name == NULL)
+            return cg_fail(cg, blame, "CE0097",
+                "codegen: captured reification context is missing a generic parameter descriptor");
+        buf_append_fmt(out,
+            "    const FengGenericParamDescriptor *%s = %s->_reified_param%zu;\n"
+            "    (void)%s;\n", name, environment, i, name);
+    }
+    return true;
+}
+
+/* Initialize a heap or stack environment with existing descriptor pointers. */
+static bool cg_emit_reification_init(CG *cg, Buf *out,
+                                     const CGReificationContext *context,
+                                     const char *environment, const char *access,
+                                     FengToken blame) {
+    if (context == NULL) return true;
+    if (context->has_generic_arguments)
+        buf_append_fmt(out, "    %s%s_generic_args = _generic_args;\n", environment, access);
+    if (context->function_descriptor_c_name != NULL)
+        buf_append_fmt(out, "    %s%s_reified_function_desc = %s;\n",
+            environment, access, context->function_descriptor_c_name);
+    if (cg_reification_owner_descriptor_c_type(context) != NULL)
+        buf_append_fmt(out, "    %s%s_reified_owner_desc = _type_desc;\n", environment, access);
+    for (size_t i = 0U; i < context->generic_param_count; ++i) {
+        const char *name = context->generic_param_descriptor_c_names != NULL
+            ? context->generic_param_descriptor_c_names[i] : NULL;
+        if (name == NULL)
+            return cg_fail(cg, blame, "CE0097",
+                "codegen: captured reification context is missing a generic parameter descriptor");
+        buf_append_fmt(out, "    %s%s_reified_param%zu = %s;\n", environment, access, i, name);
+    }
+    return true;
+}
+
 static bool cg_emit_lambda_closure_type(CG *cg,
                                         const UserSpec *spec,
                                         const char *closure_struct_name,
@@ -23160,12 +23400,9 @@ static bool cg_emit_lambda_closure_type(CG *cg,
                                         const Local *const *captures,
                                         char *const *capture_field_names,
                                         size_t capture_count,
-                                        const CGLambdaReificationContext *reification,
+                                        const CGReificationContext *reification,
                                         FengToken blame) {
     Buf *td = &cg->type_defs;
-    const char *owner_descriptor_type =
-        cg_lambda_owner_descriptor_c_type(reification);
-
     buf_append_fmt(td, "struct %s {\n", closure_struct_name);
     buf_append_cstr(td, "    FengManagedHeader _hdr;\n    void *_self;\n    ");
     cg_emit_callable_abi_return_type(td,
@@ -23197,26 +23434,7 @@ static bool cg_emit_lambda_closure_type(CG *cg,
                            capture_field_names[i]);
         }
     }
-    if (reification != NULL &&
-        reification->function_descriptor_c_name != NULL) {
-        buf_append_cstr(td,
-            "    const FengFunctionDescriptor *_reified_function_desc;\n");
-    }
-    if (owner_descriptor_type != NULL) {
-        buf_append_fmt(td,
-                       "    const %s *_reified_owner_desc;\n",
-                       owner_descriptor_type);
-    }
-    if (reification != NULL) {
-        if (reification->has_generic_arguments) {
-            buf_append_cstr(td, "    const FengGenericArguments *_generic_args;\n");
-        }
-        for (size_t i = 0U; i < reification->generic_param_count; ++i) {
-            buf_append_fmt(td,
-                "    const FengGenericParamDescriptor *_reified_param%zu;\n",
-                i);
-        }
-    }
+    cg_emit_reification_fields(td, reification);
     buf_append_cstr(td, "};\n\n");
 
     buf_append_fmt(td,
@@ -23298,7 +23516,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
                                            FengSlice const *capture_names,
                                            char *const *capture_field_names,
                                            size_t capture_count,
-                                           const CGLambdaReificationContext *reification,
+                                           const CGReificationContext *reification,
                                            FengToken blame) {
     Buf fn;
     Buf *saved_body = cg->cur_body;
@@ -23311,6 +23529,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     bool saved_callable_return_uses_out = cg->callable_return_uses_out;
     bool saved_generic_return_uses_out = cg->generic_return_uses_out;
     bool saved_has_frame_marker = cg->cur_function_has_frame_marker;
+    bool saved_has_catch_regions = cg->cur_function_has_catch_regions;
     char **saved_captured_names = cg->captured_binding_names;
     size_t saved_captured_name_count = cg->captured_binding_name_count;
     bool saved_captures_self = cg->current_callable_captures_self;
@@ -23320,8 +23539,6 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     bool body_captures_self = false;
     Scope *fn_scope = NULL;
     bool ok = false;
-    const char *owner_descriptor_type =
-        cg_lambda_owner_descriptor_c_type(reification);
 
     buf_init(&fn);
     if (!cg_compute_capture_requirements_in_lambda_body(lambda_expr,
@@ -23343,6 +23560,7 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     cg->local_counter = 0;
     cg->loop_depth = 0;
     cg->cur_function_has_frame_marker = false;
+    cg->cur_function_has_catch_regions = false;
     cg->cur_return_type = spec->callable_return_type;
     cg->callable_return_uses_out =
         spec->callable_return_abi_kind == CG_CALLABLE_ABI_ADDRESS;
@@ -23374,49 +23592,8 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
         "    (void)_lambda;\n",
         closure_struct_name,
         closure_struct_name);
-    if (reification != NULL &&
-        reification->function_descriptor_c_name != NULL) {
-        buf_append_fmt(&fn,
-            "    const FengFunctionDescriptor *%s = "
-            "_lambda->_reified_function_desc;\n"
-            "    (void)%s;\n",
-            reification->function_descriptor_c_name,
-            reification->function_descriptor_c_name);
-    }
-    if (owner_descriptor_type != NULL) {
-        buf_append_fmt(&fn,
-            "    const %s *_type_desc = _lambda->_reified_owner_desc;\n"
-            "    const %s *_td = _type_desc;\n"
-            "    (void)_type_desc; (void)_td;\n",
-            owner_descriptor_type,
-            owner_descriptor_type);
-    }
-    if (reification != NULL) {
-        if (reification->has_generic_arguments) {
-            buf_append_cstr(&fn,
-                "    const FengGenericArguments *_generic_args = _lambda->_generic_args;\n"
-                "    (void)_generic_args;\n");
-        }
-        for (size_t i = 0U; i < reification->generic_param_count; ++i) {
-            const char *descriptor_name =
-                reification->generic_param_descriptor_c_names != NULL
-                    ? reification->generic_param_descriptor_c_names[i]
-                    : NULL;
-
-            if (descriptor_name == NULL) {
-                cg_fail(cg, blame,
-                    "CE0097", "codegen: lambda reification context is missing a generic parameter descriptor");
-                goto cleanup;
-            }
-            buf_append_fmt(&fn,
-                "    const FengGenericParamDescriptor *%s = "
-                "_lambda->_reified_param%zu;\n"
-                "    (void)%s;\n",
-                descriptor_name,
-                i,
-                descriptor_name);
-        }
-    }
+    if (!cg_emit_reification_restore(cg, &fn, reification, "_lambda", blame))
+        goto cleanup;
     /* The complete entry prefix belongs to the lambda definition, including
      * closure casts and restored generic descriptors before the EH prologue.
      * Anchor each generated line so native step-in cannot inherit a helper's
@@ -23706,6 +23883,7 @@ cleanup:
     cg->generic_return_uses_out = saved_generic_return_uses_out;
     cg->cur_fn_is_main = saved_is_main;
     cg->cur_function_has_frame_marker = saved_has_frame_marker;
+    cg->cur_function_has_catch_regions = saved_has_catch_regions;
     cg->captured_binding_names = saved_captured_names;
     cg->captured_binding_name_count = saved_captured_name_count;
     cg->current_callable_captures_self = saved_captures_self;
@@ -23734,10 +23912,8 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
     char *invoke_name = NULL;
     char *closure_var = NULL;
     bool ok = false;
-    CGLambdaReificationContext reification =
-        cg_lambda_reification_context(cg);
-    const char *owner_descriptor_type =
-        cg_lambda_owner_descriptor_c_type(&reification);
+    CGReificationContext reification =
+        cg_reification_context(cg);
     FengToken blame = e ? e->token : (lambda_expr ? lambda_expr->token : (FengToken){0});
     FengToken creation_token = cg->current_stmt_anchor_active
                                   ? cg->current_stmt_anchor_token : blame;
@@ -23886,10 +24062,11 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
      * emitting a nested callable into a separate body buffer. */
     size_t creation_start = cg->cur_body->length;
     buf_append_fmt(cg->cur_body,
-        "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n"
+        "    %sstruct %s *%s = (struct %s *)feng_object_new(&%s);\n"
         "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
         "    %s->_self = NULL;\n"
         "    %s->invoke = %s;\n",
+        cg_debug_local_attribute(cg, closure_var),
         closure_struct_name,
         closure_var,
         closure_struct_name,
@@ -23898,37 +24075,8 @@ static bool cg_emit_callable_lambda_coercion(CG *cg,
         closure_var,
         closure_var,
         invoke_name);
-    if (reification.has_generic_arguments) {
-        buf_append_fmt(cg->cur_body, "    %s->_generic_args = _generic_args;\n", closure_var);
-    }
-    if (reification.function_descriptor_c_name != NULL) {
-        buf_append_fmt(cg->cur_body,
-            "    %s->_reified_function_desc = %s;\n",
-            closure_var,
-            reification.function_descriptor_c_name);
-    }
-    if (owner_descriptor_type != NULL) {
-        buf_append_fmt(cg->cur_body,
-            "    %s->_reified_owner_desc = _type_desc;\n",
-            closure_var);
-    }
-    for (size_t i = 0U; i < reification.generic_param_count; ++i) {
-        const char *descriptor_name =
-            reification.generic_param_descriptor_c_names != NULL
-                ? reification.generic_param_descriptor_c_names[i]
-                : NULL;
-
-        if (descriptor_name == NULL) {
-            cg_fail(cg, blame,
-                "CE0097", "codegen: lambda reification context is missing a generic parameter descriptor");
-            goto cleanup;
-        }
-        buf_append_fmt(cg->cur_body,
-            "    %s->_reified_param%zu = %s;\n",
-            closure_var,
-            i,
-            descriptor_name);
-    }
+    if (!cg_emit_reification_init(cg, cg->cur_body, &reification, closure_var, "->", blame))
+        goto cleanup;
     for (size_t i = 0; i < capture_count; ++i) {
         buf_append_fmt(cg->cur_body,
             "    %s->%s = NULL;\n"
@@ -24378,17 +24526,20 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         }
         buf_append_fmt(
             cg->cur_body,
-            "    const FengFunctionDescriptor *%s = %s;\n"
-            "    const FengCallableValueDescriptor *%s = &%s->callable_value;\n"
-            "    struct %s *%s = "
+            "    %sconst FengFunctionDescriptor *%s = %s;\n"
+            "    %sconst FengCallableValueDescriptor *%s = &%s->callable_value;\n"
+            "    %sstruct %s *%s = "
             "(struct %s *)feng_object_new(%s->closure_desc);\n"
             "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
             "    %s->_self = NULL;\n"
             "    %s->invoke = (",
+            cg_debug_local_attribute(cg, descriptor_name),
             descriptor_name,
             callable_descriptor_expr,
+            cg_debug_local_attribute(cg, value_descriptor_name),
             value_descriptor_name,
             descriptor_name,
+            cg_debug_local_attribute(cg, closure_name),
             target_spec->c_closure_struct_name,
             closure_name,
             target_spec->c_closure_struct_name,
@@ -24635,17 +24786,20 @@ static bool cg_emit_callable_method_coercion(CG *cg,
         }
         buf_append_fmt(
             cg->cur_body,
-            "    const FengFunctionDescriptor *%s = %s;\n"
-            "    const FengCallableValueDescriptor *%s = &%s->callable_value;\n"
-            "    struct %s *%s = "
+            "    %sconst FengFunctionDescriptor *%s = %s;\n"
+            "    %sconst FengCallableValueDescriptor *%s = &%s->callable_value;\n"
+            "    %sstruct %s *%s = "
             "(struct %s *)feng_object_new(%s->closure_desc);\n"
             "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
             "    %s->_self = NULL;\n"
             "    %s->invoke = (",
+            cg_debug_local_attribute(cg, descriptor_name),
             descriptor_name,
             callable_descriptor_expr,
+            cg_debug_local_attribute(cg, value_descriptor_name),
             value_descriptor_name,
             descriptor_name,
+            cg_debug_local_attribute(cg, closure_name),
             target_spec->c_closure_struct_name,
             closure_name,
             target_spec->c_closure_struct_name,
@@ -24957,11 +25111,12 @@ static bool cg_emit_callable_other_rewrap(CG *cg,
     buf_append_cstr(&cg->witness_defs, "}\n\n");
 
     buf_append_fmt(cg->cur_body,
-        "    struct %s *%s = (struct %s *)feng_object_new(&%s);\n"
+        "    %sstruct %s *%s = (struct %s *)feng_object_new(&%s);\n"
         "    %s->_hdr.tag = FENG_TYPE_TAG_CLOSURE;\n"
         "    %s->_self = NULL;\n"
         "    feng_assign((void **)&%s->_self, (void *)%s);\n"
         "    %s->invoke = %s;\n",
+        cg_debug_local_attribute(cg, closure_var),
         dst_spec->c_closure_struct_name,
         closure_var,
         dst_spec->c_closure_struct_name,
@@ -25661,27 +25816,31 @@ static bool cg_pack_variadic_expr_results(CG *cg,
             if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
                 const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
                 buf_append_fmt(cg->cur_body,
-                    "    FengArray *%s = feng_array_new_kinded("
+                    "    %sFengArray *%s = feng_array_new_kinded("
                     "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
                     "NULL, %s->reified_agg_deps[%zu]->size, (size_t)0);\n",
+                    cg_debug_local_attribute(cg, arr_tmp),
                     arr_tmp, rad_src, rad_idx, rad_src, rad_idx);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    FengArray *%s = feng_array_new_kinded("
+                    "    %sFengArray *%s = feng_array_new_kinded("
                     "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                    cg_debug_local_attribute(cg, arr_tmp),
                     arr_tmp, agg_desc, elem_cty);
             }
         } else if (elem_is_generic_param) {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "%s_kind, %s_agg, NULL, %s_size, (size_t)0);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp,
                 generic_elem_meta,
                 generic_elem_meta,
                 generic_elem_meta);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                "    %sFengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false");
         }
         free(elem_cty); free(desc_expr); free(generic_elem_meta);
@@ -25723,20 +25882,23 @@ static bool cg_pack_variadic_expr_results(CG *cg,
         if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
             const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
                 "NULL, %s->reified_agg_deps[%zu]->size, (size_t)%zu);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, rad_src, rad_idx, rad_src, rad_idx, n);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, agg_desc, elem_cty, n);
         }
     } else if (elem_is_generic_param) {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
+            "    %sFengArray *%s = feng_array_new_kinded("
             "%s_kind, %s_agg, NULL, %s_size, (size_t)%zu);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp,
             generic_elem_meta,
             generic_elem_meta,
@@ -25744,7 +25906,8 @@ static bool cg_pack_variadic_expr_results(CG *cg,
             n);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            "    %sFengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
     }
 
@@ -25764,7 +25927,8 @@ static bool cg_pack_variadic_expr_results(CG *cg,
             slots_tmp, arr_tmp);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    %s *%s = (%s *)feng_array_data(%s);\n",
+            "    %s%s *%s = (%s *)feng_array_data(%s);\n",
+            cg_debug_local_attribute(cg, slots_tmp),
             elem_cty, slots_tmp, elem_cty, arr_tmp);
     }
 
@@ -25777,7 +25941,7 @@ static bool cg_pack_variadic_expr_results(CG *cg,
                 "            memcpy(%s + %zu * %s_size, %s, %s_size);\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_value = *(void *const *)%s;\n"
+                "            %svoid *_value = *(void *const *)%s;\n"
                 "            *(void **)(%s + %zu * %s_size) = _value;\n"
                 "            feng_retain(_value);\n"
                 "            break;\n"
@@ -25789,6 +25953,7 @@ static bool cg_pack_variadic_expr_results(CG *cg,
                 generic_elem_meta,
                 slots_tmp, i, generic_elem_meta,
                 items[i].c_expr, generic_elem_meta,
+                cg_debug_local_attribute(cg, "_value"),
                 items[i].c_expr,
                 slots_tmp, i, generic_elem_meta,
                 slots_tmp, i, generic_elem_meta,
@@ -26054,12 +26219,14 @@ static bool cg_emit_registered_call(CG *cg,
             }
 
             buf_append_fmt(cg->cur_body,
-                "    struct %s %s = %s(%s);\n"
-                "    struct %s *%s = %s(%s);\n",
+                "    %sstruct %s %s = %s(%s);\n"
+                "    %sstruct %s *%s = %s(%s);\n",
+                cg_debug_local_attribute(cg, abi_tmp),
                 return_abi_user->c_abi_layout_name,
                 abi_tmp,
                 extern_c_name,
                 args_buf.data ? args_buf.data : "",
+                cg_debug_local_attribute(cg, ret_tmp),
                 return_abi_user->c_struct_name,
                 ret_tmp,
                 return_abi_user->c_abi_box_name,
@@ -26320,7 +26487,8 @@ static bool cg_callable_callee_guard_begin(CG *cg, ExprResult *callee,
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    void *%s = %s%s%s; feng_retain(%s);\n",
+                   "    %svoid *%s = %s%s%s; feng_retain(%s);\n",
+                   cg_debug_local_attribute(cg, temporary),
                    temporary, callee->is_storage_address ? "(*(void *const *)" : "(void *)(",
                    callee->c_expr, ")", temporary);
     guard->local_index = cg->cur_scope->count;
@@ -26507,10 +26675,7 @@ static bool cg_emit_callable_value_call(CG *cg,
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             cg_emit_current_stmt_line_directive_force(cg);
-            buf_append_fmt(cg->cur_body,
-                           "    %s %s;\n",
-                           result_ctype,
-                           result_name);
+            cg_emit_local_storage(cg, result_ctype, result_name, NULL);
             free(result_ctype);
             out->c_expr = strdup(result_name);
             out->is_addressable = true;
@@ -26772,7 +26937,7 @@ static bool cg_emit_generic_callable_value_call(CG *cg,
                 if (ret_cty == NULL) {
                     ok = false;
                 } else {
-                    buf_append_fmt(cg->cur_body, "    %s %s;\n", ret_cty, ret_tmp);
+                    cg_emit_local_storage(cg, ret_cty, ret_tmp, NULL);
                 }
                 free(ret_cty);
             }
@@ -26889,7 +27054,8 @@ static bool cg_stabilize_computed_callable_callee(CG *cg,
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    %s %s = %s; feng_retain(%s);\n",
+                   "    %s%s %s = %s; feng_retain(%s);\n",
+                   cg_debug_local_attribute(cg, temporary),
                    ctype,
                    temporary,
                    callee->c_expr,
@@ -27817,7 +27983,7 @@ static bool cg_emit_generic_type_method_call(CG *cg,
                 ok = false;
                 goto cleanup;
             }
-            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            cg_emit_local_storage(cg, cty, ret_cname, NULL);
             free(cty);
         }
     }
@@ -28356,7 +28522,7 @@ static bool cg_emit_generic_type_self_method_call(CG *cg,
                 ok = false;
                 goto cleanup;
             }
-            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            cg_emit_local_storage(cg, cty, ret_cname, NULL);
             free(cty);
         }
     }
@@ -29179,7 +29345,7 @@ static bool cg_emit_generic_method_call(CG *cg,
                 ok = false;
                 goto cleanup;
             }
-            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            cg_emit_local_storage(cg, cty, ret_cname, NULL);
             free(cty);
         }
     }
@@ -29466,7 +29632,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             if (arg.type != NULL && arg.type->kind == CG_TYPE_GENERIC_PARAM) {
-                buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, arg.c_expr);
+                buf_append_fmt(cg->cur_body, "    %sconst void *%s = %s;\n", cg_debug_local_attribute(cg, tmp), tmp, arg.c_expr);
                 arg_expr = strdup(tmp);
             } else {
                 char *cty = cg_ctype_dup(arg.type);
@@ -29477,7 +29643,7 @@ static bool cg_emit_static_method_call_with_user_method(CG *cg,
                     buf_free(&args_buf);
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, arg.c_expr);
+                cg_emit_local_storage(cg, cty, tmp, arg.c_expr);
                 if ((cgtype_is_managed(arg.type) || cgtype_is_aggregate(arg.type)) &&
                     arg.owns_ref) {
                     if (!cg_register_local_for_cleanup(cg, tmp, arg.type, e->token)) {
@@ -29638,8 +29804,9 @@ static bool cg_emit_resolved_constructor_call(CG *cg, const FengExpr *e, ExprRes
                     const char *src = cg->generic_type_method_rtd_via_desc
                                           ? "_desc" : "_td";
                     buf_append_fmt(cg->cur_body,
-                        "    struct %s *%s = (struct %s *)feng_object_new("
+                        "    %sstruct %s *%s = (struct %s *)feng_object_new("
                         "%s->reified_type_deps[%zu]);\n",
+                        cg_debug_local_attribute(cg, obj_name),
                         ut->c_struct_name, obj_name,
                         ut->c_struct_name, src, ri);
                     desc_expr = src;
@@ -29654,7 +29821,8 @@ static bool cg_emit_resolved_constructor_call(CG *cg, const FengExpr *e, ExprRes
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
-                           "    struct %s *%s = %s;\n",
+                           "    %sstruct %s *%s = %s;\n",
+                           cg_debug_local_attribute(cg, obj_name),
                            ut->c_struct_name, obj_name, obj_init);
             free(obj_init);
         }
@@ -30005,10 +30173,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         return cg_fail(cg, e->token,
                                        "IE0001", "codegen: out of memory");
                     }
-                    buf_append_fmt(cg->cur_body,
-                                   "    %s %s;\n",
-                                   ret_ctype,
-                                   ret_slot);
+                    cg_emit_local_storage(cg, ret_ctype, ret_slot, NULL);
                     free(ret_ctype);
                     out->c_expr = strdup(ret_slot);
                     out->is_addressable = true;
@@ -30233,10 +30398,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         return cg_fail(cg, e->token,
                                        "IE0001", "codegen: out of memory");
                     }
-                    buf_append_fmt(cg->cur_body,
-                                   "    %s %s;\n",
-                                   result_ctype,
-                                   result_name);
+                    cg_emit_local_storage(cg, result_ctype, result_name, NULL);
                     free(result_ctype);
                     out->c_expr = strdup(result_name);
                     out->is_addressable = true;
@@ -30397,7 +30559,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
                     if (ar.type != NULL && ar.type->kind == CG_TYPE_GENERIC_PARAM) {
-                        buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, ar.c_expr);
+                        buf_append_fmt(cg->cur_body, "    %sconst void *%s = %s;\n", cg_debug_local_attribute(cg, tmp), tmp, ar.c_expr);
                         arg_expr = strdup(tmp);
                     } else {
                         char *cty = cg_ctype_dup(ar.type);
@@ -30409,7 +30571,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                             er_free(&recv);
                             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                         }
-                        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, ar.c_expr);
+                        cg_emit_local_storage(cg, cty, tmp, ar.c_expr);
                         if (cgtype_is_managed(ar.type) && ar.owns_ref) {
                             cg_emit_cleanup_push_for_managed_local(cg, tmp);
                             ar.owns_ref = false;
@@ -30595,8 +30757,9 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         buf_free(&b); er_free(&recv); return false;
                     }
                     buf_append_fmt(cg->cur_body,
-                                   "    %s %s;\n"
+                                   "    %s%s %s;\n"
                                    "    %s;\n",
+                                   cg_debug_local_attribute(cg, return_temp),
                                    return_ctype,
                                    return_temp,
                                    b.data);
@@ -30949,7 +31112,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
                         return cg_fail(cg, e->token,
                             "IE0001", "codegen: out of memory");
                     }
-                    buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_tmp);
+                    cg_emit_local_storage(cg, cty, ret_tmp, NULL);
                     free(cty);
                 }
             }
@@ -31332,10 +31495,7 @@ static bool cg_emit_spec_static_field_address_read(
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         cg_emit_current_stmt_line_directive_force(cg);
-        buf_append_fmt(cg->cur_body,
-                       "    %s %s;\n",
-                       storage_type,
-                       storage_name);
+        cg_emit_local_storage(cg, storage_type, storage_name, NULL);
         free(storage_type);
     }
 
@@ -32444,8 +32604,9 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                     const char *src = cg->generic_type_method_rtd_via_desc
                                           ? "_desc" : "_td";
                     buf_append_fmt(cg->cur_body,
-                        "    struct %s *%s = (struct %s *)feng_object_new("
+                        "    %sstruct %s *%s = (struct %s *)feng_object_new("
                         "%s->reified_type_deps[%zu]);\n",
+                        cg_debug_local_attribute(cg, tmp),
                         ut->c_struct_name, tmp,
                         ut->c_struct_name, src, ri);
                     used_rtd = src;
@@ -32460,7 +32621,8 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
             buf_append_fmt(cg->cur_body,
-                "    struct %s *%s = %s;\n",
+                "    %sstruct %s *%s = %s;\n",
+                cg_debug_local_attribute(cg, tmp),
                 ut->c_struct_name, tmp, obj_init);
             free(obj_init);
         }
@@ -32641,14 +32803,16 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
             if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
                 const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
                 buf_append_fmt(cg->cur_body,
-                    "    FengArray *%s = feng_array_new_kinded("
+                    "    %sFengArray *%s = feng_array_new_kinded("
                     "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
                     "NULL, %s->reified_agg_deps[%zu]->size, (size_t)0);\n",
+                    cg_debug_local_attribute(cg, arr_tmp),
                     arr_tmp, rad_src, rad_idx, rad_src, rad_idx);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    FengArray *%s = feng_array_new_kinded("
+                    "    %sFengArray *%s = feng_array_new_kinded("
                     "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)0);\n",
+                    cg_debug_local_attribute(cg, arr_tmp),
                     arr_tmp, agg_desc, elem_cty);
             }
         } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
@@ -32660,12 +32824,14 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
                     "CE0184", "codegen: generic empty array literal requires an active generic descriptor");
             }
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), NULL, feng_generic_value_size(%s), (size_t)0);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, desc, desc, desc, desc);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                "    %sFengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)0);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false");
         }
         free(elem_cty); free(desc_expr);
@@ -32770,28 +32936,32 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
         if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
             const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
                 "NULL, %s->reified_agg_deps[%zu]->size, (size_t)%zu);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, rad_src, rad_idx, rad_src, rad_idx, n);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), (size_t)%zu);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, agg_desc, elem_cty, n);
         }
     } else if (generic_desc != NULL) {
         /* Erased T uses the same element layout/ownership as T[:n]; only
          * the explicit literal values, not their storage pointers, are copied. */
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
+            "    %sFengArray *%s = feng_array_new_kinded("
             "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? "
             "feng_generic_aggregate_descriptor(%s) : NULL), NULL, "
             "feng_generic_value_size(%s), (size_t)%zu);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp, generic_desc, generic_desc, generic_desc, generic_desc, n);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            "    %sFengArray *%s = feng_array_new(%s, sizeof(%s), %s, (size_t)%zu);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp, desc_expr, elem_cty, elem_managed ? "true" : "false", n);
     }
     bool literal_has_rad = false;
@@ -32805,7 +32975,8 @@ static bool cg_emit_array_literal_typed(CG *cg, const FengExpr *e,
             slots_tmp, arr_tmp);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    %s *%s = (%s *)feng_array_data(%s);\n",
+            "    %s%s *%s = (%s *)feng_array_data(%s);\n",
+            cg_debug_local_attribute(cg, slots_tmp),
             elem_cty, slots_tmp, elem_cty, arr_tmp);
     }
     for (size_t i = 0; i < n; i++) {
@@ -32954,7 +33125,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
     }
     if (e->as.array_new.size_is_statically_valid) {
         buf_append_fmt(cg->cur_body,
-            "    size_t %s = (size_t)(%s);\n", size_tmp, size_res.c_expr);
+            "    %ssize_t %s = (size_t)(%s);\n", cg_debug_local_attribute(cg, size_tmp), size_tmp, size_res.c_expr);
     } else {
         const unsigned long long target_int_max =
             cg->analysis != NULL && cg->analysis->pointer_size < 8U
@@ -32970,12 +33141,14 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-            "    uint64_t %s = (uint64_t)(%s);\n"
+            "    %suint64_t %s = (uint64_t)(%s);\n"
             "    if (%s > UINT64_C(%llu)) "
             "feng_panic(\"array size is outside the valid target int range\");\n"
-            "    size_t %s = (size_t)%s;\n",
+            "    %ssize_t %s = (size_t)%s;\n",
+            cg_debug_local_attribute(cg, raw_size_tmp),
             raw_size_tmp, size_res.c_expr,
             raw_size_tmp, target_int_max,
+            cg_debug_local_attribute(cg, size_tmp),
             size_tmp, raw_size_tmp);
         free(raw_size_tmp);
     }
@@ -33010,14 +33183,16 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
         if (cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
             const char *rad_src = cg->generic_type_method_rad_via_desc ? "_desc" : "_td";
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, %s->reified_agg_deps[%zu], "
                 "NULL, %s->reified_agg_deps[%zu]->size, %s);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, rad_src, rad_idx, rad_src, rad_idx, size_tmp);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = feng_array_new_kinded("
+                "    %sFengArray *%s = feng_array_new_kinded("
                 "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, &%s, NULL, sizeof(%s), %s);\n",
+                cg_debug_local_attribute(cg, arr_tmp),
                 arr_tmp, agg_desc, elem_cty, size_tmp);
         }
     } else if (elem->kind == CG_TYPE_GENERIC_PARAM) {
@@ -33031,12 +33206,14 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
                 "CE0187", "codegen: generic array-new requires an active generic descriptor");
         }
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new_kinded("
+            "    %sFengArray *%s = feng_array_new_kinded("
             "%s->kind, (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS ? feng_generic_aggregate_descriptor(%s) : NULL), NULL, feng_generic_value_size(%s), %s);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp, desc, desc, desc, desc, size_tmp);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    FengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
+            "    %sFengArray *%s = feng_array_new(%s, sizeof(%s), %s, %s);\n",
+            cg_debug_local_attribute(cg, arr_tmp),
             arr_tmp, desc_expr, elem_cty,
             elem_managed ? "true" : "false", size_tmp);
     }
@@ -33068,7 +33245,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
         buf_append_fmt(cg->cur_body,
             "    switch (%s->kind) {\n"
             "        case FENG_VALUE_TRIVIAL: {\n"
-            "            const FengTrivialDescriptor *%s = "
+            "            %sconst FengTrivialDescriptor *%s = "
             "feng_generic_trivial_descriptor(%s);\n"
             "            if (%s == NULL || %s->default_zero_init == NULL) "
             "feng_panic(\"generic array trivial element has no default-zero policy\");\n"
@@ -33086,11 +33263,11 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             "            break;\n"
             "        }\n"
             "        case FENG_VALUE_MANAGED_POINTER: {\n"
-            "            const FengTypeDescriptor *%s = "
+            "            %sconst FengTypeDescriptor *%s = "
             "feng_generic_type_descriptor(%s);\n"
             "            if (%s == NULL || %s->default_zero_init == NULL) "
             "feng_panic(\"generic array managed element has no default-zero initializer\");\n"
-            "            void **%s = (void **)feng_array_data(%s);\n"
+            "            %svoid **%s = (void **)feng_array_data(%s);\n"
             "            for (size_t %s = 0; %s < %s; ++%s) "
             "%s->default_zero_init(&%s[%s], %s);\n"
             "            break;\n"
@@ -33101,6 +33278,7 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             "            feng_panic(\"generic array element has an unknown value kind\");\n"
             "    }\n",
             generic_desc,
+            cg_debug_local_attribute(cg, trivial_desc_tmp),
             trivial_desc_tmp, generic_desc,
             trivial_desc_tmp, trivial_desc_tmp,
             trivial_desc_tmp,
@@ -33109,8 +33287,10 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             idx_tmp, idx_tmp, size_tmp, idx_tmp,
             trivial_desc_tmp, slots_tmp, idx_tmp, trivial_desc_tmp,
             trivial_desc_tmp,
+            cg_debug_local_attribute(cg, managed_desc_tmp),
             managed_desc_tmp, generic_desc,
             managed_desc_tmp, managed_desc_tmp,
+            cg_debug_local_attribute(cg, slots_tmp),
             slots_tmp, arr_tmp,
             idx_tmp, idx_tmp, size_tmp, idx_tmp,
             managed_desc_tmp, slots_tmp, idx_tmp, managed_desc_tmp);
@@ -33128,9 +33308,10 @@ static bool cg_emit_array_new(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-            "    %s *%s = (%s *)feng_array_data(%s);\n"
+            "    %s%s *%s = (%s *)feng_array_data(%s);\n"
             "    for (size_t %s = 0; %s < %s; ++%s) "
             "%s[%s] = %s;\n",
+            cg_debug_local_attribute(cg, slots_tmp),
             elem_cty, slots_tmp, elem_cty, arr_tmp,
             idx_tmp, idx_tmp, size_tmp, idx_tmp,
             slots_tmp, idx_tmp, element_default_expr);
@@ -33179,18 +33360,21 @@ static bool cg_emit_checked_array_index(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-            "    uint64_t %s = (uint64_t)(%s);\n"
+            "    %suint64_t %s = (uint64_t)(%s);\n"
             "    if (%s >= (uint64_t)feng_array_length(%s)) "
             "feng_panic(\"array index out of range\");\n"
-            "    size_t %s = (size_t)%s;\n",
+            "    %ssize_t %s = (size_t)%s;\n",
+            cg_debug_local_attribute(cg, raw_index_tmp),
             raw_index_tmp, index->c_expr,
             raw_index_tmp, array_expr,
+            cg_debug_local_attribute(cg, index_tmp),
             index_tmp, raw_index_tmp);
         free(raw_index_tmp);
     } else {
         buf_append_fmt(cg->cur_body,
-            "    size_t %s = (size_t)(%s);\n"
+            "    %ssize_t %s = (size_t)(%s);\n"
             "    feng_array_check_index(%s, %s);\n",
+            cg_debug_local_attribute(cg, index_tmp),
             index_tmp, index->c_expr,
             array_expr, index_tmp);
     }
@@ -33554,7 +33738,7 @@ static bool cg_emit_expression_join_slot(CG *cg,
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
     if (managed) {
-        buf_append_fmt(cg->cur_body, "    %s %s = NULL;\n", ctype, slot_name);
+        cg_emit_local_storage(cg, ctype, slot_name, "NULL");
         cg_emit_cleanup_push_for_managed_local(cg, slot_name);
         if (!scope_add(cg->cur_scope,
                        slot_name,
@@ -33565,7 +33749,8 @@ static bool cg_emit_expression_join_slot(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
     } else if (aggregate) {
-        buf_append_fmt(cg->cur_body, "    %s %s; ", ctype, slot_name);
+        buf_append_fmt(cg->cur_body, "    %s%s %s; ",
+                       cg_debug_local_attribute(cg, slot_name), ctype, slot_name);
         if (!cg_append_aggregate_default_zero_init_call(
                 cg->cur_body, result_type, slot_name)) {
             free(ctype);
@@ -33583,10 +33768,11 @@ static bool cg_emit_expression_join_slot(CG *cg,
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
     } else if (cgtype_is_by_value_struct(result_type)) {
-        buf_append_fmt(cg->cur_body, "    %s %s = {0};\n", ctype, slot_name);
+        cg_emit_local_storage(cg, ctype, slot_name, "{0}");
     } else {
         buf_append_fmt(cg->cur_body,
-                       "    %s %s = (%s)0;\n",
+                       "    %s%s %s = (%s)0;\n",
+                       cg_debug_local_attribute(cg, slot_name),
                        ctype,
                        slot_name,
                        ctype);
@@ -33908,7 +34094,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
             return cg_fail(cg, e->token,
                 "CE0201", "codegen: if-expression condition must be bool");
         }
-        buf_append_fmt(cg->cur_body, "    bool %s = %s;\n", cond_tmp, cond.c_expr);
+        buf_append_fmt(cg->cur_body, "    %sbool %s = %s;\n", cg_debug_local_attribute(cg, cond_tmp), cond_tmp, cond.c_expr);
         er_free(&cond);
 
         buf_append_fmt(cg->cur_body, "    if (%s) {\n", cond_tmp);
@@ -33961,7 +34147,7 @@ static bool cg_emit_if_expr(CG *cg, const FengExpr *e, ExprResult *out) {
         return cg_fail(cg, e->token,
             "CE0201", "codegen: if-expression condition must be bool");
     }
-    buf_append_fmt(cg->cur_body, "    bool %s = %s;\n", cond_tmp, cond.c_expr);
+    buf_append_fmt(cg->cur_body, "    %sbool %s = %s;\n", cg_debug_local_attribute(cg, cond_tmp), cond_tmp, cond.c_expr);
     er_free(&cond);
 
     if (!cg_emit_expression_join_slot(cg,
@@ -34806,7 +34992,7 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
             free(tgt_tmp);
             return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
         }
-        buf_append_fmt(cg->cur_body, "    const bool %s = %s;\n", hit, cond.data);
+        buf_append_fmt(cg->cur_body, "    %sconst bool %s = %s;\n", cg_debug_local_attribute(cg, hit), hit, cond.data);
         ok = cg_emit_union_projection_binding(cg, tgt_tmp,
             e->as.match_op.labels, e->as.match_op.label_count, e->as.match_op.binding_name,
             e->as.match_op.binding_mutability, hit, &projection_binding);
@@ -34957,7 +35143,7 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
             e->as.match_op.binding_name.data, e->as.match_op.binding_name.length)) {
         char *hit = cg_fresh_temp(cg, "_capture_hit");
         if (hit == NULL) { buf_free(&cond); free(tgt_tmp); return false; }
-        buf_append_fmt(cg->cur_body, "    const bool %s = %s;\n", hit, cond.data);
+        buf_append_fmt(cg->cur_body, "    %sconst bool %s = %s;\n", cg_debug_local_attribute(cg, hit), hit, cond.data);
         ok = cg_promote_binding_capture(cg, e->as.match_op.binding_name,
             e->as.match_op.binding_mutability, e->token, hit);
         buf_free(&cond);
@@ -35018,8 +35204,9 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
 
         if (cgtype_is_aggregate(catch_type)) {
             buf_append_fmt(cg->cur_body,
-                           "        %s %s;\n"
+                           "        %s%s %s;\n"
                            "        memset(&%s, 0, sizeof %s);\n",
+                           cg_debug_local_attribute(cg, c_name),
                            cty,
                            c_name,
                            c_name,
@@ -35042,7 +35229,8 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                            agg_desc);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "        %s %s = ((struct %s *)feng_caught_value())->value;\n",
+                           "        %s%s %s = ((struct %s *)feng_caught_value())->value;\n",
+                           cg_debug_local_attribute(cg, c_name),
                            cty,
                            c_name,
                            box_info.struct_name);
@@ -35054,7 +35242,9 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                        feng_name,
                        c_name,
                        cgtype_clone(catch_type),
-                       !is_user_value)) {
+                       !is_user_value) ||
+            !cg_debug_add_variable_record_slice_cgtype(cg, c_name, clause->name,
+                NULL, catch_type, FENG_CODEGEN_MAPING_VARIABLE_BINDING, err_token)) {
             free(c_name);
             free(feng_name);
             return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
@@ -35075,7 +35265,8 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
             return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-                       "        %s %s = (%s)feng_caught_value();\n",
+                       "        %s%s %s = (%s)feng_caught_value();\n",
+                       cg_debug_local_attribute(cg, c_name),
                        cty,
                        c_name,
                        cty);
@@ -35085,7 +35276,9 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
                    feng_name,
                    c_name,
                    cgtype_clone(catch_type),
-                   true)) {
+                   true) ||
+        !cg_debug_add_variable_record_slice_cgtype(cg, c_name, clause->name,
+            NULL, catch_type, FENG_CODEGEN_MAPING_VARIABLE_BINDING, err_token)) {
         free(c_name);
         free(feng_name);
         return cg_fail(cg, err_token, "IE0001", "codegen: out of memory");
@@ -35230,6 +35423,7 @@ static bool cg_emit_try_expr(CG *cg,
                              ExprResult *out,
                              bool result_required) {
     er_init(out);
+    cg->cur_function_has_catch_regions = true;
 
     CGType *result_type = result_required
                               ? cg_probe_expr_type(cg, e->as.try_expr.body)
@@ -35291,7 +35485,8 @@ static bool cg_emit_try_expr(CG *cg,
     }
 
     buf_append_fmt(cg->cur_body,
-                   "    static const FengCatchClause %s[%zu] = {\n",
+                   "    %sstatic const FengCatchClause %s[%zu] = {\n",
+                   cg_debug_local_attribute(cg, clauses_name),
                    clauses_name,
                    e->as.try_expr.clause_count);
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
@@ -35326,22 +35521,22 @@ static bool cg_emit_try_expr(CG *cg,
     }
     buf_append_fmt(cg->cur_body,
                    "    };\n"
-                   "    static FengLSDA %s;\n"
-                   "    static bool %s = false;\n"
-                   "    static volatile int %s = 0;\n"
+                   "    %sstatic FengLSDA %s;\n"
+                   "    %sstatic bool %s = false;\n"
+                   "    %sstatic volatile int %s = 0;\n"
                    "    if (!%s) {\n"
                    "        %s = (FengLSDA){ &&%s, &&%s, &&%s, %s, %zu };\n"
                    "        feng_register_lsda(&%s, 1);\n"
                    "        %s = true;\n"
                    "    }\n"
                    "    if (%s) goto %s;\n"
-                   "    FengCatchContext %s;\n"
+                   "    %sFengCatchContext %s;\n"
                    "    feng_try_frame_push(&%s.frame);\n"
                    "    {\n"
                    "    %s: ;\n",
-                   region_name,
-                   registered_name,
-                   keep_landing_name,
+                   cg_debug_local_attribute(cg, region_name), region_name,
+                   cg_debug_local_attribute(cg, registered_name), registered_name,
+                   cg_debug_local_attribute(cg, keep_landing_name), keep_landing_name,
                    registered_name,
                    region_name,
                    begin_label,
@@ -35353,7 +35548,7 @@ static bool cg_emit_try_expr(CG *cg,
                    registered_name,
                    keep_landing_name,
                    landing_label,
-                   marker_name,
+                   cg_debug_local_attribute(cg, marker_name), marker_name,
                    marker_name,
                    begin_label);
     Scope *try_scope = scope_push(cg->cur_scope);
@@ -35394,11 +35589,11 @@ static bool cg_emit_try_expr(CG *cg,
                    "    goto %s;\n"
                    "    %s: ;\n"
                    "    feng_exception_catch_begin(&%s);\n"
-                   "    int %s = feng_caught_clause();\n",
+                   "    %sint %s = feng_caught_clause();\n",
                    done_label,
                    landing_label,
                    marker_name,
-                   caught_clause_name);
+                   cg_debug_local_attribute(cg, caught_clause_name), caught_clause_name);
 
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
@@ -35656,7 +35851,8 @@ static bool cg_apply_reified_spec_view(CG *cg, FengToken blame,
     entry = cg_fresh_temp(cg, "_spec_view");
     if (entry == NULL) goto cleanup;
     buf_append_fmt(cg->cur_body,
-        "    const FengSpecCoercionDescriptor *%s = &%s->reified_spec_view_coercions[%zu];\n",
+        "    %sconst FengSpecCoercionDescriptor *%s = &%s->reified_spec_view_coercions[%zu];\n",
+        cg_debug_local_attribute(cg, entry),
         entry, cg->generic_callable_dep_via_desc ? "_desc" : "_td", slot);
     if (cg_type_has_value_box(out->type)) {
         if (cgtype_is_aggregate(out->type)) {
@@ -35670,7 +35866,7 @@ static bool cg_apply_reified_spec_view(CG *cg, FengToken blame,
         subject = cg_fresh_temp(cg, "_value_box");
         if (subject == NULL) goto cleanup;
         buf_append_fmt(cg->cur_body,
-            "    void *%s = feng_object_new(%s->box_descriptor);\n", subject, entry);
+            "    %svoid *%s = feng_object_new(%s->box_descriptor);\n", cg_debug_local_attribute(cg, subject), subject, entry);
         if (cgtype_is_aggregate(out->type)) {
             buf_append_fmt(cg->cur_body,
                 "    feng_aggregate_assign((unsigned char *)%s + %s->payload_offset, %s, %s);\n",
@@ -36096,7 +36292,7 @@ static void cg_emit_return_control_cleanup(CG *cg) {
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
+                   "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
                    cname, cname, cname);
 }
 
@@ -36203,7 +36399,7 @@ static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
                                   ? "_desc" : "_td";
             cg_emit_current_stmt_line_directive_force(cg);
             buf_append_fmt(cg->cur_body,
-                "    FengCleanupNode _cu_%s; "
+                "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; "
                 "feng_cleanup_push_aggregate(&_cu_%s, &%s, "
                 "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
                 cname, cname, cname, src, rad_idx);
@@ -36226,7 +36422,7 @@ static void cg_emit_cleanup_push_for_reified_aggregate_storage(
     const char *descriptor_c_name) {
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    FengCleanupNode _cu_%s; "
+                   "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; "
                    "feng_cleanup_push_aggregate(&_cu_%s, %s, %s);\n",
                    cname,
                    cname,
@@ -36243,7 +36439,7 @@ static void cg_emit_cleanup_push_for_erased_generic_storage(
     const char *descriptor_c_name) {
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-        "    FengCleanupNode _cu_%s;\n"
+        "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
         "    switch (%s->kind) {\n"
         "        case FENG_VALUE_TRIVIAL:\n"
         "            break;\n"
@@ -36273,7 +36469,7 @@ static void cg_emit_cleanup_push_for_erased_generic_argument_storage(
     const char *descriptor_c_name) {
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-        "    FengCleanupNode _cu_%s;\n"
+        "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
         "    if (%s->kind == "
         "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS) {\n"
         "        feng_cleanup_push_aggregate(&_cu_%s, %s, "
@@ -36682,10 +36878,11 @@ static bool cg_emit_initialized_local_binding(CG *cg,
     }
     if (cgtype_is_managed(decl_type)) {
         if (init->owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init->c_expr);
+            cg_emit_local_storage(cg, cty, cname, init->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s; feng_retain(%s);\n",
+                           "    %s%s %s = %s; feng_retain(%s);\n",
+                           cg_debug_local_attribute(cg, cname),
                            cty,
                            cname,
                            init->c_expr,
@@ -36693,7 +36890,7 @@ static bool cg_emit_initialized_local_binding(CG *cg,
         }
     } else if (cgtype_is_aggregate(decl_type)) {
         if (init->owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init->c_expr);
+            cg_emit_local_storage(cg, cty, cname, init->c_expr);
         } else {
             const char *desc = cg_aggregate_desc_name(decl_type);
             if (desc == NULL) {
@@ -36702,7 +36899,8 @@ static bool cg_emit_initialized_local_binding(CG *cg,
                 return cg_fail(cg, token, "CE0228", "codegen: missing aggregate descriptor for local binding");
             }
             buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                           "    %s%s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                           cg_debug_local_attribute(cg, cname),
                            cty,
                            cname,
                            init->c_expr,
@@ -36711,14 +36909,11 @@ static bool cg_emit_initialized_local_binding(CG *cg,
         }
     } else {
         if (cgtype_is_by_value_struct(decl_type)) {
-            buf_append_fmt(cg->cur_body,
-                           "    %s %s = %s;\n",
-                           cty,
-                           cname,
-                           init->c_expr);
+            cg_emit_local_storage(cg, cty, cname, init->c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                           "    %s %s = (%s)(%s);\n",
+                           "    %s%s %s = (%s)(%s);\n",
+                           cg_debug_local_attribute(cg, cname),
                            cty,
                            cname,
                            cty,
@@ -36939,16 +37134,18 @@ static bool cg_emit_user_field_value_store_with_offsets(
                                : "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-            "    void *%s = ((char *)%s + %s[%zu]);\n"
-            "    const void *%s = %s;\n"
+            "    %svoid *%s = ((char *)%s + %s[%zu]);\n"
+            "    %sconst void *%s = %s;\n"
             "    switch (%s->kind) {\n"
             "        case FENG_VALUE_TRIVIAL:\n"
             "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
             "            break;\n"
             "        case FENG_VALUE_MANAGED_POINTER: {\n"
-            "            void *_new_value = *(void *const *)%s;\n",
+            "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n",
+            cg_debug_local_attribute(cg, destination),
             destination, object_expr,
             field_offsets_expr, reified_index,
+            cg_debug_local_attribute(cg, source),
             source, value->c_expr,
             descriptor,
             destination, source, descriptor,
@@ -36959,7 +37156,7 @@ static bool cg_emit_user_field_value_store_with_offsets(
         }
         if (replace_existing) {
             buf_append_fmt(cg->cur_body,
-                "            void *_old_value = *(void **)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                 "            *(void **)%s = _new_value;\n"
                 "            feng_release(_old_value);\n",
                 destination, destination);
@@ -37149,13 +37346,14 @@ static bool cg_emit_reified_default_zero_init_at_address(
     buf_append_fmt(cg->cur_body,
         "    switch (%s->kind) {\n"
         "        case FENG_VALUE_TRIVIAL: {\n"
-        "            const FengTrivialDescriptor *%s = "
+        "            %sconst FengTrivialDescriptor *%s = "
         "feng_generic_trivial_descriptor(%s);\n"
         "            if (%s == NULL || %s->default_zero_init == NULL) "
         "feng_panic(\"generic trivial value has no default-zero policy\");\n"
         "            switch (%s->default_zero_init->kind) {\n"
         "                case FENG_DEFAULT_ZERO_BYTES:\n",
         descriptor_expr,
+        cg_debug_local_attribute(cg, trivial_descriptor),
         trivial_descriptor,
         descriptor_expr,
         trivial_descriptor,
@@ -37180,7 +37378,7 @@ static bool cg_emit_reified_default_zero_init_at_address(
         "            break;\n"
         "        }\n"
         "        case FENG_VALUE_MANAGED_POINTER: {\n"
-        "            const FengTypeDescriptor *%s = "
+        "            %sconst FengTypeDescriptor *%s = "
         "feng_generic_type_descriptor(%s);\n"
         "            if (%s == NULL || %s->default_zero_init == NULL) "
         "feng_panic(\"generic managed value has no default-zero initializer\");\n"
@@ -37191,6 +37389,7 @@ static bool cg_emit_reified_default_zero_init_at_address(
         trivial_descriptor,
         trivial_descriptor,
         address_expr,
+        cg_debug_local_attribute(cg, managed_descriptor),
         managed_descriptor,
         descriptor_expr,
         managed_descriptor,
@@ -37867,6 +38066,7 @@ cleanup:
     return ok;
 }
 
+/* Lower a source binding while retaining its value and debug storage identity. */
 static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
     const FengBinding *b = &stmt->as.binding;
     if (b->is_destructure) {
@@ -37970,7 +38170,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 "            memcpy(%s, %s, %s);\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_generic_value = *(void *const *)%s;\n",
+                "            FENG_CODEGEN_NODEBUG void *_generic_value = *(void *const *)%s;\n",
                 descriptor_name,
                 cname,
                 init.c_expr,
@@ -38195,7 +38395,8 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
              * Initialize the binding itself once, then retain only the
              * borrowed value's normal ownership; do not create a second temp. */
             buf_append_fmt(cg->cur_body,
-                "    %s %s; memcpy(&%s, %s, sizeof(%s));\n",
+                "    %s%s %s; memcpy(&%s, %s, sizeof(%s));\n",
+                cg_debug_local_attribute(cg, cname),
                 cty, cname, cname, init.c_expr, cname);
             if (!init.owns_ref && cgtype_is_aggregate(decl_type)) {
                 char *descriptor = cg_aggregate_descriptor_expr_dup(cg, decl_type, b->token);
@@ -38212,15 +38413,16 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
         } else if (cgtype_is_managed(decl_type)) {
             if (init.owns_ref) {
                 /* Take the +1 directly. */
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
+                cg_emit_local_storage(cg, cty, cname, init.c_expr);
             } else {
                 /* Borrowed; retain into our slot. */
-                buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+                buf_append_fmt(cg->cur_body, "    %s%s %s = %s; feng_retain(%s);\n",
+                               cg_debug_local_attribute(cg, cname),
                                cty, cname, init.c_expr, cname);
             }
         } else if (cgtype_is_aggregate(decl_type)) {
             if (init.owns_ref) {
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, init.c_expr);
+                cg_emit_local_storage(cg, cty, cname, init.c_expr);
             } else if (cg_value_needs_reified_layout(cg, decl_type)) {
                 /* Reified tuple: retain via RAD. */
                 const char *agg_desc = cg_aggregate_desc_name(decl_type);
@@ -38230,12 +38432,12 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                     const char *src = cg->generic_type_method_rad_via_desc
                                           ? "_desc" : "_td";
                     buf_append_fmt(cg->cur_body,
-                        "    %s %s = %s; feng_aggregate_retain(&%s, "
+                        "    %s%s %s = %s; feng_aggregate_retain(&%s, "
                         "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                        cg_debug_local_attribute(cg, cname),
                         cty, cname, init.c_expr, cname, src, rad_idx);
                 } else {
-                    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                                   cty, cname, init.c_expr);
+                    cg_emit_local_storage(cg, cty, cname, init.c_expr);
                 }
             } else {
                 const char *desc = cg_aggregate_desc_name(decl_type);
@@ -38246,15 +38448,16 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                         "CE0235", "codegen: missing aggregate descriptor for spec local");
                 }
                 buf_append_fmt(cg->cur_body,
-                               "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                               "    %s%s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                               cg_debug_local_attribute(cg, cname),
                                cty, cname, init.c_expr, cname, desc);
             }
         } else {
             if (cgtype_is_by_value_struct(decl_type)) {
-                buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                               cty, cname, init.c_expr);
+                cg_emit_local_storage(cg, cty, cname, init.c_expr);
             } else {
-                buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+                buf_append_fmt(cg->cur_body, "    %s%s %s = (%s)(%s);\n",
+                               cg_debug_local_attribute(cg, cname),
                                cty, cname, cty, init.c_expr);
             }
         }
@@ -38282,8 +38485,9 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                 const char *src = cg->generic_type_method_rad_via_desc
                                       ? "_desc" : "_td";
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s; feng_aggregate_default_zero_init(&%s, "
+                    "    %s%s %s; feng_aggregate_default_zero_init(&%s, "
                     "(const FengAggregateDescriptor *)%s->reified_agg_deps[%zu]);\n",
+                    cg_debug_local_attribute(cg, cname),
                     cty,
                     cname,
                     cname,
@@ -38299,7 +38503,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
                     return cg_fail(cg, b->token,
                         "CE0236", "codegen: missing aggregate default-init rule");
                 }
-                buf_append_fmt(cg->cur_body, "    %s %s; ", cty, cname);
+                buf_append_fmt(cg->cur_body, "    %s%s %s; ", cg_debug_local_attribute(cg, cname), cty, cname);
                 buf_append_cstr(cg->cur_body, init_call.data);
                 buf_append_cstr(cg->cur_body, ";\n");
                 buf_free(&init_call);
@@ -38309,7 +38513,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             if (!cg_default_value_expr(cg, decl_type, &b->token, &def_expr)) {
                 free(cname); free(cty); cgtype_free(decl_type); return false;
             }
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, cname, def_expr);
+            cg_emit_local_storage(cg, cty, cname, def_expr);
             free(def_expr);
         }
     }
@@ -38438,11 +38642,7 @@ static bool cg_emit_shared_static_binding_assign(
             cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
-        buf_append_fmt(cg->cur_body,
-                       "    %s %s = %s;\n",
-                       cty,
-                       old_name,
-                       destination);
+        cg_emit_local_storage(cg, cty, old_name, destination);
         if (!cg_emit_expr(cg, stmt->as.assign.value, &value)) {
             free(old_name);
             goto cleanup;
@@ -38577,7 +38777,8 @@ static bool cg_emit_reified_user_field_assign(CG *cg,
         goto cleanup;
     }
     buf_append_fmt(cg->cur_body,
-                   "    void *%s = (void *)((char *)%s + %s->reified_field_offsets[%zu]);\n",
+                   "    %svoid *%s = (void *)((char *)%s + %s->reified_field_offsets[%zu]);\n",
+                   cg_debug_local_attribute(cg, field_address),
                    field_address,
                    receiver->c_expr,
                    descriptor_expr,
@@ -38602,7 +38803,8 @@ static bool cg_emit_reified_user_field_assign(CG *cg,
             goto cleanup;
         }
         buf_append_fmt(cg->cur_body,
-                       "    %s %s = *(%s *)%s;\n",
+                       "    %s%s %s = *(%s *)%s;\n",
+                       cg_debug_local_attribute(cg, old_name),
                        ctype, old_name, ctype, field_address);
         if (!cg_emit_expr(cg, stmt->as.assign.value, &value)) {
             free(ctype);
@@ -38660,15 +38862,15 @@ static bool cg_emit_reified_user_field_assign(CG *cg,
                 goto cleanup;
             }
             buf_append_fmt(cg->cur_body,
-                "    const void *%s = %s;\n"
+                "    %sconst void *%s = %s;\n"
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_new_value = *(void *const *)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                 "            feng_retain(_new_value);\n"
-                "            void *_old_value = *(void **)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                 "            *(void **)%s = _new_value;\n"
                 "            feng_release(_old_value);\n"
                 "            break;\n"
@@ -38677,6 +38879,7 @@ static bool cg_emit_reified_user_field_assign(CG *cg,
                 "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                 "            break;\n"
                 "    }\n",
+                cg_debug_local_attribute(cg, source),
                 source, value.c_expr,
                 generic_desc,
                 field_address, source, generic_desc,
@@ -38832,7 +39035,8 @@ static bool cg_assignment_owner_guard_begin(
     }
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    %s %s = %s; feng_retain(%s);\n",
+                   "    %s%s %s = %s; feng_retain(%s);\n",
+                   cg_debug_local_attribute(cg, temporary),
                    ctype,
                    temporary,
                    receiver->c_expr,
@@ -38955,7 +39159,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
 
             buf_append_fmt(cg->cur_body,
-                "    %s %s = ((%s *)feng_array_data(%s))[%s];\n",
+                "    %s%s %s = ((%s *)feng_array_data(%s))[%s];\n",
+                cg_debug_local_attribute(cg, old_tmp),
                 elem_cty, old_tmp, elem_cty, recv.c_expr, idx_tmp);
 
             if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
@@ -39045,18 +39250,18 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return false;
             }
             buf_append_fmt(cg->cur_body,
-                "    void *%s = ((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
+                "    %svoid *%s = ((%s->kind == FENG_VALUE_MANAGED_POINTER) ? "
                 "(void *)&((void **)feng_array_data(%s))[%s] : "
                 "(void *)((char *)feng_array_data(%s) + (%s) * feng_generic_value_size(%s)));\n"
-                "    const void *%s = %s;\n"
+                "    %sconst void *%s = %s;\n"
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_new_value = *(void *const *)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                 "            feng_retain(_new_value);\n"
-                "            void *_old_value = *(void **)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                 "            *(void **)%s = _new_value;\n"
                 "            feng_release(_old_value);\n"
                 "            break;\n"
@@ -39065,9 +39270,11 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                 "            break;\n"
                 "    }\n",
+                cg_debug_local_attribute(cg, slot_tmp),
                 slot_tmp, desc,
                 recv.c_expr, idx_tmp,
                 recv.c_expr, idx_tmp, desc,
+                cg_debug_local_attribute(cg, src_tmp),
                 src_tmp, v.c_expr,
                 desc,
                 slot_tmp, src_tmp, desc,
@@ -39121,9 +39328,9 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             if (v.owns_ref) {
                 buf_append_fmt(cg->cur_body,
                     "    { %s *_slots = (%s *)feng_array_data(%s);"
-                    " void *_old = _slots[%s]; _slots[%s] = %s;"
+                    " %svoid *_old = _slots[%s]; _slots[%s] = %s;"
                     " feng_release(_old); }\n",
-                    elem_cty, elem_cty, recv.c_expr, idx_tmp, idx_tmp, v.c_expr);
+                    elem_cty, elem_cty, recv.c_expr, cg_debug_local_attribute(cg, "_old"), idx_tmp, idx_tmp, v.c_expr);
             } else {
                 buf_append_fmt(cg->cur_body,
                     "    feng_assign((void**)&((%s *)feng_array_data(%s))[%s], %s);\n",
@@ -39238,7 +39445,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                         free(cty);
                         return false;
                     }
-                    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, binding->c_name);
+                    cg_emit_local_storage(cg, cty, old_tmp, binding->c_name);
                     if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                         free(old_tmp);
                         free(cty);
@@ -39401,16 +39608,16 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
                 buf_append_fmt(cg->cur_body,
-                    "    void *%s = ((char *)%s + %s[%zu]);\n"
-                    "    const void *%s = %s;\n"
+                    "    %svoid *%s = ((char *)%s + %s[%zu]);\n"
+                    "    %sconst void *%s = %s;\n"
                     "    switch (%s->kind) {\n"
                     "        case FENG_VALUE_TRIVIAL:\n"
                     "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                     "            break;\n"
                     "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                    "            void *_new_value = *(void *const *)%s;\n"
+                    "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                     "            feng_retain(_new_value);\n"
-                    "            void *_old_value = *(void **)%s;\n"
+                    "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                     "            *(void **)%s = _new_value;\n"
                     "            feng_release(_old_value);\n"
                     "            break;\n"
@@ -39419,8 +39626,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                     "            break;\n"
                     "    }\n",
+                    cg_debug_local_attribute(cg, dst_tmp),
                     dst_tmp, recv.c_expr,
                     cg->generic_type_method_field_offsets_name, field_index,
+                    cg_debug_local_attribute(cg, src_tmp),
                     src_tmp, v.c_expr,
                     desc,
                     dst_tmp, src_tmp, desc,
@@ -39457,7 +39666,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                     return false;
                 }
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s = *(%s *)%s;\n",
+                    "    %s%s %s = *(%s *)%s;\n",
+                    cg_debug_local_attribute(cg, old_tmp),
                     field_cty, old_tmp, field_cty, field_addr);
                 ExprResult v;
                 if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
@@ -39597,25 +39807,29 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                     if (sm->is_static) {
                         buf_append_fmt(cg->cur_body,
-                            "    %s %s;\n"
+                            "    %s%s %s;\n"
                             "    ((const struct %s *)%s->witness)->get_%s(&%s);\n",
+                            cg_debug_local_attribute(cg, old_tmp),
                             field_cty, old_tmp, us->c_witness_struct_name,
                             desc_name, sm->c_field_name, old_tmp);
                     } else {
                         buf_append_fmt(cg->cur_body,
-                            "    %s %s = *(const %s *)((const struct %s *)%s->witness)->borrow_%s(%s);\n",
+                            "    %s%s %s = *(const %s *)((const struct %s *)%s->witness)->borrow_%s(%s);\n",
+                            cg_debug_local_attribute(cg, old_tmp),
                             field_cty, old_tmp, field_cty,
                             us->c_witness_struct_name, desc_name,
                             sm->c_field_name, subject_expr);
                     }
                 } else if (sm->is_static) {
                     buf_append_fmt(cg->cur_body,
-                        "    %s %s = ((const struct %s *)%s->witness)->get_%s();\n",
+                        "    %s%s %s = ((const struct %s *)%s->witness)->get_%s();\n",
+                        cg_debug_local_attribute(cg, old_tmp),
                         field_cty, old_tmp, us->c_witness_struct_name,
                         desc_name, sm->c_field_name);
                 } else {
                     buf_append_fmt(cg->cur_body,
-                        "    %s %s = ((const struct %s *)%s->witness)->get_%s(%s);\n",
+                        "    %s%s %s = ((const struct %s *)%s->witness)->get_%s(%s);\n",
+                        cg_debug_local_attribute(cg, old_tmp),
                         field_cty, old_tmp, us->c_witness_struct_name,
                         desc_name, sm->c_field_name, subject_expr);
                 }
@@ -39658,7 +39872,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                        "IE0001", "codegen: out of memory");
                     }
                     buf_append_fmt(cg->cur_body,
-                                   "    %s %s = (%s)(%s);\n",
+                                   "    %s%s %s = (%s)(%s);\n",
+                                   cg_debug_local_attribute(cg, new_tmp),
                                    field_cty, new_tmp, field_cty, expr.data);
                     if (sm->is_static) {
                         buf_append_fmt(cg->cur_body,
@@ -39803,12 +40018,14 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
 
                 if (sm->value_abi_kind == CG_CALLABLE_ABI_ADDRESS) {
                     buf_append_fmt(cg->cur_body,
-                        "    %s %s = *(const %s *)%s.witness->borrow_%s(%s.subject);\n",
+                        "    %s%s %s = *(const %s *)%s.witness->borrow_%s(%s.subject);\n",
+                        cg_debug_local_attribute(cg, old_tmp),
                         field_cty, old_tmp, field_cty,
                         recv.c_expr, sm->c_field_name, recv.c_expr);
                 } else {
                     buf_append_fmt(cg->cur_body,
-                        "    %s %s = %s.witness->get_%s(%s.subject);\n",
+                        "    %s%s %s = %s.witness->get_%s(%s.subject);\n",
+                        cg_debug_local_attribute(cg, old_tmp),
                         field_cty, old_tmp, recv.c_expr,
                         sm->c_field_name, recv.c_expr);
                 }
@@ -39848,8 +40065,9 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                        "IE0001", "codegen: out of memory");
                     }
                     buf_append_fmt(cg->cur_body,
-                                   "    %s %s = (%s)(%s);\n"
+                                   "    %s%s %s = (%s)(%s);\n"
                                    "    %s.witness->set_%s(%s.subject, &%s);\n",
+                                   cg_debug_local_attribute(cg, new_tmp),
                                    field_cty, new_tmp, field_cty, expr.data,
                                    recv.c_expr, sm->c_field_name,
                                    recv.c_expr, new_tmp);
@@ -39987,7 +40205,8 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             }
 
             buf_append_fmt(cg->cur_body,
-                "    %s %s = (%s)%s%s;\n",
+                "    %s%s %s = (%s)%s%s;\n",
+                cg_debug_local_attribute(cg, old_tmp),
                 field_cty, old_tmp, recv.c_expr, acc, uf->c_name);
 
             if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
@@ -40057,16 +40276,16 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                                "CE0257", "codegen: generic member assignment requires a value with the same generic type parameter");
             }
             buf_append_fmt(cg->cur_body,
-                "    void *%s = (void *)&(%s)%s%s;\n"
-                "    const void *%s = %s;\n"
+                "    %svoid *%s = (void *)&(%s)%s%s;\n"
+                "    %sconst void *%s = %s;\n"
                 "    switch (%s->kind) {\n"
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(%s, %s, feng_generic_value_size(%s));\n"
                 "            break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_new_value = *(void *const *)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_new_value = *(void *const *)%s;\n"
                 "            feng_retain(_new_value);\n"
-                "            void *_old_value = *(void **)%s;\n"
+                "            FENG_CODEGEN_NODEBUG void *_old_value = *(void **)%s;\n"
                 "            *(void **)%s = _new_value;\n"
                 "            feng_release(_old_value);\n"
                 "            break;\n"
@@ -40075,8 +40294,10 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 "            feng_aggregate_assign(%s, %s, feng_generic_aggregate_descriptor(%s));\n"
                 "            break;\n"
                 "    }\n",
+                cg_debug_local_attribute(cg, dst_tmp),
                 dst_tmp,
                 recv.c_expr, acc, uf->c_name,
+                cg_debug_local_attribute(cg, src_tmp),
                 src_tmp, v.c_expr,
                 desc,
                 dst_tmp, src_tmp, desc,
@@ -40187,7 +40408,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
                 return false;
             }
 
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, mb->c_name);
+            cg_emit_local_storage(cg, cty, old_tmp, mb->c_name);
             if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
                 free(old_tmp);
                 free(cty);
@@ -40277,7 +40498,7 @@ static bool cg_emit_assign(CG *cg, const FengStmt *stmt) {
             return false;
         }
 
-        buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, old_tmp, l->c_name);
+        cg_emit_local_storage(cg, cty, old_tmp, l->c_name);
         if (!cg_emit_expr(cg, stmt->as.assign.value, &v)) {
             free(old_tmp);
             free(cty);
@@ -40547,10 +40768,11 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = %s; feng_retain(%s);\n",
+                           cg_debug_local_attribute(cg, tmp),
                            cty, tmp, r.c_expr, tmp);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r.c_expr);
         }
         free(cty);
         cg_release_through(cg, NULL);
@@ -40585,13 +40807,15 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                "    %s%s %s = %s; feng_aggregate_retain(&%s, &%s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, r.c_expr, tmp, desc);
         } else {
             cg_materialize_to_local(cg, &r, "_t");
             buf_append_fmt(cg->cur_body,
-                "    %s %s; memset(&%s, 0, sizeof %s);"
+                "    %s%s %s; memset(&%s, 0, sizeof %s);"
                 " feng_aggregate_take(&%s, &%s, &%s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, tmp, tmp, tmp, r.c_expr, desc);
         }
         free(cty);
@@ -40603,10 +40827,10 @@ static bool cg_emit_return(CG *cg, const FengStmt *stmt) {
         char *tmp = cg_fresh_temp(cg, "_ret");
         char *cty = cg_ctype_dup(r.type);
         if (cgtype_is_by_value_struct(r.type)) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                           cty, tmp, r.c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r.c_expr);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = (%s)(%s);\n",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = (%s)(%s);\n",
+                           cg_debug_local_attribute(cg, tmp),
                            cty, tmp, cty, r.c_expr);
         }
         free(cty);
@@ -40949,7 +41173,8 @@ static bool cg_emit_union_projection_binding(CG *cg, const char *subject,
     alias = strndup(name.data, name.length);
     if (type == NULL || projection == NULL || pointer == NULL || alias == NULL) goto cleanup;
     buf_append_fmt(cg->cur_body,
-        "    void *%s = (unsigned char *)%s%s + %s.result_offset;\n",
+        "    %svoid *%s = (unsigned char *)%s%s + %s.result_offset;\n",
+        cg_debug_local_attribute(cg, pointer),
         pointer, address, subject, projection);
     if (materializable) {
         storage = cg_fresh_temp(cg, "_uowned");
@@ -40958,14 +41183,15 @@ static bool cg_emit_union_projection_binding(CG *cg, const char *subject,
             ctype = cg_ctype_dup(type);
             if (storage == NULL || owner_guard == NULL || ctype == NULL) goto cleanup;
             buf_append_fmt(cg->cur_body,
-                "    %s %s;\n"
-                "    bool %s = false;\n"
-                "    FengCleanupNode _cu_%s;\n"
+                "    %s%s %s;\n"
+                "    %sbool %s = false;\n"
+                "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
                 "    if (%s%s%s.materialize != NULL) {\n"
                 "        %s.materialize(%s%s, &%s);\n"
                 "        %s = &%s;\n"
                 "        %s = true;\n",
-                ctype, storage, owner_guard, storage,
+                cg_debug_local_attribute(cg, storage),
+                ctype, storage, cg_debug_local_attribute(cg, owner_guard), owner_guard, storage,
                 condition != NULL ? condition : "", condition != NULL ? " && " : "", projection,
                 projection, address, subject, storage, pointer, storage, owner_guard);
             if (cgtype_is_managed(type)) {
@@ -40992,21 +41218,22 @@ static bool cg_emit_union_projection_binding(CG *cg, const char *subject,
             goto cleanup;
         }
         buf_append_fmt(cg->cur_body,
-            "    const %s *%s = %s;\n", erased ? "FengGenericParamDescriptor" : "FengAggregateDescriptor",
+            "    %sconst %s *%s = %s;\n", cg_debug_local_attribute(cg, descriptor), erased ? "FengGenericParamDescriptor" : "FengAggregateDescriptor",
             descriptor, descriptor_expr);
         free(descriptor_expr);
-        buf_append_fmt(cg->cur_body, "    const size_t %s = ", size);
+        buf_append_fmt(cg->cur_body, "    %sconst size_t %s = ", cg_debug_local_attribute(cg, size), size);
         if (erased) buf_append_fmt(cg->cur_body, "feng_generic_value_size(%s);\n", descriptor);
         else buf_append_fmt(cg->cur_body, "%s->size;\n", descriptor);
         buf_append_fmt(cg->cur_body,
-            "    _Alignas(max_align_t) char %s[%s.materialize != NULL ? %s : 1U];\n"
-            "    bool %s = false;\n"
-            "    FengCleanupNode _cu_%s;\n"
+            "    %s_Alignas(max_align_t) char %s[%s.materialize != NULL ? %s : 1U];\n"
+            "    %sbool %s = false;\n"
+            "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
             "    if (%s%s%s.materialize != NULL) {\n"
             "        %s.materialize(%s%s, %s);\n"
             "        %s = %s;\n"
             "        %s = true;\n",
-            storage, projection, size, owner_guard, storage,
+            cg_debug_local_attribute(cg, storage),
+            storage, projection, size, cg_debug_local_attribute(cg, owner_guard), owner_guard, storage,
             condition != NULL ? condition : "", condition != NULL ? " && " : "", projection,
             projection, address, subject, storage, pointer, storage, owner_guard);
         if (erased) {
@@ -41762,7 +41989,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "CE0271", "codegen: while condition must be bool");
     }
     char *cond_tmp = cg_fresh_temp(cg, "_cond");
-    buf_append_fmt(cg->cur_body, "        bool %s = %s;\n", cond_tmp, cond.c_expr);
+    buf_append_fmt(cg->cur_body, "        %sbool %s = %s;\n", cg_debug_local_attribute(cg, cond_tmp), cond_tmp, cond.c_expr);
     er_free(&cond);
 
 
@@ -41954,15 +42181,18 @@ static bool cg_emit_fresh_reified_loop_binding_storage(
 
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
-                   "    const FengAggregateDescriptor *%s = %s;\n"
-                   "    const size_t %s = %s->size;\n"
-                   "    _Alignas(max_align_t) char %s[%s];\n"
+                   "    %sconst FengAggregateDescriptor *%s = %s;\n"
+                   "    %sconst size_t %s = %s->size;\n"
+                   "    %s_Alignas(max_align_t) char %s[%s];\n"
                    "    memcpy(%s, %s, %s);\n"
                    "    feng_aggregate_retain(%s, %s);\n",
+                   cg_debug_local_attribute(cg, descriptor_name),
                    descriptor_name,
                    descriptor_expr,
+                   cg_debug_local_attribute(cg, size_name),
                    size_name,
                    descriptor_name,
+                   cg_debug_local_attribute(cg, storage_c_name),
                    storage_c_name,
                    size_name,
                    storage_c_name,
@@ -42060,11 +42290,7 @@ static bool cg_emit_loop_binding_from_borrowed_source(
         /* Preserve the existing zero-copy borrowed address for an uncaptured
          * direct generic element. Captured generic bindings take an owned
          * per-iteration copy in the capture cell above. */
-        buf_append_fmt(cg->cur_body,
-                       "    %s %s = %s;\n",
-                       c_type,
-                       c_name,
-                       source_expr);
+        cg_emit_local_storage(cg, c_type, c_name, source_expr);
         ok = cg_register_loop_binding_local(cg,
                                             binding,
                                             c_name,
@@ -42109,7 +42335,8 @@ static bool cg_emit_loop_binding_from_borrowed_source(
     }
     if (cgtype_is_managed(binding_type)) {
         buf_append_fmt(cg->cur_body,
-                       "    %s %s = %s; feng_retain(%s);\n",
+                       "    %s%s %s = %s; feng_retain(%s);\n",
+                       cg_debug_local_attribute(cg, c_name),
                        c_type,
                        c_name,
                        fixed_value_expr,
@@ -42125,7 +42352,8 @@ static bool cg_emit_loop_binding_from_borrowed_source(
             goto cleanup;
         }
         buf_append_fmt(cg->cur_body,
-                       "    %s %s = %s;",
+                       "    %s%s %s = %s;",
+                       cg_debug_local_attribute(cg, c_name),
                        c_type,
                        c_name,
                        fixed_value_expr);
@@ -42150,14 +42378,11 @@ static bool cg_emit_loop_binding_from_borrowed_source(
         }
         buf_append_cstr(cg->cur_body, "\n");
     } else if (cgtype_is_by_value_struct(binding_type)) {
-        buf_append_fmt(cg->cur_body,
-                       "    %s %s = %s;\n",
-                       c_type,
-                       c_name,
-                       fixed_value_expr);
+        cg_emit_local_storage(cg, c_type, c_name, fixed_value_expr);
     } else {
         buf_append_fmt(cg->cur_body,
-                       "    %s %s = (%s)(%s);\n",
+                       "    %s%s %s = (%s)(%s);\n",
+                       cg_debug_local_attribute(cg, c_name),
                        c_type,
                        c_name,
                        c_type,
@@ -42252,7 +42477,8 @@ static bool cg_emit_loop_binding_pattern_from_borrowed_source(
         }
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body,
-                       "    const FengAggregateDescriptor *%s = %s;\n",
+                       "    %sconst FengAggregateDescriptor *%s = %s;\n",
+                       cg_debug_local_attribute(cg, descriptor_name),
                        descriptor_name,
                        descriptor_expr);
     } else if (source_is_address) {
@@ -42418,7 +42644,8 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         /* Condition lowering and cleanup may emit several C lines. Keep
          * both the result and the branch anchored to the loop header. */
         cg_emit_current_stmt_line_directive_force(cg);
-        buf_append_fmt(cg->cur_body, "        bool %s = %s;\n",
+        buf_append_fmt(cg->cur_body, "        %sbool %s = %s;\n",
+                       cg_debug_local_attribute(cg, cond_tmp),
                        cond_tmp, cond.c_expr);
         er_free(&cond);
         cg_release_scope(cg, cond_scope);
@@ -42721,7 +42948,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 return cg_fail(cg, stmt->token,
                     "IE0001", "codegen: reified iterable cursor requires an out-parameter call");
             }
-            buf_append_fmt(cg->cur_body, "    %s %s = %s(%s%s, ",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = %s(%s%s, ",
+                cg_debug_local_attribute(cg, cursor_var),
                 cursor_cty, cursor_var, iterable_um->c_name, src_addr, src.c_expr);
             if (!cg_append_empty_callable_fdesc(cg, cg->cur_body, iterable_um->c_name,
                                                 iterable_um->feng_name, stmt->token)) {
@@ -42836,7 +43064,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 cursor_cgtype = NULL;
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
+                    "    %s%s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
+                    cg_debug_local_attribute(cg, cursor_var),
                     cursor_cty, cursor_var,
                     shared_iter, src_addr, src.c_expr, rtd_expr,
                     func_desc_expr, cursor_var,
@@ -42870,8 +43099,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 return false;
             }
             buf_append_cstr(&iter_call, ")");
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n",
-                           cursor_cty, cursor_var, iter_call.data);
+            cg_emit_local_storage(cg, cursor_cty, cursor_var, iter_call.data);
             buf_free(&iter_call);
         }
         free(cursor_cty);
@@ -42930,7 +43158,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             cursor_var = cg_fresh_temp(cg, "_cursor");
             if (cursor_var) {
                 buf_append_fmt(cg->cur_body,
-                    "    struct %s *%s = %s; feng_retain(%s);\n",
+                    "    %sstruct %s *%s = %s; feng_retain(%s);\n",
+                    cg_debug_local_attribute(cg, cursor_var),
                     cursor_ut->c_struct_name, cursor_var, src.c_expr, cursor_var);
                 scope_add(cg->cur_scope, cursor_var, cursor_var,
                           cgtype_clone(src.type), false);
@@ -43020,10 +43249,12 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         }
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_fmt(cg->cur_body,
-            "    const FengAggregateDescriptor *%s = %s;\n"
-            "    const size_t %s = %s->size;\n",
+            "    %sconst FengAggregateDescriptor *%s = %s;\n"
+            "    %sconst size_t %s = %s->size;\n",
+            cg_debug_local_attribute(cg, result_descriptor_name),
             result_descriptor_name,
             result_descriptor_expr,
+            cg_debug_local_attribute(cg, result_size_name),
             result_size_name,
             result_descriptor_name);
         free(result_descriptor_expr);
@@ -43122,9 +43353,10 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         }
         if (result_uses_reified_storage) {
             buf_append_fmt(cg->cur_body,
-                "        _Alignas(max_align_t) char %s[%s];\n"
+                "        %s_Alignas(max_align_t) char %s[%s];\n"
                 "        memset(%s, 0, %s);\n"
                 "        %s((void *)%s%s, %s, %s, %s%s);\n",
+                cg_debug_local_attribute(cg, result_var),
                 result_var, result_size_name,
                 result_var, result_size_name,
                 shared_next, cursor_addr, cursor_var, rtd_expr,
@@ -43132,7 +43364,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
                 argument_suffix.data != NULL ? argument_suffix.data : "");
         } else {
             buf_append_fmt(cg->cur_body,
-                "        %s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
+                "        %s%s %s; %s((void *)%s%s, %s, %s, &%s%s);\n",
+                cg_debug_local_attribute(cg, result_var),
                 result_cty, result_var,
                 shared_next, cursor_addr, cursor_var, rtd_expr,
                 func_desc_expr, result_var,
@@ -43179,7 +43412,8 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
             return false;
         }
         buf_append_cstr(&next_call, ")");
-        buf_append_fmt(cg->cur_body, "        %s %s = %s;\n",
+        buf_append_fmt(cg->cur_body, "        %s%s %s = %s;\n",
+                       cg_debug_local_attribute(cg, result_var),
                        result_cty, result_var, next_call.data);
         buf_free(&next_call);
     }
@@ -43413,7 +43647,8 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         seq_tmp = cg_fresh_temp(cg, "_fseq");
         if (seq_tmp) {
             buf_append_fmt(cg->cur_body,
-                "    FengArray *%s = %s; feng_retain(%s);\n",
+                "    %sFengArray *%s = %s; feng_retain(%s);\n",
+                cg_debug_local_attribute(cg, seq_tmp),
                 seq_tmp, seq.c_expr, seq_tmp);
             scope_add(cg->cur_scope, seq_tmp, seq_tmp,
                       cgtype_clone(seq.type), false);
@@ -43430,7 +43665,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
     }
 
     char *idx_var = cg_fresh_temp(cg, "_fidx");
-    buf_append_fmt(cg->cur_body, "    size_t %s = 0;\n", idx_var);
+    buf_append_fmt(cg->cur_body, "    %ssize_t %s = 0;\n", cg_debug_local_attribute(cg, idx_var), idx_var);
 
     /* A shared T[] body cannot form a C element lvalue because T has no
      * fixed C size. Cache the descriptor-selected element size once per
@@ -43457,7 +43692,8 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
                  "_felem_size_%d",
                  id);
         buf_append_fmt(cg->cur_body,
-                       "    const size_t %s = feng_generic_value_size(%s);\n",
+                       "    %sconst size_t %s = feng_generic_value_size(%s);\n",
+                       cg_debug_local_attribute(cg, generic_element_size),
                        generic_element_size,
                        generic_element_desc);
     }
@@ -43760,11 +43996,12 @@ static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
     bool ok = source != NULL && payload != NULL && exception_descriptor != NULL;
     if (!ok) goto cleanup;
     buf_append_fmt(cg->cur_body,
-        "    const void *%s = %s;\n"
-        "    void *%s = NULL;\n"
-        "    const FengTypeDescriptor *%s = NULL;\n"
+        "    %sconst void *%s = %s;\n"
+        "    %svoid *%s = NULL;\n"
+        "    %sconst FengTypeDescriptor *%s = NULL;\n"
         "    switch (%s->kind) {\n",
-        source, value->c_expr, payload, exception_descriptor, descriptor);
+        cg_debug_local_attribute(cg, source),
+        source, value->c_expr, cg_debug_local_attribute(cg, payload), payload, cg_debug_local_attribute(cg, exception_descriptor), exception_descriptor, descriptor);
     const char *kinds[] = {"FENG_VALUE_TRIVIAL", "FENG_VALUE_MANAGED_POINTER",
                           "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS"};
     for (size_t kind = 0U; kind < sizeof(kinds) / sizeof(kinds[0]); ++kind) {
@@ -43776,10 +44013,11 @@ static bool cg_emit_generic_throw(CG *cg, ExprResult *value, FengToken blame) {
             buf_append_fmt(&target, "(&%s)", payload);
         } else {
             buf_append_fmt(cg->cur_body,
-                "            const FengSpecCoercionDescriptor *_formation = "
+                "            %sconst FengSpecCoercionDescriptor *_formation = "
                 "(const FengSpecCoercionDescriptor *)%s->witness;\n"
                 "            %s = _formation->box_descriptor;\n"
                 "            %s = feng_object_new(%s);\n",
+                cg_debug_local_attribute(cg, "_formation"),
                 descriptor, exception_descriptor, payload, exception_descriptor);
             buf_append_fmt(&target, "((unsigned char *)%s + _formation->payload_offset)", payload);
         }
@@ -43873,9 +44111,10 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
         }
         if (r.owns_ref) {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r.c_expr);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s; feng_retain(%s);\n",
+            buf_append_fmt(cg->cur_body, "    %s%s %s = %s; feng_retain(%s);\n",
+                           cg_debug_local_attribute(cg, tmp),
                            cty, tmp, r.c_expr, tmp);
         }
         free(cty);
@@ -44522,9 +44761,18 @@ static bool cg_defer_collect_capture_refs_in_expr(const FengExpr *expr,
                                                          shadow_count,
                                                          out_captures_self);
         case FENG_EXPR_LAMBDA:
-            /* Nested lambda's own captures do not affect this defer; their
-             * body references are resolved through the lambda's capture cell
-             * mechanism (semantic-analyzed separately). */
+            /* Creating the lambda needs its outer cells in this helper even
+             * though the lambda body itself executes in a separate scope. */
+            for (size_t i = 0U; i < expr->as.lambda.capture_count; ++i) {
+                const FengLambdaCapture *capture = &expr->as.lambda.captures[i];
+                if (capture->kind != FENG_LAMBDA_CAPTURE_LOCAL ||
+                    cg_defer_name_in_list(shadow_names, shadow_count,
+                                          capture->name.data, capture->name.length))
+                    continue;
+                if (!cg_capture_name_list_add(out_names, out_count, out_capacity, capture->name))
+                    return false;
+            }
+            if (expr->as.lambda.captures_self) *out_captures_self = true;
             return true;
         case FENG_EXPR_CAST:
             return cg_defer_collect_capture_refs_in_expr(expr->as.cast.value,
@@ -44728,9 +44976,11 @@ fail:
     return false;
 }
 
+/* Borrowed storage plan: immutable references keep their stable identity. */
 typedef struct DeferCaptureInfo {
     const Local *local;   /* borrowed from outer scope; lifetime tied to Scope */
     char *field_name;     /* heap-allocated closure field name */
+    bool borrows_reference; /* no extra ARC; the enclosing scope owns it */
 } DeferCaptureInfo;
 
 /* Resolve every captured name against the current outer scope chain and
@@ -44800,6 +45050,12 @@ static bool cg_defer_resolve_captures(CG *cg,
         }
         info_count++;
     }
+    for (size_t i = 0U; i < info_count; ++i) {
+        const Local *local = infos[i].local;
+        infos[i].borrows_reference = local->capture_cell_c_name == NULL &&
+            !local->is_storage_address && cgtype_is_managed(local->type) &&
+            local->binding_mutability_known && !local->binding_is_rebindable;
+    }
     *out_infos = infos;
     *out_count = info_count;
     return true;
@@ -44817,11 +45073,10 @@ static void cg_defer_capture_infos_free(DeferCaptureInfo *infos, size_t count) {
  *   1. Analyze capture requirements on the defer body (§5.4).
  *   2. Resolve each captured name against the outer scope chain.
  *   3. Emit a stack-allocated closure struct type into type_defs (§5.3);
- *      skip when there are no captures.
+ *      skip when neither values nor generic descriptor context are captured.
  *   4. Emit a static `void __defer_<module>_<seq>(void *_closure)` into
  *      witness_defs (§5.2). Inside it, register every captured binding as
- *      a Local whose c_name dereferences the closure field so the body can
- *      read/modify the outer variable by address.
+ *      a Local whose borrowed storage view preserves outer variable identity.
  *   5. At the registration site emit the closure initialiser (when any) and
  *      `feng_defer_push(&node, fn, closure_or_NULL)` (§5.5).
  *   6. Register the defer entry in the current scope's locals list via
@@ -44840,6 +45095,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
     char *node_var_name = NULL;
     bool ok = false;
     FengToken blame = stmt->token;
+    const CGReificationContext reification = cg_reification_context(cg);
 
     if (!cg_defer_compute_captures(stmt->as.defer_block,
                                    &captured_names,
@@ -44861,6 +45117,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
     /* captured_names consumed (copied into infos or skipped); free shells. */
     for (size_t i = 0U; i < captured_count; ++i) free(captured_names[i]);
     free(captured_names);
+    const bool has_closure = info_count > 0U || cg_reification_has_fields(&reification);
 
     size_t defer_id = cg->defer_counter++;
     {
@@ -44881,23 +45138,31 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
     }
 
-    /* §5.3: closure struct type. Ordinary fields point to the outer local.
+    /* §5.3: closure struct type. Ordinary fields point to the outer local;
+     * existing capture cells stay shared with nested lambdas.
      * Descriptor-sized locals already denote their value storage, so the
      * closure stores that address directly together with the descriptor
      * authority required to operate on the captured value in the generated
      * defer helper. */
-    if (info_count > 0U) {
+    if (has_closure) {
         Buf *td = &cg->type_defs;
         buf_append_fmt(td, "struct %s {\n", closure_struct_name);
         for (size_t i = 0U; i < info_count; ++i) {
-            if (infos[i].local->is_storage_address) {
+            if (infos[i].local->capture_cell_c_name != NULL) {
+                if (infos[i].local->capture_cell_uses_dynamic_storage)
+                    buf_append_fmt(td, "    FengArray *%s;\n", infos[i].field_name);
+                else
+                    buf_append_fmt(td, "    struct %s *%s;\n",
+                        infos[i].local->capture_cell_struct_name, infos[i].field_name);
+            } else if (infos[i].local->is_storage_address) {
                 buf_append_fmt(td,
                                "    void *%s;\n",
                                infos[i].field_name);
             } else {
                 buf_append_cstr(td, "    ");
                 cg_emit_c_type(td, infos[i].local->type);
-                buf_append_fmt(td, " *%s;\n", infos[i].field_name);
+                buf_append_fmt(td, infos[i].borrows_reference ? " %s;\n" : " *%s;\n",
+                               infos[i].field_name);
             }
             if (infos[i].local->uses_erased_generic_storage) {
                 buf_append_fmt(td,
@@ -44916,6 +45181,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
                 }
             }
         }
+        cg_emit_reification_fields(td, &reification);
         buf_append_cstr(td, "};\n\n");
     }
 
@@ -44939,6 +45205,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         CGType *saved_return_type = cg->cur_return_type;
         bool saved_is_main = cg->cur_fn_is_main;
         bool saved_has_frame_marker = cg->cur_function_has_frame_marker;
+        bool saved_has_catch_regions = cg->cur_function_has_catch_regions;
         const char *saved_frame_backend_symbol = cg->current_frame_backend_symbol;
         Scope *fn_scope = NULL;
         bool fn_ok = false;
@@ -44957,12 +45224,12 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         cg->local_counter = 0;
         cg->loop_depth = 0;
         cg->cur_function_has_frame_marker = false;
+        cg->cur_function_has_catch_regions = false;
         cg->cur_return_type = cgtype_new(CG_TYPE_VOID);
         cg->cur_fn_is_main = false;
         cg->current_frame_backend_symbol = NULL;
 
-        buf_append_fmt(&fn, "static void %s(void *_closure) {\n", defer_fn_name);
-        if (info_count > 0U) {
+        if (has_closure) {
             buf_append_fmt(&fn,
                 "    struct %s *_c = (struct %s *)_closure;\n"
                 "    (void)_c;\n",
@@ -44970,6 +45237,10 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
                 closure_struct_name);
         } else {
             buf_append_cstr(&fn, "    (void)_closure;\n");
+        }
+        if (!cg_emit_reification_restore(cg, &fn, &reification, "_c", blame)) {
+            buf_free(&fn);
+            goto fn_cleanup;
         }
         /* Register the defer function's frame record so the DAP proxy can
          * rewrite the stack trace and map captured variables. HIDDEN policy:
@@ -45005,7 +45276,12 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             char *alias_c_name = NULL;
             Buf cb;
             buf_init(&cb);
-            if (infos[i].local->is_storage_address) {
+            if (infos[i].local->capture_cell_c_name != NULL) {
+                if (infos[i].local->capture_cell_uses_dynamic_storage)
+                    buf_append_fmt(&cb, "((void *)feng_array_data(_c->%s))", infos[i].field_name);
+                else
+                    buf_append_fmt(&cb, "(_c->%s->value)", infos[i].field_name);
+            } else if (infos[i].local->is_storage_address || infos[i].borrows_reference) {
                 buf_append_fmt(&cb, "_c->%s", infos[i].field_name);
             } else {
                 buf_append_fmt(&cb, "(*_c->%s)", infos[i].field_name);
@@ -45016,20 +45292,35 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
                 buf_free(&fn);
                 goto fn_cleanup;
             }
-            CGType *alias_type = cgtype_clone(infos[i].local->type);
-            if (alias_type == NULL ||
-                !scope_add(fn_scope,
+            bool alias_ok;
+            if (infos[i].local->capture_cell_c_name != NULL) {
+                Buf cell;
+                buf_init(&cell);
+                buf_append_fmt(&cell, "_c->%s", infos[i].field_name);
+                const char *name = infos[i].local->name;
+                alias_ok = cell.data != NULL && cg_scope_add_capture_alias(fn_scope,
+                    (FengSlice){name, strlen(name)}, alias_c_name, cell.data,
+                    infos[i].local->capture_cell_struct_name,
+                    infos[i].local->capture_cell_desc_name,
+                    infos[i].local->type, infos[i].local->capture_cell_uses_dynamic_storage);
+                buf_free(&cell);
+            } else {
+                CGType *alias_type = cgtype_clone(infos[i].local->type);
+                alias_ok = alias_type != NULL && scope_add(fn_scope,
                            infos[i].local->name,
                            alias_c_name,
                            alias_type,
-                           true) ||
+                           true);
+                if (!alias_ok) cgtype_free(alias_type);
+            }
+            if (!alias_ok ||
                 !scope_copy_last_binding_mutability(fn_scope,
-                                                    infos[i].local)) {
+                                                    infos[i].local) ||
+                (infos[i].local->is_storage_address && !scope_mark_last_storage_address(fn_scope))) {
                 /* is_param = true: the captured binding is owned by the
                  * outer scope. cg_release_scope skips is_param locals, so
                  * the defer function does not emit a stray release for it. */
                 free(alias_c_name);
-                cgtype_free(alias_type);
                 cg_fail(cg, blame, "IE0001", "codegen: out of memory");
                 buf_free(&fn);
                 goto fn_cleanup;
@@ -45102,15 +45393,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             {
                 Buf read_expr;
                 buf_init(&read_expr);
-                if (infos[i].local->is_storage_address) {
-                    buf_append_fmt(&read_expr,
-                                   "_c->%s",
-                                   infos[i].field_name);
-                } else {
-                    buf_append_fmt(&read_expr,
-                                   "(*_c->%s)",
-                                   infos[i].field_name);
-                }
+                buf_append_cstr(&read_expr, fn_scope->items[fn_scope->count - 1U].c_name);
                 if (read_expr.data == NULL ||
                     !cg_debug_add_variable_record_cstr_cgtype(
                         cg,
@@ -45146,6 +45429,11 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             buf_free(&fn);
             goto fn_cleanup;
         }
+        buf_append_fmt(&cg->witness_defs, "static void %s(void *_closure) {\n", defer_fn_name);
+        /* Only a helper's own catches require personality metadata. Keeping
+         * pure leaf cleanups unchanged also allows optimized C compilation. */
+        if (cg->cur_function_has_catch_regions)
+            cg_emit_function_eh_metadata(&cg->witness_defs);
         buf_append(&cg->witness_defs, fn.data, fn.length);
         fn_ok = true;
 
@@ -45158,6 +45446,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         cg->cur_return_type = saved_return_type;
         cg->cur_fn_is_main = saved_is_main;
         cg->cur_function_has_frame_marker = saved_has_frame_marker;
+        cg->cur_function_has_catch_regions = saved_has_catch_regions;
         cg->current_frame_backend_symbol = saved_frame_backend_symbol;
         if (fn_scope != NULL) scope_pop_free(fn_scope);
         buf_free(&fn);
@@ -45176,7 +45465,7 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         free(defer_fn_name);
         return false;
     }
-    if (info_count > 0U) {
+    if (has_closure) {
         Buf vb;
         buf_init(&vb);
         buf_append_fmt(&vb, "__defer_closure_%s_%zu",
@@ -45190,31 +45479,53 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
             return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
         }
         buf_append_fmt(cg->cur_body,
-                       "    struct %s %s = {",
+                       "    %sstruct %s %s;\n",
+                       cg_debug_local_attribute(cg, closure_var_name),
                        closure_struct_name,
                        closure_var_name);
         for (size_t i = 0U; i < info_count; ++i) {
-            if (i > 0U) buf_append_cstr(cg->cur_body, ", ");
+            const bool cell_capture = infos[i].local->capture_cell_c_name != NULL;
+            const char *address = cell_capture || infos[i].borrows_reference ? ""
+                : infos[i].local->is_storage_address ? "(void *)" : "&";
             buf_append_fmt(cg->cur_body,
-                           infos[i].local->is_storage_address ? "%s" : "&%s",
-                           infos[i].local->c_name);
+                           "    %s.%s = %s%s;\n",
+                           closure_var_name,
+                           infos[i].field_name,
+                           address,
+                           cell_capture ? infos[i].local->capture_cell_c_name : infos[i].local->c_name);
             if (infos[i].local->uses_erased_generic_storage) {
                 buf_append_fmt(cg->cur_body,
-                               ", %s, %s",
+                               "    %s.%s_descriptor = %s;\n"
+                               "    %s.%s_size = %s;\n",
+                               closure_var_name,
+                               infos[i].field_name,
                                infos[i].local->erased_generic_descriptor_c_name,
+                               closure_var_name,
+                               infos[i].field_name,
                                infos[i].local->erased_generic_size_c_name);
             } else if (infos[i].local->uses_reified_storage) {
                 buf_append_fmt(cg->cur_body,
-                               ", %s",
+                               "    %s.%s_descriptor = %s;\n",
+                               closure_var_name,
+                               infos[i].field_name,
                                infos[i].local->reified_descriptor_c_name);
                 if (infos[i].local->reified_size_c_name != NULL) {
                     buf_append_fmt(cg->cur_body,
-                                   ", %s",
+                                   "    %s.%s_size = %s;\n",
+                                   closure_var_name,
+                                   infos[i].field_name,
                                    infos[i].local->reified_size_c_name);
                 }
             }
         }
-        buf_append_cstr(cg->cur_body, "};\n");
+        if (!cg_emit_reification_init(cg, cg->cur_body, &reification,
+                                      closure_var_name, ".", blame)) {
+            free(closure_var_name);
+            cg_defer_capture_infos_free(infos, info_count);
+            free(closure_struct_name);
+            free(defer_fn_name);
+            return false;
+        }
     }
     {
         Buf nb;
@@ -45235,14 +45546,16 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
      * struct; pass its address so the defer function can down-cast. */
     if (closure_var_name != NULL) {
         buf_append_fmt(cg->cur_body,
-                       "    FengCleanupNode %s; feng_defer_push(&%s, %s, &%s);\n",
+                       "    %sFengCleanupNode %s; feng_defer_push(&%s, %s, &%s);\n",
+                       cg_debug_local_attribute(cg, node_var_name),
                        node_var_name,
                        node_var_name,
                        defer_fn_name,
                        closure_var_name);
     } else {
         buf_append_fmt(cg->cur_body,
-                       "    FengCleanupNode %s; feng_defer_push(&%s, %s, NULL);\n",
+                       "    %sFengCleanupNode %s; feng_defer_push(&%s, %s, NULL);\n",
+                       cg_debug_local_attribute(cg, node_var_name),
                        node_var_name,
                        node_var_name,
                        defer_fn_name);
@@ -45284,13 +45597,9 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
 
 /* ===================== top-level emission ===================== */
 
-static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
-    char *frame_name = cg_fresh_temp(cg, "_fn_frame");
-
-    if (frame_name == NULL) {
-        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
-    }
-    buf_append_cstr(cg->cur_body,
+/* Attach the existing platform personality without emitting executable code. */
+static void cg_emit_function_eh_metadata(Buf *out) {
+    buf_append_cstr(out,
                     "#if !defined(_WIN32)\n"
                     "#if defined(__APPLE__)\n"
                     "    __asm__ volatile(\".cfi_personality 155, ___feng_personality_v0\\n\"\n"
@@ -45300,6 +45609,17 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
                     "                     \".cfi_lsda 16, feng_empty_function_lsda\\n\");\n"
                     "#endif\n"
                     "#endif\n");
+}
+
+/* Ordinary callables also need a cleanup boundary when an exception escapes. */
+static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
+    char *frame_name = cg_fresh_temp(cg, "_fn_frame");
+
+    if (frame_name == NULL) {
+        return cg_fail(cg, token, "IE0001", "codegen: out of memory");
+    }
+    cg_emit_function_eh_metadata(cg->cur_body);
+    cg->cur_function_has_catch_regions = false;
     /* The previous callable's closing source line must not flow into this
      * callable's first executable instruction through the generated C. */
     if (!cg_emit_line_directive_force(cg, token)) {
@@ -45307,7 +45627,8 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
         return false;
     }
     buf_append_fmt(cg->cur_body,
-                   "    FengFrameMarker %s; feng_frame_push(&%s);\n",
+                   "    %sFengFrameMarker %s; feng_frame_push(&%s);\n",
+                   cg_debug_local_attribute(cg, frame_name),
                    frame_name,
                    frame_name);
     free(frame_name);
@@ -50585,7 +50906,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
                 "        case FENG_VALUE_TRIVIAL:\n"
                 "            memcpy(_out, %s, feng_generic_value_size(%s)); break;\n"
                 "        case FENG_VALUE_MANAGED_POINTER: {\n"
-                "            void *_mptr_ = *(void *const *)%s;\n"
+                "            %svoid *_mptr_ = *(void *const *)%s;\n"
                 "            feng_retain(_mptr_);\n"
                 "            *(void **)_out = _mptr_; break;\n"
                 "        }\n"
@@ -50595,6 +50916,7 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
                 "    }\n",
                 desc,
                 r.c_expr, desc,
+                cg_debug_local_attribute(cg, "_mptr_"),
                 r.c_expr,
                 r.c_expr, desc,
                 r.c_expr, desc);
@@ -50660,9 +50982,9 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         char *cty = cg_ctype_dup(r.type);
         if (!r.owns_ref) {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = %s; feng_retain(%s);\n", cty, tmp, r.c_expr, tmp);
+                "    %s%s %s = %s; feng_retain(%s);\n", cg_debug_local_attribute(cg, tmp), cty, tmp, r.c_expr, tmp);
         } else {
-            buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, r.c_expr);
+            cg_emit_local_storage(cg, cty, tmp, r.c_expr);
         }
         free(cty);
         cg_release_through(cg, NULL);
@@ -50696,19 +51018,22 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         if (!r.owns_ref) {
             if (r.is_storage_address) {
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s = *(const %s *)(%s);"
+                    "    %s%s %s = *(const %s *)(%s);"
                     " feng_aggregate_retain(&%s, %s);\n",
+                    cg_debug_local_attribute(cg, tmp),
                     cty, tmp, cty, r.c_expr, tmp, descriptor);
             } else {
                 buf_append_fmt(cg->cur_body,
-                    "    %s %s = %s; feng_aggregate_retain(&%s, %s);\n",
+                    "    %s%s %s = %s; feng_aggregate_retain(&%s, %s);\n",
+                    cg_debug_local_attribute(cg, tmp),
                     cty, tmp, r.c_expr, tmp, descriptor);
             }
         } else {
             cg_materialize_to_local(cg, &r, "_t");
             buf_append_fmt(cg->cur_body,
-                "    %s %s; memset(&%s, 0, sizeof %s);"
+                "    %s%s %s; memset(&%s, 0, sizeof %s);"
                 " feng_aggregate_take(&%s, &%s, %s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, tmp, tmp, tmp, r.c_expr, descriptor);
         }
 
@@ -50724,11 +51049,12 @@ static bool cg_emit_generic_return(CG *cg, const FengStmt *stmt) {
         char *cty = cg_ctype_dup(cg->cur_return_type);
         if (r.is_storage_address) {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = *(const %s *)(%s);\n",
+                "    %s%s %s = *(const %s *)(%s);\n",
+                cg_debug_local_attribute(cg, tmp),
                 cty, tmp, cty, r.c_expr);
         } else {
             buf_append_fmt(cg->cur_body,
-                "    %s %s = (%s)(%s);\n", cty, tmp, cty, r.c_expr);
+                "    %s%s %s = (%s)(%s);\n", cg_debug_local_attribute(cg, tmp), cty, tmp, cty, r.c_expr);
         }
         free(cty);
         cg_release_through(cg, NULL);
@@ -51511,7 +51837,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                     return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                 }
                 if (ar.type != NULL && ar.type->kind == CG_TYPE_GENERIC_PARAM) {
-                    buf_append_fmt(cg->cur_body, "    const void *%s = %s;\n", tmp, ar.c_expr);
+                    buf_append_fmt(cg->cur_body, "    %sconst void *%s = %s;\n", cg_debug_local_attribute(cg, tmp), tmp, ar.c_expr);
                     arg_expr = strdup(tmp);
                 } else {
                     char *cty = cg_ctype_dup(ar.type);
@@ -51522,7 +51848,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                         buf_free(&args_buf);
                         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
                     }
-                    buf_append_fmt(cg->cur_body, "    %s %s = %s;\n", cty, tmp, ar.c_expr);
+                    cg_emit_local_storage(cg, cty, tmp, ar.c_expr);
                     if (cgtype_is_managed(ar.type) && ar.owns_ref) {
                         if (!cg_register_local_for_cleanup(cg, tmp, ar.type, e->token)) {
                             free(cty);
@@ -51570,7 +51896,7 @@ static bool cg_emit_generic_extern_call(CG *cg, const FengExpr *e,
                 buf_free(&args_buf);
                 return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
             }
-            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            cg_emit_local_storage(cg, cty, ret_cname, NULL);
             free(cty);
 
             buf_append_cstr(&args_buf, ", ");
@@ -52278,7 +52604,7 @@ static bool cg_emit_generic_call(CG *cg, const FengExpr *e,
                 goto generic_call_result_failure;
             }
             /* The callee establishes every returned slot through `_out`. */
-            buf_append_fmt(cg->cur_body, "    %s %s;\n", cty, ret_cname);
+            cg_emit_local_storage(cg, cty, ret_cname, NULL);
             free(cty);
         }
     }
@@ -60128,7 +60454,7 @@ static void cg_spec_aggregate_emit_cleanup_push(Buf *out,
                                                 const char *cname,
                                                 const CGType *type) {
     buf_append_fmt(out,
-                   "    FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
+                   "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
                    cname,
                    cname,
                    cname,
@@ -60400,7 +60726,7 @@ static void cg_value_emit_cleanup_push_slots(Buf *out,
             return;
         case CG_VK_MANAGED_POINTER:
             buf_append_fmt(out,
-                           "    FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
+                           "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
                            node_prefix,
                            node_prefix,
                            lvalue_expr);
@@ -60408,7 +60734,7 @@ static void cg_value_emit_cleanup_push_slots(Buf *out,
         case CG_VK_AGGREGATE:
             if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL) {
                 buf_append_fmt(out,
-                               "    FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
+                               "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; feng_cleanup_push_aggregate(&_cu_%s, &%s, &%s);\n",
                                node_prefix,
                                node_prefix,
                                lvalue_expr,
@@ -65140,6 +65466,10 @@ static char *cg_finalize(CG *cg) {
         " * not supported and requires a separate native-symbol mapping. */\n"
         "#define FENG_NATIVE_SYMBOL(name) __asm__(name)\n"
         "#endif\n\n");
+    if (!cg_emit_debug_local_attributes(cg, &out)) {
+        buf_free(&out);
+        return NULL;
+    }
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
     buf_append_cstr(&out, "\n");
     if (cg->enum_defs.length) buf_append(&out, cg->enum_defs.data, cg->enum_defs.length);
@@ -65164,6 +65494,12 @@ static char *cg_finalize(CG *cg) {
 }
 
 static void cg_dispose(CG *cg) {
+    for (size_t i = 0U; i < cg->debug_local_count; ++i) {
+        free(cg->debug_locals[i].frame);
+        free(cg->debug_locals[i].name);
+        free(cg->debug_locals[i].attribute);
+    }
+    free(cg->debug_locals);
     feng_codegen_maping_info_dispose(&cg->debug_info);
     free(cg->debug_line_logical_uri);
     buf_free(&cg->headers);

@@ -116,7 +116,7 @@ static void test_exception_info_routing(void) {
         "func partial(f:Action){try higher(f) catch e:string{}}"
         "func rethrow(f:Action){try higher(f) catch{throw;}}"
         "func translated(f:Action){try higher(f) catch{throw true;}}"
-        "func cleanup(f:Action){defer{higher(f);}}";
+        "func cleanup(f:Action){defer{try higher(f) catch{}}}";
     write_text_file(path, body);
     char *paths[] = {path};
     const char *packages[] = {bundle};
@@ -143,7 +143,7 @@ static void test_exception_info_routing(void) {
         exception_info_assert_summary(analysis, sources, "partial", "unknown");
         exception_info_assert_summary(analysis, sources, "rethrow", "unknown");
         exception_info_assert_summary(analysis, sources, "translated", "bool");
-        exception_info_assert_summary(analysis, sources, "cleanup", "unknown");
+        exception_info_assert_summary(analysis, sources, "cleanup", "none");
         feng_semantic_analysis_free(analysis);
         feng_symbol_imported_module_cache_free(cache);
         feng_cli_free_loaded_sources(sources, source_count);

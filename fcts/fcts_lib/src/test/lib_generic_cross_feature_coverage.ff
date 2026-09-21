@@ -2,6 +2,7 @@ open module fcts_lib.test;
 
 import std;
 import std.collections;
+import std.process;
 
 /** Return one generic value from an imported shared body. */
 open func libCrossFeaturePass<T>(value: T): T {
@@ -86,7 +87,9 @@ open func libCrossFeatureDeferObserve<T>(
 ): T {
   var current = initial;
   defer {
-    observer(current);
+    try observer(current) catch {
+      Process.exit(1);
+    }
   }
   current = replacement;
   if throwAfterReplacement {

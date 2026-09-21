@@ -5953,8 +5953,10 @@ void test_constraint_projection_ft(void);
 void test_throw_constraint_ft(void);
 
 void test_exception_effects_ft(void);
+void test_defer_exception_effects_ft(void);
 
 int main(void) {
+    test_defer_exception_effects_ft();
     test_exception_effects_ft();
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);

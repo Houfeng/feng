@@ -1,6 +1,6 @@
 # Feng callable 异常集合分析与 N08 后续优化方案
 
-> **状态**：2026-09-21，P33 的结构化异常元信息优化已完成，沙箱外全量 `make test` 及现有 LSP 验证全部通过，等待人工 Review；P25 的性能脚本 stderr 改动已获人工确认保留；阶段二尚未开始。
+> **状态**：2026-09-21，阶段一已交付并由人工提交；阶段二实现、定向验证及沙箱外完整 `make test` 已完成，等待人工 Review，未自动提交。既有 release 异常展开问题 S11 按人工决定独立处理；P25 的性能脚本 stderr 改动已获人工确认保留。
 >
 > **人工决定**：先完成[嵌套 catch 生命周期修复](./feng-nested-catch-exception-lifetime-bugfix.md)；
 > N08 独立跟踪，触发用例完整保留并注释。后续记录函数、方法等 callable 可能向外
@@ -16,7 +16,7 @@
 
 异常传播及具体类型匹配以[异常规范](../specifications/feng-exception.md)为准；
 清理块限制以 [defer 规范](../specifications/feng-defer.md)为准。
-阶段一已审定规则已归入对应主规范；阶段二仍需单独 Review，本文只引用规范结论。
+两个阶段已审定的规则均归入对应主规范，本文只引用规范结论；阶段二完成交付回归后等待人工代码 Review。
 
 2026-09-21 人工确认：本次不新增普通调用必须捕获异常或显式声明继续传播的要求。
 未被当前函数处理的异常沿用[异常规范 §1](../specifications/feng-exception.md#1-异常模型概览)
@@ -26,6 +26,8 @@
 ## 2 N08：展开期间 defer 再次抛出且逃逸
 
 ### 2.1 复现形态
+
+以下展示阶段二启用边界检查前的行为;阶段二应在编译期拒绝此源码。
 
 ```feng
 module n08_example;
@@ -106,8 +108,9 @@ feng_throw(B)
 作为问题追溯记录保留，不作为新的运行时行为要求。
 
 以下已通过场景继续作为嵌套 catch 修复的活动用例：defer 调用内部捕获错误并返回；
-landing pad 清理期间处理另一异常；landing pad 中的清理异常向外传播；catch 的
-defer 处理内层异常后继续读取原绑定。它们不触发本节所述整函数二次展开缺陷。
+landing pad 清理期间处理另一异常；catch 的 defer 处理内层异常后继续读取原绑定。
+原 landing pad 中的清理异常向外传播场景按阶段二获批的 M03 迁移,完整注释保留并
+增加编译期负例。它不触发本节所述整函数二次展开缺陷,但同样受新的 defer 边界限制。
 
 ## 3 实施前的异常分析基础及缺口
 
@@ -496,7 +499,7 @@ P16 已于 2026-09-21 获人工批准，具体迁移涉及 `std/std/src/thread/T
 - [x] 完成定向验证后，在沙箱外执行 `make test` 全量回归，记录环境、命令、日志和各目标结果。
 - [x] 修复本阶段发现的问题并完成必要复验及全量回归，确认无未解决的阶段一阻塞项。
 - [x] 回填阶段一覆盖清单与交付记录，明确 N08 尚未修复，输出英文 commit message，不自动提交。
-- [ ] 完成阶段一人工 Review；通过后再开始阶段二。
+- [x] 完成阶段一人工 Review；人工已提交阶段一并批准开始阶段二。
 
 #### 5.2.5 阶段一覆盖映射与验证记录
 
@@ -621,34 +624,234 @@ P33 最新验证（2026-09-21）：
 设计方向是异常不能逃出 defer；普通函数继续向上传播的能力按 §1 保留。
 本阶段检查 defer 自身的出口，不能因为外围函数或调用方有 catch 就认为该边界安全。
 
+2026-09-21 人工调整交付范围：先独立交付阶段二 defer 检查及已完成的配套修复，
+将既有 release 异常展开问题 S11 移至
+[独立修复方案](./feng-release-exception-unwind-bugfix.md)。按人工澄清，既有 BIND10 用例
+在非 release 模式下能通过，无需注释；保留其原断言及全部 defer 用例，执行沙箱外 `make test`。
+这次拆分不表示 S11 已修复，也不将默认回归结果记作完整 release 异常行为通过。
+
+#### 5.3.0 实施记录与既有用例迁移
+
+2026-09-21 人工批准开始阶段二。边界语义与 `AE1507` 的定义集中在
+[defer 规范 §6](../specifications/feng-defer.md#6-与异常模型的关系)。实现复用阶段一的图及
+固定点求解,在遍历每个 defer 时保存该块独立的结果根和块内调用的局部传播根;
+这些根不接受外围 catch 的扣除。求解完成后由独立的 defer 检查入口消费结果并构造诊断。
+关联调用位置复用既有 `FengSemanticRelatedLocation`,不向异常元信息或 FT 写入诊断文本。
+本阶段不引入新的 runtime／ABI 协议,不改变 FT 布局或版本。
+
+既有测试的必要迁移先列明,获人工确认后执行;新增用例可以独立推进。
+
+| 编号 | 现有用例 | 迁移内容 | 状态 |
+| --- | --- | --- | --- |
+| M01 | `test/semantic/test_exception_effects.c` 的 `defer{fail();}` 成功摘要断言 | 保留原源码,改为断言 `AE1507`;新增内部完整捕获的合法摘要断言 | 人工已批准,已迁移 |
+| M02 | `test/cli/exception_info_routing.inc` 的 `cleanup(f)` 无捕获 defer | 安静输出夹具改为 defer 内兜底捕获,对应函数摘要断言改为空;原无捕获源码作为新增 CLI／LSP 错误用例保留,其他提示断言不变 | 人工已批准,已迁移 |
+| M03 | `test_nested_exception_lifetime.ff` 的 `nestedExceptionEscapingLandingCleanup` 及对应成功行为断言 | 原辅助函数和断言完整注释保留,新增对应编译期负例;N08 原有注释源码保持原样,其他合法生命周期用例继续运行 | 人工已批准,已迁移 |
+| M04 | `fcts/fcts_lib/src/test/lib_generic_cross_feature_coverage.ff` 的 `libCrossFeatureDeferObserve` | defer 内的 `observer(current)` 增加兜底捕获;意外异常用 `Process.exit(1)` 使测试失败,正常／展开路径的原回调、值及生命周期断言不变 | 人工已批准,已迁移;FCTS 语义检查通过 |
+| M05 | `test/debug/loop_breakpoints.ff` 的 `deferLoop` | defer 内的 `println` 增加兜底捕获;意外异常用 `Process.exit(1)` 使测试失败,保留原循环、调用断点和命中次数断言 | 人工已批准,已迁移;完整 DAP 及两轮全量回归通过 |
+
+问题按“现象／证据 → 分析 → 处理 → 验证”追加记录。未完成全量回归前不标记交付。
+
+| 编号 | 现象／证据 | 分析与处理 | 验证 |
+| --- | --- | --- | --- |
+| S01（新增夹具） | 首轮外围 catch 用例得到 `SE0006`;后续 spec 夹具得到 `SE0604`／`AE0704`;新增 FCTS 匿名重抛场景的空 if 分支得到 `AE1101`;新增 Codegen C 夹具遗漏 `mkdtemp` 的头文件声明,泛型尾部与赋值连写又得到 `SE0610`,均尚未进入目标验证 | 有结果的 try 改用局部绑定;spec 及其实现的方法签名补齐既有规则要求的 `:void`;FCTS 的 if 表达式补齐正常完成分支的结果;C 夹具补齐 `unistd.h` 和泛型尾部必要空格,不调整产品语法规则 | 80 个源码场景、两种 FT profile 各 39 个场景、FCTS 及 Codegen 均已通过 |
+| S02 | 定向检查 FCTS 在 `fcts_lib/src/test/lib_generic_cross_feature_coverage.ff:88` 的 defer 报 `AE1507: unknown`,依赖包构建被拒绝 | 声明环境中外部传入的 `Action<T>` 不能证明无异常;原调用者仅赋值,原用例验证泛型捕获及生命周期。按 M04 迁移,不把 unknown 当空集合 | 人工批准后迁移,原行为断言在 FCTS 中通过 |
+| S03 | 完整 CLI 回归在 DAP 循环断点夹具第 141 行的 defer 报 `AE1507: string, unknown`;新 CLI／LSP 边界用例及原提示路由用例此前已通过 | 数值 `println` 保留 `string` 异常,多余 unknown 的独立原因见 S05;原用例验证清理循环的断点和隐藏帧,按 M05 在内部处理异常,不放宽检查 | 人工批准后迁移;完整 DAP 与两轮全量回归通过 |
+| S04 | 新 FCTS 的开放泛型清理在 C 编译时报未定义的 `_T`、`_U`、`_td`;涉及泛型函数及同时使用 owner／方法泛参的清理块。不含任何异常的 `cleanup<T>(value:T){defer{consume(value);}}` 也复现 `_T` 未定义 | `cg_emit_defer` 已捕获值存储及部分局部描述符,但没有恢复共享体的泛参／owner／callable 描述符环境;代码生成仍引用外层 C 函数的名字。复用现有 Lambda 的泛型环境表示,由清理栈闭包保存并在 helper 中恢复,不对具体类型或异常调用特判 | 阶段一对照编译器复现相同错误,确认既有缺口。人工批准后实施,源码与两种 FT profile 的宿主 C 矩阵及跨包行为通过 |
+| S05（println 调用链核查） | 人工追问 `println` 的异常来源。隔离调用发现纯字符串重载、格式化函数、`Stdio.writeLine` 均通过;数值重载为 `string, unknown`;直接 `int.toString` 为 `string`。另以 `first<T:Display>(value:T)` 和 `indexed<T:Display>(values:T[])` 比较,同一 `int` 实参分别得到 `string` 和 `unknown` | `string` 来自 `i64.toString → byte[].clone(start,end)` 的显式越界 throw,符合不按实参值／分支条件消除异常的规则。额外 unknown 源于 `resolve_expr` 的 INDEX 分支未保存 `infer_expr_type` 已能提供的元素类型事实。补齐下标表达式的通用类型事实记录,复用现有泛型 witness 求解;不改异常规则、对外 API 或 FT 格式 | 源码及两种 FT profile 的泛型数组元素调用覆盖通过;真正动态的 spec／callable 元素继续 unknown |
+| S06（S04 嵌套捕获验证） | 新 Codegen 矩阵在 defer 内创建捕获外部泛型值的 Lambda 时报告 `CE0102: lambda capture 'value' was not lowered to a capture cell` | defer 扫描跳过 Lambda 的捕获清单,且 helper 别名未保留 capture-cell 身份和普通 address 参数的 `is_storage_address`。扫描消费语义层已确定的捕获清单;对已有 cell 借用其指针并复用原 cell 别名机制,保留存储表示。每个捕获仍仅一个地址槽,不另造 cell、不增加堆分配或 ARC;Lambda 与清理访问同一变量 | S04 嵌套闭包、动态值及跨包实际行为验证通过 |
+| S07（S04 C 类型验证） | 新矩阵在宿主 C `-Werror` 下报告 const 参数地址写入 `void *` 丢限定符,以及共享方法 `_self` 的 `void **` 与具体 owner 指针地址不匹配 | 捕获按既有值种类及可重新绑定性选表示：不可重新绑定的托管引用直接借用稳定引用,可重新绑定的普通局部仍借用槽地址;已有 cell 和动态存储分别保留原表示。动态参数地址进入统一存储视图时显式转为 `void *`,源代码可写性仍由语义层控制。避免把擦除的 `void **` 当具体类型的指针地址;不新增分配、引用计数或运行开销 | 宿主 C 的默认／`-O2` 编译及默认模式实际行为验证通过 |
+| S08（实际行为） | 定向 FCTS 的前七个新增清理场景通过,随后“动态回调异常由清理内部兜底捕获”场景触发 `panic: uncaught exception (unwind reason=5)`,进程信号 6。无泛型、无 std 的最小程序用阶段一编译器仍同样终止 | 生成 C 的 defer helper 有 try 区间及 catch landing pad,却缺少普通函数已有的 CFI personality／LSDA 标注,平台展开器不会查询该帧的处理器。提取共用的静态展开元数据生成函数供普通函数和 defer 使用;defer 不可外抛,不需要新增函数清理标记。只补生成 C 的汇编元数据,不增加正常路径指令、清理栈操作、ARC、runtime API 或 ABI | 默认模式的正常退出、展开中清理及嵌套捕获全部通过;生成 C 的 `-O2` 编译通过。release 异常行为限制单独交由 S11 处理 |
+| S09（M05 断点复验） | 获批迁移误用了无用的结果绑定;同一行出现两个原生断点位置。分行／块表达式改写曾使旧断言通过,但人工指出这不是正确处理 | 现行 try/catch 语句本就丢弃返回值,改回 `try println(...) catch { Process.exit(1); }`。该简单调用每轮不应因生成的辅助代码额外停顿;不能推导为所有同行多语句一律只停一次。继续核查通用源位置映射,不以无用绑定、`if true` 或改断言回避问题 | 语句及多行分支 DAP 验证通过;整体源映射问题见 S12 |
+| S10（release 验证） | release FCTS 在重编 std 时报告 CFI 指令不位于 `.cfi_startproc`／`.cfi_endproc` 内,定位到仅设置 `_dispatchingMouse` 的 defer helper | 该 helper 优化为无调用的叶函数,宿主编译器不生成展开区间。仅在 helper 自身实际生成 catch 区间时输出 CFI;生成器记录当前函数是否有区间,嵌套 Lambda 保存／恢复该状态,纯清理保持原输出。不通过增加运行时函数调用或栈标记强行制造非叶函数 | 新增宿主 C `-O2` 编译验证通过,完整 release 构建通过;运行时发现的独立缺陷见 S11 |
+| S11（release 执行） | 额外 release 行为验证发现既有异常展开失败,已确认早于阶段一 | 人工决定从阶段二拆出,完整原因、原始触发用例、历史对照及待 Review 方案见[独立修复文档](./feng-release-exception-unwind-bugfix.md) | 尚未修复;默认模式可通过的既有触发用例保持启用,阶段二单独全量回归 |
+| S12（表达式断点范围复查） | 人工指出源断点正确性应覆盖所有表达式位置;现有新验证集中在 try 及局部绑定 | 盘点既有 DAP 矩阵并实测赋值、返回、实参、条件等位置,采用共用局部存储调试用途规则替换语法及消费位置补丁 | 新增真实 DAP 矩阵、完整 CLI／LSP／DAP、Codegen 及沙箱外 `make test` 两轮全量回归通过 |
+| S13（全量回归） | 沙箱外 `make test` 的 UBSan 阶段中,semantic、runtime、Codegen 通过;独立 `test_debug` 在 `test/debug/test_debug.c:403` 的条件声明数量断言失败 | 原测试只按行首 `bool _fcond` 识别生成 C 声明;S12 共用局部存储规则在声明前增加调试属性宏,旧扫描器因此漏计。适配声明识别,保留两个结果、两个分支分别属于源码第 4／7 行及宿主 C 编译的全部断言;不为测试恢复内部局部的调试信息 | 人工要求直接修复;扫描适配后独立 Debug 及沙箱外 `make test` 两轮全量回归通过 |
+
+S09 早期核验与修补记录（相关局部补丁已由 S12 共用实现替代）：语句形式仍重复命中。
+LLDB 将同一源码行绑定到 helper 的 `+96`
+（异常区间注册）和 `+248`（受保护表达式求值）两个地址。前者是编译器生成的
+异常处理准备代码,不代表额外的用户语句。去除准备代码的位置后,原生断点还会定位到
+同一行的 try 标记弹出。因此修复覆盖完整的异常处理辅助代码：注册、标记、landing
+分发和区间收尾使用无源码位置,受保护表达式及 catch 内用户语句保留源码位置;
+复用现有生成片段重映射抽象,不改变机器执行逻辑。
+
+修复后原生 LLDB 对同一行的语句、表达式探针均只绑定一个位置。增加真实 DAP
+用例验证普通函数、结果绑定、defer 和实际 catch 的每次求值命中次数,同时保留
+M05 原有断言。此验证与会清空 `temp/` 的完整 CLI／Codegen 套件串行进行。
+人工进一步要求验证多行 `if`／`match`：条件或匹配入口、各分支的用户语句分别保留
+源码停点,命中序列随实际分支选择变化,不能把整个受保护表达式压成一个停点。
+
+新增真实 DAP 用例发现泛型调用结果绑定仍多停一次：受保护表达式与最终结果绑定
+处于不同生成 C 词法块,同一源码行因此分裂。曾尝试去掉受保护表达式的 C 包装块,
+18 次 DAP 命中序列通过,但随后的跨包泛型用例报告跳转跨过变长数组初始化：该块
+还负责隔离共享体的动态临时存储,不能删除。恢复原 C 作用域和执行逻辑,继续从
+表达式求值及生成结果搬运的源位置区分入手修复;不能用取消存储作用域解决调试问题。
+结果汇合槽（`if`／`match`／`try` 共用）已完成求值,后续局部绑定只搬运结果并登记
+资源,不应再次形成该初始化语句的停点。由内部表达式结果携带这一事实,绑定生成器
+据此将搬运片段标为无源码位置;不根据被调用函数、结果类型或表达式行数判断。
+保留用户变量的调试记录、全部 C 作用域及存储／清理代码,并用真实 DAP 和跨包 C
+编译验证两方面约束。
+复查时补齐内部表达式结果新增标志的初始化／释放复位,避免普通表达式读取未初始化
+的调试状态;以修正后的构建重新执行完整 CLI 验证。
+
+S12 实测记录（当前工作区编译器、macOS arm64、debug 构建、原生 LLDB）：
+
+- 28 个单行位置各执行两次。普通调用、普通赋值、数组字面量、下标访问各命中 2 次;
+  `try` 的语句及当前局部绑定修补路径各 2 次;`return try ...`、`target = try ...`、
+  `consume(try ...)`、`1 + (try ...)` 各 4 次,说明局部绑定修补没有解决通用消费位置。
+- 多行 `if`／`match` 在返回、绑定、赋值、实参、算术运算共 10 个入口位置各执行两次,
+  每处均命中 2 次。不能把未覆盖的位置推断为正确,也不能声称已确认所有 if/match 有问题。
+- 同行 if/match 包含条件与分支用户语句时也观察到多次命中;这与单条语句展开出的
+  辅助代码不同,不能只按次数判定错误。需同时核对源码语句、原生地址及实际执行路径。
+- 现有 `#line` 只表达文件／行,没有可靠的 Feng 列映射;原生 C 词法块及内部临时变量
+  仍可能影响断点解析。修复应从共用源码位置和内部存储调试表示入手,替换只在局部
+  绑定消费 `is_evaluated_join` 的临时方案,不继续按 try／return／赋值逐项补分支。
+- 同一探针用阶段一编译器复验,返回／赋值／实参中的重复命中同样存在。对生成 C
+  仅为泛型实参及结果临时存储增加既有 `FENG_CODEGEN_NODEBUG` 后,返回、绑定、赋值、
+  实参、表达式语句、算术运算中的 if/match/try 各执行两次均命中两次。条件体及短路
+  仍按真实执行路径保留多个位置。此为原因隔离实验,不能按临时名字前缀实现产品修复。
+- 2026-09-21 人工明确要求通用实现,允许暂不提供列级断点。现有 try 专用片段隐藏和
+  `is_evaluated_join` 的绑定专用处理均已移除,不作为最终交付。
+  在共用局部存储声明中记录调试用途,最终结合既有用户变量映射保留被接管的存储和
+  变量读取所依赖的载体;纯内部局部统一抑制变量调试信息。源码位置继续复用现有
+  文件／行锚点机制,保持 C 作用域与执行代码。主规则仅定义于
+  [CLI 调试规范](../specifications/feng-cli.md#22-feng-dap),此处记录实施证据。
+  验证范围包括表达式种类与使用位置的组合、同行／多行、真实分支及短路、循环与递归、
+  用户变量读取、泛型存储、Lambda／defer,以及全量 `make test`。
+- 共用存储规则首轮验证消除 28 个探针中的生成临时存储额外命中;真实 DAP 复验进一步
+  在多行 if 的入口发现结果汇合槽和条件缓存等声明尚未全部接入该规则。
+  先记录该遗漏,继续统一局部声明规则;不恢复 try 隐藏片段或修改预期命中断言。
+- 声明用途审计发现具体 catch 的局部 binding 原先只登记值存储,未登记 `.fd` 用户变量
+  映射。补齐相同的用户 binding 元信息,使其可见性与普通 binding 一致;不能将用户
+  catch 变量错误归入纯内部临时存储。增加 catch 与捕获绑定的真实调试读取验证。
+- 统一声明规则及 catch 变量映射完成后,新增真实 DAP 单行矩阵 27 个位置／54 次命中、
+  多行矩阵 10 个位置／20 次命中、catch 与捕获变量读取 2 个位置／3 次命中全部通过。
+  完整 CLI／LSP／DAP 套件及 Codegen 套件均通过,没有修改既有断点断言;
+  此结果不能替代最终 `make test` 或 S11 的 release 验证。
+- S11 后续按人工决定独立处理,调查记录与待审定边界集中在
+  [release 异常展开修复方案](./feng-release-exception-unwind-bugfix.md)。
+
+断点规则参考：[LLDB 逻辑断点与多个位置](https://lldb.llvm.org/use/tutorial.html)、
+[.NET 可见／隐藏序列点](https://github.com/dotnet/runtime/blob/main/docs/design/specs/PortablePdb-Metadata.md#sequence-points-blob)、
+[VS Code 列断点](https://code.visualstudio.com/docs/debugtest/debugging#inline-breakpoints)。
+行断点、精确位置断点、单步是不同操作;不能以相同行号去重来掩盖映射问题。
+
+S06 首次构建的集合查询误用了不存在的辅助函数名;改用既有 `cg_defer_name_in_list`,
+不新增重复的名称集合实现。
+
+S08 的新增代码生成成本断言首次把 `feng_frame_pop` 一律排除,误伤既有 try 标记的
+正常弹出;改为核对不生成函数级 `FengFrameMarker`／`feng_frame_push`,保留内部 try
+所需的原有清理操作。
+
+S04 拟修复范围：将 Lambda 既有的 reification context 提取为内部共享抽象,统一生成
+环境字段、初始化及入口恢复,供 Lambda 和 defer 使用。保留已实现的值存储捕获规则;
+涵盖顶层／owner／方法泛参、无值捕获但使用泛参的清理以及清理中的 Lambda。
+2026-09-21 人工已批准 S04 在阶段二一并修复及下述开销。上下文中仅保存既有只读描述符／泛型参数表指针,无堆分配或 ARC 操作,不修改 runtime
+或函数 ABI。普通非泛型 defer 不增加字段;泛型 defer 的栈环境最多增加 P + 3 个指针
+（P 个泛参描述符及存在时的 owner、callable、generic-arguments 指针）,并增加对应赋值。
+这是代码生成修复,与单纯边界检查分别记录;实施后补齐生成 C、实际行为及跨包验证。
+
 #### 5.3.1 规范与方案
 
-- [ ] 按 §4.3.2 已确认的严格原则细化 defer 边界检查：未知及未消除的开放条件不得放行，内部完整捕获后可证明为空；覆盖间接调用、catch 内再次传播及现有直接 `throw` 禁令。
-- [ ] 定义编译期诊断码、定位与相关调用位置；CLI 与 LSP 使用同一检查结果。
-- [ ] 盘点现有 defer 调用和测试受新限制影响的范围，列出迁移方案；涉及修改既有用例的内容先取得人工确认。
-- [ ] 更新 defer 与异常主规范的对应规则，本文仅引用；完成阶段二方案 Review。若确需 runtime／ABI 变更或增加开销，先列明协议与成本并单独审定。
+- [x] 按 §4.3.2 已确认的严格原则细化 defer 边界检查：未知及未消除的开放条件不得放行，内部完整捕获后可证明为空；覆盖间接调用、catch 内再次传播及现有直接 `throw` 禁令。
+- [x] 定义编译期诊断码、定位与相关调用位置；CLI 与 LSP 使用同一检查结果。
+- [x] 盘点现有 defer 调用和测试受新限制影响的范围，列出迁移方案；涉及修改既有用例的内容先取得人工确认。
+- [x] 更新 defer 与异常主规范的对应规则，本文仅引用；阶段二边界规则及 S04 泛型环境开销已获批准。S11 后端／runtime 方案移至独立文档 Review。
 
 #### 5.3.2 实现
 
-- [ ] 在 defer 边界复用统一摘要计算可能逃逸的异常，覆盖块内调用、表达式求值及其内部 catch，不另建独立的函数异常推导。
-- [ ] 接入编译期拒绝与 LSP 错误展示，正确报告具体异常和无法证明安全的部分；不依赖用户开启编辑器提示才能阻止 N08。
-- [ ] 按已审定方案完成受影响代码及用例迁移，保留合法的 defer 内部异常处理和普通函数异常传播。
-- [ ] 将 §2.3 保留的 N08 复现纳入可执行验证；禁止逃逸方案对应编译期负例，原注释源码和候选断言继续保留供追溯。
+- [x] 在 defer 边界复用统一摘要计算可能逃逸的异常，覆盖块内调用、表达式求值及其内部 catch，不另建独立的函数异常推导。
+- [x] 接入编译期拒绝与 LSP 错误展示，正确报告具体异常和无法证明安全的部分；不依赖用户开启编辑器提示才能阻止 N08。
+- [x] 按已审定方案完成受影响代码及用例迁移，保留合法的 defer 内部异常处理和普通函数异常传播。
+- [x] 将 §2.3 保留的 N08 复现纳入可执行验证；禁止逃逸方案对应编译期负例，原注释源码和候选断言继续保留供追溯。
 
 #### 5.3.3 用例与定向验证
 
-- [ ] 建立阶段二覆盖清单，逐项对应合法／非法源码、诊断位置、语言行为和验证结果。
-- [ ] 在 `test/` 验证拒绝路径：直接 `throw expr`／`throw;`、直接和多层调用逃逸、部分或错误类型捕获、catch 中调用再次逃逸、外围 catch 无法封闭 defer 边界。
-- [ ] 验证接受路径：已证明不抛异常的调用、具体 catch 完整覆盖、未知来源由内部兜底 catch 完整处理且处理代码不再逃逸、被调用函数内部已经完整处理异常。
-- [ ] 覆盖递归、泛型函数与类型／方法泛参、Lambda、callable 值、spec 方法、泛型约束和跨包调用；已知、未知及混合摘要均按审定规则验证。
-- [ ] 验证 N08 原始复现及等价的跨函数、跨包、间接调用形态均被正确阻止，不再进入损坏 cleanup chain 的执行路径。
-- [ ] 在 `fcts/` 验证合法清理行为：正常退出、return、break／continue、异常展开、多个 defer 的 LIFO 顺序、内部捕获及嵌套 catch 上下文恢复、载荷析构次数和时机。
-- [ ] 在 `test/` 验证 CLI／LSP 诊断一致，以及修改被调用函数、捕获范围或依赖摘要后诊断的更新和清除。
-- [ ] 执行全部定向验证，核对阶段一的摘要和非强制提示不回退；新增问题先记录、再分析、再修复，不确定事项交由人工决策。
+- [x] 建立阶段二覆盖清单，逐项对应合法／非法源码、诊断位置、语言行为和验证结果。
+- [x] 在 `test/` 验证拒绝路径：直接 `throw expr`／`throw;`、直接和多层调用逃逸、部分或错误类型捕获、catch 中调用再次逃逸、外围 catch 无法封闭 defer 边界。
+- [x] 验证接受路径：已证明不抛异常的调用、具体 catch 完整覆盖、未知来源由内部兜底 catch 完整处理且处理代码不再逃逸、被调用函数内部已经完整处理异常。
+- [x] 覆盖递归、泛型函数与类型／方法泛参、Lambda、callable 值、spec 方法、泛型约束和跨包调用；已知、未知及混合摘要均按审定规则验证。
+- [x] 验证 N08 原始复现及等价的跨函数、跨包、间接调用形态均被正确阻止，不再进入损坏 cleanup chain 的执行路径。
+- [x] 在 `fcts/` 验证合法清理行为：正常退出、return、break／continue、异常展开、多个 defer 的 LIFO 顺序、内部捕获及嵌套 catch 上下文恢复、载荷析构次数和时机。
+- [x] 在 `test/` 验证 CLI／LSP 诊断一致，以及修改被调用函数、捕获范围或依赖摘要后诊断的更新和清除。
+- [x] 执行全部阶段二定向验证，核对阶段一的摘要和非强制提示不回退；新增问题先记录、再分析、再修复，不确定事项交由人工决策。release 异常展开问题按人工决定移交 S11。
 
 #### 5.3.4 阶段二独立交付
 
-- [ ] 完成定向验证后，再次在沙箱外执行 `make test` 全量回归，记录本阶段独立的环境、命令、日志和各目标结果。
-- [ ] 修复本阶段发现的问题并完成必要复验及全量回归，逐项核对 N08 与合法 defer 行为的验收结果。
-- [ ] 回填阶段二覆盖清单、N08 处理结论及交付记录，输出英文 commit message，不自动提交。
-- [ ] 独立交付 defer 修复，等待人工 Review。
+- [x] 完成定向验证后，再次在沙箱外执行 `make test` 全量回归，记录本阶段独立的环境、命令、日志和各目标结果。
+- [x] 完成阶段二范围内的问题修复、必要复验及全量回归，逐项核对 N08 与合法 defer 行为；S11 按人工决定独立跟踪。
+- [x] 回填阶段二覆盖清单、N08 处理结论及交付记录，提供英文 commit message，不自动提交。
+- [x] 独立交付 defer 修复，等待人工 Review。
+
+#### 5.3.5 阶段二覆盖对应
+
+| 维度 | 用例与核验内容 | 定向结果 |
+| --- | --- | --- |
+| 源码边界 | `test/semantic/test_defer_exception_effects.c`: 80 个场景,覆盖直接／多层／递归调用、未知和已知 callable、普通与静态成员、初始化、迭代、泛参、数组元素 witness、内部／外围 catch、重抛和直接语句禁令;另核对每个错误的关键字位置及相关调用 | 整个 semantic 套件通过 |
+| 跨包证明 | `test/symbol/test_defer_exception_effects.c`: 两种 FT profile 各 39 个 consumer 场景,销毁 producer AST 后读取,重复使用导入缓存;覆盖泛型代入、owner／方法泛参、callback、witness、初始化和内部捕获 | 整个 symbol 套件通过 |
+| CLI／LSP | `test/cli/defer_exception_effects.inc`: 6 个源码场景分别验证 frontend、direct、check text／JSON;同一 LSP 会话 7 次编辑验证错误更新／清除,源码隐藏的两级依赖包验证泛型传播。保留阶段一安静输出及 Hover 断言 | 整个 CLI／LSP／DAP 套件通过 |
+| 生成 C | `test/codegen/test_defer_generic_context.c`: 源码及两种 FT profile 的泛型函数、类型／方法／fit、构造泛型参数、无值捕获、嵌套 Lambda、静态 witness、标量／托管／聚合表示;宿主 C 使用 `-Werror`,另核对异常元数据且不增加函数清理标记 | 整个 codegen 套件通过 |
+| 实际行为 | `fcts_bin/src/test_defer_exception_effects.ff` 的 23 个场景及 `fcts_lib/src/test/lib_defer_exception_effects.ff`: 正常、return、break／continue、LIFO、展开／landing 清理、内部动态和具体捕获、嵌套处理器、重抛、泛型跨包／闭包、完整聚合值及析构次数 | 默认模式全部通过,23 个用例继续保留;完整 release 异常行为由 S11 独立验收 |
+| 既有用例迁移 | M01–M05 均获批准;原 N08 注释源码和断言未删除,原 landing 外抛场景完整注释保留。原 DAP 循环断点断言验证 12 场景、24 次命中、未执行分支 0 次 | 原断言通过 |
+| println 类型事实 | 重编 std 后,纯字符串重载无逃逸;数值 `println<int>`、直接泛型值及泛型数组元素调用均得到 `string`,没有多余 unknown;真正动态来源的 unknown 由上述源码及 FT 用例保留验证 | 定向检查符合预期 |
+
+以上定向验证之外,完整回归记录见 §5.3.6。阶段二实现、覆盖及 S11 拆分后的
+交付回归均已完成。S11 尚未修复,保留在独立文档中跟踪。
+
+#### 5.3.6 全量回归记录
+
+2026-09-21,macOS arm64,在沙箱外执行 `make test`,退出码为 0。
+UBSan 与正常构建两轮均完成所有 Makefile 回归目标,每轮 smoke 91／91、
+标准库 607／607、FCTS 1,492／1,492,性能约束检查通过;编译器、Debug、
+CLI／LSP／DAP、符号及构建／打包相关套件均通过。日志未出现 UBSan runtime error
+或断言失败,原断点数量、行号和行为断言均保留。
+
+本机完整日志：`/private/tmp/feng-defer-stage2-full-make-test-after-debug-fix.log`。
+S13 首次失败日志另行保留,未以成功日志覆盖。上述 FCTS 按 `make test` 的默认
+模式运行,不包含 S11 所用的 release 异常行为验证。本次没有加入相关
+`noinline`、`optnone` 或 `asm goto` 产品实现;S11 后续独立处理。
+
+S11 拆分后的交付回归（2026-09-21）：再次在沙箱外执行完整 `make test`,退出码为 0。
+BIND10 原用例及其断言保持启用,其文件与 HEAD 无差异,两轮均实际通过;
+本次拆分没有减少 FCTS 活跃用例,阶段二的 23 个 defer 行为用例全部保留并通过。
+
+| 验证项 | 本次结果 |
+| --- | --- |
+| UBSan 与普通构建 | 两轮全部 Makefile 目标通过,无 UBSan runtime error、断言失败或 make 失败 |
+| 编译器与工具 | semantic 的 80 个源码场景、两种 FT profile 各 39 个 consumer 场景、Codegen、Debug、CLI／LSP／DAP、Symbol 等套件全部通过 |
+| smoke | 每轮 91／91 |
+| 标准库 | 每轮 607／607,失败与跳过均为 0 |
+| FCTS | 每轮 1,492／1,492,失败与跳过均为 0；包括 BIND10 原用例及全部新增 defer 行为 |
+| 性能及构建发布 | 两轮性能约束检查通过；完整回归中的增量构建、release 脚本、打包及工具链测试目标通过 |
+
+完整日志：`/private/tmp/feng-defer-stage2-delivery-regression.log`。
+运行前后产品代码及测试指纹一致：
+`c9faceefb296254fd7df0b53b221430fb5c8406e83b0c0d1d76644258c34891a`
+（`git diff HEAD -- src test fcts std scripts | shasum -a 256`）。
+结束后仅回填文档。本次结果不包含完整 release 异常行为通过的结论。
+
+#### 5.3.7 交付结论与建议 commit message
+
+阶段二的 defer 边界检查及相关修复已经完成，N08 的非法外抛由编译期拒绝；
+合法的内部捕获、泛型共享体、跨包调用和清理生命周期按 §5.3.5 验证。
+原 N08 及获批迁移的 landing 外抛源码仍完整注释保留，对应编译期负例继续执行。
+通用源码断点修复及既有断言均已通过，不保留 try／绑定位置专用补丁。
+
+本阶段没有修改 runtime 源码、运行时结构布局、函数 ABI 或 FT 格式，未新增 Python 文件。
+泛型 defer 的描述符栈环境成本按 S04 已获批准的范围实施。
+S11 按人工决定移至[独立修复方案](./feng-release-exception-unwind-bugfix.md)，尚未修复。
+代码未自动提交，等待人工 Review。
+
+```text
+fix: enforce defer exception boundaries and preserve cleanup context
+
+- Reject concrete, unknown and unresolved generic exception escapes with AE1507
+- Preserve generic descriptors, captures and EH metadata in defer helpers
+- Record generic array element type facts for exception inference
+- Use shared local-storage debug metadata for consistent source breakpoints
+- Cover source, FT, CLI/LSP/DAP and cross-package cleanup behavior
+- Document the existing release unwind defect separately as S11
+
+Validation: make test passed in UBSan and normal builds, with 91 smoke,
+607 standard-library and 1492 FCTS cases passing in each round.
+```

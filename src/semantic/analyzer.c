@@ -31202,7 +31202,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
         case FENG_EXPR_INDEX:
             return resolve_expr(context, expr->as.index.object, allow_self) &&
                    resolve_expr(context, expr->as.index.index, allow_self) &&
-                   validate_index_expr(context, expr);
+                   validate_index_expr(context, expr) &&
+                   record_type_fact_for_site(context, expr, infer_expr_type(context, expr));
 
         case FENG_EXPR_UNARY:
             return resolve_expr(context, expr->as.unary.operand, allow_self) &&
@@ -42335,6 +42336,10 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
 
     if (ok && error_count == 0U) {
         ok = feng_semantic_collect_exception_effects(analysis);
+    }
+    if (ok && error_count == 0U) {
+        ok = feng_semantic_validate_defer_exception_effects(analysis,
+            &errors, &error_count, &error_capacity);
     }
     if (ok && error_count == 0U) {
         ok = feng_semantic_validate_abi_exception_effects(analysis,

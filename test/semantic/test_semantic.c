@@ -35411,8 +35411,10 @@ void test_array_static_parity_semantics(void);
 void test_throw_constraint_semantics(void);
 
 void test_exception_effects_semantics(void);
+void test_defer_exception_effects_semantics(void);
 
 int main(void) {
+    test_defer_exception_effects_semantics();
     test_exception_effects_semantics();
     test_throw_constraint_semantics();
     test_generic_container_static_semantics();

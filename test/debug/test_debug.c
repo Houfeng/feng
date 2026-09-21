@@ -388,6 +388,14 @@ static void test_codegen_three_clause_loop_condition_lines(void) {
         } else {
             const char *content = line;
             while (*content == ' ' || *content == '\t') ++content;
+            /* Storage visibility attributes do not change the declaration's
+             * source line. Skip the generated attribute token before checking
+             * the condition declaration and retain all location assertions. */
+            if (strncmp(content, "FENG_LOCAL_DEBUG_", 17U) == 0) {
+                while (*content != '\0' && *content != '\n' &&
+                       *content != ' ' && *content != '\t') ++content;
+                while (*content == ' ' || *content == '\t') ++content;
+            }
             if (strncmp(content, "bool _fcond", 11U) == 0) {
                 ASSERT(result_count < sizeof(headers) / sizeof(headers[0]));
                 ASSERT(logical_line == headers[result_count++]);

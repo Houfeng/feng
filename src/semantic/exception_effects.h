@@ -33,6 +33,12 @@ bool feng_semantic_validate_abi_exception_effects(const FengSemanticAnalysis *an
                                                  FengSemanticError **errors, size_t *error_count,
                                                  size_t *error_capacity);
 
+/* Require each cleanup block's own solved exception set to be empty. Outer
+ * catches cannot discharge this boundary; diagnostics consume only facts. */
+bool feng_semantic_validate_defer_exception_effects(const FengSemanticAnalysis *analysis,
+                                                   FengSemanticError **errors, size_t *error_count,
+                                                   size_t *error_capacity);
+
 /* Query declaration/instance information without performing analysis. */
 const FengExceptionTemplate *feng_semantic_exception_template(const FengSemanticAnalysis *analysis,
                                                               const void *source_node);

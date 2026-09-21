@@ -327,16 +327,17 @@ func nestedExceptionFunctionCleanup(): void {
 //   raiseNestedExceptionResource(1);
 // }
 
-/** An escaping landing-pad defer replaces the pending exception cleanly. */
-func nestedExceptionEscapingLandingCleanup(): int {
-  return try (if true {
-    defer { raiseNestedExceptionResource(2); }
-    throw NestedExceptionResource { code: 1 };
-  } else { 0; }) catch original: NestedExceptionResource {
-    assert(false, "replacement exception escapes the abandoned landing pad");
-    original.code;
-  };
-}
+// Phase two (M03, approved): retained source; AE1507 now rejects this boundary.
+// /** An escaping landing-pad defer replaces the pending exception cleanly. */
+// func nestedExceptionEscapingLandingCleanup(): int {
+//   return try (if true {
+//     defer { raiseNestedExceptionResource(2); }
+//     throw NestedExceptionResource { code: 1 };
+//   } else { 0; }) catch original: NestedExceptionResource {
+//     assert(false, "replacement exception escapes the abandoned landing pad");
+//     original.code;
+//   };
+// }
 
 /** Catch defers run before their borrowed binding's exception owner ends. */
 func nestedExceptionCatchDefer(): void {
@@ -540,15 +541,16 @@ open func test_nested_exception_lifetime(): void {
     //   assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12,
     //          "replacement and abandoned in-flight owners are balanced");
     // });
-    test("escaping landing cleanup releases its abandoned pending exception", () {
-      resetNestedExceptionLifetime();
-      try nestedExceptionEscapingLandingCleanup() catch error: NestedExceptionResource {
-        assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 1,
-               "abandoned pending exception is released before the new handler");
-        assert(error.code == 2, "replacement exception reaches the caller");
-      }
-      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12, "replacement cleanup is balanced");
-    });
+    // Phase two (M03, approved): preserve the former runtime assertions in full.
+    // test("escaping landing cleanup releases its abandoned pending exception", () {
+    //   resetNestedExceptionLifetime();
+    //   try nestedExceptionEscapingLandingCleanup() catch error: NestedExceptionResource {
+    //     assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 1,
+    //            "abandoned pending exception is released before the new handler");
+    //     assert(error.code == 2, "replacement exception reaches the caller");
+    //   }
+    //   assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12, "replacement cleanup is balanced");
+    // });
     test("catch return defer can handle exceptions and read its original binding", () {
       resetNestedExceptionLifetime();
       nestedExceptionCatchDefer();
