@@ -40,6 +40,8 @@ void test_generic_literal_storage_codegen(void (*compile_c)(const char *));
 void test_valid_program_codegen(void (*compile_c)(const char *));
 /* Generic container statics preserve complete types and lexical contexts. */
 void test_generic_container_static_codegen(void (*compile_c)(const char *));
+/* Shared generic bodies dispatch through the constrained sibling slot. */
+void test_generic_sibling_constraint_codegen(void (*compile_c)(const char *));
 /* Run the same complete static scenario for each array owner form. */
 void test_array_static_parity_codegen(void (*compile_c)(const char *));
 /* Constructed generic actuals use static records across every shared entrance. */
@@ -17384,6 +17386,7 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_generic_sibling_constraint_codegen(compile_generated_c_or_die);
     test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);

@@ -768,7 +768,8 @@ static bool type_ref_contains_type_param(const FengTypeRef *type_ref,
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             /* 叶子：单 segment、无 type_args → 可能是 type_param 引用。 */
-            if (type_ref->as.named.segment_count == 1U &&
+            if (type_ref->resolution_decl == NULL &&
+                type_ref->as.named.segment_count == 1U &&
                 type_ref->as.named.type_arg_count == 0U) {
                 for (i = 0U; i < type_param_count; ++i) {
                     if (rd_slice_equals(type_ref->as.named.segments[0],
@@ -1347,8 +1348,8 @@ static FengTypeRef *rd_clone_type_ref_substituting(
         return NULL;
     }
 
-    /* 叶子节点：单 segment、无 type_args → 可能是 type_param 引用。 */
-    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+    /* Only unresolved nominal leaves can refer to a generic parameter. */
+    if (type_ref->resolution_decl == NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
         type_ref->as.named.segment_count == 1U &&
         type_ref->as.named.type_arg_count == 0U) {
         for (i = 0U; i < type_param_count; ++i) {
@@ -1368,6 +1369,7 @@ static FengTypeRef *rd_clone_type_ref_substituting(
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
     clone->resolution_program = type_ref->resolution_program;
+    clone->resolution_decl = type_ref->resolution_decl;
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:

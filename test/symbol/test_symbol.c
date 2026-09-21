@@ -5952,6 +5952,9 @@ void test_constraint_projection_ft(void);
 /* Builtin bounds persist beside legacy constraints in both FT profiles. */
 void test_throw_constraint_ft(void);
 
+/* Sibling references retain declaration identities across both FT profiles. */
+void test_generic_sibling_constraint_ft(void);
+
 void test_exception_effects_ft(void);
 void test_defer_exception_effects_ft(void);
 
@@ -5960,6 +5963,7 @@ int main(void) {
     test_exception_effects_ft();
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_generic_sibling_constraint_ft();
     test_throw_constraint_ft();
     test_g24_union_projection_ft();
     test_g24_binding_ft();

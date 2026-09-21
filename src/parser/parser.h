@@ -129,6 +129,9 @@ struct FengTypeRef {
      * scope. NULL uses the current resolver scope. Copies and substitutions
      * retain each node's source program; no source syntax or ABI is added. */
     const FengProgram *resolution_program;
+    /* Borrowed nominal identity resolved in the declaration's lexical scope.
+     * Copies retain it so a caller's type parameter cannot capture the name. */
+    const FengDecl *resolution_decl;
     /* Per docs/specifications/feng-builtin-type.md §5: a writable element layer is marked
      * with `[!]` on the corresponding array layer. Only meaningful when kind ==
      * FENG_TYPE_REF_ARRAY; ignored otherwise. */

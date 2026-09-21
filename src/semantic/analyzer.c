@@ -4334,6 +4334,7 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
     clone->resolution_program = type_ref->resolution_program;
+    clone->resolution_decl = type_ref->resolution_decl;
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
             clone->as.named.segment_count = type_ref->as.named.segment_count;
@@ -4389,6 +4390,15 @@ static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref) {
 static void bind_type_ref_resolution_program(FengTypeRef *type_ref,
                                              const FengProgram *program);
 
+/* Bind nominal source names before a signature is consumed from another scope. */
+static void bind_type_ref_nominal_declarations(
+    const ResolveContext *context, const FengTypeRef *ref,
+    const FengTypeParam *params, size_t count, const FengProgram *program);
+
+/* Find the original lexical environment of a callable signature. */
+static const FengProgram *callable_source_program(
+    ResolveContext *context, const FengCallableSignature *callable);
+
 static FengTypeRef *clone_type_ref_substituting_type_params(
     const FengProgram *type_arg_program,
     const FengTypeRef *type_ref,
@@ -4401,7 +4411,7 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
         return NULL;
     }
 
-    if (type_ref->kind == FENG_TYPE_REF_NAMED &&
+    if (type_ref->resolution_decl == NULL && type_ref->kind == FENG_TYPE_REF_NAMED &&
         type_ref->as.named.segment_count == 1U &&
         type_ref->as.named.type_arg_count == 0U) {
         for (size_t param_index = 0U;
@@ -4424,6 +4434,7 @@ static FengTypeRef *clone_type_ref_substituting_type_params(
     clone->token = type_ref->token;
     clone->kind = type_ref->kind;
     clone->resolution_program = type_ref->resolution_program;
+    clone->resolution_decl = type_ref->resolution_decl;
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
@@ -4559,6 +4570,8 @@ static const FengTypeRef *substitute_type_ref_for_owner_instance(
     return substituted;
 }
 
+/* Resolve declaration-backed types while preserving lexical generic shadowing
+ * and the original environment of references from other declaration files. */
 static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
                                              const FengTypeRef *type_ref);
 
@@ -4918,6 +4931,8 @@ static FengTypeRef *create_type_ref_from_inferred_type(const InferredExprType *t
             type_ref = create_named_type_ref_for_inference(token, segments, 1U);
             if (type_ref == NULL) {
                 free(segments);
+            } else {
+                type_ref->resolution_decl = type->type_decl;
             }
             return type_ref;
 
@@ -5355,6 +5370,8 @@ static FengTypeRef *clone_type_ref_for_callable_instance(
     if (method_args != NULL && method_count == callable->type_param_count) {
         count += method_count;
     }
+    bind_type_ref_nominal_declarations(context, source, bindings.params,
+        bindings.signature.type_param_count, callable_source_program(context, callable));
     FengTypeRef *result = clone_type_ref_substituting_type_params(
         context->program, source, bindings.params, count, bindings.args);
     callable_type_bindings_free(&bindings);
@@ -5941,6 +5958,9 @@ static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
     if (type_ref == NULL || type_ref->kind != FENG_TYPE_REF_NAMED) {
         return NULL;
     }
+    if (type_ref->resolution_decl != NULL) {
+        return type_ref->resolution_decl;
+    }
     if (type_ref->as.named.segment_count == 1U &&
         is_builtin_type_name(type_ref->as.named.segments[0])) {
         return NULL;
@@ -5949,10 +5969,41 @@ static const FengDecl *resolve_type_ref_decl(const ResolveContext *context,
         type_ref->resolution_program != context->program) {
         return resolve_type_ref_decl_in_program(context, type_ref);
     }
+    if (type_ref->as.named.segment_count == 1U &&
+        type_ref->as.named.type_arg_count == 0U &&
+        find_type_param(context, type_ref->as.named.segments[0]) != NULL) {
+        return NULL;
+    }
 
     return find_named_type_decl(
         context, type_ref->as.named.segments, type_ref->as.named.segment_count,
         type_ref->as.named.type_arg_count);
+}
+
+/* Cache declaration identities independently of traversal order. Generic names
+ * belong to the source signature and remain available for substitution. */
+static void bind_type_ref_nominal_declarations(
+    const ResolveContext *context, const FengTypeRef *ref,
+    const FengTypeParam *params, size_t count, const FengProgram *program) {
+    if (ref == NULL || program == NULL) return;
+    if (ref->kind != FENG_TYPE_REF_NAMED) {
+        bind_type_ref_nominal_declarations(context, ref->as.inner, params, count, program);
+        return;
+    }
+    if (ref->as.named.segment_count == 1U) {
+        if (is_builtin_type_name(ref->as.named.segments[0])) return;
+        for (size_t i = 0U; i < count; ++i) {
+            if (slice_equals(ref->as.named.segments[0], params[i].name)) return;
+        }
+    }
+    if (ref->resolution_decl == NULL) {
+        FengTypeRef scoped = *ref;
+        if (scoped.resolution_program == NULL) scoped.resolution_program = program;
+        ((FengTypeRef *)ref)->resolution_decl = resolve_type_ref_decl_in_program(context, &scoped);
+    }
+    for (size_t i = 0U; i < ref->as.named.type_arg_count; ++i) {
+        bind_type_ref_nominal_declarations(context, ref->as.named.type_args[i], params, count, program);
+    }
 }
 
 static bool type_refs_semantically_equal(const ResolveContext *context,
@@ -14573,7 +14624,7 @@ static bool param_type_is_type_param_ref(const FengCallableSignature *callable,
     if (callable == NULL || callable->type_param_count == 0U) {
         return false;
     }
-    if (type_ref == NULL ||
+    if (type_ref == NULL || type_ref->resolution_decl != NULL ||
         type_ref->kind != FENG_TYPE_REF_NAMED ||
         type_ref->as.named.segment_count != 1U ||
         type_ref->as.named.type_arg_count != 0U) {
@@ -30163,7 +30214,8 @@ static bool resolve_named_type_ref(ResolveContext *context,
 
     /* G4-2: Single-segment name that matches an active type parameter.
      * Type parameters cannot take type arguments themselves. */
-    if (segment_count == 1U && context->type_param_count > 0U &&
+    if (type_ref->resolution_decl == NULL &&
+        segment_count == 1U && context->type_param_count > 0U &&
         find_type_param(context, name) != NULL) {
         if (type_arg_count > 0U) {
             return resolver_append_error(
@@ -30201,7 +30253,8 @@ static bool resolve_named_type_ref(ResolveContext *context,
         }
 
         /* Precise lookup: (name, type_arg_count) */
-        base_decl = find_named_type_decl(context, segments, segment_count, type_arg_count);
+        base_decl = type_ref->resolution_decl != NULL ? type_ref->resolution_decl :
+            find_named_type_decl(context, segments, segment_count, type_arg_count);
         if (base_decl == NULL) {
             const VisibleTypeEntry *any_entry = NULL;
             const FengDecl *any_decl = NULL;
@@ -30270,6 +30323,7 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return ok;
         }
 
+        ((FengTypeRef *)type_ref)->resolution_decl = base_decl;
         if (base_decl->kind == FENG_DECL_TYPE) {
             materialize_named_type_param_constraint_witnesses(
                 context,
@@ -30314,8 +30368,11 @@ static bool resolve_named_type_ref(ResolveContext *context,
             return false;
         }
 
-        /* Precise lookup: (name, arity=0) */
-        if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
+        /* Retain the declaration identity when this reference leaves its scope. */
+        const FengDecl *decl = type_ref->resolution_decl != NULL ? type_ref->resolution_decl :
+            find_named_type_decl(context, segments, segment_count, 0U);
+        if (decl != NULL) {
+            ((FengTypeRef *)type_ref)->resolution_decl = decl;
             return true;
         }
 
@@ -30345,7 +30402,10 @@ static bool resolve_named_type_ref(ResolveContext *context,
         }
     } else {
         /* Multi-segment bare name (no type arguments) */
-        if (find_named_type_decl(context, segments, segment_count, 0U) != NULL) {
+        const FengDecl *decl = type_ref->resolution_decl != NULL ? type_ref->resolution_decl :
+            find_named_type_decl(context, segments, segment_count, 0U);
+        if (decl != NULL) {
+            ((FengTypeRef *)type_ref)->resolution_decl = decl;
             return true;
         }
 

@@ -35410,10 +35410,14 @@ void test_array_static_parity_semantics(void);
 /* Additional builtin-constraint coverage; existing cases remain unchanged. */
 void test_throw_constraint_semantics(void);
 
+/* Sibling bounds use complete declaration scopes and exact actual types. */
+void test_generic_sibling_constraint_semantics(void);
+
 void test_exception_effects_semantics(void);
 void test_defer_exception_effects_semantics(void);
 
 int main(void) {
+    test_generic_sibling_constraint_semantics();
     test_defer_exception_effects_semantics();
     test_exception_effects_semantics();
     test_throw_constraint_semantics();

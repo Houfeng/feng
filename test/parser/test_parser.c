@@ -6489,7 +6489,11 @@ void test_array_static_parity_parser(void);
 /* Additional builtin-constraint coverage; existing cases remain unchanged. */
 void test_throw_constraint_parser(void);
 
+/* Sibling bounds retain both parameter orders in the source AST. */
+void test_generic_sibling_constraint_parser(void);
+
 int main(void) {
+    test_generic_sibling_constraint_parser();
     test_throw_constraint_parser();
     test_structural_type_target_parser();
     test_array_static_parity_parser();

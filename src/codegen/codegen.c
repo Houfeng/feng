@@ -9803,7 +9803,7 @@ static bool cg_type_ref_contains_type_param_names(const FengTypeRef *ref,
     if (ref == NULL || names == NULL || name_count == 0U) return false;
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED:
-            if (ref->as.named.segment_count == 1U &&
+            if (ref->resolution_decl == NULL && ref->as.named.segment_count == 1U &&
                 ref->as.named.type_arg_count == 0U) {
                 const FengSlice seg = ref->as.named.segments[0];
                 for (size_t i = 0; i < name_count; ++i) {
@@ -10000,6 +10000,7 @@ static FengTypeRef *cg_type_ref_clone(const FengTypeRef *ref) {
     clone->token = ref->token;
     clone->kind = ref->kind;
     clone->resolution_program = ref->resolution_program;
+    clone->resolution_decl = ref->resolution_decl;
     clone->array_element_writable = ref->array_element_writable;
     switch (ref->kind) {
         case FENG_TYPE_REF_NAMED:
@@ -10245,7 +10246,7 @@ static FengTypeRef *cg_type_ref_substitute(const FengTypeRef *ref,
                                            size_t type_param_count,
                                            FengTypeRef *const *type_args) {
     if (ref == NULL) return NULL;
-    if (ref->kind == FENG_TYPE_REF_NAMED &&
+    if (ref->resolution_decl == NULL && ref->kind == FENG_TYPE_REF_NAMED &&
         ref->as.named.segment_count == 1U &&
         ref->as.named.type_arg_count == 0U) {
         for (size_t i = 0; i < type_param_count; ++i) {
@@ -13160,7 +13161,8 @@ static bool cg_resolve_type(CG *cg, const FengTypeRef *ref, const FengToken *fal
         }
         /* G6: when inside a generic function body, check type parameter names
          * first so they shadow any same-named types in scope. */
-        if (ref->as.named.type_arg_count == 0 && segment_count == 1U) {
+        if (ref->resolution_decl == NULL &&
+            ref->as.named.type_arg_count == 0 && segment_count == 1U) {
             for (size_t i = 0; i < cg->generic_fn_type_param_count; i++) {
                 const char *tp;
                 if (!cg->in_generic_fn) break;
@@ -27496,9 +27498,9 @@ static bool cg_resolve_selected_callable_return_type(
         out_type);
 }
 
-/* Every concrete argument needs the selected constraint instance before its
- * witness is constructed. Erased forwarding reuses the supplied descriptor;
- * semantic projection records own any change of its constraint surface. */
+/* Resolve the selected constraint in the caller's parameter domain before
+ * constructing or forwarding a witness. Semantic projection records own
+ * any change of its constraint surface. */
 static bool cg_selected_call_generic_descriptor(
     CG *cg, const FengExpr *call, const FengCallableSignature *signature,
     size_t parameter_index, const CGType *actual,
@@ -27521,7 +27523,7 @@ static bool cg_selected_call_generic_descriptor(
         return *out != NULL;
     }
 
-    if (actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM ||
+    if (actual == NULL ||
         signature->type_params[parameter_index].constraint == NULL) {
         return cg_constraint_descriptor_expr(cg, actual, open_constraint,
                                            &call->token, out);
@@ -27542,7 +27544,7 @@ static bool cg_selected_call_generic_descriptor(
 }
 
 /* Owner and callable-value descriptors use explicit instantiation trees.
- * Close the full constraint before constructing any concrete witness. */
+ * Substitute the full constraint before constructing or forwarding a witness. */
 static bool cg_instantiated_generic_descriptor(
     CG *cg, const CGType *actual, CGGenericConstraint open_constraint,
     const FengTypeRef *constraint_ref, const FengTypeParam *params,
@@ -27551,7 +27553,7 @@ static bool cg_instantiated_generic_descriptor(
     CGType *constraint_type = NULL;
     bool handled = false;
     bool ok;
-    if (constraint_ref == NULL || actual == NULL || actual->kind == CG_TYPE_GENERIC_PARAM) {
+    if (constraint_ref == NULL || actual == NULL) {
         return cg_constraint_descriptor_expr(cg, actual, open_constraint, blame, out);
     }
     FengTypeRef *substituted = cg_type_ref_substitute(

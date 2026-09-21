@@ -91,6 +91,7 @@ func main(args: string[]) {
       test_array();
       test_g21_array_semantics();
       test_generic();
+      test_generic_sibling_constraint();
       test_g25_generic_boundaries();
       test_generic_static_binding();
       test_variadic();

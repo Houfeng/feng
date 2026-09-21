@@ -1,0 +1,154 @@
+open module fcts_lib.test.sibling_constraint;
+
+/** Supplies a payload whose type is selected by the consumer. */
+open spec SiblingBox<V> { func get(): V; }
+
+/** Exercises nominal satisfaction through a generic parent. */
+open spec SiblingChild<V>: SiblingBox<V> {}
+
+/** Supplies the second requirement of the intersection constraint. */
+open spec SiblingTag { func tag(): int; }
+
+/** Keeps the sibling argument inside an intersection member. */
+open spec SiblingBoth<V>: SiblingBox<V> & SiblingTag;
+
+/** Uses the sibling argument in callable parameter and result positions. */
+open spec SiblingMapper<V>(value: V): V;
+
+/** Uses the sibling argument as a union member. */
+open spec SiblingChoice<V>: V | string;
+
+/** Holds a closed generic function as a first-class callable. */
+open spec SiblingRead<B, V>(box: B): V;
+
+/** A concrete name must not replace the same name in a generic scope. */
+open type SiblingShadowed {}
+
+/** Resolve the receiver through its backwards bound despite the concrete name. */
+open func siblingShadowFirst<V, SiblingShadowed: SiblingBox<V>>(box: SiblingShadowed): V {
+    return box.get();
+}
+
+/** Resolve the receiver through its forwards bound despite the concrete name. */
+open func siblingShadowLater<SiblingShadowed: SiblingBox<V>, V>(box: SiblingShadowed): V {
+    return box.get();
+}
+
+/** Reference subject implementing the child and intersection contracts. */
+open type SiblingRef<V>: SiblingChild<V>, SiblingTag {
+    open var value: V;
+
+    /** Read the stored payload through a witness. */
+    func get(): V { return self.value; }
+
+    /** Make selection of the second contract observable. */
+    func tag(): int { return 19; }
+}
+
+/** Value subject uses the same contract with independent value storage. */
+@value
+open type SiblingValue<V>: SiblingBox<V> {
+    open let value: V;
+
+    /** Read a scalar, reference or aggregate payload by its actual type. */
+    func get(): V { return self.value; }
+}
+
+/** A managed aggregate makes truncated copies and wrong result layouts visible. */
+@value
+open type SiblingPacket<V> {
+    open var value: V;
+    open let marker: string;
+    open let tail: int;
+}
+
+/** The constraint refers to an earlier parameter. */
+open func siblingFirst<T, U: SiblingBox<T>>(box: U): T { return box.get(); }
+
+/** The constraint refers to a later parameter. */
+open func siblingLater<T: SiblingBox<U>, U>(box: T): U { return box.get(); }
+
+/** Ordinary arguments provide both types for inference in the first order. */
+open func siblingInferFirst<T, U: SiblingBox<T>>(box: U, hint: T): T {
+    return siblingFirst<T, U>(box);
+}
+
+/** Ordinary arguments provide both types for inference in the second order. */
+open func siblingInferLater<T: SiblingBox<U>, U>(box: T, hint: U): U {
+    return siblingLater<T, U>(box);
+}
+
+/** Reorder open actuals when forwarding to the other declaration order. */
+open func siblingRelayFirst<A, B: SiblingBox<A>>(box: B): A {
+    return siblingLater<B, A>(box);
+}
+
+/** Names and declaration order both differ from those of the callee. */
+open func siblingRelayLater<Z: SiblingBox<A>, A>(box: Z): A {
+    return siblingFirst<A, Z>(box);
+}
+
+/** Preserve a nested aggregate and array in the earlier-parameter bound. */
+open func siblingNestedFirst<V, B: SiblingBox<SiblingPacket<V[]>>>(box: B): SiblingPacket<V[]> {
+    return box.get();
+}
+
+/** Preserve the same nested type when its parameter is declared later. */
+open func siblingNestedLater<B: SiblingBox<SiblingPacket<V[]>>, V>(box: B): SiblingPacket<V[]> {
+    return box.get();
+}
+
+/** Dispatch a callable whose bound refers backwards. */
+open func siblingMapFirst<V, F: SiblingMapper<V>>(fn: F, value: V): V { return fn(value); }
+
+/** Dispatch a callable whose bound refers forwards. */
+open func siblingMapLater<F: SiblingMapper<V>, V>(fn: F, value: V): V { return fn(value); }
+
+/** Preserve a concrete or complete union actual through the first order. */
+open func siblingChoiceFirst<V, T: SiblingChoice<V>>(value: T): T { return value; }
+
+/** Preserve the same union admission relation through the second order. */
+open func siblingChoiceLater<T: SiblingChoice<V>, V>(value: T): T { return value; }
+
+/** Read the generic member of the backwards intersection constraint. */
+open func siblingBothFirst<V, T: SiblingBoth<V>>(box: T): V { return box.get(); }
+
+/** Read the generic member of the forwards intersection constraint. */
+open func siblingBothLater<T: SiblingBoth<V>, V>(box: T): V { return box.get(); }
+
+/** Exercise the other intersection witness slot with a forward reference. */
+open func siblingTagLater<T: SiblingBoth<V>, V>(box: T): int { return box.tag(); }
+
+/** Generic type owners use the same complete parameter-list scope. */
+open type SiblingFirstOwner<V, B: SiblingBox<V>> {
+    open let box: B;
+
+    /** Read through the owner's earlier-parameter constraint. */
+    func read(): V { return self.box.get(); }
+}
+
+/** Place the constrained owner parameter before its payload parameter. */
+open type SiblingLaterOwner<B: SiblingBox<V>, V> {
+    open let box: B;
+
+    /** Read through the owner's later-parameter constraint. */
+    func read(): V { return self.box.get(); }
+}
+
+/** Method generics remain separate from the unrelated owner parameter. */
+open type SiblingMethods<O> {
+    /** Infer two method parameters with a backward bound. */
+    open func first<V, B: SiblingBox<V>>(box: B, hint: V): V { return box.get(); }
+
+    /** Infer two static method parameters with a forward bound. */
+    open static func later<B: SiblingBox<V>, V>(box: B, hint: V): V { return box.get(); }
+}
+
+/** Fit methods preserve the same sibling scope after package restoration. */
+open fit SiblingMethods<O> {
+    /** Reverse the bound order on an instance method. */
+    open func later<B: SiblingBox<V>, V>(box: B, hint: V): V { return box.get(); }
+
+    /** Reverse the bound order on a static method. */
+    open static func first<V, B: SiblingBox<V>>(box: B, hint: V): V { return box.get(); }
+}

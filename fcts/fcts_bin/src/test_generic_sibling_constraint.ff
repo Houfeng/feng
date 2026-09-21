@@ -1,0 +1,231 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.sibling_constraint;
+
+/** A consumer-local implementation checks the imported contract identity. */
+type LocalSiblingBox<V>: SiblingBox<V> {
+    let value: V;
+
+    /** Return the consumer's payload through the provider's witness. */
+    func get(): V { return self.value; }
+}
+
+/** Same-package counterpart of the backwards sibling constraint. */
+func localSiblingFirst<V, B: SiblingBox<V>>(box: B): V { return box.get(); }
+
+/** Same-package counterpart of the forwards sibling constraint. */
+func localSiblingLater<B: SiblingBox<V>, V>(box: B): V { return box.get(); }
+
+/** Forward the stronger local bound through two separately compiled calls. */
+func localSiblingRelay<Z: SiblingChild<A>, A>(box: Z): A {
+    return siblingRelayFirst<A, Z>(box);
+}
+
+/** Reverse the caller's order while forwarding through the imported parent. */
+func localSiblingRelayFirst<A, Z: SiblingChild<A>>(box: Z): A {
+    return siblingRelayLater<Z, A>(box);
+}
+
+/** Instantiate an imported owner with the opposite open parameter order. */
+func localSiblingOwnerFirst<A, Z: SiblingChild<A>>(box: Z): A {
+    let owner = SiblingLaterOwner<Z, A> { box: box };
+    return owner.read();
+}
+
+/** Reverse the bound order for open owner instantiation. */
+func localSiblingOwnerLater<Z: SiblingChild<A>, A>(box: Z): A {
+    let owner = SiblingFirstOwner<A, Z> { box: box };
+    return owner.read();
+}
+
+/** Bind an imported function value through a reordered parent constraint. */
+func localSiblingCallableFirst<A, Z: SiblingChild<A>>(box: Z): A {
+    let read: SiblingRead<Z, A> = siblingLater<Z, A>;
+    return read(box);
+}
+
+/** Reverse the caller's order when binding the imported function value. */
+func localSiblingCallableLater<Z: SiblingChild<A>, A>(box: Z): A {
+    let read: SiblingRead<Z, A> = siblingFirst<A, Z>;
+    return read(box);
+}
+
+/** A local declaration has a distinct member surface from the generic bound. */
+type LocalSiblingShadowed {
+    /** Make the concrete declaration's identity observable independently. */
+    func marker(): string { return "concrete"; }
+}
+
+/** Return the nominal declaration outside any same-named generic scope. */
+func localSiblingConcrete(): LocalSiblingShadowed { return LocalSiblingShadowed(); }
+
+/** A concrete return from another declaration must retain its original scope. */
+func localSiblingConcreteRead<LocalSiblingShadowed>(): string {
+    return localSiblingConcrete().marker();
+}
+
+/** Resolve a local receiver whose generic name shadows the concrete type. */
+func localSiblingShadowFirst<V, LocalSiblingShadowed: SiblingBox<V>>(box: LocalSiblingShadowed): V {
+    return box.get();
+}
+
+/** Preserve the same shadowing rule for a forward sibling reference. */
+func localSiblingShadowLater<LocalSiblingShadowed: SiblingBox<V>, V>(box: LocalSiblingShadowed): V {
+    return box.get();
+}
+
+/** Return a managed aggregate after its source subject has left scope. */
+func escapedSiblingPacket(): SiblingPacket<string> {
+    let packet = SiblingPacket<string> { value: "alive", marker: "escaped", tail: 73 };
+    let box = SiblingValue<SiblingPacket<string>> { value: packet };
+    return siblingRelayLater<SiblingValue<SiblingPacket<string>>, SiblingPacket<string>>(box);
+}
+
+/** Cover both parameter orders through local and binary-package entry points. */
+open func test_generic_sibling_constraint() {
+    describe("generic sibling constraints", () {
+        test("both local orders dispatch a consumer-defined implementation", () {
+            let box = LocalSiblingBox<int> { value: 41 };
+            assert(localSiblingFirst<int, LocalSiblingBox<int>>(box) == 41, "earlier local parameter");
+            assert(localSiblingLater<LocalSiblingBox<int>, int>(box) == 41, "later local parameter");
+            assert(siblingFirst<int, LocalSiblingBox<int>>(box) == 41, "earlier imported parameter");
+            assert(siblingLater<LocalSiblingBox<int>, int>(box) == 41, "later imported parameter");
+        });
+
+        test("reference and value subjects keep scalar results in both orders", () {
+            let reference = SiblingRef<int> { value: 9000000041 };
+            let value = SiblingValue<int> { value: 9000000043 };
+            assert(siblingFirst<int, SiblingRef<int>>(reference) == 9000000041, "reference first");
+            assert(siblingLater<SiblingRef<int>, int>(reference) == 9000000041, "reference later");
+            assert(siblingFirst<int, SiblingValue<int>>(value) == 9000000043, "value first");
+            assert(siblingLater<SiblingValue<int>, int>(value) == 9000000043, "value later");
+        });
+
+        test("ordinary arguments infer sibling parameters in declaration order", () {
+            let box = SiblingRef<string> { value: "actual" };
+            assert(siblingInferFirst(box, "hint") == "actual", "backward bound inference");
+            assert(siblingInferLater(box, "hint") == "actual", "forward bound inference");
+        });
+
+        test("target result types complete inference for both orders", () {
+            let box = SiblingValue<string> { value: "target" };
+            let first: string = siblingFirst(box);
+            let later: string = siblingLater(box);
+            let localFirst: string = localSiblingFirst(box);
+            let localLater: string = localSiblingLater(box);
+            assert(first == "target" && later == first, "imported result inference");
+            assert(localFirst == first && localLater == first, "local result inference");
+        });
+
+        test("renamed open parameters forward between opposite orders", () {
+            let box = SiblingRef<string> { value: "forwarded" };
+            assert(siblingRelayFirst<string, SiblingRef<string>>(box) == "forwarded", "first to later");
+            assert(siblingRelayLater<SiblingRef<string>, string>(box) == "forwarded", "later to first");
+            assert(localSiblingRelay<SiblingRef<string>, string>(box) == "forwarded", "child-bound package forwarding");
+            assert(localSiblingRelayFirst<string, SiblingRef<string>>(box) == "forwarded", "reversed child-bound forwarding");
+            let packet = SiblingPacket<string> { value: "payload", marker: "parent", tail: 71 };
+            let wide = SiblingRef<SiblingPacket<string>> { value: packet };
+            let first = localSiblingRelayFirst<SiblingPacket<string>, SiblingRef<SiblingPacket<string>>>(wide);
+            let later = localSiblingRelay<SiblingRef<SiblingPacket<string>>, SiblingPacket<string>>(wide);
+            assert(first.value == "payload" && later.marker == "parent" && later.tail == 71, "parent-bound aggregate layout");
+        });
+
+        test("generic receivers shadow concrete names in both orders", () {
+            let box = SiblingValue<string> { value: "shadowed" };
+            assert(localSiblingShadowFirst<string, SiblingValue<string>>(box) == "shadowed", "local backwards shadow");
+            assert(localSiblingShadowLater<SiblingValue<string>, string>(box) == "shadowed", "local forwards shadow");
+            assert(siblingShadowFirst<string, SiblingValue<string>>(box) == "shadowed", "imported backwards shadow");
+            assert(siblingShadowLater<SiblingValue<string>, string>(box) == "shadowed", "imported forwards shadow");
+            assert(localSiblingConcreteRead<int>() == "concrete", "concrete declaration return identity");
+        });
+
+        test("managed aggregates preserve all fields and independent value storage", () {
+            let packet = SiblingPacket<int> { value: 47, marker: "wide", tail: 53 };
+            let box = SiblingValue<SiblingPacket<int>> { value: packet };
+            var first = siblingFirst<SiblingPacket<int>, SiblingValue<SiblingPacket<int>>>(box);
+            let later = siblingLater<SiblingValue<SiblingPacket<int>>, SiblingPacket<int>>(box);
+            first.value = 59;
+            assert(first.value == 59 && later.value == 47 && box.value.value == 47, "independent aggregate results");
+            assert(first.marker == "wide" && later.marker == "wide" && later.tail == 53, "complete aggregate layout");
+        });
+
+        test("reference payloads retain the original object", () {
+            let payload = SiblingRef<int> { value: 61 };
+            let box = SiblingValue<SiblingRef<int>> { value: payload };
+            let first = siblingFirst<SiblingRef<int>, SiblingValue<SiblingRef<int>>>(box);
+            let later = siblingLater<SiblingValue<SiblingRef<int>>, SiblingRef<int>>(box);
+            first.value = 67;
+            assert(later.value == 67 && payload.value == 67, "reference payload identity");
+            let escaped = escapedSiblingPacket();
+            assert(escaped.value == "alive" && escaped.marker == "escaped" && escaped.tail == 73, "managed result lifetime");
+        });
+
+        test("nested aggregate and array arguments close in both orders", () {
+            let values: string[] = ["first", "last"];
+            let packet = SiblingPacket<string[]> { value: values, marker: "array", tail: 79 };
+            let box = SiblingRef<SiblingPacket<string[]>> { value: packet };
+            let first = siblingNestedFirst<string, SiblingRef<SiblingPacket<string[]>>>(box);
+            let later = siblingNestedLater<SiblingRef<SiblingPacket<string[]>>, string>(box);
+            assert(first.value[0] == "first" && later.value[1] == "last", "nested elements");
+            assert(first.marker == "array" && later.tail == 79, "nested aggregate fields");
+        });
+
+        test("spec actuals retain their complete generic contract view", () {
+            let box: SiblingBox<string> = SiblingRef<string> { value: "view" };
+            assert(siblingFirst<string, SiblingBox<string>>(box) == "view", "first spec actual");
+            assert(siblingLater<SiblingBox<string>, string>(box) == "view", "later spec actual");
+        });
+
+        test("closed generic function values preserve both argument orders", () {
+            let box = SiblingRef<string> { value: "callable" };
+            let first: SiblingRead<SiblingRef<string>, string> = siblingFirst<string, SiblingRef<string>>;
+            let later: SiblingRead<SiblingRef<string>, string> = siblingLater<SiblingRef<string>, string>;
+            assert(first(box) == "callable" && later(box) == "callable", "closed function values");
+            assert(localSiblingCallableFirst<string, SiblingRef<string>>(box) == "callable", "open parent-bound function first");
+            assert(localSiblingCallableLater<SiblingRef<string>, string>(box) == "callable", "open parent-bound function later");
+        });
+
+        test("callable constraints substitute both parameter and result types", () {
+            let mapper: SiblingMapper<string> = (value: string) -> value;
+            assert(siblingMapFirst(mapper, "first") == "first", "first callable bound");
+            assert(siblingMapLater(mapper, "later") == "later", "later callable bound");
+        });
+
+        test("union constraints preserve concrete and complete-union actuals", () {
+            assert(siblingChoiceFirst<int, int>(83) == 83, "first concrete union member");
+            assert(siblingChoiceLater<int, int>(89) == 89, "later concrete union member");
+            let choice: SiblingChoice<int> = "union";
+            let first = siblingChoiceFirst<int, SiblingChoice<int>>(choice);
+            let later = siblingChoiceLater<SiblingChoice<int>, int>(choice);
+            let firstText = match first { let text: string { text } else { "wrong" } };
+            let laterText = match later { let text: string { text } else { "wrong" } };
+            assert(firstText == "union" && laterText == "union", "complete union identity");
+        });
+
+        test("intersection bounds keep the payload and secondary witness slot", () {
+            let box = SiblingRef<string> { value: "intersection" };
+            assert(siblingBothFirst<string, SiblingRef<string>>(box) == "intersection", "first intersection bound");
+            assert(siblingBothLater<SiblingRef<string>, string>(box) == "intersection", "later intersection bound");
+            assert(siblingTagLater<SiblingRef<string>, string>(box) == 19, "other witness member");
+        });
+
+        test("generic owners resolve sibling bounds before their shared methods", () {
+            let box = SiblingRef<string> { value: "owner" };
+            let first = SiblingFirstOwner<string, SiblingRef<string>> { box: box };
+            let later = SiblingLaterOwner<SiblingRef<string>, string> { box: box };
+            assert(first.read() == "owner" && later.read() == "owner", "owner parameter orders");
+            assert(localSiblingOwnerFirst<string, SiblingRef<string>>(box) == "owner", "open parent-bound owner first");
+            assert(localSiblingOwnerLater<SiblingRef<string>, string>(box) == "owner", "open parent-bound owner later");
+        });
+
+        test("type and fit methods infer siblings independently of their owner", () {
+            let box = SiblingValue<string> { value: "method" };
+            let methods = SiblingMethods<int>();
+            assert(methods.first(box, "hint") == "method", "type instance method");
+            assert(SiblingMethods<int>.later(box, "hint") == "method", "type static method");
+            assert(methods.later(box, "hint") == "method", "fit instance method");
+            assert(SiblingMethods<int>.first(box, "hint") == "method", "fit static method");
+        });
+    });
+}
