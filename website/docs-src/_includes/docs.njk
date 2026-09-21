@@ -5,10 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="{{ title }} — {{ interface.siteName }}">
   <meta name="theme-color" content="#f7f8f5" data-theme-color>
-  <link rel="canonical" href="https://feng-lang.com{{ page.url }}">
-  <link rel="alternate" hreflang="{{ lang }}" href="https://feng-lang.com{{ page.url }}">
-  <link rel="alternate" hreflang="{{ 'zh-CN' if lang == 'en' else 'en' }}" href="https://feng-lang.com{{ alternateUrl }}">
+  {% set siteOrigin = "https://feng-lang.com" %}
+  {% set canonicalUrl = siteOrigin + page.url %}
+  <link rel="canonical" href="{{ canonicalUrl }}">
+  <link rel="alternate" hreflang="{{ lang }}" href="{{ canonicalUrl }}">
+  <link rel="alternate" hreflang="{{ 'zh-CN' if lang == 'en' else 'en' }}" href="{{ siteOrigin }}{{ alternateUrl }}">
   <title>{{ title }} — {{ interface.siteName }}</title>
+  {% set structuredData = {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "@id": canonicalUrl + "#article",
+    "url": canonicalUrl,
+    "headline": title,
+    "inLanguage": lang,
+    "isPartOf": {
+      "@type": "WebSite",
+      "@id": siteOrigin + "/#website",
+      "name": "Feng",
+      "url": siteOrigin + "/"
+    },
+    "about": {
+      "@type": "ComputerLanguage",
+      "@id": siteOrigin + "/#language",
+      "name": "Feng",
+      "url": siteOrigin + "/"
+    }
+  } %}
+  <script type="application/ld+json">{{ structuredData | jsonLd | safe }}</script>
   <script>
     try {
       const savedTheme = localStorage.getItem('feng-theme');

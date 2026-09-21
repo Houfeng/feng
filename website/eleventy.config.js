@@ -261,6 +261,11 @@ function createSequence(language, pageKey) {
   };
 }
 
+/** Serializes structured data without allowing values to close a script element. */
+function serializeJsonLd(value) {
+  return JSON.stringify(value, null, 2).replaceAll("<", "\\u003c");
+}
+
 /** Escapes text before inserting generated navigation into HTML. */
 function escapeHtml(value) {
   return value
@@ -326,6 +331,7 @@ export default function configureEleventy(eleventyConfig) {
     errorMode: "strict",
   });
   eleventyConfig.addPlugin(InputPathToUrlTransformPlugin);
+  eleventyConfig.addFilter("jsonLd", serializeJsonLd);
 
   eleventyConfig.ignores.add("../docs/manual/README.md");
   eleventyConfig.addPassthroughCopy({ "docs-src/assets": "docs/assets" });
