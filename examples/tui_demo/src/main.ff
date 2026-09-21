@@ -91,7 +91,7 @@ func main(args: string[]) {
   // 构造 TuiApp（无外部 fd），init 进入 Raw Mode 并按终端尺寸初始化 Screen
   let app = TuiApp();
   app.init();
-  defer { app.exit(); }
+  defer { try app.exit() catch {} }
   app.key.on((event: KeyEvent<Widget>) {
     // 按下 Ctrl+C 时退出应用
     if event.isControl() && event.content match let c: u32 && c == 0x03 {

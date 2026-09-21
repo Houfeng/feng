@@ -2,7 +2,7 @@
 
 ## 1. 状态与范围
 
-状态：缺陷已确认，尚未修复；生产实现及性能方案待 Review。
+状态：缺陷已确认，产品尚未修复；已完成实施前原型验证并明确接入步骤，待人工 Review。
 
 本问题在[异常元信息开发方案](./feng-callable-exception-effects-dev.md)阶段二的额外
 release 验证中发现，原编号为 S11。2026-09-21 人工决定先独立交付 defer 阶段二，
@@ -13,8 +13,13 @@ S11 早于异常元信息阶段一，不是 defer 边界检查或本轮断点修
 语言行为仍遵循[异常规范](../specifications/feng-exception.md)及
 [defer 规范](../specifications/feng-defer.md)，本文不重新定义异常语义。
 
-本次拆分只保留问题、证据与方案，不实施 S11 的后端或 runtime 改造。
+本次文档工作只保留问题、证据与方案，不实施 S11 的产品后端或 runtime 改造。
 后续不得以某个表达式、具体 callee 或测试名称为条件增加特判；增加运行开销时须先由人工审定。
+
+2026-09-21 按人工要求补充实施前验证：在工程 `temp/` 内建立独立原型，验证 LLVM
+接入、异常表解析、既有结构与函数签名下的异常交接，以及内联后的清理。原型可使用
+runtime 源码副本，不修改产品代码或既有测试；结果须区分实际运行、交叉编译与尚未验证。
+本轮交付为本文的确定步骤及验证记录，不将原型通过表述为 S11 已完成修复。
 
 ## 2. 已确认的现象与复现
 
@@ -138,66 +143,280 @@ uncaught 错误；直接执行故障二进制的退出码为 134。编译产物�
 才使用 `-O2`。编译器自身的构建优化级别与生成程序的优化级别不同。
 此前默认全量回归通过，没有覆盖这组 release 行为，属于已确认的验证覆盖缺口。
 
-## 4. 推荐方案与 Review 边界
+## 4. 已验证的接入方案
 
-推荐使用宿主原生异常控制流，具体接入仍需原型验证与人工 Review。
+### 4.1 单次 Clang 调用中的 LLVM Pass
 
-### 4.1 在优化前建立原生异常控制流
-
-保留普通值与调用的现有 C 代码生成，在 LLVM 优化前增加结构化的 Feng EH 转换步骤：
+采用与 bundled LLVM 配套的 Pass 插件，在 `PipelineStart` 接入点建立原生异常控制流：
 
 ```text
-Feng → 现有 C 生成及编译期异常区域信息 → 未优化的 LLVM IR
-     → Feng EH 转换 → LLVM 正常优化与机器码
+Feng Codegen → 含编译期区域标记的 C
+            → Clang 生成 LLVM IR → Feng EH Pass
+            → 原有 LLVM 优化、机器码生成及链接
 ```
 
-受保护的可能外抛调用，包括 `unknown`，表达为 `invoke`；catch／清理入口使用
-`landingpad`；清理后继续展开使用 `resume`。准确维护调用属性、正常后继、异常后继
-与嵌套区域，不能采用文本替换 IR 或在 `-O2` 已破坏控制流之后补标签。
-当前仓库没有该转换步骤，所需 LLVM 开发组件及构建／分发接入属于后续方案工作。
+本机 bundled Clang 22.1.8 已实际加载原型插件，`-O0`、`-O2`、`-O3` 均执行该接入点。
+Pass 声明为 required，使默认模式的 `optnone` 不阻止转换；不改变用户函数原有优化级别。
+不需要独立运行 `opt`，不解析或替换 IR 文本，不在内联之后修补机器码地址。
 
-### 4.2 调整 personality 及清理入口
+插件使用 LLVM C++ API，但 Feng 主编译器继续使用现有 C 实现，不需要把 LLVM 库链接进
+Feng 主程序。原型在 macOS 上使用匹配的 LLVM 开发头文件构建，动态解析 Clang 导出的
+LLVM 符号；不需要向用户程序链接 C++ 标准库或 C++ 异常 runtime。
 
-- personality 读取后端生成的异常表，继续按 Feng 类型描述符匹配，向 landingpad
-  提供异常记录与 selector；不引入 C++ 类型继承或 RTTI 匹配。
-- 后端 selector 不是源码 catch 的固定序号，内联后可能改变；生成的分派必须按原生 EH
-  规则处理，不能原样假设等于 `matched_clause`。
-- 编译器生成清理入口，优先复用现有 `feng_frame_release_to(&marker)`，显式清理对应
-  的逻辑边界后继续展开；personality 不再额外按原生帧弹一个边界，防止内联错配与重复清理。
-- 保留现有异常所有权规则及 catch begin/end；清理中内部捕获其他异常后，必须继续展开
-  原异常。需要验证普通 catch、匿名重抛、landing 清理与嵌套 catch 的完整生命周期。
+插件是 host 工具：同一 macOS ARM64 插件已为当前五个 target 生成对象。正式交付应为
+三个 host 分别构建配套插件，而不是为每个 target 各实现一套异常转换。
+插件源码、标记协议版本、LLVM 版本及构建配置须配套管理；公开的插件 API 版本号不能
+代替 LLVM C++ ABI 兼容性校验。
 
-### 4.3 结构、ABI 与成本
+### 4.2 Codegen 与 Pass 之间的结构化标记
 
-设计目标是保留对象、类型／泛型／spec 描述符、`FengUnwindException`、清理链、
-`FengFrameMarker`、`FengCatchContext` 的现有布局；保留 `feng_throw`、`feng_rethrow`、
-catch begin/end 的签名及普通函数调用约定。S11 不要求修改 FT 格式或版本。
-既有 `FengLSDA` 声明与注册 API 可保留，新路径改由后端生成异常表，不要求为此改变结构布局。
+在 Codegen 的 callable／资源作用域抽象中维护区域信息，不从源码行号、表达式类别、
+callee 名称或特定测试推测保护范围。一个区域包含本 callable 内的标识、父区域、
+landing 入口和按源码顺序排列的 catch 类型描述符；无 catch 的函数清理区域也要表示。
+当前具体 catch 的闭合类型限制见[异常规范 §3.3](../specifications/feng-exception.md#33-catch)；
+现有 Codegen 已将其描述符放入静态 catch 表，能够作为原生 landingpad 的常量类型条目。
+共享体中的 throw 继续从现有泛型描述符获得实际载荷身份，不需要将开放泛参放入 catch 表。
 
-需要变化的是编译产物与 personality 之间的异常表及落点协议；因此不能承诺新旧对象文件
-无需重编即可混用。人工已明确可以统一重编，这与修改对象布局或函数参数 ABI 是不同事项。
-runtime 的表解析与展开内部实现仍然需要调整，不能将方案描述成仅改编译期检查。
+原型使用以下编译器内部标记，正式实现应将其收敛为统一且带版本的协议：
 
-方案不以新增装箱、堆分配、每次调用查询或统一禁止内联为前提。
-实际寄存器保存、栈空间、代码体积、正常路径与异常路径成本尚未测量；
-不能承诺零开销或宣称性能最优。任何新增运行开销及偏离上述 ABI 边界的需求，先提交人工决策。
+| 标记职责 | 转换结果 |
+| --- | --- |
+| 声明区域、父区域、入口与 catch 列表 | LLVM landingpad、分派及父区域关系 |
+| 设置当前异常区域 | CFG 数据流中的编译期状态，不产生运行时查询 |
+| 取得当前异常记录／selector | landingpad 结果的 SSA 值 |
+| 取得某个 catch 类型的 selector | `llvm.eh.typeid.for`，不使用源码序号代替 |
+| 继续向父区域传播 | 同函数父入口分支；到函数外才使用 `resume` |
+
+标记仅声明在生成代码的编译期协议中，不进入 runtime API、`feng_runtime_contract.inc`
+或 FT。机器码中不得遗留标记调用、保活分支、标签地址注册或相关未解析符号。
+为让 Clang 前端保留 landing 代码，原型使用标记返回值形成普通 C 条件入口；Pass 在
+优化前删除这条人工入口，再建立真实异常边。不能使用 `volatile` 保活分支作为最终产物。
+
+Pass 的处理次序明确为：
+
+1. 收集并校验区域图、类型列表和协议版本；拒绝未知父区域、重复标识及环。
+2. 移除人工入口；按“普通函数入口＋已声明 landing 入口”清理死前驱。
+   继续传播标记按终结指令处理，切断其普通后继；不能依赖后面紧邻 `unreachable`。
+3. 在 CFG 上传播当前区域，检查分支、循环、提前退出和 catch 入口的状态。
+   一个可能展开的调用若不能唯一确定所属区域，应报后端协议错误，不能猜测。
+4. 将区域内不能可靠证明不展开的调用转换为 `invoke`，包括间接调用与 `unknown`。
+   保留原调用的参数、调用约定、属性、operand bundles 和调试位置；`noreturn` 不等于
+   `nounwind`，必抛调用同样需要异常后继。
+5. 构造 landingpad、SSA 合流和分派；删除全部临时标记，并运行 LLVM verifier。
+
+### 4.3 函数清理、嵌套区域与内联
+
+每个已有函数清理边界的 callable 建立对应的根清理入口：调用现有
+`feng_frame_release_to(&function_marker)`，再将原 landingpad 结果交给 `resume`。
+因此，即使函数没有源码 catch，只持有资源并向上抛，也有正确的异常清理路径。
+不为原本没有函数 marker 的纯 helper 或非外抛 defer helper 随意增加 marker。
+
+内层 landingpad 的 catch 列表包含有效父区域的处理器信息。到达入口后先识别本区域
+能够处理的 selector：匹配则进入对应 catch；不匹配则清理当前区域，再传递原异常。
+**同一函数内仍有父区域时，传到父入口的 SSA 合流点；不能直接 `resume` 跳过该父 catch。**
+只有离开本函数的传播才使用 `resume`。LLVM 后续内联再按原生 EH 规则组合这些控制流。
+
+catch 主体的异常区域是其外层区域，不能再次匹配当前 catch；正常退出、return、break、
+continue 与 catch 退出继续复用已有资源作用域退出逻辑，并同步更新区域状态。
+类型匹配前的清理、匿名重抛以及 catch 中抛出新异常均走同一套机制。
+
+异常记录与 selector 始终作为 landingpad 的 SSA 值保留。清理回调内部可以捕获另一条
+异常，返回后继续传播的仍是原异常；不能重新从可被嵌套处理覆盖的 TLS 临时槽取回它。
+原型已验证递归清理、内联后同一原生函数内的多个 Feng marker，以及这种嵌套捕获。
+
+### 4.4 与现有 runtime 的明确衔接
+
+`__feng_personality_v0` 改为读取 `_Unwind_GetLanguageSpecificData` 返回的原生异常表，
+通过 `_Unwind_GetIPInfo`、区域起址、调用点区间、action 链和类型表选择处理动作。
+继续使用 Feng exception class 和描述符身份匹配；不引入 C++ RTTI 或新的异常根。
+
+- search 阶段只判断是否存在处理器，不修改 catch 所有权或弹清理链。
+- cleanup 阶段向目标寄存器写入异常记录和原生 selector，再安装 landingpad。
+  寄存器编号使用目标编译器的 `__builtin_eh_return_data_regno`，不硬编码某个 CPU 的编号。
+- personality 不再按物理栈帧调用 `feng_cleanup_release_to_frame_marker()`。
+  对应的逻辑 marker 由编译器生成的 cleanup 入口准确弹出一次。
+- 外来 exception class 的处理范围沿用现有约束，不在 S11 中增加跨语言异常匹配能力。
+
+保留 catch API 签名的具体方式已经验证：成功匹配到源码 catch 后，由生成代码写入
+现有字段，再进入原 API：
+
+```c
+context.exception = exception_from_landingpad;
+exception_from_landingpad->matched_clause = source_clause_index;
+feng_exception_catch_begin(&context);
+```
+
+`feng_exception_catch_begin` 改为接收 `context.exception` 中已交付的记录，不再从
+`g_pending_unwind` 接收。其“先建立异常所有权，再执行 try 资源清理，再加入活动 catch
+栈”的顺序保持不变。`feng_caught_value`、`feng_caught_clause`、catch end 和 rethrow
+继续使用现有 context 链；`matched_clause` 仍表示源码序号，不能直接填入原生 selector。
+不匹配本层 catch 的清理路径不调用 catch begin/end，也不抢占异常所有权。
+
+这改变了编译器与 runtime 的交接协议，但不需要增加字段或 API 参数。原型直接包含
+当前 `feng_runtime.h`，使用 `feng_exception.c` 的独立副本完成了上述修改；产品文件未改动。
+
+### 4.5 平台、布局与重编边界
+
+当前五个 target 共用上述 lowering 和 personality 算法；已观察到的编码区别如下。
+数值是本轮目标输出的验证结果，不应以 target 名称分支替代对编码字段的解析。
+
+| Target | 展开信息 | 原型中有 catch 的类型表编码 |
+| --- | --- | --- |
+| macOS ARM64 | Mach-O，Compact Unwind／DWARF | `0x9b`：间接、PC 相对、有符号 4 字节 |
+| Linux x64 GNU／musl | ELF，DWARF | `0x9b` |
+| Linux ARM64 GNU／musl | ELF，DWARF | `0x9c`：间接、PC 相对、有符号 8 字节 |
+
+上述目标的原型调用点表均使用 ULEB128，LPStart 省略；纯 cleanup 区域可以省略类型表。
+decoder 须统一处理实际字段编码、符号扩展及间接地址，检查长度、偏移和整数溢出；
+未支持的编码应明确失败。macOS 的 text-relative／data-relative 基址 API 不可用，
+当前输出也未使用这两种编码，不能无条件引用这些 API 或猜测基址。
+Windows 及 32 位目标不属于当前已交付范围，不在此次修复中扩展支持。
+
+已验证可以保持对象、类型／泛型／spec 描述符、`FengUnwindException`、清理链、
+`FengFrameMarker`、`FengCatchContext` 的布局，以及现有异常 API 签名和普通调用约定。
+`FengLSDA` 声明和注册 API 可以保留，但新生成代码不再调用手动注册路径。
+新后端不要求修改 FT 格式或版本。
+
+所有相关本地产物、std、依赖包静态库和最终程序必须统一重编；旧对象采用的异常表及
+交接协议与新 runtime 不兼容。仅重编最终入口或仅刷新 FT 不足以完成迁移。
+清理和重建沿用已有构建／包流程，不通过临时提高 FT 版本代替原生产物重建。
+
+### 4.6 构建、分发及既有测试接入
+
+正式接入点包括 `src/cli/compile/driver.c` 的 bin 和 lib 两条宿主编译路径。
+两者都加载同一 host 插件；debug／release、直接编译／项目构建／打包不能遗漏任何入口。
+插件默认安静运行，原型的 `Feng EH lowered ...` 调查输出不进入产品默认 CLI 输出。
+
+建议把插件作为 Feng 编译器组件构建和分发，使用与 bundled LLVM 匹配的开发 SDK；
+开发头文件与测试 sanitizer 资源是构建输入，不需要全部装进普通用户发行包。
+Makefile 应显式记录插件源码、SDK／协议版本的构建依赖，检查空增量构建不重写产物；
+发布流程须包含三个 host 插件的构建、依赖闭包、签名和安装路径校验。
+
+现有 `FENG_CC` 选择优先级仍可保留，但选中的编译器必须兼容配套插件。
+不兼容时应在编译开始前给出明确错误，不回退到已知错误的普通 C 异常路径。
+这对可覆盖工具链的兼容范围有实际影响，属于 §6 的明确 Review 项。
+
+对既有测试的必要适配也已定位，实施前应一并获准，不能在回归失败后逐例绕过：
+
+| 编号 | 当前代码与原因 | 拟进行的适配 |
+| --- | --- | --- |
+| M01 | `Makefile:test-sanitize` 用 `FENG_CC=$(CC)` 选择系统 Clang；本机为 21.1.8，插件配套 22.1.8 | 生成程序使用配套 Clang／插件及同版本 UBSan resource-dir；保留 sanitizer 与全部测试断言 |
+| M02 | `test/codegen/test_codegen.c`、`test/debug/test_debug.c`、`test/codegen/test_defer_generic_context.c` 直接调用 `cc` 编译生成 C | 统一经配套编译入口加载 Pass，保留 `-Werror`、目标平台与原有行为断言；旧 CFI／静态区域结构断言迁移到等价原生 IR／对象断言 |
+| M03 | `test/runtime/test_nested_exception.c:nested_native_try` 手写旧 LSDA 协议，并以 `noinline, optnone` 隔离优化 | 夹具改用统一的原生 EH 标记协议并进入 Pass；保留记录身份、引用计数、析构顺序、线程／子进程等全部断言，加入优化构建验证 |
+
+上述测试本轮均未修改。BIND10 与其他合法 Feng 源码用例保持原样；无需通过改写
+throw/catch 语言用例来适配后端。原 N08 和已批准保留的非法清理源码注释不因此删除。
+
+## 5. 本轮验证结果与边界（2026-09-21 至 2026-09-22）
+
+### 5.1 执行证据
+
+基于工作区提交 `be58584d`、bundled LLVM 22.1.8，在 macOS 26.5.1 ARM64 上验证。
+原型和运行产物位于 `temp/s11-native-eh/`；没有修改产品源码、既有测试或头文件布局。
+
+| 验证项 | 结果 |
+| --- | --- |
+| 同一最小 Feng 源码的当前编译器 release 产物 | 退出 134，仍为 uncaught exception |
+| 为该源码的实际生成 C 副本接入标记协议和 runtime 副本 | `-O0/-O2/-O3` 均退出 0；保留原 lambda、string 载荷及 catch 局部遮蔽逻辑 |
+| 扩展 C 协议原型 | 三种优化级别全部通过；覆盖具体／兜底 catch、异常前局部值、递归、嵌套清理、重抛、新异常替换、载荷析构次数、间接调用和独立编译的 producer／consumer |
+| 真实内联 | `-O2` IR 中同一函数包含多个 Feng 函数 marker；清理计数仍正确；未加入 `noinline`／`optnone` 产品限制 |
+| 匹配 LLVM 22 resource-dir 的 UBSan | 扩展原型与修改过的 runtime 源码副本使用 UBSan，执行退出 0，无 UBSan 诊断 |
+| 五个 target 的对象生成 | 每个 target 的扩展原型、独立 producer、实际生成 C 副本和 runtime 副本共 20 个对象均生成成功 |
+| 标记消除 | 对象无 `__feng_eh_*`、手动 LSDA 注册或空 CFI 表引用；IR 包含真实 `invoke/landingpad/resume` |
+
+实际生成 C 的适配脚本只是本次最小复现的实验工具，不作为产品 Codegen 实现；正式实现
+必须从作用域模型直接生成协议。独立 producer／consumer 验证的是原生调用及描述符传递，
+不能替代 Feng FT／泛型共享体／完整包构建回归。
+
+Linux 四个 target 本轮完成交叉编译和异常表检查，**没有实际运行验证**；本机容器服务
+未启动。两个 Linux host 的插件构建／加载、GNU／musl 原生执行仍属于正式交付验收。
+已读取 Linux Clang 的 ELF 导出表确认存在 PassBuilder 接口，但不把它计作插件运行通过。
+本轮也未执行完整 `make test`、完整 release std／FCTS 或 Feng DAP 回归。
+
+### 5.2 成本验证
+
+使用独立翻译单元中的同一普通调用行为，交替执行旧手动区域路径与原生 EH 原型各
+7 次；正常路径每次 2,000,000 次调用，原型异常路径每次 20,000 次调用。
+未用错误的旧 release 异常执行结果作为性能比较基线。
+
+| 指标 | 旧路径 | 原生 EH 原型 |
+| --- | --- | --- |
+| 普通调用中位数 | 5.290 ns／次 | 4.769 ns／次 |
+| 普通调用最小／最大值 | 5.077／7.787 ns | 4.577／7.042 ns |
+| 原型抛出／捕获中位数 | 不作比较 | 1,471.950 ns／次 |
+| 同一测试函数的静态栈用量 | 192 字节 | 176 字节 |
+| 对象 `__TEXT`／`__DATA` | 320／80 字节 | 292／0 字节 |
+
+该小样本说明接入不必然增加正常路径查询、堆分配或强制禁内联成本；不代表所有程序
+更快，也不是生产性能预算。标记完全消除、没有新增异常装箱／ARC 操作已通过原型确认。
+真实泛型、复杂清理、跨包及各平台的保存寄存器、栈空间、代码体积和耗时仍须在集成后
+测量；出现新增运行开销时按既有人工要求审定，不能据此样本自动批准。
+
+### 5.3 先记录、再分析与解决的问题
+
+| 问题 | 分析与处理 |
+| --- | --- |
+| macOS 不提供 text/data-relative 基址查询 | 从 SDK 与 vendored libunwind 确认限制；检查五平台输出后，统一解码实际使用的 4／8 字节 PC-relative 编码，未知编码明确失败 |
+| LLVM 22 `eh.typeid.for` 创建失败 | 该 intrinsic 使用 `anyptr` 重载；显式传入指针类型后解决，不修改类型匹配语义 |
+| 人工 C 入口残留前驱导致 PHI verifier 失败 | 在创建异常 PHI 前按普通入口与 landing 根清理不可达前驱，未以 `undef` 掩盖问题 |
+| 手写探针普通路径意外落入 landing | 修正探针退出逻辑；正式协议必须拒绝普通边进入 landing 的输入 |
+| UBSan 在 noreturn 标记后增加控制流 | 继续传播标记按终结指令切断普通后继，再统一清理死路径；没有匹配 UBSan 函数名或关闭 sanitizer |
+| 启动阶段曾出现 SIGKILL／137 | 保留失败记录；独立沙箱外复验及最终对照全部通过，没有修改系统安全设置，未将原因未经验证地归到 EH 算法 |
+| 完整 SDK 的 `llvm-config` 启动曾退出 137 | 本机使用已有匹配头文件成功构建插件；正式构建仍须检查 SDK／LLVM 配套信息，不依赖该次工具失败作为设计前提 |
+
+主要证据为 `runtime-results.json`、`result-ubsan.log`、`cross-compile-final.log`、
+`bench-results.json`、生成 IR／汇编和 `investigation.md`；失败批次单独保留。
+本机归档为 `/private/tmp/feng-s11-native-eh-evidence-20260922.tgz`，包含原型源码、
+构建脚本、产物和日志；所有二进制验证均从工程 `temp/` 执行，不从归档目录执行。
+临时证据用于 Review，不成为测试运行依赖；正式回归必须在仓库测试中重新建立。
+
+## 6. 实施与验收 Todo
+
+单次 Clang 内的 Pass 接入及保留既有结构／API 的交接方式已经通过原型验证。
+以下按依赖顺序实施；正式修复仍须完成所有未勾选项。
+
+### 6.1 Review 边界
+
+- [ ] 确认采用配套 LLVM Pass 插件，增加 host 编译组件与匹配 SDK 构建输入。
+      `FENG_CC` 保留选择优先级，但不兼容配套插件的工具链明确报错。
+- [ ] 批准 §4.6 的 M01–M03 既有测试／工具链适配；原行为断言和性能门槛不降低。
+- [ ] 确认按已验证协议调整 runtime 内部实现；保持现有结构、API 签名和 FT 格式，统一重编。
+
+### 6.2 按依赖顺序实施
+
+- [x] 完成缺陷、历史对照、原型方案、平台编码及初步成本记录。
+- [x] 验证现有 C → 优化前 Pass → 原生 EH 的通路，以及原生成 C 的 release 修复效果。
+- [ ] P01：在主规范的相应实现／构建边界中记录新后端协议与工具链要求；不改变语言异常语义。
+- [ ] P02：实现独立的区域模型和带版本标记协议，接入现有 callable／Scope 抽象；覆盖普通函数、
+      方法、Lambda、泛型共享体及含 catch 的 defer helper，不对某类表达式单独修补。
+- [ ] P03：实现生产 Pass 的协议校验、CFG 区域传播、invoke 转换、landing 分派、父区域 SSA
+      传播与标记消除；保留调用 ABI 和调试元数据，并覆盖普通／UBSan 管线。
+- [ ] P04：实现有边界检查的原生 LSDA decoder、personality 及显式 context 交接；保留现有
+      catch 生命周期和未捕获终止行为，移除新路径对物理帧清理和 TLS pending 交接的依赖。
+- [ ] P05：同时接入 bin／lib 编译、三个 host 插件构建与分发、工具兼容性检查和增量依赖；
+      测试使用同版本 sanitizer 资源。完成 std、依赖包与最终程序的统一重建。
+- [ ] P06：按批准范围迁移 M01–M03，建立共享的测试编译入口；不得通过保留禁优化夹具、
+      跳过 Pass、删除合法用例或降低断言来取得回归成功。
+
+### 6.3 覆盖及交付
+
+- [ ] 编译器测试覆盖标记校验、CFG 合流／循环／提前退出、必抛与条件抛、间接调用、
+      `noreturn`／`nounwind`、内联后的 selector、同函数父 catch、IR verifier 与标记消除。
+- [ ] runtime 测试覆盖原记录身份、引用计数、嵌套 catch、清理中内部捕获、重抛、新异常替换、
+      未捕获清理／终止、线程隔离及一次性析构；异常表解码增加 4／8 字节和错误输入验证。
+- [ ] BIND10 及本文最小复现保持原源码／断言，纳入自动默认／release 对照；FCTS 覆盖各合法
+      载荷、泛型共享体、类型／方法泛参、跨包、defer 顺序、各种退出和析构时序。
+- [ ] 源码隐藏后的 FT producer／consumer 在默认／release 下运行，验证静态库与共享体重新
+      构建完整；保持 FT 格式／版本和函数参数 ABI 不变。
+- [ ] 运行 LSP／DAP、源码停点与变量读取回归；异常后端不得引入编辑器语义或提示噪音。
+- [ ] 三个 host 构建并加载插件；五个 target 完成对应原生执行验证，交叉编译不能代替执行。
+- [ ] 扩展性能矩阵，记录正常／异常路径、复杂清理、泛型和跨包的时间、栈空间及代码体积；
+      发现新增运行成本先提交人工决策，再继续产品方案。
+- [ ] 在沙箱外完成 `make test`，另外显式运行 `feng run std/std_test --release` 和
+      `feng run fcts/fcts_bin --release`；确认生成程序使用 release，不只看编译器自身优化级别。
+- [ ] 回填平台、构建、性能和全量结果，输出英文 commit message，等待人工 Review，不自动提交。
 
 参考：[LLVM 异常处理](https://llvm.org/docs/ExceptionHandling.html)、
-[LLVM invoke](https://llvm.org/docs/LangRef.html#invoke-instruction)、
-[LLVM callbr 的目标地址限制](https://llvm.org/docs/LangRef.html#callbr-instruction)、
+[Pass 管线接入](https://llvm.org/docs/NewPassManager.html#inserting-passes-into-default-pipelines)、
+[Clang Pass 插件参数](https://clang.llvm.org/docs/ClangCommandLineReference.html#cmdoption-clang-fpass-plugin)、
 [原生展开接口](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html)。
-
-## 5. 实施与验收 Todo
-
-- [x] 记录原始失败用例、独立最小源码、生成代码原因及阶段一之前的对照证据。
-- [x] 按人工决定与 defer 阶段二拆分，明确未修复状态与回归范围。
-- [x] 保留原始 BIND10 用例及原断言的默认模式覆盖，不注释可通过的既有用例。
-- [ ] 细化原生 EH 接入、selector 分派、内联清理、跨包和各已支持目标平台方案，并由人工 Review。
-- [ ] 在工程内完成通用原型，核对 `invoke`／landingpad、异常表及优化后的真实机器码。
-- [ ] 测量正常路径、抛出／捕获、嵌套清理、泛型和跨包调用的时间、栈空间及代码体积；新增成本先由人工审定。
-- [ ] 按批准方案实现；检查 runtime 函数签名、结构布局、FT 与重新构建策略。
-- [ ] 对原始 BIND10 用例及最小复现增加独立自动化的默认／release 对照，保留原断言。
-- [ ] 覆盖内联／非内联、必抛／条件抛、调用前局部值修改、直接／间接调用、泛型与跨包、具体／兜底 catch、重抛、嵌套清理及载荷析构时序。
-- [ ] 执行 Debug／DAP 与语义／FT 回归，保证后端转换不改变诊断、变量读取及源码停点行为。
-- [ ] 在沙箱外执行完整 `make test`，另外显式执行 std／FCTS 的 release 行为回归；默认模式通过不能代替后者。
-- [ ] 回填结果、已支持平台与性能记录，输出英文 commit message，等待人工 Review，不自动提交。
