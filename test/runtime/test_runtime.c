@@ -3043,7 +3043,11 @@ static void test_array_aggregate_zero_length(void) {
     feng_release(a);
 }
 
+/* Native nested catch protocol coverage lives in an independent test unit. */
+void test_nested_exception_runtime(void);
+
 int main(void) {
+    test_nested_exception_runtime();
     test_object_retain_release();
     test_retain_release_nullsafe();
     test_assign_barrier();

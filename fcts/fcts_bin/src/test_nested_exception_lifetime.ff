@@ -1,0 +1,614 @@
+module fcts_bin;
+
+import std.numeric;
+import std.test;
+
+var nestedExceptionDrops: int = 0;
+var nestedExceptionOrder: int = 0;
+var nestedExceptionDefers: int = 0;
+
+/** Observe temporary payload destruction without accessing freed bindings. */
+type NestedExceptionResource {
+  let code: int;
+  /** Count every finalization, and record short scenarios in decimal order. */
+  func ~NestedExceptionResource() {
+    nestedExceptionDrops += 1;
+    if self.code != 0 {
+      nestedExceptionOrder = nestedExceptionOrder * 10 + self.code;
+    }
+  }
+}
+
+/** ValueBox payload whose reference member has an observable lifetime. */
+@value type NestedExceptionValue {
+  let resource: NestedExceptionResource;
+  let text: string;
+}
+
+/** A named tuple exercises the other aggregate ValueBox payload form. */
+type NestedExceptionTuple(NestedExceptionResource, string);
+
+/** Distinct nominal scalar identity for restoration across inner catches. */
+enum NestedExceptionStatus { Failed = 7 }
+
+/** Generic reference payloads retain their complete concrete type identity. */
+type NestedExceptionBox<T> { let value: T; }
+
+/** Catch binding captures must own their subject after the catch exits. */
+spec NestedExceptionReader(): int;
+
+/** Reset observations only after the preceding scenario has fully exited. */
+func resetNestedExceptionLifetime(): void {
+  nestedExceptionDrops = 0;
+  nestedExceptionOrder = 0;
+  nestedExceptionDefers = 0;
+}
+
+/** Throw a temporary reference with no external owner. */
+func raiseNestedExceptionResource(code: int): void {
+  throw NestedExceptionResource { code: code };
+}
+
+/** Keep the existing generic throw path in this independent bugfix's coverage. */
+func raiseNestedExceptionGeneric<E: throw>(value: E): void { throw value; }
+
+/** Handle one inner exception while a caller's catch remains active. */
+func handleNestedExceptionResource(code: int): void {
+  try raiseNestedExceptionResource(code) catch inner: NestedExceptionResource {
+    assert(inner.code == code, "inner catch reads its own payload");
+  }
+}
+
+/** Methods and method-level shared bodies participate in the same protocol. */
+type NestedExceptionHandler {
+  /** Handle an exception through a method invocation. */
+  func handle(): void { handleNestedExceptionResource(2); }
+  /** Handle a direct generic throw, then leave the method's catch. */
+  func generic<T: throw>(value: T): void {
+    try raiseNestedExceptionGeneric<T>(value) catch {}
+  }
+}
+
+/** All four named/anonymous combinations run nested in one callable. */
+func exerciseNestedExceptionCombinations(outerNamed: bool, innerNamed: bool): void {
+  resetNestedExceptionLifetime();
+  if outerNamed {
+    try raiseNestedExceptionResource(1) catch outer: NestedExceptionResource {
+      assert(nestedExceptionDrops == 0, "outer payload is live on entry");
+      if innerNamed {
+        try raiseNestedExceptionResource(2) catch inner: NestedExceptionResource {
+          assert(nestedExceptionDrops == 0, "both named payloads stay live");
+          assert(inner.code == 2 && outer.code == 1, "bindings remain distinct");
+        }
+      } else {
+        try raiseNestedExceptionResource(2) catch {
+          assert(nestedExceptionDrops == 0, "anonymous inner catch holds its payload");
+        }
+      }
+      assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 2,
+             "only the inner exception is finalized");
+      assert(outer.code == 1, "outer borrow survives the inner catch");
+    }
+  } else {
+    try raiseNestedExceptionResource(1) catch {
+      if innerNamed {
+        try raiseNestedExceptionResource(2) catch inner: NestedExceptionResource {
+          assert(nestedExceptionDrops == 0 && inner.code == 2,
+                 "anonymous outer catch retains its original payload");
+        }
+      } else {
+        try raiseNestedExceptionResource(2) catch {
+          assert(nestedExceptionDrops == 0, "two anonymous owners coexist");
+        }
+      }
+      assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 2,
+             "outer anonymous owner survives inner cleanup");
+    }
+  }
+  assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21,
+         "nested owners finalize once in exit order");
+}
+
+/** Original rethrow survives function, method, shared-method and Lambda calls. */
+func rethrowNestedExceptionAcrossCallables(value: NestedExceptionResource): void {
+  try raiseNestedExceptionGeneric(value) catch {
+    handleNestedExceptionResource(0);
+    let handler = NestedExceptionHandler {};
+    handler.handle();
+    handler.generic<int>(31);
+    let action: NestedExceptionReader = () {
+      try raiseNestedExceptionResource(0) catch { return 17; }
+      return 0;
+    };
+    assert(action() == 17, "lambda returns through its own anonymous catch");
+    throw;
+  }
+}
+
+/** An inner rethrow can be caught locally without losing the oldest catch. */
+func handleNestedExceptionRethrowLocally(): void {
+  try raiseNestedExceptionResource(1) catch {
+    try (try raiseNestedExceptionResource(2) catch {
+      throw;
+    }) catch inner: NestedExceptionResource {
+      assert(nestedExceptionDrops == 0 && inner.code == 2,
+             "original inner record survives rethrow into the same frame");
+    }
+    assert(nestedExceptionDrops == 1, "only rethrown inner exception has ended");
+    throw;
+  }
+}
+
+/** Return an outer borrowed binding through two live catches and local owners. */
+func returnNestedExceptionBinding(): NestedExceptionResource {
+  try raiseNestedExceptionResource(1) catch outer: NestedExceptionResource {
+    let outerLocal = NestedExceptionResource { code: 3 };
+    defer { nestedExceptionDefers = nestedExceptionDefers * 10 + outerLocal.code; }
+    try raiseNestedExceptionResource(2) catch inner: NestedExceptionResource {
+      let innerLocal = NestedExceptionResource { code: 4 };
+      defer { nestedExceptionDefers = nestedExceptionDefers * 10 + inner.code; }
+      assert(innerLocal.code == 4, "return path local is initialized");
+      return outer;
+    }
+  }
+  return NestedExceptionResource { code: 9 };
+}
+
+/** A callable return inside a protected expression closes try before catch. */
+func returnFromTryInsideNestedCatch(): int {
+  try raiseNestedExceptionResource(1) catch outer: NestedExceptionResource {
+    let local = NestedExceptionResource { code: 3 };
+    let result = try (if true {
+      let innerLocal = NestedExceptionResource { code: 4 };
+      assert(innerLocal.code == 4, "protected return initializes its local");
+      return outer.code + local.code;
+    } else { 0; }) catch { 0; };
+    return result;
+  }
+  return -1;
+}
+
+/** Leave two nested catches using break or continue into an enclosing loop. */
+func exitNestedExceptionLoop(useContinue: bool): int {
+  var visits = 0;
+  while visits < 2 {
+    visits += 1;
+    try raiseNestedExceptionResource(1) catch outer: NestedExceptionResource {
+      try raiseNestedExceptionResource(2) catch inner: NestedExceptionResource {
+        assert(outer.code == 1 && inner.code == 2, "loop transfer sees both owners");
+        if useContinue { continue; }
+        break;
+      }
+    }
+  }
+  return visits;
+}
+
+/** Inner loops and inner catch exits must leave the surrounding catch active. */
+func rethrowAfterNestedExceptionLoops(form: int): void {
+  try raiseNestedExceptionResource(1) catch {
+    var visits = 0;
+    if form == 0 {
+      while visits < 3 {
+        visits += 1;
+        if visits == 1 { continue; }
+        try raiseNestedExceptionResource(0) catch {
+          if visits == 2 { continue; }
+          break;
+        }
+      }
+    } else if form == 1 {
+      for var i = 0; i < 3; i += 1 {
+        visits += 1;
+        try raiseNestedExceptionResource(0) catch {
+          if i < 2 { continue; }
+          break;
+        }
+      }
+    } else {
+      for let i in [0, 1, 2] {
+        visits += 1;
+        try raiseNestedExceptionResource(0) catch {
+          if i < 2 { continue; }
+          break;
+        }
+      }
+    }
+    assert(visits == 3, "each loop reaches its final transfer");
+    assert(nestedExceptionOrder == 0, "outer exception is still owned after loops");
+    throw;
+  }
+}
+
+/** A new named throw owns its payload before the old catch releases its hold. */
+func throwNestedExceptionBindingAgain(value: NestedExceptionResource): void {
+  try raiseNestedExceptionGeneric(value) catch error: NestedExceptionResource {
+    handleNestedExceptionResource(2);
+    throw error;
+  }
+}
+
+/** A new inner exception escapes an outer catch through an unmatched clause. */
+func escapeNestedExceptionUnmatched(): void {
+  try raiseNestedExceptionResource(1) catch outer: NestedExceptionResource {
+    defer {
+      assert(outer.code == 1, "escaping catch defer can still borrow the outer payload");
+      nestedExceptionDefers += 1;
+    }
+    try raiseNestedExceptionResource(2) catch error: int {
+      assert(false, "unmatched concrete catch must not run");
+    }
+  }
+}
+
+/** Capture an exception binding into an owning callable before catch cleanup. */
+func captureNestedExceptionBinding(): NestedExceptionReader {
+  try raiseNestedExceptionResource(1) catch error: NestedExceptionResource {
+    handleNestedExceptionResource(2);
+    return () { return error.code; };
+  }
+  return () { return -1; };
+}
+
+/** Capturing an aggregate owns its managed members beyond the ValueBox's catch. */
+func captureNestedExceptionValue(): NestedExceptionReader {
+  try raiseNestedExceptionGeneric(NestedExceptionValue {
+    resource: NestedExceptionResource { code: 1 }, text: "capture" + "-value"
+  }) catch value: NestedExceptionValue {
+    handleNestedExceptionResource(2);
+    return () { return value.resource.code; };
+  }
+  return () { return -1; };
+}
+
+/** Capturing a trivial box payload copies its value into ordinary capture storage. */
+func captureNestedExceptionInt(): NestedExceptionReader {
+  try raiseNestedExceptionGeneric<int>(73) catch value: int {
+    handleNestedExceptionResource(0);
+    return () { return value; };
+  }
+  return () { return -1; };
+}
+
+/** A dynamic string capture acquires ownership independently from the catch. */
+func captureNestedExceptionString(): NestedExceptionReader {
+  try raiseNestedExceptionGeneric<string>("capture" + "-string") catch value: string {
+    handleNestedExceptionResource(0);
+    return () { return if value == "capture-string" { 1; } else { 0; }; };
+  }
+  return () { return -1; };
+}
+
+/** Repeated recursion verifies independent stack contexts at the same source site. */
+func recurseNestedExceptionLifetime(depth: int): void {
+  if depth == 0 { return; }
+  try raiseNestedExceptionResource(0) catch outer: NestedExceptionResource {
+    let before = nestedExceptionDrops;
+    recurseNestedExceptionLifetime(depth - 1);
+    assert(nestedExceptionDrops == before + depth - 1,
+           "recursive children finish without releasing their parent");
+    assert(outer.code == 0, "recursive parent binding remains live");
+  }
+}
+
+/** A normal try inside catch must not alter the caught-exception stack. */
+func normalTryInsideNestedException(): void {
+  try raiseNestedExceptionResource(1) catch {
+    let result = try 37 catch { 0; };
+    assert(result == 37 && nestedExceptionDrops == 0, "normal try keeps outer ownership");
+    throw;
+  }
+}
+
+/** Handle a nested exception while the original is in a caller's landing-pad cleanup. */
+func nestedExceptionLandingCleanup(): int {
+  let result = try (if true {
+    defer { handleNestedExceptionResource(2); }
+    throw NestedExceptionResource { code: 1 };
+  } else { 0; }) catch original: NestedExceptionResource {
+    assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 2,
+           "landing cleanup releases only its nested exception");
+    original.code;
+  };
+  return result;
+}
+
+/** Handle a nested exception from cleanup while unwinding a whole function. */
+func nestedExceptionFunctionCleanup(): void {
+  defer { handleNestedExceptionResource(2); }
+  raiseNestedExceptionResource(1);
+}
+
+// N08: retained in full and disabled by the 2026-09-21 review decision.
+// Follow-up: docs/engineering/feng-callable-exception-effects-dev.md.
+// /** A replacement exception can escape a defer while a whole function unwinds. */
+// func nestedExceptionEscapingFunctionCleanup(): void {
+//   defer { raiseNestedExceptionResource(2); }
+//   raiseNestedExceptionResource(1);
+// }
+
+/** An escaping landing-pad defer replaces the pending exception cleanly. */
+func nestedExceptionEscapingLandingCleanup(): int {
+  return try (if true {
+    defer { raiseNestedExceptionResource(2); }
+    throw NestedExceptionResource { code: 1 };
+  } else { 0; }) catch original: NestedExceptionResource {
+    assert(false, "replacement exception escapes the abandoned landing pad");
+    original.code;
+  };
+}
+
+/** Catch defers run before their borrowed binding's exception owner ends. */
+func nestedExceptionCatchDefer(): void {
+  try raiseNestedExceptionResource(1) catch original: NestedExceptionResource {
+    defer {
+      handleNestedExceptionResource(2);
+      assert(nestedExceptionDrops == 1 && original.code == 1,
+             "catch defer retains access after handling an inner exception");
+      nestedExceptionDefers += 1;
+    }
+    return;
+  }
+}
+
+/** Preserve generic/value/string exception identities across an inner catch. */
+func relayNestedExceptionGeneric<E: throw>(value: E): void {
+  try raiseNestedExceptionGeneric<E>(value) catch {
+    handleNestedExceptionResource(0);
+    throw;
+  }
+}
+
+/** Comprehensive nested catch lifecycle behavior, independent of root-spec work. */
+open func test_nested_exception_lifetime(): void {
+  describe("nested exception lifetime", () {
+    test("named catch inside named catch", () {
+      exerciseNestedExceptionCombinations(true, true);
+    });
+    test("anonymous catch inside named catch", () {
+      exerciseNestedExceptionCombinations(true, false);
+    });
+    test("named catch inside anonymous catch", () {
+      exerciseNestedExceptionCombinations(false, true);
+    });
+    test("anonymous catch inside anonymous catch", () {
+      exerciseNestedExceptionCombinations(false, false);
+    });
+    test("three simultaneously active catches release in scope order", () {
+      resetNestedExceptionLifetime();
+      try raiseNestedExceptionResource(1) catch a: NestedExceptionResource {
+        try raiseNestedExceptionResource(2) catch b: NestedExceptionResource {
+          try raiseNestedExceptionResource(3) catch c: NestedExceptionResource {
+            assert(nestedExceptionDrops == 0, "all three payloads remain live");
+            assert(a.code + b.code + c.code == 6, "three distinct bindings");
+          }
+          assert(nestedExceptionOrder == 3 && b.code == 2, "restore second catch");
+        }
+        assert(nestedExceptionOrder == 32 && a.code == 1, "restore first catch");
+      }
+      assert(nestedExceptionDrops == 3 && nestedExceptionOrder == 321, "three releases once");
+    });
+    test("original reference identity survives all callable boundaries", () {
+      resetNestedExceptionLifetime();
+      {
+        let source = NestedExceptionResource { code: 1 };
+        var caught = false;
+        try rethrowNestedExceptionAcrossCallables(source) catch error: NestedExceptionResource {
+          caught = true;
+          assert(nestedExceptionDrops == 3, "only called handlers released their exceptions");
+          assert(error == source && error.code == 1, "rethrow preserves reference identity");
+        }
+        assert(caught && nestedExceptionDrops == 3, "external owner remains after catch");
+      }
+      assert(nestedExceptionDrops == 4 && nestedExceptionOrder == 21, "source released last");
+    });
+    test("same-frame inner rethrow restores the older anonymous catch", () {
+      resetNestedExceptionLifetime();
+      var caught = false;
+      try handleNestedExceptionRethrowLocally() catch error: NestedExceptionResource {
+        caught = true;
+        assert(error.code == 1 && nestedExceptionOrder == 2, "oldest original is rethrown");
+      }
+      assert(caught && nestedExceptionDrops == 2, "both original records end once");
+    });
+    test("returning an outer binding cleans nested scopes before transferring", () {
+      resetNestedExceptionLifetime();
+      {
+        let result = returnNestedExceptionBinding();
+        assert(nestedExceptionDrops == 3 && nestedExceptionOrder == 423,
+               "inner local, inner exception and outer local release in order");
+        assert(nestedExceptionDefers == 23 && result.code == 1,
+               "defers observe live bindings and return retains the outer payload");
+      }
+      assert(nestedExceptionDrops == 4 && nestedExceptionOrder == 4231, "returned owner releases last");
+    });
+    test("return inside try closes interleaved try and catch resources", () {
+      resetNestedExceptionLifetime();
+      assert(returnFromTryInsideNestedCatch() == 4, "protected return value survives cleanup");
+      assert(nestedExceptionDrops == 3 && nestedExceptionOrder == 431, "lexical cleanup order");
+    });
+    test("break exits both nested catches", () {
+      resetNestedExceptionLifetime();
+      assert(exitNestedExceptionLoop(false) == 1, "break exits the loop immediately");
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21, "break releases both owners");
+    });
+    test("continue exits both catches before the next iteration", () {
+      resetNestedExceptionLifetime();
+      assert(exitNestedExceptionLoop(true) == 2, "continue reaches the next iteration");
+      assert(nestedExceptionDrops == 4 && nestedExceptionOrder == 2121, "each iteration is independent");
+    });
+    test("while transfers preserve a surrounding anonymous catch", () {
+      resetNestedExceptionLifetime();
+      try rethrowAfterNestedExceptionLoops(0) catch error: NestedExceptionResource {
+        assert(error.code == 1 && nestedExceptionDrops == 2, "while keeps the original owner");
+      }
+      assert(nestedExceptionDrops == 3, "while original ends once");
+    });
+    test("three-clause for transfers preserve the surrounding catch", () {
+      resetNestedExceptionLifetime();
+      try rethrowAfterNestedExceptionLoops(1) catch error: NestedExceptionResource {
+        assert(error.code == 1 && nestedExceptionDrops == 3, "for update runs after catch cleanup");
+      }
+      assert(nestedExceptionDrops == 4, "for original ends once");
+    });
+    test("for-in transfers preserve the surrounding catch", () {
+      resetNestedExceptionLifetime();
+      try rethrowAfterNestedExceptionLoops(2) catch error: NestedExceptionResource {
+        assert(error.code == 1 && nestedExceptionDrops == 3, "for-in keeps the original owner");
+      }
+      assert(nestedExceptionDrops == 4, "for-in original ends once");
+    });
+    test("named rethrow retains the original reference before releasing its catch", () {
+      resetNestedExceptionLifetime();
+      {
+        let source = NestedExceptionResource { code: 1 };
+        try throwNestedExceptionBindingAgain(source) catch error: NestedExceptionResource {
+          assert(nestedExceptionDrops == 1 && error == source, "new record owns the same reference");
+        }
+        assert(nestedExceptionDrops == 1, "source still has its external owner");
+      }
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21, "named rethrow is balanced");
+    });
+    test("unmatched inner exception ends exited outer catches", () {
+      resetNestedExceptionLifetime();
+      try escapeNestedExceptionUnmatched() catch error: NestedExceptionResource {
+        assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 1, "escaped outer catch is cleaned");
+        assert(error.code == 2 && nestedExceptionDefers == 1, "new exception and defer survive unwind");
+      }
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12, "both exception owners are balanced");
+    });
+    test("closure capture keeps a binding alive beyond both catches", () {
+      resetNestedExceptionLifetime();
+      {
+        let read = captureNestedExceptionBinding();
+        assert(nestedExceptionDrops == 1 && read() == 1, "capture owns the former exception subject");
+      }
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21, "capture releases last owner");
+    });
+    test("aggregate capture outlives its exception box and catch copy", () {
+      resetNestedExceptionLifetime();
+      {
+        let read = captureNestedExceptionValue();
+        assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 2,
+               "default field and inner payload ended while captured child remains live");
+        assert(read() == 1, "captured aggregate reads its original field");
+      }
+      assert(nestedExceptionDrops == 3 && nestedExceptionOrder == 21,
+             "capture releases the aggregate's last child reference");
+    });
+    test("scalar and dynamic string captures survive original catch cleanup", () {
+      resetNestedExceptionLifetime();
+      let number = captureNestedExceptionInt();
+      let text = captureNestedExceptionString();
+      assert(number() == 73 && text() == 1, "both captured values remain valid");
+      assert(nestedExceptionDrops == 2, "inner exception contexts have ended");
+    });
+    test("recursive catches at the same source location keep independent owners", () {
+      resetNestedExceptionLifetime();
+      recurseNestedExceptionLifetime(64);
+      assert(nestedExceptionDrops == 64, "all recursive payloads finalized exactly once");
+    });
+    test("normal inner try leaves the outer exception unchanged", () {
+      resetNestedExceptionLifetime();
+      try normalTryInsideNestedException() catch error: NestedExceptionResource {
+        assert(nestedExceptionDrops == 0 && error.code == 1, "normal path never changes active catch");
+      }
+      assert(nestedExceptionDrops == 1, "one original payload is released");
+    });
+    test("landing-pad cleanup can handle another exception before catch entry", () {
+      resetNestedExceptionLifetime();
+      assert(nestedExceptionLandingCleanup() == 1, "catch sees the pending original after defer");
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21, "landing cleanup owners balanced");
+    });
+    test("function-unwind defer can handle a nested exception", () {
+      resetNestedExceptionLifetime();
+      try nestedExceptionFunctionCleanup() catch error: NestedExceptionResource {
+        assert(nestedExceptionDrops == 1 && error.code == 1, "in-flight original survives nested handling");
+      }
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21, "unwind callback owners balanced");
+    });
+    // N08: keep the original reproducer and candidate ownership assertions.
+    // The follow-up must review exception-escape semantics before re-enabling it.
+    // See docs/engineering/feng-callable-exception-effects-dev.md.
+    // test("escaping function-unwind defer releases its abandoned exception", () {
+    //   resetNestedExceptionLifetime();
+    //   try nestedExceptionEscapingFunctionCleanup() catch error: NestedExceptionResource {
+    //     assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 1,
+    //            "abandoned in-flight exception is released before its replacement catch");
+    //     assert(error.code == 2, "defer replacement reaches the caller");
+    //   }
+    //   assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12,
+    //          "replacement and abandoned in-flight owners are balanced");
+    // });
+    test("escaping landing cleanup releases its abandoned pending exception", () {
+      resetNestedExceptionLifetime();
+      try nestedExceptionEscapingLandingCleanup() catch error: NestedExceptionResource {
+        assert(nestedExceptionDrops == 1 && nestedExceptionOrder == 1,
+               "abandoned pending exception is released before the new handler");
+        assert(error.code == 2, "replacement exception reaches the caller");
+      }
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 12, "replacement cleanup is balanced");
+    });
+    test("catch return defer can handle exceptions and read its original binding", () {
+      resetNestedExceptionLifetime();
+      nestedExceptionCatchDefer();
+      assert(nestedExceptionDrops == 2 && nestedExceptionOrder == 21 && nestedExceptionDefers == 1,
+             "catch owner remains until all defers have completed");
+    });
+    test("aggregate value payload remains live across nested handling and rethrow", () {
+      resetNestedExceptionLifetime();
+      try relayNestedExceptionGeneric(NestedExceptionValue {
+        resource: NestedExceptionResource { code: 1 }, text: "value" + "-payload"
+      }) catch value: NestedExceptionValue {
+        handleNestedExceptionResource(0);
+        assertEquals(nestedExceptionDrops, 3, "default field and two inner payloads have been released");
+        assert(value.resource.code == 1 && value.text == "value-payload", "aggregate fields remain intact");
+      }
+      assertEquals(nestedExceptionDrops, 4, "default field, ValueBox and catch copy are balanced");
+      assertEquals(nestedExceptionOrder, 1, "ValueBox child is finalized once");
+    });
+    test("tuple payload remains live across nested handling and rethrow", () {
+      resetNestedExceptionLifetime();
+      {
+        let tuple: NestedExceptionTuple = (NestedExceptionResource { code: 1 }, "tuple" + "-payload");
+        try relayNestedExceptionGeneric(tuple) catch value: NestedExceptionTuple {
+          handleNestedExceptionResource(0);
+          let (resource, text) = value;
+          assert(nestedExceptionDrops == 2 && resource.code == 1 && text == "tuple-payload",
+                 "tuple retains managed fields through both exception owners");
+        }
+        assert(nestedExceptionDrops == 2, "external tuple still holds the subject");
+      }
+      assert(nestedExceptionDrops == 3 && nestedExceptionOrder == 1,
+             "external tuple releases its final child reference once");
+    });
+    test("dynamic string and enum keep their original descriptor and value", () {
+      resetNestedExceptionLifetime();
+      var count = 0;
+      try relayNestedExceptionGeneric("dynamic" + "-message") catch value: string {
+        assert(value == "dynamic-message", "dynamic string remains intact"); count += 1;
+      }
+      try relayNestedExceptionGeneric(NestedExceptionStatus.Failed) catch value: int {
+        assert(false, "enum must not match its underlying integer");
+      } catch value: NestedExceptionStatus {
+        assert(value == NestedExceptionStatus.Failed, "enum identity is preserved"); count += 1;
+      }
+      assert(count == 2 && nestedExceptionDrops == 2, "both exact matches restored after nested catch");
+    });
+    test("closed generic reference identity survives an inner catch", () {
+      resetNestedExceptionLifetime();
+      var caught = false;
+      try relayNestedExceptionGeneric(NestedExceptionBox<NestedExceptionResource> {
+        value: NestedExceptionResource { code: 1 }
+      }) catch wrong: NestedExceptionBox<int> {
+        assert(false, "different closed generic arguments must not match");
+      } catch value: NestedExceptionBox<NestedExceptionResource> {
+        caught = true;
+        assertEquals(nestedExceptionDrops, 2, "only the default child and inner exception have ended");
+        assert(value.value.code == 1, "closed payload field is intact");
+      }
+      assert(caught, "generic wrapper reaches its exact handler");
+      assertEquals(nestedExceptionDrops, 3, "generic wrapper releases its child once");
+    });
+  });
+}

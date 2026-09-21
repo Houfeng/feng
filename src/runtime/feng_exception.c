@@ -3,13 +3,17 @@
 #include <stddef.h>
 #include <stdlib.h>
 
+/* One registered set of generated try regions and their catch clauses. */
 typedef struct FengLSDARegistration {
     const FengLSDA *regions;
     int region_count;
 } FengLSDARegistration;
 
 static _Thread_local FengCleanupNode *g_cleanup_top = NULL;
-static _Thread_local FengUnwindException *g_current_unwind = NULL;
+/* Only the personality-to-landing-pad handoff uses the pending slot. Catch
+ * ownership is kept separately so nested handling cannot replace its owner. */
+static _Thread_local FengUnwindException *g_pending_unwind = NULL;
+static _Thread_local FengCatchContext *g_catch_top = NULL;
 static _Thread_local size_t g_finalizer_depth = 0U;
 
 static FengLSDARegistration *g_lsda_registrations = NULL;
@@ -20,6 +24,7 @@ static size_t g_lsda_registration_capacity = 0U;
 const FengLSDA feng_empty_function_lsda[1] = {{0}};
 #endif
 
+/* Execute an already detached cleanup node exactly once. */
 static void feng_cleanup_release_node(FengCleanupNode *node) {
     void **slot;
 
@@ -52,6 +57,7 @@ static void feng_cleanup_release_node(FengCleanupNode *node) {
     }
 }
 
+/* Clean one unwound Feng function, including any active catches it owns. */
 static void feng_cleanup_release_to_frame_marker(void) {
     while (g_cleanup_top != NULL) {
         FengCleanupNode *node = g_cleanup_top;
@@ -67,6 +73,7 @@ static void feng_cleanup_release_to_frame_marker(void) {
     }
 }
 
+/* Drain live resources before terminating for an uncaught Feng exception. */
 static void feng_cleanup_release_all(void) {
     while (g_cleanup_top != NULL) {
         FengCleanupNode *node = g_cleanup_top;
@@ -75,7 +82,23 @@ static void feng_cleanup_release_all(void) {
     }
 }
 
+/* Destroy one exception owner after it has been detached from its context. */
+static void feng_unwind_exception_destroy(FengUnwindException *exception) {
+    if (exception == NULL) {
+        return;
+    }
+    if (g_pending_unwind == exception) {
+        g_pending_unwind = NULL;
+    }
+    if (exception->value != NULL) {
+        feng_release(exception->value);
+        exception->value = NULL;
+    }
+    free(exception);
+}
+
 #if !defined(_WIN32)
+/* Platform cleanup releases the same record and payload as catch exit. */
 static void feng_unwind_exception_cleanup(_Unwind_Reason_Code reason,
                                           struct _Unwind_Exception *unwind) {
     FengUnwindException *exception;
@@ -85,17 +108,11 @@ static void feng_unwind_exception_cleanup(_Unwind_Reason_Code reason,
         return;
     }
     exception = (FengUnwindException *)((char *)unwind - offsetof(FengUnwindException, unwind));
-    if (g_current_unwind == exception) {
-        g_current_unwind = NULL;
-    }
-    if (exception->value != NULL) {
-        feng_release(exception->value);
-        exception->value = NULL;
-    }
-    free(exception);
+    feng_unwind_exception_destroy(exception);
 }
 #endif
 
+/* Initialize the platform record without changing any active catch owner. */
 static void feng_unwind_exception_init(FengUnwindException *exception,
                                        void *value,
                                        const FengTypeDescriptor *desc) {
@@ -110,20 +127,21 @@ static void feng_unwind_exception_init(FengUnwindException *exception,
     exception->matched_clause = -1;
 }
 
-static void feng_release_current_unwind_exception(bool release_value) {
-    FengUnwindException *exception = g_current_unwind;
+/* Finish a detached catch node. During landing-pad cleanup the node already
+ * owns its exception but has not yet joined the active catch stack. */
+static void feng_exception_catch_cleanup(void *closure) {
+    FengCatchContext *context = (FengCatchContext *)closure;
+    FengUnwindException *exception = context->exception;
 
-    if (exception == NULL) {
-        return;
+    if (g_catch_top == context) {
+        g_catch_top = context->previous;
     }
-    g_current_unwind = NULL;
-    if (release_value && exception->value != NULL) {
-        feng_release(exception->value);
-        exception->value = NULL;
-    }
-    free(exception);
+    context->exception = NULL;
+    context->previous = NULL;
+    feng_unwind_exception_destroy(exception);
 }
 
+/* Register generated region metadata for the platform personality lookup. */
 void feng_register_lsda(const FengLSDA *regions, int region_count) {
     FengLSDARegistration *resized;
 
@@ -147,6 +165,7 @@ void feng_register_lsda(const FengLSDA *regions, int region_count) {
     g_lsda_registration_count++;
 }
 
+/* Track a managed-pointer local on the current thread's cleanup chain. */
 void feng_cleanup_push(FengCleanupNode *node, void **slot) {
     if (node == NULL) {
         feng_panic("feng_cleanup_push: NULL node");
@@ -164,6 +183,7 @@ void feng_cleanup_push(FengCleanupNode *node, void **slot) {
     g_cleanup_top = node;
 }
 
+/* Track descriptor-driven aggregate cleanup on the same LIFO chain. */
 void feng_cleanup_push_aggregate(FengCleanupNode *node,
                                  void *value,
                                  const FengAggregateDescriptor *desc) {
@@ -186,6 +206,7 @@ void feng_cleanup_push_aggregate(FengCleanupNode *node,
     g_cleanup_top = node;
 }
 
+/* Register a stack-backed defer callback without taking closure ownership. */
 void feng_defer_push(FengCleanupNode *node,
                      void (*fn)(void *),
                      void *closure) {
@@ -205,6 +226,7 @@ void feng_defer_push(FengCleanupNode *node,
     g_cleanup_top = node;
 }
 
+/* Detach a node whose cleanup is emitted explicitly by generated code. */
 void feng_cleanup_pop(void) {
     if (g_cleanup_top == NULL) {
         feng_panic("feng_cleanup_pop: chain underflow");
@@ -212,6 +234,7 @@ void feng_cleanup_pop(void) {
     g_cleanup_top = g_cleanup_top->prev;
 }
 
+/* Mark the boundary of one generated function's resources. */
 void feng_frame_push(FengFrameMarker *marker) {
     if (marker == NULL) {
         feng_panic("feng_frame_push: NULL marker");
@@ -227,6 +250,7 @@ void feng_frame_push(FengFrameMarker *marker) {
     g_cleanup_top = &marker->node;
 }
 
+/* Mark a try expression without initializing any later catch state. */
 void feng_try_frame_push(FengFrameMarker *marker) {
     if (marker == NULL) {
         feng_panic("feng_try_frame_push: NULL marker");
@@ -242,6 +266,7 @@ void feng_try_frame_push(FengFrameMarker *marker) {
     g_cleanup_top = &marker->node;
 }
 
+/* Remove a normally exited function/try marker after its resource cleanup. */
 void feng_frame_pop(void) {
     if (g_cleanup_top == NULL) {
         feng_panic("feng_frame_pop: chain underflow");
@@ -252,25 +277,68 @@ void feng_frame_pop(void) {
     g_cleanup_top = g_cleanup_top->prev;
 }
 
-void feng_frame_release_to(FengFrameMarker *marker) {
-    if (marker == NULL) {
-        feng_panic("feng_frame_release_to: NULL marker");
-    }
-    while (g_cleanup_top != NULL && g_cleanup_top != &marker->node) {
+/* Release newer nodes while leaving the requested boundary on the chain. */
+static void feng_cleanup_release_above(FengCleanupNode *boundary) {
+    while (g_cleanup_top != NULL && g_cleanup_top != boundary) {
         FengCleanupNode *node = g_cleanup_top;
         g_cleanup_top = node->prev;
         feng_cleanup_release_node(node);
     }
-    if (g_cleanup_top != &marker->node) {
-        feng_panic("feng_frame_release_to: marker is not on cleanup chain");
+    if (g_cleanup_top != boundary) {
+        feng_panic("feng cleanup: boundary is not on cleanup chain");
     }
+}
+
+/* Release a protected region and remove its now-empty marker. */
+void feng_frame_release_to(FengFrameMarker *marker) {
+    if (marker == NULL) {
+        feng_panic("feng_frame_release_to: NULL marker");
+    }
+    feng_cleanup_release_above(&marker->node);
     g_cleanup_top = g_cleanup_top->prev;
 }
 
+/* Protect the delivered record before running any potentially reentrant
+ * try cleanup. Reusing the marker as its owner also releases that record if
+ * a cleanup callback escapes instead of returning to this landing pad. */
+void feng_exception_catch_begin(FengCatchContext *context) {
+    FengCleanupNode *node;
+
+    if (context == NULL || g_pending_unwind == NULL) {
+        feng_panic("feng_exception_catch_begin: missing context or exception");
+    }
+    node = &context->frame.node;
+    if (node->kind != FENG_NODE_MARKER || context->frame.is_function_boundary) {
+        feng_panic("feng_exception_catch_begin: context is not a try marker");
+    }
+    context->exception = g_pending_unwind;
+    context->previous = NULL;
+    g_pending_unwind = NULL;
+    node->kind = FENG_NODE_DEFER;
+    node->defer_fn = feng_exception_catch_cleanup;
+    node->defer_closure = context;
+    feng_cleanup_release_above(node);
+    context->previous = g_catch_top;
+    g_catch_top = context;
+}
+
+/* End one active catch after its younger cleanup nodes have been removed. */
+void feng_exception_catch_end(void) {
+    FengCatchContext *context = g_catch_top;
+
+    if (context == NULL || g_cleanup_top != &context->frame.node) {
+        feng_panic("feng_exception_catch_end: catch is not the cleanup top");
+    }
+    g_cleanup_top = context->frame.node.prev;
+    feng_exception_catch_cleanup(context);
+}
+
+/* Enter the runtime's existing finalizer exception barrier. */
 void feng_exception_enter_finalizer(void) {
     g_finalizer_depth++;
 }
 
+/* Leave the finalizer barrier after normal completion. */
 void feng_exception_leave_finalizer(void) {
     if (g_finalizer_depth == 0U) {
         feng_panic("feng_exception_leave_finalizer: depth underflow");
@@ -279,6 +347,7 @@ void feng_exception_leave_finalizer(void) {
 }
 
 #if !defined(_WIN32)
+/* Test the generated program-counter range for one try expression. */
 static bool feng_ip_in_region(uintptr_t ip, const FengLSDA *region) {
     uintptr_t begin;
     uintptr_t end;
@@ -291,6 +360,7 @@ static bool feng_ip_in_region(uintptr_t ip, const FengLSDA *region) {
     return ip >= begin && ip <= end;
 }
 
+/* Select the first exact-type or anonymous clause in source order. */
 static bool feng_region_matches_exception(const FengLSDA *region,
                                           const FengUnwindException *exception,
                                           int *out_clause) {
@@ -311,6 +381,7 @@ static bool feng_region_matches_exception(const FengLSDA *region,
     return false;
 }
 
+/* Search registered regions from the most recently registered inner region. */
 static const FengLSDA *feng_find_matching_region(uintptr_t ip,
                                                  const FengUnwindException *exception,
                                                  int *out_clause) {
@@ -332,6 +403,7 @@ static const FengLSDA *feng_find_matching_region(uintptr_t ip,
     return NULL;
 }
 
+/* Match Feng exceptions, clean unwound functions, and install a landing pad. */
 _Unwind_Reason_Code __feng_personality_v0(int version,
                                           _Unwind_Action actions,
                                           uint64_t exception_class,
@@ -366,7 +438,7 @@ _Unwind_Reason_Code __feng_personality_v0(int version,
 
     if ((actions & _UA_HANDLER_FRAME) != 0 && region != NULL) {
         exception->matched_clause = matched_clause;
-        g_current_unwind = exception;
+        g_pending_unwind = exception;
         _Unwind_SetIP(context, (uintptr_t)region->landing_pad);
         return _URC_INSTALL_CONTEXT;
     }
@@ -375,6 +447,7 @@ _Unwind_Reason_Code __feng_personality_v0(int version,
 }
 #endif
 
+/* Transfer an owned payload into a new record, leaving active catches intact. */
 void feng_throw(void *value, const FengTypeDescriptor *desc) {
 #if defined(_WIN32)
     (void)desc;
@@ -395,41 +468,39 @@ void feng_throw(void *value, const FengTypeDescriptor *desc) {
         feng_panic("feng_throw: out of memory");
     }
 
-    feng_release_current_unwind_exception(true);
     feng_unwind_exception_init(exception, value, desc);
-    g_current_unwind = exception;
 
     reason = _Unwind_RaiseException(&exception->unwind);
-    g_current_unwind = NULL;
     feng_cleanup_release_all();
-    if (exception->value != NULL) {
-        feng_release(exception->value);
-        exception->value = NULL;
-    }
-    free(exception);
+    feng_unwind_exception_destroy(exception);
     feng_panic("uncaught exception (unwind reason=%d)", (int)reason);
 #endif
 }
 
+/* Borrow the payload only from the innermost active catch. */
 void *feng_caught_value(void) {
-    return g_current_unwind != NULL ? g_current_unwind->value : NULL;
+    return g_catch_top != NULL && g_catch_top->exception != NULL
+               ? g_catch_top->exception->value : NULL;
 }
 
+/* Read the clause selected for the innermost active catch. */
 int feng_caught_clause(void) {
-    return g_current_unwind != NULL ? g_current_unwind->matched_clause : -1;
+    return g_catch_top != NULL && g_catch_top->exception != NULL
+               ? g_catch_top->exception->matched_clause : -1;
 }
 
+/* Transfer the active catch's original record back to the platform unwinder. */
 void feng_rethrow(void) {
 #if defined(_WIN32)
     feng_panic("feng_rethrow: native Windows exception backend is not implemented");
 #else
-    FengUnwindException *exception = g_current_unwind;
+    FengUnwindException *exception = g_catch_top != NULL ? g_catch_top->exception : NULL;
     _Unwind_Reason_Code reason;
 
     if (exception == NULL) {
         feng_panic("feng_rethrow: no current exception");
     }
-    g_current_unwind = NULL;
+    g_catch_top->exception = NULL;
     reason = _Unwind_Resume_or_Rethrow(&exception->unwind);
 
     /* A return means the restarted search found no outer handler. Match the
@@ -439,8 +510,4 @@ void feng_rethrow(void) {
     feng_unwind_exception_cleanup(reason, &exception->unwind);
     feng_panic("uncaught rethrown exception (unwind reason=%d)", (int)reason);
 #endif
-}
-
-void feng_release_unwind_exception(void) {
-    feng_release_current_unwind_exception(true);
 }

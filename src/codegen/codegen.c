@@ -1371,6 +1371,14 @@ typedef struct Local {
     bool      capture_cell_uses_dynamic_storage;
 } Local;
 
+/* A scope can own an exception boundary after all of its local resources. */
+typedef enum CGScopeExitKind {
+    CG_SCOPE_EXIT_NONE,
+    CG_SCOPE_EXIT_TRY,
+    CG_SCOPE_EXIT_CATCH
+} CGScopeExitKind;
+
+/* Lexical resource order shared by normal and explicit control-flow exits. */
 typedef struct Scope {
     struct Scope *parent;
     Local        *items;
@@ -1384,19 +1392,16 @@ typedef struct Scope {
      * the codegen instance (lives in cur_body's identifier pool) and freed
      * by the caller that created the scope. */
     const char   *continue_label;
-    /* try_depth observed at the moment this scope was pushed. Used by
-     * break/continue to clean active try/catch frames when jumping out of
-     * generated try/catch code. */
-    int           try_depth_at_entry;
+    CGScopeExitKind exit_kind;
     /* Each scope frame also holds a list of indices into items[] in original
      * insertion order; release-on-exit walks them in reverse. */
 } Scope;
 
+/* Allocate compiler-only scope metadata; exception ownership is not inherited. */
 static Scope *scope_push(Scope *parent) {
     Scope *s = calloc(1, sizeof *s);
     if (!s) return NULL;
     s->parent = parent;
-    s->try_depth_at_entry = parent ? parent->try_depth_at_entry : 0;
     return s;
 }
 
@@ -1936,11 +1941,6 @@ typedef struct CG {
     size_t          imported_generic_shared_proto_count;
     size_t          imported_generic_shared_proto_capacity;
 
-    /* try/catch state: how many active try frames are open in the current
-     * function. Used to refuse break / continue across them in 1A. */
-    int       try_depth;
-    int       active_exception_frame_count;
-    int       active_caught_unwind_count;
     size_t    eh_region_count;
     size_t    eh_label_counter;
 
@@ -2373,7 +2373,6 @@ static bool cg_types_equal(const CGType *a, const CGType *b);
 static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_return_control_cleanup(CG *cg);
-static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count);
 static bool cg_emit_function_eh_prologue(CG *cg, FengToken token);
 static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
                                          FengToken token, const char *terminator);
@@ -5175,14 +5174,14 @@ static bool cg_scope_bind_capture_cell(CG *cg, Scope *scope, FengSlice name,
         debug_kind, NULL);
 }
 
-/* Match aliases borrow stable subject storage until capture requires an owned
+/* Borrowed bindings use stable subject storage until capture requires an owned
  * cell. Copy compiler metadata before scope growth can invalidate the alias. */
-static bool cg_promote_match_binding_capture(CG *cg, FengSlice name,
+static bool cg_promote_binding_capture(CG *cg, FengSlice name,
     FengMutability mutability, FengToken blame, const char *condition) {
     if (name.data == NULL || !cg_current_callable_captures_name(cg, name.data, name.length))
         return true;
     const Local *local = scope_lookup(cg->cur_scope, name.data, name.length);
-    if (local == NULL) return cg_fail(cg, blame, "IE0002", "codegen: match binding storage is missing");
+    if (local == NULL) return cg_fail(cg, blame, "IE0002", "codegen: binding storage is missing");
     if (local->capture_cell_c_name != NULL) return true;
     CGType *type = cgtype_clone(local->type);
     char *source = strdup(local->c_name);
@@ -23307,9 +23306,6 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     int saved_tmp_counter = cg->tmp_counter;
     int saved_local_counter = cg->local_counter;
     int saved_loop_depth = cg->loop_depth;
-    int saved_try_depth = cg->try_depth;
-    int saved_active_exception_frame_count = cg->active_exception_frame_count;
-    int saved_active_caught_unwind_count = cg->active_caught_unwind_count;
     CGType *saved_return_type = cg->cur_return_type;
     bool saved_is_main = cg->cur_fn_is_main;
     bool saved_callable_return_uses_out = cg->callable_return_uses_out;
@@ -23346,9 +23342,6 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
-    cg->active_exception_frame_count = 0;
-    cg->active_caught_unwind_count = 0;
     cg->cur_function_has_frame_marker = false;
     cg->cur_return_type = spec->callable_return_type;
     cg->callable_return_uses_out =
@@ -23708,9 +23701,6 @@ cleanup:
     cg->tmp_counter = saved_tmp_counter;
     cg->local_counter = saved_local_counter;
     cg->loop_depth = saved_loop_depth;
-    cg->try_depth = saved_try_depth;
-    cg->active_exception_frame_count = saved_active_exception_frame_count;
-    cg->active_caught_unwind_count = saved_active_caught_unwind_count;
     cg->cur_return_type = saved_return_type;
     cg->callable_return_uses_out = saved_callable_return_uses_out;
     cg->generic_return_uses_out = saved_generic_return_uses_out;
@@ -34223,7 +34213,7 @@ static bool cg_emit_match_expr_all_exit(CG *cg, const FengExpr *e,
                     break;
                 }
 
-                ok = !branch->has_binding || cg_promote_match_binding_capture(cg,
+                ok = !branch->has_binding || cg_promote_binding_capture(cg,
                     branch->binding_name, branch->binding_mutability, branch->token, NULL);
                 if (ok) ok = cg_emit_nonresult_branch(cg, branch->body, branch->token);
                 cg->cur_scope = branch_scope->parent;
@@ -34489,7 +34479,7 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
                     break;
                 }
 
-                if (branch->has_binding && !cg_promote_match_binding_capture(cg,
+                if (branch->has_binding && !cg_promote_binding_capture(cg,
                         branch->binding_name, branch->binding_mutability, branch->token, NULL)) {
                     cg->cur_scope = branch_scope->parent;
                     scope_pop_free(branch_scope);
@@ -34968,7 +34958,7 @@ static bool cg_emit_match_op(CG *cg, const FengExpr *e, ExprResult *out) {
         char *hit = cg_fresh_temp(cg, "_capture_hit");
         if (hit == NULL) { buf_free(&cond); free(tgt_tmp); return false; }
         buf_append_fmt(cg->cur_body, "    const bool %s = %s;\n", hit, cond.data);
-        ok = cg_promote_match_binding_capture(cg, e->as.match_op.binding_name,
+        ok = cg_promote_binding_capture(cg, e->as.match_op.binding_name,
             e->as.match_op.binding_mutability, e->token, hit);
         buf_free(&cond);
         buf_init(&cond);
@@ -35105,6 +35095,7 @@ static bool cg_emit_try_expr_catch_binding(CG *cg,
     return true;
 }
 
+/* Evaluate a result in its own resource scope inside the enclosing boundary. */
 static bool cg_emit_try_expr_body_to_slot(CG *cg,
                                           const FengExpr *body,
                                           const char *slot_name,
@@ -35153,6 +35144,7 @@ static bool cg_discard_expr_result(CG *cg, ExprResult *result) {
     return true;
 }
 
+/* Evaluate a statement try body and release its local resources. */
 static bool cg_emit_try_expr_body_discard(CG *cg,
                                           const FengExpr *body,
                                           FengToken err_token) {
@@ -35232,6 +35224,7 @@ static bool cg_emit_try_catch_block_to_slot(CG *cg,
     return ok;
 }
 
+/* Lower try/catch with one stack context and lexical cleanup ownership. */
 static bool cg_emit_try_expr(CG *cg,
                              const FengExpr *e,
                              ExprResult *out,
@@ -35342,8 +35335,8 @@ static bool cg_emit_try_expr(CG *cg,
                    "        %s = true;\n"
                    "    }\n"
                    "    if (%s) goto %s;\n"
-                   "    FengFrameMarker %s;\n"
-                   "    feng_try_frame_push(&%s);\n"
+                   "    FengCatchContext %s;\n"
+                   "    feng_try_frame_push(&%s.frame);\n"
                    "    {\n"
                    "    %s: ;\n",
                    region_name,
@@ -35363,8 +35356,16 @@ static bool cg_emit_try_expr(CG *cg,
                    marker_name,
                    marker_name,
                    begin_label);
-    cg->try_depth++;
-    cg->active_exception_frame_count++;
+    Scope *try_scope = scope_push(cg->cur_scope);
+    if (try_scope == NULL) {
+        free(slot_name);
+        free(marker_name);
+        cgtype_free(result_type);
+        cg_expression_join_slot_free(&join_slot);
+        return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
+    }
+    try_scope->exit_kind = CG_SCOPE_EXIT_TRY;
+    cg->cur_scope = try_scope;
     bool ok = result_required
                   ? cg_emit_try_expr_body_to_slot(cg,
                                                   e->as.try_expr.body,
@@ -35377,8 +35378,12 @@ static bool cg_emit_try_expr(CG *cg,
                   : cg_emit_try_expr_body_discard(cg,
                                                   e->as.try_expr.body,
                                                   e->token);
-    cg->active_exception_frame_count--;
-    cg->try_depth--;
+    if (ok) {
+        buf_append_fmt(cg->cur_body, "    %s: ;\n    }\n", end_label);
+        cg_release_scope(cg, try_scope);
+    }
+    cg->cur_scope = try_scope->parent;
+    scope_pop_free(try_scope);
     if (!ok) {
         free(slot_name);
         free(marker_name);
@@ -35386,14 +35391,10 @@ static bool cg_emit_try_expr(CG *cg,
         return false;
     }
     buf_append_fmt(cg->cur_body,
-                   "    %s: ;\n"
-                   "    }\n"
-                   "    feng_frame_pop();\n"
                    "    goto %s;\n"
                    "    %s: ;\n"
-                   "    feng_frame_release_to(&%s);\n"
+                   "    feng_exception_catch_begin(&%s);\n"
                    "    int %s = feng_caught_clause();\n",
-                   end_label,
                    done_label,
                    landing_label,
                    marker_name,
@@ -35430,12 +35431,15 @@ static bool cg_emit_try_expr(CG *cg,
             cgtype_free(result_type);
             return cg_fail(cg, clause->token, "IE0001", "codegen: out of memory");
         }
+        catch_scope->exit_kind = CG_SCOPE_EXIT_CATCH;
         cg->cur_scope = catch_scope;
         if (!is_anonymous &&
-            !cg_emit_try_expr_catch_binding(cg,
+            (!cg_emit_try_expr_catch_binding(cg,
                                             clause,
                                             catch_type,
-                                            clause->token)) {
+                                            clause->token) ||
+             !cg_promote_binding_capture(cg, clause->name, FENG_MUTABILITY_LET,
+                                         clause->token, NULL))) {
             cg->cur_scope = catch_scope->parent;
             scope_pop_free(catch_scope);
             cgtype_free(catch_type);
@@ -35444,8 +35448,6 @@ static bool cg_emit_try_expr(CG *cg,
             cgtype_free(result_type);
             return false;
         }
-        cg->try_depth++;
-        cg->active_caught_unwind_count++;
         ok = result_required
              ? cg_emit_try_catch_block_to_slot(cg,
                                clause->body,
@@ -35456,8 +35458,6 @@ static bool cg_emit_try_expr(CG *cg,
                                &join_slot,
                                clause->token)
              : cg_emit_block(cg, clause->body);
-        cg->active_caught_unwind_count--;
-        cg->try_depth--;
         if (ok && !clause_exits) {
             cg_release_scope(cg, catch_scope);
         }
@@ -35471,9 +35471,7 @@ static bool cg_emit_try_expr(CG *cg,
             return false;
         }
         if (!clause_exits) {
-            buf_append_cstr(cg->cur_body,
-                            "        feng_release_unwind_exception();\n"
-                            "        goto ");
+            buf_append_cstr(cg->cur_body, "        goto ");
             buf_append_cstr(cg->cur_body, catch_done_label);
             buf_append_cstr(cg->cur_body, ";\n");
         }
@@ -35921,6 +35919,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
 /* ===================== statement emission ===================== */
 
+/* Release scope locals first, then the exception boundary they depend on. */
 static void cg_release_scope(CG *cg, const Scope *scope) {
     /* Walk in reverse insertion order to mirror C destruction. Each managed
      * non-param local was paired with a feng_cleanup_push at declaration; we
@@ -36064,6 +36063,13 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
             }
         }
     }
+    if (scope->exit_kind == CG_SCOPE_EXIT_TRY) {
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+    } else if (scope->exit_kind == CG_SCOPE_EXIT_CATCH) {
+        cg_emit_current_stmt_line_directive_force(cg);
+        buf_append_cstr(cg->cur_body, "    feng_exception_catch_end();\n");
+    }
 }
 
 /* Release all scopes from cg->cur_scope down to (but not including) `stop`.
@@ -36074,27 +36080,8 @@ static void cg_release_through(CG *cg, const Scope *stop) {
     }
 }
 
-/* Keep control-flow cleanup at the statement which exits the protected scope. */
-static void cg_emit_control_cleanup_to_try_depth(CG *cg, int keep_exception_frame_count) {
-    int pop_count;
-
-    if (cg->active_caught_unwind_count > 0) {
-        cg_emit_current_stmt_line_directive_force(cg);
-        buf_append_cstr(cg->cur_body, "    feng_release_unwind_exception();\n");
-    }
-    pop_count = cg->active_exception_frame_count - keep_exception_frame_count;
-    if (pop_count < 0) {
-        pop_count = 0;
-    }
-    for (int i = 0; i < pop_count; ++i) {
-        cg_emit_current_stmt_line_directive_force(cg);
-        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
-    }
-}
-
 /* Anchor frame teardown and leave the following return at the same statement. */
 static void cg_emit_return_control_cleanup(CG *cg) {
-    cg_emit_control_cleanup_to_try_depth(cg, 0);
     if (cg->cur_function_has_frame_marker) {
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
@@ -41436,7 +41423,7 @@ static bool cg_emit_union_match_stmt_branch(CG *cg,
         }
     }
 
-    ok = !has_binding || cg_promote_match_binding_capture(cg, binding_name,
+    ok = !has_binding || cg_promote_binding_capture(cg, binding_name,
         branch->binding_mutability, token, NULL);
     if (ok) ok = cg_emit_block(cg, block);
     if (ok) {
@@ -41739,7 +41726,6 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     if (!cond_scope) return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     if (has_match_binding) {
         cond_scope->is_loop = true;
-        cond_scope->try_depth_at_entry = cg->try_depth;
         cg->loop_depth++;
     }
     cg->cur_scope = cond_scope;
@@ -41790,7 +41776,6 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     Scope *body_scope = scope_push(cg->cur_scope);
     if (!body_scope) { cg->loop_depth--; return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory"); }
     body_scope->is_loop = true;
-    body_scope->try_depth_at_entry = cg->try_depth;
     cg->cur_scope = body_scope;
     if (!cg_emit_block(cg, stmt->as.while_stmt.body)) {
         cg->cur_scope = body_scope->parent;
@@ -42460,7 +42445,6 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
-    body_scope->try_depth_at_entry = cg->try_depth;
     /* Stash label in a stable buffer associated with cur_body — we use the
      * outer scope as the lifetime anchor by allocating on the heap and
      * tracking via the items list: simpler to embed the literal in body_scope
@@ -43067,7 +43051,6 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
-    body_scope->try_depth_at_entry = cg->try_depth;
     char *cont_label_owned = strdup(cont_label);
     body_scope->continue_label = cont_label_owned;
     cg->cur_scope = body_scope;
@@ -43501,7 +43484,6 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
         return cg_fail(cg, stmt->token, "IE0001", "codegen: out of memory");
     }
     body_scope->is_loop = true;
-    body_scope->try_depth_at_entry = cg->try_depth;
     char *cont_label_owned = strdup(cont_label);
     body_scope->continue_label = cont_label_owned;
     cg->cur_scope = body_scope;
@@ -43623,6 +43605,7 @@ static bool cg_emit_for(CG *cg, const FengStmt *stmt) {
     return cg_emit_for_three(cg, stmt);
 }
 
+/* Close exactly the lexical scopes left by the nearest loop transfer. */
 static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) {
     if (cg->loop_depth == 0) {
         return cg_fail(cg, stmt->token,
@@ -43645,8 +43628,6 @@ static bool cg_emit_break_continue(CG *cg, const FengStmt *stmt, bool is_break) 
     if (stop != NULL) {
         cg_release_scope(cg, stop);
     }
-    cg_emit_control_cleanup_to_try_depth(cg,
-                                         stop != NULL ? stop->try_depth_at_entry : 0);
     if (!is_break && stop != NULL && stop->continue_label != NULL) {
         buf_append_fmt(cg->cur_body, "    goto %s;\n", stop->continue_label);
     } else {
@@ -44955,9 +44936,6 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         int saved_tmp_counter = cg->tmp_counter;
         int saved_local_counter = cg->local_counter;
         int saved_loop_depth = cg->loop_depth;
-        int saved_try_depth = cg->try_depth;
-        int saved_active_exception_frame_count = cg->active_exception_frame_count;
-        int saved_active_caught_unwind_count = cg->active_caught_unwind_count;
         CGType *saved_return_type = cg->cur_return_type;
         bool saved_is_main = cg->cur_fn_is_main;
         bool saved_has_frame_marker = cg->cur_function_has_frame_marker;
@@ -44978,9 +44956,6 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         cg->tmp_counter = 0;
         cg->local_counter = 0;
         cg->loop_depth = 0;
-        cg->try_depth = 0;
-        cg->active_exception_frame_count = 0;
-        cg->active_caught_unwind_count = 0;
         cg->cur_function_has_frame_marker = false;
         cg->cur_return_type = cgtype_new(CG_TYPE_VOID);
         cg->cur_fn_is_main = false;
@@ -45180,9 +45155,6 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
         cg->tmp_counter = saved_tmp_counter;
         cg->local_counter = saved_local_counter;
         cg->loop_depth = saved_loop_depth;
-        cg->try_depth = saved_try_depth;
-        cg->active_exception_frame_count = saved_active_exception_frame_count;
-        cg->active_caught_unwind_count = saved_active_caught_unwind_count;
         cg->cur_return_type = saved_return_type;
         cg->cur_fn_is_main = saved_is_main;
         cg->cur_function_has_frame_marker = saved_has_frame_marker;
@@ -50954,10 +50926,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         cg->tmp_counter = 0;
         cg->local_counter = 0;
         cg->loop_depth = 0;
-        cg->try_depth = 0;
         cg->cur_fn_is_main = false;
-        cg->active_exception_frame_count = 0;
-        cg->active_caught_unwind_count = 0;
         cg->cur_function_has_frame_marker = false;
 
         /* One canonical mapping keeps aggregate, managed, and callable slots
@@ -52551,7 +52520,6 @@ static bool cg_emit_function(CG *cg,
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
 
     for (size_t i = 0; i < fn->param_count; i++) {
         if (i) buf_append_cstr(body, ", ");
@@ -63472,10 +63440,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
     cg->cur_fn_is_main = false;
-    cg->active_exception_frame_count = 0;
-    cg->active_caught_unwind_count = 0;
     cg->cur_function_has_frame_marker = false;
 
     if (!cg_emit_function_eh_prologue(cg, member->token)) {
@@ -64298,7 +64263,6 @@ static bool cg_emit_user_method(CG *cg,
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
 
     for (size_t i = 0; i < m->param_count; i++) {
         if (has_param) {
@@ -64569,9 +64533,6 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
-    cg->active_exception_frame_count = 0;
-    cg->active_caught_unwind_count = 0;
     cg->cur_function_has_frame_marker = false;
 
     for (size_t i = 0; i < m->param_count; i++) {
@@ -64995,9 +64956,6 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     cg->tmp_counter = 0;
     cg->local_counter = 0;
     cg->loop_depth = 0;
-    cg->try_depth = 0;
-    cg->active_exception_frame_count = 0;
-    cg->active_caught_unwind_count = 0;
     cg->cur_function_has_frame_marker = false;
 
     if (!cg_emit_function_eh_prologue(cg, fm->token)) {

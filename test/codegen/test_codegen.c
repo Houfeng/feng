@@ -12484,7 +12484,7 @@ static void test_try_catch_return_codegen(void) {
     ASSERT(strstr(out.c_source, "switch (feng_caught_clause())") == NULL);
     ASSERT(strstr(out.c_source, "int _try_clause_") != NULL);
     ASSERT(strstr(out.c_source, "feng_frame_pop();") != NULL);
-    ASSERT(strstr(out.c_source, "feng_release_unwind_exception();") != NULL);
+    ASSERT(strstr(out.c_source, "feng_exception_catch_end();") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -12576,7 +12576,7 @@ static void test_g17_expression_branch_exit_codegen(void) {
     ASSERT(strstr(out.c_source, "g17branchexit__from_match") != NULL);
     ASSERT(strstr(out.c_source, "g17branchexit__from_try") != NULL);
     ASSERT(strstr(out.c_source, "g17branchexit__from_mixed_if") != NULL);
-    ASSERT(strstr(out.c_source, "feng_release_unwind_exception();") != NULL);
+    ASSERT(strstr(out.c_source, "feng_exception_catch_end();") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -17375,9 +17375,13 @@ static void test_g23_qualified_generic_function_codegen(void) {
 /* Additional builtin-constraint coverage; existing cases remain unchanged. */
 void test_throw_constraint_codegen(void (*compile_c)(const char *));
 
+/* Independent nested exception scope and capture ownership checks. */
+void test_nested_exception_codegen(void (*compile_c)(const char *));
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
+    test_nested_exception_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);

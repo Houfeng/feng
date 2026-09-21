@@ -872,6 +872,16 @@ typedef struct FengFrameMarker {
     bool            is_function_boundary;
 } FengFrameMarker;
 
+/* One lexical try/catch activation. The try initially uses only `frame`;
+ * catch entry turns that same node into its exception owner on the cleanup
+ * chain. `previous` links active catches, including catches in callers.
+ * The two catch fields are initialized only on the exceptional path. */
+typedef struct FengCatchContext {
+    FengFrameMarker frame;
+    FengUnwindException *exception;
+    struct FengCatchContext *previous;
+} FengCatchContext;
+
 /* Push/pop a managed local onto the cleanup chain. `node` must outlive the
  * scope of the tracked value and is typically a stack-allocated
  * FengCleanupNode adjacent to the local. Pop must be called in strict LIFO
@@ -899,9 +909,19 @@ void feng_try_frame_push(FengFrameMarker *marker);
 void feng_frame_pop(void);
 void feng_frame_release_to(FengFrameMarker *marker);
 
+/* Take ownership of the exception delivered to this landing pad, clean the
+ * try's resources, and activate its catch. `context->frame` must be the
+ * corresponding live try marker. Its storage must outlive the catch. */
+void feng_exception_catch_begin(FengCatchContext *context);
+
+/* End the innermost active catch after its locals/defers have been cleaned.
+ * Restores the previous catch and releases any exception still owned here.
+ * Unwind cleanup performs the same end action through the context's node. */
+void feng_exception_catch_end(void);
+
+/* Read the active catch's borrowed payload or selected clause. */
 void *feng_caught_value(void);
 int   feng_caught_clause(void);
-void  feng_release_unwind_exception(void);
 
 #if defined(__GNUC__) || defined(__clang__)
 void feng_throw(void *value, const FengTypeDescriptor *desc) __attribute__((noreturn));
