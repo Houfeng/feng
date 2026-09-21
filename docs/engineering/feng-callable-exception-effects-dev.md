@@ -1,6 +1,6 @@
 # Feng callable 异常集合分析与 N08 后续优化方案
 
-> **状态**：2026-09-21，P33 的结构化异常元信息优化已完成，沙箱外全量 `make test` 及现有 LSP 验证全部通过，等待人工 Review；P25 的性能脚本改动仍待决定保留或恢复；阶段二尚未开始。
+> **状态**：2026-09-21，P33 的结构化异常元信息优化已完成，沙箱外全量 `make test` 及现有 LSP 验证全部通过，等待人工 Review；P25 的性能脚本 stderr 改动已获人工确认保留；阶段二尚未开始。
 >
 > **人工决定**：先完成[嵌套 catch 生命周期修复](./feng-nested-catch-exception-lifetime-bugfix.md)；
 > N08 独立跟踪，触发用例完整保留并注释。后续记录函数、方法等 callable 可能向外
@@ -390,7 +390,7 @@ defer 规则，N08 用例继续完整注释保留，阶段一的全量回归通�
 | P22 | 复核 FT 边界发现：摘要根只检查 symbol／function ID 有效，尚未核对函数形状；把根改指另一个有效函数可绕过图内部校验，后续 owner 实参绑定依赖不匹配的槽位数量 | 在根挂接时校验声明类别、owner＋callable 泛参、显式参数及 receiver capture 数量，不接受错配根 | 增补两个 profile 的有效 ID 错配根及参数／capture 数量损坏用例，拒绝发生在 FT 读取阶段 |
 | P23（验证过程） | 普通回归的增量构建检查发现 `make all` 有待重编文件 | 回归执行期间为 P22 修改了 `ft_read.c`，本轮结果已不对应固定源码快照；属于验证过程干扰 | 保存本轮日志，完成 P22 定向测试后冻结代码，重新执行完整 `make test`；不修改原增量构建断言 |
 | P24（验证脚本） | 既有 cache-retention Python 脚本在缓存断言前失败，写死的包路径是 `build/*.fb`，实际输出在 `build/pkg/*.fb` | 路径由 2026-07-26 的 `ef8289af` 调整，本次未改输出路径；该手工脚本不在 `make test` 中，未同步修改 | 人工允许修正现有脚本，仅更新路径；原缓存断言保持不变 |
-| P25（验证脚本） | 基础 LSP 性能脚本以 std_test 为输入，交互请求完成后等待进程退出超时 30 秒 | 脚本将子进程 stderr 接入 PIPE 却从不读取；依赖构建的约 467 KB Information 写满管道。诊断时仅将 stderr 写入日志，原请求／断言均通过，证明不是交互或后台求解超时 | 曾将 stderr 改为继承输出，原性能门槛通过；Review 复核发现人工明确批准的是 P24 路径修正，P25 未获得同样明确的单独批准，已请求决定恢复或保留；不新增 Python 文件 |
+| P25（验证脚本） | 基础 LSP 性能脚本以 std_test 为输入，交互请求完成后等待进程退出超时 30 秒 | 脚本将子进程 stderr 接入 PIPE 却从不读取；依赖构建的约 467 KB Information 写满管道。诊断时仅将 stderr 写入日志，原请求／断言均通过，证明不是交互或后台求解超时 | stderr 改为继承输出，测试请求、断言及性能门槛不变，现有验证全部通过。此前此项批准状态待确认；人工在确认不影响执行和验证后，同意保留。仅调整日志去向，不新增 Python 文件 |
 | P26 | 最终普通 CLI 回归中，跨包编辑用例得到新 Hover `none`，但未观察到空诊断；同轮 UBSan 路径已通过 | 新用例误以为 didChange 请求诊断；实际只有 didSave 请求，之前通过依赖尚未执行的保存任务被合并。改为先等待原 Information，再编辑等待 Hover，最后保存并分别验证同步 parse 与后台完整诊断。后台成功分析即使与已发布缓存同版本，也应独立发布诊断，不能用缓存是否替换作为成功条件 | 修正新增用例与 P13 成功判据后，独立 CLI 及冻结代码后的 UBSan／普通全量回归均通过，保持现有通知语义 |
 | P27 | 人工 Review 的终端截图显示大量异常传播 `info`，定位被既有打印器渲染为红色；上轮全量虽退出 0，CLI 输出范围仍不符合 LSP 提示要求 | 异常 Information 进入共享语义 infos，所有 CLI 接收者一并打印。首版尝试增加受众标记在前端过滤，随后按 P30 的人工意见移除此设计，由 LSP 自行生成提示 | 首版及 P30 最终方案均完成沙箱外 `make test`；最终完整日志的异常传播提示为 0 条 |
 | P28（构建环境） | P27 首次普通增量链接发现 `lexer.o`／`dump.o` 引用 `__ubsan_handle_*`，普通链接没有 sanitizer runtime 而退出 2 | 当前目标目录保留了 UBSan 产物；不同编译选项不能混用。确认没有其他构建运行后，清理生成物并统一重编 | 清理重编和独立 CLI 回归通过；不改编译器逻辑或测试断言 |
@@ -501,7 +501,7 @@ P16 已于 2026-09-21 获人工批准，具体迁移涉及 `std/std/src/thread/T
 #### 5.2.5 阶段一覆盖映射与验证记录
 
 新增用例只追加 C／Feng 文件、测试函数和注册，不改写既有测试断言；N08 的注释用例保持原样。
-P24 的现有 Python 脚本路径修正已获批准；P25 的 stderr 改动仍待人工决定，不新增 Python 文件。
+P24 的现有 Python 脚本路径修正与 P25 的 stderr 改动均已获人工批准，不新增 Python 文件。
 以下按断言目标映射，结果以定向测试及全量回归日志为准。
 
 | 维度 | 用例及断言 |
@@ -569,7 +569,7 @@ P27／P30 修正后的验证（2026-09-21，P31 实施前）：
 | 沙箱外 `make test` | 冻结实现后完整退出 0；UBSan 与普通构建每轮 std 607／607、FCTS 1470／1470、smoke 91／91，均无失败或跳过；所有其余全量目标通过。完整日志 `temp/exception-facts-regression.log` |
 | CLI 输出与 LSP 提示 | 完整回归日志中的 `exceptions may propagate from this call:` 为 0 条；CLI 各入口无该提示，原有通用提示保留；LSP 的本地／跨包 Information、Hover、编辑更新／清除及 ABI error 用例通过 |
 | 手工缓存及调度 | 两个现有脚本通过；日志 `temp/exception-facts-lsp-cache.log`、`temp/exception-facts-lsp-scheduler.log` |
-| LSP 基础交互性能 | 200 次采样，交互 P99 0.043 ms，原门槛通过；日志 `temp/exception-facts-lsp-performance.log`。此结果使用当前包含 P25 stderr 改动的脚本，不代表该改动已经获批 |
+| LSP 基础交互性能 | 200 次采样，交互 P99 0.043 ms，原门槛通过；日志 `temp/exception-facts-lsp-performance.log`。此结果使用含 P25 stderr 改动的脚本；该改动后续已获人工确认保留 |
 | 推导 callable 性能与恢复 | 现有脚本 200 次采样的全部场景及原门槛通过；日志 `temp/exception-facts-lsp-inferred.log` |
 | LSP 规模矩阵 | 1 万／10 万／100 万行、200 次采样，整体交互 P99 0.127 ms、Max 0.351 ms；原门槛通过，日志 `temp/exception-facts-lsp-matrix.log` |
 
@@ -581,7 +581,7 @@ P31 验证（2026-09-21，P33 实施前）：
 | 沙箱外 `make test` | 完整退出 0。UBSan 与普通构建每轮 std 607／607、FCTS 1470／1470、smoke 91／91，失败和跳过均为 0；其余全量目标全部通过。日志 `temp/exception-types-hover-regression.log` |
 | 提示与强检查 | 全量日志中异常传播 Information 为 0 条，UBSan runtime error 为 0 条；LSP 保存时分别验证 parse 和完整语义诊断均无该提示；已知／未知 ABI 逃逸仍为 error |
 | 缓存及调度 | 现有两个脚本通过；日志 `temp/exception-types-hover-lsp-cache.log`、`temp/exception-types-hover-lsp-scheduler.log` |
-| 基础交互性能 | 200 次采样，交互 P99 0.071 ms，原门槛通过；日志 `temp/exception-types-hover-lsp-performance.log`。仍使用含 P25 stderr 改动的当前脚本，此验证不代表该改动已经获批 |
+| 基础交互性能 | 200 次采样，交互 P99 0.071 ms，原门槛通过；日志 `temp/exception-types-hover-lsp-performance.log`。此结果使用含 P25 stderr 改动的脚本；该改动后续已获人工确认保留 |
 | 推导 callable 性能及恢复 | 现有脚本每个稳定场景 200 次采样，全部原门槛通过；日志 `temp/exception-types-hover-lsp-inferred.log` |
 | 规模矩阵 | 1 万／10 万／100 万行、200 次采样，整体交互 P99 0.131 ms、Max 0.269 ms，原门槛通过；日志 `temp/exception-types-hover-lsp-matrix.log` |
 
@@ -597,7 +597,7 @@ P33 最新验证（2026-09-21）：
 | 沙箱外 `make test` | 完整退出 0；UBSan 与普通构建每轮 std 607／607、FCTS 1470／1470、smoke 91／91，无失败或跳过；其余全部回归目标通过。完整日志 `temp/exception-structured-regression.log` |
 | 文本与元信息隔离 | 回归日志中异常传播 Information 为 0 条、UBSan runtime error 为 0 条；已重编 std／FCTS 库，实际 std FT 扫描未发现原 unknown 原因、Hover 标签或 ABI 诊断正文；受控 FT 用例直接检查 STRS 并核对源码注释 |
 | 缓存及调度 | 现有两个脚本通过；日志 `temp/exception-structured-lsp-cache.log`、`temp/exception-structured-lsp-scheduler.log` |
-| 基础交互性能 | 200 次采样，交互 P99 0.050 ms，原门槛通过；日志 `temp/exception-structured-lsp-performance.log`。仍使用含 P25 stderr 改动的当前脚本，此验证不代表该改动已经获批 |
+| 基础交互性能 | 200 次采样，交互 P99 0.050 ms，原门槛通过；日志 `temp/exception-structured-lsp-performance.log`。此结果使用含 P25 stderr 改动的脚本；该改动已获人工确认保留 |
 | 推导 callable 性能及恢复 | 现有脚本每个稳定场景 200 次采样，全部原门槛通过；日志 `temp/exception-structured-lsp-inferred.log` |
 | 规模矩阵 | 1 万／10 万／100 万行、200 次采样，整体交互 P99 0.131 ms、Max 0.249 ms，原门槛通过；日志 `temp/exception-structured-lsp-matrix.log` |
 
