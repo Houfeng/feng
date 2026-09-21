@@ -25,6 +25,7 @@
 #include "cli/project/common.h"
 #include "lexer/lexer.h"
 #include "parser/parser.h"
+#include "semantic/exception_effects.h"
 #include "platform/platform.h"
 #include "semantic/semantic.h"
 #include "symbol/export.h"
@@ -417,6 +418,7 @@ typedef struct FengLspHoverPresentation {
     const char *category_caption;
     const char *category_label;
     char *documentation;
+    char *exceptions;
 } FengLspHoverPresentation;
 
 struct FengLspService {
@@ -2347,7 +2349,9 @@ static bool build_standalone_session(const FengLspService *service,
             return false;
         }
         session->owned_source_path_count = 1U;
-        return session_bind_owned_source_paths(session);
+        if (!session_bind_owned_source_paths(session)) {
+            return false;
+        }
     }
     return true;
 }
@@ -3404,6 +3408,7 @@ static void *background_analyzer_main(void *user) {
         pthread_t module_thread;
         bool module_thread_started = false;
         bool analysis_built = false;
+        bool analysis_succeeded = false;
         bool publish = false;
         bool refresh_workspace_index = false;
         bool task_ready = false;
@@ -3525,7 +3530,9 @@ static void *background_analyzer_main(void *user) {
                                                &candidate,
                                                refresh_workspace_index);
         }
-        if (analysis_built && candidate.exit_code == 0 && candidate.analysis != NULL) {
+        analysis_succeeded = analysis_built && candidate.exit_code == 0 &&
+                             candidate.analysis != NULL;
+        if (analysis_succeeded) {
             FengLspWorkspaceAnalysis *workspace;
 
             if (candidate.is_project) {
@@ -3599,8 +3606,11 @@ static void *background_analyzer_main(void *user) {
             }
             pthread_mutex_unlock(&service->analysis_mutex);
             pthread_mutex_unlock(&service->documents_mutex);
+            /* Diagnostics are independent of cache replacement: a save may
+             * analyze a generation already published by an earlier edit. */
             if (diagnostics_are_current &&
-                diagnostics_has_analysis_result(&analysis_diagnostics) &&
+                (analysis_succeeded ||
+                 diagnostics_has_analysis_result(&analysis_diagnostics)) &&
                 service->protocol_output != NULL &&
                 !publish_diagnostics(service->protocol_output,
                                      &analysis_diagnostics,
@@ -12289,6 +12299,7 @@ static void hover_presentation_dispose(FengLspHoverPresentation *presentation) {
     }
     string_dispose(&presentation->signature);
     free(presentation->documentation);
+    free(presentation->exceptions);
     memset(presentation, 0, sizeof(*presentation));
 }
 
@@ -12321,9 +12332,14 @@ static bool render_hover_plaintext(FengLspString *out,
          !string_append_cstr(out, presentation->category_label))) {
         return false;
     }
-    return presentation->documentation == NULL || presentation->documentation[0] == '\0' ||
-           (string_append_cstr(out, "\n\n") &&
-            string_append_cstr(out, presentation->documentation));
+    if (presentation->documentation != NULL && presentation->documentation[0] != '\0' &&
+        (!string_append_cstr(out, "\n\n") ||
+         !string_append_cstr(out, presentation->documentation))) {
+        return false;
+    }
+    return presentation->exceptions == NULL ||
+           (string_append_cstr(out, "\n\nPossible exceptions: ") &&
+            string_append_cstr(out, presentation->exceptions));
 }
 
 /* Render structured Hover content as Markdown without reparsing plaintext. */
@@ -12345,9 +12361,15 @@ static bool render_hover_markdown(FengLspString *out,
          !string_append_cstr(out, "`"))) {
         return false;
     }
-    return presentation->documentation == NULL || presentation->documentation[0] == '\0' ||
-           (string_append_cstr(out, "\n\n") &&
-            append_hover_doc_markdown(out, presentation->documentation));
+    if (presentation->documentation != NULL && presentation->documentation[0] != '\0' &&
+        (!string_append_cstr(out, "\n\n") ||
+         !append_hover_doc_markdown(out, presentation->documentation))) {
+        return false;
+    }
+    return presentation->exceptions == NULL ||
+           (string_append_cstr(out, "\n\n**Possible exceptions:** `") &&
+            string_append_cstr(out, presentation->exceptions) &&
+            string_append_cstr(out, "`"));
 }
 
 /* Build an LSP Hover result from the shared structured presentation. */
@@ -12424,6 +12446,19 @@ static bool hover_presentation_for_target(const FengLspAnalysisSession *session,
 
     if (target == NULL || presentation == NULL) {
         return false;
+    }
+    const void *source =
+        target->kind == FENG_LSP_RESOLVED_MEMBER && target->member != NULL &&
+                target->member->kind != FENG_TYPE_MEMBER_FIELD
+            ? (const void *)target->member
+        : target->kind == FENG_LSP_RESOLVED_DECL && target->decl != NULL &&
+                target->decl->kind == FENG_DECL_FUNCTION
+            ? (const void *)target->decl : NULL;
+    const FengExceptionTemplate *summary = session != NULL ?
+        feng_semantic_exception_template(session->analysis, source) : NULL;
+    if (summary != NULL && summary->effects != 0U) {
+        presentation->exceptions = feng_exception_format(summary->graph, summary->effects);
+        if (presentation->exceptions == NULL) return false;
     }
     switch (target->kind) {
         case FENG_LSP_RESOLVED_DECL:
@@ -20115,6 +20150,19 @@ static bool hover_presentation_for_cache_target(
     if (context == NULL || target == NULL || presentation == NULL) {
         return false;
     }
+    const FengSymbolDeclView *source = target->kind == FENG_LSP_RESOLVED_MEMBER ? target->member :
+        target->kind == FENG_LSP_RESOLVED_DECL ? target->decl : NULL;
+    FengSymbolDeclKind source_kind = feng_symbol_decl_kind(source);
+    const FengExceptionTemplate *exceptions =
+        source_kind == FENG_SYMBOL_DECL_KIND_FUNCTION ||
+        source_kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+        source_kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+        source_kind == FENG_SYMBOL_DECL_KIND_FINALIZER
+            ? feng_symbol_decl_exception_template(source) : NULL;
+    if (exceptions != NULL && exceptions->effects != 0U) {
+        presentation->exceptions = feng_exception_format(exceptions->graph, exceptions->effects);
+        if (presentation->exceptions == NULL) return false;
+    }
 
     switch (target->kind) {
         case FENG_LSP_RESOLVED_DECL:
@@ -20561,6 +20609,19 @@ static bool handle_hover_request(FengLspService *service,
                                                            program,
                                                            &target,
                                                            &presentation);
+            }
+            if (has_hover) {
+                for (size_t i = 0U; i < program->declaration_count; ++i) {
+                    const FengExpr *call = find_call_hit_in_decl(program->declarations[i], offset);
+                    FengExceptionCallFacts facts;
+                    if (!feng_semantic_exception_call_facts(session->analysis, call, &facts)) continue;
+                    char *copy = NULL;
+                    if (facts.effects != 0U) {
+                        copy = feng_exception_format(facts.graph, facts.effects);
+                        if (copy == NULL) { has_hover = false; break; }
+                    }
+                    free(presentation.exceptions); presentation.exceptions = copy; break;
+                }
             }
         }
     }

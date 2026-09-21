@@ -930,6 +930,11 @@ FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl) {
     return decl != NULL ? slice_from_cstr(decl->name) : (FengSlice){0};
 }
 
+/* Query immutable metadata without reanalyzing imported or cached bodies. */
+const FengExceptionTemplate *feng_symbol_decl_exception_template(const FengSymbolDeclView *decl) {
+    return decl != NULL && decl->exception_template.graph != NULL ? &decl->exception_template : NULL;
+}
+
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl) {
     return decl != NULL ? slice_from_cstr(decl->doc) : (FengSlice){0};
 }

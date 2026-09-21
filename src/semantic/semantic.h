@@ -73,6 +73,10 @@ typedef struct FengSemanticModule {
      * body; codegen skips local body emission and semantic conflict passes
      * treat them as pre-resolved package output. */
     FengSemanticModuleOrigin origin;
+    /* Provider-owned compile-time facts attached to this imported module. */
+    const void *exception_metadata_user;
+    const struct FengExceptionTemplate *(*get_exception_template)(
+        const void *user, const void *source_node);
 } FengSemanticModule;
 
 /* Per-`type` marker computed from the static managed-reference graph.
@@ -492,6 +496,8 @@ typedef struct FengImportedSymbolIdentity {
 } FengImportedSymbolIdentity;
 
 typedef struct FengSemanticAnalysis {
+    /* Unified compile-time exception summaries and callable value origins. */
+    struct FengExceptionAnalysis *exception_analysis;
     FengConstraintProjectionUse *constraint_projection_uses;
     size_t constraint_projection_use_count;
     size_t constraint_projection_use_capacity;

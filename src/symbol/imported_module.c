@@ -44,6 +44,31 @@ struct FengSymbolImportedModuleCache {
     size_t entry_capacity;
 };
 
+/* Adapt provider declaration facts to the core's neutral module callback. */
+static const FengExceptionTemplate *imported_exception_template(
+    const void *user, const void *source_node) {
+    const SynthProgram *program = user;
+    for (size_t i = 0U; i < program->decl_count; ++i) {
+        const SynthDecl *decl = &program->decls[i];
+        if (&decl->decl == source_node) return &decl->symbol_view->exception_template;
+        FengTypeMember *const *members = NULL; size_t count = 0U;
+        if (decl->decl.kind == FENG_DECL_TYPE) {
+            members = decl->decl.as.type_decl.members; count = decl->decl.as.type_decl.member_count;
+        } else if (decl->decl.kind == FENG_DECL_FIT) {
+            members = decl->decl.as.fit_decl.members; count = decl->decl.as.fit_decl.member_count;
+        } else if (decl->decl.kind == FENG_DECL_SPEC && decl->decl.as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+            members = decl->decl.as.spec_decl.as.object.members; count = decl->decl.as.spec_decl.as.object.member_count;
+        }
+        size_t at = 0U;
+        for (size_t j = 0U; j < decl->symbol_view->member_count && at < count; ++j) {
+            const FengSymbolDeclView *symbol = decl->symbol_view->members[j];
+            if (symbol->kind == FENG_SYMBOL_DECL_KIND_TYPE_PARAM) continue;
+            if (members[at++] == source_node) return &symbol->exception_template;
+        }
+    }
+    return NULL;
+}
+
 /* Grow only the pointer index: callers may retain module views across loads. */
 static SynthModuleEntry *cache_append(FengSymbolImportedModuleCache *cache,
                                       const SynthModuleEntry *entry) {
@@ -1492,6 +1517,8 @@ static const FengSemanticModule *cache_get_module(const void *user,
     entry.sem_mod.program_count = 1U;
     entry.sem_mod.program_capacity = 1U;
     entry.sem_mod.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+    entry.sem_mod.exception_metadata_user = entry.prog;
+    entry.sem_mod.get_exception_template = imported_exception_template;
 
     appended = cache_append(cache, &entry);
     if (appended == NULL) {

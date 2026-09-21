@@ -5952,7 +5952,10 @@ void test_constraint_projection_ft(void);
 /* Builtin bounds persist beside legacy constraints in both FT profiles. */
 void test_throw_constraint_ft(void);
 
+void test_exception_effects_ft(void);
+
 int main(void) {
+    test_exception_effects_ft();
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
     test_throw_constraint_ft();

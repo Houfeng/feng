@@ -1,0 +1,86 @@
+module fcts_bin;
+
+import std.test;
+import std.thread;
+
+/** The effect summary does not require ordinary callers to catch. */
+func effectStageOneRaise<T: throw>(value: T): void { throw value; }
+
+/** A typed catch translates string while an anonymous catch preserves its input. */
+func effectStageOneTranslate<T: throw>(value: T): void {
+  try effectStageOneRaise(value) catch error: string {
+    throw 73;
+  } catch {
+    throw;
+  }
+}
+
+/** Callable creation and execution have distinct effects. */
+spec EffectStageOneAction(): void;
+
+/** A closure retains its value and generic exception descriptor. */
+func effectStageOneCapture<T: throw>(value: T): EffectStageOneAction {
+  return () { effectStageOneRaise(value); };
+}
+
+/** Existing legal cleanup consumes its own indirect exception. */
+func effectStageOneCleanup(): void {
+  try effectStageOneRaise("cleanup") catch error: string {
+    assert(error == "cleanup", "cleanup catch retains payload");
+  }
+}
+
+/** Runtime conformance for stage-one compile-time summaries. */
+open func test_callable_exception_effects(): void {
+  describe("callable exception effect summaries preserve behavior", () {
+    test("ordinary generic propagation and typed translation", () {
+      var seen = false;
+      try effectStageOneTranslate("original") catch error: int {
+        seen = error == 73;
+      }
+      assert(seen, "unhandled inner exception reaches outer caller");
+    });
+    test("anonymous rethrow preserves the unmatched type", () {
+      var seen = false;
+      try effectStageOneTranslate(true) catch error: bool {
+        seen = error;
+      }
+      assert(seen, "typed catch did not consume unrelated payload");
+    });
+    test("closure construction stays separate from invocation", () {
+      let action = effectStageOneCapture("captured");
+      var seen = false;
+      try action() catch error: string {
+        seen = error == "captured";
+      }
+      assert(seen, "invocation propagates the captured generic payload");
+    });
+    test("catch-all can consume any propagated payload", () {
+      var seen = false;
+      try effectStageOneRaise((i32)9) catch {
+        seen = true;
+      }
+      assert(seen, "catch-all remains available without a binding");
+    });
+    test("legal cleanup can handle an indirect exception", () {
+      defer { effectStageOneCleanup(); }
+      assert(true, "stage one does not change defer restrictions");
+    });
+    test("thread entry returns normally for a successful callback", () {
+      var ran = false;
+      let thread = Thread.spawn(() { ran = true; });
+      thread.join();
+      assert(ran, "thread callback completed before join returned");
+    });
+    test("thread callback can consume its own exception", () {
+      var handled = false;
+      let thread = Thread.spawn(() {
+        try effectStageOneRaise("thread") catch error: string {
+          handled = error == "thread";
+        }
+      });
+      thread.join();
+      assert(handled, "internally handled exceptions do not terminate the process");
+    });
+  });
+}

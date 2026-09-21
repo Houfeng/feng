@@ -94,7 +94,9 @@ def main() -> int:
         [args.server, "lsp", "--stdio"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        # Dependency builds can emit diagnostics; inherit stderr so an unread
+        # pipe cannot block the server during shutdown.
+        stderr=None,
     )
     assert process.stdin is not None
     try:

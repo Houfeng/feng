@@ -1,4 +1,5 @@
 #include "symbol/ft_internal.h"
+#include "symbol/exception_io.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -20,6 +21,7 @@ typedef struct ReadContext {
     const FengSymbolFtSectionEntry *union_projections_section;
     const FengSymbolFtSectionEntry *spec_view_coercions_section;
     const FengSymbolFtSectionEntry *constraint_projections_section;
+    const FengSymbolFtSectionEntry *exception_effects_section;
     const FengSymbolFtSectionEntry *spns_section;
     char **strings;
     size_t string_count;
@@ -186,6 +188,7 @@ static bool load_required_sections(ReadContext *ctx,
     ctx->union_projections_section = find_section(ctx, FENG_SYMBOL_FT_SEC_UNION_PROJECTIONS);
     ctx->spec_view_coercions_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPEC_VIEW_COERCIONS);
     ctx->constraint_projections_section = find_section(ctx, FENG_SYMBOL_FT_SEC_CONSTRAINT_PROJECTIONS);
+    ctx->exception_effects_section = find_section(ctx, FENG_SYMBOL_FT_SEC_EXCEPTION_EFFECTS);
     ctx->spns_section = find_section(ctx, FENG_SYMBOL_FT_SEC_SPNS);
 
     if (ctx->strs_section == NULL || ctx->syms_section == NULL || ctx->typs_section == NULL ||
@@ -264,6 +267,24 @@ static bool load_required_sections(ReadContext *ctx,
     }
     if (occurrences != 1U) return feng_symbol_internal_set_error(
         out_error, path, (FengToken){0}, "duplicate constraint projection section");
+    const unsigned char *effects = (const unsigned char *)ctx->exception_effects_section;
+    if (effects == NULL) return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+        "symbol table missing exception summaries; rebuild the producing package");
+    uint64_t effects_offset = read_u64_le(effects + 0x08);
+    uint64_t effects_size = read_u64_le(effects + 0x10);
+    if (read_u16_le(effects + 0x02) != FENG_SYMBOL_FT_SEC_FLAG_REQUIRED ||
+        read_u32_le(effects + 0x18) != 0U || read_u32_le(effects + 0x1C) != 0U ||
+        effects_offset < ctx->header.payload_offset || effects_offset % 8U != 0U ||
+        !validate_range(ctx, effects_offset, effects_size, path, out_error))
+        return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+            "malformed exception summary section; rebuild the producing package");
+    occurrences = 0U;
+    for (size_t i = 0U; i < ctx->header.section_count; ++i) {
+        const unsigned char *entry = ctx->data + ctx->header.section_dir_offset + i * ctx->header.section_entry_size;
+        occurrences += read_u16_le(entry) == FENG_SYMBOL_FT_SEC_EXCEPTION_EFFECTS;
+    }
+    if (occurrences != 1U) return feng_symbol_internal_set_error(out_error, path, (FengToken){0},
+        "duplicate exception summary section");
     return true;
 }
 
@@ -1944,6 +1965,87 @@ static bool parse_callable_dependencies(ReadContext *ctx,
     return true;
 }
 
+/* Resolve codec string IDs against the already validated STRS table. */
+static const char *reader_exception_string(void *user, uint32_t id) {
+    return string_at(user, id);
+}
+
+/* A valid graph ID must also have the binding shape of its exported symbol.
+ * Instance receivers occupy one capture; owner slots precede callable slots. */
+static bool exception_root_matches_decl(const FengSymbolDeclView *decl,
+                                        const FengExceptionTemplate *summary) {
+    if (decl == NULL) return false;
+    size_t types = decl->type_param_count;
+    size_t captures = 0U;
+    switch (decl->kind) {
+        case FENG_SYMBOL_DECL_KIND_FUNCTION:
+        case FENG_SYMBOL_DECL_KIND_TYPE:
+        case FENG_SYMBOL_DECL_KIND_BINDING:
+            break;
+        case FENG_SYMBOL_DECL_KIND_METHOD:
+        case FENG_SYMBOL_DECL_KIND_CONSTRUCTOR:
+        case FENG_SYMBOL_DECL_KIND_FINALIZER:
+        case FENG_SYMBOL_DECL_KIND_FIELD:
+            if (decl->owner == NULL ||
+                (decl->owner->kind != FENG_SYMBOL_DECL_KIND_TYPE &&
+                 decl->owner->kind != FENG_SYMBOL_DECL_KIND_SPEC &&
+                 decl->owner->kind != FENG_SYMBOL_DECL_KIND_FIT)) return false;
+            if (decl->owner->kind == FENG_SYMBOL_DECL_KIND_FIT) {
+                /* Fits bind the nominal target's owner slots, or the one
+                 * implicit array-element parameter admitted by Semantic. */
+                const FengSymbolTypeView *target = decl->owner->fit_target;
+                if (target == NULL) return false;
+                if (target->kind == FENG_SYMBOL_TYPE_KIND_NAMED_GENERIC)
+                    types += target->as.named_generic.type_arg_count;
+                else if (target->kind == FENG_SYMBOL_TYPE_KIND_ARRAY &&
+                         projection_type_contains_parameter(target))
+                    types += 1U;
+            } else {
+                types += decl->owner->type_param_count;
+            }
+            captures = decl->is_static ? 0U : 1U;
+            break;
+        default:
+            return false;
+    }
+    const FengExceptionFunction *function = &summary->graph->functions[summary->function];
+    return function->type_count == types && function->parameter_count == decl->param_count &&
+           function->capture_count == captures;
+}
+
+/* Attach owned, provider-neutral roots after the symbol hierarchy exists. */
+static bool parse_exception_effects(ReadContext *ctx, const char *path,
+    FengSymbolError *error) {
+    const unsigned char *section = (const unsigned char *)ctx->exception_effects_section;
+    FengSymbolExceptionRoot *roots = NULL;
+    size_t count = 0U;
+    if (!feng_symbol_exception_read(ctx->data + read_u64_le(section + 0x08),
+            (size_t)read_u64_le(section + 0x10), read_u32_le(section + 0x04),
+            reader_exception_string, ctx, &roots, &count, path, error)) return false;
+    bool valid = true;
+    for (size_t i = 0U; i < count; ++i) {
+        FengSymbolDeclView *decl = decl_by_symbol_id(ctx, roots[i].symbol);
+        if (!exception_root_matches_decl(decl, &roots[i].summary) ||
+            decl->exception_template.graph != NULL) { valid = false; break; }
+        decl->exception_template = roots[i].summary;
+        memset(&roots[i].summary, 0, sizeof(roots[i].summary));
+    }
+    for (size_t i = 0U; i < ctx->decl_count && valid; ++i) {
+        const FengSymbolDeclView *decl = ctx->decls[i];
+        bool required = decl->kind == FENG_SYMBOL_DECL_KIND_FUNCTION ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_METHOD ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_CONSTRUCTOR ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_FINALIZER ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_TYPE ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_BINDING ||
+            decl->kind == FENG_SYMBOL_DECL_KIND_FIELD;
+        if (required && decl->exception_template.graph == NULL) valid = false;
+    }
+    feng_symbol_exception_roots_free(roots, count);
+    return valid || feng_symbol_internal_set_error(error, path, (FengToken){0},
+        "missing or invalid callable exception summary; rebuild the producing package");
+}
+
 static bool parse_relations(ReadContext *ctx,
                             const char *path,
                             FengSymbolError *out_error) {
@@ -1997,6 +2099,7 @@ bool feng_symbol_ft_read_bytes_internal(const void *data,
         !attach_decl_hierarchy(&ctx, source_name, out_error) ||
         !parse_module_segments(&ctx, source_name, out_error) ||
         !parse_attrs(&ctx, source_name, out_error) ||
+        !parse_exception_effects(&ctx, source_name, out_error) ||
         !parse_union_projections(&ctx, source_name, out_error) ||
         !parse_spec_view_coercions(&ctx, source_name, out_error) ||
         !parse_constraint_projections(&ctx, source_name, out_error) ||

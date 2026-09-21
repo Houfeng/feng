@@ -1,4 +1,5 @@
 #include "symbol/export.h"
+#include "semantic/exception_effects.h"
 
 #include <stdint.h>
 #include <errno.h>
@@ -4079,6 +4080,18 @@ static bool resolve_graph_callable_dependencies(
     return true;
 }
 
+/* Attach declaration facts through the common source identity table. */
+static bool attach_exception_templates(const FengSemanticAnalysis *analysis,
+    FengSymbolDeclView *decl, FengSymbolError *out_error) {
+    const FengExceptionTemplate *summary = feng_semantic_exception_template(analysis, decl->source_node);
+    if (!feng_exception_template_copy(&decl->exception_template, summary))
+        return feng_symbol_internal_set_error(out_error, decl->path, decl->token,
+            "out of memory exporting exception summary");
+    for (size_t i = 0U; i < decl->member_count; ++i)
+        if (!attach_exception_templates(analysis, decl->members[i], out_error)) return false;
+    return true;
+}
+
 bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
                              FengSymbolGraph **out_graph,
                              FengSymbolError *out_error) {
@@ -4122,7 +4135,8 @@ bool feng_symbol_build_graph(const FengSemanticAnalysis *analysis,
         uint32_t next_id = 1U;
         FengSymbolModuleGraph *module = graph->modules[module_index];
 
-        if (!assign_graph_decl_ids(&module->root_decl,
+        if (!attach_exception_templates(analysis, &module->root_decl, out_error) ||
+            !assign_graph_decl_ids(&module->root_decl,
                                    &next_id,
                                    module->primary_path,
                                    out_error)) {

@@ -15,6 +15,7 @@ typedef struct FengSymbolProvider FengSymbolProvider;
 typedef struct FengSymbolImportedModule FengSymbolImportedModule;
 typedef struct FengSymbolDeclView FengSymbolDeclView;
 typedef struct FengSymbolFitView FengSymbolFitView;
+struct FengExceptionTemplate;
 
 bool feng_symbol_provider_create(FengSymbolProvider **out_provider,
                                  FengSymbolError *out_error);
@@ -107,6 +108,8 @@ FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *mod
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl);
+/* Borrow a declaration's structured template/result; NULL means no root. */
+const struct FengExceptionTemplate *feng_symbol_decl_exception_template(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_path(const FengSymbolDeclView *decl);
 FengToken feng_symbol_decl_token(const FengSymbolDeclView *decl);
 FengVisibility feng_symbol_decl_visibility(const FengSymbolDeclView *decl);

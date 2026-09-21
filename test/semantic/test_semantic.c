@@ -35410,7 +35410,10 @@ void test_array_static_parity_semantics(void);
 /* Additional builtin-constraint coverage; existing cases remain unchanged. */
 void test_throw_constraint_semantics(void);
 
+void test_exception_effects_semantics(void);
+
 int main(void) {
+    test_exception_effects_semantics();
     test_throw_constraint_semantics();
     test_generic_container_static_semantics();
     test_array_static_parity_semantics();

@@ -1,4 +1,5 @@
 #include "semantic/semantic.h"
+#include "semantic/exception_effects.h"
 
 #include <math.h>
 #include <stdarg.h>
@@ -315,18 +316,6 @@ typedef struct CallableReturnCache {
     bool changed;
 } CallableReturnCache;
 
-typedef struct CallableExceptionEscapeCacheEntry {
-    const FengCallableSignature *callable;
-    bool escapes;
-} CallableExceptionEscapeCacheEntry;
-
-typedef struct CallableExceptionEscapeCache {
-    CallableExceptionEscapeCacheEntry *entries;
-    size_t entry_count;
-    size_t entry_capacity;
-    bool changed;
-} CallableExceptionEscapeCache;
-
 /* Stable semantic identity used by one normalized @friend type. Named types
  * retain declaration identity, while owner parameters remain symbolic until
  * the annotated member is viewed through a concrete owner instance. */
@@ -475,12 +464,9 @@ typedef struct ResolveContext {
     size_t union_narrowing_count;
     size_t union_narrowing_capacity;
     CallableReturnCache *callable_return_cache;
-    CallableExceptionEscapeCache *callable_exception_escape_cache;
     FengSemanticError **errors;
     size_t *error_count;
     size_t *error_capacity;
-    bool current_callable_has_escaping_exception;
-    size_t exception_capture_depth;
     /* Whether the nearest catch in this callable is anonymous. Ordinary
      * blocks preserve it; typed catches and callable boundaries replace it. */
     bool current_catch_is_anonymous;
@@ -835,44 +821,8 @@ static const CallableReturnCacheEntry *find_callable_return_cache_entry(
     return NULL;
 }
 
-static const CallableExceptionEscapeCacheEntry *find_callable_exception_escape_cache_entry(
-    const CallableExceptionEscapeCache *cache,
-    const FengCallableSignature *callable) {
-    size_t index;
-
-    if (cache == NULL || callable == NULL) {
-        return NULL;
-    }
-
-    for (index = 0U; index < cache->entry_count; ++index) {
-        if (cache->entries[index].callable == callable) {
-            return &cache->entries[index];
-        }
-    }
-
-    return NULL;
-}
-
 static CallableReturnCacheEntry *find_mutable_callable_return_cache_entry(
     CallableReturnCache *cache,
-    const FengCallableSignature *callable) {
-    size_t index;
-
-    if (cache == NULL || callable == NULL) {
-        return NULL;
-    }
-
-    for (index = 0U; index < cache->entry_count; ++index) {
-        if (cache->entries[index].callable == callable) {
-            return &cache->entries[index];
-        }
-    }
-
-    return NULL;
-}
-
-static CallableExceptionEscapeCacheEntry *find_mutable_callable_exception_escape_cache_entry(
-    CallableExceptionEscapeCache *cache,
     const FengCallableSignature *callable) {
     size_t index;
 
@@ -946,74 +896,7 @@ static bool cache_callable_return_type(ResolveContext *context,
     return true;
 }
 
-static bool callable_may_escape_exception(const ResolveContext *context,
-                                          const FengCallableSignature *callable) {
-    const CallableExceptionEscapeCacheEntry *entry;
-
-    if (callable == NULL || callable->body == NULL) {
-        return false;
-    }
-
-    entry = context != NULL
-                ? find_callable_exception_escape_cache_entry(
-                      context->callable_exception_escape_cache, callable)
-                : NULL;
-    return entry != NULL && entry->escapes;
-}
-
-static bool cache_callable_exception_escape(ResolveContext *context,
-                                            const FengCallableSignature *callable,
-                                            bool escapes) {
-    CallableExceptionEscapeCache *cache;
-    CallableExceptionEscapeCacheEntry *entry;
-    CallableExceptionEscapeCacheEntry new_entry;
-
-    if (context == NULL || callable == NULL || callable->body == NULL) {
-        return true;
-    }
-
-    cache = context->callable_exception_escape_cache;
-    if (cache == NULL) {
-        return true;
-    }
-
-    entry = find_mutable_callable_exception_escape_cache_entry(cache, callable);
-    if (entry != NULL) {
-        if (entry->escapes == escapes) {
-            return true;
-        }
-        entry->escapes = escapes;
-        cache->changed = true;
-        return true;
-    }
-
-    new_entry.callable = callable;
-    new_entry.escapes = escapes;
-    if (!append_raw((void **)&cache->entries,
-                    &cache->entry_count,
-                    &cache->entry_capacity,
-                    sizeof(new_entry),
-                    &new_entry)) {
-        return false;
-    }
-
-    cache->changed = true;
-    return true;
-}
-
 static void free_callable_return_cache(CallableReturnCache *cache) {
-    if (cache == NULL) {
-        return;
-    }
-
-    free(cache->entries);
-    cache->entries = NULL;
-    cache->entry_count = 0U;
-    cache->entry_capacity = 0U;
-    cache->changed = false;
-}
-
-static void free_callable_exception_escape_cache(CallableExceptionEscapeCache *cache) {
     if (cache == NULL) {
         return;
     }
@@ -1517,6 +1400,8 @@ static bool add_external_module(FengSemanticAnalysis *analysis,
     mod.segment_count = ext->segment_count;
     mod.visibility = ext->visibility;
     mod.origin = FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE;
+    mod.exception_metadata_user = ext->exception_metadata_user;
+    mod.get_exception_template = ext->get_exception_template;
     mod.program_count = ext->program_count;
     mod.program_capacity = ext->program_count;
 
@@ -13870,28 +13755,6 @@ static bool inferred_expr_type_can_match_abi_callable_type(InferredExprType type
     return type.kind != FENG_INFERRED_EXPR_TYPE_LAMBDA;
 }
 
-static bool current_callable_is_inside_exception_handler(const ResolveContext *context) {
-    return context != NULL && context->exception_capture_depth > 0U;
-}
-
-static void note_current_callable_exception_escape(ResolveContext *context) {
-    if (context == NULL || context->current_callable_signature == NULL ||
-        current_callable_is_inside_exception_handler(context)) {
-        return;
-    }
-
-    context->current_callable_has_escaping_exception = true;
-}
-
-static void note_callable_exception_escape(ResolveContext *context,
-                                          const FengCallableSignature *callable) {
-    if (!callable_may_escape_exception(context, callable)) {
-        return;
-    }
-
-    note_current_callable_exception_escape(context);
-}
-
 /* Resolve the return type supplied by the current callable-form spec target
  * for a lambda expression. An untyped lambda deliberately has no target
  * return contract at this stage. */
@@ -14644,8 +14507,6 @@ typedef struct LambdaCallableContext {
     const FengCallableSignature *signature;
     InferredExprType inferred_return;
     bool saw_return;
-    bool has_escaping_exception;
-    size_t exception_capture_depth;
     bool current_catch_is_anonymous;
     size_t loop_depth;
     ExpressionBranchBoundary expression_branch_boundary;
@@ -14663,8 +14524,6 @@ static void lambda_enter_callable_context(ResolveContext *context,
     saved->signature = context->current_callable_signature;
     saved->inferred_return = context->current_callable_inferred_return_type;
     saved->saw_return = context->current_callable_saw_return;
-    saved->has_escaping_exception = context->current_callable_has_escaping_exception;
-    saved->exception_capture_depth = context->exception_capture_depth;
     saved->current_catch_is_anonymous = context->current_catch_is_anonymous;
     saved->loop_depth = context->loop_depth;
     saved->expression_branch_boundary = context->expression_branch_boundary;
@@ -14684,8 +14543,6 @@ static void lambda_enter_callable_context(ResolveContext *context,
     context->current_callable_signature = &saved->synthetic_signature;
     context->current_callable_inferred_return_type = inferred_expr_type_unknown();
     context->current_callable_saw_return = false;
-    context->current_callable_has_escaping_exception = false;
-    context->exception_capture_depth = 0U;
     context->current_catch_is_anonymous = false;
     context->loop_depth = 0U;
     context->expression_branch_boundary = EXPRESSION_BRANCH_BOUNDARY_NONE;
@@ -14699,247 +14556,11 @@ static void lambda_leave_callable_context(ResolveContext *context,
     context->current_callable_signature = saved->signature;
     context->current_callable_inferred_return_type = saved->inferred_return;
     context->current_callable_saw_return = saved->saw_return;
-    context->current_callable_has_escaping_exception = saved->has_escaping_exception;
-    context->exception_capture_depth = saved->exception_capture_depth;
     context->current_catch_is_anonymous = saved->current_catch_is_anonymous;
     context->loop_depth = saved->loop_depth;
     context->expression_branch_boundary = saved->expression_branch_boundary;
     context->defer_depth = saved->defer_depth;
     context->self_capturable = saved->self_capturable;
-}
-
-static bool lambda_expr_may_escape_exception(ResolveContext *context, const FengExpr *expr) {
-    LambdaCallableContext callable_context;
-    bool escapes = false;
-    size_t param_index;
-    bool ok = true;
-
-    /* Exception escape is a derived analysis of a body already accepted by
-     * primary resolution. Replaying an invalid body would only duplicate its
-     * diagnostics and cannot contribute a usable exception fact. */
-    if (context == NULL || expr == NULL || expr->kind != FENG_EXPR_LAMBDA ||
-        context->error_count == NULL || *context->error_count > 0U) {
-        return false;
-    }
-
-    if (!resolver_push_scope(context)) {
-        return false;
-    }
-
-    lambda_enter_callable_context(context, expr, &callable_context);
-
-    for (param_index = 0U; param_index < expr->as.lambda.param_count && ok; ++param_index) {
-        ok = resolver_add_local_typed_name(
-            context,
-            expr->as.lambda.params[param_index].name,
-            inferred_expr_type_from_type_ref(expr->as.lambda.params[param_index].type),
-            expr->as.lambda.params[param_index].mutability);
-    }
-
-    if (ok) {
-        if (expr->as.lambda.is_block_body) {
-            ok = resolve_block_contents(context, expr->as.lambda.body_block, context->self_capturable);
-        } else {
-            ok = resolve_expr(context, expr->as.lambda.body, context->self_capturable);
-        }
-    }
-    escapes = ok && context->current_callable_has_escaping_exception;
-    lambda_leave_callable_context(context, &callable_context);
-
-    resolver_pop_scope(context);
-    return escapes;
-}
-
-static bool callable_value_expr_may_escape_exception(ResolveContext *context,
-                                                     const FengExpr *expr,
-                                                     const FengTypeRef *expected_type_ref,
-                                                     size_t depth) {
-    CallableValueResolution resolution;
-
-    if (context == NULL || expr == NULL || depth > 32U) {
-        return false;
-    }
-
-    switch (expr->kind) {
-        case FENG_EXPR_IDENTIFIER: {
-            const LocalNameEntry *local_entry =
-                resolver_find_local_name_entry(context, expr->as.identifier);
-
-            if (local_entry != NULL) {
-                const FengTypeRef *source_type_ref =
-                    local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF
-                        ? local_entry->type.type_ref
-                        : expected_type_ref;
-
-                if (local_entry->type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
-                    return lambda_expr_may_escape_exception(context, local_entry->type.lambda_expr);
-                }
-                if (local_entry->source_expr != NULL) {
-                    return callable_value_expr_may_escape_exception(
-                        context, local_entry->source_expr, source_type_ref, depth + 1U);
-                }
-                return false;
-            }
-
-            {
-                const VisibleValueEntry *visible_value =
-                    find_visible_value(context->visible_values,
-                                       context->visible_value_count,
-                                       expr->as.identifier);
-
-                if (visible_value != NULL && !visible_value->is_function && visible_value->decl != NULL &&
-                    visible_value->decl->kind == FENG_DECL_GLOBAL_BINDING &&
-                    visible_value->decl->as.binding.initializer != NULL) {
-                    const FengTypeRef *source_type_ref = visible_value->decl->as.binding.type != NULL
-                                                             ? visible_value->decl->as.binding.type
-                                                             : expected_type_ref;
-
-                    return callable_value_expr_may_escape_exception(context,
-                                                                    visible_value->decl->as.binding.initializer,
-                                                                    source_type_ref,
-                                                                    depth + 1U);
-                }
-            }
-            break;
-        }
-
-        case FENG_EXPR_MEMBER: {
-            ResolvedModuleMemberTarget target;
-
-            if (resolve_module_member_target(context, expr, &target)) {
-                const FengDecl *binding_decl =
-                    find_module_public_binding_decl(target.module,
-                                                    target.member_name);
-
-                if (binding_decl != NULL &&
-                    binding_decl->kind == FENG_DECL_GLOBAL_BINDING &&
-                    binding_decl->as.binding.initializer != NULL) {
-                    const FengTypeRef *source_type_ref =
-                        binding_decl->as.binding.type != NULL
-                            ? binding_decl->as.binding.type
-                            : expected_type_ref;
-
-                    return callable_value_expr_may_escape_exception(
-                        context,
-                        binding_decl->as.binding.initializer,
-                        source_type_ref,
-                        depth + 1U);
-                }
-            }
-            break;
-        }
-
-        case FENG_EXPR_LAMBDA:
-            return lambda_expr_may_escape_exception(context, expr);
-
-        case FENG_EXPR_IF: {
-            const FengExpr *then_yield = block_yield_expression(expr->as.if_expr.then_block);
-            const FengExpr *else_yield = block_yield_expression(expr->as.if_expr.else_block);
-
-            return (then_yield != NULL && callable_value_expr_may_escape_exception(
-                                              context, then_yield, expected_type_ref, depth + 1U)) ||
-                   (else_yield != NULL && callable_value_expr_may_escape_exception(
-                                              context, else_yield, expected_type_ref, depth + 1U));
-        }
-
-        case FENG_EXPR_MATCH: {
-            size_t branch_index;
-            const FengExpr *else_yield = block_yield_expression(expr->as.match_expr.else_block);
-
-            for (branch_index = 0U; branch_index < expr->as.match_expr.branch_count; ++branch_index) {
-                const FengExpr *branch_yield =
-                    block_yield_expression(expr->as.match_expr.branches[branch_index].body);
-
-                if (branch_yield != NULL && callable_value_expr_may_escape_exception(
-                                                context, branch_yield, expected_type_ref, depth + 1U)) {
-                    return true;
-                }
-            }
-
-            return else_yield != NULL && callable_value_expr_may_escape_exception(
-                                             context, else_yield, expected_type_ref, depth + 1U);
-        }
-
-        case FENG_EXPR_TRY: {
-            if (callable_value_expr_may_escape_exception(
-                    context, expr->as.try_expr.body, expected_type_ref, depth + 1U)) {
-                return true;
-            }
-            for (size_t clause_index = 0U;
-                 clause_index < expr->as.try_expr.clause_count;
-                 ++clause_index) {
-                const FengExpr *clause_yield =
-                    block_yield_expression(expr->as.try_expr.clauses[clause_index].body);
-
-                if (clause_yield != NULL && callable_value_expr_may_escape_exception(
-                                                context,
-                                                clause_yield,
-                                                expected_type_ref,
-                                                depth + 1U)) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        case FENG_EXPR_CAST:
-            return callable_value_expr_may_escape_exception(
-                context, expr->as.cast.value, expected_type_ref, depth + 1U);
-
-        case FENG_EXPR_MATCH_OP: {
-            /* infix match operator yields bool, not a callable value; never
-             * escapes exception via the bool result. */
-            (void)expected_type_ref;
-            (void)depth;
-            return false;
-        }
-
-        default:
-            break;
-    }
-
-    if (expected_type_ref == NULL) {
-        return false;
-    }
-
-    resolution = resolve_expr_callable_value(context, expr, expected_type_ref);
-    if (resolution.kind != FENG_CALLABLE_VALUE_RESOLUTION_UNIQUE) {
-        return false;
-    }
-    if (resolution.callable != NULL) {
-        return callable_may_escape_exception(context, resolution.callable);
-    }
-    if (resolution.lambda_expr != NULL) {
-        return lambda_expr_may_escape_exception(context, resolution.lambda_expr);
-    }
-
-    return false;
-}
-
-static void note_callable_value_expr_exception_escape(ResolveContext *context,
-                                                      const FengExpr *callee) {
-    InferredExprType callee_type;
-    const FengTypeRef *expected_type_ref = NULL;
-
-    if (context == NULL || callee == NULL) {
-        return;
-    }
-
-    callee_type = infer_expr_type(context, callee);
-    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_LAMBDA) {
-        if (lambda_expr_may_escape_exception(context, callee_type.lambda_expr)) {
-            note_current_callable_exception_escape(context);
-        }
-        return;
-    }
-
-    if (callee_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
-        expected_type_ref = callee_type.type_ref;
-    }
-
-    if (callable_value_expr_may_escape_exception(context, callee, expected_type_ref, 0U)) {
-        note_current_callable_exception_escape(context);
-    }
 }
 
 /* G4-12: Returns true when type_ref is a direct reference to one of the
@@ -18920,7 +18541,6 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                     args, arg_count)) {
                 return false;
             }
-            note_callable_value_expr_exception_escape(context, callee);
             return validate_function_type_call_block_lambda_arguments(
                 context,
                 callee_type_decl,
@@ -18965,7 +18585,6 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                     callee_constraint_ref, args, arg_count)) {
                 return false;
             }
-            note_callable_value_expr_exception_escape(context, callee);
             return validate_function_type_call_block_lambda_arguments(
                 context,
                 callee_constraint_decl,
@@ -19969,7 +19588,8 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                           expr,
                                           type_target.constraint_spec_decl,
                                           accessible_field);
-                return true;
+                return feng_semantic_exception_record_value_source(
+                    context->analysis, expr, accessible_field);
             }
             if (method_probe.inaccessible_member != NULL) {
                 return report_inaccessible_spec_member(
@@ -20020,13 +19640,19 @@ static bool validate_instance_member_expr(ResolveContext *context, const FengExp
                                                    expr->as.member.member);
 
             if (accessible_static_member != NULL) {
-                if (accessible_static_member->kind == FENG_TYPE_MEMBER_FIELD &&
-                    !record_selected_friend_fit_access(
+                if (accessible_static_member->kind == FENG_TYPE_MEMBER_FIELD) {
+                    if (!record_selected_friend_fit_access(
                         context,
                         type_target.type_decl,
                         resolved_type_target_owner_type(&type_target),
-                        accessible_static_member)) {
-                    return false;
+                        accessible_static_member) ||
+                        !feng_semantic_exception_record_value_source(
+                            context->analysis, expr, accessible_static_member) ||
+                        !record_type_fact_for_site(
+                            context, expr->as.member.object,
+                            resolved_type_target_owner_type(&type_target))) {
+                        return false;
+                    }
                 }
                 return true;
             }
@@ -27396,16 +27022,8 @@ static bool validate_abi_callable_signature(ResolveContext *context,
         return ok;
     }
 
-    if (callable_may_escape_exception(context, callable)) {
-        return resolver_append_error(
-            context,
-            token,
-            "AE1313", format_message(
-                "%s '%.*s' cannot be marked as @abi because uncaught exceptions must not cross the @abi ABI boundary",
-                callable_kind,
-                (int)name.length,
-                name.data));
-    }
+    /* Exception safety is checked after the complete callable-summary fixed
+     * point, when typed catches and imported dependencies are available. */
 
     return true;
 }
@@ -27891,10 +27509,6 @@ static bool validate_constructor_invocation(ResolveContext *context,
                 false)) {
             return false;
         }
-        note_callable_exception_escape(context,
-                                       resolution.constructor != NULL
-                                           ? &resolution.constructor->as.callable
-                                           : NULL);
         if (out_constructor != NULL) {
             *out_constructor = resolution.constructor;
         }
@@ -28482,7 +28096,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             resolution.decl != NULL && resolution.decl->is_extern)) {
                         return false;
                     }
-                    note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable,
@@ -28590,7 +28203,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                        false)) {
                         return false;
                     }
-                    note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable,
@@ -28700,7 +28312,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             false)) {
                         return false;
                     }
-                    note_callable_exception_escape(context, spec_sig);
                     materialize_callable_type_param_constraint_witnesses(
                         context,
                         expr,
@@ -28868,7 +28479,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                    false)) {
                     return false;
                 }
-                note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable,
@@ -28982,8 +28592,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             false)) {
                         return false;
                     }
-                    note_callable_exception_escape(
-                        context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(
                         context,
                         expr,
@@ -29057,7 +28665,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                                                                    false)) {
                     return false;
                 }
-                note_callable_exception_escape(context, resolution.callable);
                 materialize_callable_type_param_constraint_witnesses(context,
                                                                     expr,
                                                                     resolution.callable,
@@ -29158,7 +28765,6 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
                             resolution.decl != NULL && resolution.decl->is_extern)) {
                         return false;
                     }
-                    note_callable_exception_escape(context, resolution.callable);
                     materialize_callable_type_param_constraint_witnesses(context,
                                                                         expr,
                                                                         resolution.callable,
@@ -31263,9 +30869,11 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                                                    SYMBOL_LOOKUP_VALUE)) {
                     return false;
                 }
-                if (find_visible_value(context->visible_values,
-                                       context->visible_value_count,
-                                       expr->as.identifier) != NULL ||
+                const VisibleValueEntry *origin = find_visible_value(context->visible_values,
+                    context->visible_value_count, expr->as.identifier);
+                if (origin != NULL && !feng_semantic_exception_record_value_source(
+                        context->analysis, expr, origin->decl)) return false;
+                if (origin != NULL ||
                     find_visible_type_any_arity(context->visible_types,
                                       context->visible_type_count,
                                       expr->as.identifier) != NULL) {
@@ -31276,8 +30884,10 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                  * type-level identifier; member/call expressions on it
                  * (T.field / T.method()) are resolved via the constraint
                  * spec's witness table elsewhere. */
-                if (find_type_param(context, expr->as.identifier) != NULL) {
-                    return true;
+                const TypeParamEntry *type_target = find_type_param(context, expr->as.identifier);
+                if (type_target != NULL) {
+                    return feng_semantic_exception_record_type_parameter(
+                        context->analysis, expr, type_target->type_param);
                 }
             }
 
@@ -31442,7 +31052,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                         return false;
                     }
                 }
-                return true;
+                return record_type_fact_for_site(context, expr, target_expr_type);
             }
 
         case FENG_EXPR_TYPE_TARGET:
@@ -31552,10 +31162,14 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
             if (!validate_explicit_prepacked_variadic_argument(context, expr)) {
                 return false;
             }
-            return true;
+            return record_type_fact_for_site(context, expr, infer_expr_type(context, expr));
 
         case FENG_EXPR_MEMBER:
             if (resolve_module_member_expr(context, expr)) {
+                ResolvedModuleMemberTarget target;
+                if (resolve_module_member_target(context, expr, &target) &&
+                    !feng_semantic_exception_record_value_source(context->analysis, expr,
+                        find_module_public_binding_decl(target.module, target.member_name))) return false;
                 return record_type_fact_for_site(
                     context, expr, infer_expr_type(context, expr));
             }
@@ -32063,7 +31677,6 @@ static bool resolve_try_expr(ResolveContext *context,
                              const FengExpr *expr,
                              bool allow_self,
                              bool result_required) {
-    size_t previous_capture_depth;
     InferredExprType body_type;
     bool ok;
 
@@ -32071,12 +31684,7 @@ static bool resolve_try_expr(ResolveContext *context,
         return true;
     }
 
-    previous_capture_depth = context->exception_capture_depth;
-    if (expr->as.try_expr.clause_count > 0U) {
-        context->exception_capture_depth += 1U;
-    }
     ok = resolve_expr(context, expr->as.try_expr.body, allow_self);
-    context->exception_capture_depth = previous_capture_depth;
     if (!ok) {
         return false;
     }
@@ -32783,7 +32391,8 @@ static bool resolve_stmt(ResolveContext *context, const FengStmt *stmt, bool all
             if (!validate_throw_stmt(context, stmt)) {
                 return false;
             }
-            note_current_callable_exception_escape(context);
+            if (stmt->as.throw_value != NULL && !record_type_fact_for_site(context,
+                    stmt->as.throw_value, infer_expr_type(context, stmt->as.throw_value))) return false;
             return true;
 
         case FENG_STMT_BREAK:
@@ -32860,9 +32469,6 @@ static bool resolve_callable(ResolveContext *context,
     InferredExprType previous_callable_inferred_return_type =
         context->current_callable_inferred_return_type;
     bool previous_callable_saw_return = context->current_callable_saw_return;
-    bool previous_callable_has_escaping_exception =
-        context->current_callable_has_escaping_exception;
-    size_t previous_exception_capture_depth = context->exception_capture_depth;
     bool previous_catch_is_anonymous = context->current_catch_is_anonymous;
     size_t previous_loop_depth = context->loop_depth;
     ExpressionBranchBoundary previous_expression_branch_boundary =
@@ -32906,8 +32512,6 @@ static bool resolve_callable(ResolveContext *context,
     context->current_callable_signature = callable;
     context->current_callable_inferred_return_type = callable_effective_return_type(context, callable);
     context->current_callable_saw_return = false;
-    context->current_callable_has_escaping_exception = false;
-    context->exception_capture_depth = 0U;
     context->current_catch_is_anonymous = false;
     context->loop_depth = 0U;
     context->expression_branch_boundary = EXPRESSION_BRANCH_BOUNDARY_NONE;
@@ -32921,8 +32525,6 @@ static bool resolve_callable(ResolveContext *context,
         resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
-        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
-        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
@@ -32937,8 +32539,6 @@ static bool resolve_callable(ResolveContext *context,
             resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
             context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
             context->current_callable_saw_return = previous_callable_saw_return;
-            context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
-            context->exception_capture_depth = previous_exception_capture_depth;
             context->current_catch_is_anonymous = previous_catch_is_anonymous;
             context->loop_depth = previous_loop_depth;
             context->expression_branch_boundary = previous_expression_branch_boundary;
@@ -32953,8 +32553,6 @@ static bool resolve_callable(ResolveContext *context,
         resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
-        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
-        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
@@ -32975,8 +32573,6 @@ static bool resolve_callable(ResolveContext *context,
         resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
         context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
         context->current_callable_saw_return = previous_callable_saw_return;
-        context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
-        context->exception_capture_depth = previous_exception_capture_depth;
         context->current_catch_is_anonymous = previous_catch_is_anonymous;
         context->loop_depth = previous_loop_depth;
         context->expression_branch_boundary = previous_expression_branch_boundary;
@@ -33035,10 +32631,6 @@ static bool resolve_callable(ResolveContext *context,
             ok = false;
         }
     }
-    if (ok && !cache_callable_exception_escape(
-                  context, callable, context->current_callable_has_escaping_exception)) {
-        ok = false;
-    }
     if (ok) {
         InferredExprType resolved_return_type = callable->return_type != NULL
                                                     ? inferred_expr_type_from_type_ref(callable->return_type)
@@ -33055,8 +32647,6 @@ static bool resolve_callable(ResolveContext *context,
     resolver_pop_type_params(context, previous_type_params, previous_type_param_count);
     context->current_callable_inferred_return_type = previous_callable_inferred_return_type;
     context->current_callable_saw_return = previous_callable_saw_return;
-    context->current_callable_has_escaping_exception = previous_callable_has_escaping_exception;
-    context->exception_capture_depth = previous_exception_capture_depth;
     context->current_catch_is_anonymous = previous_catch_is_anonymous;
     context->loop_depth = previous_loop_depth;
     context->expression_branch_boundary = previous_expression_branch_boundary;
@@ -38334,7 +37924,6 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
                                   size_t function_set_count,
                                   bool infer_binding_types_only,
                                   CallableReturnCache *callable_return_cache,
-                                  CallableExceptionEscapeCache *callable_exception_escape_cache,
                                   FengSemanticError **errors,
                                   size_t *error_count,
                                   size_t *error_capacity) {
@@ -38361,7 +37950,6 @@ static bool resolve_program_names(const FengSemanticAnalysis *analysis,
     context.function_sets = function_sets;
     context.function_set_count = function_set_count;
     context.callable_return_cache = callable_return_cache;
-    context.callable_exception_escape_cache = callable_exception_escape_cache;
     context.errors = errors;
     context.error_count = error_count;
     context.error_capacity = error_capacity;
@@ -39071,7 +38659,6 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                    const FengSemanticModule *module,
                                    SemanticModulePass pass,
                                    CallableReturnCache *callable_return_cache,
-                                   CallableExceptionEscapeCache *callable_exception_escape_cache,
                                    bool *mixin_wrappers_changed,
                                    FengSemanticError **errors,
                                    size_t *error_count,
@@ -39604,7 +39191,6 @@ static bool check_symbol_conflicts(const FengSemanticAnalysis *analysis,
                                        program_function_set_count,
                                        pass == SEMANTIC_MODULE_PASS_BINDING_TYPES,
                                        callable_return_cache,
-                                       callable_exception_escape_cache,
                                        errors,
                                        error_count,
                                        error_capacity);
@@ -41178,7 +40764,6 @@ static bool expand_all_mixable_static_wrappers(
                 &analysis->modules[module_index],
                 SEMANTIC_MODULE_PASS_MIXIN_STATIC_WRAPPERS,
                 NULL,
-                NULL,
                 &changed,
                 errors,
                 error_count,
@@ -42445,7 +42030,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     size_t max_iterations;
     bool ok = true;
     CallableReturnCache callable_return_cache;
-    CallableExceptionEscapeCache callable_exception_escape_cache;
     /* pointer_size drives platform-dependent alias resolution (int → i32/i64).
      * Caller (CLI layer) fills options->pointer_size from feng_get_host_pointer_size().
      * Must be non-zero; see docs/engineering/feng-binary-literal-adaptation-bugfix.md §3. */
@@ -42457,7 +42041,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
     size_t pointer_size = options->pointer_size;
 
     memset(&callable_return_cache, 0, sizeof(callable_return_cache));
-    memset(&callable_exception_escape_cache, 0, sizeof(callable_exception_escape_cache));
 
     analysis = (FengSemanticAnalysis *)calloc(1U, sizeof(*analysis));
     if (analysis == NULL) {
@@ -42583,7 +42166,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                     &analysis->modules[program_index],
                                     SEMANTIC_MODULE_PASS_MIXIN_SOURCES,
                                     &callable_return_cache,
-                                    &callable_exception_escape_cache,
                                     NULL,
                                     &errors,
                                     &error_count,
@@ -42626,7 +42208,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
         ok = check_symbol_conflicts(analysis,
                                     &analysis->modules[program_index],
                                     SEMANTIC_MODULE_PASS_FRIEND_METADATA,
-                                    NULL,
                                     NULL,
                                     NULL,
                                     &errors,
@@ -42677,7 +42258,7 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                 }
                 ok = check_symbol_conflicts(analysis, &analysis->modules[index],
                                              SEMANTIC_MODULE_PASS_BINDING_TYPES,
-                                             &callable_return_cache, &callable_exception_escape_cache,
+                                             &callable_return_cache,
                                              NULL, &errors, &error_count, &error_capacity);
             }
             if (analysis->type_fact_count == facts_before) {
@@ -42693,7 +42274,6 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
 
     for (iteration = 0U; iteration < max_iterations && ok && error_count == 0U; ++iteration) {
         callable_return_cache.changed = false;
-        callable_exception_escape_cache.changed = false;
 
         for (program_index = 0U;
              program_index < analysis->module_count && ok && error_count == 0U;
@@ -42706,14 +42286,13 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                         &analysis->modules[program_index],
                                         SEMANTIC_MODULE_PASS_FULL,
                                         &callable_return_cache,
-                                        &callable_exception_escape_cache,
                                         NULL,
                                         &errors,
                                         &error_count,
                                         &error_capacity);
         }
 
-        if (!callable_return_cache.changed && !callable_exception_escape_cache.changed) {
+        if (!callable_return_cache.changed) {
             break;
         }
     }
@@ -42754,6 +42333,14 @@ bool feng_semantic_analyze_with_options(const FengProgram *const *programs,
                                                     &error_capacity);
     }
 
+    if (ok && error_count == 0U) {
+        ok = feng_semantic_collect_exception_effects(analysis);
+    }
+    if (ok && error_count == 0U) {
+        ok = feng_semantic_validate_abi_exception_effects(analysis,
+            &errors, &error_count, &error_capacity);
+    }
+
 finish:
     if (out_error_count != NULL) {
         *out_error_count = error_count;
@@ -42768,7 +42355,6 @@ finish:
         } else {
             feng_semantic_errors_free(errors, error_count);
         }
-        free_callable_exception_escape_cache(&callable_exception_escape_cache);
         free_callable_return_cache(&callable_return_cache);
         feng_semantic_analysis_free(analysis);
         return false;
@@ -42779,7 +42365,6 @@ finish:
     } else {
         feng_semantic_analysis_free(analysis);
     }
-    free_callable_exception_escape_cache(&callable_exception_escape_cache);
     free_callable_return_cache(&callable_return_cache);
     if (out_errors != NULL) {
         *out_errors = NULL;
@@ -42813,6 +42398,8 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     if (analysis == NULL) {
         return;
     }
+
+    feng_semantic_exception_analysis_free(analysis->exception_analysis);
 
     for (index = 0U; index < analysis->module_count; ++index) {
         free(analysis->modules[index].programs);

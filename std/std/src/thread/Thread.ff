@@ -26,6 +26,10 @@ extern func usleep(usec: u32): i32;
 @cdecl("libc", "sleep")
 extern func posix_sleep(seconds: u32): u32;
 
+/** Terminate when an unhandled thread exception reaches the C ABI entry. */
+@cdecl("libc", "abort")
+extern func abortUnhandledThreadException(): void;
+
 @abi
 spec ThreadAbiEntry(arg: int): void;
 
@@ -49,7 +53,9 @@ func threadTrampoline(arg: int): void {
   let fn = spawnFn;
   spawnReady = true;
   uv_cond_signal(spawnCond);
-  fn();
+  try fn() catch {
+    abortUnhandledThreadException();
+  }
 }
 
 /**

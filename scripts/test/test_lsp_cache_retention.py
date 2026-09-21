@@ -108,7 +108,7 @@ def prepare_fixture(server: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, s
         encoding="utf-8",
     )
     subprocess.run([str(server), "pack", str(package)], check=True)
-    bundle = package / "build/lsp_cache_pkg-0.1.0.fb"
+    bundle = package / "build/pkg/lsp_cache_pkg-0.1.0.fb"
     if not bundle.is_file():
         raise RuntimeError(f"packed dependency was not created: {bundle}")
 

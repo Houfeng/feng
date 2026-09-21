@@ -1,4 +1,5 @@
 #include "symbol/ft_internal.h"
+#include "symbol/exception_io.h"
 
 #include <errno.h>
 #include <stdio.h>
@@ -2304,6 +2305,40 @@ static bool write_header_and_sections(FILE *file,
     return true;
 }
 
+/* Adapts the writer's shared STRS pool to the portable exception codec. */
+typedef struct ExceptionStringWriter {
+    WriterContext *writer;
+    const char *path;
+    FengSymbolError *error;
+} ExceptionStringWriter;
+
+/* Summary strings are interned before the STRS section is frozen. */
+static uint32_t writer_exception_string(void *user, const char *value) {
+    ExceptionStringWriter *adapter = user;
+    return writer_intern_string(adapter->writer, value, adapter->path,
+                                (FengToken){0}, adapter->error);
+}
+
+/* Keep only selected symbol roots and their transitive summary dependencies. */
+static bool build_exception_section(WriterContext *ctx, Buffer *buffer,
+    uint32_t *count, const char *path, FengSymbolError *error) {
+    FengSymbolExceptionRoot *roots = calloc(ctx->decl_id_count, sizeof(*roots));
+    if (ctx->decl_id_count != 0U && roots == NULL) return false;
+    *count = 0U;
+    for (size_t i = 0U; i < ctx->decl_id_count; ++i) {
+        const FengSymbolDeclView *decl = ctx->decl_ids[i].decl;
+        if (decl->exception_template.graph == NULL) continue;
+        roots[*count].symbol = ctx->decl_ids[i].id;
+        roots[(*count)++].summary = decl->exception_template;
+    }
+    ExceptionStringWriter adapter = {ctx, path, error};
+    bool ok = feng_symbol_exception_write(roots, *count, writer_exception_string,
+        &adapter, &buffer->data, &buffer->length, path, error);
+    buffer->capacity = buffer->length;
+    free(roots);
+    return ok;
+}
+
 bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                                           FengSymbolProfile profile,
                                           const char *path,
@@ -2320,9 +2355,11 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     Buffer union_projections = {0};
     Buffer spec_view_coercions = {0};
     Buffer constraint_projections = {0};
+    Buffer exception_effects = {0};
+    uint32_t exception_root_count = 0U;
     Buffer spans = {0};
     Buffer payload = {0};
-    FengSymbolFtSectionEntry sections[12];
+    FengSymbolFtSectionEntry sections[13];
     size_t section_count = 0U;
     FengSymbolFtHeader header;
     FILE *file = NULL;
@@ -2338,6 +2375,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     if (!writer_prepare_decl_ids(&ctx, path, out_error) ||
         !writer_collect_decl(&ctx, &module->root_decl, 0U, path, out_error) ||
         !writer_collect_relations(&ctx, path, out_error) ||
+        !build_exception_section(&ctx, &exception_effects, &exception_root_count, path, out_error) ||
         !build_strings_section(&ctx, &strings, path, module->root_decl.token, out_error) ||
         !build_fixed_section(&syms, ctx.syms, ctx.sym_count, sizeof(*ctx.syms), path, module->root_decl.token, out_error) ||
         !build_fixed_section(&typs, ctx.types, ctx.type_count, sizeof(*ctx.types), path, module->root_decl.token, out_error) ||
@@ -2403,10 +2441,10 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
         } \
     } while (0)
 
-    /* Eight required core sections, including all three possibly empty use tables. */
+    /* Nine required core sections, including compile-time exception summaries. */
     header.payload_offset = FENG_SYMBOL_FT_HEADER_SIZE +
                             (uint64_t)(FENG_SYMBOL_FT_SECTION_ENTRY_SIZE *
-                                       (8U + (ctx.doc_count > 0U ? 1U : 0U) +
+                                       (9U + (ctx.doc_count > 0U ? 1U : 0U) +
                                         (ctx.attr_count > 0U ? 1U : 0U) +
                                         (ctx.callable_dep_count > 0U ? 1U : 0U) +
                                         (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U ? 1U : 0U)));
@@ -2475,6 +2513,9 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
                        FENG_SYMBOL_FT_SEC_FLAG_SORTED,
                    (uint32_t)ctx.constraint_projection_count,
                    (uint32_t)sizeof(FengSymbolFtConstraintProjectionRecord), &constraint_projections);
+    APPEND_SECTION(FENG_SYMBOL_FT_SEC_EXCEPTION_EFFECTS,
+                   FENG_SYMBOL_FT_SEC_FLAG_REQUIRED, exception_root_count, 0U,
+                   &exception_effects);
     if (profile == FENG_SYMBOL_PROFILE_WORKSPACE_CACHE && ctx.span_count > 0U) {
         header.flags |= FENG_SYMBOL_FT_FLAG_HAS_SPANS;
         APPEND_SECTION(FENG_SYMBOL_FT_SEC_SPNS,
@@ -2528,6 +2569,7 @@ bool feng_symbol_ft_write_module_internal(const FengSymbolModuleGraph *module,
     buffer_free(&union_projections);
     buffer_free(&spec_view_coercions);
     buffer_free(&constraint_projections);
+    buffer_free(&exception_effects);
     buffer_free(&spans);
     buffer_free(&payload);
     return true;
@@ -2547,6 +2589,7 @@ cleanup:
     buffer_free(&union_projections);
     buffer_free(&spec_view_coercions);
     buffer_free(&constraint_projections);
+    buffer_free(&exception_effects);
     buffer_free(&spans);
     buffer_free(&payload);
     return false;

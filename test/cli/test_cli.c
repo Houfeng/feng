@@ -12273,6 +12273,298 @@ static char *capture_lsp_completion_response_after_ready(
     return output;
 }
 
+/* A ready document and the exact Hover expected throughout its save cycle. */
+typedef struct EffectsLspSave {
+    const char *uri;
+    const char *source;
+    const char *needle;
+    const char *expected;
+} EffectsLspSave;
+
+/* Both parse and completed semantic diagnostics must be empty, even when the
+ * already-published function metadata includes possible exceptions. */
+static void effects_lsp_quiet_save(FILE *input, int output_fd, void *user) {
+    const EffectsLspSave *document = user;
+    char *save = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", document->uri);
+    write_lsp_message(input, save);
+    size_t completed = 0U;
+    for (unsigned i = 0U; i < 200U && completed < 2U; ++i) {
+        char *request = build_lsp_test_position_request("textDocument/hover", 7000U + i,
+            document->uri, document->source, document->needle, 5U);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, request, 7000U + i);
+        ASSERT(strstr(output, document->expected) != NULL);
+        ASSERT(strstr(output, "exceptions may propagate from this call:") == NULL);
+        ASSERT(strstr(output, "\"severity\":") == NULL);
+        completed += count_occurrences(output, "\"diagnostics\":[]");
+        if (i == 199U && completed < 2U)
+            fprintf(stderr, "exception save empty diagnostics=%zu\n%s\n", completed, output);
+        free(output); free(request);
+        if (completed < 2U) usleep(25000U);
+    }
+    ASSERT(completed == 2U);
+    free(save);
+}
+
+/* Hover contains only possible types, preserving declaration slots, call-site
+ * substitution and unknown; empty sets add no extra Hover entry. */
+static void test_lsp_exception_effects(void) {
+    const char *source = "module test.effects;\n"
+        "func fail<T:throw>(x:T){throw x;}\n"
+        "func handled(){try fail(\"x\") catch{}}\n"
+        "func main(args:string[]){fail(true);}\n"
+        "spec Action():void;spec Worker{func work():void;}\n"
+        "func mixed(f:Action,w:Worker){f();w.work();throw true;}\n"
+        "func filtered<T:throw>(x:T){try fail(x) catch e:string{}}\n";
+    const char *plain = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    const char *markdown = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{\"textDocument\":{\"hover\":{\"contentFormat\":[\"markdown\"]}}}}}";
+    const char *needles[] = {"func fail", "fail(true)", "func handled", "fail(\"x\")", "func mixed", "func filtered"};
+    size_t offsets[] = {5U, 1U, 5U, 1U, 5U, 5U};
+    const char *expected[] = {"T", "bool", NULL, "string", "bool, unknown", "T"};
+    for (size_t format = 0U; format < 2U; ++format) {
+        for (size_t i = 0U; i < sizeof needles / sizeof *needles; ++i) {
+            char *output = capture_lsp_hover_response(source, format ? markdown : plain, needles[i], offsets[i]);
+            if (expected[i] != NULL) {
+                char *summary = dup_printf(format ? "**Possible exceptions:** `%s`" : "Possible exceptions: %s", expected[i]);
+                if (strstr(output, summary) == NULL) fprintf(stderr, "missing %s\n%s\n", summary, output);
+                ASSERT(strstr(output, summary) != NULL);
+                free(summary);
+            } else {
+                ASSERT(strstr(output, "func handled()") != NULL);
+                ASSERT(strstr(output, "Possible exceptions") == NULL);
+            }
+            ASSERT(strstr(output, "unknown (") == NULL);
+            ASSERT(strstr(output, "(conditional)") == NULL);
+            free(output);
+        }
+    }
+    char directory[] = "temp/effects-lsp-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *path = path_join(directory, "main.ff");
+    write_text_file(path, source);
+    char *uri = file_uri_from_path(path), *escaped = json_escape_text(source);
+    char *open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    const char *requests[] = {"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}",
+        "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"};
+    char *ready = NULL;
+    EffectsLspSave document = {uri, source, "func fail", "Possible exceptions: T"};
+    char *output = run_lsp_server_capture_after_position_ready_action(plain, open, NULL,
+        "textDocument/hover", uri, 1U, 5U, "Possible exceptions: T",
+        effects_lsp_quiet_save, &document, requests, 2U, &ready);
+    ASSERT(ready != NULL);
+    ASSERT(strstr(ready, "exceptions may propagate from this call:") == NULL);
+    ASSERT(strstr(ready, "\"severity\":1") == NULL);
+    char *remove_error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &remove_error));
+    free(remove_error); free(output); free(ready); free(open); free(escaped); free(uri); free(path);
+}
+
+/* Unknown types appear in Hover; only strict ABI violations emit diagnostics. */
+static void test_lsp_exception_effects_diagnostics(void) {
+    const char *bodies[] = {
+        "spec Action():void;func run(f:Action){f();}",
+        "func fail(){throw true;}@abi func run(){try fail() catch e:string{}}",
+        "spec Action():void;var callback:Action=(){};@abi func run(){callback();}"};
+    const char *expected[] = {"Possible exceptions: unknown",
+        "uncaught exceptions must not cross the @abi ABI boundary",
+        "uncaught exceptions must not cross the @abi ABI boundary"};
+    const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    for (size_t i = 0U; i < sizeof bodies / sizeof *bodies; ++i) {
+        char directory[] = "temp/effects-lsp-diagnostic-XXXXXX";
+        ASSERT(mkdtemp(directory) != NULL);
+        char *source = dup_printf("module test.effects;\n%s\nfunc main(args:string[]){}", bodies[i]);
+        char *path = path_join(directory, "main.ff");
+        write_text_file(path, source);
+        char *uri = file_uri_from_path(path), *escaped = json_escape_text(source);
+        char *open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+        char *save = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", uri);
+        const char *requests[] = {"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"};
+        char *ready = NULL;
+        unsigned line, character;
+        find_line_character(source, "func run", 5U, &line, &character);
+        EffectsLspSave document = {uri, source, "func run", expected[i]};
+        char *output = run_lsp_server_capture_after_position_ready_action(initialize, open, i == 0U ? NULL : save,
+            "textDocument/hover", uri, line, character, expected[i],
+            i == 0U ? effects_lsp_quiet_save : NULL, &document, requests, 2U, &ready);
+        ASSERT(ready != NULL);
+        ASSERT(strstr(ready, "unknown (") == NULL);
+        ASSERT(strstr(ready, "exceptions may propagate from this call:") == NULL);
+        if (i == 0U) ASSERT(strstr(ready, "\"severity\":") == NULL);
+        else {
+            ASSERT(strstr(ready, "\"severity\":1") != NULL);
+            ASSERT(strstr(ready, "\"source\":\"semantic\"") != NULL);
+            ASSERT(strstr(ready, i == 1U ? "bool" : "unknown") != NULL);
+        }
+        free(output); free(ready); free(save); free(open); free(escaped); free(uri); free(path); free(source);
+        char *error = NULL;
+        ASSERT(feng_cli_project_remove_tree(directory, &error));
+        free(error);
+    }
+}
+
+/* Fresh multi-file source analysis needs no prebuilt workspace FT. */
+static void test_lsp_exception_effects_source_modules(void) {
+    char directory[] = "temp/effects-lsp-source-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *src = path_join(directory, "src"), *manifest = path_join(directory, "feng.fm");
+    char *provider = path_join(src, "provider.ff"), *consumer = path_join(src, "consumer.ff");
+    mkdir_p(src);
+    write_text_file(manifest, "[package]\nname: \"effects_local\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(provider, "open module effects.local;open func raise<T:throw>(x:T){throw x;}");
+    const char *source = "module effects.user;import effects.local as a;func run(){a.raise(true);}";
+    write_text_file(consumer, source);
+    const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+    char *output = capture_lsp_position_response_at_path(consumer, source, initialize,
+        "textDocument/hover", "a.raise(true)", 3U, "Possible exceptions: bool");
+    ASSERT(strstr(output, "Possible exceptions: bool") != NULL);
+    free(output); free(consumer); free(provider); free(manifest); free(src);
+    char *error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &error));
+    free(error);
+}
+
+/* Build a real library bundle whose consumer cannot read source bodies. */
+static char *effects_lsp_pack(const char *root, const char *name, const char *source,
+    const char *dependency) {
+    char *directory = path_join(root, name), *src = path_join(directory, "src");
+    char *path = path_join(src, "main.ff"), *out = path_join(directory, "build");
+    mkdir_p(src); write_text_file(path, source);
+    char *out_option = make_out_option(out), *name_option = dup_printf("--name=%s", name);
+    char *dependency_option = dependency != NULL ? make_pkg_option(dependency) : NULL;
+    char *argv[] = {path, "--target=lib", out_option, name_option, dependency_option};
+    ASSERT(run_direct_for_host(dependency != NULL ? 5 : 4, argv) == 0);
+    char *library = host_static_library_output_path(out, name), *mod = path_join(out, "mod");
+    char *relative = dup_printf("%s/%s-0.1.0.fb", directory, name);
+    write_library_bundle_or_die(relative, name, "0.1.0", library, mod);
+    char *bundle = realpath(relative, NULL);
+    ASSERT(bundle != NULL && unlink(path) == 0);
+    free(relative); free(mod); free(library); free(out_option); free(name_option);
+    free(dependency_option); free(out); free(path); free(src); free(directory);
+    return bundle;
+}
+
+/* Unsaved edits update hover; saving must publish the new diagnostics. */
+typedef struct EffectsLspEdit {
+    const char *uri;
+    const char *source;
+} EffectsLspEdit;
+
+/* Wait on protocol responses instead of guessing the worker's completion time. */
+static void effects_lsp_apply_edit(FILE *input, int output_fd, void *user) {
+    EffectsLspEdit *edit = user;
+    char *text = json_escape_text(edit->source);
+    char *change = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":2},\"contentChanges\":[{\"text\":\"%s\"}]}}", edit->uri, text);
+    write_lsp_message(input, change);
+    bool updated = false;
+    for (unsigned i = 0U; i < 200U && !updated; ++i) {
+        char *request = build_lsp_test_position_request("textDocument/hover", 5000U + i,
+            edit->uri, edit->source, "func updated", 5U);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, request, 5000U + i);
+        /* This function did not exist in the prior generation. Its nonempty
+         * effect proves analysis completed before testing an empty call. */
+        updated = strstr(output, "Possible exceptions: bool") != NULL;
+        if (i == 199U && !updated)
+            fprintf(stderr, "exception edit hover did not update\n%s\n", output);
+        free(output); free(request);
+        if (!updated) usleep(25000U);
+    }
+    ASSERT(updated);
+
+    /* The edit has already published this generation's semantic cache. The
+     * save must publish both its parse result and its full empty result. */
+    char *save = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", edit->uri);
+    write_lsp_message(input, save);
+    size_t cleared = 0U;
+    for (unsigned i = 0U; i < 200U && cleared < 2U; ++i) {
+        char *request = build_lsp_test_position_request("textDocument/hover", 6000U + i,
+            edit->uri, edit->source, "m.relay(\"handled\")", 3U);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, request, 6000U + i);
+        ASSERT(strstr(output, "relay") != NULL);
+        ASSERT(strstr(output, "Possible exceptions") == NULL);
+        ASSERT(strstr(output, "exceptions may propagate from this call:") == NULL);
+        ASSERT(strstr(output, "\"severity\":") == NULL);
+        cleared += count_occurrences(output, "\"diagnostics\":[]");
+        if (i == 199U && cleared < 2U)
+            fprintf(stderr, "exception save empty diagnostics=%zu\n%s\n", cleared, output);
+        free(output); free(request);
+        if (cleared < 2U) usleep(25000U);
+    }
+    ASSERT(cleared == 2U);
+    free(save);
+    free(change); free(text);
+}
+
+/* Generic effects cross two source-invisible bundles, aliases and unsaved edits. */
+static void test_lsp_exception_effects_packages(void) {
+    char directory[] = "temp/effects-lsp-packages-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *provider = effects_lsp_pack(directory, "effects_provider",
+        "open module effects.api;open func raise<T:throw>(x:T){throw x;}", NULL);
+    char *middle = effects_lsp_pack(directory, "effects_middle",
+        "open module effects.middle;import effects.api as a;"
+        "open func relay<U:throw>(x:U){try a.raise(x) catch e:string{}}", provider);
+    char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
+    char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
+    mkdir_p(src);
+    char *config = dup_printf("[package]\nname: \"effects_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\neffects_provider: \"%s\"\neffects_middle: \"%s\"\n", provider, middle);
+    write_text_file(manifest, config);
+    const char *source = "module effects.consumer;import effects.middle as m;\nfunc run(){m.relay(true);}\n";
+    const char *changed = "module effects.consumer;import effects.middle as m;\nfunc run(){m.relay(\"handled\");}\n"
+        "func updated(){m.relay(true);}\n";
+    write_text_file(path, source);
+    const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"processId\":null,\"rootUri\":null,\"capabilities\":{}}}";
+    char *uri = file_uri_from_path(path), *escaped = json_escape_text(source);
+    char *open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    const char *requests[] = {"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}", "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"};
+    EffectsLspEdit edit = {uri, changed};
+    char *ready = NULL;
+    char *output = run_lsp_server_capture_after_position_ready_action(initialize, open, NULL,
+        "textDocument/hover", uri, 1U, 14U, "Possible exceptions: bool", effects_lsp_apply_edit,
+        &edit, requests, 2U, &ready);
+    ASSERT(ready != NULL);
+    ASSERT(strstr(ready, "exceptions may propagate from this call:") == NULL);
+    free(output); free(ready); free(open); free(escaped); free(uri);
+    char *remove_error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &remove_error));
+    free(remove_error); free(config); free(manifest); free(path); free(src); free(consumer);
+    free(middle); free(provider);
+}
+
+/* The standard thread's ABI entry terminates for an unhandled user callback. */
+static void test_exception_effects_thread_boundary(void) {
+    char directory[] = "temp/effects-thread-boundary-XXXXXX";
+    ASSERT(mkdtemp(directory) != NULL);
+    char *src = path_join(directory, "src"), *path = path_join(src, "main.ff");
+    char *manifest = path_join(directory, "feng.fm"), *root = getcwd(NULL, 0);
+    ASSERT(root != NULL);
+    char *std = path_join(root, "std/std");
+    char *config = dup_printf("[package]\nname: \"effects_thread\"\nversion: \"0.1.0\"\ntarget: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nstd: \"%s\"\n", std);
+    mkdir_p(src);
+    write_text_file(manifest, config);
+    write_text_file(path, "module effects.thread;import std.thread;func main(args:string[]){"
+        "let worker=Thread.spawn((){throw \"unhandled thread exception\";});worker.join();}");
+    char *argv[] = {directory};
+    ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
+    char *binary = project_host_build_path(directory, "bin/effects_thread");
+    ASSERT(path_exists(binary));
+    fflush(stdout); fflush(stderr);
+    pid_t child = fork();
+    ASSERT(child >= 0);
+    if (child == 0) {
+        struct rlimit core_limit = {0U, 0U};
+        if (setrlimit(RLIMIT_CORE, &core_limit) != 0) _exit(126);
+        alarm(15U);
+        execl(binary, binary, (char *)NULL);
+        _exit(127);
+    }
+    int status = 0;
+    ASSERT(waitpid(child, &status, 0) == child);
+    ASSERT(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+    char *error = NULL;
+    ASSERT(feng_cli_project_remove_tree(directory, &error));
+    free(error); free(binary); free(config); free(std); free(root); free(manifest); free(path); free(src);
+}
+
 static void test_lsp_hover_uses_markdown_when_supported(void) {
     static const char *kSource =
         "module test.lsp.markdown;\n"
@@ -30189,11 +30481,18 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 #include "dap_callable.inc"
 #include "dap_union.inc"
 #include "throw_constraint.inc"
+#include "exception_info_routing.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_exception_info_routing();
+    test_lsp_exception_effects();
+    test_lsp_exception_effects_diagnostics();
+    test_lsp_exception_effects_source_modules();
+    test_lsp_exception_effects_packages();
+    test_exception_effects_thread_boundary();
     test_lsp_throw_constraint_source();
     test_throw_constraint_source_hidden_bundle();
 

@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "symbol/provider.h"
+#include "semantic/exception_graph.h"
 
 typedef enum FengSymbolRelationKind {
     FENG_SYMBOL_RELATION_TYPE_IMPLEMENTS_SPEC = 1,
@@ -122,6 +123,8 @@ struct FengSymbolTypeView {
 };
 
 struct FengSymbolDeclView {
+    /* Portable exception/callable-value declaration facts, shared with tools. */
+    FengExceptionTemplate exception_template;
     FengSymbolDeclKind kind;
     FengSpecForm spec_form;  /* only meaningful when kind == FENG_SYMBOL_DECL_KIND_SPEC */
     FengVisibility visibility;
