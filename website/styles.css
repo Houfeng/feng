@@ -907,8 +907,9 @@ svg {
 }
 
 .site-footer__identity {
-  flex: 0 1 52rem;
+  flex: 1 1 52rem;
   line-height: 1.7;
+  text-align: right;
 }
 
 .site-footer a {
@@ -946,6 +947,10 @@ svg {
 @media (max-width: 720px) {
   .shell {
     width: min(var(--shell), calc(100% - 40px));
+  }
+
+  .site-footer__identity {
+    text-align: left;
   }
 
   .site-header__inner {
