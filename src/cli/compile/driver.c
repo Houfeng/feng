@@ -2297,6 +2297,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
          * resulting -Wunused-function noise on the host compile. */
         if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
         if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
+        if (ok && !argv_push(&av, "-Wno-unused-but-set-variable")) { ok = false; }
         if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
         if (ok && !argv_push(&av, "-Wno-incompatible-pointer-types")) { ok = false; }
         if (ok && !argv_push(&av, include_flag)) { ok = false; }
@@ -2381,6 +2382,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
              * generated fit helpers for the lib compile too. */
             if (ok && !argv_push(&av, "-Wno-unused-function")) { ok = false; }
             if (ok && !argv_push(&av, "-Wno-unused-variable")) { ok = false; }
+            if (ok && !argv_push(&av, "-Wno-unused-but-set-variable")) { ok = false; }
             if (ok && !argv_push(&av, "-Wno-unused-label")) { ok = false; }
             if (ok && !argv_push(&av, "-Wno-incompatible-pointer-types")) { ok = false; }
             if (ok && !argv_push(&av, include_flag)) { ok = false; }

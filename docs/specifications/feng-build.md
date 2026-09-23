@@ -76,6 +76,8 @@ host LLVM 构建工具统一按“Feng 专用环境变量 → bundled 工具 →
 
 Feng 专用环境变量是用户对单次 Feng 调用的最高优先级显式覆盖；未设置或为空时，正常发行包使用同一 host LLVM 包中的 bundled 工具。仅当对应 bundled 路径不存在时才读取传统环境变量；传统环境变量也未设置或为空时才进入系统 `PATH` 兜底。任一非空环境变量指定的工具不可用、bundled 路径存在但不是可执行文件，或者已选工具启动失败时，必须保留真实原因并明确报错，不得静默尝试后续候选。`FENG_CC`、`FENG_AR`、`FENG_RANLIB`、`CC`、`AR`、`RANLIB` 的值只表示一个可执行文件路径或名称，不作为 shell 命令解析，也不接受内嵌参数。
 
+生成 C 的 `bin` / `lib` 编译在 debug 和 release 模式下均使用 `-Wno-unused-but-set-variable`，过滤仅赋值而未读取的变量产生的后端警告；现有 `-Wall` / `-Wextra` 与其他警告选项保持不变。该设置仅用于生成 C，不用于构建 Feng 编译器自身。
+
 指定任一 Linux 目标时，最终选中的 C 编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld` 参数，并能按自身安装规则定位可在当前 host 运行的 `ld.lld`，否则报告目标平台不可用。LLD 不建立独立查找链；Feng 通过 `-fuse-ld=lld` 让选中的 Clang 定位同一工具链中的 `bin/ld.lld -> lld`。`lldb-dap` 的后端定位由 [feng-cli.md](feng-cli.md) 单独定义。
 
 不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等用于改变安装根或整套工具链根目录的环境变量。可执行文件绝对路径解析与 runtime、Clang、LLVM ar / ranlib、LLD、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。发行包与源码开发的统一相对布局及 Makefile 软链接约定见 [feng-release-and-install.md](../engineering/feng-release-and-install.md) §4 / §5。
