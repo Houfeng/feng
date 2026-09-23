@@ -56,7 +56,10 @@ jobs:
           lfs: false
 
       - name: Install macOS build environment
-        run: brew install coreutils gh llvm@22
+        run: |
+          brew install coreutils gh llvm@22
+          llvm_bin="$(brew --prefix llvm@22)/bin"
+          ln -sf "${llvm_bin}/clang" "${llvm_bin}/cc"
 
       - name: Restore toolchain prebuilt
         env:
@@ -427,7 +430,10 @@ jobs:
           lfs: false
 
       - name: Install macOS build environment
-        run: brew install coreutils llvm@22
+        run: |
+          brew install coreutils llvm@22
+          llvm_bin="$(brew --prefix llvm@22)/bin"
+          ln -sf "${llvm_bin}/clang" "${llvm_bin}/cc"
 
       - name: Configure and verify macOS build environment
         run: >-

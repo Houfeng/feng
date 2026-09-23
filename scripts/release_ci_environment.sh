@@ -90,6 +90,9 @@ case "${PLATFORM}" in
       die "clang must resolve to Homebrew llvm@22"
     [[ "$(clang -dumpversion)" == "${MACOS_HOST_CLANG_VERSION}" ]] ||
       die "Homebrew Clang ${MACOS_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
+    require_cmd cc
+    [[ "$(cc -dumpversion)" == "${MACOS_HOST_CLANG_VERSION}" ]] ||
+      die "cc version ${MACOS_HOST_CLANG_VERSION} is required, found $(cc -dumpversion)"
     ;;
   linux-x64-gnu|linux-arm64-gnu)
     require_cmd ar
