@@ -132,6 +132,7 @@ jobs:
           llvm_version='1:22.1.8~++20260714015917+ca7933e47d3a-1~exp1~20260714135927.17'
           apt-get install -y --no-install-recommends \
             "clang-22=${llvm_version}" "libclang-rt-22-dev=${llvm_version}" "lld-22=${llvm_version}"
+          update-alternatives --install /usr/bin/cc cc /usr/lib/llvm-22/bin/clang 100
           echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
 
       - name: Checkout

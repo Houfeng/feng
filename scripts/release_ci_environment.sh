@@ -93,6 +93,7 @@ case "${PLATFORM}" in
     ;;
   linux-x64-gnu|linux-arm64-gnu)
     require_cmd ar
+    require_cmd cc
     require_cmd ld.lld
     [[ -f /etc/os-release ]] || die "/etc/os-release not found"
     # shellcheck source=/etc/os-release
@@ -101,6 +102,8 @@ case "${PLATFORM}" in
       die "Ubuntu 26.04 is required, found ${ID:-unknown} ${VERSION_ID:-unknown}"
     [[ "$(clang -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
       die "Clang ${LINUX_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
+    [[ "$(command -v cc)" -ef "$(command -v clang)" ]] ||
+      die "cc must resolve to the same compiler as clang"
     ;;
   *)
     die "unsupported CI platform: ${PLATFORM}"
