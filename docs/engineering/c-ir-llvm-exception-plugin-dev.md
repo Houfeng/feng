@@ -1,4 +1,4 @@
-# 通用 C IR LLVM 异常处理插件开发方案
+# llvm-c-eh 插件开发方案
 
 ## 1. 状态与定位
 
@@ -18,6 +18,9 @@
 本文的 C IR 指生成的 C 中间代码。插件实际处理 Clang 产生的 LLVM IR，在优化前将
 显式的异常区域标记转换为原生异常控制流，再由 LLVM 完成优化及机器码生成。
 插件不从普通 C 调用名称、源码行号或某个语言的对象布局推测异常语义。
+
+项目名采用 `llvm-c-eh`，避免与 ClangIR 的 CIR 名称混淆。这是独立项目提供的 LLVM
+编译器扩展，项目名及协议符号中的 LLVM 不表示其为 LLVM 官方内建接口。
 
 已验证的 S11 原型证明了区域转换与原生展开的可行性，但仍使用带 Feng 名称的标记，
 并硬编码 personality。本文新增的通用接口、可指定的 personality 和独立使用方测试
@@ -51,22 +54,66 @@
 - 标记转换必须先于会内联、消除或重排保护区域的 LLVM 优化；`-O0` 同样执行转换。
 - 使用方须以 `-fexceptions` 启用配套的 Clang 异常编译模式，并确保 C 声明中的
   `nothrow`／LLVM `nounwind` 承诺真实有效；插件不能把普通 C 的默认编译方式视为协议输入。
-- 协议版本、LLVM 插件 API 版本和 LLVM 构建版本分别管理。协议版本相同不代表插件
-  二进制可以被任意 Clang 加载。
+- 各版本号的归属与用途见 §4.4。协议版本相同不代表插件二进制可以被任意 Clang 加载。
 
 ## 4. 接口草案
 
-以下为首版命名与签名草案。正式协议头文件只依赖标准整数类型和目标的原生展开声明，
-不包含任何语言 runtime 头文件。声明不提供运行时实现，必须由配套 Pass 处理。
+命名按人工确认统一如下；首版接口签名及语义仍待 Review。
+
+| 用途 | 名称 |
+| --- | --- |
+| 插件项目 | `llvm-c-eh` |
+| 编译期协议标记前缀 | `__llvm_c_eh_` |
+| 协议版本宏 | `__LLVM_C_EH_PROTOCOL_VERSION` |
+| personality 函数指针类型 | `__llvm_c_eh_personality_fn` |
+| 协议头文件 | `llvm_c_eh.h` |
+
+`__llvm_c_eh_` 用于本扩展的标记和类型别名，`__LLVM_C_EH_` 用于宏，均为本扩展保留
+前缀，使用方普通代码不得占用；不额外增加尾部双下划线或 `marker`。双下划线表达
+实现保留命名，标记语义仍由配套 Pass 识别、校验并转换，不因名称本身而获得 Clang 内建语义。
+
+上述宏、类型别名及下文七个标记均由本项目定义，目前仅有文档草案，实施时统一放入
+`llvm_c_eh.h`。宏标识该头文件采用的发码协议版本，用途与校验过程见 §4.4；类型别名
+描述使用方 personality 的函数指针，其签名遵循既有展开 ABI，不另创 personality ABI。
+七个标记的用途在声明注释中逐一列出，完整语义见 §4.1–§4.3；插件负责转换它们，
+不提供同名的运行时函数实现。
+
+以下名称由既有 C 语言规定或由相应工具链头文件提供，保持原名和原定义：
+
+| 名称 | 定义来源 | 用途 |
+| --- | --- | --- |
+| `uint32_t`、`uint64_t`、`int32_t` | C 标准头文件 `<stdint.h>` | 固定宽度整数，用于协议参数及原生 ABI 参数 |
+| `_Bool`、`_Noreturn` | C 语言关键字 | 布尔类型、不返回的函数声明；不是插件定义的类型或宏 |
+| `_Unwind_Reason_Code` | 原生展开 ABI，`<unwind.h>` | 枚举类型，表示找到处理器、继续展开、安装上下文等处理结果 |
+| `_Unwind_Action` | 原生展开 ABI，`<unwind.h>` | 表示搜索阶段、清理阶段等操作标志 |
+| `struct _Unwind_Exception` | 原生展开 ABI，`<unwind.h>` | 展开器识别的异常记录头，供使用方 runtime 组织其完整异常记录 |
+| `struct _Unwind_Context` | 原生展开 ABI，`<unwind.h>` | 展开器提供的当前栈帧上下文，通过展开 API 访问 |
+
+原生类型的依据为[原生异常展开 ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi-eh.html)。
+仓库现有 libunwind 的对应定义见 [unwind.h](../../third_party/libunwind/include/unwind.h)
+和 [unwind_itanium.h](../../third_party/libunwind/include/unwind_itanium.h)；生成 C 应包含
+目标工具链提供的 `<unwind.h>`，不复制这些类型定义，也不依赖仓库绝对路径。
+例如 `_URC_HANDLER_FOUND` 表示找到处理器，`_URC_CONTINUE_UNWIND` 表示继续展开，
+`_URC_INSTALL_CONTEXT` 表示将控制权交给指定入口，`_URC_END_OF_STACK` 表示已到栈顶
+仍未找到处理器。这些枚举值同样来自既有 ABI，不由插件重新定义。
+
+具体 personality 函数由使用方 runtime 实现，负责解释其类型标识及原生异常表。
+Feng 使用现有的 `__feng_personality_v0`，接入见 [S11 §4.2](./feng-release-exception-unwind-bugfix.md#42-feng-到通用协议的映射)。
+插件只接收其函数符号，不实现 Feng 的类型匹配或异常生命周期；其他使用方可以传入
+自己的 personality。`__llvm_c_eh_personality_fn` 仅为函数指针类型，不是该函数的实现。
+
+正式协议头文件只依赖标准整数类型和目标的原生展开声明，不包含任何语言 runtime
+头文件。声明不提供运行时实现，必须由配套 Pass 处理；已有 `_Unwind_*` ABI 名称保持原样。
 
 ```c
 #include <stdint.h>
 #include <unwind.h>
 
-#define CIR_EH_PROTOCOL_VERSION 1u
+/* 本项目定义的 C 发码协议版本，由 Pass 在编译期校验。 */
+#define __LLVM_C_EH_PROTOCOL_VERSION 1u
 
-/* 使用方提供的原生异常匹配与展开入口。 */
-typedef _Unwind_Reason_Code (*CirEhPersonality)(
+/* 本项目定义的函数指针别名；签名遵循原生展开 ABI，实现由使用方提供。 */
+typedef _Unwind_Reason_Code (*__llvm_c_eh_personality_fn)(
     int version,
     _Unwind_Action actions,
     uint64_t exception_class,
@@ -74,31 +121,32 @@ typedef _Unwind_Reason_Code (*CirEhPersonality)(
     struct _Unwind_Context *context);
 
 /* 配置当前函数的协议版本与 personality。 */
-extern void cir_eh_configure(uint32_t version, CirEhPersonality personality);
+extern void __llvm_c_eh_configure(uint32_t version,
+                                  __llvm_c_eh_personality_fn personality);
 
 /* 声明当前函数内的区域；返回值仅用于保留其 landing 入口。 */
-extern _Bool cir_eh_region(uint32_t id, uint32_t parent, void *landing,
-                           uint32_t catch_count, ...);
+extern _Bool __llvm_c_eh_region(uint32_t id, uint32_t parent, void *landing,
+                               uint32_t catch_count, ...);
 
 /* 设置后续调用所属的编译期区域，0 表示没有本函数内的处理区域。 */
-extern void cir_eh_activate(uint32_t id);
+extern void __llvm_c_eh_activate(uint32_t id);
 
 /* 读取当前异常路径上该区域接收的原生异常记录。 */
-extern void *cir_eh_exception(uint32_t id);
+extern void *__llvm_c_eh_exception(uint32_t id);
 
 /* 读取与上述记录配套的原生 selector。 */
-extern int32_t cir_eh_selector(uint32_t id);
+extern int32_t __llvm_c_eh_selector(uint32_t id);
 
 /* 取得当前函数中某个类型标识对应的原生 selector。 */
-extern int32_t cir_eh_typeid(const void *type_key);
+extern int32_t __llvm_c_eh_typeid(const void *type_key);
 
 /* 将本区域尚未处理的异常传给父区域或继续向调用方展开。 */
-extern _Noreturn void cir_eh_propagate(uint32_t id);
+extern _Noreturn void __llvm_c_eh_propagate(uint32_t id);
 ```
 
 ### 4.1 函数配置与类型标识
 
-每个使用协议的函数在入口声明且只声明一次 `cir_eh_configure`。所有标记的版本、区域
+每个使用协议的函数在入口声明且只声明一次 `__llvm_c_eh_configure`。所有标记的版本、区域
 编号、父编号及数量参数必须是编译期常量，版本必须受支持。personality 必须是具备
 上述原生签名的函数符号引用；插件将其写入该 LLVM 函数的 `personality` 属性，不生成
 运行时的 personality 选择操作。配置只作用于当前函数，不隐式作用于其他函数或翻译单元。
@@ -117,42 +165,78 @@ personality 完成；首版约定空指针条目表示兜底匹配，使用方 p
 catch 列表按使用方的匹配优先顺序传入，数量必须与实际变参个数相符；每个变参均为
 `const void *` 常量，兜底条目使用 `(const void *)0` 且须最后。
 
-`cir_eh_region` 的返回值仅用于以下保活形式，不作为用户可观察的值：
+`__llvm_c_eh_region` 的返回值仅用于以下保活形式，不作为用户可观察的值：
 
 ```c
 /* 区域声明本身不激活保护范围。 */
-if (cir_eh_region(2u, 1u, &&landing, 1u,
-                  (const void *)&example_type_key)) goto landing;
-cir_eh_activate(2u);
+if (__llvm_c_eh_region(2u, 1u, &&landing, 1u,
+                      (const void *)&example_type_key)) goto landing;
+__llvm_c_eh_activate(2u);
 ```
 
 以上是区域片段，父区域与入口须由完整函数定义；`example_type_key` 表示使用方的
 静态类型标识对象。Pass 将人工条件入口消除，并建立真正的异常入口。
 除这条可消除的保活边外，普通路径不得跳入或顺序落入 landing。
 
-`cir_eh_activate` 只改变编译期的区域状态。使用方在分支、循环、提前退出、处理器入口
+`__llvm_c_eh_activate` 只改变编译期的区域状态。使用方在分支、循环、提前退出、处理器入口
 和正常离开保护范围时维护该状态；Pass 在 CFG 上验证它。对一个可能展开的调用，
 若状态不能唯一确定，必须编译失败，不能按文本位置、最近标记或默认区域猜测。
 
 ### 4.3 异常结果与传播
 
-`cir_eh_exception` 和 `cir_eh_selector` 只能在对应区域已接收到异常的路径中使用。
+`__llvm_c_eh_exception` 和 `__llvm_c_eh_selector` 只能在对应区域已接收到异常的路径中使用。
 二者来自该区域自身的 landingpad，或子区域向它传播并合流的同一份 SSA 结果；
 插件必须验证定义支配其使用。
 异常记录是借用的不透明引用，其存续与所有权由使用方 runtime 保证。
 
-`cir_eh_typeid` 转换为 `llvm.eh.typeid.for`。原生 selector 不等于源码 catch 序号，
+`__llvm_c_eh_typeid` 转换为 `llvm.eh.typeid.for`。原生 selector 不等于源码 catch 序号，
 也不能假定在内联前后不变。使用方通过该标记生成分派，并在需要时自行转换为其源码序号。
 
 区域的 landingpad 应包含本区域与有效父区域的处理器信息。若本层不处理当前 selector，
-由使用方执行相应清理后调用 `cir_eh_propagate`：同函数内有父区域时，向父入口传递原
+由使用方执行相应清理后调用 `__llvm_c_eh_propagate`：同函数内有父区域时，向父入口传递原
 异常结果并进行 SSA 合流；没有父区域时使用 LLVM `resume`。不能直接跳过同函数父处理器。
 
-`cir_eh_propagate` 是编译期终结操作，无普通后继。即使前端或 sanitizer 在其后生成
+`__llvm_c_eh_propagate` 是编译期终结操作，无普通后继。即使前端或 sanitizer 在其后生成
 其他指令，Pass 也必须统一切断普通续接路径，不能依赖特定插桩名称或紧邻 `unreachable`。
 
 该标记只负责继续传播尚未处理的异常。进入 catch 后的所有权转移、结束 catch、
 语言层面的重新抛出等，仍由使用方 runtime 协议处理；不能直接用它替换任意重抛 API。
+
+### 4.4 协议版本与校验
+
+`__LLVM_C_EH_PROTOCOL_VERSION` 表示当前协议头文件采用的 C 发码协议版本，由本项目
+定义。它供生成 C 的使用方声明发码约定，使独立交付的插件可以判断是否理解这些标记
+及其语义，避免新旧协议混用时被静默解释为另一种含义。
+
+本方案保留显式协议版本校验：每个使用协议的函数必须通过 `__llvm_c_eh_configure`
+传入受支持的编译期版本常量。宏本身不是 C 或 LLVM 的强制要求，直接传入 `1u` 也能
+表达首版版本；统一使用头文件宏可避免使用方散落版本字面量。保留宏是协议的统一
+书写方式，不能把“宏不是语法必需”理解为可以省略版本参数或校验。
+
+例如，在使用方生成函数的入口写入以下片段；`example_personality` 是使用方已声明的
+原生 personality 函数符号：
+
+```c
+__llvm_c_eh_configure(__LLVM_C_EH_PROTOCOL_VERSION, example_personality);
+```
+
+C 预处理器将宏展开成整数常量，Clang 生成 IR 后，Pass 读取配置标记中的该常量并校验。
+不支持的版本编译报错；支持则按相应协议转换并消除配置标记。宏名称不是插件在 IR 中
+查找的标识，最终程序也不保留协议版本查询、比较或分派操作，不增加运行时版本校验开销。
+
+以下版本分别由不同接口管理，不能互相替代：
+
+| 版本 | 定义方及用途 |
+| --- | --- |
+| `__LLVM_C_EH_PROTOCOL_VERSION` | 本项目定义；C 发码使用方与插件之间的协议版本，通过 `__llvm_c_eh_configure` 传入 |
+| personality 参数中的 `int version` | 原生展开 ABI 定义；由展开器调用 personality 时传入，表示该调用接口的 ABI 版本 |
+| `LLVM_PLUGIN_API_VERSION` | LLVM 的 `PassPlugin.h` 定义；用于检查 LLVM 加载 Pass 插件的接口版本，保持其原名 |
+| LLVM `22.1.8` | 配套工具链和开发 SDK 的版本，涉及插件二进制的构建与加载兼容性 |
+
+其中两个函数参数虽然都名为 `version`，但 `__llvm_c_eh_configure` 接收的是本项目的
+发码协议版本，personality 接收的是展开器提供的 ABI 版本；不得用协议版本宏替代后者。
+LLVM 插件接口的定义见 [LLVM 22.1.8 PassPlugin.h](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/include/llvm/Plugins/PassPlugin.h)。
+协议版本校验不能代替 §7 的 LLVM 工具链和插件加载兼容性验证。
 
 ## 5. 转换与校验顺序
 
@@ -185,9 +269,9 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 
 | 位置 | 内容与职责 |
 | --- | --- |
-| `third_party/cir-eh/` | 独立协议头文件、Pass 源码、构建配置、测试及使用说明；可在无 Feng 源码和 runtime 的环境中构建、验证 |
-| `scripts/build_cir_eh.sh` | 仓库维护入口；显式接收完整 LLVM SDK，手工执行构建、测试和预构建产物安装 |
-| `toolchain/cir-eh/<host>/` | 通过验证的插件动态库、配套协议头文件及构建元信息；供编译与分发使用 |
+| `third_party/llvm-c-eh/` | 独立协议头文件、Pass 源码、构建配置、测试及使用说明；可在无 Feng 源码和 runtime 的环境中构建、验证 |
+| `scripts/build_llvm_c_eh.sh` | 仓库维护入口；显式接收完整 LLVM SDK，手工执行构建、测试和预构建产物安装 |
+| `toolchain/llvm-c-eh/<host>/` | 通过验证的插件动态库、配套协议头文件及构建元信息；供编译与分发使用 |
 
 插件目录与 `toolchain/llvm/` 并列。现有 `scripts/trim_llvm.sh` 会替换 LLVM 的 host
 目录，分开存放可避免重新剪裁 LLVM 时删除插件。预构建元信息至少记录插件源码版本、
@@ -197,9 +281,9 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 
 | Host | 预构建目录 |
 | --- | --- |
-| macOS ARM64 | `toolchain/cir-eh/macos-arm64/` |
-| Linux x64 GNU | `toolchain/cir-eh/linux-x64-gnu/` |
-| Linux ARM64 GNU | `toolchain/cir-eh/linux-arm64-gnu/` |
+| macOS ARM64 | `toolchain/llvm-c-eh/macos-arm64/` |
+| Linux x64 GNU | `toolchain/llvm-c-eh/linux-x64-gnu/` |
+| Linux ARM64 GNU | `toolchain/llvm-c-eh/linux-arm64-gnu/` |
 
 同一 host 插件处理 Clang 为不同 target 产生的 IR。首版 target 范围见 §3；Linux musl
 是 target，不因此要求增加一个 musl host 插件。三个 host 都需有独立的构建与加载记录。
@@ -256,12 +340,13 @@ Feng 用户发行包的安装路径与组装接入属于 [S11 第二步](./feng-
 
 - [x] 人工确认先独立交付插件，再接入 Feng 修复 S11；采用 `third_party` 源码与手工预构建、
       `toolchain` 分发方式，普通构建及 CI 不自动构建插件。
-- [ ] Review 首版接口名、签名及语义，固定协议版本；头文件与本文保持一致。
+- [x] 人工确认项目名 `llvm-c-eh`、协议前缀 `__llvm_c_eh_` 及 §4 的配套命名。
+- [ ] Review 首版接口签名及语义，固定协议版本；头文件与本文保持一致。
 - [ ] Review §6–§8 的构建输入、产物组织、兼容性和独立验收边界。
 
 ### 9.2 独立实现与测试
 
-- [ ] 建立 `third_party/cir-eh/` 独立工程；定义协议头文件、构建入口与使用说明。
+- [ ] 建立 `third_party/llvm-c-eh/` 独立工程；定义协议头文件、构建入口与使用说明。
 - [ ] 从已验证原型抽离通用转换，移除硬编码的语言符号、类型与头文件依赖。
 - [ ] 完成配置与区域校验、CFG 状态分析、invoke 转换、landing 入口、selector／SSA、
       父区域传播和标记消除；保留调用 ABI 及调试元数据。
