@@ -5,7 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLATFORM=""
 PATH_OUTPUT=""
 PATH_OUTPUT_SET=false
-MACOS_HOST_CLANG_VERSION="21.1.8"
+MACOS_HOST_CLANG_VERSION="22.1.8"
+LINUX_HOST_CLANG_VERSION="22.1.8"
 
 # Print the supported CI environment validation invocation.
 usage() {
@@ -62,10 +63,10 @@ DETECTED_PLATFORM="$(feng_detect_host_platform)"
 
 if [[ "${PLATFORM}" == "macos-arm64" ]]; then
   require_cmd brew
-  LLVM_PREFIX="$(brew --prefix llvm@21 2>/dev/null)" ||
-    die "Homebrew llvm@21 is required"
+  LLVM_PREFIX="$(brew --prefix llvm@22 2>/dev/null)" ||
+    die "Homebrew llvm@22 is required"
   [[ -x "${LLVM_PREFIX}/bin/clang" ]] ||
-    die "Homebrew llvm@21 clang not found: ${LLVM_PREFIX}/bin/clang"
+    die "Homebrew llvm@22 clang not found: ${LLVM_PREFIX}/bin/clang"
   PATH="${LLVM_PREFIX}/bin:${PATH}"
   export PATH
 fi
@@ -86,7 +87,7 @@ case "${PLATFORM}" in
     [[ "$(xcrun --sdk macosx --show-sdk-version)" == "26.2" ]] ||
       die "macOS 26.2 SDK is required"
     [[ "$(command -v clang)" -ef "${LLVM_PREFIX}/bin/clang" ]] ||
-      die "clang must resolve to Homebrew llvm@21"
+      die "clang must resolve to Homebrew llvm@22"
     [[ "$(clang -dumpversion)" == "${MACOS_HOST_CLANG_VERSION}" ]] ||
       die "Homebrew Clang ${MACOS_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
     ;;
@@ -98,8 +99,8 @@ case "${PLATFORM}" in
     source /etc/os-release
     [[ "${ID:-}" == "ubuntu" && "${VERSION_ID:-}" == "26.04" ]] ||
       die "Ubuntu 26.04 is required, found ${ID:-unknown} ${VERSION_ID:-unknown}"
-    [[ "$(clang -dumpversion)" == 21.* ]] ||
-      die "Clang 21 is required, found $(clang -dumpversion)"
+    [[ "$(clang -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
+      die "Clang ${LINUX_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
     ;;
   *)
     die "unsupported CI platform: ${PLATFORM}"

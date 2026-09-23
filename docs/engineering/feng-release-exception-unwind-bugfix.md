@@ -16,6 +16,13 @@ S11 早于异常元信息阶段一，不是 defer 边界检查或本轮断点修
 本次文档工作只保留问题、证据与方案，不实施 S11 的产品后端或 runtime 改造。
 后续不得以某个表达式、具体 callee 或测试名称为条件增加特判；增加运行开销时须先由人工审定。
 
+人工已明确：`setjmp/longjmp` 存在正常路径开销，且是 Feng 已弃用的异常方案。
+本次 S11 修复不恢复该机制，也不将其列为候选方案。
+
+人工已确认采用“通用 C 发码协议＋面向协议的 LLVM 异常处理插件”，Feng 作为使用方
+接入。协议由[独立主文档](./c-ir-llvm-exception-protocol-dev.md)定义；本文只说明 Feng
+接入和验证。通用接口仍为待 Review 草案，不能将此前 Feng 原型的通过结果计作其验收。
+
 2026-09-21 按人工要求补充实施前验证：在工程 `temp/` 内建立独立原型，验证 LLVM
 接入、异常表解析、既有结构与函数签名下的异常交接，以及内联后的清理。原型可使用
 runtime 源码副本，不修改产品代码或既有测试；结果须区分实际运行、交叉编译与尚未验证。
@@ -143,15 +150,16 @@ uncaught 错误；直接执行故障二进制的退出码为 134。编译产物�
 才使用 `-O2`。编译器自身的构建优化级别与生成程序的优化级别不同。
 此前默认全量回归通过，没有覆盖这组 release 行为，属于已确认的验证覆盖缺口。
 
-## 4. 已验证的接入方案
+## 4. 基于原型验证的接入方案
 
 ### 4.1 单次 Clang 调用中的 LLVM Pass
 
-采用与 bundled LLVM 配套的 Pass 插件，在 `PipelineStart` 接入点建立原生异常控制流：
+采用与 bundled LLVM 配套的通用 Pass 插件，在 `PipelineStart` 接入点建立原生异常控制流。
+插件遵循[通用 C 发码协议](./c-ir-llvm-exception-protocol-dev.md)，不依赖 Feng 编译器或 runtime：
 
 ```text
-Feng Codegen → 含编译期区域标记的 C
-            → Clang 生成 LLVM IR → Feng EH Pass
+Feng Codegen → 遵循通用异常协议的 C
+            → Clang 生成 LLVM IR → 通用 EH Pass
             → 原有 LLVM 优化、机器码生成及链接
 ```
 
@@ -168,41 +176,28 @@ LLVM 符号；不需要向用户程序链接 C++ 标准库或 C++ 异常 runtime
 插件源码、标记协议版本、LLVM 版本及构建配置须配套管理；公开的插件 API 版本号不能
 代替 LLVM C++ ABI 兼容性校验。
 
-### 4.2 Codegen 与 Pass 之间的结构化标记
+### 4.2 Feng 到通用协议的映射
 
-在 Codegen 的 callable／资源作用域抽象中维护区域信息，不从源码行号、表达式类别、
-callee 名称或特定测试推测保护范围。一个区域包含本 callable 内的标识、父区域、
-landing 入口和按源码顺序排列的 catch 类型描述符；无 catch 的函数清理区域也要表示。
+接口与转换规则统一见[协议主文档 §4–§5](./c-ir-llvm-exception-protocol-dev.md#4-接口草案)。
+Feng 在 Codegen 的 callable／资源作用域抽象中维护区域，不从源码行号、表达式类别、
+callee 名称或特定测试推测保护范围。具体接入如下：
+
+| Feng 提供的信息或代码 | 通用协议中的用途 |
+| --- | --- |
+| `__feng_personality_v0` 函数符号 | 显式配置当前函数的 personality；插件不硬编码该名称 |
+| callable／Scope 的嵌套及清理边界 | 区域、父区域、landing 入口及区域状态 |
+| 具体 catch 的静态类型描述符地址，匿名 catch 的空指针 | 不透明的类型标识列表；由 Feng personality 解释 |
+| catch 类型分派、源码 clause 序号、context 赋值及所有权 API 调用 | Feng 生成的处理器主体；插件只建立对应异常入口和 SSA 结果 |
+| 已有 frame marker 及资源清理调用 | Feng 生成的 cleanup 主体；插件不插入或解释 ARC 操作 |
+
 当前具体 catch 的闭合类型限制见[异常规范 §3.3](../specifications/feng-exception.md#33-catch)；
 现有 Codegen 已将其描述符放入静态 catch 表，能够作为原生 landingpad 的常量类型条目。
 共享体中的 throw 继续从现有泛型描述符获得实际载荷身份，不需要将开放泛参放入 catch 表。
 
-原型使用以下编译器内部标记，正式实现应将其收敛为统一且带版本的协议：
-
-| 标记职责 | 转换结果 |
-| --- | --- |
-| 声明区域、父区域、入口与 catch 列表 | LLVM landingpad、分派及父区域关系 |
-| 设置当前异常区域 | CFG 数据流中的编译期状态，不产生运行时查询 |
-| 取得当前异常记录／selector | landingpad 结果的 SSA 值 |
-| 取得某个 catch 类型的 selector | `llvm.eh.typeid.for`，不使用源码序号代替 |
-| 继续向父区域传播 | 同函数父入口分支；到函数外才使用 `resume` |
-
-标记仅声明在生成代码的编译期协议中，不进入 runtime API、`feng_runtime_contract.inc`
-或 FT。机器码中不得遗留标记调用、保活分支、标签地址注册或相关未解析符号。
-为让 Clang 前端保留 landing 代码，原型使用标记返回值形成普通 C 条件入口；Pass 在
-优化前删除这条人工入口，再建立真实异常边。不能使用 `volatile` 保活分支作为最终产物。
-
-Pass 的处理次序明确为：
-
-1. 收集并校验区域图、类型列表和协议版本；拒绝未知父区域、重复标识及环。
-2. 移除人工入口；按“普通函数入口＋已声明 landing 入口”清理死前驱。
-   继续传播标记按终结指令处理，切断其普通后继；不能依赖后面紧邻 `unreachable`。
-3. 在 CFG 上传播当前区域，检查分支、循环、提前退出和 catch 入口的状态。
-   一个可能展开的调用若不能唯一确定所属区域，应报后端协议错误，不能猜测。
-4. 将区域内不能可靠证明不展开的调用转换为 `invoke`，包括间接调用与 `unknown`。
-   保留原调用的参数、调用约定、属性、operand bundles 和调试位置；`noreturn` 不等于
-   `nounwind`，必抛调用同样需要异常后继。
-5. 构造 landingpad、SSA 合流和分派；删除全部临时标记，并运行 LLVM verifier。
+Feng 生成代码包含通用协议头文件，不将标记加入 runtime API、`feng_runtime_contract.inc`
+或 FT。插件和该头文件均不包含 Feng runtime 头文件，不读取 Feng 类型布局或 catch context，
+也不新增通用运行时调度层。原型的 `__feng_eh_*` 标记和硬编码 personality 仅保留为实验
+证据，正式实现以 Review 后的通用协议为准。
 
 ### 4.3 函数清理、嵌套区域与内联
 
@@ -211,10 +206,9 @@ Pass 的处理次序明确为：
 因此，即使函数没有源码 catch，只持有资源并向上抛，也有正确的异常清理路径。
 不为原本没有函数 marker 的纯 helper 或非外抛 defer helper 随意增加 marker。
 
-内层 landingpad 的 catch 列表包含有效父区域的处理器信息。到达入口后先识别本区域
-能够处理的 selector：匹配则进入对应 catch；不匹配则清理当前区域，再传递原异常。
-**同一函数内仍有父区域时，传到父入口的 SSA 合流点；不能直接 `resume` 跳过该父 catch。**
-只有离开本函数的传播才使用 `resume`。LLVM 后续内联再按原生 EH 规则组合这些控制流。
+嵌套传播遵循[协议 §4.3](./c-ir-llvm-exception-protocol-dev.md#43-异常结果与传播)。
+Feng 生成本区域的类型分派和未匹配时的资源清理，再交给协议继续传播；同函数的外层
+catch 必须仍有机会处理。LLVM 后续内联按原生 EH 规则组合这些控制流。
 
 catch 主体的异常区域是其外层区域，不能再次匹配当前 catch；正常退出、return、break、
 continue 与 catch 退出继续复用已有资源作用域退出逻辑，并同步更新区域状态。
@@ -285,9 +279,11 @@ Windows 及 32 位目标不属于当前已交付范围，不在此次修复中�
 
 正式接入点包括 `src/cli/compile/driver.c` 的 bin 和 lib 两条宿主编译路径。
 两者都加载同一 host 插件；debug／release、直接编译／项目构建／打包不能遗漏任何入口。
+生成的 C 使用协议要求的 `-fexceptions` 等编译配置，不能只增加插件加载参数。
 插件默认安静运行，原型的 `Feng EH lowered ...` 调查输出不进入产品默认 CLI 输出。
 
-建议把插件作为 Feng 编译器组件构建和分发，使用与 bundled LLVM 匹配的开发 SDK；
+通用插件独立组织源码、协议头文件及构建入口，Feng 工具链集成并分发其配套产物；
+插件本身不以 Feng 编译器或 runtime 为构建依赖。使用与 bundled LLVM 匹配的开发 SDK；
 开发头文件与测试 sanitizer 资源是构建输入，不需要全部装进普通用户发行包。
 Makefile 应显式记录插件源码、SDK／协议版本的构建依赖，检查空增量构建不重写产物；
 发布流程须包含三个 host 插件的构建、依赖闭包、签名和安装路径校验。
@@ -313,6 +309,9 @@ throw/catch 语言用例来适配后端。原 N08 和已批准保留的非法清
 
 基于工作区提交 `be58584d`、bundled LLVM 22.1.8，在 macOS 26.5.1 ARM64 上验证。
 原型和运行产物位于 `temp/s11-native-eh/`；没有修改产品源码、既有测试或头文件布局。
+
+以下结果使用的是原型的 Feng 标记和 personality。它们验证了 S11 的转换路径；
+通用协议的版本配置、personality 参数、独立头文件和无 Feng 依赖的使用方验证尚未完成。
 
 | 验证项 | 结果 |
 | --- | --- |
@@ -377,7 +376,9 @@ Linux 四个 target 本轮完成交叉编译和异常表检查，**没有实际�
 
 ### 6.1 Review 边界
 
-- [ ] 确认采用配套 LLVM Pass 插件，增加 host 编译组件与匹配 SDK 构建输入。
+- [x] 人工确认通用 C 发码协议、面向协议的 LLVM 插件，以及 Feng 作为使用方的分层方向。
+- [ ] Review 并固定[通用协议草案](./c-ir-llvm-exception-protocol-dev.md)及独立验收范围。
+- [ ] 确认 host 插件构建、匹配 SDK 输入及工具链兼容性要求。
       `FENG_CC` 保留选择优先级，但不兼容配套插件的工具链明确报错。
 - [ ] 批准 §4.6 的 M01–M03 既有测试／工具链适配；原行为断言和性能门槛不降低。
 - [ ] 确认按已验证协议调整 runtime 内部实现；保持现有结构、API 签名和 FT 格式，统一重编。
@@ -386,11 +387,13 @@ Linux 四个 target 本轮完成交叉编译和异常表检查，**没有实际�
 
 - [x] 完成缺陷、历史对照、原型方案、平台编码及初步成本记录。
 - [x] 验证现有 C → 优化前 Pass → 原生 EH 的通路，以及原生成 C 的 release 修复效果。
-- [ ] P01：在主规范的相应实现／构建边界中记录新后端协议与工具链要求；不改变语言异常语义。
-- [ ] P02：实现独立的区域模型和带版本标记协议，接入现有 callable／Scope 抽象；覆盖普通函数、
+- [ ] P01：在通用协议主文档固定接口及校验规则；Feng 主规范的实现／构建边界引用协议并记录
+      工具链要求，不重复定义协议，不改变语言异常语义。
+- [ ] P02：按通用协议实现独立头文件、生产 Pass 与构建入口；完成协议校验、CFG 区域传播、
+      invoke 转换、landing 入口、父区域 SSA 传播与标记消除，保留调用 ABI 和调试元数据。
+      先以无 Feng 依赖的 C 使用方验收，再接入 Feng。
+- [ ] P03：在 Feng Codegen 的 callable／Scope 抽象中接入区域模型和协议；覆盖普通函数、
       方法、Lambda、泛型共享体及含 catch 的 defer helper，不对某类表达式单独修补。
-- [ ] P03：实现生产 Pass 的协议校验、CFG 区域传播、invoke 转换、landing 分派、父区域 SSA
-      传播与标记消除；保留调用 ABI 和调试元数据，并覆盖普通／UBSan 管线。
 - [ ] P04：实现有边界检查的原生 LSDA decoder、personality 及显式 context 交接；保留现有
       catch 生命周期和未捕获终止行为，移除新路径对物理帧清理和 TLS pending 交接的依赖。
 - [ ] P05：同时接入 bin／lib 编译、三个 host 插件构建与分发、工具兼容性检查和增量依赖；
@@ -400,6 +403,9 @@ Linux 四个 target 本轮完成交叉编译和异常表检查，**没有实际�
 
 ### 6.3 覆盖及交付
 
+- [ ] 完成[通用协议的独立验收](./c-ir-llvm-exception-protocol-dev.md#6-实施与验收)：
+      不包含、不链接 Feng runtime；不同名称的 personality 和不透明类型标识复用同一插件二进制。
+      下述 Feng 接入验收另行完成，不能用原型或通用测试替代。
 - [ ] 编译器测试覆盖标记校验、CFG 合流／循环／提前退出、必抛与条件抛、间接调用、
       `noreturn`／`nounwind`、内联后的 selector、同函数父 catch、IR verifier 与标记消除。
 - [ ] runtime 测试覆盖原记录身份、引用计数、嵌套 catch、清理中内部捕获、重抛、新异常替换、

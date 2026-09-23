@@ -56,7 +56,7 @@ jobs:
           lfs: false
 
       - name: Install macOS build environment
-        run: brew install coreutils gh llvm@21
+        run: brew install coreutils gh llvm@22
 
       - name: Restore toolchain prebuilt
         env:
@@ -116,8 +116,23 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates clang file gh git libc6-dev
-          libclang-rt-dev lld make nodejs unzip zip
+          binutils ca-certificates curl file gh git libc6-dev
+          make nodejs unzip zip
+
+      - &install_llvm_22
+        name: Install LLVM 22.1.8
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          curl -fsSL --retry 3 --connect-timeout 15 --max-time 120 \
+            https://apt.llvm.org/llvm-snapshot.gpg.key \
+            -o /usr/share/keyrings/apt.llvm.org.asc
+          echo 'deb [signed-by=/usr/share/keyrings/apt.llvm.org.asc] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-22 main' > /etc/apt/sources.list.d/llvm-22.list
+          apt-get update
+          llvm_version='1:22.1.8~++20260714015917+ca7933e47d3a-1~exp1~20260714135927.17'
+          apt-get install -y --no-install-recommends \
+            "clang-22=${llvm_version}" "libclang-rt-22-dev=${llvm_version}" "lld-22=${llvm_version}"
+          echo /usr/lib/llvm-22/bin >> "$GITHUB_PATH"
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -171,8 +186,10 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates clang file gh git libc6-dev
-          libclang-rt-dev lld make nodejs unzip zip
+          binutils ca-certificates curl file gh git libc6-dev
+          make nodejs unzip zip
+
+      - *install_llvm_22
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -409,7 +426,7 @@ jobs:
           lfs: false
 
       - name: Install macOS build environment
-        run: brew install coreutils llvm@21
+        run: brew install coreutils llvm@22
 
       - name: Configure and verify macOS build environment
         run: >-
@@ -454,8 +471,10 @@ jobs:
         run: >-
           apt-get update &&
           apt-get install -y --no-install-recommends
-          binutils ca-certificates clang file git git-lfs libc6-dev
-          libclang-rt-dev lld make nodejs unzip zip
+          binutils ca-certificates curl file git git-lfs libc6-dev
+          make nodejs unzip zip
+
+      - *install_llvm_22
 
       - name: Checkout verification scripts
         uses: actions/checkout@v6
