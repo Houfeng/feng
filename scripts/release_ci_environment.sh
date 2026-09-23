@@ -102,8 +102,8 @@ case "${PLATFORM}" in
       die "Ubuntu 26.04 is required, found ${ID:-unknown} ${VERSION_ID:-unknown}"
     [[ "$(clang -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
       die "Clang ${LINUX_HOST_CLANG_VERSION} is required, found $(clang -dumpversion)"
-    [[ "$(command -v cc)" -ef "$(command -v clang)" ]] ||
-      die "cc must resolve to the same compiler as clang"
+    [[ "$(cc -dumpversion)" == "${LINUX_HOST_CLANG_VERSION}" ]] ||
+      die "cc version ${LINUX_HOST_CLANG_VERSION} is required, found $(cc -dumpversion)"
     ;;
   *)
     die "unsupported CI platform: ${PLATFORM}"
