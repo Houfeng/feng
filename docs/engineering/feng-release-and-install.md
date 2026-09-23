@@ -371,6 +371,8 @@ curl -fsSL https://feng-lang.com/install.sh |
 
 Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 值，也不支持 GCC。Linux host 在严格 C11 模式下统一启用 glibc 的 GNU feature namespace，以公开源码和测试实际使用的 GNU、XSI 与 POSIX.1-2008 接口。Feng 语义分析器直接调用 `fmod` 完成编译期浮点常量计算，因此仅为包含该语义分析器对象的 Linux host 工具与测试可执行文件链接 `libm`；这属于 Feng 编译器自身的构建依赖，不得用于替代 [feng-build.md](../specifications/feng-build.md#25-收集链接信息) 规定的 Feng 用户程序 external 链接信息收集机制。
 
+本地与 CI 共用独立的 `make check-clang`，检查当前 `PATH` 中 `clang` 的精确版本为 22.1.8；`make all`、`make cli`、`make runtime` 及直接构建对象或可执行文件均以前置检查保证编译前完成校验。测试入口 `make test`、`make test-normal`、`make test-sanitize` 还通过 `make check-cc` 独立检查 `cc`，并在清理构建产物之前完成两项校验。两个检查复用同一实现；命令缺失、版本读取失败或版本不符时立即报错停止，版本不符的错误包含实际版本与命令路径。不要求两个入口指向同一文件，也不修改本机工具安装或 `PATH`。检查是只读的，作为构建产物的顺序依赖，不触发重复编译，并保留无改动构建的 `Nothing to be done` 提示。
+
 - [x] Makefile 在缺失或目标不匹配时创建或更新 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`；链接已经匹配且所有构建产物均为最新时，`make all` 不写入任何文件，并明确输出包含 `Nothing to be done` 的提示。
 - [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.4 接入。不增加工具链根目录环境变量。
 - [x] 测试可执行文件查找、相对路径、软链接布局和缺失路径错误。

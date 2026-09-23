@@ -184,7 +184,7 @@ endef
 $(foreach platform,$(RUNTIME_PLATFORMS),$(eval $(call DEFINE_RUNTIME_PLATFORM,$(platform))))
 RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_$(platform)))
 
-.PHONY: all cli runtime test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test test-sanitize clean
+.PHONY: all cli runtime check-clang check-cc test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test test-sanitize clean
 
 all: cli runtime
 
@@ -192,13 +192,40 @@ cli: runtime $(BIN_DIR)/feng
 
 runtime: $(RUNTIME_LIBS) $(RUNTIME_HEADERS)
 
+all cli runtime: | check-clang
+
+# Expand the read-only assertion only when its check target is visited. A
+# successful check expands to no recipe, preserving Make's no-op reporting.
+define CHECK_CLANG_VERSION
+$(eval CLANG_CHECK_ERROR := $(shell \
+	compiler="$(1)"; required_version=22.1.8; \
+	compiler_path=$$(command -v "$$compiler") || { \
+		echo "$$compiler $$required_version is required; command not found in PATH"; \
+		exit; \
+	}; \
+	compiler_version=$$("$$compiler_path" -dumpversion 2>/dev/null) || { \
+		echo "cannot read $$compiler version: $$compiler_path"; \
+		exit; \
+	}; \
+	if [ "$$compiler_version" != "$$required_version" ]; then \
+		echo "$$compiler $$required_version is required, found $$compiler_version ($$compiler_path)"; \
+	fi))
+$(if $(CLANG_CHECK_ERROR),$(error $(CLANG_CHECK_ERROR)))
+endef
+
+check-clang:
+	$(call CHECK_CLANG_VERSION,clang)
+
+check-cc:
+	$(call CHECK_CLANG_VERSION,cc)
+
 # Both phases clean and rebuild the same paths, so isolate them even when the
 # caller enables parallel make through -j or MAKEFLAGS.
-test:
+test: check-clang check-cc
 	$(MAKE) -j1 test-sanitize
 	$(MAKE) -j1 test-normal
 
-test-normal:
+test-normal: check-clang check-cc
 	$(MAKE) clean
 	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test
 	$(BIN_DIR)/test_archive
@@ -222,7 +249,7 @@ test-normal:
 # 3. DYLD_INSERT_LIBRARIES workaround does not resolve the issue
 #
 # Recommendation: Use Linux containers/VMs for full ASan testing on macOS hosts
-test-sanitize:
+test-sanitize: check-clang check-cc
 	$(MAKE) clean
 	@echo "=== Sanitize Test (UBSan only on macOS) ==="
 	@echo "Note: ASan causes deadlock on macOS (dyld + libunwind conflict)."
@@ -308,7 +335,7 @@ ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 	fi
 endif
 
-runtime-platform-inputs: toolchain-layout
+runtime-platform-inputs: toolchain-layout | check-clang
 ifneq ($(RUNTIME_PLATFORM_INPUTS_READY),yes)
 ifeq ($(_HOST_OS),macos)
 	@if [ -z "$(MACOS_SDK_PATH)" ] || [ ! -d "$(MACOS_SDK_PATH)" ]; then \
@@ -395,11 +422,11 @@ extlib/%/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT):
 	@echo "hint:  run scripts/build_libunwind.sh to build the matching platform libunwind" >&2
 	@exit 1
 
-$(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c
+$(OBJ_DIR)/third_party/miniz/%.o: third_party/miniz/%.c | check-clang
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(HOST_CPPFLAGS) $(THIRD_PARTY_CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(OBJ_DIR)/%.o: %.c
+$(OBJ_DIR)/%.o: %.c | check-clang
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(HOST_CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
