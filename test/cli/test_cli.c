@@ -13199,6 +13199,7 @@ static void assert_lsp_lambda_fit_call_navigation(bool packaged) {
     char *remove_error = NULL;
     char *owned_requests[2U * sizeof(kCases) / sizeof(kCases[0])];
     const char *requests[2U * sizeof(kCases) / sizeof(kCases[0]) + 2U];
+    char *ready_location;
     unsigned int ready_line;
     unsigned int ready_character;
     size_t index;
@@ -13253,10 +13254,16 @@ static void assert_lsp_lambda_fit_call_navigation(bool packaged) {
     requests[2U * index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
     find_line_character(kSource, "ready.toString()", strlen("ready."),
                         &ready_line, &ready_character);
+    /* Package Hover can precede the local dependency's source mapping. */
+    ready_location = build_lsp_test_location_marker(
+        provider_uri, kCases[0].declaration_line, 12U);
     output = run_lsp_server_capture_after_position_ready(
-        kInitialize, did_open, NULL, "textDocument/hover", uri,
-        ready_line, ready_character, "Integer description.",
+        kInitialize, did_open, NULL,
+        packaged ? "textDocument/hover" : "textDocument/definition", uri,
+        ready_line, ready_character,
+        packaged ? kCases[0].documentation : ready_location,
         requests, sizeof(requests) / sizeof(requests[0]), NULL);
+    free(ready_location);
     for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
         unsigned int hover_id = 10U + (unsigned int)(2U * index);
         char *location = dup_printf(
