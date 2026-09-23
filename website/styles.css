@@ -893,15 +893,22 @@ svg {
 .site-footer__inner {
   min-height: 104px;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
+  gap: 12px 24px;
+  padding-block: 24px;
   color: var(--faint);
   font-size: 0.78rem;
 }
 
 .site-footer p {
   margin: 0;
+}
+
+.site-footer__identity {
+  flex: 0 1 52rem;
+  line-height: 1.7;
 }
 
 .site-footer a {

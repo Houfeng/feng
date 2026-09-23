@@ -4,6 +4,8 @@
 
 Feng 是一门语法简洁的静态类型编译型语言，提供显式契约与自动内存管理。名称取自中文「锋」，意为「锋利」。
 
+本仓库 [Houfeng/feng](https://github.com/Houfeng/feng) 是 Feng 编程语言的官方源码仓库，官方网站为 [feng-lang.com](https://feng-lang.com/)。
+
 [官网](https://feng-lang.com/index-zh.html) · [用户手册](docs/manual/zh-CN/README.md) · [下载发行版](https://github.com/Houfeng/feng/releases)
 
 ## 特性

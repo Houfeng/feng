@@ -5,9 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="{{ title }} — {{ interface.siteName }}">
   <meta name="theme-color" content="#f7f8f5" data-theme-color>
-  {% set siteOrigin = "https://feng-lang.com" %}
+  {% set siteOrigin = project.origin %}
   {% set canonicalUrl = siteOrigin + page.url %}
+  {% set projectIdentity = interface.projectName + " · " + interface.officialWebsite + ": " + project.domain + " · " + interface.officialRepository + ": " + project.repositoryName %}
   <link rel="canonical" href="{{ canonicalUrl }}">
+  <link rel="describedby" type="text/markdown" href="/llms.txt">
   <link rel="alternate" hreflang="{{ lang }}" href="{{ canonicalUrl }}">
   <link rel="alternate" hreflang="{{ 'zh-CN' if lang == 'en' else 'en' }}" href="{{ siteOrigin }}{{ alternateUrl }}">
   <title>{{ title }} — {{ interface.siteName }}</title>
@@ -28,7 +30,9 @@
       "@type": "ComputerLanguage",
       "@id": siteOrigin + "/#language",
       "name": "Feng",
-      "url": siteOrigin + "/"
+      "url": siteOrigin + "/",
+      "sameAs": [project.repositoryUrl],
+      "disambiguatingDescription": projectIdentity
     }
   } %}
   <script type="application/ld+json">{{ structuredData | jsonLd | safe }}</script>
@@ -211,7 +215,7 @@
   <footer class="site-footer docs-footer">
     <div class="shell site-footer__inner">
       <span>Feng Language</span>
-      <a href="https://github.com/Houfeng/feng" target="_blank" rel="noopener noreferrer">{{ interface.openSource }}</a>
+      <p class="site-footer__identity">{{ interface.projectName }} · {{ interface.officialWebsite }}: <a href="{{ project.origin }}/">{{ project.domain }}</a> · {{ interface.officialRepository }}: <a href="{{ project.repositoryUrl }}" target="_blank" rel="noopener noreferrer">{{ project.repositoryName }}</a></p>
     </div>
   </footer>
 </body>

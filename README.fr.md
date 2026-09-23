@@ -4,6 +4,8 @@
 
 Feng est un langage de programmation compilé à typage statique, doté d’une syntaxe concise, de contrats explicites et d’une gestion automatique de la mémoire. Son nom vient du caractère chinois « 锋 », qui signifie « tranchant ».
 
+Ce dépôt, [Houfeng/feng](https://github.com/Houfeng/feng), est le dépôt officiel du code source du langage de programmation Feng. Le site officiel est [feng-lang.com](https://feng-lang.com/).
+
 [Site web](https://feng-lang.com/index-fr.html) · [Manuel utilisateur](docs/manual/en/README.md) · [Versions](https://github.com/Houfeng/feng/releases)
 
 ## Fonctionnalités

@@ -7,6 +7,7 @@ local/
 node_modules/
 /website/node_modules/
 /website/docs/
+/website/llms.txt
 build/
 temp/
 third_party/**/*.a

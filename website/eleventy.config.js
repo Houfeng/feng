@@ -1,4 +1,4 @@
-import { readFile, readdir, rm } from "node:fs/promises";
+import { readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -10,11 +10,20 @@ import Shiki from "@shikijs/markdown-it";
 const WEBSITE_DIRECTORY = path.dirname(fileURLToPath(import.meta.url));
 const MANUAL_DIRECTORY = path.resolve(WEBSITE_DIRECTORY, "../docs/manual");
 const DOCS_OUTPUT_DIRECTORY = path.join(WEBSITE_DIRECTORY, "docs");
+const LLMS_OUTPUT_PATH = path.join(WEBSITE_DIRECTORY, "llms.txt");
 const FENG_GRAMMAR_PATH = path.resolve(
   WEBSITE_DIRECTORY,
   "../editors/feng-vscode/syntaxes/feng.tmLanguage.json",
 );
 const SUPPORTED_LANGUAGES = ["en", "zh-CN"];
+
+/** Canonical project identity shared by generated pages and the document index. */
+const PROJECT = {
+  origin: "https://feng-lang.com",
+  domain: "feng-lang.com",
+  repositoryUrl: "https://github.com/Houfeng/feng",
+  repositoryName: "Houfeng/feng",
+};
 
 const FENG_GRAMMAR = {
   ...JSON.parse(await readFile(FENG_GRAMMAR_PATH, "utf8")),
@@ -86,6 +95,9 @@ const NAVIGATION = [
 const INTERFACE_TEXT = {
   en: {
     siteName: "Feng Documentation",
+    projectName: "Feng Programming Language",
+    officialWebsite: "Official website",
+    officialRepository: "Official source repository",
     manual: "User Manual",
     home: "Home",
     install: "Install",
@@ -118,6 +130,9 @@ const INTERFACE_TEXT = {
   },
   "zh-CN": {
     siteName: "Feng 文档",
+    projectName: "Feng 编程语言",
+    officialWebsite: "官方网站",
+    officialRepository: "官方源码仓库",
     manual: "用户手册",
     home: "首页",
     install: "安装",
@@ -238,6 +253,35 @@ function validateDocuments() {
 
 validateDocuments();
 
+/** Renders the official project links and every localized manual page as Markdown. */
+function renderLlmsIndex(documents) {
+  const lines = [
+    "# Feng Programming Language",
+    "",
+    "> Feng (锋) is a statically typed, compiled programming language with explicit contracts and automatic memory management.",
+    "",
+    `Feng's official website is ${PROJECT.domain}. Its official source repository is ${PROJECT.repositoryName}.`,
+    "",
+    "## Official links",
+    "",
+    `- [Official website](${PROJECT.origin}/)`,
+    `- [Official source repository: ${PROJECT.repositoryName}](${PROJECT.repositoryUrl})`,
+    `- [Official releases](${PROJECT.repositoryUrl}/releases)`,
+  ];
+
+  for (const language of SUPPORTED_LANGUAGES) {
+    lines.push("", `## ${INTERFACE_TEXT[language].manual} (${language})`, "");
+    const pages = Object.values(documents[language]).sort((left, right) => left.url.localeCompare(right.url, "en"));
+    for (const page of pages) {
+      const title = page.title.replace(/[\\[\]]/g, "\\$&");
+      const url = new URL(page.url, PROJECT.origin).href;
+      lines.push(`- [${title}](${url})`);
+    }
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
 /** Creates localized navigation data without duplicating document titles. */
 function createNavigation(language) {
   const text = INTERFACE_TEXT[language];
@@ -344,8 +388,15 @@ export default function configureEleventy(eleventyConfig) {
 
   eleventyConfig.on("eleventy.before", async () => {
     await rm(DOCS_OUTPUT_DIRECTORY, { recursive: true, force: true });
+    await rm(LLMS_OUTPUT_PATH, { force: true });
   });
 
+  /** Publishes the document index only after the manual build succeeds. */
+  eleventyConfig.on("eleventy.after", async function publishLlmsIndex() {
+    await writeFile(LLMS_OUTPUT_PATH, renderLlmsIndex(DOCUMENTS), "utf8");
+  });
+
+  eleventyConfig.addGlobalData("project", PROJECT);
   eleventyConfig.addGlobalData("layout", "docs.njk");
   eleventyConfig.addGlobalData("eleventyComputed", {
     lang: (data) => getDocumentIdentity(data.page.inputPath).language,

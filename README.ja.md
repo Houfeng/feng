@@ -4,6 +4,8 @@
 
 Feng は、簡潔な構文、明示的な契約、自動メモリ管理を備えた静的型付けのコンパイル型プログラミング言語です。名前は「鋭い」を意味する中国語の「锋」に由来します。
 
+このリポジトリ [Houfeng/feng](https://github.com/Houfeng/feng) は、プログラミング言語 Feng の公式ソースコードリポジトリです。公式サイトは [feng-lang.com](https://feng-lang.com/) です。
+
 [公式サイト](https://feng-lang.com/index-ja.html) · [ユーザーマニュアル](docs/manual/en/README.md) · [リリース](https://github.com/Houfeng/feng/releases)
 
 ## 特徴
