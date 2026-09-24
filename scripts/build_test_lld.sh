@@ -182,7 +182,7 @@ rm -rf "$work/relocated tool"
 cp -R "$work/staging" "$work/relocated tool"
 verify_binary "$work/relocated tool/bin/lld"
 run_regression "$work/relocated tool/bin/ld64.lld" "$work/relocated-validation"
-destination="$repo/test_tools/lld/macos-arm64"
+destination="$repo/toolchain/test_tools/lld/macos-arm64"
 mkdir -p "$(dirname "$destination")"
 backup=$(mktemp -d "$work/previous.XXXXXX")
 rmdir "$backup"

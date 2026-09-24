@@ -44,7 +44,7 @@ Apple Container：`llvm-c-eh-arm64`（arm64）及 `llvm-c-eh-x64`（amd64），�
 普通构建不运行维护脚本。
 macOS 维护入口显式区分普通验证与 UBSan 验证所用链接器，规则见
 [开发方案 §7.3](../../../docs/engineering/c-ir-llvm-exception-plugin-dev.md#73-macos-插件产物补齐)。
-执行前须已有 `test_tools/lld/macos-arm64/` 补丁 LLD；缺失时按
+执行前须已有 `toolchain/test_tools/lld/macos-arm64/` 补丁 LLD；缺失时按
 [LLD 维护说明](../lld/README.md)手工预构建，插件脚本不会自动构建它。
 维护脚本将中间产物和验证日志保存在仓库 `build/llvm-c-eh/` 中。
 仓库全量回归会清理 `build/` 和根 `temp/`，须与独立插件验证顺序执行；需要保留的

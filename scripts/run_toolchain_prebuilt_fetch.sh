@@ -49,6 +49,11 @@ create_toolchain() {
     printf '%s\n' "${platform}" \
       > "${root}/toolchain/sysroot/${platform}/usr/include/.platform"
   done
+  mkdir -p "${root}/toolchain/test_tools/lld/macos-arm64/bin"
+  printf '#!/usr/bin/env sh\nexit 0\n' \
+    > "${root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
+  chmod 0755 "${root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
+  ln -s lld "${root}/toolchain/test_tools/lld/macos-arm64/bin/ld64.lld"
 }
 
 # Archive one fixture using the production prebuilt top-level layout.
@@ -160,7 +165,16 @@ VALID_SOURCE="${WORK_ROOT}/valid-source"
 VALID_ARCHIVE="${WORK_ROOT}/toolchain-prebuilt-${TEST_VERSION}.tar.gz"
 mkdir -p "${VALID_SOURCE}"
 create_toolchain "${VALID_SOURCE}"
-create_archive "${VALID_SOURCE}" "${VALID_ARCHIVE}"
+# Use the production publisher for the successful archive, including test tools.
+mkdir -p "${VALID_SOURCE}/scripts"
+cp "${SCRIPT_DIR}/toolchain-prebuilt-publish.sh" "${VALID_SOURCE}/scripts/"
+PUBLISH_OUTPUT="${WORK_ROOT}/publish-output.txt"
+GITHUB_REF_NAME="${TEST_TAG}" GITHUB_OUTPUT="${PUBLISH_OUTPUT}" \
+  "${VALID_SOURCE}/scripts/toolchain-prebuilt-publish.sh" >/dev/null
+grep -Fx "asset=build/toolchain-prebuilt/toolchain-prebuilt-${TEST_VERSION}.tar.gz" \
+  "${PUBLISH_OUTPUT}" >/dev/null || die "publisher reported an unexpected archive path"
+cp "${VALID_SOURCE}/build/toolchain-prebuilt/toolchain-prebuilt-${TEST_VERSION}.tar.gz" \
+  "${VALID_ARCHIVE}"
 reset_fixture_project
 MOCK_RELEASE_ARCHIVE="${VALID_ARCHIVE}"
 FETCH_OUTPUT="$(run_fetch)"
@@ -172,6 +186,13 @@ FETCH_OUTPUT="$(run_fetch)"
   die "fetch script did not restore the host LLVM layout"
 [[ "$(readlink "${FIXTURE_ROOT}/toolchain/llvm/linux-x64-gnu/bin/llvm-ranlib")" == "llvm-ar" ]] ||
   die "fetch script did not preserve internal symbolic links"
+[[ -x "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/lld" ]] ||
+  die "prebuilt archive did not restore executable test tools"
+[[ "$(readlink "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/ld64.lld")" == "lld" ]] ||
+  die "prebuilt archive did not preserve the test linker alias"
+cmp -s "${VALID_SOURCE}/toolchain/test_tools/lld/macos-arm64/bin/lld" \
+  "${FIXTURE_ROOT}/toolchain/test_tools/lld/macos-arm64/bin/lld" ||
+  die "prebuilt restoration changed the test linker contents"
 grep -Fq \
   'api repos/Houfeng/feng/git/matching-refs/tags/toolchain-prebuilt/' \
   "${MOCK_LOG}" ||
@@ -238,6 +259,9 @@ WORKFLOW="${PROJECT_ROOT}/.github/workflows/release.yml"
   die "release workflow must restore toolchain in exactly four jobs"
 if grep -Fq 'lfs: true' "${WORKFLOW}"; then
   die "release workflow still enables Git LFS checkout"
+fi
+if grep -Fq 'git lfs pull' "${WORKFLOW}"; then
+  die "release workflow still downloads LFS assets outside the prebuilt archive"
 fi
 
 echo "toolchain prebuilt fetch: latest selection, validation, restoration, and workflow wiring passed"

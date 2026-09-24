@@ -196,6 +196,14 @@ fi
   die "installed package root not found after extraction: ${INSTALL_ROOT}"
 FENG="${INSTALL_ROOT}/bin/feng"
 LLVM_BIN="${INSTALL_ROOT}/toolchain/llvm/bin"
+CEH_ROOT="${INSTALL_ROOT}/toolchain/llvm-c-eh"
+CEH_EXTENSION=so
+if [[ "${HOST_PLATFORM}" == macos-* ]]; then CEH_EXTENSION=dylib; fi
+verify_platform_file "${CEH_ROOT}/lib/llvm_c_eh.${CEH_EXTENSION}" \
+  "${HOST_PLATFORM}" "installed LLVM C EH plugin"
+for name in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+  [[ -f "${CEH_ROOT}/${name}" ]] || die "installed LLVM C EH input not found: ${name}"
+done
 
 [[ -x "${FENG}" ]] || die "installed Feng executable not found: ${FENG}"
 [[ "$("${FENG}" --version)" == "feng ${VERSION}" ]] ||
@@ -227,6 +235,8 @@ for tool in clang lld ld.lld llvm-ar llvm-ranlib lldb lldb-dap lldb-argdumper; d
 done
 case "${HOST_PLATFORM}" in
   macos-arm64)
+    [[ -x "${LLVM_BIN}/ld64.lld" ]] ||
+      die "installed ld64.lld is missing or not executable"
     [[ -x "${LLVM_BIN}/debugserver" ]] ||
       die "installed debugserver is missing or not executable"
     ;;

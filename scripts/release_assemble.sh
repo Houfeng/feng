@@ -297,7 +297,7 @@ verify_llvm_toolchain() {
   )
 
   case "${host_platform}" in
-    macos-arm64) tools+=("debugserver") ;;
+    macos-arm64) tools+=("debugserver" "ld64.lld") ;;
     linux-*) tools+=("lldb-server") ;;
   esac
   require_dir "${llvm_root}/bin"
@@ -305,6 +305,20 @@ verify_llvm_toolchain() {
   for tool in "${tools[@]}"; do
     [[ -x "${llvm_root}/bin/${tool}" ]] ||
       die "required LLVM tool is missing or not executable: ${llvm_root}/bin/${tool}"
+  done
+}
+
+# Verify the matching host plugin and its installed protocol/provenance files.
+verify_c_eh_plugin() {
+  local host_platform="$1"
+  local plugin_root="${SOURCE_ROOT}/toolchain/llvm-c-eh/${host_platform}"
+  local extension=so
+  local name
+  if [[ "${host_platform}" == macos-* ]]; then extension=dylib; fi
+  verify_platform_file "${plugin_root}/lib/llvm_c_eh.${extension}" \
+    "${host_platform}" "LLVM C EH plugin"
+  for name in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+    require_file "${plugin_root}/${name}"
   done
 }
 
@@ -484,6 +498,9 @@ assemble_distribution() {
     "${SOURCE_ROOT}/toolchain/llvm/${host_platform}" \
     "${package_root}/toolchain/llvm"
   copy_tree \
+    "${SOURCE_ROOT}/toolchain/llvm-c-eh/${host_platform}" \
+    "${package_root}/toolchain/llvm-c-eh"
+  copy_tree \
     "${SOURCE_ROOT}/toolchain/sysroot" \
     "${package_root}/toolchain/sysroot"
   if [[ -n "${BUNDLED_PACKAGES_ROOT}" ]]; then
@@ -607,6 +624,7 @@ fi
 for host_platform in "${HOST_PLATFORMS[@]}"; do
   verify_component "${host_platform}"
   verify_llvm_toolchain "${host_platform}"
+  verify_c_eh_plugin "${host_platform}"
 done
 verify_public_headers
 verify_linux_sysroots

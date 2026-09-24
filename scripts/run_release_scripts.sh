@@ -165,9 +165,24 @@ create_source_root() {
   local host_platform
   local platform
   local tool
+  local plugin_root
+  local extension
 
   printf '%s\n' "0.1.0" > "${source_root}/VERSION"
+  mkdir -p "${source_root}/toolchain/test_tools/lld/macos-arm64/bin"
+  printf '#!/usr/bin/env sh\nexit 0\n' \
+    > "${source_root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
+  chmod 0755 "${source_root}/toolchain/test_tools/lld/macos-arm64/bin/lld"
+  ln -s lld "${source_root}/toolchain/test_tools/lld/macos-arm64/bin/ld64.lld"
   for host_platform in "${HOST_PLATFORMS[@]}"; do
+    plugin_root="${source_root}/toolchain/llvm-c-eh/${host_platform}"
+    extension=so
+    if [[ "${host_platform}" == macos-* ]]; then extension=dylib; fi
+    mkdir -p "${plugin_root}/lib" "${plugin_root}/include"
+    create_platform_binary "${host_platform}" "${plugin_root}/lib/llvm_c_eh.${extension}"
+    for tool in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+      printf '%s\n' "release fixture: ${tool}" > "${plugin_root}/${tool}"
+    done
     mkdir -p \
       "${source_root}/toolchain/llvm/${host_platform}/bin" \
       "${source_root}/toolchain/llvm/${host_platform}/lib"
@@ -180,6 +195,9 @@ create_source_root() {
       "${source_root}/toolchain/llvm/${host_platform}/bin/ld.lld" \
       "${source_root}/toolchain/llvm/${host_platform}/bin/llvm-ranlib"
     ln -s lld "${source_root}/toolchain/llvm/${host_platform}/bin/ld.lld"
+    if [[ "${host_platform}" == macos-* ]]; then
+      ln -s lld "${source_root}/toolchain/llvm/${host_platform}/bin/ld64.lld"
+    fi
     ln -s llvm-ar "${source_root}/toolchain/llvm/${host_platform}/bin/llvm-ranlib"
     case "${host_platform}" in
       macos-arm64) tool="debugserver" ;;
@@ -381,6 +399,9 @@ done
 for host_platform in "${HOST_PLATFORMS[@]}"; do
   package_name="feng-0.1.0-${host_platform}"
   archive_path="${OUTPUT_ROOT}/${package_name}.zip"
+  if unzip -Z1 "${archive_path}" | grep -E '/test_tools(/|$)' >/dev/null; then
+    die "release archive included test-only tools: ${archive_path}"
+  fi
   unzip -Z1 "${archive_path}" |
     grep -x "${package_name}/pkg/release_fixture_pkg-1.2.3.fb" >/dev/null ||
     die "release archive did not contain the validated bundled package: ${archive_path}"

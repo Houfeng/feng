@@ -324,7 +324,7 @@ static void compile_generated_c_or_die(const char *c_source) {
     write_text_file_or_die(c_path, c_source);
     ASSERT(snprintf(command,
                     sizeof(command),
-                    "cc -Isrc -Isrc/runtime -Ithird_party/miniz -std=gnu11 -fexceptions -Werror -c '%s' -o '%s' >/dev/null 2>&1",
+                    "cc " FENG_TEST_C_EH_FLAGS "-Isrc -Isrc/runtime -Ithird_party/miniz -std=gnu11 -fexceptions -Werror -c '%s' -o '%s' >/dev/null 2>&1",
                     c_path,
                     o_path) > 0);
     if (system(command) != 0) {
@@ -355,7 +355,7 @@ static void assert_generated_native_symbol_relocation(const char *c_source,
     if (target_elf) {
         ASSERT(snprintf(command,
                         sizeof(command),
-                        "build/toolchain/llvm/bin/clang --target=x86_64-unknown-linux-gnu "
+                        "build/toolchain/llvm/bin/clang " FENG_TEST_C_EH_FLAGS "--target=x86_64-unknown-linux-gnu "
                         "--sysroot=build/toolchain/sysroot/linux-x64-gnu "
                         "-Isrc -Isrc/runtime -std=gnu11 -fexceptions -Werror "
                         "-c '%s' -o '%s' >/dev/null 2>&1",
@@ -364,7 +364,7 @@ static void assert_generated_native_symbol_relocation(const char *c_source,
     } else {
         ASSERT(snprintf(command,
                         sizeof(command),
-                        "cc -Isrc -Isrc/runtime -std=gnu11 -fexceptions -Werror "
+                        "cc " FENG_TEST_C_EH_FLAGS "-Isrc -Isrc/runtime -std=gnu11 -fexceptions -Werror "
                         "-c '%s' -o '%s' >/dev/null 2>&1",
                         c_path,
                         o_path) > 0);

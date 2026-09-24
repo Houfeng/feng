@@ -275,20 +275,54 @@ static int count_logged_arguments(const char *text, const char *argument) {
     return count;
 }
 
+/* Preserve one literal argument, including quotes, when writing a shell wrapper. */
+static char *quote_shell_argument(const char *text) {
+    size_t length = strlen(text);
+    ASSERT(length <= (SIZE_MAX - 3U) / 4U);
+    char *quoted = (char *)malloc(length * 4U + 3U);
+    size_t cursor = 0U;
+
+    ASSERT(quoted != NULL);
+    quoted[cursor++] = '\'';
+    for (size_t i = 0U; i < length; ++i) {
+        if (text[i] == '\'') {
+            memcpy(quoted + cursor, "'\\''", 4U);
+            cursor += 4U;
+        } else {
+            quoted[cursor++] = text[i];
+        }
+    }
+    quoted[cursor++] = '\'';
+    quoted[cursor] = '\0';
+    return quoted;
+}
+
+/* Record compiler argv without changing the tool selected before wrapping it. */
 static char *create_logging_cc_wrapper(const char *dir, const char *log_path) {
+    const FengCliHostToolStrategy strategy = {
+        "C compiler", "FENG_CC", "toolchain/llvm/bin/clang", "CC", "cc"
+    };
+    char *compiler = feng_cli_resolve_host_tool(NULL, &strategy, NULL);
+    ASSERT(compiler != NULL);
+    char *quoted_compiler = quote_shell_argument(compiler);
+    char *quoted_log = quote_shell_argument(log_path);
     char *script_path = path_join(dir, "fake-cc.sh");
     char *script_text = dup_printf("#!/bin/sh\n"
-                                   "printf '__CMD__\\n' >> \"%s\"\n"
+                                   "printf '__CMD__\\n' >> %s\n"
                                    "for arg in \"$@\"; do\n"
-                                   "  printf '%%s\\n' \"$arg\" >> \"%s\"\n"
+                                   "  printf '%%s\\n' \"$arg\" >> %s\n"
                                    "done\n"
-                                   "exec cc \"$@\"\n",
-                                   log_path,
-                                   log_path);
+                                   "exec %s \"$@\"\n",
+                                   quoted_log,
+                                   quoted_log,
+                                   quoted_compiler);
 
     ASSERT(script_text != NULL);
     write_executable_text_file(script_path, script_text);
     free(script_text);
+    free(quoted_log);
+    free(quoted_compiler);
+    free(compiler);
     return script_path;
 }
 

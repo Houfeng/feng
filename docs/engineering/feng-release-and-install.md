@@ -86,8 +86,9 @@ feng-<version>-<platform>/
 │   ├── llvm/                     # 同一 LLVM 官方包精简后的统一根目录
 │   │   ├── bin/
 │   │   │   ├── clang          # C/LLVM 后端驱动
-│   │   │   ├── lld            # LLVM linker，所有 Linux GNU / musl 目标链接使用
+│   │   │   ├── lld            # LLVM linker，macOS / Linux 最终链接使用
 │   │   │   ├── ld.lld -> lld  # Clang / driver 调用入口
+│   │   │   ├── ld64.lld -> lld # macOS host 的 Mach-O 链接入口
 │   │   │   ├── llvm-ar        # 跨目标静态归档工具
 │   │   │   ├── llvm-ranlib    # 跨目标静态归档索引工具
 │   │   │   ├── lldb           # 命令行调试器
@@ -97,6 +98,12 @@ feng-<version>-<platform>/
 │   │       │   ├── include/   # 编译器内置头文件（平台无关）
 │   │       │   └── lib/<os>/  # 编译器运行时库（目标 OS）
 │   │       └── liblldb.*       # lldb / lldb-dap 运行所必需的库
+│   ├── llvm-c-eh/                # 当前 host 的预构建 LLVM Pass 插件
+│   │   ├── lib/llvm_c_eh.dylib   # macOS；Linux 文件名为 llvm_c_eh.so
+│   │   ├── include/llvm_c_eh.h
+│   │   ├── LICENSE
+│   │   ├── build-info.txt
+│   │   └── source-files.sha256
 │   └── sysroot/                  # Linux 目标 sysroot（native / 交叉共用）
 │       ├── linux-x64-gnu/
 │       ├── linux-x64-musl/
@@ -117,6 +124,7 @@ feng-<version>-<platform>/
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
 - `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
+- `toolchain/llvm-c-eh/` 从仓库同名目录的 `<host-platform>/` 原样复制，包含插件、头文件与许可证／来源记录；不按目标平台重复装入。macOS 签名复用现有 Mach-O 文件遍历。维护构建规则见 [插件开发方案](./c-ir-llvm-exception-plugin-dev.md)，本阶段接入不改变 Feng 异常后端。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../specifications/feng-build.md)。
 - `pkg/` 存放发行任务准备好的精确版本 `.fb`，文件名固定为
   `<name>-<version>.fb`。三个 host 分发包使用同一组输入；组装流程只校验并原样复制,
@@ -138,7 +146,7 @@ feng-<version>-<platform>/
   - 来源：LLVM 官方 host 平台预编译包。
   - 版本：`22.1.8`。
   - 工具：`clang`。
-  - 工具：`lld`、`ld.lld`。
+  - 工具：`lld`、`ld.lld`；macOS 另有 `ld64.lld -> lld`。
   - 工具：`llvm-ar`、`llvm-ranlib`。
   - 工具：`lldb`、`lldb-dap`、`lldb-argdumper`、`debugserver` / `lldb-server`。
   - 脚本：`scripts/fetch_llvm.sh`、`scripts/trim_llvm.sh`。
@@ -146,6 +154,9 @@ feng-<version>-<platform>/
     - AlmaLinux 8.10：`libxml2 2.9.7`、`xz 5.2.4`、`zlib 1.2.11`、`libgcc 8.5.0`、`Python 3.11.9`。
     - Ubuntu 22.04：`ncurses 6.3`、`libstdc++ 12.3.0`。
     - host 下限：glibc `2.34`。
+- LLVM C EH
+  - 使用预构建 Release 插件，LLVM 版本与上述工具链一致；普通构建和 CI 不现场构建插件。
+  - `toolchain/test_tools/` 中的补丁 LLD 仅用于 macOS UBSan 测试，随工具链预构建归档分发；发行组装只复制前述 LLVM、插件和 sysroot 子目录，不包含测试工具，也不替换 bundled LLD。
 - sysroot
   - macOS（§5.1）：来自 Xcode 或 Xcode Command Line Tools，不随 Feng 分发，不固定版本。
   - GNU/Linux（§5.3）
@@ -187,7 +198,7 @@ macOS 全量回归步骤从 `DEVELOPER_DIR` 推导当前 Xcode 的 `SharedFramew
 
 Linux 全量回归步骤固定使用 `LANG=C.UTF-8` 和 `LC_ALL=C.UTF-8`，使依赖 POSIX 字符宽度接口的标准库测试不受 job container 默认 `C` locale 影响。
 
-macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。
+macOS 任务生成 `macos-arm64` runtime；两个 Linux 任务分别使用同架构 GNU / musl sysroot 生成该架构的两份 runtime。各 host 平台的精简 LLVM 产物位于仓库 `toolchain/llvm/<host-platform>/`，四份 Linux 目标 sysroot 位于仓库 `toolchain/sysroot/<platform>/`，均由 git lfs 管理。预构建归档还须包含 `toolchain/llvm-c-eh/<host-platform>/` 和 `toolchain/test_tools/`，由同一次 `toolchain-prebuilt-fetch.sh` 恢复；CI 不再为测试工具单独执行 LFS 下载。补丁 LLD 的完整性、版本和实际选择在 `test-sanitize` 前置验证，环境仅对该阶段生效，具体配置见 [接入方案](./feng-llvm-c-eh-integration-dev.md#4-macos-ubsan-测试链接器)。
 
 版本 tag push 或手动试发的三个原生构件任务全部成功后，独立汇聚任务下载三份构件并组装三份 `feng-<version>-<platform>.zip`。因此发布流程不要求 Linux 生成 macOS runtime，也不要求 macOS 或任一 Linux host 单独产生完整 release zip。普通分支 push 与 pull request 不执行该汇聚任务。
 
@@ -373,7 +384,7 @@ Feng 编译器自身固定使用 `clang` 构建，不读取或接受其他 `CC` 
 
 本地与 CI 共用独立的 `make check-clang`，检查当前 `PATH` 中 `clang` 的精确版本为 22.1.8；`make all`、`make cli`、`make runtime` 及直接构建对象或可执行文件均以前置检查保证编译前完成校验。测试入口 `make test`、`make test-normal`、`make test-sanitize` 还通过 `make check-cc` 独立检查 `cc`，并在清理构建产物之前完成两项校验。两个检查复用同一实现；命令缺失、版本读取失败或版本不符时立即报错停止，版本不符的错误包含实际版本与命令路径。不要求两个入口指向同一文件，也不修改本机工具安装或 `PATH`。检查是只读的，作为构建产物的顺序依赖，不触发重复编译，并保留无改动构建的 `Nothing to be done` 提示。
 
-- [x] Makefile 在缺失或目标不匹配时创建或更新 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`；链接已经匹配且所有构建产物均为最新时，`make all` 不写入任何文件，并明确输出包含 `Nothing to be done` 的提示。
+- [x] Makefile 在缺失或目标不匹配时创建或更新 `build/toolchain/llvm -> ../../toolchain/llvm/<host-platform>`、`build/toolchain/llvm-c-eh -> ../../toolchain/llvm-c-eh/<host-platform>` 和 `build/toolchain/sysroot -> ../../toolchain/sysroot`；`build/toolchain` 本身保持实体目录。链接已经匹配且所有构建产物均为最新时，`make all` 不写入任何文件，并明确输出包含 `Nothing to be done` 的提示。
 - [x] 在 `src/cli/common.*` 统一实现 Feng 可执行文件、安装根、相对路径和 `PATH` 工具的查找与错误提示。runtime 和 host LLVM 共用该实现，`lldb-dap` 在 §8.4 接入。不增加工具链根目录环境变量。
 - [x] 测试可执行文件查找、相对路径、软链接布局和缺失路径错误。
 - [x] driver 按 [feng-build.md](../specifications/feng-build.md) 的顺序选择 host 工具：`FENG_CC` / `FENG_AR` / `FENG_RANLIB`、bundled `clang` / `llvm-ar` / `llvm-ranlib`、`CC` / `AR` / `RANLIB`、系统 `cc` / `ar` / `ranlib`。native 和交叉编译共用该结果。

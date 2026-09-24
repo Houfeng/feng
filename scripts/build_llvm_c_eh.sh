@@ -148,7 +148,7 @@ sanitizer_link_options=(${link_options[@]+"${link_options[@]}"})
 if [[ "$host" == macos-arm64 ]]; then
     source "$repo/third_party/lld/source.env"
     original_linker="$repo/toolchain/llvm/$host/bin/lld"
-    sanitizer_linker="$repo/test_tools/lld/$host/bin/ld64.lld"
+    sanitizer_linker="$repo/toolchain/test_tools/lld/$host/bin/ld64.lld"
     [[ -x "$original_linker" ]] || die 'missing original bundled LLD'
     [[ -x "$sanitizer_linker" ]] || die 'missing UBSan test LLD; run scripts/build_test_lld.sh manually'
     case $("$original_linker" -flavor darwin --version) in

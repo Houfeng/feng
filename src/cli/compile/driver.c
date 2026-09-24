@@ -1682,6 +1682,39 @@ static void argv_free(ArgVec *v) {
     v->cap = 0;
 }
 
+/* Load the installed host plugin for either generated-C output kind. */
+static bool argv_push_c_eh_flags(ArgVec *av, const char *program_path,
+                                 char **out_error_message) {
+    char *host = NULL;
+    if (!feng_platform_detect_host_platform(&host, out_error_message)) {
+        return false;
+    }
+    char *relative = dup_printf("toolchain/llvm-c-eh/lib/llvm_c_eh%s",
+                               feng_platform_dynamic_library_suffix(host));
+    free(host);
+    if (relative == NULL) {
+        return false;
+    }
+    char *plugin = feng_cli_require_install_path(program_path, relative,
+        FENG_CLI_REQUIRED_REGULAR_FILE, out_error_message);
+    free(relative);
+    if (plugin == NULL) {
+        return false;
+    }
+    char *header = feng_cli_require_install_path(program_path,
+        "toolchain/llvm-c-eh/include/llvm_c_eh.h",
+        FENG_CLI_REQUIRED_REGULAR_FILE, out_error_message);
+    char *include_dir = header != NULL ? path_dirname_dup(header) : NULL;
+    char *flag = dup_printf("-fpass-plugin=%s", plugin);
+    bool ok = include_dir != NULL && flag != NULL &&
+        argv_push(av, flag) && argv_push(av, "-I") && argv_push(av, include_dir);
+    free(flag);
+    free(include_dir);
+    free(header);
+    free(plugin);
+    return ok;
+}
+
 static int spawn_and_wait(char *const argv[]) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -1973,9 +2006,6 @@ static bool argv_push_target_platform_flags(ArgVec *av,
         if (ok && (gcc_toolchain_flag == NULL || !argv_push(av, gcc_toolchain_flag))) {
             ok = false;
         }
-        if (ok && link_executable && !argv_push(av, "-fuse-ld=lld")) {
-            ok = false;
-        }
         if (ok && link_executable &&
             feng_platform_is_linux_musl(target_platform) &&
             !argv_push(av, "-static")) {
@@ -1983,6 +2013,9 @@ static bool argv_push_target_platform_flags(ArgVec *av,
         }
         free(sysroot_flag);
         free(gcc_toolchain_flag);
+    }
+    if (ok && link_executable && !argv_push(av, "-fuse-ld=lld")) {
+        ok = false;
     }
     return ok;
 }
@@ -2268,10 +2301,17 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         goto cleanup;
     }
 
+    if (!argv_push(&av, cc) || !argv_push(&av, "-std=gnu11") ||
+        !argv_push(&av, "-fexceptions") ||
+        !argv_push_c_eh_flags(&av, opts->program_path, &tool_error)) {
+        fprintf(stderr, "error: cannot configure LLVM C EH plugin: %s\n",
+                tool_error != NULL ? tool_error : "out of memory building compiler argv");
+        argv_free(&av);
+        rc = 1;
+        goto cleanup;
+    }
+
     if (opts->target == FENG_COMPILE_TARGET_BIN) {
-        if (!argv_push(&av, cc)) { ok = false; }
-        if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
-        if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
         if (ok && !argv_push_target_platform_flags(&av,
                                                    target_platform,
                                                    target_clang,
@@ -2367,9 +2407,6 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             fprintf(stderr, "error: out of memory composing object path\n");
             rc = 1;
         } else {
-            if (!argv_push(&av, cc)) { ok = false; }
-            if (ok && !argv_push(&av, "-std=gnu11")) { ok = false; }
-            if (ok && !argv_push(&av, "-fexceptions")) { ok = false; }
             if (ok && !argv_push_target_platform_flags(&av,
                                                        target_platform,
                                                        target_clang,
@@ -2454,6 +2491,7 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
     }
 
 cleanup:
+    argv_free(&av);
     for (size_t i = 0; i < lib_count; ++i) free(libs[i]);
     free(libs);
     free_string_array(bundle_extlib_satisfied_libs, bundle_extlib_satisfied_lib_count);

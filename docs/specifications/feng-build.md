@@ -78,6 +78,20 @@ Feng 专用环境变量是用户对单次 Feng 调用的最高优先级显式覆
 
 生成 C 的 `bin` / `lib` 编译在 debug 和 release 模式下均使用 `-Wno-unused-but-set-variable`，过滤仅赋值而未读取的变量产生的后端警告；现有 `-Wall` / `-Wextra` 与其他警告选项保持不变。该设置仅用于生成 C，不用于构建 Feng 编译器自身。
 
+生成 C 的两种产物、两种构建模式均加载同一 host 的 LLVM C EH Pass 插件：
+`-fpass-plugin=<安装根>/toolchain/llvm-c-eh/lib/llvm_c_eh.dylib`（macOS）或
+`llvm_c_eh.so`（Linux），并加入该目录下 `include/` 的头文件搜索路径。
+插件选择与交叉编译目标无关；沿用 CLI 公共安装相对路径解析，缺失文件或 Clang
+加载失败须明确报错，不跳过插件。显式覆盖的编译器也必须与预构建插件的 LLVM
+22.1.8 兼容。无协议标记的 C 保持原有行为；协议定义见
+[插件开发方案](../engineering/c-ir-llvm-exception-plugin-dev.md)。
+
+macOS 与 Linux 的 `bin` 均以 `-fuse-ld=lld` 选择 LLVM 链接器；macOS 对应
+`bin/ld64.lld -> lld`，Linux 对应 `bin/ld.lld -> lld`。`lib` 的 `-c` 不传
+链接器选择参数。测试专用补丁链接器的环境配置见
+[接入方案](../engineering/feng-llvm-c-eh-integration-dev.md#4-macos-ubsan-测试链接器)，
+driver 不定位测试工具，也不增加测试专用 API。
+
 指定任一 Linux 目标时，最终选中的 C 编译器必须兼容本节定义的 Clang `--target`、`--sysroot`、`--gcc-toolchain` 与 `-fuse-ld=lld` 参数，并能按自身安装规则定位可在当前 host 运行的 `ld.lld`，否则报告目标平台不可用。LLD 不建立独立查找链；Feng 通过 `-fuse-ld=lld` 让选中的 Clang 定位同一工具链中的 `bin/ld.lld -> lld`。`lldb-dap` 的后端定位由 [feng-cli.md](feng-cli.md) 单独定义。
 
 不增加 `FENG_HOME`、`FENG_TOOLCHAIN` 等用于改变安装根或整套工具链根目录的环境变量。可执行文件绝对路径解析与 runtime、Clang、LLVM ar / ranlib、LLD、`lldb-dap` 的相对定位共用同一套 CLI 公共路径函数,不得分别实现重复的可执行文件定位逻辑。发行包与源码开发的统一相对布局及 Makefile 软链接约定见 [feng-release-and-install.md](../engineering/feng-release-and-install.md) §4 / §5。

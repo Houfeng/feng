@@ -17,7 +17,7 @@ static void defer_context_compile_release(const char *source) {
     THROW_CHECK(fwrite(source, 1U, strlen(source), file) == strlen(source));
     THROW_CHECK(fclose(file) == 0);
     snprintf(command, sizeof(command),
-        "cc -Isrc -Isrc/runtime -std=gnu11 -fexceptions -O2 -Werror -c '%s' -o '%s'", input, output);
+        "cc " FENG_TEST_C_EH_FLAGS "-Isrc -Isrc/runtime -std=gnu11 -fexceptions -O2 -Werror -c '%s' -o '%s'", input, output);
     THROW_CHECK(system(command) == 0);
     THROW_CHECK(unlink(input) == 0 && unlink(output) == 0 && rmdir(directory) == 0);
 }

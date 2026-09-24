@@ -35,10 +35,10 @@ llvm-c-eh 插件的 Makefile。`cmake/LLVMConfig.cmake` 只为独立构建选择
 
 脚本只解压 `lld/`、公共 CMake 文件及同版本 lit，使用 SDK 已构建的 LLVM 库。
 静态链接 LLVM 及可用的静态依赖，验证运行依赖闭包后生成可搬移的预构建工具。
-通过 Mach-O 上游测试、本缺陷回归及搬移验证后，安装至 `test_tools/lld/macos-arm64/`。
+通过 Mach-O 上游测试、本缺陷回归及搬移验证后，安装至 `toolchain/test_tools/lld/macos-arm64/`。
 最终产物仅依赖 macOS 系统动态库，并附 LLVM、Zstandard 许可证、构建记录和散列。
 当前构建目标为 macOS ARM64，最低 macOS 26.0。
 
 源码、补丁或配套 LLVM 版本变化时重新预构建。校验属于构建过程，没有独立 check
-脚本或编译器代理。产物目录的 LFS 规则见开发方案 §7.2；不修改 Feng 编译器代码和
-既有测试，也不接入 Feng Makefile、CI 或发行流程。
+脚本或编译器代理。产物目录的 LFS 规则见开发方案 §7.2，Feng 测试及预构建分发接入见
+[接入方案](../../docs/engineering/feng-llvm-c-eh-integration-dev.md#4-macos-ubsan-测试链接器)。

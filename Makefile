@@ -60,13 +60,14 @@ TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIM
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
 TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
 TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
+TEST_C_EH_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) src/cli/common.c src/cli/compile/driver.c test/cli/llvm_c_eh_driver.c)
 TEST_CLI_PATHS_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) src/cli/common.c $(TEST_CLI_PATHS_SRCS))
 TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
 DEPS = $(CLI_OBJS:.o=.d) $(RUNTIME_PLATFORM_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.d) \
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
 	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
 	$(TEST_CODEGEN_OBJS:.o=.d) $(TEST_DEBUG_OBJS:.o=.d) $(TEST_CLI_OBJS:.o=.d) \
-	$(TEST_CLI_PATHS_OBJS:.o=.d) $(TEST_SYMBOL_OBJS:.o=.d)
+	$(TEST_CLI_PATHS_OBJS:.o=.d) $(TEST_SYMBOL_OBJS:.o=.d) $(OBJ_DIR)/test/cli/llvm_c_eh_driver.d
 
 THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-function
 
@@ -124,28 +125,42 @@ RUNTIME_HEADERS := $(BUILD_DIR)/include/feng_generated.h \
 LIBUNWIND_LIB := extlib/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC_LIB_EXT)
 TOOLCHAIN_LAYOUT_DIR := $(BUILD_DIR)/toolchain
 LLVM_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm
+CEH_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm-c-eh
 SYSROOT_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/sysroot
 LLVM_LAYOUT_TARGET := ../../toolchain/llvm/$(HOST_PLATFORM)
+CEH_LAYOUT_TARGET := ../../toolchain/llvm-c-eh/$(HOST_PLATFORM)
 SYSROOT_LAYOUT_TARGET := ../../toolchain/sysroot
 RUNTIME_CC := $(LLVM_LAYOUT_LINK)/bin/clang
 RUNTIME_AR := $(LLVM_LAYOUT_LINK)/bin/llvm-ar
 
 ifeq ($(_HOST_OS),macos)
+CEH_LIBRARY := lib/llvm_c_eh.dylib
+# Clang's existing tool search selects this linker only during UBSan testing.
+TEST_LLD_ROOT := $(CURDIR)/toolchain/test_tools/lld/$(HOST_PLATFORM)
+SANITIZE_LDFLAGS := -fuse-ld=lld
+test-sanitize: export COMPILER_PATH := $(TEST_LLD_ROOT)/bin
 MACOS_SDK_PATH := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 RUNTIME_FLAGS_macos-arm64 := --target=arm64-apple-macosx -isysroot $(MACOS_SDK_PATH)
 else
+CEH_LIBRARY := lib/llvm_c_eh.so
 RUNTIME_FLAGS_linux-x64-gnu := --target=x86_64-unknown-linux-gnu --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-x64-gnu --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-x64-gnu
 RUNTIME_FLAGS_linux-x64-musl := --target=x86_64-unknown-linux-musl --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl
 RUNTIME_FLAGS_linux-arm64-gnu := --target=aarch64-unknown-linux-gnu --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu
 RUNTIME_FLAGS_linux-arm64-musl := --target=aarch64-unknown-linux-musl --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-arm64-musl --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-arm64-musl
 endif
 
+# Generated-C unit tests keep their direct compiler calls and existing options.
+$(patsubst %.c,$(OBJ_DIR)/%.o,$(TEST_CODEGEN_SRCS) $(TEST_DEBUG_SRCS)): CPPFLAGS += -DFENG_TEST_C_EH_FLAGS='"-fpass-plugin=$(CEH_LAYOUT_LINK)/$(CEH_LIBRARY) -I$(CEH_LAYOUT_LINK)/include "'
+
 # Keep no-op builds read-only: layout checks become recipes only when the
 # current host links or runtime inputs are not already valid.
 TOOLCHAIN_LAYOUT_READY := $(shell \
 	if [ -d "toolchain/llvm/$(HOST_PLATFORM)" ] && \
+	   [ -f "toolchain/llvm-c-eh/$(HOST_PLATFORM)/$(CEH_LIBRARY)" ] && \
+	   [ -f "toolchain/llvm-c-eh/$(HOST_PLATFORM)/include/llvm_c_eh.h" ] && \
 	   [ -d "toolchain/sysroot" ] && \
 	   [ "$$(readlink "$(LLVM_LAYOUT_LINK)" 2>/dev/null)" = "$(LLVM_LAYOUT_TARGET)" ] && \
+	   [ "$$(readlink "$(CEH_LAYOUT_LINK)" 2>/dev/null)" = "$(CEH_LAYOUT_TARGET)" ] && \
 	   [ "$$(readlink "$(SYSROOT_LAYOUT_LINK)" 2>/dev/null)" = "$(SYSROOT_LAYOUT_TARGET)" ]; then \
 		printf 'yes'; \
 	fi)
@@ -184,7 +199,7 @@ endef
 $(foreach platform,$(RUNTIME_PLATFORMS),$(eval $(call DEFINE_RUNTIME_PLATFORM,$(platform))))
 RUNTIME_PLATFORM_OBJS := $(foreach platform,$(RUNTIME_PLATFORMS),$(RUNTIME_OBJS_$(platform)))
 
-.PHONY: all cli runtime check-clang check-cc test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test test-sanitize clean
+.PHONY: all cli runtime check-clang check-cc test test-normal smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test test-sanitize clean
 
 all: cli runtime
 
@@ -227,7 +242,7 @@ test: check-clang check-cc
 
 test-normal: check-clang check-cc
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -250,12 +265,18 @@ test-normal: check-clang check-cc
 #
 # Recommendation: Use Linux containers/VMs for full ASan testing on macOS hosts
 test-sanitize: check-clang check-cc
+ifeq ($(_HOST_OS),macos)
+	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }
+	@cd "$(TEST_LLD_ROOT)" && shasum -a 256 -c SHA256SUMS
+	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 22.1.8"
+	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
+endif
 	$(MAKE) clean
 	@echo "=== Sanitize Test (UBSan only on macOS) ==="
 	@echo "Note: ASan causes deadlock on macOS (dyld + libunwind conflict)."
 	@echo "For full ASan + UBSan testing, use Linux CI."
 	$(MAKE) runtime CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic"
-	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined"
+	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol $(BIN_DIR)/test_llvm_c_eh_driver CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined $(SANITIZE_LDFLAGS)"
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -266,10 +287,15 @@ test-sanitize: check-clang check-cc
 	# The trimmed distribution Clang intentionally omits sanitizer runtimes.
 	# Generated-program UBSan coverage therefore uses the host compiler through
 	# the explicit Feng tool override; the normal phase below exercises bundled.
-	FENG_CC=$(CC) FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
+	# Resolve before child login shells can reset PATH to another compiler.
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
-	FENG_CC=$(CC) FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" bash test/cli/llvm_c_eh.sh
+
+llvm-c-eh-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
+	bash test/cli/llvm_c_eh.sh
 
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh
@@ -310,6 +336,11 @@ init-bundled-packages-test: cli
 
 toolchain-layout:
 ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
+	@for file in "$(CEH_LIBRARY)" include/llvm_c_eh.h; do \
+		if [ ! -f "toolchain/llvm-c-eh/$(HOST_PLATFORM)/$$file" ]; then \
+			echo "error: host LLVM C EH plugin input not found: toolchain/llvm-c-eh/$(HOST_PLATFORM)/$$file" >&2; exit 1; \
+		fi; \
+	done
 	@if [ ! -d "toolchain/llvm/$(HOST_PLATFORM)" ]; then \
 		echo "error: host LLVM toolchain not found: toolchain/llvm/$(HOST_PLATFORM)" >&2; \
 		exit 1; \
@@ -319,6 +350,12 @@ ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 		exit 1; \
 	fi
 	@mkdir -p $(TOOLCHAIN_LAYOUT_DIR)
+	@if [ -e "$(CEH_LAYOUT_LINK)" ] && [ ! -L "$(CEH_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path is not a symbolic link: $(CEH_LAYOUT_LINK)" >&2; exit 1; \
+	fi
+	@if [ "$$(readlink "$(CEH_LAYOUT_LINK)" 2>/dev/null)" != "$(CEH_LAYOUT_TARGET)" ]; then \
+		ln -sfn "$(CEH_LAYOUT_TARGET)" "$(CEH_LAYOUT_LINK)"; \
+	fi
 	@if [ -e "$(LLVM_LAYOUT_LINK)" ] && [ ! -L "$(LLVM_LAYOUT_LINK)" ]; then \
 		echo "error: toolchain layout path is not a symbolic link: $(LLVM_LAYOUT_LINK)" >&2; \
 		exit 1; \
@@ -378,11 +415,11 @@ $(BIN_DIR)/test_runtime: $(TEST_RUNTIME_OBJS) $(LIBUNWIND_LIB)
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_RUNTIME_OBJS) $(LDFLAGS) $(RUNTIME_LDLIBS) -o $@
 
-$(BIN_DIR)/test_codegen: $(TEST_CODEGEN_OBJS)
+$(BIN_DIR)/test_codegen: $(TEST_CODEGEN_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CODEGEN_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
-$(BIN_DIR)/test_debug: $(TEST_DEBUG_OBJS)
+$(BIN_DIR)/test_debug: $(TEST_DEBUG_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_DEBUG_OBJS) $(LDFLAGS) $(SEMANTIC_LDLIBS) -o $@
 
@@ -393,6 +430,10 @@ $(BIN_DIR)/test_cli: $(TEST_CLI_OBJS) $(RUNTIME_LIB)
 $(BIN_DIR)/test_cli_paths: $(TEST_CLI_PATHS_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CLI_PATHS_OBJS) $(LDFLAGS) -o $@
+
+$(BIN_DIR)/test_llvm_c_eh_driver: $(TEST_C_EH_OBJS) $(RUNTIME_LIB) | toolchain-layout
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_C_EH_OBJS) $(LDFLAGS) $(LSP_LDLIBS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_symbol: $(TEST_SYMBOL_OBJS)
 	@mkdir -p $(BIN_DIR)

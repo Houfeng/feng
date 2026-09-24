@@ -2,9 +2,11 @@
 
 ## 1. 状态与目标
 
-状态：2026-09-24 基于实际代码整理的待 Review 方案，尚未实施接入。
+状态：2026-09-24 本地接入及测试工具目录迁移已完成，macOS 全量回归通过，等待人工 Review。
+预构建归档发布与原生 CI 验证尚未执行，具体边界见 §8。
+实施遵循用户要求：复用现有代码、不扩大范围，不确定事项由人工决策。
 用户已提交独立插件、LLD 补丁及预构建产物，提出先完成工具链接入，再修复 S11。
-本文把接入作为独立阶段；具体接口及既有测试适配须按 §6 Review 后实施。
+本文把接入作为独立阶段；实施授权及既有测试边界见 §6。
 
 | 阶段 | 主文档与职责 |
 | --- | --- |
@@ -27,7 +29,7 @@
 | `scripts/release_finalize_macos.sh` | 已按文件格式识别 Mach-O executable、dylib 和 bundle。应先验证现有签名遍历能覆盖插件，不因扩展名增加专门签名分支。 |
 | `test/codegen/test_codegen.c`、`test/codegen/test_defer_generic_context.c`、`test/debug/test_debug.c` | 存在直接调用 `cc`／bundled Clang 编译生成 C 的入口，绕过 driver；也须加载插件。 |
 | `Makefile:test-sanitize` | 分别构建带 UBSan 的 Feng／C 测试程序，以及通过 `FENG_CC`、`FENG_CC_FLAGS` 编译 Feng 生成代码；补丁 LLD 须覆盖两类实际链接。 |
-| `.github/workflows/release.yml` | checkout 使用 `lfs: false`，随后只恢复 `toolchain` 预构建包；`test_tools` 尚无获取步骤。 |
+| `.github/workflows/release.yml` | checkout 使用 `lfs: false`，随后恢复完整 `toolchain` 预构建包；测试工具并入该目录后共用恢复步骤，无需单独 LFS 下载。 |
 | `scripts/toolchain-prebuilt-publish.sh` | 归档整个 `toolchain`，已有机制可以携带插件；须实际发布含插件的新预构建包，不能把源码提交等同于 CI 已取得新产物。 |
 
 macOS driver 当前未显式选择 LLD，bundled LLVM 只有 `ld.lld -> lld`，没有
@@ -40,6 +42,10 @@ macOS driver 当前未显式选择 LLD，bundled LLVM 只有 `ld.lld -> lld`，�
 ## 3. 插件接入方案
 
 ### 3.1 定位与开发／发行布局
+
+这里的“布局”指工具文件的目录位置、开发软链接和发行包内容，不涉及运行时数据结构。
+开发侧增加一个插件子目录软链接；发行侧将对应 host 的预构建插件目录复制进安装包，
+使两种环境中的 driver 都能按同一相对路径定位插件。
 
 仓库预构建来源仍为 `toolchain/llvm-c-eh/<host>/`，复用现有 CLI 安装相对路径解析。
 建议开发和发行共用如下相对布局：
@@ -60,8 +66,7 @@ build/toolchain/sysroot    -> ../../toolchain/sysroot
 build/toolchain/llvm-c-eh  -> ../../toolchain/llvm-c-eh/<host>
 ```
 
-发行时复制对应目录，
-同时携带许可证与来源记录。插件按运行 Clang 的 host 选择，交叉编译不按目标 CPU
+发行时复制对应目录，同时携带许可证与来源记录。插件按运行 Clang 的 host 选择，交叉编译不按目标 CPU
 或 GNU／musl target 改选插件。头文件仅增加编译搜索路径，S11 才在生成 C 中引用它。
 
 插件及 LLVM 继续通过既有预构建流程分发；普通 make、CI 和发行组装不源码构建插件。
@@ -97,10 +102,13 @@ macOS bundled LLVM 补齐 `ld64.lld -> lld` 标准入口，剪裁与发行校验
 
 ### 4.1 使用范围与参数边界
 
-使用已提交的 `test_tools/lld/macos-arm64/bin/ld64.lld`，只在 macOS UBSan 测试
+使用已提交的 `toolchain/test_tools/lld/macos-arm64/bin/ld64.lld`，只在 macOS UBSan 测试
 链接阶段启用，排除已知 Mach-O 展开信息错误对测试的干扰；UBSan 插桩仍由 Clang 负责。
 Release 插件本身保持不带 sanitizer 插桩；被编译程序是否启用 UBSan
 由测试配置决定，两者不混用。补丁 LLD 不替换 bundled LLD，也不进入 Feng 发行包。
+
+UBSan 的 `FENG_CC` 参数传入 `make check-clang` 所检查命令的绝对路径，避免测试
+启动登录 shell 后重设 `PATH`，把同名 `clang` 重新解析为 Apple Clang 等其他版本。
 
 需覆盖两条路径：
 
@@ -115,10 +123,12 @@ Release 插件本身保持不带 sanitizer 插桩；被编译程序是否启用 
 也不能正确表示包含空格的链接器路径。
 
 使用 Clang 已有的 `COMPILER_PATH`，仅在 macOS UBSan 测试命令的环境中指向仓库
-`test_tools/lld/macos-arm64/bin` 的绝对路径。Clang 在 `-fuse-ld=lld` 下从该目录
+`toolchain/test_tools/lld/macos-arm64/bin` 的绝对路径。Clang 在 `-fuse-ld=lld` 下从该目录
 找到 `ld64.lld`；环境由 Feng 的子进程继承，无需新增 `FENG_LD` 或 driver 测试选项。
 测试配置须先验证补丁文件、版本与校验和，并确认实际选择的链接器；不能依赖缺失目录
-下的 Clang 回退。普通配置不注入此环境，避免影响后续发行构建。
+下的 Clang 回退。普通阶段不新增该环境覆盖，生成 C 使用 bundled Clang 及其原版
+LLD。既有参数记录包装器保留包装前的编译器选择：普通为 bundled，UBSan 为已指定的
+host Clang，不再固定转发给 `cc`；日志格式和用例断言不变。
 
 2026-09-24 本机 LLVM Clang 22.1.8 的 `-###` 命令展开验证：设置上述环境并用
 `-fuse-ld=lld -fsanitize=undefined` 时，最终链接命令指向补丁 `ld64.lld`；同一环境
@@ -132,12 +142,18 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 
 ### 4.2 本地和 CI
 
-本地复用仓库内的预构建工具。macOS CI 在全量测试之前定向取得 `test_tools/**` 的
-Git LFS 实体文件，并检查补丁版本、可执行性与校验和；不在 CI 源码重建 LLD。
-建议复用 Git LFS 获取，不为这一步新增独立测试工具 Release 或下载脚本。
+本地复用 `toolchain/test_tools/` 中的预构建工具。工具链发布脚本归档整个 `toolchain/`，
+现有下载脚本恢复该目录；测试工具因此共用已有预构建 Release 与恢复步骤，普通 CI
+不再单独下载测试工具的 LFS 实体文件。发布工具链预构建归档时仍需恢复 LFS 内容。
+不新增发布／下载脚本，不在 CI 源码重建 LLD；macOS 测试前继续检查补丁版本、
+可执行性、校验和与实际链接器选择。
+
+仓库 `toolchain/` 包含发行工具和测试工具。Feng 发行包按[发行规范](./feng-release-and-install.md)
+只复制当前 host 的 LLVM、插件及目标 sysroot，排除 `test_tools/` 子目录；因此无需
+修改现有发行组装逻辑。补充预构建打包／恢复和发行排除的回归，保留原用例及断言。
 
 普通配置仍验证原版 LLD；Linux 流程不注入 macOS 工具。测试阶段结束后不得把
-显式补丁链接器选项带入普通构建或发行流程。测试工具及其 LFS 获取失败时，应在
+显式补丁链接器选项带入普通构建或发行流程。预构建恢复或测试工具校验失败时，应在
 进入完整测试前明确报错，不能把未下载的 LFS 指针当作有效程序。
 
 ## 5. 接入阶段验收
@@ -159,23 +175,82 @@ Git LFS 实体文件，并检查补丁版本、可执行性与校验和；不在
 
 ## 6. Review 决策与实施 Todo
 
-以下是拟议方案，不代表本轮获得了修改代码或既有测试的授权。
+整体接入已获开始实施授权。用户已明确批准 R03 的既有测试参数补齐，要求“不改用例
+语义，仅补齐参数”；该授权不包括既有测试夹具、源码语义、断言或性能门槛的变更。
 
-| 编号 | 待 Review 内容 | 建议 |
+| 编号 | Review 内容 | 建议／决策 |
 | --- | --- | --- |
 | R01 | 接入范围是否包含开发布局、发行组装、CI 工具获取和普通 macOS LLD 入口 | 包含；这些是 driver 接入在本地、CI、发行后都能工作的必要路径。普通 macOS LLD 补齐标准别名及选择，保留原版二进制。 |
 | R02 | macOS UBSan 选择补丁链接器的方式 | 按 §4.1 修改现有测试 Makefile／CI 配置，使用 Clang 的 `COMPILER_PATH` 和仅用于链接的 LLD 参数；不新增 Feng API 或环境变量。 |
-| R03 | 既有测试的工具调用及发行布局适配 | 保留直接调用 C 编译器的方式，只适配已有测试编译辅助函数、路径／归档／签名资源预期；列明涉及文件和保留断言。旧 LSDA 发码与行为断言迁移留到 S11。 |
+| R03 | 既有测试参数补齐 | 已获人工批准：保留直接调用 C 编译器的方式，仅在已有测试编译辅助函数中补齐必要参数，不改用例语义、夹具或原断言。旧 LSDA 迁移仍留到 S11。 |
 
 按以下顺序交付；遇到未确定的问题先记录、再分析，涉及范围或取舍时由人工决策。
 
-- [ ] T01：Review 本文 R01–R03；实施前明确既有测试文件及每处迁移内容。
-- [ ] T02：更新构建／发行主规范的工具链消费边界；协议与工具维护规则继续引用插件主文档。
-- [ ] T03：补齐开发插件布局、host 产物定位与错误处理；bin／lib 共用参数构造并实际加载插件。
-- [ ] T04：按批准方案接入普通 LLVM LLD；测试配置使用现有 Clang 环境选择补丁 LLD，保证编译／链接参数分离。
-- [ ] T05：补齐发行组装、插件依赖与签名后加载验证；更新既有 toolchain 预构建发布内容。
-- [ ] T06：按批准范围适配已有直接 C 测试辅助函数；接入 macOS UBSan 两条链接路径及 CI LFS 获取。
-- [ ] T07：新增 §5 的接入覆盖，核对原用例和断言未减少；所有失败先记录，再分析、解决。
-- [ ] T08：在沙箱外执行全量 `make test`，完成各平台实际加载／执行与发行搬移验证，记录边界。
-- [ ] T09：回填结果与编译耗时，输出英文 commit message，等待人工 Review，不自动提交。
+- [x] T01：R01–R02 随开始实施获批；R03 已批准，仅补齐下列既有测试的编译参数。
+- [x] T02：更新构建／发行主规范的工具链消费边界；协议与工具维护规则继续引用插件主文档。
+- [x] T03：补齐开发插件布局、host 产物定位与错误处理；bin／lib 共用参数构造并实际加载插件。
+- [x] T04：按批准方案接入普通 LLVM LLD；测试配置使用现有 Clang 环境选择补丁 LLD，保证编译／链接参数分离。
+- [x] T05：补齐发行组装、插件依赖与签名后加载验证；确认现有预构建发布脚本会归档新增资源。
+- [ ] T05-P：提交后由维护者发布包含插件、测试工具及 macOS 链接器别名的新 toolchain 预构建归档，再由原生 CI 验证。
+- [x] T06：按批准范围适配已有直接 C 测试辅助函数；接入 macOS UBSan 两条链接路径。
+- [x] T06-M：按人工批准迁移至 `toolchain/test_tools/`，复用预构建发布／恢复；补齐归档包含、发行排除验证并重新执行全量回归。
+- [x] T07：新增 §5 的接入覆盖，核对原用例和断言未减少；所有失败先记录，再分析、解决。
+- [x] T08：在沙箱外执行全量 `make test`，记录本地各平台实际加载／执行、发行搬移结果及未完成的原生 CI 边界（§8）。
+- [x] T09：回填结果与编译耗时，输出英文 commit message，等待人工 Review，不自动提交。
 - [ ] T10：本阶段验收后，按 S11 文档另行开始 Codegen／runtime 改造。
+
+## 7. 实施记录
+
+已批准的既有单测参数改动：`test/codegen/test_codegen.c`、
+`test/codegen/test_defer_generic_context.c`、`test/debug/test_debug.c` 的生成 C
+编译命令补齐同一 host 的插件加载与头文件搜索路径；保留 `-c`、`-Werror`、优化级别、
+目标选择、源码及全部断言。Makefile 复用现有 host 变量和测试目标传递所需参数。
+
+| 编号 | 问题、分析与处理 |
+| --- | --- |
+| I01 | `scripts/run_release_scripts.sh:create_source_root` 的虚拟发行源只含 LLVM／sysroot，不含插件目录或 macOS `ld64.lld`。发行组装补齐插件的必需输入后，该旧夹具不完整。用户于 2026-09-24 批准补齐三 host 的插件占位文件、头文件、许可证与来源文件，以及 macOS 链接器别名；保留全部测试操作及断言。 |
+| I02 | 新集成测试首次链接失败：复用整个 CLI 测试对象集合带入了选项解析器，其 `feng_cli_print_usage` 原由旧测试主文件提供。新测试只使用 driver，应收敛链接依赖为 driver、CLI 公共路径、archive／platform 及必要解析对象，不增加产品 API 或无关 stub。 |
+| I03 | 新集成测试的最小 Feng 源码先后因缺少 `module`、入口签名不合法触发 SE0901／AE0909／AE0910。按现有语法补齐新夹具的模块声明和 `main(args: string[]): void`；不修改编译规则或既有用例。 |
+| I04 | 新增“不兼容插件接口”负例的测试动态库使用 bundled Clang／LLD 时因未传 SDK，找不到 `libSystem`。该辅助编译也显式传入测试已取得的 macOS SDK；保持测试动态库不带 sanitizer，不改变 driver 或工具链行为。 |
+| I05 | 首轮全量回归在 UBSan `cli-project-tests/default_path` 失败：Clang 加载插件缺少 LLVM 符号。实测当前 shell 的 `clang` 是 Homebrew 22.1.8，既有用例的 `bash -lc` 则将同名命令解析为 Apple Clang 17。将现有 UBSan `FENG_CC` 参数固定为版本检查已选定的编译器绝对路径，不修改用例操作或断言。 |
+| I06 | 第二轮全量回归中 UBSan 阶段全部通过；普通阶段 std／FCTS／发行／新增集成测试通过后，`test_cli.c:2996` 的原生库链接包装器报 `cc: invalid linker name ... -fuse-ld=lld`。实测既有 `create_logging_cc_wrapper` 固定 `exec cc`，转到没有 LLD 的 Homebrew 安装。用户于 2026-09-24 确认普通阶段使用 bundled Clang；包装器在覆盖 `FENG_CC` 前复用现有 CLI 工具选择取得原本编译器，再记录并转发参数。撤销普通阶段临时增加的 `COMPILER_PATH`，UBSan 仍使用 host Clang／补丁 LLD；全部日志格式和原断言保持不变。 |
+| I07 | Linux 容器准备时，ARM64 镜像没有 `/usr/bin/time`，改用 shell 计时后普通／UBSan 全部接入用例通过。x64 Rosetta 的 GNU tar 解压返回 `Function not implemented`，改用 `cp` 准备源码后 Feng 构建通过，但新测试的归档解压也触发同一环境限制；该镜像没有 zip／unzip。保留归档用例，不添加 Rosetta 特判或安装工具。独立 driver 验证已通过 bin／lib、O0／O2、普通／UBSan 的真实异常执行及五 target 交叉编译；完整归档验证留给原生 CI，不能标记为全部通过。 |
+
+2026-09-24 用户批准将测试工具迁至 `toolchain/test_tools/`，更新路径、移除独立 LFS
+获取步骤和旧目录规则，并补充归档包含／恢复及发行排除验证。迁移不重编译工具；
+发布、下载和发行组装主脚本保持原有机制，具体边界见 §4.2。
+
+实现复用记录：
+
+- driver 使用 `feng_platform_detect_host_platform`、现有动态库后缀函数及
+  `feng_cli_require_install_path`，未增加路径 API、driver 选项或环境变量。
+- `bin`／`lib` 在分支前共用插件参数；Makefile 的三个开发子链接仍保持原有只读增量规则。
+- 项目编译及本地依赖构建会调用现有 direct compile／driver；每次原生编译读取当前插件，
+  不新增原生产物缓存，也不改变预编译 `.fb` 的复用或 FT 版本。
+- macOS 签名脚本现有 Mach-O bundle 识别可覆盖 `llvm_c_eh.dylib`，无需修改。
+- 预构建发布脚本已归档完整 `toolchain`，无需修改。提交后须沿用
+  `toolchain-prebuilt/*` tag 流程发布包含插件、`test_tools` 及 `ld64.lld` 别名的新归档；
+  本轮不会自动创建 tag、上传 Release 或触发远程 CI。
+
+## 8. 验收记录（2026-09-24）
+
+| 环境／入口 | 实际结果 |
+| --- | --- |
+| macOS ARM64，沙箱外 `make test` | 测试工具迁移后重新执行，退出码 0；UBSan 和普通阶段全部通过，总耗时 660.08 秒。两阶段分别为 std 607/607、FCTS 1508/1508，失败和跳过均为 0；CLI、DAP、编译器单测、性能约束、空增量及发行脚本测试通过。 |
+| macOS 普通 CLI | 清除测试进程的 `FENG_CC`、`FENG_CC_FLAGS`、`COMPILER_PATH` 后，`test_cli` 单独运行通过。参数记录包装器复用原本的 bundled Clang；未修改原断言。 |
+| macOS 插件集成 | 全量测试的两个阶段均通过 `test/cli/llvm_c_eh.sh`：真实 driver 的 bin／lib、O0／O2、五 target 交叉编译、空格路径、归档解压搬移、签名后加载、缺失／错误插件和无效链接器。无协议生成 C 的 LLVM IR／汇编对照一致。 |
+| macOS UBSan | 版本、校验和及实际链接命令确认使用 `test_tools` 补丁 LLD；真实 UB 检测、异常处理体、间接调用、恢复和终止模式通过。Release 插件本身未重编译或增加 sanitizer 插桩。 |
+| 测试工具迁移与分发 | 补丁 LLD 及构建记录／许可证校验和与迁移前一致；新路径由 `toolchain/**` LFS 规则覆盖。真实发布脚本对测试夹具生成的预构建归档可完整恢复测试工具，保留文件内容、可执行位及 `ld64.lld` 别名。三 host 发行归档均排除测试工具；专项测试与全量回归均通过。 |
+| Linux ARM64，Ubuntu 26.04 容器原生执行 | 普通及 UBSan 插件接入用例通过，包含真实异常执行、五 target 编译及归档搬移。隔离源码构建加普通接入测试耗时 23.075 秒；未在该容器执行完整 Feng `make test`。 |
+| Linux x64，Ubuntu 26.04 容器／Rosetta | Feng 构建及独立 driver 的 bin／lib、O0／O2、普通／UBSan 真实执行、五 target 编译通过。完整接入脚本在归档解压处受 I07 环境限制，未通过该项；未作为原生 x64 或全量回归结果。 |
+
+新增集成测试复用独立插件的协议夹具和测试 runtime，没有提前改造 Feng 的异常发码。
+既有测试包含已批准的编译参数、发行夹具资源和参数记录包装器调整，以及预构建打包／
+恢复和发行排除覆盖；用例语义、原断言及性能门槛均保留。Codegen、runtime、ABI、FT
+和插件源码没有变更。
+
+发行组装／安装／签名脚本使用既有测试夹具验证；新增集成测试对真实插件执行归档
+搬移及 macOS ad-hoc 签名后加载。未发布实际 Feng 发行包，也未执行真实公证或远程 CI。
+维护者提交后仍须完成 T05-P；新归档必须包含 `toolchain/llvm-c-eh`、
+`toolchain/test_tools` 和 macOS `ld64.lld` 别名，否则 CI 恢复旧工具链时会明确失败。
+S11 修复继续按其独立文档实施。

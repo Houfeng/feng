@@ -369,18 +369,18 @@ Feng 用户发行包的安装路径与组装由[工具链接入方案](./feng-ll
 
 ### 7.2 UBSan 专用预构建 LLD
 
-2026-09-24 人工批准：I04 的补丁 LLD 仅用于 macOS UBSan 验证，放入独立的
-`test_tools/`，不得进入 `toolchain/` 或 Feng 发行包。维护者手工预构建并验证后长期
-复用。按后续人工要求，目录名统一为 `test_tools`，并在 `.gitattributes` 中采用与
-`toolchain/**` 相同的整目录 LFS 规则：`test_tools/** filter=lfs diff=lfs merge=lfs -text`。
-不接入 Feng 的 Makefile、CI 或发行配置，不修改 Feng 编译器代码及既有测试。
+2026-09-24 人工批准：I04 的补丁 LLD 仅用于 macOS UBSan 验证，维护者手工预构建
+并验证后长期复用。后续人工批准将测试工具统一放入 `toolchain/test_tools/`，由现有
+`toolchain/**` Git LFS 规则覆盖，并随工具链预构建 Release 分发，以减少日常 CI 的
+LFS 下载。补丁 LLD 不替换 `toolchain/llvm/` 中的原版 LLD，也不进入 Feng 发行包。
+Feng Makefile／CI 的消费方式及发行排除规则见[接入文档](./feng-llvm-c-eh-integration-dev.md)。
 
 - `third_party/lld/` 只维护固定版本的来源、SHA256、许可证、补丁和构建说明，不提交
   完整 LLVM 源码。独立构建使用 `lld/`、公共 CMake 文件及 LLVM 22.1.8 完整开发 SDK；
   上游测试工具从同版本源码或 SDK 获取，不新增自行编写的 Python 脚本。
 - `scripts/build_test_lld.sh` 为唯一手工维护入口：获取并校验固定源码、应用补丁、调用
   LLD 上游构建系统、运行 Mach-O 回归及本缺陷对照，验证后安装至
-  `test_tools/lld/macos-arm64/`。下载、编译和测试的中间文件放在 `build/`／`temp/`。
+  `toolchain/test_tools/lld/macos-arm64/`。下载、编译和测试的中间文件放在 `build/`／`temp/`。
   校验在本次预构建中完成，不增加独立 check 脚本、检查模式或编译器代理脚本。
 - 人工批准复用 LLD 上游 CMake：沿用其生成文件、库依赖和测试配置，避免重新实现
   第三方构建系统；README 须说明原因及维护依赖。此决定不改变 llvm-c-eh 的 Makefile。
