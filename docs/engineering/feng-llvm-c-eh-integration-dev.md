@@ -215,6 +215,7 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 | I05 | 首轮全量回归在 UBSan `cli-project-tests/default_path` 失败：Clang 加载插件缺少 LLVM 符号。实测当前 shell 的 `clang` 是 Homebrew 22.1.8，既有用例的 `bash -lc` 则将同名命令解析为 Apple Clang 17。将现有 UBSan `FENG_CC` 参数固定为版本检查已选定的编译器绝对路径，不修改用例操作或断言。 |
 | I06 | 第二轮全量回归中 UBSan 阶段全部通过；普通阶段 std／FCTS／发行／新增集成测试通过后，`test_cli.c:2996` 的原生库链接包装器报 `cc: invalid linker name ... -fuse-ld=lld`。实测既有 `create_logging_cc_wrapper` 固定 `exec cc`，转到没有 LLD 的 Homebrew 安装。用户于 2026-09-24 确认普通阶段使用 bundled Clang；包装器在覆盖 `FENG_CC` 前复用现有 CLI 工具选择取得原本编译器，再记录并转发参数。撤销普通阶段临时增加的 `COMPILER_PATH`，UBSan 仍使用 host Clang／补丁 LLD；全部日志格式和原断言保持不变。 |
 | I07 | Linux 容器准备时，ARM64 镜像没有 `/usr/bin/time`，改用 shell 计时后普通／UBSan 全部接入用例通过。x64 Rosetta 的 GNU tar 解压返回 `Function not implemented`，改用 `cp` 准备源码后 Feng 构建通过，但新测试的归档解压也触发同一环境限制；该镜像没有 zip／unzip。保留归档用例，不添加 Rosetta 特判或安装工具。独立 driver 验证已通过 bin／lib、O0／O2、普通／UBSan 的真实异常执行及五 target 交叉编译；完整归档验证留给原生 CI，不能标记为全部通过。 |
+| I08 | 维护者重新发布预构建归档后，macOS CI 在 `test-sanitize` 的链接器可执行性检查失败。补丁 `lld` 首次加入时 Git 模式即为 `100644`，目录迁移保留该模式；本地文件为 `0755`，且 `core.filemode=false` 隐藏了差异。从提交重新还原完整 LFS 实体文件后，文件和 `ld64.lld` 别名均存在，但 `test -x` 失败，确认是执行权限遗漏。此前本地全量回归和虚拟归档测试未覆盖实际产物的 Git 模式。本次仅将 `toolchain/test_tools/lld/macos-arm64/bin/lld` 的 Git 模式改为 `100755`，保持二进制内容、别名、脚本和测试用例不变；验证从 Git 索引重新检出、预构建打包及解包后的权限、校验和和版本，再执行沙箱外全量 `make test`。提交后须重新发布包含权限修复的新预构建归档，并重跑 macOS CI。 |
 
 2026-09-24 用户批准将测试工具迁至 `toolchain/test_tools/`，更新路径、移除独立 LFS
 获取步骤和旧目录规则，并补充归档包含／恢复及发行排除验证。迁移不重编译工具；
@@ -241,6 +242,7 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 | macOS 插件集成 | 全量测试的两个阶段均通过 `test/cli/llvm_c_eh.sh`：真实 driver 的 bin／lib、O0／O2、五 target 交叉编译、空格路径、归档解压搬移、签名后加载、缺失／错误插件和无效链接器。无协议生成 C 的 LLVM IR／汇编对照一致。 |
 | macOS UBSan | 版本、校验和及实际链接命令确认使用 `test_tools` 补丁 LLD；真实 UB 检测、异常处理体、间接调用、恢复和终止模式通过。Release 插件本身未重编译或增加 sanitizer 插桩。 |
 | 测试工具迁移与分发 | 补丁 LLD 及构建记录／许可证校验和与迁移前一致；新路径由 `toolchain/**` LFS 规则覆盖。真实发布脚本对测试夹具生成的预构建归档可完整恢复测试工具，保留文件内容、可执行位及 `ld64.lld` 别名。三 host 发行归档均排除测试工具；专项测试与全量回归均通过。 |
+| macOS CI 执行权限修复（I08） | Git 索引模式已改为 `100755`，LFS 指针 blob 与二进制内容未变。从索引重新检出实际产物，经现有发布脚本打包、解包后，`ld64.lld` 可执行，别名、全部校验和及补丁版本验证通过。沙箱外重新完整执行 `make test`，退出码 0，耗时 581.00 秒；UBSan 和普通阶段分别为 std 607/607、FCTS 1508/1508，失败和跳过均为 0，编译器、CLI／DAP、插件接入及发行／预构建回归全部通过。远程 macOS CI 仍待维护者提交、重新发布预构建后重跑。 |
 | Linux ARM64，Ubuntu 26.04 容器原生执行 | 普通及 UBSan 插件接入用例通过，包含真实异常执行、五 target 编译及归档搬移。隔离源码构建加普通接入测试耗时 23.075 秒；未在该容器执行完整 Feng `make test`。 |
 | Linux x64，Ubuntu 26.04 容器／Rosetta | Feng 构建及独立 driver 的 bin／lib、O0／O2、普通／UBSan 真实执行、五 target 编译通过。完整接入脚本在归档解压处受 I07 环境限制，未通过该项；未作为原生 x64 或全量回归结果。 |
 
