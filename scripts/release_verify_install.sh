@@ -201,7 +201,7 @@ CEH_EXTENSION=so
 if [[ "${HOST_PLATFORM}" == macos-* ]]; then CEH_EXTENSION=dylib; fi
 verify_platform_file "${CEH_ROOT}/lib/llvm_c_eh.${CEH_EXTENSION}" \
   "${HOST_PLATFORM}" "installed LLVM C EH plugin"
-for name in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+for name in include/llvm_c_eh.h LICENSE; do
   [[ -f "${CEH_ROOT}/${name}" ]] || die "installed LLVM C EH input not found: ${name}"
 done
 

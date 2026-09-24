@@ -36,7 +36,9 @@ llvm-c-eh 插件的 Makefile。`cmake/LLVMConfig.cmake` 只为独立构建选择
 脚本只解压 `lld/`、公共 CMake 文件及同版本 lit，使用 SDK 已构建的 LLVM 库。
 静态链接 LLVM 及可用的静态依赖，验证运行依赖闭包后生成可搬移的预构建工具。
 通过 Mach-O 上游测试、本缺陷回归及搬移验证后，安装至 `toolchain/test_tools/lld/macos-arm64/`。
-最终产物仅依赖 macOS 系统动态库，并附 LLVM、Zstandard 许可证、构建记录和散列。
+最终产物仅依赖 macOS 系统动态库，并附 LLVM、Zstandard 许可证。
+构建记录和散列保留在 `build/test-lld/macos-arm64/`，不安装到工具链目录；
+存放规则见[插件开发方案 §7](../../docs/engineering/c-ir-llvm-exception-plugin-dev.md#7-手工构建与分发流程)。
 当前构建目标为 macOS ARM64，最低 macOS 26.0。
 
 源码、补丁或配套 LLVM 版本变化时重新预构建。校验属于构建过程，没有独立 check

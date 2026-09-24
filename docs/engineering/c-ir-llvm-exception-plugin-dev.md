@@ -288,7 +288,7 @@ C++ 异常 runtime。正常使用不输出逐函数转换日志。
 | --- | --- |
 | `third_party/llvm-c-eh/` | 独立协议头文件、Pass 源码、构建配置、测试及使用说明；可在无 Feng 源码和 runtime 的环境中构建、验证 |
 | `scripts/build_llvm_c_eh.sh` | 仓库维护入口；选择全部或单个 host，发现／覆盖完整 SDK，手工执行构建、测试和预构建产物安装 |
-| `toolchain/llvm-c-eh/<host>/` | 通过验证的插件动态库、配套协议头文件及构建元信息；供编译与分发使用 |
+| `toolchain/llvm-c-eh/<host>/` | 通过验证的插件动态库、配套协议头文件及许可证；供编译与分发使用 |
 
 插件目录与 `toolchain/llvm/` 并列。现有 `scripts/trim_llvm.sh` 会替换 LLVM 的 host
 目录，分开存放可避免重新剪裁 LLVM 时删除插件。预构建元信息至少记录插件源码版本、
@@ -339,8 +339,13 @@ sysroot 或新增交叉 SDK 管理，使用人工已授权的 Apple Container。
 3. 分别用该 host 的 bundled Clang 和 sanitizer 测试使用的宿主 Clang 加载、转换并执行
    夹具。二者均须为 22.1.8，但版本号相同不能代替 LLVM C++ ABI、导出符号和依赖检查；
    也不要求 `clang` 与 `cc` 指向同一文件。
-4. 全部验证通过后，将动态库、头文件和元信息安装到对应预构建目录。产物不得引用
+4. 全部验证通过后，将动态库、头文件和许可证安装到对应预构建目录。产物不得引用
    维护者本机的临时 SDK 绝对路径；在预期使用环境验证其加载依赖。
+
+维护构建记录只保留在 `build/`：插件的 `build-info.txt`、`source-files.sha256` 位于
+`build/llvm-c-eh/maintainer-<host>/`；补丁 LLD 的 `build-info.txt` 和 `SHA256SUMS`
+位于 `build/test-lld/macos-arm64/`。`toolchain/llvm-c-eh/` 与
+`toolchain/test_tools/lld/` 不保存或分发上述记录文件，已生成的同名文件也须移除。
 
 若同一插件产物不能兼容 bundled 与宿主 Clang，记录具体构建差异并提交人工决策，
 不能自动增加第二套实现、回退到普通 C 异常路径或将版本号检查当作兼容通过。
@@ -426,7 +431,7 @@ Feng 现有 Makefile、CI、编译器、runtime 和既有测试不变的边界�
 - 本阶段新增的独立测试驱动统一接收可选链接参数，仅在链接命令传入；不改夹具、断言、
   优化级别或 sanitizer 检查。不引入编译器代理或额外检查脚本。
 - 构建记录分别保存两种配置实际选择的链接器版本和散列。全部验收通过后安装动态库、
-  协议头文件、许可证及来源记录；不能用补丁 LLD 的成功代替原版 LLD 的普通验证。
+  协议头文件和许可证，构建记录位置遵循 §7；不能用补丁 LLD 的成功代替原版 LLD 的普通验证。
 
 - [x] 补齐维护入口的 macOS 链接器选择及独立驱动的链接参数传递。
 - [x] 完成同一 Release 插件的全部 macOS 独立验收与搬移验证，安装至预构建目录。
@@ -437,7 +442,7 @@ Feng 现有 Makefile、CI、编译器、runtime 和既有测试不变的边界�
 同一 Release 插件通过 IR、bundled／宿主普通 O0／O2／O3、UBSan O0／O2／O3、
 无协议输入对照、协议内真实 UB 终止／恢复、33 项非法输入、搬移、导出和依赖审计。
 独立 Makefile 的 `test`／`test-ubsan` 入口也实际通过，链接选项未进入 `-c`／`-S`
-命令。产物 SHA256 统一记录于各 host 的 `build-info.txt`；
+命令。产物 SHA256 记录于各 host 维护构建目录内的 `build-info.txt`，其存放规则见 §7；
 实际 Mach-O 头记录最低 macOS 26.0，本次验证使用本机系统，不声称覆盖更早版本。
 日志为 `third_party/llvm-c-eh/temp/macos-installed-final.log` 和
 `macos-make-entry-final.log`（忽略目录）。

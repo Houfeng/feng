@@ -267,7 +267,6 @@ test-normal: check-clang check-cc
 test-sanitize: check-clang check-cc
 ifeq ($(_HOST_OS),macos)
 	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }
-	@cd "$(TEST_LLD_ROOT)" && shasum -a 256 -c SHA256SUMS
 	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 22.1.8"
 	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
 endif

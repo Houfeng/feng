@@ -180,7 +180,7 @@ create_source_root() {
     if [[ "${host_platform}" == macos-* ]]; then extension=dylib; fi
     mkdir -p "${plugin_root}/lib" "${plugin_root}/include"
     create_platform_binary "${host_platform}" "${plugin_root}/lib/llvm_c_eh.${extension}"
-    for tool in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+    for tool in include/llvm_c_eh.h LICENSE; do
       printf '%s\n' "release fixture: ${tool}" > "${plugin_root}/${tool}"
     done
     mkdir -p \
@@ -401,6 +401,10 @@ for host_platform in "${HOST_PLATFORMS[@]}"; do
   archive_path="${OUTPUT_ROOT}/${package_name}.zip"
   if unzip -Z1 "${archive_path}" | grep -E '/test_tools(/|$)' >/dev/null; then
     die "release archive included test-only tools: ${archive_path}"
+  fi
+  if unzip -Z1 "${archive_path}" |
+    grep -E '/toolchain/llvm-c-eh/(.*/)?(build-info\.txt|SHA256SUMS|source-files\.sha256)$' >/dev/null; then
+    die "release archive included plugin maintenance reports: ${archive_path}"
   fi
   unzip -Z1 "${archive_path}" |
     grep -x "${package_name}/pkg/release_fixture_pkg-1.2.3.fb" >/dev/null ||

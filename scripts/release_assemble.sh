@@ -308,7 +308,7 @@ verify_llvm_toolchain() {
   done
 }
 
-# Verify the matching host plugin and its installed protocol/provenance files.
+# Verify the matching host plugin, protocol header and license.
 verify_c_eh_plugin() {
   local host_platform="$1"
   local plugin_root="${SOURCE_ROOT}/toolchain/llvm-c-eh/${host_platform}"
@@ -317,7 +317,7 @@ verify_c_eh_plugin() {
   if [[ "${host_platform}" == macos-* ]]; then extension=dylib; fi
   verify_platform_file "${plugin_root}/lib/llvm_c_eh.${extension}" \
     "${host_platform}" "LLVM C EH plugin"
-  for name in include/llvm_c_eh.h LICENSE build-info.txt source-files.sha256; do
+  for name in include/llvm_c_eh.h LICENSE; do
     require_file "${plugin_root}/${name}"
   done
 }

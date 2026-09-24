@@ -66,7 +66,7 @@ build/toolchain/sysroot    -> ../../toolchain/sysroot
 build/toolchain/llvm-c-eh  -> ../../toolchain/llvm-c-eh/<host>
 ```
 
-发行时复制对应目录，同时携带许可证与来源记录。插件按运行 Clang 的 host 选择，交叉编译不按目标 CPU
+发行时复制对应目录，同时携带许可证。插件按运行 Clang 的 host 选择，交叉编译不按目标 CPU
 或 GNU／musl target 改选插件。头文件仅增加编译搜索路径，S11 才在生成 C 中引用它。
 
 插件及 LLVM 继续通过既有预构建流程分发；普通 make、CI 和发行组装不源码构建插件。
@@ -125,7 +125,7 @@ UBSan 的 `FENG_CC` 参数传入 `make check-clang` 所检查命令的绝对路�
 使用 Clang 已有的 `COMPILER_PATH`，仅在 macOS UBSan 测试命令的环境中指向仓库
 `toolchain/test_tools/lld/macos-arm64/bin` 的绝对路径。Clang 在 `-fuse-ld=lld` 下从该目录
 找到 `ld64.lld`；环境由 Feng 的子进程继承，无需新增 `FENG_LD` 或 driver 测试选项。
-测试配置须先验证补丁文件、版本与校验和，并确认实际选择的链接器；不能依赖缺失目录
+测试配置须先验证补丁文件的可执行性、版本，并确认实际选择的链接器；不能依赖缺失目录
 下的 Clang 回退。普通阶段不新增该环境覆盖，生成 C 使用 bundled Clang 及其原版
 LLD。既有参数记录包装器保留包装前的编译器选择：普通为 bundled，UBSan 为已指定的
 host Clang，不再固定转发给 `cc`；日志格式和用例断言不变。
@@ -146,7 +146,7 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 现有下载脚本恢复该目录；测试工具因此共用已有预构建 Release 与恢复步骤，普通 CI
 不再单独下载测试工具的 LFS 实体文件。发布工具链预构建归档时仍需恢复 LFS 内容。
 不新增发布／下载脚本，不在 CI 源码重建 LLD；macOS 测试前继续检查补丁版本、
-可执行性、校验和与实际链接器选择。
+可执行性与实际链接器选择。构建记录的存放规则见[插件开发方案 §7](./c-ir-llvm-exception-plugin-dev.md#7-手工构建与分发流程)，测试不依赖预构建目录中的记录文件。
 
 仓库 `toolchain/` 包含发行工具和测试工具。Feng 发行包按[发行规范](./feng-release-and-install.md)
 只复制当前 host 的 LLVM、插件及目标 sysroot，排除 `test_tools/` 子目录；因此无需
@@ -216,6 +216,7 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 | I06 | 第二轮全量回归中 UBSan 阶段全部通过；普通阶段 std／FCTS／发行／新增集成测试通过后，`test_cli.c:2996` 的原生库链接包装器报 `cc: invalid linker name ... -fuse-ld=lld`。实测既有 `create_logging_cc_wrapper` 固定 `exec cc`，转到没有 LLD 的 Homebrew 安装。用户于 2026-09-24 确认普通阶段使用 bundled Clang；包装器在覆盖 `FENG_CC` 前复用现有 CLI 工具选择取得原本编译器，再记录并转发参数。撤销普通阶段临时增加的 `COMPILER_PATH`，UBSan 仍使用 host Clang／补丁 LLD；全部日志格式和原断言保持不变。 |
 | I07 | Linux 容器准备时，ARM64 镜像没有 `/usr/bin/time`，改用 shell 计时后普通／UBSan 全部接入用例通过。x64 Rosetta 的 GNU tar 解压返回 `Function not implemented`，改用 `cp` 准备源码后 Feng 构建通过，但新测试的归档解压也触发同一环境限制；该镜像没有 zip／unzip。保留归档用例，不添加 Rosetta 特判或安装工具。独立 driver 验证已通过 bin／lib、O0／O2、普通／UBSan 的真实异常执行及五 target 交叉编译；完整归档验证留给原生 CI，不能标记为全部通过。 |
 | I08 | 维护者重新发布预构建归档后，macOS CI 在 `test-sanitize` 的链接器可执行性检查失败。补丁 `lld` 首次加入时 Git 模式即为 `100644`，目录迁移保留该模式；本地文件为 `0755`，且 `core.filemode=false` 隐藏了差异。从提交重新还原完整 LFS 实体文件后，文件和 `ld64.lld` 别名均存在，但 `test -x` 失败，确认是执行权限遗漏。此前本地全量回归和虚拟归档测试未覆盖实际产物的 Git 模式。本次仅将 `toolchain/test_tools/lld/macos-arm64/bin/lld` 的 Git 模式改为 `100755`，保持二进制内容、别名、脚本和测试用例不变；验证从 Git 索引重新检出、预构建打包及解包后的权限、校验和和版本，再执行沙箱外全量 `make test`。提交后须重新发布包含权限修复的新预构建归档，并重跑 macOS CI。 |
+| I09 | 维护者要求 `toolchain/llvm-c-eh/` 与 `toolchain/test_tools/lld/` 不再包含 `build-info.txt`、`SHA256SUMS`，随后确认插件的 `source-files.sha256` 也不随工具链保留，已有文件均须删除。移除三平台插件的六份记录及补丁 LLD 的两份记录；维护脚本仅在 `build/` 保留这些记录，插件安装时清理旧同名文件。发行组装／安装验证不再要求插件构建记录；macOS UBSan 去除对已删除清单的读取，保留可执行性、补丁版本及实际链接器选择检查。二进制、协议头文件、许可证及其他发行 component 的校验清单不变。维护者已批准同步移除发行测试夹具中的两类插件记录，并增加三平台发行包不含这些记录的断言，保留原测试步骤及断言；完成专项验证和沙箱外全量回归后记录结果。 |
 
 2026-09-24 用户批准将测试工具迁至 `toolchain/test_tools/`，更新路径、移除独立 LFS
 获取步骤和旧目录规则，并补充归档包含／恢复及发行排除验证。迁移不重编译工具；
@@ -243,6 +244,7 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 | macOS UBSan | 版本、校验和及实际链接命令确认使用 `test_tools` 补丁 LLD；真实 UB 检测、异常处理体、间接调用、恢复和终止模式通过。Release 插件本身未重编译或增加 sanitizer 插桩。 |
 | 测试工具迁移与分发 | 补丁 LLD 及构建记录／许可证校验和与迁移前一致；新路径由 `toolchain/**` LFS 规则覆盖。真实发布脚本对测试夹具生成的预构建归档可完整恢复测试工具，保留文件内容、可执行位及 `ld64.lld` 别名。三 host 发行归档均排除测试工具；专项测试与全量回归均通过。 |
 | macOS CI 执行权限修复（I08） | Git 索引模式已改为 `100755`，LFS 指针 blob 与二进制内容未变。从索引重新检出实际产物，经现有发布脚本打包、解包后，`ld64.lld` 可执行，别名、全部校验和及补丁版本验证通过。沙箱外重新完整执行 `make test`，退出码 0，耗时 581.00 秒；UBSan 和普通阶段分别为 std 607/607、FCTS 1508/1508，失败和跳过均为 0，编译器、CLI／DAP、插件接入及发行／预构建回归全部通过。远程 macOS CI 仍待维护者提交、重新发布预构建后重跑。 |
+| 维护记录清理（I09） | 已删除两个预构建目录内的 8 份记录。三个 host 的插件及补丁 LLD 实际归档、解包后均不含 `build-info.txt`、`SHA256SUMS`、`source-files.sha256`；二进制内容、协议头文件、许可证、别名及 LLD 执行权限保持不变。维护和发行脚本语法检查通过；获批的三平台发行包排除断言通过。沙箱外全量 `make test` 退出码 0，耗时 581.39 秒，UBSan／普通阶段分别通过 std 607/607、FCTS 1508/1508，失败和跳过均为 0。未重建插件或 LLD；目录清理需随下次 toolchain 预构建发布分发。 |
 | Linux ARM64，Ubuntu 26.04 容器原生执行 | 普通及 UBSan 插件接入用例通过，包含真实异常执行、五 target 编译及归档搬移。隔离源码构建加普通接入测试耗时 23.075 秒；未在该容器执行完整 Feng `make test`。 |
 | Linux x64，Ubuntu 26.04 容器／Rosetta | Feng 构建及独立 driver 的 bin／lib、O0／O2、普通／UBSan 真实执行、五 target 编译通过。完整接入脚本在归档解压处受 I07 环境限制，未通过该项；未作为原生 x64 或全量回归结果。 |
 

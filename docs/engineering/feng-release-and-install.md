@@ -101,9 +101,7 @@ feng-<version>-<platform>/
 │   ├── llvm-c-eh/                # 当前 host 的预构建 LLVM Pass 插件
 │   │   ├── lib/llvm_c_eh.dylib   # macOS；Linux 文件名为 llvm_c_eh.so
 │   │   ├── include/llvm_c_eh.h
-│   │   ├── LICENSE
-│   │   ├── build-info.txt
-│   │   └── source-files.sha256
+│   │   └── LICENSE
 │   └── sysroot/                  # Linux 目标 sysroot（native / 交叉共用）
 │       ├── linux-x64-gnu/
 │       ├── linux-x64-musl/
@@ -124,7 +122,7 @@ feng-<version>-<platform>/
 - `lib/` 按完整目标平台分目录。三份分发包均包含五份 runtime；macOS runtime 在合法 macOS 环境构建，Linux runtime 使用对应 sysroot 构建。发布时校验对象格式、CPU 架构和平台，禁止跨平台或 libc ABI 复用。
 - `include/` 仅存放一份平台无关的 Feng 头文件。其中 `feng_generated.h` 为生成 C 提供 SDK-free 编译所需的自包含声明闭包，`feng_runtime.h` 与 `feng_runtime_contract.inc` 定义 runtime 公共 ABI；正常目标的标准和系统头文件仍由目标 SDK / sysroot 提供，不得复制 Apple SDK 头文件。
 - `toolchain/llvm/` 保持 LLVM 官方包布局，所有工具来自同一版本、同一 host 平台包。每份 Linux 分发包只包含当前 host 架构的一份 LLVM，同时支持 GNU 和 musl 目标。
-- `toolchain/llvm-c-eh/` 从仓库同名目录的 `<host-platform>/` 原样复制，包含插件、头文件与许可证／来源记录；不按目标平台重复装入。macOS 签名复用现有 Mach-O 文件遍历。维护构建规则见 [插件开发方案](./c-ir-llvm-exception-plugin-dev.md)，本阶段接入不改变 Feng 异常后端。
+- `toolchain/llvm-c-eh/` 从仓库同名目录的 `<host-platform>/` 原样复制，包含插件、头文件与许可证；不按目标平台重复装入。macOS 签名复用现有 Mach-O 文件遍历。维护构建规则见 [插件开发方案](./c-ir-llvm-exception-plugin-dev.md)，本阶段接入不改变 Feng 异常后端。
 - `toolchain/sysroot/` 按完整 Linux 目标平台分目录，保留编译和链接所需文件及目录关系，移除 GCC、binutils 和 musl.cc 工具。native 与交叉编译共用 sysroot，调用参数见 [feng-build.md](../specifications/feng-build.md)。
 - `pkg/` 存放发行任务准备好的精确版本 `.fb`，文件名固定为
   `<name>-<version>.fb`。三个 host 分发包使用同一组输入；组装流程只校验并原样复制,

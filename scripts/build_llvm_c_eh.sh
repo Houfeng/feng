@@ -246,6 +246,6 @@ install -m 644 "$library" "$destination/lib/llvm_c_eh.$extension.new"
 mv "$destination/lib/llvm_c_eh.$extension.new" "$destination/lib/llvm_c_eh.$extension"
 install -m 644 "$source_dir/include/llvm_c_eh.h" "$destination/include/llvm_c_eh.h"
 install -m 644 "$source_dir/LICENSE" "$destination/LICENSE"
-install -m 644 "$work/build-info.txt" "$destination/build-info.txt"
-install -m 644 "$work/source-files.sha256" "$destination/source-files.sha256"
+# Remove maintenance reports left by older prebuilds from the installed layout.
+rm -f "$destination/build-info.txt" "$destination/SHA256SUMS" "$destination/source-files.sha256"
 echo "Validated prebuilt plugin installed: $destination"

@@ -150,7 +150,7 @@ cmake --build "$work/build" --target lld --parallel "${CMAKE_BUILD_PARALLEL_LEVE
 python3 "$work/lit/lit.py" -sv "$work/build/test/MachO" 2>&1 | tee "$work/macho-tests.log"
 run_regression "$work/build/bin/ld64.lld" "$work/validation"
 
-# Publish only a self-contained executable plus licenses and reproducible identities.
+# Publish only a self-contained executable and its required licenses.
 install -m 755 "$work/build/bin/lld" "$work/staging/bin/lld"
 "$sdk/bin/llvm-strip" --strip-all "$work/staging/bin/lld"
 codesign --force --sign - "$work/staging/bin/lld"
@@ -161,6 +161,7 @@ zstd_archive=$(resolve_file "$(cat "$work/build/test-lld-zstd.txt")")
 zstd_license="$(dirname "$(dirname "$zstd_archive")")/LICENSE"
 [[ -f "$zstd_license" ]] || die "dependency license missing: $zstd_license"
 cp "$zstd_license" "$work/staging/LICENSES/Zstandard.txt"
+# Keep maintenance reports outside the installed tool directory.
 {
     printf 'llvm_version=%s\nhost=macos-arm64\npatch_revision=%s\n' "$LLD_VERSION" "$LLD_PATCH_REVISION"
     printf 'source_url=%s\nsource_sha256=%s\n' "$LLD_SOURCE_URL" "$LLD_SOURCE_SHA256"
@@ -170,13 +171,13 @@ cp "$zstd_license" "$work/staging/LICENSES/Zstandard.txt"
     printf 'compiler=%s\n' "$("$sdk/bin/clang" --version | head -1)"
     printf 'built_at_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     printf 'validation=upstream Mach-O; arbitrary prefixes ARM64/x64; native C++ UBSan O0/O2/O3; relocated executable\n'
-} > "$work/staging/build-info.txt"
+} > "$work/build-info.txt"
 (
     cd "$work/staging"
-    for path in bin/lld build-info.txt LICENSES/LLVM.txt LICENSES/Zstandard.txt; do
+    for path in bin/lld LICENSES/LLVM.txt LICENSES/Zstandard.txt; do
         printf '%s  %s\n' "$(sha256 "$path")" "$path"
     done
-) > "$work/staging/SHA256SUMS"
+) > "$work/SHA256SUMS"
 verify_binary "$work/staging/bin/lld"
 rm -rf "$work/relocated tool"
 cp -R "$work/staging" "$work/relocated tool"
