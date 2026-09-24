@@ -1,0 +1,5 @@
+/* Keep plugin internals out of the loading compiler's global symbol namespace. */
+{
+  global: llvmGetPassPluginInfo;
+  local: *;
+};

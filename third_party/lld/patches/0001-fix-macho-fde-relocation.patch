@@ -1,0 +1,58 @@
+--- a/lld/MachO/InputFiles.cpp
++++ b/lld/MachO/InputFiles.cpp
+@@ -1354,21 +1354,32 @@
+   }
+   if (Invert)
+     std::swap(pcSym, target);
+-  if (pcSym->isec() == isec) {
+-    if (pcSym->value - (Invert ? -1 : 1) * minuend.addend != subtrahend.offset)
+-      fatal("invalid FDE relocation in __eh_frame");
+-  } else {
+-    // Ensure the pcReloc points to a symbol within the current EH frame.
+-    // HACK: we should really verify that the original relocation's semantics
+-    // are preserved. In particular, we should have
+-    // `oldSym->value + oldOffset == newSym + newOffset`. However, we don't
+-    // have an easy way to access the offsets from this point in the code; some
+-    // refactoring is needed for that.
+-    Relocation &pcReloc = Invert ? minuend : subtrahend;
+-    pcReloc.referent = isec->symbols[0];
+-    assert(isec->symbols[0]->value == 0);
+-    minuend.addend = pcReloc.offset * (Invert ? 1LL : -1LL);
++  // The embedded addend may contain both the displacement of the PC from its
++  // anchor and a displacement of the actual target from its anchor. Resolve
++  // the latter before replacing the PC anchor, otherwise alternate entry
++  // symbols lose their displacement and acquire the wrong unwind range.
++  if (!pcSym->isec() || &pcSym->isec()->section != &isec->section)
++    fatal("invalid FDE relocation in __eh_frame");
++  int64_t pcOffset = isec->data.data() - pcSym->isec()->data.data() +
++                     subtrahend.offset - pcSym->value;
++  int64_t targetOffset = pcOffset + (Invert ? -minuend.addend : minuend.addend);
++  if (targetOffset != 0 && target && target->isec()) {
++    const Section &section = target->isec()->section;
++    uint64_t offset = target->isec()->data.data() -
++                          section.subsections.front().isec->data.data() +
++                      target->value + targetOffset;
++    auto *targetIsec =
++        cast<ConcatInputSection>(findContainingSubsection(section, &offset));
++    target = findSymbolAtOffset(targetIsec, offset);
++    if (target)
++      (Invert ? subtrahend : minuend).referent = target;
+   }
++  // Canonical references preserve target - PC (or PC - target for a CIE),
++  // including when the source and target live in separately split records.
++  Relocation &pcReloc = Invert ? minuend : subtrahend;
++  pcReloc.referent = isec->symbols[0];
++  assert(isec->symbols[0]->value == 0);
++  minuend.addend = subtrahend.offset * (Invert ? 1LL : -1LL);
+   return target;
+ }
+ 
+@@ -1487,7 +1498,7 @@
+       // to register the unwind entry under same symbol.
+       // This is not particularly efficient, but we should run into this case
+       // infrequently (only when handling the output of `ld -r`).
+-      if (funcSym->isec())
++      if (funcSym && funcSym->isec())
+         funcSym = findSymbolAtOffset(cast<ConcatInputSection>(funcSym->isec()),
+                                      funcSym->value);
+     } else {

@@ -178,7 +178,7 @@ Feng 程序。保留原有优化级别，不以禁优化或禁内联修复 S11�
 
 ### 4.2 Feng 到通用协议的映射
 
-接口与转换规则统一见[插件文档 §4–§5](./c-ir-llvm-exception-plugin-dev.md#4-接口草案)。
+接口与转换规则统一见[插件文档 §4–§5](./c-ir-llvm-exception-plugin-dev.md#4-协议接口)。
 Feng 在 Codegen 的 callable／资源作用域抽象中维护区域，不从源码行号、表达式类别、
 callee 名称或特定测试推测保护范围。具体接入如下：
 
@@ -299,6 +299,13 @@ LLVM 目录，第二步须增加插件产物的安装路径、依赖闭包及签
 版本统一本身不能替代插件加载兼容性验证。sanitizer 阶段继续使用具有完整 sanitizer
 资源的宿主 Clang，并加载第一步验证过的同一 host 插件；不将已剪裁的 bundled Clang
 当作完整 sanitizer SDK，也不在本次接入中重新设计工具链安装方式。
+
+编译器、链接器及编译资源遵循[插件文档 §7.1](./c-ir-llvm-exception-plugin-dev.md#71-工具链配套约束)。
+发行路径须自动选择配套的 bundled Clang、LLD 和插件；sanitizer 路径也须显式选择
+同版本 LLVM LLD，其中 macOS UBSan 专用预构建 LLD 的维护和使用规则见
+[插件文档 §7.2](./c-ir-llvm-exception-plugin-dev.md#72-ubsan-专用预构建-lld)。
+当前 macOS driver 尚未选择 LLD，仍会调用 Apple ld，第二步接入
+须补齐这一选择并验证发行布局，不能将当前实现记为已满足配套工具链要求。
 
 对既有测试的必要适配也已定位，实施前应一并获准，不能在回归失败后逐例绕过：
 
