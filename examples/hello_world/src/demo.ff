@@ -73,9 +73,11 @@ type Future<T> {
 
 type Promise<T> {
   open let future = Future<T>();
+  
   open func resolve(value: T) {
     self.future.resolve(value);
   }
+
   open func reject(error: string) {
     self.future.reject(error);
   }
