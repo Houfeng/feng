@@ -782,14 +782,14 @@ void *feng_object_new(const FengTypeDescriptor *desc);
  * exceptions from foreign-language unwind payloads. */
 #define FENG_EXCEPTION_CLASS UINT64_C(0x46454E4745584E00)
 
-/* One catch clause in a generated LSDA table. A NULL type is an anonymous
- * catch-all clause; otherwise matching is descriptor-pointer identity. */
+/* Legacy manual-LSDA layout retained for existing declarations. New code uses
+ * the native type table with the same exact descriptor-pointer identity. */
 typedef struct FengCatchClause {
     const FengTypeDescriptor *type;
 } FengCatchClause;
 
-/* Static language-specific data generated per try region. `pc_begin`,
- * `pc_end`, and `landing_pad` are generated label addresses. */
+/* Legacy label-address metadata. Its layout is retained, but callers must
+ * rebuild old objects instead of registering it with the native backend. */
 typedef struct FengLSDA {
     const void *pc_begin;
     const void *pc_end;
@@ -798,6 +798,7 @@ typedef struct FengLSDA {
     int clause_count;
 } FengLSDA;
 
+/* Reject nonempty legacy registrations with an explicit rebuild diagnostic. */
 void feng_register_lsda(const FengLSDA *regions, int region_count);
 
 #if !defined(_WIN32)
@@ -896,7 +897,7 @@ void feng_cleanup_pop(void);
  * of the defer statement and is typically a stack-allocated FengCleanupNode
  * adjacent to the defer registration site. `fn` is invoked with `closure`
  * when the surrounding scope exits (either normally via feng_cleanup_pop in
- * cg_release_scope, or via the personality-driven cleanup traversal on
+ * cg_release_scope, or via the generated native landing-pad cleanup on
  * exception unwind). `closure` is opaque to the runtime; codegen emits a
  * stack-allocated struct holding addresses of outer bindings. Passing a NULL
  * closure is legal and intended for defer blocks that capture nothing. */
@@ -911,7 +912,9 @@ void feng_frame_release_to(FengFrameMarker *marker);
 
 /* Take ownership of the exception delivered to this landing pad, clean the
  * try's resources, and activate its catch. `context->frame` must be the
- * corresponding live try marker. Its storage must outlive the catch. */
+ * corresponding live try marker. Generated code initializes `exception` and
+ * its source `matched_clause` from the native landing result before this call.
+ * Context storage must outlive the catch. */
 void feng_exception_catch_begin(FengCatchContext *context);
 
 /* End the innermost active catch after its locals/defers have been cleaned.

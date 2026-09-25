@@ -4,6 +4,7 @@
 #include "runtime/feng_runtime.h"
 
 #if !defined(_WIN32)
+#include <llvm_c_eh.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdio.h>
@@ -49,46 +50,44 @@ static NestedPayload *nested_payload(unsigned char code) {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wgnu-label-as-value"
 
-/* Match the generated C protocol without optimizer folding its landing pad.
- * The single static region is warmed before the concurrent-read test. */
-__attribute__((noinline, optnone))
+/* Use the same native EH protocol as generated code, including the logical
+ * function cleanup when a handler rethrows or raises a replacement. */
 static void nested_native_try(void (*body)(void *), void *argument,
                               void (*handler)(FengCatchContext *, void *),
                               void *state) {
-#if defined(__APPLE__)
-    __asm__ volatile(".cfi_personality 155, ___feng_personality_v0\n"
-                     ".cfi_lsda 16, _feng_empty_function_lsda\n");
-#else
-    __asm__ volatile(".cfi_personality 27, __feng_personality_v0\n"
-                     ".cfi_lsda 16, feng_empty_function_lsda\n");
-#endif
+    __llvm_c_eh_configure(__LLVM_C_EH_PROTOCOL_VERSION, __feng_personality_v0);
     FengFrameMarker function_frame;
     FengCatchContext context;
-    static const FengCatchClause clauses[] = {{NULL}};
-    static FengLSDA region;
-    static bool registered;
-    static volatile int keep_landing;
-
+    if (__llvm_c_eh_region(1u, 0u, &&cleanup, 0u)) goto cleanup;
+    if (__llvm_c_eh_region(2u, 1u, &&landing, 1u, (const void *)0)) goto landing;
     feng_frame_push(&function_frame);
-    if (!registered) {
-        region = (FengLSDA){&&begin, &&end, &&landing, clauses, 1};
-        feng_register_lsda(&region, 1);
-        registered = true;
-    }
-    if (keep_landing) goto landing;
+    __llvm_c_eh_activate(1u);
     feng_try_frame_push(&context.frame);
-begin:
+    __llvm_c_eh_activate(2u);
     body(argument);
-end:
     feng_frame_pop();
+    __llvm_c_eh_activate(1u);
     goto done;
 landing:
+    __llvm_c_eh_activate(1u);
+    if (__llvm_c_eh_selector(2u) != __llvm_c_eh_typeid(NULL)) {
+        feng_frame_release_to(&context.frame);
+        __llvm_c_eh_propagate(2u);
+    }
+    context.exception = __llvm_c_eh_exception(2u);
+    context.exception->matched_clause = 0;
     feng_exception_catch_begin(&context);
     CHECK(feng_caught_clause() == 0);
     handler(&context, state);
     feng_exception_catch_end();
 done:
     feng_frame_pop();
+    __llvm_c_eh_activate(0u);
+    return;
+cleanup:
+    __llvm_c_eh_activate(0u);
+    feng_frame_release_to(&function_frame);
+    __llvm_c_eh_propagate(1u);
 }
 
 #pragma clang diagnostic pop
@@ -167,7 +166,7 @@ static void nested_record_identity(bool rethrow) {
     CHECK(feng_caught_value() == NULL && feng_caught_clause() == -1);
 }
 
-/* Each thread repeatedly exercises its own active-catch and pending slots. */
+/* Each thread repeatedly exercises its own active catch and cleanup chain. */
 static void *nested_thread_worker(void *argument) {
     (void)argument;
     for (unsigned int i = 0U; i < 64U; ++i) {

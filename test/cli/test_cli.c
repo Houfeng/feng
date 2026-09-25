@@ -30526,11 +30526,14 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 #include "defer_exception_effects.inc"
 #include "try_breakpoints.inc"
 #include "source_breakpoints.inc"
+#include "native_exception.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_native_exception_release_reproducer();
+    test_native_exception_source_hidden_optimization_matrix();
     test_dap_try_breakpoints_once_per_evaluation();
     test_dap_singleline_source_positions();
     test_dap_multiline_source_positions();

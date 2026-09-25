@@ -1393,6 +1393,8 @@ typedef struct Scope {
      * by the caller that created the scope. */
     const char   *continue_label;
     CGScopeExitKind exit_kind;
+    unsigned eh_region; /* protocol region introduced by this lexical boundary */
+    bool eh_configured; /* only callable roots own protocol configuration */
     /* Each scope frame also holds a list of indices into items[] in original
      * insertion order; release-on-exit walks them in reverse. */
 } Scope;
@@ -2387,6 +2389,10 @@ static void cg_release_scope(CG *cg, const Scope *scope);
 static void cg_release_through(CG *cg, const Scope *stop);
 static void cg_emit_return_control_cleanup(CG *cg);
 static void cg_emit_function_eh_metadata(Buf *out);
+static void cg_emit_function_body_begin(Buf *out);
+static unsigned cg_scope_eh_region(const Scope *scope);
+static void cg_emit_scope_eh_state(CG *cg, const Scope *scope);
+static void cg_emit_loop_header(CG *cg);
 static bool cg_emit_function_eh_prologue(CG *cg, FengToken token);
 static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
                                          FengToken token, const char *terminator);
@@ -23588,8 +23594,8 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
     }
     cg_append_callable_abi_out_parameter(&fn,
                                          spec->callable_return_abi_kind);
+    cg_emit_function_body_begin(&fn);
     buf_append_fmt(&fn,
-        ") {\n"
         "    struct %s *_lambda = (struct %s *)_closure;\n"
         "    (void)_lambda;\n",
         closure_struct_name,
@@ -35439,27 +35445,17 @@ static bool cg_emit_try_expr(CG *cg,
     bool is_void = result_type->kind == CG_TYPE_VOID;
     CGExpressionJoinSlot join_slot = {0};
 
-    int try_id = cg->label_counter++;
-    char begin_label[64];
-    char end_label[64];
+    unsigned try_id = (unsigned)++cg->label_counter;
+    unsigned parent_region = cg_scope_eh_region(cg->cur_scope);
+    Scope *callable_scope = cg->cur_scope;
+    while (callable_scope->parent != NULL) callable_scope = callable_scope->parent;
+    callable_scope->eh_configured = true;
     char landing_label[64];
     char done_label[64];
     char catch_done_label[64];
-    char clauses_name[64];
-    char region_name[64];
-    char registered_name[64];
-    char keep_landing_name[64];
-    char caught_clause_name[64];
-    snprintf(begin_label, sizeof begin_label, "_try_begin_%d", try_id);
-    snprintf(end_label, sizeof end_label, "_try_end_%d", try_id);
-    snprintf(landing_label, sizeof landing_label, "_try_lpad_%d", try_id);
-    snprintf(done_label, sizeof done_label, "_try_done_%d", try_id);
-    snprintf(catch_done_label, sizeof catch_done_label, "_try_after_catch_%d", try_id);
-    snprintf(clauses_name, sizeof clauses_name, "_try_clauses_%d", try_id);
-    snprintf(region_name, sizeof region_name, "_try_region_%d", try_id);
-    snprintf(registered_name, sizeof registered_name, "_try_registered_%d", try_id);
-    snprintf(keep_landing_name, sizeof keep_landing_name, "_try_keep_lpad_%d", try_id);
-    snprintf(caught_clause_name, sizeof caught_clause_name, "_try_clause_%d", try_id);
+    snprintf(landing_label, sizeof landing_label, "_try_lpad_%u", try_id);
+    snprintf(done_label, sizeof done_label, "_try_done_%u", try_id);
+    snprintf(catch_done_label, sizeof catch_done_label, "_try_after_catch_%u", try_id);
 
     char *slot_name = cg_fresh_temp(cg, "_tryv");
     char *marker_name = cg_fresh_temp(cg, "_try_marker");
@@ -35487,9 +35483,10 @@ static bool cg_emit_try_expr(CG *cg,
     }
 
     buf_append_fmt(cg->cur_body,
-                   "    %sstatic const FengCatchClause %s[%zu] = {\n",
-                   cg_debug_local_attribute(cg, clauses_name),
-                   clauses_name,
+                   "    %sFengCatchContext %s;\n"
+                   "    if (__llvm_c_eh_region(%uu, %uu, &&%s, %zuu",
+                   cg_debug_local_attribute(cg, marker_name), marker_name,
+                   try_id, parent_region, landing_label,
                    e->as.try_expr.clause_count);
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
@@ -35516,43 +35513,17 @@ static bool cg_emit_try_expr(CG *cg,
             }
         }
         buf_append_fmt(cg->cur_body,
-                       "        { %s },\n",
+                       ", (const void *)%s",
                        is_anonymous ? "NULL" : desc_expr);
         cgtype_free(catch_type);
         free(desc_expr);
     }
     buf_append_fmt(cg->cur_body,
-                   "    };\n"
-                   "    %sstatic FengLSDA %s;\n"
-                   "    %sstatic bool %s = false;\n"
-                   "    %sstatic volatile int %s = 0;\n"
-                   "    if (!%s) {\n"
-                   "        %s = (FengLSDA){ &&%s, &&%s, &&%s, %s, %zu };\n"
-                   "        feng_register_lsda(&%s, 1);\n"
-                   "        %s = true;\n"
-                   "    }\n"
-                   "    if (%s) goto %s;\n"
-                   "    %sFengCatchContext %s;\n"
+                   ")) goto %s;\n"
                    "    feng_try_frame_push(&%s.frame);\n"
-                   "    {\n"
-                   "    %s: ;\n",
-                   cg_debug_local_attribute(cg, region_name), region_name,
-                   cg_debug_local_attribute(cg, registered_name), registered_name,
-                   cg_debug_local_attribute(cg, keep_landing_name), keep_landing_name,
-                   registered_name,
-                   region_name,
-                   begin_label,
-                   end_label,
-                   landing_label,
-                   clauses_name,
-                   e->as.try_expr.clause_count,
-                   region_name,
-                   registered_name,
-                   keep_landing_name,
-                   landing_label,
-                   cg_debug_local_attribute(cg, marker_name), marker_name,
-                   marker_name,
-                   begin_label);
+                   "    __llvm_c_eh_activate(%uu);\n"
+                   "    {\n",
+                   landing_label, marker_name, try_id);
     Scope *try_scope = scope_push(cg->cur_scope);
     if (try_scope == NULL) {
         free(slot_name);
@@ -35562,6 +35533,7 @@ static bool cg_emit_try_expr(CG *cg,
         return cg_fail(cg, e->token, "IE0001", "codegen: out of memory");
     }
     try_scope->exit_kind = CG_SCOPE_EXIT_TRY;
+    try_scope->eh_region = try_id;
     cg->cur_scope = try_scope;
     bool ok = result_required
                   ? cg_emit_try_expr_body_to_slot(cg,
@@ -35576,7 +35548,7 @@ static bool cg_emit_try_expr(CG *cg,
                                                   e->as.try_expr.body,
                                                   e->token);
     if (ok) {
-        buf_append_fmt(cg->cur_body, "    %s: ;\n    }\n", end_label);
+        buf_append_cstr(cg->cur_body, "    }\n");
         cg_release_scope(cg, try_scope);
     }
     cg->cur_scope = try_scope->parent;
@@ -35590,12 +35562,11 @@ static bool cg_emit_try_expr(CG *cg,
     buf_append_fmt(cg->cur_body,
                    "    goto %s;\n"
                    "    %s: ;\n"
-                   "    feng_exception_catch_begin(&%s);\n"
-                   "    %sint %s = feng_caught_clause();\n",
+                   "    __llvm_c_eh_activate(%uu);\n"
+                   "    %s.exception = (FengUnwindException *)__llvm_c_eh_exception(%uu);\n",
                    done_label,
                    landing_label,
-                   marker_name,
-                   cg_debug_local_attribute(cg, caught_clause_name), caught_clause_name);
+                   parent_region, marker_name, try_id);
 
     for (size_t i = 0U; i < e->as.try_expr.clause_count; i++) {
         const FengTryCatchClause *clause = &e->as.try_expr.clauses[i];
@@ -35604,9 +35575,12 @@ static bool cg_emit_try_expr(CG *cg,
             cg_branch_exits_via_return_or_throw(clause->body);
         bool is_anonymous = clause->type == NULL && clause->name.length == 0U;
         CGType *catch_type = NULL;
+        char *desc_expr = NULL;
 
         if (!is_anonymous) {
-            if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type)) {
+            if (!cg_resolve_type(cg, clause->type, &clause->token, &catch_type) ||
+                !cg_exception_descriptor_expr_for_type(cg, catch_type, clause->token, &desc_expr)) {
+                cgtype_free(catch_type);
                 free(slot_name);
                 free(marker_name);
                 cgtype_free(result_type);
@@ -35615,10 +35589,13 @@ static bool cg_emit_try_expr(CG *cg,
         }
 
         buf_append_fmt(cg->cur_body,
-                   "    %s (%s == %zu) {\n",
+                   "    %s (__llvm_c_eh_selector(%uu) == __llvm_c_eh_typeid((const void *)%s)) {\n"
+                   "        %s.exception->matched_clause = %zu;\n"
+                   "        feng_exception_catch_begin(&%s);\n",
                    i == 0U ? "if" : "else if",
-                   caught_clause_name,
-                   i);
+                   try_id, is_anonymous ? "NULL" : desc_expr,
+                   marker_name, i, marker_name);
+        free(desc_expr);
 
         Scope *catch_scope = scope_push(cg->cur_scope);
         if (catch_scope == NULL) {
@@ -35676,15 +35653,13 @@ static bool cg_emit_try_expr(CG *cg,
         cgtype_free(catch_type);
     }
 
-    if (e->as.try_expr.clause_count > 0U) {
-        buf_append_cstr(cg->cur_body,
-                        "    else {\n"
-                        "        feng_rethrow();\n"
-                        "    }\n");
-    } else {
-        buf_append_cstr(cg->cur_body,
-                        "    feng_rethrow();\n");
-    }
+    /* An unmatched region only cleans its own resources. It never takes
+     * catch ownership or restarts search; the same SSA record reaches the
+     * parent region, including a parent in this native function after inlining. */
+    buf_append_fmt(cg->cur_body,
+                   "    feng_frame_release_to(&%s.frame);\n"
+                   "    __llvm_c_eh_propagate(%uu);\n",
+                   marker_name, try_id);
     buf_append_fmt(cg->cur_body,
                    "    %s: ;\n"
                    "    %s: ;\n",
@@ -36066,6 +36041,7 @@ static bool cg_emit_expr_with_spec_coercion(
         ExprResult *out) {
     if (cg->failed) return false;
     bool ok;
+    size_t body_start = cg->cur_body != NULL ? cg->cur_body->length : 0U;
 
     if (cs && (cs->form == FENG_SPEC_COERCION_FORM_OBJECT_UPCAST ||
                cs->form == FENG_SPEC_COERCION_FORM_INTERSECTION_UPCAST)) {
@@ -36079,6 +36055,9 @@ static bool cg_emit_expr_with_spec_coercion(
     }
     ok = cg_emit_expr_raw(cg, e, out);
     if (!ok) return false;
+
+    if (cg->cur_body != NULL && cg->cur_body->length > body_start)
+        cg_emit_scope_eh_state(cg, cg->cur_scope);
 
     return cg_apply_object_spec_value(cg, e->token, cs, out);
 }
@@ -36104,6 +36083,8 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     } else {
         ok = cg_emit_expr_with_spec_coercion(cg, e, spec_site, out);
     }
+    if (ok && cg->cur_body != NULL && cg->cur_body->length > body_start)
+        cg_emit_scope_eh_state(cg, cg->cur_scope);
     /* A pure expression has no preamble. Adding even a line directive to
      * an empty buffer would make short-circuit lowering allocate a result
      * temporary, so restore the anchor only after actual body emission. */
@@ -36119,6 +36100,7 @@ static bool cg_emit_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
 /* Release scope locals first, then the exception boundary they depend on. */
 static void cg_release_scope(CG *cg, const Scope *scope) {
+    cg_emit_scope_eh_state(cg, scope);
     /* Walk in reverse insertion order to mirror C destruction. Each managed
      * non-param local was paired with a feng_cleanup_push at declaration; we
      * must pop the chain in strict LIFO order, then release+NULL the slot so
@@ -36136,6 +36118,7 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
             Local initialized = *l;
             initialized.cleanup_condition_c_expr = NULL;
             Scope initialized_scope = {0};
+            initialized_scope.parent = (Scope *)scope;
             initialized_scope.items = &initialized;
             initialized_scope.count = 1U;
             buf_append_fmt(cg->cur_body, "    if (%s) {\n", l->cleanup_condition_c_expr);
@@ -36263,7 +36246,10 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
     }
     if (scope->exit_kind == CG_SCOPE_EXIT_TRY) {
         cg_emit_current_stmt_line_directive_force(cg);
-        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+        buf_append_fmt(cg->cur_body,
+                       "    feng_frame_pop();\n"
+                       "    __llvm_c_eh_activate(%uu);\n",
+                       cg_scope_eh_region(scope->parent));
     } else if (scope->exit_kind == CG_SCOPE_EXIT_CATCH) {
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_exception_catch_end();\n");
@@ -36283,6 +36269,7 @@ static void cg_emit_return_control_cleanup(CG *cg) {
     if (cg->cur_function_has_frame_marker) {
         cg_emit_current_stmt_line_directive_force(cg);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+        buf_append_cstr(cg->cur_body, "    __llvm_c_eh_activate(0u);\n");
     }
     cg_emit_current_stmt_line_directive_force(cg);
 }
@@ -41945,7 +41932,7 @@ static bool cg_emit_while(CG *cg, const FengStmt *stmt) {
     /* Emit as `for (;;)` so we can re-evaluate the condition each iter
      * inside a scope that releases temporaries from condition eval. */
     bool has_match_binding = cg_expr_has_visible_match_binding(stmt->as.while_stmt.condition);
-    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    cg_emit_loop_header(cg);
     /* Condition scope: any temporaries from cond eval get released here.
      * When the condition contains a match_op with binding, the materialized
      * target tmp must survive across the body (the binding alias references
@@ -42603,7 +42590,7 @@ static bool cg_emit_for_three(CG *cg, const FengStmt *stmt) {
         scope_pop_free(outer_scope);
         return false;
     }
-    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    cg_emit_loop_header(cg);
 
     /* Condition: optional. Empty condition means "always true" per spec. */
     if (stmt->as.for_stmt.condition != NULL) {
@@ -43263,7 +43250,7 @@ static bool cg_emit_for_in_iterator(CG *cg, const FengStmt *stmt) {
     }
 
     /* Begin the loop. */
-    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    cg_emit_loop_header(cg);
 
     /* Keep the result tuple, loop binding, and user body in one nested C
      * block. The continue label below must remain outside the block because
@@ -43700,7 +43687,7 @@ static bool cg_emit_for_in(CG *cg, const FengStmt *stmt) {
                        generic_element_desc);
     }
 
-    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    cg_emit_loop_header(cg);
     buf_append_fmt(cg->cur_body,
                    "        if (%s >= feng_array_length(%s)) break;\n",
                    idx_var, seq_tmp);
@@ -44130,6 +44117,7 @@ static bool cg_emit_throw(CG *cg, const FengStmt *stmt) {
 }
 
 static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
+    cg_emit_scope_eh_state(cg, cg->cur_scope);
     FengToken saved_stmt_anchor_token = cg->current_stmt_anchor_token;
     bool saved_stmt_anchor_active = cg->current_stmt_anchor_active;
     bool ok = false;
@@ -44172,6 +44160,7 @@ static bool cg_emit_stmt(CG *cg, const FengStmt *stmt) {
     }
     cg->current_stmt_anchor_token = saved_stmt_anchor_token;
     cg->current_stmt_anchor_active = saved_stmt_anchor_active;
+    if (ok) cg_emit_scope_eh_state(cg, cg->cur_scope);
     return ok;
 }
 
@@ -45599,29 +45588,57 @@ static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
 
 /* ===================== top-level emission ===================== */
 
-/* Attach the existing platform personality without emitting executable code. */
+/* Configure the native EH protocol; the pass erases this declaration. */
 static void cg_emit_function_eh_metadata(Buf *out) {
     buf_append_cstr(out,
-                    "#if !defined(_WIN32)\n"
-                    "#if defined(__APPLE__)\n"
-                    "    __asm__ volatile(\".cfi_personality 155, ___feng_personality_v0\\n\"\n"
-                    "                     \".cfi_lsda 16, _feng_empty_function_lsda\\n\");\n"
-                    "#else\n"
-                    "    __asm__ volatile(\".cfi_personality 27, __feng_personality_v0\\n\"\n"
-                    "                     \".cfi_lsda 16, feng_empty_function_lsda\\n\");\n"
-                    "#endif\n"
-                    "#endif\n");
+                    "    __llvm_c_eh_configure(__LLVM_C_EH_PROTOCOL_VERSION, __feng_personality_v0);\n");
+}
+
+/* Configuration precedes even descriptor restoration: sanitizer checks in
+ * that prefix may otherwise split the host IR entry block before the marker. */
+static void cg_emit_function_body_begin(Buf *out) {
+    buf_append_cstr(out, ") {\n");
+    cg_emit_function_eh_metadata(out);
+}
+
+/* Find the enclosing lexical handler, falling back to the callable cleanup. */
+static unsigned cg_scope_eh_region(const Scope *scope) {
+    for (; scope != NULL; scope = scope->parent) {
+        if (scope->eh_region != 0U) return scope->eh_region;
+    }
+    return 0U;
+}
+
+/* Host C lifetime cleanups may merge early exits with ordinary continuations.
+ * Restate lexical ownership before subsequent work instead of requiring the
+ * pass to recover correlations in those compiler-generated cleanup switches. */
+static void cg_emit_scope_eh_state(CG *cg, const Scope *scope) {
+    const Scope *root = scope;
+    while (root != NULL && root->parent != NULL) root = root->parent;
+    if (cg->cur_body != NULL && root != NULL && root->eh_configured) {
+        buf_append_fmt(cg->cur_body, "    __llvm_c_eh_activate(%uu);\n",
+                       cg_scope_eh_region(scope));
+    }
+}
+
+/* Every iteration is a control-flow entry, including continue edges routed
+ * through host lifetime cleanups shared with a return from the same body. */
+static void cg_emit_loop_header(CG *cg) {
+    buf_append_cstr(cg->cur_body, "    for (;;) {\n");
+    cg_emit_scope_eh_state(cg, cg->cur_scope);
 }
 
 /* Ordinary callables also need a cleanup boundary when an exception escapes. */
 static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
+    if (cg->cur_scope == NULL || cg->cur_scope->parent != NULL)
+        return cg_fail(cg, token, "IE0002", "codegen: callable EH requires its own root scope");
+    unsigned root = (unsigned)++cg->label_counter;
     char *frame_name = cg_fresh_temp(cg, "_fn_frame");
-
-    if (frame_name == NULL) {
+    if (frame_name == NULL)
         return cg_fail(cg, token, "IE0001", "codegen: out of memory");
-    }
-    cg_emit_function_eh_metadata(cg->cur_body);
     cg->cur_function_has_catch_regions = false;
+    cg->cur_scope->eh_region = root;
+    cg->cur_scope->eh_configured = true;
     /* The previous callable's closing source line must not flow into this
      * callable's first executable instruction through the generated C. */
     if (!cg_emit_line_directive_force(cg, token)) {
@@ -45629,10 +45646,19 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
         return false;
     }
     buf_append_fmt(cg->cur_body,
-                   "    %sFengFrameMarker %s; feng_frame_push(&%s);\n",
+                   "    %sFengFrameMarker %s;\n"
+                   "    if (__llvm_c_eh_region(%uu, 0u, &&_fn_cleanup_%u, 0u)) goto _fn_cleanup_%u;\n"
+                   "    goto _fn_body_%u;\n"
+                   "    _fn_cleanup_%u: ;\n"
+                   "    __llvm_c_eh_activate(0u);\n"
+                   "    feng_frame_release_to(&%s);\n"
+                   "    __llvm_c_eh_propagate(%uu);\n"
+                   "    _fn_body_%u: ;\n"
+                   "    feng_frame_push(&%s);\n"
+                   "    __llvm_c_eh_activate(%uu);\n",
                    cg_debug_local_attribute(cg, frame_name),
-                   frame_name,
-                   frame_name);
+                   frame_name, root, root, root, root, root,
+                   frame_name, root, root, frame_name, root);
     free(frame_name);
     cg->cur_function_has_frame_marker = true;
     return true;
@@ -45654,6 +45680,7 @@ static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
     cg_emit_current_stmt_line_directive_force(cg);
     if (cg->cur_function_has_frame_marker) {
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+        buf_append_cstr(cg->cur_body, "    __llvm_c_eh_activate(0u);\n");
     }
     if (terminator != NULL) {
         cg_emit_current_stmt_line_directive_force(cg);
@@ -51230,7 +51257,7 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
         if (needs_static) buf_append_cstr(body, "static ");
         buf_append_fmt(body, "void %s(", gfn->c_name);
         EMIT_GENERIC_PARAMS(body);
-        buf_append_cstr(body, ") {\n");
+        cg_emit_function_body_begin(body);
 
         /* Suppress unused-parameter warnings. */
         buf_append_cstr(body, "    (void)_desc;\n");
@@ -52855,7 +52882,7 @@ static bool cg_emit_function(CG *cg,
         buf_append_fmt(body, " %s",
             fn->param_names[i] ? fn->param_names[i] : "_p");
     }
-    buf_append_cstr(body, ") {\n");
+    cg_emit_function_body_begin(body);
     if (!cg_emit_function_eh_prologue(cg, decl->token)) {
         goto cleanup;
     }
@@ -63729,7 +63756,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         EMIT_SHARED_PARAMS(body, &body_has_param);
         if (!body_has_param) buf_append_cstr(body, "void");
     }
-    buf_append_cstr(body, ") {\n");
+    cg_emit_function_body_begin(body);
 
     /* §2.5 prologue: extract _td and type-level generic params from descriptor. */
     buf_append_fmt(body,
@@ -64604,7 +64631,7 @@ static bool cg_emit_user_method(CG *cg,
     if (!has_param) {
         buf_append_cstr(body, "void");
     }
-    buf_append_cstr(body, ") {\n");
+    cg_emit_function_body_begin(body);
     if (!cg_emit_function_eh_prologue(cg, m->member->token)) {
         goto cleanup;
     }
@@ -64890,7 +64917,7 @@ static bool cg_emit_builtin_fit_method(CG *cg,
     if (!has_param) {
         buf_append_cstr(body, "void");
     }
-    buf_append_cstr(body, ") {\n");
+    cg_emit_function_body_begin(body);
     if (!cg_emit_function_eh_prologue(cg, m->member->token)) {
         goto cleanup;
     }
@@ -65267,8 +65294,9 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     CGType *void_type = NULL;
     bool ok = false;
 
-    buf_append_fmt(body, "static void %s(void *_self) {\n",
+    buf_append_fmt(body, "static void %s(void *_self",
                    t->c_finalizer_name);
+    cg_emit_function_body_begin(body);
     buf_append_fmt(body, "    struct %s *self = (struct %s *)_self;\n",
                    t->c_struct_name, t->c_struct_name);
     buf_append_cstr(body, "    (void)self;\n");
@@ -65286,6 +65314,12 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
     cg->loop_depth = 0;
     cg->cur_function_has_frame_marker = false;
 
+    fn_scope = scope_push(NULL);
+    if (fn_scope == NULL) {
+        cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
+        goto cleanup;
+    }
+    cg->cur_scope = fn_scope;
     if (!cg_emit_function_eh_prologue(cg, fm->token)) {
         goto cleanup;
     }
@@ -65305,13 +65339,6 @@ static bool cg_emit_user_finalizer(CG *cg, const UserType *t) {
         }
         buf_free(&frame_name);
     }
-
-    fn_scope = scope_push(NULL);
-    if (fn_scope == NULL) {
-        cg_fail(cg, fm->token, "IE0001", "codegen: out of memory");
-        goto cleanup;
-    }
-    cg->cur_scope = fn_scope;
 
     if (!cg_compute_capture_requirements_in_block(
             fm->as.callable.body,
@@ -65419,6 +65446,7 @@ static char *cg_finalize(CG *cg) {
         "/* Feng generated code — do not edit. */\n"
         "#include \"feng_generated.h\"\n"
         "#include \"feng_runtime.h\"\n"
+        "#include <llvm_c_eh.h>\n"
         "\n"
         "/* Internal expression storage must not introduce debugger-visible\n"
         " * lexical blocks. This attribute changes debug metadata only. */\n"

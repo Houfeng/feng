@@ -5661,6 +5661,18 @@ static void test_string_literal_codegen_preserves_exact_bytes(void) {
 /* Assert that one generated integer operation uses its compile-time
  * intrinsic and introduces no wrapping helper or conditional branch. The
  * ordinary Feng function frame prologue and epilogue remain out of scope. */
+static const char *generated_normal_body(const char *body_start, const char *body_end) {
+    const char *normal_entry = strstr(body_start, "\n    _fn_body_");
+    ASSERT(normal_entry != NULL && normal_entry < body_end);
+    return normal_entry;
+}
+
+/* Protocol declarations are compile-time metadata, outside the integer body. */
+static void assert_integer_body_has_no_branch(const char *body_start, const char *body_end) {
+    ASSERT(!span_contains(generated_normal_body(body_start, body_end), body_end, "if ("));
+}
+
+/* Check the intrinsic itself as well as the branch-free ordinary body. */
 static void assert_integer_wrapping_body(const char *c_source,
                                          const char *symbol_fragment,
                                          const char *builtin_name) {
@@ -5672,7 +5684,7 @@ static void assert_integer_wrapping_body(const char *c_source,
                                         &body_start,
                                         &body_end));
     ASSERT(span_contains(body_start, body_end, builtin_name));
-    ASSERT(!span_contains(body_start, body_end, "if ("));
+    assert_integer_body_has_no_branch(body_start, body_end);
     ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
 }
 
@@ -5725,13 +5737,13 @@ static void test_integer_runtime_semantics_codegen_is_zero_cost(void) {
         "feng__feng__codegen__integerwrap__shiftI32", &body_start, &body_end));
     ASSERT(span_contains(body_start, body_end, ">>"));
     ASSERT(!span_contains(body_start, body_end, "__builtin_"));
-    ASSERT(!span_contains(body_start, body_end, "if ("));
+    assert_integer_body_has_no_branch(body_start, body_end);
     ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
     ASSERT(find_generated_function_body(output.c_source,
         "feng__feng__codegen__integerwrap__shiftU32", &body_start, &body_end));
     ASSERT(span_contains(body_start, body_end, ">>"));
     ASSERT(!span_contains(body_start, body_end, "__builtin_"));
-    ASSERT(!span_contains(body_start, body_end, "if ("));
+    assert_integer_body_has_no_branch(body_start, body_end);
     ASSERT(!span_contains(body_start, body_end, "feng_wrap"));
     compile_generated_c_or_die(output.c_source);
 
@@ -12406,13 +12418,14 @@ static void test_void_try_expression_codegen(void) {
     ASSERT(strstr(out.c_source, "tryvoid__noop__from__void());") != NULL);
     ASSERT(strstr(out.c_source, "FengExceptionFrame") == NULL);
     ASSERT(strstr(out.c_source, "setjmp") == NULL);
-    ASSERT(strstr(out.c_source, "FengLSDA") != NULL);
+    ASSERT(strstr(out.c_source, "FengLSDA") == NULL);
     ASSERT(strstr(out.c_source, "feng_try_frame_push") != NULL);
-    ASSERT(strstr(out.c_source, "_try_keep_lpad") != NULL);
-    ASSERT(strstr(out.c_source,
-                  ".cfi_personality 155, ___feng_personality_v0") != NULL);
-    ASSERT(strstr(out.c_source,
-                  ".cfi_personality 27, __feng_personality_v0") != NULL);
+    ASSERT(strstr(out.c_source, "_try_keep_lpad") == NULL);
+    ASSERT(strstr(out.c_source, ".cfi_personality") == NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_configure(__LLVM_C_EH_PROTOCOL_VERSION, __feng_personality_v0)") != NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_region(") != NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_exception(") != NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_propagate(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -12484,7 +12497,9 @@ static void test_try_catch_return_codegen(void) {
     ASSERT(strstr(out.c_source, "feng_exception_pop();") == NULL);
     ASSERT(strstr(out.c_source, "setjmp") == NULL);
     ASSERT(strstr(out.c_source, "switch (feng_caught_clause())") == NULL);
-    ASSERT(strstr(out.c_source, "int _try_clause_") != NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_selector(") != NULL);
+    ASSERT(strstr(out.c_source, "__llvm_c_eh_typeid(") != NULL);
+    ASSERT(strstr(out.c_source, ".exception->matched_clause = 0;") != NULL);
     ASSERT(strstr(out.c_source, "feng_frame_pop();") != NULL);
     ASSERT(strstr(out.c_source, "feng_exception_catch_end();") != NULL);
     compile_generated_c_or_die(out.c_source);
@@ -12737,8 +12752,9 @@ static void test_anonymous_original_rethrow_codegen(void) {
                                      &cgerr));
     ASSERT(out.c_source != NULL);
 
+    ASSERT(count_substr(out.c_source, "feng_rethrow();") == 2U);
     ASSERT(count_substr(out.c_source,
-                        " == 0) {\n    feng_rethrow();") == 2U);
+                        "__llvm_c_eh_typeid((const void *)NULL)") == 2U);
     /* Only the outer concrete i32 catch reads a payload binding. */
     ASSERT(count_substr(out.c_source, "feng_caught_value()") == 1U);
     ASSERT(count_substr(out.c_source, "feng_throw((void *)") == 1U);
@@ -12805,7 +12821,7 @@ static void test_generic_try_body_reified_storage_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "feng_try_frame_push(&_try_marker") != NULL);
     ASSERT(strstr(out.c_source,
-                  ";\n    {\n    _try_begin_") != NULL);
+                  "u);\n    {\n") != NULL);
     ASSERT(strstr(out.c_source,
                   "_Alignas(max_align_t) char _gr") != NULL);
     ASSERT(count_substr(out.c_source,
@@ -12813,9 +12829,9 @@ static void test_generic_try_body_reified_storage_codegen(void) {
     ASSERT(strstr(out.c_source,
                   "_Alignas(max_align_t) char _tryv") != NULL);
     ASSERT(strstr(out.c_source,
-                  "_try_end_") != NULL);
+                  "__llvm_c_eh_propagate(") != NULL);
     ASSERT(strstr(out.c_source,
-                  ": ;\n    }\n    feng_frame_pop();") != NULL);
+                  "    }\n    feng_frame_pop();\n    __llvm_c_eh_activate(") != NULL);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -13837,9 +13853,9 @@ static void test_tuple_destructuring_evaluation_codegen(void) {
          i < sizeof(kForbiddenDirectRuntimeFragments) /
                  sizeof(kForbiddenDirectRuntimeFragments[0]);
          ++i) {
-        ASSERT(!span_contains(direct_start, direct_end,
+        ASSERT(!span_contains(generated_normal_body(direct_start, direct_end), direct_end,
                               kForbiddenDirectRuntimeFragments[i]));
-        ASSERT(!span_contains(direct_all_start, direct_all_end,
+        ASSERT(!span_contains(generated_normal_body(direct_all_start, direct_all_end), direct_all_end,
                               kForbiddenDirectRuntimeFragments[i]));
     }
 
@@ -17380,6 +17396,9 @@ void test_throw_constraint_codegen(void (*compile_c)(const char *));
 /* Independent nested exception scope and capture ownership checks. */
 void test_nested_exception_codegen(void (*compile_c)(const char *));
 
+/* Actual native EH and marker elimination across optimized/sanitized builds. */
+void test_native_exception_codegen(void (*compile_c)(const char *));
+
 /* Cleanup helpers preserve all generic descriptor domains across FT imports. */
 void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
@@ -17389,6 +17408,7 @@ int main(void) {
     test_generic_sibling_constraint_codegen(compile_generated_c_or_die);
     test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
+    test_native_exception_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);

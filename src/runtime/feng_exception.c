@@ -1,24 +1,12 @@
 #include "runtime/feng_runtime.h"
+#include "runtime/feng_exception_lsda.h"
 
 #include <stddef.h>
 #include <stdlib.h>
 
-/* One registered set of generated try regions and their catch clauses. */
-typedef struct FengLSDARegistration {
-    const FengLSDA *regions;
-    int region_count;
-} FengLSDARegistration;
-
 static _Thread_local FengCleanupNode *g_cleanup_top = NULL;
-/* Only the personality-to-landing-pad handoff uses the pending slot. Catch
- * ownership is kept separately so nested handling cannot replace its owner. */
-static _Thread_local FengUnwindException *g_pending_unwind = NULL;
 static _Thread_local FengCatchContext *g_catch_top = NULL;
 static _Thread_local size_t g_finalizer_depth = 0U;
-
-static FengLSDARegistration *g_lsda_registrations = NULL;
-static size_t g_lsda_registration_count = 0U;
-static size_t g_lsda_registration_capacity = 0U;
 
 #if !defined(_WIN32)
 const FengLSDA feng_empty_function_lsda[1] = {{0}};
@@ -52,24 +40,8 @@ static void feng_cleanup_release_node(FengCleanupNode *node) {
         }
         return;
     case FENG_NODE_MARKER:
-        /* 帧标记不释放资源，由 feng_cleanup_release_to_frame_marker 处理 */
+        /* Generated cleanup entries own the logical frame boundary. */
         return;
-    }
-}
-
-/* Clean one unwound Feng function, including any active catches it owns. */
-static void feng_cleanup_release_to_frame_marker(void) {
-    while (g_cleanup_top != NULL) {
-        FengCleanupNode *node = g_cleanup_top;
-        g_cleanup_top = node->prev;
-        if (node->kind == FENG_NODE_MARKER) {
-            FengFrameMarker *marker = (FengFrameMarker *)((char *)node - offsetof(FengFrameMarker, node));
-            if (marker->is_function_boundary) {
-                return;
-            }
-            continue;
-        }
-        feng_cleanup_release_node(node);
     }
 }
 
@@ -86,9 +58,6 @@ static void feng_cleanup_release_all(void) {
 static void feng_unwind_exception_destroy(FengUnwindException *exception) {
     if (exception == NULL) {
         return;
-    }
-    if (g_pending_unwind == exception) {
-        g_pending_unwind = NULL;
     }
     if (exception->value != NULL) {
         feng_release(exception->value);
@@ -141,28 +110,13 @@ static void feng_exception_catch_cleanup(void *closure) {
     feng_unwind_exception_destroy(exception);
 }
 
-/* Register generated region metadata for the platform personality lookup. */
+/* Preserve the legacy symbol, but never silently mix incompatible old objects
+ * with the native-EH runtime. New generated code has no registration calls. */
 void feng_register_lsda(const FengLSDA *regions, int region_count) {
-    FengLSDARegistration *resized;
-
     if (regions == NULL || region_count <= 0) {
         return;
     }
-    if (g_lsda_registration_count == g_lsda_registration_capacity) {
-        size_t new_capacity = g_lsda_registration_capacity == 0U
-                                  ? 8U
-                                  : g_lsda_registration_capacity * 2U;
-        resized = (FengLSDARegistration *)realloc(
-            g_lsda_registrations, new_capacity * sizeof(*g_lsda_registrations));
-        if (resized == NULL) {
-            feng_panic("feng_register_lsda: out of memory");
-        }
-        g_lsda_registrations = resized;
-        g_lsda_registration_capacity = new_capacity;
-    }
-    g_lsda_registrations[g_lsda_registration_count].regions = regions;
-    g_lsda_registrations[g_lsda_registration_count].region_count = region_count;
-    g_lsda_registration_count++;
+    feng_panic("legacy exception metadata: rebuild Feng runtime and all packages");
 }
 
 /* Track a managed-pointer local on the current thread's cleanup chain. */
@@ -304,16 +258,14 @@ void feng_frame_release_to(FengFrameMarker *marker) {
 void feng_exception_catch_begin(FengCatchContext *context) {
     FengCleanupNode *node;
 
-    if (context == NULL || g_pending_unwind == NULL) {
+    if (context == NULL || context->exception == NULL) {
         feng_panic("feng_exception_catch_begin: missing context or exception");
     }
     node = &context->frame.node;
     if (node->kind != FENG_NODE_MARKER || context->frame.is_function_boundary) {
         feng_panic("feng_exception_catch_begin: context is not a try marker");
     }
-    context->exception = g_pending_unwind;
     context->previous = NULL;
-    g_pending_unwind = NULL;
     node->kind = FENG_NODE_DEFER;
     node->defer_fn = feng_exception_catch_cleanup;
     node->defer_closure = context;
@@ -347,104 +299,42 @@ void feng_exception_leave_finalizer(void) {
 }
 
 #if !defined(_WIN32)
-/* Test the generated program-counter range for one try expression. */
-static bool feng_ip_in_region(uintptr_t ip, const FengLSDA *region) {
-    uintptr_t begin;
-    uintptr_t end;
-
-    if (region == NULL || region->pc_begin == NULL || region->pc_end == NULL) {
-        return false;
-    }
-    begin = (uintptr_t)region->pc_begin;
-    end = (uintptr_t)region->pc_end;
-    return ip >= begin && ip <= end;
-}
-
-/* Select the first exact-type or anonymous clause in source order. */
-static bool feng_region_matches_exception(const FengLSDA *region,
-                                          const FengUnwindException *exception,
-                                          int *out_clause) {
-    int clause_index;
-
-    if (region == NULL || exception == NULL || region->clauses == NULL) {
-        return false;
-    }
-    for (clause_index = 0; clause_index < region->clause_count; ++clause_index) {
-        const FengCatchClause *clause = &region->clauses[clause_index];
-        if (clause->type == NULL || clause->type == exception->desc) {
-            if (out_clause != NULL) {
-                *out_clause = clause_index;
-            }
-            return true;
-        }
-    }
-    return false;
-}
-
-/* Search registered regions from the most recently registered inner region. */
-static const FengLSDA *feng_find_matching_region(uintptr_t ip,
-                                                 const FengUnwindException *exception,
-                                                 int *out_clause) {
-    size_t registration_index;
-
-    for (registration_index = g_lsda_registration_count; registration_index > 0U; --registration_index) {
-        const FengLSDARegistration *registration =
-            &g_lsda_registrations[registration_index - 1U];
-        int region_index;
-
-        for (region_index = registration->region_count; region_index > 0; --region_index) {
-            const FengLSDA *region = &registration->regions[region_index - 1];
-            if (feng_ip_in_region(ip, region) &&
-                feng_region_matches_exception(region, exception, out_clause)) {
-                return region;
-            }
-        }
-    }
-    return NULL;
-}
-
-/* Match Feng exceptions, clean unwound functions, and install a landing pad. */
+/* Native tables describe physical frames after inlining; their landing pads
+ * perform Feng's logical-scope cleanup. Search is free of ownership effects. */
 _Unwind_Reason_Code __feng_personality_v0(int version,
                                           _Unwind_Action actions,
                                           uint64_t exception_class,
                                           struct _Unwind_Exception *unwind,
                                           struct _Unwind_Context *context) {
-    FengUnwindException *exception;
-    uintptr_t ip;
-    int matched_clause = -1;
-    const FengLSDA *region;
-
     if (version != 1 || unwind == NULL || context == NULL ||
         exception_class != FENG_EXCEPTION_CLASS) {
         return _URC_CONTINUE_UNWIND;
     }
-
-    exception = (FengUnwindException *)((char *)unwind - offsetof(FengUnwindException, unwind));
-    ip = (uintptr_t)_Unwind_GetIP(context);
-    region = feng_find_matching_region(ip, exception, &matched_clause);
-
-    if ((actions & _UA_SEARCH_PHASE) != 0) {
-        if (region != NULL) {
-            exception->matched_clause = matched_clause;
-            return _URC_HANDLER_FOUND;
-        }
-        return _URC_CONTINUE_UNWIND;
+    const FengUnwindException *exception = (const FengUnwindException *)(
+        (const char *)unwind - offsetof(FengUnwindException, unwind));
+    int ip_before_instruction = 0;
+    uintptr_t ip = (uintptr_t)_Unwind_GetIPInfo(context, &ip_before_instruction);
+    if (!ip_before_instruction && ip != 0U) --ip;
+    FengExceptionLanding landing;
+    if (!feng_exception_lsda_find((const unsigned char *)_Unwind_GetLanguageSpecificData(context), NULL,
+                                  (uintptr_t)_Unwind_GetRegionStart(context), ip,
+                                  exception->desc, !(actions & _UA_FORCE_UNWIND),
+                                  &landing)) {
+        return (actions & _UA_SEARCH_PHASE) ? _URC_FATAL_PHASE1_ERROR : _URC_FATAL_PHASE2_ERROR;
     }
-
-    if ((actions & _UA_CLEANUP_PHASE) != 0 && (actions & _UA_HANDLER_FRAME) == 0) {
-        feng_cleanup_release_to_frame_marker();
-        return _URC_CONTINUE_UNWIND;
-    }
-
-    if ((actions & _UA_HANDLER_FRAME) != 0 && region != NULL) {
-        exception->matched_clause = matched_clause;
-        g_pending_unwind = exception;
-        _Unwind_SetIP(context, (uintptr_t)region->landing_pad);
+    if (actions & _UA_SEARCH_PHASE)
+        return landing.selector != 0 ? _URC_HANDLER_FOUND : _URC_CONTINUE_UNWIND;
+    if ((actions & _UA_CLEANUP_PHASE) && landing.address != 0U &&
+        (landing.cleanup || landing.selector != 0)) {
+        intptr_t selector = (actions & _UA_HANDLER_FRAME) ? landing.selector : 0;
+        _Unwind_SetGR(context, __builtin_eh_return_data_regno(0), (uintptr_t)unwind);
+        _Unwind_SetGR(context, __builtin_eh_return_data_regno(1), (uintptr_t)selector);
+        _Unwind_SetIP(context, landing.address);
         return _URC_INSTALL_CONTEXT;
     }
-
     return _URC_CONTINUE_UNWIND;
 }
+
 #endif
 
 /* Transfer an owned payload into a new record, leaving active catches intact. */

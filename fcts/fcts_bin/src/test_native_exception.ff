@@ -1,0 +1,136 @@
+module fcts_bin;
+
+import std.test;
+import std.numeric;
+import fcts_lib.test;
+
+var nativeEhOrder: int = 0;
+var nativeEhDrops: int = 0;
+
+/** Observe cleanup of logical functions even when the host compiler inlines them. */
+type NativeEhResource {
+  let id: int;
+  /** Each resource contributes exactly once to the unwind order. */
+  func ~NativeEhResource() {
+    nativeEhOrder = nativeEhOrder * 10 + self.id;
+    nativeEhDrops += 1;
+  }
+}
+
+/** Throw a value from a body eligible for ordinary host optimization. */
+func nativeEhFail(value: int): int { throw value; }
+
+/** Return through two catch boundaries or leave both on the ordinary path. */
+func nativeEhReturn(value: int): int {
+  try (try (if value > 0 { nativeEhFail(value); } else { value; })
+    catch ex: string { -1; }) catch ex: int { return ex + 10; }
+  return value - 10;
+}
+
+/** An inlined callee owns a different logical cleanup boundary from its caller. */
+func nativeEhInner(value: int): void {
+  let resource = NativeEhResource { id: 2 };
+  defer { nativeEhOrder = nativeEhOrder * 10 + 3; }
+  nativeEhFail(value + resource.id - 2);
+}
+
+/** Preserve caller resources until after all callee resources have been cleaned. */
+func nativeEhOuter(value: int): void {
+  let resource = NativeEhResource { id: 1 };
+  nativeEhInner(value + resource.id - 1);
+}
+
+/** Keep local values live across both unmatched and matching landing pads. */
+func nativeEhLiveLocals(value: int): int {
+  var left = value + 1;
+  var right = value + 2;
+  return try (if value > 0 {
+    left = value * 3;
+    right = value * 5;
+    (try nativeEhFail(value) catch ex: string { -100; });
+  } else { left + right; }) catch ex: int { left + right + ex; };
+}
+
+/** Recursion must release every initialized logical activation exactly once. */
+func nativeEhRecursive(depth: int): void {
+  defer { nativeEhDrops += 1; }
+  if depth == 0 { throw "recursive"; }
+  nativeEhRecursive(depth - 1);
+}
+
+/** Exercise the native backend without depending on a particular IR spelling. */
+open func test_native_exception(): void {
+  describe("native exception control flow", () {
+    test("catch return and ordinary continuation preserve distinct frame ownership", () {
+      for var value = -3; value <= 3; value = value + 1 {
+        let expected = if value > 0 { value + 10; } else { value - 10; };
+        assertEquals(nativeEhReturn(value), expected, "return selects the correct continuation");
+      }
+    });
+
+    test("unmatched inner handlers propagate to the parent in the same function", () {
+      var observed = 0;
+      try (try (try nativeEhFail(17) catch ex: string { -1; })
+        catch ex: bool { -2; }) catch ex: int { observed = ex; }
+      assertEquals(observed, 17, "the outer typed catch receives the original value");
+    });
+
+    test("inlined functions clean logical frames in declaration reverse order", () {
+      nativeEhOrder = 0;
+      nativeEhDrops = 0;
+      var caught = 0;
+      try nativeEhOuter(19) catch ex: int { caught = ex; }
+      assertEquals(caught, 19, "callee propagation preserves the value");
+      assertEquals(nativeEhDrops, 2, "both logical frame resources are released once");
+      assertEquals(nativeEhOrder, 321, "defer and resources clean in reverse order");
+    });
+
+    test("mutable locals survive native exception register restoration", () {
+      for var value = 1; value < 8; value = value + 1 {
+        assertEquals(nativeEhLiveLocals(value), value * 9, "locals retain their latest values");
+      }
+      assertEquals(nativeEhLiveLocals(-1), 1, "ordinary return remains unchanged");
+    });
+
+    test("loop break and continue leave only their actual catch scopes", () {
+      var visits = 0;
+      var total = 0;
+      for var value = 0; value < 6; value = value + 1 {
+        try nativeEhFail(value) catch ex: int {
+          defer { visits += 1; }
+          if ex == 1 { continue; }
+          if ex == 4 { break; }
+          total += ex;
+        }
+      }
+      assertEquals(visits, 5, "each exited catch runs its defer once");
+      assertEquals(total, 5, "continue and break preserve loop control");
+    });
+
+    test("recursion unwinds every logical frame before a caller handler", () {
+      nativeEhDrops = 0;
+      var caught = false;
+      try nativeEhRecursive(12) catch ex: string { caught = ex == "recursive"; }
+      assert(caught, "recursive propagation reaches the caller");
+      assertEquals(nativeEhDrops, 13, "all recursive frames are cleaned");
+    });
+
+    test("cross package generic throws keep their precise native type keys", () {
+      var total = 0;
+      try libForwardConstrained<int>(23) catch ex: string { total = -1; }
+        catch ex: int { total += ex; }
+      try libForwardConstrained<string>("native") catch ex: int { total = -2; }
+        catch ex: string { if ex == "native" { total += 31; } }
+      assertEquals(total, 54, "generic type identity crosses package boundaries");
+    });
+
+    test("rethrow and replacement resume outside the active handler", () {
+      var result = 0;
+      try (try (try nativeEhFail(29) catch { throw; })
+        catch ex: int { throw "replacement"; }) catch ex: string {
+        if ex == "replacement" { result = 1; }
+      }
+      assertEquals(result, 1, "replacement propagates outside the active handler");
+    });
+  });
+}

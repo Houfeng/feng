@@ -1282,8 +1282,9 @@ static void test_codegen_lambda_entry_source_mapping(void) {
             begin = newline + 1;
         } while (true);
         while (begin > debug.c_source && begin[-1] != '\n') --begin;
-        end = strstr(begin, "#if !defined(_WIN32)");
+        end = strstr(begin, "FengFrameMarker ");
         ASSERT(end != NULL);
+        while (end > begin && end[-1] != '\n') --end;
         for (const char *cursor = debug.c_source; cursor < end;) {
             const char *newline = strchr(cursor, '\n');
             ASSERT(newline != NULL);

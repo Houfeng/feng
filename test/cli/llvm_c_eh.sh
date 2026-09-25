@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the installed plugin through the production driver without migrating Feng EH.
+# Validate the installed plugin through the production driver and native Feng EH.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../.." && pwd)
 cd "$root"
@@ -59,7 +59,7 @@ expect_failure() {
     fi
 }
 
-# Compile the independent consumer runtime once; Feng's personality remains unchanged.
+# Compile the independent protocol consumer without depending on Feng's personality.
 cat > "$work/support.c" <<EOF
 #include "$root/third_party/llvm-c-eh/test/runtime.c"
 #include "$root/third_party/llvm-c-eh/test/producer.c"
@@ -155,14 +155,26 @@ printf 'module main; func main(args: string[]): void {}\n' > "$work/main.ff"
 "$stage/bin/feng" "$work/main.ff" --target=lib --out="$work/feng-lib"
 generated=$(find "$work/feng-bin" -name '*.c' -type f)
 [[ -n $generated ]]
+# Keep the no-protocol equivalence control independent of Feng's EH emission.
+cat > "$work/control.c" <<'EOF'
+extern int transform(int);
+/* A pass with no configured functions must preserve ordinary calls and branches. */
+int control(int value) { return value > 0 ? transform(value) : value + 1; }
+EOF
 for optimization in 0 2; do
+    "$compiler" "${flags[@]}" "-I$stage/include" -O"$optimization" -S -emit-llvm \
+        "-fpass-plugin=$plugin" "$generated" -o "$work/feng.ll"
+    if grep -F '__llvm_c_eh_' "$work/feng.ll"; then exit 1; fi
+    grep -F 'invoke ' "$work/feng.ll" >/dev/null
+    grep -F 'landingpad ' "$work/feng.ll" >/dev/null
+    grep -F 'resume ' "$work/feng.ll" >/dev/null
     for format in ll s; do
         emit=()
         if [[ $format == ll ]]; then emit+=(-emit-llvm); fi
         "$compiler" "${flags[@]}" "-I$stage/include" -O"$optimization" -S \
-            ${emit[@]+"${emit[@]}"} "$generated" -o "$work/plain.$format"
+            ${emit[@]+"${emit[@]}"} "$work/control.c" -o "$work/plain.$format"
         "$compiler" "${flags[@]}" "-I$stage/include" -O"$optimization" -S \
-            ${emit[@]+"${emit[@]}"} "-fpass-plugin=$plugin" "$generated" -o "$work/plugin.$format"
+            ${emit[@]+"${emit[@]}"} "-fpass-plugin=$plugin" "$work/control.c" -o "$work/plugin.$format"
         cmp "$work/plain.$format" "$work/plugin.$format"
     done
 done

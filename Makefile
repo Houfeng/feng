@@ -151,6 +151,9 @@ endif
 
 # Generated-C unit tests keep their direct compiler calls and existing options.
 $(patsubst %.c,$(OBJ_DIR)/%.o,$(TEST_CODEGEN_SRCS) $(TEST_DEBUG_SRCS)): CPPFLAGS += -DFENG_TEST_C_EH_FLAGS='"-fpass-plugin=$(CEH_LAYOUT_LINK)/$(CEH_LIBRARY) -I$(CEH_LAYOUT_LINK)/include "'
+# Native runtime fixtures exercise the generated protocol directly.
+$(patsubst %.c,$(OBJ_DIR)/%.o,$(TEST_RUNTIME_SRCS)): CPPFLAGS += -fexceptions -fpass-plugin=$(CEH_LAYOUT_LINK)/$(CEH_LIBRARY) -I$(CEH_LAYOUT_LINK)/include
+$(patsubst %.c,$(OBJ_DIR)/%.o,$(TEST_RUNTIME_SRCS)): | toolchain-layout
 
 # Keep no-op builds read-only: layout checks become recipes only when the
 # current host links or runtime inputs are not already valid.

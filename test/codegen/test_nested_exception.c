@@ -96,7 +96,11 @@ static void nested_control_cleanup(void (*compile_c)(const char *)) {
         "func preserveContinue(){try fail() catch {var i=0;while i<2{i+=1;continue;}throw;}}\n";
     char *generated = nested_emit(source, compile_c);
     CHECK(strstr(generated, "feng_release_unwind_exception") == NULL);
-    CHECK(strstr(generated, "feng_frame_release_to") == NULL);
+    /* Exceptional cleanups now name logical markers in native landing pads;
+     * normal exits below must still use their original lexical pop order. */
+    CHECK(strstr(generated, "feng_frame_release_to") != NULL);
+    CHECK(strstr(generated, "__llvm_c_eh_propagate(") != NULL);
+    CHECK(strstr(generated, "feng_register_lsda") == NULL);
     CHECK(strstr(generated, "FengCatchContext _try_marker") != NULL);
     CHECK(strstr(generated, ".frame);") != NULL);
     char *body = nested_body(generated, "__returnBoth__from__");

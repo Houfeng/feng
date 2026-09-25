@@ -247,6 +247,12 @@ let label = if value {
 
 ## 7 与主规范的关系
 
+当前原生异常后端继续生成 C，通过配套的
+[LLVM C EH 协议](../engineering/c-ir-llvm-exception-plugin-dev.md)向宿主编译器表达异常边和
+清理入口。运行时按原生异常表匹配类型；协议本身不定义 Feng 类型、所有权或语言行为。
+工具链要求与分发见[接入方案](../engineering/feng-llvm-c-eh-integration-dev.md)，
+后端迁移及统一重编边界见[S11 修复方案](../engineering/feng-release-exception-unwind-bugfix.md)。
+
 - [feng-language.md](./feng-language.md): 语言总体规范、异常处理概要、流程控制、函数、GC、C 互操作与包分发。
 - [feng-flow.md](./feng-flow.md): `if`、循环、`break` / `continue` 与 `try/catch` 表达式的控制流关系。
 - [feng-function.md](./feng-function.md): 逃逸异常与本地 `catch` 如何参与非 `void` callable 的正常落尾

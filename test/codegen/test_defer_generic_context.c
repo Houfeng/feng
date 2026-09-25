@@ -5,7 +5,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-/* Optimized compilation must also accept leaf cleanups without CFI regions. */
+/* Optimized compilation must also accept leaf cleanups without EH regions. */
 static void defer_context_compile_release(const char *source) {
     char directory[] = "temp/defer-context-release-XXXXXX";
     THROW_CHECK(mkdtemp(directory) != NULL);
@@ -39,7 +39,7 @@ static void defer_context_emit(ThrowConstraintUnit *unit, void (*compile_c)(cons
         ++cursor;
         if (body == NULL || (semicolon != NULL && semicolon < body)) continue;
         const char *end = strstr(body, "\n}\n");
-        const char *personality = strstr(body, ".cfi_personality");
+        const char *personality = strstr(body, "__llvm_c_eh_configure(");
         const char *region = strstr(body, "FengCatchContext ");
         const char *push = strstr(body, "feng_frame_push(");
         const char *frame = strstr(body, "FengFrameMarker ");
