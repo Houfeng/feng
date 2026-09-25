@@ -22,7 +22,6 @@ type User: JsonSerializable<User> {
     let obj = JsonObject();
     obj.set("name", value.name);
     obj.set("age", value.age);
-    // obj.
     return obj;
   }
   static func fromJson(value: JsonObject): User {
