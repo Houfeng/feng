@@ -10,6 +10,7 @@ mkdir -p -- "$output"
 "$llvm_bin/opt" -load-pass-plugin="$plugin" -passes='c-eh-lowering,verify' \
     -S "$test_dir/attributes.ll" -o "$output/attributes.ll"
 "$llvm_bin/FileCheck" "$test_dir/attributes.ll" < "$output/attributes.ll"
+"$llvm_bin/FileCheck" --check-prefix=LP "$test_dir/attributes.ll" < "$output/attributes.ll"
 if grep -q '__llvm_c_eh_' "$output/attributes.ll"; then echo 'IR marker survived' >&2; exit 1; fi
 # Running the pass again must be idempotent, including after ordinary optimization.
 "$llvm_bin/opt" -load-pass-plugin="$plugin" -passes='c-eh-lowering,default<O2>,c-eh-lowering,verify' \

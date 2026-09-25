@@ -44,6 +44,7 @@ $(BUILD_DIR)/%.o: $(SOURCE_DIR)/src/%.cpp $(SOURCE_DIR)/Makefile
 # These tests consume the Release library; only test-ubsan instruments the consumer.
 test: all
 	bash "$(SOURCE_DIR)/test/ir.sh" "$(LLVM_ROOT)/bin" "$(LIBRARY)" "$(BUILD_DIR)/ir"
+	bash "$(SOURCE_DIR)/test/cfg.sh" "$(LLVM_ROOT)/bin" "$(LIBRARY)" "$(BUILD_DIR)/cfg"
 	bash "$(SOURCE_DIR)/test/run.sh" "$(CC)" "$(LIBRARY)" "$(BUILD_DIR)/test" $(TEST_LINK_OPTIONS)
 	bash "$(SOURCE_DIR)/test/passthrough.sh" "$(CC)" "$(LIBRARY)" "$(BUILD_DIR)/passthrough" $(TEST_LINK_OPTIONS)
 

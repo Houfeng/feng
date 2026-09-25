@@ -1,0 +1,57 @@
+module eh.measure;
+import eh.bench;
+
+// These symbols are supplied by support.c; libc remains the only foreign library.
+@cdecl("libc") extern func eh_bench_count():u64;
+@cdecl("libc") extern func eh_bench_seed():u64;
+@cdecl("libc") extern func eh_bench_mode():u64;
+@cdecl("libc") extern func eh_bench_clock():u64;
+@cdecl("libc") extern func eh_bench_finish(begin:u64, end:u64, actual:u64):void;
+
+// No allocation, ARC or string operation occurs inside a normal timed kernel.
+func main(args:string[]) {
+    let count = eh_bench_count();
+    let mode = eh_bench_mode();
+    var value = eh_bench_seed();
+    var sum:u64 = 0;
+    let begin = eh_bench_clock();
+    if mode == 0 {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = (value * 1664525 + 1013904223) & 4294967295;
+            sum += value;
+        }
+    } else if mode == 1 {
+        for var i:u64 = 0; i < count; i += 1 { value = plain(value); sum += value; }
+    } else if mode == 2 {
+        for var i:u64 = 0; i < count; i += 1 { value = step(value, false); sum += value; }
+    } else if mode == 3 {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = try step(value, false) catch error:u64 { error; };
+            sum += value;
+        }
+    } else if mode == 4 {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = try step(value, false) catch { 0; };
+            sum += value;
+        }
+    } else if mode == 5 {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = try (try step(value, false) catch error:i64 { 0; })
+                    catch error:u64 { error; };
+            sum += value;
+        }
+    } else if mode == 7 {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = try relay(value, true, 8) catch error:u64 { error; };
+            sum += value;
+        }
+    } else {
+        for var i:u64 = 0; i < count; i += 1 {
+            value = try step(value, mode != 8 || i % 1000 == 0)
+                    catch error:u64 { error; };
+            sum += value;
+        }
+    }
+    let end = eh_bench_clock();
+    eh_bench_finish(begin, end, sum);
+}

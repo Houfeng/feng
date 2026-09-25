@@ -5,17 +5,19 @@
 ; CHECK: call void @no_throw()
 ; CHECK: invoke fastcc noundef i32 @abi(ptr nonnull align 8 %value) [ "deopt"(i32 7) ]
 ; CHECK-NEXT: to label %{{.*}} unwind label %{{.*}}, !dbg !{{[0-9]+}}, !annotation !{{[0-9]+}}
-; CHECK: call i32 @llvm.eh.typeid.for.p0(ptr @key)
-; CHECK: resume { ptr, i32 }
-; CHECK: landingpad { ptr, i32 }
-; CHECK-NEXT: cleanup
-; CHECK-NEXT: catch ptr @key
+; CHECK-DAG: call i32 @llvm.eh.typeid.for.p0(ptr @key)
+; CHECK-DAG: resume { ptr, i32 }
+; CHECK-DAG: landingpad { ptr, i32 }
 ; CHECK-LABEL: define i32 @plain(
 ; CHECK-NEXT: entry:
 ; CHECK-NEXT: %result = add i32 %value, 1
 ; CHECK-NEXT: ret i32 %result
 ; CHECK-LABEL: define void @asm_goto(
 ; CHECK: callbr void asm sideeffect "", "!i"()
+; LP-LABEL: define i32 @contracts(
+; LP: landingpad { ptr, i32 }
+; LP-NEXT: cleanup
+; LP-NEXT: catch ptr @key
 declare void @__llvm_c_eh_configure(i32, ptr)
 declare i1 @__llvm_c_eh_region(i32, i32, ptr, i32, ...)
 declare void @__llvm_c_eh_activate(i32)

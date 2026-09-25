@@ -178,6 +178,7 @@ if [[ "$extension" == so ]]; then nm_flags+=(--dynamic); fi
 grep -q 'llvmGetPassPluginInfo' "$work/exports.txt" || die 'plugin entry is not exported'
 ! grep -E ' [TW] ' "$work/exports.txt" | grep -qv 'llvmGetPassPluginInfo' || die 'plugin exports an internal function'
 bash "$source_dir/test/ir.sh" "$sdk/bin" "$library" "$work/ir"
+bash "$source_dir/test/cfg.sh" "$sdk/bin" "$library" "$work/cfg"
 bash "$source_dir/test/passthrough.sh" "$bundled" "$library" "$work/passthrough-bundled" ${normal_link_options[@]+"${normal_link_options[@]}"}
 bash "$source_dir/test/passthrough.sh" "$sdk/bin/clang" "$library" "$work/passthrough-host" --sanitizer ${sanitizer_link_options[@]+"${sanitizer_link_options[@]}"}
 bash "$source_dir/test/sanitizer.sh" "$sdk/bin/clang" "$library" "$work/sanitizer-checks" ${sanitizer_link_options[@]+"${sanitizer_link_options[@]}"}

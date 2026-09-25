@@ -67,6 +67,7 @@ Linux 产物名为 `llvm_c_eh.so`，macOS 为 `llvm_c_eh.dylib`。macOS 使用�
 bash third_party/llvm-c-eh/test/run.sh "$CLANG" "$PLUGIN" temp/llvm-c-eh/test
 bash third_party/llvm-c-eh/test/run.sh "$HOST_CLANG" "$PLUGIN" temp/llvm-c-eh/ubsan --sanitizer
 bash third_party/llvm-c-eh/test/ir.sh "$LLVM_SDK/bin" "$PLUGIN" temp/llvm-c-eh/ir
+bash third_party/llvm-c-eh/test/cfg.sh "$LLVM_SDK/bin" "$PLUGIN" build/llvm-c-eh/cfg
 bash third_party/llvm-c-eh/test/passthrough.sh "$HOST_CLANG" "$PLUGIN" temp/llvm-c-eh/passthrough --sanitizer
 bash third_party/llvm-c-eh/test/sanitizer.sh "$HOST_CLANG" "$PLUGIN" temp/llvm-c-eh/sanitizer-checks
 bash third_party/llvm-c-eh/test/benchmark.sh "$CLANG" "$PLUGIN" temp/llvm-c-eh/benchmark
@@ -74,6 +75,8 @@ bash third_party/llvm-c-eh/test/benchmark.sh "$CLANG" "$PLUGIN" temp/llvm-c-eh/b
 
 测试包括实际抛出、跨函数／翻译单元捕获、父区域传播、嵌套异常存续、并发、间接调用、
 聚合参数返回、优化内联、非法输入、LLVM verifier、调用属性与调试元数据。
+`cfg.sh` 还检查 O0 结构清理、已证明的原生非外抛调用、未知／可替换目标、无协议
+函数与逐字节幂等性；证明边界见上述开发方案引用的性能优化文档。
 三个优化级别均执行行为测试；变更后的插件必须重新通过 bundled／宿主编译器及目标平台验收。
 当前验收结果与未决问题见开发方案实施记录，不能仅凭普通行为测试通过认为所有平台已交付。
 

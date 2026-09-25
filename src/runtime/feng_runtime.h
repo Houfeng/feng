@@ -12,6 +12,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Audited native no-unwind contracts; no promise about callbacks is implicit. */
+#if defined(__GNUC__) || defined(__clang__)
+#define FENG_RUNTIME_NOTHROW __attribute__((nothrow))
+#else
+#define FENG_RUNTIME_NOTHROW
+#endif
+
 #if !defined(_WIN32)
 #include <unwind.h>
 #endif
@@ -887,11 +894,11 @@ typedef struct FengCatchContext {
  * scope of the tracked value and is typically a stack-allocated
  * FengCleanupNode adjacent to the local. Pop must be called in strict LIFO
  * order. */
-void feng_cleanup_push(FengCleanupNode *node, void **slot);
+void feng_cleanup_push(FengCleanupNode *node, void **slot) FENG_RUNTIME_NOTHROW;
 void feng_cleanup_push_aggregate(FengCleanupNode *node,
                                  void *value,
-                                 const FengAggregateDescriptor *desc);
-void feng_cleanup_pop(void);
+                                 const FengAggregateDescriptor *desc) FENG_RUNTIME_NOTHROW;
+void feng_cleanup_pop(void) FENG_RUNTIME_NOTHROW;
 
 /* Register a defer block on the cleanup chain. `node` must outlive the scope
  * of the defer statement and is typically a stack-allocated FengCleanupNode
@@ -903,11 +910,12 @@ void feng_cleanup_pop(void);
  * closure is legal and intended for defer blocks that capture nothing. */
 void feng_defer_push(FengCleanupNode *node,
                      void (*fn)(void *),
-                     void *closure);
+                     void *closure) FENG_RUNTIME_NOTHROW;
 
-void feng_frame_push(FengFrameMarker *marker);
-void feng_try_frame_push(FengFrameMarker *marker);
-void feng_frame_pop(void);
+/* Registration/pop only manipulate the chain; release_to executes user cleanup. */
+void feng_frame_push(FengFrameMarker *marker) FENG_RUNTIME_NOTHROW;
+void feng_try_frame_push(FengFrameMarker *marker) FENG_RUNTIME_NOTHROW;
+void feng_frame_pop(void) FENG_RUNTIME_NOTHROW;
 void feng_frame_release_to(FengFrameMarker *marker);
 
 /* Take ownership of the exception delivered to this landing pad, clean the
@@ -923,8 +931,8 @@ void feng_exception_catch_begin(FengCatchContext *context);
 void feng_exception_catch_end(void);
 
 /* Read the active catch's borrowed payload or selected clause. */
-void *feng_caught_value(void);
-int   feng_caught_clause(void);
+void *feng_caught_value(void) FENG_RUNTIME_NOTHROW;
+int   feng_caught_clause(void) FENG_RUNTIME_NOTHROW;
 
 #if defined(__GNUC__) || defined(__clang__)
 void feng_throw(void *value, const FengTypeDescriptor *desc) __attribute__((noreturn));
@@ -937,7 +945,7 @@ void feng_rethrow(void);
 /* --- Panic ------------------------------------------------------------- */
 
 #if defined(__GNUC__) || defined(__clang__)
-void feng_panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2)));
+void feng_panic(const char *fmt, ...) __attribute__((noreturn, format(printf, 1, 2))) FENG_RUNTIME_NOTHROW;
 #else
 void feng_panic(const char *fmt, ...);
 #endif
@@ -963,5 +971,7 @@ void feng_runtime_shutdown(void);
 #ifdef __cplusplus
 }
 #endif
+
+#undef FENG_RUNTIME_NOTHROW
 
 #endif /* FENG_RUNTIME_H */

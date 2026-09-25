@@ -1,6 +1,7 @@
 #ifndef LLVM_C_EH_PROTOCOL_H
 #define LLVM_C_EH_PROTOCOL_H
 
+#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
@@ -52,6 +53,9 @@ bool parse(FunctionProtocol &P);
 
 /* Convert validated regions into native EH; return false after a diagnostic. */
 bool lower(FunctionProtocol &P);
+
+/* Prove native no-unwind only for lowered definitions, including implicit calls. */
+bool refineNoUnwind(llvm::ArrayRef<llvm::Function *> Functions);
 
 } // namespace ceh
 #endif

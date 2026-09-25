@@ -6,6 +6,7 @@
 #include "llvm/IR/Dominators.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Intrinsics.h"
+#include "llvm/IR/InstIterator.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -185,6 +186,20 @@ void invoke(ProtectedCall &Site, FunctionProtocol &P) {
   C->eraseFromParent();
 }
 
+/* Remove structural glue only after native unwind edges make reachability real.
+ * LLVM's merge utility folds single-predecessor PHIs and preserves debug records;
+ * it refuses invoke/callbr predecessors and other nontrivial control transfers.
+ * This does not run an optimization pipeline or change the function's optnone. */
+void finishCFG(Function &F) {
+  EliminateUnreachableBlocks(F);
+  bool Changed;
+  do {
+    Changed = false;
+    for (BasicBlock &B : make_early_inc_range(F))
+      Changed |= MergeBlockIntoPredecessor(&B);
+  } while (Changed);
+}
+
 } // namespace
 
 /* Assemble native CFG first, then check dominance before exposing exception values. */
@@ -224,9 +239,58 @@ bool lower(FunctionProtocol &P) {
     }
     C->eraseFromParent();
   }
+  // Region pointers and the validation dominator tree are no longer consumed.
+  finishCFG(F);
   std::string Details;
   raw_string_ostream Stream(Details);
   if (verifyFunction(F, &Stream)) return error(F, "invalid native EH output: " + Stream.str());
+  return true;
+}
+
+/* Native IR includes every hidden allocation, bridge and cleanup call. Proving
+ * this graph avoids confusing a source-language empty effect set (or an outer
+ * catch) with a no-unwind promise. Unknown/indirect calls and recursion stay
+ * conservative; only callers of a newly proven definition need another visit. */
+bool refineNoUnwind(ArrayRef<Function *> Functions) {
+  SmallPtrSet<Function *, 32> Candidates(Functions.begin(), Functions.end());
+  SmallPtrSet<Function *, 32> Pending(Functions.begin(), Functions.end());
+  SmallVector<Function *> Work(Functions.begin(), Functions.end());
+  while (!Work.empty()) {
+    Function *F = Work.pop_back_val();
+    Pending.erase(F);
+    SmallVector<InvokeInst *> SafeCalls;
+    for (BasicBlock &B : *F)
+      if (auto *Call = dyn_cast<InvokeInst>(B.getTerminator()))
+        if (Call->doesNotThrow()) SafeCalls.push_back(Call);
+    for (InvokeInst *Call : SafeCalls) changeToCall(Call);
+    if (!SafeCalls.empty()) finishCFG(*F);
+
+    if (F->doesNotThrow() || !F->hasExactDefinition() || F->isInterposable()) continue;
+    bool MayUnwind = false;
+    for (Instruction &I : instructions(F)) {
+      // mayThrow() alone can treat an invoke as locally handled. Do not infer
+      // a language-independent no-unwind promise from a personality's clauses.
+      if (auto *Call = dyn_cast<CallBase>(&I))
+        MayUnwind |= !Call->doesNotThrow();
+      else
+        MayUnwind |= I.mayThrow(/*IncludePhaseOneUnwind=*/true);
+    }
+    if (MayUnwind) continue;
+    F->setDoesNotThrow();
+    for (User *U : F->users()) {
+      auto *Call = dyn_cast<CallBase>(U);
+      if (!Call || Call->getCalledFunction() != F) continue;
+      Function *Caller = Call->getFunction();
+      if (Candidates.contains(Caller) && Pending.insert(Caller).second)
+        Work.push_back(Caller);
+    }
+  }
+  for (Function *F : Functions) {
+    std::string Details;
+    raw_string_ostream Stream(Details);
+    if (verifyFunction(*F, &Stream))
+      return error(*F, "invalid refined EH output: " + Stream.str());
+  }
   return true;
 }
 

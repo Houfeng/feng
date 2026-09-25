@@ -155,6 +155,19 @@ printf 'module main; func main(args: string[]): void {}\n' > "$work/main.ff"
 "$stage/bin/feng" "$work/main.ff" --target=lib --out="$work/feng-lib"
 generated=$(find "$work/feng-bin" -name '*.c' -type f)
 [[ -n $generated ]]
+# Real throw/catch requires native EH even when a genuinely empty body does not.
+cat > "$work/throwing.ff" <<'EOF'
+module main;
+func fail():int { throw 1; }
+func main(args:string[]) {
+    let value = try fail() catch error:int { error; };
+    if value != 1 { throw value; }
+}
+EOF
+"$stage/bin/feng" "$work/throwing.ff" --keep-ir --out="$work/feng-throw"
+"$work/feng-throw/bin/throwing"
+throw_generated=$(find "$work/feng-throw" -name '*.c' -type f)
+[[ -n $throw_generated ]]
 # Keep the no-protocol equivalence control independent of Feng's EH emission.
 cat > "$work/control.c" <<'EOF'
 extern int transform(int);
@@ -165,9 +178,13 @@ for optimization in 0 2; do
     "$compiler" "${flags[@]}" "-I$stage/include" -O"$optimization" -S -emit-llvm \
         "-fpass-plugin=$plugin" "$generated" -o "$work/feng.ll"
     if grep -F '__llvm_c_eh_' "$work/feng.ll"; then exit 1; fi
-    grep -F 'invoke ' "$work/feng.ll" >/dev/null
-    grep -F 'landingpad ' "$work/feng.ll" >/dev/null
-    grep -F 'resume ' "$work/feng.ll" >/dev/null
+    if grep -E 'invoke |landingpad |resume ' "$work/feng.ll"; then exit 1; fi
+    "$compiler" "${flags[@]}" "-I$stage/include" -O"$optimization" -S -emit-llvm \
+        "-fpass-plugin=$plugin" "$throw_generated" -o "$work/feng-throw.ll"
+    if grep -F '__llvm_c_eh_' "$work/feng-throw.ll"; then exit 1; fi
+    grep -F 'invoke ' "$work/feng-throw.ll" >/dev/null
+    grep -F 'landingpad ' "$work/feng-throw.ll" >/dev/null
+    grep -F 'resume ' "$work/feng-throw.ll" >/dev/null
     for format in ll s; do
         emit=()
         if [[ $format == ll ]]; then emit+=(-emit-llvm); fi

@@ -251,6 +251,7 @@ test-normal: check-clang check-cc
 	$(BIN_DIR)/test_parser
 	$(BIN_DIR)/test_semantic
 	$(BIN_DIR)/test_runtime
+	$(MAKE) native-exception-contract-test
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
 	$(BIN_DIR)/test_cli
@@ -284,6 +285,7 @@ endif
 	$(BIN_DIR)/test_parser
 	$(BIN_DIR)/test_semantic
 	$(BIN_DIR)/test_runtime
+	$(MAKE) native-exception-contract-test
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
 	# The trimmed distribution Clang intentionally omits sanitizer runtimes.
@@ -298,6 +300,11 @@ endif
 
 llvm-c-eh-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
 	bash test/cli/llvm_c_eh.sh
+
+# Validate audited runtime attributes independently of generated-program timing.
+.PHONY: native-exception-contract-test
+native-exception-contract-test: check-clang toolchain-layout
+	bash test/exception_perf/contracts.sh $(CC) $(CEH_LAYOUT_LINK)/$(CEH_LIBRARY) $(BUILD_DIR)/native-exception-contracts
 
 perf-constraints: cli
 	FENG_TEMP_DIR=$(CURDIR)/temp ./scripts/run_perf_constraints.sh

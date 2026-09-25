@@ -15,14 +15,17 @@ struct CEHLoweringPass : llvm::PassInfoMixin<CEHLoweringPass> {
   llvm::PreservedAnalyses run(llvm::Module &M, llvm::ModuleAnalysisManager &) {
     if (!ceh::validateModule(M)) return llvm::PreservedAnalyses::all();
     bool Changed = false;
+    llvm::SmallVector<llvm::Function *> Lowered;
     for (llvm::Function &F : M) {
       if (F.isDeclaration()) continue;
       ceh::FunctionProtocol P(F);
       if (!ceh::parse(P)) return llvm::PreservedAnalyses::none();
       if (!P.Configure) continue;
       if (!ceh::lower(P)) return llvm::PreservedAnalyses::none();
+      Lowered.push_back(&F);
       Changed = true;
     }
+    if (!ceh::refineNoUnwind(Lowered)) return llvm::PreservedAnalyses::none();
     llvm::SmallVector<llvm::Function *> Dead;
     for (llvm::Function &F : M)
       if (ceh::classify(F.getName()) != ceh::Marker::None) {

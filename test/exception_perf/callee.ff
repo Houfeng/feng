@@ -1,0 +1,18 @@
+open module eh.bench;
+
+// Bounded unsigned arithmetic has the same semantics in both controls.
+open func plain(value:u64):u64 {
+    return (value * 1664525 + 1013904223) & 4294967295;
+}
+
+// Keep the exception capability even when the normal inputs do not exercise it.
+open func step(value:u64, failure:bool):u64 {
+    if failure { throw value; }
+    return (value * 1664525 + 1013904223) & 4294967295;
+}
+
+// Each recursive caller must preserve its native and logical unwind boundary.
+open func relay(value:u64, failure:bool, depth:u64):u64 {
+    if depth == 0 { return step(value, failure); }
+    return relay(value, failure, depth - 1);
+}
