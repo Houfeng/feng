@@ -108,8 +108,11 @@ void test_native_exception_codegen(void (*compile_c)(const char *)) {
             }
             if (optimization >= 2U && !sanitized) {
                 char *body = native_ir_body(ir, "__clean__from__");
-                const char *first = strstr(body, "@feng_frame_push(");
-                THROW_CHECK(first != NULL && strstr(first + 1, "@feng_frame_push(") != NULL);
+                /* The callee's empty marker is optional. Its throw must be
+                 * inlined while the caller retains its resource boundary. */
+                THROW_CHECK(strstr(body, "@feng_frame_push(") != NULL);
+                THROW_CHECK(strstr(body, "@feng_throw(") != NULL);
+                THROW_CHECK(strstr(body, "@feng__native__eh__fail__") == NULL);
                 free(body);
                 THROW_CHECK(strstr(ir, "optnone") == NULL && strstr(ir, "noinline") == NULL);
             }

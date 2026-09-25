@@ -1,0 +1,269 @@
+module fcts_bin;
+
+import std.test;
+import std.numeric;
+import std.text;
+import fcts_lib.test;
+
+var boundaryDrops: int = 0;
+var boundaryOrder: int = 0;
+
+/** Record observable destruction without adding another exceptional path. */
+type BoundaryResource {
+  let id: int;
+  /** Every owned instance contributes exactly once. */
+  func ~BoundaryResource() {
+    boundaryDrops += 1;
+    boundaryOrder = boundaryOrder * 10 + self.id;
+  }
+}
+
+/** Aggregate slots must preserve their nested reference cleanup. */
+@value type BoundaryValue { let ref: BoundaryResource; }
+
+/** Exercise ordinary callable views and captured values. */
+spec BoundaryAction(value: int): int;
+
+/** A resource-free body can still propagate an exception. */
+func boundaryFail(value: int): int {
+  if value < 0 { throw -value; }
+  return value;
+}
+
+/** Resource-free recursion must not interfere with the caller's catch owner. */
+func boundaryRelay(value: int, depth: int): int {
+  if depth == 0 { return boundaryFail(value); }
+  return boundaryRelay(value, depth - 1);
+}
+
+/** Cover a return from the protected expression and from its handler. */
+func boundaryReturn(value: int): int {
+  try (if value == 0 { return 11; } else { boundaryFail(value); })
+    catch ex: int { return ex + 20; }
+  return value + 30;
+}
+
+/** A later resource makes all earlier function exits use the same decision. */
+func boundaryConditional(value: int): int {
+  if value == 0 { return 0; }
+  let resource = BoundaryResource { id: value };
+  return boundaryFail(-resource.id);
+}
+
+/** Keep a value aggregate alive while a resource-free callee throws. */
+func boundaryAggregate(): int {
+  let value = BoundaryValue { ref: BoundaryResource { id: 2 } };
+  return boundaryRelay(-value.ref.id, 3);
+}
+
+/** A borrowed reference is owned by the caller, including exceptional exits. */
+func boundaryBorrow(resource: BoundaryResource, fail: bool): int {
+  return boundaryFail(if fail { -resource.id; } else { resource.id; });
+}
+
+/** Open storage must retain cleanup for all supported actual types. */
+func boundaryGeneric<T>(value: T, fail: bool): T {
+  let local = value;
+  if fail { boundaryFail(-7); }
+  return local;
+}
+
+/** Type and method descriptors are independent sources of owned storage. */
+type BoundaryOwner<T> {
+  let value: T;
+  /** Copy the type-level value before invoking a potentially throwing callee. */
+  func run(fail: bool): T { return boundaryGeneric<T>(self.value, fail); }
+  /** Copy a method-level value without using the owner's type as its layout. */
+  func method<U>(value: U, fail: bool): U { return boundaryGeneric<U>(value, fail); }
+}
+
+/** A temporary callable's captured resource must outlive the indirect call. */
+func boundaryCapture(): BoundaryAction {
+  let resource = BoundaryResource { id: 3 };
+  return (value: int) { return boundaryFail(value + resource.id); };
+}
+
+/** Short-circuit emission has independent buffers but ordinary ownership. */
+func boundaryShortCircuit(enabled: bool): bool {
+  return enabled && (try (if enabled {
+    let resource = BoundaryResource { id: 4 };
+    boundaryFail(-resource.id) == 0;
+  } else { false; }) catch ex: int { ex == 4; });
+}
+
+/** The result slot belongs outside the protected expression's local lifetime. */
+func boundaryResult(fail: bool): BoundaryResource {
+  return try (if fail { boundaryFail(-5); BoundaryResource { id: 8 }; }
+    else { BoundaryResource { id: 5 }; }) catch ex: int { BoundaryResource { id: ex }; };
+}
+
+/** Distinguish resource cleanup from empty-boundary removal by observations. */
+open func test_cleanup_boundary(): void {
+  describe("cleanup boundary ownership", () {
+    test("normal and exceptional returns leave the correct scopes", () {
+      assertEquals(boundaryReturn(0), 11, "protected return");
+      assertEquals(boundaryReturn(-2), 22, "catch return");
+      assertEquals(boundaryReturn(3), 33, "ordinary continuation");
+    });
+
+    test("empty recursive frames propagate through an unmatched inner catch", () {
+      let result = try (try boundaryRelay(-17, 8) catch ex: string { -1; })
+        catch ex: int { ex; };
+      assertEquals(result, 17, "same exception reaches the outer handler");
+    });
+
+    test("adjacent lazy catches restore the enclosing owner", () {
+      var sum = 0;
+      for var i = 1; i <= 5; i += 1 {
+        try boundaryFail(-i) catch ex: int { sum += ex; }
+        try boundaryFail(i) catch { sum = -100; }
+      }
+      assertEquals(sum, 15, "normal and matching paths coexist");
+    });
+
+    test("rethrow retains the original nested catch record", () {
+      let result = try (try boundaryFail(-19) catch {
+        try boundaryFail(-2) catch ex: int { assertEquals(ex, 2, "inner value"); }
+        throw;
+      }) catch ex: int { ex; };
+      assertEquals(result, 19, "outer record survives inner completion");
+    });
+
+    test("replacement throw exits the active catch owner", () {
+      var matched = false;
+      try (try boundaryFail(-1) catch { throw "changed"; })
+        catch ex: string { matched = ex == "changed"; }
+      assert(matched, "replacement payload");
+    });
+
+    test("break and continue in protected expressions balance markers", () {
+      var sum = 0;
+      try (if true {
+        for var i = 0; i < 8; i += 1 {
+          if i == 2 { continue; }
+          if i == 5 { break; }
+          sum += i;
+        }
+        sum;
+      } else { 0; }) catch { sum = -100; }
+      assertEquals(sum, 8, "protected loop transfers");
+    });
+
+    test("catch loop transfers release exactly their catch owners", () {
+      var sum = 0;
+      for var i = 1; i < 8; i += 1 {
+        try boundaryFail(-i) catch ex: int {
+          if ex == 2 { continue; }
+          if ex == 5 { break; }
+          sum += ex;
+        }
+      }
+      assertEquals(sum, 8, "catch loop transfers");
+    });
+
+    test("late conditional resources preserve early and exceptional exits", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      assertEquals(boundaryConditional(0), 0, "empty early return");
+      try boundaryConditional(1) catch ex: int { assertEquals(ex, 1, "branch payload"); }
+      assertEquals(boundaryDrops, 1, "conditional resource released once");
+      assertEquals(boundaryOrder, 1, "correct resource released");
+    });
+
+    test("value aggregate slots survive calls and unwind exactly once", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      try boundaryAggregate() catch ex: int { assertEquals(ex, 2, "aggregate payload"); }
+      assertEquals(boundaryDrops, 2, "default field and explicit member each release once");
+      assertEquals(boundaryOrder, 2, "default zero field releases before the explicit member");
+    });
+
+    test("borrow-only calls do not steal the caller's resource", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      {
+        let resource = BoundaryResource { id: 3 };
+        assertEquals(boundaryBorrow(resource, false), 3, "ordinary borrow");
+        try boundaryBorrow(resource, true) catch ex: int { assertEquals(ex, 3, "throwing borrow"); }
+        assertEquals(boundaryDrops, 0, "caller still owns the reference");
+      }
+      assertEquals(boundaryDrops, 1, "caller eventually releases it");
+    });
+
+    test("generic shared copies work for scalar reference and aggregate values", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      assertEquals(boundaryGeneric<int>(23, false), 23, "scalar copy");
+      {
+        let resource = BoundaryResource { id: 4 };
+        let value = BoundaryValue { ref: resource };
+        assertEquals(boundaryGeneric(resource, false).id, 4, "managed copy");
+        try boundaryGeneric(value, true) catch ex: int { assertEquals(ex, 7, "aggregate unwind"); }
+        assertEquals(boundaryDrops, 1, "only the replaced default field was released");
+        assertEquals(boundaryOrder, 0, "explicit reference remains live");
+      }
+      assertEquals(boundaryDrops, 2, "default field and shared reference each release once");
+      assertEquals(boundaryOrder, 4, "shared reference releases after its remaining owners");
+    });
+
+    test("type and method generic contexts keep independent cleanup", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      {
+        let owner = BoundaryOwner<BoundaryResource> { value: BoundaryResource { id: 5 } };
+        assertEquals(owner.run(false).id, 5, "type parameter result");
+        try owner.run(true) catch {}
+        try owner.method<BoundaryValue>(BoundaryValue { ref: owner.value }, true) catch {}
+        assertEquals(boundaryDrops, 2, "only replaced default fields were released");
+        assertEquals(boundaryOrder, 0, "explicit owner remains live");
+      }
+      assertEquals(boundaryDrops, 3, "default fields and explicit reference each release once");
+      assertEquals(boundaryOrder, 5, "method copies preserve the explicit reference");
+    });
+
+    test("temporary callable guards preserve captures during propagation", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      let result = try boundaryCapture()(-10) catch ex: int { ex; };
+      assertEquals(result, 7, "indirect call propagates");
+      assertEquals(boundaryDrops, 1, "temporary callable capture releases once");
+    });
+
+    test("short circuit buffers preserve conditional cleanup facts", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      assert(!boundaryShortCircuit(false), "right operand is skipped");
+      assertEquals(boundaryDrops, 0, "skipped branch allocates nothing");
+      assert(boundaryShortCircuit(true), "right operand catches its exception");
+      assertEquals(boundaryDrops, 1, "executed branch releases its resource");
+    });
+
+    test("join result ownership survives normal and handler exits", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      {
+        let normal = boundaryResult(false);
+        let handled = boundaryResult(true);
+        assertEquals(normal.id + handled.id, 10, "both results remain valid");
+        assertEquals(boundaryDrops, 0, "results are owned by caller");
+      }
+      assertEquals(boundaryDrops, 2, "both result slots release");
+    });
+
+    test("defer thunk catches keep LIFO resource order", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      {
+        let first = BoundaryResource { id: 1 };
+        defer { try boundaryFail(-2) catch { boundaryOrder = boundaryOrder * 10 + 2; } }
+        let last = BoundaryResource { id: 3 };
+      }
+      assertEquals(boundaryDrops, 2, "both resource owners release");
+      assertEquals(boundaryOrder, 321, "resource defer resource LIFO");
+    });
+
+    test("cross package shared bodies preserve exceptions and owned arguments", () {
+      boundaryDrops = 0; boundaryOrder = 0;
+      {
+        let resource = BoundaryResource { id: 6 };
+        try libBoundaryCopy<BoundaryResource>(resource, true) catch ex: int {
+          assertEquals(ex, 29, "provider throws through its shared body");
+        }
+        assertEquals(libBoundaryCopy<BoundaryResource>(resource, false).id, 6, "provider returns ownership");
+        assertEquals(boundaryDrops, 0, "consumer ownership survives");
+      }
+      assertEquals(boundaryDrops, 1, "cross package cleanup balances");
+    });
+  });
+}

@@ -335,6 +335,25 @@ static void compile_generated_c_or_die(const char *c_source) {
     free(tmp_dir);
 }
 
+/* Inspect the selected C scope after compiler-owned preprocessing choices,
+ * without interpreting inactive fragments as runtime ownership operations. */
+static char *preprocess_generated_c_or_die(const char *c_source) {
+    char *tmp_dir = make_temp_dir();
+    char c_path[1024], output_path[1024], command[3072];
+    ASSERT(snprintf(c_path, sizeof(c_path), "%s/generated.c", tmp_dir) > 0);
+    ASSERT(snprintf(output_path, sizeof(output_path), "%s/generated.i", tmp_dir) > 0);
+    write_text_file_or_die(c_path, c_source);
+    ASSERT(snprintf(command, sizeof(command),
+                    "cc " FENG_TEST_C_EH_FLAGS
+                    "-Isrc -Isrc/runtime -std=gnu11 -E -P '%s' -o '%s'",
+                    c_path, output_path) > 0);
+    ASSERT(system(command) == 0);
+    char *preprocessed = read_text_file_or_die(output_path);
+    ASSERT(remove_dir_recursive(tmp_dir) == 0);
+    free(tmp_dir);
+    return preprocessed;
+}
+
 /* Compile generated C for one object format and verify its native relocation. */
 static void assert_generated_native_symbol_relocation(const char *c_source,
                                                       bool target_elf,
@@ -12830,8 +12849,10 @@ static void test_generic_try_body_reified_storage_codegen(void) {
                   "_Alignas(max_align_t) char _tryv") != NULL);
     ASSERT(strstr(out.c_source,
                   "__llvm_c_eh_propagate(") != NULL);
-    ASSERT(strstr(out.c_source,
+    char *preprocessed = preprocess_generated_c_or_die(out.c_source);
+    ASSERT(strstr(preprocessed,
                   "    }\n    feng_frame_pop();\n    __llvm_c_eh_activate(") != NULL);
+    free(preprocessed);
     compile_generated_c_or_die(out.c_source);
 
     feng_codegen_output_free(&out);
@@ -17399,6 +17420,9 @@ void test_nested_exception_codegen(void (*compile_c)(const char *));
 /* Actual native EH and marker elimination across optimized/sanitized builds. */
 void test_native_exception_codegen(void (*compile_c)(const char *));
 
+/* Actual ownership selects cleanup boundaries in ordinary and shared bodies. */
+void test_cleanup_boundary_codegen(void (*compile_c)(const char *));
+
 /* Cleanup helpers preserve all generic descriptor domains across FT imports. */
 void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
@@ -17409,6 +17433,7 @@ int main(void) {
     test_defer_generic_context_codegen(compile_generated_c_or_die);
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_native_exception_codegen(compile_generated_c_or_die);
+    test_cleanup_boundary_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);

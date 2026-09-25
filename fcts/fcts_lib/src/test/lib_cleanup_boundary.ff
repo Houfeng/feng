@@ -1,0 +1,8 @@
+open module fcts_lib.test;
+
+/** Export an open owned copy with both ordinary and exceptional exits. */
+open func libBoundaryCopy<T>(value: T, fail: bool): T {
+  let copy = value;
+  if fail { throw 29; }
+  return copy;
+}

@@ -1320,6 +1320,15 @@ static char *cg_ctype_dup(const CGType *t) {
 
 /* ===================== local scope ===================== */
 
+/* One compiler-owned decision shared by a boundary's entry and every exit.
+ * It outlives lexical scopes because earlier output may still reference it. */
+typedef struct CGCleanupBoundary {
+    struct CGCleanupBoundary *next;
+    unsigned region;
+    bool needs_cleanup;
+    bool is_function;
+} CGCleanupBoundary;
+
 typedef struct Local {
     char     *name;     /* Feng identifier */
     char     *c_name;   /* mangled C identifier, unique within the function */
@@ -1381,6 +1390,8 @@ typedef enum CGScopeExitKind {
 /* Lexical resource order shared by normal and explicit control-flow exits. */
 typedef struct Scope {
     struct Scope *parent;
+    CGCleanupBoundary *cleanup_boundary;
+    bool cleanup_probe; /* Type-only emission must not add live parent resources. */
     Local        *items;
     size_t        count;
     size_t        capacity;
@@ -1845,8 +1856,9 @@ typedef struct CG {
     bool      in_loop_with_break;
     CGType   *cur_return_type;
     bool      cur_fn_is_main;
-    bool      cur_function_has_frame_marker;
+    bool      cur_function_has_frame_marker; /* candidate; boundary fact selects final emission */
     bool      cur_function_has_catch_regions; /* excludes nested callables */
+    CGCleanupBoundary *cleanup_boundaries; /* compiler-only, owned until final output */
     CGDebugLocal *debug_locals;
     size_t debug_local_count;
     size_t debug_local_capacity;
@@ -2893,6 +2905,51 @@ static bool cg_fail(CG *cg, FengToken token, const char *code, const char *fmt, 
         }
     }
     return false;
+}
+
+/* Allocate the decision before entry emission; actual resource registration
+ * can only strengthen it. The final C preamble resolves all earlier uses. */
+static bool cg_cleanup_boundary_create(CG *cg, Scope *scope, unsigned region,
+                                       bool is_function, FengToken blame) {
+    CGCleanupBoundary *boundary = calloc(1U, sizeof(*boundary));
+    if (boundary == NULL)
+        return cg_fail(cg, blame, "IE0001", "codegen: out of memory");
+    boundary->region = region;
+    boundary->is_function = is_function;
+    boundary->next = cg->cleanup_boundaries;
+    cg->cleanup_boundaries = boundary;
+    scope->cleanup_boundary = boundary;
+    return true;
+}
+
+/* Account for actual ownership even if a child scope or early guard is later
+ * discarded. Nested callables have independent root scopes; probes stop here. */
+static void cg_note_cleanup_requirement(CG *cg) {
+    for (Scope *scope = cg->cur_scope; scope != NULL; scope = scope->parent) {
+        if (scope->cleanup_probe) break;
+        if (scope->cleanup_boundary != NULL)
+            scope->cleanup_boundary->needs_cleanup = true;
+    }
+}
+
+/* Locate the function decision without confusing it with a nested try. */
+static const CGCleanupBoundary *cg_function_cleanup_boundary(const Scope *scope) {
+    while (scope != NULL && scope->parent != NULL) scope = scope->parent;
+    return scope != NULL ? scope->cleanup_boundary : NULL;
+}
+
+/* Preprocessing, not a runtime branch: survives ordinary C-expression buffer
+ * composition and is selected only after all ownership facts are collected. */
+static void cg_emit_cleanup_choice(Buf *out, const CGCleanupBoundary *boundary,
+                                   bool needed) {
+    if (boundary != NULL)
+        buf_append_fmt(out, "\n#if %sFENG_CLEANUP_BOUNDARY_%u\n",
+                       needed ? "" : "!", boundary->region);
+}
+
+/* Close a boundary choice without touching source-level statement anchors. */
+static void cg_emit_cleanup_choice_end(Buf *out, const CGCleanupBoundary *boundary) {
+    if (boundary != NULL) buf_append_cstr(out, "#endif\n");
 }
 
 /* Return whether a lowered type has the common managed ValueBox<T>
@@ -34005,6 +34062,7 @@ static CGType *cg_probe_expr_type(CG *cg, const FengExpr *expr) {
         buf_free(&throwaway);
         return NULL;
     }
+    probe->cleanup_probe = true;
     cg->cur_scope = probe;
     ExprResult r;
     bool ok = cg_emit_expr(cg, expr, &r);
@@ -35432,6 +35490,9 @@ static bool cg_emit_try_expr(CG *cg,
                              bool result_required) {
     er_init(out);
     cg->cur_function_has_catch_regions = true;
+    /* This try's catches belong to its enclosing boundaries, not to its own
+     * protected body, whose normal-path marker can still be unnecessary. */
+    cg_note_cleanup_requirement(cg);
 
     CGType *result_type = result_required
                               ? cg_probe_expr_type(cg, e->as.try_expr.body)
@@ -35518,12 +35579,7 @@ static bool cg_emit_try_expr(CG *cg,
         cgtype_free(catch_type);
         free(desc_expr);
     }
-    buf_append_fmt(cg->cur_body,
-                   ")) goto %s;\n"
-                   "    feng_try_frame_push(&%s.frame);\n"
-                   "    __llvm_c_eh_activate(%uu);\n"
-                   "    {\n",
-                   landing_label, marker_name, try_id);
+    buf_append_fmt(cg->cur_body, ")) goto %s;\n", landing_label);
     Scope *try_scope = scope_push(cg->cur_scope);
     if (try_scope == NULL) {
         free(slot_name);
@@ -35534,6 +35590,19 @@ static bool cg_emit_try_expr(CG *cg,
     }
     try_scope->exit_kind = CG_SCOPE_EXIT_TRY;
     try_scope->eh_region = try_id;
+    if (!cg_cleanup_boundary_create(cg, try_scope, try_id, false, e->token)) {
+        scope_pop_free(try_scope);
+        free(slot_name);
+        free(marker_name);
+        cgtype_free(result_type);
+        cg_expression_join_slot_free(&join_slot);
+        return false;
+    }
+    CGCleanupBoundary *try_boundary = try_scope->cleanup_boundary;
+    cg_emit_cleanup_choice(cg->cur_body, try_boundary, true);
+    buf_append_fmt(cg->cur_body, "    feng_try_frame_push(&%s.frame);\n", marker_name);
+    cg_emit_cleanup_choice_end(cg->cur_body, try_boundary);
+    buf_append_fmt(cg->cur_body, "    __llvm_c_eh_activate(%uu);\n    {\n", try_id);
     cg->cur_scope = try_scope;
     bool ok = result_required
                   ? cg_emit_try_expr_body_to_slot(cg,
@@ -35590,11 +35659,14 @@ static bool cg_emit_try_expr(CG *cg,
 
         buf_append_fmt(cg->cur_body,
                    "    %s (__llvm_c_eh_selector(%uu) == __llvm_c_eh_typeid((const void *)%s)) {\n"
-                   "        %s.exception->matched_clause = %zu;\n"
-                   "        feng_exception_catch_begin(&%s);\n",
+                   "        %s.exception->matched_clause = %zu;\n",
                    i == 0U ? "if" : "else if",
                    try_id, is_anonymous ? "NULL" : desc_expr,
-                   marker_name, i, marker_name);
+                   marker_name, i);
+        cg_emit_cleanup_choice(cg->cur_body, try_boundary, false);
+        buf_append_fmt(cg->cur_body, "        feng_try_frame_push(&%s.frame);\n", marker_name);
+        cg_emit_cleanup_choice_end(cg->cur_body, try_boundary);
+        buf_append_fmt(cg->cur_body, "        feng_exception_catch_begin(&%s);\n", marker_name);
         free(desc_expr);
 
         Scope *catch_scope = scope_push(cg->cur_scope);
@@ -35656,10 +35728,10 @@ static bool cg_emit_try_expr(CG *cg,
     /* An unmatched region only cleans its own resources. It never takes
      * catch ownership or restarts search; the same SSA record reaches the
      * parent region, including a parent in this native function after inlining. */
-    buf_append_fmt(cg->cur_body,
-                   "    feng_frame_release_to(&%s.frame);\n"
-                   "    __llvm_c_eh_propagate(%uu);\n",
-                   marker_name, try_id);
+    cg_emit_cleanup_choice(cg->cur_body, try_boundary, true);
+    buf_append_fmt(cg->cur_body, "    feng_frame_release_to(&%s.frame);\n", marker_name);
+    cg_emit_cleanup_choice_end(cg->cur_body, try_boundary);
+    buf_append_fmt(cg->cur_body, "    __llvm_c_eh_propagate(%uu);\n", try_id);
     buf_append_fmt(cg->cur_body,
                    "    %s: ;\n"
                    "    %s: ;\n",
@@ -36246,8 +36318,10 @@ static void cg_release_scope(CG *cg, const Scope *scope) {
     }
     if (scope->exit_kind == CG_SCOPE_EXIT_TRY) {
         cg_emit_current_stmt_line_directive_force(cg);
+        cg_emit_cleanup_choice(cg->cur_body, scope->cleanup_boundary, true);
+        buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
+        cg_emit_cleanup_choice_end(cg->cur_body, scope->cleanup_boundary);
         buf_append_fmt(cg->cur_body,
-                       "    feng_frame_pop();\n"
                        "    __llvm_c_eh_activate(%uu);\n",
                        cg_scope_eh_region(scope->parent));
     } else if (scope->exit_kind == CG_SCOPE_EXIT_CATCH) {
@@ -36268,8 +36342,11 @@ static void cg_release_through(CG *cg, const Scope *stop) {
 static void cg_emit_return_control_cleanup(CG *cg) {
     if (cg->cur_function_has_frame_marker) {
         cg_emit_current_stmt_line_directive_force(cg);
+        const CGCleanupBoundary *boundary = cg_function_cleanup_boundary(cg->cur_scope);
+        cg_emit_cleanup_choice(cg->cur_body, boundary, true);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
         buf_append_cstr(cg->cur_body, "    __llvm_c_eh_activate(0u);\n");
+        cg_emit_cleanup_choice_end(cg->cur_body, boundary);
     }
     cg_emit_current_stmt_line_directive_force(cg);
 }
@@ -36279,6 +36356,7 @@ static void cg_emit_return_control_cleanup(CG *cg) {
  * emitted by cg_release_scope. The companion node lives on the C stack right
  * next to the local so its lifetime matches. */
 static void cg_emit_cleanup_push_for_managed_local(CG *cg, const char *cname) {
+    cg_note_cleanup_requirement(cg);
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
                    "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; feng_cleanup_push(&_cu_%s, (void **)&%s);\n",
@@ -36384,6 +36462,7 @@ static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
         size_t rad_idx;
         if (agg_desc &&
             cg_lookup_reified_agg_dep_index(cg, agg_desc, &rad_idx)) {
+            cg_note_cleanup_requirement(cg);
             const char *src = cg->generic_type_method_rad_via_desc
                                   ? "_desc" : "_td";
             cg_emit_current_stmt_line_directive_force(cg);
@@ -36398,7 +36477,9 @@ static void cg_emit_cleanup_push_for_aggregate_local(CG *cg,
     CGAggregateFacts facts;
     if (cg_aggregate_facts(type, &facts) && facts.emit_cleanup_push != NULL) {
         cg_emit_current_stmt_line_directive_force(cg);
+        size_t before = cg->cur_body->length;
         facts.emit_cleanup_push(cg->cur_body, cname, type);
+        if (cg->cur_body->length != before) cg_note_cleanup_requirement(cg);
     }
 }
 
@@ -36409,6 +36490,7 @@ static void cg_emit_cleanup_push_for_reified_aggregate_storage(
     CG *cg,
     const char *cname,
     const char *descriptor_c_name) {
+    cg_note_cleanup_requirement(cg);
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
                    "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s; "
@@ -36426,6 +36508,7 @@ static void cg_emit_cleanup_push_for_erased_generic_storage(
     CG *cg,
     const char *cname,
     const char *descriptor_c_name) {
+    cg_note_cleanup_requirement(cg);
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
         "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
@@ -36456,6 +36539,7 @@ static void cg_emit_cleanup_push_for_erased_generic_argument_storage(
     CG *cg,
     const char *cname,
     const char *descriptor_c_name) {
+    cg_note_cleanup_requirement(cg);
     cg_emit_current_stmt_line_directive_force(cg);
     buf_append_fmt(cg->cur_body,
         "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
@@ -41166,6 +41250,7 @@ static bool cg_emit_union_projection_binding(CG *cg, const char *subject,
         cg_debug_local_attribute(cg, pointer),
         pointer, address, subject, projection);
     if (materializable) {
+        cg_note_cleanup_requirement(cg);
         storage = cg_fresh_temp(cg, "_uowned");
         owner_guard = cg_fresh_temp(cg, "_uinitialized");
         if (!erased && !reified) {
@@ -45075,6 +45160,7 @@ static void cg_defer_capture_infos_free(DeferCaptureInfo *infos, size_t count) {
  *      `feng_cleanup_pop(); fn(closure_or_NULL);` at scope exit.
  */
 static bool cg_emit_defer(CG *cg, const FengStmt *stmt) {
+    cg_note_cleanup_requirement(cg);
     char **captured_names = NULL;
     size_t captured_count = 0U;
     bool captures_self = false;
@@ -45616,8 +45702,14 @@ static void cg_emit_scope_eh_state(CG *cg, const Scope *scope) {
     const Scope *root = scope;
     while (root != NULL && root->parent != NULL) root = root->parent;
     if (cg->cur_body != NULL && root != NULL && root->eh_configured) {
+        const Scope *owner = scope;
+        while (owner != NULL && owner->eh_region == 0U) owner = owner->parent;
+        const CGCleanupBoundary *boundary = owner != NULL ? owner->cleanup_boundary : NULL;
+        if (boundary != NULL && !boundary->is_function) boundary = NULL;
+        cg_emit_cleanup_choice(cg->cur_body, boundary, true);
         buf_append_fmt(cg->cur_body, "    __llvm_c_eh_activate(%uu);\n",
                        cg_scope_eh_region(scope));
+        cg_emit_cleanup_choice_end(cg->cur_body, boundary);
     }
 }
 
@@ -45633,6 +45725,7 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
     if (cg->cur_scope == NULL || cg->cur_scope->parent != NULL)
         return cg_fail(cg, token, "IE0002", "codegen: callable EH requires its own root scope");
     unsigned root = (unsigned)++cg->label_counter;
+    if (!cg_cleanup_boundary_create(cg, cg->cur_scope, root, true, token)) return false;
     char *frame_name = cg_fresh_temp(cg, "_fn_frame");
     if (frame_name == NULL)
         return cg_fail(cg, token, "IE0001", "codegen: out of memory");
@@ -45645,6 +45738,7 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
         free(frame_name);
         return false;
     }
+    cg_emit_cleanup_choice(cg->cur_body, cg->cur_scope->cleanup_boundary, true);
     buf_append_fmt(cg->cur_body,
                    "    %sFengFrameMarker %s;\n"
                    "    if (__llvm_c_eh_region(%uu, 0u, &&_fn_cleanup_%u, 0u)) goto _fn_cleanup_%u;\n"
@@ -45659,6 +45753,7 @@ static bool cg_emit_function_eh_prologue(CG *cg, FengToken token) {
                    cg_debug_local_attribute(cg, frame_name),
                    frame_name, root, root, root, root, root,
                    frame_name, root, root, frame_name, root);
+    cg_emit_cleanup_choice_end(cg->cur_body, cg->cur_scope->cleanup_boundary);
     free(frame_name);
     cg->cur_function_has_frame_marker = true;
     return true;
@@ -45679,8 +45774,11 @@ static bool cg_emit_function_fallthrough(CG *cg, const Scope *scope,
     cg_release_scope(cg, scope);
     cg_emit_current_stmt_line_directive_force(cg);
     if (cg->cur_function_has_frame_marker) {
+        const CGCleanupBoundary *boundary = cg_function_cleanup_boundary(scope);
+        cg_emit_cleanup_choice(cg->cur_body, boundary, true);
         buf_append_cstr(cg->cur_body, "    feng_frame_pop();\n");
         buf_append_cstr(cg->cur_body, "    __llvm_c_eh_activate(0u);\n");
+        cg_emit_cleanup_choice_end(cg->cur_body, boundary);
     }
     if (terminator != NULL) {
         cg_emit_current_stmt_line_directive_force(cg);
@@ -65500,6 +65598,13 @@ static char *cg_finalize(CG *cg) {
         buf_free(&out);
         return NULL;
     }
+    /* All lexical scopes have completed. These constants select earlier
+     * fragments entirely in preprocessing; no state reaches generated code. */
+    for (const CGCleanupBoundary *boundary = cg->cleanup_boundaries;
+         boundary != NULL; boundary = boundary->next) {
+        buf_append_fmt(&out, "#define FENG_CLEANUP_BOUNDARY_%u %u\n",
+                       boundary->region, boundary->needs_cleanup ? 1U : 0U);
+    }
     if (cg->headers.length) buf_append(&out, cg->headers.data, cg->headers.length);
     buf_append_cstr(&out, "\n");
     if (cg->enum_defs.length) buf_append(&out, cg->enum_defs.data, cg->enum_defs.length);
@@ -65524,6 +65629,11 @@ static char *cg_finalize(CG *cg) {
 }
 
 static void cg_dispose(CG *cg) {
+    while (cg->cleanup_boundaries != NULL) {
+        CGCleanupBoundary *next = cg->cleanup_boundaries->next;
+        free(cg->cleanup_boundaries);
+        cg->cleanup_boundaries = next;
+    }
     for (size_t i = 0U; i < cg->debug_local_count; ++i) {
         free(cg->debug_locals[i].frame);
         free(cg->debug_locals[i].name);
