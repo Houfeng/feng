@@ -17426,6 +17426,9 @@ void test_cleanup_boundary_codegen(void (*compile_c)(const char *));
 /* Cleanup helpers preserve all generic descriptor domains across FT imports. */
 void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
+/* ARC ownership has independent structural and conservative-path coverage. */
+void test_arc_ownership_codegen(void (*compile_c)(const char *));
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -17689,6 +17692,7 @@ int main(void) {
     test_loop_binding_capture_codegen();
     test_loop_binding_uncaptured_codegen();
     test_loop_tuple_destructuring_codegen();
+    test_arc_ownership_codegen(compile_generated_c_or_die);
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

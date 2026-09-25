@@ -1,0 +1,753 @@
+module fcts_bin;
+
+import std.test;
+import std.numeric;
+import fcts_lib.test;
+
+var arcDrops: int = 0;
+var arcOrder: int = 0;
+var arcObserved: int = 0;
+var arcDefaultDrops: int = 0;
+
+/** An acyclic resource with directly observable, nonthrowing destruction. */
+type ArcResource: ArcArgumentView {
+  let n: int;
+  /** A receiver must be selected before later explicit arguments. */
+  func read(extra: int): int { return self.n + extra; }
+  /** Static dispatch uses the same explicit argument evaluation order. */
+  static func first(value: ArcResource, extra: int): int { return value.n + extra; }
+  /** Destruction order must not change when redundant tokens disappear. */
+  func ~ArcResource() {
+    if self.n == 0 { arcDefaultDrops += 1; }
+    else { arcDrops += 1; arcOrder = arcOrder * 10 + self.n; }
+  }
+}
+
+/** Fixed-layout immutable and mutable aggregates need different proofs. */
+@value type ArcValue { let resource: ArcResource; }
+@value type ArcMutableValue { var resource: ArcResource; }
+type ArcPair(ArcResource, int);
+type ArcOtherPair(ArcResource, int);
+type ArcHolder { var resource: ArcResource; }
+
+/** Dynamic dispatch must preserve both the subject and witness of a view. */
+spec ArcArgumentView { func read(extra: int): int; }
+spec ArcArgumentCall(value: ArcResource, extra: int): int;
+spec ArcArgumentMutator(): int;
+/** Factories give shared bodies their own resource rather than a caller owner. */
+spec ArcArgumentProducer<T>(): T;
+/** The source owns T only through this field, avoiding a second producer token. */
+type ArcArgumentSlot<T> { var value: T; }
+
+/** Value self keeps the original storage; explicit value parameters copy it. */
+@value type ArcArgumentValue: ArcArgumentView {
+  var n: int;
+  var resource: ArcResource;
+  /** Update self so copying a receiver instead of its address is observable. */
+  func add(extra: int): int { self.n += extra; return self.n + self.resource.n; }
+  /** The generic witness must preserve mutable value self storage. */
+  func read(extra: int): int { return self.add(extra); }
+}
+type ArcArgumentContainer { var value: ArcArgumentValue; }
+
+/** Exercise both descriptor domains without changing the argument contract. */
+type ArcArgumentOwner<T> {
+  /** Type-level parameter passing. */
+  func first(value: T, extra: int): T { return value; }
+  /** Method-level parameter passing. */
+  func choose<U>(value: U, extra: int): U { return value; }
+}
+
+/** Constructor argument preparation happens before entering the constructor. */
+type ArcArgumentConstructor {
+  var result: int;
+  /** Store the first selected identity, not the later rebound source. */
+  func ArcArgumentConstructor(value: ArcResource, extra: int) { self.result = value.n + extra; }
+}
+
+/** Scalar and value snapshots follow exactly the same evaluation sequence. */
+func arcArgumentScalar(first: int, second: int): int { return first * 10 + second; }
+func arcArgumentValue(value: ArcArgumentValue, extra: int): int { return value.n + value.resource.n + extra; }
+func arcArgumentPair(value: ArcPair, extra: int): int { return value.item1.n + value.item2 + extra; }
+func arcArgumentArray(value: ArcResource[], extra: int): int { return value[0].n + extra; }
+func arcArgumentText(value: string, extra: int): string { return value; }
+func arcArgumentCallable(value: ArcReader, extra: int): int { return value() + extra; }
+/** A view parameter copies both subject and dispatch information. */
+func arcArgumentViewRead(value: ArcArgumentView): int { return value.read(0); }
+
+/** An unused generic parameter still obeys the ordinary value-copy contract. */
+func arcArgumentConsume<T>(value: T): int { return 7; }
+
+/** Observe the established parameter-copy lifetime after replacing its source. */
+func arcArgumentCopyLifetime<T>(first: ArcArgumentProducer<ArcArgumentSlot<T>>, second: ArcArgumentProducer<T>, fail: bool): int {
+  let slot = first();
+  let observed = arcArgumentConsume<T>(slot.value);
+  slot.value = second();
+  arcObserved = arcDrops;
+  if fail { throw observed; }
+  return arcDrops;
+}
+
+/** Shared bodies cannot postpone reading T until all arguments have executed. */
+func arcArgumentFirst<T>(value: T, extra: int): T { return value; }
+func arcArgumentRebound<T>(initial: T, replacement: T): T {
+  var value = initial;
+  return arcArgumentFirst<T>(value, if true { value = replacement; 1; } else { 0; });
+}
+
+/** Direct generic self follows the existing reference versus value rule. */
+func arcArgumentReceiver<T: ArcArgumentView>(initial: T, replacement: T): int {
+  var value = initial;
+  return value.read(if true { value = replacement; 1; } else { 0; });
+}
+
+/** Variadic elements are selected before the packing allocation. */
+func arcArgumentVariadic(values: ArcResource...): int { return values[0].n * 10 + values[1].n; }
+func arcArgumentGenericVariadic<T>(values: T...): T { return values[0]; }
+func arcArgumentPrepacked(value: ArcResource, values: ArcResource...): int { return value.n + values[0].n; }
+
+/** Later calls may mutate captured storage or throw before invocation. */
+func arcArgumentMutate(callback: ArcArgumentMutator): int { return callback(); }
+func arcArgumentFailure(value: ArcResource, extra: int): int { throw value.n + extra; }
+
+/** An ordinary C ABI still receives arguments evaluated in Feng order. */
+@cdecl("libc", "memcmp") extern func arcArgumentCompare(left: byte*, right: byte*, count: uint): i32;
+
+var arcResurrect: bool = false;
+var arcResurrectionCalls: int = 0;
+var arcResurrected: ArcResurrection[] = [];
+
+/** A transferred acyclic instance can still publish itself during finalization. */
+type ArcResurrection {
+  let n: int;
+  /** A resurrected instance can be finalized again after its next last release. */
+  func ~ArcResurrection() {
+    arcResurrectionCalls += 1;
+    if arcResurrect { arcResurrected = [self]; }
+  }
+}
+
+/** The root view has dynamic subject identity and remains conservative. */
+spec ArcResourceView { let resource: ArcResource; }
+@value type ArcViewedValue: ArcResourceView { let resource: ArcResource; }
+spec ArcReader(): int;
+spec ArcFactory(): ArcResource;
+var arcSaved: ArcReader = () { return 0; };
+
+/** Reset between completed scopes only. */
+func arcReset(): void { arcDrops = 0; arcOrder = 0; arcObserved = 0; arcDefaultDrops = 0; }
+
+/** The caller receives the original local's token. */
+func arcMake(n: int): ArcResource { let value = ArcResource { n: n }; return value; }
+
+/** Aliases must preserve the first owner's release position. */
+func arcAliases(n: int): ArcResource {
+  let a = ArcResource { n: n }; let b = a; let c = b; return c;
+}
+
+/** A borrowed parameter still needs an independent returned token. */
+func arcParameter(value: ArcResource): ArcResource { return value; }
+
+/** One exit cannot mark the value as moved on the other control-flow path. */
+func arcConditional(n: int): ArcResource {
+  let first = ArcResource { n: 1 };
+  if n == 0 { return first; }
+  let second = ArcResource { n: 2 };
+  return second;
+}
+
+/** A branch-local token flows through multiple result slots. */
+func arcChoose(n: int): ArcResource {
+  let value = if n == 1 { let a = ArcResource { n: 1 }; a; }
+    else { let b = ArcResource { n: 2 }; b; };
+  return value;
+}
+
+/** Both protected and caught results must leave exactly one caller token. */
+func arcTry(n: int): ArcResource {
+  return try (if n == 0 { throw 3; }
+    else { let value = ArcResource { n: n }; value; })
+    catch ex: int { ArcResource { n: ex }; };
+}
+
+/** Observing a returned local in defer cannot observe a prematurely cleared slot. */
+func arcObservedReturn(): ArcResource {
+  let value = ArcResource { n: 4 };
+  defer { arcObserved = value.n; }
+  return value;
+}
+
+/** The return snapshot must survive replacement of its source in defer. */
+func arcChangedReturn(): ArcResource {
+  var value = ArcResource { n: 5 };
+  defer { value = ArcResource { n: 6 }; }
+  return value;
+}
+
+/** Captured bindings remain owned by their cells, including after return. */
+func arcCapturedReturn(): ArcResource {
+  let value = ArcResource { n: 7 };
+  arcSaved = () { return value.n; };
+  return value;
+}
+
+/** An ordinary by-value result retains all nested slots through return. */
+func arcValueReturn(n: int): ArcValue {
+  let value = ArcValue { resource: ArcResource { n: n } };
+  let alias = value;
+  return alias;
+}
+
+/** Keep one shared generic body valid for trivial, managed and aggregate values. */
+func arcGeneric<T>(value: T): T { let copy = value; return copy; }
+
+/** Callable-return lowering uses the same token proof as ordinary functions. */
+func arcFactory(): ArcFactory {
+  return () { let value = ArcResource { n: 8 }; return value; };
+}
+
+/** A scope with an owned alias must clean normally when evaluation throws. */
+func arcThrowing(): int {
+  let value = ArcResource { n: 9 };
+  let alias = value;
+  throw alias.n;
+}
+
+/** Later argument evaluation may replace the source of an earlier argument. */
+func arcReadFirst(first: ArcResource, second: int): int { return first.n + second; }
+
+/** Read an object only on the selected side of boolean short circuiting. */
+func arcBoolean(n: int): bool { let value = arcMake(n); let alias = value; return alias.n > 0; }
+
+/** Match uses the same result-slot ownership contract as if and try. */
+func arcMatch(n: int): ArcResource {
+  return match n { 1 { let a = arcMake(1); let b = a; b; }
+    else { let a = arcMake(2); a; } };
+}
+
+/** A branch result borrowed from an outer owner needs another token. */
+func arcOuterBranch(n: int): ArcResource {
+  let outer = arcMake(n);
+  return if n > 0 { let alias = outer; alias; } else { outer; };
+}
+
+/** Returning a resource does not suppress its later resurrection. */
+func arcResurrectionReturn(): ArcResurrection {
+  let value = ArcResurrection { n: 41 }; let alias = value; return alias;
+}
+
+/** Separate correctness from operation counts: these checks observe the language. */
+open func test_arc_ownership(): void {
+  describe("ARC ownership transfer", () {
+    test("local return establishes one caller reference", () {
+      arcReset();
+      if true { let value = arcMake(1); assertEquals(value.n, 1, "returned value");
+        assertEquals(arcDrops, 0, "still alive"); }
+      assertEquals(arcDrops, 1, "one finalizer");
+    });
+    test("stable aliases preserve destruction order", () {
+      arcReset();
+      if true { let first = ArcResource { n: 1 }; let second = ArcResource { n: 2 };
+        let alias = first; assertEquals(alias.n + second.n, 3, "aliases read"); }
+      assertEquals(arcOrder, 21, "original owner keeps its LIFO position");
+    });
+    test("alias chain transfers the original token", () {
+      arcReset();
+      if true { let value = arcAliases(3); assertEquals(value.n, 3, "chain result"); }
+      assertEquals(arcDrops, 1, "chain has one object");
+    });
+    test("borrowed parameter return preserves caller ownership", () {
+      arcReset();
+      if true { let owner = ArcResource { n: 4 };
+        if true { let copy = arcParameter(owner); assertEquals(copy.n, 4, "borrowed result"); }
+        assertEquals(arcDrops, 0, "outer owner alive"); }
+      assertEquals(arcDrops, 1, "last owner ends");
+    });
+    test("early return decisions are path local", () {
+      arcReset();
+      if true { let a = arcConditional(0); assertEquals(a.n, 1, "early branch"); }
+      assertEquals(arcDrops, 1, "early branch drop");
+      arcReset();
+      if true { let b = arcConditional(1); assertEquals(b.n, 2, "later branch");
+        assertEquals(arcOrder, 1, "unreturned first object released"); }
+      assertEquals(arcOrder, 12, "returned second object released later");
+    });
+    test("if expression local results retain identity", () {
+      arcReset();
+      if true { let a = arcChoose(1); let b = arcChoose(0);
+        assertEquals(a.n + b.n, 3, "both branches"); }
+      assertEquals(arcDrops, 2, "both branch resources released");
+    });
+    test("try success and catch results preserve ownership", () {
+      arcReset();
+      if true { let a = arcTry(2); let b = arcTry(0);
+        assertEquals(a.n + b.n, 5, "success and handler results"); }
+      assertEquals(arcDrops, 2, "both results released");
+    });
+    test("defer reads the live return source", () {
+      arcReset();
+      if true { let value = arcObservedReturn(); assertEquals(arcObserved, 4, "defer sees source");
+        assertEquals(value.n, 4, "result remains alive"); }
+      assertEquals(arcDrops, 1, "observed result released");
+    });
+    test("defer replacement leaves the return snapshot alive", () {
+      arcReset();
+      if true { let value = arcChangedReturn(); assertEquals(value.n, 5, "old value returned");
+        assertEquals(arcOrder, 6, "replacement already released"); }
+      assertEquals(arcOrder, 65, "snapshot released after replacement");
+    });
+    test("escaped captures keep their own lifetime", () {
+      arcReset();
+      if true { let value = arcCapturedReturn(); assertEquals(value.n, 7, "returned capture"); }
+      assertEquals(arcDrops, 0, "closure still holds cell");
+      assertEquals(arcSaved(), 7, "escaped cell remains valid");
+      arcSaved = () { return 0; };
+      assertEquals(arcDrops, 1, "last closure released cell");
+    });
+    test("fixed aggregate aliases and return keep nested slots", () {
+      arcReset();
+      if true { let value = arcValueReturn(2); let alias = value;
+        assertEquals(alias.resource.n, 2, "nested resource"); }
+      assertEquals(arcDrops, 1, "nested slot released once");
+    });
+    test("mutable value copies keep independent managed slots", () {
+      arcReset();
+      if true { let original = ArcMutableValue { resource: ArcResource { n: 1 } };
+        var copy = original; copy.resource = ArcResource { n: 2 };
+        assertEquals(original.resource.n, 1, "original independent");
+        assertEquals(copy.resource.n, 2, "copy replaced"); }
+      assertEquals(arcDrops, 2, "both references released");
+    });
+    test("readonly tuple conversion keeps its source alive", () {
+      arcReset();
+      if true { let source: ArcPair = (ArcResource { n: 3 }, 11);
+        let target: ArcOtherPair = (ArcOtherPair)source; let (ref, number) = target;
+        assertEquals(ref.n + number, 14, "converted fields"); }
+      assertEquals(arcDrops, 1, "conversion aliases one resource");
+    });
+    test("value boxing and spec aliases retain dynamic subjects", () {
+      arcReset();
+      if true { let value = ArcViewedValue { resource: ArcResource { n: 4 } };
+        let view: ArcResourceView = value; let alias = view;
+        assertEquals(alias.resource.n, 4, "boxed view"); }
+      assertEquals(arcDrops, 1, "box and source cleanup");
+    });
+    test("mutable reference source cannot be borrowed indefinitely", () {
+      arcReset();
+      if true { var source = ArcResource { n: 5 }; let snapshot = source;
+        source = ArcResource { n: 6 }; assertEquals(snapshot.n, 5, "old identity pinned");
+        assertEquals(source.n, 6, "source replaced"); }
+      assertEquals(arcDrops, 2, "both identities released");
+    });
+    test("break and continue pop only registered owners", () {
+      arcReset();
+      for var i = 1; i <= 3; i += 1 {
+        let value = ArcResource { n: i }; let alias = value;
+        if alias.n == 1 { continue; } if alias.n == 3 { break; }
+      }
+      assertEquals(arcDrops, 3, "all loop exits release once");
+    });
+    test("throw through borrowed aliases releases original owner", () {
+      arcReset();
+      let caught = try arcThrowing() catch ex: int { ex; };
+      assertEquals(caught, 9, "same exception");
+      assertEquals(arcDrops, 1, "unwind releases owned slot");
+    });
+    test("callable out return transfers concrete local ownership", () {
+      arcReset();
+      if true { let factory = arcFactory(); let value = factory();
+        assertEquals(value.n, 8, "callable return"); }
+      assertEquals(arcDrops, 1, "callable result released");
+    });
+    test("shared generic mixes trivial managed and aggregate values", () {
+      arcReset();
+      if true { let resource = ArcResource { n: 2 }; let value = ArcValue { resource: resource };
+        assertEquals(arcGeneric<int>(31), 31, "trivial");
+        assertEquals(arcGeneric<ArcResource>(resource).n, 2, "managed");
+        assertEquals(arcGeneric<ArcValue>(value).resource.n, 2, "aggregate"); }
+      assertEquals(arcDrops, 1, "one shared resource");
+    });
+    test("array aliases do not transfer ownership of individual elements", () {
+      arcReset();
+      if true { let array: ArcResource[!] = [ArcResource { n: 1 }, ArcResource { n: 2 }];
+        let alias = array; alias[0] = ArcResource { n: 3 };
+        assertEquals(array[0].n, 3, "shared array identity"); }
+      assertEquals(arcDrops, 3, "old and new elements released");
+    });
+    test("binary-only producer and caller retain existing return ABI", () {
+      arcForeignReset();
+      if true { let value = arcForeignMake(17); let alias = value;
+        assertEquals(alias.n, 17, "foreign result"); }
+      assertEquals(arcForeignDestroyed(), 1, "foreign destructor");
+    });
+    test("cross-package generic copies all three representations", () {
+      arcForeignReset();
+      if true { let value = arcForeignMake(19);
+        let aggregate = ArcForeignValue<ArcForeign> { value: value };
+        assertEquals(arcForeignEcho<int>(23), 23, "foreign trivial");
+        assertEquals(arcForeignEcho<ArcForeign>(value).n, 19, "foreign reference");
+        assertEquals(arcForeignEcho<ArcForeignValue<ArcForeign>>(aggregate).value.n, 19, "foreign value"); }
+      assertEquals(arcForeignDestroyed(), 1, "generic copies release");
+    });
+    test("type and method descriptor domains stay independent", () {
+      arcForeignReset();
+      if true { let value = arcForeignMake(29);
+        let owner = ArcForeignOwner<ArcForeign> { value: value };
+        assertEquals(owner.read().n, 29, "type descriptor");
+        assertEquals(owner.echo<int>(41), 41, "method trivial descriptor");
+        assertEquals(owner.echo<ArcForeign>(value).n, 29, "method managed descriptor"); }
+      assertEquals(arcForeignDestroyed(), 1, "descriptor copies release");
+    });
+    test("cross-package failed copy preserves caller and cleans callee", () {
+      arcForeignReset();
+      if true { let value = arcForeignMake(31); var caught = 0;
+        try arcForeignFail<ArcForeign>(value) catch ex: int { caught = ex; }
+        assertEquals(caught, 37, "foreign exception");
+        assertEquals(value.n, 31, "caller owner remains valid"); }
+      assertEquals(arcForeignDestroyed(), 1, "no failed-return leak");
+    });
+    test("cross-package callable returns an owned result", () {
+      arcForeignReset();
+      if true { let factory = arcForeignFactory(43); let value = factory();
+        assertEquals(value.n, 43, "foreign closure result"); }
+      assertEquals(arcForeignDestroyed(), 1, "closure result release");
+    });
+    test("match transfers each selected branch exactly once", () {
+      arcReset();
+      if true { let a = arcMatch(1); let b = arcMatch(0);
+        assertEquals(a.n + b.n, 3, "both match arms"); }
+      assertEquals(arcOrder, 21, "reverse caller cleanup");
+    });
+    test("branch borrows from outer owner without stealing its token", () {
+      arcReset();
+      if true { let a = arcOuterBranch(3); assertEquals(a.n, 3, "outer branch result"); }
+      assertEquals(arcDrops, 1, "one owner after join");
+    });
+    test("later arguments cannot invalidate an earlier borrowed value", () {
+      arcReset();
+      if true { var value = arcMake(4);
+        let result = arcReadFirst(value, if true { value = arcMake(5); 1; } else { 0; });
+        assertEquals(result, 5, "first argument snapshot");
+        assertEquals(value.n, 5, "source replaced"); }
+      assertEquals(arcDrops, 2, "both argument identities released");
+    });
+    test("field borrows keep a snapshot after owner field replacement", () {
+      arcReset();
+      if true { let holder = ArcHolder { resource: arcMake(6) };
+        let snapshot = holder.resource; holder.resource = arcMake(7);
+        assertEquals(snapshot.n, 6, "borrowed field retained"); }
+      assertEquals(arcDrops, 2, "old and replacement fields released");
+      assertEquals(arcDefaultDrops, 1, "default member construction retained");
+    });
+    test("short circuiting preserves selected construction and cleanup", () {
+      arcReset();
+      assert((false && arcBoolean(1)) == false, "unused right side");
+      assert(true || arcBoolean(2), "unused disjunction side");
+      assertEquals(arcDrops, 0, "skipped calls do not construct");
+      assert(arcBoolean(3) && arcBoolean(4), "both selected calls");
+      assertEquals(arcOrder, 34, "selected calls clean in evaluation order");
+    });
+    test("nested handlers and rethrow preserve the same payload owner", () {
+      arcReset();
+      let result = try (try (if true { let value = arcMake(8); let alias = value; throw alias; }
+        else { 0; }) catch ex: ArcResource { let alias = ex; throw alias; })
+        catch ex: ArcResource { ex.n; };
+      assertEquals(result, 8, "rethrow matches original payload");
+      assertEquals(arcDrops, 1, "nested catch releases payload once");
+    });
+    test("mutable captures keep a cell rather than a stable local borrow", () {
+      arcReset();
+      if true { var value = arcMake(2); let snapshot = value;
+        let change: ArcReader = () { value = arcMake(3); return value.n; };
+        assertEquals(change(), 3, "closure writes captured cell");
+        assertEquals(snapshot.n, 2, "snapshot independent of cell"); }
+      assertEquals(arcDrops, 2, "cell and snapshot cleaned");
+    });
+    test("resurrection occurs at the unchanged final owner boundary", () {
+      arcResurrectionCalls = 0; arcResurrect = true;
+      if true { let value = arcResurrectionReturn(); let alias = value;
+        assertEquals(alias.n, 41, "returned instance");
+        assertEquals(arcResurrectionCalls, 0, "not finalized early"); }
+      assertEquals(arcResurrectionCalls, 1, "one finalization at scope exit");
+      assertEquals(arcResurrected[0].n, 41, "resurrected instance remains usable");
+      arcResurrect = false; arcResurrected = [];
+      assertEquals(arcResurrectionCalls, 2, "resurrected instance finally released");
+    });
+    test("many bindings retain the same owner across scope storage growth", () {
+      arcReset();
+      if true { let a = arcMake(1); let b = a; let c = b; let d = c;
+        let e = d; let f = e; let g = f; let h = g; let i = h; let j = i;
+        let k = j; let l = k; let m = l; let n = m; let o = n; let p = o;
+        let q = p; let r = q; let s = r; let t = s; let u = t; let v = u;
+        assertEquals(v.n, 1, "last alias retains identity"); }
+      assertEquals(arcDrops, 1, "only the original token is released");
+    });
+    test("scalar and nested call results are evaluated from left to right", () {
+      var n = 4;
+      let result = arcArgumentScalar(n, if true { n = 5; 1; } else { 0; });
+      assertEquals(result, 41, "scalar snapshot");
+      n = 4;
+      let nested = arcArgumentScalar(arcArgumentScalar(n, 0), if true { n = 5; 1; } else { 0; });
+      assertEquals(nested, 401, "first nested call executes before second argument");
+    });
+    test("later callback cannot replace an earlier captured argument", () {
+      arcReset();
+      if true { var value = arcMake(4);
+        let mutate: ArcArgumentMutator = () { value = arcMake(5); return 1; };
+        assertEquals(arcReadFirst(value, arcArgumentMutate(mutate)), 5, "captured source snapshot");
+      }
+      assertEquals(arcDrops, 2, "both captured identities released");
+    });
+    test("managed field and array element arguments keep their selected identity", () {
+      arcReset();
+      if true { let holder = ArcHolder { resource: arcMake(4) };
+        assertEquals(arcReadFirst(holder.resource, if true { holder.resource = arcMake(5); 1; } else { 0; }),
+          5, "field snapshot");
+        let values: ArcResource[!] = [arcMake(6)];
+        assertEquals(arcReadFirst(values[0], if true { values[0] = arcMake(7); 1; } else { 0; }),
+          7, "array element snapshot");
+      }
+      assertEquals(arcDrops, 4, "all replaced identities released");
+    });
+    test("array string and callable argument values survive rebinding", () {
+      var values: ArcResource[] = [arcMake(4)];
+      assertEquals(arcArgumentArray(values, if true { values = [arcMake(5)]; 1; } else { 0; }), 5, "array handle");
+      var text = "old";
+      assert(arcArgumentText(text, if true { text = "new"; 1; } else { 0; }) == "old", "string handle");
+      var callback: ArcReader = () { return 4; };
+      assertEquals(arcArgumentCallable(callback, if true { callback = () { return 5; }; 1; } else { 0; }),
+        5, "callable handle");
+    });
+    test("mutable value and tuple arguments copy before later mutations", () {
+      var value = ArcArgumentValue { n: 10, resource: arcMake(4) };
+      assertEquals(arcArgumentValue(value, if true { value.n = 20; value.resource = arcMake(5); 1; } else { 0; }),
+        15, "entire value snapshot");
+      var pair: ArcPair = (arcMake(6), 10);
+      assertEquals(arcArgumentPair(pair, if true { pair = (arcMake(7), 20); 1; } else { 0; }),
+        17, "entire tuple snapshot");
+    });
+    test("bound call results preserve the existing value argument copy lifetime", () {
+      arcReset();
+      if true {
+        var value = ArcArgumentValue { n: 10, resource: arcMake(1) };
+        let observed = arcArgumentValue(value, 0);
+        value.resource = arcMake(2);
+        assertEquals(observed, 11, "original argument value");
+        assertEquals(arcDrops, 0, "existing argument copy survives until scope exit");
+      }
+      assertEquals(arcDrops, 2, "copy and replacement end at the original scope");
+    });
+    test("expression statement argument copies end at their own temporary scope", () {
+      arcReset();
+      if true {
+        var value = ArcArgumentValue { n: 10, resource: arcMake(1) };
+        arcArgumentValue(value, 0);
+        value.resource = arcMake(2);
+        assertEquals(arcDrops, 1, "statement copy no longer owns the replaced resource");
+      }
+      assertEquals(arcDrops, 2, "replacement ends once");
+    });
+    test("spec argument copies preserve the existing subject lifetime", () {
+      arcReset();
+      if true {
+        var view: ArcArgumentView = arcMake(1);
+        let observed = arcArgumentViewRead(view);
+        view = arcMake(2);
+        assertEquals(observed, 1, "copied subject");
+        assertEquals(arcDrops, 0, "subject copy remains scope owned");
+      }
+      assertEquals(arcDrops, 2, "both subjects released once");
+    });
+    test("exception exits release the existing value argument copy once", () {
+      arcReset();
+      let error = try (if true {
+        var value = ArcArgumentValue { n: 10, resource: arcMake(1) };
+        let observed = arcArgumentValue(value, 0);
+        value.resource = arcMake(2);
+        arcObserved = arcDrops;
+        throw observed;
+      } else { 0; }) catch ex: int { ex; };
+      assertEquals(error, 11, "throw after the completed invocation");
+      assertEquals(arcObserved, 0, "copy stayed alive until unwind");
+      assertEquals(arcDrops, 2, "scope copies unwind exactly once");
+    });
+    test("shared argument copies distinguish aggregate scope lifetime from reference guards", () {
+      arcReset();
+      let aggregate = arcArgumentCopyLifetime<ArcArgumentValue>(
+        () { return ArcArgumentSlot<ArcArgumentValue> {
+          value: ArcArgumentValue { n: 10, resource: arcMake(1) } }; },
+        () { return ArcArgumentValue { n: 20, resource: arcMake(2) }; }, false);
+      assertEquals(aggregate, 0, "open aggregate parameter copy stays scope owned");
+      assertEquals(arcDrops, 2, "aggregate scope cleaned");
+      arcReset();
+      let reference = arcArgumentCopyLifetime<ArcResource>(
+        () { return ArcArgumentSlot<ArcResource> { value: arcMake(1) }; },
+        () { return arcMake(2); }, false);
+      assertEquals(reference, 1, "managed invocation guard ends before source replacement");
+      assertEquals(arcDrops, 2, "managed scope cleaned");
+      arcReset();
+      let view = arcArgumentCopyLifetime<ArcArgumentView>(
+        () { return ArcArgumentSlot<ArcArgumentView> { value: arcMake(1) }; },
+        () { return arcMake(2); }, false);
+      assertEquals(view, 0, "open spec is a complete scope-owned value copy");
+      assertEquals(arcDrops, 2, "view scope cleaned");
+    });
+    test("shared copy and conditional reference guards remain paired during unwind", () {
+      arcReset();
+      let aggregate = try arcArgumentCopyLifetime<ArcArgumentValue>(
+        () { return ArcArgumentSlot<ArcArgumentValue> {
+          value: ArcArgumentValue { n: 10, resource: arcMake(1) } }; },
+        () { return ArcArgumentValue { n: 20, resource: arcMake(2) }; }, true)
+        catch ex: int { ex; };
+      assertEquals(aggregate, 7, "aggregate failure after source replacement");
+      assertEquals(arcObserved, 0, "aggregate copy still alive before throw");
+      assertEquals(arcDrops, 2, "aggregate copies unwind once");
+      arcReset();
+      let reference = try arcArgumentCopyLifetime<ArcResource>(
+        () { return ArcArgumentSlot<ArcResource> { value: arcMake(1) }; },
+        () { return arcMake(2); }, true)
+        catch ex: int { ex; };
+      assertEquals(reference, 7, "reference failure after source replacement");
+      assertEquals(arcObserved, 1, "retired guard did not extend reference lifetime");
+      assertEquals(arcDrops, 2, "remaining reference unwinds once");
+    });
+    test("open generic argument snapshots handle all three representations", () {
+      assertEquals(arcArgumentRebound<int>(4, 5), 4, "trivial T");
+      assertEquals(arcArgumentRebound<ArcResource>(arcMake(4), arcMake(5)).n, 4, "managed T");
+      let first = ArcArgumentValue { n: 10, resource: arcMake(4) };
+      let second = ArcArgumentValue { n: 20, resource: arcMake(5) };
+      let result = arcArgumentRebound<ArcArgumentValue>(first, second);
+      assertEquals(result.n + result.resource.n, 14, "aggregate T");
+    });
+    test("type and method generic dispatch preserve first arguments", () {
+      let owner = ArcArgumentOwner<ArcResource>();
+      var value = arcMake(4);
+      assertEquals(owner.first(value, if true { value = arcMake(5); 1; } else { 0; }).n, 4, "type descriptor");
+      assertEquals(owner.choose<ArcResource>(value, if true { value = arcMake(6); 1; } else { 0; }).n, 5,
+        "method descriptor");
+    });
+    test("static constructor and dynamic callable dispatch share argument ordering", () {
+      var value = arcMake(4);
+      assertEquals(ArcResource.first(value, if true { value = arcMake(5); 1; } else { 0; }), 5, "static");
+      let instance = ArcArgumentConstructor(value, if true { value = arcMake(6); 1; } else { 0; });
+      assertEquals(instance.result, 6, "constructor");
+      let callback: ArcArgumentCall = arcReadFirst;
+      assertEquals(callback(value, if true { value = arcMake(7); 1; } else { 0; }), 7, "callable");
+    });
+    test("variadic packing and prepacked arrays cannot delay argument reads", () {
+      var value = arcMake(4);
+      assertEquals(arcArgumentVariadic(value, if true { value = arcMake(5); value; } else { value; }), 45,
+        "ordinary variadic elements");
+      let generic = arcArgumentGenericVariadic<ArcResource>(value,
+        if true { value = arcMake(6); value; } else { value; });
+      assertEquals(generic.n, 5, "generic variadic elements");
+      assertEquals(arcArgumentPrepacked(value, ...(if true { value = arcMake(7); [value]; } else { [value]; })),
+        13, "fixed prefix before prepacked suffix");
+    });
+    test("object and spec receivers are selected before explicit arguments", () {
+      var value = arcMake(4);
+      assertEquals(value.read(if true { value = arcMake(5); 1; } else { 0; }), 5, "object receiver");
+      var view: ArcArgumentView = value;
+      assertEquals(view.read(if true { view = arcMake(6); 1; } else { 0; }), 6, "spec subject and witness");
+    });
+    test("value self preserves original storage while projected owners stay alive", () {
+      var value = ArcArgumentValue { n: 10, resource: arcMake(4) };
+      assertEquals(value.add(1), 15, "value self updated");
+      assertEquals(value.n, 11, "caller sees self mutation");
+      var holder = ArcArgumentContainer { value: ArcArgumentValue { n: 10, resource: arcMake(4) } };
+      let oldHolder = holder;
+      assertEquals(holder.value.add(if true {
+        holder = ArcArgumentContainer { value: ArcArgumentValue { n: 20, resource: arcMake(5) } }; 1;
+      } else { 0; }), 15, "field receiver selected from original holder");
+      assertEquals(oldHolder.value.n, 11, "old field storage mutated");
+      assertEquals(holder.value.n, 20, "replacement not mutated");
+    });
+    test("projected receiver guards protect the only containing owner", () {
+      arcReset();
+      if true {
+        var holder = ArcArgumentContainer { value: ArcArgumentValue { n: 10, resource: arcMake(4) } };
+        assertEquals(holder.value.add(if true {
+          holder = ArcArgumentContainer { value: ArcArgumentValue { n: 20, resource: arcMake(5) } }; 1;
+        } else { 0; }), 15, "old containing object remains alive through invocation");
+        assertEquals(arcDrops, 1, "old containing object released after invocation");
+        var values: ArcArgumentValue[] = [ArcArgumentValue { n: 30, resource: arcMake(6) }];
+        assertEquals(values[0].add(if true {
+          values = [ArcArgumentValue { n: 40, resource: arcMake(7) }]; 1;
+        } else { 0; }), 37, "old array storage remains alive through invocation");
+        assertEquals(values[0].n, 40, "replacement array not mutated");
+      }
+      assertEquals(arcDrops, 4, "all old and replacement resources released");
+    });
+    test("shared receiver preparation preserves reference identity and value storage", () {
+      assertEquals(arcArgumentReceiver<ArcResource>(arcMake(4), arcMake(5)), 5, "managed receiver selected early");
+      let first = ArcArgumentValue { n: 10, resource: arcMake(4) };
+      let second = ArcArgumentValue { n: 20, resource: arcMake(5) };
+      assertEquals(arcArgumentReceiver<ArcArgumentValue>(first, second), 26, "value self refers to original slot");
+      var view: ArcArgumentView = arcMake(6);
+      let selected = arcArgumentFirst<ArcArgumentView>(view,
+        if true { view = arcMake(7); 1; } else { 0; });
+      assertEquals(selected.read(1), 7, "explicit generic spec argument snapshots the complete view");
+    });
+    test("later argument failure and callee failure clean protections once", () {
+      arcReset();
+      let argumentError = try (if true { var value = arcMake(4);
+        arcReadFirst(value, if true { value = arcMake(5); throw 71; } else { 0; });
+      } else { 0; }) catch ex: int { ex; };
+      assertEquals(argumentError, 71, "later argument throws");
+      assertEquals(arcDrops, 2, "both argument identities unwind");
+      arcReset();
+      let calleeError = try (if true { var value = arcMake(4);
+        arcArgumentFailure(value, if true { value = arcMake(5); 1; } else { 0; });
+      } else { 0; }) catch ex: int { ex; };
+      assertEquals(calleeError, 5, "callee receives selected value before throwing");
+      assertEquals(arcDrops, 2, "callee unwind releases each once");
+    });
+    test("nested catch and returned aliases outlive argument protection", () {
+      arcReset();
+      if true { var value = arcMake(4);
+        let result = arcArgumentFirst<ArcResource>(value,
+          try (if true { value = arcMake(5); throw 2; } else { 0; }) catch ex: int { ex; });
+        assertEquals(result.n, 4, "returned alias owns its original value");
+        assertEquals(arcDrops, 0, "return token survives temporary protection");
+      }
+      assertEquals(arcDrops, 2, "both final tokens end");
+    });
+    test("C ABI pointer arguments obey Feng evaluation order", () {
+      var first: byte = 1; var second: byte = 2; var pointer: byte* = &first;
+      let result = arcArgumentCompare(pointer, if true { pointer = &second; &second; } else { &first; }, 1);
+      assert(result < 0, "first C pointer was selected before source rebinding");
+    });
+    test("binary-only generic producers and callers preserve selected arguments", () {
+      arcForeignReset();
+      if true { var value = arcForeignMake(4);
+        let selected = arcForeignFirst<ArcForeign>(value,
+          if true { value = arcForeignMake(5); 1; } else { 0; });
+        assertEquals(selected.n, 4, "caller snapshots imported concrete value");
+        assertEquals(arcForeignRebound<ArcForeign>(selected, value).n, 4, "producer snapshots open T");
+        assertEquals(arcForeignRebound<int>(4, 5), 4, "producer trivial representation");
+        let first = ArcForeignValue<ArcForeign> { value: selected };
+        let second = ArcForeignValue<ArcForeign> { value: value };
+        assertEquals(arcForeignRebound<ArcForeignValue<ArcForeign>>(first, second).value.n, 4,
+          "producer reified aggregate representation");
+      }
+      assertEquals(arcForeignDestroyed(), 2, "producer lifetime checks remain authoritative");
+    });
+    test("cross-package constraint identities survive nested generic contexts", () {
+      arcForeignReset();
+      if true {
+        let number = ArcForeignReading<int> { value: 41 };
+        assertEquals(arcForeignConstraintRead<int, ArcForeignReading<int>>(number), 41, "trivial witness");
+        let owner = arcForeignMake(43);
+        let reference = ArcForeignReading<ArcForeign> { value: owner };
+        assertEquals(arcForeignConstraintRead<ArcForeign, ArcForeignReading<ArcForeign>>(reference).n,
+          43, "managed witness");
+        let aggregate = ArcForeignReading<ArcForeignValue<ArcForeign>> {
+          value: ArcForeignValue<ArcForeign> { value: owner }
+        };
+        assertEquals(arcForeignConstraintRead<ArcForeignValue<ArcForeign>,
+          ArcForeignReading<ArcForeignValue<ArcForeign>>>(aggregate).value.n, 43, "aggregate witness");
+      }
+      assertEquals(arcForeignDestroyed(), 1, "all generic witness copies released");
+    });
+  });
+}

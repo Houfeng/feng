@@ -90,6 +90,7 @@ func main(args: string[]) {
       test_nested_exception_lifetime();
       test_native_exception();
       test_cleanup_boundary();
+      test_arc_ownership();
       test_array();
       test_g21_array_semantics();
       test_generic();

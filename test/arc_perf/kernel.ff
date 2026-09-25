@@ -1,0 +1,32 @@
+module arc.measure;
+import arc.bench;
+
+@cdecl("libc") extern func arc_bench_count(): u64;
+@cdecl("libc") extern func arc_bench_seed(): u64;
+@cdecl("libc") extern func arc_bench_mode(): u64;
+@cdecl("libc") extern func arc_bench_clock(): u64;
+@cdecl("libc") extern func arc_bench_finish(begin: u64, end: u64, sum: u64,
+    live: u64, peak: u64, drops: u64, defaults: u64): void;
+
+/** Inputs and checksum validation are outside the timed region. */
+func main(args: string[]) {
+    let count = arc_bench_count(); let mode = arc_bench_mode();
+    var value = arc_bench_seed(); var sum: u64 = 0;
+    let begin = arc_bench_clock();
+    for var i: u64 = 0; i < count; i += 1 {
+        value = (value * 1664525 + 1013904223) & 4294967295;
+        if mode == 0 { let resource = direct(value); sum += resource.n; }
+        else if mode == 1 { let resource = local(value); sum += resource.n; }
+        else if mode == 2 { let resource = aliases(value); sum += resource.n; }
+        else if mode == 3 { let resource = joined(value); sum += resource.n; }
+        else if mode == 4 { let resources = array(value); sum += resources[0].n; }
+        else if mode == 5 { let resource = aggregate(value); sum += resource.resource.n; }
+        else if mode == 6 { let pair = converted(value); sum += pair.item1.n; }
+        else if mode == 7 { let resource = direct(value); let copy = generic<Resource>(resource); sum += copy.n; }
+        else if mode == 8 { let resource = deferred(value); sum += resource.n; }
+        else if mode == 9 { sum += try exceptional(value) catch ex: u64 { ex; }; }
+        else { let resource = view(value); sum += resource.n; }
+    }
+    let end = arc_bench_clock();
+    arc_bench_finish(begin, end, sum, liveCount(), peakCount(), dropCount(), defaultCount());
+}

@@ -1,0 +1,76 @@
+open module fcts_lib.test;
+
+var arcForeignDrops: int = 0;
+
+/** A binary-only producer keeps its descriptor/lifecycle authority private. */
+open type ArcForeign {
+  open let n: int;
+  /** Observe destruction through the producer's own state. */
+  func ~ArcForeign() { if self.n != 0 { arcForeignDrops += 1; } }
+}
+
+/** Open value storage exercises representation-dependent reference slots. */
+@value open type ArcForeignValue<T> { open let value: T; }
+
+/** Type- and method-level descriptors must keep their existing conventions. */
+open type ArcForeignOwner<T> {
+  open let value: T;
+  /** Return a copy selected by the type descriptor. */
+  open func read(): T { let copy = self.value; return copy; }
+  /** Return a copy selected by the method descriptor. */
+  open func echo<U>(value: U): U { let copy = value; return copy; }
+}
+
+/** Unknown callable subjects keep their existing ownership operations. */
+open spec ArcForeignThunk(): ArcForeign;
+
+/** Reset only when the preceding test has released all foreign instances. */
+open func arcForeignReset(): void { arcForeignDrops = 0; }
+
+/** Read producer-side lifecycle observations without inspecting object layout. */
+open func arcForeignDestroyed(): int { return arcForeignDrops; }
+
+/** A concrete producer can transfer its local token while keeping its ABI. */
+open func arcForeignMake(n: int): ArcForeign {
+  let value = ArcForeign { n: n };
+  let alias = value;
+  return alias;
+}
+
+/** Every permitted actual representation uses the same shared body. */
+open func arcForeignEcho<T>(value: T): T { let copy = value; return copy; }
+
+/** Binary-only calls consume already selected values despite later writes. */
+open func arcForeignFirst<T>(value: T, extra: int): T { return value; }
+
+/** The producer's shared body must snapshot its own open parameter storage. */
+open func arcForeignRebound<T>(initial: T, replacement: T): T {
+  var value = initial;
+  return arcForeignFirst<T>(value, if true { value = replacement; 1; } else { 0; });
+}
+
+/** A failed copy must release its local token and leave the caller's alive. */
+open func arcForeignFail<T>(value: T): T { let copy = value; throw 37; }
+
+/** Exercise callable out-return ownership and a captured scalar parameter. */
+open func arcForeignFactory(n: int): ArcForeignThunk {
+  return () { let value = ArcForeign { n: n }; return value; };
+}
+
+/** Constraint identities survive hidden producer generic-context switches. */
+open spec ArcForeignReader<T> { func get(): T; }
+open type ArcForeignReading<T>: ArcForeignReader<T> {
+  open let value: T;
+  /** Keep the same result representation through the constraint witness. */
+  open func get(): T { return self.value; }
+}
+
+/** A method constraint is resolved inside a separate target parameter domain. */
+open fit T[] {
+  open static func arcConstraintRead<U: ArcForeignReader<T>>(value: U): T { return value.get(); }
+}
+
+/** The caller constraint must remain valid after building the method context. */
+open func arcForeignConstraintRead<X, Y: ArcForeignReader<X>>(value: Y): X {
+  return X[].arcConstraintRead<Y>(value);
+}

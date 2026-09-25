@@ -1,0 +1,86 @@
+open module arc.bench;
+
+var alive: u64 = 0;
+var peak: u64 = 0;
+var destroyed: u64 = 0;
+var observed: u64 = 0;
+var defaults: u64 = 0;
+
+/** Identical business allocation/destruction events in every measured build. */
+open type Resource {
+    open let n: u64;
+    open let tracked: bool;
+    /** Keep the observable lifetime contract inside Feng, without instrumentation. */
+    func ~Resource() {
+        if self.tracked { alive -= 1; destroyed += 1; }
+        else { defaults += 1; }
+    }
+}
+
+@value open type Value { open let resource: Resource; }
+open type Pair(Resource, u64);
+open type OtherPair(Resource, u64);
+open spec Readable { let n: u64; }
+fit Resource: Readable {}
+
+/** Allocate exactly one object per iteration, also checking peak live resources. */
+open func direct(n: u64): Resource {
+    alive += 1;
+    if alive > peak { peak = alive; }
+    return Resource { n: n, tracked: true };
+}
+
+/** Candidate: local ownership transferred at return. */
+open func local(n: u64): Resource { let value = direct(n); return value; }
+
+/** Candidate: several immutable aliases of one stable owner. */
+open func aliases(n: u64): Resource {
+    let a = direct(n); let b = a; let c = b; let d = c; return d;
+}
+
+/** Candidate: nested result slots, each with an independently owned source. */
+open func joined(n: u64): Resource {
+    let value = if n % 2 == 0 { let a = direct(n); a; }
+        else { let b = direct(n); b; };
+    return value;
+}
+
+/** Array identity remains shared while its element's lifetime remains owned. */
+open func array(n: u64): Resource[] { let value = [direct(n)]; return value; }
+
+/** Fixed-layout aggregate slots reuse the ordinary value-model cleanup. */
+open func aggregate(n: u64): Value {
+    let value = Value { resource: direct(n) }; let alias = value; return alias;
+}
+
+/** A read-only conversion does not need another temporary owner of its source. */
+open func converted(n: u64): OtherPair {
+    let source: Pair = (direct(n), n);
+    let target: OtherPair = (OtherPair)source;
+    return target;
+}
+
+/** Control: the unknown actual representation retains its existing operations. */
+open func generic<T>(value: T): T { let copy = value; return copy; }
+
+/** Control: a defer observes source storage during the return cleanup. */
+open func deferred(n: u64): Resource {
+    let value = direct(n);
+    defer { observed = value.n; }
+    return value;
+}
+
+/** Exceptional exit must still clean the owning slot rather than each alias. */
+open func exceptional(n: u64): u64 {
+    let value = direct(n); let alias = value; throw alias.n;
+}
+
+/** Control: a spec subject's cyclicity is not statically known at consumption. */
+open func view(n: u64): Readable { let value: Readable = direct(n); return value; }
+
+/** Return counters after all timed iteration scopes have ended. */
+open func liveCount(): u64 { return alive; }
+open func peakCount(): u64 { return peak; }
+open func dropCount(): u64 { return destroyed; }
+/** Default member construction remains observable independently of business work. */
+open func defaultCount(): u64 { return defaults; }
