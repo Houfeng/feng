@@ -340,6 +340,12 @@ static bool cgtype_is_managed(const CGType *t) {
     return cgtype_value_kind(t) == CG_VK_MANAGED_POINTER;
 }
 
+/* Direct calls bind references and object/intersection views by their
+ * evaluated value. Ordinary value self keeps the original storage instead. */
+static bool cg_type_binds_receiver_value(const CGType *type) {
+    return type != NULL && (cgtype_is_managed(type) || type->kind == CG_TYPE_SPEC);
+}
+
 static bool cgtype_is_aggregate(const CGType *t) {
     return cgtype_value_kind(t) == CG_VK_AGGREGATE;
 }
@@ -47953,8 +47959,8 @@ static bool cg_emit_spec_view_coercion_table(CG *cg, Buf *out,
     return ok;
 }
 
-/* Generate target-constraint records at closure time using the existing
- * three-field static cache. Preserve open slots even when closed records are
+/* Generate target-constraint records at closure time using the complete
+ * static descriptor cache. Preserve open slots even when closed records are
  * shared. No value conversion, descriptor-sized stack record, or dynamic
  * witness lookup is introduced into a shared invocation. */
 static bool cg_emit_constraint_projection_table(CG *cg, Buf *out,
@@ -50668,6 +50674,7 @@ static bool cg_closed_array_descriptor_expr(CG *cg,
 static bool cg_closed_generic_param_descriptor_expr(
     CG *cg,
     const char *kind_expr,
+    const char *receiver_binding_expr,
     const char *descriptor_expr,
     const char *witness_expr,
     const FengToken *tok,
@@ -50676,15 +50683,16 @@ static bool cg_closed_generic_param_descriptor_expr(
     Buf expression;
     CGClosedGenericParamDescriptorNode *node;
 
-    if (cg == NULL || kind_expr == NULL || descriptor_expr == NULL ||
-        witness_expr == NULL || tok == NULL || out == NULL) {
+    if (cg == NULL || kind_expr == NULL || receiver_binding_expr == NULL ||
+        descriptor_expr == NULL || witness_expr == NULL || tok == NULL || out == NULL) {
         return false;
     }
 
     buf_init(&key);
     buf_append_fmt(&key,
-                   "%s|%s|%s",
+                   "%s|%s|%s|%s",
                    kind_expr,
+                   receiver_binding_expr,
                    descriptor_expr,
                    witness_expr);
     if (key.data == NULL) {
@@ -50748,11 +50756,12 @@ static bool cg_closed_generic_param_descriptor_expr(
     buf_append_fmt(
         &cg->statics,
         "static const FengGenericParamDescriptor %s = {"
-        ".kind = %s, .descriptor = %s, .witness = %s};\n",
+        ".kind = %s, .descriptor = %s, .witness = %s, .receiver_binding = %s};\n",
         node->c_name,
         kind_expr,
         descriptor_expr,
-        witness_expr);
+        witness_expr,
+        receiver_binding_expr);
     buf_init(&expression);
     buf_append_fmt(&expression, "&%s", node->c_name);
     *out = expression.data;
@@ -50791,6 +50800,8 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
         buf_free(&b);
         return cg_open_generic_argument_expr(cg, t, constraint_spec, *tok, out);
     }
+    const char *receiver_binding_expr = cg_type_binds_receiver_value(t)
+        ? "FENG_RECEIVER_SNAPSHOT_VALUE" : "FENG_RECEIVER_BORROW_STORAGE";
     const char *witness_expr = static_witness != NULL ? static_witness : "NULL";
     char *owned_witness_expr = NULL;
 
@@ -50927,6 +50938,7 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                 if (!cg_closed_generic_param_descriptor_expr(
                         cg,
                         "FENG_VALUE_TRIVIAL",
+                        receiver_binding_expr,
                         descriptor_expr,
                         witness_expr,
                         tok,
@@ -50945,9 +50957,10 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                 &b,
                 "&(const FengGenericParamDescriptor){"
                 ".kind = FENG_VALUE_TRIVIAL, "
-                ".descriptor = %s, .witness = %s}",
+                ".descriptor = %s, .witness = %s, .receiver_binding = %s}",
                 descriptor_expr,
-                witness_expr);
+                witness_expr,
+                receiver_binding_expr);
             free(descriptor_expr);
             break;
         }
@@ -50977,6 +50990,7 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                 if (!cg_closed_generic_param_descriptor_expr(
                         cg,
                         "FENG_VALUE_MANAGED_POINTER",
+                        receiver_binding_expr,
                         descriptor_expr,
                         witness_expr,
                         tok,
@@ -50995,9 +51009,10 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                 &b,
                 "&(const FengGenericParamDescriptor){"
                 ".kind = FENG_VALUE_MANAGED_POINTER, "
-                ".descriptor = %s, .witness = %s}",
+                ".descriptor = %s, .witness = %s, .receiver_binding = %s}",
                 descriptor_expr,
-                witness_expr);
+                witness_expr,
+                receiver_binding_expr);
             free(descriptor_expr);
             break;
         }
@@ -51020,6 +51035,7 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                     !cg_closed_generic_param_descriptor_expr(
                         cg,
                         "FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS",
+                        receiver_binding_expr,
                         descriptor.data,
                         witness_expr,
                         tok,
@@ -51038,9 +51054,10 @@ static bool cg_generic_descriptor_with_witness(CG *cg, const CGType *t,
                 &b,
                 "&(const FengGenericParamDescriptor){"
                 ".kind = FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS, "
-                ".descriptor = &%s, .witness = %s}",
+                ".descriptor = &%s, .witness = %s, .receiver_binding = %s}",
                 facts.descriptor_name,
-                witness_expr);
+                witness_expr,
+                receiver_binding_expr);
             break;
         }
     }

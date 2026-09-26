@@ -209,12 +209,60 @@ static bool cg_call_preserves_receiver_storage(CG *cg, const FengExpr *expr) {
     return false;
 }
 
+/* Keep a descriptor-selected value receiver before evaluating arguments.
+ * Managed pointers use the existing invocation guard; aggregate snapshots
+ * retain the established lexical lifetime of a concrete view operand.
+ * Storage and cleanup nodes outlive the conditional activation block. */
+static bool cg_prepare_erased_receiver_snapshot(CG *cg, const CGType *type,
+    const char *address, const char *descriptor, FengToken blame) {
+    char *enabled = cg_fresh_temp(cg, "_receiver_snapshot_enabled");
+    char *storage = cg_fresh_temp(cg, "_receiver_snapshot");
+    char *size = cg_fresh_temp(cg, "_receiver_size");
+    CGType *owned = cgtype_clone(type);
+    bool ok = false;
+    if (descriptor == NULL || enabled == NULL || storage == NULL || size == NULL ||
+        owned == NULL) goto cleanup;
+    if (!scope_add(cg->cur_scope, storage, storage, owned, false)) goto cleanup;
+    owned = NULL; /* The lexical scope owns the conditional snapshot. */
+    if (!scope_mark_last_erased_generic_argument_storage(cg->cur_scope,
+            descriptor, size)) goto cleanup;
+    Local *local = &cg->cur_scope->items[cg->cur_scope->count - 1U];
+    local->cleanup_condition_c_expr = strdup(enabled);
+    if (local->cleanup_condition_c_expr == NULL) goto cleanup;
+    cg_note_cleanup_requirement(cg);
+    cg_emit_current_stmt_line_directive_force(cg);
+    buf_append_fmt(cg->cur_body,
+        "    %sconst bool %s = %s->receiver_binding == FENG_RECEIVER_SNAPSHOT_VALUE"
+        " && %s->kind != FENG_VALUE_MANAGED_POINTER;\n"
+        "    %sconst size_t %s = %s ? feng_generic_value_size(%s) : 1U;\n"
+        "    %s_Alignas(max_align_t) char %s[%s];\n"
+        "    FENG_CODEGEN_NODEBUG FengCleanupNode _cu_%s;\n"
+        "    if (%s) {\n"
+        "        memcpy(%s, %s, %s);\n"
+        "        if (%s->kind == FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS) {\n"
+        "            feng_aggregate_retain(%s, feng_generic_aggregate_descriptor(%s));\n"
+        "            feng_cleanup_push_aggregate(&_cu_%s, %s, feng_generic_aggregate_descriptor(%s));\n"
+        "        }\n"
+        "        %s = %s;\n"
+        "    }\n",
+        cg_debug_local_attribute(cg, enabled), enabled, descriptor, descriptor,
+        cg_debug_local_attribute(cg, size), size, enabled, descriptor,
+        cg_debug_local_attribute(cg, storage), storage, size, storage, enabled,
+        storage, address, size, descriptor, storage, descriptor,
+        storage, storage, descriptor, address, storage);
+    ok = true;
+cleanup:
+    free(enabled); free(storage); free(size); cgtype_free(owned);
+    if (!ok) return cg_fail(cg, blame, "IE0001", "codegen: receiver snapshot preparation failed");
+    return true;
+}
+
 /* Explicit values copy, but implicit self refers to the selected original
  * storage. Managed receivers fix identity; generic receivers select the same
  * rule using their existing descriptor, never the placeholder C type. */
 static bool cg_prepare_call_receiver(CG *cg, ExprResult *receiver,
                                       const FengExpr *source) {
-    if (cgtype_is_managed(receiver->type) || receiver->type->kind == CG_TYPE_SPEC)
+    if (cg_type_binds_receiver_value(receiver->type))
         return cg_prepare_call_operand(cg, receiver, source);
     if (receiver->type->kind == CG_TYPE_GENERIC_PARAM &&
         receiver->managed_identity_is_stable)
@@ -241,7 +289,9 @@ static bool cg_prepare_call_receiver(CG *cg, ExprResult *receiver,
         const char *descriptor = receiver->uses_erased_generic_storage
             ? receiver->erased_generic_descriptor_c_name
             : cg_generic_param_desc_name(cg, receiver->type->generic_param_index);
-        if (!cg_guard_call_managed_storage(cg, snapshot, descriptor,
+        if (!cg_prepare_erased_receiver_snapshot(cg, receiver->type,
+                snapshot, descriptor, source->token) ||
+            !cg_guard_call_managed_storage(cg, snapshot, descriptor,
                                            source->token, snapshot)) {
             free(snapshot); return false;
         }

@@ -284,11 +284,12 @@ imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consu
 
 - 每个类型参数 `T` 都有且仅有一个 `const FengGenericParamDescriptor *_T`。
 - 共享主体按**泛型环境**完整展开隐藏描述符参数：每个类型参数一份描述符；若同一主体同时涉及 `T`、`U`、`V`，则签名中必须显式出现 `_T`、`_U`、`_V` 三个隐藏参数，且顺序与声明顺序一致。
-- 该描述符直接回答四个问题：
+- 该描述符直接回答五个问题：
   - `sizeof(T)` 是多少；
   - `T` 属于 trivial / managed pointer / aggregate 哪一类；
   - 若是 aggregate，使用哪一个 `FengAggregateValueDescriptor`。
     - 若 `T` 声明了 `spec` 约束，复用哪一个编译期已经生成好的 witness 实例；否则 `witness == NULL`。
+  - 实例方法接收者按原存储绑定，还是固定已经求值的接收者值（见 §1.2）。
 - 对 `T` 的**值语义操作**（复制、assign、retain/release、按值传参、按值返回、字段内联大小判断）只读取 `size` / `kind` / `aggregate`；只有 `T` 上的**契约能力操作**（object-form 成员访问、object-form 方法调用、callable-form 调用、union-form 收窄/投影）才读取 `witness`。
 - 这条 ABI 已有实现基础，后续工作是把类型覆盖补齐，而不是重写。
 - 当前实现里的 `FengGenericValueDescriptor` 是这条 ABI 的值模型前身；完整态直接将其重命名为 `FengGenericParamDescriptor` 并增加 `witness`，而不是再引入一层平行 wrapper。
@@ -297,13 +298,42 @@ imported 泛型 `spec` 的具体实例不保证已在 provider 中物化；consu
 
 ##### 1.1 描述符存储与转发不变量
 
-- 对编译期已经闭合的泛型实参，`FengGenericParamDescriptor` 的值分类、底层 descriptor 地址和可选 witness 地址均为编译期常量。Codegen 必须为该组合生成或复用 C 生成单元内的文件级 `static const` 实例，调用点只传递其地址；禁止在可执行路径中用 block-scope compound literal 重复构造等价实例。
-- 静态实例按“值分类 + descriptor 符号 + witness 符号”这一完整内容组合缓存。缓存只负责同一 C 生成单元内的去重；`FengGenericParamDescriptor` 的地址不具有 Feng 语言语义，跨生成单元不要求地址唯一。
+- 对编译期已经闭合的泛型实参，`FengGenericParamDescriptor` 的值分类、接收者绑定策略、底层 descriptor 地址和可选 witness 地址均为编译期常量。Codegen 必须为该组合生成或复用 C 生成单元内的文件级 `static const` 实例，调用点只传递其地址；禁止在可执行路径中用 block-scope compound literal 重复构造等价实例。
+- 静态实例按“值分类 + 接收者绑定策略 + descriptor 符号 + witness 符号”这一完整内容组合缓存。缓存只负责同一 C 生成单元内的去重；`FengGenericParamDescriptor` 的地址不具有 Feng 语言语义，跨生成单元不要求地址唯一。
 - open generic 共享主体接收的 `_T` 已经是当前实际类型参数的 descriptor 权威。向相同约束面转发时必须直接传递 `_T`，不得复制其字段形成临时 `FengGenericParamDescriptor`。
 - 从子约束面向已经由 semantic 验证为 witness 前缀兼容的父约束面转发时，只要 descriptor 与 witness 表示均未发生转换，也必须直接传递 `_T`。编译期约束兼容性证明不要求运行时 carrier 复制。
 - 只有语义上确实改变值分类、底层 descriptor 或 witness 的转换才能产生不同的 `FengGenericParamDescriptor`。当前闭合 wrapper/consumer 模型下，这类不同组合仍应由具化点静态生成并以指针传入，不引入运行时查找、分配或 descriptor 工厂。
 
 因此，二进制分发与泛型共享体保留的必要成本只有隐藏 descriptor 指针传递及共享体按需读取；闭合 descriptor 的逐调用构造，以及 open descriptor 的逐字段复制，都不属于共享 ABI 的必要成本。
+
+##### 1.2 接收者绑定策略（2026-09-25，已批准）
+
+`FengGenericParamDescriptor.receiver_binding` 的类型为 `FengReceiverBindingKind`，
+独立于 ARC 分类 `kind`，表达直接实例调用的接收者准备方式：
+
+| 策略 | 实际类型 | 实参求值前的行为 |
+| --- | --- | --- |
+| `FENG_RECEIVER_BORROW_STORAGE` | 标量、tuple、普通值类型和其他按存储绑定的值 | 保留原存储地址，方法 self 不产生副本 |
+| `FENG_RECEIVER_SNAPSHOT_VALUE` | 托管引用，以及 object／intersection spec 视图 | 固定已经求值的接收者值，并在需要时保持其拥有权 |
+
+策略由 Codegen 根据实际类型的既有语义生成，与约束面无关。转发或改变约束时保持
+实际类型的策略；函数／方法级泛参继续通过原隐式描述符参数传递，类型级泛参继续
+由宿主描述符的 `reified_generic_params` 提供。FT 不写入新增诊断或策略文本，导入
+后的实际类型同样由 Codegen 生成策略。
+
+共享体只消费该策略和既有值描述符，不根据类型名、大小、托管槽数量或 witness
+地址猜测类型。复制／保活／清理仍由原值模型处理，稳定或已有拥有者的接收者继续
+复用已有保护。spec 固定的是 subject／witness 视图，不复制或重新装箱 subject。
+调用准备不改变现有参数副本、临时值及普通值 self 的生存期规则。
+
+此字段扩展私有描述符契约，所有相关编译器、runtime 和生成包须统一重编；不新增
+runtime 函数、额外隐式参数或 callable 形成协议。实施与验证见
+[泛型接收者绑定修复](./feng-generic-receiver-binding-bugfix.md)。
+
+实际字段布局统一见 [`src/runtime/feng_runtime.h`](../../src/runtime/feng_runtime.h)
+的 `FengGenericParamDescriptor`。本文后续早期设计示意中的 `size`／`aggregate`
+直接字段记法不代表当前布局；当前经 `kind`／`descriptor` 取得值布局，并包含本节
+的 `receiver_binding`。实例构造和跨包重编必须以当前结构及本节契约为准。
 
 #### 2. 宿主布局输入
 

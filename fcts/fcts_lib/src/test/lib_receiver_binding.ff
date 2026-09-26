@@ -1,0 +1,82 @@
+open module fcts_lib.test;
+
+/** A separately compiled constraint used by consumer-owned implementations. */
+open spec ReceiverRead { func read(extra: int): int; }
+/** A second surface changes both parent order and witness projection. */
+open spec ReceiverExtra { func extra(): int; }
+/** Inherited object views keep the same selected subject across parent calls. */
+open spec ReceiverChild: ReceiverRead, ReceiverExtra {}
+/** Reverse component order so the constraint witness requires adaptation. */
+open spec ReceiverBoth: ReceiverExtra & ReceiverRead;
+/** Factories create receivers without retaining them in the caller. */
+open spec ReceiverFactory<T>(): T;
+/** An arbitrary callback can rebind a captured receiver during arguments. */
+open spec ReceiverArgument(): int;
+/** Returning an open value exercises the erased result ABI after selection. */
+open spec ReceiverResult<V> { func result(extra: int): V; }
+/** Multiple arguments can independently replace the selected source. */
+open spec ReceiverPair { func pair(first: int, second: int): int; }
+/** Default views dispatch through a synthesized zero-result witness. */
+open spec ReceiverDefault { func number(extra: int): int; }
+/** Generic fields expose mutable storage without a concrete consumer layout. */
+open type ReceiverSlot<T> { open var value: T; }
+
+/** The shared body must select self before rebinding its source. */
+open func receiverForeign<T: ReceiverRead>(first: T, second: T): int {
+    var value = first;
+    return value.read(if true { value = second; 1; } else { 0; });
+}
+
+/** Forwarding retains the actual type's binding strategy. */
+open func receiverForeignRelay<T: ReceiverRead>(first: T, second: T): int {
+    return receiverForeign<T>(first, second);
+}
+
+/** A stronger constraint must not replace the actual receiver representation. */
+open func receiverForeignParent<T: ReceiverChild>(first: T, second: T): int {
+    return receiverForeign<T>(first, second);
+}
+
+/** Intersection projection reaches the same generic parent implementation. */
+open func receiverForeignBoth<T: ReceiverBoth>(first: T, second: T): int {
+    return receiverForeign<T>(first, second);
+}
+
+/** Use the type's descriptor for self.value and a distinct method descriptor. */
+open type ReceiverOwner<T: ReceiverRead> {
+    open var value: T;
+    /** Type-level metadata must preserve the old view. */
+    open func replace(next: T): int {
+        return self.value.read(if true { self.value = next; 1; } else { 0; });
+    }
+    /** Method-level U has its own receiver policy even when T differs. */
+    open func select<U: ReceiverRead>(first: U, second: U): int {
+        var value = first;
+        return value.read(if true { value = second; 1; } else { 0; });
+    }
+}
+
+/** Captured fields and imported shared bodies still share one descriptor. */
+open func receiverForeignField<T: ReceiverRead>(slot: ReceiverSlot<T>, next: T,
+    argument: ReceiverArgument): int {
+    return slot.value.read(if true { slot.value = next; argument(); } else { 0; });
+}
+
+/** The result descriptor is independent of the receiver descriptor. */
+open func receiverForeignResult<V, T: ReceiverResult<V>>(first: T, second: T): V {
+    var value = first;
+    return value.result(if true { value = second; 1; } else { 0; });
+}
+
+/** Preserve one receiver while evaluating both arguments from left to right. */
+open func receiverForeignPair<T: ReceiverPair>(first: T, second: T, third: T): int {
+    var value = first;
+    return value.pair(if true { value = second; 1; } else { 0; },
+        if true { value = third; 3; } else { 0; });
+}
+
+/** Default views require copying their subject and synthesized witness. */
+open func receiverForeignDefault<T: ReceiverDefault>(first: T, second: T): int {
+    var value = first;
+    return value.number(if true { value = second; 1; } else { 0; });
+}

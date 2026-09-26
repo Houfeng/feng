@@ -3639,7 +3639,7 @@ static void test_generic_runtime_extern_call_infers_type_args(void) {
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
         char descriptor_definition[320];
         snprintf(descriptor_definition, sizeof(descriptor_definition),
-                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL, .receiver_binding = FENG_RECEIVER_BORROW_STORAGE};",
                  int_descriptor);
         ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
         ASSERT(strstr(out.c_source,
@@ -3688,7 +3688,7 @@ static void test_generic_runtime_extern_call_accepts_explicit_type_args(void) {
         const char *int_descriptor = sizeof(void *) >= 8U ? "feng_i64_descriptor" : "feng_i32_descriptor";
         char descriptor_definition[320];
         snprintf(descriptor_definition, sizeof(descriptor_definition),
-                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL, .receiver_binding = FENG_RECEIVER_BORROW_STORAGE};",
                  int_descriptor);
         ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
         ASSERT(strstr(out.c_source,
@@ -3750,7 +3750,7 @@ static void test_array_storage_runtime_contract_codegen(void) {
 
     snprintf(descriptor,
              sizeof(descriptor),
-             "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
+             "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL, .receiver_binding = FENG_RECEIVER_BORROW_STORAGE};",
              int_descriptor);
     ASSERT(count_substr(out.c_source, descriptor) == 1U);
     ASSERT(count_substr(out.c_source,
@@ -3813,7 +3813,7 @@ static void test_generic_runtime_extern_expression_equal_codegen(void) {
         char descriptor_definition[320];
         char rga_pattern[64];
         snprintf(descriptor_definition, sizeof(descriptor_definition),
-                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL, .receiver_binding = FENG_RECEIVER_BORROW_STORAGE};",
                  int_descriptor);
         ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
         ASSERT(strstr(out.c_source,
@@ -3867,7 +3867,7 @@ static void test_generic_runtime_extern_direct_type_param_return_codegen(void) {
         char rga_pattern[64];
         char rgr_pattern[64];
         snprintf(descriptor_definition, sizeof(descriptor_definition),
-                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL};",
+                 "static const FengGenericParamDescriptor _feng_closed_generic_param_desc_0 = {.kind = FENG_VALUE_TRIVIAL, .descriptor = &%s, .witness = NULL, .receiver_binding = FENG_RECEIVER_BORROW_STORAGE};",
                  int_descriptor);
         ASSERT(strstr(out.c_source, descriptor_definition) != NULL);
         ASSERT(strstr(out.c_source,
@@ -17428,6 +17428,8 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
 /* ARC ownership has independent structural and conservative-path coverage. */
 void test_arc_ownership_codegen(void (*compile_c)(const char *));
+/* Generic receiver binding is independent of its ARC representation. */
+void test_receiver_binding_codegen(void (*compile_c)(const char *));
 
 int main(void) {
     (void)system("rm -rf temp");
@@ -17693,6 +17695,7 @@ int main(void) {
     test_loop_binding_uncaptured_codegen();
     test_loop_tuple_destructuring_codegen();
     test_arc_ownership_codegen(compile_generated_c_or_die);
+    test_receiver_binding_codegen(compile_generated_c_or_die);
     fprintf(stdout, "codegen tests passed\n");
     return 0;
 }

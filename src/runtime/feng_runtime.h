@@ -419,6 +419,14 @@ typedef enum FengValueKind {
     FENG_VALUE_AGGREGATE_WITH_MANAGED_SLOTS = 3
 } FengValueKind;
 
+/* Receiver selection is independent from the value's ARC representation. */
+typedef enum FengReceiverBindingKind {
+    /* Direct value self continues to refer to the selected original storage. */
+    FENG_RECEIVER_BORROW_STORAGE = 0,
+    /* Preserve the evaluated receiver across subsequent argument evaluation. */
+    FENG_RECEIVER_SNAPSHOT_VALUE = 1
+} FengReceiverBindingKind;
+
 /* ---- Generic parameter descriptor (G6 — layout monomorphization + method sharing) ----
  * Passed as one hidden argument per type parameter to generic shared bodies.
  * Carries the minimum runtime information needed by erased code to correctly
@@ -426,6 +434,7 @@ typedef enum FengValueKind {
  * of the erased type parameter.
  *
  *   kind       — ARC classification; drives the switch in generic return/copy.
+ *   receiver_binding — direct-call receiver selection, separate from ARC.
  *   descriptor — concrete descriptor for the current kind. Cast target is
  *                FengTrivialDescriptor, FengTypeDescriptor, or
  *                FengAggregateDescriptor according to `kind`.
@@ -434,6 +443,7 @@ typedef enum FengValueKind {
  *                unconstrained. */
 typedef struct FengGenericParamDescriptor {
     FengValueKind   kind;
+    FengReceiverBindingKind receiver_binding;
     const void     *descriptor;
     const void     *witness;
 } FengGenericParamDescriptor;

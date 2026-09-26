@@ -1,0 +1,392 @@
+module fcts_bin;
+
+import std.test;
+import std.numeric;
+import std.text;
+import fcts_lib.test;
+
+var receiverDrops: int = 0;
+var receiverOrder: int = 0;
+var receiverSeen: int = 0;
+var receiverAfter: int = 0;
+var receiverCalls: int = 0;
+
+/** Observable identity, dispatch, and lifetime without a retained test owner. */
+type ReceiverItem: ReceiverChild {
+    let n: int;
+    /** Negative arguments throw the selected subject's own number. */
+    func read(extra: int): int {
+        receiverCalls += 1;
+        receiverSeen = receiverDrops;
+        if extra < 0 { throw self.n; }
+        return self.n + extra;
+    }
+    /** Supply the second parent surface. */
+    func extra(): int { return self.n; }
+    /** Ignore language default-zero objects when counting explicit resources. */
+    func ~ReceiverItem() {
+        if self.n != 0 { receiverDrops += 1; receiverOrder = receiverOrder * 10 + self.n; }
+    }
+}
+
+/** A different implementation makes stale or mixed witness selection visible. */
+type ReceiverOther: ReceiverChild {
+    let n: int;
+    /** The multiplier distinguishes this witness from ReceiverItem. */
+    func read(extra: int): int { return self.n * 10 + extra; }
+    /** Supply the same second parent with a different implementation. */
+    func extra(): int { return self.n * 10; }
+}
+
+/** The managed field deliberately shares the spec's ARC classification. */
+@value type ReceiverValue: ReceiverChild {
+    var n: int;
+    let owner: ReceiverItem;
+    /** Mutation must reach the selected original value storage. */
+    func read(extra: int): int { self.n += extra; return self.n; }
+    /** Observe storage after the preceding mutating call. */
+    func extra(): int { return self.n; }
+}
+
+/** A descriptor-sized value cannot be treated as a two-pointer view. */
+@value type ReceiverWide<T>: ReceiverRead {
+    var n: int;
+    let value: T;
+    let tail: i64;
+    /** Mutate original storage independently of the generic payload size. */
+    func read(extra: int): int { self.n += extra; return self.n; }
+}
+
+/** Capture an open receiver and its descriptor across a closure boundary. */
+spec ReceiverAction(): int;
+
+/** Independent open payload layouts exercise method return-value handling. */
+type ReceiverPayload<V>: ReceiverResult<V> {
+    let value: V;
+    /** Returning self's payload exposes selection before an argument rebinds it. */
+    func result(extra: int): V { return self.value; }
+}
+
+/** Encode the selected identity and both argument values. */
+type ReceiverPairItem: ReceiverPair {
+    let n: int;
+    /** Order must be receiver, first argument, then second argument. */
+    func pair(first: int, second: int): int { return self.n * 100 + first * 10 + second; }
+}
+
+/** Distinguish this implementation's witness from the default witness. */
+type ReceiverDefaultItem: ReceiverDefault {
+    /** This method must not replace the previously selected default method. */
+    func number(extra: int): int { return 90 + extra; }
+}
+
+/** A scalar fit is a storage-bound control without any ARC slots. */
+spec ReceiverNumber { func receiverNumber(extra: int): int; }
+/** The scalar receiver must read the original, possibly updated, slot. */
+fit int: ReceiverNumber {
+    /** Return the slot value after argument evaluation. */
+    func receiverNumber(extra: int): int { return self + extra; }
+}
+
+/** The descriptor's storage policy must not add a scalar snapshot. */
+func receiverScalar<T: ReceiverNumber>(first: T, second: T): int {
+    var value = first;
+    return value.receiverNumber(if true { value = second; 1; } else { 0; });
+}
+
+/** Loop iterations retire snapshots before reusing their stack storage. */
+func receiverLoop<T: ReceiverRead>(slot: ReceiverSlot<T>, first: T, second: T): int {
+    var total = 0;
+    for var i = 0; i < 32; i += 1 {
+        slot.value = first;
+        total += slot.value.read(if true { slot.value = second; 1; } else { 0; });
+    }
+    return total;
+}
+
+/** Reset only after all owners in the previous scenario have left scope. */
+func receiverReset(): void {
+    receiverDrops = 0; receiverOrder = 0; receiverSeen = 0;
+    receiverAfter = 0; receiverCalls = 0;
+}
+
+/** Local shared-body counterpart of the imported reproduction. */
+func receiverLocal<T: ReceiverRead>(first: T, second: T): int {
+    var value = first;
+    return value.read(if true { value = second; 1; } else { 0; });
+}
+
+/** Two independent generic domains must retain their own receiver strategies. */
+func receiverMixed<A: ReceiverRead, B: ReceiverRead>(a: A, aa: A, b: B, bb: B): int {
+    return receiverLocal<A>(a, aa) * 100 + receiverForeign<B>(b, bb);
+}
+
+/** Generic fields keep the same storage for value self and snapshot views. */
+func receiverField<T: ReceiverRead>(slot: ReceiverSlot<T>, next: T): int {
+    return slot.value.read(if true { slot.value = next; 1; } else { 0; });
+}
+
+/** Index receivers select an element before later argument mutation. */
+func receiverElement<T: ReceiverRead>(values: T[!], next: T): int {
+    return values[0].read(if true { values[0] = next; 1; } else { 0; });
+}
+
+/** Nested calls must not retire the outer receiver's protection. */
+func receiverNested<T: ReceiverRead>(first: T, second: T): int {
+    var value = first;
+    return value.read(if true {
+        value = second;
+        receiverLocal<T>(first, second);
+    } else { 0; });
+}
+
+/** The descriptor and mutable receiver remain available after formation. */
+func receiverClosure<T: ReceiverRead>(first: T, second: T): ReceiverAction {
+    var value = first;
+    return () { return value.read(if true { value = second; 1; } else { 0; }); };
+}
+
+/** Defer catches every exception while preserving generic receiver selection. */
+func receiverDeferred<T: ReceiverRead>(first: T, second: T): void {
+    var value = first;
+    defer {
+        try (if true {
+            receiverAfter = value.read(if true { value = second; 1; } else { 0; });
+            0;
+        } else { 0; }) catch { receiverAfter = -1; }
+    }
+}
+
+/** Producer-owned and immutable receivers need no repeated selection. */
+func receiverTemporary<T: ReceiverRead>(make: ReceiverFactory<T>): int { return make().read(1); }
+/** A stable parameter still uses the selected original representation. */
+func receiverStable<T: ReceiverRead>(value: T): int { return value.read(1); }
+
+/** Existing factory result owners keep their established lexical lifetime. */
+func receiverProducedLifetime<T: ReceiverRead>(first: ReceiverFactory<T>, second: ReceiverFactory<T>): int {
+    let slot = ReceiverSlot<T> { value: first() };
+    let result = slot.value.read(if true { slot.value = second(); 1; } else { 0; });
+    receiverAfter = receiverDrops;
+    return result;
+}
+
+/** Isolate receiver protection from factory-result ownership in the holder. */
+func receiverLifetime<T: ReceiverRead>(slot: ReceiverSlot<T>, second: ReceiverFactory<T>): int {
+    let result = slot.value.read(if true { slot.value = second(); 1; } else { 0; });
+    receiverAfter = receiverDrops;
+    return result;
+}
+
+/** The concrete path starts with exactly the same owners as the shared body. */
+func receiverConcreteLifetime(slot: ReceiverSlot<ReceiverRead>, second: ReceiverFactory<ReceiverRead>): int {
+    let result = slot.value.read(if true { slot.value = second(); 1; } else { 0; });
+    receiverAfter = receiverDrops;
+    return result;
+}
+
+/** Every exceptional exit must release exactly the newly established owners. */
+func receiverExceptional<T: ReceiverRead>(first: ReceiverFactory<T>, second: ReceiverFactory<T>, inArgument: bool): int {
+    let slot = ReceiverSlot<T> { value: first() };
+    return slot.value.read(if true {
+        slot.value = second();
+        if inArgument { throw 73; }
+        -1;
+    } else { 0; });
+}
+
+/** Source factories and argument control flow cover the complete receiver lifetime. */
+open func test_receiver_binding(): void {
+    describe("generic receiver binding", () {
+        test("local reference receivers keep the selected identity", () {
+            assertEquals(receiverLocal<ReceiverItem>(ReceiverItem { n: 4 }, ReceiverItem { n: 5 }), 5, "old reference");
+        });
+        test("local spec receivers keep the selected subject", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverItem { n: 5 };
+            assertEquals(receiverLocal<ReceiverRead>(a, b), 5, "old view");
+        });
+        test("different concrete implementations preserve subject and witness together", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            assertEquals(receiverLocal<ReceiverRead>(a, b), 5, "first witness");
+            assertEquals(receiverLocal<ReceiverRead>(b, a), 51, "second witness");
+        });
+        test("ordinary value receivers observe rebound original storage", () {
+            let owner = ReceiverItem { n: 7 };
+            let a = ReceiverValue { n: 4, owner: owner }; let b = ReceiverValue { n: 5, owner: owner };
+            assertEquals(receiverLocal<ReceiverValue>(a, b), 6, "value self");
+            assertEquals(receiverForeign<ReceiverValue>(a, b), 6, "imported value self");
+        });
+        test("value receivers mutate the original generic field", () {
+            let owner = ReceiverItem { n: 7 };
+            let slot = ReceiverSlot<ReceiverValue> { value: ReceiverValue { n: 4, owner: owner } };
+            assertEquals(receiverField<ReceiverValue>(slot, ReceiverValue { n: 5, owner: owner }), 6, "field result");
+            assertEquals(slot.value.n, 6, "field was mutated");
+        });
+        test("descriptor-sized value receivers retain their original storage", () {
+            let slot = ReceiverSlot<ReceiverWide<string>> { value: ReceiverWide<string> { n: 4, value: "first", tail: 91 } };
+            assertEquals(receiverField<ReceiverWide<string>>(slot, ReceiverWide<string> { n: 5, value: "second", tail: 92 }), 6, "wide result");
+            assertEquals(slot.value.n, 6, "wide self mutation");
+            assertEquals(slot.value.value, "second", "new payload remains");
+        });
+        test("boxing a value into a spec still selects the old box", () {
+            let owner = ReceiverItem { n: 7 };
+            let a: ReceiverRead = ReceiverValue { n: 4, owner: owner };
+            let b: ReceiverRead = ReceiverValue { n: 50, owner: owner };
+            assertEquals(receiverLocal<ReceiverRead>(a, b), 5, "old box");
+            assertEquals(a.read(0), 5, "same box mutated");
+            assertEquals(b.read(0), 50, "replacement box unchanged");
+        });
+        test("inherited and intersection views keep their dispatch surface", () {
+            let a: ReceiverChild = ReceiverItem { n: 4 }; let b: ReceiverChild = ReceiverOther { n: 5 };
+            assertEquals(receiverLocal<ReceiverChild>(a, b), 5, "child view");
+            let x: ReceiverBoth = ReceiverItem { n: 4 }; let y: ReceiverBoth = ReceiverOther { n: 5 };
+            assertEquals(receiverLocal<ReceiverBoth>(x, y), 5, "intersection view");
+        });
+        test("binary shared bodies preserve receiver strategy across forwarding", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            assertEquals(receiverForeign<ReceiverRead>(a, b), 5, "imported body");
+            assertEquals(receiverForeignRelay<ReceiverRead>(a, b), 5, "imported forwarding");
+        });
+        test("parent and intersection constraint projections retain actual strategy", () {
+            let a: ReceiverChild = ReceiverItem { n: 4 }; let b: ReceiverChild = ReceiverOther { n: 5 };
+            assertEquals(receiverForeignParent<ReceiverChild>(a, b), 5, "parent projection");
+            let x: ReceiverBoth = ReceiverItem { n: 4 }; let y: ReceiverBoth = ReceiverOther { n: 5 };
+            assertEquals(receiverForeignBoth<ReceiverBoth>(x, y), 5, "intersection projection");
+        });
+        test("type-level and method-level generic descriptors remain independent", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            let owner = ReceiverOwner<ReceiverRead> { value: a };
+            assertEquals(owner.replace(b), 5, "type parameter");
+            assertEquals(owner.value.read(0), 50, "replacement stored");
+            assertEquals(owner.select<ReceiverRead>(a, b), 5, "method parameter");
+            let refOwner = ReceiverOwner<ReceiverItem> { value: ReceiverItem { n: 8 } };
+            assertEquals(refOwner.select<ReceiverRead>(a, b), 5, "distinct type and method representations");
+        });
+        test("mixed open type parameters choose their own receiver rules", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            let token = ReceiverItem { n: 7 };
+            let x = ReceiverValue { n: 4, owner: token }; let y = ReceiverValue { n: 5, owner: token };
+            assertEquals(receiverMixed<ReceiverRead, ReceiverValue>(a, b, x, y), 506, "view then value");
+            assertEquals(receiverMixed<ReceiverValue, ReceiverRead>(x, y, a, b), 605, "value then view");
+        });
+        test("generic field views retain their old target after storage replacement", () {
+            let slot = ReceiverSlot<ReceiverRead> { value: ReceiverItem { n: 4 } };
+            assertEquals(receiverField<ReceiverRead>(slot, ReceiverOther { n: 5 }), 5, "old field view");
+            assertEquals(slot.value.read(0), 50, "new field view");
+        });
+        test("generic array elements preserve view identity and value self", () {
+            var views: ReceiverRead[!] = [ReceiverItem { n: 4 }];
+            assertEquals(receiverElement<ReceiverRead>(views, ReceiverOther { n: 5 }), 5, "old array view");
+            let owner = ReceiverItem { n: 7 };
+            var values: ReceiverValue[!] = [ReceiverValue { n: 4, owner: owner }];
+            assertEquals(receiverElement<ReceiverValue>(values, ReceiverValue { n: 5, owner: owner }), 6, "array value self");
+            assertEquals(values[0].n, 6, "array element mutated");
+        });
+        test("unknown callback arguments cannot invalidate a prepared view", () {
+            let slot = ReceiverSlot<ReceiverRead> { value: ReceiverItem { n: 4 } };
+            let next: ReceiverRead = ReceiverOther { n: 5 };
+            assertEquals(receiverForeignField<ReceiverRead>(slot, next, () { slot.value = ReceiverItem { n: 9 }; return 1; }), 5, "callback replacement");
+        });
+        test("nested invocations preserve the outer receiver", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            assertEquals(receiverNested<ReceiverRead>(a, b), 9, "outer old subject plus nested result");
+        });
+        test("captured generic descriptors keep the selection rule", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            let action = receiverClosure<ReceiverRead>(a, b);
+            assertEquals(action(), 5, "first captured view");
+            assertEquals(action(), 51, "second call observes completed rebinding");
+        });
+        test("generic defer receiver selection uses its captured descriptor", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 }; let b: ReceiverRead = ReceiverOther { n: 5 };
+            receiverDeferred<ReceiverRead>(a, b);
+            assertEquals(receiverAfter, 5, "defer selection");
+        });
+        test("stable and temporary generic view receivers remain valid", () {
+            let a: ReceiverRead = ReceiverItem { n: 4 };
+            assertEquals(receiverStable<ReceiverRead>(a), 5, "stable view");
+            assertEquals(receiverTemporary<ReceiverRead>(() { return ReceiverItem { n: 4 }; }), 5, "owned view temporary");
+        });
+        test("open method results preserve managed and aggregate payloads", () {
+            let textA: ReceiverResult<string> = ReceiverPayload<string> { value: "first" };
+            let textB: ReceiverResult<string> = ReceiverPayload<string> { value: "second" };
+            assertEquals(receiverForeignResult<string, ReceiverResult<string>>(textA, textB), "first", "managed result");
+            let owner = ReceiverItem { n: 7 };
+            let a: ReceiverResult<ReceiverValue> = ReceiverPayload<ReceiverValue> { value: ReceiverValue { n: 4, owner: owner } };
+            let b: ReceiverResult<ReceiverValue> = ReceiverPayload<ReceiverValue> { value: ReceiverValue { n: 5, owner: owner } };
+            let result = receiverForeignResult<ReceiverValue, ReceiverResult<ReceiverValue>>(a, b);
+            assertEquals(result.n, 4, "aggregate result");
+            assertEquals(result.owner.n, 7, "aggregate result owner");
+            let viewA: ReceiverRead = ReceiverItem { n: 8 }; let viewB: ReceiverRead = ReceiverItem { n: 9 };
+            let x: ReceiverResult<ReceiverRead> = ReceiverPayload<ReceiverRead> { value: viewA };
+            let y: ReceiverResult<ReceiverRead> = ReceiverPayload<ReceiverRead> { value: viewB };
+            assertEquals(receiverForeignResult<ReceiverRead, ReceiverResult<ReceiverRead>>(x, y).read(1), 9, "view result");
+        });
+        test("multiple arguments preserve the initially selected receiver", () {
+            let a: ReceiverPair = ReceiverPairItem { n: 4 };
+            let b: ReceiverPair = ReceiverPairItem { n: 5 };
+            let c: ReceiverPair = ReceiverPairItem { n: 6 };
+            assertEquals(receiverForeignPair<ReceiverPair>(a, b, c), 413, "both arguments after receiver");
+        });
+        test("default views preserve their selected subject and witness", () {
+            let first: ReceiverDefault; let second: ReceiverDefault = ReceiverDefaultItem();
+            assertEquals(receiverForeignDefault<ReceiverDefault>(first, second), 0, "default witness");
+            assertEquals(receiverForeignDefault<ReceiverDefault>(second, first), 91, "real subject witness");
+        });
+        test("scalar receiver policy preserves original storage", () {
+            assertEquals(receiverScalar<int>(4, 5), 6, "updated scalar slot");
+        });
+        test("loop snapshots do not outlive their iteration", () {
+            receiverReset();
+            if true {
+                let first: ReceiverRead = ReceiverItem { n: 4 };
+                let second: ReceiverRead = ReceiverItem { n: 5 };
+                let slot = ReceiverSlot<ReceiverRead> { value: first };
+                assertEquals(receiverLoop<ReceiverRead>(slot, first, second), 160, "all iterations select first");
+            }
+            assertEquals(receiverDrops, 2, "no surviving iteration owner");
+        });
+        test("generic view snapshot lifetime matches the concrete path", () {
+            receiverReset();
+            if true {
+                let slot = ReceiverSlot<ReceiverRead> { value: ReceiverItem { n: 4 } };
+                assertEquals(receiverConcreteLifetime(slot, () { return ReceiverItem { n: 5 }; }), 5, "concrete control");
+                assertEquals(receiverDrops, 1, "concrete snapshot released at function exit");
+            }
+            let expectedSeen = receiverSeen; let expectedAfter = receiverAfter; let expectedOrder = receiverOrder;
+            assertEquals(receiverDrops, 2, "control released both objects");
+            receiverReset();
+            if true {
+                let slot = ReceiverSlot<ReceiverRead> { value: ReceiverItem { n: 4 } };
+                assertEquals(receiverLifetime<ReceiverRead>(slot, () { return ReceiverItem { n: 5 }; }), 5, "generic lifetime");
+                assertEquals(receiverDrops, 1, "generic snapshot released at function exit");
+            }
+            assertEquals(receiverSeen, expectedSeen, "subject alive during invocation");
+            assertEquals(receiverAfter, expectedAfter, "same lexical lifetime");
+            assertEquals(receiverOrder, expectedOrder, "same finalizer order");
+            assertEquals(receiverDrops, 2, "generic released both objects");
+        });
+        test("preexisting generic producer owners keep their lexical lifetime", () {
+            receiverReset();
+            assertEquals(receiverProducedLifetime<ReceiverRead>(() { return ReceiverItem { n: 4 }; }, () { return ReceiverItem { n: 5 }; }), 5, "producer lifetime");
+            assertEquals(receiverSeen, 0, "old subject alive during call");
+            assertEquals(receiverAfter, 0, "producer not retired at call completion");
+            assertEquals(receiverOrder, 54, "original producer outlives its holder");
+            assertEquals(receiverDrops, 2, "all producers released");
+        });
+        test("throwing arguments release prepared views without invoking methods", () {
+            receiverReset();
+            let caught = try receiverExceptional<ReceiverRead>(() { return ReceiverItem { n: 4 }; }, () { return ReceiverItem { n: 5 }; }, true) catch ex: int { ex; };
+            assertEquals(caught, 73, "argument error");
+            assertEquals(receiverCalls, 0, "method not entered");
+            assertEquals(receiverDrops, 2, "argument unwind releases both");
+        });
+        test("throwing methods preserve the old subject until unwind", () {
+            receiverReset();
+            let caught = try receiverExceptional<ReceiverRead>(() { return ReceiverItem { n: 4 }; }, () { return ReceiverItem { n: 5 }; }, false) catch ex: int { ex; };
+            assertEquals(caught, 4, "old subject throws");
+            assertEquals(receiverSeen, 0, "old subject alive");
+            assertEquals(receiverCalls, 1, "one method invocation");
+            assertEquals(receiverDrops, 2, "method unwind releases both");
+        });
+    });
+}
