@@ -60,6 +60,9 @@ TEST_RUNTIME_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(RUNTIME_SRCS) $(TEST_RUNTIM
 TEST_CODEGEN_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CODEGEN_SRCS))
 TEST_DEBUG_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_DEBUG_SRCS))
 TEST_CLI_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(CODEGEN_SRCS) $(DEBUG_SRCS) $(DAP_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_CLI_SUPPORT_SRCS) $(TEST_CLI_SRCS))
+# The lifecycle test includes service.c to control thread/allocator boundaries
+# without adding test hooks to the production service or changing CLI fixtures.
+TEST_LSP_LIFETIME_OBJS := $(filter-out $(OBJ_DIR)/src/cli/lsp/service.o $(OBJ_DIR)/test/cli/test_cli.o,$(TEST_CLI_OBJS)) $(OBJ_DIR)/test/cli/test_lsp_analysis_lifetime.o
 TEST_C_EH_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) src/cli/common.c src/cli/compile/driver.c test/cli/llvm_c_eh_driver.c)
 TEST_CLI_PATHS_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) src/cli/common.c $(TEST_CLI_PATHS_SRCS))
 TEST_SYMBOL_OBJS := $(patsubst %.c,$(OBJ_DIR)/%.o,$(LEXER_SRCS) $(PARSER_SRCS) $(SEMANTIC_SRCS) $(SYMBOL_SRCS) $(ARCHIVE_SRCS) $(PLATFORM_SRCS) $(THIRD_PARTY_SRCS) $(TEST_SYMBOL_SRCS))
@@ -67,7 +70,8 @@ DEPS = $(CLI_OBJS:.o=.d) $(RUNTIME_PLATFORM_OBJS:.o=.d) $(TEST_ARCHIVE_OBJS:.o=.
 	$(TEST_LEXER_OBJS:.o=.d) $(TEST_PARSER_OBJS:.o=.d) \
 	$(TEST_SEMANTIC_OBJS:.o=.d) $(TEST_RUNTIME_OBJS:.o=.d) \
 	$(TEST_CODEGEN_OBJS:.o=.d) $(TEST_DEBUG_OBJS:.o=.d) $(TEST_CLI_OBJS:.o=.d) \
-	$(TEST_CLI_PATHS_OBJS:.o=.d) $(TEST_SYMBOL_OBJS:.o=.d) $(OBJ_DIR)/test/cli/llvm_c_eh_driver.d
+	$(TEST_CLI_PATHS_OBJS:.o=.d) $(TEST_SYMBOL_OBJS:.o=.d) $(OBJ_DIR)/test/cli/llvm_c_eh_driver.d \
+	$(OBJ_DIR)/test/cli/test_lsp_analysis_lifetime.d
 
 THIRD_PARTY_CFLAGS := $(filter-out -Werror -pedantic,$(CFLAGS)) -Wno-unused-function
 
@@ -245,7 +249,7 @@ test: check-clang check-cc
 
 test-normal: check-clang check-cc
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -256,6 +260,7 @@ test-normal: check-clang check-cc
 	$(BIN_DIR)/test_debug
 	$(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
+	$(BIN_DIR)/test_lsp_analysis_lifetime
 	$(BIN_DIR)/test_symbol
 
 # Run ASan and UBSan together, preserving the existing host compiler and linker.
@@ -270,7 +275,7 @@ endif
 	$(MAKE) clean
 	@echo "=== Sanitize Test (ASan + UBSan) ==="
 	$(MAKE) runtime CFLAGS="-fsanitize=undefined -fsanitize=address -g -O1 -std=c11 -Wall -Wextra -pedantic"
-	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol $(BIN_DIR)/test_llvm_c_eh_driver CFLAGS="-fsanitize=undefined -fsanitize=address -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined -fsanitize=address $(SANITIZE_LDFLAGS)"
+	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol $(BIN_DIR)/test_llvm_c_eh_driver CFLAGS="-fsanitize=undefined -fsanitize=address -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined -fsanitize=address $(SANITIZE_LDFLAGS)"
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -285,6 +290,7 @@ endif
 	# Resolve before child login shells can reset PATH to another compiler.
 	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" $(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
+	$(BIN_DIR)/test_lsp_analysis_lifetime
 	$(BIN_DIR)/test_symbol
 	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
 	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" bash test/cli/llvm_c_eh.sh
@@ -430,6 +436,10 @@ $(BIN_DIR)/test_cli: $(TEST_CLI_OBJS) $(RUNTIME_LIB)
 $(BIN_DIR)/test_cli_paths: $(TEST_CLI_PATHS_OBJS) | toolchain-layout
 	@mkdir -p $(BIN_DIR)
 	$(CC) $(TEST_CLI_PATHS_OBJS) $(LDFLAGS) -o $@
+
+$(BIN_DIR)/test_lsp_analysis_lifetime: $(TEST_LSP_LIFETIME_OBJS)
+	@mkdir -p $(BIN_DIR)
+	$(CC) $(TEST_LSP_LIFETIME_OBJS) $(LDFLAGS) $(LSP_LDLIBS) $(SEMANTIC_LDLIBS) -o $@
 
 $(BIN_DIR)/test_llvm_c_eh_driver: $(TEST_C_EH_OBJS) $(RUNTIME_LIB) | toolchain-layout
 	@mkdir -p $(BIN_DIR)

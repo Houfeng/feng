@@ -2646,7 +2646,6 @@ static bool analysis_task_clone(const FengLspService *service,
         return false;
     }
     task->primary_index = service->document_count;
-    task->document_count = service->document_count;
     task->generation = generation;
     task->diagnostics_requested = diagnostics_requested;
     if (manifest_path != NULL) {
@@ -2664,6 +2663,8 @@ static bool analysis_task_clone(const FengLspService *service,
         analysis_task_dispose(task);
         return false;
     }
+    /* Only allocated, zero-initialized slots may be visited by disposal. */
+    task->document_count = service->document_count;
     for (index = 0U; index < service->document_count; ++index) {
         const FengLspDocument *source = &service->documents[index];
         FengLspDocument *copy = &task->documents[index];
@@ -3443,7 +3444,8 @@ static void *background_analyzer_main(void *user) {
 
             pthread_mutex_lock(&service->documents_mutex);
             pthread_mutex_lock(&service->analysis_mutex);
-            if (earliest_pending_analysis(service,
+            if (!service->analysis_stop_requested &&
+                earliest_pending_analysis(service,
                                           &pending_index,
                                           &pending_deadline) &&
                 !analysis_deadline_is_future(&pending_deadline)) {
@@ -3486,7 +3488,10 @@ static void *background_analyzer_main(void *user) {
                 }
             }
         }
-        if (service->analysis_stop_requested) {
+        /* A claimed task owns its snapshot until the cleanup below. Stop only
+         * before claiming work, with analysis_stop_requested protected by its
+         * mutex; shutdown joins this worker before disposing service state. */
+        if (!task_ready) {
             break;
         }
 
