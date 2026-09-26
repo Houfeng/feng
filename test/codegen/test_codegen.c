@@ -14841,7 +14841,8 @@ static void test_infix_match_unary_not_preserves_precedence_codegen(void) {
 /* ==================== Literal adaptation codegen tests ==================== */
 
 static FengSemanticAnalysis *literal_adapt_analyze(const char *source,
-                                                    const char *path) {
+                                                    const char *path,
+                                                    FengProgram **out_program) {
     FengProgram *program = parse_or_die(source, path);
     const FengProgram *programs[1] = {program};
     FengSemanticError *errors = NULL;
@@ -14859,8 +14860,8 @@ static FengSemanticAnalysis *literal_adapt_analyze(const char *source,
     ASSERT(ok);
     ASSERT(error_count == 0U);
     free(errors);
-    /* program intentionally leaked — analysis borrows its AST; the test
-     * runner is a short-lived process so the leak is harmless. */
+    /* The caller owns the AST; analysis borrows it until analysis disposal. */
+    *out_program = program;
     return analysis;
 }
 
@@ -14888,7 +14889,8 @@ static void test_literal_adaptation_binding_typed(void) {
         "    let d: u8 = 255;\n"
         "    let e: f32 = 1;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bind.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bind.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     ASSERT(strstr(c, "(uint32_t)UINT32_C(1)") != NULL);
@@ -14898,7 +14900,9 @@ static void test_literal_adaptation_binding_typed(void) {
     ASSERT(strstr(c, "(float)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_binding_untyped(void) {
@@ -14908,7 +14912,8 @@ static void test_literal_adaptation_binding_untyped(void) {
         "    let x = 123;\n"
         "    let y = 12.5;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_untyped.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_untyped.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* Untyped integer defaults to int (i64 on 64-bit, i32 on 32-bit). */
@@ -14923,7 +14928,9 @@ static void test_literal_adaptation_binding_untyped(void) {
     ASSERT(strstr(c, "0x1.9p+3") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_param_and_return(void) {
@@ -14935,7 +14942,8 @@ static void test_literal_adaptation_param_and_return(void) {
         "    let r = g(10);\n"
         "    return r;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_param.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_param.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* g(10) → parameter i32 → (int32_t)INT32_C(10). */
@@ -14944,7 +14952,9 @@ static void test_literal_adaptation_param_and_return(void) {
     ASSERT(strstr(c, "(int64_t)INT64_C(123)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_binary(void) {
@@ -14956,7 +14966,8 @@ static void test_literal_adaptation_binary(void) {
         "    let cmp = n + 1 > 3;\n"
         "    return cmp;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_binary.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_binary.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* n + 1 where n: i32 → literal 1 adapts to i32. */
@@ -14965,7 +14976,9 @@ static void test_literal_adaptation_binary(void) {
     ASSERT(strstr(c, "(int32_t)INT32_C(3)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_member_and_array(void) {
@@ -14977,7 +14990,8 @@ static void test_literal_adaptation_member_and_array(void) {
         "    b.value = 1;\n"
         "    let a: i32[] = [1, 2];\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_memarr.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_memarr.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* b.value = 1 (value: i32) → (int32_t)INT32_C(1). */
@@ -14986,7 +15000,9 @@ static void test_literal_adaptation_member_and_array(void) {
     ASSERT(strstr(c, "(int32_t)INT32_C(2)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_both_literals(void) {
@@ -14995,7 +15011,8 @@ static void test_literal_adaptation_both_literals(void) {
         "func f(): bool {\n"
         "    return 10 == 20;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bothlit.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_bothlit.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* Both sides are literals → no adaptation; default int64_t emission. */
@@ -15003,7 +15020,9 @@ static void test_literal_adaptation_both_literals(void) {
     ASSERT(strstr(c, "(int64_t)INT64_C(20)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_compound_assignment(void) {
@@ -15026,7 +15045,8 @@ static void test_literal_adaptation_compound_assignment(void) {
         "    var r: f32 = 1.0;\n"
         "    r += 0.5;\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_compound.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_compound.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* n += 1 where n: i32 → literal 1 adapts to i32. */
@@ -15045,7 +15065,9 @@ static void test_literal_adaptation_compound_assignment(void) {
     ASSERT(strstr(c, "(int32_t)INT32_C(4)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_array_literal(void) {
@@ -15058,7 +15080,8 @@ static void test_literal_adaptation_array_literal(void) {
         "    var y: u8 = 1;\n"
         "    let c = [y, 255];\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_array.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_array.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* [x, 10] where x: i32 → literal 10 adapts to i32. */
@@ -15067,7 +15090,9 @@ static void test_literal_adaptation_array_literal(void) {
     ASSERT(strstr(c, "(uint8_t)UINT8_C(255)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 static void test_literal_adaptation_tuple_literal(void) {
@@ -15083,7 +15108,8 @@ static void test_literal_adaptation_tuple_literal(void) {
         "    let s: SmallPair = (5, 6);\n"
         "    let m: MixedPair = (42, 1);\n"
         "}\n";
-    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_tuple.ff");
+    FengProgram *program = NULL;
+    FengSemanticAnalysis *analysis = literal_adapt_analyze(kSource, "lit_tuple.ff", &program);
     char *c = literal_adapt_codegen(analysis);
 
     /* Point(i32, i32) → literals as int32_t. */
@@ -15100,7 +15126,9 @@ static void test_literal_adaptation_tuple_literal(void) {
     ASSERT(strstr(c, "(float)") != NULL);
     compile_generated_c_or_die(c);
 
+    free(c);
     feng_semantic_analysis_free(analysis);
+    feng_program_free(program);
 }
 
 /* Generated code constructs one explicit source and emits ordinary wrappers. */
@@ -17423,6 +17451,9 @@ void test_native_exception_codegen(void (*compile_c)(const char *));
 /* Actual ownership selects cleanup boundaries in ordinary and shared bodies. */
 void test_cleanup_boundary_codegen(void (*compile_c)(const char *));
 
+/* Binary operands register owned results before subsequent evaluation. */
+void test_binary_operand_lifetime_codegen(void (*compile_c)(const char *));
+
 /* Cleanup helpers preserve all generic descriptor domains across FT imports. */
 void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
@@ -17443,6 +17474,7 @@ int main(void) {
     test_nested_exception_codegen(compile_generated_c_or_die);
     test_native_exception_codegen(compile_generated_c_or_die);
     test_cleanup_boundary_codegen(compile_generated_c_or_die);
+    test_binary_operand_lifetime_codegen(compile_generated_c_or_die);
     test_throw_constraint_codegen(compile_generated_c_or_die);
     test_g24_static_descriptors(compile_generated_c_or_die);
     test_g24_projection_bindings(compile_generated_c_or_die);

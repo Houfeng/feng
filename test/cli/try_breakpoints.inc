@@ -68,8 +68,8 @@ static void test_dap_try_breakpoints_once_per_evaluation(void) {
         "target: \"bin\"\nsrc: \"src/\"\nout: \"build/\"\n");
     char *argv[] = {root};
     ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
-    char *source_json = json_escape_text(path), *binary_json = json_escape_text(binary);
-    char *root_json = json_escape_text(root), *list = dup_cstr("");
+    char *source_json = json_escape_text(path);
+    char *list = dup_cstr("");
     unsigned lines[sizeof(markers) / sizeof(*markers)];
     long ids[sizeof(markers) / sizeof(*markers)];
     for (size_t i = 0U; i < marker_count; ++i) {
@@ -82,9 +82,8 @@ static void test_dap_try_breakpoints_once_per_evaluation(void) {
     dap_test_start(&session, root, backend, log);
     free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\","
         "\"linesStartAt1\":true,\"columnsStartAt1\":true,\"pathFormat\":\"path\"}"));
-    char *arguments = dup_printf("{\"program\":\"%s\",\"cwd\":\"%s\"}", binary_json, root_json);
-    int launch = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    char *arguments;
+    int launch = dap_test_launch_native(&session, binary, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}", source_json, list);
     char *response = dap_test_request(&session, "setBreakpoints", arguments);
@@ -124,7 +123,7 @@ static void test_dap_try_breakpoints_once_per_evaluation(void) {
     ASSERT(dap_test_json_integer(dap_test_json_get(dap_test_body(response), "exitCode")) == 0);
     free(response);
     dap_test_finish(&session);
-    free(source_json); free(binary_json); free(root_json); free(list);
+    free(source_json); free(list);
     free(backend); free(binary); free(log); free(manifest); free(path); free(src); free(repo);
     char *error = NULL;
     ASSERT(feng_cli_project_remove_tree(root, &error));

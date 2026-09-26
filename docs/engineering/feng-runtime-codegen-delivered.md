@@ -85,12 +85,19 @@ void *feng_take(void **slot);                    /* 取走所有权，*slot 置 
 ```c
 typedef struct FengString FengString;
 
+FengString *feng_string_from_utf8(const char *utf8, size_t length);
+                                                /* 动态字节复制为普通 +1 字符串，由 ARC 回收 */
 const FengString *feng_string_literal(const char *utf8, size_t length);
                                                 /* 字面量，refcount = 持久化（运行时常量池） */
 FengString *feng_string_concat(const FengString *a, const FengString *b);
 size_t      feng_string_length(const FengString *s);
 const char *feng_string_data(const FengString *s);
 ```
+
+`feng_string_from_utf8` 按显式字节长度复制，包括内嵌 NUL；结果另有末尾 NUL。
+长度为 0 时也返回独立的 +1 空字符串，此时输入地址可为 NULL；非零长度要求
+输入指向至少相应长度的有效字节。main 的动态 `argv` 使用该入口，由参数数组
+及普通 ARC 管理生命周期。字面量仍使用原有 immortal 入口。
 
 ### 2.4 数组
 

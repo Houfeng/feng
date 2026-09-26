@@ -435,6 +435,10 @@ static void free_synthetic_type_ref(FengTypeRef *type_ref) {
 
     switch (type_ref->kind) {
         case FENG_TYPE_REF_NAMED:
+            for (index = 0U; index < type_ref->as.named.type_arg_count; ++index) {
+                free_synthetic_type_ref(type_ref->as.named.type_args[index]);
+            }
+            free(type_ref->as.named.type_args);
             for (index = 0U; index < type_ref->as.named.segment_count; ++index) {
                 free((void *)type_ref->as.named.segments[index].data);
             }
@@ -510,6 +514,14 @@ static void free_synthetic_type_member(FengTypeMember *member) {
     free(member);
 }
 
+/* Imported enum names are cloned strings, unlike source AST name slices. */
+static void free_synthetic_enum_items(FengEnumItem *items, size_t count) {
+    for (size_t index = 0U; index < count; ++index) {
+        free((void *)items[index].name.data);
+    }
+    free(items);
+}
+
 static void free_synthetic_decl_payload(FengDecl *decl) {
     size_t index;
 
@@ -536,7 +548,8 @@ static void free_synthetic_decl_payload(FengDecl *decl) {
             free(decl->as.type_decl.declared_specs);
             break;
         case FENG_DECL_ENUM:
-            free(decl->as.enum_decl.items);
+            free_synthetic_enum_items(decl->as.enum_decl.items,
+                                       decl->as.enum_decl.item_count);
             break;
         case FENG_DECL_SPEC:
             free_synthetic_type_params(decl->as.spec_decl.type_params, decl->as.spec_decl.type_param_count);
@@ -1143,18 +1156,13 @@ static FengEnumItem *synthesize_enum_items(const FengSymbolDeclView *symbol_decl
         ordinal = member->enum_item_ordinal;
         if (ordinal >= enum_item_count || filled[ordinal]) {
             free(filled);
-            free(items);
+            free_synthetic_enum_items(items, enum_item_count);
             return NULL;
         }
         items[ordinal].token = member->token;
         if (!clone_cstr_as_slice(member->name, &items[ordinal].name)) {
-            size_t cleanup_index;
-
-            for (cleanup_index = 0U; cleanup_index < enum_item_count; ++cleanup_index) {
-                free((void *)items[cleanup_index].name.data);
-            }
             free(filled);
-            free(items);
+            free_synthetic_enum_items(items, enum_item_count);
             return NULL;
         }
         items[ordinal].has_explicit_value = true;
@@ -1164,13 +1172,8 @@ static FengEnumItem *synthesize_enum_items(const FengSymbolDeclView *symbol_decl
 
     for (index = 0U; index < enum_item_count; ++index) {
         if (!filled[index]) {
-            size_t cleanup_index;
-
-            for (cleanup_index = 0U; cleanup_index < enum_item_count; ++cleanup_index) {
-                free((void *)items[cleanup_index].name.data);
-            }
             free(filled);
-            free(items);
+            free_synthetic_enum_items(items, enum_item_count);
             return NULL;
         }
     }

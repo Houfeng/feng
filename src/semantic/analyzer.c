@@ -5068,6 +5068,15 @@ static void resolver_free_scopes(ResolveContext *context) {
     context->callable_source_count = 0U;
     context->callable_source_capacity = 0U;
 
+    /* Published captures belong to the AST; only active frames still own theirs. */
+    for (size_t index = 0U; index < context->lambda_frame_count; ++index) {
+        free(context->lambda_frames[index].captures);
+    }
+    free(context->lambda_frames);
+    context->lambda_frames = NULL;
+    context->lambda_frame_count = 0U;
+    context->lambda_frame_capacity = 0U;
+
     for (type_ref_index = 0U; type_ref_index < context->union_narrowing_count; ++type_ref_index) {
         if (context->union_narrowings[type_ref_index] != NULL) {
             free(context->union_narrowings[type_ref_index]->active_members);
@@ -42472,6 +42481,10 @@ void feng_semantic_analysis_free(FengSemanticAnalysis *analysis) {
     free(analysis->modules);
     free(analysis->type_markers);
     free(analysis->type_facts);
+    for (index = 0U; index < analysis->enum_info_count; ++index) {
+        free(analysis->enum_infos[index].items);
+    }
+    free(analysis->enum_infos);
     for (index = 0U; index < analysis->spec_relation_count; ++index) {
         free(analysis->spec_relations[index].sources);
     }

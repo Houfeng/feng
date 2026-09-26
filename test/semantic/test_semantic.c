@@ -3077,6 +3077,7 @@ static void test_defer_inside_function_is_accepted(void) {
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -3240,6 +3241,7 @@ static void test_defer_with_break_inside_nested_loop_is_accepted(void) {
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -7040,6 +7042,7 @@ static void test_non_generic_array_new_legacy_bracket_syntax_rejected(void) {
            strstr(errors[0].message, "index target") != NULL);
 
     feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -7090,6 +7093,7 @@ static void test_generic_array_new_legacy_bracket_syntax_rejected(void) {
            strstr(errors[0].message, "index target") != NULL);
 
     feng_semantic_analysis_free(analysis);
+    feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
 
@@ -8963,6 +8967,7 @@ static void test_lazy_ambiguity_unused_no_error(void) {
     ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
     feng_program_free(program_b);
@@ -8997,6 +9002,7 @@ static void test_lazy_ambiguity_resolved_by_qualified_path(void) {
     ASSERT(ok);
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
     feng_program_free(program_b);
@@ -9032,6 +9038,7 @@ static void test_lazy_ambiguity_resolved_by_alias(void) {
     ASSERT(feng_semantic_analyze(programs, 3U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program_a);
     feng_program_free(program_b);
@@ -14851,6 +14858,7 @@ static void test_type_field_static_method_same_name_allowed(void) {
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -14871,6 +14879,7 @@ static void test_type_static_field_instance_method_same_name_allowed(void) {
     ASSERT(feng_semantic_analyze(programs, 1U, FENG_COMPILE_TARGET_LIB, &analysis, &errors, &error_count));
     ASSERT(error_count == 0U);
 
+    feng_semantic_analysis_free(analysis);
     feng_semantic_errors_free(errors, error_count);
     feng_program_free(program);
 }
@@ -15611,6 +15620,8 @@ static void test_for_in_loop_non_array_rejected(void) {
 /* ============================================================== */
 /* Phase 1B-2: type-cyclicity SCC analysis                         */
 /* ============================================================== */
+
+void test_imported_cyclicity(void);
 
 static const FengDecl *find_type_decl_by_name(
         const FengSemanticAnalysis *analysis, const char *name) {
@@ -35611,6 +35622,7 @@ int main(void) {
     test_cyclicity_two_node_cycle_marks_both();
     test_cyclicity_three_node_cycle_marks_all();
     test_cyclicity_array_mediated_cycle_marks_both();
+    test_imported_cyclicity();
     test_spec_relation_declared_head_recorded();
     test_spec_relation_declared_parent_transitive();
     test_spec_relation_fit_head_and_parent();

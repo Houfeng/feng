@@ -2359,14 +2359,14 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
             ok = false;
         }
         for (size_t i = 0; ok && i < lib_count; ++i) {
-            size_t need = strlen(libs[i]) + 3U;
-            char *flag = malloc(need);
-
             if (string_array_contains_text(bundle_extlib_satisfied_libs,
                                            bundle_extlib_satisfied_lib_count,
                                            libs[i])) {
                 continue;
             }
+            /* Statically satisfied libraries need no allocated -l argument. */
+            size_t need = strlen(libs[i]) + 3U;
+            char *flag = malloc(need);
             if (flag == NULL) {
                 ok = false;
                 break;

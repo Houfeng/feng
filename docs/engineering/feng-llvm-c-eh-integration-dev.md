@@ -300,3 +300,185 @@ std 607/607、FCTS 1619/1619、性能门槛及插件集成均通过，但当时�
 最终在沙箱外重新执行完整 `make test`，退出 0，ASan＋UBSan 与普通阶段均通过。
 日志为 `third_party/llvm-c-eh/temp/asan-enablement/make-test-symbol-table.log`；
 过程与验证记录见上述调试位置修复文档。本地验收完成，等待人工 Review。
+
+### 9.1 统一泄漏检测（2026-09-26）
+
+用户确认全部修复，已批准下述 22 个既有测试的资源清理、Parser 新用例注册，
+以及关联文档中的 argv runtime 修复。保留原有用例源码、行为断言与顺序。
+
+上述 macOS 回归使用了 ASan 的平台默认配置，未开启泄漏检测，不能作为
+LeakSanitizer 验收结果。[LLVM 文档](https://clang.llvm.org/docs/AddressSanitizer.html#memory-leak-detection)
+说明 Linux 默认开启泄漏检测，而 macOS 需要显式设置 `detect_leaks=1`。
+后续 Linux CI 暴露的 Parser 泄漏及跨平台复现见
+[Parser LeakSanitizer 修复记录](./feng-parser-leak-sanitizer-bugfix.md)。
+
+用户要求各平台一致开启。统一在 `Makefile` 的 `test-sanitize` 目标导出
+`ASAN_OPTIONS`：保留已有配置，在末尾追加 `detect_leaks=1`，由测试命令、
+递归 Make 和其子进程继承。本地与 CI 使用同一入口，不按平台分别设置，
+不向普通测试阶段额外导出该选项，也不改变编译／链接参数或既有用例。
+
+验证要求：在沙箱外运行 `make test`，记录实际失败位置；在已知 Parser
+泄漏修复前，不得将预期的泄漏报错记为回归通过。
+
+继续检测时，Semantic 与 Codegen 也报告资源释放遗漏，分别记录于
+[Semantic 修复文档](./feng-semantic-leak-sanitizer-bugfix.md)和
+[Codegen 修复文档](./feng-codegen-leak-sanitizer-bugfix.md)。
+Runtime 测试另外报告 373 字节／10 次分配：四个用例调用 `feng_string_literal`
+创建 immortal 字符串后没有销毁测试夹具。该 API 明确使用 immortal 引用计数，
+普通 `feng_release` 不应释放它；产品 runtime 语义保持不变。已在测试结束时
+回收测试自行分配的内存，嵌套实参先保存指针以便清理。涉及
+`test_string_literal_immortal`、`test_string_concat`、
+`test_string_utf8_length_contract`、`test_expression_equal_contract_uses_descriptor`，
+均在 `test/runtime/test_runtime.c`；修改已获人工批准，原断言保留。
+
+CLI 继续检测发现动态 `argv` 被错误构造成 immortal 字符串。根因、同一产物
+在不同路径下的执行记录及已批准的 runtime 方案见
+[main 参数生命周期修复](./feng-argv-string-lifetime-bugfix.md)。
+截至上述 argv 定位阶段，完整 `make test` 尚未通过，不能将当时的针对性结果作为整体交付。
+
+#### DAP 与 LeakSanitizer 的工具限制
+
+Linux ARM64 的完整回归已通过 Archive、Lexer、Parser、Semantic、Runtime、
+Codegen、Debug。修正新增 argv 用例的入口类型后，CLI 的 argv 四种组合及
+S11 跨包矩阵通过，随后 DAP try 断点用例运行到进程退出时报：
+`LeakSanitizer has encountered a fatal error`，紧接着明确提示
+`LeakSanitizer does not work under ptrace (strace, gdb, etc)`，退出码为 1。
+该结果不是“检测到泄漏”：Linux LSan 需要借助 ptrace 暂停被检查线程，
+LLDB 已占用同一进程的调试接口。上游对此限制有
+[明确记录](https://lists.llvm.org/pipermail/llvm-commits/Week-of-Mon-20161010/397398.html)。
+日志保留于 Linux 隔离工作树 `/repo/temp/dap-try-breakpoints-J1JzI2/dap.log`。
+
+2026-09-26 用户批准分开执行：仅在 DAP 测试的被调试进程中关闭 LSan，保留 ASan、
+UBSan 和全部原断点／退出码断言；同一测试程序在调试器外独立执行泄漏检查。
+编译器、测试进程、非调试执行的生成程序继续 `detect_leaks=1`。不在 Feng
+DAP 产品实现中屏蔽 sanitizer，不降低整体检查标准，也不按具体语言用例特判。
+在公共 DAP 测试入口实现统一配置，并核对各程序的实参、工作目录和
+预期退出码；协议模拟程序不作为真实被调试程序执行。
+
+实现位于测试的 `dap_test_launch_native`：sanitizer 阶段先 fork/exec 原产物，
+保持同一工作目录和无附加实参，显式开启泄漏检查并核对原退出码；随后仅向
+DAP launch 的 debuggee 环境追加 `detect_leaks=0`。协议模拟测试继续使用原入口。
+原 `_exit(7)` 用例仍按原语义直接退出，无法执行退出时的 LSan 扫描；它保留
+ASan／UBSan 执行检查和退出码断言，正常退出的对照用例执行完整泄漏检查。
+不改变 `_exit` 或 finalizer 行为来迁就检测器。
+
+#### 后续项目构建检测
+
+继续执行 std/FCTS 时，两平台的 CLI 均报告 52 字节／3 次分配泄漏，分配点为
+`feng_cli_compile_driver_invoke` 构造 `-l` 参数。根因：先分配 flag，再检查
+该库是否已由包内静态库满足；满足时直接 continue，遗漏释放。将分配移至
+该检查之后，仅在确实需要生成 `-l` 时创建；复用原有参数列表与释放路径，
+不改变链接参数、库解析或程序运行行为。既有项目及 std/FCTS 回归覆盖该路径。
+
+Linux FCTS 的 1619 项行为断言通过，CLI 退出另报 180 字节／5 次分配，
+其中 52 字节为上述参数问题，另外两处各 64 字节是符号图构建时的诊断对象。
+符号导出的既有名字解析回退可在最终成功时仍留下诊断对象；direct compile
+只在失败分支销毁 `symbol_error`。在成功离开该资源作用域时也调用已有析构
+函数，保留原有名字解析、FT 内容及诊断输出行为。
+
+Linux 首次后续 std 运行另有 12 个字符宽度断言失败；隔离容器尚未设置 CI
+采用的 `LANG=C.UTF-8`、`LC_ALL=C.UTF-8`。先核对 locale 并按 CI 环境重跑，
+不据此改动 TUI 实现或断言。
+
+核对确认容器初始 locale 为 POSIX。补齐上述环境并应用两处 CLI 清理后，
+macOS ARM64 与 Linux ARM64 的 std 均为 607/607、FCTS 均为 1619/1619，
+失败及跳过为 0，ASan／UBSan／LSan 无报告，两条重跑命令退出码均为 0。
+日志：`third_party/llvm-c-eh/temp/parser-leaks/library-lsan-fixed.log` 与
+`linux-arm64-library-lsan-fixed.log`；这些是专项验收，不能替代完整 `make test`。
+
+macOS 的完整普通阶段通过 91 项 smoke、CLI direct/project 后，在
+`run_cli_init_bundled_packages.sh` 中连续四次出现复制出的 `feng init` 被
+SIGKILL 终止，后续项目文件缺失。该阶段未开启 sanitizer，未据此改动产品
+或测试路径；已请求维护者核对本机安全软件。日志为同目录
+`make-test-normal.log`，普通阶段也暂不能记为完整通过。
+
+另外尝试为 Linux x64 Rosetta 准备 8 GB 独立容器，GNU tar 的文件 stat／创建
+操作返回 `Function not implemented`，未进入编译测试。临时容器已移除，既有
+容器恢复停止状态；不修改脚本添加 Rosetta 特判，也不把该尝试记为 x64 验收。
+
+Linux ARM64 随后执行完整 `make test-normal`，退出码 0；包括 91 项 smoke、
+std 607/607、FCTS 1619/1619、编译器单测、CLI／LSP／DAP、增量构建、性能
+约束、发行与工具链获取测试。完整日志为
+`third_party/llvm-c-eh/temp/parser-leaks/linux-arm64-make-test-normal.log`。
+
+该阶段剩余交付项：用户已批准二元操作临时值的必要清理及 DAP 的 LSan 分离执行；
+macOS SIGKILL 按用户要求先重试，不因疑似环境问题随意修改代码。全部解决后必须重新执行
+完整 `make test`，不能合并专项通过结果声称该入口已经通过。
+
+#### 全量 CLI 后续发现（2026-09-26）
+
+DAP 分离后，Linux 全量 CLI 越过原阻塞点，随后在既有跨包泛型环回收用例失败。
+生成程序报告 400 字节／7 次分配，包含未回收的环及断言失败路径中的 TestState；
+需要先核对生命周期断言、描述符和回收触发，再决定修复位置，不能直接归因于 LSan。
+宿主 CLI 退出另报 9,846 字节／11 次分配，分别指向 DAP stackTrace JSON 改写
+和依赖包读取错误信息；先核对各资源的转移与统一释放路径，保留所有既有断言。
+日志：`third_party/llvm-c-eh/temp/parser-leaks/linux-arm64-make-test-latest.log`。
+
+已确认两处宿主泄漏：stackTrace 连续改写 frames 与 totalFrames，最终只移交后一份
+JSON，却同时清空两份指针，导致前一份丢失；改为仅清空实际移交的指针，另一份
+由原 cleanup 释放。依赖包读取失败时，`set_errorf` 已复制 ZIP 错误文本，但调用方
+提前返回而未释放原文本；在两条错误路径复制诊断后释放原字符串。两项均不改
+协议内容、诊断文本或原测试断言，由既有失败／改写用例继续验证。
+
+跨包环的原因已定位：`cyc_collect_nodes` 无条件跳过 imported-package 模块，
+而这些模块的合成 AST 已包含 FT 提供的字段类型。消费者具化的两端描述符因此
+均生成 `is_potentially_cyclic=false`，根本不进入既有回收路径；本轮之前的 HEAD
+也保留此跳过逻辑。建议把导入类型纳入同一个字段图／SCC 分析，复用现有标记和
+描述符字段，不增加 runtime API、ABI、FT 或新的回收算法。有环类型将恢复必要
+的候选登记和回收成本，无环类型仍由图分析排除；此运行成本提交人工确认。
+用户随后要求继续修复所有问题，包含上述已说明的必要回收成本，现按授权实施。
+新增私有字段测试的初稿遗漏 `seal`，触发既有 AE0327 可见性规则；补齐测试
+声明后继续验证，不修改可见性语义。
+补充源码／FT、泛型／非泛型、自环／互环、数组边／无环对照测试，并用独立的
+非零退出失败机制检查行为。既有 CLI 用例的 std.test.assert 在测试框架外只记录
+失败，不使进程失败，故原来的退出码断言没有暴露回收遗漏；不私自改旧用例语义。
+
+另一个 TestState 泄漏已用不依赖 std 的程序复现，来自描述符布局 tuple 重复
+默认初始化；构造中途异常也存在独立遗漏，详见
+[Tuple 初始化生命周期修复](./feng-tuple-initialization-lifetime-bugfix.md)。
+重复初始化已修复，构造期清理随后按用户“继续修复所有问题”的授权完成。
+
+两处宿主释放修复后，Linux ARM64 的原依赖包错误用例、DAP stackTrace 列映射
+用例均通过 ASan／UBSan／LSan。另以临时测试入口执行跨包泛型环用例之后的
+原 CLI 用例，全部通过；保留全部原用例源码和断言，这些专项结果不代表完整
+CLI 或 `make test` 已通过。日志为 `linux-host-focus-run.log`、`linux-cli-tail.log`。
+修复导入环前的最近一次完整 `make test` 在 macOS／Linux 均停在上述跨包泛型环用例；
+macOS 已越过 argv 和 DAP，随后独立最小程序重试仍有 SIGKILL，未据此改代码。
+
+导入类型纳入原 SCC 分析后，源码／真实 FT 往返用例在两平台 Semantic 全套
+通过，包含私有字段、数组边、泛型、自环／互环和无环对照。Linux 上原跨包
+泛型环 CLI 用例已通过 LSan；新增源码隐藏包默认／release 四种组合也通过，
+以独立硬失败断言确认显式创建的对象全部且仅释放一次，不依赖 std.test 上下文。
+专项日志为 `linux-remaining-focus.log`；继续执行最终完整 `make test`。
+
+#### 最终验收（2026-09-26）
+
+全部修复及新增用例完成后，在沙箱外分别从完整入口重新执行，不以分段重跑
+代替全量结果：
+
+| 环境 | 命令 | ASan／UBSan／LSan 阶段 | 普通阶段 | 退出码 |
+| --- | --- | --- | --- | --- |
+| macOS ARM64，Clang 22.1.8 | `make test` | 通过 | 通过 | 0 |
+| Apple Container Linux ARM64，Clang 22.1.8 | `make test` | 通过 | 通过 | 0 |
+
+两平台各阶段均通过 smoke 91/91、std 607/607、FCTS 1619/1619，以及对应的
+编译器单测、CLI／LSP／DAP、性能门槛和插件集成检查；普通阶段另通过增量构建、
+发行脚本、签名流程夹具和工具链预构建获取检查。没有新的 sanitizer 失败。
+DAP 按上文已批准的方式分离泄漏检查，所有既有行为断言保留。
+
+新增覆盖包含 Parser 56 种签名清理场景反复执行、动态 UTF-8／argv 所有权、
+二元表达式正常及异常清理、固定／共享体 tuple 构造、源码／FT 导入的环分析、
+源码隐藏包默认／release 四种组合下的自环／互环回收。泛型、spec、value、
+数组、闭包、嵌套、提前返回和无环对照均包含在相关矩阵中。
+
+本次 macOS 完整重试越过了此前的 SIGKILL 位置，包括复制发行布局后的
+`feng init`；没有为此调整代码、测试路径或安全配置。Linux x64 的 Rosetta
+环境准备失败仍按上文保留，未计为本地全量通过，留待原生 CI 验证。
+
+完整日志位于 `third_party/llvm-c-eh/temp/parser-leaks/`：
+
+- `make-test-delivery.log`：macOS 完整回归。
+- `linux-arm64-make-test-delivery.log`：Linux ARM64 完整回归。
+- `linux-arm64-container-logs.tar`：停止本轮临时容器前保存的排查日志。
+
+实现及本地验收完成，等待人工 Review；未自动提交。

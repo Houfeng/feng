@@ -694,6 +694,10 @@ void feng_aggregate_default_zero_init(void *value_out,
 
 typedef struct FengString FengString;
 
+/* Copy exactly length bytes into a fresh +1 string with a trailing NUL.
+ * A zero-length input may be NULL; the result still owns a normal ARC token. */
+FengString *feng_string_from_utf8(const char *utf8, size_t length);
+
 /* Allocates a fresh immortal string holding a copy of the supplied UTF-8 bytes.
  * Codegen caches the returned pointer per literal site so each literal allocates
  * exactly once at first use. The buffer is null-terminated. */

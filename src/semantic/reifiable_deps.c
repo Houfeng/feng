@@ -1098,27 +1098,24 @@ static bool rd_expr_collect_path_segments(const FengExpr *expr,
     }
 }
 
-/* 存储仅拥有根节点和 segments 的 GENERIC_TARGET 包装引用。其 type_args
- * 借用源码 AST，必须与 analysis 持有的完整类型树使用不同的析构规则。 */
-static bool rd_store_synthesized_ref(FengSemanticAnalysis *analysis,
-                                     FengTypeRef *ref) {
-    if (analysis->reifiable_wrapper_type_ref_count ==
-        analysis->reifiable_wrapper_type_ref_capacity) {
-        size_t new_capacity = analysis->reifiable_wrapper_type_ref_capacity == 0U
-                                  ? 8U
-                                  : analysis->reifiable_wrapper_type_ref_capacity * 2U;
+/* Adopt a reference into the pool matching its ownership: borrowed-argument
+ * wrappers and fully owned type trees have distinct existing destructors. */
+static bool rd_store_type_ref(FengTypeRef ***refs,
+                              size_t *count,
+                              size_t *capacity,
+                              FengTypeRef *ref) {
+    if (*count == *capacity) {
+        size_t new_capacity = *capacity == 0U ? 8U : *capacity * 2U;
         FengTypeRef **grown = (FengTypeRef **)realloc(
-            analysis->reifiable_wrapper_type_refs,
-            new_capacity * sizeof(*grown));
+            *refs, new_capacity * sizeof(*grown));
 
         if (grown == NULL) {
             return false;
         }
-        analysis->reifiable_wrapper_type_refs = grown;
-        analysis->reifiable_wrapper_type_ref_capacity = new_capacity;
+        *refs = grown;
+        *capacity = new_capacity;
     }
-    analysis->reifiable_wrapper_type_refs[
-        analysis->reifiable_wrapper_type_ref_count++] = ref;
+    (*refs)[(*count)++] = ref;
     return true;
 }
 
@@ -1176,7 +1173,10 @@ static void rd_try_collect_generic_target(CollectContext *ctx,
     ref->as.named.type_arg_count = expr->as.generic_target.type_arg_count;
 
     /* 存入 analysis 管理生命周期。 */
-    if (!rd_store_synthesized_ref(ctx->analysis, ref)) {
+    if (!rd_store_type_ref(&ctx->analysis->reifiable_wrapper_type_refs,
+                           &ctx->analysis->reifiable_wrapper_type_ref_count,
+                           &ctx->analysis->reifiable_wrapper_type_ref_capacity,
+                           ref)) {
         free(segments);
         free(ref);
         return;
@@ -1549,7 +1549,10 @@ static void rd_try_collect_call_return_type_dep(CollectContext *ctx,
     }
 
     /* 5. 存入 analysis 管理生命周期。 */
-    if (!rd_store_synthesized_ref(ctx->analysis, owned_current)) {
+    if (!rd_store_type_ref(&ctx->analysis->synthesized_type_refs,
+                           &ctx->analysis->synthesized_type_ref_count,
+                           &ctx->analysis->synthesized_type_ref_capacity,
+                           owned_current)) {
         rd_free_synthesized_type_ref(owned_current);
         return;
     }
@@ -1729,7 +1732,10 @@ static void rd_collect_lambda_target_signature_deps(CollectContext *ctx,
         if (substituted == NULL) {
             continue;
         }
-        if (!rd_store_synthesized_ref(ctx->analysis, substituted)) {
+        if (!rd_store_type_ref(&ctx->analysis->synthesized_type_refs,
+                               &ctx->analysis->synthesized_type_ref_count,
+                               &ctx->analysis->synthesized_type_ref_capacity,
+                               substituted)) {
             rd_free_synthesized_type_ref(substituted);
             continue;
         }

@@ -163,9 +163,7 @@ static bool cg_prepare_call_operand(CG *cg, ExprResult *value,
                 value->erased_generic_descriptor_c_name, source->token, NULL))
             return false;
     } else if (owned || aggregate || dynamic) {
-        char *storage = cg_materialize_to_local(cg, value, "_call_arg");
-        if (storage == NULL) return false;
-        free(storage);
+        if (!cg_materialize_to_local(cg, value, "_call_arg")) return false;
     } else if (source->kind != FENG_EXPR_BOOL &&
                source->kind != FENG_EXPR_INTEGER &&
                source->kind != FENG_EXPR_FLOAT) {
@@ -187,10 +185,10 @@ static bool cg_emit_call_argument(CG *cg, const FengExpr *expr,
 
 /* Address ABI formatting consumes an existing snapshot without recopying it.
  * Non-operand results still use the ordinary ownership materialization. */
-static char *cg_materialize_call_storage(CG *cg, ExprResult *result,
+static bool cg_materialize_call_storage(CG *cg, ExprResult *result,
                                          const char *prefix) {
     if (result->call_operand_prepared && result->is_addressable)
-        return strdup(result->c_expr);
+        return true;
     return cg_materialize_to_local(cg, result, prefix);
 }
 
@@ -268,9 +266,7 @@ static bool cg_prepare_call_receiver(CG *cg, ExprResult *receiver,
         receiver->managed_identity_is_stable)
         return true; /* Immutable pointer identity or the original value self. */
     if (receiver->owns_ref || !receiver->is_addressable) {
-        char *storage = cg_materialize_to_local(cg, receiver, "_receiver");
-        if (storage == NULL) return false;
-        free(storage);
+        if (!cg_materialize_to_local(cg, receiver, "_receiver")) return false;
         return true;
     }
     if (receiver->type->kind != CG_TYPE_GENERIC_PARAM &&

@@ -201,9 +201,7 @@ static void test_dap_union_display_real_backend(void) {
     }
     dap_test_start(&session, root, backend_path, log_path);
     free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\"}"));
-    arguments = dup_printf("{\"program\":\"%s\"}", binary_path);
-    launch_seq = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}]}",
                             source_path, dap_test_breakpoint_line(fixture, "ready"));

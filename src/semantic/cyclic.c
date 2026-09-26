@@ -283,10 +283,8 @@ static bool cyc_collect_nodes(CycGraph *g, const FengSemanticAnalysis *analysis)
     for (mi = 0U; mi < analysis->module_count; ++mi) {
         const FengSemanticModule *mod = &analysis->modules[mi];
         size_t pi;
-        /* External package modules have no local type bodies to analyse. */
-        if (mod->origin == FENG_SEMANTIC_MODULE_ORIGIN_IMPORTED_PACKAGE) {
-            continue;
-        }
+        /* Imported modules expose field types through their synthesized AST.
+         * They must participate in the same graph as source declarations. */
         for (pi = 0U; pi < mod->program_count; ++pi) {
             const FengProgram *prog = mod->programs[pi];
             size_t di;

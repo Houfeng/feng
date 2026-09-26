@@ -78,6 +78,16 @@ static FengString *feng_string_allocate(size_t length, uint32_t initial_refcount
     return (FengString *)s;
 }
 
+/* Dynamic input owns a normal reference; it is not a cached source literal. */
+FengString *feng_string_from_utf8(const char *utf8, size_t length) {
+    FengString *s = feng_string_allocate(length, 1U);
+
+    if (length > 0U) {
+        memcpy(((struct FengString *)s)->data, utf8, length);
+    }
+    return s;
+}
+
 FengString *feng_string_literal(const char *utf8, size_t length) {
     FengString *s = feng_string_allocate(length, FENG_REFCOUNT_IMMORTAL);
 

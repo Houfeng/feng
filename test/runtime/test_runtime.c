@@ -315,6 +315,10 @@ static void test_string_literal_immortal(void) {
     feng_release(a);
     feng_release(a);
     ASSERT(feng_string_length(a) == 5U);
+
+    /* Reclaim test-owned immortal fixtures after their contract checks. */
+    free(a);
+    free(b);
 }
 
 static void test_string_concat(void) {
@@ -339,6 +343,10 @@ static void test_string_concat(void) {
     combined = feng_string_concat(NULL, NULL);
     ASSERT(feng_string_length(combined) == 0U);
     feng_release(combined);
+
+    /* Reclaim test-owned immortal fixtures after their contract checks. */
+    free(hello);
+    free(world);
 }
 
 static void test_string_utf8_length_contract(void) {
@@ -348,6 +356,10 @@ static void test_string_utf8_length_contract(void) {
     ASSERT(feng_string_utf8_length(ascii) == 5);
     ASSERT(feng_string_utf8_length(utf8) == 6);
     ASSERT(feng_string_utf8_length(NULL) == 0);
+
+    /* Reclaim test-owned immortal fixtures after their contract checks. */
+    free(ascii);
+    free(utf8);
 }
 
 static const FengTypeDescriptor i32_element_descriptor = {
@@ -542,8 +554,9 @@ static void test_expression_equal_contract_uses_descriptor(void) {
     double negative_zero = -0.0;
     double nan_value = NAN;
     FengString *left_string = feng_string_literal("hello", 5U);
-    FengString *right_string = feng_string_concat(feng_string_literal("he", 2U),
-                                                  feng_string_literal("llo", 3U));
+    FengString *prefix_string = feng_string_literal("he", 2U);
+    FengString *suffix_string = feng_string_literal("llo", 3U);
+    FengString *right_string = feng_string_concat(prefix_string, suffix_string);
     FengString *other_string = feng_string_literal("world", 5U);
     TestObject *left_object = (TestObject *)feng_object_new(&test_object_descriptor);
     TestObject *same_object = left_object;
@@ -571,6 +584,12 @@ static void test_expression_equal_contract_uses_descriptor(void) {
     feng_release(other_object);
     feng_release(left_object);
     feng_release(right_string);
+
+    /* Reclaim test-owned immortal fixtures after their contract checks. */
+    free(left_string);
+    free(other_string);
+    free(prefix_string);
+    free(suffix_string);
 }
 
 static void test_array_slice_aggregate_assigns_elements(void);
@@ -3046,10 +3065,13 @@ static void test_array_aggregate_zero_length(void) {
 /* Native nested catch protocol coverage lives in an independent test unit. */
 void test_nested_exception_runtime(void);
 void test_exception_lsda(void);
+/* Dynamic input strings must be released through ordinary ARC ownership. */
+void test_string_owned_utf8(void);
 
 int main(void) {
     test_nested_exception_runtime();
     test_exception_lsda();
+    test_string_owned_utf8();
     test_object_retain_release();
     test_retain_release_nullsafe();
     test_assign_barrier();

@@ -65,7 +65,8 @@ static void read_context_dispose(ReadContext *ctx) {
         ctx->module = NULL;
     }
     for (index = 0U; index < ctx->string_count; ++index) {
-        free(ctx->strings[index]);
+        /* String ID zero is reserved; entries occupy 1 through string_count. */
+        free(ctx->strings[index + 1U]);
     }
     free(ctx->strings);
     if (ctx->types != NULL) {

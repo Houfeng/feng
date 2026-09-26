@@ -3999,9 +3999,14 @@ static bool proxy_rewrite_stack_trace_response_payload(const char *json,
         }
     }
 
-    *out_json = payload_with_total != NULL ? payload_with_total : payload_with_frames;
-    payload_with_total = NULL;
-    payload_with_frames = NULL;
+    /* Transfer only the final payload; cleanup still owns any intermediate. */
+    if (payload_with_total != NULL) {
+        *out_json = payload_with_total;
+        payload_with_total = NULL;
+    } else {
+        *out_json = payload_with_frames;
+        payload_with_frames = NULL;
+    }
     ok = true;
 
 cleanup:

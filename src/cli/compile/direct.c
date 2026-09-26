@@ -399,6 +399,8 @@ int feng_cli_direct_run(const char *program,
             feng_cli_direct_options_dispose(&opts);
             return 1;
         }
+        /* Successful symbol fallbacks may still own a temporary diagnostic. */
+        feng_symbol_error_free(&symbol_error);
     }
 
     /* Codegen aggregate (multi-file capable, see P3). */

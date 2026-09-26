@@ -9215,6 +9215,61 @@ static int dap_test_send(DapTestSession *session, const char *command,
     return seq;
 }
 
+/* Run the same native fixture outside ptrace for LSan, then debug it with
+ * ASan/UBSan still enabled. Only the debuggee receives detect_leaks=0; neither
+ * the adapter nor this test process changes its sanitizer environment. These
+ * native fixtures have no user arguments and share the adapter's working dir. */
+static int dap_test_launch_native(DapTestSession *session, const char *program,
+                                  const char *cwd, int expected_exit) {
+    const char *options = getenv("ASAN_OPTIONS");
+    char *environment = dup_cstr("");
+    if (options != NULL) {
+        char *checking = dup_printf("%s:detect_leaks=1", options);
+        fflush(NULL);
+        pid_t child = fork();
+        ASSERT(child >= 0);
+        if (child == 0) {
+            if (chdir(cwd) != 0 || setenv("ASAN_OPTIONS", checking, 1) != 0 ||
+                dup2(fileno(session->log), STDOUT_FILENO) < 0 ||
+                dup2(fileno(session->log), STDERR_FILENO) < 0) _exit(127);
+            execl(program, program, (char *)NULL);
+            _exit(127);
+        }
+        free(checking);
+        int status;
+        long long deadline = dap_test_now_ms() + 30000LL;
+        for (;;) {
+            pid_t result = waitpid(child, &status, WNOHANG);
+            if (result == child) break;
+            ASSERT(result == 0 || (result < 0 && errno == EINTR));
+            if (dap_test_now_ms() >= deadline) {
+                (void)kill(child, SIGKILL);
+                while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+                ASSERT(false);
+            }
+            const struct timespec delay = {0, 10000000L};
+            (void)nanosleep(&delay, NULL);
+        }
+        ASSERT(WIFEXITED(status) && WEXITSTATUS(status) == expected_exit);
+        char *debugging = dup_printf("%s:detect_leaks=0", options);
+        char *escaped = json_escape_text(debugging);
+        free(environment);
+        environment = dup_printf(",\"env\":{\"ASAN_OPTIONS\":\"%s\"}", escaped);
+        free(escaped);
+        free(debugging);
+    }
+    char *escaped_program = json_escape_text(program);
+    char *escaped_cwd = json_escape_text(cwd);
+    char *arguments = dup_printf("{\"program\":\"%s\",\"cwd\":\"%s\"%s}",
+                                 escaped_program, escaped_cwd, environment);
+    int sequence = dap_test_send(session, "launch", arguments);
+    free(arguments);
+    free(escaped_cwd);
+    free(escaped_program);
+    free(environment);
+    return sequence;
+}
+
 /* Consume only the requested response/event and retain other messages in order. */
 static char *dap_test_wait(DapTestSession *session, int request_seq,
                            const char *event, const char *alternative_event) {
@@ -9415,8 +9470,6 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     char *backend_path;
     char *log_path;
     char *escaped_source;
-    char *escaped_binary;
-    char *escaped_root;
     char *fixture = read_text_file("test/debug/loop_breakpoints.ff");
     char *breakpoint_list = dup_cstr("");
     char *arguments;
@@ -9450,8 +9503,6 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     ASSERT(path_exists(binary_path));
     ASSERT(feng_cli_path_is_executable(backend_path));
     escaped_source = json_escape_text(source_path);
-    escaped_binary = json_escape_text(binary_path);
-    escaped_root = json_escape_text(root);
     for (size_t index = 0U; index < case_count; ++index) {
         char *next;
         cases[index].line = dap_test_breakpoint_line(fixture, cases[index].name);
@@ -9465,9 +9516,7 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     free(dap_test_request(&session, "initialize",
                           "{\"adapterID\":\"feng\",\"linesStartAt1\":true,"
                           "\"columnsStartAt1\":true,\"pathFormat\":\"path\"}"));
-    arguments = dup_printf("{\"program\":\"%s\",\"cwd\":\"%s\"}", escaped_binary, escaped_root);
-    launch_seq = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"name\":\"main.ff\",\"path\":\"%s\"},\"breakpoints\":[%s]}",
                             escaped_source, breakpoint_list);
@@ -9543,8 +9592,6 @@ static void test_dap_loop_breakpoints_follow_iterations(void) {
     free(breakpoint_list);
     free(fixture);
     free(escaped_source);
-    free(escaped_binary);
-    free(escaped_root);
     free(log_path);
     free(backend_path);
     free(binary_path);
@@ -9615,7 +9662,6 @@ static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
     char *backend_path;
     char *log_path;
     char *escaped_source;
-    char *escaped_binary;
     char *fixture = read_text_file("test/debug/lambda_creation_breakpoints.ff");
     char *breakpoint_list = dup_cstr("");
     char *arguments;
@@ -9649,7 +9695,6 @@ static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
     ASSERT(path_exists(binary_path));
     ASSERT(feng_cli_path_is_executable(backend_path));
     escaped_source = json_escape_text(source_path);
-    escaped_binary = json_escape_text(binary_path);
     for (size_t index = 0U; index < sizeof(lines) / sizeof(lines[0]); ++index) {
         char *next;
         lines[index] = dap_test_breakpoint_line(fixture, kBreakpoints[index]);
@@ -9662,9 +9707,7 @@ static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
     dap_test_start(&session, root, backend_path, log_path);
     free(dap_test_request(&session, "initialize",
         "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
-    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
-    launch_seq = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}",
                           escaped_source, breakpoint_list);
@@ -9735,7 +9778,6 @@ static void test_dap_lambda_creation_breakpoints_follow_calls(void) {
     free(breakpoint_list);
     free(fixture);
     free(escaped_source);
-    free(escaped_binary);
     free(log_path);
     free(backend_path);
     free(binary_path);
@@ -9900,7 +9942,6 @@ static void test_dap_expression_breakpoints_and_lambda_values(void) {
     char *backend_path;
     char *log_path;
     char *escaped_source;
-    char *escaped_binary;
     char *fixture = read_text_file("test/debug/expression_debug_values.ff");
     char *breakpoint_list = dup_cstr("");
     char *arguments;
@@ -9935,7 +9976,6 @@ static void test_dap_expression_breakpoints_and_lambda_values(void) {
     ASSERT(path_exists(binary_path));
     ASSERT(feng_cli_path_is_executable(backend_path));
     escaped_source = json_escape_text(source_path);
-    escaped_binary = json_escape_text(binary_path);
     for (size_t index = 0U; index < sizeof(kStops) / sizeof(kStops[0]); ++index) {
         unsigned int line = dap_test_breakpoint_line(fixture, kStops[index].marker);
         size_t prior = 0U;
@@ -9952,9 +9992,7 @@ static void test_dap_expression_breakpoints_and_lambda_values(void) {
     dap_test_start(&session, root, backend_path, log_path);
     free(dap_test_request(&session, "initialize",
         "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
-    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
-    launch_seq = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}",
                           escaped_source, breakpoint_list);
@@ -10027,7 +10065,6 @@ static void test_dap_expression_breakpoints_and_lambda_values(void) {
     free(breakpoint_list);
     free(fixture);
     free(escaped_source);
-    free(escaped_binary);
     free(log_path);
     free(backend_path);
     free(binary_path);
@@ -10109,7 +10146,6 @@ static void test_dap_lambda_stepping_stays_in_source(void) {
     char *binary_path;
     char *backend_path;
     char *escaped_source;
-    char *escaped_binary;
     char *fixture = read_text_file("test/debug/lambda_stepping.ff");
     char *breakpoints = dup_cstr("");
     char *remove_error = NULL;
@@ -10134,7 +10170,6 @@ static void test_dap_lambda_stepping_stays_in_source(void) {
     ASSERT(path_exists(binary_path));
     ASSERT(feng_cli_path_is_executable(backend_path));
     escaped_source = json_escape_text(source_path);
-    escaped_binary = json_escape_text(binary_path);
     for (size_t index = 0U; index < count; ++index) {
         char *marker = dup_printf("%s_call", kCases[index].name);
         char *next = dup_printf("%s%s{\"line\":%u}", breakpoints, index == 0U ? "" : ",",
@@ -10154,9 +10189,7 @@ static void test_dap_lambda_stepping_stays_in_source(void) {
         dap_test_start(&session, root, backend_path, log_path);
         free(dap_test_request(&session, "initialize",
             "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
-        arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
-        launch_seq = dap_test_send(&session, "launch", arguments);
-        free(arguments);
+        launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
         free(dap_test_wait(&session, 0, "initialized", NULL));
         arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[%s]}",
                               escaped_source, breakpoints);
@@ -10243,7 +10276,6 @@ static void test_dap_lambda_stepping_stays_in_source(void) {
     free(breakpoints);
     free(fixture);
     free(escaped_source);
-    free(escaped_binary);
     free(backend_path);
     free(binary_path);
     free(manifest_path);
@@ -10273,7 +10305,6 @@ static void test_dap_program_exit_stepping(void) {
         char *backend_path;
         char *manifest_path;
         char *escaped_source;
-        char *escaped_binary;
         char *remove_error = NULL;
         unsigned int end_line = dap_test_breakpoint_line(fixture, "main_end");
 
@@ -10291,7 +10322,6 @@ static void test_dap_program_exit_stepping(void) {
             ASSERT(feng_cli_project_build_main("feng", 1, argv) == 0);
         }
         escaped_source = json_escape_text(source_path);
-        escaped_binary = json_escape_text(binary_path);
         for (size_t mode = 0U; mode < (variant == 0U ? 6U : 3U); ++mode) {
             DapTestSession session;
             DapTestStepLocation location;
@@ -10312,9 +10342,7 @@ static void test_dap_program_exit_stepping(void) {
             dap_test_start(&session, root, backend_path, log_path);
             free(dap_test_request(&session, "initialize",
                 "{\"adapterID\":\"feng\",\"linesStartAt1\":true,\"columnsStartAt1\":true}"));
-            arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
-            launch_seq = dap_test_send(&session, "launch", arguments);
-            free(arguments);
+            launch_seq = dap_test_launch_native(&session, binary_path, root, variant == 0U ? 0 : 7);
             free(dap_test_wait(&session, 0, "initialized", NULL));
             arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}%s%s]}",
                                    escaped_source, end_line, extra, cleanup);
@@ -10402,7 +10430,6 @@ static void test_dap_program_exit_stepping(void) {
             free(cleanup);
         }
         free(escaped_source);
-        free(escaped_binary);
         free(manifest_path);
         free(source_path);
         free(binary_path);
@@ -10784,7 +10811,6 @@ static void test_dap_reports_line_start_for_feng_frames(void) {
     char *backend_path;
     char *log_path;
     char *escaped_source;
-    char *escaped_binary;
     char *arguments;
     char *response;
     char *error = NULL;
@@ -10812,12 +10838,9 @@ static void test_dap_reports_line_start_for_feng_frames(void) {
     backend_path = path_join(repo_root, "build/toolchain/llvm/bin/lldb-dap");
     log_path = path_join(root, "dap.log");
     escaped_source = json_escape_text(source_path);
-    escaped_binary = json_escape_text(binary_path);
     dap_test_start(&session, root, backend_path, log_path);
     free(dap_test_request(&session, "initialize", "{\"adapterID\":\"feng\",\"columnsStartAt1\":true}"));
-    arguments = dup_printf("{\"program\":\"%s\"}", escaped_binary);
-    launch_seq = dap_test_send(&session, "launch", arguments);
-    free(arguments);
+    launch_seq = dap_test_launch_native(&session, binary_path, root, 0);
     free(dap_test_wait(&session, 0, "initialized", NULL));
     arguments = dup_printf("{\"source\":{\"path\":\"%s\"},\"breakpoints\":[{\"line\":%u}]}", escaped_source, line);
     response = dap_test_request(&session, "setBreakpoints", arguments);
@@ -10858,7 +10881,6 @@ static void test_dap_reports_line_start_for_feng_frames(void) {
     free(response);
     dap_test_finish(&session);
     printf("dap real stack columns: 3 stops at column 1\n");
-    free(escaped_binary);
     free(escaped_source);
     free(log_path);
     free(backend_path);
@@ -30549,11 +30571,19 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 #include "try_breakpoints.inc"
 #include "source_breakpoints.inc"
 #include "native_exception.inc"
+#include "argv_lifetime.inc"
+#include "binary_lifetime.inc"
+#include "tuple_lifetime.inc"
+#include "cycle_lifetime.inc"
 
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_main_argv_lifetime();
+    test_binary_operand_lifetime();
+    test_tuple_initializer_lifetime();
+    test_imported_cycle_lifetime();
     test_native_exception_release_reproducer();
     test_native_exception_source_hidden_optimization_matrix();
     test_dap_try_breakpoints_once_per_evaluation();

@@ -939,19 +939,23 @@ static bool read_bundle_manifest(const char *bundle_path,
     bool ok = false;
 
     if (!feng_zip_reader_open(bundle_path, &reader, &zip_error)) {
-        return set_errorf(out_error,
+        ok = set_errorf(out_error,
                           bundle_path,
                           0U,
                           "failed to open bundle: %s",
                           zip_error != NULL ? zip_error : "unknown error");
+        free(zip_error);
+        return ok;
     }
     if (!feng_zip_reader_read(&reader, "feng.fm", &manifest_bytes, &manifest_size, &zip_error)) {
         feng_zip_reader_dispose(&reader);
-        return set_errorf(out_error,
+        ok = set_errorf(out_error,
                           bundle_path,
                           0U,
                           "failed to read bundle manifest: %s",
                           zip_error != NULL ? zip_error : "unknown error");
+        free(zip_error);
+        return ok;
     }
 
     manifest_text = (char *)malloc(manifest_size + 1U);

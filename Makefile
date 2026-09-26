@@ -259,6 +259,8 @@ test-normal: check-clang check-cc
 	$(BIN_DIR)/test_symbol
 
 # Run ASan and UBSan together, preserving the existing host compiler and linker.
+# Enable leak detection explicitly on every host, including macOS.
+test-sanitize: export ASAN_OPTIONS := $(if $(ASAN_OPTIONS),$(ASAN_OPTIONS):)detect_leaks=1
 test-sanitize: check-clang check-cc
 ifeq ($(_HOST_OS),macos)
 	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }

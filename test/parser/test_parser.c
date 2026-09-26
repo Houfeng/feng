@@ -6492,7 +6492,11 @@ void test_throw_constraint_parser(void);
 /* Sibling bounds retain both parameter orders in the source AST. */
 void test_generic_sibling_constraint_parser(void);
 
+/* Sanitizers verify ownership of partial and rejected callable signatures. */
+void test_parser_callable_cleanup(void);
+
 int main(void) {
+    test_parser_callable_cleanup();
     test_generic_sibling_constraint_parser();
     test_throw_constraint_parser();
     test_structural_type_target_parser();

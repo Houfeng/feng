@@ -71,6 +71,7 @@ static void free_decl(FengDecl *decl);
 static void free_annotations(FengAnnotation *annotations, size_t count);
 static void convert_trailing_yield_stmt_to_expr(Parser *parser, FengBlock *block);
 static void free_parameters(FengParameter *params, size_t count);
+static void free_callable_signature(const FengCallableSignature *callable);
 static void free_type_member(FengTypeMember *member);
 static void free_enum_items(FengEnumItem *items, size_t count);
 static void free_try_catch_clauses(FengTryCatchClause *clauses, size_t count);
@@ -1003,6 +1004,7 @@ static FengBinding parse_binding_core(Parser *parser,
     return binding;
 }
 
+/* Transfer signature ownership to the caller even when parsing fails. */
 static FengCallableSignature parse_callable_signature(Parser *parser,
                                                      FengToken token,
                                                      FengSlice name,
@@ -1696,15 +1698,14 @@ static FengDecl *parse_type_declaration(Parser *parser,
                     ? "type finalizers must provide a body '{...}'"
                     : "type methods and constructors must provide a body '{...}'");
             if (parser->error.message != NULL) {
+                free_callable_signature(&callable);
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
                 return NULL;
             }
 
             if (is_static && is_finalizer) {
-                free_parameters(callable.params, callable.param_count);
-                free_type_ref(callable.return_type);
-                free_block(callable.body);
+                free_callable_signature(&callable);
                 free_annotations(member_annotations, member_annotation_count);
                 (void)parser_error_at(parser,
                                       &callable.token,
@@ -1714,9 +1715,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
             }
 
             if (is_static && slice_equals(name, type_name)) {
-                free_parameters(callable.params, callable.param_count);
-                free_type_ref(callable.return_type);
-                free_block(callable.body);
+                free_callable_signature(&callable);
                 free_annotations(member_annotations, member_annotation_count);
                 (void)parser_error_at(parser,
                                       &callable.token,
@@ -1727,9 +1726,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
 
             if (is_finalizer) {
                 if (callable.param_count != 0U) {
-                    free_parameters(callable.params, callable.param_count);
-                    free_type_ref(callable.return_type);
-                    free_block(callable.body);
+                    free_callable_signature(&callable);
                     free_annotations(member_annotations, member_annotation_count);
                     (void)parser_error_at(parser,
                                           &callable.token,
@@ -1738,9 +1735,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                     return NULL;
                 }
                 if (callable.return_type != NULL && !type_ref_is_void_named(callable.return_type)) {
-                    free_parameters(callable.params, callable.param_count);
-                    free_type_ref(callable.return_type);
-                    free_block(callable.body);
+                    free_callable_signature(&callable);
                     free_annotations(member_annotations, member_annotation_count);
                     (void)parser_error_at(parser,
                                           &callable.token,
@@ -1753,9 +1748,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                 if (callable.return_type == NULL || type_ref_is_void_named(callable.return_type)) {
                     member_kind = FENG_TYPE_MEMBER_CONSTRUCTOR;
                 } else {
-                    free_parameters(callable.params, callable.param_count);
-                    free_type_ref(callable.return_type);
-                    free_block(callable.body);
+                    free_callable_signature(&callable);
                     free_annotations(member_annotations, member_annotation_count);
                     (void)parser_error_at(
                         parser,
@@ -1771,9 +1764,7 @@ static FengDecl *parse_type_declaration(Parser *parser,
                                      callable.token,
                                      member_doc_comment);
             if (member == NULL) {
-                free_parameters(callable.params, callable.param_count);
-                free_type_ref(callable.return_type);
-                free_block(callable.body);
+                free_callable_signature(&callable);
                 free_annotations(member_annotations, member_annotation_count);
                 free_decl(decl);
                 return NULL;
@@ -1903,6 +1894,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
             false,
             "SE0605", "spec method signatures must end with ';' and cannot have a body '{...}'");
         if (parser->error.message != NULL) {
+            free_callable_signature(&callable);
             return NULL;
         }
         for (param_index = 0U; param_index < callable.param_count; ++param_index) {
@@ -1910,9 +1902,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
                 (void)parser_error_current(
                     parser,
                     "SE0606", "spec method parameters cannot use 'let' or 'var' modifiers");
-                free_parameters(callable.params, callable.param_count);
-                free_type_ref(callable.return_type);
-                free_block(callable.body);
+                free_callable_signature(&callable);
                 return NULL;
             }
         }
@@ -1921,8 +1911,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
         }
         if (member_kind == FENG_TYPE_MEMBER_METHOD && callable.return_type == NULL) {
             (void)parser_error_current(parser, "SE0604", "spec method signatures must declare a return type");
-            free_parameters(callable.params, callable.param_count);
-            free_block(callable.body);
+            free_callable_signature(&callable);
             return NULL;
         }
         member = new_type_member(parser,
@@ -1930,9 +1919,7 @@ static FengTypeMember *parse_spec_member(Parser *parser) {
                      callable.token,
                      doc_comment);
         if (member == NULL) {
-            free_parameters(callable.params, callable.param_count);
-            free_type_ref(callable.return_type);
-            free_block(callable.body);
+            free_callable_signature(&callable);
             return NULL;
         }
         member->visibility = member_visibility;
@@ -2266,6 +2253,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
         true,
         "SE0805", "fit block methods must provide a body '{...}'");
     if (parser->error.message != NULL) {
+        free_callable_signature(&callable);
         free_annotations(member_annotations, member_annotation_count);
         return NULL;
     }
@@ -2275,9 +2263,7 @@ static FengTypeMember *parse_fit_method_member(Parser *parser) {
                              doc_comment);
     if (member == NULL) {
         free_annotations(member_annotations, member_annotation_count);
-        free_parameters(callable.params, callable.param_count);
-        free_type_ref(callable.return_type);
-        free_block(callable.body);
+        free_callable_signature(&callable);
         return NULL;
     }
     member->visibility = visibility;
@@ -5638,6 +5624,16 @@ static void free_bound_member_names(FengSlice *names, size_t count) {
     free(names);
 }
 
+/* Release every owned signature field, before or after its transfer to an AST. */
+static void free_callable_signature(const FengCallableSignature *callable) {
+    free_type_params(callable->type_params, callable->type_param_count);
+    free_parameters(callable->params, callable->param_count);
+    free_type_ref(callable->return_type);
+    free_block(callable->body);
+    free_bound_member_names(callable->bound_member_names,
+                            callable->bound_member_count);
+}
+
 static void free_type_member(FengTypeMember *member) {
     if (member == NULL) {
         return;
@@ -5648,12 +5644,7 @@ static void free_type_member(FengTypeMember *member) {
         free_type_ref(member->as.field.type);
         free_expr(member->as.field.initializer);
     } else {
-        free_type_params(member->as.callable.type_params, member->as.callable.type_param_count);
-        free_parameters(member->as.callable.params, member->as.callable.param_count);
-        free_type_ref(member->as.callable.return_type);
-        free_block(member->as.callable.body);
-        free_bound_member_names(member->as.callable.bound_member_names,
-                                member->as.callable.bound_member_count);
+        free_callable_signature(&member->as.callable);
     }
 
     free(member);
@@ -5739,11 +5730,7 @@ static void free_decl(FengDecl *decl) {
             free(decl->as.fit_decl.members);
             break;
         case FENG_DECL_FUNCTION:
-            free_type_params(decl->as.function_decl.type_params,
-                             decl->as.function_decl.type_param_count);
-            free_parameters(decl->as.function_decl.params, decl->as.function_decl.param_count);
-            free_type_ref(decl->as.function_decl.return_type);
-            free_block(decl->as.function_decl.body);
+            free_callable_signature(&decl->as.function_decl);
             break;
     }
 

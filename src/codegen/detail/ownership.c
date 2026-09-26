@@ -144,5 +144,6 @@ static char *cg_materialize_readonly_source(CG *cg, ExprResult *result,
     if (cg_stable_result_owner(cg, result).scope != NULL &&
         result->is_addressable && !result->is_storage_address)
         return strdup(result->c_expr);
-    return cg_materialize_to_local(cg, result, prefix);
+    return cg_materialize_to_local(cg, result, prefix)
+        ? strdup(result->c_expr) : NULL;
 }
