@@ -12775,6 +12775,7 @@ static CGType *cg_instantiate_builtin_fit_return_type(CG *cg,
     return cgtype_clone(return_type);
 }
 
+/* Register the instance before recursively collecting its declaration dependencies. */
 static bool cg_register_generic_spec_instance_shell(CG *cg,
                                                     const GenericSpecDecl *generic_decl,
                                                     FengTypeRef *const *type_args,
@@ -13013,6 +13014,9 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         return false;
     }
 
+    /* Recursive registration can move user_specs. All remaining decisions use
+     * the AST-owned declaration instead of retaining the instance address. */
+    const FengSpecForm form = decl->as.spec_decl.form;
     for (size_t parent_index = 0; parent_index < decl->as.spec_decl.parent_spec_count; ++parent_index) {
         CGTypeParamScope parent_scope = open_scope != NULL ? *open_scope : (CGTypeParamScope){0};
         FengTypeRef *sub = cg_type_ref_substitute(decl->as.spec_decl.parent_specs[parent_index],
@@ -13033,7 +13037,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
         cg_type_ref_free(sub);
         if (!ok) return false;
     }
-    if (s->form == FENG_SPEC_FORM_OBJECT) {
+    if (form == FENG_SPEC_FORM_OBJECT) {
         CGTypeParamScope member_scope = open_scope != NULL
             ? *open_scope
             : (CGTypeParamScope){0};
@@ -13076,7 +13080,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
                 }
             }
         }
-    } else if (s->form == FENG_SPEC_FORM_CALLABLE) {
+    } else if (form == FENG_SPEC_FORM_CALLABLE) {
         CGTypeParamScope callable_scope = open_scope != NULL
             ? *open_scope
             : (CGTypeParamScope){0};
@@ -13128,7 +13132,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
             if (!ok) return false;
         }
     }
-    if (s->form == FENG_SPEC_FORM_UNION) {
+    if (form == FENG_SPEC_FORM_UNION) {
         for (size_t member_index = 0U;
              member_index < decl->as.spec_decl.as.union_form.member_count;
              ++member_index) {
@@ -13157,7 +13161,7 @@ static bool cg_register_generic_spec_instance_shell(CG *cg,
      * instantiated as `Comparable<IntBox>` must register `Eq<IntBox>` and
      * `Ord<IntBox>`). Without this, cg_register_user_spec_members cannot
      * locate the member-spec instances later. */
-    if (s->form == FENG_SPEC_FORM_INTERSECTION) {
+    if (form == FENG_SPEC_FORM_INTERSECTION) {
         for (size_t member_index = 0U;
              member_index < decl->as.spec_decl.as.intersection_form.member_count;
              ++member_index) {
@@ -63779,6 +63783,7 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
     bool saved_captures_self = cg->current_callable_captures_self;
     const char *saved_function_descriptor_c_name =
         cg->generic_function_descriptor_c_name;
+    const char *saved_frame_backend_symbol = cg->current_frame_backend_symbol;
     UserType owner_view;
     bool owner_view_initialized = false;
     char *self_expr = NULL;
@@ -64049,6 +64054,14 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
         goto cleanup;
     }
 
+    /* Bind user storage and internal-local visibility to the shared body.
+     * Keep its existing backend display name; frame presentation is unchanged. */
+    if (!cg_debug_set_current_frame(cg, shared_name, shared_name,
+                                    FENG_CODEGEN_MAPING_FRAME_VISIBLE, member->token) ||
+        !cg_debug_add_current_frame_module_binding_records(cg, member->token)) {
+        goto cleanup;
+    }
+
     if (!cg_compute_capture_requirements_in_block(
             sig->body,
             &captured_names,
@@ -64205,6 +64218,7 @@ cleanup:
     cg_clear_generic_type_context(cg);
     cg->generic_function_descriptor_c_name =
         saved_function_descriptor_c_name;
+    cg->current_frame_backend_symbol = saved_frame_backend_symbol;
     if (param_types) {
         for (size_t i = 0; i < sig->param_count; ++i) cgtype_free(param_types[i]);
     }
@@ -65318,6 +65332,14 @@ static bool cg_emit_builtin_fit_method(CG *cg,
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
+    }
+
+    /* Fit bodies participate in the same storage visibility contract, while
+     * retaining their existing native frame display names. */
+    if (!cg_debug_set_current_frame(cg, m->c_name, m->c_name,
+                                    FENG_CODEGEN_MAPING_FRAME_VISIBLE, m->member->token) ||
+        !cg_debug_add_current_frame_module_binding_records(cg, m->member->token)) {
+        goto cleanup;
     }
 
     if (!cg_compute_capture_requirements_in_block(m->member->as.callable.body,

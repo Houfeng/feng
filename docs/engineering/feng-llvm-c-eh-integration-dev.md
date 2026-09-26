@@ -258,3 +258,45 @@ sanitizer、减少用例或换成发行包的不完整 sanitizer 资源取得成
 维护者提交后仍须完成 T05-P；新归档必须包含 `toolchain/llvm-c-eh`、
 `toolchain/test_tools` 和 macOS `ld64.lld` 别名，否则 CI 恢复旧工具链时会明确失败。
 S11 修复继续按其独立文档实施。
+
+## 9. 追加 ASan（2026-09-26）
+
+用户批准仅追加参数开启 ASan：在现有 `test-sanitize` 的编译、链接和
+`FENG_CC_FLAGS` 中保留 `-fsanitize=undefined`，追加 `-fsanitize=address`，
+同一阶段同时启用 UBSan 与 ASan。插件集成脚本的直接编译／链接同步传递该参数；
+普通阶段、测试源码和断言、优化级别、编译器及链接器选择保持不变。
+参数接入本身不修改产品代码、runtime、ABI、插件或工具链产物，
+不增加 sanitizer 屏蔽选项；下述测试发现的问题按用户后续批准单独修复。
+
+验收：沙箱外执行完整 `make test`，记录实际结果；若失败，先记录、分析，
+超出参数调整范围的修复由人工决定。
+
+首次执行退出码为 2：ASan＋UBSan 的 archive、lexer、parser、semantic、runtime
+及原生 EH 契约检查通过；`test_codegen` 在
+`test_generic_sibling_constraint_codegen` 中报告 `heap-use-after-free`，
+读取位置为 `cg_register_generic_spec_instance_shell`。ASan 的释放栈显示同一函数
+递归注册时发生 `realloc`。完整原始日志保存在
+`third_party/llvm-c-eh/temp/asan-enablement/make-test.log`。
+
+源码与符号定位确认：函数在 `codegen.c:12833` 保存 `UserSpec *s`，
+`13025` 行递归注册父 spec 时由 `12822` 行扩容 `cg->user_specs`，旧存储已释放；
+递归返回后，`13036` 行仍通过原局部指针读取 `s->form`。现有全局引用刷新未更新
+该 C 局部变量。定位记录为同目录的 `codegen-locations.txt`。
+这是编译器执行期间的内存访问错误，追加参数时未改动该代码。用户随后批准修复，
+方案与验证见[泛型 spec 注册寿命修复](./feng-spec-registration-lifetime-bugfix.md)；
+保留 ASan 及原测试。
+
+注册寿命修复后的第二次全量回归通过全部 Codegen 用例，随后发现泛型方法
+重复源码断点，普通阶段尚未执行。用户批准先修复该问题，见
+[sanitizer 调试位置修复](./feng-sanitizer-debug-location-bugfix.md)。
+该修复补齐共享方法与 fit 的既有调试上下文，不改代理或原断点断言。
+
+两处修复后，完整 `make test-normal` 退出 0。sanitizer 下 Codegen、DAP/LSP、
+std 607/607、FCTS 1619/1619、性能门槛及插件集成均通过，但当时完整 `make test`
+在 CLI release 符号清理断言处失败：原断言扫描全文件字节，误将 ASan
+全局元信息中的诊断名称当成残留符号。用户随后批准优化，已将该用例的 6 处
+符号断言改为读取真实符号表，保留源码、运行结果及普通字符串断言。
+
+最终在沙箱外重新执行完整 `make test`，退出 0，ASan＋UBSan 与普通阶段均通过。
+日志为 `third_party/llvm-c-eh/temp/asan-enablement/make-test-symbol-table.log`；
+过程与验证记录见上述调试位置修复文档。本地验收完成，等待人工 Review。

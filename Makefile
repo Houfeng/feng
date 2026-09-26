@@ -135,7 +135,7 @@ RUNTIME_AR := $(LLVM_LAYOUT_LINK)/bin/llvm-ar
 
 ifeq ($(_HOST_OS),macos)
 CEH_LIBRARY := lib/llvm_c_eh.dylib
-# Clang's existing tool search selects this linker only during UBSan testing.
+# Clang's existing tool search selects this linker only during sanitizer testing.
 TEST_LLD_ROOT := $(CURDIR)/toolchain/test_tools/lld/$(HOST_PLATFORM)
 SANITIZE_LDFLAGS := -fuse-ld=lld
 test-sanitize: export COMPILER_PATH := $(TEST_LLD_ROOT)/bin
@@ -258,28 +258,17 @@ test-normal: check-clang check-cc
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
 
-# Sanitize testing strategy:
-# - macOS: UBSan only (ASan causes deadlock/infinite loop even with LLVM 21)
-# - Linux CI: Should use full ASan + UBSan (-fsanitize=address,undefined)
-#
-# ASan issues on macOS (verified with LLVM 21.1.8):
-# 1. dyld initialization deadlock: ASan's __malloc_init conflicts with libSystem
-# 2. libfeng_unwind stack unwinding conflicts with ASan's fake stack mechanism
-# 3. DYLD_INSERT_LIBRARIES workaround does not resolve the issue
-#
-# Recommendation: Use Linux containers/VMs for full ASan testing on macOS hosts
+# Run ASan and UBSan together, preserving the existing host compiler and linker.
 test-sanitize: check-clang check-cc
 ifeq ($(_HOST_OS),macos)
 	@test -x "$(TEST_LLD_ROOT)/bin/ld64.lld" || { echo "error: missing macOS UBSan linker; restore the toolchain prebuilt archive" >&2; exit 1; }
 	@test "$$('$(TEST_LLD_ROOT)/bin/ld64.lld' --version)" = "Feng UBSan test tools patch 1 LLD 22.1.8"
-	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
+	@$(CC) -### -fuse-ld=lld -fsanitize=undefined -fsanitize=address -x c /dev/null -o /dev/null 2>&1 | grep -F '"$(TEST_LLD_ROOT)/bin/ld64.lld"' >/dev/null || { echo "error: Clang did not select the macOS UBSan linker" >&2; exit 1; }
 endif
 	$(MAKE) clean
-	@echo "=== Sanitize Test (UBSan only on macOS) ==="
-	@echo "Note: ASan causes deadlock on macOS (dyld + libunwind conflict)."
-	@echo "For full ASan + UBSan testing, use Linux CI."
-	$(MAKE) runtime CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic"
-	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol $(BIN_DIR)/test_llvm_c_eh_driver CFLAGS="-fsanitize=undefined -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined $(SANITIZE_LDFLAGS)"
+	@echo "=== Sanitize Test (ASan + UBSan) ==="
+	$(MAKE) runtime CFLAGS="-fsanitize=undefined -fsanitize=address -g -O1 -std=c11 -Wall -Wextra -pedantic"
+	$(MAKE) cli $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_symbol $(BIN_DIR)/test_llvm_c_eh_driver CFLAGS="-fsanitize=undefined -fsanitize=address -g -O1 -std=c11 -Wall -Wextra -pedantic" LDFLAGS="-fsanitize=undefined -fsanitize=address $(SANITIZE_LDFLAGS)"
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -289,14 +278,14 @@ endif
 	$(BIN_DIR)/test_codegen
 	$(BIN_DIR)/test_debug
 	# The trimmed distribution Clang intentionally omits sanitizer runtimes.
-	# Generated-program UBSan coverage therefore uses the host compiler through
+	# Generated-program sanitizer coverage therefore uses the host compiler through
 	# the explicit Feng tool override; the normal phase below exercises bundled.
 	# Resolve before child login shells can reset PATH to another compiler.
-	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" $(BIN_DIR)/test_cli
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" $(BIN_DIR)/test_cli
 	$(BIN_DIR)/test_cli_paths
 	$(BIN_DIR)/test_symbol
-	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
-	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined" bash test/cli/llvm_c_eh.sh
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" bash test/cli/llvm_c_eh.sh
 
 llvm-c-eh-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
 	bash test/cli/llvm_c_eh.sh

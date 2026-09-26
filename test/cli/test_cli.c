@@ -721,6 +721,19 @@ static void run_command_or_die(const char *command) {
     ASSERT(WEXITSTATUS(status) == 0);
 }
 
+/* Inspect actual symbols rather than strings retained by instrumentation.
+ * Keep the same LLVM/system nm selection used by the Codegen tests. */
+static char *read_binary_symbols_or_die(const char *path, const char *output_path) {
+    char *command = dup_printf(
+        "if command -v llvm-nm >/dev/null 2>&1; then "
+        "llvm-nm -a '%s' > '%s'; else nm -a '%s' > '%s'; fi",
+        path, output_path, path, output_path);
+    ASSERT(command != NULL);
+    run_command_or_die(command);
+    free(command);
+    return read_text_file(output_path);
+}
+
 #if defined(__APPLE__)
 static int find_first_dwarfdump_address_for_line(const char *dump_text,
                                                  const char *file_name,
@@ -21620,6 +21633,7 @@ static void test_project_build_release_cleans_binary_symbols(void) {
     char *binary_path;
     char *library_dir;
     char *library_path;
+    char *symbols_path;
     char *remove_error = NULL;
 
     ASSERT(workspace_dir != NULL);
@@ -21634,6 +21648,7 @@ static void test_project_build_release_cleans_binary_symbols(void) {
     binary_path = project_host_build_path(root_dir, "bin/release_cleanup_app");
     library_dir = project_host_build_path(dep_dir, "lib");
     library_path = host_static_library_path(library_dir, "release_cleanup_dep");
+    symbols_path = path_join(workspace_dir, "symbols.txt");
     mkdir_p(dep_src_dir);
     mkdir_p(root_src_dir);
     write_text_file(dep_manifest_path,
@@ -21692,6 +21707,8 @@ static void test_project_build_release_cleans_binary_symbols(void) {
     for (int release = 0; release < 2; ++release) {
         char *argv[] = {root_dir, "--release"};
         char *stdout_text;
+        char *library_symbols;
+        char *binary_symbols;
 
         ASSERT(feng_cli_project_build_main("feng", release ? 2 : 1, argv) == 0);
         stdout_text = run_binary_capture_stdout_or_die(binary_path);
@@ -21700,23 +21717,28 @@ static void test_project_build_release_cleans_binary_symbols(void) {
                       "release-cleanup-defer\n"
                       "release-cleanup-caught\n") == 0);
         free(stdout_text);
-        ASSERT(binary_file_contains_text(library_path, "cleanupValue__from__"));
+        library_symbols = read_binary_symbols_or_die(library_path, symbols_path);
+        binary_symbols = read_binary_symbols_or_die(binary_path, symbols_path);
+        ASSERT(strstr(library_symbols, "cleanupValue__from__") != NULL);
         ASSERT(binary_file_contains_text(library_path, "release-cleanup-unused"));
         ASSERT(binary_file_contains_text(binary_path, "release-cleanup-live"));
         if (release) {
-            ASSERT(!binary_file_contains_text(binary_path, "cleanupValue__from__"));
-            ASSERT(!binary_file_contains_text(binary_path,
-                                             "FengTypeDesc__test__cli__releasecleanup__Box"));
-            ASSERT(!binary_file_contains_text(binary_path, "cleanupUnused__from__"));
+            ASSERT(strstr(binary_symbols, "cleanupValue__from__") == NULL);
+            ASSERT(strstr(binary_symbols,
+                          "FengTypeDesc__test__cli__releasecleanup__Box") == NULL);
+            ASSERT(strstr(binary_symbols, "cleanupUnused__from__") == NULL);
         } else {
-            ASSERT(binary_file_contains_text(binary_path, "cleanupValue__from__"));
-            ASSERT(binary_file_contains_text(binary_path,
-                                            "FengTypeDesc__test__cli__releasecleanup__Box"));
+            ASSERT(strstr(binary_symbols, "cleanupValue__from__") != NULL);
+            ASSERT(strstr(binary_symbols,
+                          "FengTypeDesc__test__cli__releasecleanup__Box") != NULL);
         }
+        free(binary_symbols);
+        free(library_symbols);
     }
 
     ASSERT(feng_cli_project_remove_tree(workspace_dir, &remove_error));
     free(remove_error);
+    free(symbols_path);
     free(library_path);
     free(library_dir);
     free(binary_path);

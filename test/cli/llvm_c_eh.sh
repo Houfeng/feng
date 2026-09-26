@@ -34,6 +34,9 @@ if [[ ${FENG_CC_FLAGS:-} == *-fsanitize=undefined* ]]; then
     flags+=(-fsanitize=undefined -fno-sanitize-recover=all)
     sanitizer_options+=(--sanitizer)
 fi
+if [[ ${FENG_CC_FLAGS:-} == *-fsanitize=address* ]]; then
+    flags+=(-fsanitize=address)
+fi
 sdk_flags=()
 if [[ $host == macos-* ]]; then sdk_flags+=(-isysroot "$(xcrun --show-sdk-path)"); fi
 flags+=(${sdk_flags[@]+"${sdk_flags[@]}"})
