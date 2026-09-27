@@ -35408,6 +35408,8 @@ void test_intersection_projection_semantics(void);
 void test_constraint_projection_semantics(void);
 /* Generic literal storage does not relax field type or final-binding rules. */
 void test_generic_literal_storage_semantics(void);
+/* Generic postfix operands and inferred results retain their own type context. */
+void test_generic_chain_context(void);
 void test_g24_surface_diagnostics(void);
 void test_g24_composite_graphs(void);
 
@@ -35443,6 +35445,7 @@ int main(void) {
     test_intersection_projection_semantics();
     test_constraint_projection_semantics();
     test_generic_literal_storage_semantics();
+    test_generic_chain_context();
     test_g24_surface_diagnostics();
     test_g24_composite_graphs();
     test_g22_module_diagnostics();

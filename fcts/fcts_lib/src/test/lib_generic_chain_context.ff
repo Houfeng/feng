@@ -1,0 +1,65 @@
+open module fcts_lib.test.generic_chain_context;
+
+/** Keep the independently inferred element and the context-fitted count. */
+open func chain_values<T>(value: T, count: i32): T[] { return [value]; }
+/** Reversing arguments must not change generic inference. */
+open func chain_leading<T>(count: i32, value: T): T[] { return [value]; }
+/** Fixed aggregate parameters must not discard an unrelated generic binding. */
+open func chain_arrays<T>(value: T, counts: i32[]): T[] { return [value]; }
+/** Direct calls retain inference from their own expected array type. */
+open func chain_empty<T>(): T[] { return []; }
+/** Infer T only from the consumer's parameter target, including through FT. */
+open func chain_default<T>() { let value:T; return value; }
+/** Either argument may establish T before the other receives its target. */
+open func chain_pair<T>(first:T, second:T):T[] { return [first, second]; }
+/** Return a scalar without borrowing the enclosing index expression's target. */
+open func chain_identity<T>(value: T): T { return value; }
+/** A body-inferred T must be substituted exactly like an explicit return. */
+open func chain_inferred<T>(value: T) { return value; }
+/** Inferred composite returns survive subsequent semantic passes and export. */
+open func chain_inferred_array<T>(value: T) { return [value]; }
+/** Nested synthesis preserves the element's full type. */
+open func chain_inferred_nested<T>(value: T) { return [[value]]; }
+/** Forward calls force the inferred type to cross analysis iterations. */
+open func chain_inferred_forward_array<T>(value: T) { return chain_inferred_later(value); }
+/** The forward dependency deliberately follows its caller. */
+func chain_inferred_later<T>(value: T) { return [value]; }
+/** A named receiver preserves its actual parameter through fields and methods. */
+open type ChainBox<T> {
+    open let value: T;
+    /** Read the receiver's type parameter. */
+    open func read(): T { return self.value; }
+    /** Infer the owner parameter from the field without spelling a return type. */
+    open func inferred_read() { return self.value; }
+    /** Infer a method parameter independently of the owner parameter. */
+    open func convert<U>(value: U, count: i32): U[] { return [value]; }
+    /** Infer an aggregate result containing a method-level parameter. */
+    open func inferred_convert<U>(value: U, count: i32) { return [value]; }
+    /** Static generic calls obey the same context boundary as free calls. */
+    open static func make<U>(value: U, count: i32): ChainBox<U> {
+        return ChainBox<U>{value: value};
+    }
+    /** Static method results use the same caller-view substitution. */
+    open static func inferred_make<U>(value: U, count: i32) {
+        return ChainBox<U>{value: value};
+    }
+}
+/** Construct a generic receiver used by chained field and method access. */
+open func chain_box<T>(value: T, count: i32): ChainBox<T> {
+    return ChainBox<T>{value: value};
+}
+/** Callable results exercise consecutive call suffixes. */
+open spec ChainGetter<T>(): T;
+/** The returned callable owns the captured value normally. */
+open func chain_getter<T>(value: T, count: i32): ChainGetter<T> {
+    return () { return value; };
+}
+/** These methods are deliberately distinct from std's array methods. */
+open fit T[] {
+    /** Return the actual element type after any preceding suffix. */
+    open func chain_first(): T { return self[0]; }
+    /** Inferred fit returns retain the array element's type and ownership. */
+    open func chain_inferred_first() { return self[0]; }
+    /** Retain an array result across several chained calls. */
+    open func chain_again(): T[] { return self; }
+}

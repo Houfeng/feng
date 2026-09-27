@@ -856,6 +856,13 @@ static InferredExprType callable_effective_return_type(const ResolveContext *con
     return entry != NULL ? entry->return_type : inferred_expr_type_unknown();
 }
 
+/* Return-cache snapshots share the lifetime of published semantic types. */
+static bool analysis_track_synthetic_type_ref(const FengSemanticAnalysis *analysis,
+                                               FengTypeRef *type_ref);
+/* Deep-copy structural types while preserving their lexical provenance. */
+static FengTypeRef *clone_type_ref_for_inference(const FengTypeRef *type_ref);
+
+/* Preserve inferred types across resolver passes and subsequent consumers. */
 static bool cache_callable_return_type(ResolveContext *context,
                                        const FengCallableSignature *callable,
                                        InferredExprType return_type) {
@@ -873,10 +880,20 @@ static bool cache_callable_return_type(ResolveContext *context,
     }
 
     entry = find_mutable_callable_return_cache_entry(cache, callable);
-    if (entry != NULL) {
-        if (inferred_expr_types_equal(context, entry->return_type, return_type)) {
-            return true;
+    if (entry != NULL && inferred_expr_types_equal(context, entry->return_type, return_type)) {
+        return true;
+    }
+
+    if (return_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
+        FengTypeRef *snapshot = clone_type_ref_for_inference(return_type.type_ref);
+        if (snapshot == NULL || !analysis_track_synthetic_type_ref(context->analysis, snapshot)) {
+            free_synthetic_type_ref(snapshot);
+            return false;
         }
+        return_type.type_ref = snapshot;
+    }
+
+    if (entry != NULL) {
         entry->return_type = return_type;
         cache->changed = true;
         return true;
@@ -5101,6 +5118,29 @@ static bool resolve_try_expr(ResolveContext *context,
                              bool allow_self,
                              bool result_required);
 static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr *expr);
+
+/* A postfix operand has its own result type; the enclosing result target is
+ * not a target for its callee, receiver, index or unbound generic argument. */
+static InferredExprType infer_operand_type(ResolveContext *context,
+                                           const FengExpr *expr) {
+    const FengTypeRef *previous = context->current_expr_expected_type_ref;
+    context->current_expr_expected_type_ref = NULL;
+    InferredExprType result = infer_expr_type(context, expr);
+    context->current_expr_expected_type_ref = previous;
+    return result;
+}
+
+/* Resolve an operand in the same lexical scope without borrowing the parent's
+ * result target. Restore that target on both success and diagnostic paths. */
+static bool resolve_operand(ResolveContext *context, const FengExpr *expr,
+                             bool allow_self) {
+    const FengTypeRef *previous = context->current_expr_expected_type_ref;
+    context->current_expr_expected_type_ref = NULL;
+    bool ok = resolve_expr(context, expr, allow_self);
+    context->current_expr_expected_type_ref = previous;
+    return ok;
+}
+
 static bool evaluate_constant_expr(ResolveContext *context,
                                    const FengExpr *expr,
                                    FengConstValue *out);
@@ -5164,7 +5204,6 @@ static bool callable_type_ref_contains_type_params(const FengCallableSignature *
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
-                                            const FengTypeRef *target_inference_return_type,
                                             const FengDecl *owner_type_decl,
                                             const FengDecl *fit_decl,
                                             InferredExprType owner_type,
@@ -5183,6 +5222,15 @@ static bool resolve_stmt(ResolveContext *context,
 static bool callable_return_inference_is_pending(ResolveContext *context,
                                                  const FengCallableSignature *callable);
 static bool expr_type_inference_is_pending(ResolveContext *context, const FengExpr *expr);
+
+/* Pending operand inference, like operand typing, has no enclosing result target. */
+static bool operand_type_inference_is_pending(ResolveContext *context, const FengExpr *expr) {
+    const FengTypeRef *previous = context->current_expr_expected_type_ref;
+    context->current_expr_expected_type_ref = NULL;
+    bool pending = expr_type_inference_is_pending(context, expr);
+    context->current_expr_expected_type_ref = previous;
+    return pending;
+}
 static bool lambda_expr_matches_function_type(ResolveContext *context,
                                               const FengExpr *expr,
                                               const FengTypeRef *function_type_ref,
@@ -5450,6 +5498,7 @@ static const FengCallableSignature *resolved_callable_signature(
     if ((resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_FIT_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_STATIC_METHOD ||
+         resolved->kind == FENG_RESOLVED_CALLABLE_TYPE_CONSTRUCTOR ||
          resolved->kind == FENG_RESOLVED_CALLABLE_FIT_STATIC_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_METHOD ||
          resolved->kind == FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD) &&
@@ -5459,41 +5508,44 @@ static const FengCallableSignature *resolved_callable_signature(
     return NULL;
 }
 
-/* Substitute a call result using the same owner and callable inference as its
- * applicability check, or reuse the already persisted authoritative result. */
-static const FengTypeRef *substitute_callable_return_type_for_call(
+/* Explicit and inferred returns share one caller-view substitution. Preserve
+ * unknown/void/builtin/declaration results without inventing a type reference. */
+static InferredExprType infer_callable_return_type_for_call(
     ResolveContext *context,
     const FengDecl *owner_type_decl,
     const FengDecl *fit_decl,
     InferredExprType owner_type,
     const FengExpr *call_expr,
     const FengCallableSignature *callable) {
-    if (callable == NULL || callable->return_type == NULL) return NULL;
+    InferredExprType effective = callable_effective_return_type(context, callable);
+    if (effective.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF) return effective;
+    const FengTypeRef *source = effective.type_ref;
     const FengTypeRef *result = substitute_type_ref_for_callable_instance(
         context, callable, owner_type_decl, fit_decl, owner_type, NULL, 0U,
-        callable->return_type);
+        source);
     if (callable->type_param_count == 0U || call_expr == NULL ||
-        call_expr->kind != FENG_EXPR_CALL) return result;
+        call_expr->kind != FENG_EXPR_CALL) return inferred_expr_type_from_type_ref(result);
     const FengResolvedCallable *resolved = &call_expr->as.call.resolved_callable;
     if (resolved_callable_signature(resolved) == callable &&
         resolved->callable_type_arg_count == callable->type_param_count) {
-        return substitute_type_ref_for_callable_instance(
+        return inferred_expr_type_from_type_ref(substitute_type_ref_for_callable_instance(
             context, callable, owner_type_decl, fit_decl, owner_type,
             resolved->callable_type_args, resolved->callable_type_arg_count,
-            callable->return_type);
+            source));
     }
     size_t count = callable->type_param_count;
     FengTypeRef **args = calloc(count, sizeof(*args));
     bool *owned = calloc(count, sizeof(*owned));
+    result = NULL;
     if (args != NULL && owned != NULL &&
         callable_collect_call_type_args(context, call_expr, callable,
-            callable->return_type, owner_type_decl, fit_decl, owner_type, args, owned)) {
+            owner_type_decl, fit_decl, owner_type, args, owned)) {
         bool complete = true;
         for (size_t i = 0U; i < count; ++i) complete = complete && args[i] != NULL;
         if (complete) {
             result = substitute_type_ref_for_callable_instance(
                 context, callable, owner_type_decl, fit_decl, owner_type,
-                (const FengTypeRef *const *)args, count, callable->return_type);
+                (const FengTypeRef *const *)args, count, source);
         }
     }
     if (args != NULL && owned != NULL) {
@@ -5503,7 +5555,7 @@ static const FengTypeRef *substitute_callable_return_type_for_call(
     }
     free(args);
     free(owned);
-    return result;
+    return inferred_expr_type_from_type_ref(result);
 }
 
 /* Validate an alias at its actual use, before type/member/signature lookup can
@@ -7934,13 +7986,16 @@ static bool expr_is_callable_like_address_of_operand(ResolveContext *context,
 }
 
 static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
-    InferredExprType operand_type;
+    InferredExprType operand_type = infer_expr_type(context, expr->as.unary.operand);
     const char *operator_name;
     char *operand_type_name;
     char *message;
 
+    if (!inferred_expr_type_is_known(operand_type) &&
+        expr_type_inference_is_pending(context, expr->as.unary.operand)) {
+        return true;
+    }
     if (expr->as.unary.op == FENG_TOKEN_AMP) {
-        operand_type = infer_expr_type(context, expr->as.unary.operand);
         if (inferred_expr_type_is_data_addressable_abi_value(context, operand_type) ||
             inferred_expr_type_is_string(operand_type) ||
             inferred_expr_type_is_abi_array_value(context, operand_type) ||
@@ -7958,7 +8013,6 @@ static bool validate_unary_expr(ResolveContext *context, const FengExpr *expr) {
         return resolver_append_error(context, expr->token, "AE0018", message);
     }
 
-    operand_type = infer_expr_type(context, expr->as.unary.operand);
     if (unary_expr_type_is_valid(expr->as.unary.op, operand_type)) {
         return true;
     }
@@ -8193,6 +8247,14 @@ static bool validate_binary_expr(ResolveContext *context, const FengExpr *expr) 
     char *right_type_name;
     char *message;
 
+    /* Unknown operands from unresolved return types are revisited by the
+     * ordinary inference pass; an unknown with no pending source is invalid. */
+    if ((!inferred_expr_type_is_known(left_type) &&
+         expr_type_inference_is_pending(context, expr->as.binary.left)) ||
+        (!inferred_expr_type_is_known(right_type) &&
+         expr_type_inference_is_pending(context, expr->as.binary.right))) {
+        return true;
+    }
     if ((expr->as.binary.op == FENG_TOKEN_EQ || expr->as.binary.op == FENG_TOKEN_NE) &&
         (inferred_expr_type_is_union_view(context, left_type) ||
          inferred_expr_type_is_union_view(context, right_type))) {
@@ -11198,6 +11260,9 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
     }
 
     if (resolve_indexed_array_element_type_ref(context, expr->as.index.object) == NULL) {
+        if (operand_type_inference_is_pending(context, expr->as.index.object)) {
+            return true;
+        }
         object_type = infer_expr_type(context, expr->as.index.object);
         object_type_name = format_inferred_expr_type_name(object_type, context->pointer_size);
         message = format_message("index expression target must have array type, got '%s'",
@@ -11206,8 +11271,12 @@ static bool validate_index_expr(ResolveContext *context, const FengExpr *expr) {
         return resolver_append_error(context, expr->token, "AE1021", message) && false;
     }
 
-    index_type = infer_expr_type(context, expr->as.index.index);
+    index_type = infer_operand_type(context, expr->as.index.index);
     if (inferred_expr_type_is_integer(index_type)) {
+        return true;
+    }
+    if (!inferred_expr_type_is_known(index_type) &&
+        operand_type_inference_is_pending(context, expr->as.index.index)) {
         return true;
     }
 
@@ -11232,6 +11301,10 @@ static bool validate_stmt_condition_expr(ResolveContext *context,
 
     condition_type = infer_expr_type(context, condition);
     if (inferred_expr_type_is_bool(condition_type)) {
+        return true;
+    }
+    if (!inferred_expr_type_is_known(condition_type) &&
+        expr_type_inference_is_pending(context, condition)) {
         return true;
     }
 
@@ -14712,7 +14785,7 @@ static const FengTypeRef *callable_arg_type_ref_from_expr(ResolveContext *contex
         return NULL;
     }
 
-    arg_type = infer_expr_type(context, arg_expr);
+    arg_type = infer_operand_type(context, arg_expr);
     if (arg_type.kind == FENG_INFERRED_EXPR_TYPE_TYPE_REF) {
         return arg_type.type_ref;
     }
@@ -15146,7 +15219,6 @@ static bool callable_infer_instance_type_args(
 static bool callable_collect_call_type_args(ResolveContext *context,
                                             const FengExpr *call_expr,
                                             const FengCallableSignature *callable,
-                                            const FengTypeRef *target_inference_return_type,
                                             const FengDecl *owner_type_decl,
                                             const FengDecl *fit_decl,
                                             InferredExprType owner_type,
@@ -15204,7 +15276,7 @@ static bool callable_collect_call_type_args(ResolveContext *context,
                 fit_decl, owner_type, param_type, call_expr->as.call.args[arg_index],
                 type_args, owned_type_args) &&
                 inferred_expr_type_is_known(
-                    infer_expr_type(context, call_expr->as.call.args[arg_index]))) {
+                    infer_operand_type(context, call_expr->as.call.args[arg_index]))) {
                 return false;
             }
             continue;
@@ -15219,10 +15291,10 @@ static bool callable_collect_call_type_args(ResolveContext *context,
         }
     }
 
+    InferredExprType result = callable_effective_return_type(context, callable);
     return call_expr->as.call.has_explicit_type_args ||
         callable_infer_instance_type_args(context, callable, owner_type_decl,
-            fit_decl, owner_type, callable->return_type != NULL
-                ? callable->return_type : target_inference_return_type,
+            fit_decl, owner_type, result.type_ref,
             NULL, type_args, owned_type_args);
 }
 
@@ -15405,7 +15477,7 @@ static bool callable_parameters_match_args_for_owner_instance(
             if (!callable_infer_instance_type_args(context, callable, owner_type_decl,
                 fit_decl, owner_type, inference_param_type, args[arg_index],
                 type_args, owned_type_args) &&
-                inferred_expr_type_is_known(infer_expr_type(context, args[arg_index]))) {
+                inferred_expr_type_is_known(infer_operand_type(context, args[arg_index]))) {
                 ok = false;
                 break;
             }
@@ -15473,9 +15545,10 @@ static bool callable_parameters_match_args_for_owner_instance(
     }
 
     if (ok && callable->type_param_count > 0U) {
+        InferredExprType result = callable_effective_return_type(context, callable);
         ok = explicit_type_args != NULL ||
             callable_infer_instance_type_args(context, callable, owner_type_decl,
-                fit_decl, owner_type, callable->return_type, NULL,
+                fit_decl, owner_type, result.type_ref, NULL,
                 type_args, owned_type_args);
         if (!ok) goto cleanup;
         for (size_t type_param_index = 0U;
@@ -18389,7 +18462,7 @@ static InferredExprType resolve_expr_owner_type(ResolveContext *context,
                                                 const FengExpr *expr,
                                                 const FengDecl **out_type_decl,
                                                 const FengSemanticModule **out_provider_module) {
-    InferredExprType owner_type = infer_expr_type(context, expr);
+    InferredExprType owner_type = infer_operand_type(context, expr);
     const FengDecl *type_decl = resolve_inferred_expr_type_decl(context, owner_type);
 
     if (out_type_decl != NULL) {
@@ -18569,7 +18642,7 @@ static bool validate_callable_typed_expr_call(ResolveContext *context,
                                               const FengExpr *callee,
                                               FengExpr *const *args,
                                               size_t arg_count) {
-    InferredExprType callee_type = infer_expr_type(context, callee);
+    InferredExprType callee_type = infer_operand_type(context, callee);
     const FengDecl *callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
     const FengTypeRef *callee_constraint_ref =
         resolve_callable_constraint_type_ref(context, callee_type);
@@ -19015,21 +19088,10 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                InferredExprType return_type;
-
-                if (resolution.callable->return_type != NULL) {
-                    const FengTypeRef *return_type_ref =
-                        substitute_callable_return_type_for_call(context,
-                                                                 NULL,
-                                                                 NULL,
-                                                                 inferred_expr_type_unknown(),
-                                                                 expr,
-                                                                 resolution.callable);
-
-                    return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
-                } else {
-                    return_type = callable_effective_return_type(context, resolution.callable);
-                }
+                InferredExprType return_type =
+                    infer_callable_return_type_for_call(
+                        context, NULL, NULL, inferred_expr_type_unknown(),
+                        expr, resolution.callable);
 
                 if (inferred_expr_type_is_known(return_type)) {
                     return return_type;
@@ -19061,21 +19123,10 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
-                    InferredExprType return_type;
-
-                    if (resolution.callable->return_type != NULL) {
-                        const FengTypeRef *return_type_ref =
-                            substitute_callable_return_type_for_call(context,
-                                                                     resolution.owner_type_decl,
-                                                                     resolution.fit_decl,
-                                                                     owner_type,
-                                                                     expr,
-                                                                     resolution.callable);
-
-                        return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
-                    } else {
-                        return_type = callable_effective_return_type(context, resolution.callable);
-                    }
+                    InferredExprType return_type =
+                        infer_callable_return_type_for_call(
+                            context, resolution.owner_type_decl, resolution.fit_decl,
+                            owner_type, expr, resolution.callable);
 
                     if (inferred_expr_type_is_known(return_type)) {
                         return return_type;
@@ -19097,21 +19148,10 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
-                    InferredExprType return_type;
-
-                    if (resolution.callable->return_type != NULL) {
-                        const FengTypeRef *return_type_ref =
-                            substitute_callable_return_type_for_call(context,
-                                                                     NULL,
-                                                                     resolution.fit_decl,
-                                                                     owner_type,
-                                                                     expr,
-                                                                     resolution.callable);
-
-                        return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
-                    } else {
-                        return_type = callable_effective_return_type(context, resolution.callable);
-                    }
+                    InferredExprType return_type =
+                        infer_callable_return_type_for_call(
+                            context, NULL, resolution.fit_decl, owner_type,
+                            expr, resolution.callable);
 
                     if (inferred_expr_type_is_known(return_type)) {
                         return return_type;
@@ -19160,28 +19200,12 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                         recorded->owner_instance_type_ref;
                 }
                 if (spec_sig != NULL && declaring_spec != NULL) {
-                    InferredExprType return_type = inferred_expr_type_unknown();
-
-                    if (spec_sig->return_type != NULL) {
-                        InferredExprType declaring_owner =
-                            declaring_spec_instance != NULL
-                                ? inferred_expr_type_from_type_ref(
-                                      declaring_spec_instance)
-                                : inferred_expr_type_from_decl(declaring_spec);
-                        const FengTypeRef *closed_return =
-                            substitute_callable_return_type_for_call(
-                                context,
-                                declaring_spec,
-                                NULL,
-                                declaring_owner,
-                                expr,
-                                spec_sig);
-
-                        if (closed_return != NULL) {
-                            return_type =
-                                inferred_expr_type_from_type_ref(closed_return);
-                        }
-                    }
+                    InferredExprType declaring_owner =
+                        declaring_spec_instance != NULL
+                            ? inferred_expr_type_from_type_ref(declaring_spec_instance)
+                            : inferred_expr_type_from_decl(declaring_spec);
+                    InferredExprType return_type = infer_callable_return_type_for_call(
+                        context, declaring_spec, NULL, declaring_owner, expr, spec_sig);
                     if (inferred_expr_type_is_known(return_type)) {
                         return return_type;
                     }
@@ -19208,25 +19232,14 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                 if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                     resolution.callable != NULL) {
-                    InferredExprType return_type;
-
-                    if (resolution.callable->return_type != NULL) {
-                        const FengTypeRef *return_type_ref =
-                            substitute_callable_return_type_for_call(
-                                context,
-                                NULL,
-                                NULL,
-                                inferred_expr_type_unknown(),
-                                expr,
-                                resolution.callable);
-
-                        return_type =
-                            inferred_expr_type_from_return_type_ref(
-                                return_type_ref);
-                    } else {
-                        return_type = callable_effective_return_type(
-                            context, resolution.callable);
-                    }
+                    InferredExprType return_type =
+                        infer_callable_return_type_for_call(
+                            context,
+                            NULL,
+                            NULL,
+                            inferred_expr_type_unknown(),
+                            expr,
+                            resolution.callable);
 
                     if (inferred_expr_type_is_known(return_type)) {
                         return return_type;
@@ -19254,28 +19267,17 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
                                                             expr->as.call.explicit_type_arg_count);
             if (resolution.kind == FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
                 resolution.callable != NULL) {
-                InferredExprType return_type;
-
-                if (resolution.callable->return_type != NULL) {
-                    InferredExprType callable_owner_type =
-                        resolution.owner_instance_type_ref != NULL
-                            ? inferred_expr_type_from_type_ref(
-                                  resolution.owner_instance_type_ref)
-                            : owner_type;
-                    const FengTypeRef *return_type_ref =
-                        substitute_callable_return_type_for_call(context,
-                                                                 resolution.owner_type_decl != NULL
-                                                                     ? resolution.owner_type_decl
-                                                                     : owner_type_decl,
-                                                                 resolution.fit_decl,
-                                                                 callable_owner_type,
-                                                                 expr,
-                                                                 resolution.callable);
-
-                    return_type = inferred_expr_type_from_return_type_ref(return_type_ref);
-                } else {
-                    return_type = callable_effective_return_type(context, resolution.callable);
-                }
+                InferredExprType callable_owner_type =
+                    resolution.owner_instance_type_ref != NULL
+                        ? inferred_expr_type_from_type_ref(
+                              resolution.owner_instance_type_ref)
+                        : owner_type;
+                InferredExprType return_type =
+                    infer_callable_return_type_for_call(
+                        context, resolution.owner_type_decl != NULL
+                            ? resolution.owner_type_decl : owner_type_decl,
+                        resolution.fit_decl, callable_owner_type, expr,
+                        resolution.callable);
 
                 if (inferred_expr_type_is_known(return_type)) {
                     return return_type;
@@ -19319,25 +19321,17 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
 
                     if (constrained.kind ==
                             FENG_FUNCTION_CALL_RESOLUTION_UNIQUE &&
-                        constrained.callable != NULL &&
-                        constrained.callable->return_type != NULL) {
+                        constrained.callable != NULL) {
                         InferredExprType declaring_owner =
                             constrained.owner_instance_type_ref != NULL
                                 ? inferred_expr_type_from_type_ref(
                                       constrained.owner_instance_type_ref)
                                 : constraint_owner;
-                        const FengTypeRef *closed_return =
-                            substitute_callable_return_type_for_call(
-                                context,
-                                constrained.owner_type_decl,
-                                NULL,
-                                declaring_owner,
-                                expr,
-                                constrained.callable);
-
-                        if (closed_return != NULL) {
-                            return inferred_expr_type_from_type_ref(
-                                closed_return);
+                        InferredExprType return_type = infer_callable_return_type_for_call(
+                            context, constrained.owner_type_decl, NULL,
+                            declaring_owner, expr, constrained.callable);
+                        if (inferred_expr_type_is_known(return_type)) {
+                            return return_type;
                         }
                     }
                 }
@@ -19345,7 +19339,7 @@ static InferredExprType infer_call_expr_type(ResolveContext *context, const Feng
         }
     }
 
-    callee_type = infer_expr_type(context, callee);
+    callee_type = infer_operand_type(context, callee);
     callee_type_decl = resolve_inferred_expr_type_decl(context, callee_type);
     if (callee_type_decl != NULL &&
         function_type_parameters_match_args_for_instance(context,
@@ -19399,6 +19393,13 @@ static bool expr_type_inference_is_pending(ResolveContext *context, const FengEx
             return false;
         case FENG_EXPR_CALL: {
             const FengExpr *callee = expr->as.call.callee;
+            const FengResolvedCallable *resolved = &expr->as.call.resolved_callable;
+            const FengCallableSignature *signature = resolved_callable_signature(resolved);
+
+            if (signature != NULL &&
+                resolved->callable_type_arg_count < signature->type_param_count) {
+                return true;
+            }
 
             if (callee == NULL) {
                 return false;
@@ -20335,7 +20336,7 @@ static const FengTypeRef *resolve_indexed_array_element_type_ref(ResolveContext 
         return NULL;
     }
 
-    object_type = infer_expr_type(context, object_expr);
+    object_type = infer_operand_type(context, object_expr);
     if (object_type.kind != FENG_INFERRED_EXPR_TYPE_TYPE_REF || object_type.type_ref == NULL) {
         return NULL;
     }
@@ -21320,7 +21321,7 @@ static InferredExprType infer_member_expr_type(ResolveContext *context, const Fe
         }
     }
 
-    InferredExprType owner_type = infer_expr_type(context, expr->as.member.object);
+    InferredExprType owner_type = infer_operand_type(context, expr->as.member.object);
     const FengDecl *owner_type_decl;
     const FengTypeMember *field_member;
 
@@ -21570,7 +21571,7 @@ static InferredExprType infer_expr_type(ResolveContext *context, const FengExpr 
                 resolve_indexed_array_element_type_ref(context, expr->as.index.object);
 
             return element_type_ref != NULL &&
-                           inferred_expr_type_is_integer(infer_expr_type(context, expr->as.index.index))
+                           inferred_expr_type_is_integer(infer_operand_type(context, expr->as.index.index))
                        ? inferred_expr_type_from_type_ref(element_type_ref)
                                             : inferred_expr_type_unknown();
         }
@@ -23355,7 +23356,23 @@ static bool branching_expr_results_match_expected_type(
     }
 }
 
+static bool expr_matches_expected_type_ref_in_context(ResolveContext *context,
+                                                       const FengExpr *expr,
+                                                       const FengTypeRef *expected_type_ref);
+
+/* Candidate probing supplies the argument's own target without publishing it. */
 static bool expr_matches_expected_type_ref(ResolveContext *context,
+                                           const FengExpr *expr,
+                                           const FengTypeRef *expected_type_ref) {
+    const FengTypeRef *previous = context->current_expr_expected_type_ref;
+    context->current_expr_expected_type_ref = expected_type_ref;
+    bool matched = expr_matches_expected_type_ref_in_context(context, expr, expected_type_ref);
+    context->current_expr_expected_type_ref = previous;
+    return matched;
+}
+
+/* Apply ordinary compatibility rules within the supplied target context. */
+static bool expr_matches_expected_type_ref_in_context(ResolveContext *context,
                                            const FengExpr *expr,
                                            const FengTypeRef *expected_type_ref) {
     const FengDecl *function_type_decl = resolve_function_type_decl(context, expected_type_ref);
@@ -24664,7 +24681,6 @@ static void materialize_callable_type_param_constraint_witnesses(
     size_t i;
     FengTypeRef **type_args = NULL;
     bool *owned_type_args = NULL;
-    const FengTypeRef *target_inference_return_type;
 
     if (context == NULL || call_expr == NULL || callable == NULL) {
         return;
@@ -24680,20 +24696,9 @@ static void materialize_callable_type_param_constraint_witnesses(
         free(owned_type_args);
         return;
     }
-    target_inference_return_type = substitute_type_ref_for_owner_instance(
-        context,
-        owner_type_decl,
-        owner_type,
-        callable->return_type);
-    target_inference_return_type = substitute_type_ref_for_fit_instance(
-        context,
-        fit_decl,
-        owner_type,
-        target_inference_return_type);
     if (!callable_collect_call_type_args(context,
                                          call_expr,
                                          callable,
-                                         target_inference_return_type,
                                          owner_type_decl,
                                          fit_decl,
                                          owner_type,
@@ -27844,12 +27849,6 @@ static bool record_resolved_callable_from_resolution(
                                           ? inferred_expr_type_from_type_ref(
                                                 persistent_owner_ref)
                                           : inferred_expr_type_unknown();
-        const FengTypeRef *target_inference_return_type =
-            substitute_type_ref_for_owner_instance(
-                context,
-                resolution->owner_type_decl,
-                owner_type,
-                resolution->callable->return_type);
         FengTypeRef **inferred_type_args = (FengTypeRef **)calloc(
             type_arg_count, sizeof(*inferred_type_args));
         bool *owned_type_args = (bool *)calloc(
@@ -27863,18 +27862,11 @@ static bool record_resolved_callable_from_resolution(
         bool type_args_incomplete = false;
         size_t incomplete_type_arg_index = 0U;
 
-        target_inference_return_type = substitute_type_ref_for_fit_instance(
-            context,
-            resolution->fit_decl,
-            owner_type,
-            target_inference_return_type);
-
         if (type_args_ok) {
             type_args_ok = callable_collect_call_type_args(
                 context,
                 call_expr,
                 resolution->callable,
-                target_inference_return_type,
                 resolution->owner_type_decl,
                 resolution->fit_decl,
                 owner_type,
@@ -27912,16 +27904,19 @@ static bool record_resolved_callable_from_resolution(
         free(owned_type_args);
         if (type_args_incomplete) {
             free(persistent_type_args);
-            resolver_append_error(
-                context,
-                call_expr->token,
-                "AE0525",
-                format_message(
-                    "cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type",
-                    incomplete_type_arg_index,
-                    (int)resolution->callable->name.length,
-                    resolution->callable->name.data));
-            return false;
+            persistent_type_args = NULL;
+            if (context->deferred_call_argument_target_depth == 0U) {
+                resolver_append_error(
+                    context,
+                    call_expr->token,
+                    "AE0525",
+                    format_message(
+                        "cannot infer type argument %zu for generic callable '%.*s'; provide an explicit type argument or a target type",
+                        incomplete_type_arg_index,
+                        (int)resolution->callable->name.length,
+                        resolution->callable->name.data));
+                return false;
+            }
         }
         if (!type_args_ok) {
             free(persistent_type_args);
@@ -27934,7 +27929,7 @@ static bool record_resolved_callable_from_resolution(
             return false;
         }
         slot->callable_type_args = persistent_type_args;
-        slot->callable_type_arg_count = type_arg_count;
+        slot->callable_type_arg_count = type_args_incomplete ? 0U : type_arg_count;
     }
     if (resolution->member != NULL &&
         !record_selected_friend_fit_access(
@@ -30801,31 +30796,17 @@ static bool resolve_lambda_expr(ResolveContext *context, const FengExpr *expr) {
     return ok;
 }
 
-/* Return the declaration signature selected for one direct call expression. */
-static const FengCallableSignature *resolved_call_signature(
-    const FengResolvedCallable *resolved) {
-    if (resolved == NULL) {
-        return NULL;
-    }
-    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
-        resolved->function_decl != NULL) {
-        return &resolved->function_decl->as.function_decl;
-    }
-    if (resolved->member != NULL) {
-        return &resolved->member->as.callable;
-    }
-    return NULL;
-}
-
-/* Enforce block-lambda return contracts after overload resolution has chosen
- * a unique direct function, method, fit method, spec method, or constructor.
- * This post-selection location avoids emitting diagnostics while candidates
- * are still being probed. */
-static bool validate_resolved_call_block_lambda_arguments(
+/* Commit target-dependent arguments only after one signature is selected.
+ * Direct calls and callable values share the same parameter-target boundary. */
+static bool validate_resolved_call_arguments(
     ResolveContext *context,
-    const FengExpr *call_expr) {
+    const FengExpr *call_expr,
+    bool allow_self) {
     const FengResolvedCallable *resolved;
     const FengCallableSignature *signature;
+    const FengDecl *callable_spec = NULL;
+    const FengParameter *parameters;
+    size_t parameter_count;
     InferredExprType owner_type = inferred_expr_type_unknown();
     bool is_variadic;
     size_t fixed_count;
@@ -30836,18 +30817,31 @@ static bool validate_resolved_call_block_lambda_arguments(
         return true;
     }
     resolved = &call_expr->as.call.resolved_callable;
-    signature = resolved_call_signature(resolved);
-    if (signature == NULL) {
+    signature = resolved_callable_signature(resolved);
+    if (*context->error_count != 0U || (signature != NULL &&
+        resolved->callable_type_arg_count < signature->type_param_count)) {
         return true;
     }
-    if (resolved->owner_instance_type_ref != NULL) {
-        owner_type = inferred_expr_type_from_type_ref(
-            resolved->owner_instance_type_ref);
+    if (signature != NULL) {
+        parameters = signature->params;
+        parameter_count = signature->param_count;
+        if (resolved->owner_instance_type_ref != NULL) {
+            owner_type = inferred_expr_type_from_type_ref(resolved->owner_instance_type_ref);
+        }
+    } else {
+        owner_type = infer_operand_type(context, call_expr->as.call.callee);
+        callable_spec = resolve_inferred_expr_type_decl(context, owner_type);
+        if (!decl_is_function_type(callable_spec)) {
+            owner_type = inferred_expr_type_from_type_ref(
+                resolve_callable_constraint_type_ref(context, owner_type));
+            callable_spec = resolve_function_type_decl(context, owner_type.type_ref);
+        }
+        if (callable_spec == NULL) return true;
+        parameters = callable_spec->as.spec_decl.as.callable.params;
+        parameter_count = callable_spec->as.spec_decl.as.callable.param_count;
     }
-    is_variadic = signature->param_count > 0U &&
-                  signature->params[signature->param_count - 1U].is_variadic;
-    fixed_count = is_variadic ? signature->param_count - 1U
-                              : signature->param_count;
+    is_variadic = parameter_count > 0U && parameters[parameter_count - 1U].is_variadic;
+    fixed_count = is_variadic ? parameter_count - 1U : parameter_count;
 
     for (arg_index = 0U; arg_index < call_expr->as.call.arg_count; ++arg_index) {
         const FengExpr *arg = call_expr->as.call.args[arg_index];
@@ -30855,23 +30849,40 @@ static bool validate_resolved_call_block_lambda_arguments(
         const FengDecl *param_function_type_decl;
         const FengTypeRef *target_return_type;
 
-        if (arg == NULL || arg->kind != FENG_EXPR_LAMBDA ||
-            !arg->as.lambda.is_block_body) {
+        bool pending = expr_type_inference_is_pending(context, arg);
+        bool block_lambda = arg != NULL && arg->kind == FENG_EXPR_LAMBDA &&
+                            arg->as.lambda.is_block_body;
+        if (!pending && !block_lambda) {
             continue;
         }
         if (arg_index < fixed_count || arg->is_prepacked_variadic_arg) {
-            if (arg_index >= signature->param_count) {
+            if (arg_index >= parameter_count) {
                 continue;
             }
-            param_type = signature->params[arg_index].type;
+            param_type = parameters[arg_index].type;
         } else {
-            param_type = signature->params[fixed_count].type->as.inner;
+            if (!is_variadic) continue;
+            param_type = parameters[fixed_count].type->as.inner;
         }
-        param_type = substitute_type_ref_for_callable_instance(
-            context, signature, resolved->owner_type_decl, resolved->fit_decl, owner_type,
-            resolved->callable_type_args,
-            resolved->callable_type_arg_count,
-            param_type);
+        if (signature != NULL) {
+            param_type = substitute_type_ref_for_callable_instance(
+                context, signature, resolved->owner_type_decl, resolved->fit_decl, owner_type,
+                resolved->callable_type_args, resolved->callable_type_arg_count, param_type);
+        } else {
+            param_type = substitute_spec_member_type_ref_for_instance(
+                context, callable_spec, owner_type.type_ref, param_type);
+        }
+        if (pending) {
+            const FengTypeRef *previous = context->current_expr_expected_type_ref;
+            size_t previous_depth = context->deferred_call_argument_target_depth;
+            context->current_expr_expected_type_ref = param_type;
+            context->deferred_call_argument_target_depth = 0U;
+            bool ok = resolve_expr(context, arg, allow_self);
+            context->current_expr_expected_type_ref = previous;
+            context->deferred_call_argument_target_depth = previous_depth;
+            if (!ok) return false;
+        }
+        if (!block_lambda) continue;
         param_function_type_decl = resolve_function_type_decl(context, param_type);
         if (param_function_type_decl == NULL) {
             continue;
@@ -31155,7 +31166,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 bool callee_ok;
 
                 context->current_call_target_expr = expr->as.call.callee;
-                callee_ok = resolve_expr(context, expr->as.call.callee, allow_self);
+                callee_ok = resolve_operand(context, expr->as.call.callee, allow_self);
                 context->current_call_target_expr = previous_call_target;
                 if (!callee_ok) {
                     return false;
@@ -31225,7 +31236,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 !validate_function_call_expr(context, expr)) {
                 return false;
             }
-            if (!validate_resolved_call_block_lambda_arguments(context, expr)) {
+            if (!validate_resolved_call_arguments(context, expr, allow_self)) {
                 return false;
             }
             if (!validate_explicit_prepacked_variadic_argument(context, expr)) {
@@ -31261,7 +31272,7 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                         context, expr, infer_expr_type(context, expr));
                 }
             }
-            if (!resolve_expr(context, expr->as.member.object, allow_self) ||
+            if (!resolve_operand(context, expr->as.member.object, allow_self) ||
                 !validate_instance_member_expr(context, expr)) {
                 return false;
             }
@@ -31269,8 +31280,8 @@ static bool resolve_expr(ResolveContext *context, const FengExpr *expr, bool all
                 context, expr, infer_expr_type(context, expr));
 
         case FENG_EXPR_INDEX:
-            return resolve_expr(context, expr->as.index.object, allow_self) &&
-                   resolve_expr(context, expr->as.index.index, allow_self) &&
+            return resolve_operand(context, expr->as.index.object, allow_self) &&
+                   resolve_operand(context, expr->as.index.index, allow_self) &&
                    validate_index_expr(context, expr) &&
                    record_type_fact_for_site(context, expr, infer_expr_type(context, expr));
 

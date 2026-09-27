@@ -23607,10 +23607,23 @@ static FengLspCompletionBinding *member_owner_bindings(FengLspMemberQuery *query
     return bindings;
 }
 
+/* As with Signature Help, one imported module uses its published metadata.
+ * Public FT omits source coordinates, so merging a second parsed copy would
+ * invent distinct overloads and discard its authoritative inferred results. */
+static bool member_uses_source_module(const FengLspMemberQuery *query,
+                                      const FengProgram *program) {
+    return program != NULL && (query->cache == NULL ||
+        program_module_matches(program, query->program->module_segments,
+            query->program->module_segment_count) ||
+        feng_symbol_provider_find_module(query->cache->provider,
+            program->module_segments, program->module_segment_count) == NULL);
+}
+
 /* Enumerate one source fit using existing visibility and access predicates. */
 static bool member_collect_program_fits(FengLspMemberQuery *query, const FengProgram *program,
     FengLspCompletionType *receiver, FengLspMemberFilter filter, FengLspMemberCandidate **items) {
-    if (program == NULL || !source_module_visible_from_program(query->program, program)) return true;
+    if (!member_uses_source_module(query, program) ||
+        !source_module_visible_from_program(query->program, program)) return true;
     bool same_module = program_module_matches(program, query->program->module_segments, query->program->module_segment_count);
     for (size_t i = 0U; i < program->declaration_count; ++i) {
         const FengDecl *fit = program->declarations[i];
@@ -23681,7 +23694,8 @@ static bool member_collect(FengLspMemberQuery *query, FengLspCompletionType *rec
     if (receiver == NULL) return true;
     const FengDecl *owner = receiver->ref.resolution_decl;
     FengLspMemberCandidate candidate = {0};
-    if (owner != NULL && (owner->kind == FENG_DECL_TYPE || (owner->kind == FENG_DECL_SPEC && owner->as.spec_decl.form == FENG_SPEC_FORM_OBJECT))) {
+    if (owner != NULL && member_uses_source_module(query, receiver->ref.resolution_program) &&
+        (owner->kind == FENG_DECL_TYPE || (owner->kind == FENG_DECL_SPEC && owner->as.spec_decl.form == FENG_SPEC_FORM_OBJECT))) {
         candidate.owner = owner;
         candidate.program = receiver->ref.resolution_program;
         candidate.scope = member_decl_scope(owner);
@@ -23783,7 +23797,7 @@ static FengLspCompletionType *member_block_type(FengLspMemberQuery *query,
 /* Adapt all functions in a module; declaration lookup must not choose overload 0. */
 static bool member_collect_functions_in_program(FengLspMemberQuery *query, const FengProgram *program,
     const FengSlice *segments, size_t count, FengSlice name, bool public_only, FengLspMemberCandidate **items) {
-    if (program == NULL || !program_module_matches(program, segments, count) ||
+    if (!member_uses_source_module(query, program) || !program_module_matches(program, segments, count) ||
         !source_module_visible_from_program(query->program, program)) return true;
     for (size_t i = 0U; i < program->declaration_count; ++i) {
         const FengDecl *decl = program->declarations[i];
@@ -23878,13 +23892,22 @@ static bool member_result_is_bound(const FengLspCompletionType *type, const Feng
     return true;
 }
 
-/* Match complete overloads and carry their binding into the result. Contextual
- * conversions are Semantic's responsibility; a common declared return can still
- * be known without selecting an overload. Partial bindings never escape. */
+/* Infer method parameters independently of fixed-parameter target fitting.
+ * Exact candidates win; otherwise only a common closed result is usable.
+ * Contextual compatibility remains Semantic's responsibility. */
 static FengLspCompletionType *member_call_type(FengLspMemberQuery *query, const FengExpr *call,
     FengLspMemberCandidate *items, FengSlice name, const FengLspMemberScope *scope) {
     FengLspCompletionType *result = NULL, *common = NULL;
     bool matched = false, common_known = true;
+    size_t actual_count = call->as.call.arg_count;
+    FengLspCompletionType **actuals = actual_count != 0U
+        ? feng_lsp_completion_allocate(&query->types, actual_count, sizeof(*actuals)) : NULL;
+    if (actual_count != 0U && actuals == NULL) return NULL;
+    /* Argument expressions have one caller scope, shared by every overload. */
+    for (size_t a = 0U; a < actual_count; ++a) {
+        bool is_static = false;
+        actuals[a] = resolve_completion_expr_type(query, call->as.call.args[a], scope, &is_static);
+    }
     for (FengLspMemberCandidate *item = items; item != NULL; item = item->next) {
         if (!slice_equals(member_candidate_name(item), name)) continue;
         if ((item->member != NULL && item->member->kind == FENG_TYPE_MEMBER_FIELD) ||
@@ -23915,26 +23938,33 @@ static FengLspCompletionType *member_call_type(FengLspMemberQuery *query, const 
             }
             if (!applicable || argument != generic_count) continue;
         }
-        FengLspMemberCandidate declared = candidate;
+        FengLspMemberScope method_parameters = method;
+        method_parameters.parent = NULL;
+        const FengLspCompletionBinding *declared_bindings = candidate.bindings;
+        bool exact = true;
         for (size_t a = 0U; a < call->as.call.arg_count; ++a) {
-            bool is_static = false;
             size_t p = a < count ? a : count - 1U;
-            FengLspCompletionType *value = resolve_completion_expr_type(query, call->as.call.args[a], scope, &is_static);
+            FengLspCompletionType *value = actuals[a];
             FengLspCompletionType *expected = callable != NULL ? member_source_type(query, item->program, callable->params[p].type, &method)
                 : member_symbol_type(query, feng_symbol_decl_param_type(item->symbol, p), &method);
             if (variadic && p == count - 1U && expected != NULL && expected->ref.kind == FENG_TYPE_REF_ARRAY && !call->as.call.args[a]->is_prepacked_variadic_arg)
                 expected = (FengLspCompletionType *)expected->ref.as.inner;
-            if (value != NULL && expected != NULL && !feng_lsp_completion_type_match(&query->types, expected, value, &candidate.bindings)) { applicable = false; break; }
+            expected = feng_lsp_completion_type_substitute(&query->types, expected, declared_bindings);
+            FengLspCompletionBinding *previous = candidate.bindings;
+            if (value != NULL && expected != NULL && !feng_lsp_completion_type_match(&query->types, expected, value, &candidate.bindings)) {
+                candidate.bindings = previous;
+                if (!member_result_is_bound(expected, &method_parameters)) { applicable = false; break; }
+                exact = false;
+            }
         }
-        if (!applicable) {
-            FengLspCompletionType *type = member_result_type(query, &declared);
-            method.parent = NULL;
-            if (!member_result_is_bound(type, &method) || (common != NULL && !feng_lsp_completion_type_equal(&query->types, common, type))) common_known = false;
+        if (!applicable) continue;
+        FengLspCompletionType *type = member_result_type(query, &candidate);
+        if (!exact) {
+            if (!member_result_is_bound(type, &method_parameters) || (common != NULL && !feng_lsp_completion_type_equal(&query->types, common, type))) common_known = false;
             else common = type;
             continue;
         }
-        FengLspCompletionType *type = member_result_type(query, &candidate);
-        if (type == NULL || (matched && !feng_lsp_completion_type_equal(&query->types, result, type))) return NULL;
+        if (!member_result_is_bound(type, &method_parameters) || (matched && !feng_lsp_completion_type_equal(&query->types, result, type))) return NULL;
         result = type;
         matched = true;
     }

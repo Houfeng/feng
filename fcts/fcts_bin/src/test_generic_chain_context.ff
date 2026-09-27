@@ -1,0 +1,199 @@
+module fcts_bin;
+import std.test;
+import std.text;
+import std.collections;
+import fcts_lib.test.generic_chain_context;
+
+/** Same-package control for inference before a member suffix. */
+func chain_local<T>(value: T, count: i32): T[] { return [value]; }
+/** A distinct result type exposes leakage of the outer return target. */
+func chain_return(): int { return chain_values("chain", 1).chain_first().length(); }
+/** Method and owner parameters remain open inside shared bodies. */
+func chain_forward<T>(value: T): T { return chain_values(value, 1).chain_first(); }
+/** Forward an open inferred return across a package boundary. */
+func chain_inferred_forward<T>(value: T): T {
+    return chain_values(chain_inferred(value), 1).chain_inferred_first();
+}
+/** A local inferred method is also checked before package export is involved. */
+type ChainLocalBox<T> {
+    let value: T;
+    /** Preserve the owner's generic parameter through an inferred signature. */
+    func read() { return self.value; }
+}
+/** Deliberately resolve the callee's body after its caller. */
+func chain_before() { return chain_after(); }
+/** A local typed value controls forward return inference without synthesis. */
+func chain_after() { let value:string[] = ["forward"]; return value; }
+/** A forward callable result must remain pending until its type is known. */
+func chain_callable_before() { return chain_callable_after(); }
+/** The returned callable's inferred type is used by the preceding function. */
+func chain_callable_after() { return chain_getter("callable forward", 1); }
+/** Provide a concrete argument target and preserve its observable value. */
+func chain_take_int(value:int):int { return value; }
+/** Provide an aggregate argument target for nested generic calls. */
+func chain_take_array(value:int[]):int[] { return value; }
+/** Cover the same target boundary in generic owners and constructors. */
+type ChainTarget<T> {
+    let value:T;
+    /** Construct from a target-dependent argument. */
+    func ChainTarget(value:T) { self.value = value; }
+    /** Owner type arguments supply the parameter target. */
+    func take(value:T):T { return value; }
+    /** Static calls must also commit the selected parameter target. */
+    static func take_static(value:T):T { return value; }
+}
+/** A dynamic callable still has a declared parameter target. */
+spec ChainTargetCall<T>(value:T):T;
+/** A constrained callable shares the same target substitution. */
+func chain_apply<S:ChainTargetCall<int>>(call:S):int { return call(chain_default()); }
+/** Record observable source evaluation order without relying on ARC counters. */
+type ChainOrder {
+    static var trace: int = 0;
+    /** The receiver argument is evaluated once, before the fixed argument. */
+    static func value(): string { ChainOrder.trace = ChainOrder.trace * 10 + 1; return "ordered"; }
+    /** A typed value controls the scalar suffix argument. */
+    static func count(): i32 { ChainOrder.trace = ChainOrder.trace * 10 + 2; return 1; }
+    /** The index must be evaluated after the receiver call. */
+    static func index(): int { ChainOrder.trace = ChainOrder.trace * 10 + 3; return 0; }
+}
+/** Exercise source and imported generic callables through each result context. */
+func test_generic_chain_context() {
+    describe("generic chain target contexts", () {
+        test("inferred and explicit local and imported receiver calls", () {
+            assert(chain_local("local", 1).chain_first() == "local", "source inference");
+            assert(chain_values("imported", 1).chain_first() == "imported", "package inference");
+            assert(chain_values<string>("explicit", 1).chain_first() == "explicit", "explicit control");
+        });
+        test("the final return target belongs to the final suffix", () {
+            assert(chain_return() == 5, "array and string receivers are independent of int target");
+        });
+        test("binding and assignment preserve intermediate generic types", () {
+            let bound: string = chain_values("bound", 1).chain_first();
+            var assigned: string = "old";
+            assigned = chain_values("assigned", 1).chain_first();
+            assert(bound == "bound" && assigned == "assigned", "result targets");
+        });
+        test("fixed arguments before and after a generic argument", () {
+            assert(chain_leading(1, "leading").chain_first() == "leading", "leading literal");
+            assert(chain_arrays("array", []).chain_first() == "array", "empty array target fitting");
+        });
+        test("member fields and instance methods retain the receiver actual type", () {
+            assert(chain_box("field", 1).value == "field", "field suffix");
+            assert(chain_box("method", 1).read() == "method", "method suffix");
+        });
+        test("owner and method generic parameters remain independent", () {
+            let owner = ChainBox<int>{value: 17};
+            assert(owner.convert("method parameter", 1).chain_first() == "method parameter", "method parameter");
+            assert(ChainBox<int>.make("static", 1).read() == "static", "static method parameter");
+        });
+        test("index and repeated array suffixes keep their own operand types", () {
+            let indexed: string = chain_values("index", 1)[chain_identity(0)];
+            assert(indexed == "index", "index target");
+            assert(chain_values(chain_values("nested", 1), 1)[0][0] == "nested", "nested indices");
+            assert(chain_values("repeated", 1).chain_again().chain_again().chain_first() == "repeated", "repeated calls");
+        });
+        test("a returned callable supports an immediate call and member suffix", () {
+            let length: int = chain_getter("callable", 1)().length();
+            assert(length == 8, "consecutive calls");
+        });
+        test("if match and try yield contexts preserve chained result types", () {
+            let a: string = if true { chain_values("if", 1).chain_first(); } else { "bad"; };
+            let b: string = match 1 { 1 { chain_values("match", 1).chain_first(); } else { "bad"; } };
+            let c: string = try chain_values("try", 1).chain_first() catch { "bad"; };
+            assert(a == "if" && b == "match" && c == "try", "branch targets");
+        });
+        test("aggregate elements and fields consume the final chained result", () {
+            let items: string[] = [chain_values("element", 1).chain_first()];
+            let box = ChainBox<string>{value: chain_values("field", 1).chain_first()};
+            assert(items[0] == "element" && box.value == "field", "aggregate targets");
+        });
+        test("direct generic target inference still works after a chained statement", () {
+            chain_values("discarded", 1).chain_first();
+            let empty: string[] = chain_empty();
+            var assigned: int[] = [1];
+            assigned = chain_empty();
+            assert(empty.length() == 0 && assigned.length() == 0, "context restored");
+        });
+        test("open forwarding and explicit numeric fitting retain actual values", () {
+            assert(chain_forward("forward") == "forward", "managed open actual");
+            assert(chain_forward(23) == 23, "scalar open actual");
+            let small: i32 = chain_values<i32>(29, 1).chain_first();
+            assert(small == 29, "explicit generic target fitting");
+        });
+        test("receiver arguments and suffix operands execute exactly once in order", () {
+            ChainOrder.trace = 0;
+            let result: string = chain_values(ChainOrder.value(), ChainOrder.count())[ChainOrder.index()];
+            assert(result == "ordered" && ChainOrder.trace == 123, "left to right evaluation");
+        });
+        test("inferred local and imported owner returns substitute actual types", () {
+            let localBox = ChainLocalBox<string>{value: "local inferred"};
+            let local: string = localBox.read();
+            let imported: string = chain_box("imported inferred", 1).inferred_read();
+            assert(local == "local inferred" && imported == "imported inferred", "owner substitution");
+        });
+        test("inferred fit returns continue into another member call", () {
+            let length: int = chain_values("inferred", 1).chain_inferred_first().length();
+            assert(length == 8, "inferred element then string member");
+        });
+        test("inferred method and static results preserve independent parameters", () {
+            let owner = ChainBox<int>{value: 31};
+            let method: string = owner.inferred_convert("method", 1).chain_inferred_first();
+            let stat: string = ChainBox<int>.inferred_make("static", 1).inferred_read();
+            assert(method == "method" && stat == "static", "method parameter substitution");
+        });
+        test("inferred open results retain scalar array and managed actuals", () {
+            assert(chain_inferred_forward("open") == "open", "managed actual");
+            assert(chain_inferred_forward(37) == 37, "scalar actual");
+            let nested: string[] = chain_inferred_forward(["nested"]);
+            assert(nested[0] == "nested", "array actual");
+            let small: i32 = chain_inferred<i32>(41);
+            assert(small == 41, "explicit numeric fitting");
+        });
+        test("inferred composite results preserve managed and nominal elements", () {
+            let text: string = chain_inferred_array("array")[0];
+            let box = ChainBox<string>{value: "nested box"};
+            let result: string = chain_inferred_nested(box)[0][0].inferred_read();
+            assert(text == "array" && result == "nested box", "persisted composite result");
+        });
+        test("forward inferred results survive repeated calls and export", () {
+            assert(chain_inferred_forward_array("first")[0] == "first", "forward managed result");
+            assert(chain_inferred_forward_array(43)[0] == 43, "forward scalar result");
+            let arrays: string[][] = chain_inferred_array(["inner"]);
+            assert(arrays[0][0] == "inner", "nested actual parameter");
+        });
+        test("forward result inference completes before checking suffixes", () {
+            assert(chain_before()[0] == "forward", "forward index");
+            assert(chain_before().chain_first() == "forward", "forward method");
+            assert(chain_callable_before()() == "callable forward", "forward callable");
+        });
+        test("parameter targets infer direct nested and imported generic calls", () {
+            assert(chain_take_int(chain_default()) == 0, "inferred return target");
+            assert(chain_take_int(chain_identity(chain_default())) == 0, "nested target");
+            assert(chain_take_array(chain_empty()).length() == 0, "explicit return target");
+        });
+        test("known generic arguments constrain either neighboring argument", () {
+            let first = chain_pair(chain_default(), 47);
+            let second = chain_pair(53, chain_default());
+            assert(first[0] == 0 && first[1] == 47, "later binding");
+            assert(second[0] == 53 && second[1] == 0, "earlier binding");
+        });
+        test("parameter targets reach aggregate and branch results", () {
+            let items = chain_take_array([chain_default()]);
+            let a = chain_take_int(if true { chain_default(); } else { 1; });
+            let b = chain_take_int(match 1 { 1 { chain_default(); } else { 1; } });
+            let c = chain_take_int(try chain_default() catch { 1; });
+            assert(items[0] == 0 && a == 0 && b == 0 && c == 0, "nested result targets");
+        });
+        test("constructors instance and static calls use their parameter targets", () {
+            let target = ChainTarget<int>(chain_default());
+            assert(target.value == 0, "constructor target");
+            assert(target.take(chain_default()) == 0, "instance target");
+            assert(ChainTarget<int>.take_static(chain_default()) == 0, "static target");
+        });
+        test("dynamic and constrained callables commit generic argument targets", () {
+            let call:ChainTargetCall<int> = (value:int) { return value + 1; };
+            assert(call(chain_default()) == 1, "dynamic callable");
+            assert(chain_apply(call) == 1, "constrained callable");
+        });
+    });
+}

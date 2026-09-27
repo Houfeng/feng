@@ -365,7 +365,7 @@ static void fit_test_source_targets(void) {
         {"explicit contextual result", "func values<T>(n: i32): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values<string>(1)./*cursor*/ }", "marker", NULL, "func marker(): string"},
         {"fixed argument preserves binding", "func values<T>(item: T, n: i32): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values<string>(\"x\", 1)./*cursor*/ }", "marker", NULL, "func marker(): string"},
         {"leading fixed argument", "func values<T>(n: i32, item: T): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values<string>(1, \"x\")./*cursor*/ }", "marker", NULL, "func marker(): string"},
-        {"partial inference cannot escape", "func values<T>(item: T, n: i32): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values(\"x\", 1)./*cursor*/ }", NULL, "marker", NULL},
+        {"inferred contextual result", "func values<T>(item: T, n: i32): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values(\"x\", 1)./*cursor*/ }", "marker", NULL, "func marker(): string"},
         {"conflicting generic bindings", "func values<T>(item: T, other: T, n: i32): T[] { return []; } fit T[] { func marker(): T { return self[0]; } }", "func probe() { values(1, \"x\", 1)./*cursor*/ }", NULL, "marker", NULL},
         {"overload call selection", "type Box {} fit Box { func convert(value: int): int[] { return []; } func convert(value: string): string[] { return []; } } fit T[] { func marker(): T { return self[0]; } }", "func probe(box: Box) { box.convert(1)./*cursor*/ }", "marker", NULL, "func marker(): int"},
         {"constructor result", "type Box { func Box() {} } fit Box { func marker(): int { return 1; } }", "func probe() { Box()./*cursor*/ }", "marker", NULL, NULL},
@@ -385,6 +385,24 @@ static void fit_test_source_targets(void) {
         {"spec view", "spec Shape { func safe(): int; } type Box {} fit Box { func concrete(): int { return 1; } }", "func probe(value: Shape) { value./*cursor*/ }", "safe", "concrete", NULL},
         {"same name arity", "type Box {} type Box<T> {} fit Box { func plain(): int { return 1; } } fit Box<T> { func generic(): int { return 1; } }", "func probe(value: Box<int>) { value./*cursor*/ }", "generic", "plain", NULL},
         {"fixed generic array", "type Box<T> {} fit Box<int>[] { func integers(): int { return 1; } } fit Box<string>[] { func strings(): int { return 1; } }", "func probe(value: Box<int>[]) { value./*cursor*/ }", "integers", "strings", NULL},
+        {"inferred leading context", "func values<T>(n:i32,item:T):T[]{return [item];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(1,\"x\")./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred array context", "func values<T>(item:T,n:i32[]):T[]{return [item];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(\"x\",[])./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred float context", "func values<T>(item:T,n:f32):T[]{return [item];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(\"x\",1.0)./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"explicit numeric generic context", "func values<T>(item:T):T[]{return [item];} fit T[]{func marker():T{return self[0];}}", "func probe(){values<i32>(1)./*cursor*/}", "marker", NULL, "func marker(): i32"},
+        {"typed generic numeric context", "type Box<T>{func values(item:T):T[]{return [item];}} fit T[]{func marker():T{return self[0];}}", "func probe(b:Box<i32>){b.values(1)./*cursor*/}", "marker", NULL, "func marker(): i32"},
+        {"inferred method context", "type Box<T>{func values<U>(item:U,n:i32):U[]{return [item];}} fit T[]{func marker():T{return self[0];}}", "func probe(b:Box<int>){b.values(\"x\",1)./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred static context", "type Box<T>{static func values<U>(item:U,n:i32):U[]{return [item];}} fit T[]{func marker():T{return self[0];}}", "func probe(){Box<int>.values(\"x\",1)./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred qualified context", "func values<T>(item:T,n:i32):T[]{return [item];} fit T[]{func marker():T{return self[0];}}", "func probe(){fit_completion.values(\"x\",1)./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred field chain", "type Box<T>{let value:T;} func boxed<T>(v:T,n:i32):Box<T>{return Box<T>{value:v};} fit T[]{func marker():T{return self[0];}}", "func probe(v:string[]){boxed(v,1).value./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred index chain", "func values<T>(v:T,n:i32):T[]{return [v];} fit T[]{func marker():T{return self[0];}}", "func probe(v:string[]){values(v,1)[0]./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred repeated chain", "func values<T>(v:T,n:i32):T[]{return [v];} fit T[]{func marker():T{return self[0];} func again():T[]{return self;}}", "func probe(){values(\"x\",1).again().again()./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"inferred immediate call", "spec Getter<T>():T; func getter<T>(v:T,n:i32):Getter<T>{return (){return v;};} fit T[]{func marker():T{return self[0];}}", "func probe(v:string[]){getter(v,1)()./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"return chain target", "func values<T>(v:T,n:i32):T[]{return [v];} fit T[]{func marker():T{return self[0];}}", "func probe():int{return values(\"x\",1)./*cursor*/}", "marker", NULL, "func marker(): string"},
+        {"binding chain target", "func values<T>(v:T,n:i32):T[]{return [v];} fit T[]{func marker():T{return self[0];}}", "func probe(){let n:int=values(\"x\",1)./*cursor*/;}", "marker", NULL, "func marker(): string"},
+        {"fixed context before conflict", "func values<T>(n:i32,a:T,b:T):T[]{return [a,b];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(1,\"x\",2)./*cursor*/}", NULL, "marker", NULL},
+        {"unbound independent parameter", "func values<T,U>(a:T,n:i32):U[]{return [];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(\"x\",1)./*cursor*/}", NULL, "marker", NULL},
+        {"generic contextual overload ambiguity", "func values<T>(a:T,n:i32):T[]{return [a];} func values<T>(a:T,n:u32):int[]{return [];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(\"x\",1)./*cursor*/}", NULL, "marker", NULL},
+        {"generic exact overload wins", "func values<T>(a:T,n:int):T[]{return [a];} func values<T>(a:T,n:i32):int[]{return [];} fit T[]{func marker():T{return self[0];}}", "func probe(){values(\"x\",1)./*cursor*/}", "marker", NULL, "func marker(): string"},
     };
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) fit_test_case(&cases[index]);
 }
@@ -431,6 +449,13 @@ static void fit_test_package(bool binary) {
         "open func contextualPartial<U>(item: U, n: i32): U[] { return []; }\n"
         "open func contextualLeading<U>(n: i32, item: U): U[] { return []; }\n"
         "open func conflicting<U>(item: U, other: U, n: i32): U[] { return []; }\n"
+        "open func inferredItems<T>(items: T[]) { return items; }\n"
+        "open func inferredArray<T>(item:T) { return [item]; }\n"
+        "open func inferredNested<T>(item:T) { return [[item]]; }\n"
+        "open fit T[] { open func inferredElement() { return self[0]; } }\n"
+        "open fit Box<T> { open func inferredItem() { return self.item; }\n"
+        " open func inferredConvert<U>(value: U) { return value; }\n"
+        " open static func inferredStatic<U>(value: U) { return value; } }\n"
         "func verifyContextualCalls(box: Box<int>): int {\n"
         " return contextual(1).strings() + contextualArray([]).strings() + commonResult(1).strings()\n"
         "   + contextualGeneric<string>(1).strings() + box.contextual(1).strings()\n"
@@ -468,12 +493,28 @@ static void fit_test_package(bool binary) {
         {"package method unbound contextual result", "", "func probe(box: Box<int>) { box.contextualGeneric(1)./*cursor*/ }", NULL, "element", NULL},
         {"package contextual partial binding", "", "func probe() { contextualPartial<string>(\"x\", 1)./*cursor*/ }", "strings", "integers", NULL},
         {"package contextual leading argument", "", "func probe() { contextualLeading<string>(1, \"x\")./*cursor*/ }", "strings", "integers", NULL},
-        {"package incomplete inference", "", "func probe() { contextualPartial(\"x\", 1)./*cursor*/ }", NULL, "element", NULL},
+        {"package inferred contextual result", "", "func probe() { contextualPartial(\"x\", 1)./*cursor*/ }", "strings", "integers", NULL},
         {"package conflicting bindings", "", "func probe() { conflicting(1, \"x\", 1)./*cursor*/ }", NULL, "element", NULL},
         {"package generic field", "", "func probe(value: Box<int[]>) { value.item./*cursor*/ }", "integers", "strings", NULL},
         {"package static", "", "func probe() { int[]./*cursor*/ }", "factory", "element", NULL},
         {"package alias identity", "", "func probe(value: other.Box<int>) { value./*cursor*/ }", "otherMarker", "element", NULL},
         {"package nominal identity", "", "func probe(value: Box<int>) { value./*cursor*/ }", "element", "otherMarker", NULL},
+        {"package inferred leading", "", "func probe(){contextualLeading(1,\"x\")./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred qualified", "", "func probe(){completion.package.contextualPartial(\"x\",1)./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred alias", "", "func probe(){api.contextualPartial(\"x\",1)./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred index", "", "func probe(v:string[]){contextualPartial(v,1)[0]./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred member", "", "func probe(v:string[]){contextualPartial(v,1).element()./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred return position", "", "func probe():int{return contextualPartial(\"x\",1)./*cursor*/}", "strings", "integers", NULL},
+        {"package explicit generic fitting", "", "func probe(){contextualPartial<i32>(1,1)./*cursor*/}", "element", "strings", "func element(): i32"},
+        {"package receiver target fitting", "", "func probe(b:Box<i32>){b.element(1)./*cursor*/}", "builtinMarker", "strings", NULL},
+        {"package inferred receiver field", "", "func probe(v:Box<string[]>){contextualPartial(v,1)[0].item./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred return type", "", "func probe(v:string[]){inferredItems(v)./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred fit return type", "", "func probe(v:string[][]){v.inferredElement()./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred owner return type", "", "func probe(v:Box<string[]>){v.inferredItem()./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred method return type", "", "func probe(b:Box<int>,v:string[]){b.inferredConvert(v)./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred static return type", "", "func probe(v:string[]){Box<int>.inferredStatic(v)./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred composite return", "", "func probe(){inferredArray(\"item\")./*cursor*/}", "strings", "integers", NULL},
+        {"package inferred nested composite", "", "func probe(){inferredNested(\"item\")[0]./*cursor*/}", "strings", "integers", NULL},
     };
     FitTestClient client = fit_test_start();
     char *dependency = fit_test_format("%s/dependency", client.directory);
@@ -656,6 +697,12 @@ static void fit_test_effective_returns(void) {
         {"module completion.facts; fit T[] { func element() { return self[0]; } } func probe(value: int[]) { value./*cursor*/element(); }", "func element(): i64"},
         {"module completion.facts; type Box {} fit T[] { func element() { return Box {}; } } func probe(value: int[]) { value./*cursor*/element(); }", "func element(): Box"},
         {"module completion.facts; fit T[] { func element(): T { return self[0]; } } func values() { let result: int[] = []; return result; } func probe() { values()./*cursor*/element(); }", "func element(): i64"},
+        {"module completion.facts; func values<T>(v:T,n:i32):T[]{return [v];} fit T[]{func element(){return self[0];}} func probe():string{return values(\"x\",1)./*cursor*/element();}", "func element(): string"},
+        {"module completion.facts; type Box<T>{let value:T;func get(){return self.value;}} fit T[]{func element(){return self[0];}} func probe(b:Box<string[]>):string{return b.get()./*cursor*/element();}", "func element(): string"},
+        {"module completion.facts; func values<T>(v:T){return [v];} fit T[]{func element(){return self[0];}} func probe():string{return values(\"x\")./*cursor*/element();}", "func element(): string"},
+        {"module completion.facts; func before(){return after();} func after(){let v:string[]=[\"x\"];return v;} fit T[]{func element(){return self[0];}} func probe():string{return before()./*cursor*/element();}", "func element(): string"},
+        {"module completion.facts; func empty<T>():T[]{return [];} func take(v:string[]):string[]{return v;} fit T[]{func element(){return self[0];}} func probe():string{return take(empty())./*cursor*/element();}", "func element(): string"},
+        {"module completion.facts; func empty<T>(){let v:T;return v;} func identity<T>(v:T):T{return v;} func take(v:string[]):string[]{return v;} fit T[]{func element(){return self[0];}} func probe():string{return take(identity(empty()))./*cursor*/element();}", "func element(): string"},
     };
     for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); ++index) {
         FitTestClient client = fit_test_start();

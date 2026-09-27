@@ -27623,8 +27623,8 @@ static bool cg_resolve_selected_callable_type_ref(
     return ok;
 }
 
-/* Resolve the selected callable return through the common type-surface
- * substitution helper; a missing return type denotes void. */
+/* Instantiate explicit and inferred returns through the same call-site
+ * substitution used by the shared body's declared ABI. */
 static bool cg_resolve_selected_callable_return_type(
     CG *cg,
     const FengExpr *call_expr,
@@ -27634,15 +27634,24 @@ static bool cg_resolve_selected_callable_return_type(
     if (out_type == NULL) {
         return false;
     }
-    if (callable == NULL || callable->return_type == NULL) {
+    if (callable == NULL) {
         *out_type = cgtype_new(CG_TYPE_VOID);
         return *out_type != NULL;
+    }
+    const FengTypeRef *return_type = callable->return_type;
+    if (return_type == NULL) {
+        const FengSemanticTypeFact *fact =
+            feng_semantic_lookup_type_fact(cg->analysis, callable);
+        if (fact == NULL || fact->kind != FENG_SEMANTIC_TYPE_FACT_TYPE_REF) {
+            return cg_resolve_callable_return_type(cg, callable, blame, out_type);
+        }
+        return_type = fact->type_ref;
     }
     return cg_resolve_selected_callable_type_ref(
         cg,
         call_expr,
         callable,
-        callable->return_type,
+        return_type,
         blame,
         out_type);
 }

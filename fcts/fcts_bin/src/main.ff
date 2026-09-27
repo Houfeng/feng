@@ -71,6 +71,7 @@ func main(args: string[]) {
       test_intersection_projection();
       test_constraint_projection();
       test_generic_literal_storage();
+      test_generic_chain_context();
       test_valid_codegen();
       test_generic_container_static();
       test_array_static_parity();
