@@ -743,6 +743,342 @@ static void fit_test_many_declarations(void) {
     free(declarations);
 }
 
+/* Expected overloads and parameter position for one real Signature Help request. */
+typedef struct FitSignatureCase {
+    const char *name;
+    const char *body;
+    const char *labels[3];
+    size_t parameter;
+} FitSignatureCase;
+
+/* Send a marked signature request, including optional client selection context. */
+static char *fit_test_signature(FitTestClient *client, const char *source, const char *context) {
+    const char *cursor = strstr(source, "/*cursor*/");
+    FIT_CHECK(cursor != NULL);
+    unsigned int line = 0U, column = 0U;
+    for (const char *p = source; p < cursor; ++p) {
+        if (*p == '\n') { ++line; column = 0U; } else ++column;
+    }
+    unsigned int id = client->next_id++;
+    char *request = fit_test_format("{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}%s}}",
+        id, client->uri, line, column, context != NULL ? context : "");
+    fit_test_send(client, request);
+    free(request);
+    return fit_test_response(client, id);
+}
+
+/* Check exact signatures in declaration order, without duplicate overloads. */
+static void fit_test_signature_response(const FitSignatureCase *test, const char *response) {
+    size_t count = 0U, expected = 0U;
+    const char *cursor = response;
+    while ((cursor = strstr(cursor, "\"parameters\":[")) != NULL) { ++count; ++cursor; }
+    cursor = response;
+    while (expected < 3U && test->labels[expected] != NULL) {
+        char *quoted = fit_test_quote(test->labels[expected]);
+        char *needle = fit_test_format("{\"label\":%s,\"parameters\":[", quoted);
+        const char *found = strstr(cursor, needle);
+        if (found == NULL) fprintf(stderr, "signature case %s: expected %s\n%s\n", test->name, needle, response);
+        FIT_CHECK(found != NULL);
+        cursor = found + strlen(needle);
+        free(needle); free(quoted);
+        ++expected;
+    }
+    if (count != expected) fprintf(stderr, "signature case %s: expected %zu overloads, got %zu\n%s\n", test->name, expected, count, response);
+    FIT_CHECK(count == expected);
+    if (expected == 0U) FIT_CHECK(strstr(response, "\"result\":null") != NULL);
+    else {
+        char *selection = fit_test_format("],\"activeSignature\":0,\"activeParameter\":%zu}", test->parameter);
+        if (strstr(response, selection) == NULL) fprintf(stderr, "signature parameter case %s: %s\n", test->name, response);
+        FIT_CHECK(strstr(response, selection) != NULL);
+        free(selection);
+    }
+}
+
+/* One legal provider is compiled unchanged for source and source-free FT cases. */
+static const char fit_signature_declarations[] =
+    "open module signature.api;\n"
+    "open spec Getter<T>(): T[];\n"
+    "open spec View<T> { func accept(value: T): T; }\n"
+    "open type Box<T> { open let item: T; open func own(value: T): T { return value; } }\n"
+    "open type Pair(i32, string); @value open type Value {} open enum State { Ready, Done }\n"
+    "open type Holder { open static let values: i32[] = []; open let get: Getter<string>; }\n"
+    "open fit T[] {\n"
+    " open func copy(): T[] { return self; }\n"
+    " open func copy(start: i32, end: i32): T[] { return self; }\n"
+    " open func copy(start: i32): T[] { return self; }\n"
+    " open func first(): T { return self[0]; }\n"
+    " open func convert<U>(value: U): U { return value; }\n"
+    " open func spread(head: T, rest: T...): T { return head; }\n"
+    " open static func factory(value: T): T { return value; }\n"
+    " seal func hidden(): i32 { return 0; }\n"
+    "}\n"
+    "open fit T[!] { open func copy(): T[!] { return self; } }\n"
+    "open fit Box<T> { open func take(value: T): T { return value; }\n"
+    " open func convert<U>(value: T, other: U): U { return other; }\n"
+    " open func constrained<U: signature.api.View<T>>(value: U): U { return value; }\n"
+    " open static func factory(value: T): T { return value; } }\n"
+    "open fit Pair { open func take(value: i32): i32 { return value; } }\n"
+    "open fit Value { open func take(value: i32): i32 { return value; } }\n"
+    "open fit State { open func take(value: i32): i32 { return value; } }\n"
+    "open func values<T>(value: T, n: i32): T[] { return [value]; }\n"
+    "open func echo<T>(value: T): T { return value; }\n"
+    "open func choose(n: i64): i32[] { return []; }\n"
+    "open func choose(n: string): string[] { return []; }\n"
+    "open func chooseUnknown(n: i32): i32[] { return []; }\n"
+    "open func chooseUnknown(n: u32): string[] { return []; }\n"
+    "open func function(value: i32): i32 { return value; }\n"
+    "open func function(value: string): string { return value; }\n";
+
+/* Cover structural and generic receivers, overloads and incomplete call syntax. */
+static const FitSignatureCase fit_signature_cases[] = {
+    {"array overloads", "func probe(value: i32[]) { value.copy(/*cursor*/); }", {"func copy(): i32[]", "func copy(start: i32, end: i32): i32[]", "func copy(start: i32): i32[]"}, 0},
+    {"local array", "func probe() { let value: i32[] = []; value.first(/*cursor*/); }", {"func first(): i32"}, 0},
+    {"inferred array", "func probe() { let value = [\"x\"]; value.first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"writable array", "func probe(value: i32[!]) { value.copy(/*cursor*/); }", {"func copy(): i32[!]"}, 0},
+    {"nested array", "func probe(value: string[!][]) { value.first(/*cursor*/); }", {"func first(): string[!]"}, 0},
+    {"writability excludes fit", "func probe(value: i32[!]) { value.first(/*cursor*/); }", {NULL}, 0},
+    {"generic owner fit", "func probe(value: Box<string[]>) { value.take(/*cursor*/); }", {"func take(value: string[]): string[]"}, 0},
+    {"generic owner method", "func probe(value: Box<i32>) { value.own(/*cursor*/); }", {"func own(value: i32): i32"}, 0},
+    {"method scope", "func probe(value: Box<i32>) { value.convert(1,/*cursor*/); }", {"func convert<U>(value: i32, other: U): U"}, 1},
+    {"method constraints", "func probe(value: Box<i32>) { value.constrained(/*cursor*/); }", {"func constrained<U: signature.api.View<i32>>(value: U): U"}, 0},
+    {"explicit method args", "func probe(value: i32[]) { value.convert<string>(/*cursor*/); }", {"func convert<U>(value: U): U"}, 0},
+    {"explicit nested method args", "func probe(value: i32[]) { value.convert<Box<string>>(/*cursor*/); }", {"func convert<U>(value: U): U"}, 0},
+    {"static array", "func probe() { i32[].factory(/*cursor*/); }", {"func factory(value: i32): i32"}, 0},
+    {"static owner", "func probe() { Box<string>.factory(/*cursor*/); }", {"func factory(value: string): string"}, 0},
+    {"static instance exclusion", "func probe() { Box<i32>.take(/*cursor*/); }", {NULL}, 0},
+    {"instance static exclusion", "func probe(value: Box<i32>) { value.factory(/*cursor*/); }", {NULL}, 0},
+    {"tuple", "func probe(value: Pair) { value.take(/*cursor*/); }", {"func take(value: i32): i32"}, 0},
+    {"value type", "func probe(value: Value) { value.take(/*cursor*/); }", {"func take(value: i32): i32"}, 0},
+    {"enum", "func probe(value: State) { value.take(/*cursor*/); }", {"func take(value: i32): i32"}, 0},
+    {"generic field", "func probe(value: Box<string[]>) { value.item.first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"static field", "func probe() { Holder.values.first(/*cursor*/); }", {"func first(): i32"}, 0},
+    {"index", "func probe(value: string[][]) { value[0].first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"method result", "func probe(value: string[][]) { value.first().first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"generic function", "func probe() { values(\"x\", 1).first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"explicit generic function", "func probe() { values<string>(\"x\", 1).first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"inferred method result", "func probe(value: i32[], other: string[]) { value.convert(other).first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"explicit method result", "func probe(value: i32[], other: string[]) { value.convert<string[]>(other).first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"callable parameter result", "func probe(get: Getter<string>) { get().first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"callable field result", "func probe(value: Holder) { value.get().first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"overload result", "func probe() { choose(\"x\").first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"ambiguous result", "func probe() { chooseUnknown(1).first(/*cursor*/); }", {NULL}, 0},
+    {"literal", "func probe() { [\"a\", \"b\"].first(/*cursor*/); }", {"func first(): string"}, 0},
+    {"if receiver", "func probe(value: i32[]) { (if true { value; } else { value; }).first(/*cursor*/); }", {"func first(): i32"}, 0},
+    {"match receiver", "func probe(value: i32[], n: i32) { (match n { 0 { value; } else { value; } }).first(/*cursor*/); }", {"func first(): i32"}, 0},
+    {"cast receiver", "func probe(value: i32[]) { ((i32[])value).first(/*cursor*/); }", {"func first(): i32"}, 0},
+    {"constraint", "func probe<T: View<i32>>(value: T) { value.accept(/*cursor*/); }", {"func accept(value: i32): i32"}, 0},
+    {"spec view", "func probe(value: View<string>) { value.accept(/*cursor*/); }", {"func accept(value: string): string"}, 0},
+    {"open array", "func probe<T>(value: T[]) { value.first(/*cursor*/); }", {"func first(): T"}, 0},
+    {"variadic", "func probe(value: string[]) { value.spread(\"x\", \"y\", /*cursor*/); }", {"func spread(head: string, rest: string...): string"}, 1},
+    {"nested calls", "func probe(value: Box<i32>) { value.convert(echo(1), /*cursor*/); }", {"func convert<U>(value: i32, other: U): U"}, 1},
+    {"nested literals", "func probe(value: i32[]) { value.spread(1, [1, 2][0], /* a,b */ /*cursor*/); }", {"func spread(head: i32, rest: i32...): i32"}, 1},
+    {"unclosed call", "func probe(value: i32[]) { value.first(/*cursor*/ }", {"func first(): i32"}, 0},
+    {"unclosed nested call", "func probe(value: i32[]) { echo(value.first(/*cursor*/ }", {"func first(): i32"}, 0},
+    {"unclosed comma", "func probe(value: Box<i32>) { value.convert(1, /*cursor*/ }", {"func convert<U>(value: i32, other: U): U"}, 1},
+    {"comment before call", "func probe(value: i32[]) { value /* . */ . first /* ( */ (/*cursor*/); }", {"func first(): i32"}, 0},
+    {"generic argument commas", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"if branch argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let n=if true{value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);}else{0;};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"if else argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let n=if false{0;}else{value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"match branch argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let n=match true{true{value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);}else{0;}};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"match else argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let n=match false{true{0;}else{value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);}};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"catch argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let n=try echo(1) catch {value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"lambda argument", "func pair<A,B>(a:A,b:B):A{return a;} func probe(value:Box<i32>){let fn=(){return value.convert(pair<i32,string>(1,\"x\")/*cursor*/, 2);};}", {"func convert<U>(value: i32, other: U): U"}, 0},
+    {"comparison comma", "func probe(value:Box<i32>){value.convert(1 < 2, /*cursor*/);}", {"func convert<U>(value: i32, other: U): U"}, 1},
+    {"string comma", "func probe(value:Box<i32>){value.convert(1, \"a,b\"/*cursor*/);}", {"func convert<U>(value: i32, other: U): U"}, 1},
+    {"self owner", "fit Box<T>{func probe(){self.take(/*cursor*/);}}", {"func take(value: T): T"}, 0},
+    {"self array fit", "fit T[]{func probe(){self.first(/*cursor*/);}}", {"func first(): T"}, 0},
+    {"global binding", "let global:i32[]=[];func probe(){global.first(/*cursor*/);}", {"func first(): i32"}, 0},
+    {"own and fit overload", "fit Box<T>{func own():string{return \"x\";}}func probe(value:Box<i32>){value.own(/*cursor*/);}", {"func own(value: i32): i32", "func own(): string"}, 0},
+    {"nested nominal static", "func probe(){Box<Box<i32>>.factory(/*cursor*/);}", {"func factory(value: Box<i32>): Box<i32>"}, 0},
+    {"unknown receiver", "func probe() { missing.first(/*cursor*/); }", {NULL}, 0},
+};
+
+/* Reuse one protocol matrix across local source and both dependency layouts. */
+static void fit_test_signature_matrix(FitTestClient *client, const char *prefix) {
+    for (size_t i = 0U; i < sizeof(fit_signature_cases) / sizeof(fit_signature_cases[0]); ++i) {
+        const FitSignatureCase *test = &fit_signature_cases[i];
+        char *source = fit_test_format("%s\n%s\n", prefix, test->body);
+        fit_test_source(client, source);
+        char *response = fit_test_signature(client, source, NULL);
+        fit_test_signature_response(test, response);
+        free(response); free(source);
+    }
+}
+
+/* Every builtin target and alias must supply its declared callable signature. */
+static void fit_test_signature_builtins(void) {
+    static const char *const types[] = {"bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "f32", "f64", "string", "int", "uint", "byte"};
+    FitTestClient client = fit_test_start();
+    for (size_t i = 0U; i < sizeof(types) / sizeof(types[0]); ++i) {
+        char *source = fit_test_format("module signature_builtin; fit %s { func take(value: string): string { return value; } } func probe(value: %s) { value.take(/*cursor*/); }", types[i], types[i]);
+        fit_test_source(&client, source);
+        char *response = fit_test_signature(&client, source, NULL);
+        FitSignatureCase test = {.name = types[i], .labels = {"func take(value: string): string"}};
+        fit_test_signature_response(&test, response);
+        free(response); free(source);
+    }
+    fit_test_stop(&client);
+}
+
+/* Keep source and source-free packages on the identical member query matrix. */
+static void fit_test_signature_package(bool binary) {
+    FitTestClient client = fit_test_start();
+    char *dependency = fit_test_format("%s/dependency", client.directory);
+    char *dep_src = fit_test_format("%s/src", dependency);
+    char *dep_path = fit_test_format("%s/api.ff", dep_src);
+    char *dep_manifest = fit_test_format("%s/feng.fm", dependency);
+    char *consumer = fit_test_format("%s/consumer", client.directory);
+    char *src = fit_test_format("%s/src", consumer);
+    char *manifest = fit_test_format("%s/feng.fm", consumer);
+    FIT_CHECK(mkdir(dependency, 0700) == 0 && mkdir(dep_src, 0700) == 0 && mkdir(consumer, 0700) == 0 && mkdir(src, 0700) == 0);
+    fit_test_write(dep_manifest, "[package]\nname: \"signature_dep\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    fit_test_write(dep_path, fit_signature_declarations);
+    char *argv[] = {dependency};
+    FIT_CHECK(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    if (binary) {
+        char *error = NULL;
+        FIT_CHECK(feng_cli_project_remove_tree(dep_src, &error));
+        free(error);
+    }
+    char *manifest_text = fit_test_format("[package]\nname: \"signature_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nsignature_dep: \"../dependency%s\"\n",
+        binary ? "/build/pkg/signature_dep-0.1.0.fb" : "");
+    fit_test_write(manifest, manifest_text);
+    free(manifest_text);
+    free(client.path); free(client.uri);
+    client.path = fit_test_format("%s/main.ff", src);
+    client.uri = fit_test_format("file://%s", client.path);
+    const char *prefix = "module signature.consumer; import signature.api; import signature.api as api;";
+    fit_test_signature_matrix(&client, prefix);
+    static const FitSignatureCase cases[] = {
+        {"private method", "func probe(value: i32[]) { value.hidden(/*cursor*/); }", {NULL}, 0},
+        {"alias type", "func probe(value: api.Box<i32>) { value.take(/*cursor*/); }", {"func take(value: i32): i32"}, 0},
+        {"alias function chain", "func probe() { api.values(\"x\", 1).first(/*cursor*/); }", {"func first(): string"}, 0},
+        {"qualified function chain", "func probe() { signature.api.values(\"x\", 1).first(/*cursor*/); }", {"func first(): string"}, 0},
+        {"qualified generic type", "func probe() { signature.api.Box<i32>.factory(/*cursor*/); }", {"func factory(value: i32): i32"}, 0},
+        {"local alias shadow", "func probe(api: i32) { api.values(/*cursor*/); }", {NULL}, 0},
+        {"generic alias shadow", "func probe<api>() { api.values(/*cursor*/); }", {NULL}, 0},
+    };
+    for (size_t i = 0U; i < sizeof(cases) / sizeof(cases[0]); ++i) {
+        char *source = fit_test_format("%s %s", prefix, cases[i].body);
+        fit_test_source(&client, source);
+        char *response = fit_test_signature(&client, source, NULL);
+        fit_test_signature_response(&cases[i], response);
+        free(response); free(source);
+    }
+    char *self_source = fit_test_format("%s fit Box<T>{func probe(value:T){self./*cursor*/take(value);}}", prefix);
+    fit_test_source(&client, self_source);
+    char *completion = fit_test_complete(&client, self_source);
+    FIT_CHECK(strstr(completion, "\"label\":\"take\"") != NULL);
+    FIT_CHECK(strstr(completion, "func take(value: T): T") != NULL);
+    free(completion); free(self_source);
+    fit_test_stop(&client);
+    free(dependency); free(dep_src); free(dep_path); free(dep_manifest); free(consumer); free(src); free(manifest);
+}
+
+/* Encode a client selection without assuming server overload order is stable. */
+static char *fit_test_signature_context(const char *labels[], size_t count, size_t selected, bool retrigger) {
+    char *text = NULL;
+    size_t length = 0U;
+    FILE *stream = open_memstream(&text, &length);
+    FIT_CHECK(stream != NULL);
+    FIT_CHECK(fprintf(stream, ",\"context\":{\"triggerKind\":3,\"isRetrigger\":%s,\"activeSignatureHelp\":{\"signatures\":[", retrigger ? "true" : "false") > 0);
+    for (size_t i = 0U; i < count; ++i) {
+        char *quoted = fit_test_quote(labels[i]);
+        FIT_CHECK(fprintf(stream, "%s{\"label\":%s}", i == 0U ? "" : ",", quoted) > 0);
+        free(quoted);
+    }
+    FIT_CHECK(fprintf(stream, "],\"activeSignature\":%zu}}", selected) > 0);
+    FIT_CHECK(fclose(stream) == 0 && length != 0U);
+    return text;
+}
+
+/* User choices survive argument edits and reordering, never stale signatures. */
+static void fit_test_signature_selection(void) {
+    FitTestClient client = fit_test_start();
+    const char *labels[] = {"func copy(): i32[]", "func copy(start: i32, end: i32): i32[]", "func copy(start: i32): i32[]"};
+    char *source = fit_test_format("%s func probe(value: i32[]) { value.copy(1, /*cursor*/); }", fit_signature_declarations);
+    fit_test_source(&client, source);
+    for (size_t selected = 0U; selected < 5U; ++selected) {
+        char *context = fit_test_signature_context(labels, 3U, selected, true);
+        char *response = fit_test_signature(&client, source, context);
+        char *needle = fit_test_format("],\"activeSignature\":%zu,\"activeParameter\":%zu}", selected < 3U ? selected : 0U, selected == 1U ? 1U : 0U);
+        FIT_CHECK(strstr(response, needle) != NULL);
+        FIT_CHECK(strstr(response, "\"parameters\":[],\"activeParameter\":0}") != NULL);
+        FIT_CHECK(strstr(response, "\"label\":\"end\"}],\"activeParameter\":1}") != NULL);
+        free(needle); free(context); free(response);
+    }
+    const char *reordered[] = {labels[2], labels[0], labels[1]};
+    for (size_t selected = 0U; selected < 3U; ++selected) {
+        char *context = fit_test_signature_context(reordered, 3U, selected, true);
+        char *response = fit_test_signature(&client, source, context);
+        size_t actual = selected == 0U ? 2U : selected - 1U;
+        char *needle = fit_test_format("],\"activeSignature\":%zu,\"activeParameter\":%zu}", actual, actual == 1U ? 1U : 0U);
+        FIT_CHECK(strstr(response, needle) != NULL);
+        free(needle); free(context); free(response);
+    }
+    const char *stale[] = {"func copy(removed: bool): i32[]"};
+    for (size_t i = 0U; i < 3U; ++i) {
+        char *context = fit_test_signature_context(i == 0U ? stale : labels, i == 0U ? 1U : 3U, i == 0U ? 0U : 2U, i != 1U);
+        if (i == 2U) {
+            free(source);
+            source = fit_test_format("%s func probe(value: string[]) { value.copy(1, /*cursor*/); }", fit_signature_declarations);
+            fit_test_source(&client, source);
+        }
+        char *response = fit_test_signature(&client, source, context);
+        FIT_CHECK(strstr(response, "],\"activeSignature\":0,\"activeParameter\":0}") != NULL);
+        free(response); free(context);
+    }
+    free(source);
+    const char *functions[] = {"func function(value: i32): i32", "func function(value: string): string"};
+    source = fit_test_format("%s func probe() { function(/*cursor*/); }", fit_signature_declarations);
+    fit_test_source(&client, source);
+    char *context = fit_test_signature_context(functions, 2U, 1U, true);
+    char *response = fit_test_signature(&client, source, context);
+    FIT_CHECK(strstr(response, "],\"activeSignature\":1,\"activeParameter\":0}") != NULL);
+    free(context); free(response); free(source);
+    source = fit_test_format("%s func probe(value:i32[]){value./*cursor*/copy();}", fit_signature_declarations);
+    fit_test_source(&client, source);
+    free(fit_test_wait_semantic_item(&client, source, "copy"));
+    free(source);
+    source = fit_test_format("module signature.api; fit T[]{func copy():T[]{return self;}} func probe(value:i32[]){value.copy(/*cursor*/);}");
+    fit_test_source(&client, source);
+    context = fit_test_signature_context(labels, 3U, 2U, true);
+    response = fit_test_signature(&client, source, context);
+    FitSignatureCase edited = {.name = "removed overload after publication", .labels = {"func copy(): i32[]"}};
+    fit_test_signature_response(&edited, response);
+    free(context); free(response);
+    static const char *const invalid[] = {
+        ",\"context\":{\"isRetrigger\":true,\"activeSignatureHelp\":{\"signatures\":[],\"activeSignature\":0}}",
+        ",\"context\":{\"isRetrigger\":true,\"activeSignatureHelp\":{\"signatures\":[{\"label\":\"unused\"}],\"activeSignature\":-1}}",
+        ",\"context\":{\"isRetrigger\":true,\"activeSignatureHelp\":{\"signatures\":[{}],\"activeSignature\":0}}",
+        ",\"context\":{\"isRetrigger\":\"true\",\"activeSignatureHelp\":{\"signatures\":[]}}"
+    };
+    for (size_t i = 0U; i < sizeof(invalid) / sizeof(invalid[0]); ++i) {
+        response = fit_test_signature(&client, source, invalid[i]);
+        fit_test_signature_response(&edited, response);
+        free(response);
+    }
+    free(source);
+    source = fit_test_format("module signature.api; func probe(value:i32[]){value.copy(/*cursor*/);}");
+    fit_test_source(&client, source);
+    response = fit_test_signature(&client, source, NULL);
+    FIT_CHECK(strstr(response, "\"result\":null") != NULL);
+    free(response); free(source);
+    fit_test_stop(&client);
+}
+
+/* New signature coverage shares the existing executable and both test phases. */
+static void fit_test_signatures(void) {
+    FitTestClient client = fit_test_start();
+    fit_test_signature_matrix(&client, fit_signature_declarations);
+    fit_test_stop(&client);
+    fit_test_signature_builtins();
+    fit_test_signature_package(false);
+    fit_test_signature_package(true);
+    fit_test_signature_selection();
+    fprintf(stdout, "lsp signature help: receiver, source/FT, overload and edit matrices passed\n");
+}
+
 /* Public registration point called by the existing CLI test executable. */
 void test_lsp_fit_completion(void) {
     fit_test_builtin_targets();
@@ -753,5 +1089,6 @@ void test_lsp_fit_completion(void) {
     fit_test_effective_returns();
     fit_test_package(false);
     fit_test_package(true);
+    fit_test_signatures();
     fprintf(stdout, "lsp fit completion: source/FT target, receiver, edit and resolve matrices passed\n");
 }

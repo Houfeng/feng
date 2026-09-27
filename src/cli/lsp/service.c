@@ -12819,12 +12819,29 @@ static const FengExpr *find_call_hit_expr(const FengExpr *expr, size_t offset) {
             if (hit != NULL) {
                 return hit;
             }
+            hit = find_call_hit_in_block(expr->as.if_expr.then_block, offset);
+            return hit != NULL ? hit : find_call_hit_in_block(expr->as.if_expr.else_block, offset);
+        }
+        case FENG_EXPR_MATCH: {
+            const FengExpr *hit = find_call_hit_expr(expr->as.match_expr.target, offset);
+            if (hit != NULL) return hit;
+            for (size_t i = 0U; i < expr->as.match_expr.branch_count; ++i) {
+                hit = find_call_hit_in_block(expr->as.match_expr.branches[i].body, offset);
+                if (hit != NULL) return hit;
+            }
+            return find_call_hit_in_block(expr->as.match_expr.else_block, offset);
+        }
+        case FENG_EXPR_MATCH_OP:
+            return find_call_hit_expr(expr->as.match_op.target, offset);
+        case FENG_EXPR_TRY: {
+            const FengExpr *hit = find_call_hit_expr(expr->as.try_expr.body, offset);
+            if (hit != NULL) return hit;
+            for (size_t i = 0U; i < expr->as.try_expr.clause_count; ++i) {
+                hit = find_call_hit_in_block(expr->as.try_expr.clauses[i].body, offset);
+                if (hit != NULL) return hit;
+            }
             break;
         }
-        case FENG_EXPR_MATCH:
-            return find_call_hit_expr(expr->as.match_expr.target, offset);
-        case FENG_EXPR_TRY:
-            return find_call_hit_expr(expr->as.try_expr.body, offset);
         default:
             break;
     }
@@ -22806,24 +22823,6 @@ cleanup:
     return ok;
 }
 
-/* Use the same textual name adapter for immutable package type declarations. */
-static const FengSymbolDeclView *resolve_symbol_type_receiver(
-    const FengLspCacheQueryContext *context,
-    FengSlice receiver,
-    const FengLspLocalList *locals,
-    size_t offset) {
-    FengTypeRef type_ref = {0};
-    const FengSymbolDeclView *decl;
-
-    if (!named_type_ref_from_receiver(context->program, receiver, locals, offset, &type_ref)) {
-        return NULL;
-    }
-    decl = resolve_symbol_named_type_ref(context->provider, context->current_module,
-                                         context->program, &type_ref);
-    free(type_ref.as.named.segments);
-    return decl;
-}
-
 /* Extracts the already-typed and partial segments of an import path. */
 static bool extract_use_path_context(const char *text,
                                      size_t offset,
@@ -23544,7 +23543,12 @@ static bool member_nominal_equal(const FengLspCompletionType *left, const FengLs
 /* Fit generic parameters come from the nominal owner or implicit array element. */
 static FengLspMemberScope member_fit_scope(FengLspMemberQuery *query, const FengProgram *program, const FengDecl *fit) {
     const FengTypeRef *target = fit->as.fit_decl.target;
-    FengLspMemberScope scope = member_decl_scope(resolve_named_type_ref(query->session, program, target));
+    const FengDecl *owner = resolve_named_type_ref(query->session, program, target);
+    FengLspMemberScope scope = member_decl_scope(owner);
+    if (owner == NULL && query->cache != NULL)
+        scope.symbol = resolve_symbol_named_type_ref(query->cache->provider,
+            feng_symbol_provider_find_module(query->cache->provider, program->module_segments, program->module_segment_count),
+            program, target);
     FengTypeParam parameter = {0};
     if (query->session->analysis != NULL && feng_semantic_query_fit_implicit_type_param(query->session->analysis, fit, &parameter)) {
         scope.implicit = fit;
@@ -24297,6 +24301,52 @@ static bool member_append_candidates(FengLspMemberQuery *query, FengLspString *j
     return true;
 }
 
+/* Completion and Signature Help resolve the same receiver in the same scope.
+ * Recovered syntax and its text stay owned by the caller until formatting ends. */
+static FengLspCompletionType *member_resolve_receiver(FengLspMemberQuery *query,
+    const FengExpr *expr, FengSlice receiver_text, FengLspString *text,
+    FengProgram **parsed, FengLspMemberFilter *filter) {
+    const FengDecl *enclosing_decl = query->enclosing_decl;
+    const FengTypeMember *enclosing_member = query->enclosing_member;
+    FengLspMemberScope owner = enclosing_decl != NULL && enclosing_decl->kind == FENG_DECL_FIT
+        ? member_fit_scope(query, query->program, enclosing_decl) : member_decl_scope(enclosing_decl);
+    FengLspMemberScope scope = {.parent = &owner};
+    if (enclosing_member != NULL && enclosing_member->kind != FENG_TYPE_MEMBER_FIELD) {
+        scope.parameters = enclosing_member->as.callable.type_params;
+        scope.count = enclosing_member->as.callable.type_param_count;
+    }
+    FengParseError error = {0};
+    bool is_static = false;
+    const FengExpr *receiver = expr != NULL && expr->kind == FENG_EXPR_MEMBER ? expr->as.member.object : NULL;
+    if (receiver == NULL && receiver_text.length != 0U) {
+        if (!string_append_cstr(text, "module completion; func receiver() { ") ||
+            !string_append_bytes(text, receiver_text.data, receiver_text.length) || !string_append_cstr(text, ".__completion; }")) {
+            query->types.failed = true;
+            return NULL;
+        }
+        if (feng_parse_source(text->data, text->length, query->program->path, parsed, &error) && (*parsed)->declaration_count == 1U) {
+            const FengBlock *body = (*parsed)->declarations[0]->as.function_decl.body;
+            if (body != NULL && body->statement_count == 1U && body->statements[0]->kind == FENG_STMT_EXPR) {
+                const FengExpr *member = body->statements[0]->as.expr;
+                if (member != NULL && member->kind == FENG_EXPR_MEMBER) receiver = member->as.member.object;
+            }
+        }
+    }
+    FengLspCompletionType *type = resolve_completion_expr_type(query, receiver, &scope, &is_static);
+    if (type != NULL && type->parameter != NULL) {
+        for (const FengLspMemberScope *frame = &scope; frame != NULL && type->parameter != NULL; frame = frame->parent)
+            for (size_t i = 0U; i < frame->count; ++i)
+                if (type->parameter == &frame->parameters[i]) {
+                    FengLspCompletionType *constraint = member_source_type(query, query->program, frame->parameters[i].constraint, &scope);
+                    if (constraint != NULL) type = constraint;
+                    break;
+                }
+    }
+    *filter = is_static ? FENG_LSP_MEMBER_FILTER_STATIC
+        : receiver != NULL && receiver->kind == FENG_EXPR_SELF ? FENG_LSP_MEMBER_FILTER_ALL : FENG_LSP_MEMBER_FILTER_INSTANCE;
+    return type;
+}
+
 /* The member branch has one resolver for both source and FT. Current AST is
  * preferred; parsing a bounded receiver is only needed when recovery lost it. */
 static bool append_receiver_member_completion(FengLspString *json, bool *first,
@@ -24310,44 +24360,12 @@ static bool append_receiver_member_completion(FengLspString *json, bool *first,
     FengLspMemberQuery query = {.session = session != NULL ? session : &current, .cache = cache, .program = program,
         .locals = locals, .enclosing_decl = enclosing_decl, .enclosing_member = enclosing_member,
         .types.nominal_equal = member_nominal_equal};
-    FengLspMemberScope owner = enclosing_decl != NULL && enclosing_decl->kind == FENG_DECL_FIT
-        ? member_fit_scope(&query, program, enclosing_decl) : member_decl_scope(enclosing_decl);
-    FengLspMemberScope scope = {.parent = &owner};
-    if (enclosing_member != NULL && enclosing_member->kind != FENG_TYPE_MEMBER_FIELD) {
-        scope.parameters = enclosing_member->as.callable.type_params;
-        scope.count = enclosing_member->as.callable.type_param_count;
-    }
     FengLspString text = {0};
     FengProgram *parsed = NULL;
-    FengParseError error = {0};
-    bool ok = true, is_static = false;
-    const FengExpr *receiver = expr != NULL && expr->kind == FENG_EXPR_MEMBER ? expr->as.member.object : NULL;
-    if (receiver == NULL && completion->receiver.length != 0U) {
-        ok = string_append_cstr(&text, "module completion; func receiver() { ") &&
-            string_append_bytes(&text, completion->receiver.data, completion->receiver.length) && string_append_cstr(&text, ".__completion; }");
-        if (!ok) goto cleanup;
-        if (feng_parse_source(text.data, text.length, program->path, &parsed, &error) && parsed->declaration_count == 1U) {
-            const FengBlock *body = parsed->declarations[0]->as.function_decl.body;
-            if (body != NULL && body->statement_count == 1U && body->statements[0]->kind == FENG_STMT_EXPR) {
-                const FengExpr *member = body->statements[0]->as.expr;
-                if (member != NULL && member->kind == FENG_EXPR_MEMBER) receiver = member->as.member.object;
-            }
-        }
-    }
-    FengLspCompletionType *type = resolve_completion_expr_type(&query, receiver, &scope, &is_static);
-    if (type != NULL && type->parameter != NULL) {
-        for (const FengLspMemberScope *frame = &scope; frame != NULL && type->parameter != NULL; frame = frame->parent)
-            for (size_t i = 0U; i < frame->count; ++i)
-                if (type->parameter == &frame->parameters[i]) {
-                    FengLspCompletionType *constraint = member_source_type(&query, program, frame->parameters[i].constraint, &scope);
-                    if (constraint != NULL) type = constraint;
-                    break;
-                }
-    }
-    FengLspMemberFilter filter = is_static ? FENG_LSP_MEMBER_FILTER_STATIC
-        : receiver != NULL && receiver->kind == FENG_EXPR_SELF ? FENG_LSP_MEMBER_FILTER_ALL : FENG_LSP_MEMBER_FILTER_INSTANCE;
+    FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
+    FengLspCompletionType *type = member_resolve_receiver(&query, expr, completion->receiver, &text, &parsed, &filter);
     FengLspMemberCandidate *items = NULL;
-    ok = member_collect(&query, type, filter, &items) && member_append_candidates(&query, json, first, items, offset, request);
+    bool ok = member_collect(&query, type, filter, &items) && member_append_candidates(&query, json, first, items, offset, request);
     if (ok && type != NULL && filter != FENG_LSP_MEMBER_FILTER_INSTANCE) {
         const FengDecl *decl = type->ref.resolution_decl;
         if (decl != NULL && decl->kind == FENG_DECL_ENUM)
@@ -24360,7 +24378,6 @@ static bool append_receiver_member_completion(FengLspString *json, bool *first,
                     ok = append_symbol_member_completion_item(json, first, member, NULL, 0U, request);
             }
     }
-cleanup:
     ok = ok && !query.types.failed;
     feng_lsp_completion_types_dispose(&query.types);
     feng_program_free(parsed);
@@ -26295,12 +26312,15 @@ static char *resolve_doc_from_session(const FengLspAnalysisSession *session,
     return NULL;
 }
 
-/* Count commas at the current nesting level to determine activeParameter. */
-static size_t count_commas_at_level(const char *text, size_t open_paren, size_t cursor) {
+/* Count argument separators, excluding commas inside parsed expressions (such
+ * as generic targets). The parser, not a bracket heuristic, distinguishes <. */
+static size_t count_commas_at_level(const char *text, size_t open_paren, size_t cursor,
+                                    const FengExpr *call) {
     FengLexer lexer;
     FengToken token;
     size_t commas = 0U;
     size_t depth = 0U;
+    size_t argument = 0U;
 
     feng_lexer_init(&lexer, text + open_paren + 1U, cursor - open_paren - 1U, NULL);
     while ((token = feng_lexer_next(&lexer)).kind != FENG_TOKEN_EOF &&
@@ -26314,6 +26334,11 @@ static size_t count_commas_at_level(const char *text, size_t open_paren, size_t 
                 --depth;
             }
         } else if (token.kind == FENG_TOKEN_COMMA && depth == 0U) {
+            size_t offset = open_paren + 1U + token.offset;
+            while (call != NULL && argument < call->as.call.arg_count &&
+                expr_end(call->as.call.args[argument]) <= offset) ++argument;
+            if (call != NULL && argument < call->as.call.arg_count &&
+                expr_start(call->as.call.args[argument]) <= offset) continue;
             ++commas;
         }
     }
@@ -26358,59 +26383,57 @@ cleanup:
     return result;
 }
 
-/* Preserve the complete receiver of a call; its namespace is resolved later
- * against current imports and lexical scope, never from its final segment. */
+/* Locate a call target with the language parser, including grouped receivers,
+ * literals, control-flow expressions and explicit generic arguments. */
 static bool resolve_signature_callee(const char *text,
                                      size_t open_paren,
                                      char **out_method_name,
                                      char **out_owner_name,
                                      size_t *out_callee_offset) {
-    size_t end;
-    size_t start;
-    FengLspReceiverChain chain = {0};
-    FengSlice name;
-    FengLexer lexer;
-    FengToken token;
-    size_t dot_pos = SIZE_MAX;
+    static const char prefix[] = "module signature; func target() { ";
+    size_t start, end;
+    FengLspString source = {0};
+    FengProgram *program = NULL;
+    FengParseError error = {0};
+    const FengExpr *callee = NULL;
+    bool ok = false;
 
-    if (text == NULL || out_method_name == NULL || out_owner_name == NULL) {
-        return false;
-    }
     *out_method_name = NULL;
     *out_owner_name = NULL;
     if (!receiver_text_find_range(text, open_paren, &start, &end) ||
-        !receiver_chain_parse((FengSlice){text + start, end - start}, &chain)) {
-        return false;
+        !string_append_cstr(&source, prefix) || !string_append_bytes(&source, text + start, end - start) ||
+        !string_append_cstr(&source, "(); }") ||
+        !feng_parse_source(source.data, source.length, NULL, &program, &error) || program->declaration_count != 1U) goto cleanup;
+    const FengBlock *body = program->declarations[0]->as.function_decl.body;
+    if (body != NULL && body->statement_count == 1U && body->statements[0]->kind == FENG_STMT_EXPR) {
+        const FengExpr *call = body->statements[0]->as.expr;
+        if (call != NULL && call->kind == FENG_EXPR_CALL) callee = call->as.call.callee;
     }
-    if ((chain.operation_count == 0U && chain.root_kind != FENG_LSP_RECEIVER_ROOT_IDENTIFIER) ||
-        (chain.operation_count > 0U &&
-         chain.operations[chain.operation_count - 1U].kind != FENG_LSP_RECEIVER_MEMBER)) {
-        receiver_chain_dispose(&chain);
-        return false;
-    }
-    name = chain.operation_count == 0U ? chain.root
-        : chain.operations[chain.operation_count - 1U].member;
-    *out_callee_offset = (size_t)(name.data - text);
+    FengSlice name = call_callee_name_slice(callee);
+    if (name.length == 0U) goto cleanup;
+    *out_callee_offset = start + (size_t)(name.data - source.data) - (sizeof(prefix) - 1U);
     *out_method_name = dup_range(name.data, name.data + name.length);
-    receiver_chain_dispose(&chain);
-    if (*out_method_name == NULL) {
-        return false;
+    if (*out_method_name == NULL) goto cleanup;
+    if (callee->kind == FENG_EXPR_MEMBER) {
+        FengLexer lexer;
+        FengToken token;
+        size_t dot = SIZE_MAX;
+        feng_lexer_init(&lexer, text + start, *out_callee_offset - start, NULL);
+        while ((token = feng_lexer_next(&lexer)).kind != FENG_TOKEN_EOF)
+            if (token.kind == FENG_TOKEN_DOT) dot = token.offset;
+        if (dot == SIZE_MAX || (*out_owner_name = dup_range(text + start, text + start + dot)) == NULL) goto cleanup;
     }
-    feng_lexer_init(&lexer, text + start, (size_t)(name.data - text) - start, NULL);
-    while ((token = feng_lexer_next(&lexer)).kind != FENG_TOKEN_EOF) {
-        if (token.kind == FENG_TOKEN_DOT) {
-            dot_pos = start + token.offset;
-        }
+    ok = true;
+cleanup:
+    feng_program_free(program);
+    string_dispose(&source);
+    if (!ok) {
+        free(*out_method_name);
+        free(*out_owner_name);
+        *out_method_name = NULL;
+        *out_owner_name = NULL;
     }
-    if (dot_pos != SIZE_MAX) {
-        *out_owner_name = dup_range(text + start, text + dot_pos);
-        if (*out_owner_name == NULL) {
-            free(*out_method_name);
-            *out_method_name = NULL;
-            return false;
-        }
-    }
-    return true;
+    return ok;
 }
 
 /* Variadic arguments remain on their parameter instead of producing an index
@@ -26419,19 +26442,35 @@ static size_t signature_active_parameter(size_t parameter_count, size_t argument
     return parameter_count == 0U ? 0U : argument < parameter_count ? argument : parameter_count - 1U;
 }
 
-/* One overload set shares its argument position but each signature has its own
- * parameter index; the first signature also supplies the legacy top-level index. */
+/* One overload set preserves the client's selection by label across edits.
+ * Each signature still owns its parameter index independently of that choice. */
 typedef struct FengLspSignatureHelpSet {
     size_t count;
     size_t active_argument;
+    size_t active_signature;
     size_t active_parameter;
+    const char *preferred_label;
 } FengLspSignatureHelpSet;
+
+/* Record the default or explicitly selected overload using current metadata. */
+static void signature_help_record(FengLspSignatureHelpSet *set, const char *label, size_t parameter_count) {
+    if (set->count == 0U || (set->preferred_label != NULL && strcmp(set->preferred_label, label) == 0)) {
+        set->active_signature = set->count;
+        set->active_parameter = signature_active_parameter(parameter_count, set->active_argument);
+    }
+    ++set->count;
+}
+
+/* Finish a nonempty overload set with a consistent legacy top-level selection. */
+static bool signature_help_finish(FengLspString *json, const FengLspSignatureHelpSet *set) {
+    return set->count > 0U && string_append_format(json, "],\"activeSignature\":%zu,\"activeParameter\":%zu}",
+        set->active_signature, set->active_parameter);
+}
 
 /* Append one symbol-backed callable to a Signature Help signatures array. */
 static bool append_signature_help_symbol(FengLspString *json,
                                          const FengSymbolDeclView *decl,
-                                         bool has_previous,
-                                         size_t active_argument) {
+                                         FengLspSignatureHelpSet *set) {
     FengLspString label = {0};
     size_t param_count;
     size_t index;
@@ -26442,7 +26481,7 @@ static bool append_signature_help_symbol(FengLspString *json,
         return false;
     }
     param_count = feng_symbol_decl_param_count(decl);
-    if ((has_previous && !string_append_cstr(json, ",")) ||
+    if ((set->count > 0U && !string_append_cstr(json, ",")) ||
         !string_append_cstr(json, "{\"label\":") ||
         !string_append_json_string(json, label.data) ||
         !string_append_cstr(json, ",\"parameters\":[")) {
@@ -26460,9 +26499,10 @@ static bool append_signature_help_symbol(FengLspString *json,
             return false;
         }
     }
+    signature_help_record(set, label.data, param_count);
     string_dispose(&label);
     return string_append_format(json, "],\"activeParameter\":%zu}",
-        signature_active_parameter(param_count, active_argument));
+        signature_active_parameter(param_count, set->active_argument));
 }
 
 /* Source-backed modules use one current representation per file; workspace
@@ -26486,11 +26526,10 @@ static bool signature_symbol_has_source(const FengLspCacheQueryContext *context,
 /* Append a current/source-only function without requiring a compiled cache. */
 static bool append_signature_help_source(FengLspString *json,
                                          const FengDecl *decl,
-                                         bool has_previous,
-                                         size_t active_argument) {
+                                         FengLspSignatureHelpSet *set) {
     FengLspString label = {0};
     bool ok = decl_signature_to_string(&label, decl) &&
-        (!has_previous || string_append_cstr(json, ",")) &&
+        (set->count == 0U || string_append_cstr(json, ",")) &&
         string_append_cstr(json, "{\"label\":") && string_append_json_string(json, label.data) &&
         string_append_cstr(json, ",\"parameters\":[");
 
@@ -26501,9 +26540,10 @@ static bool append_signature_help_source(FengLspString *json,
             string_append_cstr(json, "{\"label\":\"") &&
             string_append_bytes(json, name.data, name.length) && string_append_cstr(json, "\"}");
     }
+    if (ok) signature_help_record(set, label.data, decl->as.function_decl.param_count);
     string_dispose(&label);
     return ok && string_append_format(json, "],\"activeParameter\":%zu}",
-        signature_active_parameter(decl->as.function_decl.param_count, active_argument));
+        signature_active_parameter(decl->as.function_decl.param_count, set->active_argument));
 }
 
 /* Collect visible values from one source file; non-callable values still bind
@@ -26524,14 +26564,9 @@ static bool append_signature_source_module(const FengProgram *program,
         }
         *matched = true;
         if (decl->kind == FENG_DECL_FUNCTION) {
-            if (!append_signature_help_source(json, decl, set->count > 0U, set->active_argument)) {
+            if (!append_signature_help_source(json, decl, set)) {
                 return false;
             }
-            if (set->count == 0U) {
-                set->active_parameter = signature_active_parameter(
-                    decl->as.function_decl.param_count, set->active_argument);
-            }
-            ++set->count;
         }
     }
     return true;
@@ -26590,14 +26625,9 @@ static bool append_signature_function_module(const FengLspCacheQueryContext *con
         }
         *matched = true;
         if (kind == FENG_SYMBOL_DECL_KIND_FUNCTION) {
-            if (!append_signature_help_symbol(json, decl, set->count > 0U, set->active_argument)) {
+            if (!append_signature_help_symbol(json, decl, set)) {
                 return false;
             }
-            if (set->count == 0U) {
-                set->active_parameter = signature_active_parameter(
-                    feng_symbol_decl_param_count(decl), set->active_argument);
-            }
-            ++set->count;
         }
     }
     return true;
@@ -26754,11 +26784,9 @@ static bool append_signature_help_local(const FengLspCacheQueryContext *context,
             string_append_cstr(json, "{\"label\":\"") &&
             string_append_bytes(json, name.data, name.length) && string_append_cstr(json, "\"}");
     }
-    set->active_parameter = signature_active_parameter(signature.parameter_count, set->active_argument);
-    ok = ok && string_append_format(json, "],\"activeParameter\":%zu}", set->active_parameter);
-    if (ok) {
-        ++set->count;
-    }
+    ok = ok && string_append_format(json, "],\"activeParameter\":%zu}",
+        signature_active_parameter(signature.parameter_count, set->active_argument));
+    if (ok) signature_help_record(set, label.data, signature.parameter_count);
     string_dispose(&label);
     return ok;
 }
@@ -26773,11 +26801,12 @@ static bool build_function_signature_help_json(const FengLspCacheQueryContext *c
                                                const FengTypeMember *enclosing_member,
                                                size_t offset,
                                                size_t active_param,
+                                               const char *preferred_label,
                                                FengLspString *json,
                                                bool *handled) {
     FengSlice name = slice_from_cstr(method_name);
     FengTypeRef path = {0};
-    FengLspSignatureHelpSet set = {0U, active_param, 0U};
+    FengLspSignatureHelpSet set = {.active_argument = active_param, .preferred_label = preferred_label};
     bool matched = false;
     bool visible = false;
     bool ok = true;
@@ -26837,304 +26866,58 @@ cleanup:
         string_dispose(json);
         return false;
     }
-    return string_append_format(json, "],\"activeSignature\":0,\"activeParameter\":%zu}", set.active_parameter);
+    return signature_help_finish(json, &set);
 }
 
-/* Collect all overload signatures of a method for the SignatureHelp response. */
+/* Format all visible method overloads through the same receiver bindings and
+ * signature formatter as Completion, without a declaration/name-only fallback. */
 static bool build_signature_help_json(const FengLspCacheQueryContext *context,
                                       const char *method_name,
-                                      const char *owner_name,
+                                      const char *receiver,
                                       const FengLspLocalList *locals,
+                                      const FengDecl *enclosing_decl,
+                                      const FengTypeMember *enclosing_member,
                                       size_t offset,
                                       size_t active_param,
+                                      const char *preferred_label,
                                       FengLspString *json) {
-    FengSlice method_slice = slice_from_cstr(method_name);
-    const FengSymbolDeclView *owner_decl = NULL;
-    size_t sig_count = 0U;
-    size_t mod_count;
-    size_t mod_idx;
-    int active_signature = 0;
+    FengCliLoadedSource source = {.path = context->program->path, .program = context->program};
+    FengLspAnalysisSession session = {.sources = &source, .source_count = 1U,
+        .source_module_index = context->source_module_index};
+    FengLspMemberQuery query = {.session = &session, .cache = context, .program = context->program,
+        .locals = locals, .enclosing_decl = enclosing_decl, .enclosing_member = enclosing_member,
+        .types.nominal_equal = member_nominal_equal};
+    FengLspString text = {0};
+    FengProgram *parsed = NULL;
+    FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
+    const FengExpr *expr = enclosing_decl != NULL ? find_expr_hit_in_decl(enclosing_decl, offset) : NULL;
+    FengLspCompletionType *type = member_resolve_receiver(&query, expr, slice_from_cstr(receiver), &text, &parsed, &filter);
+    FengLspMemberCandidate *items = NULL;
+    FengLspSignatureHelpSet set = {.active_argument = active_param, .preferred_label = preferred_label};
+    bool ok = string_append_cstr(json, "{\"signatures\":[") && member_collect(&query, type, filter, &items);
 
-    if (context == NULL || context->provider == NULL || json == NULL) {
-        return false;
+    for (FengLspMemberCandidate *item = items; ok && item != NULL; item = item->next) {
+        if (!slice_equals_cstr(member_candidate_name(item), method_name) ||
+            (item->member != NULL ? item->member->kind == FENG_TYPE_MEMBER_FIELD
+                : feng_symbol_decl_kind(item->symbol) != FENG_SYMBOL_DECL_KIND_METHOD)) continue;
+        ok = member_prepare_signature(&query, item);
+        size_t count = item->member != NULL ? item->member->as.callable.param_count : feng_symbol_decl_param_count(item->symbol);
+        ok = ok && (set.count == 0U || string_append_cstr(json, ",")) &&
+            string_append_cstr(json, "{\"label\":") && string_append_json_string(json, item->signature) &&
+            string_append_cstr(json, ",\"parameters\":[");
+        for (size_t i = 0U; ok && i < count; ++i) {
+            FengSlice name = item->member != NULL ? item->member->as.callable.params[i].name : feng_symbol_decl_param_name(item->symbol, i);
+            ok = (i == 0U || string_append_cstr(json, ",")) && string_append_cstr(json, "{\"label\":\"") &&
+                string_append_bytes(json, name.data, name.length) && string_append_cstr(json, "\"}");
+        }
+        ok = ok && string_append_format(json, "],\"activeParameter\":%zu}", signature_active_parameter(count, active_param));
+        if (ok) signature_help_record(&set, item->signature, count);
     }
-    if (!string_append_cstr(json, "{\"signatures\":[")) {
-        return false;
-    }
-    /* Find the owner type. */
-    if (owner_name != NULL) {
-        FengSlice owner_slice = slice_from_cstr(owner_name);
-        const FengLspLocal *local = find_local(locals, owner_slice);
-
-        if (local != NULL) {
-            if (local->kind == FENG_LSP_LOCAL_BINDING && local->binding != NULL) {
-                owner_decl = local->binding->type != NULL
-                    ? resolve_symbol_named_type_ref(context->provider, context->current_module,
-                                                    context->program, local->binding->type)
-                    : resolve_symbol_owner_decl_from_initializer_expr(context, local->binding->initializer);
-            } else if (local_receiver_type(local) != NULL) {
-                owner_decl = resolve_symbol_named_type_ref(context->provider, context->current_module,
-                                                           context->program, local_receiver_type(local));
-            }
-        }
-        if (owner_decl == NULL && local == NULL) {
-            owner_decl = resolve_symbol_type_receiver(context, owner_slice, locals, offset);
-        }
-        if (owner_decl == NULL && local == NULL && strchr(owner_name, '.') == NULL &&
-            !type_name_root_is_shadowed(context->program, locals, owner_slice, offset)) {
-            size_t mi;
-            size_t mc = feng_symbol_provider_module_count(context->provider);
-
-            for (mi = 0U; mi < mc && owner_decl == NULL; ++mi) {
-                const FengSymbolImportedModule *mod = feng_symbol_provider_module_at(context->provider, mi);
-
-                owner_decl = find_symbol_module_decl_by_name(mod, owner_slice, false, true, true);
-            }
-        }
-    }
-    /* Search type direct members + fit members for overloads. */
-    if (owner_decl != NULL) {
-        size_t member_count = feng_symbol_decl_member_count(owner_decl);
-        size_t index;
-
-        for (index = 0U; index < member_count; ++index) {
-            const FengSymbolDeclView *member = feng_symbol_decl_member_at(owner_decl, index);
-            FengLspString sig_label = {0};
-            size_t param_count;
-            size_t i;
-
-            if (!slice_equals(feng_symbol_decl_name(member), method_slice)) {
-                continue;
-            }
-            if (!append_symbol_member_signature(&sig_label, member)) {
-                string_dispose(&sig_label);
-                return false;
-            }
-            param_count = feng_symbol_decl_param_count(member);
-            if (sig_count > 0U && !string_append_cstr(json, ",")) {
-                string_dispose(&sig_label);
-                return false;
-            }
-            if (!string_append_cstr(json, "{\"label\":") ||
-                !string_append_json_string(json, sig_label.data) ||
-                !string_append_cstr(json, ",\"parameters\":[")) {
-                string_dispose(&sig_label);
-                return false;
-            }
-            for (i = 0U; i < param_count; ++i) {
-                FengSlice pname = feng_symbol_decl_param_name(member, i);
-
-                if (i > 0U && !string_append_cstr(json, ",")) {
-                    string_dispose(&sig_label);
-                    return false;
-                }
-                if (!string_append_cstr(json, "{\"label\":\"") ||
-                    !string_append_bytes(json, pname.data, pname.length) ||
-                    !string_append_cstr(json, "\"}")) {
-                    string_dispose(&sig_label);
-                    return false;
-                }
-            }
-            if (!string_append_cstr(json, "]}")) {
-                string_dispose(&sig_label);
-                return false;
-            }
-            string_dispose(&sig_label);
-            if (sig_count == 0U || param_count > active_param) {
-                active_signature = (int)sig_count;
-            }
-            ++sig_count;
-        }
-        /* Also search fit members. */
-        mod_count = feng_symbol_provider_module_count(context->provider);
-        for (mod_idx = 0U; mod_idx < mod_count; ++mod_idx) {
-            const FengSymbolImportedModule *mod = feng_symbol_provider_module_at(context->provider, mod_idx);
-            size_t fit_count = feng_symbol_module_fit_count(mod);
-            size_t fit_idx;
-            FengSlice owner_name_slice = feng_symbol_decl_name(owner_decl);
-
-            for (fit_idx = 0U; fit_idx < fit_count; ++fit_idx) {
-                const FengSymbolFitView *fit = feng_symbol_module_fit_at(mod, fit_idx);
-                const FengSymbolDeclView *fd = feng_symbol_fit_decl(fit);
-                const FengSymbolTypeView *target;
-                size_t fc;
-                size_t fi;
-
-                if (fd == NULL) {
-                    continue;
-                }
-                target = feng_symbol_decl_fit_target(fd);
-                if (target == NULL) {
-                    continue;
-                }
-                if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_NAMED &&
-                    feng_symbol_type_segment_count(target) >= 1U) {
-                    FengSlice seg = feng_symbol_type_segment_at(target,
-                                                                feng_symbol_type_segment_count(target) - 1U);
-                    if (!slice_equals(seg, owner_name_slice)) {
-                        continue;
-                    }
-                } else if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
-                    if (!slice_equals(feng_symbol_type_builtin_name(target), owner_name_slice)) {
-                        continue;
-                    }
-                } else {
-                    continue;
-                }
-                fc = feng_symbol_decl_member_count(fd);
-                for (fi = 0U; fi < fc; ++fi) {
-                    const FengSymbolDeclView *member = feng_symbol_decl_member_at(fd, fi);
-                    FengLspString sig_label = {0};
-                    size_t param_count;
-                    size_t i;
-
-                    if (!slice_equals(feng_symbol_decl_name(member), method_slice)) {
-                        continue;
-                    }
-                    if (!append_symbol_member_signature(&sig_label, member)) {
-                        string_dispose(&sig_label);
-                        return false;
-                    }
-                    param_count = feng_symbol_decl_param_count(member);
-                    if (sig_count > 0U && !string_append_cstr(json, ",")) {
-                        string_dispose(&sig_label);
-                        return false;
-                    }
-                    if (!string_append_cstr(json, "{\"label\":") ||
-                        !string_append_json_string(json, sig_label.data) ||
-                        !string_append_cstr(json, ",\"parameters\":[")) {
-                        string_dispose(&sig_label);
-                        return false;
-                    }
-                    for (i = 0U; i < param_count; ++i) {
-                        FengSlice pname = feng_symbol_decl_param_name(member, i);
-
-                        if (i > 0U && !string_append_cstr(json, ",")) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                        if (!string_append_cstr(json, "{\"label\":\"") ||
-                            !string_append_bytes(json, pname.data, pname.length) ||
-                            !string_append_cstr(json, "\"}")) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                    }
-                    if (!string_append_cstr(json, "]}")) {
-                        string_dispose(&sig_label);
-                        return false;
-                    }
-                    string_dispose(&sig_label);
-                    if (active_signature == 0 && param_count > active_param) {
-                        active_signature = (int)sig_count;
-                    }
-                    ++sig_count;
-                }
-            }
-        }
-    } else if (owner_name != NULL) {
-        /* Builtin type: owner_decl is NULL but we can match fit targets by name. */
-        FengSlice owner_name_slice = slice_from_cstr(owner_name);
-        const char *builtin = builtin_name_for_identifier(owner_name_slice);
-
-        if (builtin != NULL) {
-            FengSlice builtin_slice = slice_from_cstr(builtin);
-
-            mod_count = feng_symbol_provider_module_count(context->provider);
-            for (mod_idx = 0U; mod_idx < mod_count; ++mod_idx) {
-                const FengSymbolImportedModule *mod = feng_symbol_provider_module_at(context->provider, mod_idx);
-                size_t fit_count = feng_symbol_module_fit_count(mod);
-                size_t fit_idx;
-
-                for (fit_idx = 0U; fit_idx < fit_count; ++fit_idx) {
-                    const FengSymbolFitView *fit = feng_symbol_module_fit_at(mod, fit_idx);
-                    const FengSymbolDeclView *fd = feng_symbol_fit_decl(fit);
-                    const FengSymbolTypeView *target;
-                    size_t fc;
-                    size_t fi;
-
-                    if (fd == NULL) {
-                        continue;
-                    }
-                    target = feng_symbol_decl_fit_target(fd);
-                    if (target == NULL) {
-                        continue;
-                    }
-                    if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_BUILTIN) {
-                        if (!slice_equals(feng_symbol_type_builtin_name(target), builtin_slice)) {
-                            continue;
-                        }
-                    } else if (feng_symbol_type_kind(target) == FENG_SYMBOL_TYPE_KIND_NAMED &&
-                               feng_symbol_type_segment_count(target) >= 1U) {
-                        FengSlice seg = feng_symbol_type_segment_at(target,
-                                                                    feng_symbol_type_segment_count(target) - 1U);
-                        if (!slice_equals(seg, builtin_slice)) {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    }
-                    fc = feng_symbol_decl_member_count(fd);
-                    for (fi = 0U; fi < fc; ++fi) {
-                        const FengSymbolDeclView *member = feng_symbol_decl_member_at(fd, fi);
-                        FengLspString sig_label = {0};
-                        size_t param_count;
-                        size_t i;
-
-                        if (!slice_equals(feng_symbol_decl_name(member), method_slice)) {
-                            continue;
-                        }
-                        if (!append_symbol_member_signature(&sig_label, member)) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                        param_count = feng_symbol_decl_param_count(member);
-                        if (sig_count > 0U && !string_append_cstr(json, ",")) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                        if (!string_append_cstr(json, "{\"label\":") ||
-                            !string_append_json_string(json, sig_label.data) ||
-                            !string_append_cstr(json, ",\"parameters\":[")) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                        for (i = 0U; i < param_count; ++i) {
-                            FengSlice pname = feng_symbol_decl_param_name(member, i);
-
-                            if (i > 0U && !string_append_cstr(json, ",")) {
-                                string_dispose(&sig_label);
-                                return false;
-                            }
-                            if (!string_append_cstr(json, "{\"label\":\"") ||
-                                !string_append_bytes(json, pname.data, pname.length) ||
-                                !string_append_cstr(json, "\"}")) {
-                                string_dispose(&sig_label);
-                                return false;
-                            }
-                        }
-                        if (!string_append_cstr(json, "]}")) {
-                            string_dispose(&sig_label);
-                            return false;
-                        }
-                        string_dispose(&sig_label);
-                        if (active_signature == 0 && param_count > active_param) {
-                            active_signature = (int)sig_count;
-                        }
-                        ++sig_count;
-                    }
-                }
-            }
-        }
-    }
-    if (!string_append_cstr(json, "],\"activeSignature\":") ||
-        !string_append_format(json, "%d", active_signature) ||
-        !string_append_cstr(json, ",\"activeParameter\":") ||
-        !string_append_format(json, "%zu", active_param) ||
-        !string_append_cstr(json, "}")) {
-        return false;
-    }
-    return sig_count > 0U;
+    ok = ok && !query.types.failed && signature_help_finish(json, &set);
+    feng_lsp_completion_types_dispose(&query.types);
+    feng_program_free(parsed);
+    string_dispose(&text);
+    return ok;
 }
 
 /* Query current syntax and immutable indexes together. No scope-free provider
@@ -27145,7 +26928,9 @@ static bool build_current_signature_help_json(FengLspService *service,
                                                size_t offset,
                                                const char *method_name,
                                                const char *receiver,
-                                               size_t active_param,
+                                               size_t open_paren,
+                                               size_t cursor,
+                                               const char *preferred_label,
                                                FengLspString *json) {
     FengLspCacheQueryContext context = {0};
     FengLspLocalList locals = {0};
@@ -27173,20 +26958,40 @@ static bool build_current_signature_help_json(FengLspService *service,
         cache_query_context_dispose(&context);
         return false;
     }
+    const FengExpr *call = decl != NULL ? find_call_hit_in_decl(decl, offset) : NULL;
+    size_t active_param = count_commas_at_level(text, open_paren, cursor, call);
     pthread_mutex_lock(&service->analysis_mutex);
     context.provider = symbol_index_matches_path(service, document->path) ? service->symbol_index : NULL;
     context.source_module_index = module_index_matches_path(service, document->path) ? &service->module_index : NULL;
     context.current_module = feng_symbol_provider_find_module(context.provider,
         context.program->module_segments, context.program->module_segment_count);
     ok = build_function_signature_help_json(&context, method_name, receiver, &locals,
-        decl, member, offset, active_param, json, &handled);
-    if (!ok && !handled && context.provider != NULL) {
-        ok = build_signature_help_json(&context, method_name, receiver, &locals, offset, active_param, json);
+        decl, member, offset, active_param, preferred_label, json, &handled);
+    if (!ok && !handled) {
+        ok = build_signature_help_json(&context, method_name, receiver, &locals, decl, member,
+            offset, active_param, preferred_label, json);
     }
     pthread_mutex_unlock(&service->analysis_mutex);
     local_list_dispose(&locals);
     cache_query_context_dispose(&context);
     return ok;
+}
+
+/* Read the client's selected signature on retrigger. Match its label against
+ * current overloads later, so stale or reordered indexes cannot select another. */
+static char *signature_help_preferred_label(FengLspJsonValue params) {
+    FengLspJsonValue context = {0}, retrigger = {0}, active = {0};
+    FengLspJsonValue signatures = {0}, index_value = {0}, signature = {0}, label = {0};
+    unsigned int index = 0U;
+    bool is_retrigger = false;
+
+    if (!json_object_get(params, "context", &context) ||
+        !json_object_get(context, "isRetrigger", &retrigger) || !json_bool(retrigger, &is_retrigger) || !is_retrigger ||
+        !json_object_get(context, "activeSignatureHelp", &active) ||
+        !json_object_get(active, "signatures", &signatures) ||
+        (json_object_get(active, "activeSignature", &index_value) && !json_u32(index_value, &index)) ||
+        !json_array_get(signatures, index, &signature) || !json_object_get(signature, "label", &label)) return NULL;
+    return json_string_dup(label);
 }
 
 /* Recover the active call, preserving lexical scope even while it is unfinished. */
@@ -27206,7 +27011,6 @@ static bool handle_signature_help_request(FengLspService *service,
     size_t offset;
     size_t open_paren;
     size_t callee_offset;
-    size_t active_param;
     char *method_name = NULL;
     char *owner_name_str = NULL;
     FengLspString json = {0};
@@ -27235,29 +27039,30 @@ static bool handle_signature_help_request(FengLspService *service,
         free(uri);
         return send_json_response(output, id, "null");
     }
-    active_param = count_commas_at_level(document->text, open_paren, offset);
     if (!resolve_signature_callee(document->text, open_paren, &method_name, &owner_name_str,
                                   &callee_offset)) {
         free(uri);
         return send_json_response(output, id, "null");
     }
     wait_for_initial_query_state(service, document->path);
+    char *preferred_label = signature_help_preferred_label(params);
     /* Scope belongs to the callee, which remains inside AST ranges even when
      * the cursor follows an empty argument list or a repaired delimiter. */
     ok = build_current_signature_help_json(service, document, document->text, callee_offset,
-        method_name, owner_name_str, active_param, &json);
+        method_name, owner_name_str, open_paren, offset, preferred_label, &json);
     if (!ok) {
         char *repaired_text = dup_text_with_signature_repair(document->text, offset);
 
         if (repaired_text != NULL) {
             string_dispose(&json);
             ok = build_current_signature_help_json(service, document, repaired_text, callee_offset,
-                method_name, owner_name_str, active_param, &json);
+                method_name, owner_name_str, open_paren, offset, preferred_label, &json);
             free(repaired_text);
         }
     }
     free(method_name);
     free(owner_name_str);
+    free(preferred_label);
     free(uri);
     if (ok) {
         bool result = send_json_response(output, id, json.data);
