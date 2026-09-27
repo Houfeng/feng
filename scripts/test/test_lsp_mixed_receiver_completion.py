@@ -110,7 +110,7 @@ def main() -> int:
 
     tui_path = pathlib.Path("examples/tui_demo/src/main.ff")
     tui_source = tui_path.read_text(encoding="utf-8")
-    insertion_point = "    app.screen.buffer().clear();"
+    insertion_point = "  app.init();"
     insertion_offset = tui_source.index(insertion_point)
     tui_marker = "    app.screen.buffer()."
     tui_incomplete = (

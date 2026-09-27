@@ -34,11 +34,11 @@ TEST_SEMANTIC_SRCS := $(wildcard test/semantic/*.c)
 TEST_RUNTIME_SRCS := $(wildcard test/runtime/*.c)
 TEST_CODEGEN_SRCS := $(wildcard test/codegen/*.c)
 TEST_DEBUG_SRCS := $(wildcard test/debug/*.c)
-TEST_CLI_SRCS := test/cli/test_cli.c
+TEST_CLI_SRCS := test/cli/test_cli.c test/cli/test_lsp_fit_completion.c
 TEST_CLI_PATHS_SRCS := test/cli/test_paths.c
 TEST_SYMBOL_SRCS := $(wildcard test/symbol/*.c)
 TEST_CLI_SUPPORT_SRCS := src/cli/common.c src/cli/frontend.c \
-	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/scheduler.c \
+	src/cli/lsp/server.c src/cli/lsp/service.c src/cli/lsp/completion_type.c src/cli/lsp/scheduler.c \
 	src/cli/lsp/document_store.c src/cli/lsp/trace.c src/cli/lsp/main.c \
 	src/cli/dap/main.c \
 	src/cli/project/common.c src/cli/project/init.c src/cli/project/manifest.c \

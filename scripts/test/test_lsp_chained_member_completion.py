@@ -24,7 +24,7 @@ def main() -> int:
 
     path = pathlib.Path("examples/tui_demo/src/main.ff").resolve()
     valid_source = path.read_text(encoding="utf-8")
-    next_statement = "    app.screen.buffer().clear();\n"
+    next_statement = "  app.init();\n"
     insertion_offset = valid_source.index(next_statement)
     insertion = "    app.screen.\n"
     incomplete_source = (

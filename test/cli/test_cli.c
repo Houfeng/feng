@@ -30576,6 +30576,9 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 #include "tuple_lifetime.inc"
 #include "cycle_lifetime.inc"
 
+/* Additional fit completion coverage shares this executable and both test phases. */
+void test_lsp_fit_completion(void);
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
@@ -30743,6 +30746,7 @@ int main(void) {
     test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_friend_completion_parsed_only_fails_closed();
     test_lsp_fit_extension_member_completion_on_builtin_string();
+    test_lsp_fit_completion();
     test_lsp_inferred_builtin_completion_from_imports();
     test_lsp_inferred_builtin_completion_reuses_safe_semantic_facts();
     test_lsp_enum_member_completion_survives_incomplete_member_access();
