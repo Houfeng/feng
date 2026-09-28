@@ -1,0 +1,570 @@
+{
+  "schema": 1,
+  "created_at": "2026-09-28T06:56:13.641Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "25.5.0",
+    "version": "Darwin Kernel Version 25.5.0: Mon Apr 27 20:41:15 PDT 2026; root:xnu-12377.121.6~2/RELEASE_ARM64_T6041",
+    "cpu": "Apple M4 Pro",
+    "logical_cpus": 12,
+    "total_memory_bytes": 51539607552,
+    "node": "v22.14.0",
+    "load_average": [
+      3.78662109375,
+      4.71826171875,
+      5.30712890625
+    ]
+  },
+  "platform": "macos-arm64",
+  "tools": {
+    "feng": {
+      "path": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "real_path": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "version": "feng 0.1.0",
+      "sha256": "d5657d4b7a64d19a79eb10dea19931876076e1fa16f8b6804103db1e873c0268"
+    },
+    "cc": {
+      "path": "/opt/homebrew/bin/clang",
+      "real_path": "/opt/homebrew/Cellar/llvm@22/22.1.8/bin/clang-22",
+      "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg",
+      "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d"
+    },
+    "cpp": {
+      "path": "/opt/homebrew/bin/clang++",
+      "real_path": "/opt/homebrew/Cellar/llvm@22/22.1.8/bin/clang-22",
+      "version": "Homebrew clang version 22.1.8\nTarget: arm64-apple-darwin25.5.0\nThread model: posix\nInstalledDir: /opt/homebrew/Cellar/llvm@22/22.1.8/bin\nConfiguration file: /opt/homebrew/Cellar/llvm@22/22.1.8/etc/clang/arm64-apple-darwin25.cfg",
+      "sha256": "012b35304481c5d5db6b57f20e144fb78f198ca9db14aa0b8db72cd2e493e12d"
+    },
+    "rust": {
+      "path": "/Users/houfeng/.cargo/bin/rustc",
+      "real_path": "/Users/houfeng/.cargo/bin/rustup",
+      "version": "rustc 1.94.0 (4a4ef493e 2026-03-02)",
+      "sha256": "9dada6167fb0bc26e44e23f09179ea15b4d9a8ec491fef1ac5a16484699540ac"
+    },
+    "go": {
+      "path": "/opt/homebrew/bin/go",
+      "real_path": "/opt/homebrew/Cellar/go/1.27.0/libexec/bin/go",
+      "version": "go version go1.27.0 darwin/arm64",
+      "sha256": "71c4991041d8e44975c882e4f72005719c958013d3340dc665a3808b72ddf702"
+    },
+    "swift": {
+      "path": "/usr/bin/swiftc",
+      "real_path": "/usr/bin/swiftc",
+      "version": "Apple Swift version 6.2.4 (swiftlang-6.2.4.1.4 clang-1700.6.4.2)\nTarget: arm64-apple-macosx26.0",
+      "sha256": "179301dcb41ea78accc3fa0048a7e6f6710d891945a751a34addd622020c1818"
+    }
+  },
+  "commands": [
+    {
+      "command": "/opt/homebrew/bin/clang",
+      "args": [
+        "-std=c11",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/scripts/measure.c",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/measure"
+      ],
+      "log": "build/benchmarks/logs/measure.log",
+      "seconds": 0.13107075000000032,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "pack",
+        "/Users/houfeng/Repositories/feng-language/std/std",
+        "--platform=macos-arm64"
+      ],
+      "log": "build/benchmarks/logs/feng-std.log",
+      "seconds": 2.805779292,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/nbody",
+        "--name=nbody"
+      ],
+      "log": "build/benchmarks/logs/nbody-feng.log",
+      "seconds": 0.2066366250000001,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-cpp"
+      ],
+      "log": "build/benchmarks/logs/nbody-cpp.log",
+      "seconds": 0.5293165419999996,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-rust"
+      ],
+      "log": "build/benchmarks/logs/nbody-rust.log",
+      "seconds": 0.6314371660000007,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/nbody-go.log",
+      "seconds": 7.003554125,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/nbody/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/nbody-swift"
+      ],
+      "log": "build/benchmarks/logs/nbody-swift.log",
+      "seconds": 3.4911017080000017,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/binary-trees",
+        "--name=binary-trees"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-feng.log",
+      "seconds": 0.1743427499999998,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-cpp"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-cpp.log",
+      "seconds": 0.43817412499999775,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-rust"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-rust.log",
+      "seconds": 0.24155395800000043,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-go.log",
+      "seconds": 0.16886579100000018,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/binary-trees/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/binary-trees-swift"
+      ],
+      "log": "build/benchmarks/logs/binary-trees-swift.log",
+      "seconds": 2.027161790999999,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/Repositories/feng-language/build/bin/feng",
+      "args": [
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/feng/main.ff",
+        "--target=bin",
+        "--release",
+        "--platform=macos-arm64",
+        "--pkg=/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+        "--out=/Users/houfeng/Repositories/feng-language/build/benchmarks/feng/text-scan",
+        "--name=text-scan"
+      ],
+      "log": "build/benchmarks/logs/text-scan-feng.log",
+      "seconds": 0.19829087500000242,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/clang++",
+      "args": [
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/cpp/main.cpp",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-cpp"
+      ],
+      "log": "build/benchmarks/logs/text-scan-cpp.log",
+      "seconds": 0.4809503750000004,
+      "exit_code": 0
+    },
+    {
+      "command": "/Users/houfeng/.cargo/bin/rustc",
+      "args": [
+        "--edition=2021",
+        "-C",
+        "opt-level=3",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/rust/main.rs",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-rust"
+      ],
+      "log": "build/benchmarks/logs/text-scan-rust.log",
+      "seconds": 0.24890295799999876,
+      "exit_code": 0
+    },
+    {
+      "command": "/opt/homebrew/bin/go",
+      "args": [
+        "build",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-go",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/go/main.go"
+      ],
+      "log": "build/benchmarks/logs/text-scan-go.log",
+      "seconds": 0.17734541700000045,
+      "exit_code": 0
+    },
+    {
+      "command": "/usr/bin/swiftc",
+      "args": [
+        "-O",
+        "-module-cache-path",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/cache/swift",
+        "/Users/houfeng/Repositories/feng-language/benchmarks/cases/text-scan/swift/main.swift",
+        "-o",
+        "/Users/houfeng/Repositories/feng-language/build/benchmarks/bin/text-scan-swift"
+      ],
+      "log": "build/benchmarks/logs/text-scan-swift.log",
+      "seconds": 1.959158625,
+      "exit_code": 0
+    }
+  ],
+  "git": {
+    "revision": "658889ecdce8c02cb57802e3b9d2c8917994d9f3",
+    "status": ""
+  },
+  "identities": [
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/lib/macos-arm64/libfeng_runtime.a",
+      "sha256": "f84e53b5377675a71415078b01052f9a0996546fe2b20de9ef751efaafadc012"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/include/feng_runtime.h",
+      "sha256": "c6e3223d7cc87c8cb98d3d6b634f6dd57714738bbd2c3504f4278a620ce2c22d"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/build/toolchain/llvm-c-eh/lib/llvm_c_eh.dylib",
+      "sha256": "e5f8b853689963be128069555d794a7fe772479c211a46f5b60fc92f14cfce47"
+    },
+    {
+      "path": "/Users/houfeng/Repositories/feng-language/std/std/build/pkg/std-0.1.0.fb",
+      "sha256": "b19dae21213a20223936324f434a9d68170ca9c07827b2d5030259d8b07397c3"
+    }
+  ],
+  "cleared_environment": [
+    "CFLAGS",
+    "CPPFLAGS",
+    "CXXFLAGS",
+    "LDFLAGS",
+    "FENG_CC_FLAGS",
+    "FENG_CC",
+    "FENG_AR",
+    "FENG_RANLIB",
+    "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS",
+    "GOFLAGS",
+    "GOEXPERIMENT",
+    "GOARCH",
+    "GOOS",
+    "GOAMD64",
+    "GOARM64",
+    "GOGC",
+    "GOMEMLIMIT",
+    "GODEBUG",
+    "SWIFTFLAGS",
+    "SDKROOT",
+    "ASAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "LSAN_OPTIONS",
+    "LD_PRELOAD",
+    "DYLD_INSERT_LIBRARIES",
+    "COMPILER_PATH"
+  ],
+  "environment": {
+    "LC_ALL": "C",
+    "GOMAXPROCS": "1",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off"
+  },
+  "sources": [
+    {
+      "path": "benchmarks/README.md",
+      "sha256": "616a056e568641626a07ed49a328f0a39af05a45171f6d05c9d45e6fafba37d8"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/README.md",
+      "sha256": "9d3b6d04b436a7c7f9d6e28fd836eaadc5727c0772db3029b525f3f532db6d4b"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/cpp/main.cpp",
+      "sha256": "7bac9e245ce87042b76b7798440eb08c7af2b47fff93a8c38b83cfcfe8df5f8b"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/feng/main.ff",
+      "sha256": "180c613becb66b495ad268564a5860a9a6b98ff8be5c43a128eb176c338628dd"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/go/main.go",
+      "sha256": "9cd4fd5a90a985b7bf17fe7d8903f837397d6ac3fd02289d942e97ff88622a08"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/rust/main.rs",
+      "sha256": "556720bd661ddba4ea78f4c9bc6cee136b71f29f4fd086bb860b538ac94868a6"
+    },
+    {
+      "path": "benchmarks/cases/binary-trees/swift/main.swift",
+      "sha256": "d9eea4e2c40761f31e7adb42e4d5d70af4936575d2771080a10ee9a445676de9"
+    },
+    {
+      "path": "benchmarks/cases/nbody/README.md",
+      "sha256": "780b55c15ba865681a9e6efedb0f20ee46a55c457fbd2f896b1fc68bb19fd7f3"
+    },
+    {
+      "path": "benchmarks/cases/nbody/cpp/main.cpp",
+      "sha256": "abd46c85236a307836cfcde721480d29a0310b334d9725408ff70c305c3ac53e"
+    },
+    {
+      "path": "benchmarks/cases/nbody/feng/main.ff",
+      "sha256": "c4b899f7fff6160adad1c8205e27e2b9c0afaf43f98980fb2551b7871366b3af"
+    },
+    {
+      "path": "benchmarks/cases/nbody/go/main.go",
+      "sha256": "8197da3a98aafa08e70b4d4aae50946a511e69c8f272f32b54aefd979dab666d"
+    },
+    {
+      "path": "benchmarks/cases/nbody/initial.json",
+      "sha256": "0ab433ce917d93ebc09bbd970cd273758667b9684cf44a084b841bee7a14e44d"
+    },
+    {
+      "path": "benchmarks/cases/nbody/rust/main.rs",
+      "sha256": "fe94bbb63f60e5b5ed67c04d7018d8c39c04db3f27e43c85b9d32075e30f835e"
+    },
+    {
+      "path": "benchmarks/cases/nbody/swift/main.swift",
+      "sha256": "eb5bb4fd5e1a654be4f46552f422137e6f6469a119185d165773199e989252db"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/README.md",
+      "sha256": "219e4cc466c65b7d86e2dd9b8583bc412aaafea4015bf7c855e82b7551c050c3"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/cpp/main.cpp",
+      "sha256": "69125d60289fbdd623cef0d8d91e82382f24bb89408ab10b07808251f1b66f8f"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/feng/main.ff",
+      "sha256": "2a6fe272ff8819291ccaf2dfae15de37342775ab07c29a6994d1dba5f28db536"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/go/main.go",
+      "sha256": "41ff39947ef518486348a6c0f84b23c9439f0907eea27959f30dd6801aaeccea"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/rust/main.rs",
+      "sha256": "2b29d73bebfa7bcc6b59c9f6063c7729bfc3f221f2058584cf0035e472e6c5b5"
+    },
+    {
+      "path": "benchmarks/cases/text-scan/swift/main.swift",
+      "sha256": "79b17d72013bfb609aad4c2c36b238e35242ac078c5a25f7c46816ef87b6d492"
+    },
+    {
+      "path": "benchmarks/scripts/bench.mjs",
+      "sha256": "c6bffc7fe68fc7d9e83ed3a4aa68b85bfdf183e4d32568d1933fa11f5222d718"
+    },
+    {
+      "path": "benchmarks/scripts/common.mjs",
+      "sha256": "0712f5090f0afe3bffd07447ffbd3711c2315c80f0e25a881221caa8331625c1"
+    },
+    {
+      "path": "benchmarks/scripts/definitions.mjs",
+      "sha256": "539513385663549268203d3f11ec44c37a188f0137094cf2353e87864b36959c"
+    },
+    {
+      "path": "benchmarks/scripts/measure.c",
+      "sha256": "25cfa1844353e66a3305c3f831349f3bc9c5c98c69387f2fa5e93a9746b0f070"
+    },
+    {
+      "path": "benchmarks/scripts/test.mjs",
+      "sha256": "455203543b7da0e1448dd0cac5c4591c72ec2ebd4e7dd17a4b7046f097ba15cd"
+    }
+  ],
+  "artifacts": [
+    {
+      "case": "nbody",
+      "language": "feng",
+      "path": "build/benchmarks/bin/nbody-feng",
+      "sha256": "fcf478bfa9d0c8f37f079d52b3a60876f443e4007800cda23a5f160e399ade38",
+      "bytes": 118768
+    },
+    {
+      "case": "nbody",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/nbody-cpp",
+      "sha256": "1d8b4212673ca2c24de999a8376c4e47a42f6eeafa652ffcf30b65b1f5e9c1c2",
+      "bytes": 36520
+    },
+    {
+      "case": "nbody",
+      "language": "rust",
+      "path": "build/benchmarks/bin/nbody-rust",
+      "sha256": "41828646e23946c1bb160e97a7e3b60653027dc7b34ee0552d387bd059a284c0",
+      "bytes": 480296
+    },
+    {
+      "case": "nbody",
+      "language": "go",
+      "path": "build/benchmarks/bin/nbody-go",
+      "sha256": "0d20f3864174d1a8fbf85e06c6b28d80be4629538ca95bf1513fbc2e88c16479",
+      "bytes": 2447202
+    },
+    {
+      "case": "nbody",
+      "language": "swift",
+      "path": "build/benchmarks/bin/nbody-swift",
+      "sha256": "a1b8dbb37c23551a302d75c22efe9b969059fade734d28f6385a94b23aec21b0",
+      "bytes": 56792
+    },
+    {
+      "case": "binary-trees",
+      "language": "feng",
+      "path": "build/benchmarks/bin/binary-trees-feng",
+      "sha256": "1f84b7ab99bd31de1a8318e943d49353b3ac82b4a429af20cbcda7f292c5d5f5",
+      "bytes": 118880
+    },
+    {
+      "case": "binary-trees",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/binary-trees-cpp",
+      "sha256": "04870f61cdfb2a14bcb6b227ec48ed0ec6adbb44f70ae4deedb03164a1258ae0",
+      "bytes": 36736
+    },
+    {
+      "case": "binary-trees",
+      "language": "rust",
+      "path": "build/benchmarks/bin/binary-trees-rust",
+      "sha256": "6413db4e6f3e3562da23cfb9d02d63a2c92004901121807594197af9f7972f0c",
+      "bytes": 460656
+    },
+    {
+      "case": "binary-trees",
+      "language": "go",
+      "path": "build/benchmarks/bin/binary-trees-go",
+      "sha256": "c7a2b400aee0993e9a30f9cc419a2a20a9f96f9d10ae564e57f6e6389cbc69ee",
+      "bytes": 2430498
+    },
+    {
+      "case": "binary-trees",
+      "language": "swift",
+      "path": "build/benchmarks/bin/binary-trees-swift",
+      "sha256": "d9a666ea82d341e3154f9a55b43f715d281b7be65dd7a2d64d7c94c7a85df3cd",
+      "bytes": 55808
+    },
+    {
+      "case": "text-scan",
+      "language": "feng",
+      "path": "build/benchmarks/bin/text-scan-feng",
+      "sha256": "2d55d781bd6019579478fff814c6aa3df0b5dc72381d0cb497ba0191e16b7afd",
+      "bytes": 152144
+    },
+    {
+      "case": "text-scan",
+      "language": "cpp",
+      "path": "build/benchmarks/bin/text-scan-cpp",
+      "sha256": "e714826c3ddf22fdb1d32073b2b15756492bcd6b531d6b9e97dde69b86ee1852",
+      "bytes": 37952
+    },
+    {
+      "case": "text-scan",
+      "language": "rust",
+      "path": "build/benchmarks/bin/text-scan-rust",
+      "sha256": "35212b9a9c547e45765c40b1f56d12dc66351a613cbfa742ff67bb52b2051b50",
+      "bytes": 460848
+    },
+    {
+      "case": "text-scan",
+      "language": "go",
+      "path": "build/benchmarks/bin/text-scan-go",
+      "sha256": "7dd20be5a17f29ce7b3711eeb0218db8d61c19e4d9024322f997f4b85de4838b",
+      "bytes": 2430738
+    },
+    {
+      "case": "text-scan",
+      "language": "swift",
+      "path": "build/benchmarks/bin/text-scan-swift",
+      "sha256": "8658e14ae9668ff6c9feee0394806d1b1f8335742659e979ce2d3f63ee052663",
+      "bytes": 53232
+    }
+  ],
+  "sampler": {
+    "path": "build/benchmarks/bin/measure",
+    "sha256": "f4c25aaa4a4e6456d1218f7185e31e506c5356bcdd5f321ed585e44f4f57e013"
+  }
+}
