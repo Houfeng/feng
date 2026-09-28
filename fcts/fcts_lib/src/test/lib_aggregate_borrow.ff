@@ -1,0 +1,9 @@
+open module fcts_lib.test.aggregate_borrow;
+
+/** Imported unions exercise shared descriptor storage with consumer types. */
+open spec AggregateBorrowChoice<T>: bool | T;
+
+/** Returning a parameter must establish ownership independently of borrowing. */
+open func aggregate_borrow_forward<T>(value: AggregateBorrowChoice<T>): AggregateBorrowChoice<T> {
+    return value;
+}

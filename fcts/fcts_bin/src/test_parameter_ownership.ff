@@ -1,0 +1,201 @@
+module fcts_bin;
+
+import std.test;
+
+var parameterOwnershipDrops: int = 0;
+
+/** Caller ownership must survive parameter replacement in every callable form. */
+type ParameterOwnershipResource {
+    let n: int;
+    /** Observe actual user resources, excluding default zero-valued instances. */
+    func ~ParameterOwnershipResource() { if self.n > 0 { parameterOwnershipDrops += 1; } }
+}
+/** An inline managed slot must have an independent owner when replaced. */
+spec ParameterOwnershipChoice: bool | ParameterOwnershipResource;
+/** The same parameter contract applies to descriptor-sized unions. */
+spec ParameterOwnershipGenericChoice<T>: bool | T;
+/** Mutable value fields can consume their old references without rebinding self. */
+@value type ParameterOwnershipValue {
+    var resource: ParameterOwnershipResource;
+    /** Value receiver calls may replace managed slots in the receiver storage. */
+    func replace(next: ParameterOwnershipResource) { self.resource = next; }
+}
+/** Shared value parameters reuse the caller's independent owning argument slot. */
+@value type ParameterOwnershipGenericValue<T> { var resource: T; }
+/** A callable's implementation may mutate its own explicit parameter. */
+spec ParameterOwnershipAction(value: ParameterOwnershipChoice): void;
+/** Erased lambda parameters must use the same owning-storage rule. */
+spec ParameterOwnershipReplace<T>(value: T, next: T): T;
+/** A captured parameter has its own capture-cell ownership. */
+spec ParameterOwnershipReader(): int;
+
+/** Read the caller's original identity after a mutating invocation. */
+func parameterOwnershipRead(value: ParameterOwnershipChoice): int {
+    return match value { item: ParameterOwnershipResource { item.n } else { 0 } };
+}
+/** Minimal reproducer: replacing this parameter used to consume a caller token. */
+func parameterOwnershipClear(var value: ParameterOwnershipChoice) { value = false; }
+/** Managed-pointer parameters use the same rule as managed aggregate slots. */
+func parameterOwnershipRef(var value: ParameterOwnershipResource,
+    next: ParameterOwnershipResource): ParameterOwnershipResource { value = next; return value; }
+/** A let binding does not make mutable inline fields read-only. */
+func parameterOwnershipField(value: ParameterOwnershipValue, next: ParameterOwnershipResource) {
+    value.resource = next;
+}
+/** Updating shared inline storage must still leave the caller's source intact. */
+func parameterOwnershipGenericField<T>(value: ParameterOwnershipGenericValue<T>, next: T) {
+    value.resource = next;
+}
+/** Read-only uses do not need an additional parameter owner. */
+func parameterOwnershipReadonly(value: ParameterOwnershipValue): int {
+    let copy = value;
+    return copy.resource.n;
+}
+/** A value receiver may write even when the surrounding body has no assignment. */
+func parameterOwnershipReceiver(value: ParameterOwnershipValue, next: ParameterOwnershipResource) {
+    value.replace(next);
+}
+/** Nested writes and deferred work require ownership for the entire invocation. */
+func parameterOwnershipDeferred(value: ParameterOwnershipValue, next: ParameterOwnershipResource) {
+    if next.n > 0 { defer { value.resource = next; } }
+}
+/** Ordinary argument copying isolates the source before a writable callee runs. */
+func parameterOwnershipForward(value: ParameterOwnershipValue, next: ParameterOwnershipResource) {
+    parameterOwnershipField(value, next);
+}
+/** Open generic storage can be trivial, a pointer, or a managed aggregate. */
+func parameterOwnershipGeneric<T>(var value: T, next: T): T { value = next; return value; }
+/** Reified unions retain their concrete descriptor and size when copied. */
+func parameterOwnershipUnion<T>(var value: ParameterOwnershipGenericChoice<T>) { value = false; }
+/** Generic callable bodies preserve their own argument ownership. */
+func parameterOwnershipLambda<T>(initial: T, next: T): T {
+    let replace: ParameterOwnershipReplace<T> = (var value: T, replacement: T) {
+        value = replacement;
+        return value;
+    };
+    return replace(initial, next);
+}
+/** Capturing a var parameter must not add a second competing cleanup owner. */
+func parameterOwnershipCapture(var value: ParameterOwnershipChoice): ParameterOwnershipReader {
+    let reader: ParameterOwnershipReader = () { return parameterOwnershipRead(value); };
+    value = false;
+    return reader;
+}
+/** The current replacement is released during unwinding, the caller's value survives. */
+func parameterOwnershipFail(var value: ParameterOwnershipChoice): int {
+    value = ParameterOwnershipResource { n: 9 };
+    throw 3;
+}
+/** Constructors, instance methods and static methods share parameter lowering. */
+type ParameterOwnershipMethods {
+    /** Constructor parameters have independent owning storage too. */
+    func ParameterOwnershipMethods(var value: ParameterOwnershipChoice) { value = false; }
+    /** Ordinary instance entry. */
+    func clear(var value: ParameterOwnershipChoice) { value = false; }
+    /** Ordinary static entry. */
+    static func clearStatic(var value: ParameterOwnershipChoice) { value = false; }
+}
+/** Type and method generic domains must both reach parameter storage. */
+type ParameterOwnershipOwner<T> {
+    /** Type-level generic parameter. */
+    func replace(var value: T, next: T): T { value = next; return value; }
+    /** Method-level generic parameter. */
+    func replaceOther<U>(var value: U, next: U): U { value = next; return value; }
+    /** Static generic owner entry. */
+    static func replaceStatic(var value: T, next: T): T { value = next; return value; }
+}
+/** Builtin fit entries preserve the same explicit-parameter contract. */
+fit int {
+    /** The receiver stays unchanged while the value parameter is replaced. */
+    func parameterOwnershipClear(var value: ParameterOwnershipChoice) { value = false; }
+}
+
+/** Check all fixed-layout entry forms while caller resources remain alive. */
+func parameterOwnershipConcreteScope() {
+    let first = ParameterOwnershipResource { n: 1 };
+    let second = ParameterOwnershipResource { n: 2 };
+    let value: ParameterOwnershipChoice = first;
+    parameterOwnershipClear(value);
+    assert(parameterOwnershipRead(value) == 1, "free function leaves caller unchanged");
+    let methods = ParameterOwnershipMethods(value);
+    methods.clear(value);
+    ParameterOwnershipMethods.clearStatic(value);
+    let number: int = 1;
+    number.parameterOwnershipClear(value);
+    let action: ParameterOwnershipAction = (var item: ParameterOwnershipChoice) { item = false; };
+    action(value);
+    let captured = parameterOwnershipCapture(value);
+    assert(captured() == 0, "capture cell sees its own replacement");
+    let returned = parameterOwnershipRef(first, second);
+    assert(returned.n == 2 && first.n == 1, "pointer replacement and return ownership");
+    let aggregate = ParameterOwnershipValue { resource: first };
+    parameterOwnershipField(aggregate, second);
+    parameterOwnershipReceiver(aggregate, second);
+    parameterOwnershipDeferred(aggregate, second);
+    parameterOwnershipForward(aggregate, second);
+    assert(parameterOwnershipReadonly(aggregate) == 1, "read-only parameter copies stay valid");
+    assert(aggregate.resource.n == 1, "mutable inline field remains an independent value");
+    assert(parameterOwnershipRead(value) == 1 && parameterOwnershipDrops == 0,
+        "all original caller resources remain alive");
+}
+/** Exercise every erased representation and both generic descriptor domains. */
+func parameterOwnershipGenericScope() {
+    let first = ParameterOwnershipResource { n: 1 };
+    let second = ParameterOwnershipResource { n: 2 };
+    assert(parameterOwnershipGeneric<ParameterOwnershipResource>(first, second).n == 2,
+        "erased managed pointer");
+    let left: ParameterOwnershipChoice = first;
+    let right: ParameterOwnershipChoice = second;
+    let changed = parameterOwnershipGeneric<ParameterOwnershipChoice>(left, right);
+    assert(parameterOwnershipRead(changed) == 2 && parameterOwnershipRead(left) == 1,
+        "erased aggregate replacement preserves source");
+    let generic: ParameterOwnershipGenericChoice<ParameterOwnershipResource> = first;
+    parameterOwnershipUnion<ParameterOwnershipResource>(generic);
+    let genericN = match generic { item: ParameterOwnershipResource { item.n } else { 0 } };
+    assert(genericN == 1, "reified union replacement preserves source");
+    let owner = ParameterOwnershipOwner<ParameterOwnershipChoice>();
+    assert(parameterOwnershipRead(owner.replace(left, right)) == 2, "type generic method");
+    assert(owner.replaceOther<ParameterOwnershipResource>(first, second).n == 2, "method generic");
+    assert(parameterOwnershipRead(ParameterOwnershipOwner<ParameterOwnershipChoice>.replaceStatic(left, right)) == 2,
+        "generic static method");
+    assert(parameterOwnershipLambda<ParameterOwnershipResource>(first, second).n == 2, "erased lambda pointer");
+    assert(parameterOwnershipRead(parameterOwnershipLambda<ParameterOwnershipChoice>(left, right)) == 2,
+        "erased lambda aggregate");
+    assert(parameterOwnershipGeneric<int>(1, 7) == 7, "erased trivial value");
+    assert(parameterOwnershipGeneric<string>("first", "second") == "second", "erased string");
+    let replacedArray = parameterOwnershipGeneric<ParameterOwnershipResource[]>([first], [second]);
+    assert(replacedArray[0].n == 2, "erased array handle");
+    let genericValue = ParameterOwnershipGenericValue<ParameterOwnershipResource> { resource: first };
+    parameterOwnershipGenericField<ParameterOwnershipResource>(genericValue, second);
+    assert(genericValue.resource.n == 1, "shared mutable field keeps the source unchanged");
+    assert(first.n == 1 && second.n == 2 && parameterOwnershipDrops == 0,
+        "shared entries preserve all caller owners");
+}
+/** Exception cleanup owns the replacement independently of the caller. */
+func parameterOwnershipFailureScope() {
+    let value: ParameterOwnershipChoice = ParameterOwnershipResource { n: 1 };
+    let error = try parameterOwnershipFail(value) catch e: int { e };
+    assert(error == 3 && parameterOwnershipDrops == 1, "replacement finalized on unwind");
+    assert(parameterOwnershipRead(value) == 1, "original survives the failed call");
+}
+
+/** Regressions for caller-token consumption and missing parameter cleanup. */
+func test_parameter_ownership() {
+    describe("Writable parameter ownership", () {
+        test("ordinary callable entries own mutable parameter storage", () {
+            parameterOwnershipDrops = 0;
+            parameterOwnershipConcreteScope();
+            assert(parameterOwnershipDrops == 2, "both original resources finalized exactly once");
+        });
+        test("generic and lambda entries preserve representation-independent ownership", () {
+            parameterOwnershipDrops = 0;
+            parameterOwnershipGenericScope();
+            assert(parameterOwnershipDrops == 2, "generic cleanup releases both resources once");
+        });
+        test("unwinding releases the replacement and preserves the original", () {
+            parameterOwnershipDrops = 0;
+            parameterOwnershipFailureScope();
+            assert(parameterOwnershipDrops == 2, "exception and caller cleanup are independent");
+        });
+    });
+}

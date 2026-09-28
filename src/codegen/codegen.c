@@ -1353,6 +1353,7 @@ typedef struct CGCallFrame {
     size_t capacity;
     FengExpr *const *arguments;
     size_t argument_count;
+    const FengExpr *call_source; /* Resolved declaration supplies parameter mutability. */
     const FengExpr *receiver_source;
 } CGCallFrame;
 
@@ -2511,6 +2512,7 @@ static void cg_emit_cleanup_zero_for_aggregate_local(Buf *out,
                                                      const CGType *type);
 static const char *cg_aggregate_desc_name(const CGType *t);
 static bool cg_append_aggregate_default_zero_init_call(
+    CG *cg,
     Buf *out,
     const CGType *type,
     const char *lvalue_expr);
@@ -4929,7 +4931,7 @@ static bool cg_emit_capture_cell_default_init(CG *cg,
             free(descriptor);
             ok = true;
         } else {
-            ok = cg_append_aggregate_default_zero_init_call(
+            ok = cg_append_aggregate_default_zero_init_call(cg,
                 cg->cur_body, value_type, lvalue.data);
         }
         buf_free(&lvalue);
@@ -18102,7 +18104,7 @@ static bool cg_emit_spec_default_abi_result(CG *cg,
 
         buf_init(&init_call);
         if (result_ctype == NULL ||
-            !cg_append_aggregate_default_zero_init_call(&init_call,
+            !cg_append_aggregate_default_zero_init_call(cg, &init_call,
                                                         type,
                                                         "_default_ret")) {
             free(result_ctype);
@@ -19192,7 +19194,7 @@ static void cg_emit_user_spec_definition(CG *cg, const UserSpec *s) {
                 return;
             }
             buf_append_cstr(td, "    ");
-            ok = cg_append_aggregate_default_zero_init_call(
+            ok = cg_append_aggregate_default_zero_init_call(cg,
                 td, sm->type, lvalue.data);
             buf_free(&lvalue);
             if (!ok) {
@@ -20079,7 +20081,7 @@ static bool cg_emit_tuple_field_value_store(CG *cg,
                            lvalue.data, field_descriptor);
         } else {
             buf_append_cstr(cg->cur_body, "    ");
-            ok = cg_append_aggregate_default_zero_init_call(
+            ok = cg_append_aggregate_default_zero_init_call(cg,
                 cg->cur_body, field->type, lvalue.data);
             buf_append_cstr(cg->cur_body, ";\n");
             if (!ok) {
@@ -21252,6 +21254,8 @@ static bool cg_materialize_to_local(CG *cg, ExprResult *r, const char *prefix) {
         cg_result_adopts_last_local(cg, r);
     return true;
 }
+
+#include "detail/parameters.c"
 
 /* Prepare one explicit parameter for an address-based shared callable ABI.
  *
@@ -23817,10 +23821,17 @@ static bool cg_emit_lambda_invoke_function(CG *cg,
             free(param_expr);
             goto cleanup;
         }
+        if (!cg_prepare_parameter_ownership(cg, fn_scope, param->token,
+                lambda_expr->as.lambda.is_block_body ? lambda_expr->as.lambda.body_block : NULL,
+                lambda_expr->as.lambda.is_block_body ? NULL : lambda_expr->as.lambda.body)) {
+            free(param_name);
+            free(param_expr);
+            goto cleanup;
+        }
         if (!cg_debug_add_variable_record_slice_cgtype(cg,
                                                        arg_name,
                                                        param->name,
-                                                       param_expr,
+                                                       cg_parameter_read_expr(fn_scope, param_expr),
                                                        spec->callable_param_types[i],
                                                        FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                        param->token)) {
@@ -29850,6 +29861,7 @@ static bool cg_emit_call(CG *cg, const FengExpr *e, ExprResult *out) {
     cg_call_frame_begin(cg, &frame);
     frame.arguments = e->as.call.args;
     frame.argument_count = e->as.call.arg_count;
+    frame.call_source = e;
     bool ok = cg_emit_call_impl(cg, e, out);
     return cg_call_frame_finish(cg, &frame, out, ok);
 }
@@ -33771,7 +33783,7 @@ static bool cg_emit_expression_join_slot(CG *cg,
     } else if (aggregate) {
         buf_append_fmt(cg->cur_body, "    %s%s %s; ",
                        cg_debug_local_attribute(cg, slot_name), ctype, slot_name);
-        if (!cg_append_aggregate_default_zero_init_call(
+        if (!cg_append_aggregate_default_zero_init_call(cg,
                 cg->cur_body, result_type, slot_name)) {
             free(ctype);
             return cg_fail(cg, blame,
@@ -34524,6 +34536,34 @@ static bool cg_emit_match_expr_all_exit(CG *cg, const FengExpr *e,
     return out->type != NULL && out->c_expr != NULL;
 }
 
+/* A match subject is a snapshot even when borrowing. Mutable branch bindings
+ * may replace its managed slots, so only immutable projections can share the
+ * original owner's protection. Register borrowed metadata for projection
+ * lookup, without claiming a transferable token or adding a cleanup node. */
+static bool cg_materialize_match_subject(CG *cg, ExprResult *subject,
+    const FengMatchBranch *branches, size_t branch_count, const char *prefix) {
+    bool readonly = true;
+    for (size_t i = 0U; i < branch_count; ++i) {
+        if (branches[i].has_binding &&
+            branches[i].binding_mutability == FENG_MUTABILITY_VAR) readonly = false;
+    }
+    if (!readonly || !cg_result_has_stable_aggregate_borrow(cg, subject))
+        return cg_materialize_to_local(cg, subject, prefix);
+    if (!cg_materialize_ownership_alias(cg, subject, prefix)) return false;
+    CGType *type = cgtype_clone(subject->type);
+    size_t previous_count = cg->cur_scope->count;
+    if (type == NULL || !scope_add(cg->cur_scope, subject->c_expr,
+                                  subject->c_expr, type, true)) {
+        if (cg->cur_scope->count == previous_count) cgtype_free(type);
+        return false;
+    }
+    if (!scope_mark_last_binding_mutability(cg->cur_scope, FENG_MUTABILITY_LET))
+        return false;
+    subject->local_owner = (CGOwnedLocal){cg->cur_scope, cg->cur_scope->count - 1U};
+    subject->managed_identity_is_stable = true;
+    return true;
+}
+
 static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     er_init(out);
 
@@ -34571,7 +34611,8 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
 
     if (yield_for_type == NULL) {
         /* All branches exit through return/throw — emit without a result slot. */
-        char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_mt")
+        char *tgt_tmp = cg_materialize_match_subject(cg, &tgt,
+            e->as.match_expr.branches, e->as.match_expr.branch_count, "_mt")
             ? strdup(tgt.c_expr) : NULL;
         er_free(&tgt);
         if (!tgt_tmp) {
@@ -34616,7 +34657,8 @@ static bool cg_emit_match_expr(CG *cg, const FengExpr *e, ExprResult *out) {
     if (union_spec != NULL) {
         bool first_branch = true;
         bool ok = true;
-        char *tgt_tmp = cg_materialize_to_local(cg, &tgt, "_umt")
+        char *tgt_tmp = cg_materialize_match_subject(cg, &tgt,
+            e->as.match_expr.branches, e->as.match_expr.branch_count, "_umt")
             ? strdup(tgt.c_expr) : NULL;
 
         if (tgt_tmp == NULL) {
@@ -37591,7 +37633,7 @@ static bool cg_emit_user_field_default_value(CG *cg,
                 field_expr.data, rad_source, rad_index);
             ok = true;
         } else {
-            ok = cg_append_aggregate_default_zero_init_call(
+            ok = cg_append_aggregate_default_zero_init_call(cg,
                 cg->cur_body, uf->type, field_expr.data);
         }
         if (!ok) {
@@ -38534,7 +38576,7 @@ static bool cg_emit_binding(CG *cg, const FengStmt *stmt) {
             } else {
                 Buf init_call;
                 buf_init(&init_call);
-                if (!cg_append_aggregate_default_zero_init_call(
+                if (!cg_append_aggregate_default_zero_init_call(cg,
                         &init_call, decl_type, cname)) {
                     buf_free(&init_call);
                     free(cname); free(cty); cgtype_free(decl_type);
@@ -41718,7 +41760,8 @@ static bool cg_emit_match_stmt(CG *cg, const FengStmt *stmt) {
 
     const UserSpec *union_spec = cg_union_match_view(cg, target.type);
     if (union_spec != NULL) {
-        char *target_tmp = cg_materialize_to_local(cg, &target, "_umt")
+        char *target_tmp = cg_materialize_match_subject(cg, &target,
+            stmt->as.match_stmt.branches, stmt->as.match_stmt.branch_count, "_umt")
             ? strdup(target.c_expr) : NULL;
         bool first_branch = true;
         bool ok = true;
@@ -51470,10 +51513,16 @@ static bool cg_emit_generic_function(CG *cg, const FengDecl *decl,
                 scope_pop_free(fn_scope);
                 goto cleanup_params;
             }
+            if (!cg_prepare_parameter_ownership(cg, fn_scope, sig->params[i].token,
+                    sig->body, NULL)) {
+                cg->cur_scope = NULL;
+                scope_pop_free(fn_scope);
+                goto cleanup_params;
+            }
             if (!cg_debug_add_variable_record_cstr_type_ref(cg,
                                                             param_cnames[i],
                                                             param_fnames[i],
-                                                            NULL,
+                                                            cg_parameter_read_expr(fn_scope, NULL),
                                                             sig->params[i].type,
                                                             FENG_CODEGEN_MAPING_VARIABLE_PARAM,
                                                             sig->params[i].token)) {
@@ -53024,11 +53073,14 @@ static bool cg_emit_function(CG *cg,
             cg_fail(cg, decl->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
+        if (!cg_prepare_parameter_ownership(cg, fn_scope,
+                decl->as.function_decl.params[i].token,
+                decl->as.function_decl.body, NULL)) goto cleanup;
         if (!cg_debug_add_variable_record_cstr_type_ref(
             cg,
             pn,
             pn,
-            NULL,
+            cg_parameter_read_expr(fn_scope, NULL),
             decl->as.function_decl.params[i].type,
             FENG_CODEGEN_MAPING_VARIABLE_PARAM,
             decl->as.function_decl.params[i].token)) {
@@ -59898,7 +59950,7 @@ static bool cg_emit_module_binding_init(CG *cg, const ModuleBinding *mb) {
          * to NULL/0 in pass 2b). */
         if (cgtype_is_aggregate(mb->type)) {
             buf_append_cstr(cg->cur_body, "    ");
-            if (!cg_append_aggregate_default_zero_init_call(
+            if (!cg_append_aggregate_default_zero_init_call(cg,
                     cg->cur_body, mb->type, mb->c_name)) {
                 return cg_fail(cg,
                                mb->binding->token,
@@ -60259,7 +60311,7 @@ static bool cg_emit_type_static_binding_init(CG *cg, const TypeStaticBinding *bi
     if (init == NULL) {
         if (cgtype_is_aggregate(binding->type)) {
             buf_append_cstr(cg->cur_body, "    ");
-            if (!cg_append_aggregate_default_zero_init_call(
+            if (!cg_append_aggregate_default_zero_init_call(cg,
                     cg->cur_body,
                     binding->type,
                     binding->c_name)) {
@@ -60717,12 +60769,18 @@ static size_t cg_aggregate_pointer_slot_count(const CGType *t) {
  * `lvalue_expr`. The aggregate facts provider chooses either direct zero
  * bytes or the descriptor callback; this helper never invokes constructors. */
 static bool cg_append_aggregate_default_zero_init_call(
+    CG *cg,
     Buf *out,
     const CGType *type,
     const char *lvalue_expr) {
     CGAggregateFacts facts;
     if (out == NULL || lvalue_expr == NULL || !cg_aggregate_facts(type, &facts)) {
         return false;
+    }
+    if (!cg_type_uses_reified_storage(cg, type) &&
+        cg_type_default_zero_is_zero_bytes(cg, type, 0U)) {
+        buf_append_fmt(out, "memset(&%s, 0, sizeof %s)", lvalue_expr, lvalue_expr);
+        return true;
     }
     switch (facts.default_zero_init_kind) {
         case CG_AGGREGATE_DEFAULT_ZERO_INIT_ZERO_BYTES:
@@ -61403,6 +61461,17 @@ static bool cg_type_default_zero_is_zero_bytes(const CG *cg,
                 }
             }
             return true;
+        case CG_TYPE_SPEC: {
+            const UserSpec *spec = type->user_spec;
+            /* The zero tag selects the first alternative. A trivial payload
+             * uses the all-zero NONE forwarding descriptor; managed/nested
+             * payloads require real metadata even when their bytes are zero. */
+            return spec != NULL && spec->form == FENG_SPEC_FORM_UNION &&
+                spec->generic_context_type_param_count == 0U &&
+                spec->union_member_count > 0U &&
+                cgtype_value_kind(spec->union_member_types[0U]) == CG_VK_TRIVIAL &&
+                cg_type_default_zero_is_zero_bytes(cg, spec->union_member_types[0U], depth + 1U);
+        }
         default:
             return false;
     }
@@ -61586,7 +61655,7 @@ static void cg_emit_value_type_definition(CG *cg, UserType *t) {
                     buf_init(&init_call);
                     buf_append_fmt(&lvalue, "_out->%s", field->c_name);
                     if (lvalue.data == NULL ||
-                        !cg_append_aggregate_default_zero_init_call(
+                        !cg_append_aggregate_default_zero_init_call(cg,
                             &init_call,
                             field->type,
                             lvalue.data)) {
@@ -62783,7 +62852,7 @@ static void cg_emit_user_type_definition(CG *cg, UserType *t) {
                                              sizeof(lvalue),
                                              "_o->%s",
                                              t->fields[i].c_name) <= 0 ||
-                                    !cg_append_aggregate_default_zero_init_call(
+                                    !cg_append_aggregate_default_zero_init_call(cg,
                                         &init, ft, lvalue)) {
                                     buf_free(&init);
                                     (void)cg_fail(
@@ -64009,6 +64078,15 @@ static bool cg_emit_generic_type_method_shared(CG *cg, const FengDecl *decl,
                                                    sig->params[i].token)) {
             goto cleanup;
         }
+        if (!cg_prepare_parameter_ownership(cg, fn_scope, sig->params[i].token,
+                sig->body, NULL))
+            goto cleanup;
+        const char *parameter_read = cg_parameter_read_expr(fn_scope, NULL);
+        if (parameter_read != NULL &&
+            !cg_debug_add_variable_record_cstr_type_ref(cg, param_cnames[i],
+                param_fnames[i], parameter_read, sig->params[i].type,
+                FENG_CODEGEN_MAPING_VARIABLE_PARAM, sig->params[i].token))
+            goto cleanup;
     }
 
     if (member->kind == FENG_TYPE_MEMBER_CONSTRUCTOR) {
@@ -64827,11 +64905,14 @@ static bool cg_emit_user_method(CG *cg,
             cg_fail(cg, m->member->token, "IE0001", "codegen: out of memory");
             goto cleanup;
         }
+        if (!cg_prepare_parameter_ownership(cg, fn_scope,
+                m->member->as.callable.params[i].token,
+                m->member->as.callable.body, NULL)) goto cleanup;
         if (!cg_debug_add_variable_record_slice_type_ref(
             cg,
             pn,
             m->member->as.callable.params[i].name,
-            NULL,
+            cg_parameter_read_expr(fn_scope, NULL),
             m->member->as.callable.params[i].type,
             FENG_CODEGEN_MAPING_VARIABLE_PARAM,
             m->member->as.callable.params[i].token)) {
@@ -65272,11 +65353,14 @@ static bool cg_emit_builtin_fit_method(CG *cg,
                 cg, fn_scope, pt, m->member->as.callable.params[i].token)) {
             goto cleanup;
         }
+        if (!cg_prepare_parameter_ownership(cg, fn_scope,
+                m->member->as.callable.params[i].token,
+                m->member->as.callable.body, NULL)) goto cleanup;
         if (!cg_debug_add_variable_record_slice_type_ref(
             cg,
             pn,
             m->member->as.callable.params[i].name,
-            NULL,
+            cg_parameter_read_expr(fn_scope, NULL),
             m->member->as.callable.params[i].type,
             FENG_CODEGEN_MAPING_VARIABLE_PARAM,
             m->member->as.callable.params[i].token)) {

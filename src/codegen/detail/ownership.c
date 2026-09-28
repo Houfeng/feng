@@ -60,6 +60,14 @@ static bool cg_ownership_pair_has_no_effect(CG *cg, const CGType *type) {
  * outside these local facts. */
 static bool cg_ownership_slots_are_immutable(const CGType *type) {
     if (type == NULL || type->kind == CG_TYPE_GENERIC_PARAM) return false;
+    if (type->kind == CG_TYPE_SPEC && type->user_spec != NULL &&
+        type->user_spec->form == FENG_SPEC_FORM_UNION) {
+        for (size_t i = 0U; i < type->user_spec->union_member_count; ++i) {
+            if (!cg_ownership_slots_are_immutable(type->user_spec->union_member_types[i]))
+                return false;
+        }
+        return true;
+    }
     if (!cg_type_is_value_semantics(type)) return true;
     if (type->user == NULL || type->user->is_abi_type) return false;
     for (size_t i = 0U; i < type->user->field_count; ++i) {
@@ -99,6 +107,46 @@ static CGOwnedLocal cg_stable_result_owner(CG *cg, const ExprResult *result) {
         if (scope == result->local_owner.scope) return result->local_owner;
     }
     return (CGOwnedLocal){0};
+}
+
+/* Closed union alternatives can prove a read-only borrow independently of
+ * the existing whole-local transfer rules. Recurse only through inline
+ * storage; reference pointees use the established collector-effect proof. */
+static bool cg_borrow_pair_has_no_effect(CG *cg, const CGType *type) {
+    if (type == NULL || cg_type_uses_reified_storage(cg, type)) return false;
+    const UserSpec *union_spec = cg_union_match_view(cg, type);
+    if (union_spec != NULL) {
+        for (size_t i = 0U; i < union_spec->union_member_count; ++i) {
+            if (!cg_borrow_pair_has_no_effect(cg, union_spec->union_member_types[i]))
+                return false;
+        }
+        return true;
+    }
+    if (cg_type_is_value_semantics(type)) {
+        if (type->user == NULL) return false;
+        for (size_t i = 0U; i < type->user->field_count; ++i) {
+            if (!cg_borrow_pair_has_no_effect(cg, type->user->fields[i].type))
+                return false;
+        }
+        return true;
+    }
+    return cg_ownership_pair_has_no_effect(cg, type);
+}
+
+/* Borrowing does not transfer the caller's token. An immutable parameter or
+ * field path can lend a fixed aggregate while its existing owner stays live;
+ * every copied slot must remain unchanged and its paired release effect-free.
+ * Address-selected generic storage retains its original conservative path. */
+static bool cg_result_has_stable_aggregate_borrow(CG *cg,
+                                                const ExprResult *result) {
+    return result != NULL && !result->owns_ref &&
+        cgtype_is_aggregate(result->type) &&
+        !result->is_storage_address && !result->uses_erased_generic_storage &&
+        !result->uses_reified_storage &&
+        (result->managed_identity_is_stable ||
+         cg_stable_result_owner(cg, result).scope != NULL) &&
+        cg_ownership_slots_are_immutable(result->type) &&
+        cg_borrow_pair_has_no_effect(cg, result->type);
 }
 
 /* An immutable binding can share an existing token without moving its release

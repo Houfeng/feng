@@ -9914,8 +9914,21 @@ static void test_value_method_capture_codegen_has_direct_closure_lowering(void) 
                         "_desc->reified_callable_deps[") == 1U);
     ASSERT(count_substr(output.c_source,
                         "feng_object_new(_callable_value_desc") == 1U);
-    ASSERT(strstr(output.c_source,
-                  "_callable_value_desc3->aggregate_capture_desc") != NULL);
+    /* Parameter ownership may introduce temporaries before descriptor binding.
+     * Check the same declared descriptor, independently of its numeric suffix. */
+    const char *value_descriptor_decl = strstr(
+        output.c_source, "const FengCallableValueDescriptor *");
+    ASSERT(value_descriptor_decl != NULL);
+    char value_descriptor_name[128];
+    ASSERT(sscanf(value_descriptor_decl,
+                  "const FengCallableValueDescriptor *%127s =",
+                  value_descriptor_name) == 1);
+    char capture_descriptor_access[160];
+    int access_length = snprintf(capture_descriptor_access,
+                                sizeof(capture_descriptor_access),
+                                "%s->aggregate_capture_desc", value_descriptor_name);
+    ASSERT(access_length > 0 && (size_t)access_length < sizeof(capture_descriptor_access));
+    ASSERT(strstr(output.c_source, capture_descriptor_access) != NULL);
 
     /* The fixed-layout direct binder and the consumer-generated shared-body
      * adapter each contain exactly one closure allocation. At execution only
@@ -17460,6 +17473,8 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 
 /* ARC ownership has independent structural and conservative-path coverage. */
 void test_arc_ownership_codegen(void (*compile_c)(const char *));
+/* Aggregate borrows preserve mutable and unknown ownership boundaries. */
+void test_aggregate_borrow_codegen(void (*compile_c)(const char *));
 /* Generic receiver binding is independent of its ARC representation. */
 void test_receiver_binding_codegen(void (*compile_c)(const char *));
 /* Recursive spec registration preserves metadata across registry growth. */
@@ -17733,6 +17748,7 @@ int main(void) {
     test_loop_binding_uncaptured_codegen();
     test_loop_tuple_destructuring_codegen();
     test_arc_ownership_codegen(compile_generated_c_or_die);
+    test_aggregate_borrow_codegen(compile_generated_c_or_die);
     test_receiver_binding_codegen(compile_generated_c_or_die);
     test_spec_registration_growth_codegen(compile_generated_c_or_die);
     test_callable_debug_storage_codegen(compile_generated_c_or_die);

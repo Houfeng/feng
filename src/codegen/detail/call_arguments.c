@@ -120,6 +120,30 @@ static bool cg_guard_call_managed_storage(CG *cg, const char *storage,
     return ok;
 }
 
+/* New aggregate borrows require an immutable explicit parameter selected by
+ * semantic analysis. A receiver, mutable parameter, extern or opaque callable
+ * may write its value storage and keeps the original owning-copy path. */
+static bool cg_call_parameter_is_readonly(CG *cg, const FengExpr *source) {
+    const CGCallFrame *frame = cg->call_frame;
+    if (frame == NULL || frame->body != cg->cur_body || frame->call_source == NULL)
+        return false;
+    const FengResolvedCallable *resolved = &frame->call_source->as.call.resolved_callable;
+    const FengCallableSignature *signature = NULL;
+    if (resolved->kind == FENG_RESOLVED_CALLABLE_FUNCTION &&
+        resolved->function_decl != NULL && !resolved->function_decl->is_extern)
+        signature = &resolved->function_decl->as.function_decl;
+    else if (resolved->member != NULL &&
+             resolved->kind != FENG_RESOLVED_CALLABLE_SPEC_METHOD &&
+             resolved->kind != FENG_RESOLVED_CALLABLE_SPEC_STATIC_METHOD)
+        signature = &resolved->member->as.callable;
+    if (signature == NULL) return false;
+    for (size_t i = 0U; i < frame->argument_count && i < signature->param_count; ++i) {
+        if (frame->arguments[i] == source)
+            return signature->params[i].mutability != FENG_MUTABILITY_VAR;
+    }
+    return false;
+}
+
 /* Evaluate a value once. Stable owners may lend their managed identity; all
  * other borrowed managed/value representations get independent protection.
  * Literal constants are already evaluated and need no C storage. */
@@ -136,7 +160,9 @@ static bool cg_prepare_call_operand(CG *cg, ExprResult *value,
     bool owned = value->owns_ref;
     bool stable = !dynamic && (managed || !aggregate
         ? (value->managed_identity_is_stable || cg_call_keeps_local_identity(cg, value, source))
-        : cg_stable_result_owner(cg, value).scope != NULL);
+        : (cg_stable_result_owner(cg, value).scope != NULL ||
+           (cg_call_parameter_is_readonly(cg, source) &&
+            cg_result_has_stable_aggregate_borrow(cg, value))));
     if (!owned && stable) {
         /* The complete owning path is immutable. Delaying this read cannot
          * change its value or repeat a producer, so its existing spelling is

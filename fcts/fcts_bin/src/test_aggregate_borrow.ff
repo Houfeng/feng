@@ -1,0 +1,192 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.aggregate_borrow;
+
+var aggregateBorrowDrops: int = 0;
+var aggregateBorrowDeferred: int = -1;
+var aggregateBorrowNodeDrops: int = 0;
+
+/** Acyclic managed payload with observable destruction. */
+type AggregateBorrowResource {
+    let n: int;
+    /** Ignore default scalar initialization when checking real resources. */
+    func ~AggregateBorrowResource() { if self.n > 0 { aggregateBorrowDrops += 1; } }
+}
+/** Empty and managed alternatives share the same read-only path. */
+spec AggregateBorrowUnion: bool | AggregateBorrowResource;
+/** Nested inline storage must retain the selected leaf on escape. */
+spec AggregateBorrowNested: AggregateBorrowUnion | i64;
+/** The field can invalidate an earlier argument unless that argument owns it. */
+type AggregateBorrowMutableHolder { var value: AggregateBorrowUnion; }
+/** A nonzero language default must keep its descriptor initializer. */
+enum AggregateBorrowNonzero { First = 13 }
+/** The first alternative cannot be initialized by zeroing its bytes. */
+spec AggregateBorrowEnumChoice: AggregateBorrowNonzero | AggregateBorrowResource;
+/** A managed first alternative requires a real default instance. */
+spec AggregateBorrowManagedFirst: AggregateBorrowResource | bool;
+/** Default fields exercise both direct zeroing and descriptor fallback. */
+type AggregateBorrowDefaults {
+    let empty: AggregateBorrowUnion;
+    let nonzero: AggregateBorrowEnumChoice;
+    let managed: AggregateBorrowManagedFirst;
+}
+/** Captured match bindings outlive the match and its parameter. */
+spec AggregateBorrowReader(): int;
+/** Recursive immutable fields model the language workload without std Option. */
+spec AggregateBorrowTree: bool | AggregateBorrowNode;
+/** Every actual node must be destroyed exactly once. */
+type AggregateBorrowNode {
+    let left: AggregateBorrowTree;
+    let right: AggregateBorrowTree;
+    /** Account for all nodes, including leaves. */
+    func ~AggregateBorrowNode() { aggregateBorrowNodeDrops += 1; }
+}
+
+/** Read the original managed identity through an immutable match. */
+func aggregateBorrowRead(value: AggregateBorrowUnion): int {
+    return match value { item: AggregateBorrowResource { item.n } else { 0 } };
+}
+/** Construct a real tree and transfer each child into its parent. */
+func aggregateBorrowBuild(depth: int): AggregateBorrowNode {
+    if depth == 0 { return AggregateBorrowNode { left: false, right: false }; }
+    return AggregateBorrowNode {
+        left: aggregateBorrowBuild(depth - 1), right: aggregateBorrowBuild(depth - 1)
+    };
+}
+/** Read-only recursion must not introduce owners or lose the root owner. */
+func aggregateBorrowCount(value: AggregateBorrowTree): int {
+    return match value { item: AggregateBorrowNode {
+        1 + aggregateBorrowCount(item.left) + aggregateBorrowCount(item.right)
+    } else { 0 } };
+}
+/** Check resources both before and after their owning scope exits. */
+func aggregateBorrowTreeScope() {
+    let root = aggregateBorrowBuild(4);
+    assert(aggregateBorrowCount(root) == 31, "all real nodes traversed");
+    assert(aggregateBorrowCount(root) == 31, "repeated reads preserve the tree");
+    assert(aggregateBorrowNodeDrops == 0, "root owns descendants throughout traversal");
+}
+/** Mutable projection storage must remain independent of the source union. */
+func aggregateBorrowMutableMatch(value: AggregateBorrowUnion): int {
+    return match value {
+        var item: AggregateBorrowResource { item = AggregateBorrowResource { n: 2 }; item.n }
+        else { 0 }
+    };
+}
+/** Only the returned holder owns this payload after the factory exits. */
+func aggregateBorrowMakeHolder(): AggregateBorrowMutableHolder {
+    return AggregateBorrowMutableHolder { value: AggregateBorrowResource { n: 1 } };
+}
+/** A later operand changes the source used by an earlier operand. */
+func aggregateBorrowReplace(holder: AggregateBorrowMutableHolder): int {
+    holder.value = false;
+    return 0;
+}
+/** The first operand is already selected before the second one is evaluated. */
+func aggregateBorrowConsume(value: AggregateBorrowUnion, unused: int): int {
+    return aggregateBorrowRead(value);
+}
+/** An owning argument copy retains its established lexical lifetime. */
+func aggregateBorrowArgumentScope() {
+    let holder = aggregateBorrowMakeHolder();
+    let selected = aggregateBorrowConsume(holder.value, aggregateBorrowReplace(holder));
+    assert(selected == 1,
+        "later argument cannot invalidate the selected payload");
+    assert(aggregateBorrowRead(holder.value) == 0, "source replacement is observable");
+    assert(aggregateBorrowDrops == 0, "argument copy keeps its lexical lifetime");
+}
+/** Capturing a borrowed projection establishes an independent escaped owner. */
+func aggregateBorrowCapture(value: AggregateBorrowUnion): AggregateBorrowReader {
+    match value {
+        item: AggregateBorrowResource { return () { return item.n; }; }
+        else { return () { return 0; }; }
+    }
+}
+/** The closure is the only remaining payload owner after this call. */
+func aggregateBorrowCreateReader(): AggregateBorrowReader {
+    let value: AggregateBorrowUnion = AggregateBorrowResource { n: 3 };
+    return aggregateBorrowCapture(value);
+}
+/** A result can safely escape the parameter's owning scope. */
+func aggregateBorrowClosureScope() {
+    let reader = aggregateBorrowCreateReader();
+    assert(reader() == 3 && aggregateBorrowDrops == 0, "captured payload remains alive");
+}
+/** A borrowed parameter remains protected while an exception propagates. */
+func aggregateBorrowThrow(value: AggregateBorrowUnion) {
+    match value { item: AggregateBorrowResource { throw item.n; } else { throw 0; } }
+}
+/** Defer observes the same owners before their ordinary LIFO cleanup. */
+func aggregateBorrowFailureScope(): int {
+    let value: AggregateBorrowUnion = AggregateBorrowResource { n: 4 };
+    defer { aggregateBorrowDeferred = aggregateBorrowDrops; }
+    aggregateBorrowThrow(value);
+    return 0;
+}
+/** Imported generic transport must copy/return through its existing ABI. */
+func aggregateBorrowPackageScope() {
+    let original: AggregateBorrowChoice<AggregateBorrowResource> = AggregateBorrowResource { n: 5 };
+    let returned = aggregate_borrow_forward<AggregateBorrowResource>(original);
+    let n = match returned { item: AggregateBorrowResource { item.n } else { 0 } };
+    assert(n == 5 && aggregateBorrowDrops == 0, "generic return retains its payload");
+}
+
+/** Ownership and control-flow behavior are independent of the optimization. */
+func test_aggregate_borrow() {
+    describe("Aggregate borrow lifetime", () {
+        test("recursive immutable fields keep every node alive", () {
+            aggregateBorrowNodeDrops = 0;
+            aggregateBorrowTreeScope();
+            assert(aggregateBorrowNodeDrops == 31, "every node finalized exactly once");
+        });
+        test("empty and nested alternatives preserve payload identity", () {
+            assert(aggregateBorrowRead(false) == 0, "empty alternative");
+            let inner: AggregateBorrowUnion = AggregateBorrowResource { n: 1 };
+            let outer: AggregateBorrowNested = inner;
+            let n = match outer { child: AggregateBorrowUnion { aggregateBorrowRead(child) } else { -1 } };
+            assert(n == 1 && aggregateBorrowRead(inner) == 1, "nested borrow preserves source");
+            assert(aggregateBorrowMutableMatch(inner) == 2, "mutable binding uses its own copy");
+            assert(aggregateBorrowRead(inner) == 1, "mutable binding leaves source unchanged");
+        });
+        test("zero-byte defaults preserve nonzero and managed alternatives", () {
+            let defaults = AggregateBorrowDefaults();
+            assert(aggregateBorrowRead(defaults.empty) == 0, "empty first alternative");
+            let nonzero = match defaults.nonzero {
+                item: AggregateBorrowNonzero { item == AggregateBorrowNonzero.First }
+                else { false }
+            };
+            let managed = match defaults.managed {
+                item: AggregateBorrowResource { item.n == 0 }
+                else { false }
+            };
+            assert(nonzero && managed, "descriptor defaults remain observable");
+            let values = AggregateBorrowUnion[: (int)3];
+            assert(aggregateBorrowRead(values[0]) == 0 && aggregateBorrowRead(values[2]) == 0,
+                "array elements receive the same zero default");
+        });
+        test("later argument replacement preserves the earlier snapshot", () {
+            aggregateBorrowDrops = 0;
+            aggregateBorrowArgumentScope();
+            assert(aggregateBorrowDrops == 1, "replaced resource finally released once");
+        });
+        test("escaped match capture owns its payload", () {
+            aggregateBorrowDrops = 0;
+            aggregateBorrowClosureScope();
+            assert(aggregateBorrowDrops == 1, "closure cleanup releases the payload once");
+        });
+        test("throw and defer preserve owner cleanup order", () {
+            aggregateBorrowDrops = 0;
+            aggregateBorrowDeferred = -1;
+            let error = try aggregateBorrowFailureScope() catch e: int { e };
+            assert(error == 4, "original exception value");
+            assert(aggregateBorrowDeferred == 0 && aggregateBorrowDrops == 1,
+                "defer precedes the owner's final cleanup");
+        });
+        test("cross-package generic return retains ownership", () {
+            aggregateBorrowDrops = 0;
+            aggregateBorrowPackageScope();
+            assert(aggregateBorrowDrops == 1, "generic copies release exactly once");
+        });
+    });
+}
