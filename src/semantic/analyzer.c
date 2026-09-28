@@ -28597,8 +28597,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
             }
         }
 
-        /* Resolve an instance method through a generic parameter's exact
-         * object-spec constraint.  The selected requirement remains a spec
+        /* Resolve an instance method through a generic parameter's complete
+         * object/intersection constraint. The selected requirement remains a spec
          * callable, while the caller-view subject stays as the open type
          * parameter so the reifiable dependency can be closed later. */
         if (owner_type_decl == NULL &&
@@ -28618,7 +28618,8 @@ static bool validate_function_call_expr(ResolveContext *context, const FengExpr 
 
             if (constraint_decl != NULL &&
                 constraint_decl->kind == FENG_DECL_SPEC &&
-                constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
+                (constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT ||
+                 constraint_decl->as.spec_decl.form == FENG_SPEC_FORM_INTERSECTION)) {
                 InferredExprType constraint_owner =
                     inferred_expr_type_from_type_ref(constraint_ref);
 

@@ -1079,6 +1079,469 @@ static void fit_test_signatures(void) {
     fprintf(stdout, "lsp signature help: receiver, source/FT, overload and edit matrices passed\n");
 }
 
+/* Each completeness case asserts the whole overload set, including negatives. */
+typedef struct SignatureCompletenessCase {
+    const char *name;
+    const char *body;
+    const char *labels[6];
+    size_t parameter;
+} SignatureCompletenessCase;
+
+/* Count UTF-16 units rather than UTF-8 bytes at the protocol boundary. */
+static unsigned int signature_test_send_request(FitTestClient *client, const char *source, const char *context) {
+    const unsigned char *end = (const unsigned char *)strstr(source, "/*cursor*/");
+    FIT_CHECK(end != NULL);
+    unsigned int line = 0U, column = 0U;
+    for (const unsigned char *p = (const unsigned char *)source; p < end; ++p) {
+        if (*p == '\n') { ++line; column = 0U; }
+        else if ((*p & 0xc0U) != 0x80U) column += *p >= 0xf0U ? 2U : 1U;
+    }
+    unsigned int id = client->next_id++;
+    char *message = fit_test_format("{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"textDocument/signatureHelp\",\"params\":{\"textDocument\":{\"uri\":\"%s\"},\"position\":{\"line\":%u,\"character\":%u}%s}}",
+        id, client->uri, line, column, context != NULL ? context : "");
+    fit_test_send(client, message);
+    free(message);
+    return id;
+}
+
+/* Read exactly the signature response belonging to this request. */
+static char *signature_test_request(FitTestClient *client, const char *source, const char *context) {
+    return fit_test_response(client, signature_test_send_request(client, source, context));
+}
+
+/* Preserve exact labels, parameter position, multiplicity and declaration order. */
+static void signature_test_expect(const SignatureCompletenessCase *test, const char *response) {
+    const char *cursor = response;
+    size_t expected = 0U, actual = 0U;
+    while ((cursor = strstr(cursor, "\"parameters\":[")) != NULL) { ++actual; ++cursor; }
+    cursor = response;
+    while (expected < sizeof(test->labels) / sizeof(test->labels[0]) && test->labels[expected] != NULL) {
+        char *quoted = fit_test_quote(test->labels[expected]);
+        char *needle = fit_test_format("{\"label\":%s,\"parameters\":[", quoted);
+        const char *found = strstr(cursor, needle);
+        if (found == NULL) fprintf(stderr, "signature completeness %s: missing %s\n%s\n", test->name, needle, response);
+        FIT_CHECK(found != NULL);
+        cursor = found + strlen(needle);
+        free(quoted); free(needle); ++expected;
+    }
+    if (actual != expected) fprintf(stderr, "signature completeness %s: expected %zu, got %zu\n%s\n", test->name, expected, actual, response);
+    FIT_CHECK(actual == expected);
+    if (expected == 0U) FIT_CHECK(strstr(response, "\"result\":null") != NULL);
+    else {
+        char *needle = fit_test_format("],\"activeSignature\":0,\"activeParameter\":%zu}", test->parameter);
+        FIT_CHECK(strstr(response, needle) != NULL);
+        free(needle);
+    }
+}
+
+/* The identical legal declarations are used as source and source-hidden FB. */
+static const char signature_complete_declarations[] =
+    "open module signature.complete;\n"
+    "open spec Callback<T>(value: T): T;\n"
+    "open spec Many<T>(head: T, rest: T...): T; open spec Zero(): void;\n"
+    "open type Holder<T> { let callback: Callback<T>; let callbacks: Callback<T>[]; }\n"
+    "open type Point { func Point(value: i32) {} func Point(text: string) {} }\n"
+    "open type Default {}\n"
+    "open type Empty { func Empty() {} }\n"
+    "open type Construct<T> { func Construct(value: T) {} func Construct(value: T, count: i32) {} }\n"
+    "open type Hidden { seal func Hidden() {} }\n"
+    "open spec Parent<T> { func take(value: T): T; static func build(value: T): T; }\n"
+    "open spec Child<T>: Parent<T> {}\n"
+    "open spec Leaf<T>: Child<T[]> {}\n"
+    "open spec Left<T>: Parent<T> {} open spec Right<T>: Parent<T> {}\n"
+    "open spec Diamond<T>: Left<T>, Right<T> {}\n"
+    "open spec Repeated<T>: Parent<T> { func take(renamed: T): T; }\n"
+    "open spec Tag { func tag(): i32; }\n"
+    "open spec Both<T>: Child<T> & Tag; open spec Nested<T>: Both<T> & Tag;\n"
+    "open spec Dual: Parent<i32> & Parent<string>;\n"
+    "open spec Field<T> { let callback: Callback<T>; } open spec FieldChild<T>: Field<T> {}\n"
+    "open spec Secret { seal func hidden(value: i32): i32; }\n"
+    "open spec SecretChild: Secret {}\n"
+    "open func relay<T>(fn: Callback<T>): Callback<T> { return fn; }\n"
+    "open func pair<A,B>(first:A, second:B): A { return first; }\n"
+    "open let global: Callback<i32> = (x: i32) -> x;\n"
+    "open let globalAlias = global;\n"
+    "open fit i32 { func ready(): i32 { return self; } }\n"
+    "open func pick(value:i32) {} open func pick(value:i64) {} open func pick(value:string) {}\n"
+    "open func pick(value:bool) {} open func pick(value:f64) {}\n";
+
+/* All receiver forms use common type facts; all contract edges substitute args. */
+static const SignatureCompletenessCase signature_complete_cases[] = {
+    {"field", "func probe(value:Holder<i32>){value.callback(/*cursor*/1);}", {"func callback(value: i32): i32"}, 0U},
+    {"generic field", "func probe<T>(value:Holder<T[]>){value.callback(/*cursor*/[]);}", {"func callback(value: T[]): T[]"}, 0U},
+    {"array", "func probe(values:Callback<i32>[]){values[0](/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"writable array", "func probe(values:Callback<string>[!]){values[0](/*cursor*/\"x\");}", {"func Callback(value: string): string"}, 0U},
+    {"nested field and index", "func probe(value:Holder<string[]>){value.callbacks[0](/*cursor*/[]);}", {"func Callback(value: string[]): string[]"}, 0U},
+    {"call result", "func probe(fn:Callback<i32>){relay(fn)(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"generic call result", "func probe(fn:Callback<i32>){relay<i32>(fn)(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"nested call result", "func probe(fn:Callback<i32>){relay(relay(fn))(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"alias", "func probe(fn:Callback<i32>){let alias=fn;alias(/*cursor*/1);}", {"func alias(value: i32): i32"}, 0U},
+    {"alias chain", "func probe(fn:Callback<i32>){let one=fn;let two=one;two(/*cursor*/1);}", {"func two(value: i32): i32"}, 0U},
+    {"field alias", "func probe(value:Holder<i32>){let alias=value.callback;alias(/*cursor*/1);}", {"func alias(value: i32): i32"}, 0U},
+    {"returned alias", "func probe(fn:Callback<i32>){let alias=relay(fn);alias(/*cursor*/1);}", {"func alias(value: i32): i32"}, 0U},
+    {"typed local", "func probe(fn:Callback<i32>){let alias:Callback<i32> = fn;alias(/*cursor*/1);}", {"func alias(value: i32): i32"}, 0U},
+    {"global", "func probe(){global(/*cursor*/1);}", {"func global(value: i32): i32"}, 0U},
+    {"global inferred alias", "func probe(){globalAlias(/*cursor*/1);}", {"func globalAlias(value: i32): i32"}, 0U},
+    {"direct local", "func probe(fn:Callback<i32>){fn(/*cursor*/1);}", {"func fn(value: i32): i32"}, 0U},
+    {"lambda", "func probe(){let fn=(value:i32)->value;fn(/*cursor*/1);}", {"func fn(value: i32)"}, 0U},
+    {"lambda alias", "func probe(){let fn=(value:i32)->value;let alias=fn;alias(/*cursor*/1);}", {"func alias(value: i32)"}, 0U},
+    {"zero", "func probe(fn:Zero){fn(/*cursor*/);}", {"func fn(): void"}, 0U},
+    {"variadic", "func probe(fn:Many<i32>){fn(1,2,/*cursor*/3);}", {"func fn(head: i32, rest: i32...): i32"}, 1U},
+    {"if callable", "func probe(fn:Callback<i32>){(if true {fn;}else{fn;})(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"match callable", "func probe(fn:Callback<i32>){(match true{true{fn;}else{fn;}})(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"try callable", "func probe(fn:Callback<i32>){(try relay(fn) catch{fn;})(/*cursor*/1);}", {"func Callback(value: i32): i32"}, 0U},
+    {"constructor overloads", "func probe(){let value=Point(/*cursor*/1);}", {"ctor Point(value: i32): void", "ctor Point(text: string): void"}, 0U},
+    {"explicit empty constructor", "func probe(){let value=Empty(/*cursor*/);}", {"ctor Empty(): void"}, 0U},
+    {"implicit constructor", "func probe(){let value=Default(/*cursor*/);}", {"ctor Default(): void"}, 0U},
+    {"generic constructor", "func probe(){let value=Construct<string>(/*cursor*/\"x\");}", {"ctor Construct(value: string): void", "ctor Construct(value: string, count: i32): void"}, 0U},
+    {"nested generic constructor", "func probe(){let value=Construct<Callback<i32>>(/*cursor*/global);}", {"ctor Construct(value: Callback<i32>): void", "ctor Construct(value: Callback<i32>, count: i32): void"}, 0U},
+    {"constructor literal suffix", "func probe(){let value=Construct<i32>(/*cursor*/1){};}", {"ctor Construct(value: i32): void", "ctor Construct(value: i32, count: i32): void"}, 0U},
+    {"parent control", "func probe(value:Parent<i32>){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"child", "func probe(value:Child<i32>){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"two edges", "func probe(value:Leaf<i32>){value.take(/*cursor*/[]);}", {"func take(value: i32[]): i32[]"}, 0U},
+    {"diamond", "func probe(value:Diamond<i32>){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"child representative", "func probe(value:Repeated<i32>){value.take(/*cursor*/1);}", {"func take(renamed: i32): i32"}, 0U},
+    {"intersection", "func probe(value:Both<i32>){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"nested intersection", "func probe(value:Nested<i32>){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"distinct instances", "func probe(value:Dual){value.take(/*cursor*/1);}", {"func take(value: i32): i32", "func take(value: string): string"}, 0U},
+    {"generic child constraint", "func probe<T:Child<i32>>(value:T){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"generic intersection constraint", "func probe<T:Both<i32>>(value:T){value.take(/*cursor*/1);}", {"func take(value: i32): i32"}, 0U},
+    {"generic static requirement", "func probe<T:Child<i32>>(){T.build(/*cursor*/1);}", {"func build(value: i32): i32"}, 0U},
+    {"inherited callable field", "func probe(value:FieldChild<i32>){value.callback(/*cursor*/1);}", {"func callback(value: i32): i32"}, 0U},
+    {"hidden requirement", "func probe(value:SecretChild){value.hidden(/*cursor*/1);}", {NULL}, 0U},
+    {"UTF16", "func probe(fn:Callback<i32>){let text=\"中文😀\";fn(/*cursor*/1);}", {"func fn(value: i32): i32"}, 0U},
+    {"CRLF variadic", "func probe(fn:Many<i32>){\r\nfn(1,\r\n/*cursor*/2);\r\n}", {"func fn(head: i32, rest: i32...): i32"}, 1U},
+    {"generic comma", "func probe(fn:Many<i32>){fn(pair<i32,string>(1,\"x\")/*cursor*/,2);}", {"func fn(head: i32, rest: i32...): i32"}, 0U},
+    {"string and comment delimiters", "func probe(fn:Many<string>){fn(\"a,(\",/*,(*/ /*cursor*/\"b\");}", {"func fn(head: string, rest: string...): string"}, 1U},
+    {"incomplete call", "func probe(fn:Callback<i32>){let alias=fn;alias(/*cursor*/}", {"func alias(value: i32): i32"}, 0U},
+    {"incomplete constructor", "func probe(){Point(/*cursor*/}", {"ctor Point(value: i32): void", "ctor Point(text: string): void"}, 0U},
+    {"not callable", "func probe(value:i32){value(/*cursor*/);}", {NULL}, 0U},
+    {"not callable field", "type Plain{let number:i32;}func probe(value:Plain){value.number(/*cursor*/);}", {NULL}, 0U},
+    {"unknown alias", "func probe(){let fn=unknown;fn(/*cursor*/);}", {NULL}, 0U},
+    {"unknown generic argument", "func probe(fn:Callback<Missing>){fn(/*cursor*/);}", {NULL}, 0U},
+    {"unknown array element", "func probe(fn:Callback<Missing[]>){fn(/*cursor*/);}", {NULL}, 0U},
+    {"cyclic binding", "let cyclicA=cyclicB;let cyclicB=cyclicA;func probe(){cyclicA(/*cursor*/);}", {NULL}, 0U},
+    {"invalid expanding spec cycle", "spec CycleA<T>:CycleB<T[]>{}spec CycleB<T>:CycleA<T[]>{}func probe(value:CycleA<i32>){value.missing(/*cursor*/);}", {NULL}, 0U},
+    {"value shadows type", "func probe(Point:i32){Point(/*cursor*/);}", {NULL}, 0U},
+    {"value shadows global", "func probe(global:i32){global(/*cursor*/);}", {NULL}, 0U},
+    {"type parameter shadows contract", "func probe<Callback>(fn:Callback<i32>){fn(/*cursor*/);}", {NULL}, 0U},
+    {"out of scope lambda", "func probe(){{let fn=(x:i32)->x;}fn(/*cursor*/);}", {NULL}, 0U},
+    {"out of if scope", "func probe(){if true{let fn=(x:i32)->x;}fn(/*cursor*/);}", {NULL}, 0U},
+    {"out of loop scope", "func probe(){while false{let fn=(x:i32)->x;}fn(/*cursor*/);}", {NULL}, 0U},
+    {"inner scope control", "func probe(){{let fn=(x:i32)->x;fn(/*cursor*/1);}}", {"func fn(x: i32)"}, 0U},
+    {"unclosed scope control", "func probe(){{let fn=(x:i32)->x;fn(/*cursor*/", {"func fn(x: i32)"}, 0U},
+    {"open callable constraint", "func probe<T:Callback<i32>>(fn:T){fn(/*cursor*/1);}", {"func fn(value: i32): i32"}, 0U},
+    {"constructor wrong arity", "func probe(){Construct<i32,string>(/*cursor*/1);}", {NULL}, 0U},
+    {"constructor unknown argument", "func probe(){Construct<Missing>(/*cursor*/1);}", {NULL}, 0U},
+    {"contract wrong arity", "func probe(fn:Callback<i32,string>){fn(/*cursor*/1);}", {NULL}, 0U},
+    {"tuple is not constructor", "type Tuple(i32,string);func probe(){Tuple(/*cursor*/1);}", {NULL}, 0U},
+    {"five overloads", "func probe(){pick(/*cursor*/1);}", {"func pick(value: i32): void", "func pick(value: i64): void", "func pick(value: string): void", "func pick(value: bool): void", "func pick(value: f64): void"}, 0U},
+};
+
+/* Run source, published source and source-hidden metadata through one matrix. */
+static void signature_test_matrix(FitTestClient *client, const char *prefix) {
+    for (size_t i = 0U; i < sizeof(signature_complete_cases) / sizeof(signature_complete_cases[0]); ++i) {
+        const SignatureCompletenessCase *test = &signature_complete_cases[i];
+        char *source = fit_test_format("%s\n%s\n", prefix, test->body);
+        fit_test_source(client, source);
+        char *response = signature_test_request(client, source, NULL);
+        signature_test_expect(test, response);
+        free(response); free(source);
+    }
+}
+
+/* Build the dependency and physically hide its source for the FT path. */
+static void signature_test_package(bool binary) {
+    FitTestClient client = fit_test_start();
+    char *dependency = fit_test_format("%s/dependency", client.directory);
+    char *dep_src = fit_test_format("%s/src", dependency);
+    char *dep_path = fit_test_format("%s/api.ff", dep_src);
+    char *dep_manifest = fit_test_format("%s/feng.fm", dependency);
+    char *consumer = fit_test_format("%s/consumer", client.directory);
+    char *src = fit_test_format("%s/src", consumer);
+    char *manifest = fit_test_format("%s/feng.fm", consumer);
+    FIT_CHECK(mkdir(dependency, 0700) == 0 && mkdir(dep_src, 0700) == 0 &&
+        mkdir(consumer, 0700) == 0 && mkdir(src, 0700) == 0);
+    fit_test_write(dep_manifest, "[package]\nname: \"signature_complete\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    fit_test_write(dep_path, signature_complete_declarations);
+    char *argv[] = {dependency};
+    FIT_CHECK(feng_cli_project_check_main("feng", 1, argv) == 0);
+    FIT_CHECK(feng_cli_project_pack_main("feng", 1, argv) == 0);
+    if (binary) {
+        char *error = NULL;
+        FIT_CHECK(feng_cli_project_remove_tree(dep_src, &error));
+        free(error);
+    }
+    char *config = fit_test_format("[package]\nname: \"signature_consumer\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n[dependencies]\nsignature_complete: \"../dependency%s\"\n",
+        binary ? "/build/pkg/signature_complete-0.1.0.fb" : "");
+    fit_test_write(manifest, config);
+    free(config);
+    free(client.path); free(client.uri);
+    client.path = fit_test_format("%s/main.ff", src);
+    client.uri = fit_test_format("file://%s", client.path);
+    const char *prefix = "module signature.consumer; import signature.complete; import signature.complete as api;";
+    char *source = fit_test_format("%s func probe(){let value:i32=1;value./*cursor*/ready();}", prefix);
+    fit_test_source(&client, source);
+    free(fit_test_wait_complete(&client, source, "ready"));
+    free(source);
+    signature_test_matrix(&client, prefix);
+    static const SignatureCompletenessCase extra[]={
+        {"module alias global","func probe(){api.global(/*cursor*/1);}",{"func global(value: i32): i32"}, 0U},
+        {"qualified global","func probe(){signature.complete.global(/*cursor*/1);}",{"func global(value: i32): i32"}, 0U},
+        {"alias of qualified global","func probe(){let fn=api.global;fn(/*cursor*/1);}",{"func fn(value: i32): i32"}, 0U},
+        {"alias of full module global","func probe(){let fn=signature.complete.global;fn(/*cursor*/1);}",{"func fn(value: i32): i32"}, 0U},
+        {"shadowed global alias","func probe(api:i32){let fn=api.global;fn(/*cursor*/);}",{NULL}, 0U},
+        {"alias constructor","func probe(){api.Construct<i32>(/*cursor*/1);}",{"ctor Construct(value: i32): void","ctor Construct(value: i32, count: i32): void"}, 0U},
+        {"qualified constructor","func probe(){signature.complete.Point(/*cursor*/1);}",{"ctor Point(value: i32): void","ctor Point(text: string): void"}, 0U},
+        {"private suppresses default","func probe(){Hidden(/*cursor*/);}",{NULL}, 0U},
+        {"shadowed alias","func probe(api:i32){api.global(/*cursor*/);}",{NULL}, 0U},
+    };
+    for (size_t i = 0U; i < sizeof(extra) / sizeof(extra[0]); ++i) {
+        source = fit_test_format("%s %s", prefix, extra[i].body);
+        fit_test_source(&client, source);
+        char *response = signature_test_request(&client, source, NULL);
+        signature_test_expect(&extra[i], response);
+        free(response); free(source);
+    }
+    fit_test_stop(&client);
+    free(dependency); free(dep_src); free(dep_path); free(dep_manifest);
+    free(consumer); free(src); free(manifest);
+}
+
+/* A selection belongs to the full signature, including instantiated types. */
+static void signature_test_selection(void) {
+    FitTestClient client = fit_test_start();
+    char *source = fit_test_format("%s func probe(){pick(/*cursor*/1);}", signature_complete_declarations);
+    fit_test_source(&client, source);
+    const char *labels[] = {"func pick(value: i32): void", "func pick(value: i64): void",
+        "func pick(value: string): void", "func pick(value: bool): void", "func pick(value: f64): void"};
+    for (size_t i = 0U; i < 7U; ++i) {
+        char *context = fit_test_signature_context(labels, 5U, i, true);
+        char *response = signature_test_request(&client, source, context);
+        char *needle = fit_test_format("],\"activeSignature\":%zu,\"activeParameter\":0}", i < 5U ? i : 0U);
+        FIT_CHECK(strstr(response, needle) != NULL);
+        free(needle); free(response); free(context);
+    }
+    const char *reordered[] = {labels[4], labels[2], labels[0], labels[3], labels[1]};
+    const size_t positions[] = {4U, 2U, 0U, 3U, 1U};
+    for (size_t i = 0U; i < 5U; ++i) {
+        char *context = fit_test_signature_context(reordered, 5U, i, true);
+        char *response = signature_test_request(&client, source, context);
+        char *needle = fit_test_format("],\"activeSignature\":%zu,\"activeParameter\":0}", positions[i]);
+        FIT_CHECK(strstr(response, needle) != NULL);
+        free(needle); free(response); free(context);
+    }
+    free(source);
+    source = fit_test_format("%s func probe(){Construct<i32>(1,/*cursor*/2);}", signature_complete_declarations);
+    fit_test_source(&client, source);
+    const char *constructors[] = {"ctor Construct(value: i32): void", "ctor Construct(value: i32, count: i32): void"};
+    char *context = fit_test_signature_context(constructors, 2U, 1U, true);
+    char *response = signature_test_request(&client, source, context);
+    FIT_CHECK(strstr(response, "],\"activeSignature\":1,\"activeParameter\":1}") != NULL);
+    free(response); free(source);
+    source = fit_test_format("%s func probe(){Construct<string>(\"x\",/*cursor*/2);}", signature_complete_declarations);
+    fit_test_source(&client, source);
+    response = signature_test_request(&client, source, context);
+    FIT_CHECK(strstr(response, "],\"activeSignature\":0,\"activeParameter\":0}") != NULL);
+    free(response); free(context); free(source);
+    source = fit_test_format("module changed;func pick(value:i32){}func probe(){pick(/*cursor*/1);}");
+    fit_test_source(&client, source);
+    context = fit_test_signature_context(labels, 5U, 4U, true);
+    response = signature_test_request(&client, source, context);
+    SignatureCompletenessCase remaining = {.name = "removed selected overload", .labels = {labels[0]}};
+    signature_test_expect(&remaining, response);
+    free(response); free(context); free(source);
+    fit_test_stop(&client);
+}
+
+/* Update a second document in the same service without changing the request URI. */
+static void signature_test_edit_document(FitTestClient *client, const char *uri,
+    const char *source, unsigned int version) {
+    char *quoted = fit_test_quote(source);
+    char *payload = version == 1U
+        ? fit_test_format("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":%u,\"languageId\":\"feng\",\"text\":%s}}}", uri, version, quoted)
+        : fit_test_format("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didChange\",\"params\":{\"textDocument\":{\"uri\":\"%s\",\"version\":%u},\"contentChanges\":[{\"text\":%s}]}}", uri, version, quoted);
+    fit_test_send(client, payload);
+    free(payload); free(quoted);
+}
+
+/* Cross-file updates are observed through publication, never a fixed delay. */
+static void signature_test_current_doc(FitTestClient *client, const char *source,
+    const char *label, const char *documentation) {
+    char *completion = fit_test_wait_complete(client, source, label);
+    char *item = fit_test_item(completion, label);
+    free(completion);
+    FIT_CHECK(item != NULL);
+    struct timespec start, now;
+    FIT_CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0);
+    for (;;) {
+        char *resolved = fit_test_resolve(client, item);
+        if (strstr(resolved, documentation) != NULL) { free(resolved); break; }
+        /* Publication can invalidate the item between the two requests. Only
+         * a new identity permits retry; missing or wrong stable docs fail. */
+        completion = fit_test_complete(client, source);
+        char *current = fit_test_item(completion, label);
+        free(completion);
+        bool stale = current != NULL && strcmp(current, item) != 0 &&
+            strstr(resolved, "\"documentation\":") == NULL;
+        if (!stale) fprintf(stderr, "cross-file resolve expected %s\n%s\n%s\n", documentation, item, resolved);
+        FIT_CHECK(stale);
+        FIT_CHECK(clock_gettime(CLOCK_MONOTONIC, &now) == 0 && now.tv_sec - start.tv_sec < 5);
+        free(resolved); free(item);
+        item = current;
+    }
+    free(item);
+}
+
+/* Both same-module and imported-module edits must update the common queries. */
+static void signature_test_cross_file(bool other_module) {
+    FitTestClient client = fit_test_start();
+    char *path = fit_test_format("%s/api.ff", client.directory);
+    char *uri = fit_test_format("file://%s", path);
+    char *manifest = fit_test_format("%s/feng.fm", client.directory);
+    const char *prefix = other_module ? "module signature.client;import signature.edit;" : "module signature.edit;";
+    fit_test_write(manifest, "[package]\nname: \"signature_edit\"\nversion: \"0.1.0\"\ntarget: \"lib\"\nsrc: \"./\"\nout: \"build/\"\n");
+    for (size_t round = 0U; round < 4U; ++round) {
+        const char *type = round == 1U ? "string" : round == 2U ? "bool" : "i32";
+        char *api = round == 3U
+            ? fit_test_format("open module signature.edit;open fit i32{/** api revision 3 */func published3():i32{return self;}}")
+            : fit_test_format("open module signature.edit;open spec Callback(value:%s):%s;"
+            "open type Construct{func Construct(value:%s){}}open spec Parent{func take(value:%s):%s;}"
+            "open spec Child:Parent{} open fit i32{/** api revision %zu */func published%zu():i32{return self;}}", type, type, type, type, type, round, round);
+        if (round == 0U) fit_test_write(path, api);
+        signature_test_edit_document(&client, uri, api, (unsigned int)round + 1U);
+        char *source = fit_test_format("%sfunc probe(){let value:i32=1;value./*cursor*/published%zu();}", prefix, round);
+        fit_test_source(&client, source);
+        char *marker = fit_test_format("published%zu", round);
+        char *documentation = fit_test_format("api revision %zu", round);
+        signature_test_current_doc(&client, source, marker, documentation);
+        free(documentation);
+        free(marker); free(source);
+        const char *bodies[] = {
+            "func probe(fn:Callback){let alias=fn;alias(/*cursor*/);}",
+            "func probe(){Construct(/*cursor*/);}",
+            "func probe(value:Child){value.take(/*cursor*/);}"
+        };
+        const char *formats[] = {"func alias(value: %s): %s", "ctor Construct(value: %s): void", "func take(value: %s): %s"};
+        for (size_t i = 0U; i < 3U; ++i) {
+            source = fit_test_format("%s%s", prefix, bodies[i]);
+            fit_test_source(&client, source);
+            char *label = fit_test_format(formats[i], type, type);
+            SignatureCompletenessCase test = {.name = "other-file declaration edit", .labels = {round < 3U ? label : NULL}};
+            char *response = signature_test_request(&client, source, NULL);
+            signature_test_expect(&test, response);
+            free(response); free(label); free(source);
+        }
+        free(api);
+    }
+    char *closed = fit_test_format("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", client.uri);
+    fit_test_send(&client, closed);
+    client.version = 0U;
+    char *source = fit_test_format("%sfunc probe(fn:Callback){fn(/*cursor*/);}", prefix);
+    fit_test_source(&client, source);
+    char *response = signature_test_request(&client, source, NULL);
+    SignatureCompletenessCase reopened = {.name = "reopened consumer after declaration removal"};
+    signature_test_expect(&reopened, response);
+    free(response); free(closed);
+    closed = fit_test_format("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didClose\",\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", uri);
+    fit_test_send(&client, closed);
+    free(closed);
+    char *restored = fit_test_format("%sfunc probe(){let value:i32=1;value./*cursor*/published0();}", prefix);
+    fit_test_source(&client, restored);
+    free(fit_test_wait_complete(&client, restored, "published0"));
+    fit_test_source(&client, source);
+    response = signature_test_request(&client, source, NULL);
+    SignatureCompletenessCase disk = {.name = "closed provider restores disk", .labels = {"func fn(value: i32): i32"}};
+    signature_test_expect(&disk, response);
+    free(response);
+    /* Cancellation may race a completed response; neither outcome may leak a
+     * stale signature into the subsequent version's request. */
+    unsigned int id = signature_test_send_request(&client, source, NULL);
+    char *cancel = fit_test_format("{\"jsonrpc\":\"2.0\",\"method\":\"$/cancelRequest\",\"params\":{\"id\":%u}}", id);
+    fit_test_send(&client, cancel);
+    response = fit_test_response(&client, id);
+    FIT_CHECK(strstr(response, "\"result\":") != NULL || strstr(response, "-32800") != NULL);
+    free(response); free(cancel);
+    char *invalid = fit_test_format("%sfunc probe(fn:i32){fn(/*cursor*/);}", prefix);
+    fit_test_source(&client, invalid);
+    fit_test_source(&client, source);
+    fit_test_source(&client, invalid);
+    response = signature_test_request(&client, invalid, NULL);
+    SignatureCompletenessCase noncallable = {.name = "latest version wins"};
+    signature_test_expect(&noncallable, response);
+    free(response);
+    fit_test_stop(&client);
+    free(path); free(uri); free(manifest);
+    free(source); free(restored); free(invalid);
+}
+
+/* Completion consumes the exact same instantiated contract closure. */
+static void signature_test_contract_completion(void) {
+    static const char *const types[] = {"Child<i32>", "Diamond<i32>", "Repeated<i32>", "Nested<i32>", "Dual"};
+    FitTestClient client = fit_test_start();
+    for (size_t i = 0U; i < sizeof(types) / sizeof(types[0]); ++i) {
+        char *source = fit_test_format("%s func probe(value:%s){value./*cursor*/take(1);}", signature_complete_declarations, types[i]);
+        fit_test_source(&client, source);
+        char *response = fit_test_complete(&client, source);
+        const char *expected = i == 2U ? "func take(renamed: i32): i32" : "func take(value: i32): i32";
+        FIT_CHECK(strstr(response, expected) != NULL);
+        if (i == 4U) FIT_CHECK(strstr(response, "func take(value: string): string") != NULL);
+        free(response); free(source);
+    }
+    fit_test_stop(&client);
+}
+
+/* A repeated diamond must converge on one instantiated requirement. */
+static void signature_test_deep_contract(void) {
+    char *source = NULL;
+    size_t length = 0U;
+    FILE *stream = open_memstream(&source, &length);
+    FIT_CHECK(stream != NULL);
+    FIT_CHECK(fputs("module deep;spec D0<T>{func take(value:T):T;}\n", stream) >= 0);
+    for (size_t i = 1U; i <= 12U; ++i)
+        FIT_CHECK(fprintf(stream, "spec L%zu<T>:D%zu<T>{}spec R%zu<T>:D%zu<T>{}spec D%zu<T>:L%zu<T>,R%zu<T>{}\n",
+            i, i - 1U, i, i - 1U, i, i, i) > 0);
+    FIT_CHECK(fputs("func probe(value:D12<i32>){value.take(/*cursor*/1);}", stream) >= 0);
+    FIT_CHECK(fclose(stream) == 0 && length != 0U);
+    FitTestClient client = fit_test_start();
+    fit_test_source(&client, source);
+    SignatureCompletenessCase test = {.name = "12 repeated diamonds", .labels = {"func take(value: i32): i32"}};
+    double samples[100];
+    for (size_t i = 0U; i < sizeof(samples) / sizeof(samples[0]); ++i) {
+        struct timespec start, end;
+        FIT_CHECK(clock_gettime(CLOCK_MONOTONIC, &start) == 0);
+        char *response = signature_test_request(&client, source, NULL);
+        FIT_CHECK(clock_gettime(CLOCK_MONOTONIC, &end) == 0);
+        signature_test_expect(&test, response);
+        free(response);
+        double elapsed = (double)(end.tv_sec - start.tv_sec) * 1000.0 + (double)(end.tv_nsec - start.tv_nsec) / 1000000.0;
+        size_t position = i;
+        while (position > 0U && samples[position - 1U] > elapsed) {
+            samples[position] = samples[position - 1U];
+            --position;
+        }
+        samples[position] = elapsed;
+    }
+    fprintf(stdout, "lsp deep signatures: 12 diamonds, 100 requests, p50 %.3f ms, p99 %.3f ms\n", samples[49], samples[98]);
+    fit_test_stop(&client);
+    free(source);
+}
+
+/* New matrices are registered through the existing CLI binary and test phases. */
+static void signature_test_completeness(void) {
+    FitTestClient client = fit_test_start();
+    signature_test_matrix(&client, signature_complete_declarations);
+    fit_test_stop(&client);
+    signature_test_selection();
+    signature_test_cross_file(false);
+    signature_test_cross_file(true);
+    signature_test_contract_completion();
+    signature_test_deep_contract();
+    signature_test_package(false);
+    signature_test_package(true);
+    fprintf(stdout, "lsp call signatures: callable, constructor and spec source/FT matrices passed\n");
+}
+
 /* Public registration point called by the existing CLI test executable. */
 void test_lsp_fit_completion(void) {
     fit_test_builtin_targets();
@@ -1090,5 +1553,6 @@ void test_lsp_fit_completion(void) {
     fit_test_package(false);
     fit_test_package(true);
     fit_test_signatures();
+    signature_test_completeness();
     fprintf(stdout, "lsp fit completion: source/FT target, receiver, edit and resolve matrices passed\n");
 }

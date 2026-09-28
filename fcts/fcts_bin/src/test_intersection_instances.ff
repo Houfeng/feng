@@ -1,0 +1,63 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.intersection_instances;
+
+/** Same-package counterpart of the imported repeated generic component. */
+spec LocalInstanceParent<T> { func take(value: T): T; }
+/** The outer declaration is closed while both components are generic. */
+spec LocalInstanceBoth: LocalInstanceParent<i32> & LocalInstanceParent<string>;
+
+/** Observe concrete, default, projected and imported instance identities. */
+func test_intersection_instances() {
+    describe("closed intersection component instances", () {
+        test("defining package matches both concrete subject representations", () {
+            assert(instance_local_probe(), "same-package instance identities");
+        });
+        test("local defaults preserve both overloads and parent views", () {
+            let value: LocalInstanceBoth;
+            assert(value.take((i32)3) == 0, "integer default");
+            assert(value.take("x") == "", "reference default");
+            let left = (LocalInstanceParent<i32>)value;
+            let right = (LocalInstanceParent<string>)value;
+            assert(left.take((i32)4) == 0, "integer parent");
+            assert(right.take("y") == "", "reference parent");
+        });
+        test("imported subject dispatches both complete signatures", () {
+            let value = instance_make();
+            assert(value.take((i32)3) == 10, "integer implementation");
+            assert(value.take("x") == "x!", "reference implementation");
+            let left = (InstanceParent<i32>)value;
+            let right = (InstanceParent<string>)value;
+            assert(left.take((i32)4) == 11, "integer projection");
+            assert(right.take("y") == "y!", "reference projection");
+        });
+        test("nested and generic intersections retain the leaf source", () {
+            let subject = InstanceSubject();
+            let nested: InstanceNested = subject;
+            let generic: InstanceGeneric<i32, string> = subject;
+            assert(nested.take((i32)1) == 8 && nested.take("a") == "a!", "nested components");
+            assert(generic.take((i32)2) == 9 && generic.take("b") == "b!", "generic components");
+            assert(((InstanceParent<string>)nested).take("c") == "c!", "nested projection");
+        });
+        test("imported defaults and static requirements remain distinct", () {
+            let value = instance_default();
+            assert(value.take((i32)1) == 0 && value.take("x") == "", "imported defaults");
+            assert(instance_static_int<InstanceSubject>() == 16, "integer static slot");
+            assert(instance_static_string<InstanceSubject>() == "x?", "reference static slot");
+        });
+        test("imported value boxing preserves instance, static and shared slots", () {
+            let subject = InstanceValue();
+            let nested: InstanceNested = subject;
+            let generic: InstanceGeneric<i32, string> = subject;
+            assert(nested.take((i32)1) == 18 && nested.take("a") == "avalue", "boxed nested components");
+            assert(generic.take((i32)2) == 19 && generic.take("b") == "bvalue", "boxed generic components");
+            assert(((InstanceParent<i32>)nested).take((i32)3) == 20, "boxed integer parent");
+            assert(((InstanceParent<string>)generic).take("c") == "cvalue", "boxed reference parent");
+            assert(instance_static_int<InstanceValue>() == 24, "boxed integer static slot");
+            assert(instance_static_string<InstanceValue>() == "xv", "boxed reference static slot");
+            assert(instance_shared(subject) == "svalue", "boxed shared body");
+            assert(instance_shared(InstanceSubject()) == "s!", "reference shared body");
+        });
+    });
+}

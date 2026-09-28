@@ -69,6 +69,7 @@ func main(args: string[]) {
       test_g24_spec_views();
       test_g24_composite_actuals();
       test_intersection_projection();
+      test_intersection_instances();
       test_constraint_projection();
       test_generic_literal_storage();
       test_generic_chain_context();

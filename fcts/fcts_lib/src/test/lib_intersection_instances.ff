@@ -1,0 +1,69 @@
+open module fcts_lib.test.intersection_instances;
+
+/** Two closed instances intentionally share a single member declaration. */
+open spec InstanceParent<T> {
+    func take(value: T): T;
+    static func build(value: T): T;
+}
+/** The intersection itself has no parameters; its components do. */
+open spec InstanceBoth: InstanceParent<i32> & InstanceParent<string>;
+/** Empty components still retain their identity in a nested view. */
+open spec InstanceExtra {}
+/** A nested non-generic intersection preserves both leaf instances. */
+open spec InstanceNested: InstanceBoth & InstanceExtra;
+/** Generic intersections remain a control for the same component traversal. */
+open spec InstanceGeneric<A, B>: InstanceParent<A> & InstanceParent<B>;
+/** Distinct declared parents close the same generic contract. */
+open spec InstanceNumber: InstanceParent<i32> {}
+/** Declared spec lists use distinct names; the closure preserves arguments. */
+open spec InstanceText: InstanceParent<string> {}
+/** Concrete methods make swapped or merged slots observable. */
+open type InstanceSubject: InstanceNumber, InstanceText, InstanceExtra {
+    /** The integer overload must keep its address-form generic ABI. */
+    func take(value: i32): i32 { return value + 7; }
+    /** The reference overload uses the same original generic declaration. */
+    func take(value: string): string { return value + "!"; }
+    /** Static overloads have no implicit subject. */
+    static func build(value: i32): i32 { return value + 11; }
+    /** A distinct static result detects incorrect component identity. */
+    static func build(value: string): string { return value + "?"; }
+}
+/** Value boxing must select the same complete component identities. */
+@value open type InstanceValue: InstanceNumber, InstanceText, InstanceExtra {
+    let marker: i32 = 17;
+    let text: string = "value";
+    /** Read the boxed value rather than a reference-object representation. */
+    func take(value: i32): i32 { return value + self.marker; }
+    /** The managed field also checks the lifetime of the value payload. */
+    func take(value: string): string { return value + self.text; }
+    /** Distinguish the static slot from the reference subject's slot. */
+    static func build(value: i32): i32 { return value + 19; }
+    /** Keep the reference-type static overload independent. */
+    static func build(value: string): string { return value + "v"; }
+}
+/** The package boundary carries an already assembled intersection witness. */
+open func instance_make(): InstanceBoth { return InstanceSubject(); }
+/** A default subject must supply both component projections. */
+open func instance_default(): InstanceBoth { let value: InstanceBoth; return value; }
+/** Shared bodies consume the closed integer static slot. */
+open func instance_static_int<T: InstanceBoth>(): i32 { return T.build((i32)5); }
+/** Shared bodies consume the closed reference static slot. */
+open func instance_static_string<T: InstanceBoth>(): string { return T.build("x"); }
+/** A shared body dispatches through either subject representation's witness. */
+open func instance_shared<T: InstanceBoth>(value: T): string {
+    return value.take("s");
+}
+/** Demand the semantic sidecar and the concrete views in the defining package. */
+open func instance_local_probe(): bool {
+    let reference = InstanceSubject();
+    let boxed = InstanceValue();
+    let left: InstanceNested = reference;
+    let right: InstanceGeneric<i32, string> = boxed;
+    return left.take((i32)1) == 8 && left.take("l") == "l!"
+        && right.take((i32)2) == 19 && right.take("r") == "rvalue"
+        && instance_static_int<InstanceSubject>() == 16
+        && instance_static_string<InstanceSubject>() == "x?"
+        && instance_static_int<InstanceValue>() == 24
+        && instance_static_string<InstanceValue>() == "xv"
+        && instance_shared(reference) == "s!" && instance_shared(boxed) == "svalue";
+}

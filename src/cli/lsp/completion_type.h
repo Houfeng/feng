@@ -12,6 +12,7 @@ typedef struct FengLspCompletionType {
     const FengSymbolDeclView *symbol;
     const void *parameter;
     FengSlice builtin;
+    const FengExpr *lambda; /* Structural callable syntax, without body inference. */
 } FengLspCompletionType;
 
 /* Parameter keys are declaration identities, never unqualified names. */
