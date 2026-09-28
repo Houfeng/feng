@@ -94,6 +94,7 @@ func main(args: string[]) {
       test_cleanup_boundary();
       test_arc_ownership();
       test_aggregate_borrow();
+      test_aggregate_lifecycle();
       test_parameter_ownership();
       test_receiver_binding();
       test_array();

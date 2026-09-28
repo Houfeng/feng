@@ -203,6 +203,17 @@ typedef enum CGAggregateDefaultZeroInitKind {
     CG_AGGREGATE_DEFAULT_ZERO_INIT_DESCRIPTOR
 } CGAggregateDefaultZeroInitKind;
 
+/* Operations on the managed leaves of a statically described value. */
+typedef enum CGManagedSlotAction {
+    CG_MANAGED_SLOT_RETAIN,
+    CG_MANAGED_SLOT_RELEASE,
+    CG_MANAGED_SLOT_CLEAR
+} CGManagedSlotAction;
+
+/* A NULL output requests a proof without emitting any generated code. */
+typedef bool (*CGAggregateStaticSlotsEmitter)(CG *cg, Buf *out,
+    const CGType *type, const char *lvalue, CGManagedSlotAction action);
+
 typedef void (*CGAggregateSlotRowEmitter)(Buf *out,
                                           const char *field_base_offsetof_expr,
                                           const CGType *type);
@@ -231,6 +242,7 @@ typedef struct CGAggregateFacts {
     CGAggregateSlotRowEmitter emit_pointer_slot_rows;
     CGAggregateCleanupPushEmitter emit_cleanup_push;
     CGAggregateCleanupZeroEmitter emit_cleanup_zero;
+    CGAggregateStaticSlotsEmitter emit_static_slots;
 } CGAggregateFacts;
 
 /* Compile-time symbols for one concrete ValueBox<T>. Strings are owned so
@@ -2405,6 +2417,16 @@ static bool cg_emit_user_field_borrow(CG *cg,
                                       FengToken blame,
                                       ExprResult *out);
 static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out);
+/* Closed aggregate stores preserve the existing copy/take ownership protocol. */
+static bool cg_emit_static_aggregate_store(CG *cg, const CGType *type,
+    const char *destination, const char *source_address, bool take_source,
+    bool replace_existing, bool *out_handled);
+/* Prove and emit ordered managed-leaf operations, with descriptor fallback. */
+static bool cg_visit_static_managed_slots(CG *cg, Buf *out, const CGType *type,
+    const char *lvalue, CGManagedSlotAction action);
+/* Only unexposed fresh construction can retain a field's empty default. */
+static bool cg_object_field_has_empty_default(CG *cg, const UserType *type,
+    const UserMethod *constructor, const UserField *field);
 static bool cg_emit_tuple_literal_typed(CG *cg,
                                         const FengExpr *e,
                                         const CGType *expected_type,
@@ -32730,8 +32752,9 @@ static bool cg_emit_object_literal(CG *cg, const FengExpr *e, ExprResult *out) {
                 return cg_fail(cg, fi->token, "IE0001", "codegen: out of memory");
             }
         }
+        bool replace_existing = !cg_object_field_has_empty_default(cg, ut, ctor, uf);
         if (!cg_emit_user_field_value_store_with_offsets(
-                cg, tmp, uf, offsets.data, idx, &v, fi->token, true)) {
+                cg, tmp, uf, offsets.data, idx, &v, fi->token, replace_existing)) {
             buf_free(&offsets);
             er_free(&v);
             free(assigned); free(tmp);
@@ -37340,10 +37363,21 @@ static bool cg_emit_user_field_value_store_with_offsets(
                 take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
                 field_expr.data, source_address, rad_source, rad_index);
         } else {
-            buf_append_fmt(cg->cur_body,
-                "    %s(&%s, %s, &%s);\n",
-                take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
-                field_expr.data, source_address, agg_desc);
+            bool handled = false;
+            if (!value->is_storage_address && !value->uses_reified_storage &&
+                !value->uses_erased_generic_storage &&
+                !cg_emit_static_aggregate_store(cg, uf->type, field_expr.data,
+                    source_address, take_source, replace_existing, &handled)) {
+                free(source_address);
+                buf_free(&field_expr);
+                return cg_fail(cg, blame, "IE0001", "codegen: cannot emit static aggregate store");
+            }
+            if (!handled) {
+                buf_append_fmt(cg->cur_body,
+                    "    %s(&%s, %s, &%s);\n",
+                    take_source ? "feng_aggregate_take" : "feng_aggregate_assign",
+                    field_expr.data, source_address, agg_desc);
+            }
         }
         free(source_address);
         buf_free(&field_expr);
@@ -60683,6 +60717,8 @@ static size_t cg_value_aggregate_flattened_pointer_slot_count(const UserType *va
     return count;
 }
 
+#include "detail/aggregate_lifecycle.c"
+
 static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
     CGAggregateFacts facts = {0};
     if (!t) {
@@ -60711,6 +60747,7 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
             }
             facts.emit_cleanup_push = cg_spec_aggregate_emit_cleanup_push;
             facts.emit_cleanup_zero = cg_spec_aggregate_emit_cleanup_zero;
+            facts.emit_static_slots = cg_spec_aggregate_emit_static_slots;
             break;
         case CG_TYPE_OBJECT:
             if (!cg_type_is_value_semantics(t)) {
@@ -60740,6 +60777,7 @@ static bool cg_aggregate_facts(const CGType *t, CGAggregateFacts *out) {
                 }
                 facts.emit_cleanup_push = cg_value_aggregate_emit_cleanup_push;
                 facts.emit_cleanup_zero = cg_value_aggregate_emit_cleanup_zero;
+                facts.emit_static_slots = cg_value_aggregate_emit_static_slots;
             }
             break;
         default:
@@ -61078,6 +61116,17 @@ static bool cg_emit_field_release(CG *cg, Buf *td,
             if (desc == NULL) {
                 return cg_fail(cg, err_token,
                     "CE0363", "codegen: aggregate field has no descriptor symbol (unknown aggregate kind)");
+            }
+            if (cg_visit_static_managed_slots(cg, NULL, ft, NULL,
+                                             CG_MANAGED_SLOT_RELEASE)) {
+                Buf field;
+                buf_init(&field);
+                buf_append_fmt(&field, "_o->%s", field_c_name);
+                bool ok = field.data != NULL && cg_visit_static_managed_slots(
+                    cg, td, ft, field.data, CG_MANAGED_SLOT_RELEASE);
+                buf_free(&field);
+                if (!ok) return cg_fail(cg, err_token, "IE0001", "codegen: cannot emit static field release");
+                return true;
             }
             buf_append_fmt(td,
                 "    feng_aggregate_release(&_o->%s, &%s);\n",

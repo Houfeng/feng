@@ -1,0 +1,16 @@
+open module fcts_lib.test.aggregate_lifecycle;
+
+/** Source-hidden field initialization must preserve its provider-owned default. */
+open type AggregateLifecycleImported<T> {
+    open var value: T;
+    /** Construction binds a managed default before the literal may replace it. */
+    open func AggregateLifecycleImported(initial: T) { self.value = initial; }
+}
+
+/** Open value storage must retain its descriptor-sized copy and cleanup. */
+@value open type AggregateLifecycleImportedValue<T> { open var value: T; }
+
+/** Shared initialization is exercised with both pointer and aggregate payloads. */
+open func aggregate_lifecycle_imported_copy<T>(value: T): AggregateLifecycleImportedValue<T> {
+    return AggregateLifecycleImportedValue<T> { value: value };
+}

@@ -1,0 +1,171 @@
+module fcts_bin;
+
+import std.test;
+import fcts_lib.test.aggregate_lifecycle;
+
+var aggregateLifecycleDrops: int = 0;
+var aggregateLifecycleOrder: int = 0;
+
+/** Each positive identity contributes once, in actual destruction order. */
+type AggregateLifecycleResource {
+    let n: int;
+    /** Ignore resources produced by ordinary type-default initialization. */
+    func ~AggregateLifecycleResource() {
+        if self.n > 0 {
+            aggregateLifecycleDrops += 1;
+            aggregateLifecycleOrder = aggregateLifecycleOrder * 10 + self.n;
+        }
+    }
+}
+/** Empty and managed alternatives exercise both copy and move stores. */
+spec AggregateLifecycleChoice: bool | AggregateLifecycleResource;
+/** A fresh aggregate field starts without an old reference. */
+type AggregateLifecycleHolder { var value: AggregateLifecycleChoice; }
+/** Nested value slots must keep the descriptor's first-to-last order. */
+@value type AggregateLifecyclePair {
+    let first: AggregateLifecycleChoice;
+    let second: AggregateLifecycleChoice;
+}
+/** Multi-alternative unions select only the live nested payload. */
+spec AggregateLifecycleNested: bool | AggregateLifecyclePair | AggregateLifecycleResource;
+/** Object destruction expands only the statically known inline slots. */
+type AggregateLifecycleNestedHolder { let value: AggregateLifecycleNested; }
+/** A declaration initializer has observable ownership before replacement. */
+type AggregateLifecycleInitialized {
+    var value: AggregateLifecycleChoice = AggregateLifecycleResource { n: 1 };
+}
+/** A user constructor must complete before the literal replaces its field. */
+type AggregateLifecycleConstructed {
+    var value: AggregateLifecycleChoice;
+    /** The old payload must be released during the following literal store. */
+    func AggregateLifecycleConstructed() { self.value = AggregateLifecycleResource { n: 2 }; }
+}
+/** Nonzero scalar defaults cannot be replaced with an empty ownership proof. */
+enum AggregateLifecycleNonzero { First = 17 }
+/** Both nonzero scalar and managed-first defaults retain their language values. */
+spec AggregateLifecycleDefaultChoice: AggregateLifecycleNonzero | AggregateLifecycleResource;
+/** A managed-first union allocates its actual default resource. */
+spec AggregateLifecycleManagedFirst: AggregateLifecycleResource | bool;
+/** Exercise both conservative default-initialization paths. */
+type AggregateLifecycleDefaults {
+    let scalar: AggregateLifecycleDefaultChoice;
+    let managed: AggregateLifecycleManagedFirst;
+}
+
+/** Observe that caller-owned source values survive construction and cleanup. */
+func aggregateLifecycleRead(value: AggregateLifecycleChoice): int {
+    return match value { item: AggregateLifecycleResource { item.n } else { 0 } };
+}
+/** Borrowed fields retain independently; moved fields release exactly once. */
+func aggregateLifecycleCopyScope() {
+    let resource = AggregateLifecycleResource { n: 3 };
+    let source: AggregateLifecycleChoice = resource;
+    {
+        let copied = AggregateLifecycleHolder { value: source };
+        copied.value = copied.value;
+        assert(aggregateLifecycleRead(copied.value) == 3, "self assignment preserves the field");
+    }
+    assert(aggregateLifecycleDrops == 0 && aggregateLifecycleRead(source) == 3,
+        "the caller's source remains alive after the field copy is released");
+    {
+        let moved = AggregateLifecycleHolder { value: AggregateLifecycleResource { n: 4 } };
+        assert(aggregateLifecycleRead(moved.value) == 4, "owned source reaches the field");
+    }
+    assert(aggregateLifecycleOrder == 4, "moved source is not released twice");
+}
+/** Declaration defaults and constructor writes are released before the new field. */
+func aggregateLifecycleReplacementScope() {
+    {
+        let initialized = AggregateLifecycleInitialized { value: AggregateLifecycleResource { n: 3 } };
+        assert(aggregateLifecycleOrder == 1, "declaration initializer released at replacement");
+        assert(aggregateLifecycleRead(initialized.value) == 3, "replacement owns the new resource");
+    }
+    assert(aggregateLifecycleOrder == 13, "initialized object releases its current payload");
+    {
+        let constructed = AggregateLifecycleConstructed { value: AggregateLifecycleResource { n: 4 } };
+        assert(aggregateLifecycleOrder == 132, "constructor payload released at replacement");
+        assert(aggregateLifecycleRead(constructed.value) == 4, "constructor is followed by literal store");
+    }
+}
+/** One nested object is the only owner when recursive field destruction begins. */
+func aggregateLifecycleNestedScope() {
+    {
+        let empty = AggregateLifecycleNestedHolder { value: false };
+    }
+    assert(aggregateLifecycleDrops == 0, "empty alternatives release no payload");
+    {
+        let direct = AggregateLifecycleNestedHolder { value: AggregateLifecycleResource { n: 8 } };
+    }
+    assert(aggregateLifecycleDrops == 1 && aggregateLifecycleOrder == 8,
+        "the third alternative releases only its direct payload");
+    let nested = AggregateLifecycleNestedHolder {
+        value: AggregateLifecyclePair {
+            first: AggregateLifecycleResource { n: 5 },
+            second: AggregateLifecycleResource { n: 6 }
+        }
+    };
+    assert(aggregateLifecycleDrops == 1, "nested payloads stay alive until owner cleanup");
+}
+/** Completed field ownership must participate in ordinary exception unwinding. */
+func aggregateLifecycleThrow(): int {
+    let holder = AggregateLifecycleHolder { value: AggregateLifecycleResource { n: 7 } };
+    defer { assert(aggregateLifecycleRead(holder.value) == 7, "defer sees live aggregate fields"); }
+    throw 9;
+}
+/** Imported constructors and shared value stores preserve caller references. */
+func aggregateLifecycleImportedScope() {
+    let first = AggregateLifecycleResource { n: 1 };
+    let second = AggregateLifecycleResource { n: 2 };
+    let source: AggregateLifecycleChoice = first;
+    let next: AggregateLifecycleChoice = second;
+    {
+        let imported = AggregateLifecycleImported<AggregateLifecycleChoice>(source) { value: next };
+        let shared = aggregate_lifecycle_imported_copy<AggregateLifecycleChoice>(source);
+        let pointer = aggregate_lifecycle_imported_copy<AggregateLifecycleResource>(second);
+        assert(aggregateLifecycleRead(imported.value) == 2, "imported old payload replaced");
+        assert(aggregateLifecycleRead(shared.value) == 1 && pointer.value.n == 2,
+            "shared descriptors copy aggregate and pointer representations");
+    }
+    assert(aggregateLifecycleDrops == 0, "imported cleanup preserves the caller owners");
+}
+
+/** Behavioral contracts for static lifecycle lowering and its fallback paths. */
+func test_aggregate_lifecycle() {
+    describe("Static aggregate lifecycle", () {
+        test("borrowed and owned field stores preserve exact ownership", () {
+            aggregateLifecycleDrops = 0; aggregateLifecycleOrder = 0;
+            aggregateLifecycleCopyScope();
+            assert(aggregateLifecycleDrops == 2 && aggregateLifecycleOrder == 43,
+                "moved and borrowed resources each finalize once");
+        });
+        test("declaration and constructor values survive until replacement", () {
+            aggregateLifecycleDrops = 0; aggregateLifecycleOrder = 0;
+            aggregateLifecycleReplacementScope();
+            assert(aggregateLifecycleDrops == 4 && aggregateLifecycleOrder == 1324,
+                "all construction stages preserve their release timing");
+        });
+        test("nested union fields release in descriptor order", () {
+            aggregateLifecycleDrops = 0; aggregateLifecycleOrder = 0;
+            aggregateLifecycleNestedScope();
+            assert(aggregateLifecycleDrops == 3 && aggregateLifecycleOrder == 856,
+                "nested fields release first then second");
+        });
+        test("nonzero and managed default alternatives keep their values", () {
+            let defaults = AggregateLifecycleDefaults();
+            let scalar = match defaults.scalar { item: AggregateLifecycleNonzero { item == AggregateLifecycleNonzero.First } else { false } };
+            let managed = match defaults.managed { item: AggregateLifecycleResource { item.n } else { -1 } };
+            assert(scalar && managed == 0, "language defaults remain intact");
+        });
+        test("exception and defer cleanup release initialized fields", () {
+            aggregateLifecycleDrops = 0; aggregateLifecycleOrder = 0;
+            let error = try aggregateLifecycleThrow() catch value: int { value };
+            assert(error == 9 && aggregateLifecycleDrops == 1 && aggregateLifecycleOrder == 7,
+                "unwinding releases the current field once");
+        });
+        test("imported and open generic storage preserve independent copies", () {
+            aggregateLifecycleDrops = 0; aggregateLifecycleOrder = 0;
+            aggregateLifecycleImportedScope();
+            assert(aggregateLifecycleDrops == 2, "cross-package resources finalize once each");
+        });
+    });
+}

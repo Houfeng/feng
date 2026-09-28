@@ -2472,7 +2472,16 @@ static void test_object_spec_owned_subjects_move_into_persistent_slots(void) {
     field_end = strstr(field_start, "\n}\n");
     ASSERT(field_end != NULL);
     ASSERT(count_substr_in_span(
-               field_start, field_end, "feng_aggregate_take(") == 2U);
+               field_start, field_end, "feng_aggregate_take(") == 1U);
+    /* Construction expands one take without changing its ownership order. */
+    const char *field_static_release = "feng_release(((*_aggregate_dst)).subject);";
+    const char *field_static_copy = "memcpy(_aggregate_dst, _aggregate_src, sizeof *_aggregate_dst);";
+    const char *field_static_clear = "((*_aggregate_src)).subject = NULL;";
+    ASSERT(count_substr_in_span(field_start, field_end, field_static_release) == 1U);
+    ASSERT(count_substr_in_span(field_start, field_end, field_static_copy) == 1U);
+    ASSERT(count_substr_in_span(field_start, field_end, field_static_clear) == 1U);
+    ASSERT(strstr(field_start, field_static_release) < strstr(field_start, field_static_copy));
+    ASSERT(strstr(field_start, field_static_copy) < strstr(field_start, field_static_clear));
     ASSERT(count_substr_in_span(
                field_start, field_end, "feng_cleanup_push(&_cu__t") == 0U);
 
@@ -17475,6 +17484,8 @@ void test_defer_generic_context_codegen(void (*compile_c)(const char *));
 void test_arc_ownership_codegen(void (*compile_c)(const char *));
 /* Aggregate borrows preserve mutable and unknown ownership boundaries. */
 void test_aggregate_borrow_codegen(void (*compile_c)(const char *));
+/* Static slot lowering shares copy, transfer and destruction contracts. */
+void test_aggregate_lifecycle_codegen(void (*compile_c)(const char *));
 /* Generic receiver binding is independent of its ARC representation. */
 void test_receiver_binding_codegen(void (*compile_c)(const char *));
 /* Recursive spec registration preserves metadata across registry growth. */
@@ -17749,6 +17760,7 @@ int main(void) {
     test_loop_tuple_destructuring_codegen();
     test_arc_ownership_codegen(compile_generated_c_or_die);
     test_aggregate_borrow_codegen(compile_generated_c_or_die);
+    test_aggregate_lifecycle_codegen(compile_generated_c_or_die);
     test_receiver_binding_codegen(compile_generated_c_or_die);
     test_spec_registration_growth_codegen(compile_generated_c_or_die);
     test_callable_debug_storage_codegen(compile_generated_c_or_die);
