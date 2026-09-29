@@ -30579,10 +30579,14 @@ static void test_lsp_empty_fit_header_hover_and_definition(void) {
 /* Additional fit completion coverage shares this executable and both test phases. */
 void test_lsp_fit_completion(void);
 
+/* Package FT failure diagnostics exercise the real driver in both test phases. */
+void test_bundle_ft_diagnostic_lifetime(void);
+
 int main(void) {
     (void)system("rm -rf temp");
     (void)mkdir("temp", 0755);
 
+    test_bundle_ft_diagnostic_lifetime();
     test_main_argv_lifetime();
     test_binary_operand_lifetime();
     test_tuple_initializer_lifetime();

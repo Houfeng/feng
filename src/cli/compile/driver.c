@@ -629,14 +629,17 @@ static bool scan_bundle_dependencies(const char *bundle_path,
                                            &options,
                                            &graph,
                                            &symbol_error)) {
+                /* Copy the diagnostic before releasing its path and reader error. */
+                bool ok = set_errorf(out_error_message,
+                                     "failed to read symbol table %s: %s",
+                                     source_name,
+                                     symbol_error.message != NULL ? symbol_error.message : "unknown error");
+                feng_symbol_error_free(&symbol_error);
                 feng_zip_free(data);
                 free(source_name);
                 free(module_name);
                 feng_zip_reader_dispose(&reader);
-                return set_errorf(out_error_message,
-                                  "failed to read symbol table %s: %s",
-                                  source_name,
-                                  symbol_error.message != NULL ? symbol_error.message : "unknown error");
+                return ok;
             }
             if (!string_array_push_unique(&out_info->module_names,
                                           &out_info->module_count,
