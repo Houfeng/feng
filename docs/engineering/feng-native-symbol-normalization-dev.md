@@ -181,6 +181,8 @@ wall−CPU 差约 64.3 ms，人工授权等待不能解释这些秒级差距。
 原生符号识别有独立价值；本次接入不以 nbody 达到 Swift 为交付前提，也不改变
 §2 转换边界、external 语义、ABI、优化级别、向量化或 LTO 配置。
 
+**是否需要插件看 target；加载 `.so` 还是 `.dylib` 看 host。**
+
 - driver 对 macOS **目标**的 bin／lib 编译默认添加 `-fpass-plugin`，包含调试与
   release 模式。Linux 目标不加载、不查找此插件，仍正常加载独立的异常插件。
 - 插件运行于编译器进程，文件必须匹配 **host**。Linux host 交叉编译 macOS
