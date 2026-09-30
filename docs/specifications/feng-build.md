@@ -86,6 +86,9 @@ Feng 专用环境变量是用户对单次 Feng 调用的最高优先级显式覆
 22.1.8 兼容。无协议标记的 C 保持原有行为；协议定义见
 [插件开发方案](../engineering/c-ir-llvm-exception-plugin-dev.md)。
 
+原生符号还原插件的默认加载条件、host 选择与失败处理见
+[原生符号插件方案 §8](../engineering/feng-native-symbol-normalization-dev.md#8-默认接入与-host-分发)。
+
 macOS 与 Linux 的 `bin` 均以 `-fuse-ld=lld` 选择 LLVM 链接器；macOS 对应
 `bin/ld64.lld -> lld`，Linux 对应 `bin/ld.lld -> lld`。`lib` 的 `-c` 不传
 链接器选择参数。测试专用补丁链接器的环境配置见

@@ -130,15 +130,18 @@ LIBUNWIND_LIB := extlib/$(HOST_PLATFORM)/$(STATIC_LIB_PREFIX)feng_unwind$(STATIC
 TOOLCHAIN_LAYOUT_DIR := $(BUILD_DIR)/toolchain
 LLVM_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm
 CEH_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm-c-eh
+NATIVE_SYMBOLS_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/llvm-native-symbols
 SYSROOT_LAYOUT_LINK := $(TOOLCHAIN_LAYOUT_DIR)/sysroot
 LLVM_LAYOUT_TARGET := ../../toolchain/llvm/$(HOST_PLATFORM)
 CEH_LAYOUT_TARGET := ../../toolchain/llvm-c-eh/$(HOST_PLATFORM)
+NATIVE_SYMBOLS_LAYOUT_TARGET := ../../toolchain/llvm-native-symbols/$(HOST_PLATFORM)
 SYSROOT_LAYOUT_TARGET := ../../toolchain/sysroot
 RUNTIME_CC := $(LLVM_LAYOUT_LINK)/bin/clang
 RUNTIME_AR := $(LLVM_LAYOUT_LINK)/bin/llvm-ar
 
 ifeq ($(_HOST_OS),macos)
 CEH_LIBRARY := lib/llvm_c_eh.dylib
+NATIVE_SYMBOLS_LIBRARY := lib/llvm_native_symbols.dylib
 # Clang's existing tool search selects this linker only during sanitizer testing.
 TEST_LLD_ROOT := $(CURDIR)/toolchain/test_tools/lld/$(HOST_PLATFORM)
 SANITIZE_LDFLAGS := -fuse-ld=lld
@@ -147,6 +150,7 @@ MACOS_SDK_PATH := $(shell xcrun --sdk macosx --show-sdk-path 2>/dev/null)
 RUNTIME_FLAGS_macos-arm64 := --target=arm64-apple-macosx -isysroot $(MACOS_SDK_PATH)
 else
 CEH_LIBRARY := lib/llvm_c_eh.so
+NATIVE_SYMBOLS_LIBRARY := lib/llvm_native_symbols.so
 RUNTIME_FLAGS_linux-x64-gnu := --target=x86_64-unknown-linux-gnu --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-x64-gnu --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-x64-gnu
 RUNTIME_FLAGS_linux-x64-musl := --target=x86_64-unknown-linux-musl --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-x64-musl
 RUNTIME_FLAGS_linux-arm64-gnu := --target=aarch64-unknown-linux-gnu --sysroot=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu --gcc-toolchain=$(SYSROOT_LAYOUT_LINK)/linux-arm64-gnu
@@ -165,9 +169,11 @@ TOOLCHAIN_LAYOUT_READY := $(shell \
 	if [ -d "toolchain/llvm/$(HOST_PLATFORM)" ] && \
 	   [ -f "toolchain/llvm-c-eh/$(HOST_PLATFORM)/$(CEH_LIBRARY)" ] && \
 	   [ -f "toolchain/llvm-c-eh/$(HOST_PLATFORM)/include/llvm_c_eh.h" ] && \
+	   [ -f "toolchain/llvm-native-symbols/$(HOST_PLATFORM)/$(NATIVE_SYMBOLS_LIBRARY)" ] && \
 	   [ -d "toolchain/sysroot" ] && \
 	   [ "$$(readlink "$(LLVM_LAYOUT_LINK)" 2>/dev/null)" = "$(LLVM_LAYOUT_TARGET)" ] && \
 	   [ "$$(readlink "$(CEH_LAYOUT_LINK)" 2>/dev/null)" = "$(CEH_LAYOUT_TARGET)" ] && \
+	   [ "$$(readlink "$(NATIVE_SYMBOLS_LAYOUT_LINK)" 2>/dev/null)" = "$(NATIVE_SYMBOLS_LAYOUT_TARGET)" ] && \
 	   [ "$$(readlink "$(SYSROOT_LAYOUT_LINK)" 2>/dev/null)" = "$(SYSROOT_LAYOUT_TARGET)" ]; then \
 		printf 'yes'; \
 	fi)
@@ -249,7 +255,7 @@ test: check-clang check-cc
 
 test-normal: check-clang check-cc
 	$(MAKE) clean
-	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test
+	$(MAKE) $(BIN_DIR)/test_archive $(BIN_DIR)/test_lexer $(BIN_DIR)/test_parser $(BIN_DIR)/test_semantic $(BIN_DIR)/test_runtime $(BIN_DIR)/test_codegen $(BIN_DIR)/test_debug $(BIN_DIR)/test_cli $(BIN_DIR)/test_cli_paths $(BIN_DIR)/test_lsp_analysis_lifetime $(BIN_DIR)/test_symbol smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints incremental-build-test release-scripts-test release-finalize-macos-test bundled-packages-test toolchain-prebuilt-fetch-test llvm-c-eh-test llvm-native-symbols-test
 	$(BIN_DIR)/test_archive
 	$(BIN_DIR)/test_lexer
 	$(BIN_DIR)/test_parser
@@ -294,9 +300,15 @@ endif
 	$(BIN_DIR)/test_symbol
 	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" $(MAKE) smoke cli-tests cli-project-tests init-bundled-packages-test std-tests fcts-tests perf-constraints
 	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" bash test/cli/llvm_c_eh.sh
+	FENG_CC="$$(command -v $(CC))" FENG_CC_FLAGS="-fsanitize=undefined -fsanitize=address" bash test/cli/native_symbols.sh
 
 llvm-c-eh-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
 	bash test/cli/llvm_c_eh.sh
+
+.PHONY: llvm-native-symbols-test
+llvm-native-symbols-test: cli $(BIN_DIR)/test_llvm_c_eh_driver
+	bash test/cli/native_symbols.sh
+	bash test/cli/native_symbols_release.sh
 
 # Validate audited runtime attributes independently of generated-program timing.
 .PHONY: native-exception-contract-test
@@ -347,6 +359,9 @@ ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 			echo "error: host LLVM C EH plugin input not found: toolchain/llvm-c-eh/$(HOST_PLATFORM)/$$file" >&2; exit 1; \
 		fi; \
 	done
+	@test -f "toolchain/llvm-native-symbols/$(HOST_PLATFORM)/$(NATIVE_SYMBOLS_LIBRARY)" || { \
+		echo "error: host LLVM native symbols plugin input not found: toolchain/llvm-native-symbols/$(HOST_PLATFORM)/$(NATIVE_SYMBOLS_LIBRARY)" >&2; exit 1; \
+	}
 	@if [ ! -d "toolchain/llvm/$(HOST_PLATFORM)" ]; then \
 		echo "error: host LLVM toolchain not found: toolchain/llvm/$(HOST_PLATFORM)" >&2; \
 		exit 1; \
@@ -361,6 +376,12 @@ ifneq ($(TOOLCHAIN_LAYOUT_READY),yes)
 	fi
 	@if [ "$$(readlink "$(CEH_LAYOUT_LINK)" 2>/dev/null)" != "$(CEH_LAYOUT_TARGET)" ]; then \
 		ln -sfn "$(CEH_LAYOUT_TARGET)" "$(CEH_LAYOUT_LINK)"; \
+	fi
+	@if [ -e "$(NATIVE_SYMBOLS_LAYOUT_LINK)" ] && [ ! -L "$(NATIVE_SYMBOLS_LAYOUT_LINK)" ]; then \
+		echo "error: toolchain layout path is not a symbolic link: $(NATIVE_SYMBOLS_LAYOUT_LINK)" >&2; exit 1; \
+	fi
+	@if [ "$$(readlink "$(NATIVE_SYMBOLS_LAYOUT_LINK)" 2>/dev/null)" != "$(NATIVE_SYMBOLS_LAYOUT_TARGET)" ]; then \
+		ln -sfn "$(NATIVE_SYMBOLS_LAYOUT_TARGET)" "$(NATIVE_SYMBOLS_LAYOUT_LINK)"; \
 	fi
 	@if [ -e "$(LLVM_LAYOUT_LINK)" ] && [ ! -L "$(LLVM_LAYOUT_LINK)" ]; then \
 		echo "error: toolchain layout path is not a symbolic link: $(LLVM_LAYOUT_LINK)" >&2; \

@@ -183,6 +183,10 @@ create_source_root() {
     for tool in include/llvm_c_eh.h LICENSE; do
       printf '%s\n' "release fixture: ${tool}" > "${plugin_root}/${tool}"
     done
+    plugin_root="${source_root}/toolchain/llvm-native-symbols/${host_platform}"
+    mkdir -p "${plugin_root}/lib"
+    create_platform_binary "${host_platform}" "${plugin_root}/lib/llvm_native_symbols.${extension}"
+    printf '%s\n' 'release fixture: LICENSE' > "${plugin_root}/LICENSE"
     mkdir -p \
       "${source_root}/toolchain/llvm/${host_platform}/bin" \
       "${source_root}/toolchain/llvm/${host_platform}/lib"

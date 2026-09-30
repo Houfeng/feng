@@ -1685,14 +1685,15 @@ static void argv_free(ArgVec *v) {
     v->cap = 0;
 }
 
-/* Load the installed host plugin for either generated-C output kind. */
-static bool argv_push_c_eh_flags(ArgVec *av, const char *program_path,
-                                 char **out_error_message) {
+/* Resolve every LLVM plugin from the installation for the executing host. */
+static bool argv_push_host_plugin(ArgVec *av, const char *program_path,
+                                  const char *directory, const char *basename,
+                                  char **out_error_message) {
     char *host = NULL;
     if (!feng_platform_detect_host_platform(&host, out_error_message)) {
         return false;
     }
-    char *relative = dup_printf("toolchain/llvm-c-eh/lib/llvm_c_eh%s",
+    char *relative = dup_printf("toolchain/%s/lib/%s%s", directory, basename,
                                feng_platform_dynamic_library_suffix(host));
     free(host);
     if (relative == NULL) {
@@ -1704,17 +1705,28 @@ static bool argv_push_c_eh_flags(ArgVec *av, const char *program_path,
     if (plugin == NULL) {
         return false;
     }
+    char *flag = dup_printf("-fpass-plugin=%s", plugin);
+    bool ok = flag != NULL && argv_push(av, flag);
+    free(flag);
+    free(plugin);
+    return ok;
+}
+
+/* Load the exception plugin and its protocol header for generated C. */
+static bool argv_push_c_eh_flags(ArgVec *av, const char *program_path,
+                                 char **out_error_message) {
+    if (!argv_push_host_plugin(av, program_path, "llvm-c-eh", "llvm_c_eh",
+                              out_error_message)) {
+        return false;
+    }
     char *header = feng_cli_require_install_path(program_path,
         "toolchain/llvm-c-eh/include/llvm_c_eh.h",
         FENG_CLI_REQUIRED_REGULAR_FILE, out_error_message);
     char *include_dir = header != NULL ? path_dirname_dup(header) : NULL;
-    char *flag = dup_printf("-fpass-plugin=%s", plugin);
-    bool ok = include_dir != NULL && flag != NULL &&
-        argv_push(av, flag) && argv_push(av, "-I") && argv_push(av, include_dir);
-    free(flag);
+    bool ok = include_dir != NULL &&
+        argv_push(av, "-I") && argv_push(av, include_dir);
     free(include_dir);
     free(header);
-    free(plugin);
     return ok;
 }
 
@@ -2308,6 +2320,17 @@ int feng_cli_compile_driver_invoke(const FengCliDriverOptions *opts) {
         !argv_push(&av, "-fexceptions") ||
         !argv_push_c_eh_flags(&av, opts->program_path, &tool_error)) {
         fprintf(stderr, "error: cannot configure LLVM C EH plugin: %s\n",
+                tool_error != NULL ? tool_error : "out of memory building compiler argv");
+        argv_free(&av);
+        rc = 1;
+        goto cleanup;
+    }
+
+    /* Only macOS targets need symbol restoration; the plugin itself is host code. */
+    if (feng_platform_is_macos(target_platform) &&
+        !argv_push_host_plugin(&av, opts->program_path, "llvm-native-symbols",
+                               "llvm_native_symbols", &tool_error)) {
+        fprintf(stderr, "error: cannot configure LLVM native symbols plugin: %s\n",
                 tool_error != NULL ? tool_error : "out of memory building compiler argv");
         argv_free(&av);
         rc = 1;

@@ -20,3 +20,6 @@ scripts/build_llvm_native_symbols.sh --platform=linux-arm64-gnu --llvm-root=/usr
 `TEST_LINK_OPTIONS` 指定 SDK、输出与消费方；正式预构建必须经过上述维护入口。
 用 `-fpass-plugin=/absolute/path/to/plugin` 加载；opt 的显式 pass 名称为
 `feng-native-symbols`。普通 Feng 构建与 CI 不从源码构建此插件。
+
+Feng driver 默认加载及 host 发行布局统一见
+[开发方案 §8](../../docs/engineering/feng-native-symbol-normalization-dev.md#8-默认接入与-host-分发)。

@@ -1,6 +1,6 @@
 # macOS 原生函数符号名称还原插件
 
-状态：2026-09-29，独立插件与验证已完成；macOS nbody 尚未稳定达到 Swift，未默认接入。
+状态：2026-09-30，已接入 macOS 目标的默认编译流程与 host 发行包组装；macOS ARM64、Linux ARM64 完整回归通过。尚未发布远端发行包，macOS nbody 尚未稳定达到 Swift。
 
 ## 1. 目标与交付范围
 
@@ -8,10 +8,10 @@
 `__asm__("_name")` 生成的 LLVM 名称阻碍标准库识别的问题。external 的语言与
 发码规则继续由[原生符号别名方案](feng-extern-native-symbol-alias-dev.md)定义。
 
-本轮交付 `third_party/llvm-native-symbols/` 独立插件，通过 Clang 的
-`-fpass-plugin` 或 Feng 已有 `FENG_CC_FLAGS` 加载。不修改 `llvm_c_eh`，不默认
-接入 driver 或 Feng 发行包；默认接入在本轮性能结果明确后另行决定。
-不实现 `@inline`，沿用上一轮诊断中的函数体可见方式评估组合效果。
+插件位于 `third_party/llvm-native-symbols/`，保持独立于 `llvm_c_eh`。
+2026-09-29 完成独立交付，通过 Clang 的 `-fpass-plugin` 或 Feng 已有
+`FENG_CC_FLAGS` 手工加载；2026-09-30 维护者批准默认接入，规则见 §8。
+本方案不实现 `@inline`；§7 的性能结果沿用诊断中的函数体可见方式。
 
 ## 2. 转换规则
 
@@ -135,7 +135,7 @@ Linux 的组合版七次正式样本为 0.647762–0.682758 秒，数组页内�
 macOS 固定相同数组数据页内偏移后，有／无插件配对如下；同批 Swift 为
 0.874530 秒，C++ 为 0.680926 秒。五处位置中三处快于 Swift，两处仍慢，
 其中一处相较同位置的无插件组合版退化约 15%。因此尚未达到稳定持平或超越
-Swift 的目标，也没有据此默认启用插件。
+Swift 的目标，当轮没有据此默认启用插件；后续独立接入决定见 §8。
 
 | 页内偏移/字节 | 无插件/s | 有插件/s | 耗时变化 |
 |---:|---:|---:|---:|
@@ -166,11 +166,82 @@ wall−CPU 差约 64.3 ms，人工授权等待不能解释这些秒级差距。
   不同，例如 macOS 将相邻两个 double 读为 `ldp`，Linux 此处为分开的读。
 
 因此，插件已消除本例的标准库名称识别障碍，剩余差距不能继续解释为 macOS
-仍调用外部 sqrt。已证实位置相关的性能波动，尚未证实是哪一条访存指令或
-哪个 CPU 调度选择导致退化。下一步应在固定数据位置下对齐目标 CPU 配置，
-核对访存序列并做受控比较，不能由当前结果推出全局优化参数或 runtime 布局改动。
+仍调用外部 sqrt。本节首轮结果确认位置相关波动；后续固定地址及等长汇编
+干预已定位到一条成对读取和跨页宽访存，Linux 也复现相同退化，详见
+[插件后 nbody 性能差距归因](feng-nbody-post-plugin-performance-investigation.md)。
+不能由局部诊断直接推出全局优化参数或 runtime 布局改动。
 
 本地完整表格和原始数据位于 §6 证据目录的 `RESULTS.md`、`summary.json`，
 跨平台逐行比较位于 `platform-ir-comparison.json`；LLVM IR、汇编和逐次运行
 记录位于相邻 `inline-runtime-validation/` 的 `linux-release/`、
 `macos-native-symbols/` 与 `macos-native-symbols-layout/`。
+
+## 8. 默认接入与 host 分发
+
+原生符号识别有独立价值；本次接入不以 nbody 达到 Swift 为交付前提，也不改变
+§2 转换边界、external 语义、ABI、优化级别、向量化或 LTO 配置。
+
+- driver 对 macOS **目标**的 bin／lib 编译默认添加 `-fpass-plugin`，包含调试与
+  release 模式。Linux 目标不加载、不查找此插件，仍正常加载独立的异常插件。
+- 插件运行于编译器进程，文件必须匹配 **host**。Linux host 交叉编译 macOS
+  静态库时加载 Linux `.so`；macOS host 编译 Linux 目标时不加载原生符号插件。
+- 安装位置为 `<安装根>/toolchain/llvm-native-symbols/lib/llvm_native_symbols`
+  加 host 动态库后缀。开发布局增加 `build/toolchain/llvm-native-symbols` 到
+  `../../toolchain/llvm-native-symbols/<host>` 的链接；不改变整个 toolchain 目录。
+- 三个平台的发行包各自仅携带一份 host 插件及 LICENSE，不按五个 target 复制。
+  不携带 SDK、头文件或构建记录；打包校验格式与架构，macOS 沿用统一签名遍历。
+  LLVM 异常插件继续保持同样的 host 分发规则。
+- macOS 目标需要的插件缺失、损坏、架构或 LLVM API 不兼容时，必须报告错误，
+  不静默跳过。继续支持 `FENG_CC` 和 `FENG_CC_FLAGS`，不源码重建预构建插件。
+- CI 使用的完整 toolchain 预构建归档必须包含三个 host 的原生符号插件。
+  归档发布／恢复入口已操作整个 toolchain，无须增加单独下载流程；正式发布前
+  由维护者更新远端归档，本次本地接入不自动发布。
+
+验收在新增独立测试中覆盖 bin／lib、调试／release、五个 target、host 路径选择、
+空格路径和搬移、缺失及无效插件、Linux 不依赖此插件、真实 Feng external 发码的
+LLVM IR 名称恢复、两插件共存、发行包 host 唯一性与许可证。已有测试仅在获得
+批准后补充安装／发行夹具，保留原断言。新增测试进入 `make test` 的相应阶段；
+全量回归须在沙箱外执行，分开记录 Linux 容器与 macOS 的实际验收范围。
+
+- [x] 默认 driver 加载与开发布局。
+- [x] 发行组装与安装校验。
+- [x] 新增集成用例及批准范围内的夹具补充。
+- [x] 专项验证、全量回归与交付记录。
+
+### 8.1 证据保留记录
+
+2026-09-30 首次默认接入回归执行了既有 `test/cli/test_cli.c` 中的
+`rm -rf temp`，清除了仓库根目录的旧诊断工件及当轮日志。§6–§7 的历史路径
+因此不再代表当前可读取的证据；文中历史结果保留，原始工件尚未完整恢复。
+该次日志不完整的运行不计为本次验收通过。
+
+后续回归重新执行。macOS 证据保存于
+`third_party/llvm-native-symbols/temp/default-integration-20260930/`，Linux
+执行中保存于容器 `/workspace/native-symbols-default-evidence/`，结束后再复制
+到同一本地证据目录；两者均避开根目录 `make clean` 与 CLI 临时目录清理。
+
+### 8.2 默认接入验收
+
+2026-09-30，macOS ARM64 本机与 Apple Container 中的 Linux ARM64 隔离副本
+均在沙箱外完整执行 `make test`，退出码均为 0。两平台的 ASan/UBSan、普通
+两阶段各自均通过 std 607/607、FCTS 1666/1666，编译器、CLI、DAP、FT、
+异常插件集成及其他既有回归完成。容器的 1008 个源码文件已与本机逐文件比较一致。
+
+新增 `test/cli/native_symbols.sh` 已在两平台的两个阶段通过，覆盖真实 driver 的
+默认加载、host／五 target 矩阵、搬移及空格路径、真实 Feng external 的 IR
+名称恢复、缺失／损坏／错误 host／不兼容 LLVM API，以及 macOS 重签名后加载。
+Linux 目标在缺少原生符号插件时仍通过编译，macOS 目标明确失败。
+
+新增 `test/cli/native_symbols_release.sh` 已在两平台普通阶段通过，实际调用
+发行组装脚本验证三个 host 发行包中两种 LLVM 插件均只有对应 host 的一份，
+内容与来源一致，且不包含维护记录；缺失插件、错误格式／架构和缺少许可证
+被组装或安装校验拒绝。既有增量构建、发行、macOS 签名流程测试也通过。
+这些结果不代表本轮在 Linux x64 原生主机执行了全量回归。
+
+已有用例只按维护者明确批准补充 `test/cli/llvm_c_eh.sh` 与
+`scripts/run_release_scripts.sh` 两处夹具，原步骤和断言保持不变。插件源码、
+预构建二进制与 runtime 未修改；没有重测 nbody，也不据此宣称性能目标达成。
+
+完整证据保存在 §8.1 的本地目录：`macos-make-test.log`、
+`linux-make-test.log`、对应的开始／结束时间和退出码，以及
+`source-comparison.txt`。发行脚本已接入，但未执行远端预构建或正式发行发布。

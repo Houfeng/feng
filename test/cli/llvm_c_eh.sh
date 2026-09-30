@@ -18,6 +18,7 @@ cp -R build/lib "$stage/lib"
 ln -s "$root/toolchain/llvm/$host" "$stage/toolchain/llvm"
 ln -s "$root/toolchain/sysroot" "$stage/toolchain/sysroot"
 cp -R "toolchain/llvm-c-eh/$host" "$stage/toolchain/llvm-c-eh"
+cp -R "toolchain/llvm-native-symbols/$host" "$stage/toolchain/llvm-native-symbols"
 # Archive extraction and relocation must not preserve an earlier plugin path.
 tar -cf "$work/install.tar" -C "$stage" .
 mkdir "$work/relocated install"

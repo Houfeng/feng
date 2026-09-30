@@ -204,6 +204,11 @@ verify_platform_file "${CEH_ROOT}/lib/llvm_c_eh.${CEH_EXTENSION}" \
 for name in include/llvm_c_eh.h LICENSE; do
   [[ -f "${CEH_ROOT}/${name}" ]] || die "installed LLVM C EH input not found: ${name}"
 done
+NATIVE_SYMBOLS_ROOT="${INSTALL_ROOT}/toolchain/llvm-native-symbols"
+verify_platform_file "${NATIVE_SYMBOLS_ROOT}/lib/llvm_native_symbols.${CEH_EXTENSION}" \
+  "${HOST_PLATFORM}" "installed LLVM native symbols plugin"
+[[ -f "${NATIVE_SYMBOLS_ROOT}/LICENSE" ]] ||
+  die "installed LLVM native symbols license not found"
 
 [[ -x "${FENG}" ]] || die "installed Feng executable not found: ${FENG}"
 [[ "$("${FENG}" --version)" == "feng ${VERSION}" ]] ||

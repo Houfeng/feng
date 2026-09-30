@@ -322,6 +322,17 @@ verify_c_eh_plugin() {
   done
 }
 
+# Validate the single host-native symbol plugin, independent of compile targets.
+verify_native_symbols_plugin() {
+  local host_platform="$1"
+  local plugin_root="${SOURCE_ROOT}/toolchain/llvm-native-symbols/${host_platform}"
+  local extension=so
+  if [[ "${host_platform}" == macos-* ]]; then extension=dylib; fi
+  verify_platform_file "${plugin_root}/lib/llvm_native_symbols.${extension}" \
+    "${host_platform}" "LLVM native symbols plugin"
+  require_file "${plugin_root}/LICENSE"
+}
+
 # Verify all four Linux sysroots have the required compile/link directory roots.
 verify_linux_sysroots() {
   local platform
@@ -501,6 +512,9 @@ assemble_distribution() {
     "${SOURCE_ROOT}/toolchain/llvm-c-eh/${host_platform}" \
     "${package_root}/toolchain/llvm-c-eh"
   copy_tree \
+    "${SOURCE_ROOT}/toolchain/llvm-native-symbols/${host_platform}" \
+    "${package_root}/toolchain/llvm-native-symbols"
+  copy_tree \
     "${SOURCE_ROOT}/toolchain/sysroot" \
     "${package_root}/toolchain/sysroot"
   if [[ -n "${BUNDLED_PACKAGES_ROOT}" ]]; then
@@ -625,6 +639,7 @@ for host_platform in "${HOST_PLATFORMS[@]}"; do
   verify_component "${host_platform}"
   verify_llvm_toolchain "${host_platform}"
   verify_c_eh_plugin "${host_platform}"
+  verify_native_symbols_plugin "${host_platform}"
 done
 verify_public_headers
 verify_linux_sysroots
