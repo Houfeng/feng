@@ -5954,6 +5954,59 @@ static bool collect_stmt_locals(const FengStmt *stmt,
     }
 }
 
+/* Include declaration annotations when locating the containing source scope. */
+static size_t annotated_source_start(FengToken token,
+                                     const FengAnnotation *annotations,
+                                     size_t annotation_count) {
+    return annotation_count > 0U ? annotations[0].token.offset : token.offset;
+}
+
+/* Select a type argument by its source range, independently of annotation name. */
+static const FengTypeRef *find_annotation_type_argument(
+    const FengAnnotation *annotations,
+    size_t annotation_count,
+    size_t offset) {
+    for (size_t index = 0U; index < annotation_count; ++index) {
+        const FengAnnotation *annotation = &annotations[index];
+
+        if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_TYPE) {
+            continue;
+        }
+        for (size_t argument = 0U; argument < annotation->arg_count; ++argument) {
+            const FengTypeRef *type_ref = annotation->type_args[argument];
+
+            if (type_ref != NULL && offset >= type_ref->token.offset &&
+                offset <= type_ref_end(type_ref)) {
+                return type_ref;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Select an expression argument without interpreting annotation-specific syntax. */
+static const FengExpr *find_annotation_expression_argument(
+    const FengAnnotation *annotations,
+    size_t annotation_count,
+    size_t offset) {
+    for (size_t index = 0U; index < annotation_count; ++index) {
+        const FengAnnotation *annotation = &annotations[index];
+
+        if (annotation->argument_kind != FENG_ANNOTATION_ARGUMENT_EXPRESSION) {
+            continue;
+        }
+        for (size_t argument = 0U; argument < annotation->arg_count; ++argument) {
+            const FengExpr *expr = annotation->args[argument];
+
+            if (expr != NULL && offset >= expr_start(expr) && offset <= expr_end(expr)) {
+                return expr;
+            }
+        }
+    }
+    return NULL;
+}
+
+/* Find the declaration and handwritten member enclosing a source position. */
 static const FengDecl *find_enclosing_decl(const FengProgram *program,
                                            size_t offset,
                                            const FengTypeMember **out_member) {
@@ -5967,7 +6020,9 @@ static const FengDecl *find_enclosing_decl(const FengProgram *program,
         const FengDecl *decl = program->declarations[decl_index];
         size_t member_index;
 
-        if (offset < decl->token.offset || offset > decl_end(decl)) {
+        if (offset < annotated_source_start(decl->token, decl->annotations,
+                                            decl->annotation_count) ||
+            offset > decl_end(decl)) {
             continue;
         }
         if (decl->kind == FENG_DECL_TYPE) {
@@ -5975,7 +6030,9 @@ static const FengDecl *find_enclosing_decl(const FengProgram *program,
                 const FengTypeMember *member = decl->as.type_decl.members[member_index];
 
                 if (member->mixin_origin == NULL &&
-                    offset >= member->token.offset &&
+                    offset >= annotated_source_start(member->token,
+                                                      member->annotations,
+                                                      member->annotation_count) &&
                     offset <= member_end(member)) {
                     *out_member = member;
                     return decl;
@@ -5983,17 +6040,23 @@ static const FengDecl *find_enclosing_decl(const FengProgram *program,
             }
         } else if (decl->kind == FENG_DECL_SPEC && decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
             for (member_index = 0U; member_index < decl->as.spec_decl.as.object.member_count; ++member_index) {
-                if (offset >= decl->as.spec_decl.as.object.members[member_index]->token.offset &&
-                    offset <= member_end(decl->as.spec_decl.as.object.members[member_index])) {
-                    *out_member = decl->as.spec_decl.as.object.members[member_index];
+                const FengTypeMember *member = decl->as.spec_decl.as.object.members[member_index];
+
+                if (offset >= annotated_source_start(member->token, member->annotations,
+                                                      member->annotation_count) &&
+                    offset <= member_end(member)) {
+                    *out_member = member;
                     return decl;
                 }
             }
         } else if (decl->kind == FENG_DECL_FIT) {
             for (member_index = 0U; member_index < decl->as.fit_decl.member_count; ++member_index) {
-                if (offset >= decl->as.fit_decl.members[member_index]->token.offset &&
-                    offset <= member_end(decl->as.fit_decl.members[member_index])) {
-                    *out_member = decl->as.fit_decl.members[member_index];
+                const FengTypeMember *member = decl->as.fit_decl.members[member_index];
+
+                if (offset >= annotated_source_start(member->token, member->annotations,
+                                                      member->annotation_count) &&
+                    offset <= member_end(member)) {
+                    *out_member = member;
                     return decl;
                 }
             }
@@ -6023,10 +6086,15 @@ static bool callable_collect_params(const FengCallableSignature *callable,
     return true;
 }
 
+/* Collect body locals only after entering the declaration or member itself. */
 static bool collect_visible_locals(const FengDecl *decl,
                                    const FengTypeMember *member,
                                    size_t offset,
                                    FengLspLocalList *locals) {
+    if ((member != NULL && offset < member->token.offset) ||
+        (decl != NULL && offset < decl->token.offset)) {
+        return true;
+    }
     if (member != NULL && member->kind != FENG_TYPE_MEMBER_FIELD) {
         if (!callable_collect_params(&member->as.callable, locals)) {
             return false;
@@ -8614,6 +8682,11 @@ static bool find_decl_token_hit(const char *source_text,
                                 const FengDecl *decl,
                                 size_t offset,
                                 FengLspResolvedTarget *target);
+/* Declaration scopes are shared with reference collection below. */
+static void decl_type_param_scope(const FengDecl *owner,
+                                  const FengTypeParam **type_params,
+                                  size_t *type_param_count);
+
 static bool find_type_ref_hit(const FengDecl *decl,
                               const FengProgram *program,
                               const FengLspAnalysisSession *session,
@@ -8988,6 +9061,7 @@ static bool find_type_ref_in_block_exprs(const FengBlock *block,
                                          const FengTypeParam *owner_type_params,
                                          size_t owner_type_param_count);
 
+/* Resolve source type references in member annotations, signatures and bodies. */
 static bool find_type_ref_in_member(const FengDecl *owner_decl,
                                     const FengTypeMember *member,
                                     const FengProgram *program,
@@ -9034,6 +9108,13 @@ static bool find_type_ref_in_member(const FengDecl *owner_decl,
         }
     }
 
+    if (resolve_type_ref_at_offset(
+            session, program,
+            find_annotation_type_argument(member->annotations,
+                                          member->annotation_count, offset),
+            offset, target, owner_decl, owner_type_params, owner_type_param_count)) {
+        return true;
+    }
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         if (resolve_type_ref_at_offset(session,
                                        program,
@@ -9848,12 +9929,24 @@ static bool find_block_type_ref_hit(const FengBlock *block,
     return false;
 }
 
+/* Resolve declaration annotations and every ordinary source type position. */
 static bool find_type_ref_hit(const FengDecl *decl,
                               const FengProgram *program,
                               const FengLspAnalysisSession *session,
                               size_t offset,
                               FengLspResolvedTarget *target) {
     size_t index;
+    const FengTypeParam *type_params = NULL;
+    size_t type_param_count = 0U;
+
+    decl_type_param_scope(decl, &type_params, &type_param_count);
+    if (resolve_type_ref_at_offset(
+            session, program,
+            find_annotation_type_argument(decl->annotations,
+                                          decl->annotation_count, offset),
+            offset, target, decl, type_params, type_param_count)) {
+        return true;
+    }
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
@@ -10372,8 +10465,36 @@ static const FengExpr *find_expr_hit_in_block(const FengBlock *block, size_t off
     return NULL;
 }
 
+/* Search handwritten member annotations before its initializer or body. */
+static const FengExpr *find_expr_hit_in_member(const FengTypeMember *member,
+                                              size_t offset) {
+    const FengExpr *hit;
+
+    if (member == NULL || member->mixin_origin != NULL) {
+        return NULL;
+    }
+    hit = find_expr_hit(find_annotation_expression_argument(
+                            member->annotations, member->annotation_count, offset),
+                        offset);
+    if (hit != NULL) {
+        return hit;
+    }
+    return member->kind == FENG_TYPE_MEMBER_FIELD
+        ? find_expr_hit(member->as.field.initializer, offset)
+        : find_expr_hit_in_block(member->as.callable.body, offset);
+}
+
+/* Search declaration annotations and contained source expressions. */
 static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset) {
     size_t index;
+    const FengExpr *annotation_hit = find_expr_hit(
+        find_annotation_expression_argument(decl->annotations,
+                                             decl->annotation_count, offset),
+        offset);
+
+    if (annotation_hit != NULL) {
+        return annotation_hit;
+    }
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
@@ -10394,11 +10515,7 @@ static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset
             }
             for (index = 0U; index < decl->as.type_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.type_decl.members[index];
-                const FengExpr *hit = member->mixin_origin != NULL
-                                          ? NULL
-                                          : member->kind == FENG_TYPE_MEMBER_FIELD
-                                          ? find_expr_hit(member->as.field.initializer, offset)
-                                          : find_expr_hit_in_block(member->as.callable.body, offset);
+                const FengExpr *hit = find_expr_hit_in_member(member, offset);
                 if (hit != NULL) {
                     return hit;
                 }
@@ -10408,9 +10525,7 @@ static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset
             if (decl->as.spec_decl.form == FENG_SPEC_FORM_OBJECT) {
                 for (index = 0U; index < decl->as.spec_decl.as.object.member_count; ++index) {
                     const FengTypeMember *member = decl->as.spec_decl.as.object.members[index];
-                    const FengExpr *hit = member->kind == FENG_TYPE_MEMBER_FIELD
-                                              ? find_expr_hit(member->as.field.initializer, offset)
-                                              : find_expr_hit_in_block(member->as.callable.body, offset);
+                    const FengExpr *hit = find_expr_hit_in_member(member, offset);
                     if (hit != NULL) {
                         return hit;
                     }
@@ -10420,9 +10535,7 @@ static const FengExpr *find_expr_hit_in_decl(const FengDecl *decl, size_t offset
         case FENG_DECL_FIT:
             for (index = 0U; index < decl->as.fit_decl.member_count; ++index) {
                 const FengTypeMember *member = decl->as.fit_decl.members[index];
-                const FengExpr *hit = member->kind == FENG_TYPE_MEMBER_FIELD
-                                          ? find_expr_hit(member->as.field.initializer, offset)
-                                          : find_expr_hit_in_block(member->as.callable.body, offset);
+                const FengExpr *hit = find_expr_hit_in_member(member, offset);
                 if (hit != NULL) {
                     return hit;
                 }
@@ -18448,15 +18561,26 @@ static bool resolve_symbol_type_param_hit(const FengLspCacheQueryContext *contex
     return false;
 }
 
+/* Keep member annotation type queries equivalent in the persistent index path. */
 static bool find_symbol_type_ref_in_member(const FengLspCacheQueryContext *context,
                                            const FengDecl *owner_decl,
                                            const FengTypeMember *member,
                                            size_t offset,
                                            FengLspCacheResolvedTarget *target) {
     size_t index;
+    const FengTypeParam *type_params = NULL;
+    size_t type_param_count = 0U;
 
     if (member == NULL || member->mixin_origin != NULL) {
         return false;
+    }
+    decl_type_param_scope(owner_decl, &type_params, &type_param_count);
+    if (resolve_symbol_type_ref_at_offset(
+            context,
+            find_annotation_type_argument(member->annotations,
+                                          member->annotation_count, offset),
+            offset, target, owner_decl, type_params, type_param_count)) {
+        return true;
     }
     if (member->kind == FENG_TYPE_MEMBER_FIELD) {
         return resolve_symbol_type_ref_at_offset(context, member->as.field.type, offset, target,
@@ -18602,11 +18726,23 @@ static bool find_symbol_block_type_ref_hit(const FengLspCacheQueryContext *conte
     return false;
 }
 
+/* Search declaration annotations and type positions against persistent symbols. */
 static bool find_symbol_type_ref_hit(const FengLspCacheQueryContext *context,
                                      const FengDecl *decl,
                                      size_t offset,
                                      FengLspCacheResolvedTarget *target) {
     size_t index;
+    const FengTypeParam *type_params = NULL;
+    size_t type_param_count = 0U;
+
+    decl_type_param_scope(decl, &type_params, &type_param_count);
+    if (resolve_symbol_type_ref_at_offset(
+            context,
+            find_annotation_type_argument(decl->annotations,
+                                          decl->annotation_count, offset),
+            offset, target, decl, type_params, type_param_count)) {
+        return true;
+    }
 
     switch (decl->kind) {
         case FENG_DECL_GLOBAL_BINDING:
@@ -20503,9 +20639,9 @@ static const FengSymbolDeclView *find_source_symbol_member_by_shape(
     return match;
 }
 
-/* Tries to map a cache-only local dependency target to physical source. The
- * caller holds analysis_mutex, so provider/session pointers remain valid. */
-static bool definition_location_from_workspace_cache(
+/* Map imported cache targets to retained local source or their bundle FT entry.
+ * The caller holds analysis_mutex, so provider/session pointers remain valid. */
+static bool definition_location_from_imported_cache(
     const FengLspService *service,
     const FengLspCacheQueryContext *cache,
     const FengLspCacheResolvedTarget *target,
@@ -20545,8 +20681,18 @@ static bool definition_location_from_workspace_cache(
         imported_module_index);
     source_session = find_workspace_session_by_package_path(service,
                                                             package_path);
-    if (source_session == NULL ||
-        !analysis_matches_open_documents(service, source_session)) {
+    if (source_session == NULL) {
+        FengSlice origin = feng_symbol_module_source_path(imported_module);
+
+        if (origin.data != NULL && origin.length > 0U &&
+            imported_program_belongs_to_package(origin.data, package_path)) {
+            *out_found = true;
+            return location_json(result, origin.data,
+                                 feng_symbol_decl_token(imported_symbol));
+        }
+        return true;
+    }
+    if (!analysis_matches_open_documents(service, source_session)) {
         return true;
     }
     source_module = find_source_symbol_module(source_session,
@@ -20734,15 +20880,15 @@ static bool handle_definition_request(FengLspService *service,
                                                        document->text,
                                                        &cache) &&
         resolve_symbol_target_at(&cache, offset, &cache_target)) {
-        bool workspace_cache_found = false;
+        bool imported_cache_found = false;
 
         found = true;
-        ok = definition_location_from_workspace_cache(service,
+        ok = definition_location_from_imported_cache(service,
                                                       &cache,
                                                       &cache_target,
                                                       &result,
-                                                      &workspace_cache_found);
-        if (ok && !workspace_cache_found) {
+                                                      &imported_cache_found);
+        if (ok && !imported_cache_found) {
             ok = definition_location_from_cache(&cache,
                                                 &cache_target,
                                                 &result);

@@ -922,6 +922,11 @@ FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *mod
                ? module->module->visibility : FENG_VISIBILITY_PRIVATE;
 }
 
+/* Import origins outlive borrowed queries and are not declaration source paths. */
+FengSlice feng_symbol_module_source_path(const FengSymbolImportedModule *module) {
+    return module != NULL ? slice_from_cstr(module->source_path) : (FengSlice){0};
+}
+
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl) {
     return decl != NULL ? decl->kind : FENG_SYMBOL_DECL_KIND_MODULE;
 }

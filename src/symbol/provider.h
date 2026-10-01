@@ -105,6 +105,9 @@ FengSlice feng_symbol_module_segment_at(const FengSymbolImportedModule *module, 
 /* Read module visibility without exposing the provider's storage layout. */
 FengVisibility feng_symbol_module_visibility(const FengSymbolImportedModule *module);
 
+/* Borrow the recorded import origin, including the FT entry for bundle modules. */
+FengSlice feng_symbol_module_source_path(const FengSymbolImportedModule *module);
+
 FengSymbolDeclKind feng_symbol_decl_kind(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_name(const FengSymbolDeclView *decl);
 FengSlice feng_symbol_decl_doc(const FengSymbolDeclView *decl);

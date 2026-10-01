@@ -27146,6 +27146,247 @@ static void test_lsp_friend_annotation_completion_and_hover(void) {
     free(output);
 }
 
+/* Annotation arguments keep their declaration scope in source, package and
+ * parsed-only queries; each case checks both the Hover and definition target. */
+static void assert_lsp_annotation_argument_navigation(bool packaged,
+                                                      bool semantic_failure) {
+    static const char *kInitialize =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"capabilities\":{}}}";
+    static const char *kProvider =
+        "open module test.lsp.annotation_provider;\n"
+        "/** Manages annotated widgets. */\n"
+        "open type ViewManager {}\n"
+        "/** Inspects annotated widgets. */\n"
+        "open type Inspector {}\n"
+        "open type Helper {}\n"
+        "/** Generic friend helper. */\n"
+        "open type Helper<T> {}\n"
+        "open type Wrapper<T> {}\n";
+    static const char *kSource =
+        "module test.lsp.annotation_consumer;\n"
+        "import test.lsp.annotation_provider;\n"
+        "import test.lsp.annotation_provider as native;\n"
+        "/** Local friend documentation. */\n"
+        "type LocalFriend {}\n"
+        "spec Widget {\n"
+        "  @friend(ViewManager, Inspector)\n"
+        "  seal let rtStyle: int;\n"
+        "  @friend(LocalFriend) seal func inspect(): void;\n"
+        "}\n"
+        "type Vault<T> {\n"
+        "  @friend(Helper<T>) seal func generic(): void {}\n"
+        "  @friend(native.Helper<native.Wrapper<LocalFriend>>)\n"
+        "  seal static func nested(): void {}\n"
+        "  @friend(LocalFriend)\n"
+        "  @friend(test.lsp.annotation_provider.ViewManager)\n"
+        "  seal let value: int = 0;\n"
+        "}\n"
+        "spec GenericWidget<U> {\n"
+        "  @friend(Helper<U>) seal func generic(): void;\n"
+        "}\n"
+        "type FitTarget {}\n"
+        "fit FitTarget {\n"
+        "  @friend(Inspector) seal func reset(): void {}\n"
+        "}\n"
+        "/** Local library binding. */\n"
+        "let LIB: string = \"c\";\n"
+        "let SYMBOL: string = \"abs\";\n"
+        "@cdecl(LIB, SYMBOL)\n"
+        "extern func foreign(LIB: i32, SYMBOL: i32): i32;\n"
+        "func ordinary(manager: ViewManager): void {}\n"
+        "func inferredText() { return \"ready\"; }\n"
+        "func exercise(): void { let readiness = inferredText(); }\n";
+    /* A source position and its expected declaration identity. Prefixes place
+     * the cursor inside the target token, including nested generic arguments. */
+    static const struct {
+        const char *needle;
+        const char *prefix;
+        const char *signature;
+        const char *documentation;
+        bool provider;
+        const char *declaration;
+        const char *declaration_prefix;
+    } kCases[] = {
+        {"@friend(ViewManager, Inspector)", "@friend(", "type ViewManager {}",
+         "Manages annotated widgets.", true, "open type ViewManager", "open type "},
+        {"@friend(ViewManager, Inspector)", "@friend(ViewManager, ", "type Inspector {}",
+         "Inspects annotated widgets.", true, "open type Inspector", "open type "},
+        {"@friend(LocalFriend) seal func", "@friend(", "type LocalFriend {}",
+         "Local friend documentation.", false, "type LocalFriend", "type "},
+        {"@friend(Helper<T>)", "@friend(", "type Helper<T> {}",
+         "Generic friend helper.", true, "open type Helper<T>", "open type "},
+        {"@friend(Helper<T>)", "@friend(Helper<", "generic parameter T",
+         NULL, false, "type Vault<T>", "type Vault<"},
+        {"@friend(native.Helper<native.Wrapper<LocalFriend>>)", "@friend(native.",
+         "type Helper<T> {}", "Generic friend helper.",
+         true, "open type Helper<T>", "open type "},
+        {"@friend(native.Helper<native.Wrapper<LocalFriend>>)", "@friend(native.Helper<native.",
+         "type Wrapper<T> {}", NULL, true, "open type Wrapper<T>", "open type "},
+        {"@friend(native.Helper<native.Wrapper<LocalFriend>>)", "@friend(native.Helper<native.Wrapper<",
+         "type LocalFriend {}", "Local friend documentation.",
+         false, "type LocalFriend", "type "},
+        {"@friend(LocalFriend)\n", "@friend(", "type LocalFriend {}",
+         NULL, false, "type LocalFriend", "type "},
+        {"@friend(test.lsp.annotation_provider.ViewManager)", "@friend(test.lsp.annotation_provider.",
+         "type ViewManager {}", "Manages annotated widgets.",
+         true, "open type ViewManager", "open type "},
+        {"@friend(Helper<U>)", "@friend(Helper<", "generic parameter U",
+         NULL, false, "spec GenericWidget<U>", "spec GenericWidget<"},
+        {"@friend(Inspector) seal func reset", "@friend(", "type Inspector {}",
+         "Inspects annotated widgets.", true, "open type Inspector", "open type "},
+        {"@cdecl(LIB, SYMBOL)", "@cdecl(", "let LIB: string",
+         "Local library binding.", false, "let LIB: string", "let "},
+        {"@cdecl(LIB, SYMBOL)", "@cdecl(LIB, ", "let SYMBOL: string",
+         NULL, false, "let SYMBOL: string", "let "},
+        {"func ordinary(manager: ViewManager)", "func ordinary(manager: ", "type ViewManager {}",
+         "Manages annotated widgets.", true, "open type ViewManager", "open type "}
+    };
+    char directory[] = "temp/feng_lsp_annotation_arguments_XXXXXX";
+    char *provider_dir;
+    char *provider_src;
+    char *provider_manifest;
+    char *provider_path;
+    char *provider_uri;
+    char *consumer_dir;
+    char *consumer_src;
+    char *consumer_manifest;
+    char *source_path;
+    char *source;
+    char *manifest;
+    char *uri;
+    char *escaped;
+    char *did_open;
+    char *did_save;
+    char *ready_output = NULL;
+    char *output;
+    char *remove_error = NULL;
+    char *owned_requests[2U * sizeof(kCases) / sizeof(kCases[0])];
+    const char *requests[2U * sizeof(kCases) / sizeof(kCases[0]) + 2U];
+    unsigned int ready_line;
+    unsigned int ready_character;
+    size_t index;
+
+    ASSERT(mkdtemp(directory) != NULL);
+    provider_dir = path_join(directory, "provider");
+    provider_src = path_join(provider_dir, "src");
+    provider_manifest = path_join(provider_dir, "feng.fm");
+    provider_path = path_join(provider_src, "types.ff");
+    consumer_dir = path_join(directory, "consumer");
+    consumer_src = path_join(consumer_dir, "src");
+    consumer_manifest = path_join(consumer_dir, "feng.fm");
+    source_path = path_join(consumer_src, "main.ff");
+    mkdir_p(provider_src);
+    mkdir_p(consumer_src);
+    write_text_file(provider_manifest,
+        "[package]\nname: \"annotation_types\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n");
+    write_text_file(provider_path, kProvider);
+    provider_uri = file_uri_from_path(provider_path);
+    if (packaged) {
+        char *argv[] = {provider_dir};
+
+        ASSERT(feng_cli_project_pack_main("feng", 1, argv) == 0);
+        ASSERT(unlink(provider_path) == 0);
+    }
+    manifest = dup_printf(
+        "[package]\nname: \"annotation_consumer\"\nversion: \"0.1.0\"\n"
+        "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n"
+        "[dependencies]\nannotation_types: \"%s\"\n",
+        packaged ? "../provider/build/pkg/annotation_types-0.1.0.fb" : "../provider");
+    source = dup_printf("%s%s", kSource,
+                        semantic_failure ? "func broken(): int {}\n" : "");
+    write_text_file(consumer_manifest, manifest);
+    write_text_file(source_path, source);
+    uri = file_uri_from_path(source_path);
+    escaped = json_escape_text(source);
+    did_open = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\","
+        "\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+    did_save = dup_printf(
+        "{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", uri);
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        unsigned int id = 10U + (unsigned int)(2U * index);
+
+        owned_requests[2U * index] = build_lsp_test_position_request(
+            "textDocument/hover", id, uri, source, kCases[index].needle,
+            strlen(kCases[index].prefix) + 1U);
+        owned_requests[2U * index + 1U] = build_lsp_test_position_request(
+            "textDocument/definition", id + 1U, uri, source, kCases[index].needle,
+            strlen(kCases[index].prefix) + 1U);
+        requests[2U * index] = owned_requests[2U * index];
+        requests[2U * index + 1U] = owned_requests[2U * index + 1U];
+    }
+    requests[2U * index] =
+        "{\"jsonrpc\":\"2.0\",\"id\":99,\"method\":\"shutdown\",\"params\":null}";
+    requests[2U * index + 1U] = "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}";
+    find_line_character(source, "let readiness", strlen("let ") + 1U,
+                        &ready_line, &ready_character);
+    output = run_lsp_server_capture_after_position_ready(
+        kInitialize, did_open, semantic_failure ? did_save : NULL,
+        "textDocument/hover", uri, ready_line, ready_character,
+        semantic_failure ? "\"source\":\"semantic\"" : "let readiness: string",
+        requests, sizeof(requests) / sizeof(requests[0]), &ready_output);
+    if (!semantic_failure) {
+        ASSERT(strstr(ready_output, "\"severity\":1") == NULL);
+    }
+    for (index = 0U; index < sizeof(kCases) / sizeof(kCases[0]); ++index) {
+        unsigned int id = 10U + (unsigned int)(2U * index);
+        unsigned int line;
+        unsigned int character;
+        char *location;
+
+        assert_lsp_test_response_contains(output, id, kCases[index].signature);
+        if (kCases[index].documentation != NULL) {
+            assert_lsp_test_response_contains(output, id, kCases[index].documentation);
+        }
+        if (packaged && kCases[index].provider) {
+            assert_lsp_test_response_contains(output, id + 1U,
+                "annotation_types-0.1.0.fb%21mod/test/lsp/annotation_provider.ft");
+        } else {
+            find_line_character(kCases[index].provider ? kProvider : source,
+                                kCases[index].declaration,
+                                strlen(kCases[index].declaration_prefix),
+                                &line, &character);
+            location = build_lsp_test_location_marker(
+                kCases[index].provider ? provider_uri : uri, line, character);
+            assert_lsp_test_response_contains(output, id + 1U, location);
+            free(location);
+        }
+        free(owned_requests[2U * index]);
+        free(owned_requests[2U * index + 1U]);
+    }
+    free(output);
+    free(ready_output);
+    free(did_save);
+    free(did_open);
+    free(escaped);
+    free(uri);
+    free(manifest);
+    free(source);
+    free(source_path);
+    free(consumer_manifest);
+    free(consumer_src);
+    free(consumer_dir);
+    free(provider_uri);
+    free(provider_path);
+    free(provider_manifest);
+    free(provider_src);
+    free(provider_dir);
+    ASSERT(feng_cli_project_remove_tree(directory, &remove_error));
+    free(remove_error);
+}
+
+/* Exercise both published analysis and recovery with source and FT dependencies. */
+static void test_lsp_annotation_argument_hover_and_definition(void) {
+    assert_lsp_annotation_argument_navigation(false, false);
+    assert_lsp_annotation_argument_navigation(false, true);
+    assert_lsp_annotation_argument_navigation(true, false);
+    assert_lsp_annotation_argument_navigation(true, true);
+}
+
 /* Verifies generated mixin members participate in ordinary LSP surfaces and
  * go-to-definition follows their source-member mapping. */
 static void test_lsp_mixin_member_completion_hover_and_definition(void) {
@@ -30795,6 +31036,7 @@ int main(void) {
     test_lsp_annotation_completion_filter_prefix();
     test_lsp_mixable_annotation_completion_and_hover();
     test_lsp_friend_annotation_completion_and_hover();
+    test_lsp_annotation_argument_hover_and_definition();
     test_lsp_mixin_member_completion_hover_and_definition();
     test_lsp_mixable_seal_authorization_hover_and_definition();
     test_lsp_mixin_declaration_and_source_hover();
