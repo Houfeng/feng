@@ -18,12 +18,20 @@ type User: JsonSerializable<User> {
   seal var name2:string;
   var name: string;
   var age: int;
+
+  /**
+   * Converts a User object to a JsonObject.
+   */
   static func toJson(value: User): JsonObject {
     let obj = JsonObject();
     obj.set("name", value.name);
     obj.set("age", value.age);
     return obj;
   }
+
+  /**
+   * Converts a JsonObject to a User object.
+   */
   static func fromJson(value: JsonObject): User {
     return User {
       name: Json.toString(value.get("name")),
