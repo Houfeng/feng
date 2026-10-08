@@ -213,6 +213,8 @@ typedef struct FengLspAnalysisSession {
     size_t source_count;
     char **bundle_paths;
     size_t bundle_count;
+    /* Owned file states captured by background analysis, parallel to bundle_paths. */
+    struct stat *bundle_statuses;
     /* Owns every source path for the session lifetime. Each sources[i].path
      * and its program->path, when present, are bound to the corresponding
      * string in this array. session_dispose() frees the strings and array. */
@@ -246,6 +248,8 @@ typedef struct FengLspAnalysisSession {
 typedef struct FengLspWorkspaceAnalysis {
     FengLspAnalysisSession last_successful_analysis;
     size_t last_successful_generation;
+    /* Preserve the snapshot for replacement, but never query changed dependencies. */
+    bool dependencies_stale;
 } FengLspWorkspaceAnalysis;
 
 static bool publish_diagnostics(FILE *output,
@@ -2045,6 +2049,7 @@ static void session_dispose(FengLspAnalysisSession *session) {
     size_t i;
     diagnostics_dispose(&session->diagnostics);
     feng_cli_frontend_bundle_paths_dispose(session->bundle_paths, session->bundle_count);
+    free(session->bundle_statuses);
     feng_symbol_provider_free(session->source_symbol_identity_index);
     feng_semantic_analysis_free(session->analysis);
     feng_cli_free_loaded_sources(session->sources, session->source_count);
@@ -2441,6 +2446,37 @@ static long manifest_modified_nanoseconds(const struct stat *status) {
 #endif
 }
 
+/* Capture dependencies off the query thread; missing inputs cannot certify a snapshot. */
+static bool session_capture_bundle_statuses(FengLspAnalysisSession *session) {
+    if (session->bundle_count == 0U) return true;
+    session->bundle_statuses = calloc(session->bundle_count, sizeof(*session->bundle_statuses));
+    if (session->bundle_statuses == NULL) return false;
+    for (size_t i = 0U; i < session->bundle_count; ++i) {
+        if (stat(session->bundle_paths[i], &session->bundle_statuses[i]) != 0) return false;
+    }
+    return true;
+}
+
+/* Compare complete dependency lists without performing I/O in editor queries. */
+static bool session_bundle_statuses_equal(const FengLspAnalysisSession *left,
+                                          const FengLspAnalysisSession *right) {
+    if (left->bundle_count != right->bundle_count) return false;
+    for (size_t i = 0U; i < left->bundle_count; ++i) {
+        if (left->bundle_statuses == NULL || right->bundle_statuses == NULL ||
+            strcmp(left->bundle_paths[i], right->bundle_paths[i]) != 0) return false;
+        const struct stat *a = &left->bundle_statuses[i], *b = &right->bundle_statuses[i];
+        if (a->st_dev != b->st_dev || a->st_ino != b->st_ino || a->st_size != b->st_size ||
+            a->st_mtime != b->st_mtime || a->st_ctime != b->st_ctime ||
+            manifest_modified_nanoseconds(a) != manifest_modified_nanoseconds(b)) return false;
+#if defined(__APPLE__)
+        if (a->st_ctimespec.tv_nsec != b->st_ctimespec.tv_nsec) return false;
+#else
+        if (a->st_ctim.tv_nsec != b->st_ctim.tv_nsec) return false;
+#endif
+    }
+    return true;
+}
+
 static bool build_project_session(const FengLspService *service,
                                   FengLspService *live_service,
                                   const FengLspDocument *document,
@@ -2563,6 +2599,21 @@ static bool build_project_session(const FengLspService *service,
                                                              overlay_count,
                                                              &callbacks,
                                                              &outputs);
+    /* The frontend returns bundle ownership only on success. Failed candidates
+     * still need their actual inputs to distinguish edits from dependency changes. */
+    if (session->exit_code != 0) {
+        if (reused_bundles) {
+            session->bundle_paths = reused_bundle_paths;
+            session->bundle_count = reused_bundle_count;
+            reused_bundle_paths = NULL;
+            reused_bundle_count = 0U;
+        } else {
+            session->bundle_paths = resolved.package_paths;
+            session->bundle_count = resolved.package_count;
+            resolved.package_paths = NULL;
+            resolved.package_count = 0U;
+        }
+    }
     free(overlays);
     feng_cli_frontend_bundle_paths_dispose(reused_bundle_paths,
                                            reused_bundle_count);
@@ -3424,6 +3475,7 @@ static void *background_analyzer_main(void *user) {
         bool module_thread_started = false;
         bool analysis_built = false;
         bool analysis_succeeded = false;
+        bool dependencies_available = false;
         bool publish = false;
         bool refresh_workspace_index = false;
         bool task_ready = false;
@@ -3541,6 +3593,7 @@ static void *background_analyzer_main(void *user) {
                                                     &task.documents[task.primary_index],
                                                     &candidate);
         }
+        dependencies_available = analysis_built && session_capture_bundle_statuses(&candidate);
         if (analysis_built) {
             analysis_diagnostics = candidate.diagnostics;
             memset(&candidate.diagnostics, 0, sizeof(candidate.diagnostics));
@@ -3549,8 +3602,18 @@ static void *background_analyzer_main(void *user) {
                                                &candidate,
                                                refresh_workspace_index);
         }
-        analysis_succeeded = analysis_built && candidate.exit_code == 0 &&
+        analysis_succeeded = analysis_built && dependencies_available && candidate.exit_code == 0 &&
                              candidate.analysis != NULL;
+        if (analysis_built && !analysis_succeeded) {
+            pthread_mutex_lock(&service->analysis_mutex);
+            FengLspWorkspaceAnalysis *workspace = find_workspace_analysis_by_session_identity(service, &candidate);
+            if (workspace != NULL && task.generation >= workspace->last_successful_generation &&
+                (!dependencies_available ||
+                 !session_bundle_statuses_equal(&workspace->last_successful_analysis, &candidate))) {
+                workspace->dependencies_stale = true;
+            }
+            pthread_mutex_unlock(&service->analysis_mutex);
+        }
         if (analysis_succeeded) {
             FengLspWorkspaceAnalysis *workspace;
 
@@ -3567,6 +3630,7 @@ static void *background_analyzer_main(void *user) {
                 previous = workspace->last_successful_analysis;
                 workspace->last_successful_analysis = candidate;
                 workspace->last_successful_generation = task.generation;
+                workspace->dependencies_stale = false;
                 memset(&candidate, 0, sizeof(candidate));
                 publish = true;
             } else if (workspace == NULL) {
@@ -5250,7 +5314,8 @@ static const FengLspWorkspaceAnalysis *find_workspace_analysis_by_source_path(
         const FengLspWorkspaceAnalysis *workspace =
             &service->last_successful_analyses[index];
 
-        if (find_source(&workspace->last_successful_analysis, path) != NULL &&
+        if (!workspace->dependencies_stale &&
+            find_source(&workspace->last_successful_analysis, path) != NULL &&
             (best == NULL || workspace->last_successful_generation >
                              best->last_successful_generation)) {
             best = workspace;
@@ -5282,7 +5347,7 @@ static const FengLspWorkspaceAnalysis *find_workspace_analysis_for_document(
             &workspace->last_successful_analysis,
             document->path);
 
-        if (source == NULL) {
+        if (source == NULL || workspace->dependencies_stale) {
             continue;
         }
         if (source->source != NULL && source->source_length == document_length &&
@@ -13136,6 +13201,12 @@ static const FengExpr *find_call_hit_in_decl(const FengDecl *decl, size_t offset
     return NULL;
 }
 
+/* Navigation and completion share member visibility, including parsed recovery. */
+static bool member_access_target_visible(const FengLspAnalysisSession *session,
+    const FengLspCacheQueryContext *cache, const FengProgram *program,
+    const FengExpr *expr, const FengLspLocalList *locals,
+    const FengTypeMember *member, const FengSymbolDeclView *symbol);
+
 static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session,
                                            const FengProgram *program,
                                            const FengExpr *expr,
@@ -13256,6 +13327,10 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 }
             }
             target->member = find_member_by_name(target->decl, expr->as.member.member);
+            if (target->member != NULL && !member_access_target_visible(
+                    session, NULL, program, expr, locals, target->member, NULL)) {
+                target->member = NULL;
+            }
             if (target->member != NULL) {
                 target->kind = FENG_LSP_RESOLVED_MEMBER;
                 return target->decl;
@@ -13281,6 +13356,10 @@ static const FengDecl *resolve_expr_target(const FengLspAnalysisSession *session
                 owner_builtin_name,
                 expr->as.member.member,
                 &fit_decl);
+            if (target->member != NULL && !member_access_target_visible(
+                    session, NULL, program, expr, locals, target->member, NULL)) {
+                target->member = NULL;
+            }
             if (target->member != NULL && fit_decl != NULL) {
                 target->kind = FENG_LSP_RESOLVED_MEMBER;
                 target->decl = fit_decl;
@@ -19019,6 +19098,10 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
             target->member = find_symbol_decl_member_by_name(target->decl,
                                                              expr->as.member.member,
                                                              false);
+            if (target->member != NULL && !member_access_target_visible(
+                    NULL, context, context->program, expr, locals, NULL, target->member)) {
+                target->member = NULL;
+            }
             if (target->member == NULL) {
                 const FengSymbolDeclView *fit_decl = NULL;
 
@@ -19027,6 +19110,10 @@ static const FengSymbolDeclView *resolve_symbol_expr_target(const FengLspCacheQu
                     owner_decl,
                     expr->as.member.member,
                     &fit_decl);
+                if (target->member != NULL && !member_access_target_visible(
+                        NULL, context, context->program, expr, locals, NULL, target->member)) {
+                    target->member = NULL;
+                }
                 if (target->member != NULL) {
                     target->decl = fit_decl;
                 }
@@ -24795,6 +24882,44 @@ static FengLspCompletionType *member_resolve_receiver(FengLspMemberQuery *query,
     return type;
 }
 
+/* A recovered navigation target must survive the ordinary member candidate filter. */
+static bool member_access_target_visible(const FengLspAnalysisSession *session,
+    const FengLspCacheQueryContext *cache, const FengProgram *program,
+    const FengExpr *expr, const FengLspLocalList *locals,
+    const FengTypeMember *member, const FengSymbolDeclView *symbol) {
+    FengVisibility visibility = member != NULL ? member->visibility : feng_symbol_decl_visibility(symbol);
+    if (visibility != FENG_VISIBILITY_PRIVATE) return true;
+    FengCliLoadedSource source = {.path = program->path, .program = (FengProgram *)program};
+    FengLspAnalysisSession current = {
+        .sources = cache != NULL && cache->current_sources != NULL ? cache->current_sources : &source,
+        .source_count = cache != NULL && cache->current_sources != NULL ? cache->current_source_count : 1U,
+        .source_module_index = cache != NULL ? cache->source_module_index : NULL};
+    const FengTypeMember *enclosing_member = NULL;
+    const FengDecl *enclosing_decl = find_enclosing_decl(program, expr->token.offset, &enclosing_member);
+    FengLspMemberQuery query = {.session = session != NULL ? session : &current, .cache = cache, .program = program,
+        .locals = locals, .enclosing_decl = enclosing_decl, .enclosing_member = enclosing_member,
+        .types.nominal_equal = member_nominal_equal};
+    FengLspString text = {0};
+    FengProgram *parsed = NULL;
+    FengLspMemberFilter filter = FENG_LSP_MEMBER_FILTER_INSTANCE;
+    FengLspCompletionType *type = member_resolve_receiver(&query, expr, (FengSlice){0}, &text, &parsed, &filter);
+    FengLspMemberCandidate *items = NULL;
+    bool visible = false;
+    if (member_collect(&query, type, filter, &items)) {
+        for (const FengLspMemberCandidate *item = items; item != NULL; item = item->next) {
+            if ((member != NULL && item->member == member) || (symbol != NULL && item->symbol == symbol)) {
+                visible = true;
+                break;
+            }
+        }
+    }
+    visible = visible && !query.types.failed;
+    feng_lsp_completion_types_dispose(&query.types);
+    feng_program_free(parsed);
+    string_dispose(&text);
+    return visible;
+}
+
 /* The member branch has one resolver for both source and FT. Current AST is
  * preferred; parsing a bounded receiver is only needed when recovery lost it. */
 static bool append_receiver_member_completion(FengLspString *json, bool *first,
@@ -28720,6 +28845,8 @@ static bool service_handle_payload_unlocked(FengLspService *service,
                     bool refresh_workspace_index;
 
                     saved_doc->dirty = false;
+                    /* Saving can change dependency inputs without changing document text. */
+                    ++service->document_revision;
                     ok = publish_current_parse_diagnostics(output, saved_doc);
                     pthread_mutex_lock(&service->analysis_mutex);
                     refresh_workspace_index =

@@ -16401,6 +16401,172 @@ static void write_lsp_ascii_incremental_change(FILE *input,
     free(replacement);
 }
 
+/* A live session keeps the consumer URI stable while grants and bindings change. */
+typedef struct FriendLspLifecycle {
+    const char *uri;
+    const char *initial_source;
+    const char *active_bundle;
+    const char *revoked_bundle;
+    const char *restored_bundle;
+} FriendLspLifecycle;
+
+/* Vary the annotation or full receiver instance without unrelated semantic errors. */
+static char *friend_lsp_lifecycle_source(bool imported, bool revoked,
+                                        bool mismatched, unsigned int generation) {
+    char *declarations = imported ? dup_cstr("import friend.liveapi;\n") : dup_printf(
+        "type Other{}type Reader<T>{}\n"
+        "type Vault<F>{@friend(%s) seal let secret:i32=7;let visible:int=1;}\n"
+        "func stamp():bool{return true;}\n", revoked ? "Other" : "F");
+    char *source = dup_printf("module friend.live;\n%s"
+        "fit Reader<T>{func probe(v:Vault<Reader<%s>>):i32{return v.secret;}}\n"
+        "func generation%u(){throw stamp();}\n", declarations,
+        mismatched ? "T[]" : "T", generation);
+    free(declarations);
+    return source;
+}
+
+/* Effects prove a successful generation; LSP exposes access-denial text, not codes. */
+static void friend_lsp_wait_generation(FILE *input, int output_fd, const char *uri,
+    const char *source, unsigned int generation, const char *effect, const char *diagnostic,
+    unsigned int first_id) {
+    char *needle = dup_printf("func generation%u", generation);
+    char *expected = dup_printf("Possible exceptions: %s", effect);
+    bool ready = false;
+    for (unsigned int i = 0U; i < 200U && !ready; ++i) {
+        unsigned int id = first_id + i;
+        char *request = diagnostic == NULL ? build_lsp_test_position_request("textDocument/hover",
+            id, uri, source, needle, 5U) : dup_printf(
+            "{\"jsonrpc\":\"2.0\",\"id\":%u,\"method\":\"feng/testFriendBarrier\",\"params\":null}", id);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, request, id);
+        ready = diagnostic == NULL ? count_lsp_test_response_occurrences(output, id, expected) == 1U :
+            strstr(output, "\"source\":\"semantic\"") != NULL &&
+            strstr(output, diagnostic) != NULL;
+        if (ready && diagnostic == NULL) assert_lsp_test_response_contains(output, id, needle);
+        if (i == 199U && !ready)
+            fprintf(stderr, "friend generation %u not ready (granted=%d)\n%s\n%s\n",
+                generation, diagnostic == NULL, source, output);
+        free(output); free(request);
+        if (!ready) usleep(25000U);
+    }
+    ASSERT(ready);
+    free(expected); free(needle);
+}
+
+/* Check completion and both navigation paths against this generation's grant. */
+static void friend_lsp_check_generation(FILE *input, int output_fd,
+    const FriendLspLifecycle *fixture, const char *source, bool granted,
+    size_t query_count, unsigned int first_id) {
+    const char *methods[] = {"textDocument/completion", "textDocument/hover", "textDocument/definition"};
+    ASSERT(query_count <= sizeof methods / sizeof *methods);
+    for (size_t i = 0U; i < query_count; ++i) {
+        unsigned int id = first_id + (unsigned int)i;
+        char *request = build_lsp_test_position_request(methods[i], id, fixture->uri,
+            source, "return v.secret;", i == 0U ? 9U : 10U);
+        char *output = send_lsp_test_request_and_wait(input, output_fd, request, id);
+        const char *expected = i == 0U ? "\"label\":\"visible\"" : !granted ? "\"result\":null" :
+            i == 1U ? "let secret: i32" : fixture->active_bundle != NULL ? ".ft" : fixture->uri;
+        if (count_lsp_test_response_occurrences(output, id, expected) == 0U)
+            fprintf(stderr, "friend %s grant=%d expected=%s\n%s\n%s\n",
+                methods[i], granted, expected, source, output);
+        assert_lsp_test_response_contains(output, id, expected);
+        if (i == 0U) {
+            if (count_lsp_test_response_occurrences(output, id, "{\"label\":\"secret\"") !=
+                (granted ? 1U : 0U)) fprintf(stderr, "friend completion grant=%d\n%s\n%s\n", granted, source, output);
+            ASSERT(count_lsp_test_response_occurrences(output, id, "{\"label\":\"secret\"") ==
+                (granted ? 1U : 0U));
+        }
+        free(output); free(request);
+    }
+}
+
+/* Revoke/restore grants and bindings; unrelated errors retain safe prefix completion. */
+static void friend_lsp_run_lifecycle(FILE *input, int output_fd, void *user) {
+    const FriendLspLifecycle *fixture = user;
+    bool imported = fixture->active_bundle != NULL;
+    char *previous = dup_cstr(fixture->initial_source);
+    unsigned int version = 1U;
+    char *save = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didSave\","
+        "\"params\":{\"textDocument\":{\"uri\":\"%s\"}}}", fixture->uri);
+    for (unsigned int stage = 0U; stage < 6U; ++stage) {
+        bool granted = stage != 1U && stage != 3U;
+        unsigned int generation = imported && stage < 3U ? 0U : stage;
+        char *source = stage == 5U ? dup_printf("%sfunc broken(){missing;}\n", previous) :
+            friend_lsp_lifecycle_source(imported, stage == 1U, stage == 3U, generation);
+        if (stage != 0U) {
+            if (imported && stage < 3U) {
+                /* Only the on-disk bundle changes; didSave must refresh its FT facts. */
+                ASSERT(strcmp(previous, source) == 0);
+                char *replacement = dup_printf("%s.next", fixture->active_bundle);
+                copy_file_or_die(stage == 1U ? fixture->revoked_bundle : fixture->restored_bundle,
+                    replacement);
+                ASSERT(rename(replacement, fixture->active_bundle) == 0);
+                free(replacement);
+            } else {
+                write_lsp_ascii_incremental_change(input, fixture->uri, ++version, previous, source);
+            }
+            write_lsp_message(input, save);
+            const char *diagnostic = stage == 5U ? "undefined identifier 'missing'" : granted ? NULL :
+                "member 'secret' of type 'Vault' is not accessible from the current type scope";
+            friend_lsp_wait_generation(input, output_fd, fixture->uri, source, generation,
+                imported && stage >= 2U ? "i32" : "bool", diagnostic, 10000U + stage * 1000U);
+        }
+        friend_lsp_check_generation(input, output_fd, fixture, source, granted,
+            stage == 5U ? 1U : 3U, 3000U + stage * 10U);
+        free(previous);
+        previous = source;
+    }
+    free(save); free(previous);
+}
+
+/* Source edits and source-invisible bundle replacements must invalidate old grants. */
+static void test_lsp_friend_authorization_lifecycle(void) {
+    for (size_t imported = 0U; imported < 2U; ++imported) {
+        char directory[] = "temp/friend-lsp-lifecycle-XXXXXX";
+        ASSERT(mkdtemp(directory) != NULL);
+        char *bundles[3] = {NULL, NULL, NULL};
+        if (imported) {
+            const char *versions[] = {"initial", "revoked", "restored"};
+            const char *types[] = {"bool", "string", "i32"};
+            const char *values[] = {"true", "\"updated\"", "(i32)1"};
+            for (size_t i = 0U; i < 3U; ++i) {
+                char *root = path_join(directory, versions[i]);
+                char *provider = dup_printf("open module friend.liveapi;open type Other{}open type Reader<T>{}"
+                    "open type Vault<F>{@friend(%s) seal let secret:i32=7;let visible:int=1;}"
+                    "open func stamp():%s{return %s;}", i == 1U ? "Other" : "F", types[i], values[i]);
+                bundles[i] = effects_lsp_pack(root, "friend_live", provider, NULL);
+                free(provider); free(root);
+            }
+        }
+        char *consumer = path_join(directory, "consumer"), *src = path_join(consumer, "src");
+        char *path = path_join(src, "main.ff"), *manifest = path_join(consumer, "feng.fm");
+        mkdir_p(src);
+        char *dependency = imported ? dup_printf("[dependencies]\nfriend_live: \"%s\"\n", bundles[0]) : dup_cstr("");
+        char *config = dup_printf("[package]\nname: \"friend_lifecycle\"\nversion: \"0.1.0\"\n"
+            "target: \"lib\"\nsrc: \"src/\"\nout: \"build/\"\n%s", dependency);
+        write_text_file(manifest, config);
+        char *source = friend_lsp_lifecycle_source(imported != 0U, false, false, 0U);
+        write_text_file(path, source);
+        char *uri = file_uri_from_path(path), *escaped = json_escape_text(source);
+        char *open = dup_printf("{\"jsonrpc\":\"2.0\",\"method\":\"textDocument/didOpen\",\"params\":{"
+            "\"textDocument\":{\"uri\":\"%s\",\"languageId\":\"feng\",\"version\":1,\"text\":\"%s\"}}}", uri, escaped);
+        const char *initialize = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"capabilities\":{}}}";
+        const char *requests[] = {"{\"jsonrpc\":\"2.0\",\"id\":9,\"method\":\"shutdown\",\"params\":null}",
+            "{\"jsonrpc\":\"2.0\",\"method\":\"exit\"}"};
+        unsigned int line, character;
+        find_line_character(source, "func generation0", 5U, &line, &character);
+        FriendLspLifecycle fixture = {uri, source, bundles[0], bundles[1], bundles[2]};
+        char *output = run_lsp_server_capture_after_position_ready_action(initialize, open, NULL,
+            "textDocument/hover", uri, line, character, "Possible exceptions: bool",
+            friend_lsp_run_lifecycle, &fixture, requests, 2U, NULL);
+        free(output); free(open); free(escaped); free(uri); free(source);
+        free(config); free(dependency); free(manifest); free(path); free(src); free(consumer);
+        for (size_t i = 0U; i < 3U; ++i) free(bundles[i]);
+        char *error = NULL;
+        ASSERT(feng_cli_project_remove_tree(directory, &error)); free(error);
+    }
+    puts("friend LSP authorization: 12 generations and 32 completion/navigation queries passed");
+}
+
 /* Check every intermediate edit immediately, without waiting for a new analysis. */
 static void run_lsp_inferred_builtin_edits(FILE *input, int output_fd, void *user) {
     const LspInferredBuiltinFixture *fixture = (const LspInferredBuiltinFixture *)user;
@@ -31161,6 +31327,7 @@ int main(void) {
     test_lsp_spec_seal_member_completion_respects_implementation_domain();
     test_friend_generic_packages_and_lsp();
     test_friend_private_bundle_and_lsp();
+    test_lsp_friend_authorization_lifecycle();
     test_lsp_friend_member_completion_hover_and_definition();
     test_lsp_friend_completion_parsed_only_fails_closed();
     test_lsp_fit_extension_member_completion_on_builtin_string();

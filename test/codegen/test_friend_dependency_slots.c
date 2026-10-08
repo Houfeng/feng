@@ -128,6 +128,98 @@ static void friend_slot_check_ft(void) {
     feng_symbol_error_free(&error);
 }
 
+/* Check every closed slot target, including nesting, field reuse and duplicates. */
+static void friend_slot_check_closed_tables(const FriendGenericUnit *unit,
+                                           void (*compile_c)(const char *)) {
+    FengCodegenOutput output = friend_slot_emit(unit);
+    const char *arguments[] = {"i32", "string"};
+    for (size_t i = 0U; i < sizeof arguments / sizeof *arguments; ++i) {
+        const char *argument = arguments[i];
+        char expected[1024];
+        snprintf(expected, sizeof expected,
+            "FengTypeDesc__friend_slots__Vault__G__%s__rtd[] = {\n"
+            "    &FengTypeDesc__friend_slots__Reader__G__friend_slots__Reader__G__%s,\n"
+            "    &FengTypeDesc__friend_slots__Reader__G__%s,\n};", argument, argument, argument);
+        const char *table = strstr(output.c_source, expected);
+        FRIEND_CHECK(table != NULL && strstr(table + 1, expected) == NULL);
+        snprintf(expected, sizeof expected,
+            "FengTypeDesc__friend_slots__Vault__G__%s__rad[] = {\n"
+            "    &Feng__friend_slots__Stamp__G__%s__aggregate_desc,\n};", argument, argument);
+        table = strstr(output.c_source, expected);
+        FRIEND_CHECK(table != NULL && strstr(table + 1, expected) == NULL);
+
+        /* Counts and pointers must belong to this owner, not another instance. */
+        snprintf(expected, sizeof expected, ".name = \"friend_slots.Vault<%s>\"", argument);
+        const char *owner = strstr(output.c_source, expected);
+        FRIEND_CHECK(owner != NULL);
+        const char *end = strstr(owner, "\n};");
+        FRIEND_CHECK(end != NULL);
+        snprintf(expected, sizeof expected,
+            ".reified_agg_deps_count = 1,\n"
+            "    .reified_agg_deps = FengTypeDesc__friend_slots__Vault__G__%s__rad,\n"
+            "    .reified_type_deps_count = 2,\n"
+            "    .reified_type_deps = FengTypeDesc__friend_slots__Vault__G__%s__rtd,", argument, argument);
+        table = strstr(owner, expected);
+        FRIEND_CHECK(table != NULL && table < end);
+        const char *names[] = {"Reader<%s>", "Reader<friend_slots.Reader<%s>>", "Stamp<%s>"};
+        for (size_t n = 0U; n < sizeof names / sizeof *names; ++n) {
+            char name[128];
+            snprintf(name, sizeof name, names[n], argument);
+            snprintf(expected, sizeof expected, ".name = \"friend_slots.%s\"", name);
+            FRIEND_CHECK(strstr(output.c_source, expected) != NULL);
+        }
+    }
+    compile_c(output.c_source);
+    feng_codegen_output_free(&output);
+}
+
+/* Source and both source-free FT profiles must preserve identical slot bindings. */
+static void friend_slot_check_identities(void (*compile_c)(const char *)) {
+    const char *declarations = "open module friend_slots;open type Reader<T>{}"
+        "@value open type Stamp<T>{let value:T;}"
+        "open type Vault<T>{"
+        "@friend(Reader<T>,Reader<Reader<T>>,Stamp<T>) seal let reader:Reader<T>;"
+        "@friend(Reader<T>,Stamp<T>) seal let value:int=0;}";
+    const char *uses = "open func integers():Vault<i32>{return Vault<i32>();}"
+        "open func strings():Vault<string>{return Vault<string>();}";
+    char source[2048];
+    snprintf(source, sizeof source, "%s%s", declarations, uses);
+    FriendGenericUnit unit = friend_generic_analyze(source, NULL, NULL, NULL);
+    friend_slot_check_closed_tables(&unit, compile_c);
+    friend_generic_dispose(&unit);
+
+    unit = friend_generic_analyze(declarations, NULL, NULL, NULL);
+    char directory[] = "temp/friend-slot-identities-XXXXXX";
+    FRIEND_CHECK(mkdtemp(directory) != NULL);
+    char roots[2][256];
+    snprintf(roots[0], sizeof roots[0], "%s/public", directory);
+    snprintf(roots[1], sizeof roots[1], "%s/workspace", directory);
+    FengSymbolExportOptions options = {.public_root = roots[0], .workspace_root = roots[1]};
+    FengSymbolError error = {0};
+    FRIEND_CHECK(feng_symbol_export_analysis(unit.analysis, &options, &error));
+    friend_generic_dispose(&unit);
+    for (size_t profile = 0U; profile < 2U; ++profile) {
+        FengSymbolProvider *provider = NULL;
+        FRIEND_CHECK(feng_symbol_provider_create(&provider, &error));
+        FRIEND_CHECK(feng_symbol_provider_add_ft_root(provider, roots[profile],
+            profile == 0U ? FENG_SYMBOL_PROFILE_PACKAGE_PUBLIC : FENG_SYMBOL_PROFILE_WORKSPACE_CACHE, &error));
+        FengSymbolImportedModuleCache *cache = feng_symbol_imported_module_cache_create(provider);
+        FRIEND_CHECK(cache != NULL);
+        FengSemanticImportedModuleQuery query = feng_symbol_imported_module_cache_as_query(cache);
+        snprintf(source, sizeof source, "open module consumer;import friend_slots;%s", uses);
+        unit = friend_generic_analyze(source, &query, NULL, NULL);
+        friend_slot_check_closed_tables(&unit, compile_c);
+        friend_generic_dispose(&unit);
+        feng_symbol_imported_module_cache_free(cache);
+        feng_symbol_provider_free(provider);
+        char path[320];
+        snprintf(path, sizeof path, "%s/friend_slots.ft", roots[profile]);
+        FRIEND_CHECK(unlink(path) == 0 && rmdir(roots[profile]) == 0);
+    }
+    FRIEND_CHECK(rmdir(directory) == 0);
+    feng_symbol_error_free(&error);
+}
+
 /* Annotations and constraints share ordinary static dependencies and deduplication. */
 void test_friend_dependency_slots(void (*compile_c)(const char *)) {
     const FriendSlotCase cases[] = {
@@ -209,5 +301,6 @@ void test_friend_dependency_slots(void (*compile_c)(const char *)) {
     feng_codegen_output_free(&output);
     friend_generic_dispose(&unit);
     friend_slot_check_ft();
+    friend_slot_check_identities(compile_c);
     puts("annotation types share static dependency slots and preserve friend checks");
 }
