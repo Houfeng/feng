@@ -378,6 +378,51 @@ LSP 矩阵、原有缓存生命周期、构建发布及工具链检查。1996 �
 确认执行内容与工作区一致；测试后仅更新本节验证记录。macOS 本机本轮未重跑。
 本地日志保存在 `temp/friend-coverage-IxnxcC/make-test.log`。
 
+### 9.4 friend 签名具化与指针目标覆盖补充
+
+2026-10-08，基于 `c547d295`，用户批准补齐签名可见性的两个独立覆盖缺口并执行
+完整回归。语义继续引用[可见性规范 §11.1](../specifications/feng-visibility.md#111-friend-成员签名可见性)，
+不新增或调整可见性规则。
+
+- 签名类型自身为 owner 泛参：分别覆盖参数、返回值、泛型实参和数组元素中的泛参，
+  以及闭合指针整体代入泛参；代入可见类型应通过，不可见类型应报告 `AE1338`。
+- 指针目标类型：分别覆盖参数和返回值，比较同模块允许、跨模块私有类型拒绝及
+  公开类型允许；不能以“指针不能作为 friend 主体”的用例替代签名检查。
+- 两类均验证具体 friend、构造泛型 friend 和直接泛参 friend；开放条件经泛型调用
+  转传后仍须检查，且无需实际访问 friend 成员。比较源码与销毁 provider AST 后的
+  package-public、workspace-cache 两种 FT profile，并断言诊断位置和授权声明关联。
+- 新增用例及断言，不改变既有用例预期。先执行相关专项，再在沙箱外执行 `make test`。
+  发生失败时，先在本节记录复现与实际结果，再分析和修复；不确定的语义或方案由
+  人工决策。
+
+首次专项运行记录：macOS 构建成功，新增矩阵在授权关联位置的路径断言处失败
+（`test_friend_signature_visibility.c`，`related->path` 比较）。补充日志后确认，失败
+来自 package-public FT：测试错误地要求恢复 provider 的源码路径及注解行列。
+[符号表规范 §5.1](../specifications/feng-symbol-table.md#51-公开包表-ft-必须包含的事实)
+明确禁止公开 FT 携带源码路径和行列；导入上下文使用制品来源，注解使用成员符号位置。
+因此修正本轮新增断言：源码检查精确注解位置；FT 检查所选授权成员的制品来源、符号
+位置和关联消息，不降低主诊断码、具化点及错误数量要求。无需修改编译器。
+日志保存在 `temp/friend-signatures-oF9jCJ/evidence/`。
+
+随后专项运行记录：源码中直接声明参数 `R*` 时先报告 `AE0333`，因此该样本不能
+用于验证 friend 可见性。核对[泛型规范](../specifications/feng-generics-draft.md)的开放
+指针限制后，已将样本改为把闭合的
+`Hidden*`／`Shared*` 作为完整类型实参代入签名中的 `R`；固定指针签名仍单独保留。
+该调整只修正本轮新增测试的构造方式，不改变开放泛参指针的既有规则。
+
+验证完成：新增 [test_friend_signature_visibility.c](../../test/symbol/test_friend_signature_visibility.c)，
+并接入 `test_symbol`，保留全部既有测试预期。矩阵包含 12 种签名／实参组合，每种
+分别验证 6 个开放 friend 场景和 8 个已知 friend 场景；168 个场景各执行源码及两种
+FT profile，共 504 次检查。负例单独断言一个 `AE1338`、不可见类型名、声明或具化点
+token／行列，以及具化诊断的原授权关联；未访问成员的调用转传也纳入检查。
+
+2026-10-08，在 macOS ARM64、Clang 22.1.8、UTF-8 locale 的隔离副本中，沙箱外
+完整执行 `make test`，退出码为 0。ASan／UBSan 与普通构建均通过新增 504 次检查、
+标准库 607/607、FCTS 1676/1676，以及编译器、CLI／LSP、调试器、发布和工具链测试。
+测试前后 1997 项输入 SHA-256 校验通过，工作区与被测副本一致；随后仅补记本文结果。
+完整日志为 `temp/friend-signatures-oF9jCJ/evidence/make-test.log`。本轮未发现需修复的
+编译器实现缺陷，生产代码未改动。
+
 ## 10. Review 范围与实施边界
 
 已确认方向见第 2 节，不重新将“是否统一收集”“是否保留零新增 slot”列为待决策。

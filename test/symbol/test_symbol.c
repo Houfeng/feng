@@ -5956,6 +5956,8 @@ void test_exception_effects_ft(void);
 void test_defer_exception_effects_ft(void);
 
 int main(void) {
+    extern void test_friend_signature_visibility(void);
+    test_friend_signature_visibility();
     extern void test_validation_dependencies_ft(void);
     test_validation_dependencies_ft();
     extern void test_friend_signature_owner_ft(void);
